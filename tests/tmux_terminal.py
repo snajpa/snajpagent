@@ -1634,51 +1634,51 @@ def run_punctuation_case(binary, root):
             terminal = TmuxTerminal(case / "t", binary, workspace, case / "s", config,
                 width, 20, args=("--markdown" if markdown else "--no-markdown",),
                 environment={"SNAJPAGENT_IRC_UI_KEY": "local-test-only"})
-            try:
-                terminal.wait(">")
-                terminal.submit("wrap-boundaries")
-                assert paused.wait(5.0), "provider did not pause at apostrophe"
-                terminal.wait("I’")
-                terminal.send_text("draft")
-                terminal.wait("> draft")
-                assert_live_paragraph_gap(terminal, "I’", "I’")
-                proceed.set()
-                for edit in (" more", " text", " end"):
-                    terminal.send_text(edit)
-                    time.sleep(0.04)
-                wait_normalized(terminal, "wrap-done", timeout=10.0)
-                wait_for_terminal_event(case / "s", {"turn_completed"}, 5.0)
-                screen = terminal.capture()
-                (case / "screen.txt").write_text(screen)
-                rows = screen.splitlines()
-                first = next(i for i, row in enumerate(rows) if "I’ll fold" in row)
-                last = next(i for i, row in enumerate(rows) if "wrap-done" in row)
-                visible = "".join(rows[first:last + 1]).replace("• ", "")
-                assert re.sub(r"\s", "", visible) == re.sub(r"\s", "", text), screen
-                assert not rows[first - 1].strip(), screen
-                assert not rows[last + 1].strip(), screen
-                assert sum("> draft" in row for row in rows) == 1, screen
-                # No artificial paragraph boundaries, no punctuation-alone
-                # early line breaks; all non-final rows fill the available row
-                # except a fitting next word moved intact to its successor.
-                for i in range(first, last):
-                    row, following = rows[i], rows[i + 1]
-                    if not row.strip() or not following.strip():
-                        continue
-                    if markdown:
-                        assert following.startswith("  "), (row, following, screen)
-                    tail = following.lstrip(" •")
-                    word = re.match(r"[^\s]+", tail).group()
-                    cells = sum(0 if c == "́" else 2 if c == "界" else 1 for c in row.rstrip())
-                    assert cells + 1 + len(word) > width, (row, following, screen)
-                _, events = read_events(case / "s")
-                response = event_list(events, "response_completed")[-1]
-                assert response["data"]["items"][0]["text"] == text
-                terminal.send_key("C-u")
-                terminal.exit()
-            finally:
-                proceed.set()
-                close_fixture_terminal(terminal)
+            with fixture_terminal(terminal, case / "screen.txt"):
+                try:
+                    terminal.wait(">")
+                    terminal.submit("wrap-boundaries")
+                    assert paused.wait(5.0), "provider did not pause at apostrophe"
+                    terminal.wait("I’")
+                    terminal.send_text("draft")
+                    terminal.wait("> draft")
+                    assert_live_paragraph_gap(terminal, "I’", "I’")
+                    proceed.set()
+                    for edit in (" more", " text", " end"):
+                        terminal.send_text(edit)
+                        time.sleep(0.04)
+                    wait_normalized(terminal, "wrap-done", timeout=10.0)
+                    wait_for_terminal_event(case / "s", {"turn_completed"}, 5.0)
+                    screen = terminal.capture()
+                    (case / "screen.txt").write_text(screen)
+                    rows = screen.splitlines()
+                    first = next(i for i, row in enumerate(rows) if "I’ll fold" in row)
+                    last = next(i for i, row in enumerate(rows) if "wrap-done" in row)
+                    visible = "".join(rows[first:last + 1]).replace("• ", "")
+                    assert re.sub(r"\s", "", visible) == re.sub(r"\s", "", text), screen
+                    assert not rows[first - 1].strip(), screen
+                    assert not rows[last + 1].strip(), screen
+                    assert sum("> draft" in row for row in rows) == 1, screen
+                    # No artificial paragraph boundaries, no punctuation-alone
+                    # early line breaks; all non-final rows fill the available row
+                    # except a fitting next word moved intact to its successor.
+                    for i in range(first, last):
+                        row, following = rows[i], rows[i + 1]
+                        if not row.strip() or not following.strip():
+                            continue
+                        if markdown:
+                            assert following.startswith("  "), (row, following, screen)
+                        tail = following.lstrip(" •")
+                        word = re.match(r"[^\s]+", tail).group()
+                        cells = sum(0 if c == "́" else 2 if c == "界" else 1 for c in row.rstrip())
+                        assert cells + 1 + len(word) > width, (row, following, screen)
+                    _, events = read_events(case / "s")
+                    response = event_list(events, "response_completed")[-1]
+                    assert response["data"]["items"][0]["text"] == text
+                    terminal.send_key("C-u")
+                    terminal.exit()
+                finally:
+                    proceed.set()
     finally:
         proceed.set()
         provider.close()
@@ -1712,7 +1712,7 @@ def run_draft_navigation_case(binary, root, regression=None):
         terminal.run("send-keys", "-t", terminal.target, "-H",
                      *(f"{byte:02x}" for byte in sequence))
 
-    try:
+    with fixture_terminal(terminal, case / "screen.txt"):
         terminal.wait(">")
         if regression == "bounds":
             for start, end in (("Home", "End"), ("C-a", "C-e")):
@@ -1909,8 +1909,6 @@ def run_draft_navigation_case(binary, root, regression=None):
         _, events = read_events(case / "state")
         turns = event_list(events, "turn_started")
         assert [event["data"]["text"] for event in turns] == ["history draft", text]
-    finally:
-        close_fixture_terminal(terminal)
 
 
 def run_draft_word_wrap_case(binary, root, columns=80):
@@ -2053,8 +2051,9 @@ def run_bullet_class_case(binary, root):
     workspace.mkdir(mode=0o700, parents=True)
     config = case / "config.ini"
     write_config(config, False)
-    terminal = TmuxTerminal(case / "t", binary, workspace, case / "s", config, 100, 20)
-    try:
+    with fixture_terminal(TmuxTerminal(
+            case / "t", binary, workspace, case / "s", config, 100, 20),
+            case / "screen.txt") as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT)
         terminal.submit("/goal slow goal")
         terminal.wait("working on goal")
@@ -2086,8 +2085,6 @@ def run_bullet_class_case(binary, root):
         for notice in group:
             assert rows.count(notice) == 1, rows
         terminal.exit()
-    finally:
-        close_fixture_terminal(terminal)
 
 
 def wait_for_terminal_event(dotdir, terminal_types, timeout):
