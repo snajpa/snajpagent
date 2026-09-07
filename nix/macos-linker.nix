@@ -6,6 +6,17 @@ let
     stdenv = llvm.stdenv;
     useSwift = false;
   };
+  tapi = pkgs.libtapi.overrideAttrs (old: {
+    outputs = [ "out" "dev" ];
+    # Apple's export list spells libc++ string names; Linux uses libstdc++.
+    # Export the same public class across either host C++ ABI.
+    postPatch = old.postPatch + ''
+      sed -i -E 's/^(_ZNK?4tapi2v119LinkerInterfaceFile).*/\1*/' tapi/tools/libtapi/libtapi.exports
+    '';
+    ninjaFlags = [ "libtapi" ];
+    installTargets = [ "install-libtapi" "install-tapi-headers" ];
+    postInstall = "";
+  });
 in llvm.stdenv.mkDerivation {
   pname = "cctools-port";
   version = "1030.6.3-ld64-956.6";
@@ -18,7 +29,7 @@ in llvm.stdenv.mkDerivation {
   };
   postUnpack = ''sourceRoot+=/cctools'';
   nativeBuildInputs = [ pkgs.autoreconfHook ];
-  buildInputs = [ pkgs.libtapi dispatch pkgs.libuuid llvm.llvm ];
+  buildInputs = [ tapi dispatch pkgs.libuuid llvm.llvm ];
   configurePlatforms = [];
   configureFlags = [
     "--target=x86_64-apple-darwin"
@@ -31,6 +42,6 @@ in llvm.stdenv.mkDerivation {
     description = "Darwin cross-linker with legacy Mach-O loader support";
     homepage = "https://github.com/tpoechtrager/cctools-port";
     license = pkgs.lib.licenses.apple-psl20;
-    platforms = pkgs.lib.platforms.unix;
+    platforms = pkgs.lib.platforms.linux;
   };
 }
