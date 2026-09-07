@@ -1353,13 +1353,24 @@ interrupt_hidden_console(void *opaque)
 }
 
 static void
-test_hidden_console(void)
+warm_input_broker(struct snag_term_host *host, bool isolated)
+{
+    if (!isolated)
+        return;
+    int sink = _open("NUL", _O_WRONLY | _O_BINARY | _O_NOINHERIT);
+    assert(sink >= 0 && snag_output_broker_write(&host->input_broker, sink, "ready", 5u, NULL, NULL) == 0);
+    assert(close(sink) == 0 && host->input_broker);
+}
+
+static void
+test_hidden_console(bool isolated)
 {
     HANDLE input = (HANDLE)_get_osfhandle(0);
     struct snag_term_host host = {0};
     DWORD mode, written;
     assert(snag_term_input_capture(&host) == 0);
     assert(snag_term_input_hidden(&host) == 0);
+    warm_input_broker(&host, isolated);
     assert(GetConsoleMode(input, &mode) && !(mode & ENABLE_ECHO_INPUT) && (mode & ENABLE_LINE_INPUT));
     const WCHAR chars[] = {0x4e2du, 0xd83du, 0xde00u, L'\r'};
     INPUT_RECORD keys[4] = {0};
@@ -1387,11 +1398,12 @@ test_hidden_console(void)
             assert(GetHandleInformation(host.line_input, &flags) && !(flags & HANDLE_FLAG_INHERIT));
         }
     }
-    assert(!host.line_input);
+    assert(!host.line_input && !host.input_broker);
     assert(snag_term_input_restore(&host, true) == 0);
     assert(GetConsoleMode(input, &mode) && mode == host.input_mode);
     /* A following prompt must not receive a leftover CRLF as an empty line. */
     memset(&host, 0, sizeof(host));
+    warm_input_broker(&host, isolated);
     keys[0].Event.KeyEvent.uChar.UnicodeChar = L'x';
     assert(WriteConsoleInputW(input, keys, 1u, &written) && written == 1u);
     assert(WriteConsoleInputW(input, keys + 3u, 1u, &written) && written == 1u);
@@ -1399,11 +1411,13 @@ test_hidden_console(void)
     assert(snag_term_input_read(&host, bytes, sizeof(bytes)) == 1 && bytes[0] == 'x');
     assert(snag_term_input_read(&host, bytes, sizeof(bytes)) < 0 && errno == EAGAIN);
     assert(snag_term_input_read(&host, bytes, sizeof(bytes)) == 1 && bytes[0] == '\n');
+    assert(!host.input_broker);
     assert(FlushConsoleInputBuffer(input));
     struct snag_shutdown shutdown;
     atomic_store(&shutdown_signal_seen, 0);
     assert(snag_shutdown_install(&shutdown, test_shutdown_signal, false) == 0);
     assert(snag_term_input_capture(&host) == 0 && snag_term_input_hidden(&host) == 0);
+    warm_input_broker(&host, isolated);
     HANDLE interrupter = (HANDLE)_beginthreadex(NULL, 0, interrupt_hidden_console, NULL, 0, NULL);
     assert(interrupter);
     uint64_t cancel_start = snag_monotonic_ms();
@@ -1414,6 +1428,7 @@ test_hidden_console(void)
     snag_shutdown_detach(&shutdown);
     snag_shutdown_finish(&shutdown);
     assert(n <= 0 && atomic_load(&shutdown_signal_seen) == SIGINT && cancel_elapsed < 1000u);
+    assert(!host.input_broker);
 }
 
 static void
@@ -1776,7 +1791,8 @@ test_input_mode(void)
         return;
 #ifdef _WIN32
     test_native_editor();
-    test_hidden_console();
+    test_hidden_console(false);
+    test_hidden_console(true);
     test_console_output();
 #endif
     struct snag_term_host host = {0};

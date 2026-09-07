@@ -256,7 +256,7 @@ static const wchar_t broker_prefix[] = L"\\\\.\\pipe\\snajpagent-writer-";
 static _Atomic(HANDLE) broker_owned_job;
 static CRITICAL_SECTION broker_spawn_lock;
 
-enum { BROKER_WRITE = 1, BROKER_SPAWN = 2 };
+enum { BROKER_WRITE = 1, BROKER_SPAWN = 2, BROKER_READ_CONSOLE = 3 };
 struct broker_spawn_request {
     uint64_t job, streams[3];
     uint32_t units[4]; /* executable, command line, cwd, double-NUL environment */
@@ -265,6 +265,13 @@ struct broker_spawn_reply {
     uint64_t process;
     uint32_t pid, error;
 };
+
+void
+snag_output_broker_cancel(struct snag_output_broker *broker)
+{
+    if (broker && broker->process)
+        (void)TerminateProcess(broker->process, 125u);
+}
 
 void
 snag_output_broker_close(struct snag_output_broker *broker)
@@ -501,6 +508,34 @@ broker_child_transfer(HANDLE pipe, bool write, void *data, DWORD size)
     return true;
 }
 
+int
+snag_input_broker_read(struct snag_output_broker **owner, wchar_t *text, size_t capacity,
+                       int (*checkpoint)(void *), void *opaque)
+{
+    if (!owner || !text || !capacity || capacity > 256u) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!*owner && !(*owner = broker_open(checkpoint, opaque)))
+        return -1;
+    if (checkpoint && checkpoint(opaque) < 0)
+        return -1;
+    uint64_t request[2] = {BROKER_READ_CONSOLE, capacity};
+    uint32_t reply[2];
+    if (broker_transfer(*owner, true, request, sizeof(request), 0, checkpoint, opaque) < 0 ||
+        broker_transfer(*owner, false, reply, sizeof(reply), 0, checkpoint, opaque) < 0)
+        return -1;
+    if (reply[0])
+        return child_error(reply[0]);
+    if (reply[1] > capacity) {
+        errno = EIO;
+        return -1;
+    }
+    if (broker_transfer(*owner, false, text, reply[1] * sizeof(wchar_t), 0, checkpoint, opaque) < 0)
+        return -1;
+    return (int)reply[1];
+}
+
 static unsigned int __stdcall
 broker_parent_wait(void *parent)
 {
@@ -619,6 +654,7 @@ snag_output_broker_main(int argc, wchar_t **argv)
         return 125;
     uint64_t target[2];
     int result = 125;
+    HANDLE input = INVALID_HANDLE_VALUE;
     if (!broker_child_transfer(pipe, false, target, sizeof(target)) ||
         !target[0] || (uint64_t)(uintptr_t)target[0] != target[0] ||
         !target[1] || (uint64_t)(uintptr_t)target[1] != target[1])
@@ -654,6 +690,31 @@ snag_output_broker_main(int argc, wchar_t **argv)
                 break;
             continue;
         }
+        if (operation == BROKER_READ_CONSOLE) {
+            uint64_t capacity;
+            uint32_t reply[2] = {0};
+            wchar_t text[256];
+            if (!broker_child_transfer(pipe, false, &capacity, sizeof(capacity)) ||
+                !capacity || capacity > 256u)
+                break;
+            if (input == INVALID_HANDLE_VALUE)
+                input = CreateFileW(L"CONIN$", GENERIC_READ | GENERIC_WRITE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+            DWORD got = 0;
+            if (input == INVALID_HANDLE_VALUE ||
+                !ReadConsoleW(input, text, (DWORD)capacity, &got, NULL))
+                reply[0] = GetLastError();
+            else
+                reply[1] = got;
+            bool sent = broker_child_transfer(pipe, true, reply, sizeof(reply)) &&
+                        broker_child_transfer(pipe, true, text, reply[1] * sizeof(wchar_t));
+            volatile wchar_t *wipe = text;
+            for (size_t i = 0; i < 256u; ++i)
+                wipe[i] = 0;
+            if (!sent)
+                break;
+            continue;
+        }
         if (operation != BROKER_WRITE ||
             !broker_child_transfer(pipe, false, packet, sizeof(packet)))
             break;
@@ -680,6 +741,8 @@ snag_output_broker_main(int argc, wchar_t **argv)
             break;
     }
 out:
+    if (input != INVALID_HANDLE_VALUE)
+        (void)CloseHandle(input);
     {
         HANDLE job = atomic_load(&broker_owned_job);
         if (job)

@@ -35,6 +35,7 @@ struct snag_term_host {
     unsigned short input_high;
     bool input_cooked_pending;
     HANDLE line_input;
+    struct snag_output_broker *input_broker;
     INPUT_RECORD input_events[16];
     unsigned int input_count, input_next;
     char input_key[32];

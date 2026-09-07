@@ -51,6 +51,10 @@ int snag_output_broker_main(int argc, wchar_t **argv);
 int snag_output_broker_write(struct snag_output_broker **owner, int fd,
                               const void *bytes, size_t len,
                               int (*checkpoint)(void *), void *opaque);
+int snag_input_broker_read(struct snag_output_broker **owner, wchar_t *text, size_t capacity,
+                           int (*checkpoint)(void *), void *opaque);
+/* Caller keeps broker ownership alive until the read owner completes cleanup. */
+void snag_output_broker_cancel(struct snag_output_broker *broker);
 void snag_output_broker_close(struct snag_output_broker *broker);
 #endif
 

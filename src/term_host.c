@@ -22,6 +22,7 @@
 
 static pthread_mutex_t console_read_lock = PTHREAD_MUTEX_INITIALIZER;
 static HANDLE console_reader;
+static struct snag_output_broker *console_read_broker;
 static atomic_bool console_read_cancelled;
 
 typedef BOOL (WINAPI *cancel_sync_fn)(HANDLE);
@@ -65,7 +66,9 @@ cancel_console_read(void)
         control_lock(&console_read_lock);
         bool active = console_reader != NULL;
         cancel_sync_fn cancel = synchronous_cancel();
-        BOOL sent = active && cancel && cancel(console_reader);
+        if (console_read_broker)
+            snag_output_broker_cancel(console_read_broker);
+        BOOL sent = console_read_broker || (active && cancel && cancel(console_reader));
         DWORD error = cancel ? GetLastError() : ERROR_CALL_NOT_IMPLEMENTED;
         control_unlock(&console_read_lock);
         if (!active || sent || error != ERROR_NOT_FOUND)
@@ -75,8 +78,21 @@ cancel_console_read(void)
     }
 }
 
+static int
+read_broker_checkpoint(void *opaque)
+{
+    struct snag_term_host *host = opaque;
+    control_lock(&console_read_lock);
+    console_read_broker = host->input_broker;
+    bool cancelled = atomic_load(&console_read_cancelled);
+    control_unlock(&console_read_lock);
+    if (cancelled)
+        errno = EINTR;
+    return cancelled ? -1 : 0;
+}
+
 static BOOL
-read_console(HANDLE input, WCHAR *wide, DWORD size, DWORD *got)
+read_console(struct snag_term_host *host, HANDLE input, WCHAR *wide, DWORD size, DWORD *got)
 {
     control_lock(&console_read_lock);
     if (console_reader) {
@@ -98,12 +114,20 @@ read_console(HANDLE input, WCHAR *wide, DWORD size, DWORD *got)
     BOOL ok = FALSE;
     DWORD error = ERROR_OPERATION_ABORTED;
     if (!atomic_load(&console_read_cancelled)) {
-        ok = ReadConsoleW(input, wide, size, got, NULL);
-        error = GetLastError();
+        if (host->input_broker || !synchronous_cancel()) {
+            int count = snag_input_broker_read(&host->input_broker, wide, size, read_broker_checkpoint, host);
+            ok = count >= 0;
+            *got = ok ? (DWORD)count : 0;
+            error = ok ? ERROR_SUCCESS : errno == EINTR ? ERROR_OPERATION_ABORTED : ERROR_READ_FAULT;
+        } else {
+            ok = ReadConsoleW(input, wide, size, got, NULL);
+            error = GetLastError();
+        }
     }
     control_lock(&console_read_lock);
     (void)CloseHandle(console_reader);
     console_reader = NULL;
+    console_read_broker = NULL;
     if (atomic_exchange(&console_read_cancelled, false)) {
         ok = FALSE;
         error = ERROR_OPERATION_ABORTED;
@@ -324,6 +348,8 @@ snag_term_host_close(struct snag_term_host *host)
     struct snag_console_writer *writer = host->writer;
     snag_output_broker_close(host->broker);
     host->broker = NULL;
+    snag_output_broker_close(host->input_broker);
+    host->input_broker = NULL;
     if (host->line_input) {
         (void)CloseHandle(host->line_input);
         host->line_input = NULL;
@@ -777,6 +803,8 @@ snag_term_controls_restore(struct snag_term_host *host)
 static void
 reset_input(struct snag_term_host *host)
 {
+    snag_output_broker_close(host->input_broker);
+    host->input_broker = NULL;
     if (host->line_input) {
         (void)CloseHandle(host->line_input);
         host->line_input = NULL;
@@ -1161,10 +1189,12 @@ snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
             return -1;
         }
     }
-    if (!read_console(host->line_input, wide + prefix, (DWORD)capacity, &got)) {
+    if (!read_console(host, host->line_input, wide + prefix, (DWORD)capacity, &got)) {
         DWORD error = GetLastError();
         (void)CloseHandle(host->line_input);
         host->line_input = NULL;
+        snag_output_broker_close(host->input_broker);
+        host->input_broker = NULL;
         host->input_cooked_pending = false;
         host->input_high = 0;
         errno = error == ERROR_OPERATION_ABORTED ? EINTR : EIO;
@@ -1173,6 +1203,8 @@ snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
     if (!got) {
         (void)CloseHandle(host->line_input);
         host->line_input = NULL;
+        snag_output_broker_close(host->input_broker);
+        host->input_broker = NULL;
         host->input_cooked_pending = false;
         host->input_high = 0;
         return 0;
@@ -1182,6 +1214,8 @@ snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
     if (!host->input_cooked_pending) {
         (void)CloseHandle(host->line_input);
         host->line_input = NULL;
+        snag_output_broker_close(host->input_broker);
+        host->input_broker = NULL;
     }
     size_t count = got + prefix;
     host->input_high = 0;
