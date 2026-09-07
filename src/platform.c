@@ -2666,7 +2666,7 @@ snag_directory_open(int fd)
             }
         }
     }
-#elif defined(__FreeBSD__) && __FreeBSD__ < 9
+#elif defined(__FreeBSD__) && __FreeBSD__ < 10
     /* This libc closes fd even on failure; preserve the caller's ownership. */
     int copy = snag_dup_read(fd);
     dir->native = copy < 0 ? NULL : fdopendir(copy);

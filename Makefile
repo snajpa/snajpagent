@@ -28,6 +28,10 @@ override LDFLAGS += -pthread
 
 BIN = $(NAME)
 TARGET_OS := $(shell uname -s)
+ifeq ($(TARGET_OS),FreeBSD)
+override CPPFLAGS += -D__BSD_VISIBLE=1
+override LDFLAGS += -lutil
+endif
 ifeq ($(TARGET_OS),Darwin)
 DEBUG_SYMBOLS = $(BIN).dSYM
 else

@@ -138,6 +138,16 @@ Mozilla certificate-data license, and corresponding source/build instructions
 when redistributing a linked executable. Pinned dependencies live in the Nix
 store; external non-Nix media/SDK inputs belong in the ignored `.assets-cache/`.
 
+## FreeBSD platform foundation
+
+The existing base test runs on FreeBSD 8.4 amd64 with static system libraries.
+The platform layer uses native PTYs, non-reaping `waitpid` polling, `fsync`
+and the kernel random device. Directory streams preserve caller descriptor
+ownership across older libc failure paths. Native GNU make builds select BSD
+API declarations and libutil automatically. Full application dependencies and
+old/new-release qualification remain under development; FreeBSD has no
+production matrix target yet.
+
 ## macOS ARM64 and Intel cross-builds
 
 `make prod-macos-arm64` and `make prod-macos-x86_64` use the same pinned upstream dependency sources via
