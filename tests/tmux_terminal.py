@@ -4663,6 +4663,155 @@ def run_tool_yield_cases(binary, root, provider, environment):
             provider.runtime_handler = None
 
 
+def run_post_exit_drain_cases(binary, root, provider, environment):
+    # This test process stands in for the unrelated tmux server: the launched
+    # command passes us its writers, then exits. Its process group cannot close
+    # our copies. No shared tmux server or external service is involved.
+    import array
+
+    modes = ("both", "stdout", "stderr", "terminate", "signal", "flood", "late-eof", "live")
+    for mode in modes:
+        case = root / ("post-exit-" + mode)
+        workspace = case / "workspace"
+        workspace.mkdir(mode=0o700, parents=True)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        path = str(case / "handoff.sock")
+        listener.bind(path)
+        listener.listen(1)
+        listener.settimeout(5.0)
+        held = []
+        received, stop = threading.Event(), threading.Event()
+        receiver_errors = []
+        script = workspace / "pass-writers.py"
+        script.write_text(
+            "import array, os, signal, socket, sys, time\n"
+            "mode, path = sys.argv[1:]\n"
+            "fds = [1] if mode == 'stdout' else [2] if mode == 'stderr' else [1, 2]\n"
+            "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect(path)\n"
+            "for fd in fds: os.write(fd, b'captured-prefix:irc-ui-secret')\n"
+            "s.sendmsg([b'x'], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array('i', fds))])\n"
+            "assert s.recv(1) == b'y'; s.close()\n"
+            "if mode == 'terminate': time.sleep(30)\n"
+            "if mode == 'live': time.sleep(2.5); os.write(1, b'live-complete')\n"
+            "if mode == 'signal': os.kill(os.getpid(), signal.SIGTERM)\n"
+            "sys.exit(124 if mode in ('both', 'stdout', 'stderr') else 0)\n",
+            encoding="utf-8")
+
+        def receive():
+            try:
+                with listener.accept()[0] as connection:
+                    _, control, _, _ = connection.recvmsg(1, socket.CMSG_SPACE(8))
+                    for level, kind, data in control:
+                        if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+                            fds = array.array("i")
+                            fds.frombytes(data[:len(data) - len(data) % fds.itemsize])
+                            held.extend(fds)
+                    assert len(held) == (1 if mode in ("stdout", "stderr") else 2)
+                    connection.sendall(b'y')
+                received.set()
+                if mode in ("late-eof", "live"):
+                    if not stop.wait(0.2 if mode == "late-eof" else 2.7):
+                        for fd in held:
+                            os.write(fd, b'late-tail')
+                            os.close(fd)
+                        held.clear()
+                elif mode == "flood":
+                    for fd in held:
+                        os.set_blocking(fd, False)
+                    while not stop.wait(0.01):
+                        for fd in held:
+                            try:
+                                os.write(fd, b'output-still-arriving\n' * 100)
+                            except BlockingIOError:
+                                pass
+                            except BrokenPipeError:
+                                return  # Expected when the fixed drain bound closes capture.
+            except Exception as exc:
+                receiver_errors.append(exc)
+                received.set()
+
+        receiver = threading.Thread(target=receive)
+        receiver.start()
+        config = case / "config.ini"
+        write_irc_config(config, provider.port, "host-model")
+        with config.open("a") as out:
+            out.write("[tool]\nmax_wait_ms=60000\n")
+        requests = []
+        terminal_results = []
+
+        def respond(handler, request, sequence):
+            requests.append(request)
+            if len(requests) == 1:
+                args = {"command": "exec " + shlex.join([sys.executable, str(script), mode, path]),
+                        "workdir": str(workspace), "pty": False, "stdin": None,
+                        "timeout_ms": None, "yield_ms": 100 if mode == "terminate" else 0,
+                        "max_output_tokens": 2000}
+                body = provider.function_body(sequence, "start", "exec_command", args)
+            elif mode == "terminate" and len(requests) == 2:
+                _, log = read_events(terminal.dotdir)
+                result = event_list(log, "tool_finished")[-1]["data"]["result"]
+                assert result["status"] == "running", result
+                args = {"handle": result["handle"], "data": "", "eof": False,
+                        "terminate": True, "yield_ms": 0, "max_output_tokens": 2000}
+                body = provider.function_body(sequence, "stop", "write_stdin", args)
+            else:
+                _, log = read_events(terminal.dotdir)
+                result = event_list(log, "tool_finished")[-1]["data"]["result"]
+                terminal_results.append(result)
+                assert result["status"] == ("failed" if mode in ("both", "stdout", "stderr") else
+                                            "signaled" if mode in ("terminate", "signal") else "succeeded"), result
+                assert result["handle"] is None, result
+                assert result["exit_code"] == (124 if result["status"] == "failed" else
+                                              0 if result["status"] == "succeeded" else None), result
+                assert result["signal"] == (15 if result["status"] == "signaled" else None), result
+                truncated = mode not in ("late-eof", "live")
+                assert result["reason"] == ("output_drain_timeout" if truncated else None), result
+                assert ("output may be incomplete" in result["model_text"]) == truncated, result
+                projected = json.dumps(request, ensure_ascii=False)
+                assert "irc-ui-secret" not in projected, projected
+                assert "captured-prefix:" in projected and "<redacted:secret>" in projected
+                assert ("output may be incomplete" in projected) == truncated
+                if not truncated:
+                    assert "late-tail" in result["model_text"], result
+                if mode == "live":
+                    assert "live-complete" in result["model_text"], result
+                body = provider.response_body(sequence, "post-exit drain complete " + mode)
+            payload = body.encode()
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.send_header("Content-Length", str(len(payload)))
+            handler.end_headers()
+            handler.wfile.write(payload)
+            handler.close_connection = True
+
+        provider.runtime_handler = respond
+        terminal = TmuxTerminal(case / "terminal", binary, workspace, case / "state",
+                                config, 140, 35, args=("--no-listen", "--no-client"),
+                                environment=environment)
+        try:
+            terminal.wait("host-model/medium   0% ›")
+            began = time.monotonic()
+            terminal.submit("test post-exit drain " + mode)
+            assert received.wait(5.0), "command did not pass its writers"
+            assert not receiver_errors, receiver_errors
+            terminal.wait("post-exit drain complete " + mode, timeout=6.0, join_wrapped=True)
+            assert time.monotonic() - began < 7.0
+            assert terminal_results and terminal_results[-1]["duration_ms"] < 5000
+            _, log = read_events(terminal.dotdir)
+            assert not event_list(log, "turn_failed"), log[-6:]
+            assert provider.failure is None, provider.failure
+            assert not receiver_errors, receiver_errors
+        finally:
+            stop.set()
+            receiver.join(timeout=6.0)
+            for fd in held:
+                os.close(fd)
+            listener.close()
+            terminal.close()
+            provider.runtime_handler = None
+        print("post-exit drain:", mode, "ok", flush=True)
+
+
 def run_irc_case(binary, root):
     binary = os.path.abspath(binary)
     root.mkdir(mode=0o700, parents=True)
@@ -4674,6 +4823,7 @@ def run_irc_case(binary, root):
         run_goal_recovery_cases(binary, root, provider, environment)
         run_compacted_goal_cases(binary, root)
         run_automatic_turn_retry_cases(binary, root, provider, environment)
+        run_post_exit_drain_cases(binary, root, provider, environment)
         run_tool_yield_cases(binary, root, provider, environment)
         run_manual_retry_cases(binary, root, provider, environment)
         run_provider_retry_input_cases(binary, root, provider, environment)

@@ -1778,6 +1778,16 @@ by signal.  A running result means the invocation returned, not that the
 command completed.  Keep its handle and use
 .BR write_stdin ;
 do not start the same command again merely to wait for it.
+.PP
+After command exit, output capture drains for at most two seconds. If another
+process still holds a writer open, remaining capture streams close and the
+result preserves the command's exit code or signal with
+.B reason=output_drain_timeout
+and an explicit warning that output may be incomplete. Already captured output
+is retained and secret-redacted. The completed handle is released; unrelated
+processes holding passed descriptors are not signalled. Continued output does
+not extend the drain limit. A live command remains governed by its ordinary
+wait and termination controls.
 .SS write_stdin
 .B handle
 identifies a currently managed command.

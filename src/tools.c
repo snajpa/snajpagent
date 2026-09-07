@@ -31,6 +31,7 @@
 #define SNAG_TOOL_POLL_MS 50u
 #define SNAG_TOOL_YIELD_MAX_MS 600000u
 #define SNAG_TOOL_CLOSE_GRACE_MS 2000u
+#define SNAG_TOOL_DRAIN_GRACE_MS 2000u
 #define SNAG_TOOL_REDACTOR_MAX (8192u + SNAG_WIRE_SECRET_MAX)
 
 struct capture_stream {
@@ -58,6 +59,8 @@ struct managed_process {
     struct snag_child child;
     bool stdin_open;
     bool child_done;
+    bool output_incomplete;
+    uint64_t drain_deadline_ms;
     bool closing;
     bool cancelled;
     uint64_t started_ms;
@@ -398,6 +401,11 @@ model_text_for(const char *status, const char *reason, int64_t exit_code,
     } else if (snag_buf_printf(&text, "Tool status: %s.\n", status) < 0) {
         goto done;
     }
+    if (proc->output_incomplete) {
+        const char *warning = "Post-exit output drain reached its 2000 ms limit; output may be incomplete. The command has exited; remaining capture streams were closed without signalling unrelated descriptor owners.\n";
+        if (snag_buf_append(&text, warning, strlen(warning)) < 0)
+            goto done;
+    }
     if (append_stream_text(&text, "stdout", stdout_stream) < 0 ||
         append_stream_text(&text, "stderr", stderr_stream) < 0)
         goto done;
@@ -709,6 +717,19 @@ flush_capture(struct managed_process *proc, unsigned int stream)
 }
 
 static int
+close_output(struct managed_process *proc, unsigned int stream)
+{
+    struct process_output *output = &proc->output[stream];
+    if (redactor_finish(&output->redactor) < 0)
+        return -1;
+    output->open = false;
+    snag_child_close_stream(&proc->child, stream);
+    if (proc->child.pty)
+        proc->stdin_open = false;
+    return flush_capture(proc, stream);
+}
+
+static int
 process_read(struct managed_process *proc, unsigned int stream)
 {
     struct process_output *output = &proc->output[stream];
@@ -718,13 +739,7 @@ process_read(struct managed_process *proc, unsigned int stream)
         if (redactor_feed(&output->redactor, bytes, (size_t)n) < 0)
             return -1;
     } else if (n == 0) {
-        if (redactor_finish(&output->redactor) < 0)
-            return -1;
-        output->open = false;
-        snag_child_close_stream(&proc->child, stream);
-        if (proc->child.pty) {
-            proc->stdin_open = false;
-        }
+        return close_output(proc, stream);
     } else if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
         return -1;
     }
@@ -780,6 +795,7 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
                     goto fail;
             } else if (exited) {
                 proc->child_done = true;
+                proc->drain_deadline_ms = saturating_deadline(now, SNAG_TOOL_DRAIN_GRACE_MS);
                 managed_close_input(proc);
             }
         }
@@ -843,6 +859,22 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
             goto fail;
         next_fd = (i + 1u) % streams;
     }
+    now = snag_monotonic_ms();
+    for (size_t i = 0u; i < SNAG_MAX_PROCESSES; ++i) {
+        struct managed_process *proc = processes[i];
+        if (!proc || !proc->child_done || now < proc->drain_deadline_ms)
+            continue;
+        /* A separate server can retain a passed writer after the child exits.
+         * Bound capture, not that unrelated process's lifetime. Output activity
+         * never extends this deadline. */
+        for (unsigned int s = 0u; s < 2u; ++s) {
+            if (!proc->output[s].open)
+                continue;
+            proc->output_incomplete = true;
+            if (close_output(proc, s) < 0)
+                goto fail;
+        }
+    }
     return 0;
 fail:
     snag_errorf(error, error_size, "command I/O or output journal failed: %s", strerror(errno));
@@ -881,7 +913,7 @@ snag_tools_collect(const char *handle, const char *reason, json_t **result,
             if (snag_child_reap(&proc->child) < 0)
                 goto out;
         }
-        reason = NULL;
+        reason = proc->output_incomplete ? "output_drain_timeout" : NULL;
         if (proc->cancelled) {
             status = "cancelled";
             reason = "turn_cancelled";

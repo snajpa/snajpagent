@@ -925,7 +925,10 @@ snag_tool_result_valid(const json_t *result)
                             strcmp(reason, "operator_yield") == 0 ||
                             strcmp(reason, "batch_yield") == 0 ||
                             strcmp(reason, "steering_handoff") == 0))) ? 0 : -1;
-    if (!json_is_null(reason_value) || !json_is_null(handle))
+    if (!json_is_null(handle) ||
+        (!json_is_null(reason_value) &&
+         !(reason && strcmp(reason, "output_drain_timeout") == 0 &&
+           (!strcmp(status, "succeeded") || !strcmp(status, "failed") || !strcmp(status, "signaled")))))
         return -1;
     if (strcmp(status, "succeeded") == 0 || strcmp(status, "failed") == 0)
         return json_is_integer(exit_value) && json_is_null(signal_value) ? 0 : -1;
