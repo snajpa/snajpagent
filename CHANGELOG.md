@@ -2,6 +2,12 @@
 
 # Changelog
 
+## Unreleased
+
+- Accept completed tool arguments after an empty streaming placeholder, including
+  snapshot-only responses from Codex Spark. Conflicting arguments still fail
+  before tool execution.
+
 ## 0.99.1 — 2026-09-07
 
 - First full binary release: Linux x86-64, AArch64 and i686; experimental macOS

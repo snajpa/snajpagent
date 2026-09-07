@@ -2665,6 +2665,95 @@ def run_listener_collision_case(binary, root, provider, environment):
         for terminal in reversed(terminals):
             terminal.close()
 
+def run_argument_snapshot_cases(binary, root, provider, environment):
+    """Exercise snapshot-only tool streams and reject real conflicts before execution."""
+    for mode in ("done", "item", "terminal", "empty-delta", "streamed",
+                 "initial", "conflict-delta", "conflict-initial",
+                 "conflict-completed", "empty-completed", "late-delta",
+                 "invalid-json"):
+        case = root / f"arguments-{mode}"
+        case.mkdir(parents=True)
+        config = case / "config.ini"
+        write_irc_config(config, provider.port, "host-model")
+        state = case / "state"
+        succeeds = mode in ("done", "item", "terminal", "empty-delta",
+                            "streamed", "initial")
+        arguments = {"command": "printf snapshot-ok >> marker", "workdir": str(case),
+                     "timeout_ms": None, "max_output_tokens": None,
+                     "pty": False, "stdin": None, "yield_ms": 1000}
+
+        def respond(handler, request, sequence):
+            if any(item.get("type") == "function_call_output"
+                   for item in request.get("input", [])):
+                body = provider.response_body(sequence, "snapshot test finished")
+            else:
+                wire = provider.function_body(sequence, "call_snapshot",
+                                              "exec_command", arguments)
+                events = [json.loads(record.split("data: ", 1)[1])
+                          for record in wire.strip().split("\n\n")]
+                added, delta, done, item_done, completed = events[1:]
+                encoded = done["arguments"]
+                if mode in ("initial", "conflict-initial"):
+                    added["item"]["arguments"] = (
+                        encoded if mode == "initial" else '{"command":"other"}')
+                if mode == "empty-delta":
+                    delta["delta"] = ""
+                if mode == "conflict-delta":
+                    delta["delta"] = '{"command":"other"}'
+                if mode == "conflict-completed":
+                    item_done["item"]["arguments"] = '{"command":"other"}'
+                if mode == "empty-completed":
+                    done["arguments"] = ""
+                if mode == "invalid-json":
+                    done["arguments"] = item_done["item"]["arguments"] = "[]"
+                if mode not in ("empty-delta", "streamed", "conflict-delta"):
+                    events.remove(delta)
+                if mode == "late-delta":
+                    events.insert(events.index(done) + 1, delta)
+                if mode in ("item", "terminal"):
+                    events.remove(done)
+                if mode == "terminal":
+                    events.remove(item_done)
+                    completed["response"]["output"] = [item_done["item"]]
+                body = "".join(provider.event(event["type"], event)
+                               for event in events)
+            payload = body.encode()
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.send_header("Content-Length", str(len(payload)))
+            handler.end_headers()
+            handler.wfile.write(payload)
+            handler.close_connection = True
+
+        provider.runtime_handler = respond
+        try:
+            result = subprocess.run(
+                [str(binary), "--config", str(config), "--dotdir", str(state),
+                 "-e", "--", "yo"], cwd=case, env=environment,
+                capture_output=True, text=True, timeout=25)
+            _, events = read_events(state)
+            starts = event_list(events, "tool_started")
+            if succeeds:
+                assert result.returncode == 0, (mode, result.stdout, result.stderr)
+                assert len(starts) == 1, (mode, starts)
+                assert (case / "marker").read_text() == "snapshot-ok"
+                assert not event_list(events, "response_failed"), mode
+                assert "snapshot test finished" in result.stdout
+            else:
+                assert result.returncode != 0, mode
+                assert not starts and not (case / "marker").exists(), mode
+                failures = event_list(events, "response_failed")
+                assert failures, mode
+                if mode.startswith("conflict-") or mode == "empty-completed":
+                    assert all(event["data"]["message"] ==
+                               "function argument delta and snapshot disagree"
+                               for event in failures), (mode, failures)
+            assert not provider.failure, provider.failure
+            print(f"argument snapshots {mode}: ok", flush=True)
+        finally:
+            provider.runtime_handler = None
+
+
 def run_multi_tool_cases(binary, root, provider, environment):
     for mode in ("parallel", "serial", "yield", "failure", "single-request", "single-serial", "steer", "cancel", "full-output"):
         case = root / ("multi-" + mode)
@@ -4834,6 +4923,7 @@ def run_irc_case(binary, root):
         run_runtime_history_case(binary, root, provider, environment)
         run_destination_case(binary, root, provider, environment)
         run_listener_collision_case(binary, root, provider, environment)
+        run_argument_snapshot_cases(binary, root, provider, environment)
         run_multi_tool_cases(binary, root, provider, environment)
         run_output_cap_cases(binary, root, provider, environment)
         run_ctrl_d_cases(binary, root, provider, environment)

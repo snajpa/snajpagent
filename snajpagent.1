@@ -1629,6 +1629,10 @@ narrower path.  Oversized file output fails explicitly: use smaller line ranges.
 Directory order is sorted per directory; pagination observes the live tree,
 not a filesystem snapshot.
 .PP
+Tool arguments can arrive as streamed bytes or completed snapshots.  An empty
+in-progress placeholder leaves the arguments pending.  Conflicting argument
+bytes or completed snapshots fail before tool execution.
+.PP
 Commands that yield, reach a foreground handoff deadline, or receive urgent
 input continue under a process handle; the model can wait, interact, or
 explicitly terminate them with

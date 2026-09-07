@@ -502,7 +502,8 @@ reconcile_arguments(struct snag_responses_stream *stream,
         !snag_utf8_valid((const unsigned char *)arguments, len, true))
         return stream_fail(stream, EPROTO,
                            "invalid function call arguments snapshot");
-    if (item->arguments_seen) {
+    /* Empty in-progress snapshots and deltas carry no argument bytes. */
+    if (item->arguments.len || item->arguments_complete) {
         if (!text_equal(&item->arguments, arguments, len))
             return stream_fail(stream, EPROTO,
                                "function argument delta and snapshot disagree");
