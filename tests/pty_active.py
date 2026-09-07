@@ -1794,26 +1794,27 @@ def test_goal_refusal_failure_block_and_restart_state():
     child = Child([])
     child.wait(PROMPT.rstrip())
     child.send(b"/goal refusing goal\r")
-    child.wait(b"I cannot continue this goal")
-    paused_end = child.wait(b"Goal paused after model refusal")
-    child.exit_cleanly(paused_end)
-    assert bytes(child.buf).count(b"Goal paused") == 1, bytes(child.buf)
-    assert b"goal paused after" not in child.buf, bytes(child.buf)
+    child.wait(b"I cannot continue this goal.")
+    child.wait(b"Goal active; retrying")
+    child.send(b"/goal pause\r")
+    paused = child.wait(b"Goal paused at the current turn boundary")
+    child.exit_cleanly(paused)
     log = events(new_session(before))
-    assert one(log, "goal_paused")["data"]["reason"] == "refusal"
+    assert one(log, "goal_paused")["data"]["reason"] == "user"
 
     before = session_ids()
     child = Child([])
     child.wait(PROMPT.rstrip())
     child.send(b"/goal failing goal\r")
     child.wait(b"fixture goal provider failed")
-    paused_end = child.wait(b"Goal paused after the turn stopped")
-    child.exit_cleanly(paused_end)
-    assert bytes(child.buf).count(b"Goal paused") == 1, bytes(child.buf)
-    assert b"goal paused after" not in child.buf, bytes(child.buf)
+    child.wait(b"Goal active; retrying")
+    done = child.wait(b"goal done", timeout=20.0)
+    child.exit_cleanly(done)
     log = events(new_session(before))
-    assert one(log, "goal_paused")["data"]["reason"] == "turn_stopped"
-    one(log, "turn_failed")
+    assert not [e for e in log if e["type"] == "goal_paused"]
+    assert len([e for e in log if e["type"] == "turn_recovery"]) == 4
+    assert len([e for e in log if e["type"] == "turn_started"]) == 1
+    one(log, "goal_completed")
 
     before = session_ids()
     child = Child([])
@@ -4658,7 +4659,7 @@ def test_goal_orderly_quit_resume():
                 # A turn-only Ctrl-C deliberately pauses first; a later exit
                 # must preserve that pause, not turn it back into an active goal.
                 child.send(b"\x03")
-                child.wait(b"Goal paused after the turn stopped")
+                child.wait(b"Goal paused at the current turn boundary")
                 child.send(b"\x03" * 4)
             else:
                 child.send(b"\x04")
@@ -4671,7 +4672,7 @@ def test_goal_orderly_quit_resume():
         assert one(stopped, "goal_lock_changed")["data"]["locked"]
         assert not [e for e in stopped if e["type"] in ("goal_resumed", "goal_completed")]
         if mode == "five-ctrl-c":
-            assert one(stopped, "goal_paused")["data"]["reason"] == "turn_stopped"
+            assert one(stopped, "goal_paused")["data"]["reason"] == "user"
         else:
             assert not [e for e in stopped if e["type"] == "goal_paused"]
         one(stopped, "turn_interrupted")

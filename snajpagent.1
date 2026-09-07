@@ -210,7 +210,8 @@ shows its state and any blocker.
 pauses automatic continuation at a turn boundary;
 .B /goal resume
 starts it again.  Pausing does not kill a command already running.
-Failures, refusal and turn-only interruption also pause automatic goal work.
+Errors and provider refusals retain the goal and recover automatically.
+Explicit turn interruption pauses automatic goal work.
 .SS Leave and resume a session
 A session saves the workspace, conversation, tool results, model selection,
 queue and goal on disk.  Normal exit prints a command to reopen that exact
@@ -836,12 +837,28 @@ The original prompt is not duplicated and completed tools are not replayed.
 Read-only mode is preserved; current next-turn model settings apply.
 Available in both views and after session resume, until another turn starts.
 Active turns cannot be retried. Queued work and paused goals stay paused.
-Turn failures display a hint to try this command.
+Turn failures outside active-goal recovery display a hint to try this command.
+Active goals recover automatically; a retrying response retains its turn,
+completed tool results and live command handles.
+.SS Input timestamps
+New prompts and steers carry separate host-generated timing metadata in model
+context.  The original user text and its authority remain unchanged.
+.B received_at
+records acceptance of the submitted input;
+.B first_context_at
+records its first admission to an outgoing model request, including an attempted
+dispatch that fails.  These UTC timestamps remain fixed through retries and
+replay.  Queue delays can make first admission later than receipt; an edit uses
+its accepted revision's receipt time.  Metadata is explicitly labelled as host
+text, and does not claim provider acceptance or model processing.
+Older missing timing data remains unavailable rather than being inferred from
+replay time.  Terminal prompt and IRC display formats are unchanged.
 .SS Goals
 An active goal continues across ordinary turns until complete, paused,
 cancelled, or blocked.  Queued operator turns run before the next automatic
-goal turn.  Failures, refusal and turn-only interruption pause automatic
-continuation.  Quitting the foreground process interrupts its turn but does
+goal turn.  Errors and provider refusals retain the active goal and schedule
+recovery with interruptible backoff, without an attempt limit.  Turn-only
+interruption pauses automatic continuation.  Quitting the foreground process interrupts its turn but does
 not pause its goal.  Session resume preserves the saved goal state unchanged.
 .TP
 .BR /goal , " /goal status"
@@ -1969,7 +1986,7 @@ item rather than appending a new one.
 .TP
 .B There are queued prompts but nothing is running.
 Retained queues are deliberately paused after session resume.  Interruptions
-and failures can also pause them.  Inspect
+pause them; active-goal errors keep recovery scheduled.  Inspect
 .B /queue
 and use
 .B /next
@@ -2043,6 +2060,20 @@ a second owner.  Pre-1.0 internal formats can change; preserve older logs and
 use a compatible binary to inspect them rather than rewriting or deleting
 unknown data.  Archive/deletion of a session does not erase shared prompt history.
 .SS Provider failures
+An active goal retries failed work indefinitely with paced, interruptible waits.
+Provider capacity exhaustion, protocol errors, context recovery failures and
+local prerequisites do not pause or block the goal.  Recovery preserves
+completed tool effects, partial output and unsettled command handles.  Unsafe
+local state must be reconciled before new tools are admitted.  Credentials are
+read again on each attempt; next-turn model settings keep their normal boundary.
+Explicit pause, cancellation and exit remain available during backoff.
+An exited process resumes work when its saved active session is reopened.
+.PP
+Consecutive recovery failures appear as one bounded host-generated summary in
+model context.  Detailed errors remain in the session log, and repeated terminal
+notices are rate-limited.  A provider refusal does not authorize bypassing its
+policy or changing the request's purpose.
+.PP
 Transient transport, HTTP rate-limit/server, and structured Responses stream
 failures receive at most two retries of the same request, with bounded backoff
 and cancellation available during the wait.  Earlier turn/tool work is not
@@ -2056,7 +2087,9 @@ View/status controls alone do not veto retries.
 Stream retries stop once output or tool activity has been observed;
 malformed or ambiguous partial records are not automatically replayed.
 .PP
-Policy, access, quota and unknown structured failures are not transient retries.
+Policy, access, quota and unknown structured failures skip the short transport
+retry loop.  Active goals retain their paced recovery obligation for these
+errors too.
 For a pre-output
 .B cyber_policy
 rejection, the model instead receives up to three durable clarification
@@ -2064,7 +2097,9 @@ instructions per turn.  The original task remains intact: the instruction asks
 for accurate restatement of ambiguous phrasing with purpose, actions, targets
 and authorization unchanged, and operator clarification where needed.  New input
 or observed output/activity prevents another automatic clarification.  A fourth
-rejection ends the turn.  There is no provider switch or concealed task scope.
+rejection stops clarification; an active goal retains paced recovery without
+adding more clarification messages.  Other turns fail and can be retried manually.
+There is no provider switch or concealed task scope.
 .PP
 Rollout shows one concise "provider clarification N/3" notice at every verbosity
 level.  Existing levels 4, 5 and 6 add event, redacted protocol and wire details.

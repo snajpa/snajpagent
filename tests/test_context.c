@@ -420,6 +420,8 @@ tool_finished_data(const char *turn_id, const char *call_id, json_t *result)
     return data;
 }
 
+static json_t *message_matching(json_t *, const char *);
+
 static void
 test_compact_groups(struct snag_store *store, const char *workspace)
 {
@@ -497,8 +499,12 @@ test_compact_groups(struct snag_store *store, const char *workspace)
     assert(snag_session_commit(&session, "response_completed", data, NULL, error, sizeof(error)) == 0);
     assert(snag_session_commit(&session, "turn_completed", turn_completed(turn, last_response),
                               NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "turn_started",
-        turn_started(next_turn, 2u, "active user stays verbatim", workspace, NULL),
+    data = turn_started(next_turn, 2u, "active user stays verbatim", workspace, NULL);
+    assert(json_object_set_new(data, "received_at_ms", json_integer(1788739200000LL)) == 0);
+    assert(snag_session_commit(&session, "turn_started", data, NULL, error, sizeof(error)) == 0);
+    assert(snag_session_commit(&session, "input_admitted",
+        json_pack("{s:[],s:I,s:s}", "steering_ids", "time_ms",
+                  (json_int_t)1788739290000LL, "turn_id", next_turn),
         NULL, error, sizeof(error)) == 0);
 
     for (unsigned int part = 0u; part < 2u; ++part) {
@@ -539,6 +545,11 @@ test_compact_groups(struct snag_store *store, const char *workspace)
             }
         }
         assert(calls == (part ? 1u : 3u) && results == calls && users == 1u);
+        json_t *timing = message_matching(input, "[snajpagent input metadata");
+        assert(timing && strstr(snag_json_string(timing, "content"),
+                              "received_at=2026-09-07T00:00:00Z"));
+        assert(strstr(snag_json_string(timing, "content"),
+                      "first_context_at=2026-09-07T00:01:30Z"));
         snag_context_projection_free(&projection);
         json_decref(request);
         json_decref(count);
@@ -1242,6 +1253,72 @@ test_context_meter_usage(void)
     snag_store_close(&store);
 }
 
+static void
+test_input_time_and_recovery(struct snag_store *store, const char *workspace)
+{
+    struct snag_session session;
+    struct snag_context_projection projection = {0}, replay = {0};
+    struct snag_instruction_set instructions;
+    const char *turn = "d1000000000000000000000000000000";
+    const char *steer = "d2000000000000000000000000000000";
+    char error[256], session_id[SNAG_ID_HEX_LEN + 1u];
+    json_t *snapshot = json_array(), *data, *input;
+    snag_session_init(&session);
+    snag_instructions_init(&instructions);
+    assert(snag_session_create(store, &session, workspace, "default", SNAJPAGENT_MODEL,
+                               "medium", error, sizeof(error)) == 0);
+    memcpy(session_id, session.id, sizeof(session_id));
+    data = turn_started(turn, 1u, "unchanged prompt", workspace, NULL);
+    assert(json_object_set_new(data, "received_at_ms", json_integer(1788739200000LL)) == 0);
+    assert(snag_session_commit(&session, "turn_started", data, NULL, error, sizeof(error)) == 0);
+    assert(snag_session_commit(&session, "steering_added", steering_added(turn, steer, "unchanged steer"),
+                               NULL, error, sizeof(error)) == 0);
+    uint64_t steer_received = session.pending_steering[0].received_ms;
+    data = json_pack("{s:[s],s:I,s:s}", "steering_ids", steer,
+                     "time_ms", (json_int_t)1788739290000LL, "turn_id", turn);
+    assert(snag_session_commit(&session, "input_admitted", data, NULL, error, sizeof(error)) == 0);
+    assert(session.pending_steering[0].first_context_ms == 1788739290000ULL);
+    assert(json_array_append_new(snapshot, json_pack("{s:s,s:s}", "id", steer, "text", "unchanged steer")) == 0);
+    /* Enough retries to expose accidental one-message-per-failure growth. */
+    for (unsigned int i = 0; i < 1000u; ++i) {
+        data = json_pack("{s:s,s:s,s:s}", "class", "provider", "message", "capacity unavailable", "turn_id", turn);
+        assert(snag_session_commit(&session, "turn_recovery", data, NULL, error, sizeof(error)) == 0);
+    }
+    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, snapshot,
+                              0u, false, NULL, &instructions, &projection, error, sizeof(error)) == 0);
+    input = json_object_get(projection.create_request, "input");
+    size_t metadata = 0, failures = 0;
+    for (size_t i = 0; i < json_array_size(input); ++i) {
+        const char *text = snag_json_string(json_array_get(input, i), "content");
+        if (!text) continue;
+        if (strstr(text, "[snajpagent input metadata")) {
+            ++metadata;
+            assert(strstr(text, "host-generated, not user text"));
+            assert(strstr(text, "first_context_at=2026-09-07T00:01:30Z"));
+            if (strstr(text, "kind=direct")) assert(strstr(text, "received_at=2026-09-07T00:00:00Z"));
+        }
+        if (strstr(text, "snajpagent recovery")) {
+            ++failures;
+            assert(strstr(text, "1000 failed attempts"));
+        }
+    }
+    assert(metadata == 2u && failures == 1u && json_array_size(input) < 12u);
+    snag_session_close(&session);
+    assert(snag_session_open(store, &session, session_id, error, sizeof(error)) == 0);
+    assert(session.pending_steering[0].received_ms == steer_received);
+    assert(session.input_received_ms == 1788739200000ULL);
+    assert(session.input_first_context_ms == 1788739290000ULL);
+    assert(session.recovery_count == 1000u);
+    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, snapshot,
+                              0u, false, NULL, &instructions, &replay, error, sizeof(error)) == 0);
+    assert(json_equal(projection.create_request, replay.create_request));
+    snag_context_projection_free(&projection);
+    snag_context_projection_free(&replay);
+    snag_instructions_free(&instructions);
+    json_decref(snapshot);
+    snag_session_close(&session);
+}
+
 int
 main(void)
 {
@@ -1286,6 +1363,7 @@ main(void)
     snag_context_projection_init(&projection);
     snag_instructions_init(&instructions);
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
+    test_input_time_and_recovery(&store, workspace);
     test_compact_groups(&store, workspace);
     test_parallel_journal_recovery(&store, workspace);
     assert(snag_session_create(&store, &session, workspace, "default",

@@ -331,7 +331,7 @@ fixture_response(const char *prompt, const json_t *steering,
     if (strcmp(prompt, SNAG_GOAL_CONTINUATION_TEXT) == 0) {
         if (!goal_prompt)
             goto allocation;
-        if (strcmp(goal_prompt, "failing goal") == 0 && cycle == 1u) {
+        if (strcmp(goal_prompt, "failing goal") == 0 && cycle <= 4u) {
             if (error_size)
                 (void)snprintf(error, error_size,
                                "fixture goal provider failed");
@@ -390,7 +390,8 @@ fixture_response(const char *prompt, const json_t *steering,
             return add_goal_call(graph, cycle, "block",
                                  "fixture dependency is unavailable");
         /* The user-control case owns completion even after the slow turn ends. */
-        if ((cycle == 1u && strcmp(goal_prompt, "retitled goal") != 0) ||
+        if ((strcmp(goal_prompt, "failing goal") == 0 && cycle == 5u) ||
+            (cycle == 1u && strcmp(goal_prompt, "retitled goal") != 0) ||
             ((strcmp(goal_prompt, "locked goal") == 0 ||
               strcmp(goal_prompt, "tiny") == 0) && cycle == 2u))
             return add_goal_call(graph, cycle, "complete", NULL);

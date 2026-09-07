@@ -69,7 +69,8 @@ beyond it:
 
 Goals continue until complete, paused, cancelled, or blocked. Queued prompts
 come first. `/goal pause` pauses continuation at a turn boundary; it does not
-interrupt a running turn.
+interrupt a running turn. Errors keep an active goal retrying with paced,
+interruptible waits, preserving completed work and live command handles.
 
 Ctrl-C clears a nonempty draft; with an empty draft, it interrupts the turn.
 Ctrl-D on an empty draft exits. No work continues after the program exits.

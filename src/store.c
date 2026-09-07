@@ -305,7 +305,7 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
     event = json_pack("{s:O,s:s,s:I,s:s,s:I,s:s,s:i}",
         "data", data, "prev_sha256", session->prev_sha256,
         "seq", (json_int_t)seq, "session_id", session->id,
-        "time_ms", (json_int_t)snag_time_ms(), "type", type, "v", 1);
+        "time_ms", (json_int_t)session->last_time_ms, "type", type, "v", 1);
     if (!event || snag_json_digest(event, digest) < 0)
         goto memory_error;
     if (snag_json_set_new(event, "event_sha256", json_string(digest)) < 0 ||
@@ -328,15 +328,24 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
         }
         if (snag_write_full(session->log_fd, line.data, line.len) < 0 ||
             snag_sync_file(session->log_fd) < 0) {
+            int saved = errno;
+            session->append_rollback_end = snag_seek(session->log_fd, 0, SEEK_END);
+            session->append_rollback_pending = session->append_rollback_end != session->log_end;
+            if (session->append_rollback_pending && session->append_rollback_end >= session->log_end &&
+                snag_truncate(session->log_fd, session->log_end) == 0 &&
+                snag_sync_file(session->log_fd) == 0)
+                session->append_rollback_pending = false;
+            else if (session->append_rollback_pending)
+                session->append_rollback_end = snag_seek(session->log_fd, 0, SEEK_END);
             snag_errorf(error, error_size, "cannot durably append %s: %s", type,
-                      strerror(errno));
+                      strerror(saved));
+            errno = saved;
             goto out;
         }
     }
     session->log_end += (int64_t)line.len;
     session->next_seq++;
     memcpy(session->prev_sha256, digest, sizeof(digest));
-    session->last_time_ms = snag_time_ms();
     if (written_seq)
         *written_seq = seq;
     rc = 0;
@@ -585,6 +594,7 @@ add_pending_steering(struct snag_session *session, const char *id,
     memset(pending, 0, sizeof(*pending));
     memcpy(pending->steering_id, id, sizeof(pending->steering_id));
     pending->seq = seq;
+    pending->received_ms = session->last_time_ms;
     pending->text = copy;
     session->pending_steering_bytes += len;
     return 0;
@@ -1091,14 +1101,14 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
     } else if (strcmp(type, "steering_added") == 0 ||
                strcmp(type, "irc_reply_reminder") == 0) {
-        static const char *const keys[] = {"steering_id", "text", "turn_id"};
+        static const char *const keys[] = {"steering_id", "text", "turn_id", "received_at_ms"};
         const char *steering_id = snag_json_string(data, "steering_id");
         const char *text = snag_json_string(data, "text");
         const char *turn_id = snag_json_string(data, "turn_id");
         size_t len;
         bool reminder = strcmp(type, "irc_reply_reminder") == 0;
 
-        if (!snag_json_exact_keys(data, keys, 3u) || !session->active_turn ||
+        if (!snag_json_exact_keys(data, keys, json_object_get(data, "received_at_ms") ? 4u : 3u) || !session->active_turn ||
             session->response_terminal == SNAG_RESPONSE_TERMINAL_FAILED ||
             session->response_terminal == SNAG_RESPONSE_TERMINAL_INTERRUPTED ||
             !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
@@ -1118,10 +1128,14 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
         if (add_pending_steering(session, steering_id, text, len, seq) < 0)
             return -1;
+        if (json_object_get(data, "received_at_ms") &&
+            snag_json_integer_u64(data, "received_at_ms",
+                &session->pending_steering[session->pending_steering_count - 1u].received_ms) < 0)
+            goto invalid;
         if (reminder)
             session->irc_reply_reminded = true;
     } else if (strcmp(type, "future_turn_queued") == 0) {
-        static const char *const keys[] = {"queue_id", "read_only", "text", "while_turn_id"};
+        static const char *const keys[] = {"queue_id", "read_only", "text", "while_turn_id", "received_at_ms"};
         const char *queue_id = snag_json_string(data, "queue_id");
         const char *text = snag_json_string(data, "text");
         const char *turn_id = snag_json_string(data, "while_turn_id");
@@ -1129,9 +1143,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         char *copy;
         struct snag_queued_turn *queued;
 
-        if (!snag_json_exact_keys(data, keys, 4u) || !session->active_turn ||
+        if (!snag_json_exact_keys(data, keys, json_object_get(data, "received_at_ms") ? 5u : 4u) ||
+            (!session->active_turn && session->goal_status != SNAG_GOAL_ACTIVE) ||
             !json_is_boolean(json_object_get(data, "read_only")) ||
-            !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
+            !turn_id || strcmp(turn_id, session->active_turn ? session->active_turn_id : "") != 0 ||
             !queue_id || !snag_hex_is_lower(queue_id, SNAG_ID_HEX_LEN) ||
             pending_user_id_exists(session, queue_id) || !text || !*text ||
             (len = strlen(text)) > SNAG_MAX_QUEUED_TEXT ||
@@ -1146,10 +1161,14 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         memcpy(queued->queue_id, queue_id, sizeof(queued->queue_id));
         queued->seq = seq;
         queued->text = copy;
+        queued->received_ms = session->last_time_ms;
+        if (json_object_get(data, "received_at_ms") &&
+            snag_json_integer_u64(data, "received_at_ms", &queued->received_ms) < 0)
+            goto invalid;
         queued->read_only = json_is_true(json_object_get(data, "read_only"));
         session->pending_queue_bytes += len;
     } else if (strcmp(type, "future_turn_edited") == 0) {
-        static const char *const keys[] = {"queue_id", "read_only", "text"};
+        static const char *const keys[] = {"queue_id", "read_only", "text", "received_at_ms"};
         const char *queue_id = snag_json_string(data, "queue_id");
         const char *text = snag_json_string(data, "text");
         struct snag_queued_turn *queued = NULL;
@@ -1157,7 +1176,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         size_t len;
         char *copy;
 
-        if (!snag_json_exact_keys(data, keys, 3u) || !queue_id || !text || !*text ||
+        if (!snag_json_exact_keys(data, keys, json_object_get(data, "received_at_ms") ? 4u : 3u) || !queue_id || !text || !*text ||
             !json_is_boolean(json_object_get(data, "read_only")) ||
             !snag_hex_is_lower(queue_id, SNAG_ID_HEX_LEN) ||
             (len = strlen(text)) > SNAG_MAX_QUEUED_TEXT)
@@ -1181,6 +1200,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             return -1;
         free(queued->text);
         queued->text = copy;
+        queued->received_ms = session->last_time_ms;
+        if (json_object_get(data, "received_at_ms") &&
+            snag_json_integer_u64(data, "received_at_ms", &queued->received_ms) < 0)
+            goto invalid;
         queued->read_only = json_is_true(json_object_get(data, "read_only"));
         session->pending_queue_bytes =
             session->pending_queue_bytes - old_len + len;
@@ -1236,7 +1259,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
     } else if (strcmp(type, "turn_started") == 0) {
         static const char *const keys[] = {
             "config", "input_kind", "instructions", "queue_id", "queue_seq",
-            "read_only", "text", "turn_id", "turn_number", "workspace"
+            "read_only", "text", "turn_id", "turn_number", "workspace", "received_at_ms"
         };
         const char *turn_id;
         const char *text;
@@ -1253,7 +1276,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
 
         if (session->active_turn || session->process_count != 0u ||
             session->pending_steering_count != 0u ||
-            !snag_json_exact_keys(data, keys, 10u) ||
+            !snag_json_exact_keys(data, keys, json_object_get(data, "received_at_ms") ? 11u : 10u) ||
             !json_is_boolean(json_object_get(data, "read_only")) ||
             !(turn_id = snag_json_string(data, "turn_id")) ||
             !snag_hex_is_lower(turn_id, SNAG_ID_HEX_LEN) ||
@@ -1314,6 +1337,11 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !snag_strcpy(session->active_turn_effort,
                         sizeof(session->active_turn_effort), effort))
             goto invalid;
+        session->input_received_ms = session->last_time_ms;
+        session->input_first_context_ms = 0u;
+        if (json_object_get(data, "received_at_ms") &&
+            snag_json_integer_u64(data, "received_at_ms", &session->input_received_ms) < 0)
+            goto invalid;
         session->active_turn = true;
         session->last_turn_failed = false;
         session->max_parallel_commands = (uint32_t)max_parallel;
@@ -1334,6 +1362,43 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             return -1;
         if (queued && consume_oldest_queue(session) < 0)
             goto invalid;
+    } else if (strcmp(type, "input_admitted") == 0) {
+        static const char *const keys[] = {"steering_ids", "time_ms", "turn_id"};
+        json_t *ids = json_object_get(data, "steering_ids");
+        const char *turn_id = snag_json_string(data, "turn_id");
+        uint64_t when;
+        if (!snag_json_exact_keys(data, keys, 3u) || !session->active_turn ||
+            !turn_id || strcmp(turn_id, session->active_turn_id) ||
+            !json_is_array(ids) || json_array_size(ids) > session->pending_steering_count ||
+            snag_json_integer_u64(data, "time_ms", &when) < 0 || !when ||
+            (session->input_first_context_ms && !json_array_size(ids)))
+            goto invalid;
+        if (!session->input_first_context_ms)
+            session->input_first_context_ms = when;
+        for (size_t i = 0; i < json_array_size(ids); ++i) {
+            const char *id = json_string_value(json_array_get(ids, i));
+            bool found = false;
+            for (size_t j = 0; id && j < session->pending_steering_count; ++j) {
+                struct snag_pending_steering *p = &session->pending_steering[j];
+                if (!strcmp(p->steering_id, id) && !p->first_context_ms) {
+                    p->first_context_ms = when;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) goto invalid;
+        }
+    } else if (strcmp(type, "turn_recovery") == 0) {
+        static const char *const keys[] = {"class", "message", "turn_id"};
+        const char *turn_id = snag_json_string(data, "turn_id");
+        const char *message = snag_json_string(data, "message");
+        if (!snag_json_exact_keys(data, keys, 3u) || !session->active_turn ||
+            !turn_id || strcmp(turn_id, session->active_turn_id) ||
+            !snag_json_string(data, "class") || !message || strlen(message) > 8192u ||
+            session->response_open || session->pending_call_count)
+            goto invalid;
+        clear_response_state(session);
+        if (session->recovery_count < UINT64_MAX) ++session->recovery_count;
     } else if (strcmp(type, "response_started") == 0) {
         static const char *const keys[] = {
             "baseline_sha256", "capability_version", "compact_id",
@@ -2109,7 +2174,7 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
             }
             if (!common_event_valid(event, verifier, seq, &type, &data,
                                     error, error_size) ||
-                (fn ? fn(opaque, seq, type, data, error, error_size) :
+                (fn ? fn(opaque, seq, verifier->last_time_ms, type, data, error, error_size) :
                       apply_event(verifier, type, data, seq,
                                   error, error_size)) < 0) {
                 json_decref(event);
@@ -2275,20 +2340,41 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
     struct snag_session staged = {0};
     int rc = -1;
 
+    if (session->append_rollback_pending) {
+        int64_t end = snag_seek(session->log_fd, 0, SEEK_END);
+        if (end < session->log_end || end != session->append_rollback_end ||
+            snag_truncate(session->log_fd, session->log_end) < 0) {
+            snag_errorf(error, error_size, "failed journal append still requires rollback");
+            json_decref(data);
+            return -1;
+        }
+        session->append_rollback_end = session->log_end;
+        if (snag_sync_file(session->log_fd) < 0) {
+            snag_errorf(error, error_size, "journal rollback could not be persisted");
+            json_decref(data);
+            return -1;
+        }
+        session->append_rollback_pending = false;
+    }
     if (!data || clone_session_state(session, &staged) < 0) {
         snag_errorf(error, error_size, "cannot stage %s event", type);
         errno = ENOMEM;
-    } else if (apply_event(&staged, type, data, session->next_seq,
-                          error, error_size) == 0) {
+    } else if ((staged.last_time_ms = snag_time_ms(),
+                apply_event(&staged, type, data, session->next_seq,
+                          error, error_size)) == 0) {
         /* Append updates the staged metadata too. No live state is adopted
          * until durable append succeeds; descriptors and dir_path are borrowed. */
         rc = snag_session_append(&staged, type, data, written_seq,
                                  error, error_size);
     }
     json_decref(data);
-    if (rc < 0)
+    if (rc < 0) {
+        if (staged.append_rollback_pending) {
+            session->append_rollback_pending = true;
+            session->append_rollback_end = staged.append_rollback_end;
+        }
         free_session_state(&staged);
-    else {
+    } else {
         free_session_state(session);
         *session = staged;
     }

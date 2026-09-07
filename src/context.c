@@ -22,12 +22,16 @@ struct context_builder {
     json_t *tools;
     json_t *request_input;
     json_t *deferred_steering;
+    json_t *input_timing;
+    size_t recovery_index;
+    uint64_t recovery_count, recovery_first_ms, event_time_ms;
     json_t *deferred_irc;
     uint64_t deferred_irc_seq;
     size_t steering_seen;
     char active_turn_id[SNAG_ID_HEX_LEN + 1u];
     char target_turn_id[SNAG_ID_HEX_LEN + 1u];
     bool active_turn;
+    bool input_timed;
     bool networked;
     bool compact_stop_before_active;
     bool compact_current;
@@ -223,12 +227,93 @@ out:
 static int
 append_host_failed(struct context_builder *builder, const char *class_name)
 {
-    char text[256];
-
+    char text[384];
+    if (!builder->recovery_count) builder->recovery_first_ms = builder->event_time_ms;
+    if (builder->recovery_count < UINT64_MAX) ++builder->recovery_count;
     (void)snprintf(text, sizeof(text),
-        "Previous " SNAJPAGENT_NAME " turn: failed; class=%s. No final answer completed. Unfinished work did not continue. Do not assume the requested work completed.",
-        class_name);
-    return append_message(builder, "developer", text);
+        "snajpagent recovery (host-generated): %llu failed attempts; last class=%s; elapsed=%llus. "
+        "Retain completed work and unsettled command handles. Failure is not goal completion or a task blocker.",
+        (unsigned long long)builder->recovery_count, class_name,
+        (unsigned long long)((builder->event_time_ms >= builder->recovery_first_ms ?
+            builder->event_time_ms - builder->recovery_first_ms : 0u) / 1000u));
+    if (builder->recovery_count == 1u) {
+        builder->recovery_index = json_array_size(builder->request_input);
+        return append_message(builder, "developer", text);
+    }
+    return json_object_set_new(json_array_get(builder->request_input, builder->recovery_index),
+                               "content", json_string(text));
+}
+
+static void
+input_time(uint64_t ms, char out[32])
+{
+    time_t seconds = (time_t)(ms / 1000u);
+    struct tm tm;
+    if (!ms || !snag_gmtime(&seconds, &tm) ||
+        !strftime(out, 32u, "%Y-%m-%dT%H:%M:%SZ", &tm))
+        (void)snprintf(out, 32u, "unavailable");
+}
+
+static int
+render_input_time(json_t *entry)
+{
+    char received[32], first[32], text[384];
+    json_t *message = json_object_get(entry, "message");
+    input_time((uint64_t)json_integer_value(json_object_get(entry, "received")), received);
+    input_time((uint64_t)json_integer_value(json_object_get(entry, "first")), first);
+    (void)snprintf(text, sizeof(text),
+        "[snajpagent input metadata — host-generated, not user text]\n"
+        "input=%s kind=%s received_at=%s first_context_at=%s\n"
+        "Times describe host receipt and first request admission, not provider acceptance. "
+        "The following input retains its original authority.",
+        snag_json_string(entry, "id"), snag_json_string(entry, "kind"), received, first);
+    return json_object_set_new(message, "content", json_string(text));
+}
+
+static int
+append_input(struct context_builder *builder, const char *text, const char *kind,
+             const char *id, uint64_t received, uint64_t first)
+{
+    if (!builder->input_timed && !first)
+        return append_message(builder, "user", text);
+    json_t *message = json_pack("{s:s,s:s}", "role", "developer", "content", "");
+    json_t *entry = json_pack("{s:s,s:s,s:I,s:I,s:O}", "id", id, "kind", kind,
+        "received", (json_int_t)received, "first", (json_int_t)first, "message", message);
+    int rc = -1;
+    builder->recovery_count = 0u;
+    if (message && entry && render_input_time(entry) == 0 &&
+        json_array_append(builder->request_input, message) == 0 &&
+        (first || json_array_append(builder->input_timing, entry) == 0))
+        rc = append_message(builder, "user", text);
+    json_decref(entry);
+    json_decref(message);
+    return rc;
+}
+
+static int
+admit_context_input(struct context_builder *builder, const json_t *data)
+{
+    json_t *ids = json_object_get(data, "steering_ids");
+    const char *turn_id = snag_json_string(data, "turn_id");
+    uint64_t when;
+    if (!turn_id || !json_is_array(ids) ||
+        snag_json_integer_u64(data, "time_ms", &when) < 0) return -1;
+    for (size_t list = 0; list < 2u; ++list) {
+        json_t *entries = list ? builder->deferred_steering : builder->input_timing;
+        for (size_t i = 0; i < json_array_size(entries); ++i) {
+            json_t *entry = json_array_get(entries, i);
+            const char *id = snag_json_string(entry, "id");
+            bool found = id && !strcmp(id, turn_id);
+            for (size_t j = 0; id && j < json_array_size(ids); ++j) {
+                const char *steer = json_string_value(json_array_get(ids, j));
+                if (steer && !strcmp(id, steer)) found = true;
+            }
+            if (!found || json_integer_value(json_object_get(entry, "first"))) continue;
+            if (json_object_set_new(entry, "first", json_integer((json_int_t)when)) < 0 ||
+                (!list && render_input_time(entry) < 0)) return -1;
+        }
+    }
+    return 0;
 }
 
 static int
@@ -590,11 +675,14 @@ trim:
 }
 
 static int
-defer_steering(struct context_builder *builder, const char *text)
+defer_steering(struct context_builder *builder, const char *text,
+               const char *id, uint64_t received)
 {
     if (!builder->deferred_steering ||
         json_array_append_new(builder->deferred_steering,
-                              json_string(text)) < 0)
+                              json_pack("{s:s,s:s,s:I,s:I}", "text", text,
+                                  "id", id, "received", (json_int_t)received,
+                                  "first", (json_int_t)0)) < 0)
         return -1;
     return 0;
 }
@@ -607,12 +695,14 @@ append_deferred_steering(struct context_builder *builder)
 
     while (json_array_size(builder->deferred_steering) != 0u) {
         json_t *value = json_array_get(builder->deferred_steering, 0u);
-        const char *text = json_is_string(value) ? json_string_value(value) : NULL;
+        const char *text = snag_json_string(value, "text");
 
         if (!text ||
             append_message(builder, "developer",
                            boundary) < 0 ||
-            append_message(builder, "user", text) < 0 ||
+            append_input(builder, text, "steer", snag_json_string(value, "id"),
+                (uint64_t)json_integer_value(json_object_get(value, "received")),
+                (uint64_t)json_integer_value(json_object_get(value, "first"))) < 0 ||
             json_array_remove(builder->deferred_steering, 0u) < 0)
             return -1;
     }
@@ -671,12 +761,35 @@ append_room_event(struct context_builder *builder, const json_t *data)
 }
 
 static int
-context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
+context_event(void *opaque, uint64_t seq, uint64_t time_ms, const char *type, const json_t *data,
               char *error, size_t error_size)
 {
     struct context_builder *builder = opaque;
 
+    builder->event_time_ms = time_ms;
     bool summarized = builder->session && seq <= builder->session->compact_seq;
+    if (json_object_get(data, "received_at_ms") &&
+        (!strcmp(type, "steering_added") || !strcmp(type, "turn_started")) &&
+        snag_json_integer_u64(data, "received_at_ms", &time_ms) < 0) return -1;
+    if (!strcmp(type, "turn_started")) {
+        builder->input_timed = json_object_get(data, "received_at_ms") != NULL;
+        if (json_array_clear(builder->input_timing) < 0) return -1;
+    }
+    if (!strcmp(type, "input_admitted")) return admit_context_input(builder, data);
+    if (!strcmp(type, "turn_recovery")) {
+        if (builder->session && seq <= builder->session->compact_seq) return 0;
+        const char *class_name = snag_json_string(data, "class");
+        return class_name ? append_host_failed(builder, class_name) : -1;
+    }
+    if (!strcmp(type, "response_failed")) {
+        json_t *partial = json_object_get(data, "partial_public");
+        if (builder->session && seq <= builder->session->compact_seq) return 0;
+        if (json_array_size(partial)) builder->recovery_count = 0u;
+        return append_interrupted_prefix(builder, data, error, error_size);
+    }
+    if (!strcmp(type, "response_completed") || !strcmp(type, "tool_finished"))
+        builder->recovery_count = 0u;
+
     if (strcmp(type, "irc_event") == 0) {
         struct snag_irc_event event;
         if (snag_irc_event_read(data, &event) < 0) return -1;
@@ -728,8 +841,11 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
                     snag_instructions_match_metadata(builder->instructions,
                         json_object_get(data, "instructions"), error, error_size) < 0)
                     return -1;
-                if (append_message(builder,
-                    !strcmp(kind, "goal") ? "developer" : "user", text) < 0)
+                uint64_t received = time_ms;
+                if (json_object_get(data, "received_at_ms") &&
+                    snag_json_integer_u64(data, "received_at_ms", &received) < 0) return -1;
+                if ((!strcmp(kind, "goal") ? append_message(builder, "developer", text) :
+                     append_input(builder, text, kind, id, received, 0u)) < 0)
                     return -1;
             }
         } else if (builder->steering && !strcmp(type, "steering_added") &&
@@ -737,7 +853,7 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             const char *id = snag_json_string(data, "steering_id");
             const char *text = snag_json_string(data, "text");
             if (id && text && steering_matches_snapshot(builder, id, text) &&
-                defer_steering(builder, text) < 0)
+                defer_steering(builder, text, snag_json_string(data, "steering_id"), time_ms) < 0)
                 return -1;
         } else if (strcmp(type, "turn_completed") == 0 ||
                    strcmp(type, "turn_completed_silent") == 0 ||
@@ -777,8 +893,12 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
             return -1;
         memcpy(builder->active_turn_id, turn_id, sizeof(builder->active_turn_id));
         builder->active_turn = true;
-        return append_message(builder,
-                              goal_turn ? "developer" : "user", text);
+        if (goal_turn)
+            return builder->recovery_count ? 0 : append_message(builder, "developer", text);
+        uint64_t received = time_ms;
+        if (json_object_get(data, "received_at_ms") &&
+            snag_json_integer_u64(data, "received_at_ms", &received) < 0) return -1;
+        return append_input(builder, text, kind, turn_id, received, 0u);
     }
     if (strcmp(type, "response_started") == 0) {
         const char *turn_id = snag_json_string(data, "turn_id");
@@ -813,7 +933,7 @@ context_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
         }
         if (strcmp(type, "steering_added") != 0)
             return append_message(builder, "developer", text);
-        return defer_steering(builder, text);
+        return defer_steering(builder, text, steering_id, time_ms);
     }
     if (strcmp(type, "response_output_correction") == 0) {
         const char *correction_id = snag_json_string(data, "correction_id");
@@ -1269,7 +1389,7 @@ compact_process(struct context_builder *builder, const char *handle, bool runnin
 }
 
 static int
-compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
+compact_event(void *opaque, uint64_t seq, uint64_t time_ms, const char *type, const json_t *data,
               char *error, size_t error_size)
 {
     struct context_builder *builder = opaque;
@@ -1280,7 +1400,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
     if (builder->compact_stopped)
         return 0;
     if (seq <= builder->session->compact_seq)
-        return context_event(opaque, seq, type, data, error, error_size);
+        return context_event(opaque, seq, time_ms, type, data, error, error_size);
     builder->compact_source_seq = seq;
     if (builder->compact_stop_before_active &&
         strcmp(type, "turn_started") == 0 &&
@@ -1300,7 +1420,7 @@ compact_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
     }
     if (strcmp(type, "compaction_completed") == 0)
         return 0;
-    if (context_event(builder, seq, type, data, error, error_size) < 0)
+    if (context_event(builder, seq, time_ms, type, data, error, error_size) < 0)
         return -1;
     if (strcmp(type, "response_completed") == 0) {
         json_t *items = json_object_get(data, "items");
@@ -1420,6 +1540,7 @@ snag_context_compact_request_build(struct snag_session *session,
     builder.effort = effort;
     builder.request_input = json_array();
     builder.deferred_steering = json_array();
+    builder.input_timing = json_array();
     builder.compact_stop_before_active = active_prefix;
     builder.compact_budget = source_budget;
     builder.compact_allow_oversized_first = allow_oversized_first;
@@ -1428,7 +1549,7 @@ snag_context_compact_request_build(struct snag_session *session,
                sizeof(builder.target_turn_id));
     if (!session || !model || !effort || !request || !count_request ||
         !source_seq || !builder.request_input ||
-        !builder.deferred_steering ||
+        !builder.input_timing || !builder.deferred_steering ||
         session->response_open || session->pending_call_count ||
         (!active_prefix && session->process_count) ||
         session->active_compact_id[0] != '\0' ||
@@ -1503,6 +1624,7 @@ out:
     if (builder.deferred_steering)
         json_decref(builder.deferred_steering);
     json_decref(builder.deferred_irc);
+    json_decref(builder.input_timing);
     return rc;
 }
 
@@ -1587,10 +1709,11 @@ snag_context_build(struct snag_session *session, const char *model,
     builder.steering = steering;
     builder.request_input = json_array();
     builder.deferred_steering = json_array();
+    builder.input_timing = json_array();
     snag_buf_init(&network_harness, 16u * 1024u);
     if (!session || !model || !effort || !steering ||
         !builder.request_input ||
-        !builder.deferred_steering ||
+        !builder.input_timing || !builder.deferred_steering ||
         append_message(&builder, "developer", harness) < 0 ||
         (builder.networked &&
          (snag_buf_printf(&network_harness,
@@ -1714,5 +1837,6 @@ out:
     if (builder.deferred_steering)
         json_decref(builder.deferred_steering);
     json_decref(builder.deferred_irc);
+    json_decref(builder.input_timing);
     return rc;
 }

@@ -139,10 +139,12 @@ When a model turn ends:
    an open queue editor always prevents draining. It is never bypassed. Historical
    goal mentions remain conversation context, and already-frozen requests are
    not retroactively changed. A `/ro` query exposes no goal lifecycle tools.
-4. A refusal pauses the goal instead of repeating the same refusal.
-5. A provider, protocol, context, resource, output, or tool failure that stops
-   the current turn pauses the goal. An ordinary terminal tool result remains
-   available to the model to handle within that turn. A single Ctrl-C turn
+4. Refusals and errors retain the goal's active state and its continuation arm.
+5. Provider, protocol, context, resource, output and tool failures enter paced,
+   interruptible recovery without an attempt limit. Provider/protocol failures
+   continue the same turn with completed tool results and live process handles.
+   Local persistence/adapter failures must reconcile state before new admissions.
+   Ordinary terminal tool results remain available for the model to handle. A single Ctrl-C turn
    interruption also pauses the goal. Quitting the process (Ctrl-D/EOF,
    SIGHUP or SIGTERM) interrupts the turn and preserves the current goal state;
    it is not a goal pause. A Ctrl-C interruption already processed before a
@@ -165,3 +167,14 @@ and status of paused/blocked unfinished goals after replay and compaction;
 their saved state is context, not an instruction to resume. No goal is recreated
 and the user need not repeat its wording. Read-only/queued goal-controller
 suppression and the lifecycle tool restrictions above remain unchanged.
+
+## Recovery and input provenance
+
+`turn_recovery` closes a failed response attempt without closing its turn or
+managed processes. Consecutive recovery notices are coalesced in model context;
+detailed diagnostics stay in the journal. Explicit interruption remains separate.
+
+New input carries host-generated UTC receipt and first-request-admission times.
+`input_admitted` records the latter before request projection, including counting
+requests. Replay keeps both fixed; optional receipt metadata preserves UI queue
+delays. User text/roles are unchanged, and older unavailable times stay absent.

@@ -1824,6 +1824,7 @@ out:
             !ctx.body_failed && !process_controls(&ctx) && !ctx.new_input)
             failure->output_correction = SNAG_OUTPUT_CORRECTION_CYBER_POLICY;
         failure->new_input = ctx.new_input;
+        failure->retry_after_ms = ctx.retry_after_present ? ctx.retry_after_ms : 0u;
         redact_diagnostic(&ctx.secrets, failure->message, sizeof(failure->message));
     }
     if (ctx.cancel_code == 1 || ctx.cancel_code == 2) {

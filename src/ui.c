@@ -73,6 +73,7 @@ struct ui_queue {
 };
 
 struct ui_action {
+    uint64_t received_ms;
     enum snag_term_action action;
     char *text;
     int error;
@@ -450,6 +451,7 @@ read_input(struct snag_ui_display *display, int timeout_ms)
         return -1;
     rc = snag_term_poll(term, timeout_ms, runtime->commands.wake[0],
                        &item->action, &item->text);
+    if (item->text) item->received_ms = snag_time_ms();
     take_snapshot(display, &item->snapshot);
     if (item->text)
         snag_term_destination_route(term, item->text, &item->route);
@@ -1048,6 +1050,7 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms,
             return -1;
         }
     }
+    ui->input_received_ms = item->received_ms;
     ui->input_view = item->snapshot.view;
     ui->input_route = item->route;
     ui->selection = item->snapshot.selection;

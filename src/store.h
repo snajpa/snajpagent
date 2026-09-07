@@ -54,12 +54,14 @@ struct snag_pending_call {
 struct snag_pending_steering {
     char steering_id[SNAG_ID_HEX_LEN + 1u];
     uint64_t seq;
+    uint64_t received_ms, first_context_ms;
     char *text;
 };
 
 struct snag_queued_turn {
     char queue_id[SNAG_ID_HEX_LEN + 1u];
     uint64_t seq;
+    uint64_t received_ms, first_context_ms;
     char *text;
     bool read_only;
 };
@@ -143,6 +145,8 @@ struct snag_session {
     uint64_t context_meter_input_tokens;
     uint64_t capacity_ceiling_input_tokens;
     uint64_t active_response_requested_output_tokens;
+    uint64_t input_received_ms, input_first_context_ms;
+    uint64_t recovery_count;
     uint64_t goal_revision;
     uint64_t goal_turn_count;
     size_t pending_steering_bytes;
@@ -155,6 +159,8 @@ struct snag_session {
     size_t pending_call_count;
     size_t pending_steering_count;
     size_t pending_queue_count;
+    bool append_rollback_pending;
+    int64_t append_rollback_end;
     bool active_turn;
     bool last_turn_failed;
     bool retry_read_only;
@@ -214,7 +220,7 @@ int snag_session_complete_delete(struct snag_store *store,
                                 struct snag_session *session,
                                 char *error, size_t error_size);
 
-typedef int (*snag_session_event_fn)(void *opaque, uint64_t seq,
+typedef int (*snag_session_event_fn)(void *opaque, uint64_t seq, uint64_t time_ms,
                                     const char *type, const json_t *data,
                                     char *error, size_t error_size);
 int snag_session_each_event(struct snag_session *session,

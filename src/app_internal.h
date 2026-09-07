@@ -79,6 +79,11 @@ struct app_state {
     bool queue_armed;
     bool goal_armed;
     bool last_turn_refused;
+    bool recovery_wait;
+    uint64_t input_received_ms;
+    unsigned int recovery_delay_ms;
+    uint64_t recovery_notice_ms, recovery_status_ms;
+    char recovery_error[256];
     bool queue_edit_was_armed;
     bool input_closed;
     bool execute;

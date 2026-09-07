@@ -67,6 +67,11 @@ snag_app_turn_started_data(const struct app_state *app, const char *prompt,
         "turn_number", (json_int_t)(app->session.turn_count + 1u),
         "workspace", app->session.workspace);
 
+    if (data && snag_json_set_new(data, "received_at_ms",
+            json_integer((json_int_t)(queued ? queued->received_ms : app->input_received_ms))) < 0) {
+        json_decref(data);
+        data = NULL;
+    }
     if (data && queued &&
         snag_json_set_new(data, "queue_seq", json_integer((json_int_t)queued->seq)) < 0) {
         json_decref(data);
@@ -491,9 +496,10 @@ snag_app_irc_take_pending(struct app_state *app,
 }
 
 static int
-restore_irc_event(void *opaque, uint64_t seq, const char *type,
+restore_irc_event(void *opaque, uint64_t seq, uint64_t time_ms, const char *type,
                   const json_t *data, char *error, size_t error_size)
 {
+    (void)time_ms;
     struct app_state *app = opaque;
     struct snag_irc_event event;
     (void)seq;
@@ -902,9 +908,10 @@ struct process_read_range {
 };
 
 static int
-read_process_chunk(void *opaque, uint64_t seq, const char *type,
+read_process_chunk(void *opaque, uint64_t seq, uint64_t time_ms, const char *type,
                     const json_t *data, char *error, size_t error_size)
 {
+    (void)time_ms;
     struct process_read_range *read = opaque;
     struct snag_buf bytes;
     uint64_t stream, offset;

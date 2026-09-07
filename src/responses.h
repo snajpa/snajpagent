@@ -18,6 +18,7 @@ struct snag_provider_failure {
     uint64_t requested_input_tokens;
     enum snag_output_correction output_correction;
     bool new_input;
+    uint32_t retry_after_ms;
 };
 
 typedef int (*snag_responses_emit_fn)(void *opaque, size_t output_index,

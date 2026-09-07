@@ -551,13 +551,17 @@ message_snapshot(struct snag_responses_stream *stream, size_t output_index,
     json_t *content = json_object_get(snapshot, "content");
     struct snag_wire_item *item;
 
-    if (!id || !role || strcmp(role, "assistant") != 0 ||
-        (phase && phase_value(phase) == SNAG_PHASE_NONE) ||
-        !json_is_array(content) || !status ||
-        (complete ? strcmp(status, "completed") != 0 :
-                    strcmp(status, "in_progress") != 0))
-        return stream_fail(stream, EPROTO,
-                           "invalid assistant message snapshot");
+    const char *invalid = !id ? "id" :
+        !role || strcmp(role, "assistant") ? "role" :
+        phase && phase_value(phase) == SNAG_PHASE_NONE ? "phase" :
+        !json_is_array(content) ? "content" :
+        !status || strcmp(status, complete ? "completed" : "in_progress") ? "status" : NULL;
+    if (invalid) {
+        char diagnostic[96];
+        (void)snprintf(diagnostic, sizeof(diagnostic),
+                       "invalid assistant message snapshot: %s", invalid);
+        return stream_fail(stream, EPROTO, diagnostic);
+    }
     item = output_index < stream->item_count ?
            find_item(stream, output_index, id, SNAG_WIRE_ITEM_MESSAGE) :
            new_item(stream, output_index, SNAG_WIRE_ITEM_MESSAGE, id);

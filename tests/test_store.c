@@ -7,6 +7,8 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
+#include <sys/resource.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -198,9 +200,10 @@ read_file(const char *path, char *buf, size_t size)
 }
 
 static int
-count_event(void *opaque, uint64_t seq, const char *type, const json_t *data,
+count_event(void *opaque, uint64_t seq, uint64_t time_ms, const char *type, const json_t *data,
             char *error, size_t error_size)
 {
+    (void)time_ms;
     size_t *count = opaque;
     (void)type;
     (void)data;
@@ -260,6 +263,37 @@ test_pending_session(struct snag_store *store, const char *workspace)
     snag_session_close(&session);
 }
 
+static void
+test_failed_append_retry(struct snag_store *store, const char *workspace)
+{
+    struct snag_session session;
+    struct rlimit saved, limited;
+    char error[256], id[SNAG_ID_HEX_LEN + 1u];
+    snag_session_init(&session);
+    assert(snag_session_create(store, &session, workspace, "default", "test", "default",
+                               error, sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+    int64_t end = session.log_end;
+    assert(getrlimit(RLIMIT_FSIZE, &saved) == 0);
+    limited = saved;
+    limited.rlim_cur = (rlim_t)end + 16u;
+    void (*old)(int) = signal(SIGXFSZ, SIG_IGN);
+    assert(old != SIG_ERR && setrlimit(RLIMIT_FSIZE, &limited) == 0);
+    assert(snag_session_commit(&session, "effort_changed",
+        change_data("old_effort", "default", "new_effort", "high"),
+        NULL, error, sizeof(error)) < 0);
+    assert(setrlimit(RLIMIT_FSIZE, &saved) == 0 && signal(SIGXFSZ, old) != SIG_ERR);
+    assert(session.log_end == end && !strcmp(session.default_effort, "default"));
+    assert(lseek(session.log_fd, 0, SEEK_END) == end);
+    assert(snag_session_commit(&session, "effort_changed",
+        change_data("old_effort", "default", "new_effort", "high"),
+        NULL, error, sizeof(error)) == 0);
+    snag_session_close(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(!strcmp(session.default_effort, "high"));
+    snag_session_close(&session);
+}
+
 int
 main(void)
 {
@@ -290,6 +324,7 @@ main(void)
     snag_session_init(&session);
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
     test_pending_session(&store, workspace);
+    test_failed_append_retry(&store, workspace);
     assert(snag_session_create(&store, &session, workspace,
                               "default", "gpt-5.5-2026-04-23", "default",
                               error, sizeof(error)) == 0);

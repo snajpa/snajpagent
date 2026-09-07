@@ -3358,6 +3358,114 @@ def run_provider_clarification_cases(binary, root, provider, environment):
             provider.runtime_handler = None
 
 
+def run_goal_recovery_cases(binary, root, provider, environment):
+    for mode in ("capacity", "snapshot", "steer", "cancel", "running"):
+        case = root / ("gr-" + mode)
+        workspace = case / "w"
+        workspace.mkdir(mode=0o700, parents=True)
+        config = case / "c.ini"
+        write_irc_config(config, provider.port, "host-model")
+        requests, metadata = [], []
+        ready = threading.Event()
+        original = "recover this goal " + mode
+
+        def respond(handler, request, sequence):
+            requests.append(request)
+            attempt = len(requests)
+            meta = [i["content"] for i in request["input"]
+                    if i.get("role") == "developer" and
+                    i.get("content", "").startswith("[snajpagent input metadata")]
+            metadata.append(meta)
+            if attempt == 1:
+                body = provider.function_body(sequence, "create", "create_goal", {"objective": original})
+            elif attempt == 2:
+                body = provider.function_body(sequence, "once", "exec_command", {
+                    "command": "printf executed >> once; printf retained-result" +
+                               ("; sleep 2; printf survived" if mode == "running" else ""),
+                    "workdir": str(workspace), "yield_ms": 10 if mode == "running" else 1000, "timeout_ms": None,
+                    "max_output_tokens": 1000, "pty": False, "stdin": None})
+            elif (mode == "cancel" or attempt <= 6) and not (
+                    mode == "steer" and provider.latest_user(request) == "fresh recovery steer"):
+                ready.set()
+                if mode == "snapshot":
+                    body = provider.event("response.output_item.added", {
+                        "type": "response.output_item.added", "output_index": 0,
+                        "item": {"type": "message", "id": "bad", "role": "assistant",
+                                 "status": "invalid", "content": []}})
+                else:
+                    body = provider.event("response.failed", {"type": "response.failed",
+                        "response": {"error": {"code": "no_accounts", "message": "capacity unavailable"}}})
+            elif mode == "running" and not any(i.get("type") == "function_call" and
+                    i.get("name") == "write_stdin" for i in request["input"]):
+                call_ids = {i["call_id"] for i in request["input"]
+                            if i.get("type") == "function_call" and i.get("name") == "exec_command"}
+                outputs = [i["output"] for i in request["input"]
+                           if i.get("type") == "function_call_output" and i.get("call_id") in call_ids]
+                handle = re.search(r'"handle"\s*:\s*"([a-f0-9]{32})"', outputs[-1]).group(1)
+                body = provider.function_body(sequence, "collect", "write_stdin", {
+                    "handle": handle, "data": "", "eof": False, "terminate": False,
+                    "yield_ms": 1000, "max_output_tokens": 1000})
+            elif not any(i.get("type") == "function_call" and i.get("name") == "update_goal"
+                         for i in request["input"]):
+                body = provider.function_body(sequence, "finish", "update_goal",
+                    {"action": "complete", "text": None})
+            else:
+                body = provider.response_body(sequence, "goal recovery finished")
+            body = body.encode()
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.send_header("Content-Length", str(len(body)))
+            handler.end_headers()
+            handler.wfile.write(body)
+            handler.wfile.flush()
+
+        provider.runtime_handler = respond
+        terminal = TmuxTerminal(case / "t", binary, workspace, case / "s", config,
+                                150, 28, environment=environment)
+        try:
+            terminal.wait("host-model/medium   0% ›")
+            terminal.submit(original)
+            assert ready.wait(10), ("provider did not reach failure", terminal.capture())
+            terminal.wait("Goal active; retrying")
+            if mode == "steer":
+                terminal.submit("fresh recovery steer")
+            if mode == "cancel":
+                terminal.submit("/goal pause")
+                terminal.wait("Goal paused at the current turn boundary")
+                before = len(requests)
+                time.sleep(0.7)
+                assert len(requests) == before
+            else:
+                terminal.wait("goal recovery finished", timeout=25)
+            _, events = read_events(case / "s")
+            pauses = event_list(events, "goal_paused")
+            assert len(pauses) == (1 if mode == "cancel" else 0)
+            assert not event_list(events, "turn_failed")
+            failures = event_list(events, "turn_recovery")
+            assert len(failures) >= (4 if mode in ("capacity", "snapshot") else 1)
+            assert len(event_list(events, "turn_started")) == 1, "replayed a whole turn"
+            assert (workspace / "once").read_text() == "executed", "duplicated side effect"
+            assert all(len([i for i in r["input"] if i.get("role") == "user" and
+                            i.get("content") == original]) == 1 for r in requests)
+            assert metadata[0] and all(m[0] == metadata[0][0] for m in metadata)
+            assert "unavailable" not in metadata[0][0]
+            for request in requests[3:]:
+                notes = [i for i in request["input"] if i.get("role") == "developer" and
+                         i.get("content", "").startswith("snajpagent recovery")]
+                assert len(notes) <= 1, "recovery spammed model context"
+                assert "retained-result" in json.dumps(request)
+            if mode == "running":
+                assert "survived" in json.dumps(requests[-1]), "provider failure killed the live command"
+                assert not event_list(events, "process_closed")
+            terminal.exit()
+            if provider.failure:
+                raise AssertionError(provider.failure)
+            print(f"tmux_terminal goal recovery {mode}: ok", flush=True)
+        finally:
+            terminal.close()
+            provider.runtime_handler = None
+
+
 def run_manual_retry_cases(binary, root, provider, environment):
     for mode in ("queue", "read-only-resume", "chat"):
         case = root / ("manual-" + mode)
@@ -3899,6 +4007,7 @@ def run_irc_case(binary, root):
     environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
     try:
         run_token_accounting_cases(binary, root / "token-accounting")
+        run_goal_recovery_cases(binary, root, provider, environment)
         run_manual_retry_cases(binary, root, provider, environment)
         run_provider_retry_input_cases(binary, root, provider, environment)
         run_provider_clarification_cases(binary, root, provider, environment)
