@@ -156,7 +156,7 @@ let
     '';
   });
   networkLibraries = [ tls zlib brotli zstd cares nghttp2 iconv unistring idn2 ];
-  curl = cmakeLibrary sourcePkgs.curlMinimal [
+  curl = (cmakeLibrary sourcePkgs.curlMinimal [
     "-DBUILD_STATIC_LIBS=ON" "-DBUILD_CURL_EXE=OFF" "-DCURL_BUILD_EVERYTHING=OFF"
     "-DCURL_USE_MBEDTLS=ON" "-DCURL_USE_OPENSSL=OFF" "-DCURL_DEFAULT_SSL_BACKEND=mbedtls"
     "-DENABLE_ARES=ON" "-DUSE_NGHTTP2=ON" "-DUSE_LIBIDN2=ON"
@@ -164,7 +164,13 @@ let
     "-DCURL_USE_LIBPSL=OFF" "-DCURL_USE_LIBSSH2=OFF" "-DCURL_USE_LIBSSH=OFF"
     "-DCURL_DISABLE_LDAP=ON" "-DCURL_DISABLE_LDAPS=ON"
     "-DCURL_CA_BUNDLE=none" "-DCURL_CA_PATH=none"
-  ] networkLibraries;
+  ] networkLibraries).overrideAttrs (_: {
+    postInstall = ''
+      # curl prefixes the imported Threads target's -lpthread flag twice.
+      substituteInPlace "$out/lib/pkgconfig/libcurl.pc" \
+        --replace-fail '-l-lpthread' '-lpthread'
+    '';
+  });
 in {
   inherit sdk target compiler tools cflags ldflags jansson tls curl;
   application = { source, packageName, version, revision }:
