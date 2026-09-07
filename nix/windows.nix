@@ -83,6 +83,8 @@ let
     '' + pkgs.lib.optionalString legacy ''
       substituteInPlace library/CMakeLists.txt \
         --replace-fail 'ws2_32 bcrypt' 'ws2_32 advapi32'
+      substituteInPlace include/mbedtls/debug.h \
+        --replace-fail '__format__(gnu_printf,' '__format__(printf,'
     '';
     postInstall = ''
       printf '\nLibs.private: -L${pthreads}/lib -lpthread -l${if legacy then "advapi32" else "bcrypt"}\n' \
