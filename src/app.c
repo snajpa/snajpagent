@@ -765,7 +765,7 @@ static int
 remove_queued_turns(struct app_state *app, size_t index, bool all,
                     char *error, size_t error_size)
 {
-    bool remove[SNAG_MAX_PENDING_TURNS] = {false};
+    json_t *ids;
     size_t matches;
 
     if (app->session.pending_queue_count == 0u ||
@@ -773,16 +773,18 @@ remove_queued_turns(struct app_state *app, size_t index, bool all,
         snag_errorf(error, error_size, "future-turn queue is empty");
         return 1;
     }
-    if (all) {
-        for (size_t i = 0; i < app->session.pending_queue_count; ++i)
-            remove[i] = true;
-        matches = app->session.pending_queue_count;
-    } else {
-        remove[index] = true;
-        matches = 1u;
-    }
+    matches = all ? app->session.pending_queue_count : 1u;
+    ids = json_array();
+    if (ids)
+        for (size_t i = 0u; i < matches; ++i)
+            if (json_array_append_new(ids,
+                    json_string(app->session.pending_queue[all ? i : index].queue_id)) < 0) {
+                json_decref(ids);
+                ids = NULL;
+                break;
+            }
     if (commit_event(app, "future_turn_cancelled",
-                     snag_app_future_turn_cancelled_data(&app->session, remove),
+                     ids ? json_pack("{s:o,s:s}", "queue_ids", ids, "reason", "user") : NULL,
                      error, error_size) < 0)
         return -1;
     if (app->session.pending_queue_count == 0u)

@@ -663,27 +663,6 @@ snag_app_steering_added_data(const char *turn_id, const char *steering_id,
 }
 
 json_t *
-snag_app_future_turn_cancelled_data(const struct snag_session *session,
-                           const bool remove[SNAG_MAX_PENDING_TURNS])
-{
-    json_t *ids = json_array();
-
-    if (!ids)
-        goto fail;
-    for (size_t i = 0; i < session->pending_queue_count; ++i) {
-        if (remove[i] && json_array_append_new(ids,
-                json_string(session->pending_queue[i].queue_id)) < 0)
-            goto fail;
-    }
-    if (json_array_size(ids) == 0u)
-        goto fail;
-    return json_pack("{s:o,s:s}", "queue_ids", ids, "reason", "user");
-fail:
-    json_decref(ids);
-    return NULL;
-}
-
-json_t *
 snag_app_response_interrupted_data(const char *turn_id, const char *response_id,
                           unsigned int cycle, const char *origin,
                           const char *reason, json_t *partial_public)

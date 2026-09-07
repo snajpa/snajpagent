@@ -177,8 +177,6 @@ json_t *snag_app_turn_completed_data(const char *turn_id,
 json_t *snag_app_steering_added_data(const char *turn_id,
                                     const char *steering_id,
                                     const char *text);
-json_t *snag_app_future_turn_cancelled_data(const struct snag_session *session,
-                                           const bool remove[SNAG_MAX_PENDING_TURNS]);
 json_t *snag_app_response_interrupted_data(const char *turn_id,
                                           const char *response_id,
                                           unsigned int cycle,
