@@ -59,6 +59,15 @@ from multi-handle initialization. Wakeup and asynchronous DNS remain enabled;
 the compatible backend requires no extra runtime library or binary variant.
 Close-on-exec setup on this legacy-capable pipe path is not atomic.
 
+The x86-64 artifact has also been exercised on Debian Sarge's
+Linux 2.6.8-12-amd64-generic: descriptor/filesystem checks, internal read-only
+tools, parallel commands, PTY, session resume and TLS trust/hostname checks.
+Native missing-syscall fallbacks preserve an unreaped process-group leader
+using checked procfs child state. This is not Linux 2.4 qualification or a
+blanket claim for other architectures. A working procfs and OS entropy source
+are required: Mbed TLS retains its secure `/dev/random` source, which can
+block on pre-5.6 Linux when entropy is depleted, even after initial seeding.
+
 The TLS CA input is nixpkgs' pinned Mozilla/NSS standard-PEM export. It is
 embedded at build time, never fetched on startup. `SSL_CERT_FILE` explicitly
 replaces it for provider and login/refresh connections, including HTTPS proxies.

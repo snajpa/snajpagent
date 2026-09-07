@@ -2158,8 +2158,11 @@ Build a static-PIE Linux executable with embedded CA data.  Copy
 to the destination; Nix and third-party runtime libraries are not required
 there.  Optional matching symbols are in the adjacent
 .I .debug/
-directory.  These target modern Linux with x86-64, ARMv8-A or i686 baselines;
+directory.  These target Linux with x86-64, ARMv8-A or i686 baselines;
 older-kernel compatibility requires separate qualification.
+The x86-64 executable has also been exercised on Debian Sarge's
+Linux 2.6.8-12-amd64-generic, including read-only tools, parallel commands,
+PTY, session resume and TLS trust/hostname checks.
 The i686 executable is 32-bit with 64-bit file offsets and musl time_t;
 Pentium II/III CPU probes do not establish Linux 2.4 kernel support.
 .PP
@@ -2183,6 +2186,9 @@ If Linux lacks waitid, the process adapter checks its own child's parent and
 zombie state through procfs without reaping.  Normal collection still uses
 waitpid, retaining the process-group leader until family cleanup is finished.
 This fallback requires readable /proc/PID/stat files.
+The OS must supply secure entropy.  Mbed TLS retains /dev/random; on Linux
+before 5.6, it may block when entropy is depleted even after initial seeding.
+Maintain the system's entropy source rather than weakening TLS randomness.
 .TP
 .BR "make prod-macos-arm64" , " make prod-macos-x86_64"
 Cross-build a macOS 11+ executable with static application libraries and CA
