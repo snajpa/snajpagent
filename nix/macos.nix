@@ -235,7 +235,8 @@ in {
         makeFlagsArray+=(
           'TARGET_OS=Darwin'
           'CC=${compiler} --target=${target} -isysroot ${sdk}'
-          'STRIP=${tools}/llvm-strip' 'DSYMUTIL=${tools}/dsymutil'
+          'STRIP=${if legacyLoader then builtins.dirOf linker + "/x86_64-apple-darwin-strip" else tools + "/llvm-strip"}'
+          'DSYMUTIL=${tools}/dsymutil'
           'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
           'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_DARWIN_C_SOURCE -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
           'CFLAGS=-std=c11 ${cflags} -flto -Wall -Wextra -Wpedantic -Werror'
