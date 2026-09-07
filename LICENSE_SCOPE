@@ -3,7 +3,7 @@ SPDX-License-Identifier: GPL-2.0-only
 All first-party source, tests, build files, and documentation in this tree are
 licensed GPL-2.0-only, with no later-version option and no linking exception.
 
-`nix/uclibc-stat-fallback.patch` contains uClibc-ng library changes and context
+`nix/uclibc-legacy-fs.patch` contains uClibc-ng library changes and context
 under the upstream LGPL-2.1-or-later terms (COPYING.LIB). This dependency patch
 does not change the agent's license. Corresponding library source and this
 patch must remain available when redistributing the legacy linked executable.

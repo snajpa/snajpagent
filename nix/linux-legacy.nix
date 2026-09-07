@@ -22,7 +22,6 @@ let
           UCLIBC_BUILD_ALL_LOCALE y
         '';
       }).overrideAttrs (old: {
-        patches = (old.patches or [ ]) ++ [ ./uclibc-stat-fallback.patch ];
         configurePhase = builtins.replaceStrings
           [ "make defconfig" "make oldconfig" ]
           [ "make $makeFlags defconfig" "make $makeFlags oldconfig" ]
@@ -36,14 +35,40 @@ let
       });
     }) ];
   };
-  target = import pkgs.path settings;
-  # pkgsStatic forcibly changes Linux libc to musl; retain this target's ABI.
-  staticTarget = import pkgs.path (settings // {
-    crossSystem = settings.crossSystem // { isStatic = true; };
+  base = import pkgs.path settings;
+  # These implementation fixes do not change installed headers or the C ABI.
+  # ABI/configuration changes belong in settings and rebuild the base compiler.
+  libc = base.stdenv.cc.libc.overrideAttrs (old: {
+    patches = (old.patches or [ ]) ++ [ ./uclibc-legacy-fs.patch ];
   });
+  compiler = base.stdenv.cc.override {
+    inherit libc;
+    bintools = base.stdenv.cc.bintools.override {
+      inherit libc;
+      sharedLibraryLoader = pkgs.lib.getLib libc;
+    };
+  };
+  # pkgsStatic forces musl on Linux. Keep this ABI and reuse the compiler;
+  # only the dependency build/link modes differ between these package sets.
+  runtime = isStatic: import pkgs.path (settings // {
+    overlays = settings.overlays ++ [ (_: previous:
+      pkgs.lib.optionalAttrs
+        (previous.stdenv.hostPlatform.config == settings.crossSystem.config) {
+        uclibc-ng = libc;
+        stdenv = let
+          platform = pkgs.lib.systems.elaborate (settings.crossSystem // { inherit isStatic; });
+          env = previous.stdenv.override {
+            cc = compiler;
+            hostPlatform = platform;
+            targetPlatform = platform;
+          };
+        in if isStatic then previous.stdenvAdapters.makeStatic env else env;
+      }) ];
+  });
+  target = runtime false;
+  staticTarget = runtime true;
 in {
-  libc = target.stdenv.cc.libc;
-  compiler = target.stdenv.cc;
+  inherit libc compiler;
   application = args: ((import ./linux.nix {
     inherit pkgs;
     musl = target;

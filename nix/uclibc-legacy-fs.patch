@@ -1,5 +1,5 @@
 SPDX-License-Identifier: LGPL-2.1-or-later
-Preserve native statx, with old-kernel stat ABI fallback for the legacy port.
+Preserve native statx and renameat2 with legacy i386 filesystem ABI fallbacks.
 
 diff -ruN old/libc/sysdeps/linux/common/fstat.c new/libc/sysdeps/linux/common/fstat.c
 --- old/libc/sysdeps/linux/common/fstat.c	2025-09-19 01:14:04.000000000 +0200
@@ -162,6 +162,33 @@ diff -ruN old/libc/sysdeps/linux/common/lstat64.c new/libc/sysdeps/linux/common/
  
        return rc;
  }
+diff -ruN old/libc/sysdeps/linux/common/rename.c new/libc/sysdeps/linux/common/rename.c
+--- old/libc/sysdeps/linux/common/rename.c	2025-09-19 01:14:04.000000000 +0200
++++ new/libc/sysdeps/linux/common/rename.c	2026-09-07 06:05:24.492522021 +0200
+@@ -9,6 +9,7 @@
+ #include <sys/syscall.h>
+ #include <stdio.h>
+ #include <unistd.h>
++#include <errno.h>
+ 
+ #if defined __NR_renameat && !defined __NR_rename
+ # include <fcntl.h>
+@@ -20,9 +21,12 @@
+ # include <fcntl.h>
+ int rename(const char *oldpath, const char *newpath)
+ {
+-	_syscall5(int, renameat2, int, olddfd, const char *, oldpath,
+-		  int, newdfd, const char *, newpath, int, flags)
+-	return renameat2(AT_FDCWD, oldpath, AT_FDCWD, newpath, 0);
++	int rc = INLINE_SYSCALL(renameat2, 5, AT_FDCWD, oldpath, AT_FDCWD, newpath, 0);
++# ifdef __NR_rename
++	if (rc < 0 && errno == ENOSYS)
++		rc = INLINE_SYSCALL(rename, 2, oldpath, newpath);
++# endif
++	return rc;
+ }
+ #else
+ _syscall2(int, rename, const char *, oldpath, const char *, newpath)
 diff -ruN old/libc/sysdeps/linux/common/stat.c new/libc/sysdeps/linux/common/stat.c
 --- old/libc/sysdeps/linux/common/stat.c	2025-09-19 01:14:04.000000000 +0200
 +++ new/libc/sysdeps/linux/common/stat.c	2026-09-07 05:30:55.790600367 +0200
