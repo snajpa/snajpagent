@@ -374,7 +374,9 @@ test_runtime_roles(void)
     config.irc.client_count = 1u;
     assert(snag_strcpy(config.irc.clients[0], sizeof(config.irc.clients[0]), other));
     assert(snag_irc_configure(runtime, &config, "/private-workspace", error, sizeof(error)) == 0);
-    for (size_t i = 0u; i < 40u; ++i) {
+    uint64_t registration_deadline = snag_monotonic_ms() + 1000u;
+    while (!snag_irc_mentions_agent(runtime, other, "agent1: work") &&
+           snag_monotonic_ms() < registration_deadline) {
         tick(runtime, 1u);
         tick(upstream, 1u);
     }
