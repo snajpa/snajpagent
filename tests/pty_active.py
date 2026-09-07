@@ -48,16 +48,17 @@ class Child:
     def __exit__(self, *_):
         self.kill()
 
-    def __init__(self, args, ready=None, *, term=None, cols=None):
+    def __init__(self, args, ready=None, *, term=None, cols=None, env=None):
         self.sessions_before = session_ids()
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(WORKSPACE)
+            env = dict(os.environ if env is None else env)
             if term is not None:
-                os.environ["TERM"] = term
+                env["TERM"] = term
             if cols is not None:
                 fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 24, cols, 0, 0))
-            os.execv(BINARY, [BINARY, "--dotdir", DOTDIR, *args])
+            os.execve(BINARY, [BINARY, "--dotdir", DOTDIR, *args], env)
         self.buf = bytearray()
         if ready is not None:
             try:
@@ -67,13 +68,14 @@ class Child:
                 raise
 
     @classmethod
-    def from_command(cls, command):
+    def from_command(cls, command, *, env=None):
         child = cls.__new__(cls)
         child.sessions_before = session_ids()
         child.pid, child.fd = pty.fork()
         if child.pid == 0:
             os.chdir(WORKSPACE)
-            os.execl("/bin/sh", "sh", "-c", "exec " + command)
+            os.execle("/bin/sh", "sh", "-c", "exec " + command,
+                      os.environ if env is None else env)
         child.buf = bytearray()
         return child
 
@@ -1977,47 +1979,41 @@ def test_uncached_typed_model_selection():
             "default_reasoning_level": "high",
         }],
     })
-    previous_codex_home = os.environ.get("CODEX_HOME")
+    env = dict(os.environ)
     cache_path.unlink(missing_ok=True)
     default_codex_cache.parent.mkdir(mode=0o700, exist_ok=True)
     custom_codex_home.mkdir(mode=0o700, exist_ok=True)
     default_codex_cache.write_text(borrowed_catalog, encoding="utf-8")
     custom_codex_cache.write_text(borrowed_catalog, encoding="utf-8")
-    try:
-        # Even an explicitly located Codex cache is not snajpagent state.
-        os.environ["CODEX_HOME"] = str(custom_codex_home)
-        child = Child([], PROMPT.rstrip())
-        end = child.send_wait(b"/model\r", b"model cache is empty; use /model cache while idle")
-        child.wait(PROMPT.rstrip(), start=end)
-        assert not cache_path.exists()
+    # Even an explicitly located Codex cache is not snajpagent state.
+    env["CODEX_HOME"] = str(custom_codex_home)
+    child = Child([], PROMPT.rstrip(), env=env)
+    end = child.send_wait(b"/model\r", b"model cache is empty; use /model cache while idle")
+    child.wait(PROMPT.rstrip(), start=end)
+    assert not cache_path.exists()
 
-        # A typed model is trusted without discovery or any cache mutation.
-        end = child.send_wait(b"/model gpt-5.6-luna / high\r",
-            b"model for next turn: openai / gpt-5.6-luna / high", start=end
-        )
-        end = child.wait(
-            b"snajpagent: model is not known in the model cache; "
-            b"the configured provider will still be used",
-            start=end,
-        )
-        child.wait(PROMPT.rstrip(), start=end)
-        assert not cache_path.exists()
-        child.exit_now(expect_resume=False)
-        assert session_ids() == before
+    # A typed model is trusted without discovery or any cache mutation.
+    end = child.send_wait(b"/model gpt-5.6-luna / high\r",
+        b"model for next turn: openai / gpt-5.6-luna / high", start=end
+    )
+    end = child.wait(
+        b"snajpagent: model is not known in the model cache; "
+        b"the configured provider will still be used",
+        start=end,
+    )
+    child.wait(PROMPT.rstrip(), start=end)
+    assert not cache_path.exists()
+    child.exit_now(expect_resume=False)
+    assert session_ids() == before
 
-        # The conventional ~/.codex cache is ignored as well.
-        os.environ.pop("CODEX_HOME", None)
-        child = Child([], PROMPT.rstrip())
-        end = child.send_wait(b"/model list\r", b"model cache is empty; use /model cache while idle")
-        child.wait(PROMPT.rstrip(), start=end)
-        assert not cache_path.exists()
-        child.exit_now(expect_resume=False)
-        assert session_ids() == before
-    finally:
-        if previous_codex_home is None:
-            os.environ.pop("CODEX_HOME", None)
-        else:
-            os.environ["CODEX_HOME"] = previous_codex_home
+    # The conventional ~/.codex cache is ignored as well.
+    env.pop("CODEX_HOME", None)
+    child = Child([], PROMPT.rstrip(), env=env)
+    end = child.send_wait(b"/model list\r", b"model cache is empty; use /model cache while idle")
+    child.wait(PROMPT.rstrip(), start=end)
+    assert not cache_path.exists()
+    child.exit_now(expect_resume=False)
+    assert session_ids() == before
 
 
 def test_provider_login_and_first_run():
@@ -2085,35 +2081,28 @@ def test_provider_login_and_first_run():
     assert result.returncode != 0 and not auth.exists()
     config.write_bytes(original)
 
-    prior = os.environ.get("SNAJPAGENT_TEST_LOGIN")
-    os.environ["SNAJPAGENT_TEST_LOGIN"] = "1"
-    try:
-        for cancel in (True, False):
-            fresh = root / ("cancelled" if cancel else "first-run")
-            with Child.from_command(shlex.join([BINARY, "--dotdir", str(fresh)])) as child:
-                child.wait(b"Provider: ")
-                child.send_wait(b"openrouter\n", b"Local provider name [openrouter]: ")
-                child.send_wait(b"\n", b"API key (hidden;")
-                end = child.send_wait(b"hidden-first-run-key\n", b"Fetch this provider's model list now?")
+    for cancel in (True, False):
+        fresh = root / ("cancelled" if cancel else "first-run")
+        with Child.from_command(shlex.join([BINARY, "--dotdir", str(fresh)]),
+                                env=dict(os.environ, SNAJPAGENT_TEST_LOGIN="1")) as child:
+            child.wait(b"Provider: ")
+            child.send_wait(b"openrouter\n", b"Local provider name [openrouter]: ")
+            child.send_wait(b"\n", b"API key (hidden;")
+            end = child.send_wait(b"hidden-first-run-key\n", b"Fetch this provider's model list now?")
+            assert b"hidden-first-run-key" not in child.buf
+            if cancel:
+                child.send(b"\x03")
+                child.finish(expected=2, expect_resume=False)
+                assert not (fresh / "config.ini").exists()
+                assert not (fresh / "auth").exists()
+            else:
+                child.send_wait(b"n\n", b"Model number or exact model ID: ", start=end)
+                end = child.send_wait(b"vendor/model\n", b"Default model: openrouter / vendor/model")
+                child.wait(PROMPT.rstrip(), start=end)
+                child.exit_now(expect_resume=False)
+                assert not list((fresh / "sessions").glob("*/events.jsonl"))
+                assert (fresh / "auth" / "openrouter.json").exists()
                 assert b"hidden-first-run-key" not in child.buf
-                if cancel:
-                    child.send(b"\x03")
-                    child.finish(expected=2, expect_resume=False)
-                    assert not (fresh / "config.ini").exists()
-                    assert not (fresh / "auth").exists()
-                else:
-                    child.send_wait(b"n\n", b"Model number or exact model ID: ", start=end)
-                    end = child.send_wait(b"vendor/model\n", b"Default model: openrouter / vendor/model")
-                    child.wait(PROMPT.rstrip(), start=end)
-                    child.exit_now(expect_resume=False)
-                    assert not list((fresh / "sessions").glob("*/events.jsonl"))
-                    assert (fresh / "auth" / "openrouter.json").exists()
-                    assert b"hidden-first-run-key" not in child.buf
-    finally:
-        if prior is None:
-            os.environ.pop("SNAJPAGENT_TEST_LOGIN", None)
-        else:
-            os.environ["SNAJPAGENT_TEST_LOGIN"] = prior
 
 
 def test_compaction_policy_selection():
@@ -2345,19 +2334,16 @@ def test_model_cache_and_selection():
     # Any provider failure leaves the previous complete cache untouched.
     complete_cache = cache_path.read_bytes()
     complete_inode = cache_path.stat().st_ino
-    os.environ["SNAJPAGENT_FIXTURE_MODEL_FAILURE"] = "second"
-    try:
-        failing = Child(["--config", str(config)], PROMPT.rstrip())
-        failed_end = failing.send_wait(b"/model cache\r",
-            b"cannot refresh provider second: fixture model discovery failed"
-        )
-        failing.wait(initial_prompt, start=failed_end)
-        failing.send(b"/exit\r")
-        _, status = os.waitpid(failing.pid, 0)
-        os.close(failing.fd)
-        assert os.waitstatus_to_exitcode(status) == 0
-    finally:
-        os.environ.pop("SNAJPAGENT_FIXTURE_MODEL_FAILURE", None)
+    failing = Child(["--config", str(config)], PROMPT.rstrip(),
+                    env=dict(os.environ, SNAJPAGENT_FIXTURE_MODEL_FAILURE="second"))
+    failed_end = failing.send_wait(b"/model cache\r",
+        b"cannot refresh provider second: fixture model discovery failed"
+    )
+    failing.wait(initial_prompt, start=failed_end)
+    failing.send(b"/exit\r")
+    _, status = os.waitpid(failing.pid, 0)
+    os.close(failing.fd)
+    assert os.waitstatus_to_exitcode(status) == 0
     assert cache_path.read_bytes() == complete_cache
     assert cache_path.stat().st_ino == complete_inode
 
@@ -2535,164 +2521,146 @@ def test_config_editor_reload():
         encoding="utf-8",
     )
     editor.chmod(0o700)
-    old_editor = os.environ.get("EDITOR")
-    old_plan = os.environ.get("SNAJPAGENT_EDITOR_PLAN")
-    old_seen = os.environ.get("SNAJPAGENT_EDITOR_SEEN")
-    os.environ["EDITOR"] = str(editor)
-    os.environ["SNAJPAGENT_EDITOR_PLAN"] = str(plan)
-    os.environ["SNAJPAGENT_EDITOR_SEEN"] = str(seen)
-    try:
-        before = session_ids()
-        child = Child(["--config", str(config)], PROMPT.rstrip())
-        assert session_ids() == before
-        child.send_wait(b"/verbose 2\r", b"verbosity: 2")
+    env = dict(os.environ, EDITOR=str(editor),
+               SNAJPAGENT_EDITOR_PLAN=str(plan), SNAJPAGENT_EDITOR_SEEN=str(seen))
+    before = session_ids()
+    child = Child(["--config", str(config)], PROMPT.rstrip(), env=env)
+    assert session_ids() == before
+    child.send_wait(b"/verbose 2\r", b"verbosity: 2")
 
-        plan.write_text("unchanged", encoding="utf-8")
-        end = child.send_wait(b"/config\r",
-            f"configuration unchanged: {config}".encode()
-        )
-        child.wait(PROMPT.rstrip(), start=end)
-        assert seen.read_text(encoding="utf-8") == str(config)
+    plan.write_text("unchanged", encoding="utf-8")
+    end = child.send_wait(b"/config\r",
+        f"configuration unchanged: {config}".encode()
+    )
+    child.wait(PROMPT.rstrip(), start=end)
+    assert seen.read_text(encoding="utf-8") == str(config)
 
-        plan.write_text(str(valid_two), encoding="utf-8")
-        end = child.send_wait(b"/config\r", f"configuration reloaded: {config}".encode(), start=end)
-        child.wait("W  0%› ".encode(), start=end)
-        status_end = child.send_wait(b"/status\r", b"verbosity: 2", start=end)
-        child.wait(b"model: editor-base", start=end)
-        child.wait(PROMPT.rstrip(), start=status_end)
+    plan.write_text(str(valid_two), encoding="utf-8")
+    end = child.send_wait(b"/config\r", f"configuration reloaded: {config}".encode(), start=end)
+    child.wait("W  0%› ".encode(), start=end)
+    status_end = child.send_wait(b"/status\r", b"verbosity: 2", start=end)
+    child.wait(b"model: editor-base", start=end)
+    child.wait(PROMPT.rstrip(), start=status_end)
 
-        plan.write_text(str(invalid), encoding="utf-8")
-        end = child.send_wait(b"/config\r", b"invalid configuration at line 3", start=status_end)
-        child.wait("W  0%› ".encode(), start=end)
-        status_end = child.send_wait(b"/status\r", b"verbosity: 2", start=end)
-        child.wait(b"model: editor-base", start=end)
-        child.wait(PROMPT.rstrip(), start=status_end)
+    plan.write_text(str(invalid), encoding="utf-8")
+    end = child.send_wait(b"/config\r", b"invalid configuration at line 3", start=status_end)
+    child.wait("W  0%› ".encode(), start=end)
+    status_end = child.send_wait(b"/status\r", b"verbosity: 2", start=end)
+    child.wait(b"model: editor-base", start=end)
+    child.wait(PROMPT.rstrip(), start=status_end)
 
-        plan.write_text(str(unrenderable), encoding="utf-8")
-        end = child.send_wait(b"/config\r",
-            b"reloaded prompt cannot be rendered with the current selection",
-            start=status_end,
-        )
-        child.wait(PROMPT.rstrip(), start=end)
-        status_end = child.send_wait(b"/status\r", b"verbosity: 2", start=end)
-        child.wait(b"model: editor-base", start=end)
-        child.wait(PROMPT.rstrip(), start=status_end)
+    plan.write_text(str(unrenderable), encoding="utf-8")
+    end = child.send_wait(b"/config\r",
+        b"reloaded prompt cannot be rendered with the current selection",
+        start=status_end,
+    )
+    child.wait(PROMPT.rstrip(), start=end)
+    status_end = child.send_wait(b"/status\r", b"verbosity: 2", start=end)
+    child.wait(b"model: editor-base", start=end)
+    child.wait(PROMPT.rstrip(), start=status_end)
 
-        # File changes are checked and loaded even when the editor exits nonzero.
-        plan.write_text(f"nonzero:{valid_one}", encoding="utf-8")
-        warning_end = child.send_wait(b"/config\r",
-            b"$EDITOR exited unsuccessfully after changing the configuration",
-            start=status_end,
-        )
-        end = child.wait(
-            f"configuration reloaded: {config}".encode(), start=warning_end
-        )
-        child.wait(PROMPT.rstrip(), start=end)
-        status_end = child.send_wait(b"/status\r", b"verbosity: 2", start=end)
-        child.wait(b"model: editor-base", start=end)
-        child.wait(PROMPT.rstrip(), start=status_end)
+    # File changes are checked and loaded even when the editor exits nonzero.
+    plan.write_text(f"nonzero:{valid_one}", encoding="utf-8")
+    warning_end = child.send_wait(b"/config\r",
+        b"$EDITOR exited unsuccessfully after changing the configuration",
+        start=status_end,
+    )
+    end = child.wait(
+        f"configuration reloaded: {config}".encode(), start=warning_end
+    )
+    child.wait(PROMPT.rstrip(), start=end)
+    status_end = child.send_wait(b"/status\r", b"verbosity: 2", start=end)
+    child.wait(b"model: editor-base", start=end)
+    child.wait(PROMPT.rstrip(), start=status_end)
 
-        # Topology reloads preserve the selected private/public view.
-        plan.write_text(str(network), encoding="utf-8")
-        end = child.send_wait(b"/config\r", f"configuration reloaded: {config}".encode(), start=end)
-        child.wait(PROMPT.rstrip(), start=end)
-        child.send_wait(b"/chat\r", f"reloadop@{socket.gethostname()} : ".encode(), start=end)
-        child.send_wait(b"session setup\r", "reloadop › session setup".encode())
-        peer = IRCClient(network_port, "reloadpeer")
-        peer.close()
-        # Membership notifications start a turn; /config is idle-only.
-        deadline = time.monotonic() + 8.0
-        while True:
-            if session_ids() == before:
-                assert time.monotonic() < deadline, bytes(child.buf)
-                child.drain(0.05)
-                continue
-            session_id = new_session(before)
-            log = events(session_id)
-            turns = [event["data"]["turn_id"] for event in log
-                     if event["type"] == "turn_started" and
-                     "event=quit sender=reloadpeer" in event["data"]["text"]]
-            if any(event["type"] == "turn_completed" and
-                   event["data"]["turn_id"] in turns for event in log):
-                break
+    # Topology reloads preserve the selected private/public view.
+    plan.write_text(str(network), encoding="utf-8")
+    end = child.send_wait(b"/config\r", f"configuration reloaded: {config}".encode(), start=end)
+    child.wait(PROMPT.rstrip(), start=end)
+    child.send_wait(b"/chat\r", f"reloadop@{socket.gethostname()} : ".encode(), start=end)
+    child.send_wait(b"session setup\r", "reloadop › session setup".encode())
+    peer = IRCClient(network_port, "reloadpeer")
+    peer.close()
+    # Membership notifications start a turn; /config is idle-only.
+    deadline = time.monotonic() + 8.0
+    while True:
+        if session_ids() == before:
             assert time.monotonic() < deadline, bytes(child.buf)
             child.drain(0.05)
-        # Unrelated edits cannot resurrect a runtime-stopped configured host,
-        # nor erase a runtime-added outgoing endpoint. Keep its sockets intact.
-        end = child.send_wait(b"/server stop\r", b"hosting stopped; outgoing connections unchanged", start=end)
-        wait_turn_completed(child, session_id, "endpoint removed")
-        upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        upstream.bind(("127.0.0.1", 0))
-        upstream.listen(8)
-        outgoing = f"127.0.0.1:{upstream.getsockname()[1]}"
-        end = child.send_wait(f"/connect {outgoing}\r".encode(), b"outgoing connection added", start=end)
-        links = accept_connections(upstream, 2)
-        edited_network = root / "config" / "editor-network-unrelated.ini"
-        edited_network.write_text(network.read_text() + "[ui]\ntyping_pause_ms = 26\n", encoding="utf-8")
-        try:
-            plan.write_text(str(edited_network), encoding="utf-8")
-            end = child.send_wait(b"/config\r", f"configuration reloaded: {config}".encode(), start=end)
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-                assert probe.connect_ex(("127.0.0.1", network_port)) != 0
-            ready, _, _ = select.select([upstream], [], [], 0.1)
-            assert not ready, "unrelated reload restarted an outgoing owner"
-            for link in links:
-                link.setblocking(False)
-                try:
-                    data = link.recv(65536)
-                    assert data, "unrelated reload closed the outgoing socket"
-                except BlockingIOError:
-                    pass
-            # Deliberately changing the file's listener overrides the runtime
-            # removal; changing client fields is handled independently.
-            replacement_port = free_port()
-            edited_network.write_text(edited_network.read_text().replace(
-                f"listen = 127.0.0.1:{network_port}", f"listen = 127.0.0.1:{replacement_port}"), encoding="utf-8")
-            end = child.send_wait(b"/config\r", f"configuration reloaded: {config}".encode(), start=end)
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-                assert probe.connect_ex(("127.0.0.1", replacement_port)) == 0
-            end = child.send_wait(b"/disconnect\r", b"outgoing connections removed; hosting unchanged", start=end)
-            wait_turn_completed(child, session_id, f"endpoint={outgoing} ")
-        finally:
-            for link in links:
-                link.close()
-            upstream.close()
-        plan.write_text(str(valid_one), encoding="utf-8")
+            continue
+        session_id = new_session(before)
+        log = events(session_id)
+        turns = [event["data"]["turn_id"] for event in log
+                 if event["type"] == "turn_started" and
+                 "event=quit sender=reloadpeer" in event["data"]["text"]]
+        if any(event["type"] == "turn_completed" and
+               event["data"]["turn_id"] in turns for event in log):
+            break
+        assert time.monotonic() < deadline, bytes(child.buf)
+        child.drain(0.05)
+    # Unrelated edits cannot resurrect a runtime-stopped configured host,
+    # nor erase a runtime-added outgoing endpoint. Keep its sockets intact.
+    end = child.send_wait(b"/server stop\r", b"hosting stopped; outgoing connections unchanged", start=end)
+    wait_turn_completed(child, session_id, "endpoint removed")
+    upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    upstream.bind(("127.0.0.1", 0))
+    upstream.listen(8)
+    outgoing = f"127.0.0.1:{upstream.getsockname()[1]}"
+    end = child.send_wait(f"/connect {outgoing}\r".encode(), b"outgoing connection added", start=end)
+    links = accept_connections(upstream, 2)
+    edited_network = root / "config" / "editor-network-unrelated.ini"
+    edited_network.write_text(network.read_text() + "[ui]\ntyping_pause_ms = 26\n", encoding="utf-8")
+    try:
+        plan.write_text(str(edited_network), encoding="utf-8")
         end = child.send_wait(b"/config\r", f"configuration reloaded: {config}".encode(), start=end)
-        child.send_wait(b"/rollout\r", PROMPT.rstrip(), start=end)
-        child.exit_now()
-
-        # The resolved default path is passed to the editor and may be created.
-        default_config = Path(DOTDIR) / "config.ini"
-        prior_default = default_config.read_bytes() if default_config.exists() else None
-        try:
-            default_config.unlink(missing_ok=True)
-            plan.write_text(str(valid_one), encoding="utf-8")
-            child = Child([], PROMPT.rstrip())
-            end = child.send_wait(b"/config\r",
-                f"configuration reloaded: {default_config}".encode()
-            )
-            child.wait(PROMPT.rstrip(), start=end)
-            assert seen.read_text(encoding="utf-8") == str(default_config)
-            child.exit_now(expect_resume=False)
-        finally:
-            if prior_default is None:
-                default_config.unlink(missing_ok=True)
-            else:
-                default_config.write_bytes(prior_default)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            assert probe.connect_ex(("127.0.0.1", network_port)) != 0
+        ready, _, _ = select.select([upstream], [], [], 0.1)
+        assert not ready, "unrelated reload restarted an outgoing owner"
+        for link in links:
+            link.setblocking(False)
+            try:
+                data = link.recv(65536)
+                assert data, "unrelated reload closed the outgoing socket"
+            except BlockingIOError:
+                pass
+        # Deliberately changing the file's listener overrides the runtime
+        # removal; changing client fields is handled independently.
+        replacement_port = free_port()
+        edited_network.write_text(edited_network.read_text().replace(
+            f"listen = 127.0.0.1:{network_port}", f"listen = 127.0.0.1:{replacement_port}"), encoding="utf-8")
+        end = child.send_wait(b"/config\r", f"configuration reloaded: {config}".encode(), start=end)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            assert probe.connect_ex(("127.0.0.1", replacement_port)) == 0
+        end = child.send_wait(b"/disconnect\r", b"outgoing connections removed; hosting unchanged", start=end)
+        wait_turn_completed(child, session_id, f"endpoint={outgoing} ")
     finally:
-        if old_editor is None:
-            os.environ.pop("EDITOR", None)
+        for link in links:
+            link.close()
+        upstream.close()
+    plan.write_text(str(valid_one), encoding="utf-8")
+    end = child.send_wait(b"/config\r", f"configuration reloaded: {config}".encode(), start=end)
+    child.send_wait(b"/rollout\r", PROMPT.rstrip(), start=end)
+    child.exit_now()
+
+    # The resolved default path is passed to the editor and may be created.
+    default_config = Path(DOTDIR) / "config.ini"
+    prior_default = default_config.read_bytes() if default_config.exists() else None
+    try:
+        default_config.unlink(missing_ok=True)
+        plan.write_text(str(valid_one), encoding="utf-8")
+        child = Child([], PROMPT.rstrip(), env=env)
+        end = child.send_wait(b"/config\r",
+            f"configuration reloaded: {default_config}".encode()
+        )
+        child.wait(PROMPT.rstrip(), start=end)
+        assert seen.read_text(encoding="utf-8") == str(default_config)
+        child.exit_now(expect_resume=False)
+    finally:
+        if prior_default is None:
+            default_config.unlink(missing_ok=True)
         else:
-            os.environ["EDITOR"] = old_editor
-        if old_plan is None:
-            os.environ.pop("SNAJPAGENT_EDITOR_PLAN", None)
-        else:
-            os.environ["SNAJPAGENT_EDITOR_PLAN"] = old_plan
-        if old_seen is None:
-            os.environ.pop("SNAJPAGENT_EDITOR_SEEN", None)
-        else:
-            os.environ["SNAJPAGENT_EDITOR_SEEN"] = old_seen
+            default_config.write_bytes(prior_default)
 
 
 def test_known_context_meter():
