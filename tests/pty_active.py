@@ -3427,7 +3427,7 @@ def test_runtime_network_commands():
     peer = None
     try:
         child.wait(PROMPT.rstrip())
-        session_id = new_session(before)
+        assert session_ids() == before
         child.send(b"/help\r")
         end = child.wait(b"/disconnect [ENDPOINT]")
         child.wait(PROMPT.rstrip(), start=end)
@@ -3437,12 +3437,13 @@ def test_runtime_network_commands():
         child.send(b"keep-unsent-draft\r")
         end = child.wait(b"no IRC destination selected; use /names")
         child.wait(b"keep-unsent-draft", start=end)
-        assert not [event for event in events(session_id) if event["type"] == "turn_started"]
+        assert session_ids() == before
         child.send(b"\x15/rollout\r")
         end = child.wait("── rollout ──".encode(), start=end)
         child.wait(PROMPT.rstrip(), start=end)
         child.send(b"slow\r")
         end = child.wait(b"working slowly", start=end)
+        session_id = new_session(before)
         child.send(f"/server start {endpoint}\r".encode())
         end = child.wait(f"hosting started on {endpoint}".encode(), start=end)
         assert not [event for event in events(session_id)
@@ -3668,7 +3669,7 @@ def test_network_live_nick_prompt():
     links = []
     try:
         child.wait(chat_prompt("operator"))
-        session_id = new_session(before)
+        assert session_ids() == before
         links = accept_connections(upstream, 2)
         for link in links:
             link.settimeout(4.0)
@@ -3734,6 +3735,7 @@ def test_network_live_nick_prompt():
         child.send(b"network_view_stream\r")
         child.wait("@operator8 › network_view_stream".encode(), start=start)
         end = child.wait("◴".encode(), start=start)
+        session_id = new_session(before)
         visible = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", child.buf[start:end])
         assert re.search("[0-9]{2}:[0-9]{2}:[0-9]{2} operator8@".encode(),
                          visible), visible
@@ -3902,9 +3904,14 @@ def test_network_view_routing_and_atomic_catchup():
 
     try:
         child.wait(network_idle)
-        session_id = new_session(before)
+        assert session_ids() == before
         human = IRCClient(port, "remoteop")
         peer_agent = IRCClient(port, "peerbot", agent=True)
+        deadline = time.monotonic() + 8.0
+        while session_ids() == before:
+            assert time.monotonic() < deadline, bytes(child.buf)
+            child.read_once(0.02)
+        session_id = new_session(before)
 
         # Membership events also start turns. Finish setup before testing two
         # distinct messages, or the second may legitimately steer a join turn.
@@ -4047,8 +4054,13 @@ def test_chat_mention_completion_and_steering():
     human = None
     try:
         child.wait(chat_prompt("localop"))
-        session_id = new_session(before)
+        assert session_ids() == before
         human = IRCClient(port, "remoteop")
+        deadline = time.monotonic() + 8.0
+        while session_ids() == before:
+            assert time.monotonic() < deadline, bytes(child.buf)
+            child.read_once(0.02)
+        session_id = new_session(before)
         wait_turn_completed(child, session_id, "event=join sender=remoteop")
         for prompt, marker in (("slow", b"working slowly"),
                                ("managed_command_steer", b"fixture managed steering wait")):
@@ -4125,14 +4137,14 @@ def test_network_chat_and_managed_mention():
     network_idle = f"localop@{socket.gethostname()} : ".encode()
     network_active = f"localop@{socket.gethostname()} : ".encode()
     network_rollout_idle = (
-        f" openai/{DEFAULT_MODEL}/medium   ?% › ".encode()
+        f" openai/{DEFAULT_MODEL}/medium   0% › ".encode()
     )
     network_rollout_accounted_idle = (
         f" openai/{DEFAULT_MODEL}/medium   ?% › ".encode()
     )
     try:
         child.wait(network_idle)
-        session_id = new_session(before)
+        assert session_ids() == before
 
         view_start = len(child.buf)
         child.send(b"\t")
@@ -4166,6 +4178,11 @@ def test_network_chat_and_managed_mention():
         peer_agent = IRCClient(port, "peerbot", agent=True)
 
         stream_start = len(child.buf)
+        deadline = time.monotonic() + 8.0
+        while session_ids() == before:
+            assert time.monotonic() < deadline, bytes(child.buf)
+            child.read_once(0.02)
+        session_id = new_session(before)
         for nick in ("remoteop", "peerbot"):
             wait_turn_completed(child, session_id, f"event=join sender={nick}")
         model_wire_start = len(human.buf)
