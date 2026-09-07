@@ -1463,6 +1463,7 @@ test_classic_console(void)
     CLASSIC("\033[H");
     assert(GetConsoleScreenBufferInfo(screen, &info));
     size_t columns = (size_t)(info.srWindow.Right - info.srWindow.Left + 1);
+    COORD before = info.dwCursorPosition;
     char *line = malloc(columns);
     assert(line);
     memset(line, 'x', columns);
@@ -1470,11 +1471,21 @@ test_classic_console(void)
     free(line);
     assert(GetConsoleScreenBufferInfo(screen, &info));
     if (info.dwCursorPosition.X != info.srWindow.Right ||
-        info.dwCursorPosition.Y != info.srWindow.Top || !host.output_state[0].pending_wrap)
-        (void)fprintf(stderr, "classic margin: cursor=%d,%d viewport=%d,%d-%d,%d buffer=%d,%d pending=%u\n",
+        info.dwCursorPosition.Y != info.srWindow.Top || !host.output_state[0].pending_wrap) {
+        (void)fprintf(stderr, "classic margin: columns=%zu before=%d,%d cursor=%d,%d viewport=%d,%d-%d,%d buffer=%d,%d pending=%u wrap=%d\n",
+                       columns, before.X, before.Y,
                        info.dwCursorPosition.X, info.dwCursorPosition.Y,
                        info.srWindow.Left, info.srWindow.Top, info.srWindow.Right, info.srWindow.Bottom,
-                       info.dwSize.X, info.dwSize.Y, (unsigned int)host.output_state[0].pending_wrap);
+                       info.dwSize.X, info.dwSize.Y, (unsigned int)host.output_state[0].pending_wrap,
+                       host.output_state[0].wrap_column);
+        WCHAR *written = malloc(columns * sizeof(*written));
+        assert(written && ReadConsoleOutputCharacterW(screen, written, (DWORD)columns, before, &got));
+        size_t prefix = 0;
+        while (prefix < got && written[prefix] == L'x')
+            ++prefix;
+        (void)fprintf(stderr, "classic margin cells: got=%lu x-prefix=%zu\n", (unsigned long)got, prefix);
+        free(written);
+    }
     assert(info.dwCursorPosition.X == info.srWindow.Right &&
            info.dwCursorPosition.Y == info.srWindow.Top && host.output_state[0].pending_wrap);
     CLASSIC("\033[32mY");
