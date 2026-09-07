@@ -25,6 +25,21 @@ one clear behavior is enough.
 When a provider lacks an optional native endpoint, keep the user-facing behavior
 working through the existing provider path whenever practical.
 
+## Regression tests
+
+Every bug fix must include a permanent regression test in the same change.
+Reproduce the reported failure before the fix and verify the corrected behavior
+afterwards; record any case that cannot be reproduced. Cover relevant interactions
+and failure paths, not only the successful example. Temporary probes and manual
+checks support diagnosis but do not replace committed regression coverage.
+
+Prefer Python tests using the existing CLI, PTY/tmux and local fake-provider
+support. Python test code has no line-count budget: add the coverage needed for
+correctness. Keep tests clear and focused, with bounded runtime and resources.
+Use C tests when an internal invariant cannot be exercised adequately through
+Python. Preserve existing C budgets; do not impose them on Python or add a new
+test framework solely to enforce this policy.
+
 ## User documentation
 
 Follow [EDITORIAL.md](EDITORIAL.md) for project prose. It prohibits negation-led
