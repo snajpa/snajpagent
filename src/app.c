@@ -2588,6 +2588,7 @@ execute_calls(struct app_state *app, const char *turn_id,
         for (size_t i = 0u; i < count; ++i) {
             const struct snag_response_item *call = &calls[i].call;
             json_t *result = NULL;
+            bool refresh = false, cancelled = false;
             if (calls[i].finished)
                 continue;
             control = snag_app_active_input_pump(app, 0u);
@@ -2611,11 +2612,9 @@ execute_calls(struct app_state *app, const char *turn_id,
             }
             if (calls[i].started) {
                 if (snag_tools_ready(calls[i].handle)) {
-                    if (snag_tools_collect(calls[i].handle, NULL, &result, error, error_size) < 0 ||
-                        finish_call(app, turn_id, call, calls[i].handle, result, error, error_size) < 0)
+                    if (snag_tools_collect(calls[i].handle, NULL, &result, error, error_size) < 0 || !result)
                         return -1;
-                    calls[i].finished = true;
-                    ++finished;
+                    goto complete;
                 } else if (snag_tools_handoff(calls[i].handle)) {
                     handoff = "batch_yield";
                     goto handoff;
@@ -2661,13 +2660,8 @@ execute_calls(struct app_state *app, const char *turn_id,
                         break;
                     }
             }
-            if (result) {
-                if (finish_call(app, turn_id, call, NULL, result, error, error_size) < 0)
-                    return -1;
-                calls[i].finished = true;
-                ++finished;
-                continue;
-            }
+            if (result)
+                goto complete;
             char digest[SNAG_SHA256_HEX_LEN + 1u];
             if (snag_tool_action_digest(call, app->session.workspace, digest) < 0 ||
                 commit_event(app, "tool_started",
@@ -2698,26 +2692,23 @@ execute_calls(struct app_state *app, const char *turn_id,
                 json_decref(result);
                 result = snag_tool_result_terminal(false, error[0] ? error : "Tool adapter failed.");
             }
-            if (rc == 2 || app->interrupt_requested) {
-                if (result && finish_call(app, turn_id, call, calls[i].handle, result,
-                                           error, error_size) < 0)
-                    return -1;
-                if (result) {
-                    calls[i].finished = true;
-                    ++finished;
-                }
-                handoff = "turn_cancelled";
-                goto handoff;
-            }
+            refresh = true;
+            cancelled = rc == 2 || app->interrupt_requested;
+complete:
             if (result) {
-                if (finish_call(app, turn_id, call, calls[i].handle, result, error, error_size) < 0)
+                if (finish_call(app, turn_id, call, calls[i].started ? calls[i].handle : NULL,
+                                result, error, error_size) < 0)
                     return -1;
                 calls[i].finished = true;
                 ++finished;
             } else {
                 pending = true;
             }
-            if (snag_ui_send(&app->ui, (struct snag_ui_command){
+            if (cancelled) {
+                handoff = "turn_cancelled";
+                goto handoff;
+            }
+            if (refresh && snag_ui_send(&app->ui, (struct snag_ui_command){
                 .kind = SNAG_UI_SPINNERS, .data.value = prompt_spinner_states(app, true)}) < 0)
                 return -1;
         }
