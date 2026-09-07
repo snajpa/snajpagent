@@ -268,6 +268,7 @@ pipe_cancel(struct child_pipe *pipe)
 
 struct snag_output_broker {
     HANDLE process;
+    HANDLE standard[2];
     struct child_pipe control;
 };
 
@@ -276,7 +277,8 @@ static const wchar_t broker_prefix[] = L"\\\\.\\pipe\\snajpagent-writer-";
 static _Atomic(HANDLE) broker_owned_job;
 static CRITICAL_SECTION broker_spawn_lock;
 
-enum { BROKER_WRITE = 1, BROKER_SPAWN = 2, BROKER_READ_CONSOLE = 3, BROKER_PTY = 4 };
+enum { BROKER_WRITE = 1, BROKER_SPAWN = 2, BROKER_READ_CONSOLE = 3, BROKER_PTY = 4,
+       BROKER_WRITE_STANDARD = 5 };
 struct broker_spawn_request {
     uint64_t job, streams[3];
     uint32_t units[4]; /* executable, command line, cwd, double-NUL environment */
@@ -387,6 +389,8 @@ broker_open(int (*checkpoint)(void *), void *opaque, bool console)
     int error;
     if (!broker)
         return NULL;
+    broker->standard[0] = GetStdHandle(STD_OUTPUT_HANDLE);
+    broker->standard[1] = GetStdHandle(STD_ERROR_HANDLE);
     if (snag_random_id(id) < 0 || snag_random_bytes(nonce, sizeof(nonce)) < 0)
         goto fail;
     DWORD length = GetModuleFileNameW(NULL, program, 32768u);
@@ -463,8 +467,8 @@ fail:
     return NULL;
 }
 
-int
-snag_output_broker_write(struct snag_output_broker **owner, int fd,
+static int
+broker_write(struct snag_output_broker **owner, int fd, int slot,
                          const void *data, size_t len,
                          int (*checkpoint)(void *), void *opaque)
 {
@@ -475,22 +479,28 @@ snag_output_broker_write(struct snag_output_broker **owner, int fd,
     }
     if (!len)
         return 0;
+    if (*owner && slot >= 0 && (*owner)->standard[slot] !=
+        GetStdHandle(slot ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE)) {
+        snag_output_broker_close(*owner);
+        *owner = NULL;
+    }
     if (!*owner && !(*owner = broker_open(checkpoint, opaque, false)))
         return -1;
     struct snag_output_broker *broker = *owner;
     while (len) {
-        HANDLE remote;
+        HANDLE remote = NULL;
         size_t amount = len < 4096u ? len : 4096u;
         while (amount < len && amount && (bytes[amount] & 0xc0u) == 0x80u)
             --amount;
         if (!amount)
             amount = len < 4096u ? len : 4096u;
-        if (!DuplicateHandle(GetCurrentProcess(), (HANDLE)_get_osfhandle(fd),
+        if (slot < 0 && !DuplicateHandle(GetCurrentProcess(), (HANDLE)_get_osfhandle(fd),
             broker->process, &remote, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
             child_error(GetLastError());
             goto fail;
         }
-        uint64_t packet[3] = {BROKER_WRITE, (uintptr_t)remote, amount};
+        uint64_t packet[3] = {slot < 0 ? BROKER_WRITE : BROKER_WRITE_STANDARD,
+                              slot < 0 ? (uintptr_t)remote : (uint64_t)slot, amount};
         int32_t status;
         if (broker_transfer(broker, true, packet, sizeof(packet), 0, checkpoint, opaque) < 0 ||
             broker_transfer(broker, true, (void *)bytes, amount, 0, checkpoint, opaque) < 0 ||
@@ -512,6 +522,33 @@ fail:
         errno = error;
     }
     return -1;
+}
+
+int
+snag_output_broker_write(struct snag_output_broker **owner, int fd,
+                         const void *data, size_t len,
+                         int (*checkpoint)(void *), void *opaque)
+{
+    return broker_write(owner, fd, -1, data, len, checkpoint, opaque);
+}
+
+int
+snag_output_broker_write_standard(struct snag_output_broker **owner, unsigned int slot,
+                                  const void *data, size_t len,
+                                  int (*checkpoint)(void *), void *opaque)
+{
+    if (slot >= 2u) {
+        errno = EINVAL;
+        return -1;
+    }
+    HANDLE source = GetStdHandle(slot ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE);
+    DWORD flags, mode;
+    if (!GetConsoleMode(source, &mode) || !GetHandleInformation(source, &flags) ||
+        !(flags & HANDLE_FLAG_INHERIT)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    return broker_write(owner, -1, (int)slot, data, len, checkpoint, opaque);
 }
 
 static bool
@@ -712,15 +749,27 @@ snag_output_broker_main(int argc, wchar_t **argv)
         if (!((argv[2][i] >= L'0' && argv[2][i] <= L'9') ||
               (argv[2][i] >= L'a' && argv[2][i] <= L'f')))
             return 125;
+    const DWORD streams[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
+    HANDLE standard[2] = {NULL, NULL};
+    for (size_t i = 0; i < 2u; ++i) {
+        HANDLE source = GetStdHandle(streams[i + 1u]);
+        DWORD mode;
+        if (GetConsoleMode(source, &mode))
+            (void)DuplicateHandle(GetCurrentProcess(), source, GetCurrentProcess(),
+                                   &standard[i], 0, FALSE, DUPLICATE_SAME_ACCESS);
+    }
     for (int fd = 0; fd < 3; ++fd)
         (void)_close(fd);
-    const DWORD streams[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
     for (size_t i = 0; i < 3u; ++i)
         (void)SetStdHandle(streams[i], INVALID_HANDLE_VALUE);
     HANDLE pipe = CreateFileW(argv[2], GENERIC_READ | GENERIC_WRITE, 0, NULL,
                               OPEN_EXISTING, 0, NULL);
-    if (pipe == INVALID_HANDLE_VALUE)
+    if (pipe == INVALID_HANDLE_VALUE) {
+        for (size_t i = 0; i < 2u; ++i)
+            if (standard[i])
+                (void)CloseHandle(standard[i]);
         return 125;
+    }
     uint64_t target[2];
     int result = 125;
     HANDLE input = INVALID_HANDLE_VALUE;
@@ -788,22 +837,31 @@ snag_output_broker_main(int argc, wchar_t **argv)
                 break;
             continue;
         }
-        if (operation != BROKER_WRITE ||
+        if ((operation != BROKER_WRITE && operation != BROKER_WRITE_STANDARD) ||
             !broker_child_transfer(pipe, false, packet, sizeof(packet)))
             break;
-        if (!packet[0] || (uint64_t)(uintptr_t)packet[0] != packet[0] ||
-            !packet[1] || packet[1] > sizeof(bytes))
+        if (!packet[1] || packet[1] > sizeof(bytes) ||
+            (operation == BROKER_WRITE_STANDARD ? packet[0] >= 2u :
+             !packet[0] || (uint64_t)(uintptr_t)packet[0] != packet[0]))
             break;
-        HANDLE output = (HANDLE)(uintptr_t)packet[0];
+        HANDLE output = operation == BROKER_WRITE ? (HANDLE)(uintptr_t)packet[0] : NULL;
         if (!broker_child_transfer(pipe, false, bytes, (DWORD)packet[1])) {
-            (void)CloseHandle(output);
+            if (output)
+                (void)CloseHandle(output);
             break;
         }
-        int fd = _open_osfhandle((intptr_t)output, _O_WRONLY | _O_BINARY | _O_NOINHERIT);
         int32_t status = 0;
+        if (operation == BROKER_WRITE_STANDARD &&
+            (!standard[packet[0]] || !DuplicateHandle(GetCurrentProcess(), standard[packet[0]],
+                GetCurrentProcess(), &output, 0, FALSE, DUPLICATE_SAME_ACCESS)))
+            status = ENOTSUP;
+        int fd = status ? -1 :
+            _open_osfhandle((intptr_t)output, _O_WRONLY | _O_BINARY | _O_NOINHERIT);
         if (fd < 0) {
-            status = errno;
-            (void)CloseHandle(output);
+            if (!status)
+                status = errno;
+            if (output)
+                (void)CloseHandle(output);
         } else {
             if (snag_term_output_write(NULL, fd, bytes, (size_t)packet[1], false, NULL, NULL) < 0)
                 status = errno;
@@ -814,6 +872,9 @@ snag_output_broker_main(int argc, wchar_t **argv)
             break;
     }
 out:
+    for (size_t i = 0; i < 2u; ++i)
+        if (standard[i])
+            (void)CloseHandle(standard[i]);
     if (input != INVALID_HANDLE_VALUE)
         (void)CloseHandle(input);
     {

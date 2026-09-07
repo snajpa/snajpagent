@@ -2330,6 +2330,11 @@ path preserves the initial console palette and supports prompt editing and
 wrapping.  Glyphs and text decorations depend on the console font; italics
 use underline where supported.
 .PP
+On systems without synchronous I/O cancellation, output uses an authenticated
+same-executable helper.  Inheritable standard console buffers are retained at
+helper creation, including inactive buffers; other descriptors use exact
+handle transfer.  An unsupported transfer reports an error.
+.PP
 The internal legacy Windows build uses a hidden-console collector for PTY
 commands when ConPTY is unavailable.  The same executable hosts collection;
 input and output use authenticated private pipes, and command descendants

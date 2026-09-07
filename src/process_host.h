@@ -55,6 +55,11 @@ int snag_output_broker_main(int argc, wchar_t **argv);
 int snag_output_broker_write(struct snag_output_broker **owner, int fd,
                               const void *bytes, size_t len,
                               int (*checkpoint)(void *), void *opaque);
+/* Inheritable standard console slot, avoiding cross-process console duplication. */
+/* Keep the source standard handles open until this owner is closed. */
+int snag_output_broker_write_standard(struct snag_output_broker **owner, unsigned int slot,
+                                       const void *bytes, size_t len,
+                                       int (*checkpoint)(void *), void *opaque);
 int snag_input_broker_read(struct snag_output_broker **owner, wchar_t *text, size_t capacity,
                            int (*checkpoint)(void *), void *opaque);
 /* Caller keeps broker ownership alive until the read owner completes cleanup. */

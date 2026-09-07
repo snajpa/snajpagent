@@ -44,6 +44,7 @@ struct snag_term_host {
     HANDLE control_event;
     unsigned long output_mode[2];
     HANDLE output_console[2];
+    HANDLE output_source[2];
     struct snag_console_state output_state[2];
     struct snag_console_writer *writer;
     struct snag_output_broker *broker;

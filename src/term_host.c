@@ -361,6 +361,7 @@ snag_term_host_close(struct snag_term_host *host)
                 (void)SetConsoleTextAttribute(host->output_console[i], host->output_state[i].initial_attributes);
             (void)SetConsoleMode(host->output_console[i], host->output_mode[i]);
             host->output_console[i] = NULL;
+            host->output_source[i] = NULL;
         }
     if (!writer)
         return;
@@ -391,8 +392,16 @@ output_plain(struct snag_term_host *host, int fd,
         return error ? -1 : 0;
     }
     cancel_sync_fn cancel = synchronous_cancel();
-    if (!cancel)
+    if (!cancel) {
+        HANDLE output = (HANDLE)_get_osfhandle(fd);
+        DWORD flags;
+        for (unsigned int i = 0; i < 2u; ++i)
+            if (host->output_console[i] == output && host->output_source[i] &&
+                host->output_source[i] == GetStdHandle(i ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE) &&
+                GetHandleInformation(host->output_source[i], &flags) && (flags & HANDLE_FLAG_INHERIT))
+                return snag_output_broker_write_standard(&host->broker, i, text, len, checkpoint, opaque);
         return snag_output_broker_write(&host->broker, fd, text, len, checkpoint, opaque);
+    }
     if (!host->writer) {
         host->writer = calloc(1, sizeof(*host->writer));
         if (!host->writer)
@@ -858,6 +867,9 @@ snag_term_output_open(struct snag_term_host *host, int fd)
     }
     host->output_mode[fd - 1] = mode;
     host->output_console[fd - 1] = copy;
+    HANDLE source = (HANDLE)_get_osfhandle(fd);
+    host->output_source[fd - 1] = source == GetStdHandle(fd == 1 ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE) ?
+                                  source : NULL;
     host->output_state[fd - 1] = (struct snag_console_state){
         .initial_attributes = info.wAttributes, .cursor = info.dwCursorPosition, .legacy = legacy,
         .bright = (info.wAttributes & FOREGROUND_INTENSITY) != 0};

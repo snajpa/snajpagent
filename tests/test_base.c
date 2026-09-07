@@ -82,6 +82,19 @@ test_shutdown_signal(int number)
 }
 
 #ifdef _WIN32
+static BOOL
+test_create_symbolic_link(const char *link, const char *target, DWORD flags)
+{
+    BOOLEAN (WINAPI *create)(LPCSTR, LPCSTR, DWORD);
+    FARPROC function = GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "CreateSymbolicLinkA");
+    memcpy(&create, &function, sizeof(create));
+    if (!create) {
+        SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+        return FALSE;
+    }
+    return create(link, target, flags);
+}
+
 static void
 test_cmd_argument_probe(void)
 {
@@ -184,6 +197,11 @@ native_process_child(const char *mode)
         (void)SetEvent((HANDLE)(uintptr_t)strtoull(probe, NULL, 10));
         free(probe);
     }
+    if (!strcmp(mode, "shared-standard") || !strcmp(mode, "shared-error")) {
+        if (!strcmp(mode, "shared-error"))
+            output = GetStdHandle(STD_ERROR_HANDLE);
+        return WriteConsoleW(output, L"shared", 6u, &written, NULL) && written == 6u ? 0 : 1;
+    }
     if (!strcmp(mode, "tree")) {
         WCHAR program[32768], command[32768];
         assert(GetModuleFileNameW(NULL, program, 32768u));
@@ -198,7 +216,9 @@ native_process_child(const char *mode)
         assert(CloseHandle(child.hThread) && CloseHandle(child.hProcess));
         return 0;
     }
-    if (!strcmp(mode, "wait")) {
+    if (!strcmp(mode, "interrupt-ready"))
+        assert(WriteFile(output, "interrupt-ready\r\n", 17u, &written, NULL) && written == 17u);
+    if (!strcmp(mode, "wait") || !strcmp(mode, "interrupt-ready")) {
         Sleep(30000u);
         return 0;
     }
@@ -240,6 +260,60 @@ native_process_child(const char *mode)
         assert(WriteFile(output, bytes, got, &written, NULL) && written == got);
     } while (strcmp(mode, "line"));
     return 0;
+}
+
+static void
+test_standard_console_creation(void)
+{
+    wchar_t program[32768], command[32768];
+    assert(GetModuleFileNameW(NULL, program, 32768u));
+    SECURITY_ATTRIBUTES event_security = {sizeof(event_security), NULL, TRUE};
+    HANDLE excluded = CreateEventW(&event_security, TRUE, FALSE, NULL);
+    wchar_t probe[32];
+    assert(excluded && swprintf(probe, 32u, L"%llu", (unsigned long long)(uintptr_t)excluded) > 0);
+    assert(SetEnvironmentVariableW(L"SNAJPAGENT_INHERIT_PROBE", probe));
+    for (unsigned int variant = 0; variant < 4u; ++variant) {
+        unsigned int slot = variant / 2u;
+        DWORD which = slot ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE;
+        assert(swprintf(command, 32768u, L"\"%ls\" -c shared-%ls", program,
+                          slot ? L"error" : L"standard") > 0);
+        SECURITY_ATTRIBUTES security = {sizeof(security), NULL, variant % 2u != 0};
+        HANDLE screen = CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, &security, CONSOLE_TEXTMODE_BUFFER, NULL);
+        assert(screen != INVALID_HANDLE_VALUE && SetConsoleCursorPosition(screen, (COORD){0,0}));
+        HANDLE original = GetStdHandle(which);
+        assert(SetStdHandle(which, screen));
+        STARTUPINFOW startup = {.cb = sizeof(startup)};
+        PROCESS_INFORMATION child;
+        BOOL created = CreateProcessW(program, command, NULL, NULL, FALSE,
+            CREATE_NEW_PROCESS_GROUP, NULL, NULL, &startup, &child);
+        assert(SetStdHandle(which, original) && created);
+        assert(CloseHandle(child.hThread) && WaitForSingleObject(child.hProcess, 5000u) == WAIT_OBJECT_0);
+        DWORD status, got;
+        assert(GetExitCodeProcess(child.hProcess, &status) && CloseHandle(child.hProcess));
+        wchar_t text[6] = {0};
+        assert(ReadConsoleOutputCharacterW(screen, text, 6u, (COORD){0,0}, &got));
+        assert(got == 6u);
+        if (variant % 2u || !status)
+            assert(status == 0 && !wmemcmp(text, L"shared", 6u));
+        else
+            assert(status == 1 && text[0] == L' ');
+        struct snag_output_broker *broker = NULL;
+        assert(SetStdHandle(which, screen));
+        int rc = snag_output_broker_write_standard(&broker, slot, "slot", 4u, NULL, NULL);
+        int error = errno;
+        assert(SetStdHandle(which, original));
+        if (variant % 2u) {
+            assert(rc == 0);
+            assert(ReadConsoleOutputCharacterW(screen, text, 4u, (COORD){6,0}, &got));
+            assert(got == 4u && !wmemcmp(text, L"slot", 4u));
+        } else
+            assert(rc == -1 && error == ENOTSUP && !broker);
+        snag_output_broker_close(broker);
+        assert(CloseHandle(screen));
+    }
+    assert(WaitForSingleObject(excluded, 0) == WAIT_TIMEOUT && CloseHandle(excluded));
+    assert(SetEnvironmentVariableW(L"SNAJPAGENT_INHERIT_PROBE", NULL));
 }
 
 static void
@@ -362,10 +436,13 @@ test_native_process(bool pty, bool legacy)
     snag_child_init(&child);
     assert(shell && env && directory);
 #ifdef SNAG_LEGACY_PTY
-    if (legacy)
-        assert(snag_child_spawn_legacy_pty(&child, shell,
-            "echo native-out&echo native-err 1>&2&exit /b 7", directory, env) == 0);
-    else
+    if (legacy) {
+        int rc = snag_child_spawn_legacy_pty(&child, shell,
+            "echo native-out&echo native-err 1>&2&exit /b 7", directory, env);
+        if (rc < 0)
+            (void)fprintf(stderr, "legacy spawn errno=%d winerr=%lu\n", errno, (unsigned long)GetLastError());
+        assert(rc == 0);
+    } else
 #else
     (void)legacy;
 #endif
@@ -425,7 +502,7 @@ test_native_process(bool pty, bool legacy)
 struct native_wait_wake {
     snag_wake_fd wake;
     HANDLE ready, go;
-    uint64_t delay;
+    uint64_t delay, sent_at;
 };
 
 static unsigned int __stdcall
@@ -437,6 +514,7 @@ wake_native_process_wait(void *opaque)
     uint64_t start = snag_monotonic_ms();
     assert(snag_sleep_ms(40u) == 0);
     wake->delay = snag_monotonic_ms() - start;
+    wake->sent_at = snag_monotonic_ms();
     snag_wakeup_send(wake->wake);
     return 0;
 }
@@ -481,12 +559,16 @@ test_native_process_fanout(void)
     uint64_t start = snag_monotonic_ms();
     assert(SetEvent(sender.go));
     assert(snag_child_wait(events, 96u, wake[0], 1000) > 0);
-    uint64_t elapsed = snag_monotonic_ms() - start;
+    uint64_t returned_at = snag_monotonic_ms();
+    uint64_t elapsed = returned_at - start;
     assert(WaitForSingleObject(thread, 1000u) == WAIT_OBJECT_0 && CloseHandle(thread));
-    if (elapsed >= 500u)
-        (void)fprintf(stderr, "fanout wake: wait=%llu ms sender=%llu ms\n",
-                       (unsigned long long)elapsed, (unsigned long long)sender.delay);
-    assert(elapsed < 500u);
+    assert(returned_at >= sender.sent_at);
+    uint64_t delivery = returned_at - sender.sent_at;
+    if (delivery >= 500u)
+        (void)fprintf(stderr, "fanout wake: wait=%llu ms sender=%llu ms delivery=%llu ms\n",
+                       (unsigned long long)elapsed, (unsigned long long)sender.delay,
+                       (unsigned long long)delivery);
+    assert(delivery < 500u);
     for (size_t i = 0; i < 96u; ++i)
         assert(!events[i].revents);
     assert(CloseHandle(sender.ready) && CloseHandle(sender.go));
@@ -564,6 +646,10 @@ static void
 test_legacy_collector_failure(void)
 {
     char *program = snag_program_path(NULL), *directory = snag_realpath(".");
+    wchar_t image[32768];
+    assert(GetModuleFileNameW(NULL, image, 32768u));
+    const wchar_t *name = wcsrchr(image, L'\\');
+    name = name ? name + 1 : image;
     char **environment = snag_environment_entries();
     struct snag_child child;
     snag_child_init(&child);
@@ -573,7 +659,7 @@ test_legacy_collector_failure(void)
     PROCESSENTRY32W entry = {.dwSize = sizeof(entry)};
     assert(snapshot != INVALID_HANDLE_VALUE && Process32FirstW(snapshot, &entry));
     do {
-        if (entry.th32ParentProcessID == GetCurrentProcessId()) {
+        if (entry.th32ParentProcessID == GetCurrentProcessId() && !_wcsicmp(entry.szExeFile, name)) {
             assert(!broker);
             broker = OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, FALSE, entry.th32ProcessID);
             assert(broker);
@@ -599,9 +685,23 @@ test_legacy_console_interrupt(void)
     struct snag_child child;
     snag_child_init(&child);
     assert(program && directory && environment);
-    assert(snag_child_spawn_legacy_pty(&child, program, "wait", directory, environment) == 0);
-    snag_child_signal(&child, SNAG_CHILD_INTERRUPT);
+    assert(snag_child_spawn_legacy_pty(&child, program, "interrupt-ready", directory, environment) == 0);
     uint64_t deadline = snag_monotonic_ms() + 5000u;
+    char ready[4096] = {0};
+    size_t used = 0;
+    /* CreateProcess returns before the command attaches its control handler. */
+    while (!strstr(ready, "interrupt-ready")) {
+        assert(snag_monotonic_ms() < deadline && used < sizeof(ready) - 1u);
+        struct snag_child_event output = {&child, 0u, SNAG_CHILD_READ, 0};
+        assert(snag_child_wait(&output, 1u, SNAG_WAKE_INVALID, 20) >= 0);
+        if (output.revents) {
+            ssize_t n = snag_child_read(&child, 0u, ready + used, sizeof(ready) - used - 1u);
+            assert(n > 0);
+            used += (size_t)n;
+        }
+    }
+    snag_child_signal(&child, SNAG_CHILD_INTERRUPT);
+    deadline = snag_monotonic_ms() + 5000u;
     for (;;) {
         assert(snag_monotonic_ms() < deadline);
         struct snag_child_event output = {&child, 0u, SNAG_CHILD_READ, 0};
@@ -1097,7 +1197,7 @@ test_private_directory(void)
         assert(rejected == -1 && errno == EACCES);
         assert(snag_unlink_at(fd, "alias", false) == 0);
 #ifdef _WIN32
-        assert(CreateSymbolicLinkA(alias, data, 0));
+        assert(test_create_symbolic_link(alias, data, 0));
 #else
         assert(symlink(data, alias) == 0);
 #endif
@@ -1468,6 +1568,8 @@ test_broker_parent_death(bool spawn, bool input, bool legacy)
     wchar_t program[32768], command[32768];
     DWORD length = GetModuleFileNameW(NULL, program, 32768u);
     assert(ready && length && length < 32768u);
+    const wchar_t *name = wcsrchr(program, L'\\');
+    name = name ? name + 1 : program;
     assert(swprintf(command, 32768u, L"\"%ls\" --%ls-orphan %llu", program,
                       legacy ? L"pty" : spawn ? L"spawn" : input ? L"input" : L"broker",
                       (unsigned long long)(uintptr_t)ready) > 0);
@@ -1484,7 +1586,7 @@ test_broker_parent_death(bool spawn, bool input, bool legacy)
     DWORD broker_id = 0;
     assert(snapshot != INVALID_HANDLE_VALUE && Process32FirstW(snapshot, &entry));
     do {
-        if (entry.th32ParentProcessID == child.dwProcessId) {
+        if (entry.th32ParentProcessID == child.dwProcessId && !_wcsicmp(entry.szExeFile, name)) {
             assert(!broker_id);
             broker_id = entry.th32ProcessID;
         }
@@ -1492,8 +1594,6 @@ test_broker_parent_death(bool spawn, bool input, bool legacy)
     assert(broker_id);
     HANDLE process = NULL;
     if (spawn) {
-        const wchar_t *name = wcsrchr(program, L'\\');
-        name = name ? name + 1 : program;
         assert(Process32FirstW(snapshot, &entry));
         do {
             /* A new console can also place conhost under this helper. */
@@ -1978,6 +2078,7 @@ test_input_mode(void)
     test_hidden_console(false);
     test_hidden_console(true);
     test_console_output();
+    test_standard_console_creation();
 #endif
     struct snag_term_host host = {0};
 #ifdef _WIN32
@@ -2192,7 +2293,8 @@ test_platform(void)
     assert(snag_sleep_ms(UINT_MAX) == -1 && errno == EINVAL);
     assert(snag_text_locale_init());
 
-    assert(seconds > 0 && wall / 1000u <= (uint64_t)seconds);
+    /* libc time() can use a coarse vDSO value just behind a second boundary. */
+    assert(seconds > 0 && wall / 1000u <= (uint64_t)seconds + 1u);
     assert(wall / 1000u + 1u >= (uint64_t)seconds);
     assert(snag_random_bytes(NULL, 0u) == 0);
     assert(snag_random_bytes(random, sizeof(random)) == 0);
@@ -2559,6 +2661,10 @@ static int
 run_base(int argc, char **argv)
 {
 #ifdef _WIN32
+    if (argc == 2 && !strcmp(argv[1], "--standard-console-creation")) {
+        test_standard_console_creation();
+        return 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--console-capability")) {
         HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
         DWORD mode;
