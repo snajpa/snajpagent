@@ -1,0 +1,271 @@
+SPDX-License-Identifier: LGPL-2.1-or-later
+Preserve native statx, with old-kernel stat ABI fallback for the legacy port.
+
+diff -ruN old/libc/sysdeps/linux/common/fstat.c new/libc/sysdeps/linux/common/fstat.c
+--- old/libc/sysdeps/linux/common/fstat.c	2025-09-19 01:14:04.000000000 +0200
++++ new/libc/sysdeps/linux/common/fstat.c	2026-09-07 05:30:55.800600430 +0200
+@@ -33,6 +33,7 @@
+ #elif defined __NR_statx && defined __UCLIBC_HAVE_STATX__
+ # include <fcntl.h>
+ # include <statx_cp.h>
++# include <errno.h>
+ 
+ int fstat(int fd, struct stat *buf)
+ {
+@@ -41,6 +42,14 @@
+                                STATX_BASIC_STATS, &tmp);
+       if (rc == 0)
+         __cp_stat_statx ((struct stat *)buf, &tmp);
++# ifdef __NR_fstat64
++      else if (errno == ENOSYS) {
++        struct kernel_stat64 old;
++        rc = INLINE_SYSCALL(fstat64, 2, fd, &old);
++        if (rc == 0)
++          __xstat32_conv(&old, buf);
++      }
++# endif
+ 
+       return rc;
+ }
+diff -ruN old/libc/sysdeps/linux/common/fstat64.c new/libc/sysdeps/linux/common/fstat64.c
+--- old/libc/sysdeps/linux/common/fstat64.c	2025-09-19 01:14:04.000000000 +0200
++++ new/libc/sysdeps/linux/common/fstat64.c	2026-09-07 05:30:55.802600442 +0200
+@@ -39,6 +39,8 @@
+ #elif __NR_statx && defined __UCLIBC_HAVE_STATX__
+ # include <fcntl.h>
+ # include <statx_cp.h>
++# include <errno.h>
++# include "xstatconv.h"
+ 
+ int fstat64(int fd, struct stat64 *buf)
+ {
+@@ -47,6 +49,14 @@
+                                STATX_BASIC_STATS, &tmp);
+       if (rc == 0)
+         __cp_stat64_statx ((struct stat64 *)buf, &tmp);
++# ifdef __NR_fstat64
++      else if (errno == ENOSYS) {
++        struct kernel_stat64 old;
++        rc = INLINE_SYSCALL(fstat64, 2, fd, &old);
++        if (rc == 0)
++          __xstat64_conv(&old, buf);
++      }
++# endif
+ 
+       return rc;
+ }
+diff -ruN old/libc/sysdeps/linux/common/fstatat.c new/libc/sysdeps/linux/common/fstatat.c
+--- old/libc/sysdeps/linux/common/fstatat.c	2025-09-19 01:14:04.000000000 +0200
++++ new/libc/sysdeps/linux/common/fstatat.c	2026-09-07 05:30:55.805600460 +0200
+@@ -35,6 +35,7 @@
+ 
+ #if defined(__NR_statx) && defined __UCLIBC_HAVE_STATX__
+ #include <sys/sysmacros.h> // for makedev
++#include <errno.h>
+ 
+ int fstatat(int fd, const char *file, struct stat *buf, int flag)
+ {
+@@ -43,6 +44,15 @@
+ 
+ 	ret = INLINE_SYSCALL(statx, 5, fd, file, flag,
+ 			     STATX_BASIC_STATS, &tmp);
++# ifdef __NR_fstatat64
++	if (ret < 0 && errno == ENOSYS) {
++		struct kernel_stat64 old;
++		ret = INLINE_SYSCALL(fstatat64, 4, fd, file, &old, flag);
++		if (ret == 0)
++			__xstat32_conv(&old, buf);
++		return ret;
++	}
++# endif
+ 	if (ret != 0)
+ 		return ret;
+ 
+diff -ruN old/libc/sysdeps/linux/common/fstatat64.c new/libc/sysdeps/linux/common/fstatat64.c
+--- old/libc/sysdeps/linux/common/fstatat64.c	2025-09-19 01:14:04.000000000 +0200
++++ new/libc/sysdeps/linux/common/fstatat64.c	2026-09-07 05:30:55.807600473 +0200
+@@ -48,6 +48,8 @@
+ #if defined(__NR_statx) && defined(__UCLIBC_HAVE_STATX__)
+ # include <sys/stat.h>
+ # include <statx_cp.h>
++# include <errno.h>
++# include "xstatconv.h"
+ # include <fcntl.h> // for AT_NO_AUTOMOUNT
+ 
+ int fstatat64(int fd, const char *file, struct stat64 *buf, int flag)
+@@ -59,6 +61,14 @@
+ 
+ 	if (r == 0)
+ 		__cp_stat64_statx ((struct stat64 *)buf, &tmp);
++# ifdef __NR_fstatat64
++	else if (errno == ENOSYS) {
++		struct kernel_stat64 old;
++		r = INLINE_SYSCALL(fstatat64, 4, fd, file, &old, flag);
++		if (r == 0)
++			__xstat64_conv(&old, buf);
++	}
++# endif
+ 
+ 	return r;
+ }
+diff -ruN old/libc/sysdeps/linux/common/lstat.c new/libc/sysdeps/linux/common/lstat.c
+--- old/libc/sysdeps/linux/common/lstat.c	2025-09-19 01:14:04.000000000 +0200
++++ new/libc/sysdeps/linux/common/lstat.c	2026-09-07 05:30:55.795600398 +0200
+@@ -32,6 +32,8 @@
+ #elif defined __NR_statx && defined __UCLIBC_HAVE_STATX__
+ # include <fcntl.h>
+ # include <statx_cp.h>
++# include <errno.h>
++# include "xstatconv.h"
+ 
+ int lstat(const char *file_name, struct stat *buf)
+ {
+@@ -41,6 +43,14 @@
+                                STATX_BASIC_STATS, &tmp);
+       if (rc == 0)
+         __cp_stat_statx ((struct stat *)buf, &tmp);
++# ifdef __NR_lstat64
++      else if (errno == ENOSYS) {
++        struct kernel_stat64 old;
++        rc = INLINE_SYSCALL(lstat64, 2, file_name, &old);
++        if (rc == 0)
++          __xstat32_conv(&old, buf);
++      }
++# endif
+ 
+       return rc;
+ }
+diff -ruN old/libc/sysdeps/linux/common/lstat64.c new/libc/sysdeps/linux/common/lstat64.c
+--- old/libc/sysdeps/linux/common/lstat64.c	2025-09-19 01:14:04.000000000 +0200
++++ new/libc/sysdeps/linux/common/lstat64.c	2026-09-07 05:30:55.797600411 +0200
+@@ -32,6 +32,8 @@
+ #elif defined __NR_statx && defined __UCLIBC_HAVE_STATX__
+ # include <fcntl.h>
+ # include <statx_cp.h>
++# include <errno.h>
++# include "xstatconv.h"
+ 
+ int lstat64(const char *file_name, struct stat64 *buf)
+ {
+@@ -41,6 +43,14 @@
+                                STATX_BASIC_STATS, &tmp);
+       if (rc == 0)
+         __cp_stat64_statx ((struct stat64 *)buf, &tmp);
++# ifdef __NR_lstat64
++      else if (errno == ENOSYS) {
++        struct kernel_stat64 old;
++        rc = INLINE_SYSCALL(lstat64, 2, file_name, &old);
++        if (rc == 0)
++          __xstat64_conv(&old, buf);
++      }
++# endif
+ 
+       return rc;
+ }
+diff -ruN old/libc/sysdeps/linux/common/stat.c new/libc/sysdeps/linux/common/stat.c
+--- old/libc/sysdeps/linux/common/stat.c	2025-09-19 01:14:04.000000000 +0200
++++ new/libc/sysdeps/linux/common/stat.c	2026-09-07 05:30:55.790600367 +0200
+@@ -31,6 +31,8 @@
+ #elif __NR_statx && defined __UCLIBC_HAVE_STATX__
+ # include <fcntl.h>
+ # include <statx_cp.h>
++# include <errno.h>
++# include "xstatconv.h"
+ 
+ int stat(const char *file_name, struct stat *buf)
+ {
+@@ -39,6 +41,14 @@
+                                 STATX_BASIC_STATS, &tmp);
+ 	if (rc == 0)
+ 		__cp_stat_statx ((struct stat *)buf, &tmp);
++# ifdef __NR_stat64
++	else if (errno == ENOSYS) {
++		struct kernel_stat64 old;
++		rc = INLINE_SYSCALL(stat64, 2, file_name, &old);
++		if (rc == 0)
++			__xstat32_conv(&old, buf);
++	}
++# endif
+ 
+ 	return rc;
+ }
+diff -ruN old/libc/sysdeps/linux/common/stat64.c new/libc/sysdeps/linux/common/stat64.c
+--- old/libc/sysdeps/linux/common/stat64.c	2025-09-19 01:14:04.000000000 +0200
++++ new/libc/sysdeps/linux/common/stat64.c	2026-09-07 05:30:55.792600380 +0200
+@@ -23,6 +23,8 @@
+ #elif __NR_statx && defined __UCLIBC_HAVE_STATX__
+ # include <fcntl.h>
+ # include <statx_cp.h>
++# include <errno.h>
++# include "xstatconv.h"
+ 
+ int stat64(const char *file_name, struct stat64 *buf)
+ {
+@@ -31,6 +33,14 @@
+                                 STATX_BASIC_STATS, &tmp);
+ 	if (rc == 0)
+ 		__cp_stat64_statx ((struct stat64 *)buf, &tmp);
++# ifdef __NR_stat64
++	else if (errno == ENOSYS) {
++		struct kernel_stat64 old;
++		rc = INLINE_SYSCALL(stat64, 2, file_name, &old);
++		if (rc == 0)
++			__xstat64_conv(&old, buf);
++	}
++# endif
+ 
+ 	return rc;
+ }
+diff -ruN old/libc/sysdeps/linux/i386/bits/kernel_stat.h new/libc/sysdeps/linux/i386/bits/kernel_stat.h
+--- old/libc/sysdeps/linux/i386/bits/kernel_stat.h	2025-09-19 01:14:04.000000000 +0200
++++ new/libc/sysdeps/linux/i386/bits/kernel_stat.h	2026-09-07 05:30:55.787600349 +0200
+@@ -5,6 +5,12 @@
+  * struct stat should look like...  It turns out each arch has a
+  * different opinion on the subject... */
+ 
++/* Kernel timestamps retain the old long ABI even with 64-bit libc time_t. */
++struct kernel_timespec {
++	long tv_sec;
++	long tv_nsec;
++};
++
+ struct kernel_stat {
+ 	unsigned long st_dev;
+ 	unsigned long st_ino;
+@@ -17,9 +23,9 @@
+ 	unsigned long  st_size;
+ 	unsigned long  st_blksize;
+ 	unsigned long  st_blocks;
+-	struct timespec st_atim;
+-	struct timespec st_mtim;
+-	struct timespec st_ctim;
++	struct kernel_timespec st_atim;
++	struct kernel_timespec st_mtim;
++	struct kernel_timespec st_ctim;
+ 	unsigned long  __uclibc_unused4;
+ 	unsigned long  __uclibc_unused5;
+ };
+@@ -33,17 +39,15 @@
+ 	unsigned int	st_nlink;
+ 	unsigned long	st_uid;
+ 	unsigned long	st_gid;
+-	unsigned short	st_rdev;
+-	unsigned char	__pad3[10];
++	unsigned long long st_rdev;
++	unsigned char	__pad3[4];
+ 	long long	st_size;
+ 	unsigned long	st_blksize;
+-	unsigned long	st_blocks;	/* Number 512-byte blocks allocated. */
+-	unsigned long	__pad4;		/* future possible st_blocks high bits */
+-	struct timespec	st_atim;
+-	struct timespec	st_mtim;
+-	struct timespec	st_ctim;
++	unsigned long long st_blocks;	/* Number 512-byte blocks allocated. */
++	struct kernel_timespec st_atim;
++	struct kernel_timespec st_mtim;
++	struct kernel_timespec st_ctim;
+ 	unsigned long long	st_ino;
+ };
+ 
+ #endif	/*  _BITS_STAT_STRUCT_H */
+-

@@ -2767,7 +2767,7 @@ legacy_monotonic(struct timespec *out)
 {
     const uint64_t initialized = UINT64_C(1) << 63;
     char record[64];
-    int fd = snag_open_read("/proc/uptime", false);
+    int fd = open_at(AT_FDCWD, "/proc/uptime", O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0);
     if (fd < 0)
         return -1;
     ssize_t n;

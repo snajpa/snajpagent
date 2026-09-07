@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
-{ pkgs, musl }:
+{ pkgs, musl, static ? musl.pkgsStatic }:
 let
-  static = musl.pkgsStatic;
   tls = static.mbedtls;
   curl = (static.curlMinimal.override {
     opensslSupport = false;
