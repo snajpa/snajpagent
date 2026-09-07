@@ -10,6 +10,7 @@
 #include <string.h>
 #include <wchar.h>
 #include <process.h>
+#include <aclapi.h>
 
 /* Dynamically detected API; keep the rest of the import floor independent. */
 #ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
@@ -81,6 +82,73 @@ pipe_begin(struct child_pipe *pipe, bool write, DWORD size)
     pipe->ready = !pipe->pending;
 }
 
+static HANDLE
+private_pipe(const wchar_t *name, DWORD access)
+{
+    HANDLE token = NULL, pipe = INVALID_HANDLE_VALUE;
+    TOKEN_USER *user = NULL;
+    PACL acl = NULL;
+    SECURITY_DESCRIPTOR descriptor;
+    SID network;
+    SID_IDENTIFIER_AUTHORITY authority = SECURITY_NT_AUTHORITY;
+    DWORD size = 0, error = 0;
+
+    if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token) &&
+        (GetLastError() != ERROR_NO_TOKEN ||
+         !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)))
+        goto fail;
+    (void)GetTokenInformation(token, TokenUser, NULL, 0, &size);
+    if (!size)
+        goto fail;
+    user = malloc(size);
+    if (!user) {
+        error = ERROR_NOT_ENOUGH_MEMORY;
+        goto out;
+    }
+    if (!GetTokenInformation(token, TokenUser, user, size, &size) ||
+        !InitializeSid(&network, &authority, 1u))
+        goto fail;
+    *GetSidSubAuthority(&network, 0u) = SECURITY_NETWORK_RID;
+    size = (DWORD)(sizeof(ACL) + offsetof(ACCESS_DENIED_ACE, SidStart) +
+                   offsetof(ACCESS_ALLOWED_ACE, SidStart)) +
+           GetLengthSid(&network) + GetLengthSid(user->User.Sid);
+    acl = malloc(size);
+    if (!acl) {
+        error = ERROR_NOT_ENOUGH_MEMORY;
+        goto out;
+    }
+    if (!InitializeAcl(acl, size, ACL_REVISION) ||
+        !AddAccessDeniedAce(acl, ACL_REVISION, FILE_ALL_ACCESS, &network) ||
+        !AddAccessAllowedAce(acl, ACL_REVISION, FILE_ALL_ACCESS, user->User.Sid) ||
+        !InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) ||
+        !SetSecurityDescriptorOwner(&descriptor, user->User.Sid, FALSE) ||
+        !SetSecurityDescriptorDacl(&descriptor, TRUE, acl, FALSE) ||
+        !SetSecurityDescriptorControl(&descriptor, SE_DACL_PROTECTED, SE_DACL_PROTECTED))
+        goto fail;
+    SECURITY_ATTRIBUTES security = {sizeof(security), &descriptor, FALSE};
+    DWORD mode = PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT;
+#if _WIN32_WINNT >= 0x0600
+    mode |= PIPE_REJECT_REMOTE_CLIENTS;
+#endif
+    pipe = CreateNamedPipeW(name, access | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                            mode, 1, 65536u, 65536u, 0, &security);
+    if (pipe != INVALID_HANDLE_VALUE)
+        goto out;
+fail:
+    error = GetLastError();
+out:
+    if (token && !CloseHandle(token) && !error)
+        error = GetLastError();
+    free(acl);
+    free(user);
+    if (error && pipe != INVALID_HANDLE_VALUE) {
+        (void)CloseHandle(pipe);
+        pipe = INVALID_HANDLE_VALUE;
+    }
+    SetLastError(error);
+    return pipe;
+}
+
 static int
 create_pipe(struct child_pipe *pipe, bool input, HANDLE *other)
 {
@@ -90,10 +158,7 @@ create_pipe(struct child_pipe *pipe, bool input, HANDLE *other)
         return -1;
     if (swprintf(name, 96u, L"\\\\.\\pipe\\snajpagent-%hs", id) < 0)
         return -1;
-    pipe->handle = CreateNamedPipeW(name, (input ? PIPE_ACCESS_OUTBOUND : PIPE_ACCESS_INBOUND) |
-        FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
-        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-        1, 65536u, 65536u, 0, NULL);
+    pipe->handle = private_pipe(name, input ? PIPE_ACCESS_OUTBOUND : PIPE_ACCESS_INBOUND);
     if (pipe->handle == INVALID_HANDLE_VALUE) {
         pipe->handle = NULL;
         return child_error(GetLastError());
