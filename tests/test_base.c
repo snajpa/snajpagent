@@ -1704,6 +1704,13 @@ test_sockets(void)
         }
     }
     freeaddrinfo(addresses);
+    addresses = NULL;
+    hints.ai_family = AF_INET6;
+    hints.ai_flags = AI_NUMERICHOST;
+    assert(snag_socket_addresses("::1", "80", &hints, &addresses) == 0 && addresses);
+    assert(addresses->ai_family == AF_INET6 &&
+           IN6_IS_ADDR_LOOPBACK(&((struct sockaddr_in6 *)addresses->ai_addr)->sin6_addr));
+    freeaddrinfo(addresses);
     snag_socket listener = snag_socket_open(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     assert(listener != SNAG_SOCKET_INVALID);
     assert(snag_socket_reuse(listener) == 0);

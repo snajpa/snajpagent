@@ -36,9 +36,14 @@ let
     }) ];
   };
   base = import pkgs.path settings;
+  # IPv6 is a library feature, not a compiler ABI change. Rebuild dependency
+  # archives against its updated feature header while retaining the compiler.
+  sdkLibc = base.stdenv.cc.libc.override (old: {
+    extraConfig = (old.extraConfig or "") + "\nUCLIBC_HAS_IPV6 y\n";
+  });
   # These implementation fixes do not change installed headers or the C ABI.
   # ABI/configuration changes belong in settings and rebuild the base compiler.
-  libc = base.stdenv.cc.libc.overrideAttrs (old: {
+  libc = sdkLibc.overrideAttrs (old: {
     patches = (old.patches or [ ]) ++ [ ./uclibc-legacy.patch ];
   });
   wrapCompiler = runtimeLibc: base.stdenv.cc.override (old: {
@@ -54,7 +59,7 @@ let
   compiler = wrapCompiler libc;
   # Static dependency archives only need the stable ABI. The final executable
   # links the patched libc; runtime-only changes need not rebuild every archive.
-  sdkCompiler = wrapCompiler base.stdenv.cc.libc;
+  sdkCompiler = wrapCompiler sdkLibc;
   # pkgsStatic forces musl on Linux. Keep this ABI and reuse the compiler;
   # only the dependency build/link modes differ between these package sets.
   runtime = isStatic: cc: import pkgs.path (settings // {
@@ -86,7 +91,7 @@ let
     });
   });
 in {
-  inherit libc compiler;
+  inherit libc compiler sdkCompiler;
   application = args: ((import ./linux.nix {
     inherit pkgs;
     musl = target;
