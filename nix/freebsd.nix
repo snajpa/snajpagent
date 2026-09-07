@@ -1,27 +1,32 @@
 # SPDX-License-Identifier: GPL-2.0-only
-{ pkgs, sourcePkgs }:
+{ pkgs, sourcePkgs, osVersion ? "8.4" }:
 let
   lib = pkgs.lib;
   llvm = pkgs.llvmPackages_21;
-  target = "x86_64-unknown-freebsd8.4";
-  compiler = "${llvm.clang-unwrapped}/bin/clang";
+  legacy = lib.versionOlder osVersion "7.0";
+  target = "x86_64-unknown-freebsd${osVersion}";
+  compiler = if legacy then "${oldCompiler}/bin/clang" else "${llvm.clang-unwrapped}/bin/clang";
+  cxxCompiler = if legacy then "${oldCompiler}/bin/clang++" else "${llvm.clang-unwrapped}/bin/clang++";
   tools = "${llvm.llvm}/bin";
   sdk = pkgs.stdenvNoCC.mkDerivation {
     pname = "freebsd-amd64-sysroot";
-    version = "8.4";
+    version = osVersion;
     src = pkgs.fetchurl {
       name = "disc1.iso";
-      url = "https://archive.freebsd.org/old-releases/amd64/ISO-IMAGES/8.4/FreeBSD-8.4-RELEASE-amd64-disc1.iso";
-      sha256 = "2fb17d77d4eba34736eb98c142c56546dd73a4e7ac38895bb6c8517949282438";
+      url = "https://archive.freebsd.org/old-releases/amd64/ISO-IMAGES/${osVersion}/FreeBSD-${osVersion}-RELEASE-amd64-disc1.iso";
+      sha256 = {
+        "8.4" = "2fb17d77d4eba34736eb98c142c56546dd73a4e7ac38895bb6c8517949282438";
+        "5.5" = "f71eedf18ab24d973c938b473ca127018eb87ab1d1b4c96a5d8d1e9cd8f261d3";
+      }.${osVersion};
     };
     nativeBuildInputs = [ pkgs.libarchive pkgs.python3 ];
-    unpackPhase = ''bsdtar -xf "$src" 8.4-RELEASE/base'';
+    unpackPhase = ''bsdtar -xf "$src" ${osVersion}-RELEASE/base'';
     dontConfigure = true;
     dontBuild = true;
     dontFixup = true;
     installPhase = ''
       mkdir -p "$out"
-      cat 8.4-RELEASE/base/base.[a-z][a-z] | bsdtar -xf - -C "$out"
+      cat ${osVersion}-RELEASE/base/base.[a-z][a-z] | bsdtar -xf - -C "$out"
       python3 - "$out" <<'PY'
       import os, sys
       root = sys.argv[1]
@@ -36,7 +41,44 @@ let
       PY
     '';
   };
-  cflags = "-Os -g -fstack-protector-strong -D__BSD_VISIBLE=1";
+  # GCC 3.4's base runtime predates crtbeginT.o and the split libgcc_eh.
+  # Supply the actual old startup/runtime ordering rather than fake archives.
+  oldCompiler = pkgs.runCommand "freebsd-${osVersion}-clang" {} ''
+    mkdir -p "$out/bin"
+    cat > "$out/bin/clang" <<'SH'
+    #!${pkgs.runtimeShell}
+    link=1
+    shared=0
+    cxx=0
+    case "$0" in *++) cxx=1;; esac
+    for arg in "$@"; do
+      case "$arg" in
+        -c|-S|-E|-M|-MM|-fsyntax-only|--version|-dump*|-print*) link=0;;
+        -shared) shared=1;;
+      esac
+    done
+    cc=${llvm.clang-unwrapped}/bin/clang
+    extra=()
+    if [ "$cxx" = 1 ]; then
+      cc="$cc++"
+      extra=(-lstdc++)
+    fi
+    if [ "$link" = 0 ]; then
+      exec "$cc" "$@"
+    fi
+    start=(${sdk}/usr/lib/crt1.o ${sdk}/usr/lib/crti.o ${sdk}/usr/lib/crtbegin.o)
+    end=(${sdk}/usr/lib/crtend.o ${sdk}/usr/lib/crtn.o)
+    if [ "$shared" = 1 ]; then
+      start=(${sdk}/usr/lib/crti.o ${sdk}/usr/lib/crtbeginS.o)
+      end=(${sdk}/usr/lib/crtendS.o ${sdk}/usr/lib/crtn.o)
+    fi
+    exec "$cc" -nostdlib "''${start[@]}" "$@" -Wl,--start-group \
+      "''${extra[@]}" -lpthread -lc -lgcc -Wl,--end-group "''${end[@]}"
+    SH
+    chmod +x "$out/bin/clang"
+    ln -s clang "$out/bin/clang++"
+  '';
+  cflags = "-Os -g -D__BSD_VISIBLE=1" + lib.optionalString (!legacy) " -fstack-protector-strong";
   ldflags = "--ld-path=${llvm.lld}/bin/ld.lld -static";
   cmakeLibrary = package: flags: dependencies:
     pkgs.stdenvNoCC.mkDerivation {
@@ -60,10 +102,10 @@ let
         )
       '';
       cmakeFlags = [
-        "-DCMAKE_SYSTEM_NAME=FreeBSD" "-DCMAKE_SYSTEM_VERSION=8.4"
+        "-DCMAKE_SYSTEM_NAME=FreeBSD" "-DCMAKE_SYSTEM_VERSION=${osVersion}"
         "-DCMAKE_SYSTEM_PROCESSOR=amd64" "-DCMAKE_SYSROOT=${sdk}"
         "-DCMAKE_C_COMPILER=${compiler}" "-DCMAKE_C_COMPILER_TARGET=${target}"
-        "-DCMAKE_CXX_COMPILER=${llvm.clang-unwrapped}/bin/clang++"
+        "-DCMAKE_CXX_COMPILER=${cxxCompiler}"
         "-DCMAKE_CXX_COMPILER_TARGET=${target}"
         "-DCMAKE_AR=${tools}/llvm-ar" "-DCMAKE_RANLIB=${tools}/llvm-ranlib"
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.10"
@@ -88,7 +130,7 @@ let
       ] ++ flags;
       preConfigure = ''
         export CC="${compiler} --target=${target} --sysroot=${sdk}"
-        export CXX="${llvm.clang-unwrapped}/bin/clang++ --target=${target} --sysroot=${sdk}"
+        export CXX="${cxxCompiler} --target=${target} --sysroot=${sdk}"
         export AR=${tools}/llvm-ar RANLIB=${tools}/llvm-ranlib NM=${tools}/llvm-nm
         export STRIP=${tools}/llvm-strip LD=${llvm.lld}/bin/ld.lld
         export CFLAGS='${cflags}' CXXFLAGS='${cflags}' LDFLAGS='${ldflags}'

@@ -60,6 +60,12 @@ in assert buildRevision == null || buildRevision == revision; rec {
     inherit pkgs;
     sourcePkgs = static;
   }).application { inherit source packageName version revision; };
+  # Internal reach candidate; not a production output until full qualification.
+  freebsd55-amd64 = (import ./freebsd.nix {
+    inherit pkgs;
+    sourcePkgs = static;
+    osVersion = "5.5";
+  }).application { inherit source packageName version revision; };
   windows-x86_64 = (import ./windows-legacy.nix { inherit pkgs; arch = "x86_64"; }).application {
     inherit source packageName version revision;
   };
