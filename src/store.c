@@ -1746,78 +1746,58 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !process_close_status(status))
             goto invalid;
         remove_process(session, process);
-    } else if (strcmp(type, "turn_completed") == 0) {
+    } else if (snag_string_in(type,
+               "turn_completed turn_completed_silent turn_interrupted turn_failed")) {
         const char *turn_id = snag_json_string(data, "turn_id");
-        const char *item_id = snag_json_string(data, "final_item_id");
-        const char *response_id = snag_json_string(data, "final_response_id");
-        if (!snag_json_exact_keys(data, "final_item_id final_response_id turn_id") || !session->active_turn ||
-            !session->response_complete ||
-            (session->response_outcome != SNAG_GRAPH_FINAL &&
-             session->response_outcome != SNAG_GRAPH_REFUSAL) ||
-            !turn_id || strcmp(turn_id, session->active_turn_id) != 0 || !item_id ||
-            strcmp(item_id, session->final_item_id) != 0 || !response_id ||
-            strcmp(response_id, session->final_response_id) != 0 ||
-            session->process_count != 0u ||
-            session->pending_call_count != 0u ||
-            session->pending_steering_count != 0u)
-            goto invalid;
-        clear_turn_state(session);
-    } else if (strcmp(type, "turn_completed_silent") == 0) {
-        static const char reasons[] =
-            "room_update_quiet reply_reminder_exhausted";
-        const char *turn_id = snag_json_string(data, "turn_id");
-        const char *response_id = snag_json_string(data, "response_id");
         const char *reason = snag_json_string(data, "reason");
+        bool completed = !strcmp(type, "turn_completed") || !strcmp(type, "turn_completed_silent");
 
-        if (!snag_json_exact_keys(data, "reason response_id turn_id") || !session->active_turn ||
-            !session->response_complete ||
-            session->response_outcome != SNAG_GRAPH_NONPRODUCTIVE ||
-            !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
-            !response_id || strcmp(response_id,
-                                   session->active_response_id) != 0 ||
-            !snag_string_in(reason, reasons) ||
-            (strcmp(reason, "reply_reminder_exhausted") == 0 &&
-             !session->irc_reply_reminded) ||
-            session->process_count != 0u ||
-            session->pending_call_count != 0u ||
-            session->pending_steering_count != 0u)
+        if (!session->active_turn || session->process_count ||
+            !turn_id || strcmp(turn_id, session->active_turn_id))
             goto invalid;
+        if (completed) {
+            if (!session->response_complete || session->pending_call_count ||
+                session->pending_steering_count)
+                goto invalid;
+            if (!strcmp(type, "turn_completed")) {
+                const char *item_id = snag_json_string(data, "final_item_id");
+                const char *response_id = snag_json_string(data, "final_response_id");
+                if (!snag_json_exact_keys(data, "final_item_id final_response_id turn_id") ||
+                    (session->response_outcome != SNAG_GRAPH_FINAL &&
+                     session->response_outcome != SNAG_GRAPH_REFUSAL) ||
+                    !item_id || strcmp(item_id, session->final_item_id) ||
+                    !response_id || strcmp(response_id, session->final_response_id))
+                    goto invalid;
+            } else {
+                const char *response_id = snag_json_string(data, "response_id");
+                if (!snag_json_exact_keys(data, "reason response_id turn_id") ||
+                    session->response_outcome != SNAG_GRAPH_NONPRODUCTIVE ||
+                    !response_id || strcmp(response_id, session->active_response_id) ||
+                    !snag_string_in(reason, "room_update_quiet reply_reminder_exhausted") ||
+                    (!strcmp(reason, "reply_reminder_exhausted") && !session->irc_reply_reminded))
+                    goto invalid;
+            }
+        } else {
+            if (session->response_open || (session->response_complete && !all_pending_finished(session)))
+                goto invalid;
+            if (!strcmp(type, "turn_interrupted")) {
+                if (!snag_json_exact_keys(data, "origin reason turn_id") ||
+                    !snag_string_in(snag_json_string(data, "origin"), "user recovery output") ||
+                    !snag_string_in(reason, "cancelled process_lost output_lost session_recovered"))
+                    goto invalid;
+            } else {
+                const char *message = snag_json_string(data, "message");
+                if (!snag_json_exact_keys(data, "class message turn_id") ||
+                    !snag_string_in(snag_json_string(data, "class"),
+                        "context provider protocol tool persistence resource output internal") ||
+                    !message || strlen(message) > 8192u)
+                    goto invalid;
+                session->last_turn_failed = true;
+                session->retry_read_only = session->active_read_only;
+            }
+            clear_pending_steering(session);
+        }
         clear_turn_state(session);
-    } else if (strcmp(type, "turn_interrupted") == 0) {
-        static const char origins[] = "user recovery output";
-        static const char reasons[] =
-            "cancelled process_lost output_lost session_recovered";
-        const char *turn_id = snag_json_string(data, "turn_id");
-        const char *origin = snag_json_string(data, "origin");
-        const char *reason = snag_json_string(data, "reason");
-        if (!snag_json_exact_keys(data, "origin reason turn_id") || !session->active_turn ||
-            session->process_count != 0u ||
-            session->response_open ||
-            (session->response_complete && !all_pending_finished(session)) ||
-            !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
-            !snag_string_in(origin, origins) ||
-            !snag_string_in(reason, reasons))
-            goto invalid;
-        clear_turn_state(session);
-        clear_pending_steering(session);
-    } else if (strcmp(type, "turn_failed") == 0) {
-        static const char classes[] =
-            "context provider protocol tool persistence resource output internal";
-        const char *turn_id = snag_json_string(data, "turn_id");
-        const char *class_name = snag_json_string(data, "class");
-        const char *message = snag_json_string(data, "message");
-        if (!snag_json_exact_keys(data, "class message turn_id") || !session->active_turn ||
-            session->process_count != 0u ||
-            session->response_open ||
-            (session->response_complete && !all_pending_finished(session)) ||
-            !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
-            !snag_string_in(class_name, classes) ||
-            !message || strlen(message) > 8192u)
-            goto invalid;
-        session->last_turn_failed = true;
-        session->retry_read_only = session->active_read_only;
-        clear_turn_state(session);
-        clear_pending_steering(session);
     } else {
         return snag_fail(error, error_size, ENOTSUP,
                   "event type %s is not implemented by this checkpoint", type);
