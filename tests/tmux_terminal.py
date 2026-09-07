@@ -5083,6 +5083,8 @@ def run_irc_chat_case(binary, root):
             )
             terminals[name] = terminal
             terminal.wait(f"{operator}@{MACHINE_HOSTNAME} :")
+            terminal.submit("chat fixture setup")
+            wait_event_count(terminal.dotdir, "session_created", 1)
 
         ordered = [terminals[name] for name in ("host", "one", "two")]
         terminals["host"].wait("twoop joined")
