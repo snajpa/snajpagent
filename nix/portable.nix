@@ -60,8 +60,7 @@ in assert buildRevision == null || buildRevision == revision; rec {
     inherit pkgs;
     sourcePkgs = static;
   }).application { inherit source packageName version revision; };
-  # Internal reach candidate; not a production output until full qualification.
-  freebsd55-amd64 = (import ./freebsd.nix {
+  freebsd-amd64-legacy = (import ./freebsd.nix {
     inherit pkgs;
     sourcePkgs = static;
     osVersion = "5.5";

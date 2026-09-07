@@ -163,14 +163,24 @@ ownership across older libc failure paths. Native GNU make builds select BSD
 API declarations and libutil automatically. Use a UTF-8 locale and mounted
 devfs; the qualification guest used `en_US.UTF-8` and UFS for large sparse files.
 
-### Earlier FreeBSD source support
+### FreeBSD 5.5 legacy target
 
-The platform layer also builds against FreeBSD 5.5. Its existing base tests
-pass on a real 5.5 amd64 QEMU guest, including descriptor-relative operations,
+`make prod-freebsd-amd64-legacy` builds the full agent against the pinned 5.5
+release disc into `build/matrix/freebsd-amd64-legacy/bin/snajpagent`, with
+matching symbols in `.debug`. Application libraries and libutil are static;
+only native `libc.so.5` and `libpthread.so.1` are imported. This is a separate
+ABI from the 8.4-based output, which remains available for 8.4 and 14.4.
+The old compiler driver uses the release's actual CRT and libgcc ordering;
+these runtimes predate crtbeginT.o, libgcc_eh and stack-protector support.
+The legacy executable is non-PIE and has a non-executable stack.
+
+Actual 5.5 amd64 QEMU qualification covers the full agent's read-only tools
+and denied writes, interdependent parallel commands, PTY output/exit status,
+interactive history/resume, TLS distrust/explicit trust and hostname checks.
+Base, IRC and SSE units pass, including descriptor-relative operations,
 same-parent directory rename, sparse files, Unicode, threads, terminal modes,
-pipe/PTY output and repeated child-exit observation followed by exit-status
-collection. The full application and dependency build for 5.5 remains open;
-`prod-freebsd-amd64` retains its 8.4 baseline.
+and repeated non-reaping child-exit observation. Other releases remain
+unverified for this legacy artifact.
 
 Pre-8 builds retain validated paths for managed directory descriptors and
 reopen directory streams with identity checks. Closed/reused descriptors are

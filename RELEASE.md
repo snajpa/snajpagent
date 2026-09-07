@@ -27,6 +27,8 @@ The current required outputs are:
 | `macos-universal` | `snajpagent` | Both macOS slices in one native executable; experimental |
 | `windows-x86_64` | `snajpagent.exe` | Static application libraries, Windows system DLLs only; experimental |
 | `windows-arm64` | `snajpagent.exe` | Native ARM64, static application libraries and OS UCRT; experimental |
+| `freebsd-amd64` | `snajpagent` | Static application libraries, native libc/threads; FreeBSD 8.4 and 14.4 exercised |
+| `freebsd-amd64-legacy` | `snajpagent` | Separate libc.so.5/libpthread.so.1 ABI; FreeBSD 5.5 exercised |
 
 Both macOS standalone slices and the universal executable ship. Experimental
 does not mean optional: publish implemented builds with their actual testing

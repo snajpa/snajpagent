@@ -2406,7 +2406,7 @@ Cross-compilation alone does not establish runtime support.
 .B make \-jN prod-matrix
 Build all currently implemented standalone production targets: Linux
 x86-64/AArch64/i686 and legacy i686, macOS ARM64/Intel/universal, Windows
-x86-64/ARM64, and FreeBSD amd64.
+x86-64/ARM64, and FreeBSD amd64 with a separate legacy ABI target.
 Targets use separate build/matrix outputs and shared immutable Nix inputs;
 each recipe permits one Nix job and core.  SDK availability does not silently
 remove targets.  Use make \-k \-jN prod-matrix to continue independent targets
@@ -2431,8 +2431,21 @@ Source builds targeting pre-8 FreeBSD use validated pathname fallbacks for
 missing descriptor-relative filesystem calls. Avoid concurrent directory
 renames: external renames can race validation and access, and moves to a
 different parent require reopening the directory. Close-on-exec flag setup is
-non-atomic on these old kernels. The production target above keeps its 8.4
-baseline; FreeBSD 5.5 currently has platform-layer qualification only.
+non-atomic on these old kernels.
+.TP
+.B make prod-freebsd-amd64-legacy
+Build the FreeBSD 5.5 amd64 agent with static application libraries and
+embedded CA data. Copy
+.I build/matrix/freebsd-amd64-legacy/bin/snajpagent
+to a system providing libc.so.5, libpthread.so.1 and /libexec/ld-elf.so.1.
+Matching symbols are in the adjacent .debug directory. Use a UTF-8 locale and
+mounted devfs. This legacy executable is non-PIE and its old system runtime
+has no stack-protector support; its stack is non-executable.
+.PP
+Actual FreeBSD 5.5 qualification covers base/IRC/SSE tests, internal read-only
+inspection and denied writes, parallel commands, PTY execution, interactive
+resume and TLS trust/hostname verification with local fixtures. Other releases
+remain unverified for this artifact. The pathname race limits above apply.
 .TP
 .BR "make prod-windows-x86_64" , " make prod-windows-arm64"
 Build the experimental native Windows x64 or ARM64 executable using pinned Nix
