@@ -96,11 +96,18 @@ Close-on-exec setup on this legacy-capable pipe path is not atomic.
 The x86-64 artifact has also been exercised on Debian Sarge's
 Linux 2.6.8-12-amd64-generic: descriptor/filesystem checks, internal read-only
 tools, parallel commands, PTY, session resume and TLS trust/hostname checks.
+The shared clock fallback extends that same static-PIE artifact to CentOS
+3.9's backported **2.4.21-50.EL x86_64** kernel. Its base/IRC units, production
+RO enforcement, parallel commands, PTY, resume, TLS verification and hostname
+connection were exercised in local QEMU. Kernel coverage is specific to those
+releases; the x86-64 build count and file size are unchanged.
 Native missing-syscall fallbacks preserve an unreaped process-group leader
-using checked procfs child state. This is not Linux 2.4 qualification or a
-blanket claim for other architectures. A working procfs and OS entropy source
+using checked procfs child state. A working procfs and OS entropy source
 are required: Mbed TLS retains its secure `/dev/random` source, which can
 block on pre-5.6 Linux when entropy is depleted, even after initial seeding.
+For x86-64 and legacy i686, absent kernel clocks select the `/proc/uptime`
+fallback described above. Musl's EINVAL translation is checked against the
+raw syscall; the fallback requires kernel ENOSYS.
 
 The TLS CA input is nixpkgs' pinned Mozilla/NSS standard-PEM export. It is
 embedded at build time, never fetched on startup. `SSL_CERT_FILE` explicitly

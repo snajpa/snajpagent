@@ -2169,6 +2169,10 @@ older-kernel compatibility requires separate qualification.
 The x86-64 executable has also been exercised on Debian Sarge's
 Linux 2.6.8-12-amd64-generic, including read-only tools, parallel commands,
 PTY, session resume and TLS trust/hostname checks.
+The same target supports CentOS 3.9's backported Linux 2.4.21-50.EL x86_64
+kernel, exercised with base/IRC tests, read-only enforcement, parallel commands,
+PTY, resume, TLS verification and hostname-based provider connections in QEMU.
+This coverage is specific to the tested kernel releases.
 The i686 executable is 32-bit with 64-bit file offsets and musl time_t;
 Pentium II/III CPU probes do not establish Linux 2.4 kernel support.
 .PP
@@ -2195,6 +2199,10 @@ This fallback requires readable /proc/PID/stat files.
 The OS must supply secure entropy.  Mbed TLS retains /dev/random; on Linux
 before 5.6, it may block when entropy is depleted even after initial seeding.
 Maintain the system's entropy source rather than weakening TLS randomness.
+.PP
+The x86-64 and legacy i686 targets share the old-kernel clock fallback
+described below.  Musl's translated clock error is checked with a raw syscall;
+emulation requires the kernel to report ENOSYS.
 .TP
 .B make prod-linux-i686-legacy
 Build a separate static non-PIE i686 executable using uClibc-ng/LinuxThreads

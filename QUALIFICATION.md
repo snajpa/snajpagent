@@ -59,6 +59,13 @@ testing and other 2.4 kernel versions remain outstanding.
 Working procfs and replenished secure OS entropy are required; legacy descriptor
 flags are non-atomic. This target currently requires a source build.
 
+The existing `linux-x86_64` target also runs on CentOS 3.9's backported
+Linux **2.4.21-50.EL** kernel after enabling the shared clock fallback.
+Its 3,790,320-byte development executable passed base/IRC, production RO,
+parallel commands, PTY, resume, TLS trust/name and hostname-connection checks
+in QEMU. That scope applies to the tested CentOS kernel; upstream 2.4 AMD64
+coverage remains unverified. The target list is unchanged.
+
 Each release's notes distinguish checks of its exact binaries from earlier
 implementation evidence. Record local fake-provider checks and paid-provider
 runs separately. Do not describe an unperformed platform or live-model
