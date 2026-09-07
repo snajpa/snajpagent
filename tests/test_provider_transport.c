@@ -603,6 +603,17 @@ transport_settings(struct snag_provider_config *provider, struct snag_credential
     credential_set(credential, "transport-secret");
 }
 
+static struct snag_provider_connection
+transport_connection(struct snag_config *config, struct snag_credential *credential,
+                     const char *base_url)
+{
+    snag_config_init(config);
+    assert(snag_strcpy(config->providers[0].base_url,
+                       sizeof(config->providers[0].base_url), base_url));
+    transport_settings(&config->providers[0], credential);
+    return (struct snag_provider_connection){config, &config->providers[0], credential, NULL, NULL, NULL};
+}
+
 static void
 test_local_provider_transport(void)
 {
@@ -774,16 +785,11 @@ test_structured_create_failures(void)
         char error[256] = {0};
 
         start_server(&server, fixtures[i], false, "/v1");
-        snag_config_init(&config);
-        assert(snprintf(config.providers[0].base_url,
-                        sizeof(config.providers[0].base_url),
-                        "%s", server.endpoint) > 0);
-        transport_settings(&config.providers[0], &credential);
+        struct snag_provider_connection connection =
+            transport_connection(&config, &credential, server.endpoint);
         struct snag_response_graph graph = {0};
         memset(&failure, 0, sizeof(failure));
-        assert(snag_provider_responses_create((struct snag_provider_connection){
-            &config, &config.providers[0], &credential, NULL,
-            NULL, NULL},
+        assert(snag_provider_responses_create(connection,
             request, NULL, NULL, &graph, &failure, error, sizeof(error), NULL) < 0);
         assert(snag_provider_failure_is_capacity(&failure));
         assert(!strstr(error, "transport-secret"));
@@ -975,13 +981,9 @@ test_count_capability_statuses(void)
         char error[256] = {0};
 
         start_server(&server, fixtures[i], false, "/v1");
-        snag_config_init(&config);
-        assert(snprintf(config.providers[0].base_url,
-                        sizeof(config.providers[0].base_url), "%s", server.endpoint) > 0);
-        transport_settings(&config.providers[0], &credential);
-        assert(snag_provider_responses_count((struct snag_provider_connection){
-            &config, &config.providers[0], &credential, NULL,
-            NULL, NULL},
+        struct snag_provider_connection connection =
+            transport_connection(&config, &credential, server.endpoint);
+        assert(snag_provider_responses_count(connection,
             request, &tokens, &endpoint_unsupported, error, sizeof(error), NULL) < 0);
         assert(endpoint_unsupported);
         json_decref(request);
@@ -1039,13 +1041,10 @@ test_count_modes(void)
 
         assert(mkdtemp(temp));
         start_server(&server, cases[i].fixture, false, "/v1");
-        snag_config_init(&config);
-        assert(snprintf(config.providers[0].base_url,
-                        sizeof(config.providers[0].base_url), "%s",
-                        cases[i].openrouter ? "https://openrouter.ai/api/v1" : server.endpoint) > 0);
+        (void)transport_connection(&config, &credential,
+            cases[i].openrouter ? "https://openrouter.ai/api/v1" : server.endpoint);
         assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
         config.providers[0].exact_token_count = cases[i].mode;
-        transport_settings(&config.providers[0], &credential);
         memset(&app, 0, sizeof(app));
         snag_store_init(&app.store);
         assert(snag_store_open(&app.store, temp, error, sizeof(error)) == 0);
@@ -1105,13 +1104,8 @@ test_openrouter_search_transport(void)
 
     start_server(&server, MODEL_OPENROUTER_SEARCH, false, "");
     assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
-    struct snag_provider_connection connection = {
-        &config, &config.providers[0], &credential, NULL,
-        NULL, NULL};
-    snag_config_init(&config);
-    (void)snprintf(config.providers[0].base_url, sizeof(config.providers[0].base_url),
-                   "https://openrouter.ai/api/v1");
-    transport_settings(&config.providers[0], &credential);
+    struct snag_provider_connection connection =
+        transport_connection(&config, &credential, "https://openrouter.ai/api/v1");
     request = request_with_marker("search example domains");
     assert(json_object_set_new(request, "tools", json_loadb(
         search_tools, sizeof(search_tools) - 1u, 0, NULL)) == 0);
