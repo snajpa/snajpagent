@@ -410,7 +410,8 @@ snag_app_irc_take_pending(struct app_state *app,
         source = &app->irc_urgent;
         if (local_operator)
             *local_operator = app->irc_urgent_replies.count != 0u;
-    } else if (app->irc_background.len &&
+    /* Startup/history alone must not turn an unused session into saved work. */
+    } else if (app->session.log_fd >= 0 && app->irc_background.len &&
                (force_background ||
                 snag_time_ms() - app->irc_background_since_ms >= 100u)) {
         source = &app->irc_background;

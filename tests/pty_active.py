@@ -141,9 +141,9 @@ class Child:
         self.wait_idle_prompt(start=after, timeout=8.0)
         self.exit_now()
 
-    def exit_now(self):
+    def exit_now(self, expect_resume=True):
         self.send(b"/exit\r")
-        return self.finish()
+        return self.finish(expect_resume=expect_resume)
 
     def finish(self, expected=0, expect_resume=True):
         deadline = time.monotonic() + 8.0
@@ -1307,7 +1307,6 @@ def test_ctrl_c_cancels_partial_editor_states():
 
 def test_prompt_history_and_reverse_search():
     history = Path(DOTDIR) / "prompt_history"
-    before_second = session_ids()
     second = Child([], DEFAULT_IDLE_PROMPT)
     assert session_ids() == before_second
     first = Child([], DEFAULT_IDLE_PROMPT)
@@ -2043,8 +2042,7 @@ def test_uncached_typed_model_selection():
         )
         child.wait(PROMPT.rstrip(), start=end)
         assert not cache_path.exists()
-        child.send(b"/exit\r")
-        child.finish(expect_resume=False)
+        child.exit_now(expect_resume=False)
         assert session_ids() == before
 
         # The conventional ~/.codex cache is ignored as well.
@@ -2053,8 +2051,7 @@ def test_uncached_typed_model_selection():
         end = child.send_wait(b"/model list\r", b"model cache is empty; use /model cache while idle")
         child.wait(PROMPT.rstrip(), start=end)
         assert not cache_path.exists()
-        child.send(b"/exit\r")
-        child.finish(expect_resume=False)
+        child.exit_now(expect_resume=False)
         assert session_ids() == before
     finally:
         if previous_codex_home is None:
@@ -2148,8 +2145,7 @@ def test_provider_login_and_first_run():
                     child.send_wait(b"n\n", b"Model number or exact model ID: ", start=end)
                     end = child.send_wait(b"vendor/model\n", b"Default model: openrouter / vendor/model")
                     child.wait(PROMPT.rstrip(), start=end)
-                    child.send(b"/exit\r")
-                    child.finish(expect_resume=False)
+                    child.exit_now(expect_resume=False)
                     assert not list((fresh / "sessions").glob("*/events.jsonl"))
                     assert (fresh / "auth" / "openrouter.json").exists()
                     assert b"hidden-first-run-key" not in child.buf
@@ -2196,8 +2192,7 @@ def test_compaction_policy_selection():
                 child.wait(PROMPT.rstrip(), start=end)
         assert config.read_bytes() == original_config
         assert cache_path.read_bytes() == original_cache
-        child.send(b"/exit\r")
-        child.finish(expect_resume=False)
+        child.exit_now(expect_resume=False)
         assert session_ids() == before
     finally:
         child.kill()
@@ -2495,8 +2490,7 @@ def test_model_configuration_save():
     config.rmdir()
     config.write_bytes(saved)
     os.chmod(config, original_mode)
-    child.send(b"ping\r")
-    answered = child.wait(b"pong", start=status_end)
+    answered = child.send_wait(b"ping\r", b"pong", start=status_end)
     child.wait_idle_prompt(start=answered)
     child.exit_now()
 
@@ -2514,8 +2508,7 @@ def test_model_configuration_save():
     child.wait(b"model: durable-new", start=end)
     end = child.wait(b"effort: cosmic", start=end)
     child.wait(PROMPT.rstrip(), start=end)
-    child.send(b"/exit\r")
-    child.finish(expect_resume=False)
+    child.exit_now(expect_resume=False)
     assert session_ids() == before_new
 
 
@@ -2648,6 +2641,7 @@ def test_config_editor_reload():
         end = child.send_wait(b"/config\r", f"configuration reloaded: {config}".encode(), start=end)
         child.wait(PROMPT.rstrip(), start=end)
         child.send_wait(b"/chat\r", f"reloadop@{socket.gethostname()} : ".encode(), start=end)
+        child.send_wait(b"session setup\r", "reloadop › session setup".encode())
         peer = IRCClient(network_port, "reloadpeer")
         peer.close()
         # Membership notifications start a turn; /config is idle-only.
@@ -2724,8 +2718,7 @@ def test_config_editor_reload():
             )
             child.wait(PROMPT.rstrip(), start=end)
             assert seen.read_text(encoding="utf-8") == str(default_config)
-            child.send(b"/exit\r")
-            child.finish(expect_resume=False)
+            child.exit_now(expect_resume=False)
         finally:
             if prior_default is None:
                 default_config.unlink(missing_ok=True)
@@ -2756,8 +2749,7 @@ def test_known_context_meter():
     child.wait(b"gpt-5.6-luna/high   0% \xe2\x80\xba ", start=selected)
     assert session_ids() == before
     start = len(child.buf)
-    child.send(b"slow\r")
-    child.wait(b"working slowly", start=start)
+    child.send_wait(b"slow\r", b"working slowly", start=start)
     session_id = new_session(before)
     deadline = time.monotonic() + 8.0
     response = None
@@ -2912,7 +2904,7 @@ def test_empty_session_lifecycle():
 
 
 def test_empty_network_session():
-    for sent in (False, True):
+    for sent in ("none", "operator", "mention"):
         before = session_ids()
         port = free_port()
         child = Child(["--no-color", "--no-client", "--listen", f"127.0.0.1:{port}",
@@ -2923,25 +2915,32 @@ def test_empty_network_session():
             peer = IRCClient(port, "emptypeer")
             peer.message("background before input")
             child.wait(b"background before input")
+            child.drain(0.2)  # Cross the ordinary background admission delay.
             assert session_ids() == before
             # Exercise buffered IRC rendering before a durable log exists.
             child.send(b"/rollout\r")
             child.wait(DEFAULT_IDLE_PROMPT)
             child.send(b"/chat\r")
             child.wait(chat_prompt("emptyop"), start=len(child.buf))
-            if sent:
-                child.send(b"operator first message\r")
-                peer.wait(b"operator first message")
+            if sent != "none":
+                if sent == "operator":
+                    child.send(b"operator first message\r")
+                    peer.wait(b"operator first message")
+                else:
+                    peer.message("emptyagent: network_zero")
                 deadline = time.monotonic() + 5.0
                 while session_ids() == before:
                     assert time.monotonic() < deadline
                     child.read_once(0.02)
                 sid = new_session(before)
-                command = child.exit_now()
+                if sent == "mention":
+                    wait_turn_completed(child, sid, "network_zero")
+                child.send(b"\x04")  # Background catch-up may already be active.
+                command = child.finish()
                 assert command_arguments(command)[-2:] == ["--resume", sid]
                 journal = (STATE_ROOT / sid / "events.jsonl").read_text()
                 assert "background before input" in journal
-                assert "operator first message" in journal
+                assert ("operator first message" if sent == "operator" else "network_zero") in journal
             else:
                 child.send(b"/exit\r")
                 child.finish(expect_resume=False)
@@ -3183,10 +3182,7 @@ def test_network_resume_roles():
     peer = IRCClient(server_port, "firstpeer")
     peer.message("retained room message")
     server.wait("firstpeer › retained room message".encode())
-    deadline = time.monotonic() + 8.0
-    while session_ids() == before:
-        assert time.monotonic() < deadline, bytes(server.buf)
-        server.read_once(0.02)
+    server.send_wait(b"resume setup\r", "serverop › resume setup".encode())
     server_id = new_session(before)
     peer.close()
     server.send(b"\x04")
@@ -3226,14 +3222,11 @@ def test_network_resume_roles():
     assert session_ids() == before
     first_links = accept_connections(upstream, 2)
     peer = IRCClient(combined_port, "combinedpeer")
+    combined.send_wait(b"resume setup\r", "combinedop › resume setup".encode())
+    combined_id = new_session(before)
     peer.close()
-    deadline = time.monotonic() + 8.0
-    while session_ids() == before:
-        assert time.monotonic() < deadline, bytes(combined.buf)
-        combined.read_once(0.02)
     combined.send(b"\x04")
     combined_command = combined.finish()
-    combined_id = new_session(before)
     for connection in first_links:
         connection.close()
     combined_arguments = command_arguments(combined_command)
@@ -3298,6 +3291,8 @@ def test_network_collision_prompts():
             child.wait(message, start=start)
             child.drain()
             assert child.buf[start:].count(message) == 1
+        for suffix, child in enumerate(children):
+            child.send_wait(b"resume setup\r", f"root{suffix} › resume setup".encode())
     finally:
         try:
             if peer:
@@ -3386,6 +3381,7 @@ def test_network_live_nick_prompt():
         # request context includes a fresh snapshot with both accepted nicks.
         start = len(child.buf)
         child.send_wait(b"network_view_stream\r", "@operator8 › network_view_stream".encode(), start=start)
+        session_id = new_session(before)
         end = child.wait("◴".encode(), start=start)
         session_id = new_session(before)
         visible = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", child.buf[start:end])
@@ -3551,6 +3547,8 @@ def test_network_view_routing_and_atomic_catchup():
     try:
         child.wait(network_idle)
         assert session_ids() == before
+        child.send_wait(b"session setup\r", "localop › session setup".encode())
+        session_id = new_session(before)
         human = IRCClient(port, "remoteop")
         peer_agent = IRCClient(port, "peerbot", agent=True)
         deadline = time.monotonic() + 8.0
@@ -3697,6 +3695,8 @@ def test_chat_mention_completion_and_steering():
     try:
         child.wait(chat_prompt("localop"))
         assert session_ids() == before
+        child.send_wait(b"session setup\r", "localop › session setup".encode())
+        session_id = new_session(before)
         human = IRCClient(port, "remoteop")
         deadline = time.monotonic() + 8.0
         while session_ids() == before:
@@ -3807,6 +3807,8 @@ def test_network_chat_and_managed_mention():
         assert "── rollout ──".encode() not in edit
         clear_draft_incrementally(child, network_idle)
 
+        child.send_wait(b"session setup\r", "localop › session setup".encode())
+        session_id = new_session(before)
         human = IRCClient(port, "remoteop")
         assert (b" 332 remoteop #lab :" + str(network_workspace).encode() +
                 b"\r\n") in human.buf
@@ -4321,8 +4323,7 @@ def test_history_lock_keeps_editing_live():
             fcntl.lockf(history, fcntl.LOCK_UN)
         child.send(b"\x03")
         child.drain(0.1)
-        child.send(b"/exit\r")
-        child.finish(expect_resume=False)
+        child.exit_now(expect_resume=False)
         assert session_ids() == before
 
 

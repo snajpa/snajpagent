@@ -72,7 +72,8 @@ struct fixture_output {
 static int
 wait_ticks(struct fixture_output *out, unsigned int count)
 {
-    for (unsigned int i = 0u; i < count; ++i) {
+    uint64_t deadline = snag_monotonic_ms() + (uint64_t)count * 20u;
+    while (snag_monotonic_ms() < deadline) {
         int rc = out->pump(out->opaque, 20u);
         if (rc != 0)
             return rc;

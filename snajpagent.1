@@ -1914,6 +1914,8 @@ New sessions remain in memory until the first prompt or goal is submitted.
 Exiting before then creates no saved session, needs no deletion, and prints no
 resume hint. Startup activity and selection changes are retained if a prompt
 is later submitted. Existing resumed sessions remain saved.
+IRC startup and ordinary background events stay buffered until then; a direct
+mention of the model or a submitted operator chat message starts saved work.
 .PP
 Every accepted transition is appended and synced before it is treated as
 durable.  Resume reconstructs turns, tool state, queue, goals, provider/model
