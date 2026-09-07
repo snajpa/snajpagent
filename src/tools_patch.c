@@ -60,7 +60,6 @@ struct patch_op {
     char **add_lines;
     struct patch_hunk *hunks;
     size_t hunk_count;
-    size_t hunk_cap;
     char *old_bytes;
     size_t old_len;
     struct snag_buf new_bytes;
@@ -75,7 +74,7 @@ struct patch_op {
 struct patch_set {
     struct patch_op *ops;
     size_t count;
-    size_t cap;
+    struct patch_hunk *hunks;
     size_t hunk_total;
     size_t total_file_bytes;
 };
@@ -114,7 +113,6 @@ op_free(struct patch_op *op)
 {
     if (!op)
         return;
-    free(op->hunks);
     free(op->old_bytes);
     snag_permissions_free(&op->permissions);
     snag_buf_free(&op->new_bytes);
@@ -129,54 +127,8 @@ patch_set_free(struct patch_set *set)
     for (size_t i = 0; i < set->count; ++i)
         op_free(&set->ops[i]);
     free(set->ops);
+    free(set->hunks);
     memset(set, 0, sizeof(*set));
-}
-
-static int
-patch_set_add(struct patch_set *set, struct patch_op **out)
-{
-    struct patch_op *newops;
-    size_t newcap;
-
-    if (set->count >= PATCH_OP_MAX)
-        return snag_errno(EOVERFLOW);
-    if (set->count == set->cap) {
-        newcap = set->cap ? set->cap * 2u : 8u;
-        if (newcap > PATCH_OP_MAX)
-            newcap = PATCH_OP_MAX;
-        newops = realloc(set->ops, newcap * sizeof(*newops));
-        if (!newops)
-            return -1;
-        set->ops = newops;
-        set->cap = newcap;
-    }
-    *out = &set->ops[set->count++];
-    memset(*out, 0, sizeof(**out));
-    snag_buf_init(&(*out)->new_bytes, PATCH_FILE_MAX);
-    return 0;
-}
-
-static int
-op_add_hunk(struct patch_set *set, struct patch_op *op,
-            struct patch_hunk **out)
-{
-    struct patch_hunk *newhunks;
-    size_t newcap;
-
-    if (set->hunk_total >= PATCH_HUNK_MAX)
-        return snag_errno(EOVERFLOW);
-    if (op->hunk_count == op->hunk_cap) {
-        newcap = op->hunk_cap ? op->hunk_cap * 2u : 4u;
-        newhunks = realloc(op->hunks, newcap * sizeof(*newhunks));
-        if (!newhunks)
-            return -1;
-        op->hunks = newhunks;
-        op->hunk_cap = newcap;
-    }
-    *out = &op->hunks[op->hunk_count++];
-    memset(*out, 0, sizeof(**out));
-    ++set->hunk_total;
-    return 0;
 }
 
 static bool
@@ -345,12 +297,23 @@ static int
 parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
                   char *error, size_t error_size)
 {
-    size_t i = 1;
+    size_t i = 1, ops = 0u, hunks = 0u;
 
     if (strcmp(lines[0], "*** Begin Patch") != 0 ||
         strcmp(lines[line_count - 1u], "*** End Patch") != 0) {
         return snag_fail(error, error_size, EINVAL, "patch frame must begin and end exactly");
     }
+    for (size_t n = 1u; n + 1u < line_count; ++n) {
+        if (is_file_header(lines[n]) && ops < PATCH_OP_MAX)
+            ++ops;
+        if (is_hunk_header(lines[n]) && hunks < PATCH_HUNK_MAX)
+            ++hunks;
+    }
+    set->ops = calloc(ops ? ops : 1u, sizeof(*set->ops));
+    set->hunks = calloc(hunks ? hunks : 1u, sizeof(*set->hunks));
+    if (!set->ops || !set->hunks)
+        return -1;
+
     while (i + 1u < line_count) {
         struct patch_op *op;
         const char *path;
@@ -369,9 +332,13 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
             return snag_fail(error, error_size, EINVAL, "expected a file operation header");
         }
         if (path_valid(path, error, error_size) < 0 ||
-            check_duplicate_path(set, path, error, error_size) < 0 ||
-            patch_set_add(set, &op) < 0)
+            check_duplicate_path(set, path, error, error_size) < 0)
             return -1;
+        if (set->count >= PATCH_OP_MAX)
+            return snag_errno(EOVERFLOW);
+        op = &set->ops[set->count++];
+        op->new_bytes.max = PATCH_FILE_MAX;
+        op->hunks = set->hunks + set->hunk_total;
         op->type = type;
         op->path = path;
         ++i;
@@ -392,10 +359,13 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
             while (i + 1u < line_count && !is_file_header(lines[i])) {
                 struct patch_hunk *hunk;
                 bool changed = false;
-                if (!is_hunk_header(lines[i]) ||
-                    op_add_hunk(set, op, &hunk) < 0 ||
-                    parse_hunk_header(lines[i], &hunk->type,
-                                      error, error_size) < 0)
+                if (!is_hunk_header(lines[i]))
+                    return -1;
+                if (set->hunk_total >= PATCH_HUNK_MAX)
+                    return snag_errno(EOVERFLOW);
+                hunk = &set->hunks[set->hunk_total++];
+                ++op->hunk_count;
+                if (parse_hunk_header(lines[i], &hunk->type, error, error_size) < 0)
                     return -1;
                 ++i;
                 hunk->lines = lines + i;
