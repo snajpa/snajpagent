@@ -131,7 +131,7 @@ int
 snag_socket_noinherit(snag_socket fd)
 {
     DWORD flags;
-    if (!GetHandleInformation((HANDLE)fd, &flags)) {
+    if (fd == SNAG_SOCKET_INVALID || !GetHandleInformation((HANDLE)fd, &flags)) {
         WSASetLastError(WSAENOTSOCK);
         return -1;
     }
