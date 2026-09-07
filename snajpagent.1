@@ -2324,6 +2324,13 @@ to tested modern Windows PE guests (x64 build 26100, ARM64 build 28000);
 full desktop and older Windows
 remain in progress.  Plain make still builds only the host platform.
 .PP
+Windows terminal output selects native VT processing when available and
+native cursor, color, and erase operations for classic consoles.  The classic
+path preserves the initial console palette and supports prompt editing and
+wrapping.  Glyphs and text decorations depend on the console font; italics
+use underline where supported.  This display fallback does not provide
+ConPTY on operating systems that lack it.
+.PP
 See the repository's DEPENDENCIES.md for static dependency licenses, embedded
 trust, corresponding-source obligations and platform qualification details.
 .SH "Examples"
