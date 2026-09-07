@@ -631,6 +631,14 @@ console_legacy(struct snag_term_host *host, struct snag_console_state *state,
             }
             if (output_plain(host, fd, text + at, span, input, checkpoint, opaque) < 0)
                 return -1;
+            /* Classic WriteConsoleW can leave a stale cursor after a full row
+             * even though every cell was written with wrapping disabled. */
+            int x = info.dwCursorPosition.X + cells;
+            if (x > info.srWindow.Right)
+                x = info.srWindow.Right;
+            COORD cursor = {(SHORT)x, info.dwCursorPosition.Y};
+            if (!SetConsoleCursorPosition(output, cursor))
+                return console_failure();
             state->pending_wrap = state->pending_wrap || cells == remaining;
             state->wrap_column = info.srWindow.Right;
             at += span;
