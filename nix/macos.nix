@@ -33,6 +33,17 @@ let
     "${import ./macos-linker.nix { inherit pkgs; }}/bin/x86_64-apple-darwin-ld"
     else "${llvm.lld}/bin/ld64.lld";
   ldflags = lib.optionalString (!legacyLoader) "-fuse-ld=lld " + "--ld-path=${linker}";
+  compilerBuiltins = pkgs.runCommand "compiler-rt-darwin-${arch}-${deployment}" {} ''
+    mkdir -p "$out/lib"
+    for file in ${if arch == "i386" then
+      "i386/divdi3.S i386/moddi3.S i386/udivdi3.S i386/umoddi3.S" else
+      "udivti3.c udivmodti4.c"}; do
+      ${compiler} --target=${target} -isysroot ${sdk} -Os -fvisibility=hidden \
+        -c ${llvm.compiler-rt.src}/compiler-rt/lib/builtins/"$file" \
+        -o "$(basename "$file").o"
+    done
+    ${tools}/llvm-ar rcs "$out/lib/libclang_rt.builtins.a" ./*.o
+  '';
   cmakeLibrary = package: flags: dependencies:
     pkgs.stdenvNoCC.mkDerivation {
       pname = "${package.pname}-macos-${arch}";
@@ -232,7 +243,7 @@ in {
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=$(pkg-config --static --libs jansson)"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
-          "CURL_LIBS=$(pkg-config --static --libs libcurl)"
+          "CURL_LIBS=$(pkg-config --static --libs libcurl)${lib.optionalString legacyLoader " ${compilerBuiltins}/lib/libclang_rt.builtins.a"}"
         )
       '';
       installPhase = ''
