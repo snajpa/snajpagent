@@ -2128,6 +2128,13 @@ snag_fsync(int fd)
 #include <langinfo.h>
 #include <strings.h>
 #include <sys/wait.h>
+#if defined(__APPLE__)
+#include <sys/time.h>
+#include <mach/mach_time.h>
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101000
+#define SNAG_LEGACY_MAC_AT 1
+#endif
+#endif
 #if defined(SNAJPAGENT_LEGACY_LINUX_CLOCK)
 #include <stdatomic.h>
 #include <sys/syscall.h>
@@ -2418,9 +2425,9 @@ snag_directory_lock_release(struct snag_directory_lock *lock)
     return rc;
 }
 
-#if defined(__linux__)
-/* Old kernels lack *at syscalls. Procfs resolves through the held directory,
- * including after rename; never change the multithreaded process's cwd. */
+#if defined(__linux__) || defined(SNAG_LEGACY_MAC_AT)
+/* Never change cwd in the threaded process. Darwin's pathname fallback has
+ * an external rename race; Linux procfs follows the held directory itself. */
 static const char *
 legacy_at_path(int dirfd, const char *path, char out[PATH_MAX])
 {
@@ -2438,11 +2445,21 @@ legacy_at_path(int dirfd, const char *path, char out[PATH_MAX])
         errno = ENOTDIR;
         return NULL;
     }
+#if defined(__APPLE__)
+    if (fcntl(dirfd, F_GETPATH, out) < 0)
+        return NULL;
+    size_t prefix = strnlen(out, PATH_MAX);
+    if (!prefix || prefix >= PATH_MAX || out[0] != '/') {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+#else
     int prefix = snprintf(out, PATH_MAX, "/proc/self/fd/%d", dirfd);
     if (prefix < 0 || prefix >= PATH_MAX) {
         errno = ENAMETOOLONG;
         return NULL;
     }
+#endif
     if (stat(out, &linked) < 0)
         return NULL;
     if (held.st_dev != linked.st_dev || held.st_ino != linked.st_ino || !S_ISDIR(linked.st_mode)) {
@@ -2461,7 +2478,20 @@ legacy_at_path(int dirfd, const char *path, char out[PATH_MAX])
 static int
 open_at(int dirfd, const char *path, int flags, mode_t mode)
 {
+#ifdef SNAG_LEGACY_MAC_AT
+    int fd;
+    if (__builtin_available(macOS 10.10, *)) {
+        fd = openat(dirfd, path, flags, mode);
+    } else {
+        char resolved[PATH_MAX];
+        const char *legacy = legacy_at_path(dirfd, path, resolved);
+        if (!legacy)
+            return -1;
+        fd = open(legacy, flags, mode);
+    }
+#else
     int fd = openat(dirfd, path, flags, mode);
+#endif
 #if defined(__linux__)
     if (fd < 0 && errno == ENOSYS) {
         char resolved[PATH_MAX];
@@ -2470,7 +2500,9 @@ open_at(int dirfd, const char *path, int flags, mode_t mode)
             return -1;
         fd = open(legacy, flags, mode);
     }
-    /* Linux before 2.6.23 ignores O_CLOEXEC, even when openat exists.
+#endif
+#if defined(__linux__) || defined(SNAG_LEGACY_MAC_AT)
+    /* Older kernels can ignore O_CLOEXEC, even when openat exists.
      * This cannot make the legacy open/exec race atomic. */
     if (fd >= 0 && (flags & O_CLOEXEC) && snag_fd_cloexec(fd) < 0) {
         int error = errno;
@@ -2493,9 +2525,10 @@ open_read(int dirfd, const char *path, bool directory)
     if (fd < 0)
         return -1;
     rc = fstat(fd, &st);
-    if (rc == 0 && (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode)))
+    if (rc == 0 && (directory ? S_ISDIR(st.st_mode) :
+                    S_ISREG(st.st_mode) || S_ISDIR(st.st_mode)))
         return fd;
-    error = rc < 0 ? errno : EACCES;
+    error = rc < 0 ? errno : directory ? ENOTDIR : EACCES;
     (void)close(fd);
     errno = error;
     return -1;
@@ -2584,7 +2617,37 @@ snag_directory_open(int fd)
 {
     struct snag_directory *dir = malloc(sizeof(*dir));
 
-    if (dir && !(dir->native = fdopendir(fd))) {
+    if (!dir)
+        return NULL;
+#ifdef SNAG_LEGACY_MAC_AT
+    if (__builtin_available(macOS 10.10, *)) {
+        dir->native = fdopendir(fd);
+    } else {
+        char resolved[PATH_MAX];
+        const char *path = legacy_at_path(fd, ".", resolved);
+        struct stat held, opened;
+        dir->native = path ? opendir(path) : NULL;
+        if (dir->native) {
+            int error = 0;
+            /* The pre-10.8 SDK supplies dirfd as an inline statement expression. */
+            __extension__ int native_fd = dirfd(dir->native);
+            if (fstat(fd, &held) < 0 || fstat(native_fd, &opened) < 0)
+                error = errno;
+            else if (held.st_dev != opened.st_dev || held.st_ino != opened.st_ino)
+                error = ESTALE;
+            else if (close(fd) < 0)
+                error = errno;
+            if (error) {
+                (void)closedir(dir->native);
+                dir->native = NULL;
+                errno = error;
+            }
+        }
+    }
+#else
+    dir->native = fdopendir(fd);
+#endif
+    if (!dir->native) {
         int error = errno;
         free(dir);
         errno = error;
@@ -2642,6 +2705,13 @@ snag_lstat(const char *path, snag_file_info *out)
 int
 snag_lstat_at(int dirfd, const char *path, snag_file_info *out)
 {
+#ifdef SNAG_LEGACY_MAC_AT
+    if (__builtin_available(macOS 10.10, *))
+        return fstatat(dirfd, path, out, AT_SYMLINK_NOFOLLOW);
+    char resolved[PATH_MAX];
+    const char *legacy = legacy_at_path(dirfd, path, resolved);
+    return legacy ? lstat(legacy, out) : -1;
+#else
     int rc = fstatat(dirfd, path, out, AT_SYMLINK_NOFOLLOW);
 #if defined(__linux__)
     if (rc < 0 && errno == ENOSYS) {
@@ -2651,11 +2721,19 @@ snag_lstat_at(int dirfd, const char *path, snag_file_info *out)
     }
 #endif
     return rc;
+#endif
 }
 
 int
 snag_unlink_at(int dirfd, const char *path, bool directory)
 {
+#ifdef SNAG_LEGACY_MAC_AT
+    if (__builtin_available(macOS 10.10, *))
+        return unlinkat(dirfd, path, directory ? AT_REMOVEDIR : 0);
+    char resolved[PATH_MAX];
+    const char *legacy = legacy_at_path(dirfd, path, resolved);
+    return legacy ? (directory ? rmdir(legacy) : unlink(legacy)) : -1;
+#else
     int rc = unlinkat(dirfd, path, directory ? AT_REMOVEDIR : 0);
 #if defined(__linux__)
     if (rc < 0 && errno == ENOSYS) {
@@ -2665,11 +2743,20 @@ snag_unlink_at(int dirfd, const char *path, bool directory)
     }
 #endif
     return rc;
+#endif
 }
 
 int
 snag_rename_at(int from_dir, const char *from, int to_dir, const char *to)
 {
+#ifdef SNAG_LEGACY_MAC_AT
+    if (__builtin_available(macOS 10.10, *))
+        return renameat(from_dir, from, to_dir, to);
+    char source[PATH_MAX], destination[PATH_MAX];
+    const char *old = legacy_at_path(from_dir, from, source);
+    const char *next = old ? legacy_at_path(to_dir, to, destination) : NULL;
+    return next ? rename(old, next) : -1;
+#else
     int rc = renameat(from_dir, from, to_dir, to);
 #if defined(__linux__)
     if (rc < 0 && errno == ENOSYS) {
@@ -2680,11 +2767,20 @@ snag_rename_at(int from_dir, const char *from, int to_dir, const char *to)
     }
 #endif
     return rc;
+#endif
 }
 
 int
 snag_link_at(int from_dir, const char *from, int to_dir, const char *to)
 {
+#ifdef SNAG_LEGACY_MAC_AT
+    if (__builtin_available(macOS 10.10, *))
+        return linkat(from_dir, from, to_dir, to, 0);
+    char source[PATH_MAX], destination[PATH_MAX];
+    const char *old = legacy_at_path(from_dir, from, source);
+    const char *next = old ? legacy_at_path(to_dir, to, destination) : NULL;
+    return next ? link(old, next) : -1;
+#else
     int rc = linkat(from_dir, from, to_dir, to, 0);
 #if defined(__linux__)
     if (rc < 0 && errno == ENOSYS) {
@@ -2695,6 +2791,7 @@ snag_link_at(int from_dir, const char *from, int to_dir, const char *to)
     }
 #endif
     return rc;
+#endif
 }
 
 int
@@ -2712,6 +2809,13 @@ snag_mkdir_private(const char *path)
 int
 snag_mkdir_private_at(int dirfd, const char *path)
 {
+#ifdef SNAG_LEGACY_MAC_AT
+    if (__builtin_available(macOS 10.10, *))
+        return mkdirat(dirfd, path, 0700);
+    char resolved[PATH_MAX];
+    const char *legacy = legacy_at_path(dirfd, path, resolved);
+    return legacy ? mkdir(legacy, 0700) : -1;
+#else
     int rc = mkdirat(dirfd, path, 0700);
 #if defined(__linux__)
     if (rc < 0 && errno == ENOSYS) {
@@ -2721,6 +2825,7 @@ snag_mkdir_private_at(int dirfd, const char *path)
     }
 #endif
     return rc;
+#endif
 }
 
 static int
@@ -3014,6 +3119,18 @@ __wrap_clock_gettime(clockid_t clock, struct timespec *out)
 uint64_t
 snag_time_ms(void)
 {
+#if defined(__APPLE__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101200
+    if (__builtin_available(macOS 10.12, *)) {
+        struct timespec ts;
+        if (clock_gettime(CLOCK_REALTIME, &ts) < 0 || ts.tv_sec < 0)
+            return 0;
+        return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+    }
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) < 0 || tv.tv_sec < 0)
+        return 0;
+    return (uint64_t)tv.tv_sec * 1000u + (uint64_t)tv.tv_usec / 1000u;
+#else
     struct timespec ts;
 
     if (clock_gettime(CLOCK_REALTIME, &ts) < 0)
@@ -3021,16 +3138,32 @@ snag_time_ms(void)
     if ((uint64_t)ts.tv_sec > UINT64_MAX / 1000u)
         return UINT64_MAX;
     return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+#endif
 }
 
 uint64_t
 snag_monotonic_ms(void)
 {
+#if defined(__APPLE__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101200
+    if (__builtin_available(macOS 10.12, *)) {
+        struct timespec now;
+        if (clock_gettime(CLOCK_MONOTONIC, &now) < 0 || now.tv_sec < 0)
+            return 0;
+        return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
+    }
+    mach_timebase_info_data_t scale;
+    if (mach_timebase_info(&scale) != 0 || !scale.denom)
+        return 0;
+    __uint128_t value = (__uint128_t)mach_absolute_time() * scale.numer /
+                        ((__uint128_t)scale.denom * 1000000u);
+    return value > UINT64_MAX ? UINT64_MAX : (uint64_t)value;
+#else
     struct timespec now;
 
     if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
         return 0u;
     return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
+#endif
 }
 
 int
