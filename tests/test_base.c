@@ -356,12 +356,22 @@ test_native_process(bool pty)
     snag_environment_entries_free(env);
 }
 
+struct native_wait_wake {
+    snag_wake_fd wake;
+    HANDLE ready, go;
+    uint64_t delay;
+};
+
 static unsigned int __stdcall
 wake_native_process_wait(void *opaque)
 {
-    snag_wake_fd *wake = opaque;
+    struct native_wait_wake *wake = opaque;
+    assert(SetEvent(wake->ready));
+    assert(WaitForSingleObject(wake->go, 5000u) == WAIT_OBJECT_0);
+    uint64_t start = snag_monotonic_ms();
     assert(snag_sleep_ms(40u) == 0);
-    snag_wakeup_send(*wake);
+    wake->delay = snag_monotonic_ms() - start;
+    snag_wakeup_send(wake->wake);
     return 0;
 }
 
@@ -396,14 +406,24 @@ test_native_process_fanout(void)
     }
     snag_wake_fd wake[2];
     assert(snag_wakeup_create(wake) == 0);
-    HANDLE thread = (HANDLE)_beginthreadex(NULL, 0, wake_native_process_wait, &wake[1], 0, NULL);
-    assert(thread);
+    struct native_wait_wake sender = {.wake = wake[1],
+        .ready = CreateEventW(NULL, TRUE, FALSE, NULL),
+        .go = CreateEventW(NULL, TRUE, FALSE, NULL)};
+    assert(sender.ready && sender.go);
+    HANDLE thread = (HANDLE)_beginthreadex(NULL, 0, wake_native_process_wait, &sender, 0, NULL);
+    assert(thread && WaitForSingleObject(sender.ready, 5000u) == WAIT_OBJECT_0);
     uint64_t start = snag_monotonic_ms();
+    assert(SetEvent(sender.go));
     assert(snag_child_wait(events, 96u, wake[0], 1000) > 0);
-    assert(snag_monotonic_ms() - start < 500u);
+    uint64_t elapsed = snag_monotonic_ms() - start;
+    assert(WaitForSingleObject(thread, 1000u) == WAIT_OBJECT_0 && CloseHandle(thread));
+    if (elapsed >= 500u)
+        (void)fprintf(stderr, "fanout wake: wait=%llu ms sender=%llu ms\n",
+                       (unsigned long long)elapsed, (unsigned long long)sender.delay);
+    assert(elapsed < 500u);
     for (size_t i = 0; i < 96u; ++i)
         assert(!events[i].revents);
-    assert(WaitForSingleObject(thread, 1000u) == WAIT_OBJECT_0 && CloseHandle(thread));
+    assert(CloseHandle(sender.ready) && CloseHandle(sender.go));
     snag_wakeup_drain(wake[0]);
     snag_wakeup_close(wake);
     for (size_t i = 0; i < 32u; ++i)
