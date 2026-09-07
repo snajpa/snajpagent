@@ -78,8 +78,8 @@ def check_jansson_policy() -> None:
 def check_curl_policy() -> None:
     for path in source_files():
         text = path.read_text(encoding="utf-8", errors="surrogateescape")
-        if re.search(r"#\s*include\s*<curl/", text) and rel(path) != "src/provider.c":
-            fail(f"libcurl must stay behind provider.c boundary: {rel(path)}")
+        if re.search(r"#\s*include\s*<curl/", text) and rel(path) != "src/http.h":
+            fail(f"libcurl must stay behind http.h boundary: {rel(path)}")
 
 
 def check_doc() -> None:

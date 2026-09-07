@@ -360,7 +360,9 @@ allocator, object implementation, or upstream Jansson source, and it does not us
 the name `src/jansson.h` so it cannot silently shadow a system development
 header.
 
-`src/provider.c` is the only first-party file allowed to include libcurl headers.
+`src/http.h` is the shared libcurl include boundary. Provider transport and the
+optional binary-update worker own separate curl handles and share only process
+initialization and certificate-root setup.
 All other code reaches HTTP transport through the provider interface.
 
 A system-library release build still must archive the concrete executable dependency closure for each shipped platform:

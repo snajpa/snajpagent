@@ -43,3 +43,9 @@ __pycache__/
 *.swp
 *.swo
 .DS_Store
+
+# Materialized during manual Pages deployment
+/www/latest/snajpagent-*
+!/www/latest/*.json
+/www/latest-dev/snajpagent-*
+!/www/latest-dev/*.json

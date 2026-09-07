@@ -124,6 +124,8 @@ jobs:
           </html>
           """)
           PYTHON
+      - name: Include verified update-channel executables
+        run: python3 tools/release.py pages
       - uses: actions/upload-pages-artifact@v5
         with:
           path: www
