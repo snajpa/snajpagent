@@ -10,7 +10,6 @@
 #include <string.h>
 #include <wchar.h>
 #include <process.h>
-#include <aclapi.h>
 
 /* Dynamically detected API; keep the rest of the import floor independent. */
 #ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
@@ -89,8 +88,6 @@ private_pipe(const wchar_t *name, DWORD access)
     TOKEN_USER *user = NULL;
     PACL acl = NULL;
     SECURITY_DESCRIPTOR descriptor;
-    SID network;
-    SID_IDENTIFIER_AUTHORITY authority = SECURITY_NT_AUTHORITY;
     DWORD size = 0, error = 0;
 
     if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token) &&
@@ -105,20 +102,16 @@ private_pipe(const wchar_t *name, DWORD access)
         error = ERROR_NOT_ENOUGH_MEMORY;
         goto out;
     }
-    if (!GetTokenInformation(token, TokenUser, user, size, &size) ||
-        !InitializeSid(&network, &authority, 1u))
+    if (!GetTokenInformation(token, TokenUser, user, size, &size))
         goto fail;
-    *GetSidSubAuthority(&network, 0u) = SECURITY_NETWORK_RID;
-    size = (DWORD)(sizeof(ACL) + offsetof(ACCESS_DENIED_ACE, SidStart) +
-                   offsetof(ACCESS_ALLOWED_ACE, SidStart)) +
-           GetLengthSid(&network) + GetLengthSid(user->User.Sid);
+    size = (DWORD)(sizeof(ACL) + offsetof(ACCESS_ALLOWED_ACE, SidStart)) +
+           GetLengthSid(user->User.Sid);
     acl = malloc(size);
     if (!acl) {
         error = ERROR_NOT_ENOUGH_MEMORY;
         goto out;
     }
     if (!InitializeAcl(acl, size, ACL_REVISION) ||
-        !AddAccessDeniedAce(acl, ACL_REVISION, FILE_ALL_ACCESS, &network) ||
         !AddAccessAllowedAce(acl, ACL_REVISION, FILE_ALL_ACCESS, user->User.Sid) ||
         !InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) ||
         !SetSecurityDescriptorOwner(&descriptor, user->User.Sid, FALSE) ||

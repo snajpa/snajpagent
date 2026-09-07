@@ -139,14 +139,11 @@ test_child_pipe_privacy(void)
 {
     HANDLE token;
     DWORD size = 0;
-    SID network;
-    SID_IDENTIFIER_AUTHORITY authority = SECURITY_NT_AUTHORITY;
     assert(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token));
     assert(!GetTokenInformation(token, TokenUser, NULL, 0, &size) && size);
     TOKEN_USER *user = malloc(size);
     assert(user && GetTokenInformation(token, TokenUser, user, size, &size));
-    assert(CloseHandle(token) && InitializeSid(&network, &authority, 1u));
-    *GetSidSubAuthority(&network, 0u) = SECURITY_NETWORK_RID;
+    assert(CloseHandle(token));
     const DWORD streams[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
     for (size_t i = 0; i < 3u; ++i) {
         PSECURITY_DESCRIPTOR descriptor = NULL;
@@ -155,16 +152,13 @@ test_child_pipe_privacy(void)
         assert(GetSecurityInfo(GetStdHandle(streams[i]), SE_FILE_OBJECT,
             OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
             &owner, NULL, &acl, NULL, &descriptor) == ERROR_SUCCESS);
-        assert(owner && EqualSid(owner, user->User.Sid) && acl && acl->AceCount == 2u);
+        assert(owner && EqualSid(owner, user->User.Sid) && acl && acl->AceCount == 1u);
         SECURITY_DESCRIPTOR_CONTROL control;
         DWORD revision;
         assert(GetSecurityDescriptorControl(descriptor, &control, &revision) &&
                (control & SE_DACL_PROTECTED));
-        ACCESS_DENIED_ACE *deny;
         ACCESS_ALLOWED_ACE *allow;
-        assert(GetAce(acl, 0, (void **)&deny) && GetAce(acl, 1, (void **)&allow));
-        assert(deny->Header.AceType == ACCESS_DENIED_ACE_TYPE && !deny->Header.AceFlags &&
-               deny->Mask == FILE_ALL_ACCESS && EqualSid(&deny->SidStart, &network));
+        assert(GetAce(acl, 0, (void **)&allow));
         assert(allow->Header.AceType == ACCESS_ALLOWED_ACE_TYPE && !allow->Header.AceFlags &&
                allow->Mask == FILE_ALL_ACCESS && EqualSid(&allow->SidStart, owner));
         LocalFree(descriptor);
