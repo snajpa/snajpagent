@@ -93,7 +93,6 @@ struct app_state {
     bool execute;
     bool networked;
     bool request_networked; /* Capabilities frozen when constructing a request. */
-    uint64_t request_routing_revision;
     bool tool_active;
     int shutdown_signal;
     uint64_t irc_background_since_ms;

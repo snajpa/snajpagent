@@ -525,7 +525,6 @@ snag_app_request_build(struct app_state *app, const json_t *steering,
 
     app->request_networked = snag_irc_enabled(app->config) &&
                              !app->session.active_read_only;
-    app->request_routing_revision = snag_irc_routing_revision(app->irc);
     snag_irc_capture_route(app->irc, &app->irc_request_route);
     rc = snag_context_build(&app->session, app->turn_model, app->turn_effort,
         cycle, steering, app->turn_capacity.max_output_tokens,

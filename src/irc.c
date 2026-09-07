@@ -794,23 +794,6 @@ event_init(struct snag_irc_core *irc, struct snag_irc_event *event,
     (void)irc;
 }
 
-static bool
-cap_has(const char *text, const char *cap)
-{
-    size_t cap_len = strlen(cap);
-
-    while (*text) {
-        while (*text == ' ')
-            ++text;
-        if (strncmp(text, cap, cap_len) == 0 &&
-            (text[cap_len] == '\0' || text[cap_len] == ' '))
-            return true;
-        while (*text && *text != ' ')
-            ++text;
-    }
-    return false;
-}
-
 static int
 parse_message(char *line, struct irc_message *message)
 {
@@ -1513,10 +1496,10 @@ server_dispatch(struct snag_irc_core *irc, struct irc_conn *peer, char *line)
                 irc->server_name);
         }
         if (strcmp(sub, "REQ") == 0) {
-            peer->cap_catchup = cap_has(caps, SNAJPAGENT_NAME "/catchup");
-            peer->cap_batch = cap_has(caps, "batch");
-            peer->cap_server_time = cap_has(caps, "server-time");
-            peer->agent_role = cap_has(caps, SNAJPAGENT_NAME "/agent");
+            peer->cap_catchup = snag_string_in(SNAJPAGENT_NAME "/catchup", caps);
+            peer->cap_batch = snag_string_in("batch", caps);
+            peer->cap_server_time = snag_string_in("server-time", caps);
+            peer->agent_role = snag_string_in(SNAJPAGENT_NAME "/agent", caps);
             return queue_line(peer, ":%s CAP * ACK :%s", irc->server_name,
                               caps);
         }
@@ -1866,7 +1849,7 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
         return -1;
     if (!strcmp(message.command, "CAP") && message.param_count >= 3u &&
         !strcmp(message.params[1], "ACK")) {
-        link->cap_catchup = cap_has(message.params[2], SNAJPAGENT_NAME "/catchup");
+        link->cap_catchup = snag_string_in(SNAJPAGENT_NAME "/catchup", message.params[2]);
         return 0;
     }
     if (strcmp(message.command, "PING") == 0)
