@@ -1313,6 +1313,7 @@ def test_ctrl_c_cancels_partial_editor_states():
 
 def test_prompt_history_and_reverse_search():
     history = Path(DOTDIR) / "prompt_history"
+    before_second = session_ids()
     second = Child([], DEFAULT_IDLE_PROMPT)
     assert session_ids() == before_second
     first = Child([], DEFAULT_IDLE_PROMPT)
