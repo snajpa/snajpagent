@@ -32,8 +32,7 @@
           <img src="screenshots/ordinary.png" width="1122" height="221"
             alt="A local session: the model reports fixing whitespace handling and passing four checks.">
         </a>
-        <figcaption>A real run: the change and its checks, without the tool output.
-          Open the image at full size to read it.</figcaption>
+        <figcaption>Model output with tool details hidden.</figcaption>
       </figure>
       <p>You can type while work continues. Send a correction to change the current
         task, or queue a follow-up to run afterward. Correcting the task does not
@@ -53,23 +52,12 @@
         Switch to rollout to direct that agent without sending your instructions
         to the room. Models publish chosen replies rather than broadcasting their
         entire working transcript.</p>
-      <p>Give the agents a task and say who should lead. Coordination happens
-        through ordinary messages, not a predefined team workflow.</p>
-      <p>For example, Pavel started a four-agent TideFS session with:</p>
-      <blockquote>
-        <p>yooooo how is everyone :) pls agent0 is going to lead y'all to continue
-          in the suckless direction for TideFS, y'all keep setting and updating
-          goals as you need</p>
-      </blockquote>
-      <figure>
-        <a href="screenshots/tidefs.png">
-          <img src="screenshots/tidefs.png" width="1278" height="330" loading="lazy"
-            alt="TideFS room: agent0 reports an integration and plans a combined check; agent3 acknowledges it, agent1 confirms its changes match, and agent2 reports a running test build.">
-        </a>
-        <figcaption>From that session, September 6, 2026. The lead reviews and
-          integrates; the others keep their work available and report progress.
-          A crop of one room view, not a prescribed workflow. Open at full size.</figcaption>
-      </figure>
+      <p>Start a room and connect another instance in a separate terminal:</p>
+      <pre><code>snajpagent -s
+snajpagent -c</code></pre>
+      <p>These defaults connect on localhost. Give agents tasks in the room;
+        they can exchange messages and report results. How you divide the work
+        is up to you.</p>
       <p>Agents can use project files and Git for code and handoff notes;
         connecting to a room does not share their files automatically. IRC has
         no authentication or TLS. Use localhost, a trusted network, or a secure
@@ -98,8 +86,7 @@ sudo make install</code></pre>
   </main>
   <footer>
     <a href="https://github.com/snajpa/snajpagent">Source and issues</a> ·
-    <a href="https://github.com/snajpa/snajpagent/blob/master/COPYING">GPL-2.0-only</a> ·
-    <a href="https://github.com/snajpa">Pavel Šnajdr</a>
+    <a href="https://github.com/snajpa/snajpagent/blob/master/COPYING">GPL-2.0-only</a>
   </footer>
 </body>
 </html>

@@ -28,8 +28,7 @@ Type these commands and press Enter, even while the model works.
 
 [![A local session reports fixing whitespace handling and passing four checks](www/screenshots/ordinary.png)](www/screenshots/ordinary.png)
 
-A real run: the change and its checks, without the tool output. Open the image
-at full size to read it.
+Model output with tool details hidden.
 
 ### Correct this task or queue the next one
 
@@ -140,23 +139,12 @@ it as a local follow-up while your model is active**, even in chat; it does not
 send to the room. If the cursor is still at the end of `@bu` or `@builder`, Tab
 completes that name first. Outside completion while idle, Tab inserts spaces.
 
-### Give the team a task
+### Coordinate work
 
-Say what to do and who should lead. Coordination happens through ordinary
-messages, not a predefined team workflow. For example, Pavel started a four-agent
-TideFS session with:
-
-> yooooo how is everyone :) pls agent0 is going to lead y'all to continue in the suckless direction for TideFS, y'all keep setting and updating goals as you need
-
-[![TideFS agents report integration, follow-up checks and a running test build](www/screenshots/tidefs.png)](www/screenshots/tidefs.png)
-
-From that session, September 6, 2026. The lead reviews and integrates; the others
-keep their work available and report progress. This is a crop of one room view,
-not a prescribed workflow. Open it at full size to read it.
-
-Use project files and Git for code and handoff notes. Joining IRC does not share
-files, credentials or command processes. For independent edits to one repository,
-use separate Git worktrees.
+Give agents tasks in the room; they can exchange messages and report results.
+How you divide the work is up to you. Use project files and Git for code and
+handoff notes: joining IRC does not share files, credentials or command processes.
+For independent edits to one repository, use separate Git worktrees.
 
 `/server start` hosts a room; `/connect ENDPOINT` adds a connection. `/names` lists
 rooms and members. `/2` selects room 2, `/2 TEXT` sends there once, and `/all TEXT`
@@ -204,8 +192,9 @@ runtime qualifications are separate from planned ports.
 [Downloads](https://agent.snajpa.net/downloads.html) lists release availability
 and platform caveats. Every new version must ship the full implemented binary
 matrix; see the [release policy](RELEASE.md). **0.99.1 is the first binary
-release.** Download a matching executable and verify `SHA256SUMS`, or build
-from source:
+release.** Download a matching executable and verify `SHA256SUMS`.
+[Debug builds](https://agent.snajpa.net/downloads.html#debug) are separate from
+normal downloads. To build from source:
 
 The normal build needs C11/POSIX with pthreads, GNU make, libcurl, and Jansson:
 

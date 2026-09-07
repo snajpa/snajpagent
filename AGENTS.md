@@ -27,6 +27,12 @@ working through the existing provider path whenever practical.
 
 ## User documentation
 
+Write for someone using the program, not someone following its author's
+conversations. Supplied examples and screenshots are evidence, not mandatory
+public copy or a prescribed workflow. Do not overfit to a partial detail.
+Keep executable downloads primary; put runnable debug builds and maintenance
+artifacts separately. A symbol file is not a debug build.
+
 Website publication is manual-only. Source pushes do not deploy Pages.
 Deploy an authorized release only with its complete downloads; follow RELEASE.md.
 Keep pages.yml manual-only rather than restoring deployment on every push.

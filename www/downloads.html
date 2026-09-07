@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="snajpagent binary downloads for Linux, macOS and Windows, release policy, and platform compatibility.">
+  <meta name="description" content="Download snajpagent for Linux, macOS and Windows. Requirements, source and debug builds.">
   <title>Download snajpagent</title>
   <link rel="canonical" href="https://agent.snajpa.net/downloads.html">
   <link rel="stylesheet" href="style.css">
@@ -12,7 +12,7 @@
 <body>
   <header>
     <h1>Download snajpagent</h1>
-    <p class="intro">Standalone binaries for every implemented platform, with every new version.</p>
+    <p class="intro">A coding agent for your terminal.</p>
     <nav aria-label="Project">
       <a href="index.html">Home</a> · <a href="manual.html">User manual</a> ·
       <a href="https://github.com/snajpa/snajpagent/releases">Releases</a> ·
@@ -21,85 +21,85 @@
   </header>
   <main>
     <section aria-labelledby="availability-heading">
-      <h2 id="availability-heading">Release downloads</h2>
-      <p><strong>0.99.1 — September 7, 2026.</strong> The first binary release.
-        Choose your OS and architecture; each executable runs without its symbol archive.
-        Read the platform qualifications below and verify <a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/SHA256SUMS">SHA256SUMS</a>.</p>
-      <div class="table-scroll" role="region" aria-label="0.99.1 downloads" tabindex="0">
+      <h2 id="availability-heading">0.99.1</h2>
+      <p>Released September 7, 2026. Choose your operating system and architecture.
+        macOS and Windows builds are experimental; see the requirements below.</p>
+      <div class="table-scroll" role="region" aria-label="Release downloads" tabindex="0">
         <table>
-          <caption>All eight implemented production targets</caption>
-          <thead><tr><th scope="col">Platform</th><th scope="col">Executable</th><th scope="col">Bytes</th><th scope="col">Debug symbols</th></tr></thead>
+          <caption>Executables with application libraries and TLS roots included</caption>
+          <thead><tr><th scope="col">Platform</th><th scope="col">Download</th><th scope="col">Size</th></tr></thead>
           <tbody>
-            <tr><th scope="row">Linux x86-64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-linux-x86_64">linux-x86_64</a></td><td>3,790,320</td><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-linux-x86_64-symbols.tar.gz">Symbols</a> (859,349 bytes)</td></tr>
-            <tr><th scope="row">Linux ARM64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-linux-aarch64">linux-aarch64</a></td><td>3,871,976</td><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-linux-aarch64-symbols.tar.gz">Symbols</a> (871,172 bytes)</td></tr>
-            <tr><th scope="row">Linux i686 (32-bit)</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-linux-i686">linux-i686</a></td><td>4,062,408</td><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-linux-i686-symbols.tar.gz">Symbols</a> (850,031 bytes)</td></tr>
-            <tr><th scope="row">macOS Apple Silicon — experimental</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-macos-arm64">macos-arm64</a></td><td>3,514,768</td><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-macos-arm64-symbols.tar.gz">Symbols</a> (3,365,985 bytes)</td></tr>
-            <tr><th scope="row">macOS Intel — experimental</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-macos-x86_64">macos-x86_64</a></td><td>3,595,872</td><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-macos-x86_64-symbols.tar.gz">Symbols</a> (3,595,132 bytes)</td></tr>
-            <tr><th scope="row">macOS universal — experimental</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-macos-universal">macos-universal</a></td><td>7,119,248</td><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-macos-universal-symbols.tar.gz">Symbols</a> (6,691,746 bytes)</td></tr>
-            <tr><th scope="row">Windows x64 — experimental</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-windows-x86_64.exe">windows-x86_64.exe</a></td><td>4,006,419</td><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-windows-x86_64-symbols.tar.gz">Symbols</a> (144,020 bytes)</td></tr>
-            <tr><th scope="row">Windows ARM64 — experimental</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-windows-arm64.exe">windows-arm64.exe</a></td><td>4,139,008</td><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-windows-arm64-symbols.tar.gz">Symbols</a> (1,084,150 bytes)</td></tr>
+            <tr><th scope="row">Linux x86-64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-linux-x86_64">Download</a></td><td title="3,790,320 bytes">3.61 MiB</td></tr>
+            <tr><th scope="row">Linux ARM64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-linux-aarch64">Download</a></td><td title="3,871,976 bytes">3.69 MiB</td></tr>
+            <tr><th scope="row">Linux i686</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-linux-i686">Download</a></td><td title="4,062,408 bytes">3.87 MiB</td></tr>
+            <tr><th scope="row">macOS Apple Silicon</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-macos-arm64">Download</a></td><td title="3,514,768 bytes">3.35 MiB</td></tr>
+            <tr><th scope="row">macOS Intel</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-macos-x86_64">Download</a></td><td title="3,595,872 bytes">3.43 MiB</td></tr>
+            <tr><th scope="row">macOS universal</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-macos-universal">Download</a></td><td title="7,119,248 bytes">6.79 MiB</td></tr>
+            <tr><th scope="row">Windows x64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-windows-x86_64.exe">Download</a></td><td title="4,006,419 bytes">3.82 MiB</td></tr>
+            <tr><th scope="row">Windows ARM64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-windows-arm64.exe">Download</a></td><td title="4,139,008 bytes">3.95 MiB</td></tr>
           </tbody>
         </table>
       </div>
-      <h3>Source, manual and licensing</h3>
-      <ul>
-        <li><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-source.tar.gz">Tagged application source</a> (1,134,322 bytes)</li>
-        <li><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-dependency-sources.tar.gz">Corresponding dependency sources and build recipes</a> (218,160,358 bytes)</li>
-        <li><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/BUILDING-0.99.1.md">Exact build instructions and checks performed</a> (4,904 bytes)</li>
-        <li><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/THIRD-PARTY-NOTICES.md">Third-party notices and source inventory</a> (3,764 bytes)</li>
-        <li><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/COPYING">GPL-2.0 license</a> (17,921 bytes)</li>
-        <li><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/LICENSE_SCOPE">First-party licensing scope</a> (1,145 bytes)</li>
-        <li><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1.1">Installed manual source</a> (92,200 bytes)</li>
-        <li><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/manual-0.99.1.html">Versioned HTML manual</a> (132,333 bytes)</li>
-        <li><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/style.css">Stylesheet for the downloaded HTML manual</a> (5,400 bytes)</li>
-        <li><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/RELEASE-NOTES.md">Release notes</a> (3,205 bytes)</li>
-      </ul>
-      <p>The binary tag is <code>0.99.1</code>, source commit
-        <a href="https://github.com/snajpa/snajpagent/commit/46e30253024d4a16fad64723c86cb1e4ddd8a48e"><code>46e3025</code></a>.
-        The <a href="manual.html">online manual</a> follows current master;
-        the downloadable manual above describes this exact release.</p>
-      <p><a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.1">GitHub Release</a> ·
-        <a href="https://github.com/snajpa/snajpagent/releases">All releases</a> ·
-        <a href="https://github.com/snajpa/snajpagent/tags">Older source tags</a></p>
+      <p><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/SHA256SUMS">Checksums</a> ·
+        <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.1">Release notes and files</a> ·
+        <a href="https://github.com/snajpa/snajpagent/releases">All releases</a></p>
+      <p>On Linux or macOS, rename the downloaded file to <code>snajpagent</code>
+        and run <code>chmod +x snajpagent</code>. On Windows, keep the
+        <code>.exe</code> extension. Run it in your project directory and follow
+        the provider setup prompts.</p>
     </section>
     <section aria-labelledby="compatibility-heading">
-      <h2 id="compatibility-heading">Choose the right build</h2>
+      <h2 id="compatibility-heading">Requirements</h2>
       <ul>
-        <li><strong>Linux:</strong> choose x64 for Intel/AMD 64-bit PCs or ARM64
-          for AArch64 machines, or i686 for 32-bit x86. These builds statically link musl and application
-          libraries. They do not require Nix, system libcurl, or a matching glibc.
-          These release files passed local provider, resume and TLS checks on
-          native x64/i686 and emulated AArch64. Earlier builds were exercised
-          on Alpine 3.22.5 / Linux 6.12; neither is a promise of compatibility
-          with every older kernel. i686 does not imply Linux 2.4 support.</li>
-        <li><strong>macOS:</strong> universal contains both Intel and Apple Silicon
-          slices. Application libraries are included, but Apple's system library
-          is still required. The build deployment target is macOS 11; actual
-          macOS runtime qualification is pending. ARM64 is ad-hoc signed;
-          Intel is unsigned. Neither is Developer ID signed or notarized.</li>
-        <li><strong>Windows:</strong> choose x64 or native ARM64. Both include
-          application libraries and use only Windows system DLLs; ARM64 uses
-          the OS UCRT. Earlier development builds were checked in Windows PE build 26100 (x64)
-          and 28000 (ARM64); these release binaries were not executed on Windows here. Full desktop and older Windows qualification remain
-          in progress; a Windows 7 compile target is not a Windows 7
-          compatibility claim.</li>
+        <li><strong>Linux:</strong> static musl and application libraries; no Nix,
+          matching glibc, or system libcurl needed. x86-64 and i686 were tested
+          natively; AArch64 under local QEMU. i686 is a CPU baseline, not a
+          promise of Linux 2.4 support.</li>
+        <li><strong>macOS:</strong> experimental cross-builds targeting macOS 11;
+          not tested on macOS. Universal contains Intel and Apple Silicon slices.
+          ARM64 is ad-hoc signed; Intel is unsigned. Neither is Developer ID
+          signed or notarized.</li>
+        <li><strong>Windows:</strong> experimental x64 and ARM64 builds using
+          Windows system DLLs; ARM64 needs the OS UCRT. Earlier development
+          builds were tested in Windows PE, not these exact release files.
+          Full desktop and older Windows qualification remain outstanding.</li>
       </ul>
-      <p>The portable builds include TLS and CA roots; there is no first-run
-        library or certificate download. Build success and runtime qualification
-        are different. Each release must identify its actual test scope and
-        limitations; consult the <a href="https://github.com/snajpa/snajpagent/blob/master/DEPENDENCIES.md">dependency and platform notes</a>.</p>
+      <p><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/BUILDING-0.99.1.md">Exact build and test details</a>.
+        Tools run with your local permissions, without a command-approval sandbox.</p>
     </section>
-    <section aria-labelledby="use-heading">
-      <h2 id="use-heading">Using a release binary</h2>
-      <p>Download the file for your OS and architecture
-        and verify it against that release's <code>SHA256SUMS</code>. On Linux or
-        macOS, rename it to <code>snajpagent</code> and make it executable with
-        <code>chmod +x snajpagent</code>. On Windows, keep the <code>.exe</code>
-        extension. Matching debug symbols are optional, separate downloads.</p>
-      <p>Run it in your project directory and follow the provider setup prompts.
-        Start with <a href="index.html#rollout">rollout and steering</a>, then
-        <a href="index.html#network">native networking</a>. Tools run with your
-        local permissions; the program is not a command-approval sandbox.</p>
+    <section aria-labelledby="source-heading">
+      <h2 id="source-heading">Source and documentation</h2>
+      <p><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-source.tar.gz">0.99.1 source</a> ·
+        <a href="manual.html">Manual</a> ·
+        <a href="https://github.com/snajpa/snajpagent#readme">README</a> ·
+        <a href="manual.html#Building_and_installing">Build from source</a></p>
+      <p><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/COPYING">GPL-2.0 license</a> ·
+        <a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/THIRD-PARTY-NOTICES.md">Dependency notices</a> ·
+        <a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-dependency-sources.tar.gz">Corresponding dependency sources</a></p>
+    </section>
+    <section id="debug" aria-labelledby="debug-heading">
+      <h2 id="debug-heading">Debug builds</h2>
+      <p>For stepping through the application in a debugger. These are runnable
+        0.99.1 builds with debug information and frame pointers, without
+        application LTO or stripping. Dependency libraries remain optimized.
+        The platform requirements above still apply.</p>
+      <details>
+        <summary>Choose a debug build</summary>
+        <ul>
+          <li><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-linux-x86_64-debug">Linux x86-64</a> <span title="6,076,456 bytes">(5.79 MiB)</span></li>
+          <li><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-linux-aarch64-debug">Linux ARM64</a> <span title="6,305,440 bytes">(6.01 MiB)</span></li>
+          <li><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-linux-i686-debug">Linux i686</a> <span title="5,994,012 bytes">(5.72 MiB)</span></li>
+          <li><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-macos-arm64-debug.tar.gz">macOS Apple Silicon</a> <span title="5,564,331 bytes">(5.31 MiB)</span></li>
+          <li><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-macos-x86_64-debug.tar.gz">macOS Intel</a> <span title="5,895,975 bytes">(5.62 MiB)</span></li>
+          <li><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-macos-universal-debug.tar.gz">macOS universal</a> <span title="11,186,237 bytes">(10.67 MiB)</span></li>
+          <li><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-windows-x86_64-debug.exe">Windows x64</a> <span title="6,875,188 bytes">(6.56 MiB)</span></li>
+          <li><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-windows-arm64-debug.exe">Windows ARM64</a> <span title="8,028,672 bytes">(7.66 MiB)</span></li>
+        </ul>
+        <p>macOS archives include the executable and its matching dSYM.
+          Linux and Windows files contain their debug information.</p>
+      </details>
+      <p><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/DEBUG-SHA256SUMS">Debug checksums</a> ·
+        <a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/DEBUG-BUILDS-0.99.1.md">Usage and build instructions</a></p>
     </section>
   </main>
   <footer>

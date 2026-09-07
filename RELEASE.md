@@ -78,6 +78,14 @@ do not change the binaries' tagged source identity.
 
 `www/downloads.html` is the public download entry point. Keep it static and
 usable without JavaScript. Link it from the home page, README, and manual.
+The main table serves executable selection, not release maintenance. Keep debug
+builds in a separate section; symbol archives for production crash diagnosis
+remain available on the Release, not as a column beside every normal download.
+Runnable debug builds must contain an executable, identify the actual build
+profile/source and retain their platform qualifications. Do not relabel a
+symbol-only file as a debug build. Additions to a published release use distinct
+names and checksums; do not replace existing executable bytes or tags.
+
 
 For each new version:
 

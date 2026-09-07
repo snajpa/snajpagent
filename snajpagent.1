@@ -2088,6 +2088,12 @@ Verify the downloaded executable against the release checksum before use.
 On Unix, rename it to snajpagent and make it executable with chmod +x;
 on Windows retain the .exe extension.  Debug symbols are not required to run.
 Version 0.99.1 is the first binary release.  Source builds remain available below.
+.PP
+The downloads page also provides separate runnable debug builds.  These use
+unstripped application code with debug information and frame pointers; dependency
+libraries remain optimized.  macOS packages include the executable and its dSYM.
+They are not the symbol-only files for diagnosing a production executable.
+
 .SS Source builds
 Build from a Git checkout using GNU make, a C11/POSIX compiler with pthreads,
 libcurl and Jansson development files.  These instructions describe the
