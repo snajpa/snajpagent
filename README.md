@@ -196,6 +196,13 @@ where development happens, including unfamiliar ones.
 and verify `SHA256SUMS`. [Debug builds](https://agent.snajpa.net/downloads.html#debug)
 are also available.
 
+Official stable binaries check and install updates in the background on launch.
+The current process keeps running; one banner links to the release log and asks
+you to restart when convenient. Set `[agent] auto_update = false` to opt out.
+Development binaries are debug builds and default to updates off; set the option
+to `true` to follow `latest-dev`. Ordinary source builds remain updater-free.
+The manual covers publisher URLs, permissions and recovery.
+
 The normal build needs C11/POSIX with pthreads, GNU make, libcurl, and Jansson:
 
 ```sh

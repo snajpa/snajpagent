@@ -250,9 +250,9 @@ install_update(struct snag_update *update)
     *base++ = '\0';
     if (snprintf(lockname, sizeof(lockname), ".%s.update-lock", base) >= (int)sizeof(lockname) ||
         snprintf(stage, sizeof(stage), ".%s.update-new", base) >= (int)sizeof(stage) ||
-        snprintf(backup, sizeof(backup), ".%s.update-old", base) >= (int)sizeof(backup))
+        snprintf(backup, sizeof(backup), ".%s.update-old.exe", base) >= (int)sizeof(backup))
         goto out;
-    dir = snag_open_read(*path ? path : "/", true);
+    dir = snag_open_read_security_at(AT_FDCWD, *path ? path : "/", true);
     if (dir < 0 || snag_fstat(dir, &current) < 0 ||
         snag_fd_privacy(dir, &privacy) < 0 || !privacy.effective_owner)
         goto out;
@@ -265,6 +265,27 @@ install_update(struct snag_update *update)
         lock = snag_open_private_append_at(dir, lockname, false);
     if (lock < 0 || snag_lock_file(lock, false) < 0)
         goto out;
+#if defined(_WIN32) || defined(SNAJPAGENT_TEST_RENAME_ASIDE)
+    /* Running a retained backup after a crash can restore the missing name.
+     * Do not remove or overwrite an existing canonical executable. */
+    static const char suffix[] = ".update-old.exe";
+    size_t base_len = strlen(base), suffix_len = sizeof(suffix) - 1u;
+    if (base[0] == '.' && base_len > suffix_len + 1u &&
+        strcmp(base + base_len - suffix_len, suffix) == 0) {
+        char canonical[300];
+        size_t len = base_len - suffix_len - 1u;
+        if (len >= sizeof(canonical))
+            goto out;
+        memcpy(canonical, base + 1u, len); canonical[len] = '\0';
+        int old = snag_open_read_security_at(dir, base, false);
+        bool valid = old >= 0 && has_identity(old, SNAJPAGENT_VERSION, update);
+        if (old >= 0) close(old);
+        if (valid && snag_lstat_at(dir, canonical, &current) < 0 && errno == ENOENT &&
+            snag_rename_at(dir, base, dir, canonical) == 0)
+            (void)snag_sync_dir(dir);
+        goto out;
+    }
+#endif
     original = snag_open_read_security_at(dir, base, false);
     if (original < 0 || snag_fstat(original, &before) < 0 || !S_ISREG(before.st_mode) || before.st_size < 0 ||
         (uint64_t)before.st_size > UPDATE_BINARY_MAX ||
@@ -314,8 +335,12 @@ install_update(struct snag_update *update)
         atomic_load(&update->cancel))
         goto out;
     close(output); output = -1;
+#ifdef SNAJPAGENT_TEST_RENAME_ASIDE
+    if (true) {
+#else
     if (snag_rename_at(dir, stage, dir, base) < 0) {
-#ifdef _WIN32
+#endif
+#if defined(_WIN32) || defined(SNAJPAGENT_TEST_RENAME_ASIDE)
         /* Classic Windows cannot replace a mapped executable. Preserve it at
          * a fixed recovery name until no process maps it. No restart/helper. */
         if (snag_lstat_at(dir, backup, &current) == 0) {
@@ -326,6 +351,11 @@ install_update(struct snag_update *update)
         }
         if (snag_rename_at(dir, base, dir, backup) < 0)
             goto out;
+        (void)snag_sync_dir(dir);
+#ifdef SNAJPAGENT_TEST_RENAME_ASIDE
+        if (getenv("SNAJPAGENT_TEST_RENAME_CRASH"))
+            _exit(79);
+#endif
         if (snag_rename_at(dir, stage, dir, base) < 0) {
             (void)snag_rename_at(dir, backup, dir, base);
             goto out;

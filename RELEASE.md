@@ -115,3 +115,36 @@ Do not expose builder-local paths or label missing assets as downloadable.
 Before publication, keep the live page on the previous release or its honest
 pending-release notice; draft assets are not public downloads. This policy does not itself authorize creating a release, pushing
 a tag, accessing remote build hosts, or adding release automation.
+
+## Official updater builds and development channel
+
+Ordinary `make` and `prod-matrix` do not enable updating. Official publishers set
+`UPDATE_BASE_URL=https://agent.snajpa.net`; native custom builds also provide
+`UPDATE_TARGET` explicitly. The matrix supplies its own exact target IDs. A
+custom publisher supplies its own base URL and keeps that identity across updates.
+
+Stable tag builds default `[agent] auto_update=true`. Commit-suffixed development
+versions default false and use `latest-dev`; stable uses `latest`. All published
+development builds are **DEBUG=1**, with debug information and frame pointers,
+without application LTO or stripping. Optimized dependencies remain unchanged.
+Never publish an ordinary stripped build under a development version. Both
+channels ship the full current `PROD_TARGETS`, with dev downloads in a secondary
+expandable section. Keep stable and dev immutable versioned assets available.
+
+For each channel, publish one small `.json` beside its latest executable URL.
+It contains `name`, `target`, `version`, immutable HTTPS `url`, `sha256`, `size`
+and HTTPS `changelog`. The latter can include `#changelog`. Hash and size are
+computed from the final executable bytes, after signing/strip operations.
+Publish all versioned assets before switching the channel; never point a channel
+at a draft or partial matrix. HTTPS is the publisher trust root; hashes detect
+corruption and mixed-version publication, not compromise of that publisher.
+
+The existing manual Pages workflow fetches the channel executables from their
+immutable release URLs, verifies them, and includes them in the atomic site
+artifact. Git stores only the tiny channel descriptions, not executables.
+No automatic deploy-on-push or updater service is required.
+
+Maintain compact highlights in `www/downloads.html#changelog`: version/date,
+one headline and a few user-facing bullets, 80-column lines, newest first.
+Keep download selection first and detailed development evidence elsewhere.
+The banner links to this page; it does not parse or inject release prose.
