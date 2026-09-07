@@ -48,7 +48,7 @@ let
       sharedLibraryLoader = pkgs.lib.getLib libc;
     };
     nixSupport = (old.nixSupport or { }) // {
-      cc-ldflags = toString (old.nixSupport.cc-ldflags or "") + " -specs=${./legacy-ssp.specs}";
+      cc-cflags = toString (old.nixSupport.cc-cflags or "") + " -specs=${./legacy-ssp.specs}";
     };
   });
   # pkgsStatic forces musl on Linux. Keep this ABI and reuse the compiler;
