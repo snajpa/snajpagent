@@ -39,6 +39,20 @@ capture_open(bool stdout_enabled, bool stderr_enabled)
     return capture;
 }
 
+static struct output_capture
+capture_terminal(struct snag_render *render, struct snag_term *term,
+                 unsigned int columns, bool stdout_enabled, bool stderr_enabled)
+{
+    struct output_capture capture = capture_open(stdout_enabled, stderr_enabled);
+    snag_term_init(term);
+    term->columns = columns;
+    snag_render_init(render, 0u);
+    render->stdout_terminal |= stdout_enabled;
+    render->stderr_terminal |= stderr_enabled;
+    snag_render_attach_term(render, term);
+    return capture;
+}
+
 static void
 capture_restore(struct output_capture *capture)
 {
@@ -825,14 +839,10 @@ capture_wrapped(const char *first, const char *second, unsigned int columns,
     struct snag_term term;
     size_t used = 0u;
 
-    struct output_capture capture = capture_open(true, false);
+    struct output_capture capture = capture_terminal(&render, &term, columns,
+                                                    true, false);
     assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
-    snag_term_init(&term);
-    term.columns = columns;
-    snag_render_init(&render, 0u);
-    render.stdout_terminal = true;
     snag_render_set_markdown(&render, markdown);
-    snag_render_attach_term(&render, &term);
     assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     assert(snag_render_public(&render, first, strlen(first), delivered) == 0);
     used = drain_available(capture.fd, out, out_size, used);
@@ -938,15 +948,11 @@ capture_markdown_width(const char *text, bool enabled, bool split,
     size_t len = strlen(text);
     size_t used = 0u;
 
-    struct output_capture capture = capture_open(true, false);
-    snag_term_init(&term);
+    struct output_capture capture = capture_terminal(&render, &term, columns,
+                                                    true, false);
     term.opened = term.defer_redraw = true;
-    term.columns = columns;
-    snag_render_init(&render, 0u);
-    render.stdout_terminal = true;
     snag_render_set_color(&render, color);
     snag_render_set_markdown(&render, enabled);
-    snag_render_attach_term(&render, &term);
     render.checkpoint = editable_checkpoint;
     render.checkpoint_opaque = &term;
     assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
@@ -970,15 +976,10 @@ capture_prompt_boundary(const char *text, bool markdown,
     struct snag_term term;
     size_t used = 0u;
 
-    struct output_capture capture = capture_open(true, true);
-    snag_term_init(&term);
-    term.columns = 120u;
-    snag_render_init(&render, 0u);
-    render.stdout_terminal = true;
-    render.stderr_terminal = true;
+    struct output_capture capture = capture_terminal(&render, &term, 120u,
+                                                    true, true);
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
     snag_render_set_markdown(&render, markdown);
-    snag_render_attach_term(&render, &term);
     assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     assert(snag_render_public(&render, text, strlen(text), NULL) == 0);
     assert(snag_render_public_end(&render) == 0);
@@ -1093,15 +1094,11 @@ test_spacing_classes(void)
     char output[8192];
     struct snag_render render;
     struct snag_term term;
-    struct output_capture capture = capture_open(true, true);
+    struct output_capture capture = capture_terminal(&render, &term, 120u,
+                                                    true, true);
     assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
-    snag_term_init(&term);
     term.opened = term.capable = true;
-    term.columns = 120u;
-    snag_render_init(&render, 0u);
-    render.stdout_terminal = render.stderr_terminal = true;
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
-    snag_render_attach_term(&render, &term);
     assert(snag_term_set_prompt_template(&term, false, "input › ", frames, 8u, 0u) == 0);
     (void)drain_available(capture.fd, output, sizeof(output), 0u);
     assert(snag_render_input_submitted(&render, "input › ", "one") == 0);
@@ -1157,15 +1154,11 @@ test_live_paragraph_gap(void)
     struct snag_render render;
     struct snag_term term;
     struct snag_buf delivered;
-    struct output_capture capture = capture_open(true, true);
+    struct output_capture capture = capture_terminal(&render, &term, 20u,
+                                                    true, true);
     assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
-    snag_term_init(&term);
     term.opened = term.capable = term.active = true;
-    term.columns = 20u;
-    snag_render_init(&render, 0u);
-    render.stdout_terminal = render.stderr_terminal = true;
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
-    snag_render_attach_term(&render, &term);
     assert(snag_term_set_prompt_template(&term, true, "input › ", frames, 8u, 0u) == 0);
     snag_buf_init(&delivered, 1024u);
     assert(snag_render_input_submitted(&render, "user › ", "question") == 0);
@@ -1226,15 +1219,10 @@ test_input_model_boundaries(void)
              suffix < sizeof(suffixes) / sizeof(suffixes[0]); ++suffix) {
             struct snag_render render;
             struct snag_term term;
-            struct output_capture capture = capture_open(true, true);
-            snag_term_init(&term);
-            term.columns = 120u;
-            snag_render_init(&render, 0u);
-            render.stdout_terminal = true;
-            render.stderr_terminal = true;
+            struct output_capture capture = capture_terminal(&render, &term, 120u,
+                                                            true, true);
             snag_render_set_color(&render, SNAG_COLOR_NEVER);
             snag_render_set_markdown(&render, enabled != 0u);
-            snag_render_attach_term(&render, &term);
             assert(snprintf(question, sizeof(question), "question%s",
                             suffixes[suffix]) > 0);
             assert(snag_render_input_submitted(&render, "model/low › ",
@@ -1255,13 +1243,10 @@ test_input_model_boundaries(void)
     {
         struct snag_render render;
         struct snag_term term;
-        struct output_capture capture = capture_open(false, true);
-        snag_term_init(&term);
+        struct output_capture capture = capture_terminal(&render, &term, 80u,
+                                                        false, true);
         memcpy(term.label, "model/low › ", strlen("model/low › ") + 1u);
         term.line_submission_echoed = true;
-        snag_render_init(&render, 0u);
-        render.stderr_terminal = true;
-        snag_render_attach_term(&render, &term);
         assert(snag_render_input_submitted(&render, "model/low › ",
                                           "question") == 0);
         snag_render_free(&render);
@@ -1343,15 +1328,11 @@ test_markdown_streaming(void)
     struct snag_term term;
     char output[4096] = {0};
     size_t used = 0u;
-    struct output_capture capture = capture_open(true, false);
+    struct output_capture capture = capture_terminal(&render, &term, 80u,
+                                                    true, false);
 
     assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
-    snag_term_init(&term);
-    term.columns = 80u;
-    snag_render_init(&render, 0u);
-    render.stdout_terminal = true;
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
-    snag_render_attach_term(&render, &term);
     struct snag_buf delivered = {.max = 1024u};
     assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     assert(snag_render_public(&render, first, sizeof(first) - 1u,
@@ -1586,18 +1567,14 @@ test_local_mention_highlight(void)
             }};
             struct snag_irc_event event = {.endpoint = "server", .nick = "peer"};
             char output[8192] = {0};
-            struct output_capture capture = capture_open(false, true);
+            struct output_capture capture = capture_terminal(&render, &term, 40u,
+                                                            false, true);
             bool color = (flags & 1u) != 0u;
             assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
-            snag_term_init(&term);
-            term.columns = 40u;
             strcpy(flags & 4u ? destinations.items[0].model :
                                destinations.items[0].operator, cases[i].nick);
             assert(snag_term_set_destinations(&term, &destinations) == 0);
-            snag_render_init(&render, 0u);
-            render.stderr_terminal = true;
             render.markdown = !(flags & 8u);
-            snag_render_attach_term(&render, &term);
             snag_render_set_color(&render, color ? SNAG_COLOR_ALWAYS : SNAG_COLOR_NEVER);
             if (flags & 2u)
                 assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
