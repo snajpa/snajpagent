@@ -331,34 +331,19 @@ identifiers_valid(const struct snag_response_graph *graph,
                   char *error, size_t error_size)
 {
     for (size_t i = 0; i < graph->count; ++i) {
-        struct snag_response_item view = snag_response_graph_item(graph, i);
-        const struct snag_response_item *item = &view;
+        struct snag_response_item item = snag_response_graph_item(graph, i);
+        bool public = public_kind(item.kind);
+        const char *id = public ? item.local_item_id : item.call_id;
 
-        if (public_kind(item->kind) &&
-            !snag_hex_is_lower(item->local_item_id, SNAG_ID_HEX_LEN)) {
+        if (!snag_hex_is_lower(id, SNAG_ID_HEX_LEN))
             return snag_fail(error, error_size, EINVAL,
-                      "response item %zu has an invalid local id", i);
-        }
-        if (item->kind == SNAG_ITEM_TOOL_CALL &&
-            !snag_hex_is_lower(item->call_id, SNAG_ID_HEX_LEN)) {
-            return snag_fail(error, error_size, EINVAL,
-                      "response item %zu has an invalid call id", i);
-        }
+                "response item %zu has an invalid %s id", i, public ? "local" : "call");
         for (size_t j = 0; j < i; ++j) {
             struct snag_response_item previous = snag_response_graph_item(graph, j);
-            if (public_kind(item->kind) &&
-                public_kind(previous.kind) &&
-                strcmp(item->local_item_id,
-                       previous.local_item_id) == 0) {
+            if (public == public_kind(previous.kind) &&
+                !strcmp(id, public ? previous.local_item_id : previous.call_id))
                 return snag_fail(error, error_size, EINVAL,
-                          "response graph repeats a local item id");
-            }
-            if (item->kind == SNAG_ITEM_TOOL_CALL &&
-                previous.kind == SNAG_ITEM_TOOL_CALL &&
-                strcmp(item->call_id, previous.call_id) == 0) {
-                return snag_fail(error, error_size, EINVAL,
-                          "response graph repeats a call id");
-            }
+                    "response graph repeats a %s id", public ? "local item" : "call");
         }
     }
     return 0;
@@ -372,7 +357,6 @@ snag_response_graph_classify(const struct snag_response_graph *graph,
     size_t terminal_count = 0;
     size_t terminal_index = 0;
     size_t last_speech = 0;
-    bool have_speech = false;
     size_t calls = 0;
     size_t bad_index = 0;
 
@@ -392,24 +376,14 @@ snag_response_graph_classify(const struct snag_response_graph *graph,
         }
         if (!item_valid(json_array_get(graph->items, i)))
             goto bad_item;
-        switch (item->kind) {
-        case SNAG_ITEM_ASSISTANT:
-            have_speech = true;
+        if (public_kind(item->kind)) {
             last_speech = i;
             if (item->phase == SNAG_PHASE_FINAL_ANSWER) {
                 ++terminal_count;
                 terminal_index = i;
             }
-            break;
-        case SNAG_ITEM_REFUSAL:
-            have_speech = true;
-            last_speech = i;
-            ++terminal_count;
-            terminal_index = i;
-            break;
-        case SNAG_ITEM_TOOL_CALL:
+        } else {
             ++calls;
-            break;
         }
     }
     if (calls > SNAG_MAX_CALLS_PER_RESPONSE) {
@@ -425,7 +399,7 @@ snag_response_graph_classify(const struct snag_response_graph *graph,
     }
     decision->call_count = calls;
     if (terminal_count > 1u || (terminal_count && calls) ||
-        (terminal_count && (!have_speech || terminal_index != last_speech))) {
+        (terminal_count && terminal_index != last_speech)) {
         decision->outcome = SNAG_GRAPH_CONFLICT;
         decision->message = terminal_count > 1u ?
             "provider response contained multiple terminal answers" :
