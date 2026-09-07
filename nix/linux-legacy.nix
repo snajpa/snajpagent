@@ -73,7 +73,15 @@ let
       }) ];
   });
   target = runtime false compiler;
-  staticTarget = runtime true sdkCompiler;
+  staticTarget = (runtime true sdkCompiler).extend (_: previous: {
+    # The agent needs libzstd, not its Bash/grep-dependent CLI scripts.
+    zstd = previous.zstd.overrideAttrs (old: {
+      buildInputs = [ ];
+      cmakeFlags = old.cmakeFlags ++ [ "-DZSTD_BUILD_PROGRAMS=OFF" ];
+      preInstall = "";
+      outputs = [ "out" "dev" ];
+    });
+  });
 in {
   inherit libc compiler;
   application = args: ((import ./linux.nix {
