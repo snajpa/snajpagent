@@ -13,6 +13,7 @@
 #include <signal.h>
 
 #ifdef _WIN32
+#include "process_host.h"
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <io.h>
@@ -22,6 +23,25 @@
 static pthread_mutex_t console_read_lock = PTHREAD_MUTEX_INITIALIZER;
 static HANDLE console_reader;
 static atomic_bool console_read_cancelled;
+
+typedef BOOL (WINAPI *cancel_sync_fn)(HANDLE);
+static cancel_sync_fn cancel_sync;
+static pthread_once_t cancel_sync_once = PTHREAD_ONCE_INIT;
+
+static void
+find_cancel_sync(void)
+{
+    FARPROC function = GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "CancelSynchronousIo");
+    memcpy(&cancel_sync, &function, sizeof(cancel_sync));
+}
+
+static cancel_sync_fn
+synchronous_cancel(void)
+{
+    if (pthread_once(&cancel_sync_once, find_cancel_sync) != 0)
+        abort();
+    return cancel_sync;
+}
 
 static void
 control_lock(pthread_mutex_t *mutex)
@@ -44,8 +64,9 @@ cancel_console_read(void)
     for (;;) {
         control_lock(&console_read_lock);
         bool active = console_reader != NULL;
-        BOOL sent = active && CancelSynchronousIo(console_reader);
-        DWORD error = GetLastError();
+        cancel_sync_fn cancel = synchronous_cancel();
+        BOOL sent = active && cancel && cancel(console_reader);
+        DWORD error = cancel ? GetLastError() : ERROR_CALL_NOT_IMPLEMENTED;
         control_unlock(&console_read_lock);
         if (!active || sent || error != ERROR_NOT_FOUND)
             break;
@@ -301,6 +322,8 @@ void
 snag_term_host_close(struct snag_term_host *host)
 {
     struct snag_console_writer *writer = host->writer;
+    snag_output_broker_close(host->broker);
+    host->broker = NULL;
     if (host->line_input) {
         (void)CloseHandle(host->line_input);
         host->line_input = NULL;
@@ -339,6 +362,9 @@ snag_term_output_write(struct snag_term_host *host, int fd,
             errno = error;
         return error ? -1 : 0;
     }
+    cancel_sync_fn cancel = synchronous_cancel();
+    if (!cancel)
+        return snag_output_broker_write(&host->broker, fd, text, len, checkpoint, opaque);
     if (!host->writer) {
         host->writer = calloc(1, sizeof(*host->writer));
         if (!host->writer)
@@ -372,7 +398,7 @@ snag_term_output_write(struct snag_term_host *host, int fd,
         /* Retry cancellation until completion to cover the start-I/O race. */
         if (error) {
             atomic_store(&writer->cancel, true);
-            (void)CancelSynchronousIo(writer->thread);
+            (void)cancel(writer->thread);
         }
     }
     if (!error)

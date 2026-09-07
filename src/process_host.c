@@ -4,12 +4,15 @@
 #include "fs.h"
 #ifdef _WIN32
 #include "net.h"
+#include "term_host.h"
 #include <windows.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
 #include <process.h>
+#include <fcntl.h>
+#include <io.h>
 
 /* Dynamically detected API; keep the rest of the import floor independent. */
 #ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
@@ -236,6 +239,318 @@ pipe_cancel(struct child_pipe *pipe)
     (void)CancelIo(pipe->handle);
     (void)GetOverlappedResult(pipe->handle, &pipe->io, &pipe->count, TRUE);
     pipe->pending = false;
+}
+
+struct snag_output_broker {
+    HANDLE process;
+    struct child_pipe control;
+};
+
+static const wchar_t broker_option[] = L"--snajpagent-private-writer";
+static const wchar_t broker_prefix[] = L"\\\\.\\pipe\\snajpagent-writer-";
+
+void
+snag_output_broker_close(struct snag_output_broker *broker)
+{
+    if (!broker)
+        return;
+    if (broker->control.handle) {
+        pipe_cancel(&broker->control);
+        (void)CloseHandle(broker->control.handle);
+    }
+    if (broker->control.io.hEvent)
+        (void)CloseHandle(broker->control.io.hEvent);
+    if (broker->process) {
+        if (WaitForSingleObject(broker->process, 100u) != WAIT_OBJECT_0)
+            (void)TerminateProcess(broker->process, 125u);
+        (void)WaitForSingleObject(broker->process, INFINITE);
+        (void)CloseHandle(broker->process);
+    }
+    free(broker);
+}
+
+static int
+broker_wait(struct snag_output_broker *broker, uint64_t deadline,
+            int (*checkpoint)(void *), void *opaque)
+{
+    struct child_pipe *pipe = &broker->control;
+    HANDLE events[] = {pipe->io.hEvent, broker->process};
+    while (!pipe_done(pipe)) {
+        DWORD rc = WaitForMultipleObjects(2u, events, FALSE, 16u);
+        if (rc == WAIT_FAILED)
+            return child_error(GetLastError());
+        if (rc == WAIT_OBJECT_0 + 1u) {
+            errno = EPIPE;
+            return -1;
+        }
+        if (rc == WAIT_TIMEOUT) {
+            if (checkpoint && checkpoint(opaque) < 0)
+                return -1;
+            if (deadline && snag_monotonic_ms() >= deadline) {
+                errno = ETIMEDOUT;
+                return -1;
+            }
+        }
+    }
+    return pipe->error ? child_error(pipe->error) : 0;
+}
+
+static int
+broker_transfer(struct snag_output_broker *broker, bool write,
+                void *data, size_t size, uint64_t deadline,
+                int (*checkpoint)(void *), void *opaque)
+{
+    struct child_pipe *pipe = &broker->control;
+    unsigned char *bytes = data;
+    while (size) {
+        DWORD amount = size < sizeof(pipe->bytes) ? (DWORD)size : sizeof(pipe->bytes);
+        if (write)
+            memcpy(pipe->bytes, bytes, amount);
+        pipe_begin(pipe, write, amount);
+        if (broker_wait(broker, deadline, checkpoint, opaque) < 0)
+            return -1;
+        if (!pipe->count || pipe->count > amount) {
+            errno = EIO;
+            return -1;
+        }
+        if (!write)
+            memcpy(bytes, pipe->bytes, pipe->count);
+        bytes += pipe->count;
+        size -= pipe->count;
+    }
+    return 0;
+}
+
+static struct snag_output_broker *
+broker_open(int (*checkpoint)(void *), void *opaque)
+{
+    struct snag_output_broker *broker = calloc(1, sizeof(*broker));
+    HANDLE mapping = NULL, remote = NULL;
+    PROCESS_INFORMATION child = {0};
+    STARTUPINFOW startup = {.cb = sizeof(startup)};
+    wchar_t program[32768], command[32768], name[96], environment[2] = {0};
+    char id[SNAG_ID_HEX_LEN + 1u];
+    unsigned char nonce[16], answer[16];
+    void *view = NULL;
+    int error;
+    if (!broker)
+        return NULL;
+    if (snag_random_id(id) < 0 || snag_random_bytes(nonce, sizeof(nonce)) < 0)
+        goto fail;
+    DWORD length = GetModuleFileNameW(NULL, program, 32768u);
+    if (!length)
+        goto native_error;
+    if (length >= 32768u || swprintf(name, 96u, L"%ls%hs", broker_prefix, id) < 0 ||
+        swprintf(command, 32768u, L"\"%ls\" %ls %ls", program, broker_option, name) < 0) {
+        errno = ENAMETOOLONG;
+        goto fail;
+    }
+    broker->control.handle = private_pipe(name, PIPE_ACCESS_DUPLEX);
+    if (broker->control.handle == INVALID_HANDLE_VALUE) {
+        broker->control.handle = NULL;
+        goto native_error;
+    }
+    broker->control.io.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!broker->control.io.hEvent)
+        goto native_error;
+    if (!ConnectNamedPipe(broker->control.handle, &broker->control.io) &&
+        GetLastError() != ERROR_IO_PENDING)
+        goto native_error;
+    broker->control.pending = true;
+    mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
+                                  0, sizeof(nonce), NULL);
+    if (!mapping || !(view = MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0, sizeof(nonce))))
+        goto native_error;
+    memcpy(view, nonce, sizeof(nonce));
+    if (!UnmapViewOfFile(view))
+        goto native_error;
+    view = NULL;
+    if (!CreateProcessW(program, command, NULL, NULL, FALSE,
+        CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT,
+        environment, NULL, &startup, &child))
+        goto native_error;
+    broker->process = child.hProcess;
+    if (ResumeThread(child.hThread) == (DWORD)-1)
+        goto native_error;
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
+    if (broker_wait(broker, deadline, checkpoint, opaque) < 0)
+        goto fail;
+    /* The real client clears startup stdio before opening this pipe. */
+    if (!DuplicateHandle(GetCurrentProcess(), mapping, child.hProcess,
+                          &remote, FILE_MAP_READ, FALSE, 0))
+        goto native_error;
+    uint64_t target = (uintptr_t)remote;
+    if (broker_transfer(broker, true, &target, sizeof(target), deadline, checkpoint, opaque) < 0 ||
+        broker_transfer(broker, false, answer, sizeof(answer), deadline, checkpoint, opaque) < 0)
+        goto fail;
+    unsigned int difference = 0;
+    for (size_t i = 0; i < sizeof(nonce); ++i)
+        difference |= nonce[i] ^ answer[i];
+    if (difference) {
+        errno = EACCES;
+        goto fail;
+    }
+    (void)CloseHandle(child.hThread);
+    (void)CloseHandle(mapping);
+    return broker;
+native_error:
+    child_error(GetLastError());
+fail:
+    error = errno;
+    if (view)
+        (void)UnmapViewOfFile(view);
+    if (mapping)
+        (void)CloseHandle(mapping);
+    if (child.hThread)
+        (void)CloseHandle(child.hThread);
+    snag_output_broker_close(broker);
+    errno = error;
+    return NULL;
+}
+
+int
+snag_output_broker_write(struct snag_output_broker **owner, int fd,
+                         const void *data, size_t len,
+                         int (*checkpoint)(void *), void *opaque)
+{
+    const unsigned char *bytes = data;
+    if (!owner || (!data && len)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!len)
+        return 0;
+    if (!*owner && !(*owner = broker_open(checkpoint, opaque)))
+        return -1;
+    struct snag_output_broker *broker = *owner;
+    while (len) {
+        HANDLE remote;
+        size_t amount = len < 4096u ? len : 4096u;
+        while (amount < len && amount && (bytes[amount] & 0xc0u) == 0x80u)
+            --amount;
+        if (!amount)
+            amount = len < 4096u ? len : 4096u;
+        if (!DuplicateHandle(GetCurrentProcess(), (HANDLE)_get_osfhandle(fd),
+            broker->process, &remote, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+            child_error(GetLastError());
+            goto fail;
+        }
+        uint64_t packet[2] = {(uintptr_t)remote, amount};
+        int32_t status;
+        if (broker_transfer(broker, true, packet, sizeof(packet), 0, checkpoint, opaque) < 0 ||
+            broker_transfer(broker, true, (void *)bytes, amount, 0, checkpoint, opaque) < 0 ||
+            broker_transfer(broker, false, &status, sizeof(status), 0, checkpoint, opaque) < 0)
+            goto fail;
+        if (status) {
+            errno = status;
+            goto fail;
+        }
+        bytes += amount;
+        len -= amount;
+    }
+    return 0;
+fail:
+    {
+        int error = errno;
+        snag_output_broker_close(broker);
+        *owner = NULL;
+        errno = error;
+    }
+    return -1;
+}
+
+static bool
+broker_child_transfer(HANDLE pipe, bool write, void *data, DWORD size)
+{
+    unsigned char *bytes = data;
+    while (size) {
+        DWORD count;
+        BOOL ok = write ? WriteFile(pipe, bytes, size, &count, NULL) :
+                          ReadFile(pipe, bytes, size, &count, NULL);
+        if (!ok)
+            return false;
+        if (!count) {
+            SetLastError(ERROR_BROKEN_PIPE);
+            return false;
+        }
+        bytes += count;
+        size -= count;
+    }
+    return true;
+}
+
+int
+snag_output_broker_main(int argc, wchar_t **argv)
+{
+    if (argc < 2 || wcscmp(argv[1], broker_option))
+        return -1;
+    size_t prefix = wcslen(broker_prefix);
+    if (argc != 3 || wcslen(argv[2]) != prefix + SNAG_ID_HEX_LEN ||
+        wcsncmp(argv[2], broker_prefix, prefix))
+        return 125;
+    for (size_t i = prefix; argv[2][i]; ++i)
+        if (!((argv[2][i] >= L'0' && argv[2][i] <= L'9') ||
+              (argv[2][i] >= L'a' && argv[2][i] <= L'f')))
+            return 125;
+    for (int fd = 0; fd < 3; ++fd)
+        (void)_close(fd);
+    const DWORD streams[] = {STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
+    for (size_t i = 0; i < 3u; ++i)
+        (void)SetStdHandle(streams[i], INVALID_HANDLE_VALUE);
+    HANDLE pipe = CreateFileW(argv[2], GENERIC_READ | GENERIC_WRITE, 0, NULL,
+                              OPEN_EXISTING, 0, NULL);
+    if (pipe == INVALID_HANDLE_VALUE)
+        return 125;
+    uint64_t target;
+    int result = 125;
+    if (!broker_child_transfer(pipe, false, &target, sizeof(target)) ||
+        !target || (uint64_t)(uintptr_t)target != target)
+        goto out;
+    HANDLE mapping = (HANDLE)(uintptr_t)target;
+    const void *view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 16u);
+    if (!view) {
+        (void)CloseHandle(mapping);
+        goto out;
+    }
+    unsigned char nonce[16];
+    memcpy(nonce, view, sizeof(nonce));
+    (void)UnmapViewOfFile(view);
+    (void)CloseHandle(mapping);
+    if (!broker_child_transfer(pipe, true, nonce, sizeof(nonce)))
+        goto out;
+    for (;;) {
+        uint64_t packet[2];
+        unsigned char bytes[4096];
+        if (!broker_child_transfer(pipe, false, packet, sizeof(packet))) {
+            if (GetLastError() == ERROR_BROKEN_PIPE || GetLastError() == ERROR_NO_DATA)
+                result = 0;
+            break;
+        }
+        if (!packet[0] || (uint64_t)(uintptr_t)packet[0] != packet[0] ||
+            !packet[1] || packet[1] > sizeof(bytes))
+            break;
+        HANDLE output = (HANDLE)(uintptr_t)packet[0];
+        if (!broker_child_transfer(pipe, false, bytes, (DWORD)packet[1])) {
+            (void)CloseHandle(output);
+            break;
+        }
+        int fd = _open_osfhandle((intptr_t)output, _O_WRONLY | _O_BINARY | _O_NOINHERIT);
+        int32_t status = 0;
+        if (fd < 0) {
+            status = errno;
+            (void)CloseHandle(output);
+        } else {
+            if (snag_term_output_write(NULL, fd, bytes, (size_t)packet[1], false, NULL, NULL) < 0)
+                status = errno;
+            if (_close(fd) < 0 && !status)
+                status = errno;
+        }
+        if (!broker_child_transfer(pipe, true, &status, sizeof(status)))
+            break;
+    }
+out:
+    (void)CloseHandle(pipe);
+    return result;
 }
 
 void

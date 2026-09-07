@@ -5,6 +5,9 @@
 #include "login.h"
 #include "render.h"
 #include "snajpagent.h"
+#ifdef _WIN32
+#include "process_host.h"
+#endif
 
 #include <stdio.h>
 #include <string.h>
@@ -53,6 +56,9 @@ run(int argc, char **argv)
 int
 wmain(int argc, wchar_t **wide)
 {
+    int internal = snag_output_broker_main(argc, wide);
+    if (internal >= 0)
+        return internal;
     char **argv = snag_wide_arguments(argc, wide);
     if (!argv) {
         (void)fprintf(stderr, "snajpagent: command-line arguments are not valid Unicode\n");

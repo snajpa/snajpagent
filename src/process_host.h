@@ -41,4 +41,14 @@ ssize_t snag_child_read(struct snag_child *child, unsigned int stream, void *buf
 ssize_t snag_child_write(struct snag_child *child, const void *buffer, size_t size);
 int snag_child_wait(struct snag_child_event *events, size_t count, snag_wake_fd wake, int timeout_ms);
 
+#ifdef _WIN32
+struct snag_output_broker;
+/* Private same-executable entry point; -1 means ordinary application startup. */
+int snag_output_broker_main(int argc, wchar_t **argv);
+int snag_output_broker_write(struct snag_output_broker **owner, int fd,
+                              const void *bytes, size_t len,
+                              int (*checkpoint)(void *), void *opaque);
+void snag_output_broker_close(struct snag_output_broker *broker);
+#endif
+
 #endif

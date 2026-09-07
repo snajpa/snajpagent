@@ -1301,6 +1301,27 @@ test_console_output(void)
     snag_term_host_close(&host);
     assert(!host.writer);
 
+    struct snag_output_broker *broker = NULL;
+    sink = _open("NUL", _O_WRONLY | _O_BINARY | _O_NOINHERIT);
+    assert(sink >= 0);
+    /* Warm startup separately so this cancellation probes a blocked write. */
+    assert(snag_output_broker_write(&broker, sink, "warm", 4u, NULL, NULL) == 0 && broker);
+    assert(_pipe(pair, 4096u, _O_BINARY | _O_NOINHERIT) == 0);
+    memset(output, 'x', sizeof(output));
+    calls = 0;
+    start = snag_monotonic_ms();
+    assert(snag_output_broker_write(&broker, pair[1], output, sizeof(output),
+                                    cancel_console_output, &calls) < 0 && errno == ECANCELED);
+    assert(!broker && calls == 2u && snag_monotonic_ms() - start < 2000u);
+    assert(close(pair[1]) == 0);
+    assert(ReadFile((HANDLE)_get_osfhandle(pair[0]), output, sizeof(output), &got, NULL) && got);
+    for (DWORD i = 0; i < got; ++i)
+        assert(output[i] == 'x');
+    assert(close(pair[0]) == 0);
+    assert(snag_output_broker_write(&broker, sink, "fresh", 5u, NULL, NULL) == 0 && broker);
+    assert(close(sink) == 0);
+    snag_output_broker_close(broker);
+
     HANDLE screen = CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CONSOLE_TEXTMODE_BUFFER, NULL);
     assert(screen != INVALID_HANDLE_VALUE);
@@ -2112,6 +2133,9 @@ run_base(int argc, char **argv)
 int
 wmain(int argc, wchar_t **wide)
 {
+    int internal = snag_output_broker_main(argc, wide);
+    if (internal >= 0)
+        return internal;
     char **argv = snag_wide_arguments(argc, wide);
     assert(argv);
     int rc = run_base(argc, argv);

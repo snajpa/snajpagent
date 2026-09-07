@@ -20,6 +20,7 @@ struct snag_shutdown {
     bool console;
 };
 struct snag_console_writer;
+struct snag_output_broker;
 struct snag_term_host {
     unsigned long input_mode;
     bool raw_input;
@@ -35,6 +36,7 @@ struct snag_term_host {
     unsigned long output_mode[2];
     HANDLE output_console[2];
     struct snag_console_writer *writer;
+    struct snag_output_broker *broker;
 };
 #else
 #include <signal.h>
