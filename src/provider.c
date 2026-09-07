@@ -157,67 +157,57 @@ append_host_header(struct snag_buf *out, const char *base_url)
 }
 
 static int
-render_config_header(struct provider_ctx *ctx, struct snag_buf *redacted,
-                     const char *name, const char *value)
-{
-    int rc = 0;
-
-    if (!value[0])
-        return 0;
-    struct snag_buf line = {.max = SNAG_WIRE_HEADER_MAX};
-    if (snag_buf_printf(&line, "%s: %s", name, value) < 0 ||
-        snag_wire_header_redact(line.data, line.len, &ctx->secrets.wire,
-                               redacted) < 0 ||
-        snag_ui_send(ctx->render, (struct snag_ui_command){
-            .kind = SNAG_UI_TRANSPORT, .data.value = '>', .text = (const char *)redacted->data, .len = redacted->len}) < 0)
-        rc = -1;
-    snag_buf_free(&line);
-    return rc;
-}
-
-static int
 render_request_headers(struct provider_ctx *ctx, const char *request_line,
                        const char *accept, bool has_body)
 {
-    int rc = 0;
+    int rc = -1;
 
     if (!snag_ui_enabled(ctx->render, SNAG_PRESENT_WIRE))
         return 0;
     struct snag_buf redacted = {.max = SNAG_WIRE_HEADER_MAX};
+    struct snag_buf line = {.max = SNAG_WIRE_HEADER_MAX};
     struct snag_buf host = {.max = SNAG_CONFIG_URL_MAX + 8u};
     struct snag_buf accept_line = {.max = SNAG_WIRE_HEADER_MAX};
     if (append_host_header(&host, ctx->provider->base_url) < 0 ||
         snag_buf_printf(&accept_line, "accept: %s", accept) < 0)
-        goto fail;
-    if (snag_ui_send(ctx->render, (struct snag_ui_command){
-        .kind = SNAG_UI_TRANSPORT, .data.value = '>', .text = request_line, .len = strlen(request_line)}) < 0 ||
-        snag_ui_send(ctx->render, (struct snag_ui_command){
-            .kind = SNAG_UI_TRANSPORT, .data.value = '>', .text = (const char *)host.data, .len = host.len}) < 0 ||
-        snag_ui_send(ctx->render, (struct snag_ui_command){
-            .kind = SNAG_UI_TRANSPORT, .data.value = '>', .text = (const char *)accept_line.data, .len = accept_line.len}) < 0 ||
-        (has_body && snag_ui_send(ctx->render, (struct snag_ui_command){
-            .kind = SNAG_UI_TRANSPORT, .data.value = '>', .text = "content-type: application/json",
-            .len = strlen("content-type: application/json")}) < 0) ||
-        snag_wire_header_redact((const unsigned char *)"authorization: Bearer x",
-                               23u, &ctx->secrets.wire, &redacted) < 0 ||
-        snag_ui_send(ctx->render, (struct snag_ui_command){
-            .kind = SNAG_UI_TRANSPORT, .data.value = '>', .text = (const char *)redacted.data, .len = redacted.len}) < 0)
-        rc = -1;
-    snag_buf_reset(&redacted);
-    if (rc == 0 &&
-        render_config_header(ctx, &redacted, "HTTP-Referer",
-                             ctx->provider->openrouter_referer) < 0)
-        rc = -1;
-    if (rc == 0 &&
-        render_config_header(ctx, &redacted, "X-OpenRouter-Title",
-                             ctx->provider->openrouter_title) < 0)
-        rc = -1;
-    goto out;
-fail:
-    rc = -1;
+        goto out;
+    /* Keep the established diagnostic order and authorization placeholder.
+     * Configured values and authorization use the existing header redactor. */
+    const struct { const char *text, *value; bool redact; } headers[] = {
+        {request_line, NULL, false}, {(char *)host.data, NULL, false},
+        {(char *)accept_line.data, NULL, false},
+        {has_body ? "content-type: application/json" : NULL, NULL, false},
+        {"authorization: Bearer x", NULL, true},
+        {"HTTP-Referer", ctx->provider->openrouter_referer, true},
+        {"X-OpenRouter-Title", ctx->provider->openrouter_title, true}
+    };
+    for (size_t i = 0u; i < sizeof(headers) / sizeof(headers[0]); ++i) {
+        const char *text = headers[i].text;
+        if (!text || (headers[i].value && !headers[i].value[0]))
+            continue;
+        if (headers[i].value) {
+            snag_buf_reset(&line);
+            if (snag_buf_printf(&line, "%s: %s", text, headers[i].value) < 0)
+                goto out;
+            text = (char *)line.data;
+        }
+        size_t len = strlen(text);
+        if (headers[i].redact) {
+            if (snag_wire_header_redact((const unsigned char *)text, len,
+                                       &ctx->secrets.wire, &redacted) < 0)
+                goto out;
+            text = (char *)redacted.data;
+            len = redacted.len;
+        }
+        if (snag_ui_send(ctx->render, (struct snag_ui_command){
+            .kind = SNAG_UI_TRANSPORT, .data.value = '>', .text = text, .len = len}) < 0)
+            goto out;
+    }
+    rc = 0;
 out:
     snag_buf_free(&accept_line);
     snag_buf_free(&redacted);
+    snag_buf_free(&line);
     snag_buf_free(&host);
     return rc;
 }
