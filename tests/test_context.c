@@ -561,33 +561,17 @@ array_has_string(json_t *array, const char *value)
 }
 
 static json_t *
-tool_by_name(json_t *tools, const char *name)
+item_by_field(json_t *items, const char *key, const char *value)
 {
     size_t index;
-    json_t *tool;
+    json_t *item;
 
-    assert(json_is_array(tools));
-    for (index = 0u; index < json_array_size(tools); ++index) {
-        tool = json_array_get(tools, index);
-        const char *tool_name = snag_json_string(tool, "name");
-        if (tool_name && strcmp(tool_name, name) == 0)
-            return tool;
-    }
-    return NULL;
-}
-
-static json_t *
-tool_by_type(json_t *tools, const char *type)
-{
-    size_t index;
-    json_t *tool;
-
-    assert(json_is_array(tools));
-    for (index = 0u; index < json_array_size(tools); ++index) {
-        tool = json_array_get(tools, index);
-        const char *tool_type = snag_json_string(tool, "type");
-        if (tool_type && strcmp(tool_type, type) == 0)
-            return tool;
+    assert(json_is_array(items));
+    for (index = 0u; index < json_array_size(items); ++index) {
+        item = json_array_get(items, index);
+        const char *field = snag_json_string(item, key);
+        if (field && strcmp(field, value) == 0)
+            return item;
     }
     return NULL;
 }
@@ -693,7 +677,7 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
             (void)assert_strict_tool_contract(tool);
     }
 
-    tool = tool_by_name(tools, "exec_command");
+    tool = item_by_field(tools, "name", "exec_command");
     if (tool) {
         const char *description = snag_json_string(tool, "description");
         assert(strstr(description, "uses the configured command deadline"));
@@ -711,7 +695,7 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
                 "maximum", (json_int_t)max_output_tokens));
     }
 
-    tool = tool_by_name(tools, "write_stdin");
+    tool = item_by_field(tools, "name", "write_stdin");
     assert(tool && strstr(snag_json_string(tool, "description"), fallback));
     expected = json_pack(
         "{s:{s:s},s:{s:s},s:{s:[s,s]},s:{s:[s,s]},"
@@ -727,16 +711,16 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
                                    "enum", json_pack("[s]", active_handle)) == 0);
     assert_properties(tool, expected);
 
-    tool = tool_by_name(tools, "apply_patch");
+    tool = item_by_field(tools, "name", "apply_patch");
     if (tool)
         assert_properties(tool, json_pack("{s:{s:s},s:{s:s}}",
             "patch", "type", "string", "workdir", "type", "string"));
-    tool = tool_by_name(tools, "create_goal");
+    tool = item_by_field(tools, "name", "create_goal");
     if (tool) {
         assert(strstr(snag_json_string(tool, "description"), "explicitly request"));
         assert_properties(tool, json_pack("{s:{s:s}}", "objective", "type", "string"));
     }
-    tool = tool_by_name(tools, "update_goal");
+    tool = item_by_field(tools, "name", "update_goal");
     if (tool)
         assert_properties(tool, json_pack("{s:{s:s,s:[s,s,s]},s:{s:[s,s]}}",
             "action", "type", "string", "enum", "rewrite", "complete", "block",
@@ -816,20 +800,20 @@ test_read_only_and_queue_controllers(void)
         requests[2] = projection.count_request.value;
         for (size_t i = 0; i < 3u; ++i) {
             json_t *ts = json_object_get(requests[i], "tools");
-            json_t *web = tool_by_type(ts, search_type);
+            json_t *web = item_by_field(ts, "type", search_type);
 
             assert(web && json_object_size(web) == 1u);
-            assert(!tool_by_type(ts, openrouter ? "web_search" : "openrouter:web_search"));
+            assert(!item_by_field(ts, "type", openrouter ? "web_search" : "openrouter:web_search"));
             if (pass == 0u) {
                 assert(json_array_size(ts) == 4u);
-                assert(tool_by_name(ts, "list_files") && tool_by_name(ts, "read_file") &&
-                       tool_by_name(ts, "grep"));
-                (void)assert_strict_tool_contract(tool_by_name(ts, "list_files"));
-                (void)assert_strict_tool_contract(tool_by_name(ts, "read_file"));
-                (void)assert_strict_tool_contract(tool_by_name(ts, "grep"));
+                assert(item_by_field(ts, "name", "list_files") && item_by_field(ts, "name", "read_file") &&
+                       item_by_field(ts, "name", "grep"));
+                (void)assert_strict_tool_contract(item_by_field(ts, "name", "list_files"));
+                (void)assert_strict_tool_contract(item_by_field(ts, "name", "read_file"));
+                (void)assert_strict_tool_contract(item_by_field(ts, "name", "grep"));
             } else {
-                assert(tool_by_name(ts, "exec_command"));
-                assert(tool_by_name(ts, "update_goal"));
+                assert(item_by_field(ts, "name", "exec_command"));
+                assert(item_by_field(ts, "name", "update_goal"));
             }
         }
         struct snag_buf serialized = {.max = SNAG_CONTEXT_MAX_REQUEST};
@@ -1642,8 +1626,8 @@ main(void)
         json_t *tools = json_object_get(projection.create_request.value, "tools");
         assert(json_array_size(tools) == 5u);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
-        assert(tool_by_name(tools, "create_goal") != NULL);
-        assert(tool_by_name(tools, "update_goal") == NULL);
+        assert(item_by_field(tools, "name", "create_goal") != NULL);
+        assert(item_by_field(tools, "name", "update_goal") == NULL);
     }
     items = json_object_get(projection.model_input.value, "items");
     request_input = json_object_get(projection.create_request.value, "input");
@@ -1739,14 +1723,14 @@ main(void)
     {
         json_t *tools = json_object_get(projection.create_request.value, "tools");
         json_t *input = json_object_get(projection.create_request.value, "input");
-        json_t *tool_output = tool_by_type(input, "function_call_output");
+        json_t *tool_output = item_by_field(input, "type", "function_call_output");
         json_t *gate;
         const char *gate_text;
         assert(json_is_array(tools));
         assert(json_array_size(tools) == 5);
-        assert(tool_by_name(tools, "create_goal") == NULL);
-        assert(tool_by_name(tools, "update_goal") != NULL);
-        assert(tool_by_name(tools, "exec_command") != NULL);
+        assert(item_by_field(tools, "name", "create_goal") == NULL);
+        assert(item_by_field(tools, "name", "update_goal") != NULL);
+        assert(item_by_field(tools, "name", "exec_command") != NULL);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
         assert(json_is_array(input));
         assert(tool_output != NULL);
@@ -1786,15 +1770,15 @@ main(void)
         tools = json_object_get(projection.create_request.value, "tools");
         input = json_object_get(projection.create_request.value, "input");
         assert(json_array_size(tools) == 8u);
-        assert(tool_by_name(tools, "irc_send"));
-        assert(tool_by_name(tools, "irc_state"));
-        assert(tool_by_name(tools, "irc_topic"));
-        assert(tool_by_name(tools, "write_stdin"));
-        assert(tool_by_name(tools, "create_goal") == NULL);
-        assert(tool_by_name(tools, "update_goal") != NULL);
+        assert(item_by_field(tools, "name", "irc_send"));
+        assert(item_by_field(tools, "name", "irc_state"));
+        assert(item_by_field(tools, "name", "irc_topic"));
+        assert(item_by_field(tools, "name", "write_stdin"));
+        assert(item_by_field(tools, "name", "create_goal") == NULL);
+        assert(item_by_field(tools, "name", "update_goal") != NULL);
         assert_context_tool_schemas(tools, NULL,
                                     network_config.max_timeout_ms, 777u);
-        assert(strstr(snag_json_string(tool_by_type(input,
+        assert(strstr(snag_json_string(item_by_field(input, "type",
                    "function_call_output"), "output"),
                "max_output_tokens=4000") != NULL);
         gate_text = snag_json_string(
@@ -1837,15 +1821,15 @@ main(void)
         json_t *continuation = message_matching(semantic, SNAG_GOAL_CONTINUATION_TEXT);
         json_t *controller = message_matching(semantic, "Persistent goal ");
         json_t *closed = message_matching(semantic, "managed process closed;");
-        json_t *historical_output = tool_by_type(
-            json_object_get(projection.create_request.value, "input"),
+        json_t *historical_output = item_by_field(
+            json_object_get(projection.create_request.value, "input"), "type",
             "function_call_output");
         const char *historical_text;
 
         assert(json_array_size(tools) == 5u);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
-        assert(tool_by_name(tools, "create_goal") == NULL);
-        assert(tool_by_name(tools, "update_goal") != NULL);
+        assert(item_by_field(tools, "name", "create_goal") == NULL);
+        assert(item_by_field(tools, "name", "update_goal") != NULL);
         assert(continuation != NULL);
         assert(strcmp(snag_json_string(continuation, "role"), "developer") == 0);
         assert(strcmp(snag_json_string(continuation, "content"),
@@ -1872,7 +1856,7 @@ main(void)
         assert(strstr(historical_text, large_tool_hash) != NULL);
         assert(strstr(historical_text, "durable session journal") != NULL);
         assert(strstr(historical_text, "full-model-tail") != NULL);
-        assert(tool_by_type(semantic, "compaction") != NULL);
+        assert(item_by_field(semantic, "type", "compaction") != NULL);
     }
 
     {
@@ -1895,9 +1879,9 @@ main(void)
         harness = message_matching(semantic, "IRC chat mode is active.");
         assert(json_array_size(tools) == 8u);
         assert_context_tool_schemas(tools, NULL, 7654321u, 6000u);
-        assert(tool_by_name(tools, "irc_send") != NULL);
-        assert(tool_by_name(tools, "irc_state") != NULL);
-        assert(tool_by_name(tools, "irc_topic") != NULL);
+        assert(item_by_field(tools, "name", "irc_send") != NULL);
+        assert(item_by_field(tools, "name", "irc_state") != NULL);
+        assert(item_by_field(tools, "name", "irc_topic") != NULL);
         assert(harness != NULL);
         assert(strstr(snag_json_string(harness, "content"),
                       "model nick builder") != NULL);
@@ -1909,7 +1893,7 @@ main(void)
                       "irc_send is the only way") != NULL);
         assert(strstr(snag_json_string(harness, "content"),
                       "requires one successful irc_send message") != NULL);
-        assert(strstr(snag_json_string(tool_by_name(tools, "irc_send"),
+        assert(strstr(snag_json_string(item_by_field(tools, "name", "irc_send"),
                                      "description"),
                       "only way model text reaches the room") != NULL);
         snag_config_free(&network_config);
@@ -1937,8 +1921,8 @@ main(void)
 
         assert(json_array_size(tools) == 4u);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
-        assert(tool_by_name(tools, "create_goal") == NULL);
-        assert(tool_by_name(tools, "update_goal") == NULL);
+        assert(item_by_field(tools, "name", "create_goal") == NULL);
+        assert(item_by_field(tools, "name", "update_goal") == NULL);
         json_t *restored = message_matching(semantic, "Persistent goal ");
         assert(restored && strstr(snag_json_string(restored, "content"), "is paused"));
         assert(strstr(snag_json_string(restored, "content"), "wording locked"));
@@ -1968,7 +1952,7 @@ main(void)
     json_t *restored = message_matching(json_object_get(projection.model_input.value, "items"), "Persistent goal ");
     assert(restored && strstr(snag_json_string(restored, "content"), "is blocked"));
     assert(strstr(snag_json_string(restored, "content"), "Recorded blocker:\nretained dependency"));
-    assert(!tool_by_name(json_object_get(projection.create_request.value, "tools"), "update_goal"));
+    assert(!item_by_field(json_object_get(projection.create_request.value, "tools"), "name", "update_goal"));
 
     json_decref(empty_steering);
     snag_context_projection_free(&projection);

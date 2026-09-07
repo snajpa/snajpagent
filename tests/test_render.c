@@ -396,111 +396,107 @@ test_retained_prompt(void)
     struct snag_term term;
     const char *frames[SNAG_TERM_SPINNER_COUNT] = {" ⚑", " |/-", " ⠋⠙"};
     char output[4096];
-    int fds[2], saved_fd;
+    struct output_capture capture = capture_open(false, true);
 
     snag_term_init(&term);
     term.opened = term.capable = true;
     term.columns = 24u;
-    assert(pipe(fds) == 0);
-    assert(fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0);
-    saved_fd = dup(STDERR_FILENO);
-    assert(saved_fd >= 0 && dup2(fds[1], STDERR_FILENO) >= 0);
-    close(fds[1]);
+    assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
     assert(snag_term_set_prompt_template(&term, true, "  9%> ", frames, 8u, 0u) == 0);
     assert(snag_term_restore_draft(&term, "first row stays\nsecond row stays") == 0);
-    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
     assert(snag_term_set_prompt_template(&term, true, "  9%> ", frames, 8u, 0u) == 0);
-    assert(prompt_output(fds[0], output, sizeof(output)) == 0u);
+    assert(prompt_output(capture.fd, output, sizeof(output)) == 0u);
     size_t cursor_row = term.rendered_cursor_row, cursor_col = term.rendered_cursor_col;
     assert(snag_term_set_prompt_template(&term, true, " 10%> ", frames, 8u, 0u) == 0);
-    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
     assert(strstr(output, "10") && !strstr(output, "stays") && !strchr(output, '\n'));
     assert(!strstr(output, "\033[K") && !strstr(output, "\033[2K"));
     assert(term.rendered_cursor_row == cursor_row && term.rendered_cursor_col == cursor_col);
     assert(snag_term_restore_draft(&term, "first row stays\nsecond row short") == 0);
-    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
     assert(!strstr(output, "first") && !strstr(output, "10%"));
     assert(snag_term_restore_draft(&term, "small") == 0);
-    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
     assert(strstr(output, "\033[K") && !strstr(output, "\033[2K"));
     assert(term.rendered_rows == 1u && term.rendered_cursor_col == 11u);
     assert(snag_term_restore_draft(&term, "invalid:\xff") == 0);
-    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
     assert(strstr(output, "invalid:\\xFF"));
     assert(snag_term_set_prompt_template(&term, true, "two\nlines> ", frames, 8u, 0u) == 0);
-    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
     assert(strstr(output, "two\\nlines> "));
     assert(snag_term_set_prompt_template(&term, true, " 10%> ", frames, 8u, 0u) == 0);
-    (void)prompt_output(fds[0], output, sizeof(output));
+    (void)prompt_output(capture.fd, output, sizeof(output));
     char multiline[141];
     memset(multiline, '\n', sizeof(multiline) - 1u);
     multiline[sizeof(multiline) - 1u] = '\0';
     assert(snag_term_restore_draft(&term, multiline) == 0);
-    (void)prompt_output(fds[0], output, sizeof(output));
+    (void)prompt_output(capture.fd, output, sizeof(output));
     assert(snag_term_restore_draft(&term, "") == 0);
-    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
     assert(term.rendered_rows == 1u);
 
     assert(snag_term_restore_draft(&term, "café界 tail") == 0);
-    (void)prompt_output(fds[0], output, sizeof(output));
+    (void)prompt_output(capture.fd, output, sizeof(output));
     assert(snag_term_restore_draft(&term, "cafè界 tail") == 0);
-    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
     assert(strstr(output, "è") && !strstr(output, "caf") && !strstr(output, "tail"));
     assert(snag_term_restore_draft(&term, "cafè語 tail") == 0);
-    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
     assert(strstr(output, "語") && !strstr(output, "tail"));
     assert(snag_term_restore_draft(&term, "aaaaaaaaaaaaaaaaa界") == 0);
     assert(term.rendered_rows == 2u && term.rendered_cursor_col == 19u);
     assert(snag_term_restore_draft(&term, "aaaaaaaaaaaaaaaaaa\nnext") == 0);
     assert(term.rendered_rows == 2u && term.rendered_cursor_col == 10u);
     assert(snag_term_restore_draft(&term, "cafè語 tail") == 0);
-    (void)prompt_output(fds[0], output, sizeof(output));
+    (void)prompt_output(capture.fd, output, sizeof(output));
     snag_term_set_color(&term, true);
     assert(snag_term_set_prompt_template(&term, true, " 10%> ", frames, 8u, 0u) == 0);
-    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
     assert(strstr(output, "\033[1;36m") && !strstr(output, "tail"));
     snag_term_set_color(&term, false);
     assert(snag_term_set_prompt_template(&term, true, " 10%> ", frames, 8u, 0u) == 0);
-    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
     assert(!strstr(output, "tail"));
 
     assert(snag_term_restore_draft(&term, "") == 0);
     assert(snag_term_set_prompt_template(&term, true, "\xfd\xfe> ", frames, 8u, 2u) == 0);
-    (void)prompt_output(fds[0], output, sizeof(output));
+    (void)prompt_output(capture.fd, output, sizeof(output));
     term.spinner_epoch_ms -= 125u;
     uint64_t epoch = term.spinner_epoch_ms;
     assert(snag_term_set_prompt_template(&term, true, "\xfd\xfe> ", frames, 8u, 2u) == 0);
     assert(term.spinner_epoch_ms == epoch);
-    assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
     assert(strchr(output, '/') && !strchr(output, '>'));
     assert(snag_term_set_prompt_template(&term, true, "\xfd\xfe> ", frames, 8u, 2u) == 0);
-    assert(prompt_output(fds[0], output, sizeof(output)) == 0u);
+    assert(prompt_output(capture.fd, output, sizeof(output)) == 0u);
 
     assert(snag_term_output_begin(&term) == 0);
     assert(snag_term_note_output(&term, "public", 6u, "") == 0);
     assert(snag_term_output_end(&term) == 0);
-    (void)prompt_output(fds[0], output, sizeof(output));
+    (void)prompt_output(capture.fd, output, sizeof(output));
     assert(term.prompt_visible && term.painted_prompt.len != 0u);
     enum snag_term_action action;
     char *text;
     int input[2], stdin_fd = dup(STDIN_FILENO);
     assert(stdin_fd >= 0 && pipe(input) == 0 && dup2(input[0], STDIN_FILENO) >= 0);
     assert(snag_term_poll(&term, 20, -1, &action, &text) == 0);
-    assert(term.prompt_visible && prompt_output(fds[0], output, sizeof(output)) == 0u);
+    assert(term.prompt_visible && prompt_output(capture.fd, output, sizeof(output)) == 0u);
     term.input[0] = 'x';
     term.input_len = 1u;
     assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
-    assert(term.prompt_visible && prompt_output(fds[0], output, sizeof(output)) > 0u);
+    assert(term.prompt_visible && prompt_output(capture.fd, output, sizeof(output)) > 0u);
     assert(snag_term_output_begin(&term) == 0);
     assert(snag_term_note_output(&term, "more", 4u, "") == 0);
     assert(snag_term_output_end(&term) == 0);
-    (void)prompt_output(fds[0], output, sizeof(output));
+    (void)prompt_output(capture.fd, output, sizeof(output));
     assert(term.prompt_visible);
     assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
-    assert(prompt_output(fds[0], output, sizeof(output)) == 0u);
+    assert(prompt_output(capture.fd, output, sizeof(output)) == 0u);
     assert(snag_term_set_prompt_template(&term, false, "cursor> ", frames, 8u, 0u) == 0);
     assert(snag_term_restore_draft(&term, "unchanged") == 0);
-    (void)prompt_output(fds[0], output, sizeof(output));
+    (void)prompt_output(capture.fd, output, sizeof(output));
     const char *moves[] = {"\033[H", "\033[F", "\033[D"};
     const size_t columns[] = {8u, 17u, 16u};
     for (size_t i = 0u; i < 3u; ++i) {
@@ -509,7 +505,7 @@ test_retained_prompt(void)
         term.input_len = 3u;
         assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
         assert(term.rendered_cursor_col == columns[i] && term.rendered_cursor_row == 0u);
-        assert(prompt_output(fds[0], output, sizeof(output)) > 0u);
+        assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
         assert(!strstr(output, "unchanged") && !strchr(output, '>'));
         assert(!strstr(output, "\033[K") && !strstr(output, "\033[2K"));
     }
@@ -522,9 +518,8 @@ test_retained_prompt(void)
     close(readonly);
     assert(snag_term_set_prompt_template(&term, true, "failure> ", frames, 8u, 0u) < 0);
     assert(term.painted_prompt.len == 0u);
-    assert(dup2(saved_fd, STDERR_FILENO) >= 0);
-    close(saved_fd);
-    close(fds[0]);
+    capture_restore(&capture);
+    close(capture.fd);
     term.opened = false;
     snag_term_close(&term);
 }
@@ -810,23 +805,12 @@ static size_t
 capture_orientation(bool resumed, char *out, size_t out_size)
 {
     struct snag_render render;
-    struct snag_session session = {0};
-    size_t used = 0u;
-
     struct output_capture capture = capture_open(false, true);
+
     snag_render_init(&render, 0u);
-    memcpy(session.id, "0123456789abcdef0123456789abcdef",
-           sizeof(session.id));
-    assert(snprintf(session.default_model, sizeof(session.default_model),
-                    "model-must-not-appear") > 0);
-    session.workspace = "/work/tree";
-    session.turn_count = 3u;
-    session.pending_queue_count = 2u;
-    assert(snag_render_orientation(&render, session.workspace, session.id,
-                                  session.turn_count, session.pending_queue_count,
-                                  resumed) == 0);
-    used = capture_close(&capture, out, out_size, used);
-    return used;
+    assert(snag_render_orientation(&render, "/work/tree",
+        "0123456789abcdef0123456789abcdef", 3u, 2u, resumed) == 0);
+    return capture_close(&capture, out, out_size, 0u);
 }
 
 static size_t
@@ -1302,7 +1286,6 @@ capture_static_markdown(unsigned int verbosity, char *out, size_t out_size)
 {
     struct snag_render render;
     struct snag_irc_event event;
-    struct snag_session session;
     size_t used = 0u;
 
     struct output_capture capture = capture_open(false, true);
@@ -1344,17 +1327,12 @@ capture_static_markdown(unsigned int verbosity, char *out, size_t out_size)
     event.kind = SNAG_IRC_MESSAGE;
     memcpy(event.text, "plain after quit", 17u);
     assert(snag_render_irc_event(&render, &event) == 0);
-    memset(&session, 0, sizeof(session));
-    session.last_user = "**literal user**";
-    session.last_assistant = "## Saved *answer*";
-    assert(snag_render_history(&render, session.last_user, session.last_assistant) == 0);
+    assert(snag_render_history(&render, "**literal user**", "## Saved *answer*") == 0);
     snag_render_set_markdown(&render, false);
     event.kind = SNAG_IRC_MESSAGE;
     memcpy(event.text, "**literal agent**", 18u);
     assert(snag_render_irc_event(&render, &event) == 0);
-    session.last_user = NULL;
-    session.last_assistant = "## Literal assistant";
-    assert(snag_render_history(&render, session.last_user, session.last_assistant) == 0);
+    assert(snag_render_history(&render, NULL, "## Literal assistant") == 0);
     used = capture_close(&capture, out, out_size, used);
     return used;
 }
@@ -1363,13 +1341,11 @@ static void
 test_history_failure(void)
 {
     struct snag_render render;
-    struct snag_session session = {0};
     struct output_capture capture = capture_open(false, true);
     snag_render_init(&render, 0u);
     render.stderr_terminal = true;
-    session.last_assistant = "\xff";
     errno = 0;
-    assert(snag_render_history(&render, session.last_user, session.last_assistant) < 0);
+    assert(snag_render_history(&render, NULL, "\xff") < 0);
     assert(errno == EILSEQ && !render.public_item_open);
     assert(snag_render_public_begin(&render, STDERR_FILENO, NULL) == 0);
     assert(snag_render_public_end(&render) == 0);
@@ -1388,14 +1364,9 @@ test_markdown_streaming(void)
     struct snag_term term;
     char output[4096] = {0};
     size_t used = 0u;
-    int fds[2];
-    int saved;
+    struct output_capture capture = capture_open(true, false);
 
-    assert(pipe(fds) == 0);
-    assert(fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0);
-    saved = dup(STDOUT_FILENO);
-    assert(saved >= 0 && dup2(fds[1], STDOUT_FILENO) >= 0);
-    close(fds[1]);
+    assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
     snag_term_init(&term);
     term.columns = 80u;
     snag_render_init(&render, 0u);
@@ -1406,20 +1377,20 @@ test_markdown_streaming(void)
     assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     assert(snag_render_public(&render, first, sizeof(first) - 1u,
                              &delivered) == 0);
-    used = drain_available(fds[0], output, sizeof(output), used);
+    used = drain_available(capture.fd, output, sizeof(output), used);
     assert(strcmp(output, "Live") == 0);
     for (size_t i = 0u; i < sizeof(second) - 1u; ++i)
         assert(snag_render_public(&render, second + i, 1u, &delivered) == 0);
-    used = drain_available(fds[0], output, sizeof(output), used);
+    used = drain_available(capture.fd, output, sizeof(output), used);
     assert(strcmp(output, "Live café [docs] <") == 0);
     assert(snag_render_public(&render, third, sizeof(third) - 1u,
                              &delivered) == 0);
-    used = drain_available(fds[0], output, sizeof(output), used);
+    used = drain_available(capture.fd, output, sizeof(output), used);
     assert(strcmp(output,
                   "Live café [docs] <https://example.test> and co") == 0);
     assert(snag_render_public(&render, fourth, sizeof(fourth) - 1u,
                              &delivered) == 0);
-    used = drain_available(fds[0], output, sizeof(output), used);
+    used = drain_available(capture.fd, output, sizeof(output), used);
     assert(strcmp(output,
                   "Live café [docs] <https://example.test> and code\n") == 0);
     assert(snag_render_public_end(&render) == 0);
@@ -1430,7 +1401,7 @@ test_markdown_streaming(void)
 
     assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     assert(snag_render_public(&render, "**aborted", 9u, NULL) == 0);
-    used = drain_available(fds[0], output, sizeof(output), used);
+    used = drain_available(capture.fd, output, sizeof(output), used);
     assert(strcmp(output,
                   "Live café [docs] <https://example.test> and code\n\n"
                   "• aborted") == 0);
@@ -1438,15 +1409,11 @@ test_markdown_streaming(void)
     assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     assert(snag_render_public(&render, "literal", 7u, NULL) == 0);
     assert(snag_render_public_end(&render) == 0);
-    used = drain_available(fds[0], output, sizeof(output), used);
+    used = drain_available(capture.fd, output, sizeof(output), used);
     assert(strcmp(output,
                   "Live café [docs] <https://example.test> and code\n\n"
                   "• aborted\n\n• literal\n\n") == 0);
-    assert(dup2(saved, STDOUT_FILENO) >= 0);
-    close(saved);
-    while (read(fds[0], output, sizeof(output)) > 0)
-        ;
-    close(fds[0]);
+    (void)capture_close(&capture, output, sizeof(output), used);
     snag_term_close(&term);
 }
 
@@ -1555,13 +1522,9 @@ capture_color(enum snag_color_mode mode, bool chat_view,
     assert(snag_render_host(&render, "status") == 0);
     assert(snag_render_event(&render, 7u, "compaction_completed") == 0);
     memset(&call, 0, sizeof(call));
-    arguments = json_object();
+    arguments = json_pack("{s:s,s:o}", "command", "printf plain", "timeout_ms",
+                          timeout_ms < 0 ? json_null() : json_integer(timeout_ms));
     assert(arguments != NULL);
-    assert(json_object_set_new(arguments, "command",
-                               json_string("printf plain")) == 0);
-    assert(json_object_set_new(arguments, "timeout_ms",
-                               timeout_ms < 0 ? json_null() :
-                                                json_integer(timeout_ms)) == 0);
     call.name = "exec_command";
     call.arguments = arguments;
     {
@@ -1572,14 +1535,10 @@ capture_color(enum snag_color_mode mode, bool chat_view,
         snag_render_block_free(&block);
     }
     json_decref(arguments);
-    result = json_object();
+    result = json_pack("{s:i,s:i,s:s,s:n,s:s}", "duration_ms", 12, "exit_code", 0,
+                       "model_text", "fixture tool output: café\n", "reason",
+                       "status", "succeeded");
     assert(result != NULL);
-    assert(json_object_set_new(result, "duration_ms", json_integer(12)) == 0);
-    assert(json_object_set_new(result, "exit_code", json_integer(0)) == 0);
-    assert(json_object_set_new(result, "model_text",
-                               json_string("fixture tool output: café\n")) == 0);
-    assert(json_object_set_new(result, "reason", json_null()) == 0);
-    assert(json_object_set_new(result, "status", json_string("succeeded")) == 0);
     {
         struct snag_render_block block;
         assert(snag_render_prepare_tool_finish(&block, call.name, result,

@@ -661,18 +661,22 @@ class TmuxTerminal:
         )
 
     def wait(self, needle, timeout=10.0, join_wrapped=False):
+        return self.wait_until(lambda screen: needle in screen, repr(needle),
+                               timeout, join_wrapped)
+
+    def wait_until(self, matches, description, timeout=10.0, join_wrapped=False):
         deadline = time.monotonic() + timeout
         screen = ""
         while time.monotonic() < deadline:
             screen = self.capture(join_wrapped=join_wrapped)
-            if needle in screen:
+            if matches(screen):
                 return screen
             if self.dead():
                 raise AssertionError(
-                    f"pane exited while waiting for {needle!r}:\n{screen}"
+                    f"pane exited while waiting for {description}:\n{screen}"
                 )
             time.sleep(0.02)
-        raise AssertionError(f"timeout waiting for {needle!r}:\n{screen}")
+        raise AssertionError(f"timeout waiting for {description}:\n{screen}")
 
     def send_text(self, text):
         self.run("send-keys", "-t", self.target, "-l", "--", text)
@@ -789,18 +793,8 @@ def wrapped_fragment_pattern(fragment):
 
 def wait_wrapped_fragment(terminal, fragment, timeout=10.0):
     pattern = wrapped_fragment_pattern(fragment)
-    deadline = time.monotonic() + timeout
-    screen = ""
-    while time.monotonic() < deadline:
-        screen = terminal.capture(join_wrapped=True)
-        if pattern.search(screen):
-            return screen
-        if terminal.dead():
-            raise AssertionError(
-                f"pane exited while waiting for wrapped {fragment!r}:\n{screen}"
-            )
-        time.sleep(0.02)
-    raise AssertionError(f"timeout waiting for wrapped {fragment!r}:\n{screen}")
+    return terminal.wait_until(pattern.search, f"wrapped {fragment!r}",
+                               timeout, join_wrapped=True)
 
 
 def assert_wrapped_order(screen, fragments):
@@ -1268,17 +1262,10 @@ def queue_listing(screen, number, text):
 
 
 def wait_queue_listing(terminal, entries, timeout=5.0):
-    deadline = time.monotonic() + timeout
-    screen = ""
-    while time.monotonic() < deadline:
-        screen = terminal.capture()
-        if all(queue_listing(screen, number, text)
-               for number, text in enumerate(entries, 1)):
-            return screen
-        if terminal.dead():
-            raise AssertionError(f"pane exited while waiting for queue:\n{screen}")
-        time.sleep(0.02)
-    raise AssertionError(f"timeout waiting for rendered queue {entries!r}:\n{screen}")
+    return terminal.wait_until(
+        lambda screen: all(queue_listing(screen, number, text)
+                           for number, text in enumerate(entries, 1)),
+        f"rendered queue {entries!r}", timeout)
 
 
 def wait_event_count(dotdir, kind, count, timeout=5.0):
@@ -1491,18 +1478,9 @@ def run_tool_case(binary, root):
 
 
 def wait_idle_prompt_at_bottom(terminal, prompt, timeout=5.0):
-    deadline = time.monotonic() + timeout
-    screen = ""
-    while time.monotonic() < deadline:
-        screen = terminal.capture(join_wrapped=True)
-        if screen.rstrip().endswith(prompt.rstrip()):
-            return screen
-        if terminal.dead():
-            raise AssertionError(
-                f"pane exited while waiting for the idle prompt:\n{screen}"
-            )
-        time.sleep(0.02)
-    raise AssertionError(f"idle prompt is not at the bottom:\n{screen}")
+    return terminal.wait_until(
+        lambda screen: screen.rstrip().endswith(prompt.rstrip()),
+        f"idle prompt {prompt!r} at the bottom", timeout, join_wrapped=True)
 
 
 def run_retained_composer_case(binary, root):
@@ -2236,25 +2214,15 @@ def run_model_catalog_case(binary, root, provider, environment):
 
 
 def wait_current_prompt(terminal, operator, timeout=10.0):
-    deadline = time.monotonic() + timeout
     expected = (f"{operator}@{MACHINE_HOSTNAME} :" if operator else
                 " ordinary/uncached-start/low   0% ›")
     timestamped = re.compile(
         rf"(?m)^   \d{{2}}:\d{{2}}:\d{{2}} {re.escape(expected)}$"
     ) if operator else None
-    screen = ""
-    while time.monotonic() < deadline:
-        screen = terminal.capture()
-        visible = screen.rstrip()
-        if ((timestamped.search(visible) is not None) if operator else
-                visible.endswith(expected)):
-            return screen
-        if terminal.dead():
-            raise AssertionError(
-                f"pane exited while waiting for prompt {expected!r}:\n{screen}"
-            )
-        time.sleep(0.02)
-    raise AssertionError(f"current prompt {expected!r} is missing:\n{screen}")
+    return terminal.wait_until(
+        lambda screen: (timestamped.search(screen.rstrip()) is not None)
+        if operator else screen.rstrip().endswith(expected),
+        f"current prompt {expected!r}", timeout)
 
 
 def active_turns(dotdir):
