@@ -116,8 +116,7 @@ snag_provider_failure_from_json(const json_t *root,
          !strcmp(snag_json_string(object, "type"), "invalid_request_error")))
         snprintf(failure->type, sizeof(failure->type), "%s",
                  snag_json_string(object, "type"));
-    if (message && strlen(message) < sizeof(failure->message) &&
-        snag_utf8_valid((const unsigned char *)message, strlen(message), true))
+    if (snag_text_valid(message, 0u, sizeof(failure->message) - 1u))
         memcpy(failure->message, message, strlen(message) + 1u);
     for (size_t i = 0; i < sizeof(limit_keys) / sizeof(limit_keys[0]); ++i)
         if (failure_limit(object, limit_keys[i],
@@ -159,10 +158,8 @@ copy_once(struct snag_responses_stream *stream, char **target,
           const char *value, size_t max, const char *label)
 {
     char *copy;
-    size_t len;
 
-    if (!value || !(len = strlen(value)) || len > max ||
-        !snag_utf8_valid((const unsigned char *)value, len, true))
+    if (!snag_text_valid(value, 1u, max))
         return stream_fail(stream, EPROTO, "invalid %s", label);
     if (*target) {
         if (strcmp(*target, value) != 0)

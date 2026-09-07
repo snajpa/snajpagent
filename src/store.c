@@ -118,8 +118,7 @@ snag_store_open(struct snag_store *store, const char *dotdir,
     char *sessions = NULL;
     char *trash = NULL;
     int rc = -1;
-    if (!snag_path_root_len(dotdir) || strlen(dotdir) > SNAG_PATH_MAX_BYTES ||
-        !snag_utf8_valid((const unsigned char *)dotdir, strlen(dotdir), true)) {
+    if (!snag_path_root_len(dotdir) || !snag_text_valid(dotdir, 0u, SNAG_PATH_MAX_BYTES)) {
         return snag_fail(error, error_size, EINVAL,
                   "dotdir must be an absolute UTF-8 path within the supported limit");
     }
@@ -573,15 +572,6 @@ consume_oldest_queue(struct snag_session *session)
     return 0;
 }
 
-static bool
-preference_text_valid(const char *value, size_t size)
-{
-    size_t len;
-
-    return value && (len = strlen(value)) != 0u && len < size &&
-           snag_utf8_valid((const unsigned char *)value, len, true);
-}
-
 const char *
 snag_goal_status_name(enum snag_goal_status status)
 {
@@ -629,15 +619,11 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             n != 2u || !snag_json_exact_keys(data,
                 "default_effort default_model default_provider format protocol workspace") ||
             !protocol || strcmp(protocol, "responses") != 0 ||
-            !preference_text_valid(effort, sizeof(session->default_effort)) ||
-            !preference_text_valid(model, sizeof(session->default_model)) ||
-            !provider || !*provider ||
-            strlen(provider) > SNAG_CONFIG_PROVIDER_NAME_MAX ||
-            !snag_utf8_valid((const unsigned char *)provider, strlen(provider), true) ||
+            !snag_text_valid(effort, 1u, sizeof(session->default_effort) - 1u) ||
+            !snag_text_valid(model, 1u, sizeof(session->default_model) - 1u) ||
+            !snag_text_valid(provider, 1u, SNAG_CONFIG_PROVIDER_NAME_MAX) ||
             !snag_path_root_len(workspace) ||
-            strlen(workspace) > SNAG_PATH_MAX_BYTES ||
-            !snag_utf8_valid((const unsigned char *)workspace,
-                            strlen(workspace), true))
+            !snag_text_valid(workspace, 0u, SNAG_PATH_MAX_BYTES))
             goto invalid;
         if (replace_text(session, &session->workspace, "workspace", workspace,
                          SNAG_PATH_MAX_BYTES) < 0)
@@ -676,8 +662,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
 
         if (!snag_json_exact_keys(data, "reason text timestamp_ms") || !reason ||
             (!snag_string_in(reason, "join nick topology compaction")) ||
-            !text || !*text || strlen(text) > SNAG_MAX_IRC_SNAPSHOT ||
-            !snag_utf8_valid((const unsigned char *)text, strlen(text), true) ||
+            !snag_text_valid(text, 1u, SNAG_MAX_IRC_SNAPSHOT) ||
             snag_json_integer_u64(data, "timestamp_ms", &timestamp_ms) < 0 ||
             timestamp_ms == 0u)
             goto invalid;
@@ -689,9 +674,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !old_workspace || !new_workspace ||
             strcmp(old_workspace, session->workspace) != 0 ||
             strcmp(old_workspace, new_workspace) == 0 ||
-            !snag_path_root_len(new_workspace) || strlen(new_workspace) > SNAG_PATH_MAX_BYTES ||
-            !snag_utf8_valid((const unsigned char *)new_workspace,
-                            strlen(new_workspace), true) ||
+            !snag_path_root_len(new_workspace) ||
+            !snag_text_valid(new_workspace, 0u, SNAG_PATH_MAX_BYTES) ||
             replace_text(session, &session->workspace, "workspace", new_workspace,
                          SNAG_PATH_MAX_BYTES) < 0)
             goto invalid;
@@ -718,14 +702,11 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
     } else if (strcmp(type, "goal_started") == 0) {
         const char *goal_id = snag_json_string(data, "goal_id");
         const char *prompt = snag_json_string(data, "prompt");
-        size_t len;
         if (!snag_json_exact_keys(data, "goal_id prompt") || snag_goal_unfinished(session->goal_status) ||
             !goal_id || !snag_hex_is_lower(goal_id, SNAG_ID_HEX_LEN) ||
-            strcmp(goal_id, session->id) == 0 || !prompt || !*prompt ||
+            strcmp(goal_id, session->id) == 0 ||
             (session->goal_id[0] && strcmp(goal_id, session->goal_id) == 0) ||
-            snag_text_blank(prompt) ||
-            (len = strlen(prompt)) > SNAG_MAX_GOAL_PROMPT ||
-            !snag_utf8_valid((const unsigned char *)prompt, len, true) ||
+            !snag_text_valid(prompt, 1u, SNAG_MAX_GOAL_PROMPT) || snag_text_blank(prompt) ||
             replace_text(session, &session->goal_prompt, "goal_prompt", prompt,
                          SNAG_MAX_GOAL_PROMPT) < 0)
             goto invalid;
@@ -749,7 +730,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *prompt = snag_json_string(data, "prompt");
         const char *reason = snag_json_string(data, "reason");
         bool model = actor && strcmp(actor, "model") == 0;
-        size_t len;
         enum snag_goal_status status = session->goal_status;
 
         if (!snag_goal_unfinished(status) || !goal_id ||
@@ -759,9 +739,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             if (!snag_json_exact_keys(data, "actor goal_id prompt") ||
                 (!model && (!actor || strcmp(actor, "user"))) ||
                 (model && (status != SNAG_GOAL_ACTIVE || session->goal_locked)) ||
-                !prompt || !*prompt || snag_text_blank(prompt) ||
-                (len = strlen(prompt)) > SNAG_MAX_GOAL_PROMPT ||
-                !snag_utf8_valid((const unsigned char *)prompt, len, true) ||
+                !snag_text_valid(prompt, 1u, SNAG_MAX_GOAL_PROMPT) || snag_text_blank(prompt) ||
                 strcmp(prompt, session->goal_prompt) == 0 ||
                 replace_text(session, &session->goal_prompt, "goal_prompt", prompt,
                              SNAG_MAX_GOAL_PROMPT) < 0)
@@ -786,9 +764,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         } else if (strcmp(action, "blocked") == 0) {
             if (!snag_json_exact_keys(data, "actor goal_id reason") ||
                 status != SNAG_GOAL_ACTIVE || !model ||
-                !reason || !*reason || snag_text_blank(reason) ||
-                (len = strlen(reason)) > SNAG_MAX_GOAL_BLOCKER ||
-                !snag_utf8_valid((const unsigned char *)reason, len, true) ||
+                !snag_text_valid(reason, 1u, SNAG_MAX_GOAL_BLOCKER) || snag_text_blank(reason) ||
                 replace_text(session, &session->goal_blocker, "goal_blocker", reason,
                              SNAG_MAX_GOAL_BLOCKER) < 0)
                 goto invalid;
@@ -935,15 +911,12 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *new_effort = snag_json_string(data, "new_effort");
         if (session->active_turn || !snag_json_exact_keys(data,
             "new_effort new_model new_provider old_effort old_model old_provider") ||
-            !old_provider || !new_provider || !*new_provider ||
+            !old_provider || !snag_text_valid(new_provider, 1u, SNAG_CONFIG_PROVIDER_NAME_MAX) ||
             strcmp(old_provider, session->default_provider) != 0 ||
-            strlen(new_provider) > SNAG_CONFIG_PROVIDER_NAME_MAX ||
-            !snag_utf8_valid((const unsigned char *)new_provider,
-                            strlen(new_provider), true) ||
             !old_model || strcmp(old_model, session->default_model) != 0 ||
-            !preference_text_valid(new_model, sizeof(session->default_model)) ||
+            !snag_text_valid(new_model, 1u, sizeof(session->default_model) - 1u) ||
             !old_effort || strcmp(old_effort, session->default_effort) != 0 ||
-            !preference_text_valid(new_effort, sizeof(session->default_effort)) ||
+            !snag_text_valid(new_effort, 1u, sizeof(session->default_effort) - 1u) ||
             (strcmp(old_provider, new_provider) == 0 &&
              strcmp(old_model, new_model) == 0 &&
              strcmp(old_effort, new_effort) == 0) ||
@@ -958,8 +931,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *old_effort = snag_json_string(data, "old_effort");
         const char *new_effort = snag_json_string(data, "new_effort");
         if (session->active_turn || !snag_json_exact_keys(data, "new_effort old_effort") ||
-            !preference_text_valid(old_effort, sizeof(session->default_effort)) ||
-            !preference_text_valid(new_effort, sizeof(session->default_effort)) ||
+            !snag_text_valid(old_effort, 1u, sizeof(session->default_effort) - 1u) ||
+            !snag_text_valid(new_effort, 1u, sizeof(session->default_effort) - 1u) ||
             strcmp(old_effort, session->default_effort) != 0 ||
             strcmp(old_effort, new_effort) == 0 ||
             !snag_strcpy(session->default_effort,
@@ -2136,8 +2109,7 @@ canonical_workspace(const char *workspace, char *error, size_t error_size)
                   strerror(errno));
         return NULL;
     }
-    if (strlen(resolved) > SNAG_PATH_MAX_BYTES ||
-        !snag_utf8_valid((const unsigned char *)resolved, strlen(resolved), true) ||
+    if (!snag_text_valid(resolved, 0u, SNAG_PATH_MAX_BYTES) ||
         snag_stat(resolved, &st) < 0 || !S_ISDIR(st.st_mode)) {
         snag_errorf(error, error_size, "workspace must be an existing UTF-8 directory");
         free(resolved);

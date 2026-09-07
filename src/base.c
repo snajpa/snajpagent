@@ -350,6 +350,16 @@ snag_utf8_decode(const unsigned char *text, size_t len, uint32_t *out)
 }
 
 bool
+snag_text_valid(const char *text, size_t min, size_t max)
+{
+    if (!text)
+        return false;
+    size_t len = max == SIZE_MAX ? strlen(text) : strnlen(text, max + 1u);
+    return len >= min && len <= max &&
+           snag_utf8_valid((const unsigned char *)text, len, true);
+}
+
+bool
 snag_utf8_valid(const unsigned char *s, size_t len, bool reject_nul)
 {
     for (size_t i = 0u; i < len;) {

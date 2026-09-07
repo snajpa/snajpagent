@@ -178,9 +178,7 @@ resolve_effort(const char *preference)
 {
     if (!preference || strcmp(preference, "default") == 0)
         return "medium";
-    if (!*preference || strlen(preference) >= SNAG_CONFIG_EFFORT_MAX ||
-        !snag_utf8_valid((const unsigned char *)preference,
-                        strlen(preference), true))
+    if (!snag_text_valid(preference, 1u, SNAG_CONFIG_EFFORT_MAX - 1u))
         return NULL;
     return preference;
 }
@@ -2876,8 +2874,7 @@ run_turn(struct app_state *app, const char *prompt,
     snag_credential_clear(&credential);
     app->last_turn_refused = false;
     error[0] = '\0';
-    if (!*prompt || strlen(prompt) > prompt_max ||
-        !snag_utf8_valid((const unsigned char *)prompt, strlen(prompt), true)) {
+    if (!snag_text_valid(prompt, 1u, prompt_max)) {
         (void)app_error(app, queued ?
             "queued prompt must be nonempty valid UTF-8 within 256 KiB" :
             "prompt must be nonempty valid UTF-8 within 1 MiB");
@@ -3707,8 +3704,7 @@ resolve_workspace_path(const char *path, const char *label,
                   label, path, strerror(errno));
         return NULL;
     }
-    if (strlen(resolved) > SNAG_PATH_MAX_BYTES ||
-        !snag_utf8_valid((const unsigned char *)resolved, strlen(resolved), true) ||
+    if (!snag_text_valid(resolved, 0u, SNAG_PATH_MAX_BYTES) ||
         snag_stat(resolved, &st) < 0 || !S_ISDIR(st.st_mode)) {
         snag_errorf(error, error_size, "%s workspace must be an existing UTF-8 directory",
                   label);

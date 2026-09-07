@@ -2863,6 +2863,16 @@ run_base(int argc, char **argv)
     assert(snag_utf8_valid(valid, sizeof(valid) - 1u, true));
     assert(!snag_utf8_valid(invalid, sizeof(invalid), true));
     assert(!snag_utf8_valid((const unsigned char *)"a\0b", 3u, true));
+    assert(snag_text_valid("", 0u, 0u));
+    assert(!snag_text_valid("", 1u, 4u));
+    assert(!snag_text_valid(NULL, 0u, SIZE_MAX));
+    assert(snag_text_valid("café", 5u, 5u));
+    assert(!snag_text_valid("café", 0u, 4u));
+    assert(!snag_text_valid("café", 6u, 7u));
+    assert(!snag_text_valid("café", 6u, 5u));
+    assert(snag_text_valid("a\n\t", 0u, SIZE_MAX));
+    assert(!snag_text_valid("\xff", 0u, SIZE_MAX));
+    assert(!snag_text_valid("\xe2\x82", 0u, 2u));
     {
         uint32_t cp = 42u;
         const unsigned char *text = (const unsigned char *)"\xf4\x8f\xbf\xbf";

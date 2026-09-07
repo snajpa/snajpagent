@@ -146,14 +146,6 @@ parse_color_value(struct snag_cli *cli, const char *value,
     return set_color(cli, color, name, error, error_size);
 }
 
-static bool
-bounded_preference(const char *value, size_t max)
-{
-    size_t len = strlen(value);
-    return len != 0u && len < max &&
-           snag_utf8_valid((const unsigned char *)value, len, true);
-}
-
 static int
 read_execute_prompt(struct snag_cli *cli, char *error, size_t error_size)
 {
@@ -398,14 +390,13 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
         return snag_errorf(error, error_size, "--last requires --resume");
     if (cli->all && !cli->resume && !cli->list)
         return snag_errorf(error, error_size, "--all requires --resume or -l");
-    if (cli->model && !bounded_preference(cli->model,
-                                          SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_EFFORT_MAX + 2u))
+    if (cli->model && !snag_text_valid(cli->model, 1u,
+        SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_EFFORT_MAX + 1u))
         return snag_errorf(error, error_size,
                   "model exceeds the supported structural bounds");
-    if (cli->provider && !bounded_preference(cli->provider, SNAG_CONFIG_PROVIDER_NAME_MAX + 1u))
+    if (cli->provider && !snag_text_valid(cli->provider, 1u, SNAG_CONFIG_PROVIDER_NAME_MAX))
         return snag_errorf(error, error_size, "provider name is empty or oversized");
-    if (cli->effort && !bounded_preference(cli->effort,
-                                           SNAG_CONFIG_EFFORT_MAX))
+    if (cli->effort && !snag_text_valid(cli->effort, 1u, SNAG_CONFIG_EFFORT_MAX - 1u))
         return snag_errorf(error, error_size,
                   "reasoning effort exceeds the supported structural bounds");
     if (cli->resume) {

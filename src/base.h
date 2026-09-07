@@ -91,6 +91,8 @@ void snag_arguments_free(char **argv);
 #endif
 size_t snag_utf8_decode(const unsigned char *text, size_t len, uint32_t *out);
 bool snag_utf8_valid(const unsigned char *s, size_t len, bool reject_nul);
+/* NUL-terminated UTF-8, with inclusive byte-length bounds; NULL is invalid. */
+bool snag_text_valid(const char *text, size_t min, size_t max);
 int snag_char_width(uint32_t cp);
 bool snag_text_blank(const char *text);
 unsigned char snag_irc_fold(unsigned char c);

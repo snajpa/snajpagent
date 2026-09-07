@@ -140,24 +140,17 @@ command_output_limit(const json_t *arguments, uint32_t ceiling, uint32_t *out)
 static bool
 text_arg_valid(const char *text, size_t max)
 {
-    size_t len;
-    if (!text || text == (const char *)-1)
-        return false;
-    len = strlen(text);
-    return len <= max && snag_utf8_valid((const unsigned char *)text, len, true);
+    return text != (const char *)-1 && snag_text_valid(text, 0u, max);
 }
 
 static bool
 absolute_dir_arg_valid(const char *path)
 {
     snag_file_info st;
-    size_t len;
 
     if (!path || path == (const char *)-1 || !snag_path_root_len(path))
         return false;
-    len = strlen(path);
-    return len <= SNAG_PATH_MAX_BYTES &&
-           snag_utf8_valid((const unsigned char *)path, len, true) &&
+    return snag_text_valid(path, 0u, SNAG_PATH_MAX_BYTES) &&
            snag_stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 

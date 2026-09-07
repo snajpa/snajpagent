@@ -550,8 +550,7 @@ set_model_limit_section(struct parse_state *state, char *name)
     const char *model = slash ? slash + 1u : "";
 
     if ((slash && (slash == name || !slash[1])) ||
-        strlen(model) >= SNAG_CONFIG_MODEL_MAX ||
-        !snag_utf8_valid((const unsigned char *)model, strlen(model), true) ||
+        !snag_text_valid(model, 0u, SNAG_CONFIG_MODEL_MAX - 1u) ||
         config->model_limit_count >= SNAG_CONFIG_MODEL_LIMIT_MAX)
         goto invalid;
     if (slash)

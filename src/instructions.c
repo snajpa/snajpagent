@@ -39,8 +39,7 @@ try_candidate(struct snag_instruction_set *set, const char *path,
                     "instruction %s must be a non-symlink regular file", path);
     }
     canonical = snag_realpath(path);
-    if (!canonical || strlen(canonical) > SNAG_PATH_MAX_BYTES ||
-        !snag_utf8_valid((const unsigned char *)canonical, strlen(canonical), true)) {
+    if (!snag_text_valid(canonical, 0u, SNAG_PATH_MAX_BYTES)) {
         free(canonical);
         return snag_fail(error, error_size, EINVAL, "instruction path cannot be canonicalized");
     }
@@ -103,8 +102,7 @@ snag_instructions_add_directory(struct snag_instruction_set *set, const char *di
     snag_file_info st;
     int rc = -1;
 
-    if (!canonical || strlen(canonical) > SNAG_PATH_MAX_BYTES ||
-        !snag_utf8_valid((const unsigned char *)canonical, strlen(canonical), true) ||
+    if (!snag_text_valid(canonical, 0u, SNAG_PATH_MAX_BYTES) ||
         snag_stat(canonical, &st) < 0 || !S_ISDIR(st.st_mode)) {
         (void)snag_fail(error, error_size, EINVAL,
             "-d requires an existing UTF-8 directory: %s", dir ? dir : "");
@@ -275,9 +273,7 @@ snag_instructions_discover(struct snag_instruction_set *set,
         goto out;
     }
     canonical_workspace = snag_realpath(workspace);
-    if (!canonical_workspace || strlen(canonical_workspace) > SNAG_PATH_MAX_BYTES ||
-        !snag_utf8_valid((const unsigned char *)canonical_workspace,
-                        strlen(canonical_workspace), true) ||
+    if (!snag_text_valid(canonical_workspace, 0u, SNAG_PATH_MAX_BYTES) ||
         snag_stat(canonical_workspace, &st) < 0 || !S_ISDIR(st.st_mode)) {
         (void)snag_fail(error, error_size, EINVAL,
             "workspace must be an existing UTF-8 directory for instruction discovery");

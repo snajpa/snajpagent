@@ -71,13 +71,9 @@ snag_item_phase_name(enum snag_item_phase phase)
 static bool
 provider_id_valid(const char *s)
 {
-    size_t len;
-    if (!s || !*s)
+    if (!snag_text_valid(s, 1u, SNAG_MAX_PROVIDER_ID))
         return false;
-    len = strlen(s);
-    if (len > SNAG_MAX_PROVIDER_ID ||
-        !snag_utf8_valid((const unsigned char *)s, len, true))
-        return false;
+    size_t len = strlen(s);
     for (size_t i = 0; i < len; ++i) {
         unsigned char c = (unsigned char)s[i];
         if (c < 0x20u || c == 0x7fu ||
@@ -87,16 +83,6 @@ provider_id_valid(const char *s)
             return false;
     }
     return true;
-}
-
-static bool
-text_valid(const char *s, size_t max)
-{
-    size_t len;
-    if (!s || !*s)
-        return false;
-    len = strlen(s);
-    return len <= max && snag_utf8_valid((const unsigned char *)s, len, true);
 }
 
 static bool
@@ -254,7 +240,7 @@ item_valid(const json_t *value)
         snag_json_exact_keys(value, "kind local_item_id phase provider_item_id text") &&
         phase && (!strcmp(phase, "final_answer") ||
                   (!strcmp(kind, "assistant") && !strcmp(phase, "commentary"))) &&
-        text_valid(snag_json_string(value, "text"), SNAG_MAX_PUBLIC_ITEM);
+        snag_text_valid(snag_json_string(value, "text"), 1u, SNAG_MAX_PUBLIC_ITEM);
 }
 
 /* Takes ownership. Admission never leaves a partially appended item. */
@@ -307,7 +293,7 @@ snag_response_graph_add_public(struct snag_response_graph *graph,
     if (!public_kind(kind) ||
         (phase != SNAG_PHASE_FINAL_ANSWER &&
          (kind != SNAG_ITEM_ASSISTANT || phase != SNAG_PHASE_COMMENTARY)) ||
-        !provider_id_valid(provider_item_id) || !text_valid(text, SNAG_MAX_PUBLIC_ITEM))
+        !provider_id_valid(provider_item_id) || !snag_text_valid(text, 1u, SNAG_MAX_PUBLIC_ITEM))
         return snag_errno(EINVAL);
     if (snag_random_id(id) < 0)
         return -1;
