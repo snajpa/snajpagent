@@ -701,22 +701,15 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
 }
 
 static void
-test_read_only_and_queue_controllers(void)
+test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
 {
-    char temp[4096], state[4096], error[256];
-    const char *scratch = getenv("TMPDIR");
-    struct snag_store store;
+    char error[256];
     struct snag_session session;
     struct snag_config config;
     json_t *empty = json_array();
     json_t *started;
     const char *turn = "01010101010101010101010101010101";
 
-    assert(snprintf(temp, sizeof(temp), "%s/ro-context-XXXXXX",
-                     scratch ? scratch : "/tmp") > 0);
-    assert(mkdtemp(temp));
-    assert(snprintf(state, sizeof(state), "%s/state", temp) > 0);
-    snag_store_init(&store);
     snag_session_init(&session);
     struct snag_context_projection projection = {0};
     snag_config_init(&config);
@@ -724,8 +717,7 @@ test_read_only_and_queue_controllers(void)
     snag_config_provider_init(&config.providers[1], "selected");
     config.provider_count = 2u;
     (void)snprintf(config.providers[1].name, sizeof(config.providers[1].name), "selected");
-    assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
-    assert(snag_session_create(&store, &session, temp, "default",
+    assert(snag_session_create(store, &session, temp, "default",
                               SNAJPAGENT_MODEL, "default", error, sizeof(error)) == 0);
     commit_event(&session, "goal_started",
                  goal_started_data(
@@ -803,31 +795,24 @@ test_read_only_and_queue_controllers(void)
         snag_buf_free(&serialized);
     }
     session.active_read_only = true;
-    started = json_object();
-    assert(snag_json_set_new(started, "turn_id", json_string(turn)) == 0);
-    assert(snag_json_set_new(started, "origin", json_string("user")) == 0);
-    assert(snag_json_set_new(started, "reason", json_string("cancelled")) == 0);
-    commit_event(&session, "turn_interrupted", started);
+    commit_event(&session, "turn_interrupted", checked_json(json_pack("{s:s,s:s,s:s}",
+        "turn_id", turn, "origin", "user", "reason", "cancelled")));
     assert(!session.active_read_only && !session.active_queued);
     snag_context_projection_free(&projection);
     snag_session_close(&session);
-    snag_store_close(&store);
     snag_config_free(&config);
     json_decref(empty);
 }
 
 static void
-test_provider_model_projection(void)
+test_provider_model_projection(struct snag_store *store, const char *temp)
 {
-    char temp[] = "/tmp/snajpagent-projection-XXXXXX";
     char error[256] = {0};
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     struct snag_config config;
-    struct snag_store store;
     struct snag_session session;
     json_t *empty = json_array(), *started;
 
-    assert(mkdtemp(temp));
     snag_config_init(&config);
     strcpy(config.providers[0].name, "codex-lb");
     config.providers[0].models = calloc(1u, sizeof(*config.providers[0].models));
@@ -835,11 +820,9 @@ test_provider_model_projection(void)
     config.providers[0].model_count = 1u;
     strcpy(config.providers[0].models[0].name, "small");
     strcpy(config.providers[0].models[0].upstream, "gpt-6-astra");
-    snag_store_init(&store);
     snag_session_init(&session);
     struct snag_context_projection projection = {0};
-    assert(snag_store_open(&store, temp, error, sizeof(error)) == 0);
-    assert(snag_session_create(&store, &session, temp, "codex-lb", "small", "high", error, sizeof(error)) == 0);
+    assert(snag_session_create(store, &session, temp, "codex-lb", "small", "high", error, sizeof(error)) == 0);
     started = turn_started_model("01010101010101010101010101010101", 1u, "hello", temp, "small");
     assert(json_object_set_new(json_object_get(started, "config"), "provider", json_string("codex-lb")) == 0);
     commit_event(&session, "turn_started", started);
@@ -852,26 +835,19 @@ test_provider_model_projection(void)
     assert(strcmp(digest, projection.create_request.sha256) == 0);
     snag_context_projection_free(&projection);
     snag_session_close(&session);
-    snag_store_close(&store);
     snag_config_free(&config);
     json_decref(empty);
 }
 
 static void
-test_durable_irc_input_watermark(void)
+test_durable_irc_input_watermark(struct snag_store *store, const char *path)
 {
-    char path[4096], error[256], id[SNAG_ID_HEX_LEN + 1u];
-    const char *scratch = getenv("TMPDIR");
-    assert(snprintf(path, sizeof(path), "%s/irc-input-XXXXXX", scratch ? scratch : "/tmp") > 0);
-    assert(mkdtemp(path));
-    struct snag_store store;
+    char error[256], id[SNAG_ID_HEX_LEN + 1u];
     struct snag_session session;
     struct snag_context_projection projection = {0};
     json_t *empty = json_array();
-    snag_store_init(&store);
     snag_session_init(&session);
-    assert(snag_store_open(&store, path, error, sizeof(error)) == 0);
-    assert(snag_session_create(&store, &session, path, "default", SNAJPAGENT_MODEL,
+    assert(snag_session_create(store, &session, path, "default", SNAJPAGENT_MODEL,
                                "medium", error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u,
@@ -882,7 +858,7 @@ test_durable_irc_input_watermark(void)
     uint64_t received = session.irc_received_seq;
     assert(received && !session.irc_consumed_seq);
     snag_session_close(&session); snag_session_init(&session);
-    assert(snag_session_open(&store, &session, id, error, sizeof(error)) == 0);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     assert(session.irc_received_seq == received && !session.irc_consumed_seq);
     const char *turn = "22222222222222222222222222222222", *response = "33333333333333333333333333333333";
     assert(snag_session_commit(&session, "irc_admitted", json_pack("{s:[I]}",
@@ -908,7 +884,7 @@ test_durable_irc_input_watermark(void)
     assert(snag_session_commit(&session, "response_completed", response_completed(turn, response, "seen first"), NULL, error, sizeof(error)) == 0);
     assert(session.irc_consumed_seq == received && session.irc_received_seq > received);
     snag_session_close(&session); snag_session_init(&session);
-    assert(snag_session_open(&store, &session, id, error, sizeof(error)) == 0);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     assert(session.irc_received_seq > session.irc_consumed_seq && session.irc_consumed_seq == received);
     /* A copied session resumes already-admitted but unconsumed input, then a
      * later admission makes still-pending input visible exactly once. */
@@ -926,27 +902,20 @@ test_durable_irc_input_watermark(void)
     assert(projection.irc_seq == second);
     snag_buf_free(&serialized);
     snag_context_projection_free(&projection); json_decref(empty);
-    snag_session_close(&session); snag_store_close(&store);
+    snag_session_close(&session);
 }
 
 static void
-test_context_meter_usage(void)
+test_context_meter_usage(struct snag_store *store, const char *temp)
 {
-    char temp[4096], error[256] = {0};
+    char error[256] = {0};
     char session_id[SNAG_ID_HEX_LEN + 1u];
-    const char *scratch = getenv("TMPDIR");
     const uint64_t bounds[] = {73069u, 86071u, 52373u, 50034u, 1000u};
     const uint64_t measured[] = {73368u, 25055u, 43097u, 43097u, 0u};
-    struct snag_store store;
     struct snag_session session;
 
-    assert(snprintf(temp, sizeof(temp), "%s/context-meter-XXXXXX",
-                    scratch ? scratch : "/tmp") > 0);
-    assert(mkdtemp(temp));
-    snag_store_init(&store);
     snag_session_init(&session);
-    assert(snag_store_open(&store, temp, error, sizeof(error)) == 0);
-    assert(snag_session_create(&store, &session, temp, "default",
+    assert(snag_session_create(store, &session, temp, "default",
                               SNAJPAGENT_MODEL, "medium",
                               error, sizeof(error)) == 0);
     memcpy(session_id, session.id, sizeof(session_id));
@@ -984,7 +953,7 @@ test_context_meter_usage(void)
         assert(snag_session_commit(&session, "turn_completed",
                     turn_completed(turn, response), NULL, error, sizeof(error)) == 0);
         snag_session_close(&session);
-        assert(snag_session_open(&store, &session, session_id,
+        assert(snag_session_open(store, &session, session_id,
                                  error, sizeof(error)) == 0);
         assert(session.context_meter.valid);
         assert(session.context_meter.input_tokens == measured[i]);
@@ -992,7 +961,6 @@ test_context_meter_usage(void)
         assert(!session.context_meter.compact_id[0]);
     }
     snag_session_close(&session);
-    snag_store_close(&store);
 }
 
 static void
@@ -1006,7 +974,7 @@ test_input_time_and_recovery(struct snag_store *store, const char *workspace)
     char error[256], session_id[SNAG_ID_HEX_LEN + 1u];
     json_t *snapshot = json_array(), *data, *input;
     snag_session_init(&session);
-    snag_instructions_init(&instructions);
+    instructions = (struct snag_instruction_set){0};
     assert(snag_session_create(store, &session, workspace, "default", SNAJPAGENT_MODEL,
                                "medium", error, sizeof(error)) == 0);
     memcpy(session_id, session.id, sizeof(session_id));
@@ -1028,7 +996,7 @@ test_input_time_and_recovery(struct snag_store *store, const char *workspace)
     }
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, snapshot,
                               0u, false, NULL, &instructions, &projection, error, sizeof(error)) == 0);
-    input = json_object_get(projection.create_request, "input");
+    input = json_object_get(projection.create_request.value, "input");
     size_t metadata = 0, failures = 0;
     for (size_t i = 0; i < json_array_size(input); ++i) {
         const char *text = snag_json_string(json_array_get(input, i), "content");
@@ -1053,7 +1021,7 @@ test_input_time_and_recovery(struct snag_store *store, const char *workspace)
     assert(session.recovery_count == 1000u);
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, snapshot,
                               0u, false, NULL, &instructions, &replay, error, sizeof(error)) == 0);
-    assert(json_equal(projection.create_request, replay.create_request));
+    assert(json_equal(projection.create_request.value, replay.create_request.value));
     snag_context_projection_free(&projection);
     snag_context_projection_free(&replay);
     snag_instructions_free(&instructions);
@@ -1064,7 +1032,6 @@ test_input_time_and_recovery(struct snag_store *store, const char *workspace)
 int
 main(void)
 {
-    test_context_meter_usage();
     char temp[] = "/tmp/snajpagent-context-XXXXXX";
     char state[4096];
     char workspace[4096];
@@ -1088,9 +1055,6 @@ main(void)
     char large_tool_hash[SNAG_SHA256_HEX_LEN + 1u];
     char closure_output[4097];
 
-    test_read_only_and_queue_controllers();
-    test_provider_model_projection();
-    test_durable_irc_input_watermark();
     assert(mkdtemp(temp));
     assert(snprintf(state, sizeof(state), "%s/state", temp) > 0);
     assert(snprintf(workspace, sizeof(workspace), "%s/work", temp) > 0);
@@ -1104,6 +1068,10 @@ main(void)
     struct snag_instruction_set instructions = {0};
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
     test_input_time_and_recovery(&store, workspace);
+    test_context_meter_usage(&store, workspace);
+    test_read_only_and_queue_controllers(&store, workspace);
+    test_provider_model_projection(&store, workspace);
+    test_durable_irc_input_watermark(&store, workspace);
     test_compact_groups(&store, workspace);
     test_parallel_journal_recovery(&store, workspace);
     test_accounting_lineage(&store, workspace);
@@ -1297,25 +1265,14 @@ main(void)
         const char *steer_id = "12121212121212121212121212121212";
         const char *steer_id2 = "13131313131313131313131313131313";
         struct snag_session steered;
-        json_t *snapshot = json_array();
-        json_t *snapshot_item = json_object();
-        json_t *snapshot_item2 = json_object();
+        json_t *snapshot = checked_json(json_pack("[{s:s,s:s},{s:s,s:s}]",
+            "id", steer_id, "text", "change direction",
+            "id", steer_id2, "text", "and preserve order"));
         json_t *input;
 
         snag_session_init(&steered);
         struct snag_context_projection steered_projection = {0};
         struct snag_instruction_set no_instructions = {0};
-        assert(snapshot && snapshot_item && snapshot_item2);
-        assert(snag_json_set_new(snapshot_item, "id",
-                                json_string(steer_id)) == 0);
-        assert(snag_json_set_new(snapshot_item, "text",
-                                json_string("change direction")) == 0);
-        assert(json_array_append_new(snapshot, snapshot_item) == 0);
-        assert(snag_json_set_new(snapshot_item2, "id",
-                                json_string(steer_id2)) == 0);
-        assert(snag_json_set_new(snapshot_item2, "text",
-                                json_string("and preserve order")) == 0);
-        assert(json_array_append_new(snapshot, snapshot_item2) == 0);
         assert(snag_session_create(&store, &steered, workspace, "default",
                                   SNAJPAGENT_MODEL, "default",
                                   error, sizeof(error)) == 0);
@@ -1373,19 +1330,13 @@ main(void)
         const char *command_handle = "16161616161616161616161616161616";
         const char *command_steer = "18181818181818181818181818181818";
         struct snag_session steered;
-        json_t *snapshot = json_array();
-        json_t *snapshot_item = json_object();
+        json_t *snapshot = checked_json(json_pack("[{s:s,s:s}]",
+            "id", command_steer, "text", "stop or wait"));
         json_t *input;
 
         snag_session_init(&steered);
         struct snag_context_projection steered_projection = {0};
         struct snag_instruction_set no_instructions = {0};
-        assert(snapshot && snapshot_item);
-        assert(snag_json_set_new(snapshot_item, "id",
-                                json_string(command_steer)) == 0);
-        assert(snag_json_set_new(snapshot_item, "text",
-                                json_string("stop or wait")) == 0);
-        assert(json_array_append_new(snapshot, snapshot_item) == 0);
         assert(snag_session_create(&store, &steered, workspace, "default",
                                   SNAJPAGENT_MODEL, "default",
                                   error, sizeof(error)) == 0);
