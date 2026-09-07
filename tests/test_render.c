@@ -946,6 +946,14 @@ capture_markdown(const char *text, bool enabled, bool split,
                                   out_size, delivered);
 }
 
+static int
+editable_checkpoint(void *opaque)
+{
+    const struct snag_term *term = opaque;
+    assert(term->output_depth == 0u);
+    return 0;
+}
+
 static size_t
 capture_markdown_width(const char *text, bool enabled, bool split,
                        enum snag_color_mode color, unsigned int columns,
@@ -958,12 +966,15 @@ capture_markdown_width(const char *text, bool enabled, bool split,
 
     struct output_capture capture = capture_open(true, false);
     snag_term_init(&term);
+    term.opened = term.defer_redraw = true;
     term.columns = columns;
     snag_render_init(&render, 0u);
     render.stdout_terminal = true;
     snag_render_set_color(&render, color);
     snag_render_set_markdown(&render, enabled);
     snag_render_attach_term(&render, &term);
+    render.checkpoint = editable_checkpoint;
+    render.checkpoint_opaque = &term;
     assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     if (split) {
         for (size_t i = 0u; i < len; ++i)

@@ -2222,7 +2222,6 @@ render_public_chunk(struct snag_render *render, const char *text, size_t len,
     size_t complete_max;
     int rc = -1;
     int saved_errno = 0;
-    bool output = false;
 
     if (!render->public_item_open ||
         !snag_size_add(len, sizeof(render->utf8_pending), &complete_max)) {
@@ -2234,9 +2233,6 @@ render_public_chunk(struct snag_render *render, const char *text, size_t len,
                        text, len, &complete) < 0)
         goto out;
     if (complete.len) {
-        if (output_begin(render) < 0)
-            goto out;
-        output = true;
         if (public_terminal(render) && render->boundary == BOUNDARY_PROMPT &&
             markdown_gap(render) < 0)
             goto out;
@@ -2256,8 +2252,6 @@ out:
     if (rc < 0)
         saved_errno = errno;
     if (close_public_output(render) < 0 && rc == 0)
-        rc = -1;
-    if (output && output_end(render) < 0 && rc == 0)
         rc = -1;
     snag_buf_free(&complete);
     if (saved_errno)
