@@ -203,13 +203,6 @@ account_bytes(struct snag_responses_stream *stream, size_t extra)
 }
 
 static void
-wire_part_free(struct snag_wire_part *part)
-{
-    snag_buf_free(&part->text);
-    memset(part, 0, sizeof(*part));
-}
-
-static void
 wire_item_free(struct snag_wire_item *item)
 {
     free(item->id);
@@ -217,9 +210,6 @@ wire_item_free(struct snag_wire_item *item)
     free(item->name);
     free(item->call_id);
     snag_buf_free(&item->arguments);
-    for (size_t i = 0; i < item->part_count; ++i)
-        wire_part_free(&item->parts[i]);
-    free(item->parts);
     memset(item, 0, sizeof(*item));
 }
 
@@ -237,6 +227,8 @@ snag_responses_stream_free(struct snag_responses_stream *stream)
 {
     for (size_t i = 0; i < stream->item_count; ++i)
         wire_item_free(&stream->items[i]);
+    for (size_t i = 0; i < stream->part_count; ++i)
+        snag_buf_free(&stream->parts[i].text);
     free(stream->response_id);
     memset(stream, 0, sizeof(*stream));
 }
@@ -292,9 +284,7 @@ static struct snag_wire_part *
 part_at(struct snag_responses_stream *stream, struct snag_wire_item *item,
         size_t content_index, enum snag_wire_part_kind kind, bool create)
 {
-    struct snag_wire_part *parts;
-    struct snag_wire_part *part;
-    size_t cap;
+    struct snag_wire_part **part = &item->parts;
 
     if (content_index > item->part_count ||
         content_index >= SNAG_MAX_RESPONSE_PARTS) {
@@ -302,41 +292,23 @@ part_at(struct snag_responses_stream *stream, struct snag_wire_item *item,
                           "message content indexes are not contiguous");
         return NULL;
     }
+    for (size_t i = 0; i < content_index; ++i)
+        part = &(*part)->next;
     if (content_index == item->part_count) {
         if (!create || stream->part_count >= SNAG_MAX_RESPONSE_PARTS) {
             (void)stream_fail(stream, EPROTO,
                               "message content part was not announced");
             return NULL;
         }
-        if (item->part_count == item->part_cap) {
-            cap = item->part_cap ? item->part_cap * 2u : 4u;
-            if (cap > SNAG_MAX_RESPONSE_PARTS)
-                cap = SNAG_MAX_RESPONSE_PARTS;
-            parts = realloc(item->parts, cap * sizeof(*parts));
-            if (!parts) {
-                (void)stream_fail(stream, ENOMEM,
-                                  "cannot allocate message content parts");
-                return NULL;
-            }
-            memset(parts + item->part_cap, 0,
-                   (cap - item->part_cap) * sizeof(*parts));
-            item->parts = parts;
-            item->part_cap = cap;
-        }
-        part = &item->parts[item->part_count++];
-        memset(part, 0, sizeof(*part));
-        snag_buf_init(&part->text, SNAG_MAX_PUBLIC_ITEM);
-        part->kind = kind;
-        ++stream->part_count;
-        return part;
-    }
-    part = &item->parts[content_index];
-    if (part->kind != kind) {
+        *part = &stream->parts[stream->part_count++];
+        **part = (struct snag_wire_part){.kind = kind, .text = {.max = SNAG_MAX_PUBLIC_ITEM}};
+        ++item->part_count;
+    } else if ((*part)->kind != kind) {
         (void)stream_fail(stream, EPROTO,
                           "message content kind changed");
         return NULL;
     }
-    return part;
+    return *part;
 }
 
 static enum snag_item_phase
@@ -894,8 +866,8 @@ message_observations_complete(const struct snag_wire_item *item)
 {
     if (!item->part_count)
         return false;
-    for (size_t i = 0; i < item->part_count; ++i)
-        if (!item->parts[i].complete)
+    for (const struct snag_wire_part *part = item->parts; part; part = part->next)
+        if (!part->complete)
             return false;
     return true;
 }
@@ -914,9 +886,7 @@ build_message(struct snag_responses_stream *stream,
 
     if ((!item->complete && !message_observations_complete(item)) || phase == SNAG_PHASE_NONE)
         return stream_fail(stream, EPROTO, "assistant message did not complete coherently");
-    for (size_t i = 0; i < item->part_count; ++i) {
-        const struct snag_wire_part *part = &item->parts[i];
-
+    for (const struct snag_wire_part *part = item->parts; part; part = part->next) {
         if (!part->complete || (part->kind != SNAG_WIRE_PART_INERT &&
             kind != SNAG_WIRE_PART_NONE && part->kind != kind)) {
             failure = "assistant message has mixed or invalid content";

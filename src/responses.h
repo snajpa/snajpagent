@@ -42,6 +42,7 @@ enum snag_wire_part_kind {
 };
 
 struct snag_wire_part {
+    struct snag_wire_part *next;
     enum snag_wire_part_kind kind;
     struct snag_buf text;
     bool value_seen;
@@ -57,7 +58,6 @@ struct snag_wire_item {
     struct snag_buf arguments;
     struct snag_wire_part *parts;
     size_t part_count;
-    size_t part_cap;
     bool arguments_seen;
     bool arguments_complete;
     bool complete;
@@ -65,6 +65,7 @@ struct snag_wire_item {
 
 struct snag_responses_stream {
     struct snag_wire_item items[SNAG_MAX_RESPONSE_ITEMS];
+    struct snag_wire_part parts[SNAG_MAX_RESPONSE_PARTS];
     size_t item_count;
     size_t part_count;
     size_t aggregate_bytes;

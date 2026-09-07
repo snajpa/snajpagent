@@ -624,6 +624,48 @@ test_protocol_conflicts_fail_closed(void)
 }
 
 static void
+test_interleaved_content_bound(void)
+{
+    for (unsigned int count = 96u; count <= 97u; ++count) {
+        struct snag_buf wire = {.max = 32768u};
+        struct parsed_stream emitted = parsed_new(128u);
+        assert(snag_buf_printf(&wire,
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n") == 0);
+        for (unsigned int item = 0; item < 2u; ++item)
+            assert(snag_buf_printf(&wire,
+                "data: {\"type\":\"response.output_item.added\",\"output_index\":%u,"
+                "\"item\":{\"id\":\"m%u\",\"type\":\"message\",\"role\":\"assistant\","
+                "\"phase\":\"%s\",\"status\":\"in_progress\",\"content\":[]}}\n\n", item, item,
+                item ? "final_answer" : "commentary") == 0);
+        for (unsigned int i = 0; i < count; ++i)
+            assert(snag_buf_printf(&wire,
+                "data: {\"type\":\"response.content_part.done\",\"output_index\":%u,"
+                "\"item_id\":\"m%u\",\"content_index\":%u,"
+                "\"part\":{\"type\":\"output_text\",\"text\":\"%c\"}}\n\n",
+                i % 2u, i % 2u, i / 2u, i % 2u ? 'b' : 'a') == 0);
+        assert(snag_buf_printf(&wire,
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\","
+            "\"status\":\"completed\",\"output\":[]}}\n\n") == 0);
+        int rc = parse_stream((char *)wire.data, 7u, &emitted);
+        assert(emitted.calls == 96u && emitted.text.len == 96u);
+        for (size_t i = 0; i < emitted.text.len; ++i)
+            assert(emitted.text.data[i] == (i % 2u ? 'b' : 'a'));
+        if (count == 96u) {
+            assert(rc == 0 && emitted.graph.count == 2u);
+            for (size_t item = 0; item < 2u; ++item) {
+                const char *text = snag_response_graph_item(&emitted.graph, item).text;
+                assert(strlen(text) == 48u && strspn(text, item ? "b" : "a") == 48u);
+            }
+        } else {
+            assert(rc < 0 && emitted.graph.count == 0u);
+            assert(!strcmp(emitted.error, "message content part was not announced"));
+        }
+        snag_buf_free(&wire);
+        parsed_free(&emitted);
+    }
+}
+
+static void
 test_structured_capacity_failure(void)
 {
     static const char payload[] =
@@ -769,6 +811,7 @@ main(void)
     test_invalid_call_after_public_item();
     test_protocol_conflicts_fail_closed();
     test_structured_capacity_failure();
+    test_interleaved_content_bound();
     test_provider_context_formats();
     puts("test_responses: ok");
     return 0;
