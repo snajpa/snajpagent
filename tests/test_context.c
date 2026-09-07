@@ -857,7 +857,7 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
     tool = tool_by_name(tools, "exec_command");
     if (tool) {
         assert(strstr(snag_json_string(tool, "description"),
-                      "null runs without a timeout") != NULL);
+                      "uses the configured command deadline") != NULL);
         {
             char fallback[32];
             assert(snprintf(fallback, sizeof(fallback), "ceiling (%u)",

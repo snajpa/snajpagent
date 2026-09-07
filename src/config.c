@@ -124,6 +124,7 @@ snag_config_init(struct snag_config *config)
     config->irc.history_lines = 200u;
     config->shell = snag_default_shell();
     config->default_yield_ms = 10000u;
+    config->max_wait_ms = 60000u;
     config->max_parallel_commands = 4u;
     config->default_timeout_ms = 0u;
     config->max_timeout_ms = 86400000u;
@@ -884,6 +885,8 @@ parse_tool(struct parse_state *state, const char *key, const char *value)
     }
     if (strcmp(key, "default_yield_ms") == 0)
         return parse_u32(value, 0u, 600000u, &config->default_yield_ms);
+    if (strcmp(key, "max_wait_ms") == 0)
+        return parse_u32(value, 1u, UINT32_MAX, &config->max_wait_ms);
     if (strcmp(key, "max_parallel_commands") == 0)
         return parse_u32(value, 1u, 32u, &config->max_parallel_commands);
     if (strcmp(key, "default_timeout_ms") == 0)

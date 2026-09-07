@@ -133,6 +133,7 @@ struct snag_config {
     struct snag_irc_config irc;
     char *shell;
     uint32_t default_yield_ms;
+    uint32_t max_wait_ms;
     uint32_t max_parallel_commands;
     uint32_t default_timeout_ms;
     uint32_t max_timeout_ms;

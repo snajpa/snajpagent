@@ -148,6 +148,7 @@ static const struct snag_term_command commands[] = {
     {"/queue [TEXT|ACTION]", "list/add/edit/delete/clear/pop queued turns (/q alias)"},
     {"/next", "run the oldest paused turn"},
     {"/retry", "continue the last failed turn from retained context"},
+    {"/yield", "return an active tool wait to the model; keep processes owned"},
     {"/archive", "archive idle session and exit"},
     {"/compact", "compact the idle session context"},
     {"/delete", "delete idle session after confirmation"},
@@ -2100,6 +2101,12 @@ handle_common_command(struct app_state *app, const char *line, bool active,
     }
     if (strcmp(line, "/help") == 0 || strcmp(line, "/?") == 0)
         return render_help(app);
+    if (strcmp(line, "/yield") == 0) {
+        if (!app->tool_waiting)
+            return app_textf(app, SNAG_UI_HOST, "No active tool wait to yield.");
+        app->yield_requested = true;
+        return app_textf(app, SNAG_UI_HOST, "Operator requested tool yield; returning control to the model.");
+    }
     if (strcmp(line, "/status") == 0)
         return render_status(app);
     if (strcmp(line, "/history") == 0)
@@ -2621,6 +2628,7 @@ execute_calls(struct app_state *app, const char *turn_id,
 #ifndef SNAJPAGENT_TEST_FIXTURE
         calls[count].process = !app->session.active_read_only &&
             (!strcmp(call->name, "exec_command") || !strcmp(call->name, "write_stdin"));
+        app->tool_waiting |= calls[count].process;
 #endif
         ++count;
     }
@@ -2645,6 +2653,10 @@ execute_calls(struct app_state *app, const char *turn_id,
                 if (snag_app_irc_flush_urgent(app, error, error_size) < 0)
                     return -1;
                 handoff = "steering_handoff";
+                goto handoff;
+            }
+            if (app->yield_requested) {
+                handoff = "operator_yield";
                 goto handoff;
             }
             if (calls[i].started) {
@@ -3603,6 +3615,7 @@ run_turn(struct app_state *app, const char *prompt,
             int tool_rc;
             tool_rc = execute_calls(app, turn_id, &graph, &credential,
                                     error, sizeof(error));
+            app->tool_waiting = app->yield_requested = false;
             if (tool_rc < 0) {
                 (void)app_error(app, error);
                 /* An adapter/journal failure leaves effects uncertain. Stop

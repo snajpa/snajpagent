@@ -74,6 +74,7 @@ struct app_state {
     int stream_errno;
     char stream_error[256];
     bool steering_requested;
+    bool tool_waiting, yield_requested;
     uint64_t input_generation;
     bool interrupt_requested;
     bool queue_armed;

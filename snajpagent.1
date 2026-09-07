@@ -827,6 +827,19 @@ session through private trash staging.  Shared prompt history is not erased.
 .TP
 .B /exit
 Preserve the session and exit.  Idle only.
+.SS Yielding tool waits
+.TP
+.B /yield
+Return the active managed-tool batch to the model immediately. The result
+identifies the operator as the source of the handoff. Started commands keep
+their handles, pending input and captured output; unstarted calls are marked
+not_run. The handoff sends no signal and does not restart commands. A previously
+requested termination continues in the background and is reported as pending.
+The model can inspect the results and choose its next action.
+.PP
+Available locally in both views during managed-tool execution, including
+termination waits. Outside a tool wait the command reports that none is active;
+it does not queue a future yield or interrupt a provider request.
 .SS Read-only queries
 .TP
 .BI /ro " query"
@@ -1431,7 +1444,24 @@ path is preserved so symlink-selected shell behavior (such as BusyBox sh)
 is retained.
 .TP
 .B default_yield_ms
-Default initial yield interval, 0 through 600000.  Default: 10000.
+Default per-invocation yield interval, 0 through 600000. Default: 10000.
+Zero waits for completion subject to max_wait_ms and operator input.
+.TP
+.B max_wait_ms
+Maximum time each managed-tool invocation waits before returning control to
+the model, 1 through 4294967295 milliseconds. Default: 60000 (60 seconds).
+Applies to exec_command and every write_stdin call, including termination,
+zero yields and longer model-requested waits. Shorter yields still apply.
+The budget starts anew for each invocation; it measures elapsed wait time,
+including time with output, rather than inactivity or total command lifetime.
+.PP
+Expiry returns status=running, reason=wait_timeout, the live handle and captured
+output. The model text includes elapsed wait time, the configured limit and
+pending termination when applicable. The process stays owned by the session;
+the model decides whether to wait again, inspect, send input or terminate.
+The limit sends no signal. Command-specific timeout_ms remains a separate
+one-shot handoff deadline. Interactive operator cancellation retains its
+existing shutdown behavior.
 .TP
 .B max_parallel_commands
 Maximum unsettled command handles, including yielded and ready-but-uncollected
@@ -1715,8 +1745,10 @@ is UTF-8 input up to 1 MiB; use an empty string to wait without writing.
 .B eof
 true closes input after the accepted data; false or null leaves it open.
 .B terminate
-true requests termination and a final result, and requires empty data with
-eof false or null.  Yield and output bounds follow
+true requests termination and requires empty data with eof false or null.
+A yield, wait limit or operator /yield can return a running result and the
+same handle while termination or output drain remains pending.
+Yield and output bounds follow
 .BR exec_command .
 .PP
 Pending input and output are bounded.  Accepted input may still be waiting to

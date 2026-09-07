@@ -288,6 +288,9 @@ main(void)
     result = snag_tool_result_not_run("protocol_conflict");
     assert(result && snag_tool_result_valid(result) == 0);
     json_decref(result);
+    result = snag_tool_result_not_run("operator_yield");
+    assert(result && snag_tool_result_valid(result) == 0);
+    json_decref(result);
     result = snag_tool_result_outcome_unknown("owner_lost");
     assert(result && snag_tool_result_valid(result) == 0);
     json_decref(result);

@@ -824,6 +824,7 @@ reason_is_not_run(const char *reason)
                       strcmp(reason, "read_only") == 0 ||
                       strcmp(reason, "process_limit") == 0 ||
                       strcmp(reason, "batch_yield") == 0 ||
+                      strcmp(reason, "operator_yield") == 0 ||
                       strcmp(reason, "process_busy") == 0 ||
                       strcmp(reason, "stdin_busy") == 0 ||
                       strcmp(reason, "stdin_closed") == 0 ||
@@ -920,6 +921,8 @@ snag_tool_result_valid(const json_t *result)
                snag_hex_is_lower(json_string_value(handle), SNAG_ID_HEX_LEN) &&
                (json_is_null(reason_value) ||
                 (reason && (strcmp(reason, "timeout_handoff") == 0 ||
+                            strcmp(reason, "wait_timeout") == 0 ||
+                            strcmp(reason, "operator_yield") == 0 ||
                             strcmp(reason, "batch_yield") == 0 ||
                             strcmp(reason, "steering_handoff") == 0))) ? 0 : -1;
     if (!json_is_null(reason_value) || !json_is_null(handle))

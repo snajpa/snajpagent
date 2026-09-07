@@ -62,6 +62,8 @@ struct managed_process {
     bool cancelled;
     uint64_t started_ms;
     uint64_t deadline_ms;
+    uint64_t wait_started_ms;
+    uint32_t max_wait_ms;
     uint32_t max_output_tokens;
     struct snag_secret_set secrets;
     struct process_output output[2];
@@ -346,7 +348,7 @@ append_stream_text(struct snag_buf *out, const char *label,
 
 static char *
 model_text_for(const char *status, const char *reason, int64_t exit_code,
-               int signal_number,
+               int signal_number, const struct managed_process *proc, uint64_t wait_ms,
                const struct capture_stream *stdout_stream,
                const struct capture_stream *stderr_stream)
 {
@@ -368,7 +370,15 @@ model_text_for(const char *status, const char *reason, int64_t exit_code,
     } else if (strcmp(status, "running") == 0) {
         const char *msg;
 
-        if (reason && strcmp(reason, "timeout_handoff") == 0)
+        if (reason && strcmp(reason, "wait_timeout") == 0) {
+            if (snag_buf_printf(&text,
+                "Tool wait limit reached after %llu ms (max_wait_ms=%u). ",
+                (unsigned long long)wait_ms, proc->max_wait_ms) < 0)
+                goto done;
+            msg = "Control returned to the model; the process remains owned by this session. Evaluate its output and state, then use the same handle to wait, interact, or request termination. Do not restart the command merely because this wait expired.\n";
+        } else if (reason && strcmp(reason, "operator_yield") == 0)
+            msg = "The operator requested /yield: control returned to the model while the process remains owned by this session. Evaluate its output and state before deciding what to do next. Use the same handle to wait, interact, or request termination; /yield sends no signal.\n";
+        else if (reason && strcmp(reason, "timeout_handoff") == 0)
             msg = "Command timeout elapsed; the process continues in the background. Use write_stdin with the active handle to wait for, interact with, or terminate it.\n";
         else if (reason && strcmp(reason, "steering_handoff") == 0)
             msg = "Command is still running because steering arrived. Use write_stdin with the active handle to wait for, interact with, or terminate it after considering the steer.\n";
@@ -376,6 +386,11 @@ model_text_for(const char *status, const char *reason, int64_t exit_code,
             msg = "Process is still running.\n";
         if (snag_buf_append(&text, msg, strlen(msg)) < 0)
             goto done;
+        if (proc->closing) {
+            const char *pending = "Termination was already requested; process exit or output drain is still pending. The live handle remains valid.\n";
+            if (snag_buf_append(&text, pending, strlen(pending)) < 0)
+                goto done;
+        }
     } else if (strcmp(status, "io_failed") == 0) {
         const char *msg = "Tool I/O failed.\n";
         if (snag_buf_append(&text, msg, strlen(msg)) < 0)
@@ -398,10 +413,12 @@ done:
 static json_t *
 result_json(const char *status, const char *reason, int64_t exit_code,
             int signal_number, uint64_t duration_ms, const char *handle,
+            const struct managed_process *proc,
             const struct capture_stream *stdout_stream,
             const struct capture_stream *stderr_stream)
 {
-    char *model_text = model_text_for(status, reason, exit_code, signal_number,
+    uint64_t wait_ms = snag_monotonic_ms() - proc->wait_started_ms;
+    char *model_text = model_text_for(status, reason, exit_code, signal_number, proc, wait_ms,
                                      stdout_stream, stderr_stream);
     json_t *stdout_json = excerpt_json(stdout_stream);
     json_t *stderr_json = excerpt_json(stderr_stream);
@@ -612,7 +629,7 @@ const char *
 snag_tools_handoff(const char *handle)
 {
     struct managed_process *proc = find_process(handle);
-    return proc && !proc->closing ? proc->handoff : NULL;
+    return proc ? proc->handoff : NULL;
 }
 
 void
@@ -774,6 +791,9 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
                 proc->handoff = "timeout_handoff";
             }
         }
+        if (proc->in_call && !process_ready(proc) && !proc->handoff &&
+            now - proc->wait_started_ms >= proc->max_wait_ms)
+            proc->handoff = "wait_timeout";
         if (proc->deadline_ms > now &&
             proc->deadline_ms - now < (uint64_t)timeout_ms)
             timeout_ms = (int)(proc->deadline_ms - now);
@@ -875,11 +895,11 @@ snag_tools_collect(const char *handle, const char *reason, json_t **result,
             status = "outcome_unknown";
             reason = "owner_lost";
         }
-    } else if (proc->handoff) {
+    } else if (proc->handoff && (!reason || !strcmp(reason, "batch_yield"))) {
         reason = proc->handoff;
     }
     *result = result_json(status, reason, exit_code, signal_number,
-        snag_monotonic_ms() - proc->started_ms, process_ready(proc) ? NULL : handle,
+        snag_monotonic_ms() - proc->started_ms, process_ready(proc) ? NULL : handle, proc,
         &streams[0], &streams[1]);
     if (!*result ||
         snag_json_set_new(*result, "max_output_tokens", json_integer(proc->max_output_tokens)) < 0)
@@ -1030,8 +1050,6 @@ command_args(const struct snag_response_item *call, const struct snag_config *co
             !json_bool_member(call->arguments, "terminate", false, &args->terminate) ||
             (args->terminate && (args->input[0] || args->eof)))
             return -1;
-        if (args->terminate)
-            args->yield = 0u;
     }
     return args->handle && snag_hex_is_lower(args->handle, SNAG_ID_HEX_LEN) ? 0 : -1;
 }
@@ -1096,6 +1114,7 @@ snag_tools_start(const struct snag_response_item *call, const struct snag_config
             *result = snag_tool_result_terminal(false, error[0] ? error : "Command could not start.");
             return *result ? 0 : -1;
         }
+        proc = find_process(args.handle);
     } else {
         proc = find_process(args.handle);
         if (!proc)
@@ -1113,6 +1132,8 @@ snag_tools_start(const struct snag_response_item *call, const struct snag_config
                 proc->input_eof = true;
         }
     }
+    proc->wait_started_ms = snag_monotonic_ms();
+    proc->max_wait_ms = config->max_wait_ms;
     return 0;
 }
 
@@ -1151,11 +1172,11 @@ wait_process(const char *handle, uint32_t yield_ms, snag_tool_pump_fn pump,
         if (control < 0 || control == 2) {
             snag_tools_close_all(true);
             cancelled = true;
-        } else if (control == 1 && !cancelled && !find_process(handle)->closing) {
+        } else if (control == 1 && !cancelled) {
             reason = "steering_handoff";
             break;
         }
-        if (!cancelled && !find_process(handle)->closing &&
+        if (!cancelled &&
             (snag_tools_handoff(handle) || snag_monotonic_ms() >= end))
             break;
         if (snag_tools_service(10, wake_fd, error, error_size) < 0)

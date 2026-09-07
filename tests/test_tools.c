@@ -280,8 +280,8 @@ run_pty_command(const char *command, int timeout_ms)
 }
 
 static json_t *
-run_tool_with_args_pump(const char *name, json_t *args,
-                        snag_tool_pump_fn pump, void *pump_opaque)
+run_tool_with_wait(const char *name, json_t *args,
+                   snag_tool_pump_fn pump, void *pump_opaque, uint32_t max_wait_ms)
 {
     char cwd[4096];
     struct snag_config config;
@@ -295,6 +295,7 @@ run_tool_with_args_pump(const char *name, json_t *args,
     snag_config_init(&config);
     config.default_timeout_ms = 1000;
     config.default_yield_ms = 1000;
+    config.max_wait_ms = max_wait_ms;
     config.max_timeout_ms = 5000;
     snag_credential_clear(&credential);
     snag_response_graph_init(&graph);
@@ -312,6 +313,13 @@ run_tool_with_args_pump(const char *name, json_t *args,
     snag_response_graph_free(&graph);
     snag_config_free(&config);
     return result;
+}
+
+static json_t *
+run_tool_with_args_pump(const char *name, json_t *args,
+                        snag_tool_pump_fn pump, void *pump_opaque)
+{
+    return run_tool_with_wait(name, args, pump, pump_opaque, 60000u);
 }
 
 static json_t *
@@ -931,6 +939,54 @@ test_malformed_interaction_preserves_active_process(void)
                                   "retained"), "got:right") != NULL);
     json_decref(done);
     json_decref(rejected);
+    json_decref(result);
+}
+
+static void
+test_wait_limit_and_pending_termination(void)
+{
+    char cwd[4096], handle[SNAG_ID_HEX_LEN + 1u], error[256] = {0};
+    assert(getcwd(cwd, sizeof(cwd)) != NULL);
+    /* Ignore TERM so the test observes an actually pending termination. */
+    json_t *args = call_args_yield("trap '' TERM; printf ready; while :; do sleep 1; done",
+                                 cwd, 5000, 0, NULL);
+    assert(snag_json_set_new(args, "pty", json_false()) == 0);
+    json_t *result = run_tool_with_wait("exec_command", args, NULL, NULL, 100u);
+    assert(!strcmp(snag_json_string(result, "status"), "running"));
+    assert(!strcmp(snag_json_string(result, "reason"), "wait_timeout"));
+    assert(strstr(snag_json_string(result, "model_text"), "max_wait_ms=100"));
+    assert(snag_strcpy(handle, sizeof(handle), snag_json_string(result, "handle")));
+    json_decref(result);
+    /* Repeated waits reset the budget and preserve the same process. */
+    args = json_pack("{s:s,s:s,s:b,s:b,s:i}", "handle", handle, "data", "",
+                     "eof", 0, "terminate", 0, "yield_ms", 600000);
+    assert(snag_json_set_new(args, "max_output_tokens", json_null()) == 0);
+    result = run_tool_with_wait("write_stdin", args, NULL, NULL, 100u);
+    assert(!strcmp(snag_json_string(result, "reason"), "wait_timeout"));
+    assert(!strcmp(snag_json_string(result, "handle"), handle));
+    json_decref(result);
+    args = json_pack("{s:s,s:s,s:b,s:b,s:i}", "handle", handle, "data", "",
+                     "eof", 0, "terminate", 1, "yield_ms", 0);
+    assert(snag_json_set_new(args, "max_output_tokens", json_null()) == 0);
+    uint64_t began = snag_monotonic_ms();
+    result = run_tool_with_wait("write_stdin", args, NULL, NULL, 100u);
+    assert(snag_monotonic_ms() - began < 1500u);
+    assert(!strcmp(snag_json_string(result, "status"), "running"));
+    assert(!strcmp(snag_json_string(result, "reason"), "wait_timeout"));
+    assert(!strcmp(snag_json_string(result, "handle"), handle));
+    assert(strstr(snag_json_string(result, "model_text"), "Termination was already requested"));
+    json_decref(result);
+    /* An operator handoff wins over the timer while closing. */
+    assert(snag_tools_collect(handle, "operator_yield", &result, error, sizeof(error)) == 0);
+    assert(snag_tool_result_valid(result) == 0);
+    assert(!strcmp(snag_json_string(result, "reason"), "operator_yield"));
+    assert(strstr(snag_json_string(result, "model_text"), "operator requested /yield"));
+    assert(strstr(snag_json_string(result, "model_text"), "Termination was already requested"));
+    json_decref(result);
+    snag_tools_collected(handle);
+    assert(snag_tools_close_managed(handle, false, NULL, NULL, -1,
+                                   &result, error, sizeof(error)) == 0);
+    assert(strcmp(snag_json_string(result, "status"), "running"));
     json_decref(result);
 }
 
@@ -1676,6 +1732,7 @@ main(void)
     test_write_stdin_rejects_unknown_handle();
     test_wrong_handle_does_not_touch_active_process();
     test_malformed_interaction_preserves_active_process();
+    test_wait_limit_and_pending_termination();
     test_write_stdin_terminates_managed_process();
     test_invalid_termination_preserves_managed_process();
     test_managed_process_close_returns_terminal_result();

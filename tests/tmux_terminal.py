@@ -4379,6 +4379,104 @@ def run_token_accounting_cases(binary, root):
             provider.close()
 
 
+def run_tool_yield_cases(binary, root, provider, environment):
+    for mode in ("timeout", "operator", "timeout-close", "operator-close"):
+        case = root / ("tool-yield-" + mode)
+        workspace = case / "workspace"
+        workspace.mkdir(mode=0o700, parents=True)
+        config = case / "config.ini"
+        write_irc_config(config, provider.port, "host-model")
+        operator = mode.startswith("operator")
+        closing = mode.endswith("close")
+        with config.open("a") as out:
+            out.write(f"[tool]\nmax_wait_ms={60000 if operator else 200}\nmax_parallel_commands=1\n")
+        requests = []
+
+        def respond(handler, request, sequence):
+            requests.append(request)
+            _, log = read_events(terminal.dotdir)
+            results = [e["data"]["result"] for e in event_list(log, "tool_finished")]
+            if len(requests) == 1:
+                command = ("trap '' TERM; echo $$ > command.pid; "
+                           "printf ready; while :; do sleep 1; done" if closing else
+                           "echo $$ > command.pid; printf ready; read line; printf 'continued:%s' \"$line\"")
+                args = {"command": command, "workdir": str(workspace), "pty": False,
+                        "stdin": None, "timeout_ms": None,
+                        "yield_ms": 20 if closing else 0, "max_output_tokens": 2000}
+                calls = [("start", "exec_command", args)]
+                if mode == "operator":
+                    calls.append(("unstarted", "exec_command", {**args,
+                                  "command": "touch must-not-run"}))
+                body = provider.functions_body(sequence, calls)
+            elif closing and len(requests) == 2:
+                args = {"handle": results[-1]["handle"], "data": "", "eof": False,
+                        "terminate": True, "yield_ms": 0, "max_output_tokens": 2000}
+                body = provider.function_body(sequence, "terminate", "write_stdin", args)
+            elif len(requests) == (3 if closing else 2):
+                running = next(r for r in reversed(results) if r["status"] == "running")
+                assert running["reason"] == ("operator_yield" if operator else "wait_timeout"), running
+                projected = json.dumps(request, ensure_ascii=False)
+                assert ("operator requested /yield" if operator else "Tool wait limit reached") in projected
+                if closing:
+                    assert "Termination was already requested" in projected
+                else:
+                    os.kill(int((workspace / "command.pid").read_text()), 0)
+                if mode == "operator":
+                    assert results[-1]["status"] == "not_run", results
+                    assert results[-1]["reason"] == "operator_yield"
+                    assert not (workspace / "must-not-run").exists()
+                args = {"handle": running["handle"], "data": "" if closing else "continue\n",
+                        "eof": not closing, "terminate": False, "yield_ms": 10000,
+                        "max_output_tokens": 2000}
+                body = provider.function_body(sequence, "collect", "write_stdin", args)
+            elif results[-1]["status"] == "running":
+                args = {"handle": results[-1]["handle"], "data": "", "eof": False,
+                        "terminate": False, "yield_ms": 10000, "max_output_tokens": 2000}
+                body = provider.function_body(sequence, "collect" + str(sequence), "write_stdin", args)
+            else:
+                body = provider.response_body(sequence, "tool yield complete " + mode)
+            payload = body.encode()
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.send_header("Content-Length", str(len(payload)))
+            handler.end_headers()
+            handler.wfile.write(payload)
+            handler.close_connection = True
+
+        provider.runtime_handler = respond
+        terminal = TmuxTerminal(case / "terminal", binary, workspace, case / "state",
+                                config, 140, 35, args=("--no-listen", "--no-client", "-v"),
+                                environment=environment)
+        try:
+            terminal.wait("host-model/medium   0% ›")
+            terminal.submit("/yield")
+            terminal.wait("No active tool wait to yield.")
+            assert not requests
+            terminal.submit("test tool yield " + mode)
+            if operator:
+                deadline = time.monotonic() + 5.0
+                while True:
+                    logs = list((terminal.dotdir / "sessions").glob("*/events.jsonl"))
+                    log = read_events(terminal.dotdir)[1] if logs else []
+                    if len(event_list(log, "tool_started")) >= (2 if closing else 1) and (workspace / "command.pid").exists():
+                        break
+                    assert time.monotonic() < deadline, provider.failure
+                    time.sleep(0.01)
+                terminal.submit("/yield")
+            terminal.wait("tool yield complete " + mode, timeout=10.0, join_wrapped=True)
+            _, log = read_events(terminal.dotdir)
+            assert not event_list(log, "turn_failed"), log[-6:]
+            assert not event_list(log, "steering_received")
+            assert len(event_list(log, "turn_started")) == 1
+            handles = [e["data"]["result"]["handle"] for e in event_list(log, "tool_finished")
+                       if e["data"]["result"]["status"] == "running"]
+            assert len(set(handles)) == 1, handles
+            assert provider.failure is None, provider.failure
+        finally:
+            terminal.close()
+            provider.runtime_handler = None
+
+
 def run_irc_case(binary, root):
     binary = os.path.abspath(binary)
     root.mkdir(mode=0o700, parents=True)
@@ -4389,6 +4487,7 @@ def run_irc_case(binary, root):
         run_token_accounting_cases(binary, root / "token-accounting")
         run_goal_recovery_cases(binary, root, provider, environment)
         run_automatic_turn_retry_cases(binary, root, provider, environment)
+        run_tool_yield_cases(binary, root, provider, environment)
         run_manual_retry_cases(binary, root, provider, environment)
         run_provider_retry_input_cases(binary, root, provider, environment)
         run_provider_clarification_cases(binary, root, provider, environment)

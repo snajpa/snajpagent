@@ -121,6 +121,27 @@ test_batch_settings(const char *path)
 }
 
 static void
+test_tool_max_wait(const char *path)
+{
+    const char *values[] = {"1", "60000", "4294967295", "0", "-1", "4294967296", "never"};
+    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+        struct snag_config config;
+        char text[96], error[256] = {0};
+        int n = snprintf(text, sizeof(text), "[tool]\nmax_wait_ms=%s\n", values[i]);
+        write_bytes(path, text, (size_t)n);
+        snag_config_init(&config);
+        assert(config.max_wait_ms == 60000u);
+        assert((snag_config_load(&config, path, NULL, error, sizeof(error)) == 0) == (i < 3u));
+        if (i < 3u)
+            assert(config.max_wait_ms == (uint32_t)strtoul(values[i], NULL, 10));
+        snag_config_free(&config);
+    }
+    const char duplicate[] = "[tool]\nmax_wait_ms=1\nmax_wait_ms=2\n";
+    write_bytes(path, duplicate, sizeof(duplicate) - 1u);
+    expect_invalid(path);
+}
+
+static void
 test_turn_retries(const char *path)
 {
     const char *values[] = {"0", "1", "3", "17", "4294967295", "4294967296", "-1", "3.5", "never"};
@@ -774,6 +795,7 @@ main(void)
 
     test_compact_setting(path);
     test_batch_settings(path);
+    test_tool_max_wait(path);
     test_turn_retries(path);
     test_auth_settings(path);
     test_prompt_numbers(path);

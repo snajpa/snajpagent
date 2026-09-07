@@ -1084,7 +1084,9 @@ exec_tool_schema(uint32_t max_timeout_ms, uint32_t max_output_tokens)
     if (snprintf(description, sizeof(description),
             "Run one POSIX shell command from an explicit absolute workdir. "
             "Set timeout_ms only when this command needs a deadline; null "
-            "runs without a timeout. Pick a positive max_output_tokens limit "
+            "uses the configured command deadline. Managed waits also yield at "
+            "max_wait_ms or operator /yield, retaining the live handle. "
+            "Pick a positive max_output_tokens limit "
             "for result text sent to model context, or null for the configured "
             "ceiling (%u). This legacy-named limit caps retained UTF-8 bytes, "
             "not tokens.", max_output_tokens) < 0)
@@ -1109,7 +1111,8 @@ stdin_tool_schema(uint32_t max_output_tokens)
     if (snprintf(description, sizeof(description),
             "Wait for or write bounded UTF-8 data to an existing managed "
             "process. Set terminate=true only with empty data and "
-            "eof=false/null to terminate it and receive its terminal result. "
+            "eof=false/null to request termination. A wait limit or operator /yield "
+            "can return a live handle while termination is pending. "
             "Pick a positive max_output_tokens limit for new result text sent "
             "to model context, or null for the configured ceiling (%u). Larger "
             "requests are capped. This legacy-named limit caps retained UTF-8 bytes, not tokens.",
