@@ -3525,7 +3525,7 @@ def run_incremental_history_case(binary, root):
         return read_events(t.dotdir)[0].parent.name
 
     def records(t):
-        return event_list(read_events(t.dotdir)[1], "irc_event")
+        return event_list(maybe_events(t.dotdir)[1], "irc_event")
 
     def wait_record(t, text, count=1):
         deadline = time.monotonic() + 10
