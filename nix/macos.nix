@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-{ pkgs, sourcePkgs, arch }:
+{ pkgs, sourcePkgs, arch, deployment ? "11.0" }:
 let
   lib = pkgs.lib;
   llvm = pkgs.llvmPackages_21;
@@ -7,12 +7,16 @@ let
     (pkgs.path + "/pkgs/by-name/ap/apple-sdk/metadata/versions.json")))."15";
   sdk = (pkgs.callPackage
     (pkgs.path + "/pkgs/by-name/ap/apple-sdk/common/fetch-sdk.nix") {}) sdkInfo;
-  target = "${arch}-apple-macos11.0";
+  target = "${arch}-apple-macos${deployment}";
   processor = if arch == "arm64" then "aarch64" else arch;
   compiler = "${llvm.clang-unwrapped}/bin/clang";
   tools = "${llvm.llvm}/bin";
   cflags = "-Os -g -fstack-protector-strong -D_FORTIFY_SOURCE=2 -Werror=unguarded-availability";
-  ldflags = "-fuse-ld=lld --ld-path=${llvm.lld}/bin/ld64.lld";
+  legacyLoader = lib.versionOlder deployment "10.8";
+  linker = if legacyLoader then
+    "${import ./macos-linker.nix { inherit pkgs; }}/bin/x86_64-apple-darwin-ld"
+    else "${llvm.lld}/bin/ld64.lld";
+  ldflags = lib.optionalString (!legacyLoader) "-fuse-ld=lld " + "--ld-path=${linker}";
   cmakeLibrary = package: flags: dependencies:
     pkgs.stdenvNoCC.mkDerivation {
       pname = "${package.pname}-macos-${arch}";
@@ -44,7 +48,7 @@ let
         "-DCMAKE_CXX_COMPILER_TARGET=${target}"
         "-DCMAKE_OSX_ARCHITECTURES=${arch}"
         "-DCMAKE_OSX_SYSROOT=${sdk}"
-        "-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0"
+        "-DCMAKE_OSX_DEPLOYMENT_TARGET=${deployment}"
         "-DCMAKE_AR=${tools}/llvm-ar"
         "-DCMAKE_RANLIB=${tools}/llvm-ranlib"
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.10"
@@ -79,9 +83,9 @@ let
         export CXX="${llvm.clang-unwrapped}/bin/clang++ --target=${target} -isysroot ${sdk}"
         export AR=${tools}/llvm-ar RANLIB=${tools}/llvm-ranlib NM=${tools}/llvm-nm
         export STRIP=${tools}/llvm-strip
-        export LD=${llvm.lld}/bin/ld64.lld LIPO=${tools}/llvm-lipo
+        export LD=${linker} LIPO=${tools}/llvm-lipo
         export CFLAGS='${cflags}' CXXFLAGS='${cflags}' LDFLAGS='${ldflags}'
-        export MACOSX_DEPLOYMENT_TARGET=11.0
+        export MACOSX_DEPLOYMENT_TARGET=${deployment}
         export PKG_CONFIG_PATH=
         export PKG_CONFIG_LIBDIR=${lib.escapeShellArg
           (lib.concatMapStringsSep ":" (dep: "${dep}/lib/pkgconfig") dependencies)}
