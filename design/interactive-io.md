@@ -177,6 +177,8 @@ same wrapped text, keeping edits out of terminal scrollback. Up/Down move among
 draft rows with a preferred cell column, including recalled prompts. The first
 or last row clamps to the actual text start/end; another arrow there selects
 one history entry. Ctrl-P/Ctrl-N always select history directly.
+Ctrl-A/Home and Ctrl-E/End jump to the start and end of the whole draft,
+including across explicit newlines; both pairs use the same editor actions.
 Ctrl-arrow, Alt-arrow and Meta-b/f implement the same whitespace-delimited word
 movement as Ctrl-W. Display-to-source mapping uses the same sanitizing/wrapping
 pass as painting, using current draft geometry even during input-only output

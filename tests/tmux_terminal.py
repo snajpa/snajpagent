@@ -1760,6 +1760,40 @@ def run_draft_navigation_case(binary, root, regression=None):
 
     try:
         terminal.wait(">")
+        if regression == "bounds":
+            for start, end in (("Home", "End"), ("C-a", "C-e")):
+                terminal.send_key(start)
+                terminal.send_key(end)
+                terminal.send_text("one café界")
+                terminal.send_key("C-j")
+                terminal.send_text("two three")
+                terminal.send_key(start)
+                terminal.send_text("A")
+                terminal.send_key(end)
+                terminal.send_text("Z")
+                draft(["> Aone café界", "  two threeZ"])
+                terminal.send_key("C-u")
+            terminal.submit("older")
+            terminal.wait("fixture answer")
+            terminal.send_text("unsent")
+            terminal.send_key("C-a")
+            terminal.send_key("Up")
+            draft(["> older"])
+            terminal.send_key("C-a")
+            terminal.send_key("C-e")
+            terminal.send_key("Down")
+            draft(["> unsent"])
+            terminal.send_key("C-u")
+            terminal.send_text("old")
+            terminal.send_key("C-r")
+            terminal.send_key("C-a")  # Accept search, then move to start.
+            terminal.send_text("A")
+            terminal.send_key("C-e")
+            terminal.send_text("Z")
+            draft(["> AolderZ"])
+            terminal.send_key("C-u")
+            terminal.exit()
+            return
         if regression == "escape":
             for left, right in ((b"\x1b\x1b[D", b"\x1b\x1b[C"),
                                 (b"\x1b\x1bOD", b"\x1b\x1bOC")):
@@ -1801,10 +1835,11 @@ def run_draft_navigation_case(binary, root, regression=None):
             terminal.send_key("C-u")
             terminal.exit()
             return
-        if regression == "tall":
+        if regression in ("tall", "tall-control"):
+            start, end = ("C-a", "C-e") if regression == "tall-control" else ("Home", "End")
             text = " ".join(f"word{i:02d}" for i in range(90))
             terminal.send_text(text)
-            terminal.send_key("Home")
+            terminal.send_key(start)
             terminal.send_text("X")
             deadline = time.monotonic() + 3.0
             while time.monotonic() < deadline:
@@ -1814,14 +1849,14 @@ def run_draft_navigation_case(binary, root, regression=None):
                 time.sleep(0.02)
             else:
                 raise AssertionError(f"start of tall wrapped draft is not editable:\n{screen}")
-            terminal.send_key("End")
+            terminal.send_key(end)
             terminal.send_text("Y")
             terminal.wait("word89Y")
             terminal.resize(25, 12)
-            terminal.send_key("Home")
+            terminal.send_key(start)
             terminal.wait("> Xword00 word01 word02")
             terminal.resize(24, 16)
-            terminal.send_key("Home")
+            terminal.send_key(start)
             terminal.send_key("Down")
             terminal.send_text("Z")
             terminal.send_key("Enter")
@@ -2141,7 +2176,7 @@ def run_fixture(binary, workspace, root):
     run_retained_composer_case(binary, root)
     run_lifecycle_case(binary, root)
     run_draft_navigation_case(binary, root)
-    for regression in ("escape", "wrap", "history", "tall"):
+    for regression in ("escape", "wrap", "history", "tall", "bounds", "tall-control"):
         run_draft_navigation_case(binary, root / regression, regression)
     for columns in (60, 80, 120):
         run_draft_word_wrap_case(binary, root, columns)

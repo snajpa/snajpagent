@@ -2510,6 +2510,10 @@ feed_byte(struct snag_term *term, unsigned char byte,
         search_accept(term, false) < 0)
         return -1;
     switch (byte) {
+    case 0x01u:
+        return apply_key(term, KEY_HOME);
+    case 0x05u:
+        return apply_key(term, KEY_END);
     case '\r':
         return complete_action(term, SNAG_TERM_SUBMIT, action, text);
     case '\n': {

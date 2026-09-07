@@ -191,7 +191,8 @@ are listed under INTERACTIVE INPUT.
 .SS Edit or stop
 Ctrl-J inserts a newline.  Bracketed paste keeps pasted newlines in the draft
 instead of submitting each line.  Up/Down move through wrapped or multiline
-draft rows, then prompt history at the start or end of the text.  Ctrl-P/Ctrl-N go directly through
+draft rows, then prompt history at the start or end of the text.  Ctrl-A/Ctrl-E
+jump to the start/end of the whole prompt.  Ctrl-P/Ctrl-N go directly through
 history; Ctrl-R searches it.  Ctrl-C clears a nonempty draft without interrupting the turn.  On an
 empty draft it interrupts active work.  Ctrl-D on an empty draft exits.
 .SS Continue toward a goal
@@ -578,7 +579,14 @@ Abort reverse search and restore the exact original draft and cursor.  Escape
 accepts the current match without submitting it; editing and movement keys
 accept it before applying their normal action.
 .TP
-.BR Left , " Right" , " Home" , " End" , " Delete" , " Backspace"
+.BR Ctrl-A , " Home"
+Move to the start of the whole prompt, across wrapped rows and explicit newlines.
+.TP
+.BR Ctrl-E , " End"
+Move to the end of the whole prompt.  Ctrl-A/Ctrl-E use the Control key on both
+PC and Mac keyboards.
+.TP
+.BR Left , " Right" , " Delete" , " Backspace"
 Edit the UTF-8 draft.
 .TP
 .B Ctrl-U
