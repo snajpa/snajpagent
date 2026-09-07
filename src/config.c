@@ -1100,162 +1100,6 @@ out:
     return rc;
 }
 
-static void
-trim_span(const unsigned char **start, const unsigned char **end)
-{
-    while (*start < *end && (**start == ' ' || **start == '\t' ||
-                             **start == '\r'))
-        ++*start;
-    while (*end > *start && ((*end)[-1] == ' ' || (*end)[-1] == '\t' ||
-                             (*end)[-1] == '\r'))
-        --*end;
-}
-
-static bool
-line_is_section(const unsigned char *line, size_t len, const char *name)
-{
-    const unsigned char *start = line;
-    const unsigned char *end = line + len;
-    size_t name_len = strlen(name);
-
-    if (end > start && end[-1] == '\n')
-        --end;
-    trim_span(&start, &end);
-    return (size_t)(end - start) == name_len + 2u && start[0] == '[' &&
-           start[name_len + 1u] == ']' &&
-           memcmp(start + 1u, name, name_len) == 0;
-}
-
-static bool
-line_is_other_section(const unsigned char *line, size_t len)
-{
-    const unsigned char *start = line;
-    const unsigned char *end = line + len;
-
-    if (end > start && end[-1] == '\n')
-        --end;
-    trim_span(&start, &end);
-    return end > start + 1u && start[0] == '[' && end[-1] == ']';
-}
-
-static bool
-line_has_key(const unsigned char *line, size_t len, const char *key)
-{
-    const unsigned char *start = line;
-    const unsigned char *end = line + len;
-    const unsigned char *equal;
-    const unsigned char *key_end;
-    size_t key_len = strlen(key);
-
-    if (end > start && end[-1] == '\n')
-        --end;
-    trim_span(&start, &end);
-    if (start == end || *start == '#' || *start == ';')
-        return false;
-    equal = memchr(start, '=', (size_t)(end - start));
-    if (!equal)
-        return false;
-    key_end = equal;
-    while (key_end > start && (key_end[-1] == ' ' || key_end[-1] == '\t' ||
-                               key_end[-1] == '\r'))
-        --key_end;
-    return (size_t)(key_end - start) == key_len &&
-           memcmp(start, key, key_len) == 0;
-}
-
-static int
-append_assignment(struct snag_buf *out, const char *key, const char *value,
-                  const unsigned char *ending, size_t ending_len)
-{
-    return snag_buf_printf(out, "%s = %s", key, value) < 0 ||
-           snag_buf_append(out, ending, ending_len) < 0 ? -1 : 0;
-}
-
-static int
-append_missing_model_settings(struct snag_buf *out, bool seen[3],
-                              const char *provider, const char *model,
-                              const char *effort)
-{
-    static const unsigned char newline = '\n';
-    const char *keys[3] = {"provider", "model", "reasoning_effort"};
-    const char *values[3] = {provider, model, effort};
-
-    if (out->len && out->data[out->len - 1u] != '\n' &&
-        snag_buf_putc(out, '\n') < 0)
-        return -1;
-    for (size_t i = 0u; i < 3u; ++i)
-        if (!seen[i] && append_assignment(out, keys[i], values[i],
-                                          &newline, 1u) < 0)
-            return -1;
-    return 0;
-}
-
-static int
-replace_model_settings(const struct snag_buf *input, struct snag_buf *output,
-                       const char *provider, const char *model,
-                       const char *effort)
-{
-    size_t offset = 0u;
-    bool in_agent = false;
-    bool saw_agent = false;
-    bool added_missing = false;
-    bool seen[3] = {false, false, false};
-    const char *keys[3] = {"provider", "model", "reasoning_effort"};
-    const char *values[3] = {provider, model, effort};
-
-    while (offset < input->len) {
-        const unsigned char *line = input->data + offset;
-        const unsigned char *newline = memchr(line, '\n', input->len - offset);
-        size_t len = newline ? (size_t)(newline - line) + 1u :
-                               input->len - offset;
-
-        if (line_is_section(line, len, "agent")) {
-            in_agent = true;
-            saw_agent = true;
-        } else if (in_agent && line_is_other_section(line, len)) {
-            if (append_missing_model_settings(output, seen, provider,
-                                              model, effort) < 0)
-                return -1;
-            added_missing = true;
-            in_agent = false;
-        }
-        if (in_agent) {
-            size_t ending_len = len && line[len - 1u] == '\n' ? 1u : 0u;
-            if (ending_len && len >= 2u && line[len - 2u] == '\r')
-                ending_len = 2u;
-            for (size_t i = 0u; i < 3u; ++i) {
-                if (!line_has_key(line, len, keys[i]))
-                    continue;
-                if (append_assignment(output, keys[i], values[i],
-                                      line + len - ending_len,
-                                      ending_len) < 0)
-                    return -1;
-                seen[i] = true;
-                goto next_line;
-            }
-        }
-        if (snag_buf_append(output, line, len) < 0)
-            return -1;
-next_line:
-        offset += len;
-    }
-    if (saw_agent && !added_missing) {
-        if (append_missing_model_settings(output, seen, provider,
-                                          model, effort) < 0)
-            return -1;
-    } else if (!saw_agent) {
-        static const char heading[] = "[agent]\n";
-        if (output->len && output->data[output->len - 1u] != '\n' &&
-            snag_buf_putc(output, '\n') < 0)
-            return -1;
-        if (snag_buf_append(output, heading, sizeof(heading) - 1u) < 0 ||
-            append_missing_model_settings(output, seen, provider,
-                                          model, effort) < 0)
-            return -1;
-    }
-    return 0;
-}
-
 static bool
 same_file(const snag_file_info *left, const snag_file_info *right)
 {
@@ -1307,58 +1151,103 @@ provider_settings(struct snag_buf *output, const struct snag_provider_config *p)
         snag_buf_printf(output, "api_key = %s\n", p->api_key.expression);
 }
 
+static const char *const model_setting_keys[] = {"provider", "model", "reasoning_effort"};
+
 static int
-replace_provider_settings(const struct snag_buf *input, struct snag_buf *output,
-                           const struct snag_provider_config *provider)
+append_missing_model_settings(struct snag_buf *out, const bool seen[3],
+                              const char *const values[3])
+{
+    if (out->len && out->data[out->len - 1u] != '\n' &&
+        snag_buf_putc(out, '\n') < 0)
+        return -1;
+    for (size_t i = 0u; i < 3u; ++i)
+        if (!seen[i] && snag_buf_printf(out, "%s = %s\n", model_setting_keys[i], values[i]) < 0)
+            return -1;
+    return 0;
+}
+
+/* Walk original bytes once per edit. Provider blocks are replaced at their
+ * heading; model assignments retain their individual line endings. */
+static int
+replace_settings(const struct snag_buf *input, struct snag_buf *output,
+                 const struct snag_provider_config *provider,
+                 const char *const values[3])
 {
     size_t at = 0u;
-    bool selected = false, found = false;
+    bool selected = false, found = false, seen[3] = {false, false, false};
 
     while (at < input->len) {
-        size_t end = at;
-        char line[SNAG_CONFIG_FILE_MAX + 1u];
-        char *s, *equal;
-        while (end < input->len && input->data[end] != '\n')
-            ++end;
-        memcpy(line, input->data + at, end - at);
-        line[end - at] = '\0';
-        s = trim(line);
-        if (*s == '[') {
+        const unsigned char *line = input->data + at;
+        const unsigned char *newline = memchr(line, '\n', input->len - at);
+        size_t content = newline ? (size_t)(newline - line) : input->len - at;
+        size_t len = content + (newline != NULL);
+        char copy[SNAG_CONFIG_FILE_MAX + 1u];
+        memcpy(copy, line, content);
+        copy[content] = '\0';
+        char *s = trim(copy);
+        bool replaced = false;
+
+        if (provider && *s == '[') {
             char *close = strchr(s, ']');
             selected = false;
             if (close) {
                 *close = '\0';
                 s = trim(s + 1);
-                if (strncmp(s, "provider ", 9u) == 0) {
-                    const char *name = trim(s + 9);
-                    selected = strcmp(name, provider->name) == 0;
-                }
+                selected = strncmp(s, "provider ", 9u) == 0 &&
+                           strcmp(trim(s + 9), provider->name) == 0;
             }
-            if (snag_buf_append(output, input->data + at, end - at) < 0 ||
-                snag_buf_putc(output, '\n') < 0)
+            if (snag_buf_append(output, line, content) < 0 ||
+                snag_buf_putc(output, '\n') < 0 ||
+                (selected && provider_settings(output, provider) < 0))
                 return -1;
-            if (selected) {
-                found = true;
-                if (provider_settings(output, provider) < 0)
+            found |= selected;
+            replaced = true;
+        } else if (!provider && *s == '[' && strlen(s) > 1u && s[strlen(s) - 1u] == ']') {
+            if (strcmp(s, "[agent]") == 0) {
+                selected = found = true;
+            } else if (selected) {
+                if (append_missing_model_settings(output, seen, values) < 0)
                     return -1;
+                selected = false;
             }
-        } else {
-            bool replaced = false;
-            equal = strchr(s, '=');
-            if (selected && equal) {
+        } else if (selected) {
+            char *equal = strchr(s, '=');
+            if (equal) {
                 *equal = '\0';
                 s = trim(s);
-                replaced = snag_string_in(s, "auth base_url api_key native_compaction parallel_tool_calls");
+                if (provider) {
+                    replaced = snag_string_in(s,
+                        "auth base_url api_key native_compaction parallel_tool_calls");
+                } else {
+                    size_t ending = newline ? 1u + (content && line[content - 1u] == '\r') : 0u;
+                    for (size_t i = 0u; i < 3u; ++i) {
+                        if (strcmp(s, model_setting_keys[i]) != 0)
+                            continue;
+                        if (snag_buf_printf(output, "%s = %s", s, values[i]) < 0 ||
+                            snag_buf_append(output, line + len - ending, ending) < 0)
+                            return -1;
+                        seen[i] = replaced = true;
+                        break;
+                    }
+                }
             }
-            if (!replaced && snag_buf_append(output, input->data + at,
-                    end - at + (end < input->len ? 1u : 0u)) < 0)
+        }
+        if (!replaced && snag_buf_append(output, line, len) < 0)
+            return -1;
+        at += len;
+    }
+    if (provider) {
+        if (!found && (snag_buf_printf(output, "\n[provider %s]\n", provider->name) < 0 ||
+                       provider_settings(output, provider) < 0))
+            return -1;
+    } else {
+        if (!found) {
+            if ((output->len && output->data[output->len - 1u] != '\n' &&
+                 snag_buf_putc(output, '\n') < 0) ||
+                snag_buf_append(output, "[agent]\n", 8u) < 0)
                 return -1;
         }
-        at = end + 1u;
-    }
-    if (!found) {
-        if (snag_buf_printf(output, "\n[provider %s]\n", provider->name) < 0 ||
-            provider_settings(output, provider) < 0)
+        if ((!found || selected) && append_missing_model_settings(output, seen, values) < 0)
             return -1;
     }
     return 0;
@@ -1450,15 +1339,14 @@ save_config_settings(const char *path, bool allow_create,
                           &permissions, error, error_size);
     if (read_rc < 0)
         goto out;
-    if ((provider_config ?
-         replace_provider_settings(&input, &output, provider_config) :
-         replace_model_settings(&input, &output, provider, model, effort)) < 0) {
+    const char *values[] = {provider, model, effort};
+    if (replace_settings(&input, &output, provider_config, values) < 0) {
         snag_errorf(error, error_size, "configuration update exceeds 64 KiB");
         goto out;
     }
     if (provider_config && *model) {
         struct snag_buf selected = {.max = SNAG_CONFIG_FILE_MAX};
-        if (replace_model_settings(&output, &selected, provider, model, effort) < 0) {
+        if (replace_settings(&output, &selected, NULL, values) < 0) {
             snag_buf_free(&selected);
             goto out;
         }

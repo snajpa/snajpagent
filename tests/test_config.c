@@ -207,6 +207,30 @@ test_auth_settings(const char *path)
     assert(strcmp(config.model, "chosen/model") == 0);
     snag_config_free(&config);
 
+    /* Model edits preserve original bytes, including comments and line endings. */
+    static const struct { const char *input, *output; } edits[] = {
+        {"[agent]\r\n# model = ignored\r\n model \t= old\r\n",
+         "[agent]\r\n# model = ignored\r\nmodel = new\r\nprovider = default\nreasoning_effort = high\n"},
+        {"[agent]\nprovider=default\nmodel=old\nreasoning_effort=low",
+         "[agent]\nprovider = default\nmodel = new\nreasoning_effort = high\n"},
+        {"[agent]\n[ui]\n",
+         "[agent]\nprovider = default\nmodel = new\nreasoning_effort = high\n[ui]\n"},
+        {"[ui]", "[ui]\n[agent]\nprovider = default\nmodel = new\nreasoning_effort = high\n"},
+        {"[agent]", "[agent]\nprovider = default\nmodel = new\nreasoning_effort = high\n"}
+    };
+    for (size_t i = 0u; i < sizeof(edits) / sizeof(edits[0]); ++i) {
+        char input[512], expected[512], actual[512];
+        int n = snprintf(input, sizeof(input), "[provider default]\n%s", edits[i].input);
+        int want = snprintf(expected, sizeof(expected), "[provider default]\n%s", edits[i].output);
+        assert(n > 0 && n < (int)sizeof(input) && want > 0 && want < (int)sizeof(expected));
+        write_bytes(path, input, (size_t)n);
+        assert(snag_config_save_model(path, false, "default", "new", "high",
+                                      error, sizeof(error)) == 0);
+        int fd = open(path, O_RDONLY);
+        assert(fd >= 0 && read(fd, actual, sizeof(actual)) == want && close(fd) == 0);
+        assert(memcmp(actual, expected, (size_t)want) == 0);
+    }
+
     /* Both writers must reject the same cross-field errors as loading. */
     const char *invalid_save[] = {
         invalid,
