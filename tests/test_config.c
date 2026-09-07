@@ -822,6 +822,13 @@ main(void)
     test_tool_max_wait(path);
     test_turn_retries(path);
     test_auth_settings(path);
+    expect_ui(path, "prompt", "{chat:{rollout-idle:x}}{rollout-idle:y}{rollout-active:z}", false);
+    expect_ui(path, "prompt", "{chat:{queued:{goal_spinner}{queued:{goal_spinner}}}}"
+              "{rollout-idle:y}{rollout-active:z}", false);
+    expect_ui(path, "prompt", "{chat:{goal_spinner}}{rollout-idle:{goal_spinner}}"
+              "{rollout-active:{goal_spinner}}", true);
+    expect_ui(path, "prompt", "{queued:{goal_spinner}}{chat:x}{rollout-idle:y}"
+              "{rollout-active:z}{goal_spinner}", false);
     test_prompt_numbers(path);
     assert(snprintf(link_path, sizeof(link_path), "%s/link.ini", temp) > 0);
     assert(symlink(path, link_path) == 0);

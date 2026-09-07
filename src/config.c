@@ -280,11 +280,13 @@ prompt_end(const char *text, size_t len, size_t start)
 static int
 prompt_body(const char *text, size_t len,
             const char *const values[SNAG_PROMPT_FIELD_COUNT],
-            unsigned char marker, unsigned int *spinners, struct snag_buf *out)
+            unsigned char marker, unsigned int spinners[3], unsigned int modes,
+            unsigned int selected, unsigned int *seen, struct snag_buf *out)
 {
     static const char *const fields[] = {"provider", "model", "effort",
         "operator", "host", "context", "mode", "queue", "hour", "minute", "second",
         "goal_spinner", "activity_spinner"};
+    static const char *const names[] = {"chat:", "rollout-idle:", "rollout-active:"};
 
     for (size_t i = 0u; i < len; ++i) {
         unsigned char c = (unsigned char)text[i];
@@ -298,17 +300,28 @@ prompt_body(const char *text, size_t len,
                 goto invalid;
             if (out && snag_buf_putc(out, (unsigned char)text[i]) < 0)
                 return -1;
-        } else if (c == '{' && len - i >= 8u &&
-                   memcmp(text + i, "{queued:", 8u) == 0) {
-            size_t end = prompt_end(text, len, i + 8u);
-            bool queued = out && strcmp(values[SNAG_PROMPT_QUEUE], "0") != 0;
-
-            if (!end || end == i + 9u ||
-                prompt_body(text + i + 8u, end - i - 9u, values, marker,
-                            spinners, queued ? out : NULL) < 0)
-                goto invalid;
-            i = end - 1u;
         } else if (c == '{') {
+            size_t name = 3u;
+            if (seen)
+                for (name = 0u; name < 3u; ++name)
+                    if (strncmp(text + i + 1u, names[name], strlen(names[name])) == 0)
+                        break;
+            bool queued = len - i >= 8u && memcmp(text + i, "{queued:", 8u) == 0;
+            if (name < 3u || queued) {
+                size_t start = i + 1u + (queued ? 7u : strlen(names[name]));
+                size_t end = prompt_end(text, len, start);
+                bool display = out && (queued ? strcmp(values[SNAG_PROMPT_QUEUE], "0") != 0 :
+                                      name == selected);
+                if (!end || end == start + 1u || (name < 3u && (*seen & (1u << name))) ||
+                    prompt_body(text + start, end - start - 1u, values, marker, spinners,
+                                queued ? modes : 1u << name, selected, NULL,
+                                display ? out : NULL) < 0)
+                    goto invalid;
+                if (name < 3u)
+                    *seen |= 1u << name;
+                i = end - 1u;
+                continue;
+            }
             const char *end = memchr(text + i + 1u, '}', len - i - 1u);
             size_t field_len = end ? (size_t)(end - text - i - 1u) : 0u;
             const char *format = memchr(text + i + 1u, ':', field_len);
@@ -322,9 +335,7 @@ prompt_body(const char *text, size_t len,
                    (strlen(fields[field]) != field_len ||
                     memcmp(fields[field], text + i + 1u, field_len) != 0))
                 ++field;
-            if (!end || field == sizeof(fields) / sizeof(fields[0]) ||
-                (field >= SNAG_PROMPT_FIELD_COUNT &&
-                 (*spinners & (1u << (field - SNAG_PROMPT_FIELD_COUNT)))))
+            if (!end || field == sizeof(fields) / sizeof(fields[0]))
                 goto invalid;
             if (format) {
                 bool clock = field >= SNAG_PROMPT_HOUR &&
@@ -350,10 +361,17 @@ prompt_body(const char *text, size_t len,
                 }
             }
             if (field >= SNAG_PROMPT_FIELD_COUNT) {
-                *spinners |= 1u << (field - SNAG_PROMPT_FIELD_COUNT);
+                unsigned int bit = 1u << (field - SNAG_PROMPT_FIELD_COUNT);
+                for (unsigned int mode = 0u; mode < 3u; ++mode) {
+                    if (!(modes & (1u << mode)))
+                        continue;
+                    if (spinners[mode] & bit)
+                        goto invalid;
+                    spinners[mode] |= bit;
+                }
                 if (out && snag_buf_putc(out,
                         marker + field - SNAG_PROMPT_FIELD_COUNT) < 0)
-                    return -1;
+                    goto invalid;
             } else if (out) {
                 size_t value_len = strlen(values[field]);
 
@@ -361,9 +379,9 @@ prompt_body(const char *text, size_t len,
                     fill = ' ';
                 for (size_t pad = value_len; pad < width; ++pad)
                     if (snag_buf_putc(out, fill) < 0)
-                        return -1;
+                        goto invalid;
                 if (snag_buf_append(out, values[field], value_len) < 0)
-                    return -1;
+                    goto invalid;
             }
             i = (size_t)(end - text);
         } else if (c == '}') {
@@ -372,7 +390,8 @@ prompt_body(const char *text, size_t len,
             return -1;
         }
     }
-    return 0;
+    if (!seen || *seen == 7u)
+        return 0;
 invalid:
     return snag_errno(EINVAL);
 }
@@ -380,65 +399,11 @@ invalid:
 static int
 parse_prompt(const char *text, unsigned int selected,
              const char *const values[SNAG_PROMPT_FIELD_COUNT],
-             unsigned char marker,
-             struct snag_buf *out)
+             unsigned char marker, struct snag_buf *out)
 {
-    static const char *const names[] = {"chat:", "rollout-idle:",
-                                        "rollout-active:"};
     unsigned int seen = 0u, spinners[3] = {0u};
-    size_t len = strlen(text);
-
-    for (size_t i = 0u; i < len; ++i) {
-        unsigned char c = (unsigned char)text[i];
-        const char *body = NULL;
-        size_t name = 0u, end;
-
-        if (c < 0x20u || c == 0x7fu)
-            goto invalid;
-        if (c == '\\') {
-            if (++i >= len || (text[i] != '\\' && text[i] != '{' &&
-                              text[i] != '}'))
-                goto invalid;
-            if (out && snag_buf_putc(out, (unsigned char)text[i]) < 0)
-                return -1;
-            continue;
-        }
-        if (c == '}')
-            goto invalid;
-        if (c != '{') {
-            if (out && snag_buf_putc(out, c) < 0)
-                return -1;
-            continue;
-        }
-        for (; name < 3u; ++name)
-            if (strncmp(text + i + 1u, names[name], strlen(names[name])) == 0) {
-                body = text + i + 1u + strlen(names[name]);
-                break;
-            }
-        end = prompt_end(text, len, body ? (size_t)(body - text) : i + 1u);
-        if (!end)
-            goto invalid;
-        if (!body) {
-            for (unsigned int mode = 0u; mode < 3u; ++mode)
-                if (prompt_body(text + i, end - i, values, marker,
-                                &spinners[mode], out && mode == selected ? out : NULL) < 0)
-                    goto invalid;
-            i = end - 1u;
-            continue;
-        }
-        if (seen & (1u << name))
-            goto invalid;
-        if (end - 1u == (size_t)(body - text) ||
-            prompt_body(body, end - 1u - (size_t)(body - text), values, marker,
-                        &spinners[name], out && name == selected ? out : NULL) < 0)
-            goto invalid;
-        seen |= 1u << name;
-        i = end - 1u;
-    }
-    if (seen == 7u)
-        return 0;
-invalid:
-    return snag_errno(EINVAL);
+    return prompt_body(text, strlen(text), values, marker, spinners, 7u,
+                       selected, &seen, out);
 }
 
 static int
