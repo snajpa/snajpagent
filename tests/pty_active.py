@@ -605,7 +605,7 @@ def test_incremental_multiline_delete_clears_old_tail():
 
 def test_incremental_wrapped_long_prompt_multiline_indent():
     model = "m" * 120
-    prompt = f" openai/{model}/medium   ?% › ".encode()
+    prompt = f" openai/{model}/medium   0% › ".encode()
     child = Child(["-m", model])
     try:
         child.wait(prompt)
@@ -2540,7 +2540,7 @@ def test_provider_local_models(native=True):
 
 def test_model_cache_and_selection():
     cache_path = Path(DOTDIR) / "models.json"
-    initial_prompt = b" first/uncached-start/low   ?% \xe2\x80\xba "
+    initial_prompt = b" first/uncached-start/low   0% \xe2\x80\xba "
     cache_path.unlink(missing_ok=True)
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "models.ini"
     config.write_text(
@@ -2897,7 +2897,7 @@ def test_config_editor_reload():
         before = session_ids()
         child = Child(["--config", str(config)])
         child.wait(PROMPT.rstrip())
-        session_id = new_session(before)
+        assert session_ids() == before
         child.send(b"/verbose 2\r")
         child.wait(b"verbosity: 2")
 
@@ -2912,7 +2912,7 @@ def test_config_editor_reload():
         plan.write_text(str(valid_two), encoding="utf-8")
         child.send(b"/config\r")
         end = child.wait(f"configuration reloaded: {config}".encode(), start=end)
-        child.wait("W  ?%› ".encode(), start=end)
+        child.wait("W  0%› ".encode(), start=end)
         child.send(b"/status\r")
         status_end = child.wait(b"verbosity: 2", start=end)
         child.wait(b"model: editor-base", start=end)
@@ -2921,7 +2921,7 @@ def test_config_editor_reload():
         plan.write_text(str(invalid), encoding="utf-8")
         child.send(b"/config\r")
         end = child.wait(b"invalid configuration at line 3", start=status_end)
-        child.wait("W  ?%› ".encode(), start=end)
+        child.wait("W  0%› ".encode(), start=end)
         child.send(b"/status\r")
         status_end = child.wait(b"verbosity: 2", start=end)
         child.wait(b"model: editor-base", start=end)
@@ -2967,6 +2967,11 @@ def test_config_editor_reload():
         # Membership notifications start a turn; /config is idle-only.
         deadline = time.monotonic() + 8.0
         while True:
+            if session_ids() == before:
+                assert time.monotonic() < deadline, bytes(child.buf)
+                child.drain(0.05)
+                continue
+            session_id = new_session(before)
             log = events(session_id)
             turns = [event["data"]["turn_id"] for event in log
                      if event["type"] == "turn_started" and
@@ -3042,7 +3047,8 @@ def test_config_editor_reload():
             )
             child.wait(PROMPT.rstrip(), start=end)
             assert seen.read_text(encoding="utf-8") == str(default_config)
-            child.exit_now()
+            child.send(b"/exit\r")
+            child.finish(expect_resume=False)
         finally:
             if prior_default is None:
                 default_config.unlink(missing_ok=True)
@@ -3067,15 +3073,17 @@ def test_known_context_meter():
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "models.ini"
     before = session_ids()
     child = Child(["--config", str(config)])
-    child.wait(b" first/uncached-start/low   ?% \xe2\x80\xba ")
+    child.wait(b" first/uncached-start/low   0% \xe2\x80\xba ")
     child.send(b"/model gpt-5.6-luna / high\r")
     selected = child.wait(
         b"model for next turn: first / gpt-5.6-luna / high"
     )
-    child.wait(b"gpt-5.6-luna/high   ?% \xe2\x80\xba ", start=selected)
-    session_id = new_session(before)
+    child.wait(b"gpt-5.6-luna/high   0% \xe2\x80\xba ", start=selected)
+    assert session_ids() == before
     start = len(child.buf)
     child.send(b"slow\r")
+    child.wait(b"working slowly", start=start)
+    session_id = new_session(before)
     deadline = time.monotonic() + 8.0
     response = None
     while time.monotonic() < deadline:
@@ -3118,7 +3126,7 @@ def test_config_and_cli_model_passthrough():
     )
     before = session_ids()
     child = Child(["--config", str(config)])
-    child.wait(b" openai/openai/gpt-5.6/medium   ?% \xe2\x80\xba ")
+    child.wait(b" openai/openai/gpt-5.6/medium   0% \xe2\x80\xba ")
 
     child.send(b"/status\r")
     end = child.wait(b"model: openai/gpt-5.6")
@@ -3786,7 +3794,7 @@ def test_prompt_identity_is_terminal_safe():
     visible = b"unsafe\\x1Bmodel/odd\\u{202E}effort"
     before = session_ids()
     child = Child(["-m", unsafe_model, "--effort", unsafe_effort])
-    child.wait(b" openai/" + visible + "   ?% › ".encode())
+    child.wait(b" openai/" + visible + "   0% › ".encode())
     assert unsafe_model.encode() not in child.buf
     assert unsafe_effort.encode() not in child.buf
     child.send(b"ping\r")
