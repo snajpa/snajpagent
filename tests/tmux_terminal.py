@@ -517,6 +517,19 @@ class FakeResponses:
 
 
 class TmuxTerminal:
+    @classmethod
+    def fixture(cls, binary, case, cols, rows, *, args=(), pause_ms=300,
+                markdown=None, prompt=None):
+        workspace = case / "workspace"
+        workspace.mkdir(mode=0o700, parents=True)
+        config = case / "config.ini"
+        write_config(config, False, pause_ms=pause_ms, markdown=markdown)
+        if prompt is not None:
+            with config.open("a", encoding="utf-8") as out:
+                out.write(f"prompt = {prompt}\n")
+        return fixture_terminal(cls(case / "terminal", binary, workspace,
+            case / "state", config, cols, rows, args=args), case / "screen.txt")
+
     def __enter__(self):
         return self
 
@@ -766,14 +779,9 @@ def assert_wrapped_order(screen, fragments):
 
 def run_status_case(binary, root):
     case = root / "status"
-    workspace = case / "workspace"
-    workspace.mkdir(mode=0o700, parents=True)
-    config = case / "config.ini"
-    write_config(config, False)
-    dotdir = case / "state"
-    with fixture_terminal(TmuxTerminal(
-        case / "terminal", binary, workspace, dotdir, config, 40, 14
-    ), case / "screen.txt") as terminal:
+    with TmuxTerminal.fixture(
+        binary, case, 40, 14
+    ) as terminal:
         idle = terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
         assert re.search(r"(?m)^   [0-9]{2}:[0-9]{2}:[0-9]{2}" +
                          re.escape(DEFAULT_IDLE_PROMPT), idle), idle
@@ -792,7 +800,7 @@ def run_status_case(binary, root):
                               join_wrapped=True)
         assert_order(final, ["status-first-fragment", "status-second-",
                              "fragment"])
-        _, events = wait_for_terminal_event(dotdir, {"turn_completed"}, 5.0)
+        _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
         completed = event_list(events, "response_completed")
         expected = "status-first-fragment status-second-fragment"
         if len(completed) != 1 or completed[0]["data"]["items"][0]["text"] != expected:
@@ -839,14 +847,9 @@ def assert_live_paragraph_gap(terminal, first, last):
 
 def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None, typing=False):
     case = root / f"decode-{width}-{unicode}-{resize}-{typing}"
-    workspace = case / "workspace"
-    workspace.mkdir(mode=0o700, parents=True)
-    config = case / "config.ini"
-    write_config(config, False, pause_ms=0 if typing else 300)
-    dotdir = case / "state"
-    with fixture_terminal(TmuxTerminal(
-        case / "terminal", binary, workspace, dotdir, config, width, 14
-    ), case / "screen.txt") as terminal:
+    with TmuxTerminal.fixture(
+        binary, case, width, 14, pause_ms=0 if typing else 300
+    ) as terminal:
         def prose_pattern(fragment):
             return re.compile(r"(?:\n  )?".join(r"\s+" if c == " " else re.escape(c)
                                                 for c in fragment))
@@ -913,7 +916,7 @@ def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None, ty
         if time.monotonic() - final_at < 0.8:
             raise AssertionError("the fixture's post-delta pause was lost")
 
-        _, events = wait_for_terminal_event(dotdir, {"turn_completed"}, 6.0)
+        _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 6.0)
         completed = event_list(events, "response_completed")
         public = [
             item["text"]
@@ -944,15 +947,9 @@ def run_markdown_case(binary, root):
     )
     for name, configured, args, rendered in cases:
         case = root / f"markdown-{name}"
-        workspace = case / "workspace"
-        workspace.mkdir(mode=0o700, parents=True)
-        config = case / "config.ini"
-        write_config(config, False, markdown=configured)
-        dotdir = case / "state"
-        with fixture_terminal(TmuxTerminal(
-            case / "terminal", binary, workspace, dotdir, config, 64, 16,
-            args=args,
-        ), case / "screen.txt") as terminal:
+        with TmuxTerminal.fixture(
+            binary, case, 64, 16, args=args, markdown=configured
+        ) as terminal:
             terminal.wait(DEFAULT_IDLE_PROMPT)
             terminal.submit("terminal_markdown")
             if rendered:
@@ -966,7 +963,7 @@ def run_markdown_case(binary, root):
                     raise AssertionError(
                         f"rendered Markdown retained syntax markers:\n{held}"
                     )
-                _, pending_events = maybe_events(dotdir)
+                _, pending_events = maybe_events(terminal.dotdir)
                 if event_list(pending_events, "response_completed"):
                     raise AssertionError(
                         "Markdown did not become visible during the provider pause"
@@ -988,7 +985,7 @@ def run_markdown_case(binary, root):
                     "- split `code` and [docs](https://example.test)",
                     timeout=2.0, join_wrapped=True,
                 )
-            _, events = wait_for_terminal_event(dotdir, {"turn_completed"}, 5.0)
+            _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
             completed = event_list(events, "response_completed")
             if (len(completed) != 1 or
                     completed[0]["data"]["items"][0]["text"] != MARKDOWN_TEXT):
@@ -1050,21 +1047,15 @@ def run_markdown_case(binary, root):
 
 def run_narrow_markdown_table_case(binary, root):
     case = root / "markdown-narrow-table"
-    workspace = case / "workspace"
-    workspace.mkdir(mode=0o700, parents=True)
-    config = case / "config.ini"
-    write_config(config, False, markdown=True)
-    dotdir = case / "state"
-    with fixture_terminal(TmuxTerminal(
-        case / "terminal", binary, workspace, dotdir, config, 22, 24,
-        args=("--color=never",),
-    ), case / "screen.txt") as terminal:
+    with TmuxTerminal.fixture(
+        binary, case, 22, 24, args=("--color=never",), markdown=True
+    ) as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
         terminal.submit_wait("terminal_markdown", "┌─ table", timeout=3.0, join_wrapped=True)
         terminal.wait("│ Item: alpha", timeout=3.0, join_wrapped=True)
         terminal.wait("│ State: ready", timeout=3.0, join_wrapped=True)
         terminal.wait("│ Count: 7", timeout=3.0, join_wrapped=True)
-        _, events = wait_for_terminal_event(dotdir, {"turn_completed"}, 5.0)
+        _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
         completed = event_list(events, "response_completed")
         if (len(completed) != 1 or
                 completed[0]["data"]["items"][0]["text"] != MARKDOWN_TEXT):
@@ -1240,17 +1231,9 @@ def wait_event_count(dotdir, kind, count, timeout=5.0):
 
 def run_queue_case(binary, root):
     case = root / "queue"
-    workspace = case / "workspace"
-    workspace.mkdir(mode=0o700, parents=True)
-    (workspace / "AGENTS.md").write_text(
-        "These instructions must be disabled.\n", encoding="utf-8"
-    )
-    config = case / "config.ini"
-    write_config(config, False, pause_ms=150)
-    dotdir = case / "state"
-    with fixture_terminal(TmuxTerminal(
-        case / "terminal", binary, workspace, dotdir, config, 48, 20
-    ), case / "screen.txt") as terminal:
+    with TmuxTerminal.fixture(
+        binary, case, 48, 20
+    ) as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
         terminal.submit_wait("queue_slow", "working slowly")
         for count, text in enumerate(("first", "second", "third", "fourth"), 1):
@@ -1263,19 +1246,19 @@ def run_queue_case(binary, root):
         wait_queue_listing(terminal, ("first", "second", "third", "fourth"))
 
         terminal.submit("/q p")
-        wait_event_count(dotdir, "future_turn_cancelled", 1)
+        wait_event_count(terminal.dotdir, "future_turn_cancelled", 1)
         terminal.wait("1 future turn cancelled")
         wait_idle_prompt_at_bottom(terminal, "/medium   ?% (3) »")
         terminal.submit("/queue pop")
-        wait_event_count(dotdir, "future_turn_cancelled", 2)
+        wait_event_count(terminal.dotdir, "future_turn_cancelled", 2)
         wait_idle_prompt_at_bottom(terminal, "/medium   ?% (2) »")
         terminal.submit("/queue 1 delete")
-        wait_event_count(dotdir, "future_turn_cancelled", 3)
+        wait_event_count(terminal.dotdir, "future_turn_cancelled", 3)
         wait_idle_prompt_at_bottom(terminal, "/medium   ?% (1) »")
         terminal.submit_wait("/q 1e", " ◴  ?% edit 1 › second")
         terminal.send_text(" active")
         terminal.send_key("Enter")
-        wait_event_count(dotdir, "future_turn_edited", 1)
+        wait_event_count(terminal.dotdir, "future_turn_edited", 1)
         wait_idle_prompt_at_bottom(terminal, "/medium   ?% (1) »")
 
         terminal.send_text("fifth")
@@ -1290,9 +1273,9 @@ def run_queue_case(binary, root):
         terminal.submit_wait("/queue 1 edit", "    ?% edit 1 › second active")
         terminal.send_text(" idle")
         terminal.send_key("Enter")
-        wait_event_count(dotdir, "future_turn_edited", 2)
+        wait_event_count(terminal.dotdir, "future_turn_edited", 2)
         terminal.submit("/q c")
-        wait_event_count(dotdir, "future_turn_cancelled", 4)
+        wait_event_count(terminal.dotdir, "future_turn_cancelled", 4)
         terminal.wait("2 future turns cancelled")
         wait_idle_prompt_at_bottom(terminal, DEFAULT_ACCOUNTED_IDLE_PROMPT)
         empty = terminal.submit_wait("/q", "future-turn queue is empty")
@@ -1311,7 +1294,7 @@ def run_queue_case(binary, root):
         )
         terminal.exit()
 
-        _, events = read_events(dotdir)
+        _, events = read_events(terminal.dotdir)
         queued = event_list(events, "future_turn_queued")
         edited = event_list(events, "future_turn_edited")
         cancelled = event_list(events, "future_turn_cancelled")
@@ -1405,14 +1388,9 @@ def run_tool_spinner_delay_case(binary, root):
 
 def run_tool_case(binary, root):
     case = root / "tools"
-    workspace = case / "workspace"
-    workspace.mkdir(mode=0o700, parents=True)
-    config = case / "config.ini"
-    write_config(config, False)
-    dotdir = case / "state"
-    with fixture_terminal(TmuxTerminal(
-        case / "terminal", binary, workspace, dotdir, config, 52, 18
-    ), case / "screen.txt") as terminal:
+    with TmuxTerminal.fixture(
+        binary, case, 52, 18
+    ) as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT)
         terminal.submit_wait("/verbose 3", "verbosity: 3")
         screen = terminal.submit_wait("text_tool", "fixture command succeeded", join_wrapped=True)
@@ -1422,7 +1400,7 @@ def run_tool_case(binary, root):
             'arguments:',
             "fixture command succeeded",
         ])
-        _, events = wait_for_terminal_event(dotdir, {"turn_completed"}, 5.0)
+        _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
         finished = event_list(events, "tool_finished")
         if (len(finished) != 1 or
                 finished[0]["data"]["result"]["model_text"] !=
@@ -1439,15 +1417,8 @@ def wait_idle_prompt_at_bottom(terminal, prompt, timeout=5.0):
 
 def run_retained_composer_case(binary, root):
     case = root / "retained"
-    workspace = case / "workspace"
-    workspace.mkdir(mode=0o700, parents=True)
-    config = case / "config.ini"
-    write_config(config, False)
-    with config.open("a", encoding="utf-8") as output:
-        output.write("prompt = {chat:p>}{rollout-idle:p>}{rollout-active:p>}\n")
-    with fixture_terminal(TmuxTerminal(
-        case / "terminal", binary, workspace, case / "state", config, 24, 18,
-    ), case / "screen.txt") as terminal:
+    with TmuxTerminal.fixture(binary, case, 24, 18,
+            prompt="{chat:p>}{rollout-idle:p>}{rollout-active:p>}") as terminal:
         terminal.wait("p>")
         draft = "first-row-unchanged second-row-unchanged third-row"
         terminal.send_text(draft)
@@ -1612,14 +1583,6 @@ def run_punctuation_case(binary, root):
 
 def run_draft_navigation_case(binary, root, regression=None):
     case = root / "draft-keys"
-    workspace = case / "workspace"
-    workspace.mkdir(mode=0o700, parents=True)
-    config = case / "config.ini"
-    write_config(config, False, pause_ms=0)
-    with config.open("a") as out:
-        out.write("prompt = {chat::}{rollout-idle:>}{rollout-active:>}\n")
-    terminal = TmuxTerminal(case / "terminal", binary, workspace, case / "state",
-                            config, 24, 16)
 
     def draft(expected):
         deadline = time.monotonic() + 3.0
@@ -1638,7 +1601,8 @@ def run_draft_navigation_case(binary, root, regression=None):
         terminal.run("send-keys", "-t", terminal.target, "-H",
                      *(f"{byte:02x}" for byte in sequence))
 
-    with fixture_terminal(terminal, case / "screen.txt"):
+    with TmuxTerminal.fixture(binary, case, 24, 16, pause_ms=0,
+            prompt="{chat::}{rollout-idle:>}{rollout-active:>}") as terminal:
         terminal.wait(">")
         if regression == "bounds":
             for start, end in (("Home", "End"), ("C-a", "C-e")):
@@ -1908,15 +1872,9 @@ def run_draft_word_wrap_case(binary, root, columns=80):
 
 def run_lifecycle_case(binary, root):
     case = root / "lifecycle"
-    workspace = case / "workspace"
-    workspace.mkdir(mode=0o700, parents=True)
-    config = case / "config.ini"
-    write_config(config, False)
-    dotdir = case / "state"
-    with fixture_terminal(TmuxTerminal(
-        case / "terminal", binary, workspace, dotdir, config, 60, 18,
-        args=("--color=always",),
-    ), case / "screen.txt") as terminal:
+    with TmuxTerminal.fixture(
+        binary, case, 60, 18, args=("--color=always",)
+    ) as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT)
         terminal.submit_wait("/goal slow goal", "• Goal set")
         terminal.wait("working on goal")
@@ -1930,7 +1888,7 @@ def run_lifecycle_case(binary, root):
         terminal.send_key("Enter")
         terminal.wait("• Goal cleared")
         terminal.wait("goal checkpoint")
-        wait_for_terminal_event(dotdir, {"turn_completed"}, 5.0)
+        wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
         wait_idle_prompt_at_bottom(terminal, DEFAULT_ACCOUNTED_IDLE_PROMPT)
 
         terminal.submit_wait("/compact", "• Compacted")
@@ -1960,7 +1918,7 @@ def run_lifecycle_case(binary, root):
                 raise AssertionError(
                     f"lifecycle notice lacks its green role: {notice!r}"
                 )
-        _, events = read_events(dotdir)
+        _, events = read_events(terminal.dotdir)
         if len(event_list(events, "goal_started")) != 1 or \
                 len(event_list(events, "goal_cancelled")) != 1 or \
                 len(event_list(events, "compaction_completed")) != 1:
