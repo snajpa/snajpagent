@@ -2139,7 +2139,8 @@ complete_action(struct snag_term *term, enum snag_term_action action,
                  (destination == SNAG_IRC_TARGET_SELECT || verbosity);
     if (local ? term->local_backlog : term->input_backlog)
         return snag_term_write(STDERR_FILENO, "\a", 1u);
-    if (term->utf8_pending_len || !term->draft.len)
+    if (term->utf8_pending_len ||
+        (!term->draft.len && (term->active || action != SNAG_TERM_SUBMIT)))
         return 0;
     if (term->capable) {
         if (snag_term_hide(term) < 0)

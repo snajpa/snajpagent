@@ -86,7 +86,10 @@ cd /path/to/project
 snajpagent
 .fi
 .PP
-Enter submits a turn.  Type
+Enter submits a turn.  An empty idle rollout prompt submits
+.B Continue.
+using the retained conversation. Empty input during a turn or in chat is ignored.
+Type
 .B /help
 for commands and keys.
 .SS Start a task
@@ -395,9 +398,32 @@ the printed resume command includes them.  They remain explicit pointers even
 when automatic discovery is disabled.  They do not grant unrelated write
 permission or synchronize documents between hosts.
 .TP
-.BI \-m " model"
-Override the next model.  On resume this is a one-turn override unless combined
-with an explicit provider selection or selected again in the session.
+.BI \-m " [provider/]model[/effort]"
+Select the model for the next turn, on start or resume.  With an omitted
+provider, use the first provider defined in the configuration (or an explicit
+.BR \-\-provider ).
+With two components, a configured first component means
+.IR provider/model ;
+otherwise the components mean
+.IR model/effort .
+With an omitted effort, use the first effort listed for that model in the
+local cache, then its cached default, then the configured reasoning effort.
+.B \-\-effort
+explicitly overrides the selector's effort.  Typed model IDs need not be cached.
+Each component must be nonempty; for upstream IDs containing slashes, define a
+provider-local model name in the configuration.
+The selection is the initial default for a new session. On resume it lasts one
+turn unless combined with an explicit provider selection or selected again in
+the session.
+.TP
+.B \-\-update-model-cache
+Refresh every configured provider's model catalog.  The refresh runs before
+model selection and session startup, regardless of option order.  Combine with
+.B \-l
+for a noninteractive refresh without starting a turn.  A refresh failure stops
+startup and leaves the previous cache intact.  Help and version exit without
+refreshing.  Uses the same authenticated endpoints as
+.BR "/model cache" .
 .TP
 .BI \-\-effort " level"
 Override reasoning effort.  On resume this is a one-turn override unless
@@ -475,11 +501,21 @@ List sessions and exit.  Only
 .BR \-\-all ,
 .BR \-\-dotdir ,
 .BR \-\-config ,
-color options, and Markdown presentation options may accompany it.  Markdown
+color options, Markdown presentation options, and
+.B \-\-update-model-cache
+may accompany it.  Markdown
 presentation has no useful effect on session-list output.
 .TP
 .BR \-h
 Print short help and exit.  It must stand alone.
+.TP
+.B \-\-help
+Open the installed
+.BR snajpagent (1)
+manual with
+.B man
+where available.  If the viewer or manual is unavailable, print short help.
+On Windows, print short help.  It must stand alone.
 .TP
 .BR \-V
 Print build identity and exit.  It must stand alone.

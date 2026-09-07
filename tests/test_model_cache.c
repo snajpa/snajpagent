@@ -35,6 +35,42 @@ write_file_at(int dirfd, const char *name, const char *text)
 }
 
 static void
+test_selectors(void)
+{
+    struct snag_config config;
+    struct snag_model_selection selected;
+    char error[256] = {0};
+    const char *bad[] = {"", "/m", "m/", "p//high", "p/m/high/extra", "missing/m/high"};
+    snag_config_init(&config);
+    config.provider_count = 2u;
+    snag_config_provider_init(&config.providers[0], "p");
+    snag_config_provider_init(&config.providers[1], "q");
+    const struct snag_provider_config *first = &config.providers[0];
+    assert(snag_model_select(NULL, &config, "m", first, "medium", &selected,
+                             error, sizeof(error)) == 0);
+    assert(selected.provider == first && !strcmp(selected.model, "m") &&
+           !strcmp(selected.effort, "medium"));
+    assert(snag_model_select(NULL, &config, "q/m", first, "medium", &selected,
+                             error, sizeof(error)) == 0);
+    assert(selected.provider == &config.providers[1] && !strcmp(selected.model, "m"));
+    assert(snag_model_select(NULL, &config, "m/custom", first, "medium", &selected,
+                             error, sizeof(error)) == 0);
+    assert(selected.provider == first && !strcmp(selected.effort, "custom"));
+    assert(snag_model_select(NULL, &config, "q/m/low", first, "medium", &selected,
+                             error, sizeof(error)) == 0);
+    assert(selected.provider == &config.providers[1] && !strcmp(selected.effort, "low"));
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i)
+        assert(snag_model_select(NULL, &config, bad[i], first, "medium", &selected,
+                                 error, sizeof(error)) < 0);
+    char oversized[SNAG_CONFIG_MODEL_MAX + 1u];
+    memset(oversized, 'x', sizeof(oversized) - 1u);
+    oversized[sizeof(oversized) - 1u] = '\0';
+    assert(snag_model_select(NULL, &config, oversized, first, "medium", &selected,
+                             error, sizeof(error)) < 0);
+    snag_config_free(&config);
+}
+
+static void
 test_local_models(struct snag_store *store, struct snag_model_cache *cache)
 {
     struct snag_config config;
@@ -98,6 +134,7 @@ test_local_models(struct snag_store *store, struct snag_model_cache *cache)
 int
 main(void)
 {
+    test_selectors();
     static const char providers_text[] =
         "[{\"base_url\":\"https://api.example.test/v1\","
         "\"models\":[{\"default_effort\":\"high\","

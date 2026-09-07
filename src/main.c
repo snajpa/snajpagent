@@ -32,7 +32,7 @@ run(int argc, char **argv)
         return 2;
     }
     if (cli.help) {
-        snag_cli_usage(STDOUT_FILENO);
+        snag_cli_help(cli.manual);
         snag_cli_free(&cli);
         return 0;
     }

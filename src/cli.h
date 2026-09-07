@@ -42,6 +42,8 @@ struct snag_cli {
     bool all;
     bool prompt_after_dashdash;
     bool help;
+    bool manual;
+    bool update_model_cache;
     bool version;
     unsigned int verbosity;
     enum snag_cli_color_mode color;
@@ -73,5 +75,6 @@ void snag_cli_free(struct snag_cli *cli);
 int snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
                   char *error, size_t error_size);
 void snag_cli_usage(int fd);
+void snag_cli_help(bool manual);
 
 #endif

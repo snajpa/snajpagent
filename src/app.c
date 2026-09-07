@@ -3926,9 +3926,14 @@ build_resume_command(const struct app_state *app, const char *program,
     for (unsigned int i = 0u; i < snag_ui_verbosity(&app->ui); ++i)
         if (append_command_literal(command, "-v") < 0)
             goto out;
-    if (app->staged_model &&
-        append_command_option(command, "-m", app->staged_model) < 0)
-        goto out;
+    if (app->staged_model) {
+        char selector[SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_MODEL_MAX + 2u];
+        const struct snag_provider_config *provider = next_provider(app);
+        if (!provider) goto out;
+        (void)snprintf(selector, sizeof(selector), "%s/%s", provider->name, app->staged_model);
+        if (append_command_option(command, "-m", selector) < 0)
+            goto out;
+    }
     if (app->staged_effort &&
         append_command_option(command, "--effort", app->staged_effort) < 0)
         goto out;
@@ -4199,6 +4204,13 @@ interactive_loop(struct app_state *app, const char *initial)
             continue;
         }
         enum snag_render_view input_view = owned ? app->ui.input_view : app->ui.view;
+        if (!*prompt && input_view == SNAG_RENDER_CHAT) {
+            free(owned);
+            owned = NULL;
+            prompt = NULL;
+            if (set_input_prompt(app, false) < 0) return 6;
+            continue;
+        }
         if (input_view == SNAG_RENDER_ROLLOUT) {
             if (snag_ui_submitted(&app->ui,
                     app->ui.label, prompt, true) < 0) {
@@ -4266,7 +4278,7 @@ interactive_loop(struct app_state *app, const char *initial)
                     return 3;
                 }
             } else {
-                const char *actual = query;
+                const char *actual = !*prompt ? "Continue." : query;
                 int turn_rc;
 
                 if (retry) {
@@ -4334,6 +4346,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     char *relocated_workspace = NULL;
     const char *new_model = NULL;
     const char *new_effort;
+    struct snag_model_selection selection = {0};
     bool signal_handlers_installed = false;
     int rc = 3;
     memset(&app, 0, sizeof(app));
@@ -4398,6 +4411,14 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         rc = 2;
         goto out;
     }
+    if (snag_store_open(&app.store, dotdir, error, sizeof(error)) < 0) {
+        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
+        goto out;
+    }
+    if (cli->update_model_cache && refresh_model_cache(&app, error, sizeof(error)) < 0) {
+        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
+        goto out;
+    }
     app.config_path = config_path;
     app.irc_file_config = config.irc;
     snag_ui_color(&app.ui, snag_cli_color(cli, config.color));
@@ -4422,17 +4443,26 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         rc = 2;
         goto out;
     }
-    if (!cli->resume || cli->model)
-        new_model = effective_model(cli->model ? cli->model : config.model);
+    new_model = effective_model(config.model);
     new_effort = cli->effort ? cli->effort : config.reasoning_effort;
-    if ((!cli->resume || cli->effort) && !resolve_effort(new_effort)) {
+    if (cli->model) {
+        char ignored[256] = {0};
+        if (!cli->update_model_cache)
+            (void)snag_model_cache_load(&app.store, &app.model_cache, ignored, sizeof(ignored));
+        if (snag_model_select(&app.model_cache, &config, cli->model,
+                snag_config_provider(&config, cli->provider), new_effort,
+                &selection, error, sizeof(error)) < 0) {
+            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
+            rc = 2;
+            goto out;
+        }
+        new_model = effective_model(selection.model);
+        new_effort = cli->effort ? cli->effort : selection.effort;
+    }
+    if ((!cli->resume || cli->effort || cli->model) && !resolve_effort(new_effort)) {
         (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
             "reasoning effort is empty, oversized, or invalid UTF-8");
         rc = 2;
-        goto out;
-    }
-    if (snag_store_open(&app.store, dotdir, error, sizeof(error)) < 0) {
-        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
         goto out;
     }
     workspace = current_workspace(error, sizeof(error));
@@ -4477,7 +4507,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
             rc = 3;
             goto out;
         }
-        resume_provider = snag_config_provider(&config,
+        resume_provider = cli->model ? selection.provider : snag_config_provider(&config,
             cli->provider ? cli->provider : app.session.default_provider);
         resume_model = cli->model ? new_model : app.session.default_model;
         if (!resume_provider) {
@@ -4488,7 +4518,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         if (!cli->execute && validate_prompt_values(&app.ui, &config,
                 resume_provider,
                 cli->model ? new_model : app.session.default_model,
-                resolve_effort(cli->effort ? cli->effort :
+                resolve_effort(cli->model || cli->effort ? new_effort :
                                app.session.default_effort)) < 0) {
             (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
                 "configured prompt cannot be rendered with the current selection");
@@ -4518,20 +4548,21 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         }
         if (cli->provider &&
             record_model_selection(&app, resume_provider->name, resume_model,
-                cli->effort ? cli->effort : app.session.default_effort,
+                cli->model || cli->effort ? new_effort : app.session.default_effort,
                 error, sizeof(error)) < 0) {
             (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
             rc = 3;
             goto out;
         }
+        app.staged_provider = !cli->provider && cli->model ? selection.provider : NULL;
         app.staged_model = cli->provider ? NULL : cli->model ? new_model : NULL;
-        app.staged_effort = cli->provider ? NULL : cli->effort;
+        app.staged_effort = cli->provider ? NULL : cli->model || cli->effort ? new_effort : NULL;
         app.turn_model = next_model(&app);
         app.turn_effort = resolve_effort(next_effort(&app));
         app.turn_provider = next_provider(&app);
     } else {
         const char *selected_workspace = cli->workspace ? cli->workspace : workspace;
-        const struct snag_provider_config *selected_provider =
+        const struct snag_provider_config *selected_provider = cli->model ? selection.provider :
             snag_config_provider(&config,
                 cli->provider ? cli->provider : config.provider[0] ? config.provider : NULL);
         if (!cli->execute && validate_prompt_values(

@@ -81,6 +81,19 @@ typedef int (*snag_model_entry_fn)(void *, size_t, const char *, const char *,
                                     const char *, const json_t *);
 int snag_model_each(const struct snag_model_cache *cache, const struct snag_config *config,
                      const char *fallback_effort, snag_model_entry_fn visit, void *opaque);
+struct snag_model_selection {
+    const struct snag_provider_config *provider;
+    char model[SNAG_CONFIG_MODEL_MAX];
+    char effort[SNAG_CONFIG_EFFORT_MAX];
+};
+/* A configured provider prefix disambiguates provider/model from model/effort. */
+int snag_model_select(const struct snag_model_cache *cache,
+                      const struct snag_config *config, const char *selector,
+                      const struct snag_provider_config *fallback_provider,
+                      const char *fallback_effort,
+                      struct snag_model_selection *selection,
+                      char *error, size_t error_size);
+
 const char *snag_model_cache_best_effort(const json_t *model,
                                         const char *fallback);
 

@@ -21,6 +21,7 @@ snajpagent
 
 Describe a task and press Enter: “Fix the empty-input bug, keep the public API
 unchanged, and run the tests.” The model can read and edit files and run commands.
+Press Enter on an empty idle rollout prompt to ask it to continue.
 
 Read its replies and scroll back normally. Tool details are hidden by default;
 `/verbose 1` shows compact activity and `/verbose 2` adds input/result previews.

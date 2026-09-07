@@ -2353,7 +2353,7 @@ def test_provider_login_and_first_run():
     env["SNAJPAGENT_TEST_LOGIN"] = "1"
     env.pop("OPENAI_API_KEY", None)
     api = root / "api"
-    command = [BINARY, "--dotdir", str(api), "-m", "vendor/model", "login",
+    command = [BINARY, "--dotdir", str(api), "-m", "openrouter/model/high", "login",
                "openrouter", "--with-api-key"]
     result = subprocess.run(command, input=b"private-test-key\n", capture_output=True,
                             env=env, timeout=10)
@@ -2379,7 +2379,8 @@ def test_provider_login_and_first_run():
                             capture_output=True, env=env, timeout=10)
     assert result.returncode == 0, result.stderr
     assert "provider = openrouter" in config.read_text()
-    assert "model = vendor/model" in config.read_text()
+    assert "model = model" in config.read_text()
+    assert "reasoning_effort = high" in config.read_text()
     assert (api / "auth" / "openai.json").exists()
     result = subprocess.run([BINARY, "--dotdir", str(api), "logout", "openrouter"],
                             capture_output=True, env=env, timeout=10)
@@ -3153,7 +3154,8 @@ def test_known_context_meter():
 def test_config_and_cli_model_passthrough():
     config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "model-passthrough.ini"
     config.write_text(
-        "[provider openai]\n[agent]\nmodel = openai/gpt-5.6\nreasoning_effort = default\n",
+        "[provider openai]\n[agent]\nmodel = openai/gpt-5.6\nreasoning_effort = default\n"
+        "[model-alias openai/future]\nmodel=vendor/future-model\n",
         encoding="utf-8",
     )
     before = session_ids()
@@ -3175,14 +3177,14 @@ def test_config_and_cli_model_passthrough():
     assert turn["data"]["config"]["effort"] == "medium"
 
     resumed = Child([
-        "--config", str(config), "-m", "vendor/future-model",
+        "--config", str(config), "-m", "openai/future",
         "--effort", "custom-effort", "--resume", session_id
     ])
-    resumed.wait(b" openai/vendor/future-model/custom-effort   ?% \xe2\x80\xba ")
+    resumed.wait(b" openai/future/custom-effort   ?% \xe2\x80\xba ")
     start = len(resumed.buf)
     resumed.send(b"/status\r")
     end = resumed.wait(
-        b"model: vendor/future-model (staged once)", start=start
+        b"model: future (staged once)", start=start
     )
     resumed.wait(PROMPT.rstrip(), start=end)
     for _ in range(2):  # Repeating /effort is a durable no-op, not a model reset.
@@ -3203,7 +3205,7 @@ def test_config_and_cli_model_passthrough():
 
     resumed_turns = [event for event in events(session_id)
                      if event["type"] == "turn_started"]
-    assert resumed_turns[-1]["data"]["config"]["model"] == "vendor/future-model"
+    assert resumed_turns[-1]["data"]["config"]["model"] == "future"
     assert resumed_turns[-1]["data"]["config"]["effort"] == "quantum"
     selection = one(events(session_id), "model_selection_changed")["data"]
     assert selection["old_model"] == selection["new_model"] == "openai/gpt-5.6"
@@ -3417,13 +3419,13 @@ def test_exit_resume_matrix():
     original_command = original.exit_now()
     assert command_arguments(original_command)[-2:] == ["--resume", staged_id]
     staged = Child([
-        "--no-color", "-m", "future/model", "--effort", "xhigh",
+        "--no-color", "-m", "openai/future", "--effort", "xhigh",
         "--resume", staged_id,
     ])
     staged.wait(PROMPT.rstrip())
     staged_command = staged.exit_now()
     staged_arguments = command_arguments(staged_command)
-    assert staged_arguments[staged_arguments.index("-m") + 1] == "future/model"
+    assert staged_arguments[staged_arguments.index("-m") + 1] == "openai/future"
     assert staged_arguments[staged_arguments.index("--effort") + 1] == "xhigh"
 
     occupied = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

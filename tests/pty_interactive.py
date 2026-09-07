@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
+import json
 import os
 import pty
 import re
 import select
 import sys
 import time
+from pathlib import Path
 
 binary = sys.argv[1]
 workspace = sys.argv[2]
@@ -36,8 +38,8 @@ def read_until(needle: bytes, timeout: float = 5.0) -> None:
 fresh_prompt = b" openai/gpt-5.5-2026-04-23/medium   0% \xe2\x80\xba "
 accounted_prompt = b" openai/gpt-5.5-2026-04-23/medium   ?% \xe2\x80\xba "
 read_until(fresh_prompt)
-os.write(fd, b"ping\r")
-read_until(b"pong")
+os.write(fd, b"\r")
+read_until(b"fixture answer")
 # A prompt redraw can occur while a response is still active.  The durable
 # terminal event is the unambiguous point at which /exit is an idle command.
 read_until(b"turn_completed synced")
@@ -85,5 +87,10 @@ read_until(b"You can resume this session")
 _, status = os.waitpid(pid, 0)
 if os.waitstatus_to_exitcode(status) != 0:
     raise SystemExit(f"explicit exit status {status}: {bytes(buf)!r}")
+# Empty Enter must admit a direct continuation and preserve ordinary turn history.
+logs = list(Path(dotdir, "sessions").glob("*/events.jsonl"))
+assert any(json.loads(line).get("type") == "turn_started" and
+           json.loads(line)["data"]["text"] == "Continue."
+           for path in logs for line in path.read_text().splitlines())
 if os.environ.get("TERM") == "dumb" and b"\x1b" in buf:
     raise SystemExit(f"TERM=dumb received ANSI: {bytes(buf)!r}")

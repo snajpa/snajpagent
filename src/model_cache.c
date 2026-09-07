@@ -693,6 +693,67 @@ snag_model_metadata(const struct snag_model_cache *cache,
     return snag_model_cache_find(cache, provider->name, snag_config_model_upstream(provider, model));
 }
 
+int
+snag_model_select(const struct snag_model_cache *cache,
+                  const struct snag_config *config, const char *selector,
+                  const struct snag_provider_config *fallback_provider,
+                  const char *fallback_effort,
+                  struct snag_model_selection *selection,
+                  char *error, size_t error_size)
+{
+    char copy[SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_PROVIDER_NAME_MAX +
+              SNAG_CONFIG_EFFORT_MAX + 2u];
+    char *parts[3], *model;
+    const char *effort = NULL;
+    size_t count = 1u;
+    const struct snag_provider_config *provider = fallback_provider;
+
+    if (!selector || !snag_strcpy(copy, sizeof(copy), selector))
+        goto invalid;
+    parts[0] = copy;
+    for (char *p = copy; *p; ++p) {
+        if (*p != '/') continue;
+        if (count == 3u) goto invalid;
+        *p = '\0';
+        parts[count++] = p + 1u;
+    }
+    for (size_t i = 0u; i < count; ++i)
+        if (!parts[i][0]) goto invalid;
+    model = parts[0];
+    if (count == 3u || (count == 2u && (snag_config_provider(config, parts[0]) ||
+            (fallback_provider && !strcmp(fallback_provider->name, parts[0]))))) {
+        provider = fallback_provider && !strcmp(fallback_provider->name, parts[0]) ?
+            fallback_provider : snag_config_provider(config, parts[0]);
+        model = parts[1];
+        if (count == 3u) effort = parts[2];
+    } else if (count == 2u) {
+        effort = parts[1];
+    }
+    if (!provider) {
+        snag_errorf(error, error_size, "model selector names an unconfigured provider");
+        return -1;
+    }
+    if (!effort) {
+        const json_t *metadata = snag_model_metadata(cache, provider, model);
+        const char *first = json_string_value(json_array_get(
+            json_object_get(metadata, "efforts"), 0u));
+        if (!first) first = json_string_value(json_object_get(metadata, "default_effort"));
+        effort = first ? first : fallback_effort;
+    }
+    if (!effort || !*effort ||
+        !snag_strcpy(selection->model, sizeof(selection->model), model) ||
+        !snag_strcpy(selection->effort, sizeof(selection->effort), effort) ||
+        !snag_utf8_valid((const unsigned char *)model, strlen(model), true) ||
+        !snag_utf8_valid((const unsigned char *)effort, strlen(effort), true))
+        goto invalid;
+    selection->provider = provider;
+    return 0;
+invalid:
+    snag_errorf(error, error_size,
+        "invalid model selector; use [provider/]model[/effort] with nonempty, bounded components");
+    return -1;
+}
+
 static int
 visit_model(const json_t *metadata, const char *provider, const char *model,
              const char *fallback, size_t *index, snag_model_entry_fn visit, void *opaque)

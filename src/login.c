@@ -6,6 +6,7 @@
 #include "base.h"
 #include "config.h"
 #include "json.h"
+#include "model_cache.h"
 #include "provider.h"
 #include "store.h"
 #include "term_host.h"
@@ -264,14 +265,22 @@ static int
 choose_model(const struct snag_cli *cli, const struct snag_config *config,
               const struct snag_provider_config *provider,
               struct snag_auth_tokens *tokens, char model[SNAG_CONFIG_MODEL_MAX],
-              char *error, size_t error_size)
+              char effort[SNAG_CONFIG_EFFORT_MAX], char *error, size_t error_size)
 {
     json_t *models = NULL;
     char answer[SNAG_CONFIG_MODEL_MAX];
     int rc = -1;
     if (cli->model) {
-        if (!plain_value(cli->model) || !snag_strcpy(model, SNAG_CONFIG_MODEL_MAX, cli->model))
+        struct snag_model_selection selection;
+        if (snag_model_select(NULL, config, cli->model, provider,
+                config->reasoning_effort, &selection, error, error_size) < 0)
             return -1;
+        if (strcmp(selection.provider->name, provider->name)) {
+            snag_errorf(error, error_size, "model selector must use the login provider");
+            return -1;
+        }
+        (void)snag_strcpy(model, SNAG_CONFIG_MODEL_MAX, selection.model);
+        (void)snag_strcpy(effort, SNAG_CONFIG_EFFORT_MAX, selection.effort);
         return 0;
     }
     if (read_line("Fetch this provider's model list now? [Y/n]: ", answer,
@@ -361,6 +370,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
     snag_file_info st;
     char error[256] = {0}, rollback_error[256] = {0};
     char model[SNAG_CONFIG_MODEL_MAX] = {0};
+    char effort[SNAG_CONFIG_EFFORT_MAX] = {0};
     char *dotdir = NULL, *path = NULL;
     bool first, existing = false, signals = false, credentials_written = false;
     bool setup = cli->auth_command == SNAG_CLI_AUTH_NONE;
@@ -372,7 +382,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
     if (setup && !getenv("SNAJPAGENT_TEST_LOGIN"))
         return 0;
 #endif
-    if (setup && (cli->execute || cli->resume || cli->list || cli->config_path || cli->provider ||
+    if (setup && (cli->update_model_cache || cli->execute || cli->resume || cli->list || cli->config_path || cli->provider ||
                    !snag_isatty(STDIN_FILENO) || !snag_isatty(STDERR_FILENO)))
         return 0;
     snag_config_init(&config);
@@ -437,7 +447,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
         goto out;
     if (acquire_login(cli, &provider, path, root_fd, &tokens, error, sizeof(error)) < 0)
         goto out;
-    if (first && choose_model(cli, &config, &provider, &tokens, model, error, sizeof(error)) < 0)
+    if (first && choose_model(cli, &config, &provider, &tokens, model, effort, error, sizeof(error)) < 0)
         goto out;
     if (cancelled)
         goto out;
@@ -450,7 +460,7 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
         credentials_written = true;
     }
     if (snag_config_save_provider(path, cli->config_path == NULL, &provider,
-                                  first ? model : NULL, cli->effort,
+                                  first ? model : NULL, cli->effort ? cli->effort : effort[0] ? effort : NULL,
                                   error, sizeof(error)) < 0) {
         if (credentials_written && snag_auth_restore(store.root_fd, &provider, &tokens,
                 &previous, rollback_error, sizeof(rollback_error)) < 0)

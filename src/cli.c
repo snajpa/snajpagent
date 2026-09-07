@@ -9,6 +9,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifndef _WIN32
+#include <fcntl.h>
+#include <sys/wait.h>
+#endif
 
 void
 snag_cli_init(struct snag_cli *cli)
@@ -335,7 +339,7 @@ parse_auth_command(struct snag_cli *cli, int argc, char **argv, int first,
         if (argv[i][0] != '-' && !cli->auth_provider)
             goto invalid;
     }
-    if (cli->list || cli->last || cli->all || cli->provider || cli->irc_listen || cli->irc_client_count ||
+    if (cli->update_model_cache || cli->list || cli->last || cli->all || cli->provider || cli->irc_listen || cli->irc_client_count ||
         cli->doc_instructions.count ||
         cli->irc_no_listen || cli->irc_no_client ||
         cli->irc_model_nick || cli->irc_operator_nick || cli->irc_room_name ||
@@ -395,7 +399,15 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
             positional = i;
             break;
         }
-        if (strcmp(arg, "--last") == 0) {
+        if (strcmp(arg, "--help") == 0) {
+            cli->help = cli->manual = true;
+        } else if (strcmp(arg, "--update-model-cache") == 0) {
+            if (cli->update_model_cache) {
+                snag_errorf(error, error_size, "duplicate --update-model-cache option");
+                return -1;
+            }
+            cli->update_model_cache = true;
+        } else if (strcmp(arg, "--last") == 0) {
             if (cli->last) { snag_errorf(error, error_size, "duplicate --last option"); return -1; }
             cli->last = true;
         } else if (strcmp(arg, "--all") == 0) {
@@ -478,8 +490,8 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
     }
     if ((cli->help || cli->version) &&
         (argc != 2 ||
-         (strcmp(argv[1], "-h") != 0 && strcmp(argv[1], "-V") != 0))) {
-        snag_errorf(error, error_size, "-h and -V must stand alone");
+         (strcmp(argv[1], "-h") != 0 && strcmp(argv[1], "--help") != 0 && strcmp(argv[1], "-V") != 0))) {
+        snag_errorf(error, error_size, "-h, --help and -V must stand alone");
         return -1;
     }
     if (cli->help || cli->version)
@@ -499,7 +511,7 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
                       cli->irc_client_count || cli->irc_model_nick ||
                       cli->irc_operator_nick || cli->irc_room_name)) {
         snag_errorf(error, error_size,
-                  "-l accepts only --config, --dotdir, --all, and color options");
+                  "-l accepts only --config, --dotdir, --all, --update-model-cache, and presentation options");
         return -1;
     }
     if (cli->execute && (cli->irc_listen ||
@@ -524,7 +536,7 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
         return -1;
     }
     if (cli->model && !bounded_preference(cli->model,
-                                          SNAG_CONFIG_MODEL_MAX)) {
+                                          SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_EFFORT_MAX + 2u)) {
         snag_errorf(error, error_size,
                   "model exceeds the supported structural bounds");
         return -1;
@@ -615,13 +627,14 @@ snag_cli_usage(int fd)
         "      --config FILE            explicit configuration file\n"
         "      --provider NAME          select a configured provider (also on resume)\n"
         "      --effort LEVEL           reasoning effort override\n"
+        "      --update-model-cache     refresh the provider model catalog\n"
         "      --color[=WHEN]            auto, always, or never\n"
         "      --no-color               alias for --color=never\n"
         "      --markdown               render model Markdown (default)\n"
         "      --no-markdown            show model Markdown literally\n"
         "  -C DIR                       workspace (or resume relocation)\n"
         "  -d DIR                       additional working docs with AGENTS.md; repeatable\n"
-        "  -m MODEL                     next-turn model override\n"
+        "  -m [PROVIDER/]MODEL[/EFFORT]  model for next turn (start or resume)\n"
         "  -v                           exact detail level: repeat 1 through 6 times\n"
         "                               1 tools; 2 previews; 3 full tools;\n"
         "                               4 debug; 5 protocol; 6 wire (default 0)\n"
@@ -629,7 +642,38 @@ snag_cli_usage(int fd)
         "      --all                    include sessions from all workspaces\n"
         "  -e                           one-shot execution (prompt or stdin)\n"
         "  -l                           list sessions\n"
-        "  -h                           show this help\n"
+        "  -h                           show short help\n"
+        "      --help                   open the manual (short help if unavailable)\n"
         "  -V                           show version\n";
     (void)snag_write_full(fd, text, sizeof(text) - 1u);
+}
+
+void
+snag_cli_help(bool manual)
+{
+#ifndef _WIN32
+    if (manual) {
+        int status;
+        pid_t child = fork(), got;
+        if (child == 0) {
+            int fd = open("/dev/null", O_WRONLY);
+            if (fd >= 0) {
+                (void)dup2(fd, STDERR_FILENO);
+                if (fd != STDERR_FILENO) (void)close(fd);
+            }
+            execlp("man", "man", "1", SNAJPAGENT_NAME, (char *)NULL);
+            _exit(127);
+        }
+        if (child > 0) {
+            do {
+                got = waitpid(child, &status, 0);
+            } while (got < 0 && errno == EINTR);
+            if (got == child && WIFEXITED(status) && WEXITSTATUS(status) == 0)
+                return;
+        }
+    }
+#else
+    (void)manual;
+#endif
+    snag_cli_usage(STDOUT_FILENO);
 }

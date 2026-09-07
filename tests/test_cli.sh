@@ -105,6 +105,30 @@ grep -q -- '--no-listen' "$root/help"
 grep -q -- '--no-client' "$root/help"
 grep -q "^usage: $SNAJPAGENT_TEST_NAME " "$root/help"
 
+# Short help stays short; long help invokes man directly and falls back on failure.
+grep -Fq -- '-m [PROVIDER/]MODEL[/EFFORT]' "$root/help"
+grep -Fq -- 'model for next turn (start or resume)' "$root/help"
+grep -Fq -- '--update-model-cache' "$root/help"
+! grep -q -- '-M ' "$root/help"
+mkdir "$root/man-bin"
+cat >"$root/man-bin/man" <<'MAN'
+#!/bin/sh
+printf 'manual %s %s\n' "$1" "$2"
+MAN
+chmod +x "$root/man-bin/man"
+PATH="$root/man-bin:$PATH" $bin --help >"$root/manual-help" 2>"$root/manual-help.err"
+grep -qx "manual 1 $SNAJPAGENT_TEST_NAME" "$root/manual-help"
+[ ! -s "$root/manual-help.err" ]
+PATH="$root/man-bin:$PATH" $bin -h >"$root/short-help"
+cmp "$root/help" "$root/short-help"
+printf '#!/bin/sh\necho unavailable >&2\nexit 1\n' >"$root/man-bin/man"
+PATH="$root/man-bin:$PATH" $bin --help >"$root/manual-help" 2>"$root/manual-help.err"
+cmp "$root/help" "$root/manual-help"
+[ ! -s "$root/manual-help.err" ]
+PATH="$root/absent-bin" $bin --help >"$root/manual-help" 2>"$root/manual-help.err"
+cmp "$root/help" "$root/manual-help"
+[ ! -s "$root/manual-help.err" ]
+
 for args in \
     '-s --no-listen' \
     '--no-listen -s' \
@@ -730,6 +754,74 @@ for signal_case in 'INT 130' 'HUP 129' 'TERM 143'; do
     [ "$signal_status" -eq "$expected_status" ]
     [ "$(resume_count "$root/signal-$signal_name.err")" -eq 1 ]
 done
+
+# Selector defaults, cache-before-selection ordering, and one-turn resume scope.
+python3 - "$bin" "$root" <<'PYSELECTOR'
+import json, os, subprocess, sys
+from pathlib import Path
+binary, root = sys.argv[1], Path(sys.argv[2])
+state = root / "selector-state"
+state.mkdir(mode=0o700)
+(state / "config.ini").write_text("""[provider first]
+[provider second]
+[agent]
+provider=second
+model=configured
+reasoning_effort=medium
+[model-alias first/local]
+model=gpt-5.6-terra
+""")
+def run(*args, ok=True, env=None):
+    result = subprocess.run([binary, "--dotdir", str(state), *args],
+                            text=True, capture_output=True, env=env)
+    assert (result.returncode == 0) == ok, (args, result.returncode, result.stderr)
+    return result
+
+def turns():
+    return [e["data"] for p in (state / "sessions").glob("*/events.jsonl")
+            for line in p.read_text().splitlines()
+            if (e := json.loads(line))["type"] == "turn_started"]
+
+# Refresh works without a turn and regardless of the -m position.
+run("--update-model-cache", "-l")
+assert not turns()
+for spec, provider, model, effort in [
+    ("gpt-5.6-terra", "first", "gpt-5.6-terra", "low"),
+    ("second/gpt-5.6-terra", "second", "gpt-5.6-terra", "low"),
+    ("gpt-5.6-terra/high", "first", "gpt-5.6-terra", "high"),
+    ("second/gpt-5.6-terra/custom", "second", "gpt-5.6-terra", "custom"),
+    ("local", "first", "local", "low"),
+    ("uncached", "first", "uncached", "medium"),
+]:
+    before = {t["turn_id"] for t in turns()}
+    run("-m", spec, "--update-model-cache", "-e", "--", "ping")
+    turn, = [t for t in turns() if t["turn_id"] not in before]
+    assert tuple(turn["config"][k] for k in ("provider", "model", "effort")) == (provider, model, effort), turn
+
+# Explicit effort remains an override; resume falls back to the saved selection.
+seed = root / "selector-resume"
+seed.mkdir(mode=0o700)
+(seed / "config.ini").write_text((state / "config.ini").read_text())
+state = seed
+run("-e", "--", "ping")
+session, = (state / "sessions").iterdir()
+run("--update-model-cache", "-m", "local", "--effort", "high", "-e", "--resume", session.name, "--", "ping")
+run("-e", "--resume", session.name, "--", "ping")
+assert [tuple(t["config"][k] for k in ("provider", "model", "effort")) for t in turns()] == [
+    ("second", "configured", "medium"), ("first", "local", "high"), ("second", "configured", "medium")]
+old_cache = (state / "models.json").read_bytes()
+before = len(turns())
+failure = dict(os.environ, SNAJPAGENT_FIXTURE_MODEL_FAILURE="second")
+result = run("-m", "bad//", "--update-model-cache", "-e", "--", "ping", ok=False, env=failure)
+assert "cannot refresh provider second" in result.stderr
+assert (state / "models.json").read_bytes() == old_cache
+assert len(turns()) == before
+for spec in ("", "m/", "/m", "first//high", "first/m/high/extra", "missing/m/high"):
+    run("-m", spec, "-e", "--", "ping", ok=False)
+run("-M", "unused", "-e", "--", "ping", ok=False)
+assert len(turns()) == before
+print("CLI selectors and refresh ordering: ok")
+PYSELECTOR
 
 # Resume command-line settings are consumed by one admitted turn only.
 override_state="$root/override-state"
