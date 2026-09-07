@@ -3392,12 +3392,14 @@ def run_provider_retry_input_cases(binary, root, provider, environment):
         peer = None
         try:
             terminal.wait(f"retryop@{MACHINE_HOSTNAME} :")
+            terminal.submit("retry fixture setup")
+            wait_event_count(terminal.dotdir, "session_created", 1)
             peer = socket.create_connection(("127.0.0.1", int(endpoint.rsplit(":", 1)[1])))
             peer.sendall(b"NICK retrypeer\r\nUSER retrypeer 0 * :human\r\nJOIN #lab\r\n")
             terminal.wait("retrypeer joined")
             wait_irc_idle([terminal])
             terminal.submit("/rollout")
-            terminal.wait("host-model/medium   0% ›")
+            terminal.wait("host-model/medium   ?% ›")
             terminal.submit("retry-original")
             assert arrived.wait(5.0)
             if mode not in ("before", "zero", "healthy"):
@@ -3509,12 +3511,14 @@ def run_provider_clarification_cases(binary, root, provider, environment):
         peer = None
         try:
             terminal.wait(f"clarifyop@{MACHINE_HOSTNAME} :")
+            terminal.submit("clarification fixture setup")
+            wait_event_count(terminal.dotdir, "session_created", 1)
             peer = socket.create_connection(("127.0.0.1", int(endpoint.rsplit(":", 1)[1])))
             peer.sendall(b"NICK clarifypeer\r\nUSER clarifypeer 0 * :human\r\nJOIN #lab\r\n")
             terminal.wait("clarifypeer joined")
             wait_irc_idle([terminal])
             terminal.submit("/rollout")
-            terminal.wait("host-model/medium   0% ›")
+            terminal.wait("host-model/medium   ?% ›")
             terminal.submit(original)
             if mode in ("steer", "chat", "queue"):
                 assert arrived.wait(5.0)
