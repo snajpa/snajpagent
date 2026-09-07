@@ -850,6 +850,10 @@ wait_pair_event(struct snag_irc *server, struct snag_irc *client,
         else
             tick(client, 1u);
     }
+    if (capture->events[kind] < count)
+        (void)fprintf(stderr, "wait_pair_event: kind=%u expected=%u received=%u messages=%u notices=%u history=%u\n",
+            (unsigned int)kind, count, capture->events[kind], capture->events[SNAG_IRC_MESSAGE],
+            capture->events[SNAG_IRC_NOTICE], capture->events[SNAG_IRC_HISTORY_READY]);
     assert(capture->events[kind] >= count);
 }
 
