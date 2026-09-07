@@ -196,11 +196,11 @@ in {
           'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
           'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
           'CFLAGS=-std=c11 ${cflags} -flto -ffunction-sections -fdata-sections -Wall -Wextra -Wpedantic -Werror'
-          'LDFLAGS=${ldflags} -flto -Wl,--gc-sections'
+          'LDFLAGS=--ld-path=${llvm.lld}/bin/ld.lld -flto -Wl,--gc-sections'
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
-          "LDLIBS=$(pkg-config --static --libs jansson)"
+          "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson)"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
-          "CURL_LIBS=$(pkg-config --static --libs libcurl) -lutil"
+          "CURL_LIBS=$(pkg-config --static --libs libcurl) -lutil -Wl,-Bdynamic"
         )
       '';
       installPhase = ''
