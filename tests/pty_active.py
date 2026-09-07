@@ -517,7 +517,7 @@ def test_prompt_clock_lifetime():
         # Empty Tab changes views, not the underlying composer capture.
         start = len(child.buf)
         child.send(b"\t")
-        idle = b"@" + original + "   ?% › ".encode()
+        idle = b"@" + original + "   0% › ".encode()
         child.wait(idle, start=start)
         child.send(b"clock-draft")
         child.drain()
@@ -535,7 +535,7 @@ def test_prompt_clock_lifetime():
         start = len(child.buf)
         child.send(b"\x03")
         cancelled = child.wait(b"^C\r\n", start=start)
-        child.wait("   ?% › ".encode(), start=cancelled)
+        child.wait("   0% › ".encode(), start=cancelled)
         replacement = latest_clock()
         assert replacement != original, bytes(child.buf[start:])
         child.drain(1.1)
