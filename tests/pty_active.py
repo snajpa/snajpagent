@@ -4352,7 +4352,8 @@ def test_editor_during_render_flood():
             while b"live-draft" not in re.sub(
                     rb"\x1b\[[0-?]*[ -/]*[@-~]| \x08|\r", b"", child.buf[start:]):
                 remaining = deadline - time.monotonic()
-                assert remaining > 0, "rendering stopped local editing"
+                assert remaining > 0, (mode, "rendering stopped local editing",
+                                       bytes(child.buf[start:]))
                 child.read_once(remaining)
             end = child.wait(b"flood-end", start=start)
             child.wait_idle_prompt(start=end)
