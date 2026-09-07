@@ -143,6 +143,49 @@ out:
 }
 
 static int
+verify_pipe_pair(struct child_pipe *pipe, bool input, HANDLE other)
+{
+    unsigned char expected[16], received[16];
+    DWORD count;
+    if (snag_random_bytes(expected, sizeof(expected)) < 0)
+        return -1;
+    if (input)
+        memcpy(pipe->bytes, expected, sizeof(expected));
+    else if (!WriteFile(other, expected, sizeof(expected), &count, NULL))
+        return child_error(GetLastError());
+    else if (count != sizeof(expected)) {
+        errno = EIO;
+        return -1;
+    }
+    /* Both endpoints are owned and empty; the challenge fits their quota. */
+    pipe_begin(pipe, input, sizeof(expected));
+    if (pipe->pending && WaitForSingleObject(pipe->io.hEvent, 1000u) != WAIT_OBJECT_0) {
+        errno = ETIMEDOUT;
+        return -1;
+    }
+    if (!pipe_done(pipe) || pipe->error || pipe->count != sizeof(expected))
+        return child_error(pipe->error ? pipe->error : ERROR_INVALID_DATA);
+    if (input && !ReadFile(other, received, sizeof(received), &count, NULL))
+        return child_error(GetLastError());
+    if (input && count != sizeof(received)) {
+        errno = EIO;
+        return -1;
+    }
+    const unsigned char *actual = input ? received : pipe->bytes;
+    unsigned int difference = 0;
+    for (size_t i = 0; i < sizeof(expected); ++i)
+        difference |= actual[i] ^ expected[i];
+    if (difference) {
+        errno = EACCES;
+        return -1;
+    }
+    (void)ResetEvent(pipe->io.hEvent);
+    pipe->ready = false;
+    pipe->count = 0;
+    return 0;
+}
+
+static int
 create_pipe(struct child_pipe *pipe, bool input, HANDLE *other)
 {
     char id[SNAG_ID_HEX_LEN + 1u];
@@ -170,15 +213,18 @@ create_pipe(struct child_pipe *pipe, bool input, HANDLE *other)
         *other = NULL;
         return child_error(GetLastError());
     }
-    DWORD bytes, pid;
-    if ((!connected && !GetOverlappedResult(pipe->handle, &pipe->io, &bytes, TRUE)) ||
-        !GetNamedPipeClientProcessId(pipe->handle, &pid) || pid != GetCurrentProcessId()) {
+    DWORD bytes;
+    if (!connected && !GetOverlappedResult(pipe->handle, &pipe->io, &bytes, TRUE))
+        return child_error(GetLastError());
+    pipe->pending = false;
+#if _WIN32_WINNT >= 0x0600
+    DWORD pid;
+    if (!GetNamedPipeClientProcessId(pipe->handle, &pid) || pid != GetCurrentProcessId()) {
         errno = EACCES;
         return -1;
     }
-    (void)ResetEvent(pipe->io.hEvent);
-    pipe->pending = false;
-    return 0;
+#endif
+    return verify_pipe_pair(pipe, input, *other);
 }
 
 static void
