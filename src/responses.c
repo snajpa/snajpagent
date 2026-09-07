@@ -615,13 +615,12 @@ handle_output_item(struct snag_responses_stream *stream, const json_t *root,
 
 static int
 handle_content_part(struct snag_responses_stream *stream, const json_t *root,
-                    bool complete)
+                    enum snag_wire_part_kind kind, bool complete)
 {
     const char *item_id = snag_json_string(root, "item_id");
     size_t output_index;
     size_t content_index;
     struct snag_wire_item *item;
-    json_t *part = json_object_get(root, "part");
 
     if (json_index(stream, root, "output_index", SNAG_MAX_RESPONSE_ITEMS,
                    &output_index) < 0 ||
@@ -631,29 +630,11 @@ handle_content_part(struct snag_responses_stream *stream, const json_t *root,
     item = find_item(stream, output_index, item_id, SNAG_WIRE_ITEM_MESSAGE);
     if (!item)
         return -1;
-    return part_snapshot(stream, output_index, item, content_index,
-                         part, complete);
-}
-
-static int
-handle_public_text(struct snag_responses_stream *stream, const json_t *root,
-                   enum snag_wire_part_kind kind, bool complete)
-{
-    const char *item_id = snag_json_string(root, "item_id");
+    if (kind == SNAG_WIRE_PART_NONE)
+        return part_snapshot(stream, output_index, item, content_index,
+                             json_object_get(root, "part"), complete);
     const char *text = snag_json_string(root, !complete ? "delta" :
         kind == SNAG_WIRE_PART_REFUSAL ? "refusal" : "text");
-    size_t output_index;
-    size_t content_index;
-    struct snag_wire_item *item;
-
-    if (json_index(stream, root, "output_index", SNAG_MAX_RESPONSE_ITEMS,
-                   &output_index) < 0 ||
-        json_index(stream, root, "content_index", SNAG_MAX_RESPONSE_PARTS,
-                   &content_index) < 0)
-        return -1;
-    item = find_item(stream, output_index, item_id, SNAG_WIRE_ITEM_MESSAGE);
-    if (!item)
-        return -1;
     return reconcile_part(stream, output_index, item, content_index, kind,
                           text, !complete, complete);
 }
@@ -792,17 +773,17 @@ dispatch_event(struct snag_responses_stream *stream, const char *type,
     if (strcmp(type, "response.output_item.done") == 0)
         return handle_output_item(stream, root, true);
     if (strcmp(type, "response.content_part.added") == 0)
-        return handle_content_part(stream, root, false);
+        return handle_content_part(stream, root, SNAG_WIRE_PART_NONE, false);
     if (strcmp(type, "response.content_part.done") == 0)
-        return handle_content_part(stream, root, true);
+        return handle_content_part(stream, root, SNAG_WIRE_PART_NONE, true);
     if (strcmp(type, "response.output_text.delta") == 0)
-        return handle_public_text(stream, root, SNAG_WIRE_PART_TEXT, false);
+        return handle_content_part(stream, root, SNAG_WIRE_PART_TEXT, false);
     if (strcmp(type, "response.output_text.done") == 0)
-        return handle_public_text(stream, root, SNAG_WIRE_PART_TEXT, true);
+        return handle_content_part(stream, root, SNAG_WIRE_PART_TEXT, true);
     if (strcmp(type, "response.refusal.delta") == 0)
-        return handle_public_text(stream, root, SNAG_WIRE_PART_REFUSAL, false);
+        return handle_content_part(stream, root, SNAG_WIRE_PART_REFUSAL, false);
     if (strcmp(type, "response.refusal.done") == 0)
-        return handle_public_text(stream, root, SNAG_WIRE_PART_REFUSAL, true);
+        return handle_content_part(stream, root, SNAG_WIRE_PART_REFUSAL, true);
     if (strcmp(type, "response.function_call_arguments.delta") == 0)
         return handle_arguments(stream, root, false);
     if (strcmp(type, "response.function_call_arguments.done") == 0)
