@@ -99,10 +99,12 @@ let
     "-DZSTD_BUILD_SHARED=OFF" "-DZSTD_BUILD_STATIC=ON"
     "-DZSTD_BUILD_PROGRAMS=OFF" "-DZSTD_BUILD_TESTS=OFF"
   ] []).overrideAttrs (_: { cmakeDir = "../build/cmake"; });
-  cares = cmakeLibrary windows.c-ares ([
+  cares = (cmakeLibrary windows.c-ares ([
     "-DCARES_SHARED=OFF" "-DCARES_STATIC=ON"
     "-DCARES_BUILD_TOOLS=OFF" "-DCARES_BUILD_TESTS=OFF"
-  ] ++ pkgs.lib.optional legacy "-DCARES_THREADS=OFF") [];
+  ] ++ pkgs.lib.optional legacy "-DCARES_THREADS=OFF") []).overrideAttrs (old: {
+    patches = (old.patches or []) ++ pkgs.lib.optional legacy ./cares-legacy-windows.patch;
+  });
   nghttp2 = (cmakeLibrary windows.nghttp2 [
     "-DENABLE_LIB_ONLY=ON" "-DBUILD_STATIC_LIBS=ON" "-DENABLE_DOC=OFF"
   ] []).overrideAttrs (_: {

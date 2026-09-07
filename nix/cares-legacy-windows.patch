@@ -1,0 +1,236 @@
+SPDX-License-Identifier: MIT
+
+Windows 2000 API fallbacks for c-ares 1.34.6. Upstream MIT terms retained.
+
+--- a/src/lib/ares_sysconfig_win.c
++++ b/src/lib/ares_sysconfig_win.c
+@@ -297,6 +297,38 @@
+ #  define IPAA_INITIAL_BUF_SZ 15 * 1024
+ #  define IPAA_MAX_TRIES      3
+ 
++#  if _WIN32_WINNT < 0x0501
++static ares_bool_t get_DNS_Windows2000(char **outptr)
++{
++  ULONG size = sizeof(FIXED_INFO);
++  FIXED_INFO *info = NULL;
++  ULONG res = ERROR_BUFFER_OVERFLOW;
++  int tries;
++  *outptr = NULL;
++  for (tries = 0; tries < IPAA_MAX_TRIES && res == ERROR_BUFFER_OVERFLOW; tries++) {
++    FIXED_INFO *next;
++    if (size > 1024 * 1024)
++      break;
++    next = ares_realloc(info, size);
++    if (!next)
++      break;
++    info = next;
++    res = GetNetworkParams(info, &size);
++  }
++  if (res == ERROR_SUCCESS) {
++    IP_ADDR_STRING *dns;
++    for (dns = &info->DnsServerList; dns; dns = dns->Next) {
++      struct in_addr address;
++      if (ares_inet_pton(AF_INET, dns->IpAddress.String, &address) == 1 &&
++          address.s_addr != INADDR_ANY && address.s_addr != INADDR_NONE)
++        commajoin(outptr, dns->IpAddress.String);
++    }
++  }
++  ares_free(info);
++  return *outptr != NULL ? ARES_TRUE : ARES_FALSE;
++}
++#  endif
++
+ static ares_bool_t get_DNS_Windows(char **outptr)
+ {
+   IP_ADAPTER_DNS_SERVER_ADDRESS *ipaDNSAddr;
+@@ -322,6 +354,19 @@
+     struct sockaddr_in6 *sa6;
+   } namesrvr;
+ 
++  typedef ULONG (WINAPI *adapter_query)(ULONG, ULONG, PVOID,
++                                        PIP_ADAPTER_ADDRESSES, PULONG);
++#  if _WIN32_WINNT < 0x0501
++  adapter_query query;
++  HMODULE helper = GetModuleHandleW(L"iphlpapi.dll");
++  FARPROC function = helper ? GetProcAddress(helper, "GetAdaptersAddresses") : NULL;
++  if (!function)
++    return get_DNS_Windows2000(outptr);
++  memcpy(&query, &function, sizeof(query));
++#  else
++  adapter_query query = GetAdaptersAddresses;
++#  endif
++
+   *outptr = NULL;
+ 
+   ipaa = ares_malloc(Bufsz);
+@@ -341,7 +386,7 @@
+   }
+ 
+   /* Usually this call succeeds with initial buffer size */
+-  res = GetAdaptersAddresses(AF_UNSPEC, AddrFlags, NULL, ipaa, &ReqBufsz);
++  res = query(AF_UNSPEC, AddrFlags, NULL, ipaa, &ReqBufsz);
+   if ((res != ERROR_BUFFER_OVERFLOW) && (res != ERROR_SUCCESS)) {
+     goto done;
+   }
+@@ -355,7 +400,7 @@
+       Bufsz = ReqBufsz;
+       ipaa  = newipaa;
+     }
+-    res = GetAdaptersAddresses(AF_UNSPEC, AddrFlags, NULL, ipaa, &ReqBufsz);
++    res = query(AF_UNSPEC, AddrFlags, NULL, ipaa, &ReqBufsz);
+     if (res == ERROR_SUCCESS) {
+       break;
+     }
+--- a/src/lib/util/ares_iface_ips.c
++++ b/src/lib/util/ares_iface_ips.c
+@@ -344,6 +344,70 @@
+   return ARES_FALSE;
+ }
+ 
++#  if _WIN32_WINNT < 0x0501
++static ares_status_t ares_iface_ips_windows2000(ares_iface_ips_t *ips,
++                                                const char *name)
++{
++  ULONG size = sizeof(IP_ADAPTER_INFO), res = ERROR_BUFFER_OVERFLOW;
++  IP_ADAPTER_INFO *adapters = NULL, *adapter;
++  ares_status_t status = ARES_EFILE;
++  int tries;
++  for (tries = 0; tries < 3 && res == ERROR_BUFFER_OVERFLOW; tries++) {
++    IP_ADAPTER_INFO *next;
++    if (!size || size > 1024 * 1024)
++      goto done;
++    next = ares_realloc(adapters, size);
++    if (!next) {
++      status = ARES_ENOMEM;
++      goto done;
++    }
++    adapters = next;
++    res = GetAdaptersInfo(adapters, &size);
++  }
++  if (res == ERROR_NO_DATA) {
++    status = ARES_SUCCESS;
++    goto done;
++  }
++  if (res != ERROR_SUCCESS)
++    goto done;
++  status = ARES_SUCCESS;
++  for (adapter = adapters; adapter; adapter = adapter->Next) {
++    IP_ADDR_STRING *entry;
++    MIB_IFROW row;
++    ares_iface_ip_flags_t flags = 0;
++    if (!name_match(name, adapter->AdapterName, adapter->Index))
++      continue;
++    memset(&row, 0, sizeof(row));
++    row.dwIndex = adapter->Index;
++    if (GetIfEntry(&row) == NO_ERROR &&
++        row.dwOperStatus != MIB_IF_OPER_STATUS_OPERATIONAL)
++      flags |= ARES_IFACE_IP_OFFLINE;
++    if (adapter->Type == IF_TYPE_SOFTWARE_LOOPBACK)
++      flags |= ARES_IFACE_IP_LOOPBACK;
++    for (entry = &adapter->IpAddressList; entry; entry = entry->Next) {
++      struct ares_addr addr;
++      struct in_addr mask;
++      unsigned char prefix = 0;
++      size_t i;
++      addr.family = AF_INET;
++      if (ares_inet_pton(AF_INET, entry->IpAddress.String, &addr.addr.addr4) != 1 ||
++          addr.addr.addr4.s_addr == INADDR_ANY ||
++          ares_inet_pton(AF_INET, entry->IpMask.String, &mask) != 1)
++        continue;
++      for (i = 0; i < sizeof(mask); i++)
++        prefix = (unsigned char)(prefix + ares_count_bits_u8(((unsigned char *)&mask)[i]));
++      status = ares_iface_ips_add(ips, flags, adapter->AdapterName, &addr,
++                                   prefix, adapter->Index);
++      if (status != ARES_SUCCESS)
++        goto done;
++    }
++  }
++done:
++  ares_free(adapters);
++  return status;
++}
++#  endif
++
+ static ares_status_t ares_iface_ips_enumerate(ares_iface_ips_t *ips,
+                                               const char       *name)
+ {
+@@ -354,8 +418,21 @@
+   IP_ADAPTER_ADDRESSES *address   = NULL;
+   ares_status_t         status    = ARES_SUCCESS;
+ 
++  typedef ULONG (WINAPI *adapter_query)(ULONG, ULONG, PVOID,
++                                        PIP_ADAPTER_ADDRESSES, PULONG);
++#  if _WIN32_WINNT < 0x0501
++  adapter_query query;
++  HMODULE helper = GetModuleHandleW(L"iphlpapi.dll");
++  FARPROC function = helper ? GetProcAddress(helper, "GetAdaptersAddresses") : NULL;
++  if (!function)
++    return ares_iface_ips_windows2000(ips, name);
++  memcpy(&query, &function, sizeof(query));
++#  else
++  adapter_query query = GetAdaptersAddresses;
++#  endif
++
+   /* Get necessary buffer size */
+-  GetAdaptersAddresses(AF_UNSPEC, myflags, NULL, NULL, &outBufLen);
++  query(AF_UNSPEC, myflags, NULL, NULL, &outBufLen);
+   if (outBufLen == 0) {
+     status = ARES_EFILE;
+     goto done;
+@@ -368,7 +445,7 @@
+   }
+ 
+   retval =
+-    GetAdaptersAddresses(AF_UNSPEC, myflags, NULL, addresses, &outBufLen);
++    query(AF_UNSPEC, myflags, NULL, addresses, &outBufLen);
+   if (retval != ERROR_SUCCESS) {
+     status = ARES_EFILE;
+     goto done;
+--- a/src/lib/util/ares_rand.c
++++ b/src/lib/util/ares_rand.c
+@@ -186,10 +186,33 @@
+  * https://docs.microsoft.com/en-us/windows/win32/api/ntsecapi/nf-ntsecapi-rtlgenrandom
+  */
+ #ifdef _WIN32
++#  if _WIN32_WINNT < 0x0501
++#    include <wincrypt.h>
++static void ares_legacy_random(unsigned char *buf, size_t len)
++{
++  HCRYPTPROV provider = 0;
++  if (!CryptAcquireContextW(&provider, NULL, NULL, PROV_RSA_FULL,
++                             CRYPT_VERIFYCONTEXT | CRYPT_SILENT))
++    abort();
++  while (len) {
++    DWORD count = len > MAXDWORD ? MAXDWORD : (DWORD)len;
++    if (!CryptGenRandom(provider, count, buf)) {
++      CryptReleaseContext(provider, 0);
++      /* This void interface cannot propagate an entropy failure. */
++      abort();
++    }
++    buf += count;
++    len -= count;
++  }
++  if (!CryptReleaseContext(provider, 0))
++    abort();
++}
++#  else
+ BOOLEAN WINAPI SystemFunction036(PVOID RandomBuffer, ULONG RandomBufferLength);
+ #  ifndef RtlGenRandom
+ #    define RtlGenRandom(a, b) SystemFunction036(a, b)
+ #  endif
++#  endif
+ #endif
+ 
+ 
+@@ -296,7 +319,11 @@
+     switch (state->type) {
+       case ARES_RAND_OS:
+ #ifdef _WIN32
++#  if _WIN32_WINNT < 0x0501
++        ares_legacy_random(buf, len);
++#  else
+         RtlGenRandom(buf, (ULONG)len);
++#  endif
+         return;
+ #elif defined(HAVE_ARC4RANDOM_BUF)
+         arc4random_buf(buf, len);

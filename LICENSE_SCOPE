@@ -14,6 +14,8 @@ the legacy linked executable.
 or Apache-2.0 terms. Select the GPL-2.0-or-later option for this GPL-2.0-only
 application and distribute the corresponding library source and patch.
 
+`nix/cares-legacy-windows.patch` retains c-ares's upstream MIT terms.
+
 Project design notes live under design/. System Jansson and system libcurl are
 build/runtime dependencies; no third-party
 Jansson or libcurl implementation source or upstream header source is vendored.
