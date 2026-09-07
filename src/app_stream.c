@@ -103,27 +103,15 @@ fail:
 }
 
 int
-snag_app_finish_stream_item(struct app_state *app)
+snag_app_close_stream_item(struct app_state *app, bool abort)
 {
     if (!app->stream_item_active)
         return 0;
     app->stream_item_active = false;
-    if (snag_ui_text(&app->ui, SNAG_UI_ROLLOUT_END, NULL) < 0) {
-        return stream_fail(app, errno,
+    if (snag_ui_text(&app->ui, abort ? SNAG_UI_ROLLOUT_ABORT : SNAG_UI_ROLLOUT_END, NULL) < 0) {
+        return stream_fail(app, errno, abort ?
+                           "steered public output item could not be closed" :
                            "public output item could not be finished");
-    }
-    return 0;
-}
-
-int
-snag_app_abort_stream_item(struct app_state *app)
-{
-    if (!app->stream_item_active)
-        return 0;
-    app->stream_item_active = false;
-    if (snag_ui_text(&app->ui, SNAG_UI_ROLLOUT_ABORT, NULL) < 0) {
-        return stream_fail(app, errno,
-                           "steered public output item could not be closed");
     }
     return 0;
 }
@@ -165,7 +153,7 @@ snag_app_stream_public(void *opaque, size_t item_index, enum snag_item_kind kind
         if (app->stream_item_seen && item_index <= app->stream_item_index)
             return stream_fail(app, EPROTO,
                                "public output indexes did not increase");
-        if (snag_app_finish_stream_item(app) < 0)
+        if (snag_app_close_stream_item(app, false) < 0)
             return -1;
         app->stream_item_seen = true;
         app->stream_item_index = item_index;

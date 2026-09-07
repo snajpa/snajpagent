@@ -257,8 +257,7 @@ int snag_app_tool_run(struct app_state *app,
 
 void snag_app_clear_partial_public(struct app_state *app);
 json_t *snag_app_partial_public_json(const struct app_state *app);
-int snag_app_finish_stream_item(struct app_state *app);
-int snag_app_abort_stream_item(struct app_state *app);
+int snag_app_close_stream_item(struct app_state *app, bool abort);
 int snag_app_stream_public(void *opaque, size_t item_index,
                           enum snag_item_kind kind, enum snag_item_phase phase,
                           const char *provider_item_id,

@@ -3131,17 +3131,10 @@ run_turn(struct app_state *app, const char *prompt,
         projection.create_request.value = NULL;
         json_decref(steering);
         steering = NULL;
-        if ((provider_rc == 1 && app->steering_requested) ||
-            (provider_rc == 2 && app->interrupt_requested) ||
-            provider_failure.output_correction !=
-                SNAG_OUTPUT_CORRECTION_NONE) {
-            if (snag_app_abort_stream_item(app) < 0)
-                app->stream_failed = true;
-        } else if (snag_app_finish_stream_item(app) < 0) {
-            app->stream_failed = true;
-        }
         bool steered = provider_rc == 1 && app->steering_requested;
         bool interrupted = provider_rc == 2 && app->interrupt_requested;
+        (void)snag_app_close_stream_item(app, steered || interrupted ||
+            provider_failure.output_correction != SNAG_OUTPUT_CORRECTION_NONE);
         if ((steered || interrupted) && !app->stream_failed) {
             json_t *partial = snag_app_partial_public_json(app);
             if (!partial ||
