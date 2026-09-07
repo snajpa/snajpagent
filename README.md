@@ -224,8 +224,8 @@ application libraries and CA roots are included without third-party runtime DLLs
 Plain `make` builds only the host platform.
 
 Without configuration or existing credentials, the first interactive launch
-offers ChatGPT/Codex, OpenRouter, OpenAI, or custom-provider setup. Authenticate
-and choose a [supported model](#supported-providers). `snajpagent login status`
+offers ChatGPT/Codex subscription, OpenRouter, OpenAI, or custom-provider setup.
+Authenticate and choose a [supported model](#supported-providers). `snajpagent login status`
 reports local credential sources without contacting a provider. The manual
 explains login methods and logout.
 
@@ -273,8 +273,8 @@ see [COPYING](COPYING).
 
 ## Supported providers
 
-Supported connections: OpenAI, ChatGPT/Codex, OpenRouter, and custom providers
-with an OpenAI-compatible Responses API.
+Supported connections: OpenAI, ChatGPT/Codex subscription, OpenRouter, and custom
+providers with an OpenAI-compatible Responses API.
 
 - **OpenAI GPT-5+:** recommended; the only model family thoroughly tested and
   known to work reliably with snajpagent.
