@@ -2777,14 +2777,6 @@ handoff:
     return 0;
 }
 
-static json_t *
-silent_turn_data(const char *turn_id, const char *response_id,
-                 const char *reason)
-{
-    return json_pack("{s:s,s:s,s:s}", "reason", reason,
-        "response_id", response_id, "turn_id", turn_id);
-}
-
 /* Return the command exit status after the durable transition. Pre-response
  * failures retain process ownership while a retry remains available. */
 static int
@@ -3504,9 +3496,9 @@ run_turn(struct app_state *app, const char *prompt,
         }
         if (app->request_networked && decision.outcome == SNAG_GRAPH_NONPRODUCTIVE) {
             if (commit_event(app, "turn_completed_silent",
-                    silent_turn_data(turn_id, response_id,
-                        app->irc_turn_replies.count ?
-                        "reply_reminder_exhausted" : "room_update_quiet"),
+                    json_pack("{s:s,s:s,s:s}", "reason", app->irc_turn_replies.count ?
+                        "reply_reminder_exhausted" : "room_update_quiet",
+                        "response_id", response_id, "turn_id", turn_id),
                     error, sizeof(error)) < 0) {
                 (void)app_error(app, error[0] ? error :
                                 "quiet IRC turn could not be completed");

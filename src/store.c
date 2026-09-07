@@ -2147,17 +2147,6 @@ canonical_workspace(const char *workspace, char *error, size_t error_size)
     return resolved;
 }
 
-static json_t *
-session_created_data(const char *workspace, const char *provider,
-                     const char *model,
-                     const char *effort)
-{
-    return json_pack("{s:s,s:s,s:s,s:i,s:s,s:s}",
-        "default_effort", effort, "default_model", model,
-        "default_provider", provider, "format", 2, "protocol", "responses",
-        "workspace", workspace);
-}
-
 int
 snag_session_prepare(struct snag_session *session, const char *workspace,
                      const char *provider, const char *model, const char *effort,
@@ -2177,7 +2166,10 @@ snag_session_prepare(struct snag_session *session, const char *workspace,
         goto out;
     snag_buf_init(session->pending_log, SNAG_LOG_HARD_LIMIT - SNAG_LOG_RESERVE);
     rc = snag_session_commit(session, "session_created",
-        session_created_data(resolved, provider, model, effort),
+        json_pack("{s:s,s:s,s:s,s:i,s:s,s:s}",
+            "default_effort", effort, "default_model", model,
+            "default_provider", provider, "format", 2, "protocol", "responses",
+            "workspace", resolved),
         NULL, error, error_size);
 out:
     free(resolved);

@@ -224,12 +224,6 @@ goal_text_data(const struct snag_session *session, const char *actor,
                      "actor", actor, "prompt", prompt);
 }
 
-static json_t *
-goal_started_data(const char *goal_id, const char *prompt)
-{
-    return json_pack("{s:s,s:s}", "goal_id", goal_id, "prompt", prompt);
-}
-
 static int
 commit_goal_event(struct app_state *app, const char *type, json_t *data,
                   char *error, size_t error_size)
@@ -345,7 +339,7 @@ start_goal(struct app_state *app, const char *prompt,
                        "cryptographic goal id generation failed");
     }
     if (commit_goal_event(app, "goal_started",
-                          goal_started_data(goal_id, prompt),
+                          json_pack("{s:s,s:s}", "goal_id", goal_id, "prompt", prompt),
                           error, error_size) < 0)
         return -1;
     app->goal_armed = true;

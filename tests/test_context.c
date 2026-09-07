@@ -85,20 +85,6 @@ goal_started_data(const char *goal_id, const char *prompt)
 }
 
 static json_t *
-goal_lock_data(const char *goal_id, bool locked)
-{
-    return checked_json(json_pack("{s:s,s:b}",
-        "goal_id", goal_id, "locked", locked));
-}
-
-static json_t *
-goal_paused_data(const char *goal_id)
-{
-    return checked_json(json_pack("{s:s,s:s}",
-        "goal_id", goal_id, "reason", "user"));
-}
-
-static json_t *
 response_started(const char *turn_id, const char *response_id,
                  const char *compact_id)
 {
@@ -181,15 +167,6 @@ steering_added(const char *turn_id, const char *steering_id, const char *text)
 {
     return checked_json(json_pack("{s:s,s:s,s:s}",
         "steering_id", steering_id, "text", text, "turn_id", turn_id));
-}
-
-static json_t *
-response_interrupted(const char *turn_id, const char *response_id,
-                     const char *prefix)
-{
-    return checked_json(json_pack("{s:i,s:s,s:[o],s:s,s:s,s:s}",
-        "cycle", 1, "origin", "steering", "partial_public", assistant_item(prefix),
-        "reason", "steered", "response_id", response_id, "turn_id", turn_id));
 }
 
 static json_t *
@@ -1395,9 +1372,9 @@ main(void)
                      steering_added(steer_turn, steer_id,
                          "change direction"));
         commit_event(&steered, "response_interrupted",
-                     response_interrupted(steer_turn,
-                         steer_response,
-                         "visible prefix"));
+                     checked_json(json_pack("{s:i,s:s,s:[o],s:s,s:s,s:s}",
+                         "cycle", 1, "origin", "steering", "partial_public", assistant_item("visible prefix"),
+                         "reason", "steered", "response_id", steer_response, "turn_id", steer_turn)));
         commit_event(&steered, "steering_added",
                      steering_added(steer_turn, steer_id2,
                          "and preserve order"));
@@ -1844,7 +1821,8 @@ main(void)
     }
     assert(session.process_count == 0u);
     commit_event(&session, "turn_interrupted", turn_interrupted_data(turn2));
-    commit_event(&session, "goal_lock_changed", goal_lock_data(goal, true));
+    commit_event(&session, "goal_lock_changed", checked_json(json_pack("{s:s,s:b}",
+        "goal_id", goal, "locked", true)));
     commit_event(&session, "turn_started",
                  goal_turn_started(goal_turn, 3, workspace,
                      snag_instructions_metadata_json(&instructions)));
@@ -1937,7 +1915,8 @@ main(void)
         snag_config_free(&network_config);
     }
 
-    commit_event(&session, "goal_paused", goal_paused_data(goal));
+    commit_event(&session, "goal_paused", checked_json(json_pack("{s:s,s:s}",
+        "goal_id", goal, "reason", "user")));
     char resumed_id[SNAG_ID_HEX_LEN + 1u];
     memcpy(resumed_id, session.id, sizeof(resumed_id));
     snag_session_close(&session);

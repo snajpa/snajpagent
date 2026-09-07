@@ -105,14 +105,6 @@ test_native_read_results(void)
     free(root);
 }
 
-static json_t *
-args(void)
-{
-    return checked_json(json_pack("{s:s,s:b,s:n,s:i,s:s,s:i}",
-        "command", "true", "pty", 0, "stdin", "timeout_ms", 1000, "workdir", "/tmp",
-        "yield_ms", 1000));
-}
-
 int
 main(void)
 {
@@ -164,7 +156,9 @@ main(void)
                                          SNAG_PHASE_COMMENTARY,
                                          "msg_commentary", "checking") == 0);
     assert(snag_response_graph_add_call(&graph, "item_call", "provider_call",
-                                       "exec_command", args()) == 0);
+                                       "exec_command", checked_json(json_pack("{s:s,s:b,s:n,s:i,s:s,s:i}",
+        "command", "true", "pty", 0, "stdin", "timeout_ms", 1000, "workdir", "/tmp",
+        "yield_ms", 1000))) == 0);
     assert(snag_response_graph_classify(&graph, &decision,
                                        error, sizeof(error)) == 0);
     assert(decision.outcome == SNAG_GRAPH_CALLS);

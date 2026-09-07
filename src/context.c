@@ -58,12 +58,6 @@ snag_context_projection_free(struct snag_context_projection *projection)
 }
 
 static int
-json_array_append_string(json_t *array, const char *value)
-{
-    return json_array_append_new(array, json_string(value));
-}
-
-static int
 append_message(struct context_builder *builder, const char *role, const char *text)
 {
     return json_array_append_new(builder->request_input,
@@ -866,7 +860,7 @@ tool_schema(const char *name, const char *description, json_t *properties)
     /* Property insertion order is also the provider's required-field order. */
     for (void *iter = json_object_iter(properties); iter;
          iter = json_object_iter_next(properties, iter))
-        if (json_array_append_string(required, json_object_iter_key(iter)) < 0)
+        if (json_array_append_new(required, json_string(json_object_iter_key(iter))) < 0)
             goto out;
     tool = json_pack("{s:s,s:s,s:{s:b,s:O,s:O,s:s},s:b,s:s}",
         "description", description, "name", name,

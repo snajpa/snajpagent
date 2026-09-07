@@ -31,13 +31,6 @@ snag_session_unarchive(struct snag_session *session, uint64_t *written_seq,
                               written_seq, error, error_size);
 }
 
-static json_t *
-delete_request_data(const char *prefix, const char *trash_name)
-{
-    return json_pack("{s:s,s:s}", "confirmed_id_prefix", prefix,
-                     "trash_name", trash_name);
-}
-
 static int
 make_trash_name(const struct snag_session *session,
                 char out[SNAG_TRASH_NAME_LEN + 1u], char *error,
@@ -168,7 +161,8 @@ snag_session_delete(struct snag_store *store, struct snag_session *session,
     if (make_trash_name(session, trash_name, error, error_size) < 0)
         return -1;
     if (snag_session_commit(session, "session_delete_requested",
-                           delete_request_data(confirmed_prefix, trash_name),
+                           json_pack("{s:s,s:s}", "confirmed_id_prefix", confirmed_prefix,
+                                     "trash_name", trash_name),
                            written_seq, error, error_size) < 0)
         return -1;
     return snag_session_complete_delete(store, session, error, error_size);

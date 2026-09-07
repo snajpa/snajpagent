@@ -65,13 +65,6 @@ check_replay(void *opaque, const struct snag_session *state, uint64_t seq,
 }
 
 static json_t *
-delete_data(const char *prefix, const char *trash_name)
-{
-    return checked_json(json_pack("{s:s,s:s}",
-        "confirmed_id_prefix", prefix, "trash_name", trash_name));
-}
-
-static json_t *
 turn_started_data(const struct snag_session *session, const char *turn_id)
 {
     struct snag_instruction_set instructions = {0};
@@ -595,7 +588,8 @@ main(void)
     id_prefix[8] = '\0';
     assert(snprintf(trash_name, sizeof(trash_name), "%s.%032x",
                     session.id, 1u) == (int)(sizeof(trash_name) - 1u));
-    commit_event(&session, "session_delete_requested", delete_data(id_prefix, trash_name));
+    commit_event(&session, "session_delete_requested", checked_json(json_pack("{s:s,s:s}",
+        "confirmed_id_prefix", id_prefix, "trash_name", trash_name)));
     assert(renameat(store.sessions_fd, id, store.trash_fd, trash_name) == 0);
     snag_session_close(&session);
     snag_session_init(&session);
