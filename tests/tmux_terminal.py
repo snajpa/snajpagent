@@ -1836,7 +1836,7 @@ def run_lifecycle_case(binary, root):
 
         terminal.submit("/compact")
         terminal.wait("• Compacted")
-        wait_idle_prompt_at_bottom(terminal, DEFAULT_IDLE_PROMPT)
+        wait_idle_prompt_at_bottom(terminal, DEFAULT_ACCOUNTED_IDLE_PROMPT)
         screen = terminal.capture(join_wrapped=True)
         assert_order(screen, ["• Goal set", "• Goal cleared", "• Compacted"])
         for notice in ("• Goal set", "• Goal cleared", "• Compacted"):
