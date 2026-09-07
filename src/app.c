@@ -435,7 +435,7 @@ format_context_meter(struct app_state *app, bool active,
     provider_capacity_source_sha256(provider, model, provider_source_hash);
     if (!snag_input_observation_matches(&app->session.context_meter,
             provider->name, model, effort, provider_source_hash, app->session.compact_id)) {
-        memcpy(meter, "?", sizeof("0%"));
+        memcpy(meter, "?", sizeof("?"));
         return 0;
     }
     if (!capacity->hard_input_known) {

@@ -182,11 +182,12 @@ read_file(const char *path, char *buf, size_t size)
 }
 
 static int
-count_event(void *opaque, const struct snag_session *state, uint64_t seq, const char *type, const json_t *data,
+count_event(void *opaque, const struct snag_session *state,
+            uint64_t seq, const char *type, const json_t *data,
             char *error, size_t error_size)
 {
-    (void)state;
     size_t *count = opaque;
+    assert(state->next_seq == seq + 1u);
     (void)type;
     (void)data;
     (void)error;

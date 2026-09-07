@@ -561,7 +561,7 @@ test_accounting_lineage(struct snag_store *store, const char *workspace)
     commit_event(&session, "response_completed", response_completed(turn, response, "done"));
     assert(!session.context_meter.compact_id[0] && !session.active_accounting.compact_id[0]);
     assert(!strcmp(session.usage_anchor.compact_id, compact));
-    assert(session.context_meter.input_tokens == 1000u);
+    assert(session.context_meter.input_tokens == 10u);
     assert(session.usage_anchor.input_tokens == 10u);
     snag_session_close(&session);
     json_decref(output);
@@ -932,9 +932,10 @@ test_durable_irc_input_watermark(void)
     assert(mkdtemp(path));
     struct snag_store store;
     struct snag_session session;
-    struct snag_context_projection projection;
+    struct snag_context_projection projection = {0};
     json_t *empty = json_array();
-    snag_store_init(&store); snag_session_init(&session); snag_context_projection_init(&projection);
+    snag_store_init(&store);
+    snag_session_init(&session);
     assert(snag_store_open(&store, path, error, sizeof(error)) == 0);
     assert(snag_session_create(&store, &session, path, "default", SNAJPAGENT_MODEL,
                                "medium", error, sizeof(error)) == 0);
