@@ -1730,7 +1730,7 @@ def run_punctuation_case(binary, root):
         provider.close()
 
 
-def run_draft_navigation_case(binary, root):
+def run_draft_navigation_case(binary, root, regression=None):
     case = root / "draft-keys"
     workspace = case / "workspace"
     workspace.mkdir(mode=0o700, parents=True)
@@ -1760,6 +1760,125 @@ def run_draft_navigation_case(binary, root):
 
     try:
         terminal.wait(">")
+        if regression == "escape":
+            for left, right in ((b"\x1b\x1b[D", b"\x1b\x1b[C"),
+                                (b"\x1b\x1bOD", b"\x1b\x1bOC")):
+                terminal.send_text("one café界 three")
+                raw(left)
+                raw(left)
+                terminal.send_text("X")
+                raw(right)
+                terminal.send_text("Y")
+                draft(["> one Xcafé界Y three"])
+                terminal.send_key("C-u")
+            terminal.send_text("abc")
+            raw(b"\x1bOD")
+            terminal.send_text("X")
+            raw(b"\x1bOC")
+            terminal.send_text("Y")
+            draft(["> abXcY"])
+            raw(b"\x1bOH")
+            terminal.send_text("H")
+            raw(b"\x1bOF")
+            terminal.send_text("E")
+            draft(["> HabXcYE"])
+            terminal.send_key("C-u")
+            terminal.exit()
+            return
+        if regression == "wrap":
+            terminal.submit("older")
+            terminal.wait("fixture answer")
+            terminal.send_text("alpha beta gamma extraordinaryyyyyyyyyyy")
+            draft(["> alpha beta gamma", "extraordinaryyyyyyyyyyy"])
+            terminal.send_key("Up")
+            terminal.send_key("Down")
+            terminal.send_text("!")
+            draft(["> alpha beta gamma", "extraordinaryyyyyyyyyyy!"])
+            terminal.send_key("BSpace")
+            terminal.send_key("Up")
+            terminal.send_text("X")
+            draft(["> alpha beta gammaX", "extraordinaryyyyyyyyyyy"])
+            terminal.send_key("C-u")
+            terminal.exit()
+            return
+        if regression == "tall":
+            text = " ".join(f"word{i:02d}" for i in range(90))
+            terminal.send_text(text)
+            terminal.send_key("Home")
+            terminal.send_text("X")
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline:
+                screen = terminal.run("capture-pane", "-p", "-t", terminal.target)
+                if "> Xword00 word01 word02" in screen:
+                    break
+                time.sleep(0.02)
+            else:
+                raise AssertionError(f"start of tall wrapped draft is not editable:\n{screen}")
+            terminal.send_key("End")
+            terminal.send_text("Y")
+            terminal.wait("word89Y")
+            terminal.resize(25, 12)
+            terminal.send_key("Home")
+            terminal.wait("> Xword00 word01 word02")
+            terminal.resize(24, 16)
+            terminal.send_key("Home")
+            terminal.send_key("Down")
+            terminal.send_text("Z")
+            terminal.send_key("Enter")
+            wait_event_count(case / "state", "turn_completed", 1, timeout=5.0)
+            _, events = read_events(case / "state")
+            submitted = event_list(events, "turn_started")[0]["data"]["text"]
+            assert submitted == "X" + text.replace("word03", "woZrd03") + "Y", submitted
+            terminal.exit()
+            return
+        if regression == "history":
+            terminal.submit("older")
+            terminal.wait("fixture answer")
+            terminal.send_text("first")
+            terminal.send_key("C-j")
+            terminal.send_text("second")
+            terminal.send_key("Enter")
+            wait_event_count(case / "state", "turn_completed", 2, timeout=5.0)
+            terminal.send_text("unsent")
+            terminal.send_key("C-p")
+            draft(["> first", "  second"])
+            terminal.send_key("Up")
+            terminal.send_text("X")
+            draft(["> firstX", "  second"])
+            terminal.send_key("C-u")
+            terminal.send_text("unsent")
+            terminal.send_key("C-p")
+            raw(b"\x1bOA")
+            raw(b"\x1bOB")
+            terminal.send_text("Y")
+            draft(["> first", "  secondY"])
+            terminal.send_key("C-u")
+            terminal.send_text("unsent")
+            terminal.send_key("C-p")
+            terminal.send_key("Up")  # Inside recalled text.
+            terminal.send_key("Up")  # Clamp to prompt start.
+            draft(["> first", "  second"])
+            terminal.send_key("Up")  # One older prompt at the actual start.
+            draft(["> older"])
+            terminal.send_key("Down")  # One newer prompt at the actual end.
+            draft(["> first", "  second"])
+            terminal.send_key("Home")
+            terminal.send_key("C-n")  # Direct shortcut works from any position.
+            draft(["> unsent"])
+            terminal.send_key("Home")
+            terminal.send_key("Down")  # Go to end before selecting history.
+            terminal.send_text("!")
+            draft(["> unsent!"])
+            terminal.send_key("C-p")
+            terminal.send_key("C-p")
+            draft(["> older"])
+            terminal.send_key("C-n")
+            draft(["> first", "  second"])
+            terminal.send_key("C-n")
+            draft(["> unsent!"])
+            terminal.send_key("C-u")
+            terminal.exit()
+            return
         text = "alpha beta gamma delta epsilon zeta eta"
         terminal.send_text(text)
         draft(["> alpha beta gamma delta", " epsilon zeta eta"])
@@ -1801,6 +1920,76 @@ def run_draft_navigation_case(binary, root):
         _, events = read_events(case / "state")
         turns = event_list(events, "turn_started")
         assert [event["data"]["text"] for event in turns] == ["history draft", text]
+    finally:
+        close_fixture_terminal(terminal)
+
+
+def run_draft_word_wrap_case(binary, root, columns=80):
+    case = root / f"draft-wrap-{columns}"
+    workspace = case / "w"
+    workspace.mkdir(mode=0o700, parents=True)
+    config = case / "config.ini"
+    write_config(config, False, pause_ms=0)
+    terminal = TmuxTerminal(case / "t", binary, workspace, case / "s",
+                            config, columns, 24)
+
+    def draft(rows):
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            screen = terminal.capture()
+            lines = screen.rstrip().splitlines()
+            starts = [i for i, line in enumerate(lines) if " › " in line or " » " in line]
+            if starts:
+                lines = lines[starts[-1]:]
+                lines[0] = re.split(" [›»] ", lines[0], maxsplit=1)[1]
+                if lines == rows:
+                    return
+            time.sleep(0.02)
+        raise AssertionError(f"expected word-wrapped draft {rows!r}:\n{screen}")
+
+    try:
+        terminal.wait("›")
+        screen = terminal.capture()
+        label = next(line.split("›")[0] + "› " for line in screen.splitlines()
+                     if "›" in line)
+        # Grow the last word across the margin one keystroke at a time.
+        first = "a" * (columns - len(label) - 2)
+        terminal.send_text(first + " ")
+        terminal.send_text("b")
+        draft([first + " b"])
+        terminal.send_text("c")
+        draft([first, "bc"])
+        terminal.send_text("d")
+        draft([first, "bcd"])
+        terminal.send_key("BSpace")
+        terminal.send_key("BSpace")
+        draft([first + " b"])
+        terminal.send_text("cd")
+        terminal.send_key("Home")
+        terminal.send_key("Down")
+        terminal.send_key("End")
+        terminal.send_text("!")
+        draft([first, "bcd!"])
+        terminal.resize(columns + 10, 24)
+        draft([first + " bcd!"])
+        terminal.resize(columns, 24)
+        draft([first, "bcd!"])
+        terminal.send_key("Enter")
+        wait_event_count(case / "s", "turn_completed", 1, timeout=5.0)
+        terminal.send_key("C-p")
+        draft([first, "bcd!"])
+        terminal.send_key("C-u")
+        terminal.submit("slow")
+        terminal.wait("working slowly")
+        terminal.send_text(first + " bcd!")
+        draft([first, "bcd!"])
+        wait_event_count(case / "s", "turn_completed", 2, timeout=5.0)
+        draft([first, "bcd!"])
+        terminal.send_key("C-u")
+        terminal.exit()
+        _, events = read_events(case / "s")
+        assert [e["data"]["text"] for e in event_list(events, "turn_started")] == [
+            first + " bcd!", "slow"]
     finally:
         close_fixture_terminal(terminal)
 
@@ -1952,6 +2141,10 @@ def run_fixture(binary, workspace, root):
     run_retained_composer_case(binary, root)
     run_lifecycle_case(binary, root)
     run_draft_navigation_case(binary, root)
+    for regression in ("escape", "wrap", "history", "tall"):
+        run_draft_navigation_case(binary, root / regression, regression)
+    for columns in (60, 80, 120):
+        run_draft_word_wrap_case(binary, root, columns)
     run_bullet_class_case(binary, root)
     print("tmux_terminal fixture: ok")
 

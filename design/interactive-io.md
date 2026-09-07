@@ -172,11 +172,15 @@ Pause reasons come from the durable event, not a duplicate host warning.
 
 The composer word-wraps fitting whitespace-delimited words while retaining every
 draft byte. Overlong words hard-wrap; explicit newlines keep their existing
-indentation. Up/Down move among displayed draft rows with a preferred cell
-column, then enter history at the edges. Ctrl-P/Ctrl-N always select history.
+indentation. Drafts taller than the screen show a cursor-following slice of the
+same wrapped text, keeping edits out of terminal scrollback. Up/Down move among
+draft rows with a preferred cell column, including recalled prompts. The first
+or last row clamps to the actual text start/end; another arrow there selects
+one history entry. Ctrl-P/Ctrl-N always select history directly.
 Ctrl-arrow, Alt-arrow and Meta-b/f implement the same whitespace-delimited word
 movement as Ctrl-W. Display-to-source mapping uses the same sanitizing/wrapping
-pass as painting; resize first accounts for the actual old painted bytes.
+pass as painting, using current draft geometry even during input-only output
+checkpoints; resize first accounts for the actual old painted bytes.
 
 Rendered prose also has one empty row above and below throughout streaming,
 independent of its neighboring block type. The terminal's existing output detour

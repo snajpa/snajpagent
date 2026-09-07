@@ -72,6 +72,7 @@ struct snag_term {
     size_t painted_label_len;
     size_t painted_cursor_byte;
     size_t preferred_column;
+    size_t viewport_row;
     unsigned int painted_columns;
     bool painted_color;
     size_t output_columns;
@@ -92,6 +93,7 @@ struct snag_term {
     size_t rendered_cursor_row;
     size_t rendered_cursor_col;
     unsigned int columns;
+    unsigned int rows;
     unsigned int output_depth;
     unsigned int output_newlines;
     unsigned int output_gap;

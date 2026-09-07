@@ -80,6 +80,7 @@ int snag_term_controls_install(struct snag_term_host *host,
 void snag_term_controls_restore(struct snag_term_host *host);
 bool snag_term_host_capable(void);
 unsigned int snag_term_host_columns(void);
+unsigned int snag_term_host_rows(void);
 int snag_term_input_capture(struct snag_term_host *host);
 int snag_term_input_raw(struct snag_term_host *host);
 int snag_term_input_hidden(struct snag_term_host *host);

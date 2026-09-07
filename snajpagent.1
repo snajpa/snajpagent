@@ -191,7 +191,7 @@ are listed under INTERACTIVE INPUT.
 .SS Edit or stop
 Ctrl-J inserts a newline.  Bracketed paste keeps pasted newlines in the draft
 instead of submitting each line.  Up/Down move through wrapped or multiline
-draft rows, then prompt history at the edges.  Ctrl-P/Ctrl-N go directly through
+draft rows, then prompt history at the start or end of the text.  Ctrl-P/Ctrl-N go directly through
 history; Ctrl-R searches it.  Ctrl-C clears a nonempty draft without interrupting the turn.  On an
 empty draft it interrupts active work.  Ctrl-D on an empty draft exits.
 .SS Continue toward a goal
@@ -493,6 +493,9 @@ The default port is 6667.  In networked mode initial chat text must follow
 .BR \-\- .
 .SH "Terminal"
 .SS Editing keys
+The prompt word-wraps while typing, moving fitting words intact to the next row
+and hard-wrapping words wider than the terminal.  Wrapping preserves the submitted
+text.  Long drafts scroll within the editor to keep the cursor visible.
 .TP
 .B Enter
 Submit while idle.  In rollout during model generation, interrupt the response
@@ -552,8 +555,10 @@ work and exit without waiting for the model or command to finish.
 .TP
 .BR Up , " Down"
 Move within the displayed rows of a wrapped or multiline draft, preserving the
-preferred terminal column.  At the draft edges, move through shared persistent
-prompt history and preserve the current draft at its newest boundary.
+preferred terminal column, including in recalled prompts.  At the first or last
+row, move to the start or end of the text.  Up at the start selects one older
+prompt; Down at the end selects one newer prompt.  History is shared and
+persistent; returning to its newest boundary restores the unsent draft.
 .TP
 .BR Ctrl-P , " Ctrl-N"
 Move directly through prompt history, including from inside a multiline draft.
@@ -561,7 +566,8 @@ Move directly through prompt history, including from inside a multiline draft.
 .BR Ctrl-Left , " Ctrl-Right" , " Option-Left" , " Option-Right"
 Move to the previous word start or next word end.  Words are separated by spaces,
 tabs or newlines, as with Ctrl-W.  Common PC control arrows, Mac option arrows
-and Meta-b/Meta-f sequences are accepted; the terminal must transmit them.
+and Meta-b/Meta-f sequences are accepted, including Escape-prefixed and
+application-cursor arrows; the terminal must transmit them.
 .TP
 .B Ctrl-R
 Start case-sensitive incremental reverse search over prompt history.  Press it

@@ -266,6 +266,7 @@ snag_term_init(struct snag_term *term)
     snag_buf_init(&term->painted_prompt, SIZE_MAX);
     snag_buf_init(&term->completion_output, SNAG_MAX_DIRECT_PROMPT);
     term->columns = 80u;
+    term->rows = 24u;
     term->history_pos = SIZE_MAX;
     term->preferred_column = SIZE_MAX;
     term->search_pos = SIZE_MAX;
@@ -463,6 +464,8 @@ term_control_capable(void)
 static void
 update_size(struct snag_term *term)
 {
+    unsigned int rows = snag_term_host_rows();
+    term->rows = rows ? rows : 24u;
     if (!term_control_capable()) {
         term->columns = 80u;
         term->capable = false;
@@ -1065,6 +1068,41 @@ compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes,
     return 0;
 }
 
+/* Keep the editable cursor on screen. Terminal cursor movement cannot reach
+ * draft rows already scrolled into history. Keep one row for a pending margin
+ * wrap and one for the output boundary. The full draft remains untouched. */
+static void
+clip_prompt(struct snag_term *term, struct snag_buf *frame, size_t *label,
+            size_t *cursor_row, size_t *cursor_col, size_t *end_row, size_t *end_col)
+{
+    size_t rows = term->rows > 2u ? term->rows - 2u : 1u;
+    size_t top = term->viewport_row, start = 0u, end = frame->len;
+
+    if (*end_row < rows)
+        top = 0u;
+    else if (*cursor_row < top)
+        top = *cursor_row;
+    else if (*cursor_row - top >= rows)
+        top = *cursor_row - rows + 1u;
+    term->viewport_row = top;
+    for (size_t y = 0u, next = 0u; y <= *end_row; ++y) {
+        struct prompt_row line = prompt_row(frame, next, term->columns);
+        if (y == top)
+            start = next;
+        if (y == top + rows - 1u) {
+            end = line.end;
+            break;
+        }
+        next = line.next;
+    }
+    *label = *label > start ? *label - start : 0u;
+    term->painted_cursor_byte -= start;
+    memmove(frame->data, frame->data + start, end - start);
+    frame->len = end - start;
+    frame_position(frame, term->painted_cursor_byte, term->columns, cursor_row, cursor_col);
+    frame_position(frame, frame->len, term->columns, end_row, end_col);
+}
+
 /* Keep a base character and its combining marks in the same paint span. */
 static size_t
 prompt_cell_end(const unsigned char *data, size_t start, size_t end)
@@ -1376,6 +1414,7 @@ redraw(struct snag_term *term)
     if (compose_frame(term, &out, &label_len, &cursor_row, &cursor_col,
                        &end_row, &end_col, NULL) < 0)
         goto out;
+    clip_prompt(term, &out, &label_len, &cursor_row, &cursor_col, &end_row, &end_col);
     rc = paint_prompt(term, &out, label_len, cursor_row, cursor_col, end_row, end_col);
 out:
     snag_buf_free(&out);
@@ -2193,43 +2232,59 @@ move_vertical(struct snag_term *term, bool down, size_t preferred)
 {
     struct snag_buf frame;
     size_t label, row, col, end_row, end_col, source;
-    size_t target = term->rendered_cursor_row;
     int rc;
 
-    if (term->history_pos != SIZE_MAX || (!down && !target) ||
-        (down && target + 1u >= term->rendered_rows))
+    if ((!down && !term->cursor) || (down && term->cursor == term->draft.len))
         return down ? history_down(term) : history_up(term);
-    target = down ? target + 1u : target - 1u;
+    /* Input checkpoints may have edited the draft without painting it yet. */
+    rc = compose_frame(term, &frame, &label, &row, &col, &end_row, &end_col, NULL);
+    if (rc < 0) {
+        snag_buf_free(&frame);
+        return -1;
+    }
+    size_t target = row;
     if (preferred == SIZE_MAX)
-        preferred = term->rendered_cursor_col;
+        preferred = col;
+    if ((!down && !target) || (down && target == end_row)) {
+        term->cursor = down ? term->draft.len : 0u;
+        snag_buf_free(&frame);
+        term->preferred_column = preferred;
+        return redraw(term);
+    }
+    target = down ? target + 1u : target - 1u;
     source = 0u;
-    struct prompt_row line = prompt_row(&term->painted_prompt, source, term->columns);
+    struct prompt_row line = prompt_row(&frame, source, term->columns);
     for (size_t y = 0u; y < target; ++y) {
         source = line.next;
-        line = prompt_row(&term->painted_prompt, source, term->columns);
+        line = prompt_row(&frame, source, term->columns);
     }
     size_t width = 0u;
     while (source < line.end) {
-        size_t next = prompt_cell_end(term->painted_prompt.data, source, line.end);
-        size_t cells = snag_term_text_width((char *)term->painted_prompt.data + source, next - source);
+        size_t next = prompt_cell_end(frame.data, source, line.end);
+        size_t cells = snag_term_text_width((char *)frame.data + source, next - source);
         if (width + cells > preferred)
             break;
         width += cells;
         source = next;
     }
+    snag_buf_free(&frame);
     rc = compose_frame(term, &frame, &label, &row, &col, &end_row, &end_col, &source);
     snag_buf_free(&frame);
     if (rc < 0)
         return -1;
-    size_t old = term->cursor;
     term->cursor = source;
     rc = compose_frame(term, &frame, &label, &row, &col, &end_row, &end_col, NULL);
     snag_buf_free(&frame);
     if (rc < 0)
         return -1;
-    if (row != target) {
-        term->cursor = old;
-        return down ? history_down(term) : history_up(term);
+    /* A soft-wrap boundary maps to the next row's first byte. Stay on the
+     * requested row, including when its final space starts a display wrap. */
+    while (row > target && term->cursor) {
+        term->cursor = previous_cp(term->draft.data, term->cursor);
+        rc = compose_frame(term, &frame, &label, &row, &col, &end_row, &end_col, NULL);
+        snag_buf_free(&frame);
+        if (rc < 0)
+            return -1;
     }
     term->preferred_column = preferred;
     return redraw(term);
@@ -2258,8 +2313,13 @@ static const struct escape_key keys[] = {
     {"\033[1;5D", 6u, KEY_WORD_LEFT}, {"\033[1;5C", 6u, KEY_WORD_RIGHT},
     {"\033[1;3D", 6u, KEY_WORD_LEFT}, {"\033[1;3C", 6u, KEY_WORD_RIGHT},
     {"\033b", 2u, KEY_WORD_LEFT}, {"\033f", 2u, KEY_WORD_RIGHT},
+    {"\033\033[D", 4u, KEY_WORD_LEFT}, {"\033\033[C", 4u, KEY_WORD_RIGHT},
+    {"\033\033OD", 4u, KEY_WORD_LEFT}, {"\033\033OC", 4u, KEY_WORD_RIGHT},
     {"\033[A", 3u, KEY_UP}, {"\033[B", 3u, KEY_DOWN},
     {"\033[C", 3u, KEY_RIGHT}, {"\033[D", 3u, KEY_LEFT},
+    {"\033OA", 3u, KEY_UP}, {"\033OB", 3u, KEY_DOWN},
+    {"\033OC", 3u, KEY_RIGHT}, {"\033OD", 3u, KEY_LEFT},
+    {"\033OH", 3u, KEY_HOME}, {"\033OF", 3u, KEY_END},
     {"\033[H", 3u, KEY_HOME}, {"\033[F", 3u, KEY_END},
     {"\033[1~", 4u, KEY_HOME}, {"\033[4~", 4u, KEY_END},
     {"\033[3~", 4u, KEY_DELETE}, {"\033[200~", 6u, KEY_PASTE_BEGIN}

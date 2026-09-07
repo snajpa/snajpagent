@@ -915,6 +915,14 @@ snag_term_host_columns(void)
            (unsigned int)(info.srWindow.Right - info.srWindow.Left + 1) : 0u;
 }
 
+unsigned int
+snag_term_host_rows(void)
+{
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    return GetConsoleScreenBufferInfo((HANDLE)_get_osfhandle(2), &info) ?
+           (unsigned int)(info.srWindow.Bottom - info.srWindow.Top + 1) : 0u;
+}
+
 int
 snag_term_input_capture(struct snag_term_host *host)
 {
@@ -1437,6 +1445,13 @@ snag_term_host_columns(void)
 {
     struct winsize size = {0};
     return ioctl(STDERR_FILENO, TIOCGWINSZ, &size) == 0 ? size.ws_col : 0u;
+}
+
+unsigned int
+snag_term_host_rows(void)
+{
+    struct winsize size = {0};
+    return ioctl(STDERR_FILENO, TIOCGWINSZ, &size) == 0 ? size.ws_row : 0u;
 }
 
 int
