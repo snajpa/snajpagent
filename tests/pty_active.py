@@ -3549,6 +3549,10 @@ def test_network_resume_roles():
     peer = IRCClient(server_port, "firstpeer")
     peer.message("retained room message")
     server.wait("firstpeer › retained room message".encode())
+    deadline = time.monotonic() + 8.0
+    while session_ids() == before:
+        assert time.monotonic() < deadline, bytes(server.buf)
+        server.read_once(0.02)
     server_id = new_session(before)
     peer.close()
     server.send(b"\x04")
@@ -3590,6 +3594,10 @@ def test_network_resume_roles():
     first_links = accept_connections(upstream, 2)
     peer = IRCClient(combined_port, "combinedpeer")
     peer.close()
+    deadline = time.monotonic() + 8.0
+    while session_ids() == before:
+        assert time.monotonic() < deadline, bytes(combined.buf)
+        combined.read_once(0.02)
     combined.send(b"\x04")
     combined_command = combined.finish()
     combined_id = new_session(before)
