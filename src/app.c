@@ -2865,6 +2865,7 @@ run_turn(struct app_state *app, const char *prompt,
     char turn_id[SNAG_ID_HEX_LEN + 1u];
     char response_id[SNAG_ID_HEX_LEN + 1u];
     char error[256];
+    const char *report_message = error;
     char provider_source_hash[SNAG_SHA256_HEX_LEN + 1u];
     char rejected_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
     char over_budget_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
@@ -2935,9 +2936,8 @@ run_turn(struct app_state *app, const char *prompt,
     if (continuing) {
         memcpy(turn_id, app->session.active_turn_id, sizeof(turn_id));
     } else if (snag_random_id(turn_id) < 0) {
-        (void)app_error(app, "cryptographic turn id generation failed");
-        result = 3;
-        goto out;
+        report_message = "cryptographic turn id generation failed";
+        goto fail;
     }
     if (!continuing && commit_event(app, "turn_started",
                      snag_app_turn_started_data(app, turn_prompt, turn_id, queued,
@@ -2950,14 +2950,12 @@ run_turn(struct app_state *app, const char *prompt,
             "turn › %s started%s · model=%s · effort=%s · workspace=%s",
             turn_id, read_only ? " (read-only)" : "", app->turn_model,
             app->turn_effort, app->session.workspace) < 0) {
-        (void)app_error(app, "turn runtime facts could not be rendered");
-        result = 6;
-        goto out;
+        report_message = "turn runtime facts could not be rendered";
+        goto output_fail;
     }
     if (!app->execute && set_input_prompt(app, true) < 0) {
-        (void)app_error(app, "active composer could not be displayed");
-        result = 6;
-        goto out;
+        report_message = "active composer could not be displayed";
+        goto output_fail;
     }
     for (unsigned int cycle = next_cycle; cycle != 0u; ++cycle) {
         struct snag_graph_decision decision;
@@ -2972,10 +2970,9 @@ run_turn(struct app_state *app, const char *prompt,
         memset(&provider_failure, 0, sizeof(provider_failure));
         error[0] = '\0';
         if (snag_app_irc_flush_urgent(app, error, sizeof(error)) < 0) {
-            (void)app_error(app, error[0] ? error :
-                            "urgent IRC input could not be admitted");
-            result = 3;
-            goto out;
+            report_message = error[0] ? error :
+                            "urgent IRC input could not be admitted";
+            goto fail;
         }
         if (admit_input(app, error, sizeof(error)) < 0) {
             (void)app_error(app, error);
@@ -3081,15 +3078,13 @@ run_turn(struct app_state *app, const char *prompt,
                              cycle, &projection, count_method, provider_source_hash,
                              steering),
                          error, sizeof(error)) < 0) {
-            (void)app_error(app, error[0] ? error :
-                                   "response setup could not be persisted");
-            result = 3;
-            goto out;
+            report_message = error[0] ? error :
+                                   "response setup could not be persisted";
+            goto fail;
         }
         if (!app->execute && set_input_prompt(app, true) < 0) {
-            (void)app_error(app, "context meter could not be displayed");
-            result = 6;
-            goto out;
+            report_message = "context meter could not be displayed";
+            goto output_fail;
         }
         json_decref(projection.count_request.value);
         projection.count_request.value = NULL;
@@ -3097,9 +3092,8 @@ run_turn(struct app_state *app, const char *prompt,
                 "response › %s started · turn=%s · cycle=%u · model=%s · profile=%s",
                 response_id, turn_id, cycle, app->turn_model,
                 SNAJPAGENT_PROFILE_ID) < 0) {
-            (void)app_error(app, "response runtime facts could not be rendered");
-            result = 6;
-            goto out;
+            report_message = "response runtime facts could not be rendered";
+            goto output_fail;
         }
         if (request_body.len &&
             snag_ui_send(&app->ui, (struct snag_ui_command){
@@ -3111,14 +3105,12 @@ run_turn(struct app_state *app, const char *prompt,
                                           "output", failure, partial, 0u,
                                           "output_failure", error,
                                           sizeof(error)) < 0) {
-                (void)app_error(app, error[0] ? error :
-                                "diagnostic output failure could not be persisted");
-                result = 3;
-                goto out;
+                report_message = error[0] ? error :
+                                "diagnostic output failure could not be persisted";
+                goto fail;
             }
-            (void)app_error(app, failure);
-            result = 6;
-            goto out;
+            report_message = failure;
+            goto output_fail;
         }
         snag_buf_free(&request_body);
         snag_app_reset_stream(app);
@@ -3157,11 +3149,10 @@ run_turn(struct app_state *app, const char *prompt,
                     snag_app_response_interrupted_data(turn_id, response_id, cycle,
                         steered ? "steering" : "user", steered ? "steered" : "cancelled", partial),
                     error, sizeof(error)) < 0) {
-                (void)app_error(app, error[0] ? error : steered ?
+                report_message = error[0] ? error : steered ?
                     "active-turn response could not be persisted" :
-                    "interruption could not be persisted");
-                result = 3;
-                goto out;
+                    "interruption could not be persisted";
+                goto fail;
             }
             if (steered)
                 continue;
@@ -3202,10 +3193,9 @@ run_turn(struct app_state *app, const char *prompt,
                     "response_output_correction", data, error, sizeof(error)) : -1;
                 json_decref(partial);
                 if (correction_rc < 0) {
-                    (void)app_error(app, error[0] ? error :
-                        "assistant output correction could not be persisted");
-                    result = 3;
-                    goto out;
+                    report_message = error[0] ? error :
+                        "assistant output correction could not be persisted";
+                    goto fail;
                 }
                 if (cyber_clarification) {
                     char notice[128];
@@ -3255,10 +3245,9 @@ run_turn(struct app_state *app, const char *prompt,
                             turn_id, response_id, cycle, projection.create_request.sha256,
                             &provider_failure, &app->turn_capacity,
                             provider_source_hash), error, sizeof(error)) < 0) {
-                    (void)app_error(app, error[0] ? error :
-                        "capacity rejection could not be persisted");
-                    result = 3;
-                    goto out;
+                    report_message = error[0] ? error :
+                        "capacity rejection could not be persisted";
+                    goto fail;
                 } else {
                     int recovery_rc;
                     bool ceiling_matches;
@@ -3305,9 +3294,8 @@ run_turn(struct app_state *app, const char *prompt,
             }
             partial = snag_app_partial_public_json(app);
             if (!partial) {
-                (void)app_error(app, "failed response prefix could not be retained");
-                result = 3;
-                goto out;
+                report_message = "failed response prefix could not be retained";
+                goto fail;
             }
             /* Fresh queued/chat input keeps its existing failed-request handoff. */
             if (!app->stream_failed && provider_failure.new_input &&
@@ -3330,9 +3318,8 @@ run_turn(struct app_state *app, const char *prompt,
         if (!app->execute) {
             int input_rc = snag_app_active_input_pump(app, 0u);
             if (input_rc < 0) {
-                (void)app_error(app, "active input could not be processed");
-                result = 3;
-                goto out;
+                report_message = "active input could not be processed";
+                goto fail;
             }
         }
         if (snag_response_graph_classify(&graph, &decision,
@@ -3343,9 +3330,8 @@ run_turn(struct app_state *app, const char *prompt,
                            error[0] ? error : "invalid provider response graph");
             partial = snag_app_partial_public_json(app);
             if (!partial) {
-                (void)app_error(app, "invalid response prefix could not be retained");
-                result = 3;
-                goto out;
+                report_message = "invalid response prefix could not be retained";
+                goto fail;
             }
             if (fail_response(app, turn_id, response_id, cycle, "protocol",
                               failure, partial, provider_retry_count,
@@ -3364,10 +3350,9 @@ run_turn(struct app_state *app, const char *prompt,
         }
         error[0] = '\0';
         if (snag_app_irc_flush_urgent(app, error, sizeof(error)) < 0) {
-            (void)app_error(app, error[0] ? error :
-                            "urgent IRC input could not be admitted");
-            result = 3;
-            goto out;
+            report_message = error[0] ? error :
+                            "urgent IRC input could not be admitted";
+            goto fail;
         }
         {
             char input_tokens[32];
@@ -3389,9 +3374,8 @@ run_turn(struct app_state *app, const char *prompt,
                     (unsigned long long)(snag_time_ms() - response_begin_ms),
                     input_tokens, output_tokens, reasoning_tokens,
                     total_tokens) < 0) {
-                (void)app_error(app, "response runtime facts could not be rendered");
-                result = 6;
-                goto out;
+                report_message = "response runtime facts could not be rendered";
+                goto output_fail;
             }
         }
         if (decision.outcome == SNAG_GRAPH_CONFLICT) {
@@ -3437,10 +3421,9 @@ run_turn(struct app_state *app, const char *prompt,
                     snag_app_steering_added_data(turn_id, steering_id,
                         SNAG_IRC_REPLY_REMINDER_TEXT),
                     error, sizeof(error)) < 0) {
-                (void)app_error(app, error[0] ? error :
-                                "IRC reply reminder could not be persisted");
-                result = 3;
-                goto out;
+                report_message = error[0] ? error :
+                                "IRC reply reminder could not be persisted";
+                goto fail;
             }
             continue;
         }
@@ -3450,10 +3433,9 @@ run_turn(struct app_state *app, const char *prompt,
                         "reply_reminder_exhausted" : "room_update_quiet",
                         "response_id", response_id, "turn_id", turn_id),
                     error, sizeof(error)) < 0) {
-                (void)app_error(app, error[0] ? error :
-                                "quiet IRC turn could not be completed");
-                result = 3;
-                goto out;
+                report_message = error[0] ? error :
+                                "quiet IRC turn could not be completed";
+                goto fail;
             }
             result = 0;
             goto out;
@@ -3478,16 +3460,14 @@ run_turn(struct app_state *app, const char *prompt,
             if (app_textf(app, SNAG_UI_RUNTIME,
                     "turn › %s completed · response=%s · item=%s",
                     turn_id, response_id, final->local_item_id) < 0) {
-                (void)app_error(app, "turn runtime facts could not be rendered");
-                result = 6;
-                goto out;
+                report_message = "turn runtime facts could not be rendered";
+                goto output_fail;
             }
             if (app->execute &&
                 snag_ui_send(&app->ui, (struct snag_ui_command){
                     .kind = SNAG_UI_RAW, .data.value = (unsigned int)(STDOUT_FILENO), .text = final->text, .len = strlen(final->text)}) < 0) {
-                (void)app_error(app, "final answer could not be written to stdout");
-                result = 6;
-                goto out;
+                report_message = "final answer could not be written to stdout";
+                goto output_fail;
             }
             if (snag_app_compact_after_turn(app, projection.input_tokens_bound, count_method,
                                            error, sizeof(error)) < 0)
@@ -3544,9 +3524,13 @@ rebuild_request:
 user_interrupted:
     result = finish_user_interrupt(app, turn_id, error, sizeof(error));
     goto out;
+output_fail:
+    result = 6;
+    goto report;
 fail:
-    (void)app_error(app, error);
     result = 3;
+report:
+    (void)app_error(app, report_message);
 out:
     snag_app_response_cycle_release(app, &graph, &steering,
                                        &projection,
