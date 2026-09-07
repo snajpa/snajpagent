@@ -3,6 +3,116 @@ SPDX-License-Identifier: curl
 Pre-Vista Windows support for curl 8.20.0 with c-ares and static winpthreads.
 Upstream curl license terms retained.
 
+--- a/lib/curlx/fopen.c
++++ b/lib/curlx/fopen.c
+@@ -126,16 +126,17 @@
+
+ #ifndef _UNICODE
+   /* convert multibyte input to unicode */
+-  if(mbstowcs_s(&needed, NULL, 0, in, 0))
++  needed = mbstowcs(NULL, in, 0);
++  if(needed == (size_t)-1)
+     goto cleanup;
++  ++needed;
+   if(!needed || needed >= max_path_len)
+     goto cleanup;
+   ibuf = CURLX_MALLOC(needed * sizeof(wchar_t));
+   if(!ibuf)
+     goto cleanup;
+-  if(mbstowcs_s(&count, ibuf, needed, in, needed - 1))
+-    goto cleanup;
+-  if(count != needed)
++  count = mbstowcs(ibuf, in, needed);
++  if(count != needed - 1 || ibuf[count])
+     goto cleanup;
+   in_w = ibuf;
+ #else
+@@ -188,14 +189,8 @@
+       if(!temp)
+         goto cleanup;
+
+-      if(wcsncpy_s(temp, needed, L"\\\\?\\UNC\\", 8)) {
+-        CURLX_FREE(temp);
+-        goto cleanup;
+-      }
+-      if(wcscpy_s(temp + 8, needed, fbuf + 2)) {
+-        CURLX_FREE(temp);
+-        goto cleanup;
+-      }
++      memcpy(temp, L"\\\\?\\UNC\\", 8 * sizeof(wchar_t));
++      memcpy(temp + 8, fbuf + 2, (count - 2 + 1) * sizeof(wchar_t));
+     }
+     else {
+       /* "\\?\" + full path + null */
+@@ -207,14 +202,8 @@
+       if(!temp)
+         goto cleanup;
+
+-      if(wcsncpy_s(temp, needed, L"\\\\?\\", 4)) {
+-        CURLX_FREE(temp);
+-        goto cleanup;
+-      }
+-      if(wcscpy_s(temp + 4, needed, fbuf)) {
+-        CURLX_FREE(temp);
+-        goto cleanup;
+-      }
++      memcpy(temp, L"\\\\?\\", 4 * sizeof(wchar_t));
++      memcpy(temp + 4, fbuf, (count + 1) * sizeof(wchar_t));
+     }
+
+     CURLX_FREE(fbuf);
+@@ -223,16 +212,17 @@
+
+ #ifndef _UNICODE
+   /* convert unicode full path to multibyte output */
+-  if(wcstombs_s(&needed, NULL, 0, fbuf, 0))
++  needed = wcstombs(NULL, fbuf, 0);
++  if(needed == (size_t)-1)
+     goto cleanup;
++  ++needed;
+   if(!needed || needed >= max_path_len)
+     goto cleanup;
+   obuf = CURLX_MALLOC(needed);
+   if(!obuf)
+     goto cleanup;
+-  if(wcstombs_s(&count, obuf, needed, fbuf, needed - 1))
+-    goto cleanup;
+-  if(count != needed)
++  count = wcstombs(obuf, fbuf, needed);
++  if(count != needed - 1 || obuf[count])
+     goto cleanup;
+   *out = obuf;
+   obuf = NULL;
+@@ -378,6 +368,11 @@
+   TCHAR *fixed = NULL;
+   const TCHAR *target = NULL;
+
++  if(!filename || !mode || !fp) {
++    errno = EINVAL;
++    return NULL;
++  }
++
+ #ifdef _UNICODE
+   wchar_t *filename_w = fn_convert_UTF8_to_wchar(filename);
+   wchar_t *mode_w = fn_convert_UTF8_to_wchar(mode);
+@@ -386,7 +381,7 @@
+       target = fixed;
+     else
+       target = filename_w;
+-    errno = _wfreopen_s(&file, target, mode_w, fp);
++    file = _wfreopen(target, mode_w, fp);
+   }
+   else
+     /* !checksrc! disable ERRNOVAR 1 */
+@@ -398,7 +393,7 @@
+     target = fixed;
+   else
+     target = filename;
+-  errno = freopen_s(&file, target, mode, fp);
++  file = freopen(target, mode, fp);
+ #endif
+
+   CURLX_FREE(fixed);
 --- a/lib/easy_lock.h
 +++ b/lib/easy_lock.h
 @@ -27,7 +27,7 @@
