@@ -765,7 +765,9 @@ test_private_directory(void)
     char path[MAX_PATH * 4u];
     assert(snag_open_read(NULL, false) == -1 && errno == EINVAL);
     assert(snag_open_read("NUL", false) == -1 && errno == EACCES);
-    assert(snag_open_read("C:/NUL", false) == -1 && errno == EACCES);
+    char *device = snag_path_join(cwd, "NUL");
+    assert(device && snag_open_read(device, false) == -1 && errno == EACCES);
+    free(device);
     assert(snag_open_read("//./pipe/snajpagent-test", false) == -1 && errno == EINVAL);
     DWORD count = GetTempPathW(MAX_PATH, temp);
     assert(count && count < MAX_PATH);
