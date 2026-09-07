@@ -767,6 +767,10 @@ test_private_directory(void)
         char *data = snag_path_join(root, "data"), *alias = snag_path_join(root, "alias");
         int file = snag_create_private_at(fd, "data", true);
         assert(data && alias && file >= 0);
+#ifndef _WIN32
+        int file_flags = fcntl(file, F_GETFD);
+        assert(file_flags >= 0 && (file_flags & FD_CLOEXEC) != 0);
+#endif
         assert(snag_fd_privacy(file, &privacy) == 0 && privacy.effective_owner && privacy.private_access);
         assert(snag_write_full(file, bytes, sizeof(bytes)) == 0);
         snag_file_info info, linked;
@@ -849,6 +853,10 @@ test_private_directory(void)
         assert(snag_open_history(alias) == -1);
         file = snag_open_secret_file(alias);
         assert(file >= 0 && read(file, received, sizeof(received)) == sizeof(received));
+#ifndef _WIN32
+        file_flags = fcntl(file, F_GETFD);
+        assert(file_flags >= 0 && (file_flags & FD_CLOEXEC) != 0);
+#endif
         assert(!memcmp(bytes, received, sizeof(bytes)) && close(file) == 0);
         assert(snag_stat(alias, &linked) == 0 && S_ISREG(linked.st_mode) &&
                linked.st_dev == info.st_dev && linked.st_ino == info.st_ino);

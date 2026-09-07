@@ -2317,14 +2317,14 @@ open_at(int dirfd, const char *path, int flags, mode_t mode)
         if (!legacy)
             return -1;
         fd = open(legacy, flags, mode);
-        /* Linux before 2.6.23 ignores O_CLOEXEC: set it explicitly. This
-         * cannot make the legacy open/exec race atomic. */
-        if (fd >= 0 && (flags & O_CLOEXEC) && fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) {
-            int error = errno;
-            (void)close(fd);
-            errno = error;
-            return -1;
-        }
+    }
+    /* Linux before 2.6.23 ignores O_CLOEXEC, even when openat exists.
+     * This cannot make the legacy open/exec race atomic. */
+    if (fd >= 0 && (flags & O_CLOEXEC) && snag_fd_cloexec(fd) < 0) {
+        int error = errno;
+        (void)close(fd);
+        errno = error;
+        return -1;
     }
 #endif
     return fd;
@@ -2358,7 +2358,7 @@ snag_open_read(const char *path, bool directory)
 int
 snag_open_secret_file(const char *path)
 {
-    return open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    return open_at(AT_FDCWD, path, O_RDONLY | O_NONBLOCK | O_CLOEXEC, 0);
 }
 
 int

@@ -1013,6 +1013,11 @@ snag_term_output_open(struct snag_term_host *host, int fd)
     int error = ttyname_r(fd, path, sizeof(path));
     int copy = error ? -1 : open(path, O_WRONLY | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
 
+    if (copy >= 0 && snag_fd_cloexec(copy) < 0) {
+        error = errno;
+        (void)close(copy);
+        copy = -1;
+    }
     if (error)
         errno = error;
     if (copy < 0 || snag_fstat(fd, &original) < 0 || snag_fstat(copy, &owned) < 0 ||
