@@ -4174,6 +4174,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     struct snag_shutdown signal_handlers;
     struct snag_config config;
     char error[256];
+    const char *invalid_message = error;
     char *dotdir = NULL;
     char *config_path = NULL;
     char *workspace = NULL;
@@ -4205,55 +4206,38 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     app.execute = cli->execute;
     pending_shutdown_signal = 0;
     if (snag_shutdown_install(&signal_handlers, mark_shutdown_signal, true) < 0) {
-        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
-                                   "cannot install shutdown signal handlers");
-        rc = 2;
-        goto out;
+        invalid_message = "cannot install shutdown signal handlers";
+        goto invalid;
     }
     signal_handlers_installed = true;
     if (!snag_text_locale_init()) {
-        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
-                                   "a UTF-8 locale is required");
-        rc = 2;
-        goto out;
+        invalid_message = "a UTF-8 locale is required";
+        goto invalid;
     }
     error[0] = '\0';
     dotdir = snag_app_dotdir(cli->dotdir, error, sizeof(error));
     if (!dotdir) {
-        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
-                                   error[0] ? error : "dotdir is unavailable");
-        rc = 2;
-        goto out;
+        invalid_message = error[0] ? error : "dotdir is unavailable";
+        goto invalid;
     }
     if (snag_config_load(&config, cli->config_path, dotdir,
-                        error, sizeof(error)) < 0) {
-        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
-        rc = 2;
-        goto out;
-    }
+                        error, sizeof(error)) < 0)
+        goto invalid;
     if (!cli->list && ((!config.provider_count) ||
         (cli->provider && !snag_config_provider(&config, cli->provider)))) {
-        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, cli->provider ?
+        invalid_message = cli->provider ?
             "--provider names an unconfigured provider" :
-            "no provider is configured; run snajpagent login");
-        rc = 2;
-        goto out;
+            "no provider is configured; run snajpagent login";
+        goto invalid;
     }
     config_path = snag_config_path(cli->config_path, dotdir,
                                   error, sizeof(error));
-    if (!config_path) {
-        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
-        rc = 2;
-        goto out;
-    }
-    if (snag_store_open(&app.store, dotdir, error, sizeof(error)) < 0) {
-        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
-        goto out;
-    }
-    if (cli->update_model_cache && refresh_model_cache(&app, error, sizeof(error)) < 0) {
-        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
-        goto out;
-    }
+    if (!config_path)
+        goto invalid;
+    if (snag_store_open(&app.store, dotdir, error, sizeof(error)) < 0)
+        goto fail;
+    if (cli->update_model_cache && refresh_model_cache(&app, error, sizeof(error)) < 0)
+        goto fail;
     app.config_path = config_path;
     app.irc_file_config = config.irc;
     snag_ui_send(&app.ui, (struct snag_ui_command){
@@ -4261,11 +4245,8 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     snag_ui_send(&app.ui, (struct snag_ui_command){
         .kind = SNAG_UI_MARKDOWN, .data.value = snag_cli_markdown(cli, config.markdown)});
     if (!cli->execute && !cli->list &&
-        snag_irc_apply_cli(&config, cli, error, sizeof(error)) < 0) {
-        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
-        rc = 2;
-        goto out;
-    }
+        snag_irc_apply_cli(&config, cli, error, sizeof(error)) < 0)
+        goto invalid;
     app.networked = !cli->execute && !cli->list && snag_irc_enabled(&config);
     snag_ui_send(&app.ui, (struct snag_ui_command){
         .kind = SNAG_UI_COMMANDS, .data.commands = {commands, command_count()}});
@@ -4278,10 +4259,8 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         goto out;
     if (!cli->execute && !cli->list &&
         (snag_isatty(STDIN_FILENO) != 1 || snag_isatty(STDERR_FILENO) != 1)) {
-        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
-            "interactive mode requires terminal stdin and stderr; use -e for scripts");
-        rc = 2;
-        goto out;
+        invalid_message = "interactive mode requires terminal stdin and stderr; use -e for scripts";
+        goto invalid;
     }
     new_model = effective_model(config.model);
     new_effort = cli->effort ? cli->effort : config.reasoning_effort;
@@ -4292,18 +4271,14 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         if (snag_model_select(&app.model_cache, &config, cli->model,
                 snag_config_provider(&config, cli->provider), new_effort,
                 &selection, error, sizeof(error)) < 0) {
-            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
-            rc = 2;
-            goto out;
+            goto invalid;
         }
         new_model = effective_model(selection.model);
         new_effort = cli->effort ? cli->effort : selection.effort;
     }
     if ((!cli->resume || cli->effort || cli->model) && !resolve_effort(new_effort)) {
-        (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
-            "reasoning effort is empty, oversized, or invalid UTF-8");
-        rc = 2;
-        goto out;
+        invalid_message = "reasoning effort is empty, oversized, or invalid UTF-8";
+        goto invalid;
     }
     workspace = current_workspace(error, sizeof(error));
     if (!workspace) {
@@ -4322,11 +4297,8 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         if (cli->workspace) {
             relocated_workspace = resolve_workspace_path(cli->workspace, "relocation",
                                                          error, sizeof(error));
-            if (!relocated_workspace) {
-                (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
-                rc = 2;
-                goto out;
-            }
+            if (!relocated_workspace)
+                goto invalid;
         }
         if (cli->resume_id)
             rc = snag_session_open(&app.store, &app.session, cli->resume_id,
@@ -4348,19 +4320,16 @@ snag_app_run(const struct snag_cli *cli, const char *program)
             cli->provider ? cli->provider : app.session.default_provider);
         resume_model = cli->model ? new_model : app.session.default_model;
         if (!resume_provider) {
-            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, "selected provider is not configured; use --provider NAME");
-            rc = 2;
-            goto out;
+            invalid_message = "selected provider is not configured; use --provider NAME";
+            goto invalid;
         }
         if (!cli->execute && validate_prompt_values(&app.ui, &config,
                 resume_provider,
                 cli->model ? new_model : app.session.default_model,
                 resolve_effort(cli->model || cli->effort ? new_effort :
                                app.session.default_effort)) < 0) {
-            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
-                "configured prompt cannot be rendered with the current selection");
-            rc = 2;
-            goto out;
+            invalid_message = "configured prompt cannot be rendered with the current selection";
+            goto invalid;
         }
         if (app.session.archived && snag_session_unarchive(&app.session, NULL, error, sizeof(error)) < 0) {
             (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error); rc = 3; goto out;
@@ -4397,10 +4366,8 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         if (!cli->execute && validate_prompt_values(
                 &app.ui, &config, selected_provider, new_model,
                 resolve_effort(new_effort)) < 0) {
-            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR,
-                "configured prompt cannot be rendered with the current selection");
-            rc = 2;
-            goto out;
+            invalid_message = "configured prompt cannot be rendered with the current selection";
+            goto invalid;
         }
         if (snag_session_prepare(&app.session, selected_workspace,
                                selected_provider->name, new_model, new_effort,
@@ -4452,9 +4419,13 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     }
     rc = interactive_loop(&app, cli->prompt);
     goto out;
+invalid:
+    rc = 2;
+    goto report;
 fail:
-    (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
     rc = 3;
+report:
+    (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, invalid_message);
 out:
     (void)capture_shutdown_signal(&app);
     (void)snag_ui_text(&app.ui, SNAG_UI_CLOSE, NULL);
