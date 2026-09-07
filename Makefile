@@ -22,6 +22,18 @@ else
 BUILD_VERSION := $(VERSION)-$(GIT_REVISION)$(GIT_DIRTY)
 endif
 endif
+# Publisher opt-in; ordinary local and matrix builds have no updater.
+UPDATE_BASE_URL ?=
+UPDATE_TARGET ?=
+ifneq ($(UPDATE_BASE_URL),)
+ifeq ($(UPDATE_TARGET),)
+ifeq ($(filter prod-%,$(MAKECMDGOALS)),)
+$(error UPDATE_TARGET is required with UPDATE_BASE_URL)
+endif
+endif
+UPDATE_CHANNEL := $(if $(findstring -,$(BUILD_VERSION)),latest-dev,latest)
+override CPPFLAGS += -DSNAJPAGENT_UPDATE_BASE='"$(UPDATE_BASE_URL)"' -DSNAJPAGENT_UPDATE_TARGET='"$(UPDATE_TARGET)"' -DSNAJPAGENT_UPDATE_URL='"$(UPDATE_BASE_URL)/$(UPDATE_CHANNEL)/$(NAME)-$(UPDATE_TARGET)$(if $(findstring windows-,$(UPDATE_TARGET)),.exe)"'
+endif
 override CPPFLAGS += -DSNAJPAGENT_NAME='"$(NAME)"' -DSNAJPAGENT_VERSION='"$(BUILD_VERSION)"'
 override CFLAGS += -pthread
 override LDFLAGS += -pthread
@@ -45,9 +57,9 @@ LIVE_WORKSPACE ?= $(CURDIR)
 LIVE_RESULT_ROOT ?=
 TMUX_TEST_ROOT ?= $(CURDIR)/build/tmux-test
 PLATFORM_SRC = src/base.c src/platform.c src/term_host.c src/wake.c src/net.c src/process_host.c
-COMMON_SRC = $(PLATFORM_SRC) src/config.c src/secret_source.c src/credential.c src/auth.c src/auth_http.c src/login.c src/secret.c src/instructions.c src/json.c src/wire.c src/context.c src/provider_retry.c src/provider.c src/model_cache.c src/tools.c src/tools_read.c src/irc.c src/irc_runtime.c src/sse.c src/responses.c src/turn.c src/store.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/history.c src/term.c src/render.c src/render_prepare.c src/cli.c src/ui.c src/app_events.c src/app_stream.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/app.c
+COMMON_SRC = $(PLATFORM_SRC) src/config.c src/secret_source.c src/credential.c src/auth.c src/auth_http.c src/login.c src/secret.c src/instructions.c src/json.c src/wire.c src/context.c src/provider_retry.c src/http.c src/update.c src/provider.c src/model_cache.c src/tools.c src/tools_read.c src/irc.c src/irc_runtime.c src/sse.c src/responses.c src/turn.c src/store.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/history.c src/term.c src/render.c src/render_prepare.c src/cli.c src/ui.c src/app_events.c src/app_stream.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/app.c
 COMMON_OBJ = $(COMMON_SRC:.c=.o)
-HEADERS = src/snajpagent.h src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/credential.h src/auth.h src/login.h src/secret.h src/instructions.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/provider.h src/model_cache.h src/tools.h src/process_host.h src/tools_patch.h src/irc.h src/irc_internal.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h src/ui.h src/history.h
+HEADERS = src/snajpagent.h src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/credential.h src/auth.h src/login.h src/secret.h src/instructions.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/http.h src/update.h src/provider.h src/model_cache.h src/tools.h src/process_host.h src/tools_patch.h src/irc.h src/irc_internal.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h src/ui.h src/history.h
 DEPFLAGS = -MMD -MP
 FIXTURE_BIN = tests/$(NAME)-fixture
 TEST_BIN = tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store $(FIXTURE_BIN)
@@ -330,7 +342,7 @@ sizecheck:
 		test "$$test_c" -le "$$test_c_hard"
 
 clean:
-	rm -f $(BIN) src/*.o src/*.d $(TEST_BIN)
+	rm -f $(BIN) src/*.o src/*.d $(TEST_BIN) tests/update-old tests/update-new tests/update-local tests/update-stable
 	rm -rf tests/.fixture-obj build debug-$(BIN) $(BIN).debug $(BIN).dSYM
 
 help:
@@ -378,10 +390,10 @@ prod-matrix: $(PROD_TARGETS)
 prod-macos-universal: prod-macos-arm64 prod-macos-x86_64
 
 $(PROD_TARGETS):
-	@test '$(DEBUG)' = 0 || { printf '%s\n' '$@: production only; use DEBUG=0' >&2; exit 2; }
 	@mkdir -p build/matrix
 	nix-build nix/portable.nix -A $(patsubst prod-%,%,$@) \
 		--argstr buildVersion '$(BUILD_VERSION)' --argstr buildRevision '$(GIT_HEAD)' \
+		--arg debug $(if $(filter 1,$(DEBUG)),true,false) --argstr updateBase '$(UPDATE_BASE_URL)' \
 		--max-jobs 1 --cores 1 --out-link build/matrix/$(patsubst prod-%,%,$@)
 
 install: $(BIN) $(BIN).1
@@ -397,3 +409,16 @@ FORCE:
 .PHONY: all check stylecheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install help prod-matrix $(PROD_TARGETS) FORCE
 
 -include $(COMMON_OBJ:.o=.d) src/main.d
+
+# Focused loopback tests build real executable variants from the same source.
+UPDATE_TEST_SRC = $(PLATFORM_SRC) src/config.c src/secret_source.c src/json.c src/http.c src/update.c tests/test_update.c
+UPDATE_TEST_FLAGS = -DSNAJPAGENT_TEST_UPDATE=1 -DSNAJPAGENT_UPDATE_BASE='"https://publisher.test"' -DSNAJPAGENT_UPDATE_TARGET='"linux-x86_64"'
+tests/update-old tests/update-new tests/update-local tests/update-stable: $(UPDATE_TEST_SRC) $(HEADERS)
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CURL_CFLAGS) $(CFLAGS) -O0 $(LDFLAGS) -Isrc \
+		-USNAJPAGENT_VERSION -USNAJPAGENT_UPDATE_BASE -USNAJPAGENT_UPDATE_URL -USNAJPAGENT_UPDATE_TARGET \
+		-DSNAJPAGENT_VERSION='"$(if $(filter tests/update-new,$@),0.99.2-bbbbbbb,$(if $(filter tests/update-stable,$@),0.99.2,0.99.2-aaaaaaa))"' \
+		$(if $(filter-out tests/update-local,$@),$(UPDATE_TEST_FLAGS) -DSNAJPAGENT_UPDATE_URL='"https://publisher.test/$(if $(filter tests/update-stable,$@),latest,latest-dev)/snajpagent-linux-x86_64"') \
+		-o $@ $(UPDATE_TEST_SRC) $(LDLIBS) $(CURL_LIBS)
+updatecheck: tests/update-old tests/update-new tests/update-local tests/update-stable
+	python3 tests/update.py $^
+.PHONY: updatecheck

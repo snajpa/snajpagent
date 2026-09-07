@@ -27,6 +27,7 @@
 #define COLOR_PROTOCOL "\033[35m"
 #define COLOR_TRANSPORT "\033[2;34m"
 #define COLOR_HOST "\033[34m"
+#define COLOR_UPDATE "\033[1;30;46m"
 #define MARKDOWN_TABLE_COLUMNS 16u
 
 enum { BOUNDARY_NONE, BOUNDARY_CONTENT, BOUNDARY_PROMPT, BOUNDARY_BULLET };
@@ -2533,6 +2534,15 @@ int
 snag_render_warning_ctx(struct snag_render *render, const char *message)
 {
     return render_message(render, message, COLOR_WARNING);
+}
+
+int
+snag_render_update(struct snag_render *render, const char *text)
+{
+    size_t len = strlen(text);
+    return write_role_block(render, BOUNDARY_CONTENT, STDERR_FILENO, COLOR_UPDATE,
+                            text, len, first_line_len(text, len),
+                            render->stderr_terminal, true);
 }
 
 int

@@ -143,7 +143,8 @@ let
     import ./windows-pty.nix { inherit pkgs windows threads winver; } else null;
 in {
   inherit windows threads jansson tls curl networkLibraries regex pty;
-  application = { source, packageName, version, revision }: windows.stdenv.mkDerivation {
+  application = { source, packageName, version, revision, debug ? false,
+                  updateBase ? "", updateTarget ? "" }: windows.stdenv.mkDerivation {
     pname = "${packageName}-windows-${arch}";
     inherit version;
     src = source;
@@ -160,13 +161,15 @@ in {
       od -An -v -t u1 build/ca_bundle.zst |
         sed -E 's/([0-9]+)/\1,/g' > build/ca_bundle.inc
       makeFlagsArray+=(
+        'DEBUG=${if debug then "1" else "0"}'
+        ${pkgs.lib.optionalString (updateBase != "") "'UPDATE_BASE_URL=${updateBase}' 'UPDATE_TARGET=${updateTarget}'"}
         'TARGET_OS=Windows' 'BIN=${packageName}.exe'
         'DEBUG_SYMBOLS=debug-${packageName}.exe'
         "CC=$CC" "STRIP=$STRIP" "OBJCOPY=$OBJCOPY"
         'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
         'CPPFLAGS=-D_WIN32_WINNT=${winver} -DWINVER=${winver} -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"${pkgs.lib.optionalString (pty != null) " -DSNAG_LEGACY_PTY"}'
-        'CFLAGS=-std=c11 -Os -g -flto -ffunction-sections -fdata-sections -Wall -Wextra -Wpedantic -Werror'
-        'LDFLAGS=-static -municode -flto -Wl,--gc-sections${pkgs.lib.optionalString legacy ",--major-os-version,5,--minor-os-version,${if arch == "x86_64" then "2" else "0"},--major-subsystem-version,5,--minor-subsystem-version,${if arch == "x86_64" then "2" else "0"}"}'
+        'CFLAGS=-std=c11 ${if debug then "-Og -g -fno-omit-frame-pointer" else "-Os -g -flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
+        'LDFLAGS=-static -municode ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections${pkgs.lib.optionalString legacy ",--major-os-version,5,--minor-os-version,${if arch == "x86_64" then "2" else "0"},--major-subsystem-version,5,--minor-subsystem-version,${if arch == "x86_64" then "2" else "0"}"}'
         "JANSSON_CFLAGS=$($PKG_CONFIG --cflags jansson)"
         "LDLIBS=$($PKG_CONFIG --static --libs jansson) -lsnagregex -lunistring -liconv -ladvapi32 -lntdll -lws2_32 -lwinpthread${pkgs.lib.optionalString (pty != null) " -lsnagpty -L${pty.cxx}/lib -lc++ -L${pty.unwind}/lib -lunwind -luser32 -lshell32"}"
         "CURL_CFLAGS=$($PKG_CONFIG --cflags libcurl)"
@@ -177,7 +180,7 @@ in {
       runHook preInstall
       mkdir -p "$out/bin" "$debug"
       cp ${packageName}.exe "$out/bin/"
-      cp debug-${packageName}.exe "$debug/"
+      cp ${if debug then "${packageName}.exe" else "debug-${packageName}.exe"} "$debug/"
       ln -s "$debug" "$out/bin/.debug"
       runHook postInstall
     '';

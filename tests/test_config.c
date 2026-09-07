@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "config.h"
 #include "base.h"
+#include "snajpagent.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -552,6 +553,12 @@ main(void)
     assert(config.max_goal_prompt_bytes == 256u * 1024u);
     assert(config.max_turn_retries == 3u);
     assert(config.read_agents_md);
+#ifdef SNAJPAGENT_UPDATE_URL
+    assert(config.auto_update == (strchr(SNAJPAGENT_VERSION, '-') == NULL));
+    assert(strcmp(config.update_url, SNAJPAGENT_UPDATE_URL) == 0);
+#else
+    assert(!config.auto_update && !config.update_url[0]);
+#endif
     assert(config.markdown);
     assert(config.resume_history_turns == 2u);
     assert(config.typing_pause_ms == 500u);

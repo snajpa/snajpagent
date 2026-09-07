@@ -24,6 +24,10 @@
 /tests/test_tools
 /tests/test_turn
 /tests/test_wire
+/tests/update-old
+/tests/update-new
+/tests/update-local
+/tests/update-stable
 
 # Release and evidence artifacts
 /build/

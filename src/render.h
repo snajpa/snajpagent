@@ -160,6 +160,7 @@ int snag_render_rollout_end(struct snag_render *render);
 int snag_render_rollout_abort(struct snag_render *render);
 int snag_render_error_ctx(struct snag_render *render, const char *message);
 int snag_render_warning_ctx(struct snag_render *render, const char *message);
+int snag_render_update(struct snag_render *render, const char *text);
 int snag_render_host(struct snag_render *render, const char *text);
 int snag_render_runtime(struct snag_render *render, const char *text);
 int snag_render_irc_event(struct snag_render *render,

@@ -216,7 +216,8 @@ let
   ] networkLibraries;
 in {
   inherit sdk target compiler tools cflags ldflags jansson tls curl;
-  application = { source, packageName, version, revision }:
+  application = { source, packageName, version, revision, debug ? false,
+                  updateBase ? "", updateTarget ? "" }:
     pkgs.stdenvNoCC.mkDerivation {
       pname = "${packageName}-macos-${arch}";
       inherit version;
@@ -233,14 +234,16 @@ in {
         od -An -v -t u1 build/ca_bundle.zst |
           sed -E 's/([0-9]+)/\1,/g' > build/ca_bundle.inc
         makeFlagsArray+=(
+        'DEBUG=${if debug then "1" else "0"}'
+        ${pkgs.lib.optionalString (updateBase != "") "'UPDATE_BASE_URL=${updateBase}' 'UPDATE_TARGET=${updateTarget}'"}
           'TARGET_OS=Darwin'
           'CC=${compiler} --target=${target} -isysroot ${sdk}'
           'STRIP=${if legacyLoader then builtins.dirOf linker + "/x86_64-apple-darwin-strip" else tools + "/llvm-strip"}'
           'DSYMUTIL=${tools}/dsymutil'
           'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
           'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_DARWIN_C_SOURCE -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
-          'CFLAGS=-std=c11 ${cflags} -flto -Wall -Wextra -Wpedantic -Werror'
-          'LDFLAGS=${ldflags}${lib.optionalString legacyLoader " -Wl,-lto_library,${llvm.llvm.lib}/lib/libLTO.so"} -flto -Wl,-object_path_lto,build/app-lto.o -Wl,-dead_strip -Wl,-dead_strip_dylibs -Wl,-pie'
+          'CFLAGS=-std=c11 ${if debug then "-Og -g -fno-omit-frame-pointer -Werror=unguarded-availability" else cflags + " -flto"} -Wall -Wextra -Wpedantic -Werror'
+          'LDFLAGS=${ldflags}${lib.optionalString legacyLoader " -Wl,-lto_library,${llvm.llvm.lib}/lib/libLTO.so"} ${lib.optionalString (!debug) "-flto -Wl,-object_path_lto,build/app-lto.o -Wl,-dead_strip -Wl,-dead_strip_dylibs"} -Wl,-pie'
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=$(pkg-config --static --libs jansson)"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
@@ -251,6 +254,7 @@ in {
         runHook preInstall
         mkdir -p "$out/bin" "$debug"
         cp ${packageName} "$out/bin/"
+        ${lib.optionalString debug "${tools}/dsymutil ${packageName} -o ${packageName}.dSYM"}
         cp -R ${packageName}.dSYM "$debug/"
         ln -s "$debug/${packageName}.dSYM" "$out/bin/${packageName}.dSYM"
         runHook postInstall
