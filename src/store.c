@@ -972,73 +972,58 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
         if (reminder)
             session->irc_reply_reminded = true;
-    } else if (strcmp(type, "future_turn_queued") == 0) {
-        const char *queue_id = snag_json_string(data, "queue_id");
-        const char *text = snag_json_string(data, "text");
-        const char *turn_id = snag_json_string(data, "while_turn_id");
-        size_t len;
-        struct snag_queued_turn *queued;
-
-        if (!snag_json_exact_keys(data, json_object_get(data, "received_at_ms") ?
-                "queue_id read_only text while_turn_id received_at_ms" : "queue_id read_only text while_turn_id") ||
-            (!session->active_turn && session->goal_status != SNAG_GOAL_ACTIVE) ||
-            !json_is_boolean(json_object_get(data, "read_only")) ||
-            !turn_id || strcmp(turn_id, session->active_turn ? session->active_turn_id : "") != 0 ||
-            !queue_id || !snag_hex_is_lower(queue_id, SNAG_ID_HEX_LEN) ||
-            pending_user_id_exists(session, queue_id) || !text || !*text ||
-            (len = strlen(text)) > SNAG_MAX_QUEUED_TEXT ||
-            session->pending_queue_count >= SNAG_MAX_PENDING_TURNS ||
-            session->pending_queue_bytes > SNAG_MAX_PENDING_QUEUE_TEXT - len)
-            goto invalid;
-        queued = &session->pending_queue[session->pending_queue_count];
-        memset(queued, 0, sizeof(*queued));
-        if (replace_text(session, &queued->text, queue_id, text, SNAG_MAX_QUEUED_TEXT) < 0)
-            return -1;
-        ++session->pending_queue_count;
-        memcpy(queued->queue_id, queue_id, sizeof(queued->queue_id));
-        queued->seq = seq;
-        queued->received_ms = session->last_time_ms;
-        if (json_object_get(data, "received_at_ms") &&
-            snag_json_integer_u64(data, "received_at_ms", &queued->received_ms) < 0)
-            goto invalid;
-        queued->read_only = json_is_true(json_object_get(data, "read_only"));
-        session->pending_queue_bytes += len;
-    } else if (strcmp(type, "future_turn_edited") == 0) {
+    } else if (snag_string_in(type, "future_turn_queued future_turn_edited")) {
+        bool adding = strcmp(type, "future_turn_queued") == 0;
+        bool read_only = json_is_true(json_object_get(data, "read_only"));
         const char *queue_id = snag_json_string(data, "queue_id");
         const char *text = snag_json_string(data, "text");
         struct snag_queued_turn *queued = NULL;
-        size_t old_len;
-        size_t len;
+        size_t old_len = 0u, len;
 
-        if (!snag_json_exact_keys(data, json_object_get(data, "received_at_ms") ?
-                "queue_id read_only text received_at_ms" : "queue_id read_only text") || !queue_id || !text || !*text ||
+        const char *keys = adding ?
+            (json_object_get(data, "received_at_ms") ? "queue_id read_only text while_turn_id received_at_ms" :
+                                                     "queue_id read_only text while_turn_id") :
+            (json_object_get(data, "received_at_ms") ? "queue_id read_only text received_at_ms" :
+                                                     "queue_id read_only text");
+        if (!snag_json_exact_keys(data, keys) ||
             !json_is_boolean(json_object_get(data, "read_only")) ||
-            !snag_hex_is_lower(queue_id, SNAG_ID_HEX_LEN) ||
-            (len = strlen(text)) > SNAG_MAX_QUEUED_TEXT)
+            !queue_id || !snag_hex_is_lower(queue_id, SNAG_ID_HEX_LEN) ||
+            !text || !*text || (len = strlen(text)) > SNAG_MAX_QUEUED_TEXT)
             goto invalid;
-        for (size_t i = 0; i < session->pending_queue_count; ++i) {
-            if (strcmp(session->pending_queue[i].queue_id, queue_id) == 0) {
-                queued = &session->pending_queue[i];
-                break;
-            }
+        if (adding) {
+            const char *turn_id = snag_json_string(data, "while_turn_id");
+            if ((!session->active_turn && session->goal_status != SNAG_GOAL_ACTIVE) ||
+                !turn_id || strcmp(turn_id, session->active_turn ? session->active_turn_id : "") ||
+                pending_user_id_exists(session, queue_id) ||
+                session->pending_queue_count >= SNAG_MAX_PENDING_TURNS)
+                goto invalid;
+            queued = &session->pending_queue[session->pending_queue_count];
+        } else {
+            for (size_t i = 0; i < session->pending_queue_count && !queued; ++i)
+                if (strcmp(session->pending_queue[i].queue_id, queue_id) == 0)
+                    queued = &session->pending_queue[i];
+            if (!queued || (!strcmp(queued->text, text) && queued->read_only == read_only))
+                goto invalid;
+            old_len = strlen(queued->text);
         }
-        if (!queued || (strcmp(queued->text, text) == 0 &&
-            queued->read_only == json_is_true(json_object_get(data, "read_only"))))
-            goto invalid;
-        old_len = strlen(queued->text);
-        if (len > old_len &&
-            session->pending_queue_bytes >
+        if (len > old_len && session->pending_queue_bytes >
                 SNAG_MAX_PENDING_QUEUE_TEXT - (len - old_len))
             goto invalid;
+        if (adding)
+            memset(queued, 0, sizeof(*queued));
         if (replace_text(session, &queued->text, queue_id, text, SNAG_MAX_QUEUED_TEXT) < 0)
             return -1;
         queued->received_ms = session->last_time_ms;
         if (json_object_get(data, "received_at_ms") &&
             snag_json_integer_u64(data, "received_at_ms", &queued->received_ms) < 0)
             goto invalid;
-        queued->read_only = json_is_true(json_object_get(data, "read_only"));
-        session->pending_queue_bytes =
-            session->pending_queue_bytes - old_len + len;
+        if (adding) {
+            ++session->pending_queue_count;
+            memcpy(queued->queue_id, queue_id, sizeof(queued->queue_id));
+            queued->seq = seq;
+        }
+        queued->read_only = read_only;
+        session->pending_queue_bytes = session->pending_queue_bytes - old_len + len;
     } else if (strcmp(type, "future_turn_cancelled") == 0) {
         const char *reason = snag_json_string(data, "reason");
         json_t *ids = json_object_get(data, "queue_ids");
