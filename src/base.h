@@ -67,6 +67,8 @@ bool snag_environment_prefix(const char *entry, const char *prefix);
 /* Explicit UTF-8/UTF-16 conversion; caller owns the result. */
 wchar_t *snag_utf8_to_wide(const char *text);
 char *snag_wide_to_utf8(const wchar_t *text);
+/* Convert exactly count UTF-16 units; NULL output queries the byte count. */
+ssize_t snag_utf16_to_utf8(const wchar_t *text, size_t count, char *out, size_t capacity);
 char **snag_wide_arguments(int argc, wchar_t **wide);
 void snag_arguments_free(char **argv);
 #endif

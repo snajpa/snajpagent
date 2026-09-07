@@ -142,33 +142,38 @@ snag_utf8_to_wide(const char *path)
 {
     wchar_t *wide;
     size_t len;
-    int chars;
 
     if (!path) {
         errno = EINVAL;
         return NULL;
     }
     len = strlen(path);
-    if (len > INT_MAX) {
+    if (len > INT_MAX || len > SIZE_MAX / sizeof(*wide) - 1u) {
         errno = E2BIG;
         return NULL;
     }
-    if (!snag_utf8_valid((const unsigned char *)path, len, true)) {
-        errno = EILSEQ;
+    wide = malloc((len + 1u) * sizeof(*wide));
+    if (!wide)
         return NULL;
+    size_t units = 0;
+    for (size_t i = 0; i < len;) {
+        uint32_t cp;
+        size_t n = snag_utf8_decode((const unsigned char *)path + i, len - i, &cp);
+        if (!n) {
+            free(wide);
+            errno = EILSEQ;
+            return NULL;
+        }
+        if (cp <= 0xffffu)
+            wide[units++] = (wchar_t)cp;
+        else {
+            cp -= 0x10000u;
+            wide[units++] = (wchar_t)(0xd800u + (cp >> 10));
+            wide[units++] = (wchar_t)(0xdc00u + (cp & 0x3ffu));
+        }
+        i += n;
     }
-    chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, NULL, 0);
-    if (!chars) {
-        path_error(GetLastError());
-        return NULL;
-    }
-    wide = malloc((size_t)chars * sizeof(*wide));
-    if (wide && !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1, wide, chars)) {
-        DWORD error = GetLastError();
-        free(wide);
-        path_error(error);
-        return NULL;
-    }
+    wide[units] = 0;
     return wide;
 }
 
@@ -184,19 +189,64 @@ wide_path(const char *path)
 
 static bool private_dacl(PACL dacl, PSID owner);
 
+ssize_t
+snag_utf16_to_utf8(const wchar_t *text, size_t count, char *out, size_t capacity)
+{
+    size_t used = 0;
+    if (!text && count) {
+        errno = EINVAL;
+        return -1;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        uint32_t cp = (uint16_t)text[i];
+        if (cp >= 0xd800u && cp <= 0xdbffu) {
+            if (++i == count || text[i] < 0xdc00u || text[i] > 0xdfffu) {
+                errno = EILSEQ;
+                return -1;
+            }
+            cp = 0x10000u + ((cp - 0xd800u) << 10) + ((uint16_t)text[i] - 0xdc00u);
+        } else if (cp >= 0xdc00u && cp <= 0xdfffu) {
+            errno = EILSEQ;
+            return -1;
+        }
+        size_t width = cp < 0x80u ? 1u : cp < 0x800u ? 2u : cp < 0x10000u ? 3u : 4u;
+        if (used > (size_t)SSIZE_MAX - width) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        if (out) {
+            if (used > capacity || width > capacity - used) {
+                errno = E2BIG;
+                return -1;
+            }
+            if (width == 1u)
+                out[used] = (char)cp;
+            else {
+                unsigned int prefix = width == 2u ? 0xc0u : width == 3u ? 0xe0u : 0xf0u;
+                out[used] = (char)(prefix | (cp >> (6u * (width - 1u))));
+                for (size_t j = 1u; j < width; ++j)
+                    out[used + j] = (char)(0x80u | ((cp >> (6u * (width - 1u - j))) & 0x3fu));
+            }
+        }
+        used += width;
+    }
+    return (ssize_t)used;
+}
+
 char *
 snag_wide_to_utf8(const wchar_t *wide)
 {
-    int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, NULL, 0, NULL, NULL);
-    if (!size) {
-        path_error(GetLastError());
+    if (!wide) {
+        errno = EINVAL;
         return NULL;
     }
+    size_t units = wcslen(wide) + 1u;
+    ssize_t size = snag_utf16_to_utf8(wide, units, NULL, 0);
+    if (size < 0)
+        return NULL;
     char *out = malloc((size_t)size);
-    if (out && !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, out, size, NULL, NULL)) {
-        DWORD error = GetLastError();
+    if (out && snag_utf16_to_utf8(wide, units, out, (size_t)size) < 0) {
         free(out);
-        path_error(error);
         return NULL;
     }
     return out;
@@ -467,9 +517,7 @@ snag_hostname(char *out, size_t size)
         if (!GetComputerNameW(name, &count))
             return path_error(GetLastError());
     }
-    if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, name, -1, out, (int)size, NULL, NULL))
-        return path_error(GetLastError());
-    return 0;
+    return snag_utf16_to_utf8(name, wcslen(name) + 1u, out, size) < 0 ? -1 : 0;
 }
 
 int
@@ -1188,7 +1236,7 @@ snag_directory_next(struct snag_directory *dir)
     FILE_NAMES_INFORMATION *info = &record.align;
     IO_STATUS_BLOCK io = {0};
     NTSTATUS status;
-    int bytes;
+    ssize_t bytes;
     size_t header = offsetof(FILE_NAMES_INFORMATION, FileName);
 
     if (!dir) {
@@ -1214,14 +1262,11 @@ snag_directory_next(struct snag_directory *dir)
         errno = EIO;
         return NULL;
     }
-    bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, info->FileName,
-        (int)(info->FileNameLength / sizeof(WCHAR)), dir->name, sizeof(dir->name) - 1u, NULL, NULL);
-    if (!bytes) {
-        DWORD code = GetLastError();
-        if (code == ERROR_INSUFFICIENT_BUFFER)
+    bytes = snag_utf16_to_utf8(info->FileName, info->FileNameLength / sizeof(WCHAR),
+                               dir->name, sizeof(dir->name) - 1u);
+    if (bytes < 0) {
+        if (errno == E2BIG)
             errno = ENAMETOOLONG;
-        else
-            path_error(code);
         return NULL;
     }
     if (memchr(dir->name, '\0', (size_t)bytes)) {
@@ -1748,10 +1793,9 @@ snag_realpath(const char *path)
     } else if (wcsncmp(body, L"\\\\?\\", 4u) == 0) {
         body += 4u;
     }
-    bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, body, -1,
-                                NULL, 0, NULL, NULL);
-    if (!bytes)
-        goto native_error;
+    bytes = (int)snag_utf16_to_utf8(body, wcslen(body) + 1u, NULL, 0);
+    if (bytes < 0)
+        goto out;
     if ((size_t)bytes + prefix > SNAG_PATH_MAX_BYTES + 1u) {
         errno = ENAMETOOLONG;
         goto out;
@@ -1761,12 +1805,9 @@ snag_realpath(const char *path)
         goto out;
     if (prefix)
         result[0] = result[1] = '/';
-    if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, body, -1,
-                             result + prefix, bytes, NULL, NULL)) {
-        DWORD native_error = GetLastError();
+    if (snag_utf16_to_utf8(body, wcslen(body) + 1u, result + prefix, (size_t)bytes) < 0) {
         free(result);
         result = NULL;
-        path_error(native_error);
         goto out;
     }
     for (char *p = result; *p; ++p)

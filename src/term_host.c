@@ -663,10 +663,9 @@ encode_key(struct snag_term_host *host, const KEY_EVENT_RECORD *key)
     size_t prefix = alt && !(ctrl && c >= 0x20u) ? 1u : 0u;
     if (prefix)
         host->input_key[0] = '\033';
-    n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, scalar, units,
-                            host->input_key + prefix, (int)(sizeof(host->input_key) - prefix), NULL, NULL);
-    if (!n) {
-        errno = EILSEQ;
+    n = (int)snag_utf16_to_utf8(scalar, (size_t)units, host->input_key + prefix,
+                                sizeof(host->input_key) - prefix);
+    if (n < 0) {
         return -1;
     }
     host->input_key_len = (unsigned int)n + (unsigned int)prefix;
@@ -860,13 +859,7 @@ snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
         errno = EAGAIN;
         return -1;
     }
-    int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, (int)used,
-                                    buffer, (int)size, NULL, NULL);
-    if (!bytes) {
-        errno = EILSEQ;
-        return -1;
-    }
-    return bytes;
+    return snag_utf16_to_utf8(wide, used, (char *)buffer, size);
 }
 
 int

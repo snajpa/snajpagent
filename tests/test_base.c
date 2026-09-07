@@ -1092,6 +1092,28 @@ test_private_directory(void)
 static void
 test_realpath(void)
 {
+#ifdef _WIN32
+    const wchar_t pair[] = {L'A', 0xd83d, 0xde00, 0};
+    const wchar_t embedded[] = {L'a', 0, L'b'};
+    const wchar_t invalid[][3] = {{0xd800, 0, 0}, {0xdc00, 0, 0}, {0xd800, L'x', 0}};
+    char converted[8];
+    assert(snag_utf16_to_utf8(NULL, 0, NULL, 0) == 0);
+    assert(snag_utf16_to_utf8(NULL, 1, NULL, 0) == -1 && errno == EINVAL);
+    assert(snag_utf16_to_utf8(pair, 4, NULL, 0) == 6);
+    assert(snag_utf16_to_utf8(pair, 4, converted, sizeof(converted)) == 6);
+    assert(!memcmp(converted, "A\xf0\x9f\x98\x80", 6));
+    memset(converted, 'X', sizeof(converted));
+    assert(snag_utf16_to_utf8(pair, 4, converted, 4) == -1 && errno == E2BIG);
+    assert(converted[4] == 'X');
+    assert(snag_utf16_to_utf8(embedded, 3, converted, sizeof(converted)) == 3);
+    assert(!memcmp(converted, "a\0b", 3));
+    for (size_t i = 0; i < 3u; ++i)
+        assert(!snag_wide_to_utf8(invalid[i]) && errno == EILSEQ);
+    assert(!snag_utf8_to_wide("\xed\xa0\x80") && errno == EILSEQ);
+    wchar_t *roundtrip = snag_utf8_to_wide("A\xf0\x9f\x98\x80");
+    assert(roundtrip && !memcmp(roundtrip, pair, sizeof(pair)));
+    free(roundtrip);
+#endif
     char *path = snag_realpath(".");
     char *again;
 
