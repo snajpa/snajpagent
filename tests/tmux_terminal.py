@@ -1890,7 +1890,7 @@ def run_bullet_class_case(binary, root):
         terminal.submit("/goal pause")
         terminal.wait("Goal paused at the current turn boundary")
         terminal.wait("goal checkpoint")
-        wait_idle_prompt_at_bottom(terminal, DEFAULT_IDLE_PROMPT)
+        wait_idle_prompt_at_bottom(terminal, DEFAULT_ACCOUNTED_IDLE_PROMPT)
         terminal.send_key("Tab")
         commands = (("/goal lock", "goal_lock_changed", 1),
                     ("/goal unlock", "goal_lock_changed", 2),
@@ -1902,7 +1902,7 @@ def run_bullet_class_case(binary, root):
             wait_event_count(case / "s", kind, count)
         terminal.send_key("Tab")
         terminal.wait("• Compacted")
-        wait_idle_prompt_at_bottom(terminal, DEFAULT_IDLE_PROMPT)
+        wait_idle_prompt_at_bottom(terminal, DEFAULT_ACCOUNTED_IDLE_PROMPT)
         rows = terminal.capture().splitlines()
         group = ["• Goal wording locked against model changes",
                  "• Goal wording unlocked for model changes", "• Goal updated",
