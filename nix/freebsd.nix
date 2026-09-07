@@ -10,6 +10,7 @@ let
     pname = "freebsd-amd64-sysroot";
     version = "8.4";
     src = pkgs.fetchurl {
+      name = "disc1.iso";
       url = "https://archive.freebsd.org/old-releases/amd64/ISO-IMAGES/8.4/FreeBSD-8.4-RELEASE-amd64-disc1.iso";
       sha256 = "2fb17d77d4eba34736eb98c142c56546dd73a4e7ac38895bb6c8517949282438";
     };
