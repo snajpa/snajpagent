@@ -17,8 +17,6 @@
 
 static atomic_uint sigint_pending;
 static volatile sig_atomic_t sigwinch_pending;
-/* Only the existing terminal owner uses these privately reopened descriptions. */
-static _Thread_local struct snag_term *output_owner;
 static int redraw(struct snag_term *term);
 static size_t previous_cp(const unsigned char *s, size_t pos);
 static int compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes,
@@ -208,7 +206,7 @@ output_checkpoint(void *opaque)
 int
 snag_term_write(int fd, const void *text, size_t len)
 {
-    struct snag_term *term = output_owner;
+    struct snag_term *term = snag_term_output_owner();
     int target = term && fd >= STDOUT_FILENO && fd <= STDERR_FILENO ?
                  term->output_fd[fd - STDOUT_FILENO] : -1;
 
@@ -539,7 +537,7 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
         }
         term->output_fd[fd - STDOUT_FILENO] = copy;
     }
-    output_owner = term;
+    snag_term_output_bind(term);
     if (term->capable && snag_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0) {
         int saved_errno = errno;
         snag_term_close(term);
@@ -2747,8 +2745,8 @@ snag_term_close(struct snag_term *term)
     snag_buf_free(&term->output_line);
     snag_buf_free(&term->painted_prompt);
     snag_buf_free(&term->completion_output);
-    if (output_owner == term)
-        output_owner = NULL;
+    if (snag_term_output_owner() == term)
+        snag_term_output_bind(NULL);
     for (size_t i = 0u; i < 2u; ++i)
         if (term->output_fd[i] >= 0)
             close(term->output_fd[i]);

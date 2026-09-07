@@ -2468,7 +2468,9 @@ legacy_at_path(int dirfd, const char *path, char out[PATH_MAX])
 #if defined(__APPLE__)
     if (fcntl(dirfd, F_GETPATH, out) < 0)
         return NULL;
-    size_t prefix = strnlen(out, PATH_MAX);
+    size_t prefix = 0;
+    while (prefix < PATH_MAX && out[prefix])
+        ++prefix;
     if (!prefix || prefix >= PATH_MAX || out[0] != '/') {
         errno = ENAMETOOLONG;
         return NULL;

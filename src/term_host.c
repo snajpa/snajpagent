@@ -12,6 +12,49 @@
 #include <stdatomic.h>
 #include <signal.h>
 
+#if defined(__APPLE__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1070
+#include <pthread.h>
+static pthread_key_t output_owner;
+static pthread_once_t output_owner_once = PTHREAD_ONCE_INIT;
+
+static void
+output_owner_init(void)
+{
+    if (pthread_key_create(&output_owner, NULL) != 0)
+        abort();
+}
+
+struct snag_term *
+snag_term_output_owner(void)
+{
+    if (pthread_once(&output_owner_once, output_owner_init) != 0)
+        abort();
+    return pthread_getspecific(output_owner);
+}
+
+void
+snag_term_output_bind(struct snag_term *term)
+{
+    if (pthread_once(&output_owner_once, output_owner_init) != 0 ||
+        pthread_setspecific(output_owner, term) != 0)
+        abort();
+}
+#else
+static _Thread_local struct snag_term *output_owner;
+
+struct snag_term *
+snag_term_output_owner(void)
+{
+    return output_owner;
+}
+
+void
+snag_term_output_bind(struct snag_term *term)
+{
+    output_owner = term;
+}
+#endif
+
 #ifdef _WIN32
 #include "process_host.h"
 #define WIN32_LEAN_AND_MEAN

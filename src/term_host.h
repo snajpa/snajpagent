@@ -7,6 +7,10 @@
 #include <sys/types.h>
 #include <signal.h>
 
+struct snag_term;
+struct snag_term *snag_term_output_owner(void);
+void snag_term_output_bind(struct snag_term *term);
+
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX

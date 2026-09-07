@@ -40,7 +40,10 @@
 #endif
 
 static atomic_int shutdown_signal_seen;
+#if !defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070
 static _Thread_local int thread_local_value = 7;
+#endif
+static int thread_parent_owner, thread_child_owner;
 
 #ifdef _WIN32
 static unsigned __stdcall
@@ -50,15 +53,25 @@ static void *
 thread_local_worker(void *unused)
 {
     (void)unused;
+#if !defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070
     assert(thread_local_value == 7);
     thread_local_value = 13;
+#endif
+    assert(snag_term_output_owner() == NULL);
+    snag_term_output_bind((struct snag_term *)&thread_child_owner);
+    assert(snag_term_output_owner() == (struct snag_term *)&thread_child_owner);
+    snag_term_output_bind(NULL);
     return 0;
 }
 
 static void
 test_thread_local(void)
 {
+#if !defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070
     thread_local_value = 41;
+#endif
+    assert(snag_term_output_owner() == NULL);
+    snag_term_output_bind((struct snag_term *)&thread_parent_owner);
     for (int i = 0; i < 2; ++i) {
 #ifdef _WIN32
         HANDLE thread = (HANDLE)_beginthreadex(NULL, 0, thread_local_worker, NULL, 0, NULL);
@@ -71,8 +84,12 @@ test_thread_local(void)
         assert(pthread_create(&thread, NULL, thread_local_worker, NULL) == 0);
         assert(pthread_join(thread, &result) == 0 && result == NULL);
 #endif
+#if !defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070
         assert(thread_local_value == 41);
+#endif
+        assert(snag_term_output_owner() == (struct snag_term *)&thread_parent_owner);
     }
+    snag_term_output_bind(NULL);
 }
 
 static void

@@ -147,7 +147,9 @@ snag_secret_source_resolve(const struct snag_secret_source *source, char **out,
             len = strlen(value);
     } else if (source->kind == SNAG_SECRET_LITERAL) {
         const char *text = source->value;
-        if (!text || !(len = strnlen(text, SNAG_SECRET_MAX + 1u)) || len > SNAG_SECRET_MAX)
+        while (text && len <= SNAG_SECRET_MAX && text[len])
+            ++len;
+        if (!text || !len || len > SNAG_SECRET_MAX)
             goto done;
         value = snag_strdup_checked(text, SNAG_SECRET_MAX);
     } else if (source->kind == SNAG_SECRET_FILE) {
