@@ -2495,6 +2495,8 @@ def run_destination_case(binary, root, provider, environment):
                 case / "state", config, 120, 24, args=args, environment=environment)
             terminals[name] = terminal
             terminal.wait(f"{args[args.index('-o') + 1]}@{MACHINE_HOSTNAME} :")
+            terminal.submit("destination fixture setup")
+            wait_event_count(terminal.dotdir, "session_created", 1)
         client = terminals["c"]
         terminals["a"].wait("routerop joined")
         terminals["b"].wait("routerop joined")
