@@ -1,0 +1,29 @@
+SPDX-License-Identifier: MIT
+Use Mach monotonic time for Darwin DNS timeout sampling before clock_gettime.
+
+--- a/src/lib/util/ares_timeval.c
++++ b/src/lib/util/ares_timeval.c
+@@ -53,1 +53,22 @@
+-#elif defined(HAVE_CLOCK_GETTIME_MONOTONIC)
++#elif defined(__APPLE__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101200
++#include <mach/mach_time.h>
++void ares_tvnow(ares_timeval_t *now)
++{
++  mach_timebase_info_data_t scale;
++  now->sec = 0;
++  now->usec = 0;
++  if (mach_timebase_info(&scale) != 0 || !scale.denom) {
++    return;
++  }
++  uint64_t ticks = mach_absolute_time(), quotient = ticks / scale.denom;
++  uint64_t fraction = (ticks % scale.denom) * scale.numer / scale.denom;
++  fraction += (quotient % 1000000000u) * scale.numer;
++  uint64_t whole = quotient / 1000000000u;
++  if (scale.numer && whole > (INT64_MAX - fraction / 1000000000u) / scale.numer) {
++    now->sec = INT64_MAX;
++    return;
++  }
++  now->sec = (ares_int64_t)(whole * scale.numer + fraction / 1000000000u);
++  now->usec = (unsigned int)((fraction % 1000000000u) / 1000u);
++}
++#elif defined(HAVE_CLOCK_GETTIME_MONOTONIC)

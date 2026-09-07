@@ -1,0 +1,25 @@
+SPDX-License-Identifier: MIT
+Use Mach monotonic seconds on Darwin before clock_gettime.
+
+--- a/lib/nghttp2_time.c
++++ b/lib/nghttp2_time.c
+@@ -46,3 +46,19 @@
+ #if defined(HAVE_GETTICKCOUNT64) && !defined(__CYGWIN__)
+ uint64_t nghttp2_time_now_sec(void) { return GetTickCount64() / 1000; }
++#elif defined(__APPLE__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 101200
++#include <mach/mach_time.h>
++uint64_t nghttp2_time_now_sec(void) {
++  mach_timebase_info_data_t scale;
++  if (mach_timebase_info(&scale) != 0 || !scale.denom) {
++    return 0;
++  }
++  uint64_t ticks = mach_absolute_time(), quotient = ticks / scale.denom;
++  uint64_t fraction = (ticks % scale.denom) * scale.numer / scale.denom;
++  fraction = ((quotient % 1000000000u) * scale.numer + fraction) / 1000000000u;
++  uint64_t whole = quotient / 1000000000u;
++  if (scale.numer && whole > (UINT64_MAX - fraction) / scale.numer) {
++    return UINT64_MAX;
++  }
++  return whole * scale.numer + fraction;
++}
+ #elif defined(HAVE_CLOCK_GETTIME) && HAVE_DECL_CLOCK_MONOTONIC

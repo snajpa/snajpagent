@@ -17,6 +17,8 @@ application and distribute the corresponding library source and patch.
 for its pre-10.12 monotonic clock implementation.
 
 `nix/cares-legacy-windows.patch` retains c-ares's upstream MIT terms.
+`nix/cares-legacy-darwin.patch` and `nix/nghttp2-legacy-darwin.patch` retain
+their upstream MIT terms for the old-Darwin monotonic clock implementations.
 `nix/curl-legacy-windows.patch` retains curl's upstream curl license terms.
 `nix/winpty-owned-pipes.patch` retains WinPTY's MIT terms.
 `nix/libunwind-legacy-windows.patch` retains LLVM's Apache-2.0 WITH

@@ -134,14 +134,37 @@ let
     "-DZSTD_BUILD_SHARED=OFF" "-DZSTD_BUILD_STATIC=ON"
     "-DZSTD_BUILD_PROGRAMS=OFF" "-DZSTD_BUILD_TESTS=OFF"
   ] []).overrideAttrs (_: { cmakeDir = "../build/cmake"; });
-  cares = cmakeLibrary sourcePkgs.c-ares [
+  cares = (cmakeLibrary sourcePkgs.c-ares ([
     "-DCARES_SHARED=OFF" "-DCARES_STATIC=ON" "-DCARES_STATIC_PIC=ON"
     "-DCARES_BUILD_TOOLS=OFF" "-DCARES_BUILD_TESTS=OFF"
-  ] [];
-  nghttp2 = cmakeLibrary sourcePkgs.nghttp2 [
+  ] ++ lib.optional (lib.versionOlder deployment "10.11") "-DHAVE_CONNECTX=OFF"
+    ++ lib.optional (lib.versionOlder deployment "10.7") "-DHAVE_ARC4RANDOM_BUF=OFF")
+  []).overrideAttrs (old: {
+    patches = (old.patches or []) ++ lib.optional
+      (lib.versionOlder deployment "10.12") ./cares-legacy-darwin.patch;
+  });
+  nghttp2 = (cmakeLibrary sourcePkgs.nghttp2 [
     "-DENABLE_LIB_ONLY=ON" "-DBUILD_STATIC_LIBS=ON" "-DENABLE_DOC=OFF"
-  ] [];
-  iconv = autotoolsLibrary pkgs.libiconvReal [] [];
+  ] []).overrideAttrs (old: {
+    patches = (old.patches or []) ++ lib.optional
+      (lib.versionOlder deployment "10.12") ./nghttp2-legacy-darwin.patch;
+  });
+  iconv = (autotoolsLibrary pkgs.libiconvReal [] []).overrideAttrs (_:
+    lib.optionalAttrs (lib.versionOlder deployment "10.10") {
+      buildPhase = ''
+        runHook preBuild
+        make lib/localcharset.h
+        make -j"$NIX_BUILD_CORES" -C lib
+        runHook postBuild
+      '';
+      installPhase = ''
+        runHook preInstall
+        make -C libcharset install
+        make -C lib install
+        install -Dm644 include/iconv.h.inst "$out/include/iconv.h"
+        runHook postInstall
+      '';
+    });
   unistring = autotoolsLibrary sourcePkgs.libunistring
     [ "--with-libiconv-prefix=${iconv}" ] [ iconv ];
   idn2 = (autotoolsLibrary sourcePkgs.libidn2 [
