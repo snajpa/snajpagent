@@ -750,6 +750,10 @@ strikethrough, and links are supported.  Pipe tables align as a grid when they
 fit and become labeled rows on narrow terminals.  Redirected and durable text
 retains the model's exact bytes.
 .PP
+Plain-text fences labelled text, txt or plaintext omit the language label.
+Other fence labels remain visible.  Indentation and Markdown-looking content
+inside a fence are displayed literally, including pipe tables.
+.PP
 Top-level prose paragraphs are bulleted, with one empty row above and below,
 even while a paragraph is streaming.  Adjacent paragraphs share that row;
 headings, lists, code, tables and prompts use the same paragraph boundary.
