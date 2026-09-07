@@ -398,8 +398,7 @@ snag_app_goal_pause(struct app_state *app, const char *reason,
     }
     data = goal_id_data(&app->session);
     if (!data || snag_json_set_new(data, "reason", json_string(reason)) < 0) {
-        if (data)
-            json_decref(data);
+        json_decref(data);
         return snag_errorf(error, error_size, "cannot allocate goal pause event");
     }
     if (commit_goal_event(app, "goal_paused", data,
@@ -445,8 +444,7 @@ goal_simple_command(struct app_state *app, const char *command)
                          "goal wording is already unlocked");
         data = goal_id_data(&app->session);
         if (!data || snag_json_set_new(data, "locked", json_boolean(locked)) < 0) {
-            if (data)
-                json_decref(data);
+            json_decref(data);
             return goal_error(app, "cannot allocate goal lock event");
         }
         if (commit_goal_event(app, "goal_lock_changed", data,
@@ -606,8 +604,7 @@ snag_app_goal_tool(struct app_state *app,
                                "block requires a bounded nonblank reason", result);
         data = goal_actor_data(&app->session, "model");
         if (!data || snag_json_set_new(data, "reason", json_string(text)) < 0) {
-            if (data)
-                json_decref(data);
+            json_decref(data);
             return snag_errorf(error, error_size, "cannot allocate goal block event");
         }
         if (commit_goal_event(app, "goal_blocked", data,

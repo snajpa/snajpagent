@@ -1071,8 +1071,7 @@ build_call(struct snag_responses_stream *stream,
                                      SNAG_MAX_TOOL_ARGUMENTS,
                                      json_error, sizeof(json_error));
     if (!arguments || !json_is_object(arguments)) {
-        if (arguments)
-            json_decref(arguments);
+        json_decref(arguments);
         return stream_fail(stream, EPROTO,
                            "function arguments are not one strict object: %s",
                            json_error);

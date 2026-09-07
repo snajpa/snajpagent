@@ -199,8 +199,7 @@ add_goal_call(struct snag_response_graph *graph, unsigned int cycle,
                  "item_fixture_goal_%u", cycle) < 0 ||
         snprintf(call_id, sizeof(call_id),
                  "call_fixture_goal_%u", cycle) < 0) {
-        if (args)
-            json_decref(args);
+        json_decref(args);
         return -1;
     }
     return snag_response_graph_add_call(graph, item_id, call_id,
@@ -220,8 +219,7 @@ add_create_goal_call(struct snag_response_graph *graph, unsigned int cycle,
                  "item_fixture_create_goal_%u", cycle) < 0 ||
         snprintf(call_id, sizeof(call_id),
                  "call_fixture_create_goal_%u", cycle) < 0) {
-        if (args)
-            json_decref(args);
+        json_decref(args);
         return -1;
     }
     return snag_response_graph_add_call(graph, item_id, call_id,

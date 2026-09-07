@@ -449,8 +449,7 @@ snag_response_graph_classify(const struct snag_response_graph *graph,
     {
         json_t *items = graph->items ? json_incref(graph->items) : json_array();
         int rc = items ? snag_json_digest_bounded(items, SNAG_MAX_RESPONSE_GRAPH, NULL, NULL) : -1;
-        if (items)
-            json_decref(items);
+        json_decref(items);
         if (rc < 0) {
             return snag_fail(error, error_size, EOVERFLOW, "response graph exceeds 8 MiB");
         }

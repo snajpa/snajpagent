@@ -1038,8 +1038,7 @@ build_model_limits(const json_t *source, bool codex, json_t **out)
 invalid:
     errno = EPROTO;
 fail:
-    if (limits)
-        json_decref(limits);
+    json_decref(limits);
     return -1;
 }
 
@@ -1252,10 +1251,8 @@ decode_models(const unsigned char *data, size_t len, bool codex,
     rc = 0;
 out:
     free(refs);
-    if (out)
-        json_decref(out);
-    if (root)
-        json_decref(root);
+    json_decref(out);
+    json_decref(root);
     return rc;
 }
 

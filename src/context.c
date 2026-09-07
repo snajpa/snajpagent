@@ -432,8 +432,7 @@ append_rollout_log_location(struct context_builder *builder)
                         (const char *)text.data);
 out:
     free(quoted_path);
-    if (path_value)
-        json_decref(path_value);
+    json_decref(path_value);
     snag_buf_free(&text);
     snag_buf_free(&path);
     return rc;
@@ -523,8 +522,7 @@ append_process_closed(struct context_builder *builder, const char *cause,
     model_json = json_string(context_text);
     if (model_json)
         quoted = canonical_string(model_json, SNAG_CONTEXT_MAX_REQUEST);
-    if (model_json)
-        json_decref(model_json);
+    json_decref(model_json);
     if (!quoted)
         goto done;
     struct snag_buf text = {.max = SNAG_CONTEXT_MAX_REQUEST};
@@ -1371,10 +1369,8 @@ out:
     if (rc != 0)
         snag_context_projection_free(projection);
     json_decref(builder.tools);
-    if (builder.request_input)
-        json_decref(builder.request_input);
-    if (builder.deferred_steering)
-        json_decref(builder.deferred_steering);
+    json_decref(builder.request_input);
+    json_decref(builder.deferred_steering);
     json_decref(builder.deferred_irc);
     json_decref(builder.input_timing);
     return rc;
@@ -1562,10 +1558,8 @@ out:
     if (rc < 0)
         snag_context_projection_free(projection);
     json_decref(builder.tools);
-    if (builder.request_input)
-        json_decref(builder.request_input);
-    if (builder.deferred_steering)
-        json_decref(builder.deferred_steering);
+    json_decref(builder.request_input);
+    json_decref(builder.deferred_steering);
     json_decref(builder.deferred_irc);
     json_decref(builder.input_timing);
     return rc;

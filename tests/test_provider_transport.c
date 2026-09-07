@@ -31,6 +31,7 @@ struct local_server {
     int fd;
     pid_t pid;
     unsigned short port;
+    char endpoint[128];
 };
 
 struct http_request {
@@ -513,7 +514,7 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
 
 static void
 start_server(struct local_server *server, enum model_fixture models,
-             bool transport)
+             bool transport, const char *suffix)
 {
     struct sockaddr_in addr;
     socklen_t len = sizeof(addr);
@@ -532,6 +533,9 @@ start_server(struct local_server *server, enum model_fixture models,
     assert(listen(server->fd, 4) == 0);
     assert(getsockname(server->fd, (struct sockaddr *)&addr, &len) == 0);
     server->port = ntohs(addr.sin_port);
+    int written = snprintf(server->endpoint, sizeof(server->endpoint),
+                           "http://127.0.0.1:%u%s", server->port, suffix);
+    assert(written > 0 && (size_t)written < sizeof(server->endpoint));
     server->pid = fork();
     assert(server->pid >= 0);
     if (server->pid == 0)
@@ -618,12 +622,9 @@ test_local_provider_transport(void)
     json_t *models = NULL;
     uint64_t tokens = 0u;
     unsigned int retries = 99u;
-    char endpoint[128];
     char error[256] = {0};
 
-    start_server(&server, MODEL_OPENAI, true);
-    assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u",
-                    (unsigned int)server.port) > 0);
+    start_server(&server, MODEL_OPENAI, true, "");
     struct snag_provider_connection connection = {
         &config, &config.providers[1], &credential, NULL,
         NULL, NULL};
@@ -634,7 +635,7 @@ test_local_provider_transport(void)
                     sizeof(config.providers[1].name), "transport") > 0);
     assert(snprintf(config.providers[1].base_url,
                     sizeof(config.providers[1].base_url),
-                    "%s/v1/", endpoint) > 0);
+                    "%s/v1/", server.endpoint) > 0);
     transport_settings(&config.providers[1], &credential);
 
     assert(snag_provider_models_list(connection,
@@ -715,88 +716,52 @@ test_local_provider_transport(void)
 static void
 test_codex_path_selection(void)
 {
+    static const struct {
+        enum model_fixture fixture;
+        const char *path, *provider, *base_override, *id, *diagnostic;
+        size_t count;
+    } cases[] = {
+        {MODEL_CODEX_LOOKALIKE, "/backend-api/codexish", "codex", NULL,
+         "lookalike-openai", NULL, 1u},
+        {MODEL_OPENAI, "", "codex", "http://backend-api/codex", NULL, NULL, 2u},
+        {MODEL_CODEX_MALFORMED, "/backend-api/codex", "codex", NULL,
+         NULL, "invalid model entry", 0u},
+        {MODEL_CODEX_FAILURE, "/backend-api/codex", "neutral", NULL,
+         NULL, "catalog rejected", 0u},
+        {MODEL_LIMIT_CONFLICT, "", "neutral", NULL, NULL, "invalid model entry", 0u}
+    };
     struct local_server server;
     struct snag_config config;
     struct snag_credential credential;
-    json_t *models = NULL;
-    char endpoint[128];
     char error[256] = {0};
-
     struct snag_provider_connection connection = {
-        &config, &config.providers[0], &credential, NULL,
-        NULL, NULL};
+        &config, &config.providers[0], &credential, NULL, NULL, NULL};
+
     snag_config_init(&config);
     transport_settings(&config.providers[0], &credential);
-    start_server(&server, MODEL_CODEX_LOOKALIKE, false);
-    assert(snprintf(endpoint, sizeof(endpoint),
-                    "http://127.0.0.1:%u/backend-api/codexish",
-                    (unsigned int)server.port) > 0);
-    assert(snprintf(config.providers[0].name,
-                    sizeof(config.providers[0].name), "codex") > 0);
-    assert(snprintf(config.providers[0].base_url,
-                    sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
-    assert(snag_provider_models_list(connection,
-        &models, error, sizeof(error)) == 0);
-    assert(json_array_size(models) == 1u);
-    assert(strcmp(snag_json_string(json_array_get(models, 0), "id"),
-                  "lookalike-openai") == 0);
-    json_decref(models);
-    stop_server(&server);
-
-    models = NULL;
-    start_server(&server, MODEL_OPENAI, false);
-    assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u",
-                    (unsigned int)server.port) > 0);
-    assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
-    assert(snprintf(config.providers[0].base_url,
-                    sizeof(config.providers[0].base_url), "%s",
-                    "http://backend-api/codex") > 0);
-    assert(snag_provider_models_list(connection,
-        &models, error, sizeof(error)) == 0);
-    assert(json_array_size(models) == 2u);
-    json_decref(models);
-    assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
-    stop_server(&server);
-
-    models = NULL;
-    start_server(&server, MODEL_CODEX_MALFORMED, false);
-    assert(snprintf(endpoint, sizeof(endpoint),
-                    "http://127.0.0.1:%u/backend-api/codex",
-                    (unsigned int)server.port) > 0);
-    assert(snprintf(config.providers[0].base_url,
-                    sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
-    assert(snag_provider_models_list(connection,
-        &models, error, sizeof(error)) < 0);
-    assert(models == NULL);
-    assert(strstr(error, "invalid model entry") != NULL);
-    stop_server(&server);
-
-    models = NULL;
-    start_server(&server, MODEL_CODEX_FAILURE, false);
-    assert(snprintf(endpoint, sizeof(endpoint),
-                    "http://127.0.0.1:%u/backend-api/codex",
-                    (unsigned int)server.port) > 0);
-    assert(snprintf(config.providers[0].name,
-                    sizeof(config.providers[0].name), "neutral") > 0);
-    assert(snprintf(config.providers[0].base_url,
-                    sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
-    assert(snag_provider_models_list(connection,
-        &models, error, sizeof(error)) < 0);
-    assert(models == NULL);
-    assert(strstr(error, "catalog rejected") != NULL);
-    stop_server(&server);
-
-    models = NULL;
-    start_server(&server, MODEL_LIMIT_CONFLICT, false);
-    assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u",
-                    (unsigned int)server.port) > 0);
-    assert(snprintf(config.providers[0].base_url,
-                    sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
-    assert(snag_provider_models_list(connection,
-        &models, error, sizeof(error)) < 0);
-    assert(models == NULL);
-    assert(strstr(error, "invalid model entry") != NULL);
-    stop_server(&server);
+    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        json_t *models = NULL;
+        start_server(&server, cases[i].fixture, false, cases[i].path);
+        assert(snag_strcpy(config.providers[0].name,
+                           sizeof(config.providers[0].name), cases[i].provider));
+        assert(snag_strcpy(config.providers[0].base_url, sizeof(config.providers[0].base_url),
+                           cases[i].base_override ? cases[i].base_override : server.endpoint));
+        if (cases[i].base_override)
+            assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
+        int rc = snag_provider_models_list(connection, &models, error, sizeof(error));
+        if (cases[i].diagnostic) {
+            assert(rc < 0 && models == NULL);
+            assert(strstr(error, cases[i].diagnostic));
+        } else {
+            assert(rc == 0 && json_array_size(models) == cases[i].count);
+            if (cases[i].id)
+                assert(!strcmp(snag_json_string(json_array_get(models, 0), "id"), cases[i].id));
+        }
+        json_decref(models);
+        if (cases[i].base_override)
+            assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
+        stop_server(&server);
+    }
     snag_config_free(&config);
 }
 
@@ -813,17 +778,13 @@ test_structured_create_failures(void)
         struct snag_credential credential;
         struct snag_provider_failure failure;
         json_t *request = request_with_marker("capacity-failure");
-        char endpoint[128];
         char error[256] = {0};
 
-        start_server(&server, fixtures[i], false);
-        assert(snprintf(endpoint, sizeof(endpoint),
-                        "http://127.0.0.1:%u/v1",
-                        (unsigned int)server.port) > 0);
+        start_server(&server, fixtures[i], false, "/v1");
         snag_config_init(&config);
         assert(snprintf(config.providers[0].base_url,
                         sizeof(config.providers[0].base_url),
-                        "%s", endpoint) > 0);
+                        "%s", server.endpoint) > 0);
         transport_settings(&config.providers[0], &credential);
         struct snag_response_graph graph = {0};
         memset(&failure, 0, sizeof(failure));
@@ -948,7 +909,7 @@ test_create_retries(void)
         struct retry_cancel cancellation = {.code = i < count ? 0 : (int)(i - count + 1u)};
 
         retry_case = i < count ? &cases[i] : &cancelled;
-        start_server(&server, MODEL_CREATE_RETRY, false);
+        start_server(&server, MODEL_CREATE_RETRY, false, "/v1");
         if (cancellation.code) {
             assert(pipe(pipefd) == 0);
             assert(fcntl(pipefd[0], F_SETFL, O_NONBLOCK) == 0);
@@ -960,8 +921,7 @@ test_create_retries(void)
             assert(snag_ui_init(&ui) == 0);
         }
         snag_config_init(&config);
-        snprintf(config.providers[0].base_url, sizeof(config.providers[0].base_url),
-                 "http://127.0.0.1:%u/v1", server.port);
+        strcpy(config.providers[0].base_url, server.endpoint);
         strcpy(config.providers[0].openrouter_referer, "https://github.com/snajpa/snajpagent");
         strcpy(config.providers[0].openrouter_title, "snajpagent");
         config.providers[0].request_timeout_ms = 3000u;
@@ -1019,15 +979,12 @@ test_count_capability_statuses(void)
         json_t *request = request_with_marker("count-status");
         uint64_t tokens = 0u;
         bool endpoint_unsupported = true;
-        char endpoint[128];
         char error[256] = {0};
 
-        start_server(&server, fixtures[i], false);
-        assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u/v1",
-                        (unsigned int)server.port) > 0);
+        start_server(&server, fixtures[i], false, "/v1");
         snag_config_init(&config);
         assert(snprintf(config.providers[0].base_url,
-                        sizeof(config.providers[0].base_url), "%s", endpoint) > 0);
+                        sizeof(config.providers[0].base_url), "%s", server.endpoint) > 0);
         transport_settings(&config.providers[0], &credential);
         assert(snag_provider_responses_count((struct snag_provider_connection){
             &config, &config.providers[0], &credential, NULL,
@@ -1083,20 +1040,17 @@ test_count_modes(void)
         const char *method = cases[i].mode == SNAG_TOKEN_COUNT_STRICT ?
             "anchored_upper_bound" : "unknown";
         uint64_t tokens = 99u;
-        char endpoint[128];
         char error[256] = {0};
         char temp[] = "/tmp/snajpagent-count-mode-XXXXXX";
         int rc;
 
         assert(mkdtemp(temp));
-        start_server(&server, cases[i].fixture, false);
-        assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u/v1",
-                        (unsigned int)server.port) > 0);
+        start_server(&server, cases[i].fixture, false, "/v1");
         snag_config_init(&config);
         assert(snprintf(config.providers[0].base_url,
                         sizeof(config.providers[0].base_url), "%s",
-                        cases[i].openrouter ? "https://openrouter.ai/api/v1" : endpoint) > 0);
-        assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
+                        cases[i].openrouter ? "https://openrouter.ai/api/v1" : server.endpoint) > 0);
+        assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
         config.providers[0].exact_token_count = cases[i].mode;
         transport_settings(&config.providers[0], &credential);
         memset(&app, 0, sizeof(app));
@@ -1153,13 +1107,11 @@ test_openrouter_search_transport(void)
     struct snag_credential credential;
     struct emitted_text emitted = {0};
     json_t *request;
-    char endpoint[128], error[256] = {0};
+    char error[256] = {0};
     unsigned int retries = 0u;
 
-    start_server(&server, MODEL_OPENROUTER_SEARCH, false);
-    assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u",
-                     (unsigned int)server.port) > 0);
-    assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
+    start_server(&server, MODEL_OPENROUTER_SEARCH, false, "");
+    assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
     struct snag_provider_connection connection = {
         &config, &config.providers[0], &credential, NULL,
         NULL, NULL};
@@ -1309,7 +1261,7 @@ test_provider_auth(void)
     struct snag_auth_tokens tokens, previous, loaded;
     struct snag_credential credential;
     struct local_server server;
-    char path[4096], endpoint[128], error[256] = {0};
+    char path[4096], error[256] = {0};
     const char *tmp = getenv("TMPDIR");
     struct stat st;
     int status;
@@ -1387,9 +1339,8 @@ test_provider_auth(void)
         snag_auth_json_free(response);
     }
     for (int mode = MODEL_AUTH_DEVICE; mode <= MODEL_AUTH_EXPIRED; ++mode) {
-        start_server(&server, (enum model_fixture)mode, false);
-        snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u", server.port);
-        assert(setenv("SNAJPAGENT_TEST_AUTH_BASE", endpoint, 1) == 0);
+        start_server(&server, (enum model_fixture)mode, false, "");
+        assert(setenv("SNAJPAGENT_TEST_AUTH_BASE", server.endpoint, 1) == 0);
         error[0] = '\0';
         int rc = snag_auth_device(&tokens, mode == MODEL_AUTH_CANCEL ? cancel_device_poll : NULL,
                                   NULL, error, sizeof(error));
@@ -1412,9 +1363,8 @@ test_provider_auth(void)
         tokens.expires_at_ms = mode >= MODEL_AUTH_401 ? snag_time_ms() + 3600000u : 1u;
         assert(snag_auth_save(store.root_fd, &config.providers[0], &tokens, NULL,
                               NULL, NULL, error, sizeof(error)) == 0);
-        start_server(&server, (enum model_fixture)mode, false);
-        snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u", server.port);
-        assert(setenv("SNAJPAGENT_TEST_AUTH_BASE", endpoint, 1) == 0);
+        start_server(&server, (enum model_fixture)mode, false, "");
+        assert(setenv("SNAJPAGENT_TEST_AUTH_BASE", server.endpoint, 1) == 0);
         error[0] = '\0';
         if (mode == MODEL_AUTH_REFRESH) {
             pid_t children[2];
@@ -1441,7 +1391,7 @@ test_provider_auth(void)
             assert(strcmp(loaded.refresh_token, "old-refresh") == 0);
         } else {
             json_t *models = NULL;
-            assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
+            assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
             assert(snag_auth_read(store.root_fd, &config.providers[0], false, NULL,
                 &credential, NULL, NULL, error, sizeof(error)) == 0);
             int rc = snag_provider_models_list((struct snag_provider_connection){
@@ -1468,9 +1418,8 @@ test_provider_auth(void)
         strcpy(config.providers[0].base_url, pass == 0u ? "https://api.openai.com" : SNAG_CHATGPT_BASE);
         strcpy(config.providers[0].openrouter_referer, "https://github.com/snajpa/snajpagent");
         strcpy(config.providers[0].openrouter_title, "snajpagent");
-        start_server(&server, pass == 2u ? MODEL_COMPACT_403 : MODEL_COMPACT_404, false);
-        snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u", server.port);
-        assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
+        start_server(&server, pass == 2u ? MODEL_COMPACT_403 : MODEL_COMPACT_404, false, "");
+        assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
         int rc = snag_provider_responses_compact((struct snag_provider_connection){
             &config, &config.providers[0], &credential, NULL,
             NULL, NULL},

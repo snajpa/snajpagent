@@ -2867,8 +2867,7 @@ render_irc_record(struct snag_render *render, const struct snag_render_record *r
         goto out;
     rc = render_irc_event_now(render, &irc);
 out:
-    if (event)
-        json_decref(event);
+    json_decref(event);
     return rc;
 }
 
@@ -2898,8 +2897,7 @@ flush_view(struct snag_render *render, enum snag_render_view view)
                     items = json_object_get(data, "partial_public");
                 json_t *text = json_object_get(json_array_get(items, record->source_item), "text");
                 if (!json_is_string(text)) {
-                    if (event)
-                        json_decref(event);
+                    json_decref(event);
                     return snag_errno(EPROTO);
                 }
                 snag_buf_init(&record->text, SNAG_MAX_PUBLIC_ITEM);
@@ -3208,10 +3206,8 @@ render_tool_record(struct snag_render *render, const struct snag_render_record *
     }
     errno = EPROTO;
 out:
-    if (event)
-        json_decref(event);
-    if (response)
-        json_decref(response);
+    json_decref(event);
+    json_decref(response);
     return rc;
 }
 
@@ -3278,8 +3274,7 @@ snag_render_durable(struct snag_render *render, int fd, struct snag_render_sourc
                 break;
             }
         }
-        if (event)
-            json_decref(event);
+        json_decref(event);
         return rc;
     }
     bool start = strcmp(type, "tool_started") == 0;

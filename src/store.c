@@ -309,8 +309,7 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
 memory_error:
     snag_errorf(error, error_size, "cannot encode %s event", type);
 out:
-    if (event)
-        json_decref(event);
+    json_decref(event);
     snag_buf_free(&line);
     return rc;
 }
@@ -360,8 +359,7 @@ common_event_valid(json_t *event, struct snag_session *session, uint64_t seq,
     copy = json_copy(event);
     if (!copy || json_object_del(copy, "event_sha256") < 0 ||
         snag_json_digest(copy, computed) < 0) {
-        if (copy)
-            json_decref(copy);
+        json_decref(copy);
         snag_errorf(error, error_size, "cannot verify event digest");
         return false;
     }
@@ -919,8 +917,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             compact_output_digest(output, computed, &bytes) < 0 || bytes == 0u ||
             strcmp(output_hash, computed) != 0)
             goto invalid;
-        if (session->compact_output)
-            json_decref(session->compact_output);
+        json_decref(session->compact_output);
         session->compact_output = json_deep_copy(output);
         if (!session->compact_output)
             return -1;

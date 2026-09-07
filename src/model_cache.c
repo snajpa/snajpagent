@@ -22,8 +22,7 @@
 void
 snag_model_cache_free(struct snag_model_cache *cache)
 {
-    if (cache->providers)
-        json_decref(cache->providers);
+    json_decref(cache->providers);
     *cache = (struct snag_model_cache){0};
 }
 
@@ -249,8 +248,7 @@ decode_cache(const unsigned char *data, size_t len,
         !providers_valid((providers = json_object_get(root, "providers")), true)) {
         snag_errorf(error, error_size,
                   "model cache is unusable; use /model cache while idle");
-        if (root)
-            json_decref(root);
+        json_decref(root);
         return snag_errno(EINVAL);
     }
     copy = json_incref(providers);
@@ -399,8 +397,7 @@ out:
         (void)close(fd);
     if (rc < 0 && tmp_name[0])
         (void)snag_unlink_at(store->root_fd, tmp_name, false);
-    if (root)
-        json_decref(root);
+    json_decref(root);
     snag_buf_free(&data);
     errno = saved;
     return rc;
@@ -409,10 +406,6 @@ out:
 static int
 prepare_accounting(json_t *model, const json_t *old)
 {
-    static const char *const keys[] = {
-        "observed_hard_input_tokens"
-    };
-
     if (json_object_set_new(model, "count_capability",
                             json_string("unknown")) < 0)
         return -1;
@@ -420,21 +413,8 @@ prepare_accounting(json_t *model, const json_t *old)
     if (json_object_set_new(model, "observed_input_tokens", json_integer(0)) < 0 ||
         json_object_set_new(model, "observed_input_bytes", json_integer(0)) < 0)
         return -1;
-    if (old) {
-        for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i)
-            if (json_object_set(model, keys[i],
-                                json_object_get(old, keys[i])) < 0)
-                return -1;
-        return 0;
-    }
-    if (json_object_set_new(model, "observed_hard_input_tokens",
-                            json_integer(0)) < 0 ||
-        json_object_set_new(model, "observed_input_tokens",
-                            json_integer(0)) < 0 ||
-        json_object_set_new(model, "observed_input_bytes",
-                            json_integer(0)) < 0)
-        return -1;
-    return 0;
+    return json_object_set_new(model, "observed_hard_input_tokens", old ?
+        json_incref(json_object_get(old, "observed_hard_input_tokens")) : json_integer(0));
 }
 
 int
@@ -490,8 +470,7 @@ snag_model_cache_replace(struct snag_store *store, const json_t *providers,
         error[0] = '\0';
     rc = write_cache(store, prepared, updated_at_ms, cache, error, error_size);
 out:
-    if (prepared)
-        json_decref(prepared);
+    json_decref(prepared);
     snag_model_cache_free(&previous);
     (void)close(lock_fd);
     return rc;

@@ -87,8 +87,7 @@ snag_app_provider_models(struct app_state *app,
     *models = out;
     return 0;
 fail:
-    if (out)
-        json_decref(out);
+    json_decref(out);
     return snag_errno(ENOMEM);
 #else
     struct snag_credential credential;

@@ -98,8 +98,7 @@ snag_app_partial_public_json(const struct app_state *app)
     }
     return array;
 fail:
-    if (array)
-        json_decref(array);
+    json_decref(array);
     return NULL;
 }
 
