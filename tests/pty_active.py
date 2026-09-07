@@ -2849,9 +2849,7 @@ def test_empty_session_lifecycle():
     for action in (b"/exit\r", b"\x04", b"\x03" * 5, b"/archive\r", b"/delete\r",
                    signal.SIGHUP, signal.SIGTERM):
         before = session_ids()
-        child = Child(["--no-color", "--no-listen", "--no-client"])
-        try:
-            child.wait(DEFAULT_IDLE_PROMPT)
+        with Child(["--no-color", "--no-listen", "--no-client"], DEFAULT_IDLE_PROMPT) as child:
             assert session_ids() == before
             child.send(b"/compact\r")
             child.wait(b"nothing to compact before the first prompt")
@@ -2865,25 +2863,17 @@ def test_empty_session_lifecycle():
                 child.send(action)
                 child.finish(expect_resume=False)
             assert session_ids() == before
-        finally:
-            child.kill()
 
     before = session_ids()
-    child = Child(["--no-color", "--no-listen", "--no-client"])
-    try:
-        child.wait(DEFAULT_IDLE_PROMPT)
+    with Child(["--no-color", "--no-listen", "--no-client"], DEFAULT_IDLE_PROMPT) as child:
         child.send(b"unsent draft")
         child.wait(b"unsent draft")
         child.send(b"\x15\x04")
         child.finish(expect_resume=False)
         assert session_ids() == before
-    finally:
-        child.kill()
 
     before = session_ids()
-    child = Child(["--no-color", "--no-listen", "--no-client"])
-    try:
-        child.wait(DEFAULT_IDLE_PROMPT)
+    with Child(["--no-color", "--no-listen", "--no-client"], DEFAULT_IDLE_PROMPT) as child:
         child.send(b"/model selected-before-prompt / high\r")
         child.wait(b"selected-before-prompt/high   0%")
         assert session_ids() == before
@@ -2895,17 +2885,12 @@ def test_empty_session_lifecycle():
         log = events(sid)
         assert len([e for e in log if e["type"] == "session_created"]) == 1
         assert one(log, "turn_started")["data"]["config"]["model"] == "selected-before-prompt"
-    finally:
-        child.kill()
     saved = (STATE_ROOT / sid / "events.jsonl").read_bytes()
-    resumed = Child(["--no-color", "--no-listen", "--no-client", "--resume", sid])
-    try:
-        resumed.wait(b"selected-before-prompt/high   ?%")
+    with Child(["--no-color", "--no-listen", "--no-client", "--resume", sid],
+               b"selected-before-prompt/high   ?%") as resumed:
         command = resumed.exit_now()
         assert command_arguments(command)[-2:] == ["--resume", sid]
         assert (STATE_ROOT / sid / "events.jsonl").read_bytes() == saved
-    finally:
-        resumed.kill()
     print("empty session lifecycle: ok")
 
 
@@ -2960,97 +2945,54 @@ def test_empty_network_session():
 
 
 def test_exit_resume_matrix():
-    for exit_input in (b"/exit\r", b"\x04"):
+    for action in (b"/exit\r", b"\x04", "cancel", signal.SIGHUP, signal.SIGTERM,
+                   "active", b"/archive\r", b"/delete\r", "staged"):
         before = session_ids()
-        child = Child(["--no-color"], PROMPT.rstrip())
-        child.send(b"ping\r")
-        answered = child.wait(b"pong")
-        child.wait_idle_prompt(start=answered)
-        session_id = new_session(before)
-        child.send(exit_input)
-        command = child.finish()
-        arguments = command_arguments(command)
-        assert arguments[-2:] == ["--resume", session_id], arguments
-        assert arguments[arguments.index("--dotdir") + 1] == DOTDIR
+        ready = DEFAULT_IDLE_PROMPT if action == "cancel" else PROMPT.rstrip()
+        with Child(["--no-color"], ready) as child:
+            if action == "active":
+                child.send_wait(b"slow\r", b"working slowly")
+                child.send_wait(b"\x04", RESUME_HEADER, timeout=1.0)
+            else:
+                answered = child.send_wait(b"ping\r", b"pong")
+                child.wait_idle_prompt(start=answered)
+            session_id = new_session(before)
+            if action == "cancel":
+                start = len(child.buf)
+                child.send(b"\x03" * 4)
+                deadline = time.monotonic() + 8.0
+                while bytes(child.buf[start:]).count(b"^C\r\n") < 4:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or not child.read_once(remaining):
+                        raise AssertionError(f"missing Ctrl-C cancellations: {child.buf!r}")
+                assert os.waitpid(child.pid, os.WNOHANG) == (0, 0)
+                child.send(b"\x03")
+            elif isinstance(action, int):
+                os.kill(child.pid, action)
+            elif action == b"/delete\r":
+                child.send_wait(action, b"type the displayed 8-character id prefix to confirm")
+                child.send(session_id[:8].encode() + b"\r")
+            elif action != "active":
+                child.send(b"/exit\r" if action == "staged" else action)
+            command = child.finish(expected=128 + action if isinstance(action, int) else 0,
+                                   expect_resume=action != b"/delete\r")
+            if action == b"/delete\r":
+                assert not (STATE_ROOT / session_id).exists()
+                continue
+            arguments = command_arguments(command)
+            assert arguments[-2:] == ["--resume", session_id], arguments
+            assert arguments[arguments.index("--dotdir") + 1] == DOTDIR
+            if action == b"/archive\r":
+                assert one(events(session_id), "session_archived")
+            if action == "active":
+                log = events(session_id)
+                assert one(log, "turn_interrupted")["data"]["origin"] == "user"
+                assert not [event for event in log if event["type"] == "turn_completed"]
+                assert b"slow complete" not in child.buf
 
-    before = session_ids()
-    cancelled = Child(["--no-color"], DEFAULT_IDLE_PROMPT)
-    cancelled.send(b"ping\r")
-    answered = cancelled.wait(b"pong")
-    cancelled.wait_idle_prompt(start=answered)
-    cancelled_id = new_session(before)
-    start = len(cancelled.buf)
-    cancelled.send(b"\x03" * 4)
-    deadline = time.monotonic() + 8.0
-    while bytes(cancelled.buf[start:]).count(b"^C\r\n") < 4:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0 or not cancelled.read_once(remaining):
-            raise AssertionError(f"missing Ctrl-C cancellations: {cancelled.buf!r}")
-    assert os.waitpid(cancelled.pid, os.WNOHANG) == (0, 0)
-    cancelled.send(b"\x03")
-    command = cancelled.finish()
-    assert command_arguments(command)[-2:] == ["--resume", cancelled_id]
-
-    for signal_number in (signal.SIGHUP, signal.SIGTERM):
-        before = session_ids()
-        child = Child(["--no-color"], PROMPT.rstrip())
-        child.send(b"ping\r")
-        answered = child.wait(b"pong")
-        child.wait_idle_prompt(start=answered)
-        session_id = new_session(before)
-        os.kill(child.pid, signal_number)
-        command = child.finish(expected=128 + signal_number)
-        assert command_arguments(command)[-2:] == ["--resume", session_id]
-
-    before = session_ids()
-    active_eof = Child(["--no-color"], PROMPT.rstrip())
-    active_eof.send_wait(b"slow\r", b"working slowly")
-    active_eof.send_wait(b"\x04", RESUME_HEADER, timeout=1.0)
-    active_eof_command = active_eof.finish()
-    active_eof_id = new_session(before)
-    assert command_arguments(active_eof_command)[-2:] == [
-        "--resume", active_eof_id
-    ]
-    log = events(active_eof_id)
-    assert one(log, "turn_interrupted")["data"]["origin"] == "user"
-    assert not [event for event in log if event["type"] == "turn_completed"]
-    assert b"slow complete" not in active_eof.buf
-
-    before = session_ids()
-    archived = Child(["--no-color"], PROMPT.rstrip())
-    archived.send(b"ping\r")
-    answered = archived.wait(b"pong")
-    archived.wait_idle_prompt(start=answered)
-    archived_id = new_session(before)
-    archived.send(b"/archive\r")
-    archived_command = archived.finish()
-    assert command_arguments(archived_command)[-2:] == [
-        "--resume", archived_id
-    ]
-    assert one(events(archived_id), "session_archived")
-
-    before = session_ids()
-    deleted = Child(["--no-color"], PROMPT.rstrip())
-    deleted.send(b"ping\r")
-    answered = deleted.wait(b"pong")
-    deleted.wait_idle_prompt(start=answered)
-    deleted_id = new_session(before)
-    deleted.send_wait(b"/delete\r", b"type the displayed 8-character id prefix to confirm")
-    deleted.send(deleted_id[:8].encode() + b"\r")
-    deleted.finish(expect_resume=False)
-    assert not (STATE_ROOT / deleted_id).exists()
-
-    before = session_ids()
-    original = Child(["--no-color"], PROMPT.rstrip())
-    original.send(b"ping\r")
-    answered = original.wait(b"pong")
-    original.wait_idle_prompt(start=answered)
-    staged_id = new_session(before)
-    original_command = original.exit_now()
-    assert command_arguments(original_command)[-2:] == ["--resume", staged_id]
     staged = Child([
         "--no-color", "-m", "openai/future", "--effort", "xhigh",
-        "--resume", staged_id,
+        "--resume", session_id,
     ], PROMPT.rstrip())
     staged_command = staged.exit_now()
     staged_arguments = command_arguments(staged_command)
