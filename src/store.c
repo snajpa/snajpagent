@@ -1027,51 +1027,34 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
     } else if (strcmp(type, "future_turn_cancelled") == 0) {
         const char *reason = snag_json_string(data, "reason");
         json_t *ids = json_object_get(data, "queue_ids");
-        bool remove[SNAG_MAX_PENDING_TURNS] = {false};
-        size_t previous = 0;
-        bool have_previous = false;
-        size_t count;
+        size_t count, removed = 0u, out = 0u;
 
         if (!snag_json_exact_keys(data, "queue_ids reason") || !reason ||
             strcmp(reason, "user") != 0 || !json_is_array(ids) ||
             !(count = json_array_size(ids)) || count > SNAG_MAX_PENDING_TURNS)
             goto invalid;
-        for (size_t i = 0; i < count; ++i) {
-            json_t *value = json_array_get(ids, i);
-            const char *id = json_is_string(value) ? json_string_value(value) : NULL;
-            size_t index;
+        /* IDs must follow queue order. Mutations remain in the event stage. */
+        for (size_t i = 0u; i < session->pending_queue_count; ++i) {
+            struct snag_queued_turn *queued = &session->pending_queue[i];
+            const char *id = removed < count ? json_string_value(json_array_get(ids, removed)) : NULL;
 
-            if (!id || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN))
+            if (removed < count && (!id || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN)))
                 goto invalid;
-            for (index = 0; index < session->pending_queue_count; ++index)
-                if (strcmp(session->pending_queue[index].queue_id, id) == 0)
-                    break;
-            if (index == session->pending_queue_count || remove[index] ||
-                (have_previous && index <= previous))
-                goto invalid;
-            remove[index] = true;
-            previous = index;
-            have_previous = true;
-        }
-        {
-            size_t out = 0;
-            for (size_t i = 0; i < session->pending_queue_count; ++i) {
-                if (remove[i]) {
-                    session->pending_queue_bytes -=
-                        strlen(session->pending_queue[i].text);
-                    json_object_del(session->strings, session->pending_queue[i].queue_id);
-                    session->pending_queue[i].text = NULL;
-                    continue;
-                }
+            if (id && !strcmp(queued->queue_id, id)) {
+                session->pending_queue_bytes -= strlen(queued->text);
+                json_object_del(session->strings, queued->queue_id);
+                ++removed;
+            } else {
                 if (out != i)
-                    session->pending_queue[out] = session->pending_queue[i];
+                    session->pending_queue[out] = *queued;
                 ++out;
             }
-            memset(&session->pending_queue[out], 0,
-                   (session->pending_queue_count - out) *
-                   sizeof(session->pending_queue[0]));
-            session->pending_queue_count = out;
         }
+        if (removed != count)
+            goto invalid;
+        memset(&session->pending_queue[out], 0,
+               (session->pending_queue_count - out) * sizeof(session->pending_queue[0]));
+        session->pending_queue_count = out;
     } else if (strcmp(type, "turn_started") == 0) {
         const char *turn_id;
         const char *text;

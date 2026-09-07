@@ -654,6 +654,31 @@ main(void)
         assert(session.pending_queue[1].seq == second_seq);
         assert(session.pending_queue_bytes ==
                strlen("first") + strlen("second edited"));
+        const char *invalid_cancellations[][2] = {
+            {first_id, first_id}, {second_id, first_id}, {first_id, missing_id},
+            {first_id, "bad"}, {first_id, NULL}
+        };
+        for (size_t i = 0u; i < sizeof(invalid_cancellations) / sizeof(invalid_cancellations[0]); ++i) {
+            struct snag_session before_cancel = session;
+            assert(snag_session_commit(&session, "future_turn_cancelled",
+                checked_json(json_pack("{s:[s,s?],s:s}", "queue_ids",
+                    invalid_cancellations[i][0], invalid_cancellations[i][1], "reason", "user")),
+                NULL, error, sizeof(error)) < 0);
+            assert(memcmp(&session, &before_cancel, sizeof(session)) == 0);
+            assert(!strcmp(session.pending_queue[0].text, "first"));
+            assert(!strcmp(session.pending_queue[1].text, "second edited"));
+        }
+        commit_event(&session, "future_turn_cancelled",
+            checked_json(json_pack("{s:[s],s:s}", "queue_ids", first_id, "reason", "user")));
+        assert(session.pending_queue_count == 1u && session.pending_queue_bytes == strlen("second edited"));
+        assert(!strcmp(session.pending_queue[0].queue_id, second_id));
+        assert(session.pending_queue[0].seq == second_seq && !session.pending_queue[1].text);
+        assert(!json_object_get(session.strings, first_id));
+        snag_session_close(&session);
+        snag_session_init(&session);
+        assert(snag_session_open(&store, &session, id, error, sizeof(error)) == 0);
+        assert(session.pending_queue_count == 1u && session.pending_queue_bytes == strlen("second edited"));
+        assert(!strcmp(session.pending_queue[0].text, "second edited"));
         snag_session_close(&session);
     }
     snag_store_close(&store);
