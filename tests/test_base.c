@@ -1603,9 +1603,12 @@ test_platform(void)
     before = next;
     assert(snag_sleep_ms(20u) == 0 && snag_monotonic_ms() >= before + 1u);
 #ifdef SNAJPAGENT_LEGACY_LINUX_CLOCK
+    int __real_clock_gettime(clockid_t clock, struct timespec *out);
     struct timespec invalid_clock;
     errno = 0;
-    assert(clock_gettime((clockid_t)123456, &invalid_clock) == -1 && errno == EINVAL);
+    assert(__real_clock_gettime((clockid_t)123456, &invalid_clock) == -1);
+    int invalid_clock_error = errno;
+    assert(clock_gettime((clockid_t)123456, &invalid_clock) == -1 && errno == invalid_clock_error);
 #endif
     assert(snag_sleep_ms(UINT_MAX) == -1 && errno == EINVAL);
     assert(snag_text_locale_init());
