@@ -38,4 +38,15 @@ let
 in {
   libc = target.stdenv.cc.libc;
   compiler = target.stdenv.cc;
+  application = args: ((import ./linux.nix {
+    inherit pkgs;
+    musl = target;
+  }).application args).overrideAttrs (old: {
+    hardeningDisable = (old.hardeningDisable or [ ]) ++ [ "pie" ];
+    preBuild = builtins.replaceStrings
+      [ "-D_FILE_OFFSET_BITS=64 -Ibuild" "-static-pie -flto -Wl,--gc-sections" ]
+      [ "-D_FILE_OFFSET_BITS=64 -DSNAJPAGENT_LEGACY_LINUX_CLOCK -Ibuild"
+        "-static -flto -Wl,--gc-sections,--wrap=clock_gettime" ]
+      old.preBuild;
+  });
 }

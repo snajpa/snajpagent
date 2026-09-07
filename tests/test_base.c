@@ -1556,7 +1556,9 @@ test_platform(void)
     int fd;
 
     assert(snag_sleep_ms(0u) == 0);
-    before = snag_monotonic_ms();
+    uint64_t next = snag_monotonic_ms();
+    assert(next >= before);
+    before = next;
     assert(snag_sleep_ms(20u) == 0 && snag_monotonic_ms() >= before + 1u);
     assert(snag_sleep_ms(UINT_MAX) == -1 && errno == EINVAL);
     assert(snag_text_locale_init());

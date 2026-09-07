@@ -1,4 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#if defined(SNAJPAGENT_LEGACY_LINUX_CLOCK) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
 #include "base.h"
 #include "fs.h"
 
@@ -1973,6 +1976,10 @@ snag_fsync(int fd)
 #include <langinfo.h>
 #include <strings.h>
 #include <sys/wait.h>
+#if defined(SNAJPAGENT_LEGACY_LINUX_CLOCK)
+#include <stdatomic.h>
+#include <sys/syscall.h>
+#endif
 
 const char *
 snag_command_shell_note(void)
@@ -2749,6 +2756,106 @@ snag_random_bytes(unsigned char *out, size_t len)
     }
     return close(fd);
 }
+
+#if defined(SNAJPAGENT_LEGACY_LINUX_CLOCK)
+/* Linked only by the legacy Linux target, including its static dependencies. */
+int __real_clock_gettime(clockid_t clock, struct timespec *out);
+static _Atomic uint64_t legacy_clock_ticks;
+
+static int
+legacy_monotonic(struct timespec *out)
+{
+    const uint64_t initialized = UINT64_C(1) << 63;
+    char record[64];
+    int fd = snag_open_read("/proc/uptime", false);
+    if (fd < 0)
+        return -1;
+    ssize_t n;
+    do {
+        n = read(fd, record, sizeof(record));
+    } while (n < 0 && errno == EINTR);
+    int error = errno;
+    (void)close(fd);
+    if (n < 0) {
+        errno = error;
+        return -1;
+    }
+    char *p = record, *end = record + n;
+    uint64_t ticks = 0;
+    while (p < end && *p >= '0' && *p <= '9') {
+        unsigned int digit = (unsigned int)(*p++ - '0');
+        if (ticks > ((initialized - 1u) / 100u - digit) / 10u) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        ticks = ticks * 10u + digit;
+    }
+    if (p == record || end - p < 4 || p[0] != '.' || p[1] < '0' || p[1] > '9' ||
+        p[2] < '0' || p[2] > '9' || p[3] != ' ') {
+        errno = EIO;
+        return -1;
+    }
+    ticks = ticks * 100u + (unsigned int)(p[1] - '0') * 10u + (unsigned int)(p[2] - '0');
+    if (ticks >= initialized) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    uint64_t observed = atomic_load_explicit(&legacy_clock_ticks, memory_order_relaxed);
+    for (;;) {
+        uint64_t next = ticks;
+        if (observed & initialized) {
+            uint64_t previous = observed & ~initialized;
+            uint32_t delta = (uint32_t)ticks - (uint32_t)previous;
+            /* Standard 2.4 i386 uptime wraps after 2^32 centiseconds. */
+            next = delta > UINT32_MAX / 2u ? previous : previous + delta;
+        }
+        if (next >= initialized) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        if (atomic_compare_exchange_weak_explicit(&legacy_clock_ticks, &observed,
+                initialized | next, memory_order_relaxed, memory_order_relaxed)) {
+            if ((uint64_t)(time_t)(next / 100u) != next / 100u) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            out->tv_sec = (time_t)(next / 100u);
+            out->tv_nsec = (long)(next % 100u) * 10000000L;
+            return 0;
+        }
+    }
+}
+
+int
+__wrap_clock_gettime(clockid_t clock, struct timespec *out)
+{
+    int rc = __real_clock_gettime(clock, out);
+    if (rc == 0 || errno != ENOSYS)
+        return rc;
+    if (!out) {
+        errno = EFAULT;
+        return -1;
+    }
+    /* The old kernel ABI uses longs even when libc exposes 64-bit time_t. */
+    struct { long seconds, fraction; } native;
+    if (syscall(SYS_clock_gettime, clock, &native) == 0) {
+        out->tv_sec = native.seconds;
+        out->tv_nsec = native.fraction;
+        return 0;
+    }
+    if (errno != ENOSYS)
+        return -1;
+    if (clock == CLOCK_REALTIME) {
+        /* libc gettimeofday may call clock_gettime; do not recurse into it. */
+        if (syscall(SYS_gettimeofday, &native, NULL) < 0)
+            return -1;
+        out->tv_sec = native.seconds;
+        out->tv_nsec = native.fraction * 1000L;
+        return 0;
+    }
+    return clock == CLOCK_MONOTONIC ? legacy_monotonic(out) : -1;
+}
+#endif
 
 uint64_t
 snag_time_ms(void)
