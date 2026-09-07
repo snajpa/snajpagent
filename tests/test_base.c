@@ -2220,7 +2220,13 @@ test_input_mode(void)
     assert(GetConsoleCP() == codepage);
 #else
     struct termios restored;
-    assert(tcgetattr(0, &restored) == 0 && restored.c_lflag == host.input_mode.c_lflag &&
+    assert(tcgetattr(0, &restored) == 0);
+    tcflag_t transient = 0;
+#ifdef PENDIN
+    /* BSD sets this when restoring canonical mode without flushing input. */
+    transient = PENDIN;
+#endif
+    assert(((restored.c_lflag ^ host.input_mode.c_lflag) & ~transient) == 0 &&
            restored.c_iflag == host.input_mode.c_iflag);
 #endif
     assert(snag_term_input_raw(&host) == 0 && snag_term_input_restore(&host, true) == 0);
