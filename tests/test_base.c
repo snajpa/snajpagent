@@ -206,7 +206,7 @@ native_process_child(const char *mode)
 }
 
 static void
-test_native_process_input(bool pty)
+test_native_process_input(bool pty, bool isolated)
 {
     WCHAR program[32768];
     assert(GetModuleFileNameW(NULL, program, 32768u));
@@ -215,7 +215,8 @@ test_native_process_input(bool pty)
     struct snag_child child;
     snag_child_init(&child);
     assert(executable && directory && env);
-    assert(snag_child_spawn(&child, executable, pty ? "line" : "echo", directory, env, pty) == 0);
+    assert((isolated ? snag_child_spawn_isolated(&child, executable, "echo", directory, env) :
+            snag_child_spawn(&child, executable, pty ? "line" : "echo", directory, env, pty)) == 0);
     unsigned char payload[131072];
     size_t size = pty ? 13u : sizeof(payload), written = 0;
     for (size_t i = 0; i < sizeof(payload); ++i)
@@ -1700,8 +1701,9 @@ test_platform(void)
     test_cmd_argument_probe();
     test_native_process(false);
     test_native_process(true);
-    test_native_process_input(false);
-    test_native_process_input(true);
+    test_native_process_input(false, false);
+    test_native_process_input(true, false);
+    test_native_process_input(false, true);
     test_native_process_fanout();
     test_native_process_descendant();
     test_home_environment();

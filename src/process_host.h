@@ -43,6 +43,9 @@ int snag_child_wait(struct snag_child_event *events, size_t count, snag_wake_fd 
 
 #ifdef _WIN32
 struct snag_output_broker;
+/* Native pipe command with an isolated handle-inheritance owner. */
+int snag_child_spawn_isolated(struct snag_child *child, const char *shell, const char *command,
+                              const char *directory, char **environment);
 /* Private same-executable entry point; -1 means ordinary application startup. */
 int snag_output_broker_main(int argc, wchar_t **argv);
 int snag_output_broker_write(struct snag_output_broker **owner, int fd,

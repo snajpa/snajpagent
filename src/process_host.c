@@ -13,10 +13,14 @@
 #include <process.h>
 #include <fcntl.h>
 #include <io.h>
+#include <stdatomic.h>
 
 /* Dynamically detected API; keep the rest of the import floor independent. */
 #ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
 #define PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE ((DWORD_PTR)0x00020016)
+#endif
+#ifndef PROC_THREAD_ATTRIBUTE_HANDLE_LIST
+#define PROC_THREAD_ATTRIBUTE_HANDLE_LIST ((DWORD_PTR)0x00020002)
 #endif
 
 struct child_pipe {
@@ -35,6 +39,7 @@ struct snag_child_windows {
     HRESULT (WINAPI *console_release)(HANDLE);
     HRESULT (WINAPI *console_resize)(HANDLE, COORD);
     COORD dimensions;
+    struct snag_output_broker *broker;
 };
 
 static int
@@ -248,6 +253,18 @@ struct snag_output_broker {
 
 static const wchar_t broker_option[] = L"--snajpagent-private-writer";
 static const wchar_t broker_prefix[] = L"\\\\.\\pipe\\snajpagent-writer-";
+static _Atomic(HANDLE) broker_owned_job;
+static CRITICAL_SECTION broker_spawn_lock;
+
+enum { BROKER_WRITE = 1, BROKER_SPAWN = 2 };
+struct broker_spawn_request {
+    uint64_t job, streams[3];
+    uint32_t units[4]; /* executable, command line, cwd, double-NUL environment */
+};
+struct broker_spawn_reply {
+    uint64_t process;
+    uint32_t pid, error;
+};
 
 void
 snag_output_broker_close(struct snag_output_broker *broker)
@@ -315,6 +332,9 @@ broker_transfer(struct snag_output_broker *broker, bool write,
         }
         if (!write)
             memcpy(bytes, pipe->bytes, pipe->count);
+        volatile unsigned char *wipe = pipe->bytes;
+        for (DWORD i = 0; i < pipe->count; ++i)
+            wipe[i] = 0;
         bytes += pipe->count;
         size -= pipe->count;
     }
@@ -379,7 +399,7 @@ broker_open(int (*checkpoint)(void *), void *opaque)
     if (!DuplicateHandle(GetCurrentProcess(), mapping, child.hProcess,
                           &remote, FILE_MAP_READ, FALSE, 0) ||
         !DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), child.hProcess,
-                          &parent, SYNCHRONIZE, FALSE, 0))
+                          &parent, SYNCHRONIZE | PROCESS_DUP_HANDLE, FALSE, 0))
         goto native_error;
     uint64_t target[2] = {(uintptr_t)remote, (uintptr_t)parent};
     if (broker_transfer(broker, true, target, sizeof(target), deadline, checkpoint, opaque) < 0 ||
@@ -437,7 +457,7 @@ snag_output_broker_write(struct snag_output_broker **owner, int fd,
             child_error(GetLastError());
             goto fail;
         }
-        uint64_t packet[2] = {(uintptr_t)remote, amount};
+        uint64_t packet[3] = {BROKER_WRITE, (uintptr_t)remote, amount};
         int32_t status;
         if (broker_transfer(broker, true, packet, sizeof(packet), 0, checkpoint, opaque) < 0 ||
             broker_transfer(broker, true, (void *)bytes, amount, 0, checkpoint, opaque) < 0 ||
@@ -485,8 +505,94 @@ static unsigned int __stdcall
 broker_parent_wait(void *parent)
 {
     (void)WaitForSingleObject(parent, INFINITE);
+    EnterCriticalSection(&broker_spawn_lock);
+    HANDLE job = atomic_load(&broker_owned_job);
+    if (job)
+        (void)TerminateJobObject(job, 125u);
     ExitProcess(125u);
     return 0;
+}
+
+static bool
+broker_child_spawn(HANDLE pipe, HANDLE parent)
+{
+    struct broker_spawn_request request;
+    struct broker_spawn_reply reply = {0};
+    wchar_t *text[4] = {0};
+    HANDLE streams[3] = {0};
+    PROCESS_INFORMATION child = {0};
+    bool sent = false;
+    if (atomic_load(&broker_owned_job) ||
+        !broker_child_transfer(pipe, false, &request, sizeof(request)))
+        return false;
+    if (!request.job || (uint64_t)(uintptr_t)request.job != request.job)
+        return false;
+    HANDLE job = (HANDLE)(uintptr_t)request.job;
+    atomic_store(&broker_owned_job, job);
+    for (size_t i = 0; i < 3u; ++i) {
+        if (!request.streams[i] || (uint64_t)(uintptr_t)request.streams[i] != request.streams[i])
+            goto out;
+        streams[i] = (HANDLE)(uintptr_t)request.streams[i];
+    }
+    for (size_t i = 0; i < 4u; ++i) {
+        uint32_t units = request.units[i];
+        if (units < (i == 3u ? 2u : 1u) ||
+            units > (i == 3u ? SNAG_MEMORY_LIMIT / sizeof(wchar_t) : 32768u))
+            goto out;
+        text[i] = malloc((size_t)units * sizeof(wchar_t));
+        if (!text[i] || !broker_child_transfer(pipe, false, text[i], units * sizeof(wchar_t)))
+            goto out;
+        if (text[i][units - 1u] ||
+            (i == 3u ? text[i][units - 2u] != 0 : wcslen(text[i]) != units - 1u))
+            goto out;
+    }
+    STARTUPINFOW startup = {.cb = sizeof(startup), .dwFlags = STARTF_USESTDHANDLES,
+        .hStdInput = streams[2], .hStdOutput = streams[0], .hStdError = streams[1]};
+    for (size_t i = 0; i < 3u; ++i)
+        if (!SetHandleInformation(streams[i], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT))
+            goto out;
+    /* Parent death cannot interleave between creation and job assignment. */
+    EnterCriticalSection(&broker_spawn_lock);
+    if (!CreateProcessW(text[0], text[1], NULL, NULL, TRUE,
+        CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT,
+        text[3], text[2], &startup, &child)) {
+        reply.error = GetLastError();
+    } else if (!AssignProcessToJobObject(job, child.hProcess)) {
+        reply.error = GetLastError();
+        (void)TerminateProcess(child.hProcess, 125u);
+    } else {
+        HANDLE remote;
+        if (!DuplicateHandle(GetCurrentProcess(), child.hProcess, parent, &remote,
+                              0, FALSE, DUPLICATE_SAME_ACCESS))
+            reply.error = GetLastError();
+        else {
+            reply.process = (uintptr_t)remote;
+            reply.pid = child.dwProcessId;
+        }
+    }
+    LeaveCriticalSection(&broker_spawn_lock);
+    sent = broker_child_transfer(pipe, true, &reply, sizeof(reply));
+    if (sent && !reply.error && ResumeThread(child.hThread) == (DWORD)-1)
+        sent = false;
+out:
+    if (!sent || reply.error)
+        (void)TerminateJobObject(job, 125u);
+    if (child.hThread)
+        (void)CloseHandle(child.hThread);
+    if (child.hProcess)
+        (void)CloseHandle(child.hProcess);
+    for (size_t i = 0; i < 3u; ++i)
+        if (streams[i])
+            (void)CloseHandle(streams[i]);
+    for (size_t i = 0; i < 4u; ++i) {
+        if (text[i]) {
+            volatile wchar_t *wipe = text[i];
+            for (size_t j = 0; j < request.units[i]; ++j)
+                wipe[j] = 0;
+        }
+        free(text[i]);
+    }
+    return sent && !reply.error;
 }
 
 int
@@ -527,6 +633,7 @@ snag_output_broker_main(int argc, wchar_t **argv)
     memcpy(nonce, view, sizeof(nonce));
     (void)UnmapViewOfFile(view);
     (void)CloseHandle(mapping);
+    InitializeCriticalSection(&broker_spawn_lock);
     HANDLE watcher = (HANDLE)_beginthreadex(NULL, 0, broker_parent_wait,
                                             (void *)(uintptr_t)target[1], 0, NULL);
     if (!watcher)
@@ -535,13 +642,21 @@ snag_output_broker_main(int argc, wchar_t **argv)
     if (!broker_child_transfer(pipe, true, nonce, sizeof(nonce)))
         goto out;
     for (;;) {
-        uint64_t packet[2];
+        uint64_t operation, packet[2];
         unsigned char bytes[4096];
-        if (!broker_child_transfer(pipe, false, packet, sizeof(packet))) {
+        if (!broker_child_transfer(pipe, false, &operation, sizeof(operation))) {
             if (GetLastError() == ERROR_BROKEN_PIPE || GetLastError() == ERROR_NO_DATA)
                 result = 0;
             break;
         }
+        if (operation == BROKER_SPAWN) {
+            if (!broker_child_spawn(pipe, (HANDLE)(uintptr_t)target[1]))
+                break;
+            continue;
+        }
+        if (operation != BROKER_WRITE ||
+            !broker_child_transfer(pipe, false, packet, sizeof(packet)))
+            break;
         if (!packet[0] || (uint64_t)(uintptr_t)packet[0] != packet[0] ||
             !packet[1] || packet[1] > sizeof(bytes))
             break;
@@ -565,6 +680,11 @@ snag_output_broker_main(int argc, wchar_t **argv)
             break;
     }
 out:
+    {
+        HANDLE job = atomic_load(&broker_owned_job);
+        if (job)
+            (void)TerminateJobObject(job, 125u);
+    }
     (void)CloseHandle(pipe);
     return result;
 }
@@ -609,6 +729,7 @@ snag_child_free(struct snag_child *child)
         return;
     if (native->job)
         (void)TerminateJobObject(native->job, 137u);
+    snag_output_broker_close(native->broker);
     if (native->process) {
         (void)WaitForSingleObject(native->process, INFINITE);
         (void)CloseHandle(native->process);
@@ -637,15 +758,72 @@ console_dimensions(void)
                 (SHORT)(info.srWindow.Bottom - info.srWindow.Top + 1)} : (COORD){80, 24};
 }
 
-int
-snag_child_spawn(struct snag_child *child, const char *shell, const char *command,
-                 const char *directory, char **environment, bool pty)
+static int
+broker_spawn(struct snag_child_windows *native, HANDLE ends[3],
+             wchar_t *exe, wchar_t *line, wchar_t *cwd, struct snag_buf *environment)
+{
+    struct broker_spawn_request request = {0};
+    struct broker_spawn_reply reply;
+    wchar_t *texts[] = {exe, line, cwd, (wchar_t *)environment->data};
+    struct snag_output_broker *broker = broker_open(NULL, NULL);
+    if (!broker)
+        return -1;
+    native->broker = broker;
+    HANDLE remote;
+    if (!DuplicateHandle(GetCurrentProcess(), native->job, broker->process, &remote,
+                          JOB_OBJECT_ASSIGN_PROCESS | JOB_OBJECT_TERMINATE, FALSE, 0))
+        return child_error(GetLastError());
+    request.job = (uintptr_t)remote;
+    for (size_t i = 0; i < 3u; ++i) {
+        if (!DuplicateHandle(GetCurrentProcess(), ends[i], broker->process, &remote,
+                              0, FALSE, DUPLICATE_SAME_ACCESS))
+            return child_error(GetLastError());
+        request.streams[i] = (uintptr_t)remote;
+    }
+    for (size_t i = 0; i < 4u; ++i)
+        request.units[i] = (uint32_t)(i == 3u ? environment->len / sizeof(wchar_t) :
+                                     wcslen(texts[i]) + 1u);
+    uint64_t operation = BROKER_SPAWN, deadline = snag_monotonic_ms() + 5000u;
+    if (broker_transfer(broker, true, &operation, sizeof(operation), deadline, NULL, NULL) < 0 ||
+        broker_transfer(broker, true, &request, sizeof(request), deadline, NULL, NULL) < 0)
+        return -1;
+    for (size_t i = 0; i < 4u; ++i)
+        if (broker_transfer(broker, true, texts[i], (size_t)request.units[i] * sizeof(wchar_t),
+                             deadline, NULL, NULL) < 0)
+            return -1;
+    if (broker_transfer(broker, false, &reply, sizeof(reply), deadline, NULL, NULL) < 0)
+        return -1;
+    if (reply.error)
+        return child_error(reply.error);
+    if (!reply.process || (uint64_t)(uintptr_t)reply.process != reply.process || !reply.pid) {
+        errno = EIO;
+        return -1;
+    }
+    native->process = (HANDLE)(uintptr_t)reply.process;
+    native->pid = reply.pid;
+    return 0;
+}
+
+static int
+child_spawn(struct snag_child *child, const char *shell, const char *command,
+            const char *directory, char **environment, bool pty, bool isolated)
 {
     struct snag_child_windows *native = calloc(1, sizeof(*native));
     HANDLE ends[3] = {0};
     struct snag_buf line, env;
     wchar_t *exe = NULL, *cwd = NULL, *text = NULL;
-    STARTUPINFOEXW startup = {0};
+    struct { STARTUPINFOW StartupInfo; void *lpAttributeList; } startup = {0};
+    BOOL (WINAPI *attributes_init)(void *, DWORD, DWORD, SIZE_T *);
+    BOOL (WINAPI *attributes_update)(void *, DWORD, DWORD_PTR, void *, SIZE_T, void *, SIZE_T *);
+    void (WINAPI *attributes_delete)(void *);
+    HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+    FARPROC function = GetProcAddress(kernel, "InitializeProcThreadAttributeList");
+    memcpy(&attributes_init, &function, sizeof(attributes_init));
+    function = GetProcAddress(kernel, "UpdateProcThreadAttribute");
+    memcpy(&attributes_update, &function, sizeof(attributes_update));
+    function = GetProcAddress(kernel, "DeleteProcThreadAttributeList");
+    memcpy(&attributes_delete, &function, sizeof(attributes_delete));
+    isolated |= !attributes_init || !attributes_update || !attributes_delete;
     PROCESS_INFORMATION process = {0};
     int rc = -1;
     SIZE_T attributes = 0;
@@ -723,10 +901,25 @@ snag_child_spawn(struct snag_child *child, const char *shell, const char *comman
         if ((!pty || i != 1u) && create_pipe(&native->pipe[i], i == 2u, &ends[i]) < 0)
             goto out;
     native->job = CreateJobObjectW(NULL, NULL);
+    if (!native->job)
+        goto native_error;
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if (!native->job || !SetInformationJobObject(native->job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
-        goto native_error;
+    if (!SetInformationJobObject(native->job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
+        if (!isolated || GetLastError() != ERROR_INVALID_PARAMETER)
+            goto native_error;
+        JOBOBJECT_BASIC_LIMIT_INFORMATION basic = {0};
+        if (!SetInformationJobObject(native->job, JobObjectBasicLimitInformation, &basic, sizeof(basic)))
+            goto native_error;
+    }
+    if (isolated) {
+        if (pty) {
+            errno = ENOTSUP; /* Native hidden-console collection is separate. */
+            goto out;
+        }
+        rc = broker_spawn(native, ends, exe, text, cwd, &env);
+        goto out;
+    }
     if (pty) {
         HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
         HRESULT (WINAPI *create)(COORD, HANDLE, HANDLE, DWORD, HANDLE *);
@@ -746,14 +939,14 @@ snag_child_spawn(struct snag_child *child, const char *shell, const char *comman
         if (FAILED(create(native->dimensions, ends[2], ends[0], 0, &native->console)))
             goto native_error;
     }
-    (void)InitializeProcThreadAttributeList(NULL, 1u, 0, &attributes);
+    (void)attributes_init(NULL, 1u, 0, &attributes);
     startup.lpAttributeList = malloc(attributes);
     if (!startup.lpAttributeList)
         goto out;
-    if (!InitializeProcThreadAttributeList(startup.lpAttributeList, 1u, 0, &attributes))
+    if (!attributes_init(startup.lpAttributeList, 1u, 0, &attributes))
         goto native_error;
     attributes_ready = true;
-    if (!UpdateProcThreadAttribute(startup.lpAttributeList, 0,
+    if (!attributes_update(startup.lpAttributeList, 0,
         pty ? PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE : PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
         pty ? native->console : (void *)ends, pty ? sizeof(HANDLE) : sizeof(ends), NULL, NULL))
         goto native_error;
@@ -790,7 +983,7 @@ out:
         if (process.hThread)
             (void)CloseHandle(process.hThread);
         if (attributes_ready)
-            DeleteProcThreadAttributeList(startup.lpAttributeList);
+            attributes_delete(startup.lpAttributeList);
         free(startup.lpAttributeList);
         for (size_t i = 0; i < 3u; ++i)
             if (ends[i])
@@ -808,6 +1001,20 @@ out:
         errno = error;
     }
     return rc;
+}
+
+int
+snag_child_spawn(struct snag_child *child, const char *shell, const char *command,
+                 const char *directory, char **environment, bool pty)
+{
+    return child_spawn(child, shell, command, directory, environment, pty, false);
+}
+
+int
+snag_child_spawn_isolated(struct snag_child *child, const char *shell, const char *command,
+                          const char *directory, char **environment)
+{
+    return child_spawn(child, shell, command, directory, environment, false, true);
 }
 
 static unsigned int __stdcall
