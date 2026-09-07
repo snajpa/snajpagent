@@ -389,12 +389,9 @@ snag_app_measured_input(struct app_state *app, uint64_t *tokens)
     char hash[SNAG_SHA256_HEX_LEN + 1u];
 
     provider_capacity_source_sha256(app->turn_provider, app->turn_model, hash);
-    if (!s->context_meter.valid ||
-        strcmp(s->context_meter.provider, app->turn_provider->name) ||
-        strcmp(s->context_meter.model, app->turn_model) ||
-        strcmp(s->context_meter.effort, app->turn_effort) ||
-        strcmp(s->context_meter.compact_id, s->compact_id) ||
-        strcmp(s->context_meter.provider_source_sha256, hash))
+    if (!snag_input_observation_matches(&s->context_meter,
+            app->turn_provider->name, app->turn_model, app->turn_effort,
+            hash, s->compact_id))
         return false;
     *tokens = s->context_meter.input_tokens;
     return true;
