@@ -3170,8 +3170,12 @@ snag_realpath(const char *path)
         return NULL;
     }
 #ifdef SNAG_LEGACY_BSD_AT
-    /* This libc requires the caller to provide its PATH_MAX-byte buffer. */
+    /* Old libc accepts empty/missing paths and requires an output buffer.
+     * Check the original traversal before normalizing away dot components. */
+    struct stat st;
     char resolved[PATH_MAX];
+    if (stat(path, &st) < 0)
+        return NULL;
     return realpath(path, resolved) ? strdup(resolved) : NULL;
 #else
     return realpath(path, NULL);
