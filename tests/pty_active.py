@@ -2267,40 +2267,24 @@ def test_model_cache_and_selection():
     end = prompt_end
 
     # Uncached identifiers and effort names pass through without local lookup.
-    end = child.send_wait(b"/model definitely-new-model\r",
-        b"model for next turn: first / definitely-new-model / high", start=end
-    )
-    end = child.wait(b"not known in the model cache", start=end)
-    child.wait(PROMPT.rstrip(), start=end)
-    end = child.send_wait(b"/model fresh-model / quantum\r",
-        b"model for next turn: first / fresh-model / quantum", start=end
-    )
-    end = child.wait(b"not known in the model cache", start=end)
-    child.wait(PROMPT.rstrip(), start=end)
-    end = child.send_wait(b"/model default / literal-effort\r",
-        b"model for next turn: first / default / literal-effort", start=end
-    )
-    end = child.wait(b"not known in the model cache", start=end)
-    child.wait(PROMPT.rstrip(), start=end)
-    end = child.send_wait(b"/model second / future-new / cosmic\r",
-        b"model for next turn: second / future-new / cosmic", start=end
-    )
-    end = child.wait(b"not known in the model cache", start=end)
-    child.wait(PROMPT.rstrip(), start=end)
+    for selector, expected in (
+            ("definitely-new-model", "first / definitely-new-model / high"),
+            ("fresh-model / quantum", "first / fresh-model / quantum"),
+            ("default / literal-effort", "first / default / literal-effort"),
+            ("second / future-new / cosmic", "second / future-new / cosmic")):
+        end = child.send_wait(f"/model {selector}\r".encode(),
+            f"model for next turn: {expected}".encode(), start=end)
+        end = child.wait(b"not known in the model cache", start=end)
+        child.wait(PROMPT.rstrip(), start=end)
 
     # Both numeric spellings select the exact flattened cached variant.
-    end = child.send_wait(b"/model 2\r",
-        b"model for next turn: first / gpt-5.6-terra / low", start=end
-    )
-    child.wait(PROMPT.rstrip(), start=end)
-    end = child.send_wait(b"/model #16\r",
-        b"model for next turn: second / vendor/future-model / low", start=end
-    )
-    child.wait(PROMPT.rstrip(), start=end)
-    end = child.send_wait(b"/model #9\r",
-        b"model for next turn: second / gpt-5.6-luna / high", start=end
-    )
-    child.wait(PROMPT.rstrip(), start=end)
+    for selector, expected in (
+            ("2", "first / gpt-5.6-terra / low"),
+            ("#16", "second / vendor/future-model / low"),
+            ("#9", "second / gpt-5.6-luna / high")):
+        end = child.send_wait(f"/model {selector}\r".encode(),
+            f"model for next turn: {expected}".encode(), start=end)
+        child.wait(PROMPT.rstrip(), start=end)
     answer_end = child.send_wait(b"ping\r", b"pong", start=end)
     child.exit_cleanly(answer_end)
 
