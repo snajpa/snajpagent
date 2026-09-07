@@ -55,7 +55,7 @@ let
           (lib.concatMapStringsSep ":" (dep: "${dep}/lib/pkgconfig") dependencies)}
         cmakeFlagsArray+=(
           "-DCMAKE_C_FLAGS=${cflags}"
-          "-DCMAKE_CXX_FLAGS=${cflags}"
+          "-DCMAKE_CXX_FLAGS=${cflags} -stdlib=libstdc++"
           "-DCMAKE_EXE_LINKER_FLAGS=${ldflags}"
         )
       '';
@@ -108,6 +108,8 @@ let
     postPatch = ''
       perl scripts/config.pl set MBEDTLS_THREADING_C
       perl scripts/config.pl set MBEDTLS_THREADING_PTHREAD
+      substituteInPlace library/net_sockets.c \
+        --replace-fail 'fd >= FD_SETSIZE' '(unsigned int) fd >= FD_SETSIZE'
     '';
   });
   zlib = cmakeLibrary sourcePkgs.zlib [
@@ -118,10 +120,17 @@ let
     "-DZSTD_BUILD_SHARED=OFF" "-DZSTD_BUILD_STATIC=ON"
     "-DZSTD_BUILD_PROGRAMS=OFF" "-DZSTD_BUILD_TESTS=OFF"
   ] []).overrideAttrs (_: { cmakeDir = "../build/cmake"; });
-  cares = cmakeLibrary sourcePkgs.c-ares [
+  cares = (cmakeLibrary sourcePkgs.c-ares [
     "-DCARES_SHARED=OFF" "-DCARES_STATIC=ON" "-DCARES_STATIC_PIC=ON"
     "-DCARES_BUILD_TOOLS=OFF" "-DCARES_BUILD_TESTS=OFF"
-  ] [];
+  ] []).overrideAttrs (_: {
+    postPatch = ''
+      # Old BSD net/if.h needs sockaddr declared before configure's type probes.
+      substituteInPlace CMakeLists.txt \
+        --replace-fail 'CARES_EXTRAINCLUDE_IFSET (HAVE_NET_IF_H       net/if.h)' \
+          'CARES_EXTRAINCLUDE_IFSET (HAVE_NET_IF_H       "sys/socket.h;net/if.h")'
+    '';
+  });
   nghttp2 = cmakeLibrary sourcePkgs.nghttp2 [
     "-DENABLE_LIB_ONLY=ON" "-DBUILD_STATIC_LIBS=ON" "-DENABLE_DOC=OFF"
   ] [];
