@@ -341,8 +341,15 @@ def session_ids():
     return {entry.name for entry in STATE_ROOT.iterdir() if entry.is_dir()}
 
 
-def new_session(before):
-    created = session_ids() - before
+def new_session(before, child=None):
+    deadline = time.monotonic() + 4.0
+    while True:
+        created = session_ids() - before
+        if child is None or (created and all(
+                (STATE_ROOT / sid / "events.jsonl").is_file() for sid in created)):
+            break
+        assert time.monotonic() < deadline, bytes(child.buf)
+        child.read_once(0.01)
     if len(created) != 1:
         raise AssertionError(f"expected one new session, got {sorted(created)!r}")
     return created.pop()
@@ -3183,7 +3190,7 @@ def test_network_resume_roles():
     peer.message("retained room message")
     server.wait("firstpeer › retained room message".encode())
     server.send_wait(b"resume setup\r", "serverop › resume setup".encode())
-    server_id = new_session(before)
+    server_id = new_session(before, server)
     peer.close()
     server.send(b"\x04")
     server_command = server.finish()
@@ -3223,7 +3230,7 @@ def test_network_resume_roles():
     first_links = accept_connections(upstream, 2)
     peer = IRCClient(combined_port, "combinedpeer")
     combined.send_wait(b"resume setup\r", "combinedop › resume setup".encode())
-    combined_id = new_session(before)
+    combined_id = new_session(before, combined)
     peer.close()
     combined.send(b"\x04")
     combined_command = combined.finish()
@@ -3381,7 +3388,7 @@ def test_network_live_nick_prompt():
         # request context includes a fresh snapshot with both accepted nicks.
         start = len(child.buf)
         child.send_wait(b"network_view_stream\r", "@operator8 › network_view_stream".encode(), start=start)
-        session_id = new_session(before)
+        session_id = new_session(before, child)
         end = child.wait("◴".encode(), start=start)
         session_id = new_session(before)
         visible = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", child.buf[start:end])
@@ -3548,7 +3555,7 @@ def test_network_view_routing_and_atomic_catchup():
         child.wait(network_idle)
         assert session_ids() == before
         child.send_wait(b"session setup\r", "localop › session setup".encode())
-        session_id = new_session(before)
+        session_id = new_session(before, child)
         human = IRCClient(port, "remoteop")
         peer_agent = IRCClient(port, "peerbot", agent=True)
         deadline = time.monotonic() + 8.0
@@ -3696,7 +3703,7 @@ def test_chat_mention_completion_and_steering():
         child.wait(chat_prompt("localop"))
         assert session_ids() == before
         child.send_wait(b"session setup\r", "localop › session setup".encode())
-        session_id = new_session(before)
+        session_id = new_session(before, child)
         human = IRCClient(port, "remoteop")
         deadline = time.monotonic() + 8.0
         while session_ids() == before:
@@ -3808,7 +3815,7 @@ def test_network_chat_and_managed_mention():
         clear_draft_incrementally(child, network_idle)
 
         child.send_wait(b"session setup\r", "localop › session setup".encode())
-        session_id = new_session(before)
+        session_id = new_session(before, child)
         human = IRCClient(port, "remoteop")
         assert (b" 332 remoteop #lab :" + str(network_workspace).encode() +
                 b"\r\n") in human.buf
@@ -4203,7 +4210,13 @@ def test_goal_orderly_quit_resume():
                 child.wait_idle_prompt(start=switched)
             child.send_wait(b"/goal slow goal\r", b"working on goal")
             session_id = new_session(before)
-            child.send_wait(b"/goal lock\r", b"Goal wording locked against model changes")
+            child.send(b"/goal lock\r")
+            # The notice is queued behind the open response. Wait for the
+            # durable lock, not its eventual rendering at the response boundary.
+            deadline = time.monotonic() + 4.0
+            while not any(e["type"] == "goal_lock_changed" for e in events(session_id)):
+                assert time.monotonic() < deadline, bytes(child.buf)
+                child.read_once(0.01)
             expected = 0
             if mode == "eof":
                 attrs = termios.tcgetattr(child.fd)
@@ -4221,6 +4234,7 @@ def test_goal_orderly_quit_resume():
                 child.send(b"\x03" * 4)
             else:
                 child.send(b"\x04")
+            child.wait(b"Goal wording locked against model changes")
             child.wait(RESUME_HEADER, timeout=4.0)
             command = child.finish(expected=expected)
         stopped = events(session_id)
