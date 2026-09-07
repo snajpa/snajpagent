@@ -175,6 +175,11 @@ native_process_child(const char *mode)
     HANDLE input = GetStdHandle(STD_INPUT_HANDLE), output = GetStdHandle(STD_OUTPUT_HANDLE);
     if (!strcmp(mode, "echo"))
         test_child_pipe_privacy();
+    char *probe = snag_environment("SNAJPAGENT_INHERIT_PROBE");
+    if (probe) {
+        (void)SetEvent((HANDLE)(uintptr_t)strtoull(probe, NULL, 10));
+        free(probe);
+    }
     if (!strcmp(mode, "tree")) {
         WCHAR program[32768], command[32768];
         assert(GetModuleFileNameW(NULL, program, 32768u));
@@ -208,6 +213,11 @@ native_process_child(const char *mode)
 static void
 test_native_process_input(bool pty, bool isolated)
 {
+    SECURITY_ATTRIBUTES security = {sizeof(security), NULL, TRUE};
+    HANDLE excluded = CreateEventW(&security, TRUE, FALSE, NULL);
+    wchar_t probe[32];
+    assert(excluded && swprintf(probe, 32u, L"%llu", (unsigned long long)(uintptr_t)excluded) > 0);
+    assert(SetEnvironmentVariableW(L"SNAJPAGENT_INHERIT_PROBE", probe));
     WCHAR program[32768];
     assert(GetModuleFileNameW(NULL, program, 32768u));
     char *executable = snag_wide_to_utf8(program), *directory = snag_realpath(".");
@@ -215,6 +225,10 @@ test_native_process_input(bool pty, bool isolated)
     struct snag_child child;
     snag_child_init(&child);
     assert(executable && directory && env);
+    if (isolated) {
+        assert(snag_child_spawn_isolated(&child, "C:/no-such-snajpagent.exe", "echo", directory, env) < 0);
+        assert(errno == ENOENT && !child.native);
+    }
     assert((isolated ? snag_child_spawn_isolated(&child, executable, "echo", directory, env) :
             snag_child_spawn(&child, executable, pty ? "line" : "echo", directory, env, pty)) == 0);
     unsigned char payload[131072];
@@ -272,6 +286,8 @@ test_native_process_input(bool pty, bool isolated)
     } else
         assert(output.len == size && !memcmp(output.data, payload, size));
     snag_child_free(&child);
+    assert(WaitForSingleObject(excluded, 0) == WAIT_TIMEOUT && CloseHandle(excluded));
+    assert(SetEnvironmentVariableW(L"SNAJPAGENT_INHERIT_PROBE", NULL));
     snag_buf_free(&output);
     snag_environment_entries_free(env);
     free(executable);
@@ -396,7 +412,7 @@ test_native_process_fanout(void)
 }
 
 static void
-test_native_process_descendant(void)
+test_native_process_descendant(bool isolated)
 {
     WCHAR program[32768];
     assert(GetModuleFileNameW(NULL, program, 32768u));
@@ -405,7 +421,8 @@ test_native_process_descendant(void)
     struct snag_child child;
     snag_child_init(&child);
     assert(executable && directory && env);
-    assert(snag_child_spawn(&child, executable, "tree", directory, env, false) == 0);
+    assert((isolated ? snag_child_spawn_isolated(&child, executable, "tree", directory, env) :
+            snag_child_spawn(&child, executable, "tree", directory, env, false)) == 0);
     snag_child_close_stream(&child, 2u);
     char message[64] = {0};
     size_t used = 0;
@@ -1705,7 +1722,8 @@ test_platform(void)
     test_native_process_input(true, false);
     test_native_process_input(false, true);
     test_native_process_fanout();
-    test_native_process_descendant();
+    test_native_process_descendant(false);
+    test_native_process_descendant(true);
     test_home_environment();
 #endif
     assert(!snag_environment(NULL) && errno == EINVAL);
