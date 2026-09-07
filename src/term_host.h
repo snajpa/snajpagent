@@ -23,7 +23,7 @@ struct snag_console_writer;
 struct snag_output_broker;
 struct snag_console_state {
     unsigned short initial_attributes;
-    bool legacy, pending_wrap;
+    bool legacy, pending_wrap, bold, bright;
     COORD cursor;
     unsigned char sequence[64];
     unsigned int sequence_len;

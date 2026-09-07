@@ -490,13 +490,18 @@ console_csi(HANDLE output, struct snag_console_state *state)
         WORD attributes = info.wAttributes;
         for (unsigned int i = 0; i < count; ++i) {
             unsigned int value = args[i];
-            if (value == 0u)
+            if (value == 0u) {
                 attributes = state->initial_attributes;
-            else if (value == 1u)
+                state->bold = false;
+                state->bright = (attributes & FOREGROUND_INTENSITY) != 0;
+            } else if (value == 1u) {
+                state->bold = true;
                 attributes |= FOREGROUND_INTENSITY;
-            else if (value == 2u || value == 22u)
-                attributes &= ~FOREGROUND_INTENSITY;
-            else if (value == 3u || value == 4u)
+            } else if (value == 2u || value == 22u) {
+                state->bold = false;
+                attributes = (WORD)((attributes & ~FOREGROUND_INTENSITY) |
+                    (value == 22u && state->bright ? FOREGROUND_INTENSITY : 0));
+            } else if (value == 3u || value == 4u)
                 attributes |= COMMON_LVB_UNDERSCORE;
             else if (value == 23u || value == 24u)
                 attributes &= ~COMMON_LVB_UNDERSCORE;
@@ -504,15 +509,18 @@ console_csi(HANDLE output, struct snag_console_state *state)
                 attributes |= COMMON_LVB_REVERSE_VIDEO;
             else if (value == 27u)
                 attributes &= ~COMMON_LVB_REVERSE_VIDEO;
-            else if ((value >= 30u && value <= 37u) || (value >= 90u && value <= 97u))
+            else if ((value >= 30u && value <= 37u) || (value >= 90u && value <= 97u)) {
+                state->bright = value >= 90u;
                 attributes = (WORD)((attributes & ~15u) | console_color(value % 10u) |
-                                     (value >= 90u ? FOREGROUND_INTENSITY : 0));
-            else if ((value >= 40u && value <= 47u) || (value >= 100u && value <= 107u))
+                                     (state->bright || state->bold ? FOREGROUND_INTENSITY : 0));
+            } else if ((value >= 40u && value <= 47u) || (value >= 100u && value <= 107u))
                 attributes = (WORD)((attributes & ~240u) | (console_color(value % 10u) << 4) |
                                      (value >= 100u ? BACKGROUND_INTENSITY : 0));
-            else if (value == 39u)
-                attributes = (WORD)((attributes & ~15u) | (state->initial_attributes & 15u));
-            else if (value == 49u)
+            else if (value == 39u) {
+                state->bright = (state->initial_attributes & FOREGROUND_INTENSITY) != 0;
+                attributes = (WORD)((attributes & ~15u) | (state->initial_attributes & 15u) |
+                                     (state->bold ? FOREGROUND_INTENSITY : 0));
+            } else if (value == 49u)
                 attributes = (WORD)((attributes & ~240u) | (state->initial_attributes & 240u));
         }
         return SetConsoleTextAttribute(output, attributes) ? 0 : console_failure();
@@ -643,6 +651,7 @@ capture_diagnostic_console(void)
         CONSOLE_SCREEN_BUFFER_INFO info;
         if (GetConsoleScreenBufferInfo(GetStdHandle(streams[i]), &info)) {
             diagnostic_console[i].initial_attributes = info.wAttributes;
+            diagnostic_console[i].bright = (info.wAttributes & FOREGROUND_INTENSITY) != 0;
             diagnostic_console[i].cursor = info.dwCursorPosition;
             diagnostic_console[i].legacy = true;
         }
@@ -810,7 +819,8 @@ snag_term_output_open(struct snag_term_host *host, int fd)
     host->output_mode[fd - 1] = mode;
     host->output_console[fd - 1] = copy;
     host->output_state[fd - 1] = (struct snag_console_state){
-        .initial_attributes = info.wAttributes, .cursor = info.dwCursorPosition, .legacy = legacy};
+        .initial_attributes = info.wAttributes, .cursor = info.dwCursorPosition, .legacy = legacy,
+        .bright = (info.wAttributes & FOREGROUND_INTENSITY) != 0};
     return result;
 }
 
