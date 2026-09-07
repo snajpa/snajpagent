@@ -108,14 +108,6 @@ commit_rendered(struct app_state *app, const char *type, json_t *data,
     return 0;
 }
 
-static void
-clear_active_compaction(struct snag_session *session)
-{
-    session->active_compact_id[0] = '\0';
-    session->active_compact_source_sha256[0] = '\0';
-    session->active_compact_source_seq = 0u;
-}
-
 static int
 compaction_state_valid(const struct app_state *app, const char *reason,
                        bool active_prefix, char *error, size_t error_size)
@@ -573,8 +565,13 @@ out:
         else
             started = false;
     }
-    if (rc < 0 && started)
-        clear_active_compaction(&app->session);
+    if (rc < 0 && started && app->session.active_compact_id[0]) {
+        char cleanup_error[256] = {0};
+        if (commit_rendered(app, "compaction_interrupted",
+                compaction_interrupted_data(compact_id, "error"),
+                cleanup_error, sizeof(cleanup_error)) < 0)
+            snprintf(error, error_size, "%s", cleanup_error);
+    }
     if (output)
         json_decref(output);
     if (output_count_request)

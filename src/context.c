@@ -1322,6 +1322,25 @@ snag_context_provider_model(const struct snag_provider_config *provider,
         json_string(snag_config_model_upstream(provider, model))) : -1;
 }
 
+/* Gateways can lift all developer/system messages into instructions. Keep an
+ * explicitly host-generated input when compaction leaves only those messages. */
+static int
+ensure_conversation_input(json_t *input)
+{
+    for (size_t i = 0u; i < json_array_size(input); ++i) {
+        const json_t *item = json_array_get(input, i);
+        const char *type = snag_json_string(item, "type");
+        const char *role = snag_json_string(item, "role");
+        if ((type && strcmp(type, "message")) || !role ||
+            (strcmp(role, "developer") && strcmp(role, "system")))
+            return 0;
+    }
+    return json_array_append_new(input, json_pack("{s:s,s:s}", "role", "user",
+        "content", "[snajpagent host continuation — not a new user message]\n"
+        "Continue from the existing instructions and retained context. "
+        "This marker adds no task, approval or change to the goal state."));
+}
+
 static json_t *
 create_request_object(struct context_builder *builder)
 {
@@ -1597,6 +1616,8 @@ snag_context_compact_request_build(struct snag_session *session,
         rc = 1;
         goto out;
     }
+    if (ensure_conversation_input(builder.request_input) < 0)
+        goto out;
     req = compact_count_request_object(builder.request_input, model);
     count = json_incref(req);
     if (!req) {
@@ -1792,6 +1813,8 @@ snag_context_build(struct snag_session *session, const char *model,
         config, session->active_turn_provider, session->active_read_only);
     if (builder.deferred_irc_seq && projection->irc_seq >= builder.deferred_irc_seq)
         projection->irc_seq = builder.deferred_irc_seq - 1u;
+    if (ensure_conversation_input(builder.request_input) < 0)
+        goto out;
     projection->model_input = model_input_object(&builder);
     projection->create_request = create_request_object(&builder);
     projection->count_request = count_request_object(projection->create_request);

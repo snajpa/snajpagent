@@ -443,6 +443,14 @@ clear_response_state(struct snag_session *session)
 }
 
 static void
+clear_compaction_state(struct snag_session *session)
+{
+    session->active_compact_id[0] = '\0';
+    session->active_compact_source_sha256[0] = '\0';
+    session->active_compact_source_seq = 0u;
+}
+
+static void
 clear_turn_state(struct snag_session *session)
 {
     session->active_turn = false;
@@ -451,6 +459,7 @@ clear_turn_state(struct snag_session *session)
     session->active_turn_id[0] = '\0';
     session->active_turn_model[0] = '\0';
     clear_response_state(session);
+    clear_compaction_state(session);
 }
 
 static bool
@@ -995,7 +1004,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->active_compact_source_seq = source_seq;
     } else if (strcmp(type, "compaction_interrupted") == 0) {
         static const char *const keys[] = {"compact_id", "reason"};
-        static const char *const reasons[] = {"steering", "user", "endpoint_unavailable", "context_rejected"};
+        static const char *const reasons[] = {"steering", "user", "endpoint_unavailable", "context_rejected", "error"};
         const char *compact_id = snag_json_string(data, "compact_id");
         const char *reason = snag_json_string(data, "reason");
 
@@ -1398,6 +1407,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             session->response_open || !all_pending_finished(session))
             goto invalid;
         clear_response_state(session);
+        /* Older writers cleared failed compaction only in memory. A recorded
+         * failed attempt closes it on replay before the next compaction. */
+        clear_compaction_state(session);
         if (session->recovery_count < UINT64_MAX) ++session->recovery_count;
     } else if (strcmp(type, "response_started") == 0) {
         static const char *const keys[] = {

@@ -3697,6 +3697,192 @@ def run_goal_recovery_cases(binary, root, provider, environment):
             provider.runtime_handler = None
 
 
+def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual", "legacy")):
+    """Exercise real request bytes, gateway instruction hoisting and journal reopen."""
+    for mode in modes:
+        case = root / ("compact-goal-" + mode)
+        workspace = case / "w"
+        workspace.mkdir(mode=0o700, parents=True)
+        state, config = case / "s", case / "c.ini"
+        provider = FakeResponses()
+        write_irc_config(config, provider.port, "host-model")
+        config.write_text(config.read_text().replace(
+            "[agent]\n", "[agent]\nmax_turn_retries=0\n", 1))
+        if mode in ("recover", "legacy"):
+            config.write_text(config.read_text().replace(
+                "auto_compact_input_tokens = 0", "auto_compact_input_tokens = 100"))
+        environment = {**os.environ, "SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
+        requests, summaries = [], []
+        rejected = []
+        counts = {"goal": 0}
+        terminal = None
+
+        def send(handler, body, status=200):
+            encoded = body.encode()
+            handler.send_response(status)
+            handler.send_header("Content-Type", "text/event-stream" if status == 200 else "application/json")
+            handler.send_header("Content-Length", str(len(encoded)))
+            handler.end_headers()
+            handler.wfile.write(encoded)
+
+        def respond(handler, request, sequence):
+            # Common Responses gateways lift text-only developer/system messages
+            # into instructions. Seven instruction items can still yield input=[].
+            conversation = [i for i in request.get("input", []) if not (
+                i.get("type", "message") == "message" and
+                i.get("role") in ("developer", "system") and
+                isinstance(i.get("content"), str))]
+            if not conversation:
+                rejected.append(request)
+                send(handler, json.dumps({"error": {"code": "missing_required_parameter",
+                    "message": "One of input or previous_response_id or prompt or conversation must be provided."}}), 400)
+                return
+            if request.get("tool_choice") == "none":
+                summaries.append(request)
+                if mode in ("recover", "manual", "legacy") and len(summaries) <= 4:
+                    send(handler, provider.event("response.failed", {"type": "response.failed",
+                        "response": {"error": {"code": "upstream_unavailable",
+                            "message": "Response payload is not completed: <TransferEncodingError: 400, message='Not enough data to satisfy transfer length header.'>"}}}))
+                else:
+                    send(handler, provider.response_body(sequence, json.dumps([
+                        {"type": "message", "role": "developer",
+                         "content": "retained-summary: preserve the active goal and prior tool effects."}])))
+                return
+            requests.append(request)
+            goal = next((i.get("content", "") for i in request["input"]
+                         if i.get("role") == "developer" and
+                         i.get("content", "").startswith("Persistent goal ")), "")
+            if " is active " not in goal:
+                latest = provider.latest_user(request)
+                send(handler, provider.response_body(sequence,
+                    "seed stored" if latest == "seed-user-café" and not counts["goal"] else "compacted goal done"))
+                return
+            counts["goal"] += 1
+            if mode in ("recover", "legacy") and counts["goal"] == 1:
+                send(handler, provider.function_body(sequence, "once", "exec_command", {
+                    "command": "printf executed >> once; printf retained-result", "workdir": str(workspace),
+                    "stdin": None, "pty": False, "timeout_ms": None, "yield_ms": 1000,
+                    "max_output_tokens": 1000}).replace('"input_tokens":1', '"input_tokens":1000')
+                    .replace('"total_tokens":2', '"total_tokens":1001'))
+            elif counts["goal"] == (2 if mode in ("recover", "legacy") else 1):
+                # A further error after compaction must keep usable input and
+                # retain tools, not reissue the original command.
+                send(handler, provider.event("response.failed", {"type": "response.failed",
+                    "response": {"error": {"code": "upstream_unavailable", "message": "retry after compact"}}}))
+            else:
+                send(handler, provider.function_body(sequence, "done", "update_goal",
+                    {"action": "complete", "text": None}))
+
+        provider.runtime_handler = respond
+        try:
+            # Establish genuine historical user input; then summarize it away.
+            result = subprocess.run([str(binary), "--dotdir", str(state), "--config", str(config),
+                                     "-C", str(workspace), "-e", "--", "seed-user-café"],
+                                    env=environment, capture_output=True, text=True, timeout=10)
+            assert result.returncode == 0, result.stderr
+            sid = next((state / "sessions").iterdir()).name
+            terminal = TmuxTerminal(case / "t", binary, workspace, state, config, 140, 28,
+                                    args=("--resume", sid), environment=environment)
+            terminal.wait("host-model/medium")
+            if mode in ("resume", "manual"):
+                if mode == "manual":
+                    for attempt in range(4):
+                        expected = len(summaries) + 1
+                        terminal.submit("/compact")
+                        deadline = time.monotonic() + 4
+                        while len(summaries) < expected and time.monotonic() < deadline:
+                            time.sleep(0.01)
+                        assert len(summaries) == expected, terminal.capture()
+                        terminal.wait("TransferEncodingError")
+                        terminal.wait_dead()
+                        terminal.close()
+                        terminal = TmuxTerminal(case / f"f{attempt}", binary, workspace,
+                                                state, config, 140, 28,
+                                                args=("--resume", sid), environment=environment)
+                        terminal.wait("host-model/medium")
+                terminal.submit("/compact")
+                terminal.wait("Compacted", timeout=10)
+                terminal.exit()
+                terminal.close()
+                terminal = TmuxTerminal(case / "r", binary, workspace, state, config, 140, 28,
+                                        args=("--resume", sid), environment=environment)
+                terminal.wait("host-model/medium")
+            terminal.submit("/goal regression compacted objective")
+            terminal.wait("Goal set")
+            terminal.wait("Goal active; retrying", timeout=12)
+            events = wait_event_count(state, "goal_completed", 1, timeout=20)
+            terminal.wait("compacted goal done", timeout=5)
+            assert not rejected, "gateway received instruction-only input"
+            assert not event_list(events, "goal_paused")
+            assert not event_list(events, "goal_blocked")
+            assert not event_list(events, "turn_failed")
+            assert event_list(events, "turn_recovery")
+            assert event_list(events, "goal_completed")
+            marker = "[snajpagent host continuation — not a new user message]"
+            goal_requests = [r for r in requests if any(
+                " is active " in i.get("content", "") and
+                i.get("content", "").startswith("Persistent goal ") for i in r["input"])]
+            assert goal_requests
+            for request in goal_requests:
+                markers = [i for i in request["input"] if i.get("content", "").startswith(marker)]
+                assert len(markers) <= 1, "continuation markers accumulated across retries"
+                original_inputs = [i for i in request["input"] if i.get("role") == "user" and
+                                   not i.get("content", "").startswith(marker)]
+                if original_inputs:
+                    assert not markers, "added synthetic input alongside real conversation"
+                if mode in ("resume", "manual"):
+                    assert len(markers) == 1 and markers[0]["role"] == "user"
+                    assert "seed-user-café" not in json.dumps(request["input"], ensure_ascii=False)
+                    assert not any(i.get("content", "").startswith("[snajpagent input metadata")
+                                   for i in request["input"]), "host marker acquired user timing"
+                    assert any(i.get("role") == "developer" and
+                               "retained-summary" in i.get("content", "") for i in request["input"])
+            if mode in ("recover", "legacy"):
+                assert len(summaries) >= 5, "did not exercise repeated compaction failures"
+                assert (workspace / "once").read_text() == "executed"
+                assert len(event_list(events, "tool_started")) == 2, "repeated side effect"
+                assert len(event_list(events, "compaction_interrupted")) >= 4
+                assert any(i.get("type") == "function_call_output" and
+                           "retained-result" in i.get("output", "") for i in goal_requests[-1]["input"])
+            terminal.exit()
+            terminal.close()
+            terminal = None
+            if mode == "legacy":
+                # Old versions cleared failed compactions only in memory. Their
+                # turn_recovery records must close those attempts on replay.
+                log = state / "sessions" / sid / "events.jsonl"
+                rewritten, sequences = [], {0: 0}
+                previous = "0" * 64
+                for line in log.read_text().splitlines():
+                    event = json.loads(line)
+                    if event["type"] == "compaction_interrupted" and event["data"]["reason"] == "error":
+                        sequences[event["seq"]] = len(rewritten)
+                        continue
+                    sequences[event["seq"]] = len(rewritten) + 1
+                    # Preserve the writer's canonical escaping and pre-failure
+                    # byte offsets. Rebuild only this private fixture's chain.
+                    line = re.sub(r',"seq":\d+,"session_id":',
+                                  f',"seq":{len(rewritten) + 1},"session_id":', line)
+                    if "source_seq" in event["data"]:
+                        line = re.sub(r'"source_seq":\d+',
+                                      f'"source_seq":{sequences[event["data"]["source_seq"]]}', line)
+                    line = line.replace(event["prev_sha256"], previous)
+                    unsigned = line.replace(',"event_sha256":"' + event["event_sha256"] + '"', '')
+                    previous = hashlib.sha256(unsigned.encode()).hexdigest()
+                    rewritten.append(line.replace(event["event_sha256"], previous))
+                log.write_text("\n".join(rewritten) + "\n")
+            result = subprocess.run([str(binary), "--dotdir", str(state), "--config", str(config),
+                                     "-C", str(workspace), "-e", "--resume", sid, "--", "reopen check"],
+                                    env=environment, capture_output=True, text=True, timeout=10)
+            assert result.returncode == 0, result.stderr
+            assert result.stdout.strip() == "compacted goal done", result.stdout
+            print("compacted goal", mode, "PASS", flush=True)
+        finally:
+            if terminal:
+                terminal.close()
+            provider.close()
+
+
 def run_automatic_turn_retry_cases(binary, root, provider, environment):
     modes = ("success", "exhaust", "zero", "one", "budget", "steer", "cancel", "running", "paused", "one-shot", "server")
     for mode in modes:
@@ -4486,6 +4672,7 @@ def run_irc_case(binary, root):
     try:
         run_token_accounting_cases(binary, root / "token-accounting")
         run_goal_recovery_cases(binary, root, provider, environment)
+        run_compacted_goal_cases(binary, root)
         run_automatic_turn_retry_cases(binary, root, provider, environment)
         run_tool_yield_cases(binary, root, provider, environment)
         run_manual_retry_cases(binary, root, provider, environment)

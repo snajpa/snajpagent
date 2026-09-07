@@ -1028,6 +1028,11 @@ other native failures remain errors.  Manual
 .B /compact
 is idle only.  Compaction changes model context and preserves the append-only
 local log.
+.PP
+If compaction leaves only instructions, outgoing requests include a labelled
+host continuation so gateways can keep a nonempty conversation input.  It adds
+no user instruction or approval and does not change saved goal state.  Failed
+compaction attempts are recorded before recovery so the session can reopen.
 .SS Login
 Common options such as
 .BR --dotdir ,

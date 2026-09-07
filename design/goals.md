@@ -160,6 +160,15 @@ append-only session events. Resume reconstructs them from the same validated
 event log as turns and tools. Synthetic continuation turns are identified as
 goal turns in that log and do not masquerade as new user messages.
 
+Gateways may move developer/system messages into top-level instructions. When
+compaction leaves only those messages, request projection adds one labelled
+host-continuation marker in the user-role input slot. It is transport input,
+not a new operator message: it carries no new task, approval, receipt timestamp
+or goal transition. Existing instruction roles and compact output remain intact.
+The marker is regenerated only when needed, included in request hashes/counts,
+and omitted whenever user, assistant or tool conversation remains. Responses
+compaction uses the same rule for instruction-only source context.
+
 Restoration is separate from continuation. Reopening a session automatically
 displays its saved goal, wording, status, revision, lock and blocker, even when
 resume history is disabled. Ordinary model requests retain the current wording
@@ -173,6 +182,11 @@ suppression and the lifecycle tool restrictions above remain unchanged.
 `turn_recovery` closes a failed response attempt without closing its turn or
 managed processes. Consecutive recovery notices are coalesced in model context;
 detailed diagnostics stay in the journal. Explicit interruption remains separate.
+Failed compaction attempts record `compaction_interrupted` with reason `error`
+before retry or exit. Replay also clears an unfinished compaction at a recorded
+turn recovery/termination boundary for journals written by older versions that
+only cleared it in memory. Successful compact output and tool effects remain
+unchanged; event validation and the original journal hash chain are preserved.
 
 New input carries host-generated UTC receipt and first-request-admission times.
 `input_admitted` records the latter before request projection, including counting
