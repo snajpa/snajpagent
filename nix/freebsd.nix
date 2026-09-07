@@ -13,7 +13,7 @@ let
     version = osVersion;
     src = pkgs.fetchurl {
       name = "disc1.iso";
-      url = "https://archive.freebsd.org/old-releases/amd64/ISO-IMAGES/${osVersion}/FreeBSD-${osVersion}-RELEASE-amd64-disc1.iso";
+      url = "https://archive.freebsd.org/old-releases/amd64/ISO-IMAGES/${osVersion}/${lib.optionalString (!legacy) "FreeBSD-"}${osVersion}-RELEASE-amd64-disc1.iso";
       sha256 = {
         "8.4" = "2fb17d77d4eba34736eb98c142c56546dd73a4e7ac38895bb6c8517949282438";
         "5.5" = "f71eedf18ab24d973c938b473ca127018eb87ab1d1b4c96a5d8d1e9cd8f261d3";
@@ -215,7 +215,7 @@ let
     "-DCURL_DISABLE_LDAP=ON" "-DCURL_DISABLE_LDAPS=ON"
     "-DCURL_CA_BUNDLE=none" "-DCURL_CA_PATH=none"
   ] networkLibraries).overrideAttrs (_: {
-    postInstall = ''
+    postInstall = lib.optionalString (!legacy) ''
       # curl prefixes the imported Threads target's -lpthread flag twice.
       substituteInPlace "$out/lib/pkgconfig/libcurl.pc" \
         --replace-fail '-l-lpthread' '-lpthread'
