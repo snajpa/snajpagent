@@ -1417,8 +1417,73 @@ test_hidden_console(void)
 }
 
 static void
+test_classic_console(void)
+{
+    HANDLE screen = CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CONSOLE_TEXTMODE_BUFFER, NULL);
+    assert(screen != INVALID_HANDLE_VALUE);
+    DWORD original_mode;
+    assert(GetConsoleMode(screen, &original_mode));
+    assert(SetConsoleMode(screen, ENABLE_PROCESSED_OUTPUT));
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    assert(GetConsoleScreenBufferInfo(screen, &info));
+    WORD original_attributes = info.wAttributes;
+    const WORD theme = FOREGROUND_GREEN | BACKGROUND_BLUE;
+    assert(SetConsoleTextAttribute(screen, theme));
+    int fd = _open_osfhandle((intptr_t)screen, _O_WRONLY | _O_BINARY | _O_NOINHERIT);
+    assert(fd >= 0);
+    struct snag_term_host host = {0};
+    host.output_console[0] = screen;
+    host.output_mode[0] = original_mode;
+    host.output_state[0] = (struct snag_console_state){
+        .legacy = true, .initial_attributes = theme, .cursor = info.dwCursorPosition};
+#define CLASSIC(text) assert(snag_term_output_write(&host, fd, text, sizeof(text) - 1u, false, NULL, NULL) == 0)
+    CLASSIC("\033[2J\033[H\033[1;31");
+    CLASSIC("mAB\033[0mC");
+    CHAR_INFO cells[3];
+    SMALL_RECT area = {0, info.srWindow.Top, 2, info.srWindow.Top};
+    assert(ReadConsoleOutputW(screen, cells, (COORD){3, 1}, (COORD){0, 0}, &area));
+    assert(cells[0].Char.UnicodeChar == L'A' && cells[1].Char.UnicodeChar == L'B' &&
+           cells[2].Char.UnicodeChar == L'C');
+    assert(cells[0].Attributes == (FOREGROUND_RED | FOREGROUND_INTENSITY | BACKGROUND_BLUE));
+    assert(cells[2].Attributes == theme);
+    CLASSIC("\033[2D\033[K");
+    WCHAR row[4];
+    DWORD got;
+    assert(ReadConsoleOutputCharacterW(screen, row, 3u, (COORD){0, info.srWindow.Top}, &got) && got == 3u);
+    assert(row[0] == L'A' && row[1] == L' ' && row[2] == L' ');
+    CLASSIC("\033[H");
+    size_t columns = (size_t)(info.srWindow.Right - info.srWindow.Left + 1);
+    char *line = malloc(columns);
+    assert(line);
+    memset(line, 'x', columns);
+    assert(snag_term_output_write(&host, fd, line, columns, false, NULL, NULL) == 0);
+    free(line);
+    assert(GetConsoleScreenBufferInfo(screen, &info));
+    assert(info.dwCursorPosition.X == info.srWindow.Right &&
+           info.dwCursorPosition.Y == info.srWindow.Top && host.output_state[0].pending_wrap);
+    CLASSIC("\033[32mY");
+    assert(GetConsoleScreenBufferInfo(screen, &info));
+    assert(info.dwCursorPosition.X == 1 && info.dwCursorPosition.Y == info.srWindow.Top + 1);
+    CLASSIC("\033[1A\r\033[2K");
+    assert(ReadConsoleOutputCharacterW(screen, row, 3u, (COORD){0, info.srWindow.Top}, &got) && got == 3u);
+    assert(row[0] == L' ' && row[1] == L' ' && row[2] == L' ');
+    CLASSIC("\033[?2004h\033[?2004l\033[H");
+    assert(GetConsoleScreenBufferInfo(screen, &info) && info.dwCursorPosition.X == 0 &&
+           info.dwCursorPosition.Y == info.srWindow.Top);
+    snag_term_host_close(&host);
+    assert(GetConsoleScreenBufferInfo(screen, &info) && info.wAttributes == theme);
+    DWORD mode;
+    assert(GetConsoleMode(screen, &mode) && mode == original_mode);
+    assert(SetConsoleTextAttribute(screen, original_attributes));
+    assert(close(fd) == 0);
+#undef CLASSIC
+}
+
+static void
 test_console_output(void)
 {
+    test_classic_console();
     wchar_t *malformed[] = {L"test", L"--snajpagent-private-writer", L"not-a-pipe"};
     assert(snag_output_broker_main(1, malformed) == -1);
     assert(snag_output_broker_main(2, malformed) == 125);

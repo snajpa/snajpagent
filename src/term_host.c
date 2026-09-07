@@ -331,6 +331,8 @@ snag_term_host_close(struct snag_term_host *host)
     /* stdout/stderr can share a console buffer; unwind in reverse order. */
     for (size_t i = 2u; i-- > 0u;)
         if (host->output_console[i]) {
+            if (host->output_state[i].legacy)
+                (void)SetConsoleTextAttribute(host->output_console[i], host->output_state[i].initial_attributes);
             (void)SetConsoleMode(host->output_console[i], host->output_mode[i]);
             host->output_console[i] = NULL;
         }
@@ -350,10 +352,10 @@ snag_term_host_close(struct snag_term_host *host)
     host->writer = NULL;
 }
 
-int
-snag_term_output_write(struct snag_term_host *host, int fd,
-                       const void *text, size_t len, bool input,
-                       int (*checkpoint)(void *), void *opaque)
+static int
+output_plain(struct snag_term_host *host, int fd,
+             const void *text, size_t len, bool input,
+             int (*checkpoint)(void *), void *opaque)
 {
     (void)input;
     if (!host || !checkpoint) {
@@ -406,6 +408,282 @@ snag_term_output_write(struct snag_term_host *host, int fd,
     if (error)
         errno = error;
     return error ? -1 : 0;
+}
+
+static int
+console_failure(void)
+{
+    errno = GetLastError() == ERROR_INVALID_HANDLE ? EBADF : EIO;
+    return -1;
+}
+
+static WORD
+console_color(unsigned int color)
+{
+    return (WORD)(((color & 1u) ? FOREGROUND_RED : 0) |
+                  ((color & 2u) ? FOREGROUND_GREEN : 0) |
+                  ((color & 4u) ? FOREGROUND_BLUE : 0));
+}
+
+static int
+console_erase(HANDLE output, const CONSOLE_SCREEN_BUFFER_INFO *info,
+              bool display, unsigned int mode)
+{
+    DWORD width = (DWORD)info->dwSize.X;
+    DWORD cursor = (DWORD)info->dwCursorPosition.Y * width + (DWORD)info->dwCursorPosition.X;
+    DWORD first = display ? (DWORD)info->srWindow.Top * width : cursor - (DWORD)info->dwCursorPosition.X;
+    DWORD end = display ? ((DWORD)info->srWindow.Bottom + 1u) * width : first + width;
+    if (mode == 0u)
+        first = cursor;
+    else if (mode == 1u)
+        end = cursor + 1u;
+    else if (mode != 2u) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (end <= first)
+        return 0;
+    COORD start = {(SHORT)(first % width), (SHORT)(first / width)};
+    DWORD written, count = end - first;
+    if (!FillConsoleOutputCharacterW(output, L' ', count, start, &written) || written != count ||
+        !FillConsoleOutputAttribute(output, info->wAttributes, count, start, &written) || written != count)
+        return console_failure();
+    return 0;
+}
+
+static int
+console_csi(HANDLE output, struct snag_console_state *state)
+{
+    unsigned int args[16] = {0}, count = 1;
+    size_t at = 2u, end = state->sequence_len - 1u;
+    bool private = state->sequence[at] == '?';
+    if (private)
+        ++at;
+    for (; at < end; ++at) {
+        unsigned char c = state->sequence[at];
+        if (c == ';' && count < 16u)
+            ++count;
+        else if (c >= '0' && c <= '9' && args[count - 1u] <= 3276u)
+            args[count - 1u] = args[count - 1u] * 10u + c - '0';
+        else {
+            errno = EINVAL;
+            return -1;
+        }
+    }
+    unsigned char command = state->sequence[end];
+    if (private) {
+        if (count == 1u && args[0] == 25u && (command == 'h' || command == 'l')) {
+            CONSOLE_CURSOR_INFO cursor;
+            if (!GetConsoleCursorInfo(output, &cursor))
+                return console_failure();
+            cursor.bVisible = command == 'h';
+            if (!SetConsoleCursorInfo(output, &cursor))
+                return console_failure();
+        }
+        /* Native INPUT_RECORD paste needs no terminal bracket negotiation. */
+        return 0;
+    }
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    if (!GetConsoleScreenBufferInfo(output, &info))
+        return console_failure();
+    if (command == 'm') {
+        WORD attributes = info.wAttributes;
+        for (unsigned int i = 0; i < count; ++i) {
+            unsigned int value = args[i];
+            if (value == 0u)
+                attributes = state->initial_attributes;
+            else if (value == 1u)
+                attributes |= FOREGROUND_INTENSITY;
+            else if (value == 2u || value == 22u)
+                attributes &= ~FOREGROUND_INTENSITY;
+            else if (value == 3u || value == 4u)
+                attributes |= COMMON_LVB_UNDERSCORE;
+            else if (value == 23u || value == 24u)
+                attributes &= ~COMMON_LVB_UNDERSCORE;
+            else if (value == 7u)
+                attributes |= COMMON_LVB_REVERSE_VIDEO;
+            else if (value == 27u)
+                attributes &= ~COMMON_LVB_REVERSE_VIDEO;
+            else if ((value >= 30u && value <= 37u) || (value >= 90u && value <= 97u))
+                attributes = (WORD)((attributes & ~15u) | console_color(value % 10u) |
+                                     (value >= 90u ? FOREGROUND_INTENSITY : 0));
+            else if ((value >= 40u && value <= 47u) || (value >= 100u && value <= 107u))
+                attributes = (WORD)((attributes & ~240u) | (console_color(value % 10u) << 4) |
+                                     (value >= 100u ? BACKGROUND_INTENSITY : 0));
+            else if (value == 39u)
+                attributes = (WORD)((attributes & ~15u) | (state->initial_attributes & 15u));
+            else if (value == 49u)
+                attributes = (WORD)((attributes & ~240u) | (state->initial_attributes & 240u));
+        }
+        return SetConsoleTextAttribute(output, attributes) ? 0 : console_failure();
+    }
+    if (command == 'K' || command == 'J')
+        return console_erase(output, &info, command == 'J', args[0]);
+    int x = info.dwCursorPosition.X, y = info.dwCursorPosition.Y;
+    int amount = args[0] ? (int)args[0] : 1;
+    switch (command) {
+    case 'A': y -= amount; break;
+    case 'B': y += amount; break;
+    case 'C': x += amount; break;
+    case 'D': x -= amount; break;
+    case 'G': x = info.srWindow.Left + amount - 1; break;
+    case 'H': case 'f':
+        y = info.srWindow.Top + amount - 1;
+        x = info.srWindow.Left + (count > 1u && args[1] ? (int)args[1] : 1) - 1;
+        break;
+    default: return 0;
+    }
+    if (x < info.srWindow.Left) x = info.srWindow.Left;
+    if (x > info.srWindow.Right) x = info.srWindow.Right;
+    if (y < info.srWindow.Top) y = info.srWindow.Top;
+    if (y > info.srWindow.Bottom) y = info.srWindow.Bottom;
+    state->pending_wrap = false;
+    state->cursor = (COORD){(SHORT)x, (SHORT)y};
+    return SetConsoleCursorPosition(output, state->cursor) ? 0 : console_failure();
+}
+
+static int
+console_legacy(struct snag_term_host *host, struct snag_console_state *state,
+               int fd, const unsigned char *text, size_t len, bool input,
+               int (*checkpoint)(void *), void *opaque)
+{
+    HANDLE output = (HANDLE)_get_osfhandle(fd);
+    size_t at = 0;
+    while (at < len) {
+        if (checkpoint && checkpoint(opaque) < 0)
+            return -1;
+        unsigned char c = text[at];
+        if (state->sequence_len || c == '\033') {
+            if (state->sequence_len == sizeof(state->sequence)) {
+                state->sequence_len = 0;
+                errno = E2BIG;
+                return -1;
+            }
+            state->sequence[state->sequence_len++] = c;
+            ++at;
+            if (state->sequence_len == 2u && c != '[') {
+                state->sequence_len = 0;
+                errno = EINVAL;
+                return -1;
+            }
+            if (state->sequence_len > 2u && c >= 0x40u && c <= 0x7eu) {
+                int rc = console_csi(output, state);
+                state->sequence_len = 0;
+                if (rc < 0)
+                    return -1;
+            }
+            continue;
+        }
+        CONSOLE_SCREEN_BUFFER_INFO info;
+        if (!GetConsoleScreenBufferInfo(output, &info))
+            return console_failure();
+        if (info.dwCursorPosition.X != state->cursor.X ||
+            info.dwCursorPosition.Y != state->cursor.Y)
+            state->pending_wrap = false;
+        if (c < 0x20u || c == 0x7fu) {
+            state->pending_wrap = false;
+            if (output_plain(host, fd, text + at, 1u, input, checkpoint, opaque) < 0)
+                return -1;
+            ++at;
+        } else {
+            uint32_t cp;
+            size_t n = snag_utf8_decode(text + at, len - at, &cp);
+            int width = n ? snag_char_width(cp) : 1;
+            int remaining = info.srWindow.Right - info.dwCursorPosition.X + 1;
+            if (width > info.srWindow.Right - info.srWindow.Left + 1) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            if ((state->pending_wrap && width != 0) || width > remaining) {
+                if (output_plain(host, fd, "\r\n", 2u, input, checkpoint, opaque) < 0)
+                    return -1;
+                state->pending_wrap = false;
+                if (!GetConsoleScreenBufferInfo(output, &info))
+                    return console_failure();
+                state->cursor = info.dwCursorPosition;
+                continue;
+            }
+            size_t span = 0;
+            int cells = 0;
+            while (at + span < len && span < 1024u &&
+                   text[at + span] >= 0x20u && text[at + span] != 0x7fu) {
+                n = snag_utf8_decode(text + at + span, len - at - span, &cp);
+                width = n ? snag_char_width(cp) : 1;
+                if (width < 0)
+                    width = 1;
+                if (width > remaining - cells)
+                    break;
+                cells += width;
+                span += n ? n : 1u;
+            }
+            if (!span) {
+                errno = EIO;
+                return -1;
+            }
+            if (output_plain(host, fd, text + at, span, input, checkpoint, opaque) < 0)
+                return -1;
+            state->pending_wrap = state->pending_wrap || cells == remaining;
+            at += span;
+        }
+        if (!GetConsoleScreenBufferInfo(output, &info))
+            return console_failure();
+        state->cursor = info.dwCursorPosition;
+    }
+    return 0;
+}
+
+static pthread_once_t diagnostic_console_once = PTHREAD_ONCE_INIT;
+static struct snag_console_state diagnostic_console[2];
+
+static void
+capture_diagnostic_console(void)
+{
+    const DWORD streams[] = {STD_OUTPUT_HANDLE, STD_ERROR_HANDLE};
+    for (size_t i = 0; i < 2u; ++i) {
+        CONSOLE_SCREEN_BUFFER_INFO info;
+        if (GetConsoleScreenBufferInfo(GetStdHandle(streams[i]), &info)) {
+            diagnostic_console[i].initial_attributes = info.wAttributes;
+            diagnostic_console[i].cursor = info.dwCursorPosition;
+            diagnostic_console[i].legacy = true;
+        }
+    }
+}
+
+int
+snag_term_output_write(struct snag_term_host *host, int fd,
+                       const void *text, size_t len, bool input,
+                       int (*checkpoint)(void *), void *opaque)
+{
+    struct snag_console_state *state = NULL;
+    HANDLE output = (HANDLE)_get_osfhandle(fd);
+    DWORD mode = 0;
+    bool temporary = false;
+    if (host) {
+        for (size_t i = 0; i < 2u; ++i)
+            if (host->output_console[i] == output && host->output_state[i].legacy)
+                state = &host->output_state[i];
+    } else if (fd >= 1 && fd <= 2 && GetConsoleMode(output, &mode) &&
+               !(mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
+        if (pthread_once(&diagnostic_console_once, capture_diagnostic_console) != 0)
+            abort();
+        if (diagnostic_console[fd - 1].legacy) {
+            state = &diagnostic_console[fd - 1];
+            if (!SetConsoleMode(output, (mode | ENABLE_PROCESSED_OUTPUT) & ~ENABLE_WRAP_AT_EOL_OUTPUT))
+                return console_failure();
+            temporary = true;
+        }
+    }
+    int rc = state ? console_legacy(host, state, fd, text, len, input, checkpoint, opaque) :
+                    output_plain(host, fd, text, len, input, checkpoint, opaque);
+    int error = errno;
+    if (rc < 0 && state) {
+        state->pending_wrap = false;
+        state->sequence_len = 0;
+    }
+    if (temporary && !SetConsoleMode(output, mode) && rc == 0)
+        return console_failure();
+    errno = error;
+    return rc;
 }
 
 static _Atomic(void (*)(int)) console_interrupt;
@@ -515,15 +793,24 @@ snag_term_output_open(struct snag_term_host *host, int fd)
         return -1;
     }
     DWORD mode;
-    if (!GetConsoleMode(copy, &mode) ||
-        !SetConsoleMode(copy, mode | ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT |
-                        ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN)) {
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    if (!GetConsoleMode(copy, &mode) || !GetConsoleScreenBufferInfo(copy, &info)) {
+        (void)_close(result);
+        errno = EIO;
+        return -1;
+    }
+    bool legacy = !SetConsoleMode(copy, mode | ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT |
+                                   ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN);
+    if (legacy && !SetConsoleMode(copy, (mode | ENABLE_PROCESSED_OUTPUT) &
+                                  ~(ENABLE_WRAP_AT_EOL_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING))) {
         (void)_close(result);
         errno = ENOTSUP;
         return -1;
     }
     host->output_mode[fd - 1] = mode;
     host->output_console[fd - 1] = copy;
+    host->output_state[fd - 1] = (struct snag_console_state){
+        .initial_attributes = info.wAttributes, .cursor = info.dwCursorPosition, .legacy = legacy};
     return result;
 }
 
@@ -542,9 +829,14 @@ snag_term_output_mode(struct snag_term_host *host, bool active)
     for (size_t n = 0; n < 2u; ++n) {
         size_t i = active ? n : 1u - n;
         DWORD mode = host->output_mode[i];
-        if (active)
-            mode |= ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT |
-                    ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+        if (active) {
+            if (host->output_state[i].legacy)
+                mode = (mode | ENABLE_PROCESSED_OUTPUT) &
+                       ~(ENABLE_WRAP_AT_EOL_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+            else
+                mode |= ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT |
+                        ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+        }
         if (host->output_console[i] && !SetConsoleMode(host->output_console[i], mode)) {
             errno = EIO;
             return -1;

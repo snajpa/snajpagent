@@ -21,6 +21,13 @@ struct snag_shutdown {
 };
 struct snag_console_writer;
 struct snag_output_broker;
+struct snag_console_state {
+    unsigned short initial_attributes;
+    bool legacy, pending_wrap;
+    COORD cursor;
+    unsigned char sequence[64];
+    unsigned int sequence_len;
+};
 struct snag_term_host {
     unsigned long input_mode;
     bool raw_input;
@@ -35,6 +42,7 @@ struct snag_term_host {
     HANDLE control_event;
     unsigned long output_mode[2];
     HANDLE output_console[2];
+    struct snag_console_state output_state[2];
     struct snag_console_writer *writer;
     struct snag_output_broker *broker;
 };
