@@ -123,6 +123,17 @@ create_pipe(struct child_pipe *pipe, bool input, HANDLE *other)
     return 0;
 }
 
+static void
+pipe_cancel(struct child_pipe *pipe)
+{
+    if (!pipe->pending)
+        return;
+    /* The engine owns issuance and cancellation on the same thread. */
+    (void)CancelIo(pipe->handle);
+    (void)GetOverlappedResult(pipe->handle, &pipe->io, &pipe->count, TRUE);
+    pipe->pending = false;
+}
+
 void
 snag_child_close_stream(struct snag_child *child, unsigned int stream)
 {
@@ -130,10 +141,7 @@ snag_child_close_stream(struct snag_child *child, unsigned int stream)
         return;
     struct child_pipe *pipe = &child->native->pipe[stream];
     if (pipe->handle) {
-        if (pipe->pending) {
-            (void)CancelIoEx(pipe->handle, &pipe->io);
-            (void)GetOverlappedResult(pipe->handle, &pipe->io, &pipe->count, TRUE);
-        }
+        pipe_cancel(pipe);
         (void)CloseHandle(pipe->handle);
     }
     if (pipe->io.hEvent)
@@ -149,10 +157,7 @@ snag_child_signal(struct snag_child *child, enum snag_child_signal signal)
         return;
     if (signal == SNAG_CHILD_INTERRUPT && child->pty) {
         struct child_pipe *pipe = &native->pipe[2];
-        if (pipe->pending) {
-            (void)CancelIoEx(pipe->handle, &pipe->io);
-            (void)GetOverlappedResult(pipe->handle, &pipe->io, &pipe->count, TRUE);
-        }
+        pipe_cancel(pipe);
         pipe->bytes[0] = 3;
         pipe_begin(pipe, true, 1u);
     } else if (signal == SNAG_CHILD_INTERRUPT)
