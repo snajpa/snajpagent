@@ -2143,6 +2143,9 @@ def test_runtime_verbosity_resume():
         child = Child(["-vvv"])
         try:
             child.wait_idle_prompt()
+            child.send(b"ping\r")
+            answered = child.wait(b"pong")
+            child.wait_idle_prompt(start=answered)
             child.send(f"/verbose {level}\r".encode())
             end = child.wait(f"verbosity: {level} (".encode())
             child.wait_idle_prompt(start=end)
