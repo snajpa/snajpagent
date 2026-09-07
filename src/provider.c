@@ -316,21 +316,18 @@ write_cb(char *ptr, size_t size, size_t nmemb, void *opaque)
                                                "invalid provider SSE stream"));
             return 0;
         }
-    } else {
-        if (snag_buf_append(&ctx->error_body, ptr, len) < 0) {
-            ctx->body_failed = true;
-            ctx_error(ctx, "provider error body exceeds diagnostic bound");
-            return 0;
-        }
-    }
+    } else
+        return count_write_cb(ptr, size, nmemb, opaque);
     return len;
 }
 
 static int
-process_controls(struct provider_ctx *ctx)
+process_controls(void *opaque, unsigned int timeout_ms)
 {
+    struct provider_ctx *ctx = opaque;
     int rc;
 
+    (void)timeout_ms;
     if (!ctx->pump)
         return 0;
     rc = ctx->pump(ctx->pump_opaque, 0u);
@@ -349,7 +346,8 @@ process_controls(struct provider_ctx *ctx)
 }
 
 static CURLcode
-perform_request(CURL *curl, struct provider_ctx *ctx)
+perform_request(CURL *curl, snag_provider_pump_fn pump, void *opaque,
+                snag_wake_fd wake_fd, int poll_ms)
 {
     CURLM *multi = curl_multi_init();
     CURLcode result = CURLE_FAILED_INIT;
@@ -361,12 +359,12 @@ perform_request(CURL *curl, struct provider_ctx *ctx)
         goto out;
     for (;;) {
         struct curl_waitfd wake = {
-            .fd = snag_ui_wake_fd(ctx->render), .events = CURL_WAIT_POLLIN
+            .fd = wake_fd, .events = CURL_WAIT_POLLIN
         };
         CURLMsg *message;
         int remaining;
 
-        if (process_controls(ctx)) {
+        if (pump && pump(opaque, 0u)) {
             result = CURLE_ABORTED_BY_CALLBACK;
             break;
         }
@@ -379,7 +377,7 @@ perform_request(CURL *curl, struct provider_ctx *ctx)
             break;
         }
         if (curl_multi_poll(multi, wake.fd == CURL_SOCKET_BAD ? NULL : &wake,
-                            wake.fd == CURL_SOCKET_BAD ? 0u : 1u, 25, NULL) != CURLM_OK)
+                            wake.fd == CURL_SOCKET_BAD ? 0u : 1u, poll_ms, NULL) != CURLM_OK)
             break;
     }
     (void)curl_multi_remove_handle(multi, curl);
@@ -447,10 +445,8 @@ snag_provider_auth_post(const char *issuer, const char *path, const char *type, 
     char url[4096], header[96], parse_error[128];
     struct curl_slist *headers = NULL;
     CURL *curl = NULL;
-    CURLM *multi = NULL;
-    CURLMsg *message;
-    int running = 0, pending, rc = -1;
-    bool attached = false, initialized = false;
+    int rc = -1;
+    bool initialized = false;
 
     *response = NULL;
     *status = 0;
@@ -460,10 +456,9 @@ snag_provider_auth_post(const char *issuer, const char *path, const char *type, 
         goto out;
     initialized = true;
     curl = curl_easy_init();
-    multi = curl_multi_init();
     (void)snprintf(header, sizeof(header), "Content-Type: %s", type);
     headers = curl_slist_append(NULL, header);
-    if (!curl || !multi || !headers ||
+    if (!curl || !headers ||
         provider_trust(curl) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
@@ -476,23 +471,14 @@ snag_provider_auth_post(const char *issuer, const char *path, const char *type, 
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 10000L) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 30000L) != CURLE_OK ||
-        curl_easy_setopt(curl, CURLOPT_USERAGENT, SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) != CURLE_OK ||
-        curl_multi_add_handle(multi, curl) != CURLM_OK)
+        curl_easy_setopt(curl, CURLOPT_USERAGENT, SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) != CURLE_OK)
         goto out;
-    attached = true;
-    do {
-        if (pump && pump(opaque, 0u) != 0) {
-            errno = ECANCELED;
-            snag_errorf(error, error_size, "login or token refresh cancelled");
-            goto out;
-        }
-        if (curl_multi_perform(multi, &running) != CURLM_OK)
-            goto out;
-        if (running && curl_multi_poll(multi, NULL, 0, 100, NULL) != CURLM_OK)
-            goto out;
-    } while (running);
-    message = curl_multi_info_read(multi, &pending);
-    if (!message || message->msg != CURLMSG_DONE || message->data.result != CURLE_OK ||
+    CURLcode code = perform_request(curl, pump, opaque, SNAG_WAKE_INVALID, 100);
+    if (code == CURLE_ABORTED_BY_CALLBACK) {
+        (void)snag_fail(error, error_size, ECANCELED, "login or token refresh cancelled");
+        goto out;
+    }
+    if (code != CURLE_OK ||
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status) != CURLE_OK)
         goto out;
     if (*status >= 200 && *status < 300) {
@@ -505,10 +491,6 @@ snag_provider_auth_post(const char *issuer, const char *path, const char *type, 
     }
     rc = 0;
 out:
-    if (attached)
-        (void)curl_multi_remove_handle(multi, curl);
-    if (multi)
-        (void)curl_multi_cleanup(multi);
     if (curl)
         curl_easy_cleanup(curl);
     curl_slist_free_all(headers);
@@ -643,7 +625,7 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
         ctx->retry_after_present, ctx->retry_after_ms);
     uint64_t deadline = snag_monotonic_ms() + delay_ms;
 
-    if (process_controls(ctx))
+    if (process_controls(ctx, 0u))
         return ctx->cancel_code == 3 ? -1 : ctx->cancel_code;
     if (ctx->new_input)
         return SNAG_PROVIDER_NEW_INPUT;
@@ -661,7 +643,7 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
         uint64_t now = snag_monotonic_ms();
         uint64_t remaining = now < deadline ? deadline - now : 0u;
         uint32_t slice = remaining > 25u ? 25u : (uint32_t)remaining;
-        if (process_controls(ctx))
+        if (process_controls(ctx, 0u))
             return ctx->cancel_code == 3 ? -1 : ctx->cancel_code;
         if (ctx->new_input)
             return SNAG_PROVIDER_NEW_INPUT;
@@ -738,7 +720,7 @@ perform_with_retry(CURL *curl, struct provider_ctx *ctx,
     for (;;) {
         long request_size = 0;
         begin_attempt(ctx);
-        code = perform_request(curl, ctx);
+        code = perform_request(curl, process_controls, ctx, snag_ui_wake_fd(ctx->render), 25);
         if (code == CURLE_OK && ctx->sse.record &&
             ctx->http_status >= 200 && ctx->http_status < 300) {
             if (snag_sse_finish(&ctx->sse, ctx->error, sizeof(ctx->error)) < 0)
@@ -1677,7 +1659,7 @@ out:
         failure->output_correction = ctx.stream.output_correction;
         if (rc < 0 && strcmp(failure->code, "cyber_policy") == 0 &&
             !ctx.stream.retry_unsafe && !ctx.stream.terminal &&
-            !ctx.body_failed && !process_controls(&ctx) && !ctx.new_input)
+            !ctx.body_failed && !process_controls(&ctx, 0u) && !ctx.new_input)
             failure->output_correction = SNAG_OUTPUT_CORRECTION_CYBER_POLICY;
         failure->new_input = ctx.new_input;
         failure->retry_after_ms = ctx.retry_after_present ? ctx.retry_after_ms : 0u;
