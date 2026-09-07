@@ -65,16 +65,16 @@ requires an explicit scope decision, recorded in the release notes.
 
 ## Website and publication checklist
 
-The next website deployment is reserved for the **0.99.1 release**. Until then,
-ship reviewed source changes to origin/master without changing the live site.
-The Pages workflow is manual-only: ordinary branch pushes, tags and releases
-do not deploy it automatically. Do not dispatch it just to preview or verify
-a source change; render and inspect locally.
+Binary publication starts with **0.99.1**; older tags need not be backfilled.
+Pages is manual-only: branch pushes, tags and releases do not deploy it.
+Complete the matrix and download entries, then explicitly run Pages from the
+authorized release revision. Check public pages and assets before announcing.
+Local previews never require deployment. Source-only changes may ship without
+publishing the site.
 
-For 0.99.1, finish the full implemented binary matrix and download entries
-below, then explicitly run the Pages workflow from the authorized release
-revision. Verify the published pages and assets before announcing the release.
-This source-copy shipment does not create or publish 0.99.1.
+The binary release tag stays fixed after publication. Download-page-only
+updates may follow on master once exact asset sizes are known; those updates
+do not change the binaries' tagged source identity.
 
 `www/downloads.html` is the public download entry point. Keep it static and
 usable without JavaScript. Link it from the home page, README, and manual.
@@ -100,8 +100,7 @@ For each new version:
    before announcing the version as shipped. Uploaded drafts or local Nix
    store paths are not public downloads.
 
-Until the first binary release is published, the page must explicitly say that
-downloads are not yet available and point to source-build instructions. Do not
-invent version links, expose builder-local paths, or label missing assets as
-downloadable. This policy does not itself authorize creating a release, pushing
+Do not expose builder-local paths or label missing assets as downloadable.
+Before publication, keep the live page on the previous release or its honest
+pending-release notice; draft assets are not public downloads. This policy does not itself authorize creating a release, pushing
 a tag, accessing remote build hosts, or adding release automation.

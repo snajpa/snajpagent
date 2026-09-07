@@ -150,7 +150,13 @@ After interruption, failure or session resume, the queue can be paused.
 Use
 .B /next
 while idle to restart it.  This starts the oldest item and allows the rest
-to drain.  Queued prompts take precedence over automatic goal continuation.
+to drain.  Queued prompts take precedence over automatic goal continuation.  The acknowledgement
+.B "queued (/next or /q c) ›"
+marks a submitted follow-up, not its execution.
+.B /next
+continues a paused queue;
+.B /q c
+clears waiting prompts without stopping current work.
 See Provider failures for the new-input/retry handoff case.
 .SS Complete names with Tab
 Command completion starts with a slash at the beginning of the draft.
@@ -184,8 +190,9 @@ leaves the draft unchanged, not queued.  Full cursor and command exceptions
 are listed under INTERACTIVE INPUT.
 .SS Edit or stop
 Ctrl-J inserts a newline.  Bracketed paste keeps pasted newlines in the draft
-instead of submitting each line.  Up/Down recall prompts; Ctrl-R searches their
-history.  Ctrl-C clears a nonempty draft without interrupting the turn.  On an
+instead of submitting each line.  Up/Down move through wrapped or multiline
+draft rows, then prompt history at the edges.  Ctrl-P/Ctrl-N go directly through
+history; Ctrl-R searches it.  Ctrl-C clears a nonempty draft without interrupting the turn.  On an
 empty draft it interrupts active work.  Ctrl-D on an empty draft exits.
 .SS Continue toward a goal
 A normal final answer ends the turn and returns control to you.  A goal asks
@@ -2080,11 +2087,11 @@ source/build and license material, the manual, and separate matching symbols.
 Verify the downloaded executable against the release checksum before use.
 On Unix, rename it to snajpagent and make it executable with chmod +x;
 on Windows retain the .exe extension.  Debug symbols are not required to run.
-Until the first binary release is published, use the source builds below.
+Version 0.99.1 is the first binary release.  Source builds remain available below.
 .SS Source builds
 Build from a Git checkout using GNU make, a C11/POSIX compiler with pthreads,
 libcurl and Jansson development files.  These instructions describe the
-normal POSIX build.  An experimental native Windows x86-64 package is also
+normal POSIX build.  Experimental native Windows x86-64 and ARM64 packages are also
 available; see the standalone target below and DEPENDENCIES.md for its
 current qualification scope.
 Plain

@@ -2,7 +2,7 @@
 name: Deploy website
 
 on:
-  # Source pushes do not deploy. Next publication: the 0.99.1 release.
+  # Source pushes do not deploy. Dispatch only for an authorized publication.
   workflow_dispatch:
 
 permissions:

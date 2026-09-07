@@ -27,10 +27,9 @@ working through the existing provider path whenever practical.
 
 ## User documentation
 
-Website publication is held for the 0.99.1 release. Source changes may ship
-to origin/master without deploying Pages. Keep pages.yml manual-only; do not
-dispatch it or restore automatic deployment before that release. Follow
-RELEASE.md for the release-time deployment and complete downloads.
+Website publication is manual-only. Source pushes do not deploy Pages.
+Deploy an authorized release only with its complete downloads; follow RELEASE.md.
+Keep pages.yml manual-only rather than restoring deployment on every push.
 
 Every new version must ship binaries for the entire implemented production
 matrix and update the website downloads in the same release. Follow

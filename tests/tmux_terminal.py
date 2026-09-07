@@ -1340,7 +1340,7 @@ def run_queue_case(binary, root):
         for count, text in enumerate(("first", "second", "third", "fourth"), 1):
             terminal.send_text(text)
             terminal.send_key("Tab")
-            terminal.wait(f"next › {text}")
+            terminal.wait(f"queued (/next or /q c) › {text}")
             wait_idle_prompt_at_bottom(terminal, f"/medium   ?% ({count}) »")
 
         terminal.submit("/q")
@@ -1365,7 +1365,7 @@ def run_queue_case(binary, root):
 
         terminal.send_text("fifth")
         terminal.send_key("Tab")
-        terminal.wait("next › fifth")
+        terminal.wait("queued (/next or /q c) › fifth")
         terminal.submit("/queue")
         wait_queue_listing(terminal, ("second active", "fifth"))
 
@@ -1386,12 +1386,12 @@ def run_queue_case(binary, root):
         assert_order(
             empty,
             [
-                "next › first",
-                "next › second",
-                "next › third",
-                "next › fourth",
+                "queued (/next or /q c) › first",
+                "queued (/next or /q c) › second",
+                "queued (/next or /q c) › third",
+                "queued (/next or /q c) › fourth",
                 " ◴  ?% edit 1 › second active",
-                "next › fifth",
+                "queued (/next or /q c) › fifth",
                 "    ?% edit 1 › second active idle",
                 "future-turn queue is empty",
             ],
@@ -2982,7 +2982,7 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
                 assert "boundary ordinary message" not in second
             elif boundary == "queue":
                 terminal.submit("/queue boundary future input")
-                terminal.wait("next › boundary future input")
+                terminal.wait("queued (/next or /q c) › boundary future input")
                 assert len(requests) == 1
             release.set()
             expected = 4 if boundary == "tool" else 3
@@ -3413,7 +3413,7 @@ def run_manual_retry_cases(binary, root, provider, environment):
             terminal.wait("that command is unavailable while a turn is active")
             if mode == "queue":
                 terminal.submit("/queue still paused")
-                terminal.wait("next › still paused")
+                terminal.wait("queued (/next or /q c) › still paused")
             release.set()
             terminal.wait("manual retry failure 2")
             terminal.wait("turn failed; try /retry to continue")

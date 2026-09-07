@@ -756,7 +756,7 @@ queue_future_turn(struct app_state *app, const char *text, bool arm,
                                              queue_id, queued_text, read_only),
                      error, error_size) < 0)
         return -1;
-    if (snag_ui_submitted(&app->ui, "next › ", text, false) < 0) {
+    if (snag_ui_submitted(&app->ui, "queued (/next or /q c) › ", text, false) < 0) {
         snag_errorf(error, error_size, "queued turn acknowledgement could not be rendered");
         return -1;
     }

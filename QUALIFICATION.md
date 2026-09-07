@@ -9,7 +9,9 @@ binary on each advertised platform and against a live provider account.
 
 ## Source-archive evidence
 
-The default `make check` path now includes the following machine-checkable gates:
+The repository provides these existing checks. `make check` runs unit, CLI,
+terminal and source checks; bundle collection and matrix aggregation are
+separate opt-in tools, not steps implicitly run by `make check`:
 
 | Gate | Evidence produced inside this tarball |
 |---|---|
@@ -32,24 +34,27 @@ controlling-terminal, immediate-run, yielded-run, and `write_stdin` paths.
 The tmux layer complements those raw-PTY checks by interpreting cursor movement,
 erase, wrap, and resize sequences as a real terminal does.
 
-## External evidence still required
+## Release qualification
 
-External evidence still required before a production release:
+[RELEASE.md](RELEASE.md) defines publication requirements: every implemented
+`PROD_TARGETS` executable ships from one clean tag with matching companions.
+Building the entire matrix is not the same as qualifying every platform.
+Experimental builds ship with explicit limitations rather than being omitted.
 
-1. run the full release gate on each advertised platform/architecture,
-   including at least Linux x86-64, Linux AArch64, macOS x86-64, and macOS Apple
-   Silicon where those are claimed by the release notes;
-2. run `make livecheck` with a real `OPENAI_API_KEY`, network access, and quota;
-3. run `make releaseevidence` or otherwise archive a `make evidencebundle` output
-   verified with `make evidencecheck EVIDENCE_DIR=...` for each concrete shipped
-   executable, including the selected Jansson library, libcurl library, detected
-   libcurl TLS/resolver/compression/HTTP backends, and host terminal evidence;
-4. copy the checked platform bundles into the release workspace and run
-   `make evidencematrixcheck RELEASE_EVIDENCE_DIRS="..."` with the required
-   platform ids before claiming the release matrix is complete.
+For 0.99.1, Linux x86-64, AArch64 and i686 use static musl/application libraries.
+Earlier Linux checks include native execution and local QEMU; the i686 CPU
+baseline is not a claim of Linux 2.4 compatibility. macOS Intel, ARM64 and
+universal are cross-builds targeting macOS 11; no actual macOS execution is
+claimed. ARM64 is ad-hoc signed, Intel unsigned; neither is Developer ID signed
+or notarized. Earlier Windows checks ran in PE build 26100 (x64) and 28000
+(ARM64), not a full desktop or older Windows qualification. ARM64 requires the
+OS UCRT. See [DEPENDENCIES.md](DEPENDENCIES.md) for the precise earlier scope.
 
-Until those external runs are recorded, this tarball remains a source-only
-implementation checkpoint rather than a production release.
+Each release's notes distinguish checks of its exact binaries from earlier
+implementation evidence. Local fake-provider transport/terminal checks are not
+paid live-provider tests. Do not describe an unperformed platform or live-model
+run as passing, and do not turn the historical four-platform bundle defaults
+into the production matrix: `PROD_TARGETS` is its source of truth.
 
 ## Evidence bundle layout
 
@@ -64,7 +69,7 @@ canonical relative paths confined to that evidence directory; absolute paths,
 by the checker. `make releaseevidence` additionally requires
 `OPENAI_API_KEY` and writes `live_provider_evidence.json`;
 `tools/check_release_evidence.py --require-terminal --require-live` is the
-checker for a complete single-platform evidence record. The final release-matrix
-aggregation gate is `make evidencematrixcheck`, with `RELEASE_PLATFORMS` defaulting
+checker for a complete single-platform evidence record. The optional historical bundle
+aggregation command is `make evidencematrixcheck`, with `RELEASE_PLATFORMS` defaulting
 to `linux-x86_64 linux-aarch64 macos-x86_64 macos-arm64` and
 `RELEASE_EVIDENCE_DIRS` pointing at the copied per-platform bundle directories.

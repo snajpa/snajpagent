@@ -45,7 +45,9 @@ wait for them or stop them rather than blindly restarting them.
 **Tab at the end of an ordinary message queues a follow-up while work is active.**
 “Then add regression coverage” waits for the current turn to finish. Queued
 prompts run oldest first, one at a time, not as parallel agents. `(N)` in the
-prompt counts waiting turns, not the running one.
+prompt counts waiting turns, not the running one. The acknowledgement
+`queued (/next or /q c) ›` confirms submission: `/next` resumes a paused queue,
+while `/q c` clears waiting prompts without stopping current work.
 
 Tab completes command names before it queues. Start a line with `/sta` and press
 Tab to get `/status `; press Enter to run it. Completion applies while the cursor
@@ -73,7 +75,8 @@ interrupt a running turn.
 Ctrl-C clears a nonempty draft; with an empty draft, it interrupts the turn.
 Ctrl-D on an empty draft exits. No work continues after the program exits.
 The conversation, tool results, queue and goal are saved as a **session**.
-Normal exit prints its resume command. You can also list sessions or reopen the
+After the first prompt or goal, normal exit prints its resume command. Exiting
+a fresh session before submitting anything creates no saved session. You can also list sessions or reopen the
 latest one for this project directory:
 
 ```sh
@@ -168,7 +171,8 @@ sandbox.
 ## Further controls
 
 `/help` lists commands and editing keys; `/status` shows the current state.
-Ctrl-J inserts a newline, Up/Down recall prompts, and Ctrl-R searches history.
+Ctrl-J inserts a newline. Up/Down move through draft rows, then prompt history
+at the edges; Ctrl-P/Ctrl-N go straight through history. Ctrl-R searches it.
 `/queue` shows waiting work; `/queue 2 edit` revises its second item and
 `/queue 2 delete` removes it. The manual covers the queue editor and slash-command
 exceptions.
@@ -177,9 +181,10 @@ exceptions.
 it. Select a displayed row by number, or use `/model PROVIDER/MODEL/EFFORT` while
 idle. Add `save` to persist a selection.
 
-The prompt's context percentage compares a request-token bound with the usable
-input budget, not a bill or necessarily an exact token count. `?%` means capacity
-is unknown; `/status` explains the accounting. Older context is automatically
+The prompt's context percentage shows the last measured request input against
+the resolved input budget, rounded up—not a bill or a local estimate. A fresh
+session starts at `0%`; after a turn, unknown or incomparable measurements show
+`?%`. `/status` explains the accounting. Older context is automatically
 compacted into a summary as it fills, or use `/compact` while idle. The original
 transcript stays on disk, but a summary does not preserve every detail—keep
 important requirements in project documents.
@@ -198,8 +203,9 @@ runtime qualifications are separate from planned ports.
 
 [Downloads](https://agent.snajpa.net/downloads.html) lists release availability
 and platform caveats. Every new version must ship the full implemented binary
-matrix; see the [release policy](RELEASE.md). Until the first binary release is
-published, build from source:
+matrix; see the [release policy](RELEASE.md). **0.99.1 is the first binary
+release.** Download a matching executable and verify `SHA256SUMS`, or build
+from source:
 
 The normal build needs C11/POSIX with pthreads, GNU make, libcurl, and Jansson:
 

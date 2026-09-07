@@ -8,8 +8,9 @@ interfaces, system libcurl, and system Jansson. That source policy is machine-ch
 by `make depscheck`; the built executable closure is captured and validated by
 `make depclosurecheck`, release evidence bundles are created/checked by
 `make evidencebundle` and `make evidencecheck`, the evidence validators are
-self-tested by `make evidencetoolcheck`, and the final multi-platform bundle set
-is checked by `make evidencematrixcheck`.
+self-tested by `make evidencetoolcheck`, and those bundles can be checked by `make evidencematrixcheck`. Release
+publication follows `RELEASE.md` and its current `PROD_TARGETS`, not the older
+four-platform defaults in those optional tools.
 
 Vendored third-party implementation source: none.
 
@@ -220,5 +221,7 @@ platform bundles have been copied into the release workspace, `make
 evidencematrixcheck RELEASE_EVIDENCE_DIRS="..."` verifies unique platform ids,
 consistent versioning, required platform coverage, terminal evidence, and
 live-provider evidence across the matrix. The tree includes local transport
-evidence and an optional `make livecheck` harness, but external live-provider
-and advertised-platform closure evidence remain release gates.
+evidence and an optional `make livecheck` harness, but neither local fixtures nor a successful cross-build prove live-provider
+or target-platform behavior. Follow RELEASE.md: ship all implemented targets
+with actual test scope and experimental qualifications. Optional bundle tools
+do not replace that matrix or require unperformed runs to be called passing.

@@ -2,7 +2,21 @@
 
 # Changelog
 
-## Unreleased
+## 0.99.1 — 2026-09-07
+
+- First full binary release: Linux x86-64, AArch64 and i686; experimental macOS
+  Intel, Apple Silicon and universal; experimental Windows x64 and ARM64.
+  Publish matching symbols, checksums, manual and source/license companions.
+- Replace the queued-input acknowledgement with `queued (/next or /q c) ›`.
+- Use measured request input for the context meter, with 0% for a fresh session
+  and ?% for unavailable measurements. Keep fresh sessions in memory until their
+  first prompt or goal, and preserve validated shell aliases such as BusyBox.
+- Navigate wrapped drafts with Up/Down; use Ctrl-P/Ctrl-N for direct history.
+  Improve paragraph/prompt spacing and briefly retain the tool activity marker.
+- Rewrite introductory copy around actual workflows, and make the complete
+  single-source manual navigable with semantic HTML and a grouped outline.
+
+### Earlier changes since 0.98 (including the 0.99.0 source tag)
 
 - Share the default prompt's activity/goal indicators and timestamp across chat
   and rollout, putting the busy indicator before the goal flag in both views.
