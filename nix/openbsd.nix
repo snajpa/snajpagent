@@ -179,6 +179,10 @@ let
     "-DJANSSON_WITHOUT_TESTS=ON" "-DJANSSON_EXAMPLES=OFF"
   ] []).overrideAttrs (_: {
     postPatch = lib.optionalString early ''
+      # Preserve format checking when the application's legacy printf macro
+      # is active; GCC/Clang accept the reserved spelling for the archetype.
+      substituteInPlace src/jansson.h \
+        --replace-fail 'format(printf,' 'format(__printf__,'
       # 3.5 declares these as libc functions rather than math.h macros.
       substituteInPlace src/value.c \
         --replace-fail '#ifndef isnan' '#if !defined(isnan) && !defined(__OpenBSD__)' \
