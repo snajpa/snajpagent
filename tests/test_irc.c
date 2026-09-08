@@ -532,31 +532,23 @@ test_validation(void)
     char error[256] = {0};
 
     memset(&cli, 0, sizeof(cli));
-    snag_config_init(&config);
-    config.irc.listen_explicit = true;
-    assert(snag_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
-    assert(strcmp(config.irc.model_nick, "agent0") == 0);
-    assert(strcmp(config.irc.operator_nick, "root0") == 0);
-    assert(strcmp(config.irc.operator_nick, config.irc.model_nick) != 0);
-    assert(config.irc.model_nick_implicit);
-    assert(config.irc.operator_nick_implicit);
-    snag_config_free(&config);
-
-    set_user("agent");
-    snag_config_init(&config);
-    config.irc.listen_explicit = true;
-    assert(snag_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
-    assert(strcmp(config.irc.operator_nick, "localop0") == 0);
-    assert(config.irc.operator_nick_implicit);
-    snag_config_free(&config);
-
-    set_user("not valid");
-    snag_config_init(&config);
-    config.irc.listen_explicit = true;
-    assert(snag_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
-    assert(strcmp(config.irc.operator_nick, "operator0") == 0);
-    assert(config.irc.operator_nick_implicit);
-    snag_config_free(&config);
+    const struct {
+        const char *user, *operator;
+    } defaults[] = {
+        {"root", "root0"}, {"agent", "localop0"}, {"not valid", "operator0"}
+    };
+    for (size_t i = 0u; i < sizeof(defaults) / sizeof(defaults[0]); ++i) {
+        set_user(defaults[i].user);
+        snag_config_init(&config);
+        config.irc.listen_explicit = true;
+        assert(snag_irc_apply_cli(&config, &cli, error, sizeof(error)) == 0);
+        assert(strcmp(config.irc.model_nick, "agent0") == 0);
+        assert(strcmp(config.irc.operator_nick, defaults[i].operator) == 0);
+        assert(strcmp(config.irc.operator_nick, config.irc.model_nick) != 0);
+        assert(config.irc.model_nick_implicit);
+        assert(config.irc.operator_nick_implicit);
+        snag_config_free(&config);
+    }
     set_user("root");
 
     snag_config_init(&config);
