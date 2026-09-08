@@ -40,6 +40,13 @@ let
       PYSDK
     '';
   };
+  compilerBuiltins = pkgs.runCommand "compiler-rt-netbsd-${osVersion}" {} ''
+    mkdir -p "$out/lib"
+    ${llvm.clang-unwrapped}/bin/clang --target=${target} --sysroot=${sdk} \
+      -Os -g -fPIC -D_NETBSD_SOURCE \
+      -c ${llvm.compiler-rt.src}/compiler-rt/lib/builtins/emutls.c -o emutls.o
+    ${tools}/llvm-ar rcs "$out/lib/libclang_rt.builtins.a" emutls.o
+  '';
   compilerWrapper = pkgs.runCommand "netbsd-${osVersion}-clang" {} ''
     mkdir -p "$out/bin"
     cat > "$out/bin/clang" <<'SH'
@@ -68,14 +75,15 @@ let
       flags=()
     fi
     exec "$cc" "''${inlineFlags[@]}" -nostdlib "''${flags[@]}" "''${start[@]}" "$@" \
-      -L${sdk}/usr/lib -L${sdk}/lib -Wl,-Bdynamic "''${extra[@]}" -lpthread -lc ${sdk}/usr/lib/libgcc.a "''${end[@]}"
+      -L${sdk}/usr/lib -L${sdk}/lib -Wl,-Bdynamic "''${extra[@]}" -lpthread -lc ${compilerBuiltins}/lib/libclang_rt.builtins.a ${sdk}/usr/lib/libgcc.a "''${end[@]}"
     SH
     chmod +x "$out/bin/clang"
     ln -s clang "$out/bin/clang++"
   '';
   compiler = "${compilerWrapper}/bin/clang";
   cxxCompiler = "${compilerWrapper}/bin/clang++";
-  cflags = "-Os -g -D_NETBSD_SOURCE -fPIC -fstack-protector-strong";
+  # NetBSD 5 lacks the ELF TLS runtime; retain TLS through compiler-rt.
+  cflags = "-Os -g -D_NETBSD_SOURCE -fPIC -fstack-protector-strong -femulated-tls";
   ldflags = "--ld-path=${llvm.lld}/bin/ld.lld";
   cmakeLibrary = package: flags: dependencies:
     pkgs.stdenvNoCC.mkDerivation {
