@@ -77,6 +77,7 @@ struct snag_responses_stream {
     bool terminal;
     bool failed;
     bool retry_unsafe;
+    bool clarification_unsafe;
     enum snag_output_correction output_correction;
     struct snag_provider_failure provider_failure;
     char error[256];
@@ -93,6 +94,7 @@ int snag_responses_stream_finish(struct snag_responses_stream *stream,
 const char *snag_responses_stream_error(const struct snag_responses_stream *stream);
 bool snag_provider_failure_is_capacity(
     const struct snag_provider_failure *failure);
+bool snag_provider_failure_is_policy(const struct snag_provider_failure *failure);
 int snag_provider_failure_from_json(const json_t *root,
                                    struct snag_provider_failure *failure);
 

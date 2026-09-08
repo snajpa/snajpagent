@@ -102,7 +102,7 @@ snag_config_init(struct snag_config *config)
         return;
     config->provider_count = 1u;
     config->max_goal_prompt_bytes = 256u * 1024u;
-    config->max_turn_retries = 3u;
+    config->max_turn_retries = 5u;
     config->read_agents_md = true;
 #ifdef SNAJPAGENT_UPDATE_URL
     config->auto_update = strchr(SNAJPAGENT_VERSION, '-') == NULL;

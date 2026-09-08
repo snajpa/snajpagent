@@ -924,7 +924,7 @@ Available in both views and after session resume, until another turn starts.
 Active turns cannot be retried. Queued work and paused goals stay paused.
 Ordinary turns retry failures automatically up to
 .B max_turn_retries
-additional times (default three), then display the manual retry hint.
+additional times (default five), then display the manual retry hint.
 A manual retry starts a fresh retry budget. Active goals recover without an
 attempt limit. Automatic recovery retains the turn, completed tool results and
 live command handles.
@@ -1080,7 +1080,8 @@ Automatic compaction uses the provider threshold and resolved input capacity;
 setting the proactive threshold to zero does not disable capacity handling.
 Native compaction is used when enabled.  Set
 .B native_compaction=false
-to summarize through ordinary Responses.  Direct ChatGPT/Codex also falls back
+to summarize through ordinary Responses; the application wraps the returned
+summary text in its stored message format. Direct ChatGPT/Codex also falls back
 once to Responses summarization when its native endpoint is unavailable;
 other native failures remain errors.  Manual
 .B /compact
@@ -1176,7 +1177,7 @@ Goal wording limit, 1 through 1048576.  Default: 262144.
 .TP
 .B max_turn_retries
 Additional automatic retries of an ordinary failed turn, 0 through 4294967295.
-Default: 3 (four attempts including the first).  Zero disables ordinary automatic
+Default: 5 (six attempts including the first).  Zero disables ordinary automatic
 retries. The budget is captured at turn start, including an explicit
 .BR /retry ,
 and is not reset by successful intermediate responses or tools.
@@ -2246,7 +2247,7 @@ unknown data.  Archive/deletion of a session does not erase shared prompt histor
 .SS Provider failures
 Ordinary failures that otherwise offer
 .B /retry
-receive up to three automatic retries by default. Configure
+receive up to five automatic retries by default. Configure
 .B max_turn_retries
 in the
 .B agent
@@ -2285,21 +2286,22 @@ Stream retries stop once output or tool activity has been observed;
 malformed or ambiguous partial records are not automatically replayed.
 .PP
 Policy, access, quota and unknown structured failures skip the short transport
-retry loop.  Active goals retain their paced recovery obligation for these
-errors too.
+retry loop. Access, quota and unknown failures retain paced turn recovery.
 For a pre-output
 .B cyber_policy
-rejection, the model instead receives up to three durable clarification
-instructions per turn.  The original task remains intact: the instruction asks
+rejection, the model receives a durable clarification instruction immediately,
+with up to five clarification attempts per turn. Reasoning-only stream events
+do not delay clarification.  The original task remains intact: the instruction asks
 for accurate restatement of ambiguous phrasing with purpose, actions, targets
 and authorization unchanged, and operator clarification where needed.  New input
-or observed output/activity prevents another automatic clarification.  A fourth
-rejection stops clarification. Retained-turn recovery adds no more clarification
-messages: ordinary turns use their remaining retry budget, while active goals
-keep recovering without an attempt limit.
+or observed public output, refusal, tool or unknown activity prevents another
+automatic clarification. After five clarification attempts, a further rejection
+stops automatic retries and pauses an active goal. Other policy rejections also
+stop automatic retries. Existing running commands are retained while the
+interactive session waits for operator clarification; they are not replayed.
 There is no provider switch or concealed task scope.
 .PP
-Rollout shows one concise "provider clarification N/3" notice at every verbosity
+Rollout shows one concise "provider clarification N/5" notice at every verbosity
 level.  Existing levels 4, 5 and 6 add event, redacted protocol and wire details.
 Error codes, not message wording, determine eligibility.  A failed stream never
 becomes a successful response merely because the connection closed.

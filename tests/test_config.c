@@ -125,7 +125,7 @@ test_numeric_settings(const char *path)
          &config.max_wait_ms, 60000u, 0u, 3u, 7u},
         {"[agent]\nmax_turn_retries=%s\n", "[agent]\nmax_turn_retries=3\nmax_turn_retries=0\n",
          {"0", "1", "3", "17", "4294967295", "4294967296", "-1", "3.5", "never"},
-         &config.max_turn_retries, 3u, 0u, 5u, 9u}
+         &config.max_turn_retries, 5u, 0u, 5u, 9u}
     };
     for (size_t c = 0u; c < sizeof(cases) / sizeof(cases[0]); ++c) {
         for (size_t i = 0u; i < cases[c].count; ++i) {
@@ -532,7 +532,7 @@ main(void)
     assert(config.provider[0] == '\0');
     assert(strcmp(config.reasoning_effort, "default") == 0);
     assert(config.max_goal_prompt_bytes == 256u * 1024u);
-    assert(config.max_turn_retries == 3u);
+    assert(config.max_turn_retries == 5u);
     assert(config.read_agents_md);
 #ifdef SNAJPAGENT_UPDATE_URL
     assert(config.auto_update == (strchr(SNAJPAGENT_VERSION, '-') == NULL));

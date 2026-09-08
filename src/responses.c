@@ -28,6 +28,13 @@ snag_provider_failure_is_capacity(const struct snag_provider_failure *failure)
                              "context_length_exceeded") == 0;
 }
 
+bool
+snag_provider_failure_is_policy(const struct snag_provider_failure *failure)
+{
+    return failure && (snag_string_in(failure->code, "cyber_policy content_filter") ||
+                       snag_string_in(failure->type, "cyber_policy content_filter"));
+}
+
 int
 snag_provider_failure_from_json(const json_t *root,
                                struct snag_provider_failure *failure)
@@ -742,15 +749,32 @@ dispatch_event(struct snag_responses_stream *stream, const char *type,
                const json_t *root)
 {
     json_t *output = json_object_get(json_object_get(root, "response"), "output");
-    if (output && (!json_is_array(output) || json_array_size(output)))
+    if (output && (!json_is_array(output) || json_array_size(output))) {
         stream->retry_unsafe = true;
+        if (!json_is_array(output))
+            stream->clarification_unsafe = true;
+        for (size_t i = 0; i < json_array_size(output); ++i) {
+            const char *kind = snag_json_string(json_array_get(output, i), "type");
+            if (!kind || strcmp(kind, "reasoning"))
+                stream->clarification_unsafe = true;
+        }
+    }
     if (strcmp(type, "keepalive") == 0)
         return 0;
     if (strcmp(type, "response.created") == 0)
         return handle_response_created(stream, root);
     /* Only lifecycle notices prove no output or hosted-tool activity. */
-    if (!snag_string_in(type, "response.queued response.in_progress response.failed response.incomplete error"))
+    if (!snag_string_in(type, "response.queued response.in_progress response.failed response.incomplete error")) {
+        const char *kind = snag_json_string(json_object_get(root, "item"), "type");
+        bool reasoning = (snag_string_in(type, "response.output_item.added response.output_item.done") &&
+                           kind && !strcmp(kind, "reasoning")) ||
+            snag_string_in(type, "response.reasoning_summary_part.added response.reasoning_summary_part.done "
+                "response.reasoning_summary_text.delta response.reasoning_summary_text.done "
+                "response.reasoning_text.delta response.reasoning_text.done");
         stream->retry_unsafe = true;
+        if (!reasoning)
+            stream->clarification_unsafe = true;
+    }
     if (strcmp(type, "response.output_item.added") == 0)
         return handle_output_item(stream, root, false);
     if (strcmp(type, "response.output_item.done") == 0)

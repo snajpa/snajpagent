@@ -966,6 +966,49 @@ test_create_retries(void)
 }
 
 static void
+test_policy_clarification_after_reasoning(void)
+{
+    const struct retry_case policy = {
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"policy\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"r\",\"summary\":[]}}\n\n"
+        "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"item_id\":\"r\",\"summary_index\":0,\"delta\":\"Reviewing the task\"}\n\n",
+        "data: {\"type\":\"response.failed\",\"response\":{\"output\":[{\"type\":\"reasoning\",\"id\":\"r\",\"summary\":[]}],\"error\":{\"code\":\"cyber_policy\"}}}\n\n",
+        200, 1, 0, false, "[cyber_policy]", ""
+    };
+    struct local_server server;
+    struct snag_config config;
+    struct snag_credential credential;
+    struct snag_provider_failure failure;
+    struct snag_response_graph graph = {0};
+    struct emitted_text emitted = {0};
+    json_t *request = request_with_marker("policy-reasoning");
+    char error[512] = {0};
+    unsigned int retries = 99u;
+
+    retry_case = &policy;
+    start_server(&server, MODEL_CREATE_RETRY, false, "/v1");
+    snag_config_init(&config);
+    strcpy(config.providers[0].base_url, server.endpoint);
+    strcpy(config.providers[0].openrouter_referer, "https://github.com/snajpa/snajpagent");
+    strcpy(config.providers[0].openrouter_title, "snajpagent");
+    credential_set(&credential, "transport-secret");
+    snag_buf_init(&emitted.text, 1024u);
+    int rc = snag_provider_responses_create((struct snag_provider_connection){
+        &config, &config.providers[0], &credential, NULL, NULL, NULL},
+        request, emit_capture, &emitted, &graph, &failure, error, sizeof(error), &retries);
+    assert(rc < 0 && retries == 0u && emitted.text.len == 0u);
+    assert(!strcmp(failure.code, "cyber_policy"));
+    assert(failure.output_correction == SNAG_OUTPUT_CORRECTION_CYBER_POLICY);
+    snag_response_graph_free(&graph);
+    snag_buf_free(&emitted.text);
+    snag_credential_clear(&credential);
+    snag_config_free(&config);
+    json_decref(request);
+    stop_server(&server);
+    retry_case = NULL;
+}
+
+static void
 test_count_capability_statuses(void)
 {
     const enum model_fixture fixtures[] = {
@@ -1446,6 +1489,7 @@ main(void)
     test_codex_path_selection();
     test_structured_create_failures();
     test_create_retries();
+    test_policy_clarification_after_reasoning();
     test_count_capability_statuses();
     test_count_modes();
     puts("test_provider_transport: ok");

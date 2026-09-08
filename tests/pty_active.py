@@ -698,8 +698,8 @@ def test_public_index_diagnostic():
 
     log = events(child.session_id())
     failures = [item for item in log if item["type"] == "response_failed"]
-    assert len(failures) == 4
-    assert len([item for item in log if item["type"] == "turn_recovery"]) == 3
+    assert len(failures) == 6
+    assert len([item for item in log if item["type"] == "turn_recovery"]) == 5
     failed = failures[-1]
     assert failed["data"]["class"] == "protocol"
     assert failed["data"]["message"] == (
@@ -1555,11 +1555,11 @@ def test_goal_user_terminal_commands_and_unlock():
 def test_goal_refusal_failure_block_and_restart_state():
     child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal refusing goal\r", b"I cannot continue this goal.")
-    child.wait(b"Goal active; retrying")
-    paused = child.send_wait(b"/goal pause\r", b"Goal paused at the current turn boundary")
+    paused = child.wait(b"Goal paused after model refusal")
     child.exit_cleanly(paused)
     log = events(child.session_id())
-    assert one(log, "goal_paused")["data"]["reason"] == "user"
+    assert one(log, "goal_paused")["data"]["reason"] == "refusal"
+    assert not [item for item in log if item["type"] == "turn_recovery"]
 
     child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal failing goal\r", b"fixture goal provider failed")

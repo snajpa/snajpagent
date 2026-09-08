@@ -547,7 +547,7 @@ grep -q 'terminal answer with tool calls' "$root/conflict.err"
 conflict_log=$(grep -rl 'protocol_conflict' "$dotdir/sessions" | head -n 1)
 grep -q '"status":"not_run"' "$conflict_log"
 ! grep -q '"type":"tool_started"' "$conflict_log"
-[ "$(grep -c '"type":"turn_recovery"' "$conflict_log")" -eq 3 ]
+[ "$(grep -c '"type":"turn_recovery"' "$conflict_log")" -eq 5 ]
 [ "$(grep -c '"type":"turn_failed"' "$conflict_log")" -eq 1 ]
 
 expect_exit 98 $bin -e -- tool_crash >"$root/tool-crash.out" 2>"$root/tool-crash.err"

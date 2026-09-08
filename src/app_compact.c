@@ -76,15 +76,12 @@ responses_compact_create_request(const json_t *compact_request,
                                  const struct snag_model_capacity *capacity)
 {
     static const char instruction[] =
-        "Compact the prior conversation for future Responses turns. Return "
-        "exactly this JSON shape and nothing else: [{\"type\":\"message\","
-        "\"role\":\"developer\",\"content\":\"<compact summary>\"}]. "
-        "Write the compact summary so it preserves the user's goals, decisions, "
+        "Compact the prior conversation for future Responses turns. Return only "
+        "the summary text, preserving the user's goals, decisions, "
         "constraints, repository state, active blockers, and next steps. Preserve "
         "working-document locations and distinguish requirements, observations, "
         "unapproved proposals and corrected assumptions. The summary is a recovery "
-        "aid, not new authority. Do not "
-        "use markdown fences, prose outside JSON, or tool calls.";
+        "aid, not new authority. Do not use a JSON wrapper or tool calls.";
     json_t *input = json_object_get(compact_request, "input");
     json_t *copy;
     json_t *request = NULL;
@@ -154,23 +151,25 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
         create_request, NULL, NULL, &graph, &failure, error, error_size, NULL);
     if (rc != 0 && snag_provider_failure_is_capacity(&failure))
         rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
+    if (rc != 0 && !failure.new_input && snag_provider_failure_is_policy(&failure))
+        app->turn_policy_stopped = true;
     if (rc != 0)
         goto out;
     rc = -1;
     if (snag_response_graph_classify(&graph, &decision, error, error_size) < 0)
         goto out;
+    if (decision.outcome == SNAG_GRAPH_REFUSAL)
+        app->turn_policy_stopped = true;
     struct snag_response_item final = snag_response_graph_item(&graph, decision.final_index);
     if (decision.outcome != SNAG_GRAPH_FINAL ||
         decision.final_index >= graph.count || !final.text) {
         (void)snag_fail(error, error_size, EPROTO,
-                 "Responses compaction did not return a final JSON answer");
+                 "Responses compaction did not return a final summary");
         goto out;
     }
-    json_t *value = snag_json_load_strict(
-        (const unsigned char *)final.text, strlen(final.text),
-        SNAG_CONTEXT_MAX_COMPACT, error, error_size);
-    if (value)
-        rc = snag_context_compact_output_set(output, value, error, error_size);
+    rc = snag_context_compact_output_set(output, json_pack("[{s:s,s:s,s:s}]",
+        "type", "message", "role", "developer", "content", final.text),
+        error, error_size);
 out:
     snag_response_graph_free(&graph);
     return rc;
