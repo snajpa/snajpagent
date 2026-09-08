@@ -15,7 +15,7 @@ let
     pname = "freebsd-amd64-sysroot";
     version = osVersion;
     src = pkgs.fetchurl {
-      name = "disc1.iso";
+      name = if early then "miniinst.iso" else "disc1.iso";
       url = "https://archive.freebsd.org/old-releases/amd64/ISO-IMAGES/${osVersion}/${lib.optionalString (!legacy) "FreeBSD-"}${osVersion}-RELEASE-amd64-${if early then "miniinst" else "disc1"}.iso";
       sha256 = {
         "8.4" = "2fb17d77d4eba34736eb98c142c56546dd73a4e7ac38895bb6c8517949282438";
