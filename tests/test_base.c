@@ -1171,7 +1171,11 @@ test_private_directory(void)
         assert(snag_pread(file, received, sizeof(received), 0) == sizeof(received));
         assert(!memcmp(bytes, received, sizeof(bytes)) && snag_seek(file, 0, SEEK_CUR) == 2);
         assert(snag_pread(file, received, 1u, INT64_C(5368709120)) == 0);
-        assert(snag_pread(file, received, 1u, -1) == -1 && errno == EINVAL);
+        ssize_t negative_read = snag_pread(file, received, 1u, -1);
+        if (negative_read != -1 || errno != EINVAL)
+            fprintf(stderr, "negative pread: rc=%ld errno=%d\n", (long)negative_read, errno);
+        assert(negative_read == -1 && errno == EINVAL);
+        assert(snag_pread(file, received, 0u, -1) == -1 && errno == EINVAL);
         assert(snag_truncate(file, -1) == -1 && errno == EINVAL);
         assert(snag_seek(file, 0, SEEK_CUR) == 2);
         assert(snag_pread(-1, received, 1u, 0) == -1 && errno == EBADF);
