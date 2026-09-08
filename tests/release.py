@@ -668,3 +668,15 @@ for target, expected in (
         input=audio_flags + '\nall:\n\t@printf "%s\\n" "$(AUDIO_DEVICE_LIBS)"\n', text=True)
     assert actual.split() == expected, (target, actual)
 print("PASS: audio device link flags follow native and portable target OS names")
+
+# zlib's Windows static archive is libzs.a, while its upstream pkg-config
+# template still advertises -lz. Fix the producer, not individual consumers.
+windows = (root / "nix/windows.nix").read_text()
+zlib_recipe = windows.split("zlib = ", 1)[1].split("  brotli =", 1)[0]
+assert '"$out/lib/pkgconfig/zlib.pc"' in zlib_recipe
+expression = re.search(r"sed -i '([^']+)'", zlib_recipe).group(1)
+actual = subprocess.check_output(["sed", expression],
+    input="Libs: -L/fixture/lib -lz\nCflags: -I/fixture/include\n", text=True)
+assert actual == "Libs: -L/fixture/lib -lzs\nCflags: -I/fixture/include\n"
+assert '"CURL_LIBS=$($PKG_CONFIG --static --libs libcurl)"' in windows
+print("PASS: Windows zlib metadata names its static archive for every consumer")

@@ -91,9 +91,13 @@ let
         >> "$out/lib/pkgconfig/mbedcrypto.pc"
     '';
   });
-  zlib = cmakeLibrary windows.zlib [
+  zlib = (cmakeLibrary windows.zlib [
     "-DZLIB_BUILD_SHARED=OFF" "-DZLIB_BUILD_STATIC=ON" "-DZLIB_BUILD_TESTING=OFF"
-  ] [];
+  ] []).overrideAttrs (_: {
+    postInstall = ''
+      sed -i 's/ -lz$/ -lzs/' "$out/lib/pkgconfig/zlib.pc"
+    '';
+  });
   brotli = cmakeLibrary windows.brotli [ "-DBROTLI_DISABLE_TESTS=ON" ] [];
   zstd = (cmakeLibrary windows.zstd [
     "-DZSTD_BUILD_SHARED=OFF" "-DZSTD_BUILD_STATIC=ON"
@@ -173,7 +177,7 @@ in {
         "JANSSON_CFLAGS=$($PKG_CONFIG --cflags jansson)"
         "LDLIBS=$($PKG_CONFIG --static --libs jansson) -lsnagregex -lunistring -liconv -ladvapi32 -lntdll -lws2_32 -lwinpthread${pkgs.lib.optionalString (pty != null) " -lsnagpty -L${pty.cxx}/lib -lc++ -L${pty.unwind}/lib -lunwind -luser32 -lshell32"}"
         "CURL_CFLAGS=$($PKG_CONFIG --cflags libcurl)"
-        "CURL_LIBS=$($PKG_CONFIG --static --libs libcurl | sed -E 's/(^| )-lz( |$)/\1-lzs\2/g')"
+        "CURL_LIBS=$($PKG_CONFIG --static --libs libcurl)"
       )
     '';
     installPhase = ''
