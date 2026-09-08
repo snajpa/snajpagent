@@ -89,7 +89,7 @@ let
     done
     cc=${llvm.clang-unwrapped}/bin/clang
     extra=()
-    case "$0" in *++) cc="$cc++"; extra=(${if early then "-l:libstdc++.so.32.0" else if legacy then "-l:libstdc++.so.57.0" else "-lc++ -lc++abi"});; esac
+    case "$0" in *++) cc="$cc++"; extra=(${if early then "-l:libstdc++.so.32.0 -l:libm.so.1.0" else if legacy then "-l:libstdc++.so.57.0" else "-lc++ -lc++abi"});; esac
     if [ "$link" = 0 ]; then exec "$cc" "$@"; fi
     start=(${sdk}/usr/lib/crt0.o ${sdk}/usr/lib/crtbegin.o)
     end=(${sdk}/usr/lib/crtend.o)
@@ -172,10 +172,17 @@ let
           (lib.concatMapStringsSep ":" (dep: "${dep}/lib/pkgconfig") dependencies)}
       '';
     };
-  jansson = cmakeLibrary sourcePkgs.jansson [
+  jansson = (cmakeLibrary sourcePkgs.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF" "-DJANSSON_BUILD_DOCS=OFF"
     "-DJANSSON_WITHOUT_TESTS=ON" "-DJANSSON_EXAMPLES=OFF"
-  ] [];
+  ] []).overrideAttrs (_: {
+    postPatch = lib.optionalString early ''
+      # 3.5 declares these as libc functions rather than math.h macros.
+      substituteInPlace src/value.c \
+        --replace-fail '#ifndef isnan' '#if !defined(isnan) && !defined(__OpenBSD__)' \
+        --replace-fail '#ifndef isinf' '#if !defined(isinf) && !defined(__OpenBSD__)'
+    '';
+  });
   tls = (cmakeLibrary sourcePkgs.mbedtls [
     "-DUSE_SHARED_MBEDTLS_LIBRARY=OFF" "-DENABLE_PROGRAMS=OFF"
     "-DENABLE_TESTING=OFF" "-DGEN_FILES=OFF"
@@ -185,12 +192,29 @@ let
       perl scripts/config.pl set MBEDTLS_THREADING_PTHREAD
       substituteInPlace library/net_sockets.c \
         --replace-fail 'fd >= FD_SETSIZE' '(unsigned int) fd >= FD_SETSIZE'
+    '' + lib.optionalString early ''
+      # Keep the library's volatile zeroizer when libc has no explicit_bzero.
+      # 3.5 has native clocks in sys/time.h and an empty POSIX threads macro.
+      substituteInPlace library/platform_util.c \
+        --replace-fail '|| defined(__OpenBSD__)' "" \
+        --replace-fail '_POSIX_THREAD_SAFE_FUNCTIONS >= 200112L' '(_POSIX_THREAD_SAFE_FUNCTIONS + 0) >= 200112L' \
+        --replace-fail '#include <time.h>' '#include <time.h>
+      #include <sys/time.h>' \
+        --replace-fail '|| defined(__HAIKU__)' '|| defined(__HAIKU__) || defined(__OpenBSD__)'
     '';
   });
   zlib = cmakeLibrary sourcePkgs.zlib [
     "-DZLIB_BUILD_SHARED=OFF" "-DZLIB_BUILD_STATIC=ON" "-DZLIB_BUILD_TESTING=OFF"
   ] [];
-  brotli = cmakeLibrary sourcePkgs.brotli [ "-DBROTLI_DISABLE_TESTS=ON" ] [];
+  brotli = (cmakeLibrary sourcePkgs.brotli [ "-DBROTLI_DISABLE_TESTS=ON" ] []).overrideAttrs (_: {
+    postPatch = lib.optionalString early ''
+      # The log2 fallback calls log, which is in the native math library.
+      substituteInPlace CMakeLists.txt \
+        --replace-fail 'add_definitions(-DBROTLI_HAVE_LOG2=0)' \
+          'set(LIBM_LIBRARY "m")
+      add_definitions(-DBROTLI_HAVE_LOG2=0)'
+    '';
+  });
   zstd = (cmakeLibrary sourcePkgs.zstd [
     "-DZSTD_BUILD_SHARED=OFF" "-DZSTD_BUILD_STATIC=ON"
     "-DZSTD_BUILD_PROGRAMS=OFF" "-DZSTD_BUILD_TESTS=OFF"
@@ -204,14 +228,23 @@ let
       substituteInPlace CMakeLists.txt \
         --replace-fail 'CARES_EXTRAINCLUDE_IFSET (HAVE_NET_IF_H       net/if.h)' \
           'CARES_EXTRAINCLUDE_IFSET (HAVE_NET_IF_H       "sys/socket.h;net/if.h")'
+    '' + lib.optionalString early ''
+      # This release's socket headers require sys/types.h first.
+      substituteInPlace CMakeLists.txt \
+        --replace-fail 'CHECK_INCLUDE_FILES (sys/socket.h' 'CHECK_INCLUDE_FILES ("sys/types.h;sys/socket.h"' \
+        --replace-fail 'CARES_EXTRAINCLUDE_IFSET (HAVE_SYS_SOCKET_H   sys/socket.h)' 'CARES_EXTRAINCLUDE_IFSET (HAVE_SYS_SOCKET_H  "sys/types.h;sys/socket.h")'
     '';
   });
   nghttp2 = cmakeLibrary sourcePkgs.nghttp2 [
     "-DENABLE_LIB_ONLY=ON" "-DBUILD_STATIC_LIBS=ON" "-DENABLE_DOC=OFF"
   ] [];
   iconv = autotoolsLibrary pkgs.libiconvReal [] [];
-  unistring = autotoolsLibrary sourcePkgs.libunistring
-    [ "--with-libiconv-prefix=${iconv}" ] [ iconv ];
+  unistring = (autotoolsLibrary sourcePkgs.libunistring
+    [ "--with-libiconv-prefix=${iconv}" ] [ iconv ]).overrideAttrs (_: lib.optionalAttrs early {
+    # Build the library, without cross-building Gnulib's host test programs.
+    buildPhase = ''runHook preBuild; make -j"$NIX_BUILD_CORES" -C lib; runHook postBuild'';
+    installPhase = ''runHook preInstall; make -C lib install; runHook postInstall'';
+  });
   idn2 = (autotoolsLibrary sourcePkgs.libidn2 [
     "--disable-doc" "--with-libiconv-prefix=${iconv}"
     "--with-libunistring-prefix=${unistring}"
