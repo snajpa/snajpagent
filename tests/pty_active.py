@@ -394,6 +394,11 @@ def events(session_id):
     return records
 
 
+def turn_events(items, event_type, turn_id):
+    return [item for item in items if item["type"] == event_type and
+            item["data"]["turn_id"] == turn_id]
+
+
 def one(items, event_type):
     matches = [item for item in items if item["type"] == event_type]
     if len(matches) != 1:
@@ -1068,9 +1073,7 @@ def test_steering_during_pre_response_compaction():
                    "steering_added")
     turns = [item for item in log if item["type"] == "turn_started"]
     turn_id = turns[-1]["data"]["turn_id"]
-    starts = [item for item in log
-              if item["type"] == "response_started" and
-              item["data"]["turn_id"] == turn_id]
+    starts = turn_events(log, "response_started", turn_id)
     assert len(starts) == 1
     assert starts[0]["data"]["steering_ids"] == [
         steering["data"]["steering_id"]
@@ -1101,21 +1104,15 @@ def test_steering_during_capacity_recovery_compaction():
     log = events(session_id)
     turn = [item for item in log if item["type"] == "turn_started"][-1]
     turn_id = turn["data"]["turn_id"]
-    rejected = [item for item in log
-                if item["type"] == "response_capacity_rejected" and
-                item["data"]["turn_id"] == turn_id]
+    rejected = turn_events(log, "response_capacity_rejected", turn_id)
     interrupted = [item for item in log
                    if item["type"] == "compaction_interrupted"]
     compactions = [item for item in log
                    if item["type"] == "compaction_started" and
                    item["data"]["reason"] == "provider_rejection"]
     completed = [item for item in log if item["type"] == "compaction_completed"]
-    steering = [item for item in log
-                if item["type"] == "steering_added" and
-                item["data"]["turn_id"] == turn_id]
-    starts = [item for item in log
-              if item["type"] == "response_started" and
-              item["data"]["turn_id"] == turn_id]
+    steering = turn_events(log, "steering_added", turn_id)
+    starts = turn_events(log, "response_started", turn_id)
     assert len(rejected) == 1
     assert rejected[0]["data"]["observed_hard_input_tokens"] == 89999
     assert re.fullmatch(
@@ -3443,11 +3440,7 @@ def test_network_view_routing_and_atomic_catchup():
         "network_zero", "slow"
     ]
     slow_turn = direct[1]["data"]["turn_id"]
-    steering = [
-        event for event in log
-        if event["type"] == "steering_added" and
-        event["data"]["turn_id"] == slow_turn
-    ]
+    steering = turn_events(log, "steering_added", slow_turn)
     assert len(steering) == 1
     assert steering[0]["data"]["text"] == "rollout active steer"
     chat_turns = [
@@ -3809,17 +3802,9 @@ def test_network_chat_and_managed_mention():
     reminder_turn = next(
         event for event in turns if "network_reminder" in event["data"]["text"]
     )
-    reminders = [
-        event for event in log
-        if event["type"] == "irc_reply_reminder" and
-        event["data"]["turn_id"] == reminder_turn["data"]["turn_id"]
-    ]
+    reminders = turn_events(log, "irc_reply_reminder", reminder_turn["data"]["turn_id"])
     assert len(reminders) == 1
-    reminder_responses = [
-        event for event in log
-        if event["type"] == "response_started" and
-        event["data"]["turn_id"] == reminder_turn["data"]["turn_id"]
-    ]
+    reminder_responses = turn_events(log, "response_started", reminder_turn["data"]["turn_id"])
     assert len(reminder_responses) == 4
     failed_response = next(
         event for event in log
@@ -3840,16 +3825,8 @@ def test_network_chat_and_managed_mention():
     zero_turn = next(
         event for event in turns if "network_zero" in event["data"]["text"]
     )
-    zero_reminders = [
-        event for event in log
-        if event["type"] == "irc_reply_reminder" and
-        event["data"]["turn_id"] == zero_turn["data"]["turn_id"]
-    ]
-    zero_responses = [
-        event for event in log
-        if event["type"] == "response_started" and
-        event["data"]["turn_id"] == zero_turn["data"]["turn_id"]
-    ]
+    zero_reminders = turn_events(log, "irc_reply_reminder", zero_turn["data"]["turn_id"])
+    zero_responses = turn_events(log, "response_started", zero_turn["data"]["turn_id"])
     assert not zero_reminders
     assert len(zero_responses) == 1
 
@@ -3857,18 +3834,10 @@ def test_network_chat_and_managed_mention():
         event for event in turns if "network_managed" in event["data"]["text"]
     )
     turn_id = managed_turn["data"]["turn_id"]
-    steering = [
-        event for event in log
-        if event["type"] == "steering_added" and
-        event["data"]["turn_id"] == turn_id
-    ]
+    steering = turn_events(log, "steering_added", turn_id)
     assert len(steering) == 1
     assert "network managed mention" in steering[0]["data"]["text"]
-    completed = [
-        event for event in log
-        if event["type"] == "response_completed" and
-        event["data"]["turn_id"] == turn_id
-    ]
+    completed = turn_events(log, "response_completed", turn_id)
     assert [event["data"]["cycle"] for event in completed] == [1, 2, 3, 4]
     cycle2_call = completed[1]["data"]["items"][0]["call_id"]
     assert [item["name"] for item in completed[2]["data"]["items"]] == [
