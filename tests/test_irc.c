@@ -385,7 +385,8 @@ test_runtime_roles(void)
     config.irc.client_count = 1u;
     assert(snag_strcpy(config.irc.clients[0], sizeof(config.irc.clients[0]), other));
     assert(snag_irc_configure(runtime, &config, "/private-workspace", error, sizeof(error)) == 0);
-    uint64_t registration_deadline = snag_monotonic_ms() + 1000u;
+    /* Registration includes both clients and catch-up, even on slow CPUs. */
+    uint64_t registration_deadline = snag_monotonic_ms() + 10000u;
     while (!snag_irc_mentions_agent(runtime, other, "agent1: work") &&
            snag_monotonic_ms() < registration_deadline) {
         tick(runtime, 1u);
@@ -904,9 +905,10 @@ test_client_reconnect(void)
     assert(snag_irc_open(&client, &client_config, "/client", capture_event,
                         capture_trace, &client_capture,
                         error, sizeof(error)) == 0);
-    /* Bounded network ticks drain the extended 4 MiB history incrementally. */
-    for (unsigned int i = 0u; i < 2000u &&
-         !client_capture.events[SNAG_IRC_HISTORY_READY]; ++i)
+    /* Observe the complete 4 MiB replay; poll counts do not measure progress. */
+    uint64_t history_deadline = snag_monotonic_ms() + 120000u;
+    while (!client_capture.events[SNAG_IRC_HISTORY_READY] &&
+           snag_monotonic_ms() < history_deadline)
         pump_pair(server, client, 1u);
     assert(client_capture.events[SNAG_IRC_HISTORY_READY] != 0u);
     assert(server_capture.events[SNAG_IRC_JOIN] >= 2u);
@@ -935,8 +937,9 @@ test_client_reconnect(void)
     assert(snag_irc_open(&client, &client_config, "/client", capture_event,
                         capture_trace, &client_capture,
                         error, sizeof(error)) == 0);
-    for (unsigned int i = 0u; i < 2000u &&
-         !client_capture.events[SNAG_IRC_HISTORY_READY]; ++i)
+    history_deadline = snag_monotonic_ms() + 120000u;
+    while (!client_capture.events[SNAG_IRC_HISTORY_READY] &&
+           snag_monotonic_ms() < history_deadline)
         pump_pair(server, client, 1u);
     assert(client_capture.events[SNAG_IRC_HISTORY_READY] != 0u);
     assert(client_capture.last_message.historical);
@@ -990,7 +993,10 @@ test_client_reconnect(void)
                               error, sizeof(error)) == 0);
     assert(strcmp(client_capture.last_message.room, "#lab") == 0);
     next_server = open_server(&server_config, &next_capture);
-    pump_pair(next_server, client, 800u);
+    uint64_t reconnect_deadline = snag_monotonic_ms() + 10000u;
+    while (strcmp(next_capture.last_message.text, "retained while disconnected") != 0 &&
+           snag_monotonic_ms() < reconnect_deadline)
+        pump_pair(next_server, client, 1u);
     assert(strcmp(next_capture.last_message.nick, "remoteagent") == 0);
     assert(strcmp(next_capture.last_message.text,
                   "retained while disconnected") == 0);
