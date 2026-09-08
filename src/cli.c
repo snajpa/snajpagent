@@ -18,18 +18,16 @@ void
 snag_cli_init(struct snag_cli *cli)
 {
     memset(cli, 0, sizeof(*cli));
-    cli->color = SNAG_CLI_COLOR_UNSET;
     cli->markdown = SNAG_CLI_MARKDOWN_UNSET;
 }
 
 enum snag_color_mode
 snag_cli_color(const struct snag_cli *cli, enum snag_color_mode fallback)
 {
-    switch (cli->color) {
-    case SNAG_CLI_COLOR_AUTO: return SNAG_COLOR_AUTO;
-    case SNAG_CLI_COLOR_ALWAYS: return SNAG_COLOR_ALWAYS;
-    case SNAG_CLI_COLOR_NEVER: return SNAG_COLOR_NEVER;
-    case SNAG_CLI_COLOR_UNSET: return fallback;
+    if (cli->color) {
+        if (!strcmp(cli->color, "auto")) return SNAG_COLOR_AUTO;
+        if (!strcmp(cli->color, "always")) return SNAG_COLOR_ALWAYS;
+        if (!strcmp(cli->color, "never")) return SNAG_COLOR_NEVER;
     }
     return fallback;
 }
@@ -106,17 +104,6 @@ optional_endpoint(int argc, char **argv, int *index, const char *attached)
 }
 
 static int
-set_color(struct snag_cli *cli, enum snag_cli_color_mode color,
-          const char *name, char *error, size_t error_size)
-{
-    if (cli->color != SNAG_CLI_COLOR_UNSET) {
-        return snag_fail(error, error_size, EINVAL, "duplicate %s option", name);
-    }
-    cli->color = color;
-    return 0;
-}
-
-static int
 set_markdown(struct snag_cli *cli, enum snag_cli_markdown_mode markdown,
              const char *name, char *error, size_t error_size)
 {
@@ -131,19 +118,10 @@ static int
 parse_color_value(struct snag_cli *cli, const char *value,
                   const char *name, char *error, size_t error_size)
 {
-    enum snag_cli_color_mode color;
-
-    if (strcmp(value, "auto") == 0)
-        color = SNAG_CLI_COLOR_AUTO;
-    else if (strcmp(value, "always") == 0)
-        color = SNAG_CLI_COLOR_ALWAYS;
-    else if (strcmp(value, "never") == 0)
-        color = SNAG_CLI_COLOR_NEVER;
-    else {
+    if (!snag_string_in(value, "auto always never"))
         return snag_fail(error, error_size, EINVAL,
-                  "%s accepts auto, always, or never", name);
-    }
-    return set_color(cli, color, name, error, error_size);
+                         "%s accepts auto, always, or never", name);
+    return set_once(&cli->color, value, name, error, error_size);
 }
 
 static int
@@ -316,11 +294,10 @@ parse_options(struct snag_cli *cli, int argc, char **argv, int *index,
             if (!attached && *index + 1 < argc &&
                 snag_string_in(argv[*index + 1], "auto always never"))
                 attached = argv[++*index];
-            if ((attached ? parse_color_value(cli, attached, name, error, error_size) :
-                 set_color(cli, SNAG_CLI_COLOR_ALWAYS, name, error, error_size)) < 0)
+            if (parse_color_value(cli, attached ? attached : "always", name, error, error_size) < 0)
                 return -1;
         } else if (strcmp(name, "--no-color") == 0) {
-            if (set_color(cli, SNAG_CLI_COLOR_NEVER, name, error, error_size) < 0)
+            if (set_once(&cli->color, "never", name, error, error_size) < 0)
                 return -1;
         } else if (set_markdown(cli, strcmp(name, "--markdown") == 0 ?
                                SNAG_CLI_MARKDOWN_ENABLED : SNAG_CLI_MARKDOWN_DISABLED,

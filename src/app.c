@@ -3749,21 +3749,8 @@ build_resume_command(const struct app_state *app, const char *program,
         if (append_command_option(command, "-d", dir) < 0)
             goto out;
     }
-    switch (cli->color) {
-    case SNAG_CLI_COLOR_UNSET: break;
-    case SNAG_CLI_COLOR_AUTO:
-        if (append_command_literal(command, "--color=auto") < 0)
-            goto out;
-        break;
-    case SNAG_CLI_COLOR_ALWAYS:
-        if (append_command_literal(command, "--color=always") < 0)
-            goto out;
-        break;
-    case SNAG_CLI_COLOR_NEVER:
-        if (append_command_literal(command, "--color=never") < 0)
-            goto out;
-        break;
-    }
+    if (cli->color && snag_buf_printf(command, " --color=%s", cli->color) < 0)
+        goto out;
     if (cli->markdown == SNAG_CLI_MARKDOWN_ENABLED &&
         append_command_literal(command, "--markdown") < 0)
         goto out;

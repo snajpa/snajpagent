@@ -193,6 +193,11 @@ LC_ALL=C grep -q "$(printf '\033')" "$root/color-error.err"
 expect_exit 2 $bin --color=rainbow >"$root/bad-color.out" 2>"$root/bad-color.err"
 grep -q 'accepts auto, always, or never' "$root/bad-color.err"
 
+for args in '--color=auto --color=never' '--no-color --color' '--color --no-color'; do
+    expect_exit 2 $bin $args -l >"$root/bad-color.out" 2>"$root/bad-color.err"
+    grep -q 'duplicate --.*color option' "$root/bad-color.err"
+done
+
 for args in '--markdown --markdown' '--no-markdown --no-markdown' \
             '--markdown --no-markdown'; do
     # These arguments contain no quoting-sensitive values.
@@ -324,6 +329,13 @@ assert not lines[1][:1].isspace(), lines
 assert b"\x1b" not in lines[1], lines
 assert lines[1].endswith(b"\n"), lines
 PY
+
+for color in auto always never; do
+    out=$($bin --dotdir "$root/color-$color" --color="$color" -e -- ping \
+        2>"$root/color-$color.err")
+    [ "$out" = pong ]
+    grep -q -- " --color=$color " "$root/color-$color.err"
+done
 
 out=$($bin -e --resume "$id" -- ping 2>"$root/err")
 [ "$out" = pong ]
