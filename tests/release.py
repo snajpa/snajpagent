@@ -170,3 +170,12 @@ for recipe in ("freebsd.nix", "netbsd.nix"):
     assert 'set(LIBM_LIBRARY "m")' in brotli, recipe
     assert 'add_definitions(-DBROTLI_HAVE_LOG2=0)' in brotli, recipe
 print("PASS: BSD Brotli log2 fallback retains its libm dependency")
+
+# GCC's 32-bit ARM specs can accept -static-pie but still choose a dynamic
+# loader/libc. Keep static library selection and omit PT_INTERP explicitly.
+linux = (root / "nix/linux.nix").read_text()
+link = next(line for line in linux.splitlines() if "'LDFLAGS=" in line)
+assert '-static-pie' in link
+assert 'musl.stdenv.hostPlatform.isAarch32' in link
+assert '" -Wl,-Bstatic,--no-dynamic-linker,-z,text"' in link
+print("PASS: 32-bit ARM static PIE explicitly omits the dynamic runtime")
