@@ -73,7 +73,7 @@ let
     done
     cc=${llvm.clang-unwrapped}/bin/clang
     extra=()
-    case "$0" in *++) cc="$cc++"; extra=(-lc++ -lc++abi);; esac
+    case "$0" in *++) cc="$cc++"; extra=(${if legacy then "-l:libstdc++.so.57.0" else "-lc++ -lc++abi"});; esac
     if [ "$link" = 0 ]; then exec "$cc" "$@"; fi
     start=(${sdk}/usr/lib/crt0.o ${sdk}/usr/lib/crtbegin.o)
     end=(${sdk}/usr/lib/crtend.o)
@@ -112,7 +112,7 @@ let
           (lib.concatMapStringsSep ":" (dep: "${dep}/lib/pkgconfig") dependencies)}
         cmakeFlagsArray+=(
           "-DCMAKE_C_FLAGS=${cflags}"
-          "-DCMAKE_CXX_FLAGS=${cflags} -stdlib=libc++"
+          "-DCMAKE_CXX_FLAGS=${cflags} -stdlib=${if legacy then "libstdc++" else "libc++"}"
           "-DCMAKE_EXE_LINKER_FLAGS=${ldflags}"
         )
       '';
