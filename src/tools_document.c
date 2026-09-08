@@ -239,7 +239,7 @@ snag_tools_video(const struct snag_response_item *call, struct snag_session *ses
     char *retained = NULL;
     json_t *source = NULL, *parts = NULL;
     struct snag_av_video *video = NULL;
-    struct snag_av_video_info info;
+    struct snag_av_video_info info = {0};
     int rc = -1;
     *result = NULL;
     (void)wake;

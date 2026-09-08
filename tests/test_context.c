@@ -1762,6 +1762,11 @@ test_document_conversion(void)
         write_file(playlist, "#EXTM3U\n#EXTINF:1,\nfile:///etc/passwd\n");
         struct snag_av_video *decoder = NULL; struct snag_av_video_info meta;
         assert(snag_av_video_open(playlist, NULL, NULL, &decoder, &meta, error, sizeof(error)) < 0 && !decoder);
+        call.arguments = json_pack("{s:s,s:i,s:i,s:i}", "path", playlist, "start_s", 0, "end_s", 1, "frames", 1);
+        assert(snag_tools_video(&call, &session, NULL, NULL, SNAG_WAKE_INVALID, NULL, &result) == 0);
+        assert(result && strcmp(snag_json_string(result, "status"), "succeeded") &&
+               !json_object_get(result, "content") && snag_tool_result_valid(result) == 0);
+        json_decref(result); json_decref(call.arguments);
         assert(unlink(playlist) == 0); free(playlist);
         char *av = snag_path_join(root, "sound.mp4");
         const char *av_args[] = {"ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=red:s=64x64:r=4:d=2",
