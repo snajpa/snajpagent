@@ -1808,7 +1808,14 @@ snag_child_exited(struct snag_child *child)
     if (size % sizeof(*list)) {
         error = EIO;
     } else for (size_t i = 0; i < size / sizeof(*list); ++i) {
-        if (list[i].ki_pid == child->pid && list[i].ki_ppid == getpid()) {
+        bool matches = list[i].ki_pid == child->pid;
+#ifndef KERN_PROC_PROC
+        /* 5.1 omits ki_pid for zombies. Each managed child leads its own
+         * group; require that group and our parentage, never parent alone. */
+        matches |= list[i].ki_pid == 0 && list[i].ki_stat == SZOMB &&
+                   list[i].ki_pgid == child->pid;
+#endif
+        if (matches && list[i].ki_ppid == getpid()) {
             /* 5.5 fill_kinfo_thread reports zombies as SIDL; its list
              * skips newborns. Require the exit flag as well as that state. */
             rc = list[i].ki_stat == SZOMB ||

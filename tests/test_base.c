@@ -2249,6 +2249,36 @@ test_input_mode(void)
 
 #ifndef _WIN32
 static void
+test_posix_child_ownership(void)
+{
+    char **env = snag_environment_entries();
+    char *directory = snag_realpath(".");
+    struct snag_child waiting, exited;
+    snag_child_init(&waiting);
+    snag_child_init(&exited);
+    assert(env && directory);
+    assert(snag_child_spawn(&waiting, "/bin/sh", "read value; exit 7",
+                            directory, env, false) == 0);
+    assert(snag_child_spawn(&exited, "/bin/sh", "exit 9",
+                            directory, env, false) == 0);
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
+    int done;
+    while ((done = snag_child_exited(&exited)) == 0) {
+        assert(snag_monotonic_ms() < deadline);
+        assert(snag_sleep_ms(1u) == 0);
+    }
+    assert(done == 1 && !exited.reaped);
+    assert(snag_child_exited(&waiting) == 0 && !waiting.reaped);
+    assert(snag_child_exited(&exited) == 1 && !exited.reaped);
+    assert(snag_child_reap(&exited) == 0 && exited.exit_code == 9);
+    assert(snag_child_exited(&waiting) == 0 && !waiting.reaped);
+    snag_child_free(&exited);
+    snag_child_free(&waiting);
+    snag_environment_free(env);
+    free(directory);
+}
+
+static void
 test_posix_process(bool pty)
 {
     char **env = snag_environment_entries();
@@ -2332,6 +2362,7 @@ test_platform(void)
     test_native_process_descendant(true, false);
     test_home_environment();
 #else
+    test_posix_child_ownership();
     test_posix_process(false);
 #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
     test_posix_process(true);
