@@ -198,7 +198,8 @@ let
       # 3.5 hides fd_set/select behind these newer feature requests.
       substituteInPlace library/net_sockets.c \
         --replace-fail '#define _POSIX_C_SOURCE 200112L' '/* Native BSD declarations. */' \
-        --replace-fail '#define _XOPEN_SOURCE 600' '/* Native BSD declarations. */'
+        --replace-fail '#define _XOPEN_SOURCE 600' '/* Native BSD declarations. */' \
+        --replace-fail 'defined(__socklen_t_defined)' 'defined(__OpenBSD__) || defined(__socklen_t_defined)'
       # Keep the library's volatile zeroizer when libc has no explicit_bzero.
       # 3.5 has native clocks in sys/time.h and an empty POSIX threads macro.
       substituteInPlace library/platform_util.c \
