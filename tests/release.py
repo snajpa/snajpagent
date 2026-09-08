@@ -5,6 +5,7 @@ import argparse
 import importlib.util
 import json
 import os
+import os
 import re
 import shutil
 from pathlib import Path
@@ -86,8 +87,12 @@ with tempfile.TemporaryDirectory(prefix="release-tag-", dir=root / "build") as t
     git("commit", "-qm", "release source")
     git("tag", "-a", "0.99.3", "-m", "approved fixture release")
     probe = "version-test:;@printf '%s\\n' '$(BUILD_VERSION)'"
-    command = ["make", "-s", "--eval", probe, "version-test"]
+    command = ["make", "--no-print-directory", "-s", "--eval", probe, "version-test"]
     assert subprocess.check_output(command, cwd=tmp, text=True).strip() == "0.99.3"
+    # Recursive make exports -w even when the probe asks for silent recipes.
+    # Directory banners are build chatter, not part of the version value.
+    nested = dict(os.environ, MAKEFLAGS="w", MAKELEVEL="2")
+    assert subprocess.check_output(command, cwd=tmp, env=nested, text=True) == "0.99.3\n"
     matrix_plan = subprocess.check_output(["make", "-n", "prod-linux-x86_64",
         "UPDATE_BASE_URL=https://publisher.test"], cwd=tmp, text=True)
     assert "--argstr buildVersion '0.99.3'" in matrix_plan
