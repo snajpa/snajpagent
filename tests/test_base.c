@@ -2446,7 +2446,7 @@ test_platform(void)
     assert(snag_char_width(0xd800u) == -1);
     assert(snag_char_width(0xdfffu) == -1);
     assert(snag_char_width(0x110000u) == -1);
-#ifdef _WIN32
+#if defined(_WIN32) || defined(SNAJPAGENT_STATIC_UTF8)
     assert(snag_char_width(0x0301u) == 0);
     assert(snag_char_width(0x4e2du) == 2);
     assert(snag_char_width(0x1f600u) == 2);

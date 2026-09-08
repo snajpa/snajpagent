@@ -58,6 +58,7 @@ in stdenv.mkDerivation {
   dontUnpack = true;
   strictDeps = true;
   configurePlatforms = [];
+  dontStrip = true;
   nativeBuildInputs = [ pkgs.autoconf pkgs.automake pkgs.python3 pkgs.perl
                         pkgs.gettext (if nativeCharset then windows.buildPackages.pkg-config else pkgs.pkg-config) ];
   buildInputs = [ unistring ] ++ pkgs.lib.optional (threads != null) threads;
@@ -73,7 +74,7 @@ in stdenv.mkDerivation {
     # libc multibyte and regex implementations require missing locale data.
     export gl_cv_func_mbrtowc_incomplete_state=no
     export gl_cv_func_mbrtowc_sanitycheck=no
-  '' + '' 
+  '' + ''
     cp ${configure} configure.ac
     cp ${makefile} Makefile.am
     chmod u+w configure.ac Makefile.am

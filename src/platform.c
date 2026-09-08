@@ -11,6 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <locale.h>
+#ifdef SNAJPAGENT_STATIC_UTF8
+#include <uniwidth.h>
+#endif
 
 void
 snag_environment_entries_free(char **entries)
@@ -2324,10 +2327,15 @@ snag_ignore_sigpipe(void)
 bool
 snag_text_locale_init(void)
 {
+#ifdef SNAJPAGENT_STATIC_UTF8
+    /* UTF-8 decoding, regex and width use the static Unicode libraries. */
+    return setlocale(LC_CTYPE, "C") != NULL;
+#else
     const char *locale = setlocale(LC_CTYPE, "");
     const char *codeset = locale ? nl_langinfo(CODESET) : NULL;
 
     return codeset && (!strcasecmp(codeset, "UTF-8") || !strcasecmp(codeset, "UTF8"));
+#endif
 }
 
 int64_t
@@ -3119,7 +3127,11 @@ snag_char_width(uint32_t cp)
 {
     if (cp > 0x10ffffu || (cp >= 0xd800u && cp <= 0xdfffu))
         return -1;
+#ifdef SNAJPAGENT_STATIC_UTF8
+    return uc_width(cp, "UTF-8");
+#else
     return cp <= (uint32_t)WCHAR_MAX ? wcwidth((wchar_t)cp) : -1;
+#endif
 }
 
 int

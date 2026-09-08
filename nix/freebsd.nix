@@ -244,7 +244,7 @@ let
     '';
   });
 in {
-  inherit sdk target compiler tools cflags ldflags jansson tls curl regex;
+  inherit sdk target compiler tools cflags ldflags jansson tls curl regex unistring;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }:
     pkgs.stdenvNoCC.mkDerivation {
@@ -253,7 +253,7 @@ in {
       src = source;
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
-      buildInputs = [ jansson curl ] ++ networkLibraries;
+      buildInputs = [ jansson curl ] ++ networkLibraries ++ lib.optional early regex;
       enableParallelBuilding = true;
       dontStrip = true;
       preBuild = ''
@@ -272,11 +272,11 @@ in {
           'CC=${compiler} --target=${target} --sysroot=${sdk}'
           'STRIP=${tools}/llvm-strip' 'OBJCOPY=${tools}/llvm-objcopy'
           'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
-          'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
+          'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"${lib.optionalString early " -DSNAJPAGENT_STATIC_UTF8 -I${regex}/include -I${unistring}/include"}'
           'CFLAGS=-std=c11 ${if debug then "-Og -g -fno-omit-frame-pointer" else cflags + " -flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           'LDFLAGS=--ld-path=${llvm.lld}/bin/ld.lld ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections,--as-needed,-Bstatic'
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
-          "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson)"
+          "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson)${lib.optionalString early " -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"}"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
           "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l-?pthread//g') -lutil${lib.optionalString early " ${compilerBuiltins}/lib/libclang_rt.builtins.a"} -Wl,-Bdynamic -l${threads}"
         )
