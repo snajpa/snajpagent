@@ -12,6 +12,8 @@ void snag_office_program(const char *);
 char *snag_office_runtime(const char *program,const char *root);
 /* Owned percent-encoded file URL from an absolute POSIX, drive or UNC path. */
 char *snag_office_file_url(const char *path);
+/* Create a fresh private profile with macro/link settings before import. */
+int snag_office_profile(const char *,char *,size_t);
 int snag_office_worker(int, char **);
 int snag_office_export(struct snag_session *, const char *, const char *, unsigned int, unsigned int,
                        const struct snag_sheet_range *, int (*)(void *, unsigned int), void *, snag_wake_fd,

@@ -2676,7 +2676,11 @@ Only selected content is inspected.
 Office import runs in a bounded child of the same linked executable, with a
 fresh private profile and no inherited API credentials. The worker rejects
 scripts, macros, encrypted packages, external resource relationships, XML
-entities and embedded OLE, then disables macro execution for import. Linux
+entities and embedded OLE. Before import, the private profile disables macros,
+empties trusted locations, blocks links from untrusted documents and sets
+Writer/Calc link updates to Never. The load call also disables macro execution.
+These importer settings complement package checks; they do not prove every
+possible external-resource access is blocked. Linux
 network and process-execution syscalls are denied; available Landlock filesystem
 restrictions are applied and their availability is reported in the result.
 On other targets the result reports unavailable OS filesystem/network/exec

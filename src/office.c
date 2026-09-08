@@ -61,6 +61,35 @@ char *snag_office_file_url(const char *path)
 failed: snag_buf_free(&out); return NULL;
 }
 
+int snag_office_profile(const char *path,char *error,size_t size)
+{
+    static const char settings[]=
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<oor:items xmlns:oor=\"http://openoffice.org/2001/registry\">"
+        "<item oor:path=\"/org.openoffice.Office.Common/Security/Scripting\">"
+        "<prop oor:name=\"MacroSecurityLevel\" oor:op=\"fuse\"><value>3</value></prop>"
+        "<prop oor:name=\"DisableMacrosExecution\" oor:op=\"fuse\"><value>true</value></prop>"
+        "<prop oor:name=\"SecureURL\" oor:op=\"fuse\"><value/></prop>"
+        "<prop oor:name=\"BlockUntrustedRefererLinks\" oor:op=\"fuse\"><value>true</value></prop>"
+        "</item><item oor:path=\"/org.openoffice.Office.Writer/Content/Update\">"
+        "<prop oor:name=\"Link\" oor:op=\"fuse\"><value>2</value></prop>"
+        "</item><item oor:path=\"/org.openoffice.Office.Calc/Content/Update\">"
+        "<prop oor:name=\"Link\" oor:op=\"fuse\"><value>1</value></prop>"
+        "</item></oor:items>";
+    int root=-1,user=-1,fd=-1,rc=-1;
+    if(snag_mkdir_private(path)<0 || (root=snag_open_read(path,true))<0 ||
+        snag_mkdir_private_at(root,"user")<0 || (user=snag_open_read_at(root,"user",true))<0 ||
+        (fd=snag_create_private_at(user,"registrymodifications.xcu",true))<0 ||
+        snag_write_full(fd,settings,sizeof(settings)-1u)<0)goto out;
+    rc=0;
+out:
+    if(rc)snag_errorf(error,size,"Cannot prepare private Office profile: %s",strerror(errno));
+    if(fd>=0)close(fd);
+    if(user>=0)close(user);
+    if(root>=0)close(root);
+    return rc;
+}
+
 #if SNAJPAGENT_OFFICE
 #define LOK_USE_UNSTABLE_API
 #include <LibreOfficeKit/LibreOfficeKit.h>
@@ -184,7 +213,8 @@ snag_office_worker(int argc, char **argv)
     if (!dir || snag_office_worker_limits(dir,error,sizeof(error))<0) goto done;
     char *profile = snag_path_join(dir,"profile");
     char *output = snag_path_join(dir,"pages.pdf");
-    source_url = snag_office_file_url(argv[2]); profile_url = profile ? snag_office_file_url(profile) : NULL;
+    source_url = snag_office_file_url(argv[2]);
+    profile_url = profile && !snag_office_profile(profile,error,sizeof(error)) ? snag_office_file_url(profile) : NULL;
     output_url = output ? snag_office_file_url(output) : NULL;
     free(profile); free(output);
     if (!source_url || !profile_url || !output_url) goto done;
@@ -258,7 +288,7 @@ snag_office_worker(int argc, char **argv)
         "LibreOffice: %s; document type %d, parts %d. "
         "Layout/fonts and computed values may differ from the originating application. "
         "Macros, scripts, embedded OLE and external resource relationships rejected; "
-        "macro execution disabled. %s. "
+        "macro execution and Writer/Calc link updates disabled; untrusted links blocked. %s. "
         "Other pages, slides, sheets, cells and speaker notes uninspected.",
         selected,type,parts,
         confinement_note);

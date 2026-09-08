@@ -2116,6 +2116,22 @@ static void test_office_limits(void)
 #if SNAJPAGENT_OFFICE && !defined(_WIN32)
     char *root=snag_path_join(getenv("TMPDIR"),"snag-office-limits-XXXXXX"),error[256];
     assert(root && mkdtemp(root));
+    char *profile=snag_path_join(root,"profile");
+    assert(profile && snag_office_profile(profile,error,sizeof(error))==0);
+    /* Reuse must not overwrite configuration in an existing profile. */
+    assert(snag_office_profile(profile,error,sizeof(error))<0);
+    char *user=snag_path_join(profile,"user"),*settings=snag_path_join(user,"registrymodifications.xcu");
+    int fd=snag_open_read(settings,false);assert(fd>=0);
+    struct snag_file_privacy privacy;assert(snag_fd_privacy(fd,&privacy)==0 && privacy.private_access);
+    char xml[2048];ssize_t n=read(fd,xml,sizeof(xml)-1u);assert(n>0);xml[n]=0;close(fd);
+    assert(strstr(xml,"MacroSecurityLevel\" oor:op=\"fuse\"><value>3</value>"));
+    assert(strstr(xml,"DisableMacrosExecution\" oor:op=\"fuse\"><value>true</value>"));
+    assert(strstr(xml,"SecureURL\" oor:op=\"fuse\"><value/>"));
+    assert(strstr(xml,"BlockUntrustedRefererLinks\" oor:op=\"fuse\"><value>true</value>"));
+    assert(strstr(xml,"Writer/Content/Update\"><prop oor:name=\"Link\" oor:op=\"fuse\"><value>2</value>"));
+    assert(strstr(xml,"Calc/Content/Update\"><prop oor:name=\"Link\" oor:op=\"fuse\"><value>1</value>"));
+    assert(unlink(settings)==0 && rmdir(user)==0 && rmdir(profile)==0);
+    free(settings);free(user);free(profile);
     for(unsigned int private_dir=0;private_dir<2u;++private_dir) {
         assert(chmod(root,private_dir?0700:0777)==0);
         pid_t child=fork();assert(child>=0);

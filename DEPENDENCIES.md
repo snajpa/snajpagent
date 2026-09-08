@@ -46,6 +46,12 @@ filesystem quota. Portable dependency/runtime closure remains unfinished.
 This is not a proof
 that all parser vulnerabilities are confined. Macro execution is disabled by
 the load call and active/external package features are rejected before loading.
+A fresh `profile/user/registrymodifications.xcu` also disables macros, clears
+trusted locations, blocks untrusted-referer links and sets Writer/Calc link
+updates to Never (their configuration values differ). The pinned runtime's
+load call leaves UpdateDocMode to configuration, so the profile is prepared
+before LibreOfficeKit initialization. These settings complement package checks
+without establishing a cross-platform parser sandbox.
 The worker exits without invoking LibreOffice global teardown after synchronous
 export; the native runtime crashed in teardown in a generated-file probe.
 Sources and selected PDF/image derivatives stay in the existing asset store.
