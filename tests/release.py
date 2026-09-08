@@ -255,6 +255,30 @@ int main(void)
     subprocess.run([str(tmp / "locale")], check=True)
 print("PASS: Android locale initialization needs no API26 langinfo symbol")
 
+# The system shell is shared by command defaults and EDITOR on Android.
+assert 'execl(SNAG_SYSTEM_SHELL, "sh", "-c",' in platform
+shell_start = platform.index("#if defined(__ANDROID__)\n#define SNAG_SYSTEM_SHELL")
+shell_end = platform.index("\nint\nsnag_hostname", shell_start)
+with tempfile.TemporaryDirectory(prefix="android-shell-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    source = tmp / "shell.c"
+    source.write_text("#include <assert.h>\n#include <stdlib.h>\n#include <string.h>\n" +
+                      platform[shell_start:shell_end] + """
+int main(void)
+{
+    char *shell = snag_default_shell();
+    assert(shell && !strcmp(shell, EXPECTED_SHELL));
+    free(shell);
+    return 0;
+}
+""")
+    for target, expected in (([], "/bin/sh"), (["-D__ANDROID__"], "/system/bin/sh")):
+        subprocess.run(["cc", "-std=c11", "-D_POSIX_C_SOURCE=200809L", "-Werror",
+                        *target, f'-DEXPECTED_SHELL="{expected}"', str(source),
+                        "-o", str(tmp / "shell")], check=True)
+        subprocess.run([str(tmp / "shell")], check=True)
+print("PASS: Android command and editor shell use the native system path")
+
 # Feature-selection macros follow the requested target, including cross-builds.
 for target in ("Linux", "Darwin", "FreeBSD", "OpenBSD", "NetBSD", "Windows_NT"):
     for extra in ([], ["CPPFLAGS=-D_POSIX_C_SOURCE=200809L"]):

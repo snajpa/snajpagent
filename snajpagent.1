@@ -1554,7 +1554,9 @@ Only presentation is delayed; tool execution and result delivery are unchanged.
 Absolute executable used by
 .BR exec_command .
 Default on POSIX:
-.BR /bin/sh .
+.BR /bin/sh ;
+Android uses
+.BR /system/bin/sh .
 Experimental native Windows builds use the system cmd.exe path.  Commands
 must use the configured shell's syntax; changing shells does not translate them.
 The target must resolve to an executable regular file, but its configured

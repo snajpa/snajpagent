@@ -2247,10 +2247,16 @@ snag_environment_entries(void)
     return entries;
 }
 
+#if defined(__ANDROID__)
+#define SNAG_SYSTEM_SHELL "/system/bin/sh"
+#else
+#define SNAG_SYSTEM_SHELL "/bin/sh"
+#endif
+
 char *
 snag_default_shell(void)
 {
-    return strdup("/bin/sh");
+    return strdup(SNAG_SYSTEM_SHELL);
 }
 
 int
@@ -2278,7 +2284,7 @@ snag_editor_run(const char *path, bool *success)
         sigset_t signals;
         sigemptyset(&signals);
         (void)sigprocmask(SIG_SETMASK, &signals, NULL);
-        execl("/bin/sh", "sh", "-c", "exec $EDITOR \"$1\"", "snajpagent-editor", path, (char *)NULL);
+        execl(SNAG_SYSTEM_SHELL, "sh", "-c", "exec $EDITOR \"$1\"", "snajpagent-editor", path, (char *)NULL);
         _exit(127);
     }
     if (child < 0)
