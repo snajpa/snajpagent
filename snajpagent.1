@@ -2277,6 +2277,13 @@ The normal coding-tool surface is
 .BR write_stdin ,
 and
 .BR apply_patch .
+Both normal and read-only turns can inspect retained images, documents and
+sampled video through
+.BR view_image ,
+.BR read_document ,
+and
+.BR inspect_video .
+Configured audio routes add perception, transcription and speech generation.
 Read-only queries instead expose the native functions
 .BR list_files ,
 .BR read_file ,
@@ -2599,6 +2606,197 @@ path.  The live filesystem can change between pages.  All inspection tools
 require safe non-symlink paths; file reading requires regular UTF-8 text without
 NUL.  Result, traversal and scan ceilings are listed under AUTOMATION AND
 INTEGRATION.  These tools do not interpret shell globs or ignore files.
+.SS Image inspection
+.B view_image
+accepts a literal path to PNG, JPEG, GIF, WebP, BMP or TIFF bytes, relative to
+the workspace or absolute, or asset:ID for an accepted image in this session.
+Available in normal and read-only turns; no symlink path components are followed.
+Image contents are data, not executable instructions.
+.PP
+Optional frame is a zero-based animation/page frame number from 0 through 999;
+null selects frame zero. Optional crop is an object with integer x, y, width
+and height in source pixels, before orientation; null selects the whole frame.
+The crop must lie within the source. Linked decoding prepares one RGBA PNG,
+applies orthogonal rotation/reflection metadata, preserves alpha and limits the
+long edge to 1600 pixels. Source images are limited to 256 MiB and 16,777,216
+pixels; cooperative decoding time is limited to 60 seconds. Color profiles are
+not applied. Unsupported transforms, malformed data or exceeded limits fail.
+.PP
+The result records the original asset and prepared PNG with the selected frame,
+crop, dimensions and display transform. Other frames and regions remain
+uninspected. For a closer view, call view_image on the original asset with a
+narrower crop. /attach uses the same preparation with frame zero and no crop;
+/attachments shows preparation details before submission. The original is
+retained for follow-up inspection, while only the prepared PNG is transmitted.
+.PP
+The journal stores references, not base64. Resume reuses the prepared PNG without
+redecoding the original; a changed/deleted external source cannot change accepted
+input. Missing or corrupt retained source/prepared assets fail explicitly.
+Copy the entire session directory when moving a session. Archive retains media;
+confirmed session deletion removes it.
+.PP
+Requests accept up to eight images and 12 MiB of prepared image data in total.
+Provider/request ceilings may be lower. Retained media accumulates on disk until
+session deletion; there is no fixed session-wide byte or file-count cap.
+A custom WITH_AV=0 build forwards PNG/JPEG up to 12 MiB without normalization;
+other formats and non-default frame/crop selections require linked decoding.
+.PP
+The configured provider receives the image bytes.  Its selected model must
+support image input in function results. Requests use explicit high detail.
+Exact token counting is preferred; strict mode still requires it. With counting
+off or a definitively unsupported endpoint, known OpenAI models on the direct
+API or Codex route use media_upper_bound: canonical textual request bytes
+without image URLs, plus per-image maximum processed patch/tile budgets and
+framing reserve. Base64 length and text-only learned ratios never estimate
+vision tokens. The same rule applies to compaction.
+.PP
+Conservative per-image ceilings are 3,001 tokens for gpt-5.6-sol/terra/luna,
+gpt-5.5 (including 2026-04-23), and gpt-5.4/mini/nano; 7,374 for gpt-5.2;
+9,955 for gpt-4.1-mini (including 2025-04-14); 2,311 for gpt-5.1;
+2,806 for gpt-4.1 and gpt-4o; and 93,506 for gpt-4o-mini.
+These are deliberately maximum-size bounds, not exact counts or billing quotes.
+Other names, specialized variants, custom base URLs and proxy routes require
+exact counting. An unbudgetable image request fails without dropping images
+or disabling text-only requests.
+.PP
+Protocol display omits media-bearing request bodies rather than printing data
+URLs.  No microphone capture, automatic upload, or remote image fetch is implied.
+.SS Document and sampled video inspection
+.B read_document
+accepts a local path or an accepted session reference of the form asset:ID.
+It supports PDF, UTF-8 text/Markdown, CSV and TSV, plus selected rendered
+Office pages from DOCX/ODT, PPTX/ODP and XLSX/ODS.  The first and last
+selectors are inclusive and 1-based; null selects the first page/record, or last
+matching first.  Select at most four PDF pages or 200 text records per call.
+PDF results contain extracted text followed by a rendered page, including scans
+with no extractable text.  CSV quoted multiline fields count as one record;
+TSV uses lines.  Text selections and individual records have a 256 KiB bound.
+Only selected content is inspected.
+.PP
+Office import runs in a bounded child of the same linked executable, with a
+fresh private profile and no inherited API credentials. The worker rejects
+scripts, macros, encrypted packages, external resource relationships, XML
+entities and embedded OLE, then disables macro execution for import. Linux
+network and process-execution syscalls are denied; available Landlock filesystem
+restrictions are applied and their availability is reported in the result.
+On other targets the result reports unavailable OS filesystem/network/exec
+confinement; package checks and worker resource limits still apply.
+This is not a general cross-platform parser sandbox. The worker has a 60-second
+CPU/elapsed limit, 2 GiB address-space limit (data-segment limit on macOS and
+targets without RLIMIT_AS), 32 MiB per-file/output limit,
+4,096 ZIP-entry limit, 16 MiB per XML entry and 256 MiB expanded-input limit.
+The resource limits and a fresh credential-free environment are also installed
+by the POSIX worker itself. Windows verifies the direct-argv child's 2 GiB job
+memory and 60-second user-CPU limits, installs a 60-second elapsed timer, locks
+the private directory and replaces its environment while retaining system
+directory variables. A direct internal invocation creates its own job when
+unassigned; an existing job lacking these limits causes an error.
+On Linux it exits if its parent disappears; other
+POSIX workers can survive the parent until their own elapsed limit expires.
+One private temporary
+profile/output directory is limited to 256 MiB for the current conversion.
+The existing conversion loop checks cumulative file sizes, 4,096 entries and
+32-directory depth at 50-millisecond checkpoints and before accepting output;
+crossing a bound terminates the operation.
+This polling bound can overshoot between checks. POSIX per-file limits apply
+at writes; Windows enforces output and scratch sizes at parent checkpoints.
+Ordinary completion removes the directory; session reopening removes
+crash residue after its worker releases ownership. A surviving worker's directory
+is preserved and another Office import must wait for it to exit. Session deletion
+includes this temporary directory and preserves a live worker's data on failure.
+.PP
+Selected Office pages become a retained PDF and are inspected as text plus
+page images. First/last select importer page numbers for DOCX/ODT, workbook
+print pages for XLSX/ODS, and source-order slide numbers for PPTX/ODP.
+Selected hidden slides are included and retain their original slide numbers;
+speaker notes are excluded. Results identify the numbering used. Page/slide
+selection must produce exactly the requested number of pages or it fails.
+Layout, substituted fonts and computed values may differ from the originating
+application. Other pages, slides and speaker notes remain uninspected. Select
+at most four pages per call. A failed/cancelled import publishes no partial result and removes
+its own temporary profile; retained originals remain available.
+.PP
+For XLSX and ODS, sheet_range selects a cell rectangle with integer members
+sheet, row, column, rows and columns. Sheet, row and column are 1-based; rows
+and columns are counts. Select up to 200 rows and 32 columns, within row
+1,048,576 and column 16,384. sheet_range and non-null first/last are mutually
+exclusive. With all selectors null, a workbook starts at sheet 1, A1:H20.
+.PP
+Sheet results include its name/count, absolute cell coordinates, JSON-quoted
+values, blank cells, merged ranges and covered-cell references, plus a rendering
+of that same selected rectangle. Newlines inside values are escaped as
+\[rs]u000a. Output text is bounded to 256 KiB; the image fits within 1600 pixels
+on its long edge. A selection beginning inside or cutting a merged cell fails
+when its coordinates cannot be matched; select the whole merged range.
+The importer's computed values may differ from saved Excel values. Hidden cells
+may appear in textual selection but not the rendering; formulas, macros and
+speaker notes are not executable instructions. Other sheets/cells remain
+uninspected. Request a new range or explicit print pages for layout elsewhere.
+.PP
+.B view_video
+accepts MP4/MOV and Matroska/WebM paths or asset:ID, with integer start_s, end_s
+and frames selectors.  Null defaults select 0 through 30 seconds and eight
+samples.  Intervals must be at most 30 seconds; frames must be 1 through 8.
+Output labels the selected coverage, seek positions and decoded source frame
+PTS. Linked FFmpeg libraries scale frames to fit 1600 by 1600, normalize pixel
+aspect ratio, and apply orthogonal rotations/reflections with labelled transforms.
+Other display transforms fail explicitly. With multiple samples, the interval
+includes the first decodable frame and the last frame before its exclusive end.  Samples can miss intervening
+events; this is not continuous video perception. When an audio stream and a
+configured transcription route exist, the same interval is transcribed once
+using the retained source, with separate API billing. Missing, failed or
+interrupted transcription is explicitly labelled as uninspected audio.
+Acoustic questions can use listen_audio on the same source and interval;
+video inspection does not automatically pay for both audio operations.
+.PP
+.B listen_audio
+accepts path, question, start_s and end_s. A path may name a supported audio or
+video file, or asset:ID from a retained result. question contains 1 through
+16384 UTF-8 bytes. The configured audio model receives the extracted sound
+and question; its attributed answer is returned as derived tool data.
+.PP
+.B transcribe_audio
+accepts path, start_s and end_s and returns speech text from the configured
+transcription endpoint. Both input tools accept integer seconds: a null start
+selects zero and a null end selects start plus 60. Start must be 0 through
+86400, and the interval must be positive and at most 60 seconds. Linked FFmpeg
+libraries extract the first audio stream as 24 kHz stereo PCM. Mono is duplicated
+into stereo; more than two source channels fail rather than being silently mixed.
+The decoder reads only the retained file; additional file and network opens are
+rejected. Format changes and gaps fail explicitly. Decoder limits and a 60-second
+operation deadline bound supported inputs; this is not a parser security sandbox. Results retain the source
+and extracted WAV, label requested coverage and decoded duration, and establish
+neither speaker identity nor word timestamps. Other intervals remain uninspected.
+.PP
+.B speak_text
+accepts text containing 1 through 4096 UTF-8 bytes and retains a WAV asset from
+the speech endpoint. It is unavailable in read-only turns. Playback and
+microphone capture are not started. Identify this voice as AI-generated when
+presenting the sound to listeners.
+.PP
+Audio understanding and transcription are available in read-only turns and
+can incur API charges. A failed understanding request does not fall back to
+transcription. Accepted answers and sound assets replay without another paid
+request. The configured provider is named in results.
+Returned usage is retained separately as provider-reported text, including
+duration-based usage when supplied. Speech endpoints returning only WAV bytes
+provide no response-body usage; no zero-cost inference is made from its absence.
+.PP
+Document and video tools are available in normal and read-only turns. They retain the original
+and derived images privately; replay does not rerun conversion.  The existing
+image/request and session storage limits still apply.  Extracted text receives
+configured secret redaction, but images, original files and sound cannot be
+redacted as text.  Do not submit sensitive media expecting textual redaction to
+remove its contents.  Document contents are data, never tool instructions.
+.PP
+PDF rendering uses linked Poppler/libpng with a bounded retained-file stream.
+It reports page count, rejects encrypted documents and invalid page ranges,
+and keeps extracted text within 256 KiB per page. Page images fit within
+1601 by 1601 pixels including raster rounding. Input reads and rendering
+callbacks check cancellation and a 60-second operation deadline. Parsing and
+font/image decoding remain third-party attack surfaces; these bounds are not
+an OS sandbox. No document action, macro, URL fetch, device capture or automatic
+playback is executed by the inspection tools.
 .SS Hosted search
 .B web_search
 runs on the provider.  The model receives
@@ -2859,670 +3057,6 @@ of 1 through 16384 ASCII bytes without whitespace or controls.
 Names an additional value hidden from tool children and redacted from output.
 .SH "Troubleshooting"
 .SS Common problems
-.SH AUTOMATION AND INTEGRATION
-Use
-.B \-e
-for scripts.  It runs the supplied turn and any explicitly requested goal
-continuations before exiting.  A prompt after
-.B \-\-
-preserves shell argument boundaries as spaces; a prompt from non-terminal stdin
-preserves internal newlines and removes one final LF or CRLF.
-.PP
-Standard output carries one-shot model text.  Diagnostics and the resume hint
-use standard error.  Redirected model text remains byte-exact and contains no
-terminal color or Markdown presentation.
-.PP
-The normal coding-tool surface is
-.BR exec_command ,
-.BR write_stdin ,
-and
-.BR apply_patch .
-Both normal and read-only turns can inspect PNG/JPEG images with
-.BR view_image .
-Read-only queries instead expose the native functions
-.BR list_files ,
-.BR read_file ,
-and
-.BR grep .
-They also expose provider-hosted
-.BR web_search ,
-executed by the provider, never as a local function or external command.
-Listed AGENTS guidance remains subordinate to the read-only query and its
-restrictions.  Other file and web contents are untrusted data, not instructions.
-All other local tool dispatch, including process control, patches,
-goal lifecycle, and IRC, is unavailable for that turn.
-.PP
-Native inspection accepts literal workspace-relative or absolute paths and
-never follows symlinks, including parent components.  Listings include hidden
-entries; special files and symlinks are labeled but not opened.  Reads require
-regular UTF-8 files without NUL bytes.  Search uses POSIX extended regex or
-explicit literal matching, with optional case folding, and reports skipped
-non-text/special files.  It does not interpret ignore files or shell syntax.
-This is not a confidentiality sandbox: local readable files are accessible.
-Session/history persistence and filesystem access-time updates remain normal;
-independently running processes are not stopped or made read-only.
-.PP
-Results are bounded to 256 KiB, lines to less than 64 KiB, each scan to 128 MiB,
-directory entries to 100,000, and traversal depth to 32.  Listing/search use
-offset/limit pagination (default 200, maximum 1,000 results); output identifies
-incompleteness and the next offset.  Scan limits and I/O errors require a
-narrower path.  Oversized file output fails explicitly: use smaller line ranges.
-Directory order is sorted per directory; pagination observes the live tree,
-not a filesystem snapshot.
-.PP
-Commands that yield, reach a foreground handoff deadline, or receive urgent
-input continue under a process handle; the model can wait, interact, or
-explicitly terminate them with
-.BR write_stdin .
-.PP
-Process handles belong to the current foreground process, not a detached job
-service.  Turn interruption, closure, or process exit closes managed commands;
-resume does not revive an operating-system process.
-.PP
-Every
-.B exec_command
-and
-.B write_stdin
-call selects a positive
-.B max_output_tokens
-context bound or
-.B null
-for the configured
-.BR "[tool] max_output_tokens" " ceiling (default: 6000)."
-Larger requested bounds are capped at that ceiling; smaller bounds are honored.
-The bound is persisted with the result and conservatively enforced as at most
-one token per retained UTF-8 byte.  Truncated context retains bounded
-provenance; complete redacted output remains in journal chunks.  Polls return
-only newly collected output, with exact stream-range references.  Multiple
-independent command calls may overlap; emission order does not establish a
-dependency.  A batch shares the smallest positive yield interval.  Steering
-hands back started commands and skips unstarted calls; it does not kill them.
-Invalid or repeated same-handle interactions are not run.  All handles must
-be settled before a final answer or goal completion.  Existing commands keep
-their tool catalog; unrelated work does not require an immediate poll.
-Hosted web search is a provider tool.  When the active provider URL has the
-exact hostname
-.BR openrouter.ai ,
-snajpagent automatically uses
-.BR openrouter:web_search ;
-other providers retain
-.BR web_search .
-Hostname matching is case-insensitive and accepts an optional terminal DNS
-dot and port, but not userinfo, subdomains, or lookalike hosts.  The provider
-section name and model name do not control detection.  Use the usual
-.B https://openrouter.ai/api/v1
-base URL, model, and API credentials; no extra search setting, web plugin,
-.B :online
-suffix, or separate search credential is required.  This applies equally to
-normal and read-only turns.  OpenRouter chooses the search engine by default;
-search incurs provider charges in addition to model usage.
-.PP
-Networked mode adds
-.BR irc_send ,
-.BR irc_state ,
-and privilege-checked
-.BR irc_topic .
-Sending and topic changes require a nullable string
-.B destination
-argument: a number from
-.BR irc_state ,
-.B all
-for explicit broadcast, or
-.B null
-only for a sole destination.  Model routing is independent of the operator's
-selection.  Results distinguish queue acceptance from failures, not remote receipt.
-.PP
-Explicit goal requests expose
-.B create_goal
-when no unfinished goal exists.  An active goal exposes
-.B update_goal
-for rewriting, completion, or blocking.  A paused or blocked goal exposes
-neither.  Wording locks prevent model rewording, not completion or blocking.
-.PP
-IRC is the network integration.  The event log is durable internal state, not
-a stable external API while snajpagent remains pre-1.0.
-.SH TOOL REFERENCE
-These are model-callable tools, not slash commands to type into the composer.
-The advertised functions depend on turn mode, goal state and networking.
-Arguments use strict JSON objects: all declared fields are present, with
-.B null
-where a nullable field should use its default.  Unknown fields are rejected.
-Runtime validation and tool results remain authoritative even if a provider
-accepts an invalid declaration.  Pre-1.0 tool and event formats are not a
-stable third-party automation API.
-.SS exec_command
-Run one command using the configured shell and explicit absolute
-.BR workdir .
-.B command
-is UTF-8 text up to 256 KiB.  A normal POSIX build runs the shell with
-.B -c
-and does not implicitly use a login shell.  On experimental native Windows,
-the default system cmd.exe receives its native command syntax; a configured
-POSIX shell receives
-.BR -c .
-.PP
-.B stdin
-is null to leave input available for later interaction, or UTF-8 text up to
-1 MiB to send and then close input.  An empty string sends immediate EOF.
-.B pty
-is true for a pseudo-terminal; false or null uses ordinary pipes.  PTY output
-is a terminal stream rather than separate stdout/stderr, and terminal line
-editing/echo rules may affect interactive input.
-.PP
-.B yield_ms
-is 0 through 600000, or null for the configured default.  It bounds the
-foreground wait before returning a handle; it is not a process lifetime.
-.B timeout_ms
-is a positive foreground handoff deadline, bounded by the configured maximum,
-or null for the configured default.  The built-in default has no deadline.
-A deadline yields control without terminating the child.
-.PP
-.B max_output_tokens
-is a positive model-context bound or null for the configured ceiling.
-Returned status distinguishes running, successful/failed exit, and termination
-by signal.  A running result means the invocation returned, not that the
-command completed.  Keep its handle and use
-.BR write_stdin ;
-do not start the same command again merely to wait for it.
-.SS write_stdin
-.B handle
-identifies a currently managed command.
-.B data
-is UTF-8 input up to 1 MiB; use an empty string to wait without writing.
-.B eof
-true closes input after the accepted data; false or null leaves it open.
-.B terminate
-true requests termination and a final result, and requires empty data with
-eof false or null.  Yield and output bounds follow
-.BR exec_command .
-.PP
-Pending input and output are bounded.  Accepted input may still be waiting to
-reach the process; output references distinguish accepted, written, pending
-and open-input state.  Do not resend accepted data or send to a closed input.
-Each handle can participate at most once in a model response's call batch.
-The runtime rejects invalid, stale or concurrently occupied handles rather
-than guessing which process was intended.
-.PP
-Unsettled commands count against
-.BR max_parallel_commands ,
-including commands that have exited but whose final result is not collected.
-The model may perform unrelated work while a command runs, but must settle
-all handles before its final answer or goal completion.  Shutdown cleans up
-managed commands and descendants; saved session history cannot revive them.
-.SS apply_patch
-.B workdir
-must be the exact session workspace.
-.B patch
-contains one bounded patch with this structure:
-.PP
-.nf
-*** Begin Patch
-*** Update File: example.c
-@@
--old line
-+new line
-*** End Patch
-.fi
-.PP
-Also supported are
-.B *** Add File:
-with added lines prefixed by plus, and
-.B *** Delete File:
-without a body.  File paths are relative to the workspace, not absolute;
-parent traversal, duplicate targets and symlink traversal are rejected.
-Update hunks use matching context rather than trusting a guessed line number.
-There is no move/rename operation in this patch grammar.
-.PP
-The tool validates targets and computes replacements before installation,
-checks for concurrent changes, and reports rejection or I/O failure explicitly.
-Do not assume a multi-file transaction survives every crash atomically.
-Inspect the result and current files after failure before retrying.
-Limits are 2 MiB patch text, 1 MiB per patch line, 256 file operations,
-2048 hunks in total, 16 MiB per regular file and 48 MiB aggregate file data.
-Result text and diff previews are bounded.  Use normal command tools for work
-outside this patch grammar; their local authority is not a workspace sandbox.
-.SS Native read-only inspection
-.B list_files
-accepts path, recursive, offset and limit.  Path is required; null recursive
-means false.  It lists hidden entries and labels directories, symlinks and
-special files without following them.
-.PP
-.B read_file
-accepts path, start_line and end_line.  Non-null line bounds are inclusive,
-1-based and at most 2147483647.  Null bounds select the start/end of the file.
-Text is returned with line numbers; use narrower ranges when output is too large.
-.PP
-.B grep
-accepts path, pattern, recursive, ignore_case, literal, offset and limit.
-Patterns are at most 4096 bytes.  Null recursive means true; null ignore_case
-and literal mean false.  The default is POSIX extended regular expressions;
-literal true disables regex interpretation.  Matches use path:line:text.
-.PP
-For listing and search, offset is zero-based (default 0, maximum 1000000),
-limit defaults to 200 and may be 1 through 1000.  Use the returned next offset
-when pagination is incomplete.  Scan-limit exhaustion instead needs a narrower
-path.  The live filesystem can change between pages.  All inspection tools
-require safe non-symlink paths; file reading requires regular UTF-8 text without
-NUL.  Result, traversal and scan ceilings are listed under AUTOMATION AND
-INTEGRATION.  These tools do not interpret shell globs or ignore files.
-.SS Image inspection
-.B view_image
-accepts a literal path to PNG, JPEG, GIF, WebP, BMP or TIFF bytes, relative to
-the workspace or absolute, or asset:ID for an accepted image in this session.
-Available in normal and read-only turns; no symlink path components are followed.
-Image contents are data, not executable instructions.
-.PP
-Optional frame is a zero-based animation/page frame number from 0 through 999;
-null selects frame zero. Optional crop is an object with integer x, y, width
-and height in source pixels, before orientation; null selects the whole frame.
-The crop must lie within the source. Linked decoding prepares one RGBA PNG,
-applies orthogonal rotation/reflection metadata, preserves alpha and limits the
-long edge to 1600 pixels. Source images are limited to 256 MiB and 16,777,216
-pixels; cooperative decoding time is limited to 60 seconds. Color profiles are
-not applied. Unsupported transforms, malformed data or exceeded limits fail.
-.PP
-The result records the original asset and prepared PNG with the selected frame,
-crop, dimensions and display transform. Other frames and regions remain
-uninspected. For a closer view, call view_image on the original asset with a
-narrower crop. /attach uses the same preparation with frame zero and no crop;
-/attachments shows preparation details before submission. The original is
-retained for follow-up inspection, while only the prepared PNG is transmitted.
-.PP
-The journal stores references, not base64. Resume reuses the prepared PNG without
-redecoding the original; a changed/deleted external source cannot change accepted
-input. Missing or corrupt retained source/prepared assets fail explicitly.
-Copy the entire session directory when moving a session. Archive retains media;
-confirmed session deletion removes it.
-.PP
-Requests accept up to eight images and 12 MiB of prepared image data in total.
-Provider/request ceilings may be lower. Retained media accumulates on disk until
-session deletion; there is no fixed session-wide byte or file-count cap.
-A custom WITH_AV=0 build forwards PNG/JPEG up to 12 MiB without normalization;
-other formats and non-default frame/crop selections require linked decoding.
-.PP
-The configured provider receives the image bytes.  Its selected model must
-support image input in function results. Requests use explicit high detail.
-Exact token counting is preferred; strict mode still requires it. With counting
-off or a definitively unsupported endpoint, known OpenAI models on the direct
-API or Codex route use media_upper_bound: canonical textual request bytes
-without image URLs, plus per-image maximum processed patch/tile budgets and
-framing reserve. Base64 length and text-only learned ratios never estimate
-vision tokens. The same rule applies to compaction.
-.PP
-Conservative per-image ceilings are 3,001 tokens for gpt-5.6-sol/terra/luna,
-gpt-5.5 (including 2026-04-23), and gpt-5.4/mini/nano; 7,374 for gpt-5.2;
-9,955 for gpt-4.1-mini (including 2025-04-14); 2,311 for gpt-5.1;
-2,806 for gpt-4.1 and gpt-4o; and 93,506 for gpt-4o-mini.
-These are deliberately maximum-size bounds, not exact counts or billing quotes.
-Other names, specialized variants, custom base URLs and proxy routes require
-exact counting. An unbudgetable image request fails without dropping images
-or disabling text-only requests.
-.PP
-Protocol display omits media-bearing request bodies rather than printing data
-URLs.  No microphone capture, automatic upload, or remote image fetch is implied.
-.SS Document and sampled video inspection (development checkpoint)
-.B read_document
-accepts a local path or an accepted session reference of the form asset:ID.
-It supports PDF, UTF-8 text/Markdown, CSV and TSV, plus selected rendered
-Office pages from DOCX/ODT, PPTX/ODP and XLSX/ODS.  The first and last
-selectors are inclusive and 1-based; null selects the first page/record, or last
-matching first.  Select at most four PDF pages or 200 text records per call.
-PDF results contain extracted text followed by a rendered page, including scans
-with no extractable text.  CSV quoted multiline fields count as one record;
-TSV uses lines.  Text selections and individual records have a 256 KiB bound.
-Only selected content is inspected.
-.PP
-Office import runs in a bounded child of the same linked executable, with a
-fresh private profile and no inherited API credentials. The worker rejects
-scripts, macros, encrypted packages, external resource relationships, XML
-entities and embedded OLE, then disables macro execution for import. Linux
-network and process-execution syscalls are denied; available Landlock filesystem
-restrictions are applied and their availability is reported in the result.
-On other targets the result reports unavailable OS filesystem/network/exec
-confinement; package checks and worker resource limits still apply.
-This is not a general cross-platform parser sandbox. The worker has a 60-second
-CPU/elapsed limit, 2 GiB address-space limit (data-segment limit on macOS and
-targets without RLIMIT_AS), 32 MiB per-file/output limit,
-4,096 ZIP-entry limit, 16 MiB per XML entry and 256 MiB expanded-input limit.
-The resource limits and a fresh credential-free environment are also installed
-by the POSIX worker itself. Windows verifies the direct-argv child's 2 GiB job
-memory and 60-second user-CPU limits, installs a 60-second elapsed timer, locks
-the private directory and replaces its environment while retaining system
-directory variables. A direct internal invocation creates its own job when
-unassigned; an existing job lacking these limits causes an error.
-On Linux it exits if its parent disappears; other
-POSIX workers can survive the parent until their own elapsed limit expires.
-One private temporary
-profile/output directory is limited to 256 MiB for the current conversion.
-The existing conversion loop checks cumulative file sizes, 4,096 entries and
-32-directory depth at 50-millisecond checkpoints and before accepting output;
-crossing a bound terminates the operation.
-This polling bound can overshoot between checks. POSIX per-file limits apply
-at writes; Windows enforces output and scratch sizes at parent checkpoints.
-Ordinary completion removes the directory; session reopening removes
-crash residue after its worker releases ownership. A surviving worker's directory
-is preserved and another Office import must wait for it to exit. Session deletion
-includes this temporary directory and preserves a live worker's data on failure.
-.PP
-Selected Office pages become a retained PDF and are inspected as text plus
-page images. First/last select importer page numbers for DOCX/ODT, workbook
-print pages for XLSX/ODS, and source-order slide numbers for PPTX/ODP.
-Selected hidden slides are included and retain their original slide numbers;
-speaker notes are excluded. Results identify the numbering used. Page/slide
-selection must produce exactly the requested number of pages or it fails.
-Layout, substituted fonts and computed values may differ from the originating
-application. Other pages, slides and speaker notes remain uninspected. Select
-at most four pages per call. A failed/cancelled import publishes no partial result and removes
-its own temporary profile; retained originals remain available.
-.PP
-For XLSX and ODS, sheet_range selects a cell rectangle with integer members
-sheet, row, column, rows and columns. Sheet, row and column are 1-based; rows
-and columns are counts. Select up to 200 rows and 32 columns, within row
-1,048,576 and column 16,384. sheet_range and non-null first/last are mutually
-exclusive. With all selectors null, a workbook starts at sheet 1, A1:H20.
-.PP
-Sheet results include its name/count, absolute cell coordinates, JSON-quoted
-values, blank cells, merged ranges and covered-cell references, plus a rendering
-of that same selected rectangle. Newlines inside values are escaped as
-\[rs]u000a. Output text is bounded to 256 KiB; the image fits within 1600 pixels
-on its long edge. A selection beginning inside or cutting a merged cell fails
-when its coordinates cannot be matched; select the whole merged range.
-The importer's computed values may differ from saved Excel values. Hidden cells
-may appear in textual selection but not the rendering; formulas, macros and
-speaker notes are not executable instructions. Other sheets/cells remain
-uninspected. Request a new range or explicit print pages for layout elsewhere.
-.PP
-.B view_video
-accepts MP4/MOV and Matroska/WebM paths or asset:ID, with integer start_s, end_s
-and frames selectors.  Null defaults select 0 through 30 seconds and eight
-samples.  Intervals must be at most 30 seconds; frames must be 1 through 8.
-Output labels the selected coverage, seek positions and decoded source frame
-PTS. Linked FFmpeg libraries scale frames to fit 1600 by 1600, normalize pixel
-aspect ratio, and apply orthogonal rotations/reflections with labelled transforms.
-Other display transforms fail explicitly. With multiple samples, the interval
-includes the first decodable frame and the last frame before its exclusive end.  Samples can miss intervening
-events; this is not continuous video perception. When an audio stream and a
-configured transcription route exist, the same interval is transcribed once
-using the retained source, with separate API billing. Missing, failed or
-interrupted transcription is explicitly labelled as uninspected audio.
-Acoustic questions can use listen_audio on the same source and interval;
-video inspection does not automatically pay for both audio operations.
-.PP
-.B listen_audio
-accepts path, question, start_s and end_s. A path may name a supported audio or
-video file, or asset:ID from a retained result. question contains 1 through
-16384 UTF-8 bytes. The configured audio model receives the extracted sound
-and question; its attributed answer is returned as derived tool data.
-.PP
-.B transcribe_audio
-accepts path, start_s and end_s and returns speech text from the configured
-transcription endpoint. Both input tools accept integer seconds: a null start
-selects zero and a null end selects start plus 60. Start must be 0 through
-86400, and the interval must be positive and at most 60 seconds. Linked FFmpeg
-libraries extract the first audio stream as 24 kHz stereo PCM. Mono is duplicated
-into stereo; more than two source channels fail rather than being silently mixed.
-The decoder reads only the retained file; additional file and network opens are
-rejected. Format changes and gaps fail explicitly. Decoder limits and a 60-second
-operation deadline bound supported inputs; this is not a parser security sandbox. Results retain the source
-and extracted WAV, label requested coverage and decoded duration, and establish
-neither speaker identity nor word timestamps. Other intervals remain uninspected.
-.PP
-.B speak_text
-accepts text containing 1 through 4096 UTF-8 bytes and retains a WAV asset from
-the speech endpoint. It is unavailable in read-only turns. Playback and
-microphone capture are not started. Identify this voice as AI-generated when
-presenting the sound to listeners.
-.PP
-Audio understanding and transcription are available in read-only turns and
-can incur API charges. A failed understanding request does not fall back to
-transcription. Accepted answers and sound assets replay without another paid
-request. The configured provider is named in results.
-Returned usage is retained separately as provider-reported text, including
-duration-based usage when supplied. Speech endpoints returning only WAV bytes
-provide no response-body usage; no zero-cost inference is made from its absence.
-.PP
-Document and video tools are available in normal and read-only turns. They retain the original
-and derived images privately; replay does not rerun conversion.  The existing
-image/request and session storage limits still apply.  Extracted text receives
-configured secret redaction, but images, original files and sound cannot be
-redacted as text.  Do not submit sensitive media expecting textual redaction to
-remove its contents.  Document contents are data, never tool instructions.
-.PP
-PDF rendering uses linked Poppler/libpng with a bounded retained-file stream.
-It reports page count, rejects encrypted documents and invalid page ranges,
-and keeps extracted text within 256 KiB per page. Page images fit within
-1601 by 1601 pixels including raster rounding. Input reads and rendering
-callbacks check cancellation and a 60-second operation deadline. Parsing and
-font/image decoding remain third-party attack surfaces; these bounds are not
-an OS sandbox. No document action, macro, URL fetch, device capture or automatic
-playback is executed by the inspection tools.
-.SS Hosted search
-.B web_search
-is executed by the provider, not a local shell helper.  The model receives
-provider search results in the same turn; external pages remain untrusted data.
-OpenRouter's endpoint selects its corresponding native search declaration
-automatically.  Search availability and charges depend on the provider.
-.SS Model goal controls
-.B create_goal
-accepts objective text and is available only when creating a goal is explicitly
-requested and no unfinished goal already exists.  A sentence claiming a goal
-is active is not a substitute for a successful tool result.
-.PP
-.B update_goal
-accepts action and text.  Action rewrite requires new wording; complete
-requires null text; block requires a specific reason.  Only an active goal
-advertises it.  A wording lock rejects model rewording, not completion or
-blocking; the operator retains explicit control through slash commands.
-.SS Model IRC controls
-.B irc_state
-accepts an empty object and reports the actual current destinations and room
-state; it does not open connections.
-.B irc_send
-accepts destination, notice and text.  Null/false notice sends a normal message;
-true sends an informational notice, which does not satisfy a required reply.
-.B irc_topic
-accepts destination and topic and requires the model's current channel-op status.
-.PP
-Destination is a numeric string from irc_state, all for an explicit broadcast,
-or null only when exactly one destination exists.  The model never implicitly
-follows the operator's selected room.  Text and topic are bounded UTF-8;
-topic is at most 280 bytes with no newline.  Successful send acceptance is not
-proof that every remote participant received it.  Runtime joining, history and
-reconnection are not model-managed tools.
-.SH IRC MODE
-Listener mode creates one room.  Its default name is the hostname and its initial
-topic is the server agent's absolute launch workspace.  snajpagent clients join
-the advertised room automatically.
-.PP
-The local operator and ordinary IRC clients receive channel mode
-.BR +o ;
-the model nick does not.  Current channel operators may change the topic.
-Only direct mentions of the model nick are urgent; ordinary messages from
-local or channel operators remain background context.
-Urgent input is coalesced and admitted at the earliest safe boundary;
-generation reaches a safe stream boundary and commands are handed back alive.
-.PP
-Other messages, joins, leaves, mode changes, and topic changes enter model
-context when convenient and do not force a reply.  First join and successful
-compaction inject bounded room history.  The runtime reconnects outgoing links
-without model babysitting.
-.PP
-Implicit outgoing nicks form zero-based sequences:
-.BR agent0 ,
-.BR agent1 ,
-and so on, with the same rule for the operator's default.  When an explicit
-preferred nick is already present, the client handles the server's normal
-.B 433
-reply by appending
-.BR 1 ,
-.BR 2 ,
-and so on until registration succeeds.  The accepted nick is retained across
-reconnects.
-.PP
-The terminal starts in the timestamped
-.B chat
-view.  Model text and tools belong to the
-.B rollout
-view regardless of verbosity.  Chat input goes to the selected room as the
-local operator.  Multiple destinations receive short source/prompt labels;
-a hosted room counts once regardless of how many clients joined it.
-Explicit numbered sends and broadcasts also work from rollout, but ordinary
-rollout input stays local:
-while idle it starts a model turn, and during active work it steers that turn at
-the next safe boundary.  It never emits an IRC message.  Incoming room traffic
-is not automatically bridged between servers.  Model response text remains local;
-.B irc_send
-is the only model-authored path to a room message or notice.  If a
-local-operator mention turn reaches a terminal response without a successful
-.B irc_send
-message, the model receives one reminder.  Notices do not satisfy that reply
-requirement.  Other room traffic never forces a reply.
-.PP
-The accepted per-server nick drives mentions, echo suppression, and model
-instructions.  Live IRC nick changes retain op status and produce room
-notifications.  Chat uses the selected destination's accepted operator nick.
-There is no local slash command for changing
-nicks; standard IRC clients can use
-.BR NICK .
-.PP
-Nicks are at most 30 bytes and local model/operator preferences must differ
-under IRC case folding.  Room names are at most 50 bytes excluding
-.BR # .
-The server implements registration, join/part, messages/notices, topic,
-names/who, nick and mode changes, liveness, and bounded history, not the entire
-IRC protocol.  snajpagent clients expect its advertised single-room behavior.
-.PP
-The built-in IRC subset has no TLS or authentication.  A non-loopback listener
-is suitable only for a trusted network or a separately secured tunnel.
-.SH PROVIDER FAILURES
-Transient transport, HTTP rate-limit/server, and structured Responses stream
-failures receive at most two retries of the same request, with bounded backoff
-and cancellation available during the wait.  Earlier turn/tool work is not
-replayed.  Additional live chat, steering or queued input prevents further
-retries, including during backoff.  Steering keeps its immediate handoff;
-background chat and queued turns retain their normal admission rules, without
-interrupting a healthy response.  When new input stops retrying a failed
-response, armed queued turns proceed automatically, without an extra
-.BR /next .
-View/status controls alone do not veto retries.
-Stream retries stop once output or tool activity has been observed;
-malformed or ambiguous partial records are not automatically replayed.
-.PP
-Policy, access, quota and unknown structured failures are not transient retries.
-For a pre-output
-.B cyber_policy
-rejection, the model instead receives up to three durable clarification
-instructions per turn.  The original task remains intact: the instruction asks
-for accurate restatement of ambiguous phrasing with purpose, actions, targets
-and authorization unchanged, and operator clarification where needed.  New input
-or observed output/activity prevents another automatic clarification.  A fourth
-rejection ends the turn.  There is no provider switch or concealed task scope.
-.PP
-Rollout shows one concise "provider clarification N/3" notice at every verbosity
-level.  Existing levels 4, 5 and 6 add event, redacted protocol and wire details.
-Error codes, not message wording, determine eligibility.  A failed stream never
-becomes a successful response merely because the connection closed.
-.SH SESSION DURABILITY
-Every accepted transition is appended and synced before it is treated as
-durable.  Resume reconstructs turns, tool state, queue, goals, provider/model
-selection, and admitted IRC state.
-.PP
-Normal exit prints a two-line resume hint for every resumable session.  It
-includes the exact session, dotdir, explicit configuration, presentation
-overrides, unused one-turn preferences, and effective IRC topology.  It never
-includes prompts or credential values.  The command includes the effective
-listener and outgoing list, or explicit
-.B --no-listen
-and
-.B --no-client
-for absent roles, so reused config defaults cannot resurrect removed endpoints.
-Temporary connection outages do not remove desired roles from the command.
-.PP
-On experimental native Windows, the resume header names a normal cmd.exe
-prompt with delayed expansion off.  Paste the printed command there, not into
-PowerShell or a batch file.  A scoped child interpreter preserves literal
-percent signs, exclamation marks, quotes and other argument characters without
-changing the caller's environment.  On POSIX, use a POSIX-compatible shell.
-.PP
-Resume preserves the saved goal state: active goals continue, while paused,
-blocked, completed and cancelled goals keep their recorded states.  No goal
-pause or resume transition is added merely by reopening the session.
-Resume automatically displays the saved goal and wording,
-including its status, revision, lock and blocker, even with history disabled.
-Paused and blocked goal wording remains in ordinary model context after resume
-and compaction; it need not be re-entered.  Inactive goals do not restart work.
-Queued turns are also paused; use
-.B /next
-to restart FIFO execution.  Interrupted active turns are recovered from their
-durable prefix.
-.PP
-History replay ends with a mode-style "history replayed" banner.  Replayed
-chat timestamps have no per-message "history" label; stored historical flags
-and model-input handling are unchanged.
-.PP
-SIGKILL, power loss, and fatal process corruption cannot guarantee cleanup or a
-printed resume command.  Already synced events remain available.
-.SH SIGNALS
-.TP
-.B SIGINT
-Interactive Ctrl-C follows the composer rules above.  Outside that handler it
-requests graceful shutdown.
-.TP
-.BR SIGHUP , " SIGTERM"
-Request graceful shutdown, terminal restoration, IRC closure, and a resume
-hint.  Exit status is 128 plus the signal number.
-.TP
-.B SIGTSTP
-Ctrl-Z restores the terminal before suspension and redraws after continuation.
-.TP
-.B SIGPIPE
-Ignored; write failures are handled as errors.
-.SH EXIT STATUS
-.TP
-.B 0
-Success or normal interactive exit.
-.TP
-.B 2
-Command-line, configuration, locale, credential, prompt, or selection error.
-.TP
-.B 3
-Durable state, local runtime, or IRC failure.
-.TP
-.B 4
-One-shot provider, protocol, context, or tool-cycle failure.
-.TP
-.B 6
-Terminal/output failure or one-shot interruption that cannot return to a prompt.
-.TP
-.B 128+N
-Graceful exit after signal
-.IR N .
-.SH EXAMPLES
-Start an interactive session in the current directory:
-.PP
-.nf
-snajpagent
-.fi
-.PP
-Execute a task from a script:
-.PP
-.nf
-printf '%s\en' 'run the tests and summarize failures' | snajpagent -e
-.fi
-.PP
-Resume the newest active session:
-.PP
-.nf
-snajpagent --resume --last
-.fi
-.PP
-Host a room and connect another agent:
-.PP
-.nf
-snajpagent -s localhost:6667 -n builder -o alice -r work
-snajpagent -c localhost:6667 -n reviewer -o bob
-.fi
-.SH TROUBLESHOOTING
 .TP
 .B The downloaded program will not start.
 Match both CPU architecture and OS/ABI to its download row. On Unix, check

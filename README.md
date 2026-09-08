@@ -15,26 +15,6 @@ rebuilding or updating an executable affects new launches, not an open session.
 
 ## 1. Work on a project
 
-## Multimodal development status
-
-This branch implements retained image attachments, frame/crop selection and
-normalized native image results,
-PDF/text/CSV inspection, timestamped video frame sampling, and file-audio
-understanding, transcription and speech generation through a configured API.
-Audio/video decoding links FFmpeg libraries; PDF rendering links Poppler and
-libpng. `/dictate` inserts a microphone transcript into the editable draft;
-`/play asset:ID` explicitly plays an accepted audio asset. Both use one linked
-miniaudio device owner. `/voice on` starts a configured realtime conversation
-with continuous capture, streamed reply audio and the existing coding queue;
-`/voice mute` pauses capture and `/voice off` stops voice. Office page import and
-spreadsheet range selection are available in the native development build.
-Realtime recovery and portable packaging remain in progress.
-Image budgeting uses exact counts or documented model-specific conservative bounds.
-See the manual for selectors, privacy, resource limits and checkpoint caveats.
-The required default release will include all modalities linked in; custom lean
-builds must not become a reduced official default. Nothing starts a microphone
-or camera automatically.
-
 After [installing and choosing a provider](#install-and-choose-a-provider),
 start in the project you want to change:
 
@@ -148,7 +128,8 @@ Resume continues in-progress work without a fresh prompt, including from scripts
 original command and an explicit unknown outcome; they do not trigger blind
 re-execution. Explicit cancellations and paused automatic work remain stopped.
 After accepted work or other retained session state, normal exit prints its
-resume command. Exiting an unused session creates no saved session. You can also list sessions or reopen the
+resume command. Preparing an attachment, `/dictate` and `/voice on` also retain
+the session. Exiting an unused session creates no saved session. You can also list sessions or reopen the
 latest one for this project directory:
 
 ```sh
@@ -162,6 +143,22 @@ retain their states. Armed queues continue after recovered work; paused queues
 need `/next` and take priority over automatic goal work. Resume shows retained public
 history and continues unfinished turns from saved input and tool results. Commands
 with uncertain outcomes are reported honestly rather than restarted automatically.
+
+### Attach files and use voice
+
+Use `/attach PATH` to stage an image, inspect the staged list with
+`/attachments`, then submit it with your prompt. Ask the agent to inspect
+PDF, Office or text documents, sample a video interval, or transcribe an audio
+file. Accepted originals and prepared results stay with the saved session.
+
+With an audio provider configured, `/dictate` places a microphone transcript
+in your editable draft. `/play asset:ID` plays a retained audio asset.
+`/voice on` starts a realtime conversation alongside the coding queue;
+`/voice mute` pauses microphone forwarding and `/voice off` stops voice.
+Capture starts only through an explicit local command. Use a headset for duplex
+voice; replies use a synthetic voice. The configured audio API receives speech
+and bills it separately. See the [manual](https://agent.snajpa.net/manual.html) for provider setup,
+selectors, data destinations and capture controls.
 
 ### Keep useful findings in files
 
