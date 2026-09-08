@@ -508,10 +508,8 @@ console_erase(HANDLE output, const CONSOLE_SCREEN_BUFFER_INFO *info,
         first = cursor;
     else if (mode == 1u)
         end = cursor + 1u;
-    else if (mode != 2u) {
-        errno = EINVAL;
-        return -1;
-    }
+    else if (mode != 2u)
+        return snag_errno(EINVAL);
     if (end <= first)
         return 0;
     COORD start = {(SHORT)(first % width), (SHORT)(first / width)};
@@ -536,10 +534,8 @@ console_csi(HANDLE output, struct snag_console_state *state)
             ++count;
         else if (c >= '0' && c <= '9' && args[count - 1u] <= 3276u)
             args[count - 1u] = args[count - 1u] * 10u + c - '0';
-        else {
-            errno = EINVAL;
-            return -1;
-        }
+        else
+            return snag_errno(EINVAL);
     }
     unsigned char command = state->sequence[end];
     if (private) {
@@ -635,15 +631,13 @@ console_legacy(struct snag_term_host *host, struct snag_console_state *state,
         if (state->sequence_len || c == '\033') {
             if (state->sequence_len == sizeof(state->sequence)) {
                 state->sequence_len = 0;
-                errno = E2BIG;
-                return -1;
+                return snag_errno(E2BIG);
             }
             state->sequence[state->sequence_len++] = c;
             ++at;
             if (state->sequence_len == 2u && c != '[') {
                 state->sequence_len = 0;
-                errno = EINVAL;
-                return -1;
+                return snag_errno(EINVAL);
             }
             if (state->sequence_len > 2u && c >= 0x40u && c <= 0x7eu) {
                 int rc = console_csi(output, state);
@@ -670,10 +664,8 @@ console_legacy(struct snag_term_host *host, struct snag_console_state *state,
             size_t n = snag_utf8_decode(text + at, len - at, &cp);
             int width = n ? snag_char_width(cp) : 1;
             int remaining = info.srWindow.Right - info.dwCursorPosition.X + 1;
-            if (width > info.srWindow.Right - info.srWindow.Left + 1) {
-                errno = EOVERFLOW;
-                return -1;
-            }
+            if (width > info.srWindow.Right - info.srWindow.Left + 1)
+                return snag_errno(EOVERFLOW);
             if ((state->pending_wrap && width != 0) || width > remaining) {
                 if (output_plain(host, fd, "\r\n", 2u, input, checkpoint, opaque) < 0)
                     return -1;
@@ -696,10 +688,8 @@ console_legacy(struct snag_term_host *host, struct snag_console_state *state,
                 cells += width;
                 span += n ? n : 1u;
             }
-            if (!span) {
-                errno = EIO;
-                return -1;
-            }
+            if (!span)
+                return snag_errno(EIO);
             if (output_plain(host, fd, text + at, span, input, checkpoint, opaque) < 0)
                 return -1;
             /* Classic WriteConsoleW can leave a stale cursor after a full row
@@ -876,15 +866,13 @@ snag_term_output_open(struct snag_term_host *host, int fd)
     if (result < 0) {
         int saved = errno;
         (void)CloseHandle(copy);
-        errno = saved;
-        return -1;
+        return snag_errno(saved);
     }
     DWORD mode;
     CONSOLE_SCREEN_BUFFER_INFO info;
     if (!GetConsoleMode(copy, &mode) || !GetConsoleScreenBufferInfo(copy, &info)) {
         (void)_close(result);
-        errno = EIO;
-        return -1;
+        return snag_errno(EIO);
     }
     bool legacy = !SetConsoleMode(copy, mode | ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT |
                                    ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN);
@@ -1325,8 +1313,7 @@ snag_shutdown_install(struct snag_shutdown *saved, void (*handler)(int), bool ha
         if (sigaction(saved->numbers[i], &action, &saved->saved[i]) < 0) {
             int error = errno;
             snag_shutdown_finish(saved);
-            errno = error;
-            return -1;
+            return snag_errno(error);
         }
         ++saved->count;
     }
@@ -1398,8 +1385,7 @@ snag_term_controls_install(struct snag_term_host *host,
     if (sigaction(SIGWINCH, &action, &host->sigwinch) < 0) {
         int error = errno;
         (void)sigaction(SIGINT, &host->sigint, NULL);
-        errno = error;
-        return -1;
+        return snag_errno(error);
     }
     return 0;
 }
@@ -1448,8 +1434,7 @@ snag_term_output_open(struct snag_term_host *host, int fd)
         int saved = copy < 0 ? errno : EIO;
         if (copy >= 0)
             (void)close(copy);
-        errno = saved;
-        return -1;
+        return snag_errno(saved);
     }
     return copy;
 }
@@ -1547,10 +1532,8 @@ mask_signals(int how, const sigset_t *set, sigset_t *saved)
 {
     int error = pthread_sigmask(how, set, saved);
 
-    if (error) {
-        errno = error;
-        return -1;
-    }
+    if (error)
+        return snag_errno(error);
     return 0;
 }
 

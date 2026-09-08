@@ -194,32 +194,22 @@ ssize_t
 snag_utf16_to_utf8(const wchar_t *text, size_t count, char *out, size_t capacity)
 {
     size_t used = 0;
-    if (!text && count) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!text && count)
+        return snag_errno(EINVAL);
     for (size_t i = 0; i < count; ++i) {
         uint32_t cp = (uint16_t)text[i];
         if (cp >= 0xd800u && cp <= 0xdbffu) {
-            if (++i == count || text[i] < 0xdc00u || text[i] > 0xdfffu) {
-                errno = EILSEQ;
-                return -1;
-            }
+            if (++i == count || text[i] < 0xdc00u || text[i] > 0xdfffu)
+                return snag_errno(EILSEQ);
             cp = 0x10000u + ((cp - 0xd800u) << 10) + ((uint16_t)text[i] - 0xdc00u);
-        } else if (cp >= 0xdc00u && cp <= 0xdfffu) {
-            errno = EILSEQ;
-            return -1;
-        }
+        } else if (cp >= 0xdc00u && cp <= 0xdfffu)
+            return snag_errno(EILSEQ);
         size_t width = cp < 0x80u ? 1u : cp < 0x800u ? 2u : cp < 0x10000u ? 3u : 4u;
-        if (used > (size_t)SSIZE_MAX - width) {
-            errno = EOVERFLOW;
-            return -1;
-        }
+        if (used > (size_t)SSIZE_MAX - width)
+            return snag_errno(EOVERFLOW);
         if (out) {
-            if (used > capacity || width > capacity - used) {
-                errno = E2BIG;
-                return -1;
-            }
+            if (used > capacity || width > capacity - used)
+                return snag_errno(E2BIG);
             if (width == 1u)
                 out[used] = (char)cp;
             else {
@@ -423,15 +413,11 @@ snag_command_argument(struct snag_buf *command, const char *argument)
 {
     const unsigned char *p = (const unsigned char *)argument;
     bool executable = command->len == 0;
-    if (strchr(argument, '\r') || strchr(argument, '\n')) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (strchr(argument, '\r') || strchr(argument, '\n'))
+        return snag_errno(EINVAL);
     if (executable) {
-        if (strchr(argument, '"')) {
-            errno = EINVAL;
-            return -1;
-        }
+        if (strchr(argument, '"'))
+            return snag_errno(EINVAL);
         if (snag_buf_putc(command, '"') < 0)
             return -1;
         for (; *p; ++p) {
@@ -551,8 +537,7 @@ snag_editor_run(const char *path, bool *success)
     size_t capacity = (size_t)editor_len + 2u * wcslen(file) + 5u;
     if (capacity > 32768u) {
         free(file);
-        errno = E2BIG;
-        return -1;
+        return snag_errno(E2BIG);
     }
     wchar_t *command = calloc(capacity, sizeof(*command));
     if (!command) {
@@ -2465,10 +2450,8 @@ legacy_remember_directory(int fd, const char *path)
         return 0;
     if (!realpath(path, canonical) || lstat(canonical, &linked) < 0)
         return -1;
-    if (!legacy_same_directory(&linked, held.st_dev, held.st_ino)) {
-        errno = ESTALE;
-        return -1;
-    }
+    if (!legacy_same_directory(&linked, held.st_dev, held.st_ino))
+        return snag_errno(ESTALE);
     char *copy = strdup(canonical);
     if (!copy)
         return -1;
@@ -2631,8 +2614,7 @@ open_at(int dirfd, const char *path, int flags, mode_t mode)
     if (fd >= 0 && legacy_remember_directory(fd, legacy) < 0) {
         int error = errno;
         (void)close(fd);
-        errno = error;
-        return -1;
+        return snag_errno(error);
     }
 #else
     int fd = openat(dirfd, path, flags, mode);
@@ -2652,8 +2634,7 @@ open_at(int dirfd, const char *path, int flags, mode_t mode)
     if (fd >= 0 && snag_fd_cloexec(fd) < 0) {
         int error = errno;
         (void)close(fd);
-        errno = error;
-        return -1;
+        return snag_errno(error);
     }
 #endif
     return fd;
@@ -2675,8 +2656,7 @@ open_read(int dirfd, const char *path, bool directory)
         return fd;
     error = rc < 0 ? errno : directory ? ENOTDIR : EACCES;
     (void)close(fd);
-    errno = error;
-    return -1;
+    return snag_errno(error);
 }
 
 int
@@ -2706,8 +2686,7 @@ snag_dup_read(int fd)
     if (copy >= 0 && snag_fd_cloexec(copy) < 0) {
         int error = errno;
         (void)close(copy);
-        errno = error;
-        return -1;
+        return snag_errno(error);
     }
 #ifdef SNAG_LEGACY_BSD_AT
     if (copy >= 0) {
@@ -2717,8 +2696,7 @@ snag_dup_read(int fd)
             (legacy_directory_path(fd, path) < 0 || legacy_remember_directory(copy, path) < 0))) {
             int error = errno;
             (void)close(copy);
-            errno = error;
-            return -1;
+            return snag_errno(error);
         }
     }
 #endif
@@ -3031,8 +3009,7 @@ open_private(int dirfd, const char *path, int flags, bool tighten)
     if ((flags & O_EXCL) && fchmod(fd, 0600) < 0) {
         int saved = errno;
         (void)close(fd);
-        errno = saved;
-        return -1;
+        return snag_errno(saved);
     }
     if (fstat(fd, &st) < 0 || snag_fd_privacy(fd, &privacy) < 0 ||
         !S_ISREG(st.st_mode) || st.st_nlink != 1u ||
@@ -3043,8 +3020,7 @@ open_private(int dirfd, const char *path, int flags, bool tighten)
     if (tighten && fchmod(fd, 0600) < 0) {
         int saved = errno;
         (void)close(fd);
-        errno = saved;
-        return -1;
+        return snag_errno(saved);
     }
     return fd;
 }
@@ -3208,8 +3184,7 @@ snag_random_bytes(unsigned char *out, size_t len)
             continue;
         int error = n == 0 ? EIO : errno;
         (void)close(fd);
-        errno = error;
-        return -1;
+        return snag_errno(error);
     }
     return close(fd);
 }
@@ -3233,30 +3208,22 @@ legacy_monotonic(struct timespec *out)
     } while (n < 0 && errno == EINTR);
     int error = errno;
     (void)close(fd);
-    if (n < 0) {
-        errno = error;
-        return -1;
-    }
+    if (n < 0)
+        return snag_errno(error);
     char *p = record, *end = record + n;
     uint64_t ticks = 0;
     while (p < end && *p >= '0' && *p <= '9') {
         unsigned int digit = (unsigned int)(*p++ - '0');
-        if (ticks > ((initialized - 1u) / 100u - digit) / 10u) {
-            errno = EOVERFLOW;
-            return -1;
-        }
+        if (ticks > ((initialized - 1u) / 100u - digit) / 10u)
+            return snag_errno(EOVERFLOW);
         ticks = ticks * 10u + digit;
     }
     if (p == record || end - p < 4 || p[0] != '.' || p[1] < '0' || p[1] > '9' ||
-        p[2] < '0' || p[2] > '9' || p[3] != ' ') {
-        errno = EIO;
-        return -1;
-    }
+        p[2] < '0' || p[2] > '9' || p[3] != ' ')
+        return snag_errno(EIO);
     ticks = ticks * 100u + (unsigned int)(p[1] - '0') * 10u + (unsigned int)(p[2] - '0');
-    if (ticks >= initialized) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (ticks >= initialized)
+        return snag_errno(EOVERFLOW);
     uint64_t observed = atomic_load_explicit(&legacy_clock_ticks, memory_order_relaxed);
     for (;;) {
         uint64_t next = ticks;
@@ -3266,16 +3233,12 @@ legacy_monotonic(struct timespec *out)
             /* Standard 2.4 i386 uptime wraps after 2^32 centiseconds. */
             next = delta > UINT32_MAX / 2u ? previous : previous + delta;
         }
-        if (next >= initialized) {
-            errno = EOVERFLOW;
-            return -1;
-        }
+        if (next >= initialized)
+            return snag_errno(EOVERFLOW);
         if (atomic_compare_exchange_weak_explicit(&legacy_clock_ticks, &observed,
                 initialized | next, memory_order_relaxed, memory_order_relaxed)) {
-            if ((uint64_t)(time_t)(next / 100u) != next / 100u) {
-                errno = EOVERFLOW;
-                return -1;
-            }
+            if ((uint64_t)(time_t)(next / 100u) != next / 100u)
+                return snag_errno(EOVERFLOW);
             out->tv_sec = (time_t)(next / 100u);
             out->tv_nsec = (long)(next % 100u) * 10000000L;
             return 0;
@@ -3291,10 +3254,8 @@ __wrap_clock_gettime(clockid_t clock, struct timespec *out)
      * The raw probe below still requires kernel ENOSYS before emulation. */
     if (rc == 0 || (errno != ENOSYS && !(clock == CLOCK_MONOTONIC && errno == EINVAL)))
         return rc;
-    if (!out) {
-        errno = EFAULT;
-        return -1;
-    }
+    if (!out)
+        return snag_errno(EFAULT);
     /* The old kernel ABI uses longs even when libc exposes 64-bit time_t. */
     struct { long seconds, fraction; } native;
     if (syscall(SYS_clock_gettime, clock, &native) == 0) {

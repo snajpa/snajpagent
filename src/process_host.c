@@ -190,10 +190,8 @@ verify_pipe_pair(struct child_pipe *pipe, bool input, HANDLE other, bool asynchr
         return child_error(GetLastError());
     /* Both endpoints are owned and empty; the challenge fits their quota. */
     pipe_begin(pipe, input, sizeof(expected));
-    if (pipe->pending && WaitForSingleObject(pipe->io.hEvent, 1000u) != WAIT_OBJECT_0) {
-        errno = ETIMEDOUT;
-        return -1;
-    }
+    if (pipe->pending && WaitForSingleObject(pipe->io.hEvent, 1000u) != WAIT_OBJECT_0)
+        return snag_errno(ETIMEDOUT);
     if (!pipe_done(pipe) || pipe->error || pipe->count != sizeof(expected))
         return child_error(pipe->error ? pipe->error : ERROR_INVALID_DATA);
     if (input && !peer_transfer(other, false, received, sizeof(received), asynchronous))
@@ -202,10 +200,8 @@ verify_pipe_pair(struct child_pipe *pipe, bool input, HANDLE other, bool asynchr
     unsigned int difference = 0;
     for (size_t i = 0; i < sizeof(expected); ++i)
         difference |= actual[i] ^ expected[i];
-    if (difference) {
-        errno = EACCES;
-        return -1;
-    }
+    if (difference)
+        return snag_errno(EACCES);
     (void)ResetEvent(pipe->io.hEvent);
     pipe->ready = false;
     pipe->count = 0;
@@ -249,10 +245,8 @@ create_pipe(struct child_pipe *pipe, bool input, HANDLE *other, bool asynchronou
     memcpy(&client_pid, &function, sizeof(client_pid));
     if (client_pid) {
         ULONG pid;
-        if (!client_pid(pipe->handle, &pid) || pid != GetCurrentProcessId()) {
-            errno = EACCES;
-            return -1;
-        }
+        if (!client_pid(pipe->handle, &pid) || pid != GetCurrentProcessId())
+            return snag_errno(EACCES);
     }
     return verify_pipe_pair(pipe, input, *other, asynchronous);
 }
@@ -328,17 +322,13 @@ broker_wait(struct snag_output_broker *broker, uint64_t deadline,
         DWORD rc = WaitForMultipleObjects(2u, events, FALSE, 16u);
         if (rc == WAIT_FAILED)
             return child_error(GetLastError());
-        if (rc == WAIT_OBJECT_0 + 1u) {
-            errno = EPIPE;
-            return -1;
-        }
+        if (rc == WAIT_OBJECT_0 + 1u)
+            return snag_errno(EPIPE);
         if (rc == WAIT_TIMEOUT) {
             if (checkpoint && checkpoint(opaque) < 0)
                 return -1;
-            if (deadline && snag_monotonic_ms() >= deadline) {
-                errno = ETIMEDOUT;
-                return -1;
-            }
+            if (deadline && snag_monotonic_ms() >= deadline)
+                return snag_errno(ETIMEDOUT);
         }
     }
     return pipe->error ? child_error(pipe->error) : 0;
@@ -358,10 +348,8 @@ broker_transfer(struct snag_output_broker *broker, bool write,
         pipe_begin(pipe, write, amount);
         if (broker_wait(broker, deadline, checkpoint, opaque) < 0)
             return -1;
-        if (!pipe->count || pipe->count > amount) {
-            errno = EIO;
-            return -1;
-        }
+        if (!pipe->count || pipe->count > amount)
+            return snag_errno(EIO);
         if (!write)
             memcpy(bytes, pipe->bytes, pipe->count);
         volatile unsigned char *wipe = pipe->bytes;
@@ -475,10 +463,8 @@ broker_write(struct snag_output_broker **owner, int fd, int slot,
                          int (*checkpoint)(void *), void *opaque)
 {
     const unsigned char *bytes = data;
-    if (!owner || (!data && len)) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!owner || (!data && len))
+        return snag_errno(EINVAL);
     if (!len)
         return 0;
     if (*owner && slot >= 0 && (*owner)->standard[slot] !=
@@ -539,17 +525,13 @@ snag_output_broker_write_standard(struct snag_output_broker **owner, unsigned in
                                   const void *data, size_t len,
                                   int (*checkpoint)(void *), void *opaque)
 {
-    if (slot >= 2u) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (slot >= 2u)
+        return snag_errno(EINVAL);
     HANDLE source = GetStdHandle(slot ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE);
     DWORD flags, mode;
     if (!GetConsoleMode(source, &mode) || !GetHandleInformation(source, &flags) ||
-        !(flags & HANDLE_FLAG_INHERIT)) {
-        errno = ENOTSUP;
-        return -1;
-    }
+        !(flags & HANDLE_FLAG_INHERIT))
+        return snag_errno(ENOTSUP);
     return broker_write(owner, -1, (int)slot, data, len, checkpoint, opaque);
 }
 
@@ -577,10 +559,8 @@ int
 snag_input_broker_read(struct snag_output_broker **owner, wchar_t *text, size_t capacity,
                        int (*checkpoint)(void *), void *opaque)
 {
-    if (!owner || !text || !capacity || capacity > 256u) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (!owner || !text || !capacity || capacity > 256u)
+        return snag_errno(EINVAL);
     if (!*owner && !(*owner = broker_open(checkpoint, opaque, false)))
         return -1;
     if (checkpoint && checkpoint(opaque) < 0)
@@ -592,10 +572,8 @@ snag_input_broker_read(struct snag_output_broker **owner, wchar_t *text, size_t 
         return -1;
     if (reply[0])
         return child_error(reply[0]);
-    if (reply[1] > capacity) {
-        errno = EIO;
-        return -1;
-    }
+    if (reply[1] > capacity)
+        return snag_errno(EIO);
     if (broker_transfer(*owner, false, text, reply[1] * sizeof(wchar_t), 0, checkpoint, opaque) < 0)
         return -1;
     return (int)reply[1];
@@ -1000,10 +978,8 @@ broker_spawn(struct snag_child_windows *native, HANDLE ends[3],
         return -1;
     if (reply.error)
         return child_error(reply.error);
-    if (!reply.process || (uint64_t)(uintptr_t)reply.process != reply.process || !reply.pid) {
-        errno = EIO;
-        return -1;
-    }
+    if (!reply.process || (uint64_t)(uintptr_t)reply.process != reply.process || !reply.pid)
+        return snag_errno(EIO);
     native->process = (HANDLE)(uintptr_t)reply.process;
     native->pid = reply.pid;
     return 0;
@@ -1329,10 +1305,8 @@ ssize_t
 snag_child_read(struct snag_child *child, unsigned int stream, void *buffer, size_t size)
 {
     struct child_pipe *pipe = &child->native->pipe[stream];
-    if (!pipe_done(pipe)) {
-        errno = EAGAIN;
-        return -1;
-    }
+    if (!pipe_done(pipe))
+        return snag_errno(EAGAIN);
     if (pipe->error) {
         if (pipe->error != ERROR_BROKEN_PIPE && pipe->error != ERROR_NO_DATA)
             return child_error(pipe->error);
@@ -1363,20 +1337,16 @@ ssize_t
 snag_child_write(struct snag_child *child, const void *buffer, size_t size)
 {
     struct child_pipe *pipe = &child->native->pipe[2];
-    if (!pipe->handle) {
-        errno = EPIPE;
-        return -1;
-    }
+    if (!pipe->handle)
+        return snag_errno(EPIPE);
     if (!pipe->pending && !pipe->ready) {
         if (size > sizeof(pipe->bytes))
             size = sizeof(pipe->bytes);
         memcpy(pipe->bytes, buffer, size);
         pipe_begin(pipe, true, (DWORD)size);
     }
-    if (!pipe_done(pipe)) {
-        errno = EAGAIN;
-        return -1;
-    }
+    if (!pipe_done(pipe))
+        return snag_errno(EAGAIN);
     pipe->ready = false;
     return pipe->error ? child_error(pipe->error) : (ssize_t)pipe->count;
 }
@@ -1388,10 +1358,8 @@ snag_child_wait(struct snag_child_event *events, size_t count, snag_wake_fd wake
     size_t waiting = 0, group = 0;
     uint64_t start = snag_monotonic_ms();
     int rc = 0;
-    if (count > 96u || timeout_ms < -1) {
-        errno = EINVAL;
-        return -1;
-    }
+    if (count > 96u || timeout_ms < -1)
+        return snag_errno(EINVAL);
     if (wake != SNAG_WAKE_INVALID) {
         wake_event = WSACreateEvent();
         if (wake_event == WSA_INVALID_EVENT)
@@ -1533,8 +1501,7 @@ make_pipe(int p[2])
         int saved = errno;
         (void)close(p[0]);
         (void)close(p[1]);
-        errno = saved;
-        return -1;
+        return snag_errno(saved);
     }
     return 0;
 }
@@ -1747,10 +1714,8 @@ proc_child_exited(struct snag_child *child)
     char path[64], record[1024], state, *end;
     long pid, parent;
     int length = snprintf(path, sizeof(path), "/proc/%ld/stat", (long)child->pid);
-    if (length < 0 || (size_t)length >= sizeof(path)) {
-        errno = EOVERFLOW;
-        return -1;
-    }
+    if (length < 0 || (size_t)length >= sizeof(path))
+        return snag_errno(EOVERFLOW);
     int fd = snag_open_read(path, false);
     if (fd < 0) {
         if (errno == ENOENT || errno == ESRCH)
@@ -1772,14 +1737,10 @@ proc_child_exited(struct snag_child *child)
     pid = strtol(record, &end, 10);
     char *comm_end = strrchr(end, ')');
     if (pid != child->pid || strncmp(end, " (", 2u) || !comm_end ||
-        sscanf(comm_end + 1, " %c %ld", &state, &parent) != 2) {
-        errno = EIO;
-        return -1;
-    }
-    if (parent != (long)getpid()) {
-        errno = ECHILD;
-        return -1;
-    }
+        sscanf(comm_end + 1, " %c %ld", &state, &parent) != 2)
+        return snag_errno(EIO);
+    if (parent != (long)getpid())
+        return snag_errno(ECHILD);
     return state == 'Z';
 }
 #endif
@@ -1827,8 +1788,7 @@ snag_child_exited(struct snag_child *child)
         free(list);
         if (error == ENOMEM || error == EAGAIN)
             return 0; /* The snapshot changed; retry on the next poll. */
-        errno = error;
-        return -1;
+        return snag_errno(error);
     }
     rc = -1;
     error = ECHILD;
