@@ -775,15 +775,13 @@ static size_t
 capture(unsigned int verbosity, char *out, size_t out_size)
 {
     struct snag_render render;
-    size_t used = 0u;
 
     struct output_capture capture = capture_open(false, true);
     snag_render_init(&render, verbosity);
     assert(snag_render_protocol(&render, "request JSON", "{\"x\":1}", 7u) == 0);
     assert(snag_render_protocol(&render, "response JSON", "{}", 2u) == 0);
     assert(snag_render_transport(&render, '>', "POST https://example.test", 25u) == 0);
-    used = capture_close(&capture, out, out_size, used);
-    return used;
+    return capture_close(&capture, out, out_size, 0u);
 }
 
 static size_t
@@ -1026,7 +1024,6 @@ capture_prompt_boundary(const char *text, bool markdown,
 {
     struct snag_render render;
     struct snag_term term;
-    size_t used = 0u;
 
     struct output_capture capture = capture_terminal(&render, &term, 120u,
                                                     true, true);
@@ -1039,8 +1036,7 @@ capture_prompt_boundary(const char *text, bool markdown,
     assert(snag_render_before_prompt(&render) == 0);
     snag_render_free(&render);
     snag_term_close(&term);
-    used = capture_close(&capture, out, out_size, used);
-    return used;
+    return capture_close(&capture, out, out_size, 0u);
 }
 
 static void
@@ -1329,7 +1325,6 @@ capture_static_markdown(unsigned int verbosity, char *out, size_t out_size)
     };
     struct snag_render render;
     struct snag_irc_event event = {.timestamp_ms = 1000u, .endpoint = "local", .local = true};
-    size_t used = 0u;
 
     struct output_capture capture = capture_open(false, true);
     snag_render_init(&render, verbosity);
@@ -1349,8 +1344,7 @@ capture_static_markdown(unsigned int verbosity, char *out, size_t out_size)
     memcpy(event.text, "**literal agent**", 18u);
     assert(snag_render_irc_event(&render, &event) == 0);
     assert(snag_render_history(&render, NULL, "## Literal assistant") == 0);
-    used = capture_close(&capture, out, out_size, used);
-    return used;
+    return capture_close(&capture, out, out_size, 0u);
 }
 
 static void
@@ -1522,7 +1516,6 @@ capture_color(enum snag_color_mode mode, bool chat_view,
     struct snag_response_item call = {.name = "exec_command"};
     json_t *arguments;
     json_t *result;
-    size_t used = 0u;
 
     struct output_capture capture = capture_open(false, true);
     snag_render_init(&render, verbosity);
@@ -1571,8 +1564,7 @@ capture_color(enum snag_color_mode mode, bool chat_view,
     if (chat_view)
         assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
     snag_render_free(&render);
-    used = capture_close(&capture, out, out_size, used);
-    return used;
+    return capture_close(&capture, out, out_size, 0u);
 }
 
 static void
@@ -1704,7 +1696,6 @@ capture_lifecycle(unsigned int verbosity, enum snag_color_mode color,
         "goal_completed", "goal_cancelled", "turn_completed"
     };
     struct snag_render render;
-    size_t used = 0u;
 
     struct output_capture capture = capture_open(false, true);
     snag_render_init(&render, verbosity);
@@ -1712,8 +1703,7 @@ capture_lifecycle(unsigned int verbosity, enum snag_color_mode color,
     for (size_t i = 0u; i < sizeof(events) / sizeof(events[0]); ++i)
         assert(snag_render_event(&render, i + 1u, events[i]) == 0);
     snag_render_free(&render);
-    used = capture_close(&capture, out, out_size, used);
-    return used;
+    return capture_close(&capture, out, out_size, 0u);
 }
 
 static size_t
@@ -1721,15 +1711,13 @@ capture_resume_hint(enum snag_color_mode color, char *out, size_t out_size)
 {
     static const char command[] = "'snajpagent' --resume '0123'";
     struct snag_render render;
-    size_t used = 0u;
 
     struct output_capture capture = capture_open(false, true);
     snag_render_init(&render, 0u);
     snag_render_set_color(&render, color);
     assert(snag_render_resume_hint(&render, command, sizeof(command) - 1u) == 0);
     snag_render_free(&render);
-    used = capture_close(&capture, out, out_size, used);
-    return used;
+    return capture_close(&capture, out, out_size, 0u);
 }
 
 static void
