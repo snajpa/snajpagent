@@ -395,6 +395,19 @@ prompt_output(int fd, char *output, size_t size)
 }
 
 static void
+editor_input(struct snag_term *term, const char *bytes)
+{
+    enum snag_term_action action;
+    char *text = NULL;
+    term->input_pos = 0u;
+    term->input_len = strlen(bytes);
+    assert(term->input_len <= sizeof(term->input));
+    memcpy(term->input, bytes, term->input_len);
+    assert(snag_term_poll(term, 0, -1, &action, &text) == 0);
+    assert(action == SNAG_TERM_NONE && !text);
+}
+
+static void
 test_retained_prompt(void)
 {
     struct snag_term term;
@@ -487,9 +500,7 @@ test_retained_prompt(void)
     assert(stdin_fd >= 0 && pipe(input) == 0 && dup2(input[0], STDIN_FILENO) >= 0);
     assert(snag_term_poll(&term, 20, -1, &action, &text) == 0);
     assert(term.prompt_visible && prompt_output(capture.fd, output, sizeof(output)) == 0u);
-    term.input[0] = 'x';
-    term.input_len = 1u;
-    assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
+    editor_input(&term, "x");
     assert(term.prompt_visible && prompt_output(capture.fd, output, sizeof(output)) > 0u);
     assert(snag_term_output_begin(&term) == 0);
     assert(snag_term_note_output(&term, "more", 4u, "") == 0);
@@ -504,10 +515,7 @@ test_retained_prompt(void)
     const char *moves[] = {"\033[H", "\033[F", "\033[D"};
     const size_t columns[] = {8u, 17u, 16u};
     for (size_t i = 0u; i < 3u; ++i) {
-        memcpy(term.input, moves[i], 3u);
-        term.input_pos = 0u;
-        term.input_len = 3u;
-        assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
+        editor_input(&term, moves[i]);
         assert(term.rendered_cursor_col == columns[i] && term.rendered_cursor_row == 0u);
         assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
         assert(!strstr(output, "unchanged") && !strchr(output, '>'));
@@ -554,8 +562,6 @@ test_mention_completion(void)
         for (unsigned int active = 0u; active < 2u; ++active) {
             struct snag_term term;
             struct snag_irc_destinations destinations = {.count = 1u};
-            enum snag_term_action action;
-            char *text = NULL;
 
             snag_term_init(&term);
             term.chat = true;
@@ -567,29 +573,13 @@ test_mention_completion(void)
             assert(snag_buf_append(&term.draft, cases[i].draft,
                                   strlen(cases[i].draft)) == 0);
             term.cursor = cases[i].cursor;
-            term.input[0] = '\t';
-            term.input_len = 1u;
-            assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
-            assert(action == SNAG_TERM_NONE && !text);
+            editor_input(&term, "\t");
             assert(term.draft.len == strlen(cases[i].expected));
             assert(memcmp(term.draft.data, cases[i].expected, term.draft.len) == 0);
             assert(term.cursor == cases[i].result_cursor);
             snag_term_close(&term);
         }
     }
-}
-
-static void
-completion_input(struct snag_term *term, const char *bytes)
-{
-    enum snag_term_action action;
-    char *text = NULL;
-    term->input_pos = 0u;
-    term->input_len = strlen(bytes);
-    assert(term->input_len <= sizeof(term->input));
-    memcpy(term->input, bytes, term->input_len);
-    assert(snag_term_poll(term, 0, -1, &action, &text) == 0);
-    assert(action == SNAG_TERM_NONE && !text);
 }
 
 static void
@@ -628,12 +618,12 @@ test_completion_choices(void)
             snag_term_set_commands(&term, commands, sizeof(commands) / sizeof(commands[0]));
             assert(snag_term_set_destinations(&term, &destinations) == 0);
             assert(snag_term_restore_draft(&term, cases[i].draft) == 0);
-            completion_input(&term, "\t");
+            editor_input(&term, "\t");
             assert(term.draft.len == strlen(cases[i].common));
             assert(memcmp(term.draft.data, cases[i].common, term.draft.len) == 0);
             assert(prompt_output(capture.fd, output, sizeof(output)) == 0u);
             size_t cursor = term.cursor;
-            completion_input(&term, "\t");
+            editor_input(&term, "\t");
             assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
             assert(strstr(output, cases[i].first) && strstr(output, cases[i].second));
             assert(count_text(output, cases[i].first) == 1u);
@@ -641,14 +631,14 @@ test_completion_choices(void)
             assert(term.cursor == cursor && term.draft.len == strlen(cases[i].common));
             assert(memcmp(term.draft.data, cases[i].common, term.draft.len) == 0);
             /* Cursor movement breaks the consecutive-Tab sequence. */
-            completion_input(&term, "\033[D\033[C\t");
+            editor_input(&term, "\033[D\033[C\t");
             assert(prompt_output(capture.fd, output, sizeof(output)) == 0u);
             /* Capture while output is stalled; listing is deferred, not lost. */
             term.input_only = true;
-            completion_input(&term, "\t");
+            editor_input(&term, "\t");
             assert(term.completion_output.len && prompt_output(capture.fd, output, sizeof(output)) == 0u);
             term.input_only = false;
-            completion_input(&term, "x");
+            editor_input(&term, "x");
             assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
             assert(strstr(output, cases[i].first) && strstr(output, cases[i].second));
             assert(!term.completion_output.len);
@@ -662,7 +652,7 @@ test_completion_choices(void)
     for (size_t i = 0u; i < 3u; ++i) {
         assert(snag_term_restore_draft(&term, drafts[i]) == 0);
         term.cursor = i == 1u ? 5u : 3u;
-        completion_input(&term, "\t");
+        editor_input(&term, "\t");
         const char *expected = i == 2u ? "/help tail" : "/help ";
         assert(term.draft.len == strlen(expected));
         assert(memcmp(term.draft.data, expected, term.draft.len) == 0);
@@ -719,18 +709,13 @@ test_destination_editor(void)
     strcpy(destinations.items[0].nicks, "agent2\n");
     strcpy(destinations.items[1].nicks, "agent17\n");
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
-        enum snag_term_action action;
-        char *text = NULL;
         snag_term_init(&term);
         term.chat = cases[i].chat;
         term.active = true;
         assert(snag_term_set_destinations(&term, &destinations) == 0);
         assert(term.destination.id == 2u);
         assert(snag_term_restore_draft(&term, cases[i].draft) == 0);
-        term.input[0] = '\t';
-        term.input_len = 1u;
-        assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
-        assert(action == SNAG_TERM_NONE && !text);
+        editor_input(&term, "\t");
         assert(term.draft.len == strlen(cases[i].expected));
         assert(memcmp(term.draft.data, cases[i].expected, term.draft.len) == 0);
         assert(term.destination.id == 2u);
@@ -781,12 +766,8 @@ test_destination_editor(void)
     snag_term_init(&term);
     assert(snag_term_restore_draft(&term, "/17") == 0);
     term.local_backlog = true;
-    term.input[0] = '\r';
-    term.input_len = 1u;
-    enum snag_term_action action;
-    char *text = NULL;
-    assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
-    assert(action == SNAG_TERM_NONE && !text && term.draft.len == 3u);
+    editor_input(&term, "\r");
+    assert(term.draft.len == 3u);
     snag_term_close(&term);
 }
 
