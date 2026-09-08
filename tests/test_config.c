@@ -23,6 +23,17 @@ write_bytes(const char *path, const void *data, size_t len)
 }
 
 static void
+load_config(struct snag_config *config, const char *path, const char *dotdir)
+{
+    char error[256] = {0};
+    snag_config_init(config);
+    int rc = snag_config_load(config, path, dotdir, error, sizeof(error));
+    if (rc != 0)
+        fprintf(stderr, "config fixture %s: %s\n", path ? path : dotdir, error);
+    assert(rc == 0);
+}
+
+static void
 expect_invalid(const char *path)
 {
     struct snag_config config;
@@ -176,8 +187,7 @@ test_auth_settings(const char *path)
     assert(snag_config_validate_provider(&provider, error, sizeof(error)) == 0);
     assert(snag_config_save_provider(path, false, &provider, "chosen/model", "high",
                                      error, sizeof(error)) == 0);
-    snag_config_init(&config);
-    assert(snag_config_load(&config, path, NULL, error, sizeof(error)) == 0);
+    load_config(&config, path, NULL);
     assert(config.provider_count == 1u);
     assert(config.providers[0].auth == SNAG_AUTH_CHATGPT);
     assert(strcmp(config.provider, "openrouter") == 0);
@@ -262,12 +272,10 @@ test_layered_limits_and_secrets(const char *path)
     struct snag_config config;
     struct snag_model_limit_config limits;
     const struct snag_model_limit_config *sources[3];
-    char error[256] = {0};
 
     write_bytes(path, text, sizeof(text) - 1u);
     assert(chmod(path, 0600) == 0);
-    snag_config_init(&config);
-    assert(snag_config_load(&config, path, NULL, error, sizeof(error)) == 0);
+    load_config(&config, path, NULL);
     assert(strcmp(snag_config_provider(&config, NULL)->name, "codex-lb") == 0);
     assert(config.providers[0].model_count == 2u && config.providers[1].model_count == 1u);
     assert(strcmp(snag_config_model_upstream(&config.providers[0], "small"), "gpt-6-astra") == 0);
@@ -298,8 +306,7 @@ test_layered_limits_and_secrets(const char *path)
         const char literal_targets[] = "[provider p]\n[model-alias p/a]\nmodel=b\n"
             "[model-alias p/b]\nmodel=c\n[model-alias p/self]\nmodel=self\n";
         write_bytes(path, literal_targets, sizeof(literal_targets) - 1u);
-        snag_config_init(&config);
-        assert(snag_config_load(&config, path, NULL, error, sizeof(error)) == 0);
+        load_config(&config, path, NULL);
         assert(strcmp(snag_config_model_upstream(&config.providers[0], "a"), "b") == 0);
         assert(strcmp(snag_config_model_upstream(&config.providers[0], "b"), "c") == 0);
         assert(strcmp(snag_config_model_upstream(&config.providers[0], "self"), "self") == 0);
@@ -520,9 +527,7 @@ main(void)
     assert(snprintf(dotdir, sizeof(dotdir), "%s/dotdir", temp) > 0);
     assert(mkdir(dotdir, 0700) == 0);
 
-    snag_config_init(&config);
-    assert(snag_config_load(&config, NULL, dotdir,
-                           error, sizeof(error)) == 0);
+    load_config(&config, NULL, dotdir);
     assert(strcmp(config.model, "default") == 0);
     assert(config.provider[0] == '\0');
     assert(strcmp(config.reasoning_effort, "default") == 0);
@@ -612,8 +617,7 @@ main(void)
     int shell_len = snprintf(shell_config, sizeof(shell_config), "[tool]\nshell = %s\n", link_path);
     assert(shell_len > 0 && (size_t)shell_len < sizeof(shell_config));
     write_bytes(path, shell_config, (size_t)shell_len);
-    snag_config_init(&config);
-    assert(snag_config_load(&config, path, dotdir, error, sizeof(error)) == 0);
+    load_config(&config, path, dotdir);
     assert(strcmp(config.shell, link_path) == 0);
     snag_config_free(&config);
     assert(unlink(path) == 0 && unlink(link_path) == 0);
@@ -705,9 +709,7 @@ main(void)
 
     assert(snprintf(path, sizeof(path), "%s/config.ini", dotdir) > 0);
     write_bytes(path, valid, sizeof(valid) - 1u);
-    snag_config_init(&config);
-    assert(snag_config_load(&config, NULL, dotdir,
-                           error, sizeof(error)) == 0);
+    load_config(&config, NULL, dotdir);
     assert(config.provider_count == 2u);
     assert(strcmp(config.providers[0].name, "default") == 0);
     assert(strcmp(config.providers[1].name, "backup") == 0);
@@ -801,16 +803,12 @@ main(void)
 
     write_bytes(path, "[tool]\nmax_timeout_ms=4294967295\n",
                 sizeof("[tool]\nmax_timeout_ms=4294967295\n") - 1u);
-    snag_config_init(&config);
-    assert(snag_config_load(&config, path, dotdir,
-                           error, sizeof(error)) == 0);
+    load_config(&config, path, dotdir);
     assert(config.max_timeout_ms == UINT32_MAX);
     snag_config_free(&config);
     write_bytes(path, "[tool]\nmax_output_bytes=4294967295\n",
                 sizeof("[tool]\nmax_output_bytes=4294967295\n") - 1u);
-    snag_config_init(&config);
-    assert(snag_config_load(&config, path, dotdir,
-                           error, sizeof(error)) == 0);
+    load_config(&config, path, dotdir);
     assert(config.max_output_bytes == UINT32_MAX);
     snag_config_free(&config);
     {
@@ -899,9 +897,7 @@ main(void)
         assert(strstr(bytes, "provider = second\n") != NULL);
         assert(strstr(bytes, "model = new-model\r\n") != NULL);
         assert(strstr(bytes, "reasoning_effort = ultra\n") != NULL);
-        snag_config_init(&config);
-        assert(snag_config_load(&config, path, dotdir,
-                               error, sizeof(error)) == 0);
+        load_config(&config, path, dotdir);
         assert(strcmp(config.provider, "second") == 0);
         assert(strcmp(config.model, "new-model") == 0);
         assert(strcmp(config.reasoning_effort, "ultra") == 0);
@@ -921,9 +917,7 @@ main(void)
         (void)umask(restrictive_mask);
         assert(stat(created, &st) == 0);
         assert((st.st_mode & 0777u) == 0600u);
-        snag_config_init(&config);
-        assert(snag_config_load(&config, created, dotdir,
-                               error, sizeof(error)) == 0);
+        load_config(&config, created, dotdir);
         assert(strcmp(config.provider, "named") == 0);
         assert(strcmp(config.model, "created-model") == 0);
         snag_config_free(&config);
