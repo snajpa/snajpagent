@@ -844,9 +844,7 @@ def test_read_only_queries():
 
     child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"slow\r", b"working slowly")
-    end = child.send_wait(b"/ro ping\r", b"/ro cannot steer an active turn")
-    child.wait(b"/ro ping", start=end)
-    child.send_wait(b"\t", b"queued (/next or /q c) " + PROMPT + b"/ro ping", start=end)
+    end = child.send_wait(b"/ro ping\r", b"queued (/next or /q c) " + PROMPT + b"/ro ping")
     child.send_wait(b"/queue /ro repeat\r", b"queued (/next or /q c) " + PROMPT + b"/ro repeat", start=end)
     end = child.send_wait(b"//ro ping\t", b"slow complete")
     end = child.wait(b"pong", start=end)
@@ -923,9 +921,7 @@ def test_read_only_multiline_compaction_and_chat():
 
     child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"slow\r", b"working slowly")
-    end = child.send_wait(b"\x1b[200~/ro inspect\nmultiline\x1b[201~\r", b"/ro cannot steer an active turn")
-    child.wait(b"multiline", start=end)
-    end = child.send_wait(b"\t", b"queued (/next or /q c) " + PROMPT, start=end)
+    end = child.send_wait(b"\x1b[200~/ro inspect\nmultiline\x1b[201~\r", b"queued (/next or /q c) " + PROMPT)
     child.send_wait(b"\x1b[200~/queue /ro another\nquery\x1b[201~\r", b"queued (/next or /q c) " + PROMPT, start=end)
     end = child.wait(b"slow complete")
     end = child.wait(b"fixture answer", start=end)
@@ -1392,7 +1388,8 @@ def test_resume_pauses_fifo():
     assert len(turns) == 2
     assert turns[1]["data"]["input_kind"] == "queued"
     assert one(log, "response_interrupted")["data"]["origin"] == "recovery"
-    assert one(log, "turn_interrupted")["data"]["origin"] == "recovery"
+    assert not [e for e in log if e["type"] == "turn_interrupted"]
+    assert len([e for e in log if e["type"] == "turn_completed"]) == 2
 
 
 def test_goal_quoted_reserved_wording():
@@ -1908,10 +1905,170 @@ def test_command_name_completion():
     status_end = child.send_wait(b"\r", b"state: active", start=end)
     child.wait("»".encode(), start=status_end)
     config_end = child.send_wait(b"/config\r",
-        b"/config is idle-only; interrupt or wait", start=status_end
+        b"/config accepted; applying at the next safe request boundary", start=status_end
     )
-    answer_end = child.wait(b"slow complete", start=config_end)
+    answer_end = child.wait(b"fixture answer", start=config_end)
     child.exit_cleanly(answer_end)
+
+
+def test_unfinished_public_resume():
+    for stop in ("crash", "eof", "exit"):
+        with Child([], PROMPT.rstrip()) as child:
+            child.send_wait(b"queue_slow\r", b"working slowly")
+            session_id = child.session_id()
+            log = events(session_id)
+            output = [e["data"] for e in log if e["type"] == "response_output"]
+            assert "".join(e["item"]["text"] for e in output) == "working slowly\n", log
+            assert not [e for e in log if e["type"] == "response_completed"]
+            if stop == "crash":
+                child.kill()
+            else:
+                child.send(b"\x04" if stop == "eof" else b"/exit\r")
+                child.finish()
+        with Child(["--resume", session_id]) as child:
+            child.wait(b"unfinished turn")
+            child.wait(b"working slowly")
+            end = child.wait(b"fixture answer")
+            child.wait_idle_prompt(start=end)
+            start = len(child.buf)
+            end = child.send_wait(b"/history 1\r", b"working slowly", start=start)
+            child.wait(b"fixture answer", start=end)
+            child.exit_now()
+        log = events(session_id)
+        turn = one(log, "turn_started")["data"]["turn_id"]
+        assert one(log, "turn_completed")["data"]["turn_id"] == turn
+        requests = [e["data"] for e in log if e["type"] == "response_started"]
+        assert [r["cycle"] for r in requests] == [1, 2], log
+        assert {r["turn_id"] for r in requests} == {turn}
+        partial = one(log, "response_interrupted")["data"]["partial_public"]
+        assert partial[0]["text"] == "working slowly\n", log
+        assert not [e for e in log if e["type"] == "turn_interrupted"]
+        # A second resume is passive after the recovered turn has completed.
+        count = len(requests)
+        with Child(["--resume", session_id], PROMPT.rstrip()) as child:
+            child.drain(.1)
+            child.exit_now()
+        assert sum(e["type"] == "response_started" for e in events(session_id)) == count
+
+
+def test_explicit_cancel_is_not_resumed():
+    with Child([], PROMPT.rstrip()) as child:
+        child.send_wait(b"queue_slow\r", b"working slowly")
+        session_id = child.session_id()
+        end = child.send_wait(b"\x03", b"turn interrupted", start=len(child.buf))
+        child.exit_cleanly(end)
+    with Child(["--resume", session_id], PROMPT.rstrip()) as child:
+        child.wait(b"interrupted turn")
+        child.wait(b"working slowly")
+        child.drain(.1)
+        assert b"fixture answer" not in child.buf
+        child.exit_now()
+    log = events(session_id)
+    assert len([e for e in log if e["type"] == "response_started"]) == 1
+    assert one(log, "turn_interrupted")["data"]["origin"] == "user"
+
+
+def test_recovery_at_durable_tool_boundaries():
+    # These private, inactive test sessions are cut to real writer boundaries.
+    # No fabricated events or hashes, live file rewriting, or repeated effects.
+    cuts = [("response_completed", 0), ("tool_started", 0),
+            ("tool_finished", 0), ("tool_finished", 1),
+            ("response_completed", 1)]
+    for kind, occurrence in cuts:
+        with Child([], PROMPT.rstrip()) as child:
+            end = child.send_wait(b"two_tools\r", b"two tools complete")
+            child.exit_cleanly(end)
+            session_id = child.session_id()
+        path = STATE_ROOT / session_id / "events.jsonl"
+        lines = path.read_bytes().splitlines(keepends=True)
+        parsed = [json.loads(line) for line in lines]
+        end = [i for i, e in enumerate(parsed) if e["type"] == kind][occurrence] + 1
+        before = parsed[:end]
+        path.write_bytes(b"".join(lines[:end]))
+        with Child(["--resume", session_id]) as child:
+            child.wait(b"two tools complete")
+            child.wait_idle_prompt()
+            child.exit_now()
+        after = events(session_id)
+        added = after[end:]
+        assert not [e for e in added if e["type"] == "tool_started"], added
+        one(after, "turn_started")
+        one(after, "turn_completed")
+        finished = {e["data"]["call_id"] for e in before if e["type"] == "tool_finished"}
+        assert not [e for e in added if e["type"] == "tool_finished" and e["data"]["call_id"] in finished]
+        started = {e["data"]["call_id"] for e in before if e["type"] == "tool_started"}
+        for e in added:
+            if e["type"] == "tool_finished":
+                expected = "outcome_unknown" if e["data"]["call_id"] in started else "not_run"
+                assert e["data"]["result"]["status"] == expected, e
+
+
+def test_idle_compaction_crash_recovery():
+    config = write_config("compact-crash.ini", "[provider openai]\nnative_compaction=false\n")
+    with Child(["--config", str(config)], PROMPT.rstrip()) as child:
+        end = child.send_wait(b"ping\r", b"pong")
+        child.wait_idle_prompt(start=end)
+        end = child.send_wait(b"/compact\r", COMPACTED, start=len(child.buf))
+        child.exit_cleanly(end)
+        session_id = child.session_id()
+    path = STATE_ROOT / session_id / "events.jsonl"
+    lines = path.read_bytes().splitlines(keepends=True)
+    end = next(i for i, line in enumerate(lines) if json.loads(line)["type"] == "compaction_started") + 1
+    path.write_bytes(b"".join(lines[:end]))
+    with Child(["--config", str(config), "--resume", session_id], PROMPT.rstrip()) as child:
+        end = child.send_wait(b"/compact\r", COMPACTED, start=len(child.buf))
+        child.exit_cleanly(end)
+    log = events(session_id)
+    one(log, "compaction_interrupted")
+    one(log, "compaction_completed")
+
+
+def test_active_next_turn_settings():
+    # Defaults can change while the current turn retains its request identity.
+    with Child([], PROMPT.rstrip()) as child:
+        child.send_wait(b"queue_slow\r", b"working slowly")
+        session_id = child.session_id()
+        initial = one(events(session_id), "turn_started")["data"]["config"]
+        start = len(child.buf)
+        child.send_wait(b"/model gpt-5.6-luna/high\r",
+                        b"model for next turn:", start=start)
+        start = len(child.buf)
+        child.send_wait(b"/effort medium\r", b"effort", start=start)
+        # Force another request in the *same* turn after both default changes.
+        end = child.send_wait(b"finish this turn\r", b"steered: finish this turn",
+                              start=len(child.buf))
+        child.wait_idle_prompt(start=end)
+        end = child.send_wait(b"ping\r", b"pong", start=len(child.buf))
+        child.exit_cleanly(end)
+    log = events(session_id)
+    turns = [e["data"] for e in log if e["type"] == "turn_started"]
+    assert len(turns) == 2, turns
+    assert turns[1]["config"]["model"] == "gpt-5.6-luna", turns
+    assert turns[1]["config"]["effort"] == "medium", turns
+    requests = [e["data"] for e in log if e["type"] == "response_started"
+                and e["data"]["turn_id"] == turns[0]["turn_id"]]
+    assert len(requests) == 2, requests
+    for request in requests:
+        assert (request["model"], request["effort"]) == (
+            initial["model"], initial["effort"]), requests
+    # The deferred defaults must also survive a crash before the next turn.
+    with Child(["--resume", session_id], PROMPT.rstrip()) as child:
+        child.send_wait(b"queue_slow\r", b"working slowly")
+        child.send_wait(b"/effort high\r", b"effort", start=len(child.buf))
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            changes = [e for e in events(session_id)
+                       if e["type"] == "model_selection_changed"]
+            if changes[-1]["data"]["new_effort"] == "high":
+                break
+            child.read_once(.02)
+        else:
+            raise AssertionError("active effort change was not journaled")
+        child.kill()
+    with Child(["--resume", session_id], PROMPT.rstrip()) as child:
+        child.send_wait(b"/status\r", b"gpt-5.6-luna", start=len(child.buf))
+        child.exit_now()
+    assert changes[-1]["data"]["new_effort"] == "high"
 
 
 def cached_timestamp(cache):
@@ -2803,7 +2960,8 @@ def test_exit_resume_matrix():
                 assert one(events(session_id), "session_archived")
             if action == "active":
                 log = events(session_id)
-                assert one(log, "turn_interrupted")["data"]["origin"] == "user"
+                assert not [event for event in log if event["type"] == "turn_interrupted"]
+                assert one(log, "turn_recovery")
                 assert not [event for event in log if event["type"] == "turn_completed"]
                 assert b"slow complete" not in child.buf
 
@@ -3869,9 +4027,9 @@ def test_ctrl_d_exit():
                 continue
             log = events(new_session(before))
             if prompt:
-                assert one(log, "turn_interrupted")
+                assert not [e for e in log if e["type"] == "turn_interrupted"]
                 assert len([e for e in log if e["type"] == "turn_started"]) == 1
-                assert not [e for e in log if e["type"] == "turn_completed"]
+                assert not [e for e in log if e["type"] == "turn_completed"], (prompt, log)
             if prompt == b"queue_slow":
                 assert one(log, "future_turn_queued")["data"]["text"] == "ping"
             if prompt == b"/goal slow goal":
@@ -3941,7 +4099,10 @@ def test_goal_orderly_quit_resume():
             assert one(stopped, "goal_paused")["data"]["reason"] == "user"
         else:
             assert not [e for e in stopped if e["type"] == "goal_paused"]
-        one(stopped, "turn_interrupted")
+        if mode == "five-ctrl-c":
+            one(stopped, "turn_interrupted")
+        else:
+            assert not [e for e in stopped if e["type"] == "turn_interrupted"]
         with Child.from_command(command) as resumed:
             if mode == "five-ctrl-c":
                 restored = resumed.wait(f"goal {goal['goal_id'][:8]}: paused · wording locked".encode())
@@ -4194,6 +4355,11 @@ if __name__ == "__main__":
     test_saved_goal_restored_without_lookup()
     test_resume_preserves_inactive_and_queued_goal_states()
     test_queue_mutation_commands()
+    test_unfinished_public_resume()
+    test_explicit_cancel_is_not_resumed()
+    test_recovery_at_durable_tool_boundaries()
+    test_idle_compaction_crash_recovery()
+    test_active_next_turn_settings()
     test_preferences_and_verbosity()
     test_runtime_verbosity_resume()
     test_command_name_completion()

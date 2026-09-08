@@ -586,6 +586,11 @@ snag_render_history(struct snag_render *render, const struct snag_history_turn *
     if (turn) {
         if (shown == 1u && render_banner(render, "── history ──\n") < 0)
             return -1;
+        if (turn->status && strcmp(turn->status, "completed")) {
+            char state[96];
+            (void)snprintf(state, sizeof(state), "── %s turn ──\n", turn->status);
+            if (render_banner(render, state) < 0) return -1;
+        }
         return render_history_turn(render, turn);
     }
     char footer[160];

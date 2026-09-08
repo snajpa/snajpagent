@@ -20,6 +20,7 @@ enum snag_render_view {
 
 struct snag_history_turn {
     char *user, *assistant;
+    const char *status;
 };
 
 enum snag_presentation {

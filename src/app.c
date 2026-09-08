@@ -318,8 +318,13 @@ prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
         return snag_fail(error, error_size, ENOTSUP,
                   "reasoning effort is empty, oversized, or invalid UTF-8");
     }
-    app->turn_model = model;
-    app->turn_effort = effort;
+    /* Keep this identity through turn_completed and its post-turn measurement.
+     * Both defaults and the reducer's active-turn storage can change earlier. */
+    if (!snag_strcpy(app->turn_model_value, sizeof(app->turn_model_value), model) ||
+        !snag_strcpy(app->turn_effort_value, sizeof(app->turn_effort_value), effort))
+        return snag_fail(error, error_size, EINVAL, "turn model or effort is oversized");
+    app->turn_model = app->turn_model_value;
+    app->turn_effort = app->turn_effort_value;
     app->turn_provider = provider;
     if (snag_app_capacity_resolve(app, provider, model, &app->turn_capacity,
                                  error, error_size) < 0)
@@ -345,7 +350,7 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
         json_decref(data);
         return -1;
     }
-    if (strcmp(type, "goal_started") == 0 &&
+    if (snag_string_in(type, "goal_started control_requested future_turn_queued") &&
         snag_session_persist(&app->store, &app->session, error, error_size) < 0) {
         json_decref(data);
         return -1;
@@ -370,6 +375,19 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
     return 0;
 }
 #define commit_event snag_app_commit_event
+
+static int
+request_control(struct app_state *app, unsigned int control, const char *name)
+{
+    char error[256] = {0};
+    if (!(app->session.pending_controls & control) &&
+        commit_event(app, "control_requested", json_pack("{s:i}", "control", (int)control),
+                     error, sizeof(error)) < 0)
+        return app_error(app, error) < 0 ? -1 : 0;
+    if (!app->applying_controls) app->control_requested = true;
+    return app_textf(app, SNAG_UI_HOST, "%s accepted; applying at the next safe request boundary", name);
+}
+
 static const char *next_model(const struct app_state *app);
 static const char *next_effort(const struct app_state *app);
 static int
@@ -736,10 +754,6 @@ queue_future_turn(struct app_state *app, const char *text, bool arm,
     bool read_only;
     const char *queued_text = snag_prompt_parse(text, &read_only);
     size_t len;
-    if (!app->session.active_turn && !app->recovery_wait) {
-        (void)snag_fail(error, error_size, EINVAL, "/queue TEXT is valid only while a turn is active");
-        return 1;
-    }
     if (text[0] == '/' && !read_only) {
         if (text[1] != '/') {
             (void)snag_fail(error, error_size, EINVAL,
@@ -832,12 +846,7 @@ handle_queue_command(struct app_state *app, const char *line, bool active,
     case QUEUE_COMMAND_LIST:
         return render_queue(app);
     case QUEUE_COMMAND_ADD:
-        if (!active) {
-            snag_errorf(error, error_size,
-                      "/queue TEXT is active-only; submit it during a running turn");
-            return 1;
-        }
-        return queue_future_turn(app, argument, true, error, error_size);
+        return queue_future_turn(app, argument, active, error, error_size);
     case QUEUE_COMMAND_DELETE:
         if (number == 0u || number > app->session.pending_queue_count) {
             snag_errorf(error, error_size, "queue item %zu does not exist", number);
@@ -1169,7 +1178,7 @@ load_model_cache(struct app_state *app, bool refresh,
         for (size_t i = 0; i < app->config->provider_count; ++i)
             if (app->config->providers[i].model_count)
                 return 0; /* Configured models do not require discovery. */
-        return snag_fail(error, error_size, ENOENT, "model cache is empty; use /model cache while idle");
+        return snag_fail(error, error_size, ENOENT, "model cache is empty; use /model cache");
     }
     return rc;
 }
@@ -1519,8 +1528,7 @@ change_model(struct app_state *app, const char *value, bool active)
     }
     if (strcmp(selector, "cache") == 0) {
         if (active)
-            rc = app_error(app,
-                "/model cache is idle-only; interrupt or wait");
+            rc = request_control(app, SNAG_CONTROL_CACHE, "/model cache");
         else if (load_model_cache(app, true, error, sizeof(error)) < 0)
             rc = app_error(app, error);
         else
@@ -1529,11 +1537,6 @@ change_model(struct app_state *app, const char *value, bool active)
         return rc;
     }
     save = strip_model_save_suffix(selector);
-    if (active) {
-        free(copy);
-        return app_error(app,
-            "/model selection is idle-only; interrupt or wait");
-    }
     rc = select_cached_model(app, selector, save);
     if (rc == 1)
         rc = select_typed_model(app, selector, save);
@@ -1701,7 +1704,8 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     merge_file_network(app, &candidate);
     if (snag_irc_normalize(&candidate, error, error_size) < 0)
         goto out;
-    if (!snag_config_provider(&candidate, selected_provider)) {
+    if (!snag_config_provider(&candidate, selected_provider) ||
+        (app->session.active_turn && !snag_config_provider(&candidate, app->session.active_turn_provider))) {
         (void)snag_fail(error, error_size, EINVAL,
             "reloaded configuration does not define the selected provider");
         goto out;
@@ -1718,8 +1722,12 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     *app->config = candidate;
     memset(&candidate, 0, sizeof(candidate));
     app->irc_file_config = file_network;
-    app->turn_provider = snag_config_provider(app->config, selected_provider);
-    app->turn_model = app->session.default_model;
+    app->turn_provider = snag_config_provider(app->config, app->session.active_turn ?
+        app->session.active_turn_provider : selected_provider);
+    if (!app->session.active_turn) {
+        app->turn_model = app->session.default_model;
+        app->turn_effort = resolve_effort(app->session.default_effort);
+    }
     app->staged_provider = NULL;
     snag_ui_send(&app->ui, (struct snag_ui_command){
         .kind = SNAG_UI_COLOR, .data.value = snag_cli_color(app->cli, app->config->color)});
@@ -1769,7 +1777,7 @@ change_config(struct app_state *app, bool active)
     int rc;
 
     if (active)
-        return app_error(app, "/config is idle-only; interrupt or wait");
+        return request_control(app, SNAG_CONTROL_CONFIG, "/config");
     if (snapshot_config(app->config_path, &before,
                         error, sizeof(error)) < 0)
         return app_error(app, error);
@@ -1806,11 +1814,10 @@ change_effort(struct app_state *app, const char *value, bool active)
     char error[256] = {0};
     char *copy = NULL;
     char *effort = NULL;
+    (void)active;
     if (!value)
         return show_setting(app, "effort", next_effort(app),
                             app->staged_effort != NULL);
-    if (active)
-        return app_error(app, "/effort LEVEL is idle-only; interrupt or wait");
     copy = snag_strdup_checked(value, SNAG_CONFIG_EFFORT_MAX - 1u);
     if (copy)
         effort = trim_selector_part(copy);
@@ -2005,6 +2012,56 @@ handle_destination_command(struct app_state *app, const char *line, bool *handle
     return send_operator_routed(app, line, line + body, SNAG_IRC_MESSAGE);
 }
 
+/* The current transport/tool invocation has unwound before this function runs.
+ * An editor is an external effect: journal its start and never relaunch an
+ * ambiguous previous invocation automatically after a crash. */
+static int
+apply_controls(struct app_state *app)
+{
+    if (app->applying_controls || app->session.response_open || app->session.pending_call_count)
+        return 0;
+    unsigned int pending = app->session.pending_controls;
+    if (!pending) { app->control_requested = false; return 0; }
+    app->applying_controls = true;
+    app->control_requested = false;
+    int result = 0;
+    for (unsigned int bit = 1u; bit <= SNAG_CONTROL_RETRY; bit <<= 1u) {
+        if (!(pending & bit)) continue;
+        char error[256] = {0};
+        bool started = (app->session.started_controls & bit) != 0u;
+        if (!started && commit_event(app, "control_started",
+                json_pack("{s:i}", "control", (int)bit), error, sizeof(error)) < 0) {
+            result = -1; break;
+        }
+        int rc = 0;
+        bool exit_now = false, handled = false;
+        if (bit == SNAG_CONTROL_CONFIG) {
+            if (started) {
+                (void)app_warning(app, "Previous configuration editor outcome is uncertain; reloading the saved file without reopening the editor.");
+                rc = reload_config(app, error, sizeof(error));
+            } else rc = change_config(app, false);
+        } else if (bit == SNAG_CONTROL_CACHE) {
+            rc = change_model(app, "cache", false);
+        } else if (bit == SNAG_CONTROL_COMPACT) {
+            rc = snag_app_compact_requested(app, error, sizeof(error));
+        } else if (bit != SNAG_CONTROL_RETRY) {
+            rc = snag_app_lifecycle_command(app,
+                bit == SNAG_CONTROL_ARCHIVE ? "/archive" : "/delete", &handled, &exit_now);
+        }
+        if (error[0] && app_error(app, error) < 0) rc = -1;
+        if (bit == SNAG_CONTROL_DELETE && exit_now && app->session.delete_requested) {
+            app->input_closed = true;
+            break; /* Deleted journal can no longer record a completion. */
+        }
+        if (commit_event(app, "control_finished", json_pack("{s:i}", "control", (int)bit),
+                         error, sizeof(error)) < 0) { result = -1; break; }
+        if (exit_now) { app->input_closed = true; break; }
+        if (rc < 0 && app->session.append_rollback_pending) { result = -1; break; }
+    }
+    app->applying_controls = false;
+    return result;
+}
+
 static int
 handle_common_command(struct app_state *app, const char *line, bool active,
                       bool *handled, bool *prompt_ready)
@@ -2022,6 +2079,23 @@ handle_common_command(struct app_state *app, const char *line, bool active,
     }
     if (strcmp(line, "/help") == 0 || strcmp(line, "/?") == 0)
         return render_help(app);
+    if (active && snag_string_in(line, "/compact /archive /delete"))
+        return request_control(app, !strcmp(line, "/compact") ? SNAG_CONTROL_COMPACT :
+            !strcmp(line, "/archive") ? SNAG_CONTROL_ARCHIVE : SNAG_CONTROL_DELETE, line);
+    if (active && !strcmp(line, "/next")) {
+        if (!app->session.pending_queue_count) return app_error(app, "future-turn queue is empty");
+        app->queue_armed = true;
+        return app_textf(app, SNAG_UI_HOST, "queued work armed for the next full turn");
+    }
+    if (active && !strcmp(line, "/retry")) {
+        app->yield_requested = app->tool_waiting;
+        return request_control(app, SNAG_CONTROL_RETRY, "/retry");
+    }
+    if (active && strcmp(line, "/exit") == 0) {
+        app->input_closed = true;
+        app->interrupt_requested = true;
+        return 0;
+    }
     if (strcmp(line, "/yield") == 0) {
         if (!app->tool_waiting)
             return app_textf(app, SNAG_UI_HOST, "No active tool wait to yield.");
@@ -2140,11 +2214,13 @@ snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
     char *line = NULL;
     char error[256];
     int rc;
+    if (snag_app_flush_public(app, false) < 0)
+        return -1;
     if (capture_shutdown_signal(app) || app->interrupt_requested) {
         app->interrupt_requested = true;
         return 2;
     }
-    if (app->steering_requested)
+    if (app->steering_requested || (app->control_requested && !app->applying_controls))
         return 1;
     bool busy = snag_tools_busy();
     if (snag_tools_service(0, snag_ui_wake_fd(&app->ui), error, sizeof(error)) < 0) {
@@ -2205,6 +2281,11 @@ snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
         (action == SNAG_TERM_INTERRUPT && app->queue_edit_id[0]))
         return cancel_queue_edit(app, true);
     if (action == SNAG_TERM_INTERRUPT) {
+        if (app->session.active_turn && commit_event(app, "turn_cancel_requested",
+                json_pack("{s:s}", "turn_id", app->session.active_turn_id), error, sizeof(error)) < 0) {
+            free(line);
+            return -1;
+        }
         app->interrupt_requested = true;
         free(line);
         return set_input_prompt(app, true) < 0 ? -1 : 2;
@@ -2236,12 +2317,9 @@ snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
 
         (void)snag_prompt_parse(line, &read_only);
         if (read_only) {
-            (void)snag_ui_text(&app->ui, SNAG_UI_ERROR,
-                "/ro cannot steer an active turn; press Tab or use /queue /ro QUERY");
-            rc = set_input_prompt(app, true);
-            if (rc == 0)
-                rc = snag_ui_send(&app->ui, (struct snag_ui_command){
-                    .kind = SNAG_UI_DRAFT, .text = line});
+            rc = queue_future_turn(app, line, true, error, sizeof(error));
+            if (rc != 0) (void)app_error(app, error);
+            if (rc >= 0) rc = set_input_prompt(app, true);
             goto active_done;
         }
         rc = handle_input_command(app, line, true, &handled, &prompt_ready);
@@ -2253,7 +2331,7 @@ snag_app_active_input_pump(void *opaque, unsigned int timeout_ms)
                 rc = -1;
         } else if (single_line && line[0] == '/' && line[1] != '/') {
             (void)snag_ui_text(&app->ui, SNAG_UI_ERROR,
-                "that command is unavailable while a turn is active");
+                "unknown slash command");
             rc = set_input_prompt(app, true);
         } else {
             const char *text = line[0] == '/' && line[1] == '/' ? line + 1 : line;
@@ -2308,7 +2386,8 @@ active_done:
     free(line);
     if (rc < 0)
         return -1;
-    return app->steering_requested ? 1 : 0;
+    return app->interrupt_requested ? 2 :
+        app->steering_requested || (app->control_requested && !app->applying_controls) ? 1 : 0;
 }
 static int
 commit_pending_result(struct app_state *app, const char *turn_id,
@@ -2344,6 +2423,10 @@ terminalize_pending(struct app_state *app, const char *turn_id,
             result = call->started ? snag_tool_result_outcome_unknown("owner_lost") :
                                     snag_tool_result_not_run(unstarted_reason);
         }
+        if (result && snag_app_recovered_output(app, handle, result) < 0) {
+            json_decref(result);
+            return -1;
+        }
         if (!result || commit_pending_result(app, id, call->call_id, result,
                                              error, error_size) < 0)
             return -1;
@@ -2351,8 +2434,8 @@ terminalize_pending(struct app_state *app, const char *turn_id,
     }
     return 0;
 }
-static int
-close_active_process_for_turn(struct app_state *app, const char *turn_id,
+int
+snag_app_close_active_processes(struct app_state *app, const char *turn_id,
                               const char *cause, bool user_interrupt,
                               char *error, size_t error_size)
 {
@@ -2369,6 +2452,10 @@ close_active_process_for_turn(struct app_state *app, const char *turn_id,
                                     error, error_size) < 0)
             return -1;
 #endif
+        if (result && snag_app_recovered_output(app, handle, result) < 0) {
+            json_decref(result);
+            return -1;
+        }
         json_t *data = json_pack("{s:s,s:s,s:O,s:s}",
             "cause", cause, "handle", handle, "result", result, "turn_id", turn_id);
         json_decref(result);
@@ -2390,7 +2477,7 @@ fail_turn(struct app_state *app, struct turn_retry *retry, const char *turn_id, 
         if (rc == 0) retry->pending = !app->turn_policy_stopped;
         return rc;
     }
-    return close_active_process_for_turn(app, turn_id, cause, false,
+    return snag_app_close_active_processes(app, turn_id, cause, false,
                                          error, error_size) < 0 ||
            commit_event(app, "turn_failed",
                         snag_app_turn_failed_data(turn_id, class_name, message),
@@ -2403,12 +2490,18 @@ interrupt_turn(struct app_state *app, const char *turn_id,
                const char *origin, const char *reason,
                char *error, size_t error_size)
 {
-    return close_active_process_for_turn(app, turn_id, cause, user_interrupt,
-                                         error, error_size) < 0 ||
-           commit_event(app, "turn_interrupted",
-                        json_pack("{s:s,s:s,s:s}", "origin", origin,
-                         "reason", reason, "turn_id", turn_id),
-                        error, error_size) < 0 ? -1 : 0;
+    char id[SNAG_ID_HEX_LEN + 1u];
+    memcpy(id, turn_id, sizeof(id));
+    if (snag_app_close_active_processes(app, id, cause, user_interrupt,
+                                     error, error_size) < 0)
+        return -1;
+    if (app->input_closed && !app->session.cancel_requested)
+        return commit_event(app, "turn_recovery",
+            snag_app_turn_failed_data(id, "internal", "Session closed; unfinished turn retained for resume."),
+            error, error_size);
+    return commit_event(app, "turn_interrupted",
+        json_pack("{s:s,s:s,s:s}", "origin", origin, "reason", reason, "turn_id", id),
+        error, error_size);
 }
 
 static int
@@ -2436,86 +2529,50 @@ fail_response(struct app_state *app, struct turn_retry *retry, const char *turn_
 static int
 recover_session(struct app_state *app, char *error, size_t error_size)
 {
+    struct snag_session *session = &app->session;
+    if (session->active_compact_id[0] &&
+        commit_event(app, "compaction_interrupted", json_pack("{s:s,s:s}",
+            "compact_id", session->active_compact_id, "reason", "error"), error, error_size) < 0)
+        return -1;
+    if (!session->active_turn) return 0;
     char turn_id[SNAG_ID_HEX_LEN + 1u];
-    const char *message, *cause = "protocol_failure", *class_name = "protocol";
-    const char *warning = "recovered an interrupted turn";
-    bool has_steering;
-    struct turn_retry retry = {0};
-    if (!app->session.active_turn)
-        return 0;
-    memcpy(turn_id, app->session.active_turn_id, sizeof(turn_id));
-    has_steering = app->session.pending_steering_count != 0u;
-    if (app->session.response_open) {
-        if (commit_event(app, "response_interrupted",
-                         snag_app_response_interrupted_data(turn_id,
-                                                   app->session.active_response_id,
-                                                   app->session.active_cycle,
-                                                   "recovery", "process_lost",
-                                                   NULL),
-                         error, error_size) < 0)
+    memcpy(turn_id, session->active_turn_id, sizeof(turn_id));
+    if (session->response_open &&
+        commit_event(app, "response_interrupted",
+            snag_app_response_interrupted_data(turn_id, session->active_response_id,
+                session->active_cycle, "recovery", "process_lost",
+                session->response_public ? json_copy(session->response_public) : NULL),
+            error, error_size) < 0)
+        return -1;
+    if (session->cancel_requested) {
+        if (terminalize_pending(app, turn_id, "turn_cancelled", error, error_size) < 0 ||
+            interrupt_turn(app, turn_id, "user_interrupt", false, "user", "cancelled", error, error_size) < 0 ||
+            snag_app_goal_pause(app, "user", error, error_size) < 0)
             return -1;
-        goto interrupted;
+        return app_warning(app, "recovered deliberate turn cancellation");
     }
-    if (app->session.response_complete) {
-        if (app->session.response_outcome == SNAG_GRAPH_CONFLICT) {
-            message = "provider response had conflicting terminal actions";
-            warning = "recovered a protocol-conflicted turn";
-            if (terminalize_pending(app, turn_id, "protocol_conflict",
-                                    error, error_size) < 0)
-                return -1;
-            goto failed;
-        }
-        if (has_steering) {
-            if (app->session.response_outcome == SNAG_GRAPH_CALLS &&
-                terminalize_pending(app, turn_id, "superseded_by_steering",
-                                    error, error_size) < 0)
-                return -1;
-            warning = "recovered a turn whose pending active-turn input could not be resumed automatically";
-            goto interrupted;
-        }
-        switch (app->session.response_outcome) {
-        case SNAG_GRAPH_FINAL:
-        case SNAG_GRAPH_REFUSAL:
-            if (app->session.process_count) {
-                message = "recovered terminal response while a managed process was unresolved";
-                warning = "recovered a terminal response that violated managed process ordering";
-                goto failed;
-            }
-            if (commit_event(app, "turn_completed",
-                             snag_app_turn_completed_data(turn_id,
-                                                 app->session.final_response_id,
-                                                 app->session.final_item_id),
-                             error, error_size) < 0)
-                return -1;
-            return app_warning(app, "recovered a durably completed turn");
-        case SNAG_GRAPH_CALLS:
-            if (terminalize_pending(app, turn_id, "recovery_unstarted",
-                                    error, error_size) < 0)
-                return -1;
-            warning = "recovered a turn with unfinished tool work";
-            goto interrupted;
-        case SNAG_GRAPH_CONFLICT:
-            break;
-        case SNAG_GRAPH_NONPRODUCTIVE:
-            message = "provider completed without a final answer, refusal, or tool call";
-            warning = "recovered a nonproductive response";
-            goto failed;
-        }
+    if (session->response_complete && !session->pending_steering_count &&
+        !session->process_count &&
+        (session->response_outcome == SNAG_GRAPH_FINAL || session->response_outcome == SNAG_GRAPH_REFUSAL)) {
+        bool refusal = session->response_outcome == SNAG_GRAPH_REFUSAL;
+        if (commit_event(app, "turn_completed",
+                snag_app_turn_completed_data(turn_id, session->final_response_id,
+                                              session->final_item_id), error, error_size) < 0)
+            return -1;
+        if (refusal && snag_app_goal_pause(app, "refusal", error, error_size) < 0)
+            return -1;
+        return app_warning(app, "recovered a durably completed turn");
     }
-    if (app->session.response_terminal == SNAG_RESPONSE_TERMINAL_FAILED) {
-        message = "provider response had already failed before process recovery";
-        cause = "provider_failure";
-        class_name = "provider";
-        warning = "recovered a provider-failed turn";
-        goto failed;
-    }
-interrupted:
-    return interrupt_turn(app, turn_id, "internal_failure", false,
-                          "recovery", "session_recovered", error, error_size) < 0 ?
-           -1 : app_warning(app, warning);
-failed:
-    return fail_turn(app, &retry, turn_id, cause, class_name, message, error, error_size) < 0 ?
-           -1 : app_warning(app, warning);
+    /* Reconstruct facts, never rerun a tool from its journal entry. Results
+     * without a durable completion remain explicitly uncertain. */
+    if (terminalize_pending(app, turn_id, "recovery_unstarted", error, error_size) < 0 ||
+        snag_app_close_active_processes(app, turn_id, "internal_failure", false,
+                                      error, error_size) < 0 ||
+        commit_event(app, "turn_recovery", snag_app_turn_failed_data(turn_id,
+            "internal", "Session resumed; retain completed results and inspect uncertain side effects before further actions."),
+            error, error_size) < 0)
+        return -1;
+    return app_warning(app, "recovered unfinished turn; continuing from durable context and tool results");
 }
 static int
 finish_call(struct app_state *app, const char *turn_id,
@@ -2909,15 +2966,6 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         return 2;
     }
     provider_capacity_source_sha256(app->turn_provider, app->turn_model, provider_source_hash);
-#ifndef SNAJPAGENT_TEST_FIXTURE
-    if (snag_auth_read(app->store.root_fd, app->turn_provider, false, NULL,
-                      &credential, snag_app_active_input_pump, app,
-                      error, sizeof(error)) < 0) {
-        (void)app_error(app, error);
-        snag_credential_clear(&credential);
-        return 2;
-    }
-#endif
     graph = (struct snag_response_graph){0};
     if (app->config->read_agents_md) {
         if (snag_instructions_discover(&app->turn_instructions,
@@ -2964,6 +3012,17 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         goto fail;
     }
     if (!continuing) consume_staged_settings(app);
+    /* prepare_turn_settings owns the identity, including after the reducer
+     * clears its active-turn fields at completion. */
+#ifndef SNAJPAGENT_TEST_FIXTURE
+    if (snag_auth_read(app->store.root_fd, app->turn_provider, false, NULL,
+                      &credential, snag_app_active_input_pump, app,
+                      error, sizeof(error)) < 0) {
+        (void)app_error(app, error);
+        snag_credential_clear(&credential);
+        return 2;
+    }
+#endif
     if (app_textf(app, SNAG_UI_RUNTIME,
             "turn › %s started%s · model=%s · effort=%s · workspace=%s",
             turn_id, read_only ? " (read-only)" : "", app->turn_model,
@@ -2987,6 +3046,20 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                                        &request_body);
         memset(&provider_failure, 0, sizeof(provider_failure));
         error[0] = '\0';
+        bool reconfigured = (app->session.pending_controls & SNAG_CONTROL_CONFIG) != 0u;
+        if (apply_controls(app) < 0) goto fail;
+        if (app->input_closed) { result = 0; goto out; }
+        if (reconfigured) {
+            if (prepare_turn_settings(app, error, sizeof(error)) < 0) goto fail;
+            provider_capacity_source_sha256(app->turn_provider, app->turn_model, provider_source_hash);
+#ifndef SNAJPAGENT_TEST_FIXTURE
+            snag_credential_clear(&credential);
+            if (snag_auth_read(app->store.root_fd, app->turn_provider, false, NULL,
+                    &credential, snag_app_active_input_pump, app, error, sizeof(error)) < 0)
+                goto fail;
+#endif
+        }
+
         if (snag_app_irc_flush_urgent(app, error, sizeof(error)) < 0) {
             report_message = error[0] ? error :
                             "urgent IRC input could not be admitted";
@@ -3010,7 +3083,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         provider_rc = snag_app_provider_count(app, projection.count_request.value, &credential,
             &projection.input_tokens_bound, &count_method,
             error, sizeof(error));
-        if (provider_rc == 1 && app->steering_requested)
+        if (provider_rc == 1 && (app->steering_requested || app->control_requested))
             goto steered_before_response;
         if (provider_rc == 2 && app->interrupt_requested)
             goto user_interrupted;
@@ -3090,6 +3163,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                                           failure, error, sizeof(error));
             goto out;
         }
+        if (app->control_requested) goto rebuild_request;
         if (commit_event(app, "response_started",
                          snag_app_response_started_data(app, turn_id, response_id,
                              cycle, &projection, count_method, provider_source_hash,
@@ -3149,22 +3223,23 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         json_decref(steering);
         steering = NULL;
         bool steered = provider_rc == 1 && app->steering_requested;
+        bool controlled = provider_rc == 1 && app->control_requested;
         bool interrupted = provider_rc == 2 && app->interrupt_requested;
         (void)snag_app_close_stream_item(app, steered || interrupted ||
             provider_failure.output_correction != SNAG_OUTPUT_CORRECTION_NONE);
-        if ((steered || interrupted) && !app->stream_failed) {
+        if ((steered || controlled || interrupted) && !app->stream_failed) {
             json_t *partial = snag_app_partial_public_json(app);
             if (!partial ||
                 commit_event(app, "response_interrupted",
                     snag_app_response_interrupted_data(turn_id, response_id, cycle,
-                        steered ? "steering" : "user", steered ? "steered" : "cancelled", partial),
+                        steered ? "steering" : "user", steered ? "steered" : controlled ? "control" : "cancelled", partial),
                     error, sizeof(error)) < 0) {
                 report_message = error[0] ? error : steered ?
                     "active-turn response could not be persisted" :
                     "interruption could not be persisted";
                 goto fail;
             }
-            if (steered) {
+            if (steered || controlled) {
                 cyber_clarifications = 0u;
                 continue;
             }
@@ -3565,6 +3640,20 @@ run_tracked_turn(struct app_state *app, const char *prompt,
                  const struct snag_queued_turn *queued, bool goal_turn,
                  bool read_only)
 {
+    if (app->session.active_turn) {
+        read_only = app->session.active_read_only;
+        goal_turn = app->session.active_goal;
+        if (strcmp(prompt, app->session.active_prompt)) {
+            char id[SNAG_ID_HEX_LEN + 1u], error[256] = {0};
+            if (snag_random_id(id) < 0 ||
+                commit_event(app, "steering_added", snag_app_steering_added_data(
+                    app->session.active_turn_id, id, prompt), error, sizeof(error)) < 0) {
+                (void)app_error(app, error);
+                return 3;
+            }
+        }
+        prompt = app->session.active_prompt;
+    }
     /* A queued entry can be consumed by turn_started: own the input across retries. */
     char *retained = snag_strdup_checked(prompt, SNAG_MAX_DIRECT_PROMPT);
     uint64_t turns = app->session.turn_count;
@@ -3653,7 +3742,8 @@ run_tracked_turn(struct app_state *app, const char *prompt,
                     repair = commit_event(app, "response_interrupted",
                         snag_app_response_interrupted_data(app->session.active_turn_id,
                             app->session.active_response_id, app->session.active_cycle,
-                            "recovery", "process_lost", NULL), error, sizeof(error));
+                            "recovery", "process_lost", app->session.response_public ?
+                            json_copy(app->session.response_public) : NULL), error, sizeof(error));
                 if (!repair && (app->session.append_rollback_pending || rc == 3 || rc == 6 ||
                         app->session.response_complete ||
                         app->session.response_terminal != SNAG_RESPONSE_TERMINAL_NONE))
@@ -3675,7 +3765,10 @@ run_tracked_turn(struct app_state *app, const char *prompt,
         if (snag_app_goal_pause(app, "user", error, sizeof(error)) < 0)
             (void)app_error(app, error);
     }
-    if (app->session.active_turn && (app->input_closed || app->interrupt_requested)) {
+    if (app->session.active_turn && !app->session.archived && !app->session.delete_requested &&
+        (app->input_closed || app->interrupt_requested) &&
+        (app->session.response_open || app->session.response_complete ||
+         app->session.process_count || app->session.pending_call_count || !app->input_closed)) {
         char error[256] = {0};
         if (interrupt_turn(app, app->session.active_turn_id, "user_interrupt", true,
                            "user", "cancelled", error, sizeof(error)) < 0)
@@ -3933,6 +4026,17 @@ run_ready_chains(struct app_state *app)
             app->goal_armed = false;
             return 0;
         }
+        if (apply_controls(app) < 0) return 3;
+        if (app->input_closed) return 0;
+        if (app->session.active_turn) {
+            if (app->session.active_goal && app->session.goal_status != SNAG_GOAL_ACTIVE)
+                return 0;
+            turn_rc = run_tracked_turn(app, app->session.active_prompt, NULL,
+                app->session.active_goal, app->session.active_read_only);
+            if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY)
+                return turn_rc;
+            continue;
+        }
         if (app->irc_urgent.len ||
              ((!app->queue_armed || app->session.pending_queue_count == 0u) &&
               app->goal_armed && app->irc_background.len)) {
@@ -4009,7 +4113,7 @@ submit_idle(struct app_state *app, const char *prompt,
             app->queue_armed = true;
             rc = run_ready_chains(app);
         }
-    } else if (retry && !app->session.last_turn_failed) {
+    } else if (retry && !app->session.last_turn_failed && !app->session.active_turn) {
         (void)app_error(app, "no failed turn to retry");
     } else if (!retry && !read_only && single_line && prompt[0] == '/' && prompt[1] != '/') {
         (void)app_error(app, "unknown slash command");
@@ -4018,9 +4122,10 @@ submit_idle(struct app_state *app, const char *prompt,
             return 3;
     } else {
         if (retry) {
-            query = "Retry the last failed turn. Continue from the retained "
+            query = app->session.active_turn ? app->session.active_prompt :
+                    "Retry the last failed turn. Continue from the retained "
                     "conversation and tool results; do not repeat completed actions.";
-            read_only = app->session.retry_read_only;
+            read_only = app->session.active_turn ? app->session.active_read_only : app->session.retry_read_only;
         }
         if (read_only && !*query) {
             (void)app_error(app, "usage: /ro QUERY (query must not be empty)");
@@ -4052,7 +4157,9 @@ interactive_loop(struct app_state *app, const char *initial)
         (initial && (snag_app_sync_destinations(app) < 0 ||
                      snag_ui_capture_route(&app->ui, initial) < 0)))
         return 6;
-    if (!initial && app->goal_armed) {
+    if (apply_controls(app) < 0) return 3;
+    if (app->input_closed) return 0;
+    if (!initial && (app->goal_armed || app->session.active_turn)) {
         rc = run_ready_chains(app);
         if (rc == 3 || rc == 6)
             return rc;

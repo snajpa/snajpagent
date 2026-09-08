@@ -81,30 +81,61 @@ partial_public_target(struct app_state *app, size_t graph_index,
 json_t *
 snag_app_partial_public_json(const struct app_state *app)
 {
-    json_t *array = json_array();
+    return app->session.response_public ? json_copy(app->session.response_public) : json_array();
+}
 
-    if (!array)
-        goto fail;
-    for (size_t i = 0; i < app->partial_count; ++i) {
-        const struct partial_public_item *partial = &app->partial[i];
-        json_t *item = json_pack("{s:s,s:s,s:s,s:s,s:s%}",
-            "kind", snag_item_kind_name(partial->kind),
-            "local_item_id", partial->local_item_id,
-            "phase", snag_item_phase_name(partial->phase),
-            "provider_item_id", partial->provider_item_id,
-            "text", (const char *)partial->text.data, partial->text.len);
-        if (!item || json_array_append_new(array, item) < 0)
-            goto fail;
+/* Persist complete UTF-8 before exposing it. Show the first complete fragment
+ * immediately; batch subsequent fragments at input-pump boundaries. */
+int
+snag_app_flush_public(struct app_state *app, bool force)
+{
+    if (app->public_flushing || !app->session.response_open || !app->partial_count)
+        return 0;
+    struct partial_public_item *item = &app->partial[app->partial_count - 1u];
+    size_t end = item->committed;
+    uint64_t now = snag_monotonic_ms();
+    if (!force && item->committed && item->text.len - end < 16384u &&
+        now - app->public_flush_ms < 100u)
+        return 0;
+    while (end < item->text.len) {
+        size_t width = snag_utf8_size(item->text.data[end]);
+        if (!width) return stream_fail(app, EILSEQ, "invalid public UTF-8");
+        if (width > item->text.len - end) break;
+        if (!snag_utf8_valid(item->text.data + end, width, true))
+            return stream_fail(app, EILSEQ, "invalid public UTF-8");
+        end += width;
     }
-    return array;
-fail:
-    json_decref(array);
-    return NULL;
+    if (end == item->committed) return 0;
+    size_t index = 0u;
+    for (size_t i = 0u; i + 1u < app->partial_count; ++i)
+        index += app->partial[i].committed != 0u;
+    json_t *part = json_pack("{s:s,s:s,s:s,s:s,s:s%}",
+        "kind", snag_item_kind_name(item->kind), "phase", snag_item_phase_name(item->phase),
+        "local_item_id", item->local_item_id, "provider_item_id", item->provider_item_id,
+        "text", (char *)item->text.data + item->committed, end - item->committed);
+    json_t *data = json_pack("{s:s,s:s,s:I,s:I,s:I,s:o}",
+        "turn_id", app->session.active_turn_id, "response_id", app->session.active_response_id,
+        "cycle", (json_int_t)app->session.active_cycle, "index", (json_int_t)index,
+        "offset", (json_int_t)item->committed, "item", part);
+    char error[256] = {0};
+    app->public_flushing = true;
+    int rc = snag_app_commit_event(app, "response_output", data, error, sizeof(error));
+    if (rc == 0) {
+        size_t begin = item->committed;
+        item->committed = end;
+        app->public_flush_ms = now;
+        if (!app->stream_item_hidden)
+            rc = snag_ui_public(&app->ui, (char *)item->text.data + begin, end - begin, NULL);
+    }
+    app->public_flushing = false;
+    return rc < 0 ? stream_fail(app, errno, error[0] ? error : "public output delivery failed") : 0;
 }
 
 int
 snag_app_close_stream_item(struct app_state *app, bool abort)
 {
+    if (snag_app_flush_public(app, true) < 0)
+        return -1;
     if (!app->stream_item_active)
         return 0;
     app->stream_item_active = false;
@@ -123,8 +154,6 @@ snag_app_stream_public(void *opaque, size_t item_index, enum snag_item_kind kind
 {
     struct app_state *app = opaque;
     struct partial_public_item *partial;
-    size_t partial_before;
-    size_t partial_max;
     size_t remaining;
     bool partial_created;
     int fd = STDOUT_FILENO, rc = -1;
@@ -181,8 +210,6 @@ snag_app_stream_public(void *opaque, size_t item_index, enum snag_item_kind kind
         return stream_fail(app, EPROTO,
                            "public output item kind or phase changed");
     }
-    if (app->stream_item_hidden)
-        return 0;
     if (app->partial_bytes > SNAG_MAX_RESPONSE_GRAPH) {
         return stream_fail(app, EOVERFLOW,
                            "partial public output exceeds its bound");
@@ -195,30 +222,13 @@ snag_app_stream_public(void *opaque, size_t item_index, enum snag_item_kind kind
                            "public output item identity changed" :
                            "partial public output could not be retained");
     }
-    partial_before = partial->text.len;
-    partial_max = partial->text.max;
     remaining = SNAG_MAX_RESPONSE_GRAPH - app->partial_bytes;
-    if (partial->text.len > SIZE_MAX - remaining) {
-        errno = EOVERFLOW;
-        goto out;
-    }
-    if (partial->text.max > partial->text.len + remaining)
-        partial->text.max = partial->text.len + remaining;
-    if (snag_ui_public(&app->ui, text, len, &partial->text) < 0)
-        goto out;
-    app->partial_bytes += partial->text.len - partial_before;
-    rc = 0;
-out:
-    partial->text.max = partial_max;
-    if (partial_created && partial->text.len == 0u) {
-        snag_buf_free(&partial->text);
-        memset(partial, 0, sizeof(*partial));
-        --app->partial_count;
-    }
-    return rc == 0 ? 0 : stream_fail(app, errno,
-                       errno == EOVERFLOW ?
-                       "public output exceeds its limit" :
-                       "public output could not be rendered");
+    if (len > remaining || snag_buf_append(&partial->text, text, len) < 0)
+        return stream_fail(app, EOVERFLOW, "public output exceeds its limit");
+    app->partial_bytes += len;
+    if (partial_created) app->public_flush_ms = snag_monotonic_ms();
+    rc = snag_app_flush_public(app, false);
+    return rc;
 }
 
 void

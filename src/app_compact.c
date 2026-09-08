@@ -55,7 +55,7 @@ compaction_state_valid(const struct app_state *app, const char *reason,
         (strcmp(reason, "manual") != 0 && !active_reason(reason)))
         return snag_fail(error, error_size, EINVAL, "invalid compaction reason");
     if (active_prefix) {
-        if (!active_reason(reason) || !app->session.active_turn ||
+        if (!app->session.active_turn ||
             app->session.response_open ||
             app->session.pending_call_count ||
             app->session.active_compact_id[0] != '\0')
@@ -464,6 +464,12 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
         error[0] = '\0';
     return run_compaction_attempt(app, reason, active_prefix, false,
                                   credential, compacted, error, error_size);
+}
+
+int
+snag_app_compact_requested(struct app_state *app, char *error, size_t error_size)
+{
+    return run_compaction(app, "manual", app->session.active_turn, NULL, NULL, error, error_size);
 }
 
 int

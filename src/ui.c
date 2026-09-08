@@ -1024,6 +1024,7 @@ snag_ui_orientation(struct snag_ui *ui, const struct snag_session *session,
 struct history_replay {
     struct snag_ui *ui;
     struct snag_history_turn turn;
+    struct snag_buf response;
     uint64_t completed, skip, shown, total;
 };
 
@@ -1033,6 +1034,53 @@ history_display(struct history_replay *history, const struct snag_history_turn *
     return snag_ui_send(history->ui, (struct snag_ui_command){.kind = SNAG_UI_HISTORY,
         .data.replay = {.turn = turn, .shown = history->shown,
             .completed = history->completed, .total = history->total}});
+}
+
+static int
+history_append(char **target, const char *text, const char *separator)
+{
+    size_t old = *target ? strlen(*target) : 0u;
+    size_t sep = old ? strlen(separator) : 0u, len = strlen(text);
+    size_t size;
+    if (!snag_size_add(old, sep, &size) || !snag_size_add(size, len + 1u, &size))
+        return -1;
+    char *joined = realloc(*target, size);
+    if (!joined) return -1;
+    memcpy(joined + old, separator, sep);
+    memcpy(joined + old + sep, text, len + 1u);
+    *target = joined;
+    return 0;
+}
+
+static int
+history_items(struct history_replay *history, const json_t *items)
+{
+    for (size_t i = 0u; i < json_array_size(items); ++i) {
+        const json_t *item = json_array_get(items, i);
+        const char *kind = snag_json_string(item, "kind");
+        if (snag_string_in(kind, "assistant refusal") &&
+            history_append(&history->turn.assistant, snag_json_string(item, "text"), "\n\n") < 0)
+            return -1;
+    }
+    return 0;
+}
+
+static int
+history_finish(struct history_replay *history)
+{
+    if (!history->turn.user) return 0;
+    if (history->response.len) {
+        if (snag_buf_terminate(&history->response) < 0 ||
+            history_append(&history->turn.assistant, (char *)history->response.data, "\n\n") < 0)
+            return -1;
+        snag_buf_reset(&history->response);
+    }
+    ++history->shown;
+    int rc = history_display(history, &history->turn);
+    free(history->turn.user);
+    free(history->turn.assistant);
+    history->turn = (struct snag_history_turn){0};
+    return rc;
 }
 
 static int
@@ -1047,33 +1095,33 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
         history->completed += completed;
         return 0;
     }
-    if (history->skip) {
-        history->skip -= completed;
-        return 0;
-    }
     if (!strcmp(type, "turn_started")) {
-        free(turn->user);
-        free(turn->assistant);
-        turn->assistant = NULL;
+        if (history_finish(history) < 0) return -1;
+        if (history->skip) { --history->skip; return 0; }
         turn->user = strdup(snag_json_string(data, "text"));
-        if (!turn->user)
+        turn->status = "unfinished";
+        return turn->user ? 0 : -1;
+    }
+    if (!turn->user) return 0;
+    if (!strcmp(type, "steering_added"))
+        return history_append(&turn->user, snag_json_string(data, "text"), "\nsteering: ");
+    if (!strcmp(type, "response_started")) {
+        snag_buf_reset(&history->response);
+    } else if (!strcmp(type, "response_output")) {
+        const char *text = snag_json_string(json_object_get(data, "item"), "text");
+        uint64_t offset;
+        if (snag_json_integer_u64(data, "offset", &offset) < 0) return -1;
+        if (!offset && history->response.len && snag_buf_append(&history->response, "\n\n", 2u) < 0)
             return -1;
-    } else if (!strcmp(type, "response_completed")) {
+        return snag_buf_append(&history->response, text, strlen(text));
+    } else if (snag_string_in(type, "response_completed response_failed response_interrupted response_output_correction")) {
+        snag_buf_reset(&history->response);
         json_t *items = json_object_get(data, "items");
-        for (size_t i = json_array_size(items); i > 0u; --i) {
-            json_t *item = json_array_get(items, i - 1u);
-            if (!snag_string_in(snag_json_string(item, "kind"), "assistant refusal"))
-                continue;
-            char *text = strdup(snag_json_string(item, "text"));
-            if (!text)
-                return -1;
-            free(turn->assistant);
-            turn->assistant = text;
-            break;
-        }
-    } else if (completed) {
-        ++history->shown;
-        return history_display(history, turn);
+        if (!items) items = json_object_get(data, "partial_public");
+        return history_items(history, items);
+    } else if (completed || snag_string_in(type, "turn_failed turn_interrupted")) {
+        turn->status = completed ? "completed" : !strcmp(type, "turn_failed") ? "failed" : "interrupted";
+        return history_finish(history);
     }
     return 0;
 }
@@ -1081,17 +1129,19 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
 int
 snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count)
 {
-    struct history_replay history = {.total = session->turn_count};
+    struct history_replay history = {.total = session->turn_count,
+        .response = {.max = SNAG_MAX_RESPONSE_GRAPH + 2u * SNAG_MAX_RESPONSE_ITEMS}};
     int rc = snag_session_each_event(session, history_event, &history, NULL, 0u);
     history.ui = ui;
-    if (rc == 0 && count && history.completed) {
-        history.skip = history.completed > count ? history.completed - count : 0u;
+    if (rc == 0 && count && history.total) {
+        history.skip = history.total > count ? history.total - count : 0u;
         rc = snag_session_each_event(session, history_event, &history, NULL, 0u);
+        if (rc == 0) rc = history_finish(&history);
     }
-    if (rc == 0)
-        rc = history_display(&history, NULL);
+    if (rc == 0) rc = history_display(&history, NULL);
     free(history.turn.user);
     free(history.turn.assistant);
+    snag_buf_free(&history.response);
     return rc;
 }
 

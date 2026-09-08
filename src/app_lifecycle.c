@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "app_internal.h"
+#include "tools.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -99,7 +100,9 @@ confirm_delete(struct app_state *app, char prefix[9], char *error,
         return snag_errorf(error, error_size, "delete confirmation prompt could not be displayed");
     }
     do {
-        rc = snag_ui_poll(&app->ui, -1, false, &action, &line);
+        if (snag_tools_service(0, snag_ui_wake_fd(&app->ui), error, error_size) < 0)
+            return -1;
+        rc = snag_ui_poll(&app->ui, 25, false, &action, &line);
     } while (rc == 0);
     if (rc < 0) {
         free(line);
@@ -138,6 +141,9 @@ snag_app_lifecycle_command(struct app_state *app, const char *line,
     *handled = true;
     *exit_now = false;
     if (strcmp(line, "/archive") == 0) {
+        if (app->session.process_count && snag_app_close_active_processes(app,
+                app->session.active_turn_id, "user_interrupt", true, error, sizeof(error)) < 0)
+            return -1;
         seq = app->session.next_seq;
         if (snag_session_archive(&app->session, &seq, error, sizeof(error)) < 0) {
             (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
@@ -171,6 +177,10 @@ snag_app_lifecycle_command(struct app_state *app, const char *line,
                 (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
             return confirm_rc < 0 ? -1 : 0;
         }
+        /* Confirmation precedes stopping any owned processes. */
+        if (app->session.process_count && snag_app_close_active_processes(app,
+                app->session.active_turn_id, "user_interrupt", true, error, sizeof(error)) < 0)
+            return -1;
         seq = app->session.next_seq;
         if (snag_session_delete(&app->store, &app->session, prefix, &seq,
                                error, sizeof(error)) < 0) {

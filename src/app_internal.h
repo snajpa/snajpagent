@@ -31,6 +31,7 @@ struct partial_public_item {
     char local_item_id[SNAG_ID_HEX_LEN + 1u];
     char provider_item_id[SNAG_MAX_PROVIDER_ID + 1u];
     struct snag_buf text;
+    size_t committed;
 };
 
 struct app_state {
@@ -55,6 +56,8 @@ struct app_state {
     struct snag_irc_config irc_file_config;
     const char *config_path;
     bool config_allow_create;
+    char turn_model_value[SNAG_MODEL_MAX_BYTES];
+    char turn_effort_value[SNAG_EFFORT_MAX_BYTES];
     const char *turn_model;
     const char *turn_effort;
     const struct snag_provider_config *turn_provider;
@@ -64,6 +67,8 @@ struct app_state {
     struct partial_public_item partial[SNAG_MAX_RESPONSE_ITEMS];
     size_t partial_count;
     size_t partial_bytes;
+    uint64_t public_flush_ms;
+    bool public_flushing;
     size_t stream_item_index;
     enum snag_item_kind stream_kind;
     enum snag_item_phase stream_phase;
@@ -74,6 +79,7 @@ struct app_state {
     int stream_errno;
     char stream_error[256];
     bool steering_requested;
+    bool control_requested, applying_controls;
     bool tool_waiting, yield_requested;
     uint64_t input_generation;
     bool interrupt_requested;
@@ -100,6 +106,7 @@ struct app_state {
 
 int snag_app_tool_output(void *, const char *, unsigned int, uint64_t, const void *, size_t);
 int snag_app_tool_read(void *, const char *, unsigned int, uint64_t, uint64_t, struct snag_buf *);
+int snag_app_recovered_output(struct app_state *, const char *, json_t *);
 
 enum {
     /* Provider pump results already use 1 and 2. */
@@ -173,6 +180,7 @@ json_t *snag_app_response_interrupted_data(const char *turn_id,
 json_t *snag_app_turn_failed_data(const char *turn_id,
                                  const char *class_name,
                                  const char *message);
+int snag_app_compact_requested(struct app_state *app, char *error, size_t error_size);
 int snag_app_compact_idle_command(struct app_state *app, const char *reason,
                                  char *error, size_t error_size);
 int snag_app_compact_after_turn(struct app_state *app, uint64_t input_tokens_bound,
@@ -193,6 +201,7 @@ void snag_app_response_cycle_release(struct app_state *app,
                                     json_t **steering,
                                     struct snag_context_projection *projection,
                                     struct snag_buf *request_body);
+int snag_app_close_active_processes(struct app_state *, const char *, const char *, bool, char *, size_t);
 int snag_app_lifecycle_command(struct app_state *app, const char *line,
                               bool *handled, bool *exit_now);
 int snag_app_parse_queue_argument(const char *argument,
@@ -242,6 +251,7 @@ int snag_app_tool_run(struct app_state *app,
 void snag_app_clear_partial_public(struct app_state *app);
 json_t *snag_app_partial_public_json(const struct app_state *app);
 int snag_app_close_stream_item(struct app_state *app, bool abort);
+int snag_app_flush_public(struct app_state *app, bool force);
 int snag_app_stream_public(void *opaque, size_t item_index,
                           enum snag_item_kind kind, enum snag_item_phase phase,
                           const char *provider_item_id,

@@ -41,6 +41,15 @@ enum snag_response_terminal {
     SNAG_RESPONSE_TERMINAL_FAILED
 };
 
+enum snag_session_control {
+    SNAG_CONTROL_CONFIG = 1u,
+    SNAG_CONTROL_CACHE = 2u,
+    SNAG_CONTROL_COMPACT = 4u,
+    SNAG_CONTROL_ARCHIVE = 8u,
+    SNAG_CONTROL_DELETE = 16u,
+    SNAG_CONTROL_RETRY = 32u
+};
+
 struct snag_pending_call {
     char call_id[SNAG_ID_HEX_LEN + 1u];
     char action_sha256[SNAG_SHA256_HEX_LEN + 1u];
@@ -127,11 +136,14 @@ struct snag_session {
     char *dir_path;
     const char *first_user;
     const char *last_user;
+    const char *active_prompt;
     const char *goal_prompt;
     const char *goal_blocker;
     /* Private immutable string owners; text fields above and in pending inputs borrow. */
     json_t *strings;
     json_t *compact_output;
+    json_t *response_public; /* Reconstructed public prefix of the current response. */
+    size_t response_public_bytes;
     int dir_fd;
     int log_fd;
     int lock_fd;
@@ -159,11 +171,14 @@ struct snag_session {
     size_t pending_queue_count;
     bool append_rollback_pending;
     int64_t append_rollback_end;
+    unsigned int pending_controls, started_controls;
     bool active_turn;
     bool last_turn_failed;
     bool retry_read_only;
     bool active_read_only;
     bool active_queued;
+    bool active_goal;
+    bool cancel_requested;
     bool archived;
     bool delete_requested;
     bool response_open;

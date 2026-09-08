@@ -278,7 +278,7 @@ grep -q "^'$bin' --dotdir '$dotdir' --no-listen --no-client --resume '[0-9a-f]\\
 [ -d "$dotdir/trash" ]
 id=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
 [ ${#id} -eq 32 ]
-[ "$(wc -l < "$dotdir/sessions/$id/events.jsonl")" -eq 6 ]
+[ "$(wc -l < "$dotdir/sessions/$id/events.jsonl")" -eq 7 ]
 [ "$(grep -c '"type":"input_admitted"' "$dotdir/sessions/$id/events.jsonl")" -eq 1 ]
 
 # The writer owns the exact two-line header and framing; the builder owns only
@@ -341,7 +341,7 @@ out=$($bin -e --resume "$id" -- ping 2>"$root/err")
 [ "$out" = pong ]
 strip_resume "$root/err"
 only_resume "$root/err"
-[ "$(wc -l < "$dotdir/sessions/$id/events.jsonl")" -eq 11 ]
+[ "$(wc -l < "$dotdir/sessions/$id/events.jsonl")" -eq 13 ]
 [ "$(grep -c '"type":"input_admitted"' "$dotdir/sessions/$id/events.jsonl")" -eq 2 ]
 $bin -l >"$root/list" 2>"$root/err"
 grep -q "^$(printf %.8s "$id").*2" "$root/list"
@@ -364,8 +364,10 @@ expect_exit 99 $bin -e -- crash >"$root/crash.out" 2>"$root/crash.err"
 [ ! -s "$root/crash.out" ]
 crash_id=$(grep -rl '"text":"crash"' "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
 $bin -e --resume "$crash_id" -- ping >"$root/crash-recovered.out" 2>"$root/crash-recovered.err"
-[ "$(cat "$root/crash-recovered.out")" = pong ]
-grep -q 'recovered an interrupted turn' "$root/crash-recovered.err"
+[ "$(cat "$root/crash-recovered.out")" = 'fixture answer' ]
+[ "$(grep -c '"type":"turn_started"' "$dotdir/sessions/$crash_id/events.jsonl")" -eq 1 ]
+grep -q '"text":"ping"' "$dotdir/sessions/$crash_id/events.jsonl"
+grep -q 'recovered unfinished turn' "$root/crash-recovered.err"
 
 $bin -e -- provider_fail >"$root/fail.out" 2>"$root/fail.err"
 [ -s "$root/fail.out" ]
@@ -553,8 +555,10 @@ grep -q '"status":"not_run"' "$conflict_log"
 expect_exit 98 $bin -e -- tool_crash >"$root/tool-crash.out" 2>"$root/tool-crash.err"
 tool_crash_id=$(grep -rl '"text":"tool_crash"' "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
 out=$($bin -e --resume "$tool_crash_id" -- ping 2>"$root/tool-recovery.err")
-[ "$out" = pong ]
-grep -q 'unfinished tool work' "$root/tool-recovery.err"
+[ "$out" = 'unexpected continuation' ]
+[ "$(grep -c '"type":"turn_started"' "$dotdir/sessions/$tool_crash_id/events.jsonl")" -eq 1 ]
+[ "$(grep -c '"type":"tool_started"' "$dotdir/sessions/$tool_crash_id/events.jsonl")" -eq 1 ]
+grep -q 'recovered unfinished turn' "$root/tool-recovery.err"
 grep -q '"status":"outcome_unknown"' "$dotdir/sessions/$tool_crash_id/events.jsonl"
 
 
@@ -805,6 +809,12 @@ started = [event for event in events if event["type"] == "compaction_started"]
 completed = [event for event in events if event["type"] == "compaction_completed"]
 assert len(started) == 1 and len(completed) == 1
 assert started[0]["data"]["reason"] == "proactive"
+# Completion clears reducer active state; post-turn measurement must retain
+# the completed request identity long enough to select proactive compaction.
+turn = next(event for event in events if event["type"] == "turn_started")
+terminal = next(event for event in events if event["type"] == "turn_completed")
+assert events.index(terminal) < events.index(started[0])
+assert started[0]["data"]["model"] == turn["data"]["config"]["model"]
 assert started[0]["data"]["count_method"] == "unknown"
 assert started[0]["data"]["count_request_sha256"]
 assert completed[0]["data"]["count_method"] == "unknown"

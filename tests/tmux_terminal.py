@@ -5414,9 +5414,80 @@ def run_post_exit_drain_cases(binary, root, provider, environment):
         print("post-exit drain:", mode, "ok", flush=True)
 
 
+def run_session_process_recovery_case(binary, root):
+    # Real local child, real provider transport, no duplicate side effects.
+    case = root / "process-recovery"
+    provider = FakeResponses()
+    workspace, config = irc_workspace(case / "w", provider.port, "host-model")
+    state = case / "state"
+    environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret")
+    seen = []
+    marker = workspace / "effects"
+    output = "recovery-output:" + "x" * 20000
+
+    def respond(handler, request, sequence):
+        seen.append(request)
+        if len(seen) == 1:
+            body = provider.function_body(sequence, "recovery-command", "exec_command", {
+                "command": "printf x >> effects; printf '%s' '" + output + "'; sleep 2",
+                "workdir": str(workspace), "stdin": None, "pty": False,
+                "timeout_ms": 5000, "yield_ms": 0, "max_output_tokens": 1000,
+            })
+        else:
+            evidence = json.dumps(request, ensure_ascii=False)
+            assert "owner_lost" in evidence and "recovery-output:" in evidence, evidence
+            assert "output_ref" in evidence, evidence
+            body = provider.response_body(sequence, "recovered without repeating effects")
+        provider.reply(handler, body.encode(), close_header=True)
+        handler.close_connection = True
+
+    provider.runtime_handler = respond
+    common = [os.path.abspath(binary), "--dotdir", str(state), "--config", str(config),
+              "--no-listen", "--no-client"]
+    child = None
+    try:
+        with (case / "first.out").open("wb") as out, (case / "first.err").open("wb") as err:
+            child = subprocess.Popen([*common, "-e", "--", "recover this command"],
+                cwd=workspace, env=environment, stdout=out, stderr=err)
+            deadline = time.monotonic() + 10
+            while True:
+                path, log = maybe_events(state)
+                if any(e["type"] == "process_output" for e in log):
+                    break
+                assert child.poll() is None and time.monotonic() < deadline, (log, provider.failure)
+                time.sleep(.01)
+            assert not event_list(log, "tool_finished"), log
+            child.kill()
+            child.wait(timeout=5)
+        session = path.parent.name
+        result = subprocess.run([*common, "-e", "--resume", session, "--", "continue"],
+            cwd=workspace, env=environment, capture_output=True, text=True, timeout=15)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == "recovered without repeating effects", result.stdout
+        _, log = read_events(state)
+        assert len(event_list(log, "turn_started")) == 1, log
+        assert len(event_list(log, "tool_started")) == 1, log
+        assert len(event_list(log, "turn_completed")) == 1, log
+        recovered = event_list(log, "tool_finished")[0]["data"]["result"]
+        assert recovered["status"] == "outcome_unknown", recovered
+        assert recovered["stdout"]["original_bytes"] > 0, recovered
+        assert recovered["output_ref"]["stdout_end"] > 0, recovered
+        assert marker.read_text() == "x"
+        assert len(seen) == 2, seen
+        print("real process crash recovery: ok", flush=True)
+    finally:
+        if child is not None and child.poll() is None:
+            child.kill()
+            child.wait(timeout=5)
+        # The bounded child command ends naturally; never signal an inferred PID.
+        time.sleep(2.1)
+        provider.close()
+
+
 def run_irc_case(binary, root):
     binary = os.path.abspath(binary)
     root.mkdir(mode=0o700, parents=True)
+    run_session_process_recovery_case(binary, root)
     run_punctuation_case(binary, root)
     provider = FakeResponses()
     environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}

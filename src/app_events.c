@@ -348,14 +348,11 @@ snag_app_irc_flush_urgent(struct app_state *app,
     if (snag_random_id(steering_id) < 0 ||
         !(text = pending_batch(&app->irc_urgent, &used)))
         return -1;
-    if (admit_irc_input(app, &app->irc_urgent_refs, used, error, error_size) < 0) {
-        free(text); return -1;
-    }
     rc = snag_app_commit_event(app, "steering_added",
             snag_app_steering_added_data(app->session.active_turn_id,
                 steering_id, text), error, error_size);
     free(text);
-    if (rc < 0)
+    if (rc < 0 || admit_irc_input(app, &app->irc_urgent_refs, used, error, error_size) < 0)
         return -1;
     consume_pending(&app->irc_urgent, used);
     admit_replies(app, used);
@@ -736,4 +733,61 @@ snag_app_tool_read(void *opaque, const char *handle, unsigned int stream,
                                       &read, error, sizeof(error)) < 0)
         return -1;
     return read.seen == to - from ? 0 : -1;
+}
+
+/* Owner loss invalidates the OS handle, not the bytes already in the journal. */
+int
+snag_app_recovered_output(struct app_state *app, const char *handle, json_t *result)
+{
+    struct snag_process_state *process = snag_session_process(&app->session, handle);
+    if (!process || json_object_get(result, "output_ref") ||
+        strcmp(snag_json_string(result, "status"), "outcome_unknown"))
+        return 0;
+    struct snag_buf message = {.max = 32768u};
+    int rc = -1;
+    if (snag_buf_printf(&message, "Tool outcome is unknown: owner_lost. The old handle is invalid. "
+            "Do not repeat ambiguous effects without inspecting current state. "
+            "Captured output remains in %s/events.jsonl.\n", app->session.dir_path) < 0)
+        goto out;
+    const char *names[] = {"stdout", "stderr"};
+    for (unsigned int stream = 0u; stream < 2u; ++stream) {
+        struct snag_buf bytes = {.max = 6000u}, encoded = {.max = 8000u};
+        uint64_t from = process->collected_bytes[stream], to = process->output_bytes[stream];
+        if (snag_app_tool_read(app, handle, stream, from, to, &bytes) < 0) {
+            snag_buf_free(&bytes); goto out;
+        }
+        bool utf8 = snag_utf8_valid(bytes.data, bytes.len, true);
+        int erc = utf8 ? snag_buf_append(&encoded, bytes.data, bytes.len) :
+            snag_base64_append(&encoded, bytes.data, bytes.len);
+        if (erc == 0) erc = snag_json_set_new(result, names[stream],
+            json_pack("{s:I,s:s,s:I,s:s%,s:I}",
+                "discarded_bytes", (json_int_t)(to - from - bytes.len),
+                "encoding", utf8 ? "utf8" : "base64", "original_bytes", (json_int_t)(to - from),
+                "retained", encoded.len ? (char *)encoded.data : "", encoded.len,
+                "retained_bytes", (json_int_t)bytes.len));
+        if (erc == 0 && encoded.len) erc = snag_buf_printf(&message, "\n%s%s:\n%.*s\n",
+            names[stream], utf8 ? "" : " (base64)", (int)encoded.len, (char *)encoded.data);
+        if (erc == 0 && to - from > bytes.len)
+            erc = snag_buf_printf(&message, "[%llu bytes omitted between the retained head and tail]\n",
+                                 (unsigned long long)(to - from - bytes.len));
+        snag_buf_free(&bytes); snag_buf_free(&encoded);
+        if (erc < 0) goto out;
+    }
+    if (snag_json_set_new(result, "model_text", json_stringn((char *)message.data, message.len)) < 0 ||
+        snag_json_set_new(result, "max_output_tokens", json_integer(16000)) < 0 ||
+        snag_json_set_new(result, "output_ref", json_pack("{s:s,s:I,s:I,s:I,s:I,s:I,s:I,s:I,s:b,s:I,s:I}",
+            "handle", handle, "stdout_start", (json_int_t)process->collected_bytes[0],
+            "stdout_end", (json_int_t)process->output_bytes[0],
+            "stderr_start", (json_int_t)process->collected_bytes[1],
+            "stderr_end", (json_int_t)process->output_bytes[1],
+            "stdin_accepted", (json_int_t)process->input_accepted,
+            "stdin_written", (json_int_t)process->input_written,
+            "stdin_pending", (json_int_t)process->input_pending, "stdin_open", 0,
+            "log_start", (json_int_t)process->log_offset,
+            "log_end", (json_int_t)app->session.log_end)) < 0)
+        goto out;
+    rc = 0;
+out:
+    snag_buf_free(&message);
+    return rc;
 }
