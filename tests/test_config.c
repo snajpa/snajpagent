@@ -540,8 +540,8 @@ main(void)
                     assert(snag_config_prompt_expand(config.prompt, mode, values, 0xfdu,
                                                     expanded, sizeof(expanded)) == 0);
                     assert(snprintf(expected, sizeof(expected),
-                                    "\xfe\xfd 03:07:09 p/m/e %3s%% %s%s ",
-                                    contexts[i], badge, mode == 1u ? "›" : "»") > 0);
+                                    "%s 03:07:09 p/m/e %3s%% %s%s ",
+                                    "\xfe\xfd", contexts[i], badge, mode == 1u ? "›" : "»") > 0);
                     assert(strcmp(expanded, expected) == 0);
                 }
             }
