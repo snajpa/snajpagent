@@ -29,6 +29,7 @@ The current required outputs are:
 | `windows-arm64` | `snajpagent.exe` | Native ARM64, static application libraries and OS UCRT; experimental |
 | `freebsd-amd64` | `snajpagent` | Static application libraries, native libc/threads; FreeBSD 8.4 and 14.4 exercised |
 | `freebsd-amd64-legacy` | `snajpagent` | Separate libc.so.5/libc_r.so.5 ABI; FreeBSD 5.1 and 5.5 exercised |
+| `netbsd-amd64` | `snajpagent` | NetBSD 10.1 libc.so.12/libpthread.so.1 ABI, PIE/full RELRO, static application libraries; experimental |
 | `netbsd-amd64-legacy` | `snajpagent` | NetBSD 5.2.3 libc.so.12/libpthread.so.0 ABI, non-PIE, static application libraries; experimental |
 | `openbsd-amd64` | `snajpagent` | OpenBSD 7.9, static application libraries, native libc/thread ABI; experimental |
 | `openbsd-amd64-legacy` | `snajpagent` | OpenBSD 5.9 libc/thread ABI, static application libraries; experimental |

@@ -74,7 +74,14 @@ writes, parallel commands, PTY exit status, CLI/interactive resume and TLS
 trust/hostname checks on an installed NetBSD 5.2.3 guest. Its native two-segment
 ELF has a non-executable stack and stack protection, without PIE or RELRO.
 NetBSD 10.1's libpthread.so.1 cannot load this artifact. Earlier NetBSD releases
-and the modern ABI require separate qualification.
+require separate qualification.
+
+The `netbsd-amd64` target uses NetBSD 10.1's native libc.so.12/libpthread.so.1
+ABI with PIE, full RELRO, stack protection and a non-executable stack. Candidate
+`e5b7a8d8` is 4,268,152 bytes with matching debug symbols. Its static Unicode
+engine handles case folding in the C locale. Base/configuration/SSE/IRC,
+read-only enforcement, parallel commands, PTY exit status, CLI/interactive
+resume and TLS trust/hostname checks passed on the installed 10.1 guest.
 
 Each release's notes distinguish checks of its exact binaries from earlier
 implementation evidence. Record local fake-provider checks and paid-provider

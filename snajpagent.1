@@ -2542,6 +2542,17 @@ durability. Child exit observation preserves the final wait and status.
 Base/configuration/SSE/IRC, read-only enforcement, parallel commands, PTY,
 CLI/interactive resume and TLS trust/hostname checks were exercised on 3.5.
 .TP
+.B make prod-netbsd-amd64
+Build the experimental NetBSD 10.1 amd64 agent at
+.I build/matrix/netbsd-amd64/bin/snajpagent
+with matching symbols in .debug. It requires libc.so.12, libpthread.so.1
+and /libexec/ld.elf_so. Application libraries, Unicode, TLS and CA data are
+static. The executable uses PIE, full RELRO, stack protection and a
+non-executable stack. Native directory-relative filesystem operations,
+non-reaping child exit observation and PTY commands are supported.
+Base/configuration/SSE/IRC, read-only enforcement, parallel commands,
+CLI/interactive resume and TLS trust/hostname checks were exercised on 10.1.
+.TP
 .B make prod-netbsd-amd64-legacy
 Build the experimental NetBSD 5.2.3 amd64 agent at
 .I build/matrix/netbsd-amd64-legacy/bin/snajpagent

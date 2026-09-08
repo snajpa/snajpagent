@@ -4,8 +4,9 @@
 
 ## Unreleased
 
-- Add an experimental NetBSD 5.2.3 amd64 source-build target with static
+- Add experimental NetBSD 5.2.3 and 10.1 amd64 source-build targets with static
   application libraries and native filesystem, process and terminal support.
+  The 10.1 target uses PIE and full RELRO with its separate native pthread ABI.
 
 ## 0.99.2 — 2026-09-08
 
