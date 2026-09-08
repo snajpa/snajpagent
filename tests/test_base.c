@@ -15,6 +15,9 @@
 #ifndef SNAJPAGENT_STATIC_UTF8
 #include <wchar.h>
 #endif
+#ifdef SNAJPAGENT_STATIC_UTF8
+#include <unistr.h>
+#endif
 #include <locale.h>
 #include <regex.h>
 #include <signal.h>
@@ -2938,6 +2941,14 @@ run_base(int argc, char **argv)
     (void)argc;
     (void)argv;
 #endif
+#ifdef SNAJPAGENT_STATIC_UTF8
+    const uint32_t wide_text[] = {'A', 0x1f600u, 0};
+    assert(u32_strlen(wide_text) == 2u && u32_strlen(wide_text + 2u) == 0u);
+#endif
+    char formatted[48];
+    assert(snprintf(formatted, sizeof(formatted), "%zu/%td/%ju", (size_t)17,
+                    (ptrdiff_t)-3, (uintmax_t)4294967296ULL) == 16);
+    assert(strcmp(formatted, "17/-3/4294967296") == 0);
     char failure[8];
     assert(snag_errorf(failure, sizeof(failure), "%s %u", "bad", 3u) == -1);
     assert(strcmp(failure, "bad 3") == 0);

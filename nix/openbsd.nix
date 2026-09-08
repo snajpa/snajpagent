@@ -110,7 +110,7 @@ let
   compiler = "${compilerWrapper}/bin/clang";
   cxxCompiler = "${compilerWrapper}/bin/clang++";
   cflags = "-Os -g -D_BSD_SOURCE -fPIC"
-    + (if early then " -fno-stack-protector" else " -fstack-protector-strong")
+    + (if early then " -fno-stack-protector -fno-builtin-wcslen" else " -fstack-protector-strong")
     # 5.9's endian statement macros predate Clang's token-context diagnostic.
     + lib.optionalString legacy " -Wno-compound-token-split-by-macro";
   ldflags = "--ld-path=${llvm.lld}/bin/ld.lld";
@@ -297,13 +297,17 @@ let
     inherit pkgs unistring;
     cross = { inherit compiler cxxCompiler target sdk tools cflags ldflags; };
   }).overrideAttrs (old: {
-    preConfigure = ''
+    preConfigure = lib.optionalString early ''
+      export gl_cv_func_printf_sizes_c99=no
+    '' + ''
       # Native C-locale char32 encoding rejects non-ASCII even when the
       # replacement decoder accepts UTF-8; select the matching encoder too.
       export gl_cv_func_mbrtoc32_sanitycheck=no
       export gl_cv_func_c32rtomb_sanitycheck=no
     '' + (if early then lib.replaceStrings
-      [ "--m4-base=m4 regex" ] [ "--m4-base=m4 regex errno" ] old.preConfigure
+      [ "--m4-base=m4 regex" ]
+      [ "--m4-base=m4 regex errno snprintf-posix vsnprintf-posix printf-posix fprintf-posix" ]
+      old.preConfigure
       else old.preConfigure);
     postInstall = ''
       # OpenBSD sys/cdefs.h defines __used as an attribute. Rename only the
@@ -360,7 +364,7 @@ in {
           'CC=${compiler} --target=${target} --sysroot=${sdk}'
           'STRIP=${tools}/llvm-strip' 'OBJCOPY=${tools}/llvm-objcopy'
           'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
-          'CPPFLAGS=${lib.optionalString (!early) "-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 "}-D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\" -DSNAJPAGENT_STATIC_UTF8 -I${regex}/include -I${unistring}/include'
+          'CPPFLAGS=${lib.optionalString (!early) "-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 "}-D_FILE_OFFSET_BITS=64 ${lib.optionalString early "-Dsnprintf=rpl_snprintf -Dvsnprintf=rpl_vsnprintf -Dprintf=rpl_printf -Dfprintf=rpl_fprintf "}-Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\" -DSNAJPAGENT_STATIC_UTF8 -I${regex}/include -I${unistring}/include'
           'CFLAGS=-std=c11 ${cflags} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           'LDFLAGS=--ld-path=${llvm.lld}/bin/ld.lld ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections,--as-needed,-Bstatic'
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
