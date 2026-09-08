@@ -163,18 +163,30 @@ ownership across older libc failure paths. Native GNU make builds select BSD
 API declarations and libutil automatically. Use a UTF-8 locale and mounted
 devfs; the qualification guest used `en_US.UTF-8` and UFS for large sparse files.
 
-### FreeBSD 5.5 legacy target
+### FreeBSD 5.1/5.5 legacy target
 
-`make prod-freebsd-amd64-legacy` builds the full agent against the pinned 5.5
-release disc into `build/matrix/freebsd-amd64-legacy/bin/snajpagent`, with
+`make prod-freebsd-amd64-legacy` builds the full agent against the pinned 5.1
+mini-install disc into `build/matrix/freebsd-amd64-legacy/bin/snajpagent`, with
 matching symbols in `.debug`. Application libraries and libutil are static;
-only native `libc.so.5` and `libpthread.so.1` are imported. This is a separate
+only native `libc.so.5` and `libc_r.so.5` are imported through
+`/usr/libexec/ld-elf.so.1`. This is a separate
 ABI from the 8.4-based output, which remains available for 8.4 and 14.4.
 The old compiler driver uses the release's actual CRT and libgcc ordering;
 these runtimes predate crtbeginT.o, libgcc_eh and stack-protector support.
 The legacy executable is non-PIE and has a non-executable stack.
 
-Actual 5.5 amd64 QEMU qualification covers the full agent's read-only tools
+The legacy target includes Gnulib's static UTF-8 regex and libunistring width
+support, shared with the Windows recipe, and runs with the C character locale.
+It needs no installed UTF-8 locale data. The derived SDK broadens the original
+GCC-3-only attribute declarations for Clang. LLVM compiler-rt supplies 128-bit
+unsigned division under Apache-2.0 WITH LLVM-exception; preserve those notices.
+Compiler stack realignment accommodates the first amd64 libc_r thread ABI.
+The target's join adapter waits for a joinable thread to leave libc_r's active
+list before native status collection, avoiding its lost live-join notification.
+The 5.1 archive provides a publisher MD5; the recipe's SHA256 pins the bytes
+retrieved over official HTTPS and checked against that legacy digest.
+
+Actual 5.1 and 5.5 amd64 QEMU qualification covers the full agent's read-only tools
 and denied writes, interdependent parallel commands, PTY output/exit status,
 interactive history/resume, TLS distrust/explicit trust and hostname checks.
 Base, IRC and SSE units pass, including descriptor-relative operations,
@@ -193,7 +205,8 @@ these kernels. Native at-family APIs remain selected on newer build baselines.
 
 For old kernels lacking non-reaping wait flags, process-list snapshots preserve
 child ownership. PID and parentage are checked before interpreting the old
-zombie representation; the owner still collects status with waitpid. Source
+zombie representation. FreeBSD 5.1 omits zombie PIDs, so it also accepts the
+child-owned process group with matching parentage; the owner still collects status with waitpid. Source
 checks and the focused tests cover this path independently of full-agent
 qualification. The old libc realpath call uses a caller-owned buffer and checks
 that the original path exists before normalization.
@@ -337,7 +350,7 @@ and LLVM's Apache-2.0 WITH LLVM-exception terms. Older Windows still needs
 runtime qualification; a DLL import archive renamed to `.a` is never
 a self-contained static dependency.
 
-The Windows-only `regex` library attribute imports Gnulib's POSIX ERE module
+The Windows and early-FreeBSD `regex` library attribute imports Gnulib's POSIX ERE module
 at pinned revision `58df1afe785d3067cfa474ab57ccf283665dfa38` through
 `nix/windows-regex.nix`. Only its LGPLv2-compatible module closure is compiled;
 no third-party implementation is vendored and no external grep executable is
@@ -347,9 +360,9 @@ sets of notices and the corresponding source/build recipe when redistributing.
 The static engine handles UTF-8 internally, independently of msvcrt's locale
 support: its charset, multibyte width, DFA fast path and Unicode character
 classes consistently use UTF-8/Unicode. It does not change the process-global
-CRT locale or require UCRT or a separately installed regex DLL. POSIX builds
-continue using libc regex. This dependency is part of the Windows port in
-progress; it does not establish complete Windows agent support.
+CRT locale or require UCRT or a separately installed regex DLL. The FreeBSD
+5.1-based target uses the same UTF-8 engine with Gnulib multibyte-state and
+encoding replacements. Other POSIX builds continue using libc regex.
 
 `src/snag_jansson.h` is the only Jansson include surface in first-party C code. It
 prefers a system `<jansson.h>` when one is available. Some minimal qualification

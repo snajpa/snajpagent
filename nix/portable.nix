@@ -62,7 +62,7 @@ in assert buildRevision == null || buildRevision == revision; rec {
   freebsd-amd64-legacy = (import ./freebsd.nix {
     inherit pkgs;
     sourcePkgs = static;
-    osVersion = "5.5";
+    osVersion = "5.1";
   }).application (args "freebsd-amd64-legacy");
   windows-x86_64 = (import ./windows-legacy.nix { inherit pkgs; arch = "x86_64"; }).application (args "windows-x86_64");
   windows-arm64 = (import ./windows.nix {

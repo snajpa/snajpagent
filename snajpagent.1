@@ -2107,8 +2107,8 @@ Enables terminal capabilities and color detection.
 .TP
 .BR LC_ALL , " LC_CTYPE" , " LANG"
 On POSIX, select a UTF-8 locale using normal locale precedence.
-Native Windows uses explicit UTF-8 conversions and does not require a
-UTF-8 CRT locale.
+Native Windows and the FreeBSD 5.1-based production target use explicit
+UTF-8 processing and do not require installed UTF-8 locale data.
 .TP
 .B PATH
 On POSIX, used to resolve an executable invoked without a slash for the
@@ -2487,15 +2487,16 @@ different parent require reopening the directory. Close-on-exec flag setup is
 non-atomic on these old kernels.
 .TP
 .B make prod-freebsd-amd64-legacy
-Build the FreeBSD 5.5 amd64 agent with static application libraries and
+Build the FreeBSD 5.1/5.5 amd64 agent with static application libraries and
 embedded CA data. Copy
 .I build/matrix/freebsd-amd64-legacy/bin/snajpagent
-to a system providing libc.so.5, libpthread.so.1 and /libexec/ld-elf.so.1.
-Matching symbols are in the adjacent .debug directory. Use a UTF-8 locale and
-mounted devfs. This legacy executable is non-PIE and its old system runtime
+to a system providing libc.so.5, libc_r.so.5 and /usr/libexec/ld-elf.so.1.
+Matching symbols are in the adjacent .debug directory. Mount devfs before use.
+This target includes UTF-8 regex and display-width support and uses the C
+character locale; installed UTF-8 locale files are optional. This legacy executable is non-PIE and its old system runtime
 has no stack-protector support; its stack is non-executable.
 .PP
-Actual FreeBSD 5.5 qualification covers base/IRC/SSE tests, internal read-only
+Actual FreeBSD 5.1 and 5.5 qualification covers base/IRC/SSE tests, internal read-only
 inspection and denied writes, parallel commands, PTY execution, interactive
 resume and TLS trust/hostname verification with local fixtures. Other releases
 remain unverified for this artifact. The pathname race limits above apply.
