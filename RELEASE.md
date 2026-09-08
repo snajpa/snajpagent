@@ -105,6 +105,11 @@ requires an explicit scope decision, recorded in the release notes.
 - Keep versioned assets available. Do not overwrite a published version with
   different executable bytes; corrections get a new version. Label prereleases
   and experimental platforms explicitly rather than implying qualification.
+- Preserve release-tag ancestry when integrating later work. Once a commit is
+  tagged for publication, integrate that history without rebasing it away from
+  master. If equivalent patches were already rebased, reconcile the original
+  tagged history explicitly while retaining current source. Never move an
+  existing release tag to newer source or relabel different bytes as that release.
 
 ## Website and publication checklist
 
