@@ -410,88 +410,57 @@ open_parent_dir(int root_fd, const char *path, char leaf[SNAG_NAME_MAX_BYTES + 1
 }
 
 static int
-read_target_file(int root_fd, struct patch_op *op,
-                 char *error, size_t error_size)
+prepare_target(int root_fd, struct patch_op *op, char *error, size_t error_size)
 {
     char leaf[SNAG_NAME_MAX_BYTES + 1u];
-    int parent_fd = -1;
-    int fd = -1;
-    int rc = -1;
+    int parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
+    int fd = -1, rc = -1;
 
-    parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
     if (parent_fd < 0)
         return -1;
-    fd = snag_open_read_security_at(parent_fd, leaf, false);
-    if (fd < 0) {
-        snag_errorf(error, error_size, "patch target %s cannot be opened", op->path);
-        goto out;
-    }
-    if (snag_fstat(fd, &op->st) < 0)
-        goto out;
-    if (!S_ISREG(op->st.st_mode) || op->st.st_size > (int64_t)PATCH_FILE_MAX) {
-        (void)snag_fail(error, error_size, EINVAL,
-            "patch target %s is not a regular file within 16 MiB", op->path);
-        goto out;
-    }
-    if (snag_permissions_capture(fd, &op->permissions) < 0)
-        goto out;
-    if (snag_buf_read(&op->old_bytes, fd) < 0 || snag_buf_terminate(&op->old_bytes) < 0) {
-        snag_errorf(error, error_size, "patch target %s cannot be read", op->path);
-        goto out;
+    if (op->type == OP_ADD) {
+        snag_file_info st;
+        if (snag_lstat_at(parent_fd, leaf, &st) == 0) {
+            (void)snag_fail(error, error_size, EEXIST, "add target %s already exists", op->path);
+            goto out;
+        }
+        if (errno != ENOENT) {
+            snag_errorf(error, error_size, "add target %s cannot be checked", op->path);
+            goto out;
+        }
+    } else if (op->type == OP_DELETE) {
+        if (snag_lstat_at(parent_fd, leaf, &op->st) < 0) {
+            snag_errorf(error, error_size, "delete target %s cannot be checked", op->path);
+            goto out;
+        }
+        if (!S_ISREG(op->st.st_mode)) {
+            (void)snag_fail(error, error_size, EINVAL, "delete target %s is not a regular file", op->path);
+            goto out;
+        }
+    } else {
+        fd = snag_open_read_security_at(parent_fd, leaf, false);
+        if (fd < 0) {
+            snag_errorf(error, error_size, "patch target %s cannot be opened", op->path);
+            goto out;
+        }
+        if (snag_fstat(fd, &op->st) < 0)
+            goto out;
+        if (!S_ISREG(op->st.st_mode) || op->st.st_size > (int64_t)PATCH_FILE_MAX) {
+            (void)snag_fail(error, error_size, EINVAL,
+                "patch target %s is not a regular file within 16 MiB", op->path);
+            goto out;
+        }
+        if (snag_permissions_capture(fd, &op->permissions) < 0)
+            goto out;
+        if (snag_buf_read(&op->old_bytes, fd) < 0 || snag_buf_terminate(&op->old_bytes) < 0) {
+            snag_errorf(error, error_size, "patch target %s cannot be read", op->path);
+            goto out;
+        }
     }
     rc = 0;
 out:
     if (fd >= 0)
         close(fd);
-    close(parent_fd);
-    return rc;
-}
-
-static int
-validate_add_target(int root_fd, struct patch_op *op,
-                    char *error, size_t error_size)
-{
-    char leaf[SNAG_NAME_MAX_BYTES + 1u];
-    snag_file_info st;
-    int parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
-    int rc = -1;
-
-    if (parent_fd < 0)
-        return -1;
-    if (snag_lstat_at(parent_fd, leaf, &st) == 0) {
-        (void)snag_fail(error, error_size, EEXIST, "add target %s already exists", op->path);
-        goto out;
-    }
-    if (errno != ENOENT) {
-        snag_errorf(error, error_size, "add target %s cannot be checked", op->path);
-        goto out;
-    }
-    rc = 0;
-out:
-    close(parent_fd);
-    return rc;
-}
-
-static int
-validate_delete_target(int root_fd, struct patch_op *op,
-                       char *error, size_t error_size)
-{
-    char leaf[SNAG_NAME_MAX_BYTES + 1u];
-    int parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
-    int rc = -1;
-
-    if (parent_fd < 0)
-        return -1;
-    if (snag_lstat_at(parent_fd, leaf, &op->st) < 0) {
-        snag_errorf(error, error_size, "delete target %s cannot be checked", op->path);
-        goto out;
-    }
-    if (!S_ISREG(op->st.st_mode)) {
-        (void)snag_fail(error, error_size, EINVAL, "delete target %s is not a regular file", op->path);
-        goto out;
-    }
-    rc = 0;
-out:
     close(parent_fd);
     return rc;
 }
@@ -661,19 +630,16 @@ validate_and_compute(struct patch_set *set, int root_fd,
 {
     for (size_t i = 0; i < set->count; ++i) {
         struct patch_op *op = &set->ops[i];
+        if (prepare_target(root_fd, op, error, error_size) < 0)
+            return -1;
         if (op->type == OP_ADD) {
-            if (validate_add_target(root_fd, op, error, error_size) < 0 ||
-                append_new_lines(&op->new_bytes, op->add_lines, op->added_lines, false) < 0)
+            if (append_new_lines(&op->new_bytes, op->add_lines, op->added_lines, false) < 0)
                 return -1;
             set->total_file_bytes += op->new_bytes.len;
         } else if (op->type == OP_UPDATE) {
-            if (read_target_file(root_fd, op, error, error_size) < 0 ||
-                apply_update_hunks(op, error, error_size) < 0)
+            if (apply_update_hunks(op, error, error_size) < 0)
                 return -1;
             set->total_file_bytes += op->old_bytes.len + op->new_bytes.len;
-        } else {
-            if (validate_delete_target(root_fd, op, error, error_size) < 0)
-                return -1;
         }
         if (set->total_file_bytes > PATCH_TOTAL_MAX) {
             return snag_fail(error, error_size, EOVERFLOW,
