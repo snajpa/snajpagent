@@ -384,15 +384,18 @@ test_runtime_roles(void)
     endpoint(other, upstream_port);
     config.irc.client_count = 1u;
     assert(snag_strcpy(config.irc.clients[0], sizeof(config.irc.clients[0]), other));
+    joins = upstream_capture.events[SNAG_IRC_JOIN];
     assert(snag_irc_configure(runtime, &config, "/private-workspace", error, sizeof(error)) == 0);
     /* Registration includes both clients and catch-up, even on slow CPUs. */
     uint64_t registration_deadline = snag_monotonic_ms() + 10000u;
-    while (!snag_irc_mentions_agent(runtime, other, "agent1: work") &&
+    while ((!snag_irc_mentions_agent(runtime, other, "agent1: work") ||
+            upstream_capture.events[SNAG_IRC_JOIN] < joins + 2u) &&
            snag_monotonic_ms() < registration_deadline) {
         tick(runtime, 1u);
         tick(upstream, 1u);
     }
     assert(snag_irc_mentions_agent(runtime, other, "agent1: work"));
+    assert(upstream_capture.events[SNAG_IRC_JOIN] == joins + 2u);
     assert(strcmp(snag_irc_model_nick(runtime), "agent1") == 0);
     joins = upstream_capture.events[SNAG_IRC_JOIN];
     revision = snag_irc_routing_revision(runtime);
