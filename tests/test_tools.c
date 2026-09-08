@@ -483,45 +483,6 @@ test_command_output_limit_is_required_and_positive(void)
 }
 
 static void
-test_large_stdout_is_complete_for_model(void)
-{
-    json_t *result = run_command(
-        "perl -e 'binmode STDOUT; print q{x} x (1024 * 1024) or exit 23'",
-        5000);
-    json_t *out = json_object_get(result, "stdout");
-
-    assert(strcmp(snag_json_string(result, "status"), "succeeded") == 0);
-    assert(json_int_member(out, "original_bytes") == 1024 * 1024);
-    assert(json_int_member(out, "retained_bytes") == 6000);
-    assert(json_int_member(out, "discarded_bytes") == 1024 * 1024 - 6000);
-    const char *handle = snag_json_string(json_object_get(result, "output_ref"), "handle");
-    assert(output_journal[output_index(handle)].streams[0].len == 1024u * 1024u);
-    assert(strlen(snag_json_string(result, "model_text")) < 7000u);
-    json_decref(result);
-}
-
-static void
-test_output_excerpt_encoding(void)
-{
-    json_t *result = run_command("printf '\\377\\000\\n'; printf tail >&2", 1000);
-    json_t *out = json_object_get(result, "stdout");
-
-    assert(!strcmp(snag_json_string(out, "encoding"), "base64"));
-    assert(!strcmp(snag_json_string(out, "retained"), "/wAK"));
-    assert(json_int_member(out, "retained_bytes") == 3);
-    assert(json_int_member(out, "original_bytes") == 3);
-    assert(json_int_member(out, "discarded_bytes") == 0);
-    assert(!strcmp(snag_json_string(result, "model_text"),
-        "Process exited with code 0.\n\nstdout:\n<3 binary bytes; base64 follows>\n/wAK\n\nstderr:\ntail\n"));
-    json_decref(result);
-    result = run_command("printf 'line\\n'", 1000);
-    assert(!strcmp(snag_json_string(result, "model_text"), "Process exited with code 0.\n\nstdout:\nline\n"));
-    assert(!strcmp(snag_json_string(json_object_get(result, "stderr"), "retained"), ""));
-    assert(!strcmp(snag_json_string(json_object_get(result, "stderr"), "encoding"), "utf8"));
-    json_decref(result);
-}
-
-static void
 test_stdin_uses_blocking_child_fd(void)
 {
     bool delayed = false;
@@ -903,8 +864,6 @@ main(void)
     test_command_output_limit_selection();
     test_managed_output_ceiling();
     test_command_output_limit_is_required_and_positive();
-    test_large_stdout_is_complete_for_model();
-    test_output_excerpt_encoding();
     test_stdin_uses_blocking_child_fd();
     test_managed_process_hands_off_on_steering();
     test_wait_limit_and_pending_termination();

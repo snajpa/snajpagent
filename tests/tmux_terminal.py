@@ -4080,6 +4080,29 @@ def run_tool_cases(binary, root, provider, environment):
                     result = interact(result["handle"], eof=True, yield_ms=5000)
                 assert result["stdout"]["retained"] == (value or "")
 
+            result = command("perl -e 'binmode STDOUT; print q{x} x (1024 * 1024) or exit 23'", timeout=5000)
+            out = result["stdout"]
+            assert all(type(out[k]) is int for k in ("original_bytes", "retained_bytes", "discarded_bytes"))
+            assert out["original_bytes"] == 1024 * 1024
+            assert out["retained_bytes"] == 6000
+            assert out["discarded_bytes"] == 1024 * 1024 - 6000
+            handle = result["output_ref"]["handle"]
+            _, journal = read_events(terminal.dotdir)
+            chunks = [e["data"] for e in event_list(journal, "process_output")
+                      if e["data"]["handle"] == handle and e["data"]["stream"] == 0]
+            assert all(c["encoding"] == "utf8" for c in chunks)
+            assert "".join(c["data"] for c in chunks) == "x" * (1024 * 1024)
+            assert len(result["model_text"].encode()) < 7000
+            result = command("printf '\\377\\000\\n'; printf tail >&2")
+            assert all(type(result["stdout"][k]) is int for k in ("original_bytes", "retained_bytes", "discarded_bytes"))
+            assert result["stdout"] == {"encoding": "base64", "retained": "/wAK",
+                                        "retained_bytes": 3, "original_bytes": 3, "discarded_bytes": 0}
+            assert result["model_text"] == ("Process exited with code 0.\n\nstdout:\n"
+                "<3 binary bytes; base64 follows>\n/wAK\n\nstderr:\ntail\n")
+            result = command("printf 'line\\n'")
+            assert result["model_text"] == "Process exited with code 0.\n\nstdout:\nline\n"
+            assert result["stderr"]["retained"] == "" and result["stderr"]["encoding"] == "utf8"
+
             result = command("printf out; printf err >&2")
             assert result["stdout"]["retained"] == "out"
             assert result["stderr"]["retained"] == "err"
