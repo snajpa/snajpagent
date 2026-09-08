@@ -224,17 +224,9 @@ run_command_full(const char *command, int timeout_ms, const char *secret,
 }
 
 static json_t *
-run_command_with_credential(const char *command, int timeout_ms,
-                            const char *secret)
-{
-    return run_command_full(command, timeout_ms, secret, NULL, NULL, NULL,
-                            -1, 6000u);
-}
-
-static json_t *
 run_command(const char *command, int timeout_ms)
 {
-    return run_command_with_credential(command, timeout_ms, NULL);
+    return run_command_full(command, timeout_ms, NULL, NULL, NULL, NULL, -1, 6000u);
 }
 
 static json_t *
@@ -258,16 +250,9 @@ run_tool_with_wait(const char *name, json_t *args,
 }
 
 static json_t *
-run_tool_with_args_pump(const char *name, json_t *args,
-                        snag_tool_pump_fn pump, void *pump_opaque)
-{
-    return run_tool_with_wait(name, args, pump, pump_opaque, 60000u);
-}
-
-static json_t *
 run_tool_with_args(const char *name, json_t *args)
 {
-    return run_tool_with_args_pump(name, args, NULL, NULL);
+    return run_tool_with_wait(name, args, NULL, NULL, 60000u);
 }
 
 static json_t *
@@ -283,21 +268,14 @@ run_managed_exec(const char *command, int timeout_ms, int yield_ms)
 }
 
 static json_t *
-run_write_stdin_call_limit(const char *handle, const char *data, bool eof,
-                           int yield_ms, int max_output_tokens)
+run_write_stdin_call(const char *handle, const char *data, bool eof,
+                     int yield_ms, int max_output_tokens)
 {
     json_t *args = checked_json(json_pack("{s:s,s:s,s:o,s:b,s:I,s:o}",
         "handle", handle, "data", data, "eof", eof ? json_true() : json_false(), "terminate", 0,
         "yield_ms", (json_int_t)(yield_ms),
         "max_output_tokens", max_output_tokens < 0 ? json_null() : json_integer(max_output_tokens)));
     return run_tool_with_args("write_stdin", args);
-}
-
-static json_t *
-run_write_stdin_call(const char *handle, const char *data, bool eof,
-                     int yield_ms)
-{
-    return run_write_stdin_call_limit(handle, data, eof, yield_ms, -1);
 }
 
 static void
@@ -387,8 +365,8 @@ test_managed_process_hands_off_on_steering(void)
     assert(getcwd(cwd, sizeof(cwd)) != NULL);
     args = call_args_yield("sleep 2", cwd, 4000, 0, NULL);
     assert(snag_json_set_new(args, "pty", json_false()) == 0);
-    result = run_tool_with_args_pump("exec_command", args,
-                                     handoff_once_pump, &requested);
+    result = run_tool_with_wait("exec_command", args,
+                                handoff_once_pump, &requested, 60000u);
     assert(requested);
     assert(snag_time_ms() - started < 1000u);
     assert(strcmp(snag_json_string(result, "status"), "running") == 0);
@@ -430,8 +408,8 @@ test_managed_output_ceiling(void)
 
     assert(handle != NULL);
     for (size_t i = 0u; i < sizeof(requests) / sizeof(requests[0]); ++i) {
-        json_t *result = run_write_stdin_call_limit(handle, "", false, 1,
-                                                    requests[i]);
+        json_t *result = run_write_stdin_call(handle, "", false, 1,
+                                               requests[i]);
         assert(strcmp(snag_json_string(result, "status"), "running") == 0);
         assert(json_integer_value(json_object_get(result, "max_output_tokens")) ==
                (requests[i] == 42 ? 42 : 6000));
@@ -507,9 +485,9 @@ test_managed_process_accepts_repeated_write_stdin(void)
     assert(strcmp(snag_json_string(result, "status"), "running") == 0);
     handle = snag_json_string(result, "handle");
     assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
-    next = run_write_stdin_call(handle, "one\n", false, 50);
+    next = run_write_stdin_call(handle, "one\n", false, 50, -1);
     assert(strcmp(snag_json_string(next, "status"), "running") == 0);
-    done = run_write_stdin_call(handle, "two\n", true, 5000);
+    done = run_write_stdin_call(handle, "two\n", true, 5000, -1);
     assert(strcmp(snag_json_string(done, "status"), "succeeded") == 0);
     assert(strstr(snag_json_string(json_object_get(next, "stdout"),
                                   "retained"), "first:one") != NULL);
@@ -621,7 +599,8 @@ test_managed_close_kills_process_family(void)
 static void
 test_provider_secret_redacted(const char *command)
 {
-    json_t *result = run_command_with_credential(command, 1000, "secret-value-for-test");
+    json_t *result = run_command_full(command, 1000, "secret-value-for-test",
+                                      NULL, NULL, NULL, -1, 6000u);
     const char *retained = snag_json_string(json_object_get(result, "stdout"),
                                            "retained");
     assert(strstr(retained, "secret-value-for-test") == NULL);
@@ -793,7 +772,7 @@ test_steering_with_blocked_stdin(void)
     assert(json_int_member(ref, "stdin_accepted") == 1024 * 1024);
     assert(json_int_member(ref, "stdin_pending") > 0);
     const char *handle = snag_json_string(result, "handle");
-    json_t *rejected = run_write_stdin_call(handle, "duplicate", false, 0);
+    json_t *rejected = run_write_stdin_call(handle, "duplicate", false, 0, -1);
     assert(!strcmp(snag_json_string(rejected, "reason"), "stdin_busy"));
     json_decref(rejected);
     json_t *closed = run_tool_with_args("write_stdin",
