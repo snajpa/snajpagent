@@ -20,8 +20,13 @@ portable matrix. `WITH_OFFICE=0` supplies explicit unsupported-operation stubs.
 `src/office.c` runs one disposable child of the same binary through the existing
 bounded child runner. `src/office_package.c` checks ZIP/XML before import;
 `src/office_confine.c` denies Linux network/exec syscalls and applies available
-Landlock filesystem restrictions. Missing Landlock is labelled in results;
-other target confinement implementations are unfinished. This is not a proof
+Landlock filesystem restrictions. POSIX workers install CPU/file/time limits,
+a private working-directory lock and a fresh environment. Memory limits use
+RLIMIT_AS where supported, RLIMIT_DATA on macOS/targets without RLIMIT_AS.
+Linux installs a parent-death signal; other POSIX workers retain their own
+60-second alarm if the parent disappears. Missing Landlock and unavailable
+non-Linux OS confinement are labelled in results. Windows worker support and
+portable dependency/runtime closure remain unfinished. This is not a proof
 that all parser vulnerabilities are confined. Macro execution is disabled by
 the load call and active/external package features are rejected before loading.
 The worker exits without invoking LibreOffice global teardown after synchronous

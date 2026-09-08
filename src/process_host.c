@@ -1535,7 +1535,12 @@ exec_child(const char *shell, const char *command, const char *const *argv, cons
     if (argv) {
         struct rlimit cpu = {60u, 60u}, memory = {2ull << 30, 2ull << 30};
         struct rlimit files = {32u << 20, 32u << 20}, core = {0u, 0u};
-        if (setrlimit(RLIMIT_CPU, &cpu) || setrlimit(RLIMIT_AS, &memory) ||
+        if (setrlimit(RLIMIT_CPU, &cpu) ||
+#if defined(__APPLE__) || !defined(RLIMIT_AS)
+            setrlimit(RLIMIT_DATA, &memory) ||
+#else
+            setrlimit(RLIMIT_AS, &memory) ||
+#endif
             setrlimit(RLIMIT_FSIZE, &files) || setrlimit(RLIMIT_CORE, &core)) _exit(125);
     }
     if (chdir(workdir) < 0)

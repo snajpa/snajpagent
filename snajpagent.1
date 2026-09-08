@@ -3178,11 +3178,16 @@ scripts, macros, encrypted packages, external resource relationships, XML
 entities and embedded OLE, then disables macro execution for import. Linux
 network and process-execution syscalls are denied; available Landlock filesystem
 restrictions are applied and their availability is reported in the result.
+On other POSIX targets the result reports unavailable OS filesystem/network/exec
+confinement; package checks and worker resource limits still apply.
 This is not a general cross-platform parser sandbox. The worker has a 60-second
-CPU/elapsed limit, 2 GiB address-space limit, 32 MiB per-file/output limit,
+CPU/elapsed limit, 2 GiB address-space limit (data-segment limit on macOS and
+targets without RLIMIT_AS), 32 MiB per-file/output limit,
 4,096 ZIP-entry limit, 16 MiB per XML entry and 256 MiB expanded-input limit.
-The CPU, address-space, per-file and elapsed limits, plus a fresh credential-free
-environment, are also installed by the worker itself. It exits if its parent disappears. One private temporary
+The resource limits and a fresh credential-free environment are also installed
+by the POSIX worker itself. On Linux it exits if its parent disappears; other
+POSIX workers can survive the parent until their own elapsed limit expires.
+One private temporary
 profile/output directory is limited to 256 MiB for the current conversion.
 The existing conversion loop checks cumulative file sizes, 4,096 entries and
 32-directory depth at 50-millisecond checkpoints and before accepting output;
@@ -3823,8 +3828,9 @@ For a relative bundle, supply explicit OFFICE_CFLAGS and OFFICE_LIBS for the
 build-time headers/libraries; there is no runtime PATH search or download.
 OFFICE_CFLAGS and OFFICE_LIBS supply LibreOfficeKit, libarchive and libxml2
 headers/libraries. The complete runtime and fonts must accompany the build.
-The native Office worker currently requires Linux syscall confinement; other
-target adapters and portable Office packaging remain in development.
+Linux applies syscall and available filesystem confinement. Other POSIX targets
+report unavailable OS confinement and retain package checks and worker limits.
+Windows worker support and portable Office packaging remain in development.
 .TP
 .B make WITH_AUDIO_DEVICE=0
 Build a custom executable without capture, playback or audio-device enumeration.

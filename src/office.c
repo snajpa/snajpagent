@@ -148,7 +148,7 @@ snag_office_worker(int argc, char **argv)
     char *source_url = NULL, *output_url = NULL, *profile_url = NULL;
     char *runtime=NULL,*program_dir=NULL;
     struct snag_sheet_range range={0},*selection=NULL;
-    if ((argc != 6 && argc != 11) || argv[2][0] != '/' || !office_type(argv[3])) goto done;
+    if ((argc != 6 && argc != 11) || !snag_path_root_len(argv[2]) || !office_type(argv[3])) goto done;
     char *tail; unsigned long first = strtoul(argv[4],&tail,10);
     if (*tail || !first) goto done;
     unsigned long last = strtoul(argv[5],&tail,10);
@@ -177,6 +177,8 @@ snag_office_worker(int argc, char **argv)
     if (!source_url || !profile_url || !output_url) goto done;
     int confinement = snag_office_confine(dir,runtime,argv[2],error,sizeof(error));
     if (confinement < 0) goto done;
+    char confinement_note[sizeof(error)];
+    (void)snag_strcpy(confinement_note,sizeof(confinement_note),error);
     if (confinement > 0) (void)fprintf(stderr,"%s\n",error);
     if (snag_office_package(argv[2],error,sizeof(error)) < 0) goto done;
     if (setenv("SAL_USE_VCLPLUGIN","svp",1) || setenv("SAL_DISABLE_OPENCL","1",1) ||
@@ -240,10 +242,10 @@ snag_office_worker(int argc, char **argv)
         "LibreOffice: %s; document type %d, parts %d. "
         "Layout/fonts and computed values may differ from the originating application. "
         "Macros, scripts, embedded OLE and external resource relationships rejected; "
-        "macro execution disabled. Network/exec syscalls denied; filesystem confinement %s. "
+        "macro execution disabled. %s. "
         "Other pages, slides, sheets, cells and speaker notes uninspected.",
         selected,type,parts,
-        confinement?"unavailable on this host":"active");
+        confinement_note);
     struct snag_buf header;snag_buf_init(&header,2u*1024u*1024u);
     if(!meta || json_object_set_new(meta,"coverage",json_string(coverage))<0 ||
         snag_json_canonical(meta,&header)<0 || snag_buf_putc(&header,'\n')<0 ||

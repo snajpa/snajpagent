@@ -23,7 +23,7 @@
 #if SNAJPAGENT_OFFICE
 #include <archive.h>
 #include <archive_entry.h>
-#if defined(__linux__)
+#if !defined(_WIN32)
 #include <sys/resource.h>
 #include <sys/wait.h>
 #endif
@@ -1797,22 +1797,6 @@ test_office_import(void)
     if (!getenv("SNAJPAGENT_TEST_MEDIA")) return;
     char *root=snag_path_join(getenv("TMPDIR"),"snag-office-XXXXXX"), error[256];
     assert(root && mkdtemp(root));
-#if defined(__linux__)
-    pid_t child=fork();assert(child>=0);
-    if(!child) {
-        assert(chdir(root)==0 && setenv("SNAJPAGENT_OFFICE_SECRET","must disappear",1)==0);
-        assert(snag_office_worker_limits(root,error,sizeof(error))==0);
-        assert(!getenv("SNAJPAGENT_OFFICE_SECRET") && !strcmp(getenv("HOME"),root));
-        const int limits[]={RLIMIT_CPU,RLIMIT_AS,RLIMIT_FSIZE,RLIMIT_CORE};
-        const rlim_t values[]={60u,2ull<<30,32u<<20,0u};
-        for(size_t i=0;i<4u;++i) {
-            struct rlimit bound;assert(getrlimit(limits[i],&bound)==0);
-            assert(bound.rlim_cur==values[i] && bound.rlim_max==values[i]);
-        }
-        _Exit(0);
-    }
-    int status;assert(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0);
-#endif
     char *path=snag_path_join(root,"test.odt");
     const char *names[]={"mimetype","content.xml","META-INF/manifest.xml"};
     const char *bodies[]={"application/vnd.oasis.opendocument.text",
@@ -2127,11 +2111,53 @@ test_office_import(void)
 static void test_office_import(void) {}
 #endif
 
+static void test_office_limits(void)
+{
+#if SNAJPAGENT_OFFICE && !defined(_WIN32)
+    char *root=snag_path_join(getenv("TMPDIR"),"snag-office-limits-XXXXXX"),error[256];
+    assert(root && mkdtemp(root));
+    for(unsigned int private_dir=0;private_dir<2u;++private_dir) {
+        assert(chmod(root,private_dir?0700:0777)==0);
+        pid_t child=fork();assert(child>=0);
+        if(!child) {
+            assert(chdir(root)==0 && setenv("SNAJPAGENT_OFFICE_SECRET","must disappear",1)==0);
+            int rc=snag_office_worker_limits(root,error,sizeof(error));
+            if(!private_dir) {assert(rc<0);_Exit(0);}
+            assert(rc==0 && !getenv("SNAJPAGENT_OFFICE_SECRET"));
+            assert(!strcmp(getenv("HOME"),root) && !strcmp(getenv("TMPDIR"),root));
+            assert(!strcmp(getenv("LC_ALL"),"C") && !strcmp(getenv("TZ"),"UTC"));
+            const int limits[]={RLIMIT_CPU,
+#if defined(__APPLE__) || !defined(RLIMIT_AS)
+                RLIMIT_DATA,
+#else
+                RLIMIT_AS,
+#endif
+                RLIMIT_FSIZE,RLIMIT_CORE};
+            const rlim_t values[]={60u,2ull<<30,32u<<20,0u};
+            for(size_t i=0;i<4u;++i) {
+                struct rlimit bound;assert(getrlimit(limits[i],&bound)==0);
+                assert(bound.rlim_cur==values[i] && bound.rlim_max==values[i]);
+            }
+            assert(alarm(0)>0);
+#if !defined(__linux__)
+            assert(snag_office_confine(root,root,root,error,sizeof(error))==1);
+            assert(strstr(error,"confinement unavailable"));
+            assert(!strstr(error,"syscalls denied"));
+#endif
+            _Exit(0);
+        }
+        int status;assert(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0);
+    }
+    assert(rmdir(root)==0);free(root);
+#endif
+}
+
 int
 main(int argc, char **argv)
 {
     snag_office_program(argv[0]);
     (void)snag_office_worker(argc,argv);
+    test_office_limits();
     char *office_root=snag_office_runtime("/bundle/bin/snajpagent","../lib/libreoffice");
     assert(office_root && !strcmp(office_root,"/bundle/bin/../lib/libreoffice"));free(office_root);
     office_root=snag_office_runtime("/snajpagent","lib/libreoffice");

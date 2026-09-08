@@ -17,5 +17,7 @@ int snag_office_export(struct snag_session *, const char *, const char *, unsign
 /* Worker-only: rejects active/external Office package content before import. */
 int snag_office_package(const char *, char *, size_t);
 int snag_office_worker_limits(const char *, char *, size_t);
+/* Nonnegative: writes the applied restrictions/availability to the message;
+ * 1 means OS confinement is wholly or partly unavailable, -1 is a failure. */
 int snag_office_confine(const char *, const char *, const char *, char *, size_t);
 #endif

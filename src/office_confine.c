@@ -11,8 +11,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#if defined(__linux__) && SNAJPAGENT_OFFICE
+#if SNAJPAGENT_OFFICE && !defined(_WIN32)
 #include <fcntl.h>
+#include <sys/resource.h>
+#include <signal.h>
+#if defined(__linux__)
 #include <linux/audit.h>
 #include <linux/filter.h>
 #include <linux/landlock.h>
@@ -20,8 +23,7 @@
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <sys/stat.h>
-#include <sys/resource.h>
-#include <signal.h>
+#endif
 
 int
 snag_office_worker_limits(const char *dir,char *error,size_t size)
@@ -30,10 +32,17 @@ snag_office_worker_limits(const char *dir,char *error,size_t size)
     struct rlimit file={32u<<20,32u<<20},core={0u,0u};
     struct snag_file_privacy privacy;
     struct snag_directory_lock lock={.fd=-1};
-    pid_t parent_pid=getppid();
     /* Also enforced when invoked directly, independently of the parent runner. */
-    if(prctl(PR_SET_PDEATHSIG,SIGKILL) || getppid()!=parent_pid ||
-        setrlimit(RLIMIT_CPU,&cpu) || setrlimit(RLIMIT_AS,&memory) ||
+#if defined(__linux__)
+    pid_t parent_pid=getppid();
+    if(prctl(PR_SET_PDEATHSIG,SIGKILL) || getppid()!=parent_pid)goto failed;
+#endif
+    if(setrlimit(RLIMIT_CPU,&cpu) ||
+#if defined(__APPLE__) || !defined(RLIMIT_AS)
+        setrlimit(RLIMIT_DATA,&memory) ||
+#else
+        setrlimit(RLIMIT_AS,&memory) ||
+#endif
         setrlimit(RLIMIT_FSIZE,&file) || setrlimit(RLIMIT_CORE,&core))goto failed;
     if(signal(SIGALRM,SIG_DFL)==SIG_ERR)goto failed;
     alarm(60u);
@@ -41,7 +50,25 @@ snag_office_worker_limits(const char *dir,char *error,size_t size)
     if(work_fd<0 || snag_fd_privacy(work_fd,&privacy)<0 ||
         !privacy.effective_owner || !privacy.private_access ||
         snag_directory_lock_acquire(work_fd,&lock)<0)goto failed;
-    if(clearenv() || setenv("HOME",dir,1) || setenv("TMPDIR",dir,1) ||
+#if defined(__linux__)
+    if(clearenv())goto failed;
+#else
+    /* clearenv is not available on every supported POSIX libc. */
+    char **entries=snag_environment_entries();
+    if(!entries)goto failed;
+    int env_rc=0;
+    for(size_t i=0;entries[i] && !env_rc;++i) {
+        char *eq=strchr(entries[i],'=');
+        if(eq) {
+            *eq=0;
+            (void)unsetenv(entries[i]); /* void return on legacy BSD. */
+            if(getenv(entries[i]))env_rc=-1;
+        }
+    }
+    snag_environment_entries_free(entries);
+    if(env_rc)goto failed;
+#endif
+    if(setenv("HOME",dir,1) || setenv("TMPDIR",dir,1) ||
         setenv("TMP",dir,1) || setenv("TEMP",dir,1) || setenv("LC_ALL","C",1) ||
         setenv("TZ","UTC",1))goto failed;
     return 0;
@@ -49,6 +76,7 @@ failed:
     snag_errorf(error,size,"Office worker limits/private directory failed: %s",strerror(errno));return -1;
 }
 
+#if defined(__linux__)
 static int
 allow_path(int rule, const char *path, uint64_t rights, bool required)
 {
@@ -130,12 +158,21 @@ snag_office_confine(const char *workdir, const char *runtime, const char *input,
 #undef DENY
     struct sock_fprog program = {.len = (unsigned short)(sizeof(filter) / sizeof(filter[0])), .filter = filter};
     if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program) < 0) goto failed;
-    if (abi < 1) (void)snprintf(error, size, "Filesystem confinement unavailable; package checks and network/exec restrictions active");
+    (void)snprintf(error, size, "Network/exec syscalls denied; filesystem confinement %s",
+        abi < 1 ? "unavailable on this host" : "active");
     return abi < 1 ? 1 : 0;
 #endif
 failed:
     snag_errorf(error, size, "Office confinement failed: %s", strerror(errno)); return -1;
 }
+#else
+int snag_office_confine(const char *dir, const char *runtime, const char *input, char *error, size_t size)
+{
+    (void)dir; (void)runtime; (void)input;
+    (void)snprintf(error,size,"OS filesystem/network/exec confinement unavailable; package checks and worker limits active");
+    return 1;
+}
+#endif
 #else
 int snag_office_worker_limits(const char *dir,char *error,size_t size)
 {
