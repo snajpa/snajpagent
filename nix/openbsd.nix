@@ -104,6 +104,7 @@ let
       cmakeFlags = [
         "-DCMAKE_SYSTEM_NAME=OpenBSD" "-DCMAKE_SYSTEM_VERSION=${osVersion}"
         "-DCMAKE_SYSTEM_PROCESSOR=amd64" "-DCMAKE_SYSROOT=${sdk}"
+        "-DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER"
         "-DCMAKE_C_COMPILER=${compiler}" "-DCMAKE_C_COMPILER_TARGET=${target}"
         "-DCMAKE_CXX_COMPILER=${cxxCompiler}"
         "-DCMAKE_CXX_COMPILER_TARGET=${target}"
@@ -205,7 +206,13 @@ let
   regex = (import ./windows-regex.nix {
     inherit pkgs unistring;
     cross = { inherit compiler cxxCompiler target sdk tools cflags ldflags; };
-  }).overrideAttrs (_: {
+  }).overrideAttrs (old: {
+    preConfigure = ''
+      # Native C-locale char32 encoding rejects non-ASCII even when the
+      # replacement decoder accepts UTF-8; select the matching encoder too.
+      export gl_cv_func_mbrtoc32_sanitycheck=no
+      export gl_cv_func_c32rtomb_sanitycheck=no
+    '' + old.preConfigure;
     postInstall = ''
       # OpenBSD sys/cdefs.h defines __used as an attribute. Rename only the
       # public header's private struct member; its layout and library ABI stay.
