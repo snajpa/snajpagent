@@ -1096,7 +1096,8 @@ child_spawn(struct snag_child *child, const char *shell, const char *command,
         limits.BasicLimitInformation.PerJobUserTimeLimit.QuadPart = 60ll * 10000000ll;
     }
     /* The isolated broker explicitly terminates this job on parent death. */
-    if (!isolated && !SetInformationJobObject(native->job, JobObjectExtendedLimitInformation,
+    if(isolated)limits.BasicLimitInformation.LimitFlags &= ~JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if ((!isolated || argv) && !SetInformationJobObject(native->job, JobObjectExtendedLimitInformation,
                                                &limits, sizeof(limits)))
         goto native_error;
     if (isolated) {
@@ -1954,7 +1955,6 @@ snag_child_wait(struct snag_child_event *events, size_t count, snag_wake_fd wake
     }
     return rc;
 }
-#endif
 
 int
 snag_child_spawn(struct snag_child *child, const char *shell, const char *command,
@@ -1970,3 +1970,4 @@ snag_child_spawn_argv(struct snag_child *child, const char *const *argv,
     if (!argv || !argv[0] || !snag_path_root_len(argv[0])) { errno = EINVAL; return -1; }
     return child_spawn(child, argv[0], NULL, argv, directory, environment, false);
 }
+#endif

@@ -2126,6 +2126,8 @@ static void test_office_limits(void)
             assert(rc==0 && !getenv("SNAJPAGENT_OFFICE_SECRET"));
             assert(!strcmp(getenv("HOME"),root) && !strcmp(getenv("TMPDIR"),root));
             assert(!strcmp(getenv("LC_ALL"),"C") && !strcmp(getenv("TZ"),"UTC"));
+            assert(!strcmp(getenv("SAL_USE_VCLPLUGIN"),"svp") && !strcmp(getenv("SAL_DISABLE_OPENCL"),"1"));
+            assert(!strcmp(getenv("LOK_HOST_ALLOWLIST"),"a^") && !strcmp(getenv("SAL_LOG"),"-WARN"));
             const int limits[]={RLIMIT_CPU,
 #if defined(__APPLE__) || !defined(RLIMIT_AS)
                 RLIMIT_DATA,

@@ -25,8 +25,15 @@ a private working-directory lock and a fresh environment. Memory limits use
 RLIMIT_AS where supported, RLIMIT_DATA on macOS/targets without RLIMIT_AS.
 Linux installs a parent-death signal; other POSIX workers retain their own
 60-second alarm if the parent disappears. Missing Landlock and unavailable
-non-Linux OS confinement are labelled in results. Windows worker support and
-portable dependency/runtime closure remain unfinished. This is not a proof
+non-Linux OS confinement are labelled in results. Windows workers check job
+CPU/memory limits, use a one-shot elapsed timer and keep the private-directory
+lock; direct-argv launches apply job limits through the isolated broker too.
+The Windows CRT/native environment receives the private paths/import settings
+and retains only system-directory/hidden-drive entries from its input. Worker
+stdout is binary and runtime file URLs handle drive/UNC/UTF-8 paths. Windows
+output/scratch-size checks remain in the parent loop, without a per-write
+filesystem quota. Portable dependency/runtime closure remains unfinished.
+This is not a proof
 that all parser vulnerabilities are confined. Macro execution is disabled by
 the load call and active/external package features are rejected before loading.
 The worker exits without invoking LibreOffice global teardown after synchronous

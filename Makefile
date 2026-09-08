@@ -158,7 +158,7 @@ $(FIXTURE_BIN): $(COMMON_SRC) src/main.c tests/fixture_provider.c $(HEADERS) $(P
 	done; \
 	$(CC) $(LDFLAGS) -o $@ $$objs $(PDF_OBJ) $(AUDIO_DEVICE_OBJ) $(LDLIBS) $(CURL_LIBS)
 
-tests/test_base: src/pcm.c src/pcm.h $(PLATFORM_SRC) src/convert.c tests/test_base.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/process_host.h
+tests/test_base: src/pcm.c src/pcm.h $(PLATFORM_SRC) src/convert.c src/office_confine.c src/office.h tests/test_base.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/process_host.h
 
 tests/test_config: $(PLATFORM_SRC) src/config.c src/secret_source.c tests/test_config.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h
 
@@ -197,7 +197,7 @@ tests/test_store: $(PLATFORM_SRC) src/json.c src/instructions.c src/media.c src/
 tests/test_context tests/test_store tests/test_tools tests/test_turn: tests/checked_json.h
 
 tests/test_base tests/test_sse tests/test_provider_retry:
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ $(filter %.c,$^) $(LDLIBS)
+	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ $(filter %.c,$^) $(LDLIBS)
 
 tests/test_config tests/test_irc tests/test_credential tests/test_instructions tests/test_json tests/test_wire tests/test_responses tests/test_context tests/test_model_cache tests/test_render tests/test_turn:
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \

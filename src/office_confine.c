@@ -11,6 +11,56 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+#if SNAJPAGENT_OFFICE
+static int office_setenv(const char *name,const char *value)
+{
+#ifdef _WIN32
+    wchar_t *key=snag_utf8_to_wide(name),*wide=value?snag_utf8_to_wide(value):NULL;
+    struct snag_buf entry;snag_buf_init(&entry,SNAG_PATH_MAX_BYTES+64u);
+    wchar_t *pair=NULL;int rc=-1;
+    if(!key || (value && !wide) || snag_buf_printf(&entry,"%s=%s",name,value?value:"")<0 ||
+        snag_buf_terminate(&entry)<0 || !(pair=snag_utf8_to_wide((char *)entry.data)))goto out;
+    /* The CRT table and native environment can be consumed independently. */
+    if(!_wputenv(pair)) {
+        if(SetEnvironmentVariableW(key,wide) || (!value && GetLastError()==ERROR_ENVVAR_NOT_FOUND))rc=0;
+    }
+out:
+    free(key);free(wide);free(pair);snag_buf_free(&entry);return rc;
+#else
+    if(value)return setenv(name,value,1);
+    (void)unsetenv(name); /* void return on legacy BSD. */
+    return getenv(name)?-1:0;
+#endif
+}
+
+static int office_environment(const char *dir)
+{
+    char **entries=snag_environment_entries();
+    if(!entries)return -1;
+    int rc=0;
+    for(size_t i=0;entries[i] && !rc;++i) {
+#ifdef _WIN32
+        /* Keep native system location and hidden drive-current-directory entries. */
+        if(entries[i][0]=='=' || snag_environment_prefix(entries[i],"SystemRoot=") ||
+            snag_environment_prefix(entries[i],"WINDIR="))continue;
+#endif
+        char *eq=strchr(entries[i],'=');
+        if(eq) {*eq=0;rc=office_setenv(entries[i],NULL);}
+    }
+    snag_environment_entries_free(entries);
+    if(rc || office_setenv("HOME",dir) || office_setenv("TMPDIR",dir) ||
+        office_setenv("TMP",dir) || office_setenv("TEMP",dir) ||
+        office_setenv("LC_ALL","C") || office_setenv("TZ","UTC") ||
+        office_setenv("SAL_USE_VCLPLUGIN","svp") || office_setenv("SAL_DISABLE_OPENCL","1") ||
+        office_setenv("LOK_HOST_ALLOWLIST","a^") || office_setenv("SAL_LOG","-WARN"))return -1;
+    return 0;
+}
+#endif
+
 #if SNAJPAGENT_OFFICE && !defined(_WIN32)
 #include <fcntl.h>
 #include <sys/resource.h>
@@ -50,27 +100,7 @@ snag_office_worker_limits(const char *dir,char *error,size_t size)
     if(work_fd<0 || snag_fd_privacy(work_fd,&privacy)<0 ||
         !privacy.effective_owner || !privacy.private_access ||
         snag_directory_lock_acquire(work_fd,&lock)<0)goto failed;
-#if defined(__linux__)
-    if(clearenv())goto failed;
-#else
-    /* clearenv is not available on every supported POSIX libc. */
-    char **entries=snag_environment_entries();
-    if(!entries)goto failed;
-    int env_rc=0;
-    for(size_t i=0;entries[i] && !env_rc;++i) {
-        char *eq=strchr(entries[i],'=');
-        if(eq) {
-            *eq=0;
-            (void)unsetenv(entries[i]); /* void return on legacy BSD. */
-            if(getenv(entries[i]))env_rc=-1;
-        }
-    }
-    snag_environment_entries_free(entries);
-    if(env_rc)goto failed;
-#endif
-    if(setenv("HOME",dir,1) || setenv("TMPDIR",dir,1) ||
-        setenv("TMP",dir,1) || setenv("TEMP",dir,1) || setenv("LC_ALL","C",1) ||
-        setenv("TZ","UTC",1))goto failed;
+    if(office_environment(dir))goto failed;
     return 0;
 failed:
     snag_errorf(error,size,"Office worker limits/private directory failed: %s",strerror(errno));return -1;
@@ -173,6 +203,49 @@ int snag_office_confine(const char *dir, const char *runtime, const char *input,
     return 1;
 }
 #endif
+#elif SNAJPAGENT_OFFICE && defined(_WIN32)
+static void CALLBACK office_timeout(void *opaque,BOOLEAN fired)
+{
+    (void)opaque;(void)fired;
+    (void)TerminateProcess(GetCurrentProcess(),124u);
+}
+
+int snag_office_worker_limits(const char *dir,char *error,size_t size)
+{
+    HANDLE job=NULL,timer=NULL;
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits={0};
+    DWORD required=JOB_OBJECT_LIMIT_JOB_MEMORY|JOB_OBJECT_LIMIT_JOB_TIME;
+    if(!QueryInformationJobObject(NULL,JobObjectExtendedLimitInformation,&limits,sizeof(limits),NULL)) {
+        job=CreateJobObjectW(NULL,NULL);
+        limits.BasicLimitInformation.LimitFlags=required;
+        limits.BasicLimitInformation.PerJobUserTimeLimit.QuadPart=60ll*10000000ll;
+        limits.JobMemoryLimit=(SIZE_T)2u<<30;
+        if(!job || !SetInformationJobObject(job,JobObjectExtendedLimitInformation,&limits,sizeof(limits)) ||
+            !AssignProcessToJobObject(job,GetCurrentProcess()))goto failed;
+        /* Own handle remains open for this disposable worker's lifetime. */
+    }
+    if((limits.BasicLimitInformation.LimitFlags&required)!=required ||
+        limits.JobMemoryLimit>((SIZE_T)2u<<30) ||
+        limits.BasicLimitInformation.PerJobUserTimeLimit.QuadPart>60ll*10000000ll)goto failed;
+    if(!CreateTimerQueueTimer(&timer,NULL,office_timeout,NULL,60000u,0u,WT_EXECUTEONLYONCE))goto failed;
+    struct snag_file_privacy privacy;
+    struct snag_directory_lock lock={.fd=-1};
+    int fd=snag_open_read(".",true);
+    if(fd<0 || snag_fd_privacy(fd,&privacy)<0 || !privacy.effective_owner || !privacy.private_access ||
+        snag_directory_lock_acquire(fd,&lock)<0 || office_environment(dir))goto failed;
+    SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX|SEM_NOOPENFILEERRORBOX);
+    return 0;
+failed:
+    snag_errorf(error,size,"Office worker job limits/private directory failed (Windows %lu, errno %d)",
+        (unsigned long)GetLastError(),errno);return -1;
+}
+
+int snag_office_confine(const char *dir,const char *runtime,const char *input,char *error,size_t size)
+{
+    (void)dir;(void)runtime;(void)input;
+    (void)snprintf(error,size,"OS filesystem/network/exec confinement unavailable; package checks and job limits active");
+    return 1;
+}
 #else
 int snag_office_worker_limits(const char *dir,char *error,size_t size)
 {

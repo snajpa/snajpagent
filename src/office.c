@@ -11,6 +11,9 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#ifdef _WIN32
+#include <io.h>
+#endif
 
 static char executable[SNAG_PATH_MAX_BYTES + 1u];
 void snag_office_program(const char *program)
@@ -191,10 +194,13 @@ snag_office_worker(int argc, char **argv)
     (void)snag_strcpy(confinement_note,sizeof(confinement_note),error);
     if (confinement > 0) (void)fprintf(stderr,"%s\n",error);
     if (snag_office_package(argv[2],error,sizeof(error)) < 0) goto done;
-    if (setenv("SAL_USE_VCLPLUGIN","svp",1) || setenv("SAL_DISABLE_OPENCL","1",1) ||
-        setenv("LOK_HOST_ALLOWLIST","a^",1) || setenv("SAL_LOG","-WARN",1)) goto done;
     /* Suppress library stdout. Only verified PDF bytes reach the parent. */
+#ifdef _WIN32
+    if(_setmode(STDOUT_FILENO,_O_BINARY)<0)goto done;
+    int channel = dup(STDOUT_FILENO), null = open("NUL",O_WRONLY|O_BINARY);
+#else
     int channel = dup(STDOUT_FILENO), null = open("/dev/null",O_WRONLY);
+#endif
     if (channel < 0 || null < 0 || dup2(null,STDOUT_FILENO) < 0) goto done;
     close(null);
     LibreOfficeKit *office = libreofficekit_hook_2(program_dir,profile_url);

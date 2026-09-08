@@ -3178,22 +3178,28 @@ scripts, macros, encrypted packages, external resource relationships, XML
 entities and embedded OLE, then disables macro execution for import. Linux
 network and process-execution syscalls are denied; available Landlock filesystem
 restrictions are applied and their availability is reported in the result.
-On other POSIX targets the result reports unavailable OS filesystem/network/exec
+On other targets the result reports unavailable OS filesystem/network/exec
 confinement; package checks and worker resource limits still apply.
 This is not a general cross-platform parser sandbox. The worker has a 60-second
 CPU/elapsed limit, 2 GiB address-space limit (data-segment limit on macOS and
 targets without RLIMIT_AS), 32 MiB per-file/output limit,
 4,096 ZIP-entry limit, 16 MiB per XML entry and 256 MiB expanded-input limit.
 The resource limits and a fresh credential-free environment are also installed
-by the POSIX worker itself. On Linux it exits if its parent disappears; other
+by the POSIX worker itself. Windows verifies the direct-argv child's 2 GiB job
+memory and 60-second user-CPU limits, installs a 60-second elapsed timer, locks
+the private directory and replaces its environment while retaining system
+directory variables. A direct internal invocation creates its own job when
+unassigned; an existing job lacking these limits causes an error.
+On Linux it exits if its parent disappears; other
 POSIX workers can survive the parent until their own elapsed limit expires.
 One private temporary
 profile/output directory is limited to 256 MiB for the current conversion.
 The existing conversion loop checks cumulative file sizes, 4,096 entries and
 32-directory depth at 50-millisecond checkpoints and before accepting output;
 crossing a bound terminates the operation.
-This polling bound can overshoot between checks. The per-file limit applies
-at writes. Ordinary completion removes the directory; session reopening removes
+This polling bound can overshoot between checks. POSIX per-file limits apply
+at writes; Windows enforces output and scratch sizes at parent checkpoints.
+Ordinary completion removes the directory; session reopening removes
 crash residue after its worker releases ownership. A surviving worker's directory
 is preserved and another Office import must wait for it to exit. Session deletion
 includes this temporary directory and preserves a live worker's data on failure.
@@ -3832,7 +3838,9 @@ OFFICE_CFLAGS and OFFICE_LIBS supply LibreOfficeKit, libarchive and libxml2
 headers/libraries. The complete runtime and fonts must accompany the build.
 Linux applies syscall and available filesystem confinement. Other POSIX targets
 report unavailable OS confinement and retain package checks and worker limits.
-Windows worker support and portable Office packaging remain in development.
+Windows applies job CPU/memory limits and an elapsed timer; OS
+filesystem/network/exec confinement is reported unavailable.
+Portable Office packaging remains in development.
 .TP
 .B make WITH_AUDIO_DEVICE=0
 Build a custom executable without capture, playback or audio-device enumeration.

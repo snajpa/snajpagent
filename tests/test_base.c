@@ -7,6 +7,7 @@
 #include "net.h"
 #include "term_host.h"
 #include "process_host.h"
+#include "office.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -506,6 +507,25 @@ test_native_process_input(bool pty, bool isolated)
     snag_environment_entries_free(env);
     free(executable);
     free(directory);
+}
+
+static void test_direct_argv_limits(void)
+{
+    char *program=snag_program_path(NULL),*dir=snag_realpath(".");
+    char id[SNAG_ID_HEX_LEN+1u];assert(dir && snag_random_id(id)==0);
+    char *scratch=snag_path_join(dir,id);
+    assert(scratch && snag_mkdir_private(scratch)==0);
+    char **env=snag_environment_entries();
+    const char *args[]={program,"--direct-argv-limits",scratch,NULL};
+    struct snag_child child;snag_child_init(&child);
+    assert(program && dir && env && snag_child_spawn_argv(&child,args,scratch,env)==0);
+    snag_child_close_stream(&child,2u);
+    DWORD started=GetTickCount();
+    while(!snag_child_exited(&child) && GetTickCount()-started<10000u)Sleep(10u);
+    assert(snag_child_exited(&child));
+    assert(snag_child_reap(&child)==0 && child.exit_code==0);
+    snag_child_free(&child);free(program);free(dir);snag_environment_entries_free(env);
+    assert(snag_unlink_at(-1,scratch,true)==0);free(scratch);
 }
 
 static void
@@ -2460,6 +2480,7 @@ test_platform(void)
 {
 #ifdef _WIN32
     test_cmd_argument_probe();
+    test_direct_argv_limits();
     test_native_process(false, false);
     test_native_process(true, false);
     test_native_process_input(false, false);
@@ -3118,6 +3139,28 @@ test_pcm(void)
 static int
 run_base(int argc, char **argv)
 {
+#ifdef _WIN32
+    if(argc==3 && !strcmp(argv[1],"--direct-argv-limits")) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits={0};
+        assert(QueryInformationJobObject(NULL,JobObjectExtendedLimitInformation,&limits,sizeof(limits),NULL));
+        DWORD flags=JOB_OBJECT_LIMIT_JOB_MEMORY|JOB_OBJECT_LIMIT_JOB_TIME;
+        assert((limits.BasicLimitInformation.LimitFlags&flags)==flags);
+        assert(limits.JobMemoryLimit==((SIZE_T)2u<<30));
+        assert(limits.BasicLimitInformation.PerJobUserTimeLimit.QuadPart==60ll*10000000ll);
+#if SNAJPAGENT_OFFICE
+        assert(_wputenv(L"SNAJPAGENT_OFFICE_SECRET=must disappear")==0);
+        char error[256];
+        assert(snag_office_worker_limits(argv[2],error,sizeof(error))==0);
+        assert(!getenv("SNAJPAGENT_OFFICE_SECRET") && !snag_environment("SNAJPAGENT_OFFICE_SECRET"));
+        char *home=snag_environment("HOME"),*plugin=snag_environment("SAL_USE_VCLPLUGIN");
+        assert(home && !strcmp(home,argv[2]) && plugin && !strcmp(plugin,"svp"));
+        free(home);free(plugin);
+        assert(snag_office_confine(argv[2],argv[2],argv[2],error,sizeof(error))==1);
+        assert(strstr(error,"confinement unavailable") && !strstr(error,"syscalls denied"));
+#endif
+        return 0;
+    }
+#endif
     test_wide_division();
 #ifdef _WIN32
     if (argc == 2 && !strcmp(argv[1], "--standard-console-creation")) {
