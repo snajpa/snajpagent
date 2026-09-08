@@ -281,9 +281,8 @@ copy_goal_argument(const char *argument, uint32_t limit,
         --end;
     if (start < end && *start == '"') {
         if (end - start < 2 || end[-1] != '"') {
-            (void)snprintf(error, error_size,
-                           "quoted goal wording requires a closing double quote");
-            errno = EINVAL;
+            (void)snag_fail(error, error_size, EINVAL,
+                            "quoted goal wording requires a closing double quote");
             return NULL;
         }
         ++start;
@@ -291,9 +290,8 @@ copy_goal_argument(const char *argument, uint32_t limit,
     }
     len = (size_t)(end - start);
     if (!len || len > limit || len > SNAG_MAX_GOAL_PROMPT) {
-        (void)snprintf(error, error_size,
-                       "goal wording must contain 1..%u UTF-8 bytes", limit);
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL,
+                        "goal wording must contain 1..%u UTF-8 bytes", limit);
         return NULL;
     }
     copy = malloc(len + 1u);
@@ -304,9 +302,8 @@ copy_goal_argument(const char *argument, uint32_t limit,
     if (snag_text_blank(copy) ||
         !snag_utf8_valid((const unsigned char *)copy, len, true)) {
         free(copy);
-        (void)snprintf(error, error_size,
-                       "goal wording must be nonblank valid UTF-8");
-        errno = EINVAL;
+        (void)snag_fail(error, error_size, EINVAL,
+                        "goal wording must be nonblank valid UTF-8");
         return NULL;
     }
     return copy;
