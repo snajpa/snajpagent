@@ -519,14 +519,12 @@ def test_static_zero_width_spinner_has_no_refresh():
 
 
 def test_prompt_clock_lifetime():
-    config = (Path(os.environ["SNAJPAGENT_TEST_ROOT"]) /
-              "config" / "prompt-clock.ini")
     clock = "@{hour:02}:{minute:02}:{second:02}"
-    config.write_text(
+    config = write_config("prompt-clock.ini",
         "[provider openai]\n[ui]\nprompt = " + clock + "{chat::}"
         "{rollout-idle: {context:3}%{activity_spinner}›}"
         "{rollout-active: {context:3}%{activity_spinner}»}\n"
-        'prompt_spinner_provider = " P"\n', encoding="utf-8")
+        'prompt_spinner_provider = " P"\n')
     child = Child(["--config", str(config), "-s", f"127.0.0.1:{free_port()}",
                    "-n", "clockagent", "-o", "clockop", "-r", "lab"])
     pattern = rb"@(\d{2}:\d{2}:\d{2})"
@@ -2114,7 +2112,6 @@ def test_compaction_policy_selection():
 
 
 def test_provider_local_models(native=True):
-    config = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "config" / "provider-models.ini"
     text = (
         "[agent]\nmodel=small\nreasoning_effort=high\n"
         "[provider codex-lb]\nbase_url=https://fixture.test/backend-api/codex\n"
@@ -2126,7 +2123,7 @@ def test_provider_local_models(native=True):
         "[model-limit codex-lb]\ncontext_window_tokens=500000\n"
         "[model-limit codex-lb/small]\ncontext_window_tokens=128000\n"
     )
-    config.write_text(text, encoding="utf-8")
+    config = write_config("provider-models.ini",text)
     before = session_ids()
     with Child(["--config", str(config)], ready=b"codex-lb/small/high") as child:
         assert session_ids() == before
@@ -2393,22 +2390,15 @@ def test_model_configuration_save():
 
 def test_config_editor_reload():
     root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
-    config = root / "config" / "editor.ini"
-    valid_two = root / "config" / "editor-valid-two.ini"
-    valid_one = root / "config" / "editor-valid-one.ini"
-    invalid = root / "config" / "editor-invalid.ini"
-    unrenderable = root / "config" / "editor-unrenderable.ini"
-    network = root / "config" / "editor-network.ini"
     plan = root / "config" / "editor-plan"
     seen = root / "config" / "editor-seen"
     editor = root / "config" / "editor"
-    config.write_text(
+    config = write_config("editor.ini",
         "[agent]\nmodel = editor-base\nreasoning_effort = medium\n"
         "[provider openai]\napi_key = ${OPENAI_API_KEY}\n"
         "[ui]\n",
-        encoding="utf-8",
     )
-    valid_two.write_text(
+    valid_two = write_config("editor-valid-two.ini",
         "[agent]\nmodel = ignored-default\nreasoning_effort = high\n"
         "[provider openai]\napi_key = ${OPENAI_API_KEY}\n"
         "[ui]\ntyping_pause_ms = 25\n"
@@ -2418,33 +2408,28 @@ def test_config_editor_reload():
         'prompt_spinner_goal = "\\0"\n'
         'prompt_spinner_provider = "\\0P"\n'
         'prompt_spinner_tool = " "\n',
-        encoding="utf-8",
     )
-    valid_one.write_text(
+    valid_one = write_config("editor-valid-one.ini",
         "[agent]\nmodel = another-default\nreasoning_effort = low\n"
         "[provider openai]\napi_key = ${OPENAI_API_KEY}\n"
         "[ui]\n",
-        encoding="utf-8",
     )
-    invalid.write_text(
+    invalid = write_config("editor-invalid.ini",
         "[ui]\nprompt_spinner_tool = \"\\0\"\n"
-        "prompt = {chat:{hour:002}}{rollout-idle:x}{rollout-active:y}\n",
-        encoding="utf-8")
-    unrenderable.write_text(
+        "prompt = {chat:{hour:002}}{rollout-idle:x}{rollout-active:y}\n")
+    unrenderable = write_config("editor-unrenderable.ini",
         "[provider openai]\n[ui]\n"
         "prompt = {chat:x}{rollout-idle:" + ("x" * 600) +
         "}{rollout-active:z}\n",
-        encoding="utf-8",
     )
     network_port = free_port()
-    network.write_text(
+    network = write_config("editor-network.ini",
         "[agent]\nmodel = network-default\nreasoning_effort = medium\n"
         "[provider openai]\napi_key = ${OPENAI_API_KEY}\n"
         "[irc]\n"
         f"listen = 127.0.0.1:{network_port}\n"
         "model_nick = reloadagent\noperator_nick = reloadop\n"
         "room_name = lab\n",
-        encoding="utf-8",
     )
     editor.write_text(
         "#!/bin/sh\n"
