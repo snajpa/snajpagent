@@ -757,9 +757,7 @@ def test_typing_pause_and_transient_composer():
     child.drain(0.05)
     clear_draft_incrementally(child)
     child.send(b"/exit\r")
-    _, status = os.waitpid(child.pid, 0)
-    os.close(child.fd)
-    assert os.waitstatus_to_exitcode(status) == 0
+    assert child.reap() == 0
 
     completed = one(events(child.session_id()), "response_completed")
     assert completed["data"]["items"][0]["text"] == (
@@ -1713,9 +1711,7 @@ def test_queue_mutation_commands():
     child.send_wait(b" idle\r", "› second active idle".encode(), start=edit_start)
 
     child.send(b"/exit\r")
-    _, status = os.waitpid(child.pid, 0)
-    os.close(child.fd)
-    assert os.waitstatus_to_exitcode(status) == 0
+    assert child.reap() == 0
 
     session_id = child.session_id()
     resumed = Child(["--resume", session_id], b"2 queued paused")
@@ -1728,9 +1724,7 @@ def test_queue_mutation_commands():
     empty_end = resumed.send_wait(b"/q\r", b"future-turn queue is empty", start=cleared_end)
     resumed.wait(PROMPT.rstrip(), start=empty_end)
     resumed.send(b"/exit\r")
-    _, status = os.waitpid(resumed.pid, 0)
-    os.close(resumed.fd)
-    assert os.waitstatus_to_exitcode(status) == 0
+    assert resumed.reap() == 0
 
     log = events(session_id)
     queued = [item for item in log if item["type"] == "future_turn_queued"]
@@ -2280,9 +2274,7 @@ def test_model_cache_and_selection():
     )
     failing.wait(initial_prompt, start=failed_end)
     failing.send(b"/exit\r")
-    _, status = os.waitpid(failing.pid, 0)
-    os.close(failing.fd)
-    assert os.waitstatus_to_exitcode(status) == 0
+    assert failing.reap() == 0
     assert cache_path.read_bytes() == complete_cache
     assert cache_path.stat().st_ino == complete_inode
 
@@ -2665,9 +2657,7 @@ def test_config_and_cli_model_passthrough():
         b" openai/openai/gpt-5.6/quantum   ?% \xe2\x80\xba ", start=answer_end
     )
     resumed.send(b"/exit\r")
-    _, status = os.waitpid(resumed.pid, 0)
-    os.close(resumed.fd)
-    assert os.waitstatus_to_exitcode(status) == 0, idle_end
+    assert resumed.reap() == 0, idle_end
 
     resumed_turns = [event for event in events(session_id)
                      if event["type"] == "turn_started"]
