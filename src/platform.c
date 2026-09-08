@@ -2367,6 +2367,8 @@ snag_seek(int fd, int64_t offset, int whence)
 int
 snag_truncate(int fd, int64_t size)
 {
+    if (size < 0)
+        return snag_errno(EINVAL);
     if ((int64_t)(off_t)size != size)
         return snag_errno(EOVERFLOW);
     return ftruncate(fd, (off_t)size);

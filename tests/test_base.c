@@ -1219,6 +1219,8 @@ test_private_directory(void)
         assert(negative_read == -1 && errno == EINVAL);
         assert(snag_pread(file, received, 0u, -1) == -1 && errno == EINVAL);
         assert(snag_truncate(file, -1) == -1 && errno == EINVAL);
+        assert(snag_truncate(file, INT64_MIN) == -1 && errno == EINVAL);
+        assert(snag_fstat(file, &linked) == 0 && linked.st_size == sizeof(bytes));
         assert(snag_seek(file, 0, SEEK_CUR) == 2);
         assert(snag_pread(-1, received, 1u, 0) == -1 && errno == EBADF);
         assert(snag_truncate(-1, 0) == -1 && errno == EBADF);
