@@ -180,7 +180,15 @@ let
   zlib = cmakeLibrary sourcePkgs.zlib [
     "-DZLIB_BUILD_SHARED=OFF" "-DZLIB_BUILD_STATIC=ON" "-DZLIB_BUILD_TESTING=OFF"
   ] [];
-  brotli = cmakeLibrary sourcePkgs.brotli [ "-DBROTLI_DISABLE_TESTS=ON" ] [];
+  brotli = (cmakeLibrary sourcePkgs.brotli [ "-DBROTLI_DISABLE_TESTS=ON" ] []).overrideAttrs (_: {
+    postPatch = lib.optionalString early ''
+      # This libm has log but not log2; the fallback still requires -lm.
+      substituteInPlace CMakeLists.txt \
+        --replace-fail 'add_definitions(-DBROTLI_HAVE_LOG2=0)' \
+          'set(LIBM_LIBRARY "m")
+    add_definitions(-DBROTLI_HAVE_LOG2=0)'
+    '';
+  });
   zstd = (cmakeLibrary sourcePkgs.zstd [
     "-DZSTD_BUILD_SHARED=OFF" "-DZSTD_BUILD_STATIC=ON"
     "-DZSTD_BUILD_PROGRAMS=OFF" "-DZSTD_BUILD_TESTS=OFF"

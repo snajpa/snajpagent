@@ -123,3 +123,11 @@ assert 'if legacy then "crtbegin.o" else "crtbeginS.o"' in netbsd_text
 assert 'if legacy then "crtend.o" else "crtendS.o"' in netbsd_text
 assert 'if legacy then "-no-pie,--no-rosegment,-z,norelro," else "-pie,-z,relro,-z,now,"' in netbsd_text
 print("PASS: NetBSD hardening follows the native loader ABI")
+
+# Brotli's log2 fallback calls log, which still requires libm on old BSDs.
+for recipe in ("freebsd.nix", "netbsd.nix"):
+    text = (root / "nix" / recipe).read_text()
+    brotli = text.split("  brotli =", 1)[1].split("  zstd =", 1)[0]
+    assert 'set(LIBM_LIBRARY "m")' in brotli, recipe
+    assert 'add_definitions(-DBROTLI_HAVE_LOG2=0)' in brotli, recipe
+print("PASS: BSD Brotli log2 fallback retains its libm dependency")
