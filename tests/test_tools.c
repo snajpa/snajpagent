@@ -224,12 +224,6 @@ run_command_full(const char *command, int timeout_ms, const char *secret,
 }
 
 static json_t *
-run_command(const char *command, int timeout_ms)
-{
-    return run_command_full(command, timeout_ms, NULL, NULL, NULL, NULL, -1, 6000u);
-}
-
-static json_t *
 run_tool_with_wait(const char *name, json_t *args,
                    snag_tool_pump_fn pump, void *pump_opaque, uint32_t max_wait_ms)
 {
@@ -276,22 +270,6 @@ run_write_stdin_call(const char *handle, const char *data, bool eof,
         "yield_ms", (json_int_t)(yield_ms),
         "max_output_tokens", max_output_tokens < 0 ? json_null() : json_integer(max_output_tokens)));
     return run_tool_with_args("write_stdin", args);
-}
-
-static void
-join_path(char *out, size_t out_size, const char *dir, const char *name)
-{
-    int n = snprintf(out, out_size, "%s/%s", dir, name);
-    assert(n > 0 && (size_t)n < out_size);
-}
-
-static char *
-make_temp_workspace(void)
-{
-    char tmpl[] = "/tmp/snajpagent-patch-test-XXXXXX";
-    char *dir = mkdtemp(tmpl);
-    assert(dir != NULL);
-    return strdup(dir);
 }
 
 static void
@@ -573,13 +551,15 @@ test_managed_process_close_returns_terminal_result(void)
 static void
 test_managed_close_kills_process_family(void)
 {
-    char *dir = make_temp_workspace();
+    char dir[] = "/tmp/snajpagent-patch-test-XXXXXX";
     char marker[4096];
     char command[8192];
     json_t *result;
     const char *handle;
 
-    join_path(marker, sizeof(marker), dir, "managed-leaked.txt");
+    assert(mkdtemp(dir) != NULL);
+    int n = snprintf(marker, sizeof(marker), "%s/%s", dir, "managed-leaked.txt");
+    assert(n > 0 && (size_t)n < sizeof(marker));
     assert(snprintf(command, sizeof(command),
                     "(sleep 0.25; printf leaked > '%s') & wait",
                     marker) > 0);
@@ -593,7 +573,6 @@ test_managed_close_kills_process_family(void)
     json_decref(closed);
     json_decref(result);
     assert(rmdir(dir) == 0);
-    free(dir);
 }
 
 static void
@@ -613,7 +592,8 @@ test_provider_secret_removed_from_environment(void)
 {
     json_t *result;
     setenv("OPENAI_API_KEY", "secret-value-for-test", 1);
-    result = run_command("printf ${OPENAI_API_KEY-unset}", 1000);
+    result = run_command_full("printf ${OPENAI_API_KEY-unset}", 1000,
+                              NULL, NULL, NULL, NULL, -1, 6000u);
     assert(strcmp(snag_json_string(json_object_get(result, "stdout"),
                                   "retained"), "unset") == 0);
     unsetenv("OPENAI_API_KEY");
