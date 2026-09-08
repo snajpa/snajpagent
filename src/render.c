@@ -30,7 +30,7 @@
 #define COLOR_UPDATE "\033[1;30;46m"
 #define MARKDOWN_TABLE_COLUMNS 16u
 
-enum { BOUNDARY_NONE, BOUNDARY_CONTENT, BOUNDARY_PROMPT, BOUNDARY_BULLET };
+enum { BOUNDARY_NONE, BOUNDARY_CONTENT, BOUNDARY_PROMPT, BOUNDARY_BULLET, BOUNDARY_UPDATE };
 
 enum markdown_table_alignment {
     TABLE_LEFT,
@@ -2540,9 +2540,14 @@ int
 snag_render_update(struct snag_render *render, const char *text)
 {
     size_t len = strlen(text);
-    return write_role_block(render, BOUNDARY_CONTENT, STDERR_FILENO, COLOR_UPDATE,
-                            text, len, first_line_len(text, len),
-                            render->stderr_terminal, true);
+    if (close_public_output(render) < 0)
+        return -1;
+    int rc = write_role_block(render, BOUNDARY_UPDATE, STDERR_FILENO, COLOR_UPDATE,
+                              text, len, first_line_len(text, len),
+                              render->stderr_terminal, true);
+    if (render->stderr_terminal && render->public_item_open)
+        render->public_column = 0u;
+    return rc;
 }
 
 int

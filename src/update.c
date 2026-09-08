@@ -191,30 +191,47 @@ has_identity(int fd, const char *version, struct snag_update *update)
     }
 }
 
+static const char *
+version_parts(const char *text, uint32_t parts[3])
+{
+    if (!text || strlen(text) > 100u)
+        return NULL;
+    for (size_t i = 0; i < 3u; ++i) {
+        const char *start = text;
+        parts[i] = 0;
+        while (*text >= '0' && *text <= '9') {
+            unsigned int digit = (unsigned int)(*text++ - '0');
+            if (parts[i] > (UINT32_MAX - digit) / 10u)
+                return NULL;
+            parts[i] = parts[i] * 10u + digit;
+        }
+        if (text == start || (text - start > 1 && *start == '0') ||
+            (i < 2u && *text++ != '.'))
+            return NULL;
+    }
+    return text;
+}
+
 static bool
 newer_version(const char *candidate)
 {
-    unsigned long a[3], b[3];
-    int end_a = 0;
-    if (!candidate || strlen(candidate) > 100u ||
-        sscanf(candidate, "%lu.%lu.%lu%n", &a[0], &a[1], &a[2], &end_a) != 3 ||
-        sscanf(SNAJPAGENT_VERSION, "%lu.%lu.%lu", &b[0], &b[1], &b[2]) != 3)
+    uint32_t a[3], b[3];
+    const char *suffix = version_parts(candidate, a);
+    const char *current = version_parts(SNAJPAGENT_VERSION, b);
+    if (!suffix || !current)
         return false;
-    const char *suffix = candidate + end_a;
-    if (*suffix && (*suffix != '-' || !suffix[1]))
+    if (*suffix && (*suffix != '-' || strlen(suffix + 1u) < 7u ||
+                    strlen(suffix + 1u) > 40u ||
+                    !snag_hex_is_lower(suffix + 1u, strlen(suffix + 1u))))
         return false;
-    for (const char *p = suffix + (*suffix != 0); *p; ++p)
-        if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f')))
-            return false;
-    if (strchr(SNAJPAGENT_VERSION, '-') == NULL && *suffix)
+    if (!*current && *suffix)
         return false;
     for (size_t i = 0; i < 3u; ++i)
         if (a[i] != b[i])
             return a[i] > b[i];
-    /* Stable supersedes the development snapshot; development channel order
-     * is selected by the publisher, never lexical ordering of Git hashes. */
-    return strchr(SNAJPAGENT_VERSION, '-') != NULL &&
-           strcmp(candidate, SNAJPAGENT_VERSION) != 0;
+    /* Git hashes have no chronological ordering: the publisher chooses the
+     * development tip. Numeric releases still never move backwards. */
+    return *current == '-' && strcmp(candidate, SNAJPAGENT_VERSION) != 0;
 }
 
 static void
