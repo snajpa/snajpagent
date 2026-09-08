@@ -1,0 +1,9 @@
+{
+  "name": "snajpagent",
+  "target": "netbsd-amd64",
+  "version": "0.99.3",
+  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-netbsd-amd64",
+  "sha256": "2d8333677a97329f2b7ba3dbcbff9ee5996e667e8d600255d3fa5a0efa7419e5",
+  "size": 4274824,
+  "changelog": "https://agent.snajpa.net/downloads.html#changelog"
+}

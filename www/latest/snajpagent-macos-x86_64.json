@@ -1,9 +1,9 @@
 {
   "name": "snajpagent",
   "target": "macos-x86_64",
-  "version": "0.99.2",
-  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.2/snajpagent-0.99.2-macos-x86_64",
-  "sha256": "c94bcbd77b921d1d767770134c8332bed19d4bde9578cce1d388b43aa487102e",
-  "size": 3600232,
+  "version": "0.99.3",
+  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-macos-x86_64",
+  "sha256": "d74448f549daf9323f42232a50a98caaa7a6e724df31bca66c20321319332309",
+  "size": 3600224,
   "changelog": "https://agent.snajpa.net/downloads.html#changelog"
 }

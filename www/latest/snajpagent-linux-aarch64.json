@@ -1,9 +1,9 @@
 {
   "name": "snajpagent",
   "target": "linux-aarch64",
-  "version": "0.99.2",
-  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.2/snajpagent-0.99.2-linux-aarch64",
-  "sha256": "b11c85ea9f8cbf803518f5a701e4fe4a201c8160278903a64009b05fdcdf51d5",
+  "version": "0.99.3",
+  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-linux-aarch64",
+  "sha256": "982b7e976cc9f30518a39e6b713dbb765f5713ba194538871ca813dc0820976d",
   "size": 3872200,
   "changelog": "https://agent.snajpa.net/downloads.html#changelog"
 }
