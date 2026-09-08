@@ -48,6 +48,12 @@ check_native_read(const char *workspace, const char *name, const char *arguments
 static void
 test_native_read_results(void)
 {
+    bool read_only;
+
+    assert(strcmp(snag_prompt_parse("/ro\n inspect", &read_only), "inspect") == 0 && read_only);
+    assert(!*snag_prompt_parse("/ro  \t", &read_only) && read_only);
+    assert(strcmp(snag_prompt_parse("//ro inspect", &read_only), "/ro inspect") == 0 && !read_only);
+    assert(strcmp(snag_prompt_parse("/root", &read_only), "/root") == 0 && !read_only);
     char id[SNAG_ID_HEX_LEN + 1u];
 #ifdef _WIN32
     const char *scratch = getenv("TMP");
@@ -100,6 +106,13 @@ test_native_read_results(void)
         false, "", NULL);
     check_native_read(root, "read_file", "{\"path\":\"text\",\"start_line\":null,\"end_line\":null}",
         false, "interrupted", cancel_read);
+    file = snag_create_private_at(dir, "a ; echo nope", true);
+    const char cancelled_text[] = "Alpha\nβeta\nlast";
+    assert(file >= 0 && snag_write_full(file, cancelled_text, sizeof(cancelled_text) - 1u) == 0);
+    assert(close(file) == 0);
+    check_native_read(root, "read_file", "{\"path\":\"a ; echo nope\",\"start_line\":null,\"end_line\":null}",
+        false, "interrupted", cancel_read);
+    assert(snag_unlink_at(dir, "a ; echo nope", false) == 0);
     assert(snag_unlink_at(dir, "text", false) == 0 && close(dir) == 0);
     assert(snag_unlink_at(-1, root, true) == 0);
     free(root);

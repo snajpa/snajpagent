@@ -3927,6 +3927,7 @@ def run_tool_cases(binary, root, provider, environment):
                       "[tool]\ndefault_timeout_ms=0\nmax_timeout_ms=5000\n")
     call_id, name, arguments = "", "", {}
     number = 0
+    prompt = "tool behavior cases"
     ready = threading.Event()
 
     def respond(handler, request, sequence):
@@ -3945,7 +3946,7 @@ def run_tool_cases(binary, root, provider, environment):
         call_id, name, arguments = f"tool-{number}", tool, args
         ready.set()
         if number == 1:
-            terminal.submit("tool behavior cases")
+            terminal.submit(prompt)
         wait_event_count(terminal.dotdir, "tool_finished", number)
         _, events = read_events(terminal.dotdir)
         finished = event_list(events, "tool_finished")
@@ -4133,6 +4134,68 @@ def run_tool_cases(binary, root, provider, environment):
             wait_irc_idle([terminal])
             terminal.exit()
             print("tmux_terminal patch and command behavior: ok", flush=True)
+        workspace = case / "read-work"
+        workspace.mkdir(mode=0o700)
+        assert (workspace / "a ; echo nope").write_bytes("Alpha\nβeta\nlast".encode()) == 16
+        (workspace / "sub").mkdir(mode=0o700)
+        assert (workspace / "sub" / ".hidden").write_bytes(b"Alpha nested\n") == 13
+        (workspace / "link").symlink_to("sub")
+        os.mkfifo(workspace / "pipe", 0o600)
+        assert (workspace / "binary").write_bytes(b"\0" * 70000) == 70000
+        number = 0
+        prompt = "/ro read tool behavior cases"
+        with TmuxTerminal(case / "read-term", binary, workspace, case / "read-state",
+                          config, 120, 28, environment=environment) as terminal:
+            terminal.wait("host-model/medium   0% ›")
+            for path, start, end, success, expected in (
+                ("a ; echo nope", None, None, True, "1:Alpha\n2:βeta\n3:last"),
+                ("a ; echo nope", 2, 2, True, "2:βeta\n"),
+                ("a ; echo nope", 4, None, False, "beyond end"),
+                ("a ; echo nope", 3, 2, False, "Invalid"),
+                ("binary", None, None, False, "Non-text"),
+                ("link/.hidden", None, None, False, "Cannot open"),
+                ("pipe", None, None, False, "Cannot open"),
+            ):
+                result = invoke("read_file", {"path": path, "start_line": start, "end_line": end},
+                                "succeeded" if success else "failed")
+                assert expected in result["model_text"], result
+            for recursive, offset, limit, expected in (
+                (True, None, None, "./sub/.hidden\tfile"),
+                (False, None, 1, "More results (repeat with next_offset); returned=1; next_offset=1"),
+                (False, 1, 1, "./binary\tfile"),
+            ):
+                result = invoke("list_files", {"path": ".", "recursive": recursive,
+                    "offset": offset, "limit": limit})
+                assert expected in result["model_text"], result
+            for pattern, recursive, ignore_case, literal, offset, limit, success, expected in (
+                ("^alpha", None, True, None, None, None, True, "./sub/.hidden:1:Alpha nested"),
+                ("missing", True, None, True, None, None, True,
+                 "Complete; returned=0; next_offset=0; skipped_nontext_or_special=3"),
+                ("[", True, None, False, None, None, False, ""),
+                ("Alpha", True, None, True, 1, 1, True, "./sub/.hidden:1:Alpha nested"),
+            ):
+                result = invoke("grep", {"path": ".", "pattern": pattern, "recursive": recursive,
+                    "ignore_case": ignore_case, "literal": literal, "offset": offset, "limit": limit},
+                    "succeeded" if success else "failed")
+                assert expected in result["model_text"], result
+            assert (workspace / "large").write_bytes(b"1234567890\n" * 50000) == 550000
+            for start, end, success, expected in (
+                (None, None, False, "narrower line range"),
+                (49999, 50000, True, "50000:1234567890"),
+            ):
+                result = invoke("read_file", {"path": "large", "start_line": start, "end_line": end},
+                                "succeeded" if success else "failed")
+                assert expected in result["model_text"], result
+            name = None
+            ready.set()
+            terminal.wait("tool cases done")
+            wait_irc_idle([terminal])
+            terminal.exit()
+            print("tmux_terminal read tool behavior: ok", flush=True)
+        for filename in ("large", "binary", "pipe", "link", "sub/.hidden", "a ; echo nope"):
+            (workspace / filename).unlink(missing_ok=True)
+        (workspace / "sub").rmdir()
+        workspace.rmdir()
     finally:
         ready.set()
         provider.runtime_handler = None
