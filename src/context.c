@@ -902,80 +902,6 @@ stdin_tool_schema(uint32_t max_output_tokens)
 }
 
 static json_t *
-patch_tool_schema(void)
-{
-    return tool_schema("apply_patch",
-        "Apply one unified patch in the session workspace.",
-        json_pack("{s:{s:s},s:{s:s}}",
-                  "patch", "type", "string", "workdir", "type", "string"));
-}
-
-static json_t *
-create_goal_tool_schema(void)
-{
-    return tool_schema("create_goal",
-        "Create a persistent goal only when the user or system/developer "
-        "instructions explicitly request it; never infer one from ordinary "
-        "work. Writing or committing goal documentation does not activate "
-        "continuation. After success, a normal final answer is a checkpoint "
-        "and " SNAJPAGENT_NAME " starts another goal turn.",
-        json_pack("{s:{s:s}}", "objective", "type", "string"));
-}
-
-static json_t *
-update_goal_tool_schema(void)
-{
-    return tool_schema("update_goal",
-        "Update the active persistent goal: rewrite uses new wording in text, "
-        "complete requires null text, and block uses a specific reason in text.",
-        json_pack("{s:{s:s,s:[s,s,s]},s:{s:[s,s]}}",
-            "action", "type", "string", "enum", "rewrite", "complete", "block",
-            "text", "type", "string", "null"));
-}
-
-static json_t *
-web_search_tool_schema(const char *type)
-{
-    return json_pack("{s:s}", "type", type);
-}
-
-static json_t *
-irc_send_tool_schema(void)
-{
-    return tool_schema("irc_send",
-        "Send bounded room chat as the agent identity. This is the only way "
-        "model text reaches the room; assistant response text remains local. "
-        "Set destination to a numbered destination string from irc_state, "
-        "or all for an explicit broadcast. Null selects the sole destination "
-        "only when there is exactly one. Sends never follow operator UI selection. "
-        "Set notice true only for a non-reply informational notice. "
-        "Connection, join, and retry work is owned by the runtime.",
-        json_pack("{s:{s:[s,s]},s:{s:[s,s]},s:{s:s}}",
-            "destination", "type", "string", "null",
-            "notice", "type", "boolean", "null", "text", "type", "string"));
-}
-
-static json_t *
-irc_state_tool_schema(void)
-{
-    return tool_schema("irc_state",
-        "Read the already-maintained room, topic, endpoint, membership, and "
-        "operator state without polling or changing connections.", json_object());
-}
-
-static json_t *
-irc_topic_tool_schema(void)
-{
-    return tool_schema("irc_topic",
-        "Change the room topic as the agent identity; this succeeds only "
-        "where that identity currently has channel operator mode. Destination "
-        "is a numbered string from irc_state, all for explicit broadcast, "
-        "or null only when exactly one destination exists.",
-        json_pack("{s:{s:[s,s]},s:{s:s}}",
-            "destination", "type", "string", "null", "topic", "type", "string"));
-}
-
-static json_t *
 read_only_schema(const char *name)
 {
     bool read = strcmp(name, "read_file") == 0;
@@ -1025,10 +951,8 @@ tool_schemas(bool goal_active,
         if (json_array_append_new(tools, read_only_schema("list_files")) < 0 ||
             json_array_append_new(tools, read_only_schema("read_file")) < 0 ||
             json_array_append_new(tools, read_only_schema("grep")) < 0 ||
-            json_array_append_new(tools, web_search_tool_schema(search_type)) < 0) {
-            json_decref(tools);
-            return NULL;
-        }
+            json_array_append_new(tools, json_pack("{s:s}", "type", search_type)) < 0)
+            goto fail;
         return tools;
     }
     if (json_array_append_new(tools,
@@ -1038,20 +962,54 @@ tool_schemas(bool goal_active,
         json_array_append_new(tools,
             stdin_tool_schema(config ? config->max_output_tokens :
                          SNAG_DEFAULT_TOOL_OUTPUT_TOKENS)) < 0 ||
-        json_array_append_new(tools, patch_tool_schema()) < 0 ||
-        json_array_append_new(tools, web_search_tool_schema(search_type)) < 0 ||
-        (networked &&
-         (json_array_append_new(tools, irc_send_tool_schema()) < 0 ||
-          json_array_append_new(tools, irc_state_tool_schema()) < 0 ||
-          json_array_append_new(tools, irc_topic_tool_schema()) < 0)) ||
-        (goal_create_allowed &&
-         json_array_append_new(tools, create_goal_tool_schema()) < 0) ||
-        (goal_active &&
-         json_array_append_new(tools, update_goal_tool_schema()) < 0)) {
-        json_decref(tools);
-        return NULL;
-    }
+        json_array_append_new(tools, tool_schema("apply_patch",
+            "Apply one unified patch in the session workspace.",
+            json_pack("{s:{s:s},s:{s:s}}",
+                "patch", "type", "string", "workdir", "type", "string"))) < 0 ||
+        json_array_append_new(tools, json_pack("{s:s}", "type", search_type)) < 0)
+        goto fail;
+    if (networked &&
+        (json_array_append_new(tools, tool_schema("irc_send",
+            "Send bounded room chat as the agent identity. This is the only way "
+            "model text reaches the room; assistant response text remains local. "
+            "Set destination to a numbered destination string from irc_state, "
+            "or all for an explicit broadcast. Null selects the sole destination "
+            "only when there is exactly one. Sends never follow operator UI selection. "
+            "Set notice true only for a non-reply informational notice. "
+            "Connection, join, and retry work is owned by the runtime.",
+            json_pack("{s:{s:[s,s]},s:{s:[s,s]},s:{s:s}}",
+                "destination", "type", "string", "null",
+                "notice", "type", "boolean", "null", "text", "type", "string"))) < 0 ||
+         json_array_append_new(tools, tool_schema("irc_state",
+            "Read the already-maintained room, topic, endpoint, membership, and "
+            "operator state without polling or changing connections.", json_object())) < 0 ||
+         json_array_append_new(tools, tool_schema("irc_topic",
+            "Change the room topic as the agent identity; this succeeds only "
+            "where that identity currently has channel operator mode. Destination "
+            "is a numbered string from irc_state, all for explicit broadcast, "
+            "or null only when exactly one destination exists.",
+            json_pack("{s:{s:[s,s]},s:{s:s}}",
+                "destination", "type", "string", "null", "topic", "type", "string"))) < 0))
+        goto fail;
+    if (goal_create_allowed && json_array_append_new(tools, tool_schema("create_goal",
+            "Create a persistent goal only when the user or system/developer "
+            "instructions explicitly request it; never infer one from ordinary "
+            "work. Writing or committing goal documentation does not activate "
+            "continuation. After success, a normal final answer is a checkpoint "
+            "and " SNAJPAGENT_NAME " starts another goal turn.",
+            json_pack("{s:{s:s}}", "objective", "type", "string"))) < 0)
+        goto fail;
+    if (goal_active && json_array_append_new(tools, tool_schema("update_goal",
+            "Update the active persistent goal: rewrite uses new wording in text, "
+            "complete requires null text, and block uses a specific reason in text.",
+            json_pack("{s:{s:s,s:[s,s,s]},s:{s:[s,s]}}",
+                "action", "type", "string", "enum", "rewrite", "complete", "block",
+                "text", "type", "string", "null"))) < 0)
+        goto fail;
     return tools;
+fail:
+    json_decref(tools);
+    return NULL;
 }
 
 static json_t *
