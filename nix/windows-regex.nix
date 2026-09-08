@@ -58,7 +58,7 @@ in stdenv.mkDerivation {
   dontUnpack = true;
   strictDeps = true;
   configurePlatforms = if windowsTarget then [ "build" "host" ] else [];
-  dontStrip = true;
+  dontStrip = !windowsTarget;
   nativeBuildInputs = [ pkgs.autoconf pkgs.automake pkgs.python3 pkgs.perl
                         pkgs.gettext (if windowsTarget then windows.buildPackages.pkg-config else pkgs.pkg-config) ];
   buildInputs = [ unistring ] ++ pkgs.lib.optional (threads != null) threads;

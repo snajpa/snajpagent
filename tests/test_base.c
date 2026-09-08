@@ -2141,7 +2141,12 @@ test_input_mode(void)
     char ignored[4];
     assert(snag_term_input_read(&host, ignored, sizeof(ignored)) < 0 && errno == EAGAIN);
 #else
-    assert(raise(SIGINT) == 0 && atomic_load(&console_interrupts) == 1u);
+    assert(raise(SIGINT) == 0);
+    uint64_t deadline = snag_monotonic_ms() + 1000u;
+    /* Old libc_r defers process-directed raise until its scheduler runs. */
+    while (!atomic_load(&console_interrupts) && snag_monotonic_ms() < deadline)
+        (void)snag_sleep_ms(1u);
+    assert(atomic_load(&console_interrupts) == 1u);
 #endif
     snag_term_controls_restore(&host);
 #ifndef _WIN32
