@@ -40,7 +40,8 @@
 #endif
 
 static atomic_int shutdown_signal_seen;
-#if !defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070
+#if (!defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070) && \
+    (!defined(__FreeBSD__) || __FreeBSD__ >= 6)
 static _Thread_local int thread_local_value = 7;
 #endif
 static int thread_parent_owner, thread_child_owner;
@@ -53,7 +54,8 @@ static void *
 thread_local_worker(void *unused)
 {
     (void)unused;
-#if !defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070
+#if (!defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070) && \
+    (!defined(__FreeBSD__) || __FreeBSD__ >= 6)
     assert(thread_local_value == 7);
     thread_local_value = 13;
 #endif
@@ -61,13 +63,16 @@ thread_local_worker(void *unused)
     snag_term_output_bind((struct snag_term *)&thread_child_owner);
     assert(snag_term_output_owner() == (struct snag_term *)&thread_child_owner);
     snag_term_output_bind(NULL);
+    assert(snag_term_output_owner() == NULL);
+    snag_term_output_bind(NULL);
     return 0;
 }
 
 static void
 test_thread_local(void)
 {
-#if !defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070
+#if (!defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070) && \
+    (!defined(__FreeBSD__) || __FreeBSD__ >= 6)
     thread_local_value = 41;
 #endif
     assert(snag_term_output_owner() == NULL);
@@ -84,12 +89,14 @@ test_thread_local(void)
         assert(pthread_create(&thread, NULL, thread_local_worker, NULL) == 0);
         assert(pthread_join(thread, &result) == 0 && result == NULL);
 #endif
-#if !defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070
+#if (!defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070) && \
+    (!defined(__FreeBSD__) || __FreeBSD__ >= 6)
         assert(thread_local_value == 41);
 #endif
         assert(snag_term_output_owner() == (struct snag_term *)&thread_parent_owner);
     }
     snag_term_output_bind(NULL);
+    assert(snag_term_output_owner() == NULL);
 }
 
 static void

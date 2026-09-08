@@ -4,6 +4,9 @@ let
   lib = pkgs.lib;
   llvm = pkgs.llvmPackages_21;
   legacy = lib.versionOlder osVersion "7.0";
+  early = lib.versionOlder osVersion "5.3";
+  threads = if early then "c_r" else "pthread";
+  mediaRoot = lib.optionalString (!early) "${osVersion}-RELEASE/";
   target = "x86_64-unknown-freebsd${osVersion}";
   compiler = if legacy then "${oldCompiler}/bin/clang" else "${llvm.clang-unwrapped}/bin/clang";
   cxxCompiler = if legacy then "${oldCompiler}/bin/clang++" else "${llvm.clang-unwrapped}/bin/clang++";
@@ -13,20 +16,22 @@ let
     version = osVersion;
     src = pkgs.fetchurl {
       name = "disc1.iso";
-      url = "https://archive.freebsd.org/old-releases/amd64/ISO-IMAGES/${osVersion}/${lib.optionalString (!legacy) "FreeBSD-"}${osVersion}-RELEASE-amd64-disc1.iso";
+      url = "https://archive.freebsd.org/old-releases/amd64/ISO-IMAGES/${osVersion}/${lib.optionalString (!legacy) "FreeBSD-"}${osVersion}-RELEASE-amd64-${if early then "miniinst" else "disc1"}.iso";
       sha256 = {
         "8.4" = "2fb17d77d4eba34736eb98c142c56546dd73a4e7ac38895bb6c8517949282438";
+        # Official HTTPS and matching publisher MD5; SHA256 computed locally.
+        "5.1" = "701dceb84e046858ec52ed2e1fa05daa880523766b254941dbf0abbccc9248dc";
         "5.5" = "f71eedf18ab24d973c938b473ca127018eb87ab1d1b4c96a5d8d1e9cd8f261d3";
       }.${osVersion};
     };
     nativeBuildInputs = [ pkgs.libarchive pkgs.python3 ];
-    unpackPhase = ''bsdtar -xf "$src" ${osVersion}-RELEASE/base'';
+    unpackPhase = ''bsdtar -xf "$src" ${mediaRoot}base'';
     dontConfigure = true;
     dontBuild = true;
     dontFixup = true;
     installPhase = ''
       mkdir -p "$out"
-      cat ${osVersion}-RELEASE/base/base.[a-z][a-z] | bsdtar -xf - -C "$out"
+      cat ${mediaRoot}base/base.[a-z][a-z] | bsdtar -xf - -C "$out"
       python3 - "$out" <<'PY'
       import os, sys
       root = sys.argv[1]
@@ -39,6 +44,10 @@ let
                       os.unlink(path)
                       os.symlink(os.path.relpath(root + dest, directory), path)
       PY
+    '' + lib.optionalString early ''
+      # 5.1 recognizes GCC 3 exactly; Clang implements these attributes too.
+      substituteInPlace "$out/usr/include/sys/cdefs.h" \
+        --replace-fail '|| __GNUC__ == 3' '|| __GNUC__ >= 3'
     '';
   };
   # GCC 3.4's base runtime predates crtbeginT.o and the split libgcc_eh.
@@ -72,8 +81,8 @@ let
       start=(${sdk}/usr/lib/crti.o ${sdk}/usr/lib/crtbeginS.o)
       end=(${sdk}/usr/lib/crtendS.o ${sdk}/usr/lib/crtn.o)
     fi
-    exec "$cc" -nostdlib "''${start[@]}" "$@" -Wl,--start-group \
-      "''${extra[@]}" -lpthread -lc -lgcc -Wl,--end-group "''${end[@]}"
+    exec "$cc" ${lib.optionalString early "-Wl,--dynamic-linker=/usr/libexec/ld-elf.so.1"} -nostdlib "''${start[@]}" "$@" -Wl,--start-group \
+      "''${extra[@]}" -l${threads} -lc -lgcc -Wl,--end-group "''${end[@]}"
     SH
     chmod +x "$out/bin/clang"
     ln -s clang "$out/bin/clang++"
@@ -256,7 +265,7 @@ in {
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson)"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
-          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed 's/-lpthread//g') -lutil -Wl,-Bdynamic -lpthread"
+          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed 's/-lpthread//g') -lutil -Wl,-Bdynamic -l${threads}"
         )
       '';
       installPhase = ''

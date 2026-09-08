@@ -12,7 +12,8 @@
 #include <stdatomic.h>
 #include <signal.h>
 
-#if defined(__APPLE__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1070
+#if (defined(__APPLE__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1070) || \
+    (defined(__FreeBSD__) && __FreeBSD__ < 6)
 #include <pthread.h>
 static pthread_key_t output_owner;
 static pthread_once_t output_owner_once = PTHREAD_ONCE_INIT;
@@ -1420,7 +1421,11 @@ snag_term_output_open(struct snag_term_host *host, int fd)
         error = ENOTTY;
     if (!error) {
         memcpy(path, "/dev/", 5u);
-        if (!devname_r(st.st_rdev, S_IFCHR, path + 5u, (int)sizeof(path) - 5))
+        size_t size = sizeof(path) - 5u;
+        if (sysctlbyname("kern.devname", path + 5u, &size,
+                         &st.st_rdev, sizeof(st.st_rdev)) < 0)
+            error = errno;
+        else if (!size || size > sizeof(path) - 5u || path[5u + size - 1u])
             error = ENOTTY;
     }
 #else

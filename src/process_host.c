@@ -1784,7 +1784,11 @@ snag_child_exited(struct snag_child *child)
 #if defined(__FreeBSD__) && !defined(WNOWAIT)
     /* KERN_PROC_PID omits zombies on old FreeBSD; the process list includes
      * them. Validate parentage and leave reaping exclusively to the owner. */
+#ifdef KERN_PROC_PROC
     int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC};
+#else
+    int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL};
+#endif
     size_t size = 0;
     if (sysctl(mib, 3u, NULL, &size, NULL, 0) < 0)
         return -1;
