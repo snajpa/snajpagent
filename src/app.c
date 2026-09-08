@@ -2853,7 +2853,6 @@ run_turn(struct app_state *app, const char *prompt,
     char over_budget_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
     unsigned int hard_compaction_attempts = 0u;
     bool capacity_recovery_used = false;
-    char *turn_prompt;
     bool continuing = app->session.active_turn;
     unsigned int next_cycle = continuing ? app->session.active_cycle + 1u : 1u;
     struct snag_credential credential;
@@ -2893,12 +2892,6 @@ run_turn(struct app_state *app, const char *prompt,
         return 2;
     }
 #endif
-    turn_prompt = snag_strdup_checked(prompt, prompt_max);
-    if (!turn_prompt) {
-        (void)app_error(app, "cannot retain turn input");
-        snag_credential_clear(&credential);
-        return 3;
-    }
     graph = (struct snag_response_graph){0};
     if (app->config->read_agents_md) {
         if (snag_instructions_discover(&app->turn_instructions,
@@ -2922,7 +2915,7 @@ run_turn(struct app_state *app, const char *prompt,
         goto fail;
     }
     if (!continuing && commit_event(app, "turn_started",
-                     snag_app_turn_started_data(app, turn_prompt, turn_id, queued,
+                     snag_app_turn_started_data(app, prompt, turn_id, queued,
                                                goal_turn, read_only),
                      error, sizeof(error)) < 0) {
         goto fail;
@@ -3098,7 +3091,7 @@ run_turn(struct app_state *app, const char *prompt,
         snag_app_reset_stream(app);
         response_begin_ms = snag_time_ms();
         error[0] = '\0';
-        provider_rc = snag_app_provider_run(app, turn_prompt, steering, cycle,
+        provider_rc = snag_app_provider_run(app, prompt, steering, cycle,
                                    projection.create_request.value, &credential, &graph,
                                    &provider_failure,
                                    error, sizeof(error), &provider_retry_count);
@@ -3515,7 +3508,6 @@ out:
         result = 6;
     snag_credential_clear(&credential);
     snag_instructions_free(&app->turn_instructions);
-    free(turn_prompt);
     return result;
 }
 
