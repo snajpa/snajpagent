@@ -169,7 +169,7 @@ static void selected(int type,const char *payload,void *opaque)
 }
 
 int
-snag_office_sheet(LibreOfficeKitDocument *doc,const struct snag_sheet_range *range,
+snag_office_sheet(LibreOfficeKit *office,LibreOfficeKitDocument *doc,const struct snag_sheet_range *range,
                    struct snag_buf *png,json_t **metadata,char *error,size_t error_size)
 {
     *metadata=NULL;
@@ -206,21 +206,25 @@ snag_office_sheet(LibreOfficeKitDocument *doc,const struct snag_sheet_range *ran
     int cx,cy,cw,ch,col,row;char extra;
     valid=coords && sscanf(coords,"%d, %d, %d, %d, %d, %d %c",&cx,&cy,&cw,&ch,&col,&row,&extra)==6 &&
         col==(int)range->column-1 && row==(int)range->row-1;
-    json_decref(value);free(cursor);if(!valid)goto invalid;
+    json_decref(value);
+    if(cursor)office->pClass->freeError(cursor);
+    if(!valid)goto invalid;
     char *html=doc->pClass->getTextSelection(doc,"text/html",NULL);
     struct snag_buf cells;snag_buf_init(&cells,256u*1024u);
-    int rc=html?snag_office_sheet_html(html,range,&cells):-1;free(html);
+    int rc=html?snag_office_sheet_html(html,range,&cells):-1;
+    if(html)office->pClass->freeError(html);
     if(!rc)rc=snag_buf_terminate(&cells);
     if(rc){snag_buf_free(&cells);goto invalid;}
     char *name=doc->pClass->getPartName(doc,(int)range->sheet-1);
     char *info=doc->pClass->getPartInfo(doc,(int)range->sheet-1);
     json_t *partinfo=info?json_loadb(info,strlen(info),JSON_REJECT_DUPLICATES,NULL):NULL;
-    free(info);
+    if(info)office->pClass->freeError(info);
     if(partinfo)(void)json_object_del(partinfo,"hash");
     *metadata=json_pack("{s:s,s:s,s:i,s:i,s:s,s:O}","format","png","sheet_name",name?name:"",
         "sheet",(int)range->sheet,"sheet_count",doc->pClass->getParts(doc),"cells",(char *)cells.data,
         "sheet_info",partinfo?partinfo:json_null());
-    free(name);json_decref(partinfo);snag_buf_free(&cells);
+    if(name)office->pClass->freeError(name);
+    json_decref(partinfo);snag_buf_free(&cells);
     if(!*metadata)goto invalid;
     double factor=fmin(1.0/15.0,fmin(1600.0/width,1600.0/height));
     int w=(int)ceil(width*factor),h=(int)ceil(height*factor);
@@ -253,7 +257,7 @@ invalid:
 #else
 int snag_office_sheet_html(const char *h,const struct snag_sheet_range *r,struct snag_buf *b)
 {(void)h;(void)r;(void)b;return -1;}
-int snag_office_sheet(struct _LibreOfficeKitDocument *d,const struct snag_sheet_range *r,
+int snag_office_sheet(struct _LibreOfficeKit *o,struct _LibreOfficeKitDocument *d,const struct snag_sheet_range *r,
                        struct snag_buf *b,json_t **m,char *e,size_t n)
-{(void)d;(void)r;(void)b;*m=NULL;snag_errorf(e,n,"This custom build excludes Office sheets");return -1;}
+{(void)o;(void)d;(void)r;(void)b;*m=NULL;snag_errorf(e,n,"This custom build excludes Office sheets");return -1;}
 #endif

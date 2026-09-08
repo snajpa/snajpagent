@@ -32,6 +32,8 @@ fontconfig builds; upstream test executables exercise the same link interface.
 
 `src/office.c` runs one disposable child of the same binary through the existing
 bounded child runner. `src/office_package.c` checks ZIP/XML before import;
+sheet metadata and selection strings are released by LibreOffice's allocator,
+keeping ownership within its runtime even when the client uses another CRT.
 `src/office_confine.c` denies Linux network/exec syscalls and applies available
 Landlock filesystem restrictions. POSIX workers install CPU/file/time limits,
 a private working-directory lock and a fresh environment. Memory limits use

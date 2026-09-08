@@ -250,7 +250,7 @@ snag_office_worker(int argc, char **argv)
     json_t *meta=NULL;
     int fd=-1;
     if(selection) {
-        if(snag_office_sheet(doc,selection,&png,&meta,error,sizeof(error))<0)goto done;
+        if(snag_office_sheet(office,doc,selection,&png,&meta,error,sizeof(error))<0)goto done;
     } else {
         char options[768];
         snprintf(options,sizeof(options),"{\"PageRange\":{\"type\":\"string\",\"value\":\"%lu-%lu\"},"

@@ -21,6 +21,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #if SNAJPAGENT_OFFICE
+#define LOK_USE_UNSTABLE_API
+#include <LibreOfficeKit/LibreOfficeKit.h>
 #include <archive.h>
 #include <archive_entry.h>
 #if !defined(_WIN32)
@@ -1778,9 +1780,88 @@ check_office_pages(struct snag_session *session,const char *path,const char *kin
     }
 }
 
+/* A synthetic LOK allocator makes cross-runtime ownership observable without
+ * loading another installed Office or relying on matching host CRT heaps. */
+static unsigned int sheet_allocated, sheet_released, sheet_case;
+static LibreOfficeKitCallback sheet_callback;
+static void *sheet_callback_data;
+static char *sheet_string(const char *text)
+{
+    char *value=strdup(text);assert(value);++sheet_allocated;return value;
+}
+static void sheet_release(char *value)
+{ assert(value);++sheet_released;free(value); }
+static int sheet_one(LibreOfficeKitDocument *d) { (void)d;return 1; }
+static int sheet_mode(LibreOfficeKitDocument *d) { (void)d;return sheet_case==4u?2:0; }
+static void sheet_initialize(LibreOfficeKitDocument *d,const char *args)
+{ (void)d;assert(!strcmp(args,"{}")); }
+static void sheet_part(LibreOfficeKitDocument *d,int part) { (void)d;assert(part==0); }
+static void sheet_register(LibreOfficeKitDocument *d,LibreOfficeKitCallback callback,void *data)
+{ (void)d;sheet_callback=callback;sheet_callback_data=data; }
+static void sheet_command(LibreOfficeKitDocument *d,const char *command,const char *args,bool notify)
+{
+    (void)d;assert(!strcmp(command,".uno:GoToCell") && strstr(args,"$A$1:$A$1") && notify);
+    sheet_callback(42,"0, 0, 300, 300",sheet_callback_data);
+    sheet_callback(16,"{\"commandName\":\".uno:GoToCell\",\"success\":true,"
+        "\"result\":{\"value\":\"$A$1:$A$1\"}}",sheet_callback_data);
+}
+static char *sheet_cursor(LibreOfficeKitDocument *d,const char *command)
+{
+    (void)d;assert(!strcmp(command,".uno:CellCursor"));
+    if(sheet_case==5u)return NULL;
+    return sheet_string(sheet_case==1u?"{}":"{\"commandValues\":\"0, 0, 300, 300, 0, 0\"}");
+}
+static char *sheet_text(LibreOfficeKitDocument *d,const char *mime,char **used)
+{
+    (void)d;assert(!strcmp(mime,"text/html") && !used);
+    if(sheet_case==6u)return NULL;
+    return sheet_string(sheet_case==2u?"<html><body></body></html>":
+        "<html><body><table><tr><td>owned cell</td></tr></table></body></html>");
+}
+static char *sheet_name(LibreOfficeKitDocument *d,int part)
+{ (void)d;assert(part==0);return sheet_case==3u?NULL:sheet_string("owned sheet"); }
+static char *sheet_info(LibreOfficeKitDocument *d,int part)
+{ (void)d;assert(part==0);return sheet_case==3u?NULL:sheet_string("{\"hash\":\"omit\",\"visible\":true}"); }
+static void sheet_paint(LibreOfficeKitDocument *d,unsigned char *p,int part,int mode,int w,int h,
+                        int x,int y,int width,int height)
+{
+    (void)d;assert(part==0 && mode==0 && x==0 && y==0 && width==300 && height==300);
+    memset(p,255,(size_t)w*h*4u);
+}
+static void test_office_sheet_ownership(void)
+{
+    LibreOfficeKitClass api={.nSize=sizeof(api),.freeError=sheet_release};
+    LibreOfficeKit office={.pClass=&api};
+    LibreOfficeKitDocumentClass methods={.nSize=sizeof(methods),.getDocumentType=sheet_one,
+        .getParts=sheet_one,.initializeForRendering=sheet_initialize,.setPart=sheet_part,
+        .registerCallback=sheet_register,.postUnoCommand=sheet_command,.getCommandValues=sheet_cursor,
+        .getTextSelection=sheet_text,.getPartName=sheet_name,.getPartInfo=sheet_info,
+        .paintPartTile=sheet_paint,.getTileMode=sheet_mode};
+    LibreOfficeKitDocument doc={.pClass=&methods};
+    struct snag_sheet_range range={1u,1u,1u,1u,1u};
+    static const unsigned int allocations[]={4u,1u,2u,2u,4u,0u,1u};
+    for(sheet_case=0;sheet_case<sizeof(allocations)/sizeof(allocations[0]);++sheet_case) {
+        sheet_allocated=sheet_released=0;
+        struct snag_buf png;snag_buf_init(&png,4096u);json_t *meta=NULL;char error[256];
+        int rc=snag_office_sheet(&office,&doc,&range,&png,&meta,error,sizeof(error));
+        bool success=sheet_case==0u || sheet_case==3u;
+        assert((rc==0)==success && !sheet_callback);
+        assert(sheet_allocated==allocations[sheet_case]);
+        assert(sheet_released==sheet_allocated);
+        if(success) {
+            assert(png.len>8u && !memcmp(png.data,"\211PNG\r\n\032\n",8u));
+            assert(!strcmp(snag_json_string(meta,"sheet_name"),sheet_case==3u?"":"owned sheet"));
+            assert(strstr(snag_json_string(meta,"cells"),"owned cell"));
+            assert(!json_object_get(json_object_get(meta,"sheet_info"),"hash"));
+        } else assert(!meta && png.len==0u);
+        json_decref(meta);snag_buf_free(&png);
+    }
+}
+
 static void
 test_office_import(void)
 {
+    test_office_sheet_ownership();
     struct snag_sheet_range selection={2u,3u,2u,2u,3u};
     struct snag_buf cells_text;snag_buf_init(&cells_text,4096u);
     const char *html="<html><body><table><tr><td colspan=2>merged</td><td>x&amp;y</td></tr>"
