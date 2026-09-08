@@ -234,6 +234,27 @@ and TLS trust and hostname checks with local fixtures. The IRC capacity test
 raises its own descriptor soft limit to 256 because it holds both endpoints of
 64 connections in one process. Ordinary agent checks use the default limit.
 
+### OpenBSD 5.9 legacy ABI
+
+`make prod-openbsd-amd64-legacy` uses the pinned 5.9 installation image and
+requires `libc.so.84.2`, `libpthread.so.20.1` and `/usr/libexec/ld.so`.
+The 5.9 executable fails to load on 7.9 because that libc ABI is absent; the
+separate output preserves both release runtimes without installing old libraries.
+Application libraries and Unicode support remain static, with PIE, stack
+protection and a non-executable stack. Matching symbols accompany the executable.
+
+Clang uses emulated thread-local storage at this target. The build includes
+LLVM compiler-rt's thread-local storage and 128-bit division support and the
+native GCC runtime archive. Preserve their licenses with the base-system and
+application dependency notices. The old system-header macro warning is scoped
+to this build; all other compiler warnings remain errors.
+
+The process adapter observes child exit through the native process query,
+validating PID and parentage before checking zombie status. The owning command
+retains the final `waitpid` and exit status. Actual 5.9 checks cover the base,
+IRC and SSE suites, read-only enforcement, parallel commands, PTY exit status,
+interactive history/resume and TLS trust and hostname verification.
+
 ## macOS ARM64 and Intel cross-builds
 
 `make prod-macos-arm64` and `make prod-macos-x86_64` use the same pinned upstream dependency sources via
@@ -292,7 +313,7 @@ compatibility, signing identity or notarization.
 
 `make -jN prod-matrix` explicitly builds Linux x86-64/AArch64/i686 and legacy i686, macOS
 ARM64/Intel/universal, Windows x86-64/ARM64, FreeBSD amd64/current and legacy,
-and OpenBSD 7.9 amd64. This is the full implemented
+and OpenBSD 7.9/5.9 amd64. This is the full implemented
 set, not the completed legacy/exotic portability roadmap. The remaining ports
 are still in development. SDK availability never silently
 reduces the requested set; a failed target fails the command.

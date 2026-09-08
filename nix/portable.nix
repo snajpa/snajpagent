@@ -59,6 +59,11 @@ in assert buildRevision == null || buildRevision == revision; rec {
     inherit pkgs;
     sourcePkgs = static;
   }).application (args "openbsd-amd64");
+  openbsd-amd64-legacy = (import ./openbsd.nix {
+    inherit pkgs;
+    sourcePkgs = static;
+    osVersion = "5.9";
+  }).application (args "openbsd-amd64-legacy");
   freebsd-amd64 = (import ./freebsd.nix {
     inherit pkgs;
     sourcePkgs = static;

@@ -376,6 +376,7 @@ help:
 		'make prod-macos-arm64  macOS ARM64 with static application libraries via pinned Nix' \
 		'make prod-macos-x86_64 macOS Intel with static application libraries via pinned Nix' \
 		'make prod-macos-universal Native ARM64+Intel Mach-O file and matching dSYM' \
+		'make prod-openbsd-amd64-legacy OpenBSD 5.9 amd64 native ABI with static application libraries' \
 		'make prod-openbsd-amd64 OpenBSD 7.9 amd64 with static application libraries and native libc/threads' \
 		'make prod-freebsd-amd64 FreeBSD amd64 with static application libraries and native libc/threads' \
 		'make prod-freebsd-amd64-legacy FreeBSD 5.1/5.5 amd64 with static application libraries and native libc/threads' \
@@ -398,7 +399,7 @@ help:
 		'Live targets (livecheck, terminallivecheck, releaseevidence) use network/' \
 		'credentials and may incur provider charges; never part of make or help.'
 
-PROD_TARGETS = prod-linux-x86_64 prod-linux-aarch64 prod-macos-arm64 prod-macos-x86_64 prod-macos-universal prod-windows-x86_64 prod-windows-arm64 prod-linux-i686 prod-linux-i686-legacy prod-freebsd-amd64 prod-freebsd-amd64-legacy prod-openbsd-amd64
+PROD_TARGETS = prod-linux-x86_64 prod-linux-aarch64 prod-macos-arm64 prod-macos-x86_64 prod-macos-universal prod-windows-x86_64 prod-windows-arm64 prod-linux-i686 prod-linux-i686-legacy prod-freebsd-amd64 prod-freebsd-amd64-legacy prod-openbsd-amd64 prod-openbsd-amd64-legacy
 
 prod-matrix: $(PROD_TARGETS)
 	@printf '%s\n' 'Production matrix built: $(PROD_TARGETS:prod-%=%)' \

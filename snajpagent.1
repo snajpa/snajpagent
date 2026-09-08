@@ -2514,6 +2514,17 @@ OpenBSD 7.9 checks cover base/IRC/SSE tests, read-only inspection and denied
 writes, parallel commands, PTY execution, durable resume and TLS trust/hostname
 verification with local fixtures.
 .TP
+.B make prod-openbsd-amd64-legacy
+Build the experimental OpenBSD 5.9 amd64 agent at
+.I build/matrix/openbsd-amd64-legacy/bin/snajpagent
+with matching symbols in .debug. It requires libc.so.84.2, libpthread.so.20.1
+and /usr/libexec/ld.so. Application libraries, Unicode support, compiler
+thread-local storage support and CA data are static. This PIE executable uses
+a separate ABI from the 7.9 output. Child exit observation preserves the
+owner's final wait and exit status. Base/IRC/SSE tests, read-only enforcement,
+parallel commands, PTY, interactive resume and TLS trust/hostname checks have
+been exercised on 5.9.
+.TP
 .BR "make prod-windows-x86_64" , " make prod-windows-arm64"
 Build the experimental native Windows x64 or ARM64 executable using pinned Nix
 dependencies.  Copy
