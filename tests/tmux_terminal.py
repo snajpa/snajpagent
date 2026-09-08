@@ -1617,8 +1617,7 @@ def run_draft_navigation_case(binary, root, regression=None):
                 terminal.send_text("Z")
                 draft(["> Aone café界", "  two threeZ"])
                 terminal.send_key("C-u")
-            terminal.submit("older")
-            terminal.wait("fixture answer")
+            terminal.submit_wait("older", "fixture answer")
             terminal.send_text("unsent")
             terminal.send_key("C-a")
             terminal.send_key("Up")
@@ -1664,8 +1663,7 @@ def run_draft_navigation_case(binary, root, regression=None):
             terminal.exit()
             return
         if regression == "wrap":
-            terminal.submit("older")
-            terminal.wait("fixture answer")
+            terminal.submit_wait("older", "fixture answer")
             terminal.send_text("alpha beta gamma extraordinaryyyyyyyyyyy")
             draft(["> alpha beta gamma", "extraordinaryyyyyyyyyyy"])
             terminal.send_key("Up")
@@ -1711,8 +1709,7 @@ def run_draft_navigation_case(binary, root, regression=None):
             terminal.exit()
             return
         if regression == "history":
-            terminal.submit("older")
-            terminal.wait("fixture answer")
+            terminal.submit_wait("older", "fixture answer")
             terminal.send_text("first")
             terminal.send_key("C-j")
             terminal.send_text("second")
@@ -1823,7 +1820,7 @@ def run_draft_word_wrap_case(binary, root, columns=80):
             time.sleep(0.02)
         raise AssertionError(f"expected word-wrapped draft {rows!r}:\n{screen}")
 
-    try:
+    with fixture_terminal(terminal, case / "screen.txt"):
         terminal.wait("›")
         screen = terminal.capture()
         label = next(line.split("›")[0] + "› " for line in screen.splitlines()
@@ -1855,8 +1852,7 @@ def run_draft_word_wrap_case(binary, root, columns=80):
         terminal.send_key("C-p")
         draft([first, "bcd!"])
         terminal.send_key("C-u")
-        terminal.submit("slow")
-        terminal.wait("working slowly")
+        terminal.submit_wait("slow", "working slowly")
         terminal.send_text(first + " bcd!")
         draft([first, "bcd!"])
         wait_event_count(case / "s", "turn_completed", 2, timeout=5.0)
@@ -1866,8 +1862,6 @@ def run_draft_word_wrap_case(binary, root, columns=80):
         _, events = read_events(case / "s")
         assert [e["data"]["text"] for e in event_list(events, "turn_started")] == [
             first + " bcd!", "slow"]
-    finally:
-        close_fixture_terminal(terminal)
 
 
 def run_lifecycle_case(binary, root):
@@ -2411,8 +2405,7 @@ def run_destination_case(binary, root, provider, environment):
         deliveries("single-still-valid", {"a": 1, "c": 1})
         assert "[1 #alpha]" not in client.capture().rstrip().splitlines()[-1]
         client.submit_wait(f"/connect {endpoints[1]}", "outgoing connection added")
-        client.submit("/names")
-        client.wait(f"destination[3]: {endpoints[1]}")
+        client.submit_wait("/names", f"destination[3]: {endpoints[1]}")
         client.submit_wait("/2 removed-target", "destination 2 is unavailable; use /names")
         client.wait(": /2 removed-target")
         deliveries("removed-target", {})
@@ -2451,8 +2444,7 @@ def run_listener_collision_case(binary, root, provider, environment):
                 assert f"cannot listen on IRC endpoint {endpoint}:" in screen, screen
                 assert ("Address already in use" in screen or
                         "Address in use" in screen), screen
-        terminals[0].submit("/names")
-        terminals[0].wait(f"members[{endpoint}]:", join_wrapped=True)
+        terminals[0].submit_wait("/names", f"members[{endpoint}]:", join_wrapped=True)
         terminals[0].exit()
         print("tmux_terminal listener collision: ok", flush=True)
     finally:
@@ -3495,8 +3487,7 @@ def run_goal_recovery_cases(binary, root, provider, environment):
             if mode == "steer":
                 terminal.submit("fresh recovery steer")
             if mode == "cancel":
-                terminal.submit("/goal pause")
-                terminal.wait("Goal paused at the current turn boundary")
+                terminal.submit_wait("/goal pause", "Goal paused at the current turn boundary")
                 before = len(requests)
                 time.sleep(0.7)
                 assert len(requests) == before
@@ -3631,15 +3622,13 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
                                                 state, config, 140, 28,
                                                 args=("--resume", sid), environment=environment)
                         terminal.wait("host-model/medium")
-                terminal.submit("/compact")
-                terminal.wait("Compacted", timeout=10)
+                terminal.submit_wait("/compact", "Compacted", timeout=10)
                 terminal.exit()
                 terminal.close()
                 terminal = TmuxTerminal(case / "r", binary, workspace, state, config, 140, 28,
                                         args=("--resume", sid), environment=environment)
                 terminal.wait("host-model/medium")
-            terminal.submit("/goal regression compacted objective")
-            terminal.wait("Goal set")
+            terminal.submit_wait("/goal regression compacted objective", "Goal set")
             terminal.wait("Goal active; retrying", timeout=12)
             events = wait_event_count(state, "goal_completed", 1, timeout=20)
             terminal.wait("compacted goal done", timeout=5)
@@ -3732,8 +3721,7 @@ def run_automatic_turn_retry_cases(binary, root, provider, environment):
         def respond(handler, request, sequence):
             if mode == "paused" and provider.latest_user(request) != original:
                 assert terminal is not None
-                terminal.submit("/goal pause")
-                terminal.wait("Goal paused at the current turn boundary")
+                terminal.submit_wait("/goal pause", "Goal paused at the current turn boundary")
                 body = provider.response_body(sequence, "paused seed").encode()
                 provider.reply(handler, body)
                 handler.wfile.flush()
@@ -3792,8 +3780,7 @@ def run_automatic_turn_retry_cases(binary, root, provider, environment):
                     terminal.submit("/rollout")
                 terminal.wait("host-model/medium   0% ›")
                 if mode == "paused":
-                    terminal.submit("/goal retained paused goal")
-                    terminal.wait("paused seed")
+                    terminal.submit_wait("/goal retained paused goal", "paused seed")
                 terminal.submit(("/ro " if mode == "success" else "") + original)
                 if mode in ("cancel", "steer"):
                     terminal.wait("Retrying turn after error")
@@ -4649,8 +4636,7 @@ def run_tool_yield_cases(binary, root, provider, environment):
                                 environment=environment)
         try:
             terminal.wait("host-model/medium   0% ›")
-            terminal.submit("/yield")
-            terminal.wait("No active tool wait to yield.")
+            terminal.submit_wait("/yield", "No active tool wait to yield.")
             assert not requests
             terminal.submit("test tool yield " + mode)
             if operator:
@@ -4901,8 +4887,7 @@ def run_irc_chat_case(binary, root):
         wait_irc_idle(ordered)
         for terminal, operator in zip(ordered, ("hostop", "oneop", "twoop")):
             wait_current_prompt(terminal, operator)
-        terminals["two"].submit("/names")
-        names = terminals["two"].wait(
+        names = terminals["two"].submit_wait("/names",
             f"members[{endpoint}]:", join_wrapped=True
         )
         for nick in ("hostbot", "@hostop", "onebot", "@oneop",
@@ -4921,8 +4906,7 @@ def run_irc_chat_case(binary, root):
                 terminal.wait(f"{agent} heard one")
         wait_irc_idle(ordered)
 
-        terminals["two"].submit("/verbose 1")
-        terminals["two"].wait("verbosity: 1")
+        terminals["two"].submit_wait("/verbose 1", "verbosity: 1")
         wait_current_prompt(terminals["two"], "twoop")
         second = IRC_SECOND_MESSAGE
         terminals["two"].submit(second)
@@ -5044,8 +5028,7 @@ def run_irc_chat_case(binary, root):
                                    ("hostbot", "host"), ("onebot", "one")):
                 if viewer == "one":
                     wait_current_prompt(terminals["one"], "oneop")
-                    terminals["one"].submit("/rollout")
-                    terminals["one"].wait("── rollout ──")
+                    terminals["one"].submit_wait("/rollout", "── rollout ──")
                 ending = f"highlight {target} end"
                 message = f"@{target.upper()} **highlight start** `code` " + "wrapped message " * 12 + ending
                 peer.sendall(f"PRIVMSG #lab :{message}\r\n".encode())

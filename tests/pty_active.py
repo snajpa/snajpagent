@@ -1296,9 +1296,8 @@ def test_prompt_history_and_reverse_search():
 
     before_second = session_ids()
     second.send(b"draft-restore")
-    second.send(b"\x12")
     # The terminal may reuse the existing trailing blank instead of emitting it.
-    second.wait(b"(failed reverse-i-search)`draft-restore':")
+    second.send_wait(b"\x12", b"(failed reverse-i-search)`draft-restore':")
     second.send(b"\x07")
     restored = len(second.buf)
     answer = second.send_wait(b"\r", b"fixture answer", start=restored)
@@ -1568,8 +1567,7 @@ def test_goal_refusal_failure_block_and_restart_state():
     child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal refusing goal\r", b"I cannot continue this goal.")
     child.wait(b"Goal active; retrying")
-    child.send(b"/goal pause\r")
-    paused = child.wait(b"Goal paused at the current turn boundary")
+    paused = child.send_wait(b"/goal pause\r", b"Goal paused at the current turn boundary")
     child.exit_cleanly(paused)
     log = events(child.session_id())
     assert one(log, "goal_paused")["data"]["reason"] == "user"
@@ -2653,8 +2651,7 @@ def test_known_context_meter():
     child = Child(["--config", str(config), "--resume", session_id])
     child.wait_idle_prompt()
     start = len(child.buf)
-    child.send(b"context_anchor_chain\r")
-    answered = child.wait(b"context anchor complete", start=start)
+    answered = child.send_wait(b"context_anchor_chain\r", b"context anchor complete", start=start)
     child.wait_idle_prompt(start=answered)
     completed = [event["data"] for event in events(session_id)
                  if event["type"] == "response_completed"][-1]
@@ -2721,8 +2718,7 @@ def test_empty_session_lifecycle():
         before = session_ids()
         with Child(["--no-color", "--no-listen", "--no-client"], DEFAULT_IDLE_PROMPT) as child:
             assert session_ids() == before
-            child.send(b"/compact\r")
-            child.wait(b"nothing to compact before the first prompt")
+            child.send_wait(b"/compact\r", b"nothing to compact before the first prompt")
             child.send(b"/status\r")
             child.wait(DEFAULT_IDLE_PROMPT, start=len(child.buf))
             assert session_ids() == before
@@ -2736,19 +2732,16 @@ def test_empty_session_lifecycle():
 
     before = session_ids()
     with Child(["--no-color", "--no-listen", "--no-client"], DEFAULT_IDLE_PROMPT) as child:
-        child.send(b"unsent draft")
-        child.wait(b"unsent draft")
+        child.send_wait(b"unsent draft", b"unsent draft")
         child.send(b"\x15\x04")
         child.finish(expect_resume=False)
         assert session_ids() == before
 
     before = session_ids()
     with Child(["--no-color", "--no-listen", "--no-client"], DEFAULT_IDLE_PROMPT) as child:
-        child.send(b"/model selected-before-prompt / high\r")
-        child.wait(b"selected-before-prompt/high   0%")
+        child.send_wait(b"/model selected-before-prompt / high\r", b"selected-before-prompt/high   0%")
         assert session_ids() == before
-        child.send(b"ping\r")
-        child.wait(b"pong")
+        child.send_wait(b"ping\r", b"pong")
         sid = new_session(before)
         command = child.exit_now()
         assert command_arguments(command)[-2:] == ["--resume", sid]
@@ -2780,8 +2773,7 @@ def test_empty_network_session():
             child.drain(0.2)  # Cross the ordinary background admission delay.
             assert session_ids() == before
             # Exercise buffered IRC rendering before a durable log exists.
-            child.send(b"/rollout\r")
-            child.wait(DEFAULT_IDLE_PROMPT)
+            child.send_wait(b"/rollout\r", DEFAULT_IDLE_PROMPT)
             child.send(b"/chat\r")
             child.wait(chat_prompt("emptyop"), start=len(child.buf))
             if sent != "none":
@@ -2966,11 +2958,9 @@ def test_network_resume_roles():
     ], chat_prompt("clientop"))
     assert session_ids() == before
     first_links = accept_connections(upstream, 2)
-    client.send(b"/rollout\r")
-    switched = client.wait("── rollout ──".encode())
+    switched = client.send_wait(b"/rollout\r", "── rollout ──".encode())
     client.wait_idle_prompt(start=switched)
-    client.send(b"ping\r")
-    answered = client.wait(b"pong", start=switched)
+    answered = client.send_wait(b"ping\r", b"pong", start=switched)
     client.wait_idle_prompt(start=answered)
     client_id = new_session(before)
     client_command = client.exit_now()
