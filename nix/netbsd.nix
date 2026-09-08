@@ -216,7 +216,12 @@ let
   regex = (import ./windows-regex.nix {
     inherit pkgs unistring;
     cross = { inherit compiler cxxCompiler target sdk tools cflags ldflags; };
-  }).overrideAttrs (_: {
+  }).overrideAttrs (old: {
+    preConfigure = lib.optionalString (!legacy) ''
+      # Match the static UTF-8 decoder with its encoder in the C locale.
+      export gl_cv_func_mbrtoc32_sanitycheck=no
+      export gl_cv_func_c32rtomb_sanitycheck=no
+    '' + old.preConfigure;
     postInstall = ''
       # sys/cdefs.h reserves __used as an attribute; retain the struct layout.
       substituteInPlace "$out/include/snajpagent-gnulib-regex.h" \

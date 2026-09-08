@@ -2786,6 +2786,8 @@ test_regex(void)
         {"^.$", "\xf0\x9f\x98\x80", 0, true},
         {"^..$", "\xf0\x9f\x98\x80", 0, false},
         {"^\xc3\x89$", "\xc3\xa9", REG_ICASE, true},
+        {"^\xc3\xa9$", "\xc3\x89", REG_ICASE, true},
+        {"^\xce\xa9$", "\xcf\x89", REG_ICASE, true},
         {"^[[:alpha:]]+$", "\xc3\xa9", 0, true},
         {"^[[:alpha:]]+$", "\xf0\x9f\x98\x80", 0, false}
     };
