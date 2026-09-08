@@ -214,6 +214,13 @@ assert '"-DANDROID_PLATFORM=android-${api}"' in android
 assert '"-DCMAKE_FIND_ROOT_PATH=${lib.concatStringsSep ";" dependencies}"' in android
 print("PASS: Android static libraries use NDK archiving tools and Bionic target")
 
+android_libs = next(line for line in android.splitlines() if '"CURL_LIBS=' in line)
+assert "sed 's/-l-pthread/-pthread/g'" in android_libs
+thread_flags = subprocess.check_output(["sed", "s/-l-pthread/-pthread/g"],
+    input="-lcurl -l-pthread -lmbedtls -pthread -l-pthread\n", text=True)
+assert thread_flags == "-lcurl -pthread -lmbedtls -pthread -pthread\n"
+print("PASS: Android curl pthread flags remain compiler switches")
+
 # Android API24 lacks nl_langinfo; select Bionic's built-in UTF-8 locale directly.
 platform = (root / "src/platform.c").read_text()
 locale_init = re.findall(r"bool\nsnag_text_locale_init\(void\)\n\{.*?\n}",
