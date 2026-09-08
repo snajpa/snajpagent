@@ -1482,7 +1482,7 @@ done:
 #define SNAJPAGENT_HAVE_PROC_CHILD 1
 #include <pty.h>
 #include <sys/ioctl.h>
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) || defined(__OpenBSD__)
 #define SNAJPAGENT_HAVE_PTY 1
 #include <sys/ioctl.h>
 #include <util.h>

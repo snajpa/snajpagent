@@ -54,6 +54,10 @@ ifeq ($(TARGET_OS),FreeBSD)
 override CPPFLAGS += -D__BSD_VISIBLE=1
 override LDFLAGS += -lutil
 endif
+ifeq ($(TARGET_OS),OpenBSD)
+override CPPFLAGS += -D_BSD_SOURCE
+override LDFLAGS += -lutil
+endif
 ifeq ($(TARGET_OS),Darwin)
 DEBUG_SYMBOLS = $(BIN).dSYM
 else

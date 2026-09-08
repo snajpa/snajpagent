@@ -2404,7 +2404,7 @@ test_platform(void)
 #else
     test_posix_child_ownership();
     test_posix_process(false);
-#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
+#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__)
     test_posix_process(true);
 #endif
 #endif
