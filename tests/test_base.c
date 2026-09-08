@@ -2314,6 +2314,10 @@ test_posix_child_ownership(void)
     assert(snag_child_exited(&waiting) == 0 && !waiting.reaped);
     snag_child_free(&exited);
     snag_child_free(&waiting);
+    struct snag_child unowned;
+    snag_child_init(&unowned);
+    unowned.pid = getpid();
+    assert(snag_child_exited(&unowned) == -1 && errno == ECHILD && unowned.reaped);
     snag_environment_entries_free(env);
     free(directory);
 }

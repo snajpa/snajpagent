@@ -1505,6 +1505,11 @@ done:
 #include <sys/sysctl.h>
 #include <sys/user.h>
 #endif
+#if defined(__OpenBSD__) && !defined(WNOWAIT)
+#include <sys/param.h>
+#include <sys/sysctl.h>
+#include <sys/proc.h>
+#endif
 
 #ifndef O_CLOEXEC
 #define O_CLOEXEC 0
@@ -1781,7 +1786,19 @@ proc_child_exited(struct snag_child *child)
 int
 snag_child_exited(struct snag_child *child)
 {
-#if defined(__FreeBSD__) && !defined(WNOWAIT)
+#if defined(__OpenBSD__) && !defined(WNOWAIT)
+    struct kinfo_proc info = {0};
+    int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, child->pid, sizeof(info), 1};
+    size_t size = sizeof(info);
+    if (sysctl(mib, 6u, &info, &size, NULL, 0) < 0)
+        return -1;
+    if (size != sizeof(info) || info.p_pid != child->pid || info.p_ppid != getpid()) {
+        child->reaped = true;
+        return snag_errno(ECHILD);
+    }
+    /* Preserve waitpid ownership while observing the native zombie state. */
+    return (info.p_psflags & PS_ZOMBIE) != 0;
+#elif defined(__FreeBSD__) && !defined(WNOWAIT)
     /* KERN_PROC_PID omits zombies on old FreeBSD; the process list includes
      * them. Validate parentage and leave reaping exclusively to the owner. */
 #ifdef KERN_PROC_PROC

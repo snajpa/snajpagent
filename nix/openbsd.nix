@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0-only
-{ pkgs, sourcePkgs }:
+{ pkgs, sourcePkgs, osVersion ? "7.9" }:
 let
   inherit (pkgs) lib;
-  osVersion = "7.9";
+  legacy = lib.versionOlder osVersion "6.0";
+  release = lib.replaceStrings [ "." ] [ "" ] osVersion;
   target = "x86_64-unknown-openbsd${osVersion}";
   llvm = pkgs.llvmPackages_21;
   tools = "${llvm.llvm}/bin";
@@ -10,17 +11,20 @@ let
     pname = "openbsd-amd64-sysroot";
     version = osVersion;
     src = pkgs.fetchurl {
-      url = "https://cdn.openbsd.org/pub/OpenBSD/${osVersion}/amd64/install79.iso";
-      sha256 = "7a4a92e953618035097c796a90b54424a0f3ae775552e1e7d102cf8a5130449f";
+      url = "https://${if legacy then "ftp.eu" else "cdn"}.openbsd.org/pub/OpenBSD/${osVersion}/amd64/install${release}.iso";
+      sha256 = {
+        "7.9" = "7a4a92e953618035097c796a90b54424a0f3ae775552e1e7d102cf8a5130449f";
+        "5.9" = "685262fc665425c61a2952b2820389a2d331ac5558217080e6d564d2ce88eecb";
+      }.${osVersion};
     };
     nativeBuildInputs = [ pkgs.libarchive pkgs.python3 ];
-    unpackPhase = ''bsdtar -xf "$src" 7.9/amd64/base79.tgz 7.9/amd64/comp79.tgz'';
+    unpackPhase = ''bsdtar -xf "$src" ${osVersion}/amd64/base${release}.tgz ${osVersion}/amd64/comp${release}.tgz'';
     dontConfigure = true;
     dontBuild = true;
     dontFixup = true;
     installPhase = ''
       mkdir -p "$out"
-      for set in 7.9/amd64/base79.tgz 7.9/amd64/comp79.tgz; do
+      for set in ${osVersion}/amd64/base${release}.tgz ${osVersion}/amd64/comp${release}.tgz; do
         bsdtar -xf "$set" -C "$out"
       done
       python3 - "$out" <<'PYSDK'
@@ -44,6 +48,15 @@ let
       PYSDK
     '';
   };
+  compilerBuiltins = pkgs.runCommand "compiler-rt-openbsd-${osVersion}" {} ''
+    mkdir -p "$out/lib"
+    for file in emutls.c udivti3.c udivmodti4.c; do
+      ${llvm.clang-unwrapped}/bin/clang --target=${target} --sysroot=${sdk} \
+        -Os -g -fPIC -D_BSD_SOURCE \
+        -c ${llvm.compiler-rt.src}/compiler-rt/lib/builtins/"$file" -o "$file.o"
+    done
+    ${tools}/llvm-ar rcs "$out/lib/libclang_rt.builtins.a" ./*.o
+  '';
   # Supply the release's native startup objects and compiler runtime. Clang's
   # Linux installation otherwise injects its own host search/startup paths.
   compilerWrapper = pkgs.runCommand "openbsd-${osVersion}-clang" {} ''
@@ -71,14 +84,16 @@ let
       flags=()
     fi
     exec "$cc" -nostdlib "''${flags[@]}" "''${start[@]}" "$@" \
-      -Wl,-Bdynamic "''${extra[@]}" -lpthread -lc -lcompiler_rt "''${end[@]}"
+      -Wl,-Bdynamic "''${extra[@]}" ${if legacy then "-l:libpthread.so.20.1 -l:libc.so.84.2 ${compilerBuiltins}/lib/libclang_rt.builtins.a ${sdk}/usr/lib/gcc-lib/amd64-unknown-openbsd5.9/4.2.1/libgcc.a" else "-lpthread -lc -lcompiler_rt"} "''${end[@]}"
     SH
     chmod +x "$out/bin/clang"
     ln -s clang "$out/bin/clang++"
   '';
   compiler = "${compilerWrapper}/bin/clang";
   cxxCompiler = "${compilerWrapper}/bin/clang++";
-  cflags = "-Os -g -D_BSD_SOURCE -fPIC -fstack-protector-strong";
+  cflags = "-Os -g -D_BSD_SOURCE -fPIC -fstack-protector-strong"
+    # 5.9's endian statement macros predate Clang's token-context diagnostic.
+    + lib.optionalString legacy " -Wno-compound-token-split-by-macro";
   ldflags = "--ld-path=${llvm.lld}/bin/ld.lld";
   cmakeLibrary = package: flags: dependencies:
     pkgs.stdenvNoCC.mkDerivation {
@@ -263,7 +278,7 @@ in {
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson) -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
-          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l-?pthread//g') -lutil -Wl,-Bdynamic -lpthread"
+          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l-?pthread//g') -lutil -Wl,-Bdynamic ${if legacy then "-l:libpthread.so.20.1" else "-lpthread"}"
         )
       '';
       installPhase = ''
