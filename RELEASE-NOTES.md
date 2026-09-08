@@ -1,52 +1,52 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 
-# snajpagent 0.99.1 — September 7, 2026
+# snajpagent 0.99.2 — September 8, 2026
 
-The first binary release. Eight standalone executables cover Linux x86-64,
-AArch64 and i686; macOS Intel, Apple Silicon and universal; Windows x64 and
-ARM64. macOS and Windows are experimental. Older tags remain source releases.
+Background binary updates and clearer streamed Markdown.
 
 ## Changes
 
-- Queue acknowledgements say `queued (/next or /q c) ›`: `/next` resumes a
-  paused queue, `/q c` clears waiting prompts without stopping current work.
-- Standalone work, steering, goals and native IRC remain one program. IRC
-  reconnects catch up by durable event ID rather than repeating conversation.
-- Prompts share activity/goal indicators and time; context shows measured request
-  input, not a local estimate. Wrapped draft navigation and paragraph spacing
-  are improved. Active goals survive exit/resume; unused fresh sessions are not
-  saved. Validated shell aliases retain their intended behavior.
-- The README/homepage explain concrete workflows. The complete man page now
-  supplies a readable web reference with grouped, keyboard-accessible contents.
+- Official standalone binaries discover, verify and install matching releases
+  in a background thread. The current process keeps running its old version.
+  One local banner gives restart advice and links to the release log.
+- Stable builds default to automatic updates. Development builds carry a Git
+  suffix, retain debugging information and use a separate channel that defaults
+  off. Configure `auto_update` and `update_url` in `[agent]`.
+- Plain-text code fences keep their border without a redundant type label.
+  Indented and pipe-prefixed code stays literal during streaming.
+- Eleven standalone targets now include Linux i686 legacy, FreeBSD amd64 and
+  FreeBSD amd64 legacy. Completed tool arguments are accepted after empty
+  streaming placeholders, including snapshot-only provider responses.
 
-See [CHANGELOG.md](CHANGELOG.md) for detailed development history, including
-changes already present in the earlier 0.99.0 source tag.
+## Installation and updating
 
-## Choosing a binary
+Download the executable for your OS and architecture and verify `SHA256SUMS`.
+On Unix, make it executable and place it in a user-owned standalone directory.
+Use `auto_update = false` for package-managed installations. Updates preserve
+executable permissions and require ownership of the file and its directory.
+The updater's trust root is the configured HTTPS publisher; expected size,
+SHA-256 and product/target/publisher identity are checked before replacement.
 
-| Target | Requirements and limits |
-| --- | --- |
-| Linux x86-64 | Static musl/application libraries; no Nix, glibc, libcurl or Jansson installation needed. |
-| Linux AArch64 | The same self-contained build for 64-bit ARM. |
-| Linux i686 | 32-bit x86 baseline, not a promise of Linux 2.4 or arbitrary old-kernel support. |
-| macOS Intel / ARM64 / universal | Experimental cross-builds, deployment target macOS 11, only Apple's libSystem dynamically linked. No actual macOS execution claimed. ARM64 is ad-hoc signed; Intel is unsigned, including its universal slice. Neither is Developer ID signed or notarized. |
-| Windows x64 / ARM64 | Experimental, static application libraries, system DLLs only; ARM64 uses the OS UCRT. Earlier tests used Windows PE 26100 (x64) and 28000 (ARM64), not full-desktop or old-Windows qualification. |
+Unix replaces the executable by a same-directory rename. Windows retains the
+mapped original at `.EXECUTABLE.update-old.exe` if rename-over is unavailable;
+this two-rename fallback has an interruption window. The manual describes
+recovery. Windows replacement has Linux forced-path regression coverage but
+has not yet been qualified on an actual Windows runtime for this release.
 
-Earlier platform tests are described in [DEPENDENCIES.md](DEPENDENCIES.md) and
-[QUALIFICATION.md](QUALIFICATION.md). Build success is not runtime qualification.
-The published release includes `BUILDING-0.99.1.md` with exact binary identity,
-checks actually performed for this release, dependencies and reproduction steps.
-No paid live-provider test or unperformed Windows/macOS run is implied.
+## Platforms
 
-## Downloads and use
+- Modern Linux: x86-64, AArch64 and i686, with static application libraries.
+- Legacy Linux: i686 non-PIE build; Linux 2.4.27 runtime exercised. Requires
+  procfs and secure OS entropy; PTY commands also require devpts.
+- macOS: experimental Intel, Apple Silicon and universal builds, macOS 11+.
+  ARM64 is ad-hoc signed; Intel is unsigned. Developer ID signing and
+  notarization are absent. Actual macOS execution remains unqualified.
+- Windows: experimental x64 and ARM64 builds using OS DLLs. ARM64 needs UCRT.
+- FreeBSD: amd64 libc.so.7 build, exercised on 8.4 and 14.4; separate legacy
+  libc.so.5/libpthread.so.1 build exercised on 5.5.
 
-Download the executable for your OS/architecture and verify `SHA256SUMS`.
-On Unix rename it to `snajpagent` and run `chmod +x snajpagent`; on Windows keep
-`.exe`. Matching symbols are separate optional archives, not needed to run.
-The manual, source, dependency sources and licensing/build material accompany
-the release. TLS roots and application libraries are included in each binary.
-
-Run in your project directory. Fresh interactive setup can guide provider and
-model selection; existing credentials/configuration are not overwritten.
-Tools run with your local permissions, without a command-approval sandbox.
-IRC has no authentication or TLS: use localhost, a trusted network or a tunnel.
+See `DEPENDENCIES.md` and `QUALIFICATION.md` for platform limits. Earlier
+platform runs qualify those paths, not every behavior added in this release.
+All targets include matching symbol archives, exact source/build instructions,
+manual and dependency license/source companions. Development applications are
+always debug builds and retain symbols without application stripping.

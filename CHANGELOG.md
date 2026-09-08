@@ -4,6 +4,16 @@
 
 ## Unreleased
 
+## 0.99.2 — 2026-09-08
+
+- Official standalone binaries install matching updates in the background and
+  keep the current process running. One local banner links to the release log.
+  Stable builds default on; debug development builds use a separate channel
+  and default off. Ordinary source builds remain updater-free.
+- Hide plain-text fence labels and keep indentation and pipe-prefixed content
+  literal inside code blocks, including bytewise streamed output.
+- Add the Linux i686 legacy and FreeBSD amd64/legacy binary variants.
+
 - Accept completed tool arguments after an empty streaming placeholder, including
   snapshot-only responses from Codex Spark. Conflicting arguments still fail
   before tool execution.

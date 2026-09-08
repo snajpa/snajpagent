@@ -8,7 +8,8 @@ let
   linux = musl: import ./linux.nix { inherit pkgs musl; };
   x86 = linux pkgs.pkgsCross.musl64;
   static = x86.static;
-  source = builtins.fetchGit { url = toString ../.; };
+  source = builtins.fetchGit ({ url = toString ../.; } //
+    pkgs.lib.optionalAttrs (buildRevision != null) { rev = buildRevision; });
   revision = if source ? dirtyRev then
     pkgs.lib.removeSuffix "-dirty" source.dirtyRev else source.rev;
   metadata = pkgs.lib.splitString "\n" (builtins.readFile (source + "/META"));

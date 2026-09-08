@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 .POSIX:
 
-include config.mk
 include META
 
 GIT_HEAD := $(shell git rev-parse --verify HEAD 2>/dev/null)
@@ -22,13 +21,24 @@ else
 BUILD_VERSION := $(VERSION)-$(GIT_REVISION)$(GIT_DIRTY)
 endif
 endif
+# Publisher-enabled development applications always retain debug information.
+ifneq ($(UPDATE_BASE_URL),)
+ifneq ($(findstring -,$(BUILD_VERSION)),)
+override DEBUG = 1
+endif
+endif
+include config.mk
+
 # Publisher opt-in; ordinary local and matrix builds have no updater.
 UPDATE_BASE_URL ?=
 UPDATE_TARGET ?=
 ifneq ($(UPDATE_BASE_URL),)
 ifeq ($(UPDATE_TARGET),)
-ifeq ($(filter prod-%,$(MAKECMDGOALS)),)
+ifeq ($(MAKECMDGOALS),)
 $(error UPDATE_TARGET is required with UPDATE_BASE_URL)
+endif
+ifneq ($(filter-out prod-%,$(MAKECMDGOALS)),)
+$(error UPDATE_TARGET is required for native goals with UPDATE_BASE_URL)
 endif
 endif
 UPDATE_CHANNEL := $(if $(findstring -,$(BUILD_VERSION)),latest-dev,latest)
@@ -218,6 +228,7 @@ check: $(TEST_BIN)
 		printf '%s\n' 'tmux_terminal: skipped (tmux unavailable)'; \
 	fi
 	$(MAKE) updatecheck
+	python3 tests/release.py
 	$(MAKE) stylecheck
 	$(MAKE) depscheck
 	$(MAKE) portabilitycheck
