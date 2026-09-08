@@ -118,7 +118,8 @@ a tag, accessing remote build hosts, or adding release automation.
 
 ## Official updater builds and development channel
 
-Ordinary `make` and `prod-matrix` do not enable updating. Official publishers set
+Ordinary `make` and `prod-matrix` do not enable updating. Package recipes must
+leave the publisher parameters unset; enabled binaries are standalone installs. Official publishers set
 `UPDATE_BASE_URL=https://agent.snajpa.net`; native custom builds also provide
 `UPDATE_TARGET` explicitly. The matrix supplies its own exact target IDs. A
 custom publisher supplies its own base URL and keeps that identity across updates.
@@ -150,8 +151,13 @@ Keep download selection first and detailed development evidence elsewhere.
 The banner links to this page; it does not parse or inject release prose.
 
 Stage a completed matrix with `python3 tools/release.py stage --version VERSION
---output STAGE --release https://github.com/snajpa/snajpagent/releases/download/VERSION`.
+--revision REVISION --output STAGE --release https://github.com/snajpa/snajpagent/releases/download/VERSION`.
 This copies standalone executables and symbols and writes the channel descriptors.
+`REVISION` must be the exact clean source commit used to build the entire matrix;
+its source, manual and notices are archived even if publishing edits follow.
+Development version suffixes must identify that commit. Each staged release
+includes the target matrix at its source revision; older channels retain their
+original targets when a newer release adds a platform.
 Add the corresponding dependency sources, notices, and checksums to the stage;
 publish those immutable files, then copy the descriptors to `www/latest/` or
 `www/latest-dev/`. Update the downloads page and run the manual Pages workflow.
