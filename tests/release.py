@@ -651,3 +651,20 @@ assert '#define ALSA_CONFIG_DIR "/usr/share/alsa"' in linux
 assert 'substituteInPlace include/config.h' in linux
 assert '"-Ddaemon=false" "-Dclient=true"' in linux
 print("PASS: portable Linux links audio clients and uses host ALSA configuration")
+
+# The portable recipe uses TARGET_OS=Windows, while native Windows hosts may
+# report Windows_NT. Neither may inherit the POSIX dlopen link flags.
+audio_flags = next(line for line in (root / "config.mk").read_text().splitlines()
+                   if line.startswith("AUDIO_DEVICE_LIBS ?="))
+for target, expected in (
+    ("Windows", ["-lole32", "-lwinmm"]),
+    ("Windows_NT", ["-lole32", "-lwinmm"]),
+    ("Darwin", ["-framework", "CoreFoundation", "-framework", "CoreAudio",
+                "-framework", "AudioToolbox"]),
+    ("Linux", ["-ldl", "-lm"]),
+):
+    actual = subprocess.check_output(["make", "-s", "--no-print-directory", "-f", "-",
+                                      "TARGET_OS=" + target],
+        input=audio_flags + '\nall:\n\t@printf "%s\\n" "$(AUDIO_DEVICE_LIBS)"\n', text=True)
+    assert actual.split() == expected, (target, actual)
+print("PASS: audio device link flags follow native and portable target OS names")
