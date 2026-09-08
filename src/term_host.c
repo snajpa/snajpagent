@@ -11,6 +11,9 @@
 #include <stdio.h>
 #include <stdatomic.h>
 #include <signal.h>
+#ifdef __NetBSD__
+#include <sys/param.h>
+#endif
 
 #if (defined(__APPLE__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1070) || \
     (defined(__FreeBSD__) && __FreeBSD__ < 6)
