@@ -1407,8 +1407,10 @@ output_terminal_path(int fd, char *path, size_t capacity)
 {
     snag_file_info original, entry;
     const char *directories[] = {"/dev", "/dev/pts"};
-    if (snag_fstat(fd, &original) < 0 || !snag_isatty(fd))
+    if (snag_fstat(fd, &original) < 0)
         return errno;
+    if (!snag_isatty(fd))
+        return ENOTTY;
     for (size_t i = 0; i < sizeof(directories) / sizeof(directories[0]); ++i) {
         int root = snag_open_read(directories[i], true);
         if (root < 0)

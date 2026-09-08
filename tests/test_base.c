@@ -2143,6 +2143,9 @@ test_input_mode(void)
     assert(snag_term_output_open(&invalid_output, -1) == -1 && errno == EBADF);
     int nonterminal = open("/dev/null", O_WRONLY);
     assert(nonterminal >= 0);
+    errno = 0;
+    assert(snag_term_output_open(&invalid_output, nonterminal) == -1 && errno == ENOTTY);
+    errno = EIO;
     assert(snag_term_output_open(&invalid_output, nonterminal) == -1 && errno == ENOTTY);
     assert(close(nonterminal) == 0);
 #endif
