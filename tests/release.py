@@ -316,9 +316,10 @@ assert '-L${unistring}/lib -lunistring' in android
 print("PASS: Android character widths use the static Unicode library")
 
 # Native Bionic regex does not provide the required Unicode character classes.
-assert 'regex = import ./windows-regex.nix' in android
+assert 'regex = (import ./windows-regex.nix' in android
 assert '-I${regex}/include' in android
 assert '-L${regex}/lib -lsnagregex' in android
+assert "--replace-fail '__REPB_PREFIX(used)' '__REPB_PREFIX(snag_used)'" in android
 print("PASS: Android links the shared static Unicode regex implementation")
 
 # The system shell is shared by command defaults and EDITOR on Android.
