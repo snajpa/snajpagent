@@ -4009,6 +4009,34 @@ def run_tool_cases(binary, root, provider, environment):
                       "succeeded" if after else "patch_rejected")
                 assert (workspace / "lines").read_bytes() == (after or before)
 
+            for before, hunks, after, diagnostic in (
+                (b"one\ntwo\n", "@@ @start\n+head\n@@\n-two\n+TWO\n@@ @end\n+tail\n",
+                 b"head\none\nTWO\ntail\n", None),
+                (b"one\r\ntwo", "@@ @start\n+head\n@@ @end\n+tail\n",
+                 b"head\r\none\r\ntwo\r\ntail", None),
+                (b"", "@@ @start\n+first\n", b"first", None),
+                (b"", "@@ @end\n+last\n", b"last", None),
+                (b"one\n", "@@ @start\n+x\n@@ @start\n+y\n", None,
+                 "conflicting @start insertion"),
+                (b"one\n", "@@\n-one\n+ONE\n@@ @start\n+x\n", None,
+                 "conflicting @start insertion"),
+                (b"", "@@ @start\n+x\n@@ @end\n+y\n", None,
+                 "conflicting @end insertion"),
+                (b"one\n", "@@ @end\n+x\n@@ @end\n+y\n", None,
+                 "hunks cannot follow an @end insertion"),
+                (b"one\n", "@@ @end\n+x\n@@ @start\n+y\n", None,
+                 "hunks cannot follow an @end insertion"),
+                (b"one\n", "@@ @end\n+x\n@@\n-one\n+ONE\n", None,
+                 "hunks cannot follow an @end insertion"),
+            ):
+                (workspace / "anchors").write_bytes(before)
+                message = apply("*** Begin Patch\n*** Update File: anchors\n" +
+                                hunks + "*** End Patch\n",
+                                "patch_rejected" if diagnostic else "succeeded")
+                assert (workspace / "anchors").read_bytes() == (before if diagnostic else after)
+                if diagnostic:
+                    assert message == f"Patch rejected: {diagnostic}.\n", message
+
             (workspace / "dup.txt").write_bytes(b"x\nx\n")
             apply("*** Begin Patch\n*** Update File: dup.txt\n@@\n-x\n+y\n"
                   "*** End Patch\n", "patch_rejected")

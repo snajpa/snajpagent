@@ -59,9 +59,7 @@ struct patch_op {
     char **add_lines;
     struct patch_hunk *hunks;
     size_t hunk_count;
-    char *old_bytes;
-    size_t old_len;
-    struct snag_buf new_bytes;
+    struct snag_buf old_bytes, new_bytes;
     bool eol_crlf;
     bool final_nl;
     struct snag_permissions permissions;
@@ -83,7 +81,7 @@ op_free(struct patch_op *op)
 {
     if (!op)
         return;
-    free(op->old_bytes);
+    snag_buf_free(&op->old_bytes);
     snag_permissions_free(&op->permissions);
     snag_buf_free(&op->new_bytes);
     memset(op, 0, sizeof(*op));
@@ -298,6 +296,7 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
         if (set->count >= PATCH_OP_MAX)
             return snag_errno(EOVERFLOW);
         op = &set->ops[set->count++];
+        op->old_bytes.max = PATCH_FILE_MAX + 1u;
         op->new_bytes.max = PATCH_FILE_MAX;
         op->hunks = set->hunks + set->hunk_total;
         op->type = type;
@@ -377,25 +376,6 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set,
 }
 
 static int
-read_fd_all(int fd, char **out, size_t *out_len)
-{
-    int rc = -1;
-
-    *out = NULL;
-    *out_len = 0;
-    struct snag_buf buf = {.max = PATCH_FILE_MAX + 1u};
-    if (snag_buf_read(&buf, fd) < 0 || snag_buf_terminate(&buf) < 0)
-        goto out_free;
-    *out = (char *)buf.data;
-    *out_len = buf.len;
-    memset(&buf, 0, sizeof(buf));
-    rc = 0;
-out_free:
-    snag_buf_free(&buf);
-    return rc;
-}
-
-static int
 open_parent_dir(int root_fd, const char *path, char leaf[SNAG_NAME_MAX_BYTES + 1u],
                 char *error, size_t error_size)
 {
@@ -455,7 +435,7 @@ read_target_file(int root_fd, struct patch_op *op,
     }
     if (snag_permissions_capture(fd, &op->permissions) < 0)
         goto out;
-    if (read_fd_all(fd, &op->old_bytes, &op->old_len) < 0) {
+    if (snag_buf_read(&op->old_bytes, fd) < 0 || snag_buf_terminate(&op->old_bytes) < 0) {
         snag_errorf(error, error_size, "patch target %s cannot be read", op->path);
         goto out;
     }
@@ -628,7 +608,7 @@ apply_update_hunks(struct patch_op *op, char *error, size_t error_size)
     bool end_seen = false;
     int rc = -1;
 
-    if (parse_file_lines(op->old_bytes, op->old_len, &lines, &op->eol_crlf,
+    if (parse_file_lines((char *)op->old_bytes.data, op->old_bytes.len, &lines, &op->eol_crlf,
                          &op->final_nl, error, error_size) < 0)
         goto out;
     snag_buf_reset(&op->new_bytes);
@@ -638,43 +618,31 @@ apply_update_hunks(struct patch_op *op, char *error, size_t error_size)
             (void)snag_fail(error, error_size, EINVAL, "hunks cannot follow an @end insertion");
             goto out;
         }
+        size_t match = cursor;
         if (hunk->type == HUNK_START) {
-            if (start_seen || cursor != 0u || (lines.n == 0u && end_seen)) {
+            if (start_seen || cursor != 0u) {
                 (void)snag_fail(error, error_size, EINVAL, "conflicting @start insertion");
                 goto out;
             }
             start_seen = true;
-            if (append_new_lines(&op->new_bytes, hunk->lines, hunk->count,
-                                 op->eol_crlf) < 0)
-                goto out;
-            continue;
-        }
-        if (hunk->type == HUNK_END) {
-            if (end_seen || (lines.n == 0u && start_seen)) {
+        } else if (hunk->type == HUNK_END) {
+            if (lines.n == 0u && start_seen) {
                 (void)snag_fail(error, error_size, EINVAL, "conflicting @end insertion");
                 goto out;
             }
-            if (append_line_range(&op->new_bytes, &lines, cursor, lines.n,
-                                  op->eol_crlf) < 0 ||
-                append_new_lines(&op->new_bytes, hunk->lines, hunk->count,
-                                 op->eol_crlf) < 0)
-                goto out;
-            cursor = lines.n;
+            match = lines.n;
             end_seen = true;
-            continue;
-        }
-        {
-            size_t match = find_unique_match(&lines, cursor, hunk,
-                                             error, error_size);
+        } else {
+            match = find_unique_match(&lines, cursor, hunk, error, error_size);
             if (match == SIZE_MAX)
                 goto out;
-            if (append_line_range(&op->new_bytes, &lines, cursor, match,
-                                  op->eol_crlf) < 0 ||
-                append_new_lines(&op->new_bytes, hunk->lines, hunk->count,
-                                 op->eol_crlf) < 0)
-                goto out;
-            cursor = match + hunk->old_count;
         }
+        if (append_line_range(&op->new_bytes, &lines, cursor, match,
+                              op->eol_crlf) < 0 ||
+            append_new_lines(&op->new_bytes, hunk->lines, hunk->count,
+                             op->eol_crlf) < 0)
+            goto out;
+        cursor = match + hunk->old_count;
     }
     if (append_line_range(&op->new_bytes, &lines, cursor, lines.n,
                           op->eol_crlf) < 0)
@@ -688,13 +656,6 @@ out:
 }
 
 static int
-compute_add_bytes(struct patch_op *op)
-{
-    snag_buf_reset(&op->new_bytes);
-    return append_new_lines(&op->new_bytes, op->add_lines, op->added_lines, false);
-}
-
-static int
 validate_and_compute(struct patch_set *set, int root_fd,
                      char *error, size_t error_size)
 {
@@ -702,14 +663,14 @@ validate_and_compute(struct patch_set *set, int root_fd,
         struct patch_op *op = &set->ops[i];
         if (op->type == OP_ADD) {
             if (validate_add_target(root_fd, op, error, error_size) < 0 ||
-                compute_add_bytes(op) < 0)
+                append_new_lines(&op->new_bytes, op->add_lines, op->added_lines, false) < 0)
                 return -1;
             set->total_file_bytes += op->new_bytes.len;
         } else if (op->type == OP_UPDATE) {
             if (read_target_file(root_fd, op, error, error_size) < 0 ||
                 apply_update_hunks(op, error, error_size) < 0)
                 return -1;
-            set->total_file_bytes += op->old_len + op->new_bytes.len;
+            set->total_file_bytes += op->old_bytes.len + op->new_bytes.len;
         } else {
             if (validate_delete_target(root_fd, op, error, error_size) < 0)
                 return -1;
