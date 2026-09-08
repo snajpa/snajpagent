@@ -96,7 +96,7 @@ test_numeric_settings(const char *path)
             snag_config_init(&config);
             assert(*cases[c].value == cases[c].initial);
             bool valid = i >= cases[c].first && i < cases[c].end;
-            assert((snag_config_load(&config, path, c == 3u ? "/tmp" : NULL,
+            assert((snag_config_load(&config, path, c == 3u ? (getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp") : NULL,
                                     error, sizeof(error)) == 0) == valid);
             if (valid) {
                 assert(*cases[c].value == (!strcmp(cases[c].values[i], "auto") ?
@@ -473,14 +473,14 @@ main(void)
         "room_name = build-host\n"
         "history_lines = 321\n"
         "\n[tool]\n"
-        "shell = /bin/sh\n"
         "default_yield_ms = 0\n"
         "default_timeout_ms = 4000\n"
         "max_timeout_ms = 5000\n"
         "max_output_tokens = 7654\n"
         "max_output_bytes = 123456\n"
         "secret = ${TOKEN_ONE}\nsecret = ${TOKEN_TWO}\n";
-    char temp[] = "/tmp/snajpagent-config-XXXXXX";
+    const char *tmp = getenv("TMPDIR");
+    char *temp = snag_path_join(tmp ? tmp : "/tmp", "snajpagent-config-XXXXXX");
     char dotdir[4096];
     char path[4096];
     char link_path[4096];
@@ -489,7 +489,7 @@ main(void)
     char *shell;
 
     assert(setlocale(LC_CTYPE, "") != NULL);
-    assert(mkdtemp(temp));
+    assert(temp && mkdtemp(temp));
     assert(snprintf(dotdir, sizeof(dotdir), "%s/dotdir", temp) > 0);
     assert(mkdir(dotdir, 0700) == 0);
 
@@ -577,7 +577,9 @@ main(void)
 
     /* Resolution validates the target, but must not replace a shell alias. */
     assert(snprintf(link_path, sizeof(link_path), "%s/shell-alias", temp) > 0);
-    assert(symlink("/bin/sh", link_path) == 0);
+    shell = snag_default_shell();
+    assert(shell && symlink(shell, link_path) == 0);
+    free(shell);
     assert(snprintf(path, sizeof(path), "%s/shell.ini", temp) > 0);
     char shell_config[8192];
     int shell_len = snprintf(shell_config, sizeof(shell_config), "[tool]\nshell = %s\n", link_path);
@@ -913,6 +915,7 @@ main(void)
 
     test_layered_limits_and_secrets(path);
     assert(unlink(path) == 0);
+    free(temp);
     puts("test_config: ok");
     return 0;
 }

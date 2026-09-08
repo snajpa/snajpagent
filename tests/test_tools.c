@@ -55,9 +55,11 @@ static void
 test_child_wait_ownership(void)
 {
     struct snag_child child;
-    char *environment[] = {"PATH=/usr/bin:/bin", NULL};
+    char *shell = snag_default_shell();
+    assert(shell);
+    char *environment[] = {"PATH=/usr/bin:/bin:/system/bin", NULL};
     snag_child_init(&child);
-    assert(snag_child_spawn(&child, "/bin/sh", "exit 7", "/", environment, false) == 0);
+    assert(snag_child_spawn(&child, shell, "exit 7", "/", environment, false) == 0);
     uint64_t deadline = snag_monotonic_ms() + 1000u;
     int exited;
     while ((exited = snag_child_exited(&child)) == 0 && snag_monotonic_ms() < deadline)
@@ -71,20 +73,23 @@ test_child_wait_ownership(void)
     child.pid = getpid();
     assert(snag_child_exited(&child) < 0 && errno == ECHILD && child.reaped);
     snag_child_free(&child);
+    free(shell);
 }
 
 static void
 test_child_interrupt_mask(void)
 {
     sigset_t blocked, saved, current;
+    char *shell = snag_default_shell();
+    assert(shell);
     sigemptyset(&blocked);
     sigaddset(&blocked, SIGINT);
     assert(sigprocmask(SIG_BLOCK, &blocked, &saved) == 0);
     for (unsigned int pty = 0; pty < 2u; ++pty) {
         struct snag_child child;
-        char *environment[] = {"PATH=/usr/bin:/bin", NULL};
+        char *environment[] = {"PATH=/usr/bin:/bin:/system/bin", NULL};
         snag_child_init(&child);
-        assert(snag_child_spawn(&child, "/bin/sh", "printf ready; exec sleep 30", "/",
+        assert(snag_child_spawn(&child, shell, "printf ready; exec sleep 30", "/",
                                 environment, pty != 0) == 0);
         struct snag_child_event event = {&child, 0u, SNAG_CHILD_READ, 0};
         assert(snag_child_wait(&event, 1u, SNAG_WAKE_INVALID, 1000) > 0);
@@ -100,6 +105,7 @@ test_child_interrupt_mask(void)
     }
     assert(sigprocmask(SIG_SETMASK, NULL, &current) == 0 && sigismember(&current, SIGINT));
     assert(sigprocmask(SIG_SETMASK, &saved, NULL) == 0);
+    free(shell);
 }
 
 static struct {
@@ -579,13 +585,14 @@ test_managed_process_close_returns_terminal_result(void)
 static void
 test_managed_close_kills_process_family(void)
 {
-    char dir[] = "/tmp/snajpagent-patch-test-XXXXXX";
+    const char *tmp = getenv("TMPDIR");
+    char *dir = snag_path_join(tmp ? tmp : "/tmp", "snajpagent-patch-test-XXXXXX");
     char marker[4096];
     char command[8192];
     json_t *result;
     const char *handle;
 
-    assert(mkdtemp(dir) != NULL);
+    assert(dir && mkdtemp(dir) != NULL);
     int n = snprintf(marker, sizeof(marker), "%s/%s", dir, "managed-leaked.txt");
     assert(n > 0 && (size_t)n < sizeof(marker));
     assert(snprintf(command, sizeof(command),
@@ -601,6 +608,7 @@ test_managed_close_kills_process_family(void)
     json_decref(closed);
     json_decref(result);
     assert(rmdir(dir) == 0);
+    free(dir);
 }
 
 static void

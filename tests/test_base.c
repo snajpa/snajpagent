@@ -2338,13 +2338,14 @@ test_posix_child_ownership(void)
 {
     char **env = snag_environment_entries();
     char *directory = snag_realpath(".");
+    char *shell = snag_default_shell();
     struct snag_child waiting, exited;
     snag_child_init(&waiting);
     snag_child_init(&exited);
-    assert(env && directory);
-    assert(snag_child_spawn(&waiting, "/bin/sh", "read value; exit 7",
+    assert(env && directory && shell);
+    assert(snag_child_spawn(&waiting, shell, "read value; exit 7",
                             directory, env, false) == 0);
-    assert(snag_child_spawn(&exited, "/bin/sh", "exit 9",
+    assert(snag_child_spawn(&exited, shell, "exit 9",
                             directory, env, false) == 0);
     uint64_t deadline = snag_monotonic_ms() + 5000u;
     int done;
@@ -2366,6 +2367,7 @@ test_posix_child_ownership(void)
     assert(snag_child_exited(&unowned) == -1 && errno == ECHILD && unowned.reaped);
     snag_environment_entries_free(env);
     free(directory);
+    free(shell);
 }
 
 static void
@@ -2373,12 +2375,13 @@ test_posix_process(bool pty)
 {
     char **env = snag_environment_entries();
     char *directory = snag_realpath(".");
+    char *shell = snag_default_shell();
     struct snag_child child;
     snag_child_init(&child);
-    assert(env && directory);
+    assert(env && directory && shell);
     const char *command = pty ? "test -t 1 && printf native-pty; exit 7" :
         "read value; printf native-out; printf native-err >&2; exit 7";
-    assert(snag_child_spawn(&child, "/bin/sh", command, directory, env, pty) == 0);
+    assert(snag_child_spawn(&child, shell, command, directory, env, pty) == 0);
     if (!pty) {
         assert(snag_child_exited(&child) == 0 && !child.reaped);
         assert(snag_child_write(&child, "ready\n", 6u) == 6);
@@ -2427,6 +2430,7 @@ test_posix_process(bool pty)
     snag_child_free(&child);
     snag_environment_entries_free(env);
     free(directory);
+    free(shell);
 }
 #endif
 
