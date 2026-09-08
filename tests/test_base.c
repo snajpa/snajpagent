@@ -2316,7 +2316,8 @@ test_posix_child_ownership(void)
     }
     assert(done == 1 && !exited.reaped);
     assert(snag_child_exited(&waiting) == 0 && !waiting.reaped);
-    assert(snag_child_exited(&exited) == 1 && !exited.reaped);
+    for (unsigned i = 0; i < 3; ++i)
+        assert(snag_child_exited(&exited) == 1 && !exited.reaped);
     assert(snag_child_reap(&exited) == 0 && exited.exit_code == 9);
     assert(snag_child_exited(&waiting) == 0 && !waiting.reaped);
     snag_child_free(&exited);

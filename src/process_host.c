@@ -1505,7 +1505,7 @@ done:
 #include <sys/sysctl.h>
 #include <sys/user.h>
 #endif
-#if (defined(__OpenBSD__) || defined(__NetBSD__)) && !defined(WNOWAIT)
+#if (defined(__OpenBSD__) && !defined(WNOWAIT)) || (defined(__NetBSD__) && !defined(WEXITED))
 #include <sys/param.h>
 #include <sys/sysctl.h>
 #include <sys/proc.h>
@@ -1787,7 +1787,7 @@ proc_child_exited(struct snag_child *child)
 int
 snag_child_exited(struct snag_child *child)
 {
-#if (defined(__OpenBSD__) || defined(__NetBSD__)) && !defined(WNOWAIT)
+#if (defined(__OpenBSD__) && !defined(WNOWAIT)) || (defined(__NetBSD__) && !defined(WEXITED))
 #ifdef KERN_PROC2
     struct kinfo_proc2 info = {0};
     int mib[] = {CTL_KERN, KERN_PROC2, KERN_PROC_PID, child->pid, sizeof(info), 1};
@@ -1856,8 +1856,8 @@ snag_child_exited(struct snag_child *child)
         errno = error;
     }
     return rc;
-#elif defined(__FreeBSD__) || defined(__NetBSD__)
-    /* BSD waitpid supports polling without releasing child ownership. */
+#elif defined(__FreeBSD__)
+    /* FreeBSD supports polling without releasing child ownership. */
     int status;
     pid_t pid = waitpid(child->pid, &status, WNOHANG | WNOWAIT);
     if (pid < 0 && errno == ECHILD)
