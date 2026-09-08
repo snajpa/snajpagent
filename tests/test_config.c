@@ -739,66 +739,50 @@ main(void)
 
     assert(snprintf(path, sizeof(path), "%s/valid.ini", temp) > 0);
 
-    expect_ui(path, "prompt_spinner_goal", "\"\\0\"", true);
-    expect_ui(path, "prompt_spinner_goal", "\" \"", true);
-    expect_ui(path, "prompt_spinner_goal", "\"\\0◆\"", true);
-    expect_ui(path, "prompt_spinner_goal",
-              "\"\\0abcdefghijklmnop\"", true);
-    expect_ui(path, "prompt_spinner_goal",
-              "\"\\0abcdefghijklmnopq\"", false);
-    expect_ui(path, "prompt_spinner_goal", "\"\"", false);
-    expect_ui(path, "prompt_spinner_goal", "unquoted", false);
-    expect_ui(path, "prompt_spinner_goal", "\" aab\"", false);
-    expect_ui(path, "prompt_spinner_goal",
-              "\"\\0" "\xcc\x81" "\"", false);
-    expect_ui(path, "prompt_spinner_goal",
-              "\"\\0" "\xe2\x80\x8b" "\"", false);
-    expect_ui(path, "prompt_spinner_goal",
-              "\"\\0" "\xe2\x80\xae" "\"", false);
-    expect_ui(path, "prompt_spinner_goal",
-              "\"\\0" "\xe7\x95\x8c" "\"", false);
-    expect_ui(path, "prompt_spinner_interrupt", "\" x\"", false);
-    expect_ui(path, "prompt_spinner_per_second", "0", false);
-    expect_ui(path, "prompt_spinner_per_second", "61", false);
-    expect_ui(path, "prompt_tool_spinner_off_delay_ms", "0", true);
-    expect_ui(path, "prompt_tool_spinner_off_delay_ms", "60000", true);
-    expect_ui(path, "prompt_tool_spinner_off_delay_ms", "60001", false);
-    expect_ui(path, "prompt_tool_spinner_off_delay_ms", "-1", false);
-
-    expect_ui(path, "prompt",
-        "{chat:x}{rollout-idle:y}{rollout-active:z}", true);
-    expect_ui(path, "prompt",
-        "{chat:x}{chat:y}{rollout-idle:y}{rollout-active:z}", false);
-    expect_ui(path, "prompt", "{chat:x}{rollout-idle:y}", false);
-    expect_ui(path, "prompt",
-        "{hour:02}{activity_spinner}{chat:x}{rollout-idle:y}"
-        "{rollout-active:z}{goal_spinner}", true);
-    expect_ui(path, "prompt",
-        "{activity_spinner}{chat:x}{rollout-idle:y}"
-        "{rollout-active:z}{activity_spinner}", false);
-    expect_ui(path, "prompt",
-        "{goal_spinner}{chat:x}{rollout-idle:{goal_spinner}}{rollout-active:z}", false);
-    expect_ui(path, "prompt",
-        "{chat:{goal_spinner}}{rollout-idle:y}{rollout-active:z}{goal_spinner}", false);
-    expect_ui(path, "prompt", "{unknown}{chat:x}{rollout-idle:y}{rollout-active:z}", false);
-    expect_ui(path, "prompt", "{hour:0}{chat:x}{rollout-idle:y}{rollout-active:z}", false);
-    expect_ui(path, "prompt", "{queued:{unknown}}{chat:x}{rollout-idle:y}{rollout-active:z}", false);
-    expect_ui(path, "prompt", "{queued:}{chat:x}{rollout-idle:y}{rollout-active:z}", false);
-    expect_ui(path, "prompt", "{queued:x{chat:y}{rollout-idle:y}{rollout-active:z}", false);
-    expect_ui(path, "prompt", "{queued:{goal_spinner}}{chat:{goal_spinner}}"
-              "{rollout-idle:y}{rollout-active:z}", false);
-    expect_ui(path, "prompt",
-        "{chat:{rollout-idle:x}}{rollout-idle:y}{rollout-active:z}", false);
-    expect_ui(path, "prompt",
-        "{chat:{unknown}}{rollout-idle:y}{rollout-active:z}", false);
-    expect_ui(path, "prompt",
-        "{chat:{goal_spinner}{goal_spinner}}{rollout-idle:y}"
-        "{rollout-active:z}", false);
-    expect_ui(path, "prompt",
-        "{chat:{activity_spinner}{activity_spinner}}{rollout-idle:y}"
-        "{rollout-active:z}", false);
-    expect_ui(path, "prompt", "{chat:}{rollout-idle:y}{rollout-active:z}",
-              false);
+    static const struct {
+        const char *key, *value;
+        bool valid;
+    } ui_cases[] = {
+        {"prompt_spinner_goal", "\"\\0\"", true},
+        {"prompt_spinner_goal", "\" \"", true},
+        {"prompt_spinner_goal", "\"\\0◆\"", true},
+        {"prompt_spinner_goal", "\"\\0abcdefghijklmnop\"", true},
+        {"prompt_spinner_goal", "\"\\0abcdefghijklmnopq\"", false},
+        {"prompt_spinner_goal", "\"\"", false},
+        {"prompt_spinner_goal", "unquoted", false},
+        {"prompt_spinner_goal", "\" aab\"", false},
+        {"prompt_spinner_goal", "\"\\0" "\xcc\x81" "\"", false},
+        {"prompt_spinner_goal", "\"\\0" "\xe2\x80\x8b" "\"", false},
+        {"prompt_spinner_goal", "\"\\0" "\xe2\x80\xae" "\"", false},
+        {"prompt_spinner_goal", "\"\\0" "\xe7\x95\x8c" "\"", false},
+        {"prompt_spinner_interrupt", "\" x\"", false},
+        {"prompt_spinner_per_second", "0", false},
+        {"prompt_spinner_per_second", "61", false},
+        {"prompt_tool_spinner_off_delay_ms", "0", true},
+        {"prompt_tool_spinner_off_delay_ms", "60000", true},
+        {"prompt_tool_spinner_off_delay_ms", "60001", false},
+        {"prompt_tool_spinner_off_delay_ms", "-1", false},
+        {"prompt", "{chat:x}{rollout-idle:y}{rollout-active:z}", true},
+        {"prompt", "{chat:x}{chat:y}{rollout-idle:y}{rollout-active:z}", false},
+        {"prompt", "{chat:x}{rollout-idle:y}", false},
+        {"prompt", "{hour:02}{activity_spinner}{chat:x}{rollout-idle:y}" "{rollout-active:z}{goal_spinner}", true},
+        {"prompt", "{activity_spinner}{chat:x}{rollout-idle:y}" "{rollout-active:z}{activity_spinner}", false},
+        {"prompt", "{goal_spinner}{chat:x}{rollout-idle:{goal_spinner}}{rollout-active:z}", false},
+        {"prompt", "{chat:{goal_spinner}}{rollout-idle:y}{rollout-active:z}{goal_spinner}", false},
+        {"prompt", "{unknown}{chat:x}{rollout-idle:y}{rollout-active:z}", false},
+        {"prompt", "{hour:0}{chat:x}{rollout-idle:y}{rollout-active:z}", false},
+        {"prompt", "{queued:{unknown}}{chat:x}{rollout-idle:y}{rollout-active:z}", false},
+        {"prompt", "{queued:}{chat:x}{rollout-idle:y}{rollout-active:z}", false},
+        {"prompt", "{queued:x{chat:y}{rollout-idle:y}{rollout-active:z}", false},
+        {"prompt", "{queued:{goal_spinner}}{chat:{goal_spinner}}" "{rollout-idle:y}{rollout-active:z}", false},
+        {"prompt", "{chat:{rollout-idle:x}}{rollout-idle:y}{rollout-active:z}", false},
+        {"prompt", "{chat:{unknown}}{rollout-idle:y}{rollout-active:z}", false},
+        {"prompt", "{chat:{goal_spinner}{goal_spinner}}{rollout-idle:y}" "{rollout-active:z}", false},
+        {"prompt", "{chat:{activity_spinner}{activity_spinner}}{rollout-idle:y}" "{rollout-active:z}", false},
+        {"prompt", "{chat:}{rollout-idle:y}{rollout-active:z}", false},
+    };
+    for (size_t i = 0u; i < sizeof(ui_cases) / sizeof(ui_cases[0]); ++i)
+        expect_ui(path, ui_cases[i].key, ui_cases[i].value, ui_cases[i].valid);
     {
         const char *values[SNAG_PROMPT_FIELD_COUNT] = {
             "prov", "model", "high", "", "host", "0", "rollout-idle",
