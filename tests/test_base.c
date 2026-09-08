@@ -44,6 +44,25 @@
 #include <pthread.h>
 #endif
 
+static FILE *
+test_tmpfile(void)
+{
+#ifdef _WIN32
+    return tmpfile();
+#else
+    /* Android's libc tmpfile ignores the app-private TMPDIR. */
+    const char *temp = getenv("TMPDIR");
+    char path[4096];
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-file-XXXXXX",
+                    temp && temp[0] ? temp : "/tmp") < (int)sizeof(path));
+    int fd = mkstemp(path);
+    assert(fd >= 0 && unlink(path) == 0);
+    FILE *file = fdopen(fd, "w+");
+    assert(file);
+    return file;
+#endif
+}
+
 static atomic_int shutdown_signal_seen;
 #if (!defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070) && \
     (!defined(__FreeBSD__) || __FreeBSD__ >= 6)
@@ -2510,7 +2529,7 @@ test_platform(void)
     uint64_t before = snag_monotonic_ms();
     uint64_t wall = snag_time_ms();
     time_t seconds = time(NULL);
-    FILE *file = tmpfile();
+    FILE *file = test_tmpfile();
     char content[4] = {0};
     int fd;
 
@@ -3011,7 +3030,7 @@ run_base(int argc, char **argv)
     assert(snprintf(formatted, sizeof(formatted), "%zu/%td/%ju", (size_t)17,
                     (ptrdiff_t)-3, (uintmax_t)4294967296ULL) == 16);
     assert(strcmp(formatted, "17/-3/4294967296") == 0);
-    FILE *format_file = tmpfile();
+    FILE *format_file = test_tmpfile();
     assert(format_file && fprintf(format_file, "%zu/%td/%ju", (size_t)17,
            (ptrdiff_t)-3, (uintmax_t)4294967296ULL) == 16);
     assert(fflush(format_file) == 0 && fseek(format_file, 0, SEEK_SET) == 0);
@@ -3103,7 +3122,7 @@ run_base(int argc, char **argv)
     errno = 0;
     assert(snag_buf_putc(&buf, 'e') < 0 && errno == EOVERFLOW);
     snag_buf_free(&buf);
-    FILE *file = tmpfile();
+    FILE *file = test_tmpfile();
     assert(file && fwrite("b\0c", 1u, 3u, file) == 3u && fflush(file) == 0);
     assert(fseek(file, 0, SEEK_SET) == 0);
     snag_buf_init(&buf, 4u);
