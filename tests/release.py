@@ -633,3 +633,9 @@ assert '"--with-default-fonts=/usr/share/fonts,/usr/local/share/fonts"' in linux
 pdf_recipe = linux.split("pdf = (static.poppler.override {", 1)[1].split("}).overrideAttrs", 1)[0]
 assert "inherit fontconfig;" in pdf_recipe
 print("PASS: portable PDF font fallback uses host directories")
+
+# Nixpkgs curlMinimal disables WebSockets unless explicitly requested. Realtime
+# voice uses the linked library, covered at runtime by test_provider_transport.
+curl_recipe = linux.split("curl = (static.curlMinimal.override {", 1)[1].split("}).overrideAttrs", 1)[0]
+assert "websocketSupport = true;" in curl_recipe
+print("PASS: portable Linux curl enables realtime WebSockets")

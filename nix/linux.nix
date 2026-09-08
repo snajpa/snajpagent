@@ -61,6 +61,7 @@ let
     scpSupport = false;
     gssSupport = false;
     http2Support = true;
+    websocketSupport = true;
     idnSupport = true;
     zlibSupport = true;
     brotliSupport = true;
