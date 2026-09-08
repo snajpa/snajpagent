@@ -237,7 +237,15 @@ let
   zstd = (cmakeLibrary sourcePkgs.zstd [
     "-DZSTD_BUILD_SHARED=OFF" "-DZSTD_BUILD_STATIC=ON"
     "-DZSTD_BUILD_PROGRAMS=OFF" "-DZSTD_BUILD_TESTS=OFF"
-  ] []).overrideAttrs (_: { cmakeDir = "../build/cmake"; });
+  ] []).overrideAttrs (_: {
+    cmakeDir = "../build/cmake";
+    postPatch = lib.optionalString early ''
+      # The 3.5 loader diagnoses undefined optional trace hooks even when
+      # they are weak. Keep zstd's normal compression/decompression only.
+      substituteInPlace lib/common/zstd_trace.h \
+        --replace-fail '#  define ZSTD_TRACE ZSTD_HAVE_WEAK_SYMBOLS' '#  define ZSTD_TRACE 0'
+    '';
+  });
   cares = (cmakeLibrary sourcePkgs.c-ares [
     "-DCARES_SHARED=OFF" "-DCARES_STATIC=ON" "-DCARES_STATIC_PIC=ON"
     "-DCARES_BUILD_TOOLS=OFF" "-DCARES_BUILD_TESTS=OFF"
