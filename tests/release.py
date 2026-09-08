@@ -104,3 +104,14 @@ application_link = next(line for line in netbsd if "'LDFLAGS=" in line)
 assert "${ldflags}" in application_link, application_link
 assert "-Wl,-mllvm,-emulated-tls" in application_link, application_link
 print("PASS: NetBSD emulated TLS reaches the LTO linker")
+
+# Feature-selection macros follow the requested target, including cross-builds.
+for target in ("Linux", "Darwin", "FreeBSD", "OpenBSD", "NetBSD", "Windows_NT"):
+    for extra in ([], ["CPPFLAGS=-D_POSIX_C_SOURCE=200809L"]):
+        plan = subprocess.run(["make", "-Bn", "src/platform.o",
+                               f"TARGET_OS={target}", *extra], cwd=root,
+                              capture_output=True, text=True, check=True).stdout
+        compile_line = next(line for line in plan.splitlines()
+                            if "-c src/platform.c" in line)
+        assert ("-D_DARWIN_C_SOURCE" in compile_line) == (target == "Darwin"), target
+print("PASS: Darwin feature selection is target-specific")

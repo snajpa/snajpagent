@@ -59,6 +59,7 @@ override CPPFLAGS += -D_BSD_SOURCE
 override LDFLAGS += -lutil
 endif
 ifeq ($(TARGET_OS),Darwin)
+override CPPFLAGS += -D_DARWIN_C_SOURCE
 DEBUG_SYMBOLS = $(BIN).dSYM
 else
 DEBUG_SYMBOLS = debug-$(BIN)
