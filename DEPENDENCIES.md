@@ -255,6 +255,38 @@ retains the final `waitpid` and exit status. Actual 5.9 checks cover the base,
 IRC and SSE suites, read-only enforcement, parallel commands, PTY exit status,
 interactive history/resume and TLS trust and hostname verification.
 
+### OpenBSD 3.5
+
+`make prod-openbsd-amd64-early` builds the separate 3.5 ABI using its native
+base/compiler sets. It requires `libc.so.30.3`, `libpthread.so.2.4` and
+`/usr/libexec/ld.so`; the same executable cannot load on 5.9. Application
+libraries, Unicode, CA data and compiler support remain static. Matching
+symbols accompany the non-PIE executable. Its native startup objects and
+stack-protector ABI predate the modern hardening used by the 5.9/7.9 targets;
+this build uses a non-executable stack, without compiler stack protection.
+The archive provides publisher MD5 checksums; the recipe pins locally verified
+SHA-256 values. No cryptographic publisher signature is claimed for these sets.
+
+The early C compiler retains GNU89 extern-inline semantics for the native
+headers and avoids synthesizing calls to absent `wcslen`. The existing Gnulib
+closure supplies LGPLv2-compatible `snprintf`/`vsnprintf` and missing errno
+values. First-party stream adapters use that formatter for `printf`/`fprintf`.
+Modern POSIX-format modules with incompatible licensing are excluded. Native
+`/dev/urandom` supplies both application and TLS entropy; `/dev/random` returns
+EIO on the exercised 3.5 installation. Optional zstd trace hooks are disabled
+because the old loader reports unresolved weak hooks.
+
+Filesystem operations use the validated pathname fallback: directory identity
+and no-follow checks remain, but external rename races and non-atomic close-on-
+exec setup remain possible. Moves across parents require reopening a directory.
+Child exit observation uses native `KERN_PROC2` with PID/parent verification,
+leaving the final status to its owner. Native filesystem calls receive explicit
+negative-length checks. Base/configuration/SSE/IRC tests and full-agent read-only,
+parallel, PTY, durable/interactive resume and TLS trust/hostname checks run on 3.5.
+The IRC test re-executes after raising its descriptor limit because this
+libpthread sizes its descriptor table before `main`; ordinary agent checks use
+the default soft limit of 128. No product limit is silently raised.
+
 ## macOS ARM64 and Intel cross-builds
 
 `make prod-macos-arm64` and `make prod-macos-x86_64` use the same pinned upstream dependency sources via
