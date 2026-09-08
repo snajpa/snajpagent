@@ -199,10 +199,16 @@ let
       runHook postInstall
     '';
   });
-  regex = import ./windows-regex.nix {
+  regex = (import ./windows-regex.nix {
     inherit pkgs unistring;
     cross = { inherit compiler cxxCompiler target sdk tools cflags ldflags; };
-  };
+  }).overrideAttrs (_: {
+    postInstall = ''
+      # sys/cdefs.h reserves __used as an attribute; retain the struct layout.
+      substituteInPlace "$out/include/snajpagent-gnulib-regex.h" \
+        --replace-fail '__REPB_PREFIX(used)' '__REPB_PREFIX(snag_used)'
+    '';
+  });
   networkLibraries = [ tls zlib brotli zstd cares nghttp2 iconv unistring idn2 ];
   curl = (cmakeLibrary sourcePkgs.curlMinimal [
     "-DBUILD_STATIC_LIBS=ON" "-DBUILD_CURL_EXE=OFF" "-DCURL_BUILD_EVERYTHING=OFF"
