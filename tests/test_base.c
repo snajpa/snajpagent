@@ -2531,6 +2531,8 @@ test_platform(void)
     assert(snag_fsync(fd) == 0);
     struct snag_file_privacy privacy;
 #ifndef _WIN32
+    /* tmpfile's initial permissions vary across libc implementations. */
+    assert(fchmod(fd, 0600) == 0);
     assert(snag_fd_privacy(fd, &privacy) == 0);
     assert(privacy.effective_owner && privacy.private_access);
     assert(privacy.real_owner == (getuid() == geteuid()));
