@@ -36,7 +36,7 @@ WITH_PDF ?= 1
 ifeq ($(WITH_PDF),1)
 CXX ?= c++
 CXXFLAGS ?= $(filter-out -std=c11,$(CFLAGS)) -std=c++20
-PDF_CFLAGS ?= $(shell pkg-config --cflags poppler libpng)
+PDF_CFLAGS ?= $(patsubst -I%,-isystem %,$(shell pkg-config --cflags poppler libpng))
 PDF_LIBS ?= $(shell pkg-config --libs poppler libpng) -lstdc++
 PDF_OBJ = src/pdf.o
 else ifeq ($(WITH_PDF),0)

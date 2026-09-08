@@ -609,3 +609,19 @@ assert "+    pkg_check_modules(STATIC_FONTS REQUIRED fontconfig freetype2)" in f
 assert "+    set_property(TARGET Fontconfig::Fontconfig APPEND PROPERTY" in fonts
 assert 'INTERFACE_LINK_LIBRARIES "${STATIC_FONTS_STATIC_LDFLAGS}"' in fonts
 print("PASS: static PDF consumers retain ordered font-library dependencies")
+
+# External PDF headers contain intentionally unused parameters. Keep application
+# warnings fatal while marking only pkg-config include directories as system.
+pdf_flags = next(line for line in (root / "config.mk").read_text().splitlines()
+                 if line.startswith("PDF_CFLAGS ?="))
+pdf_flags = pdf_flags.replace("$(shell pkg-config --cflags poppler libpng)",
+                              "-I/fixture/poppler -DKEEP_FLAG=1 -I/fixture/png")
+actual = subprocess.check_output(["make", "-s", "--no-print-directory", "-f", "-"],
+    input=pdf_flags + '\nall:\n\t@printf "%s\\n" "$(PDF_CFLAGS)"\n', text=True)
+assert actual.split() == ["-isystem", "/fixture/poppler", "-DKEEP_FLAG=1", "-isystem", "/fixture/png"]
+pdf_line = next(line for line in linux.splitlines() if '"PDF_CFLAGS=' in line)
+expression = re.search(r"sed -E '([^']+)'", pdf_line).group(1)
+actual = subprocess.check_output(["sed", "-E", expression],
+    input="-I/fixture/poppler -DKEEP_FLAG=1 -I/fixture/png", text=True)
+assert actual.split() == ["-isystem", "/fixture/poppler", "-DKEEP_FLAG=1", "-isystem", "/fixture/png"]
+print("PASS: PDF system include paths preserve unrelated compiler flags")

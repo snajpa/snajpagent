@@ -102,7 +102,7 @@ in {
         "CURL_LIBS=$($PKG_CONFIG --static --libs libcurl)"
         "AV_CFLAGS=$($PKG_CONFIG --cflags libavformat libavcodec libavutil libswresample libswscale)"
         "AV_LIBS=$($PKG_CONFIG --static --libs libavformat libavcodec libavutil libswresample libswscale)"
-        "PDF_CFLAGS=$($PKG_CONFIG --cflags poppler libpng)"
+        "PDF_CFLAGS=$($PKG_CONFIG --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')"
         "PDF_LIBS=$($PKG_CONFIG --static --libs poppler libpng) -lstdc++"
         'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}'
       )
