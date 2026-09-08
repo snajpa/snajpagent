@@ -2556,13 +2556,14 @@ Base/configuration/SSE/IRC, read-only enforcement, parallel commands,
 CLI/interactive resume and TLS trust/hostname checks were exercised on 10.1.
 .TP
 .B make prod-netbsd-amd64-legacy
-Build the experimental NetBSD 5.2.3 amd64 agent at
+Build the experimental NetBSD 2.0/5.2.3 amd64 agent at
 .I build/matrix/netbsd-amd64-legacy/bin/snajpagent
 with matching symbols in .debug. It requires libc.so.12, libpthread.so.0
 and /libexec/ld.elf_so. NetBSD 10.1 uses a different pthread ABI.
 Application libraries, Unicode, compiler thread-local support and CA data are
 static. The native loader requires a non-PIE executable with two load segments;
-the build retains stack protection and a non-executable stack without RELRO.
+the build retains a non-executable stack without RELRO or stack protection
+(the NetBSD 2.0 runtime lacks the stack-protector symbols).
 .PP
 The filesystem adapter validates directory identity and rejects symlinks,
 but pathname-based operations retain an external rename race; moving a
@@ -2570,7 +2571,7 @@ held directory across parents requires reopening it. Close-on-exec setup is
 not atomic. Native entropy and fdatasync supply randomness and file durability.
 Child exit observation preserves the final wait and status. Base/configuration/
 SSE/IRC, read-only enforcement, parallel commands, PTY, CLI/interactive resume
-and TLS trust/hostname checks were exercised on 5.2.3.
+and TLS trust/hostname checks were exercised on 2.0 and 5.2.3.
 .TP
 .BR "make prod-windows-x86_64" , " make prod-windows-arm64"
 Build the experimental native Windows x64 or ARM64 executable using pinned Nix

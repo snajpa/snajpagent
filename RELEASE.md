@@ -65,7 +65,7 @@ The current required outputs are:
 | `freebsd-amd64` | `snajpagent` | Static application libraries, native libc/threads; FreeBSD 8.4 and 14.4 exercised |
 | `freebsd-amd64-legacy` | `snajpagent` | Separate libc.so.5/libc_r.so.5 ABI; FreeBSD 5.1 and 5.5 exercised |
 | `netbsd-amd64` | `snajpagent` | NetBSD 10.1 libc.so.12/libpthread.so.1 ABI, PIE/full RELRO, static application libraries; experimental |
-| `netbsd-amd64-legacy` | `snajpagent` | NetBSD 5.2.3 libc.so.12/libpthread.so.0 ABI, non-PIE, static application libraries; experimental |
+| `netbsd-amd64-legacy` | `snajpagent` | NetBSD 2.0/5.2.3 libc.so.12/libpthread.so.0 ABI, non-PIE/NX, static application libraries; experimental |
 | `openbsd-amd64` | `snajpagent` | OpenBSD 7.9, static application libraries, native libc/thread ABI; experimental |
 | `openbsd-amd64-legacy` | `snajpagent` | OpenBSD 5.9 libc/thread ABI, static application libraries; experimental |
 | `openbsd-amd64-early` | `snajpagent` | OpenBSD 3.5 libc/thread ABI, non-PIE, static application libraries; experimental |

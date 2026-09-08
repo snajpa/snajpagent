@@ -378,7 +378,7 @@ help:
 		'make prod-macos-x86_64 macOS Intel with static application libraries via pinned Nix' \
 		'make prod-macos-universal Native ARM64+Intel Mach-O file and matching dSYM' \
 		'make prod-netbsd-amd64 NetBSD 10.1 amd64 PIE with static application libraries' \
-		'make prod-netbsd-amd64-legacy NetBSD 5.2.3 amd64 native ABI with static application libraries' \
+		'make prod-netbsd-amd64-legacy NetBSD 2.0/5.2.3 amd64 native ABI with static application libraries' \
 		'make prod-openbsd-amd64-early OpenBSD 3.5 amd64 native ABI with static application libraries' \
 		'make prod-openbsd-amd64-legacy OpenBSD 5.9 amd64 native ABI with static application libraries' \
 		'make prod-openbsd-amd64 OpenBSD 7.9 amd64 with static application libraries and native libc/threads' \

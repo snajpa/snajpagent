@@ -63,6 +63,7 @@ in assert buildRevision == null || buildRevision == revision; rec {
   netbsd-amd64-legacy = (import ./netbsd.nix {
     inherit pkgs;
     sourcePkgs = static;
+    osVersion = "2.0";
   }).application (args "netbsd-amd64-legacy");
   openbsd-amd64 = (import ./openbsd.nix {
     inherit pkgs;
