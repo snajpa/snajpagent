@@ -1282,6 +1282,9 @@ snag_term_signals_unblock(void)
 #else
 #include <pthread.h>
 #include <sys/ioctl.h>
+#ifdef __FreeBSD__
+#include <sys/sysctl.h>
+#endif
 #include <unistd.h>
 
 int
