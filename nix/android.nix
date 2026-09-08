@@ -50,6 +50,7 @@ let
         "-DCMAKE_RANLIB=${tools}/llvm-ranlib"
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.10"
         "-DCMAKE_PREFIX_PATH=${lib.concatStringsSep ";" dependencies}"
+        "-DCMAKE_FIND_ROOT_PATH=${lib.concatStringsSep ";" dependencies}"
         "-DCMAKE_INSTALL_LIBDIR=lib"
         "-DCMAKE_INSTALL_INCLUDEDIR=include"
         "-DCMAKE_INSTALL_BINDIR=bin"
