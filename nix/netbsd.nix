@@ -60,7 +60,8 @@ let
     if [ "$link" = 0 ]; then exec "$cc" "''${inlineFlags[@]}" "$@"; fi
     start=(${sdk}/usr/lib/crt0.o ${sdk}/usr/lib/crti.o ${sdk}/usr/lib/crtbegin.o)
     end=(${sdk}/usr/lib/crtend.o ${sdk}/usr/lib/crtn.o)
-    flags=(-Wl,-no-pie,-e,_start,--dynamic-linker=/libexec/ld.elf_so)
+    # The NetBSD 5 ELF loader accepts only two PT_LOAD segments.
+    flags=(-Wl,-no-pie,--no-rosegment,-z,norelro,-e,_start,--dynamic-linker=/libexec/ld.elf_so)
     if [ "$shared" = 1 ]; then
       start=(${sdk}/usr/lib/crti.o ${sdk}/usr/lib/crtbeginS.o)
       end=(${sdk}/usr/lib/crtendS.o ${sdk}/usr/lib/crtn.o)
