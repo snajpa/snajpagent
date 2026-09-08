@@ -58,6 +58,7 @@ in assert buildRevision == null || buildRevision == revision; rec {
   linux-aarch64 = (linux pkgs.pkgsCross.aarch64-multiplatform-musl).application (args "linux-aarch64");
   linux-armv6 = (linux pkgs.pkgsCross.muslpi).application (args "linux-armv6");
   linux-riscv64 = (linux pkgs.pkgsCross.riscv64-musl).application (args "linux-riscv64");
+  linux-ppc64le = (linux pkgs.pkgsCross.musl-power).application (args "linux-ppc64le");
   netbsd-amd64 = (import ./netbsd.nix {
     inherit pkgs;
     sourcePkgs = static;

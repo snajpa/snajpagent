@@ -261,6 +261,11 @@ assert ('linux-riscv64 = (linux pkgs.pkgsCross.riscv64-musl).application '
         '(args "linux-riscv64");') in portable
 print("PASS: RISC-V matrix target uses the static musl recipe and its own identity")
 
+assert "linux-ppc64le" in release.targets()
+assert ('linux-ppc64le = (linux pkgs.pkgsCross.musl-power).application '
+        '(args "linux-ppc64le");') in portable
+print("PASS: POWER8 Linux matrix target uses static musl and its own identity")
+
 
 
 # Bootstrap download failure must try the next pinned URL before nix-build.
