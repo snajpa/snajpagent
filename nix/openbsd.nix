@@ -305,8 +305,14 @@ let
       export gl_cv_func_mbrtoc32_sanitycheck=no
       export gl_cv_func_c32rtomb_sanitycheck=no
     '' + (if early then lib.replaceStrings
-      [ "--m4-base=m4 regex" ]
-      [ "--m4-base=m4 regex errno snprintf-posix vsnprintf-posix printf-posix fprintf-posix" ]
+      [ "--m4-base=m4 regex" "autoreconf -fiv" ]
+      [ "--m4-base=m4 regex errno snprintf vsnprintf" ''
+        # Keep the LGPLv2-compatible formatting modules. Their basic checks
+        # omit C99 length modifiers, which the native guest proved missing.
+        substituteInPlace m4/snprintf.m4 m4/vsnprintf.m4 \
+          --replace-fail '_usable = no; then' '_usable = no || test $gl_cv_func_printf_sizes_c99 = no; then'
+        autoreconf -fiv
+      '' ]
       old.preConfigure
       else old.preConfigure);
     postInstall = ''
@@ -364,7 +370,7 @@ in {
           'CC=${compiler} --target=${target} --sysroot=${sdk}'
           'STRIP=${tools}/llvm-strip' 'OBJCOPY=${tools}/llvm-objcopy'
           'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
-          'CPPFLAGS=${lib.optionalString (!early) "-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 "}-D_FILE_OFFSET_BITS=64 ${lib.optionalString early "-Dsnprintf=rpl_snprintf -Dvsnprintf=rpl_vsnprintf -Dprintf=rpl_printf -Dfprintf=rpl_fprintf "}-Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\" -DSNAJPAGENT_STATIC_UTF8 -I${regex}/include -I${unistring}/include'
+          'CPPFLAGS=${lib.optionalString (!early) "-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 "}-D_FILE_OFFSET_BITS=64 ${lib.optionalString early "-Dsnprintf=rpl_snprintf -Dvsnprintf=rpl_vsnprintf -DSNAJPAGENT_LEGACY_PRINTF -Dprintf=snag_legacy_printf -Dfprintf=snag_legacy_fprintf "}-Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\" -DSNAJPAGENT_STATIC_UTF8 -I${regex}/include -I${unistring}/include'
           'CFLAGS=-std=c11 ${cflags} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           'LDFLAGS=--ld-path=${llvm.lld}/bin/ld.lld ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections,--as-needed,-Bstatic'
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"

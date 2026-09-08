@@ -2949,6 +2949,19 @@ run_base(int argc, char **argv)
     assert(snprintf(formatted, sizeof(formatted), "%zu/%td/%ju", (size_t)17,
                     (ptrdiff_t)-3, (uintmax_t)4294967296ULL) == 16);
     assert(strcmp(formatted, "17/-3/4294967296") == 0);
+    FILE *format_file = tmpfile();
+    assert(format_file && fprintf(format_file, "%zu/%td/%ju", (size_t)17,
+           (ptrdiff_t)-3, (uintmax_t)4294967296ULL) == 16);
+    assert(fflush(format_file) == 0 && fseek(format_file, 0, SEEK_SET) == 0);
+    memset(formatted, 0, sizeof(formatted));
+    assert(fread(formatted, 1, sizeof(formatted), format_file) == 16);
+    assert(strcmp(formatted, "17/-3/4294967296") == 0 && fclose(format_file) == 0);
+    struct snag_buf format_buf;
+    snag_buf_init(&format_buf, 64u);
+    assert(snag_buf_printf(&format_buf, "%zu/%td/%ju", (size_t)17,
+                          (ptrdiff_t)-3, (uintmax_t)4294967296ULL) == 0);
+    assert(format_buf.len == 16 && !memcmp(format_buf.data, formatted, 16));
+    snag_buf_free(&format_buf);
     char failure[8];
     assert(snag_errorf(failure, sizeof(failure), "%s %u", "bad", 3u) == -1);
     assert(strcmp(failure, "bad 3") == 0);

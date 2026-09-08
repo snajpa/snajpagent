@@ -290,6 +290,47 @@ snag_buf_printf(struct snag_buf *buf, const char *fmt, ...)
     return rc;
 }
 
+#ifdef SNAJPAGENT_LEGACY_PRINTF
+static int
+legacy_vfprintf(FILE *stream, const char *format, va_list args)
+{
+    va_list copy;
+    va_copy(copy, args);
+    int n = vsnprintf(NULL, 0, format, copy);
+    va_end(copy);
+    if (n < 0)
+        return -1;
+    char *text = malloc((size_t)n + 1u);
+    if (!text)
+        return -1;
+    int result = vsnprintf(text, (size_t)n + 1u, format, args);
+    if (result != n || fwrite(text, 1u, (size_t)n, stream) != (size_t)n)
+        result = -1;
+    free(text);
+    return result;
+}
+
+int
+snag_legacy_fprintf(FILE *stream, const char *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    int result = legacy_vfprintf(stream, format, args);
+    va_end(args);
+    return result;
+}
+
+int
+snag_legacy_printf(const char *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    int result = legacy_vfprintf(stdout, format, args);
+    va_end(args);
+    return result;
+}
+#endif
+
 int
 snag_buf_terminate(struct snag_buf *buf)
 {
