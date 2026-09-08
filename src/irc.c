@@ -1168,11 +1168,12 @@ static int
 server_send_history(struct snag_irc_core *irc, struct irc_conn *peer)
 {
     char batch_id[17u];
+    uint64_t after = 0u;
 
     (void)snprintf(batch_id, sizeof(batch_id), "%08llx",
                    (unsigned long long)(snag_time_ms() & 0xffffffffu));
     if (peer->cap_catchup) {
-        uint64_t after = !strcmp(peer->since_stream, irc->stream) ? peer->since_sequence : 0u;
+        after = !strcmp(peer->since_stream, irc->stream) ? peer->since_sequence : 0u;
         uint64_t oldest = irc->history_count ? irc->history[irc->history_start].sequence : irc->sequence + 1u;
         bool gap = after && (after < oldest - 1u || after > irc->sequence);
         if (after > irc->sequence)
@@ -1180,15 +1181,7 @@ server_send_history(struct snag_irc_core *irc, struct irc_conn *peer)
         if (queue_line(peer, ":%s BATCH +%s chathistory %s %s %u", irc->server_name,
                        batch_id, irc->room, irc->stream, gap ? 1u : 0u) < 0)
             return -1;
-        for (size_t i = 0u; i < irc->history_count; ++i) {
-            const struct snag_irc_event *event = &irc->history[(irc->history_start + i) % irc->history_limit];
-            if (hosted_history_event(irc, event) && event->sequence > after &&
-                server_event_line(irc, peer, event, "history", batch_id) < 0)
-                return -1;
-        }
-        return queue_line(peer, ":%s BATCH -%s", irc->server_name, batch_id);
-    }
-    if (peer->cap_batch &&
+    } else if (peer->cap_batch &&
         queue_line(peer, ":%s BATCH +%s chathistory %s",
                    irc->server_name, batch_id, irc->room) < 0)
         return -1;
@@ -1201,6 +1194,11 @@ server_send_history(struct snag_irc_core *irc, struct irc_conn *peer)
 
         if (!hosted_history_event(irc, event))
             continue;
+        if (peer->cap_catchup) {
+            if (event->sequence > after && server_event_line(irc, peer, event, "history", batch_id) < 0)
+                return -1;
+            continue;
+        }
         format_time(event->timestamp_ms, when);
         if (peer->cap_batch) {
             (void)snprintf(tag_buf, sizeof(tag_buf),
@@ -1212,15 +1210,12 @@ server_send_history(struct snag_irc_core *irc, struct irc_conn *peer)
             (void)snprintf(tag_buf, sizeof(tag_buf), "@time=%s ", when);
             tag = tag_buf;
         }
-        if (peer->cap_batch && event->kind == SNAG_IRC_MESSAGE) {
-            if (queue_line(peer, "%s:%s!user@%s PRIVMSG %s :%s", tag,
-                           event->nick, irc->server_name, irc->room,
-                           event->text) < 0)
-                return -1;
-        } else if (peer->cap_batch && event->kind == SNAG_IRC_NOTICE) {
-            if (queue_line(peer, "%s:%s!user@%s NOTICE %s :%s", tag,
-                           event->nick, irc->server_name, irc->room,
-                           event->text) < 0)
+        if (peer->cap_batch &&
+            (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE)) {
+            if (queue_line(peer, "%s:%s!user@%s %s %s :%s", tag,
+                           event->nick, irc->server_name,
+                           event->kind == SNAG_IRC_MESSAGE ? "PRIVMSG" : "NOTICE",
+                           irc->room, event->text) < 0)
                 return -1;
         } else if (queue_line(peer,
                    "%s:%s NOTICE %s :[history %s] %s%s%s %s %s", tag,
@@ -1231,10 +1226,8 @@ server_send_history(struct snag_irc_core *irc, struct irc_conn *peer)
             return -1;
         }
     }
-    if (peer->cap_batch &&
-        queue_line(peer, ":%s BATCH -%s", irc->server_name, batch_id) < 0)
-        return -1;
-    return 0;
+    return peer->cap_catchup || peer->cap_batch ?
+        queue_line(peer, ":%s BATCH -%s", irc->server_name, batch_id) : 0;
 }
 
 static int server_finish_join(struct snag_irc_core *, struct irc_conn *);
