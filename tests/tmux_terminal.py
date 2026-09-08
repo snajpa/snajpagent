@@ -4036,6 +4036,21 @@ def run_tool_cases(binary, root, provider, environment):
             assert "diff preview truncated" in preview
             assert (workspace / "big.txt").read_bytes() == (payload + "\n").encode()
 
+            exec_args = {"command": "printf should-not-run", "workdir": str(workspace),
+                         "timeout_ms": 1000, "yield_ms": 0, "max_output_tokens": None,
+                         "stdin": None, "pty": False}
+            for field, value in (("stdin", False), ("stdin", 0), ("stdin", []),
+                                 ("stdin", {}), ("pty", "false"), ("pty", 0),
+                                 ("command", []), ("workdir", True)):
+                rejected = invoke("exec_command", {**exec_args, field: value}, "not_run")
+                assert rejected["reason"] == "invalid_arguments", (field, value, rejected)
+            for value in (None, "", "input\n"):
+                result = invoke("exec_command", {**exec_args, "command": "cat", "stdin": value,
+                    "pty": None if value is None else False}, "running" if value is None else "succeeded")
+                if value is None:
+                    result = interact(result["handle"], eof=True, yield_ms=5000)
+                assert result["stdout"]["retained"] == (value or "")
+
             result = command("printf out; printf err >&2")
             assert result["stdout"]["retained"] == "out"
             assert result["stderr"]["retained"] == "err"

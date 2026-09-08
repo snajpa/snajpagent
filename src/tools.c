@@ -82,19 +82,10 @@ json_bool_member(const json_t *object, const char *key, bool default_value,
                  bool *out)
 {
     json_t *value = json_object_get(object, key);
-    if (!value || json_is_null(value)) {
-        *out = default_value;
-        return true;
-    }
-    if (json_is_true(value)) {
-        *out = true;
-        return true;
-    }
-    if (json_is_false(value)) {
-        *out = false;
-        return true;
-    }
-    return false;
+    if (value && !json_is_null(value) && !json_is_boolean(value))
+        return false;
+    *out = !value || json_is_null(value) ? default_value : json_is_true(value);
+    return true;
 }
 
 static bool
@@ -117,15 +108,6 @@ json_u32_member(const json_t *object, const char *key, uint32_t default_value,
     return true;
 }
 
-static const char *
-json_nullable_string(const json_t *object, const char *key)
-{
-    json_t *value = json_object_get(object, key);
-    if (!value || json_is_null(value))
-        return NULL;
-    return json_is_string(value) ? json_string_value(value) : (const char *)-1;
-}
-
 static bool
 command_output_limit(const json_t *arguments, uint32_t ceiling, uint32_t *out)
 {
@@ -138,17 +120,11 @@ command_output_limit(const json_t *arguments, uint32_t ceiling, uint32_t *out)
 }
 
 static bool
-text_arg_valid(const char *text, size_t max)
-{
-    return text != (const char *)-1 && snag_text_valid(text, 0u, max);
-}
-
-static bool
 absolute_dir_arg_valid(const char *path)
 {
     snag_file_info st;
 
-    if (!path || path == (const char *)-1 || !snag_path_root_len(path))
+    if (!path || !snag_path_root_len(path))
         return false;
     return snag_text_valid(path, 0u, SNAG_PATH_MAX_BYTES) &&
            snag_stat(path, &st) == 0 && S_ISDIR(st.st_mode);
@@ -911,12 +887,13 @@ command_args(const struct snag_response_item *call, const struct snag_config *co
     if (args->exec) {
         args->command = snag_json_string(call->arguments, "command");
         args->workdir = snag_json_string(call->arguments, "workdir");
-        args->input = json_nullable_string(call->arguments, "stdin");
+        json_t *input = json_object_get(call->arguments, "stdin");
+        args->input = json_string_value(input);
         args->handle = call->call_id;
         args->eof = args->input != NULL;
-        if (!text_arg_valid(args->command, SNAG_TOOL_COMMAND_MAX) ||
+        if (!snag_text_valid(args->command, 0u, SNAG_TOOL_COMMAND_MAX) ||
             !absolute_dir_arg_valid(args->workdir) ||
-            (args->input && !text_arg_valid(args->input, SNAG_TOOL_STDIN_MAX)) ||
+            (!json_is_null(input) && !snag_text_valid(args->input, 0u, SNAG_TOOL_STDIN_MAX)) ||
             !json_bool_member(call->arguments, "pty", false, &args->pty) ||
             !json_u32_member(call->arguments, "timeout_ms", config->default_timeout_ms,
                              1u, config->max_timeout_ms, &args->timeout))
@@ -924,7 +901,7 @@ command_args(const struct snag_response_item *call, const struct snag_config *co
     } else {
         args->handle = snag_json_string(call->arguments, "handle");
         args->input = snag_json_string(call->arguments, "data");
-        if (!text_arg_valid(args->input, SNAG_TOOL_STDIN_MAX) ||
+        if (!snag_text_valid(args->input, 0u, SNAG_TOOL_STDIN_MAX) ||
             !json_bool_member(call->arguments, "eof", false, &args->eof) ||
             !json_bool_member(call->arguments, "terminate", false, &args->terminate) ||
             (args->terminate && (args->input[0] || args->eof)))
