@@ -2296,6 +2296,9 @@ test_posix_process(bool pty)
         assert(snag_monotonic_ms() < deadline);
         assert(snag_sleep_ms(1u) == 0);
     }
+    if (exited != 1 || child.reaped)
+        fprintf(stderr, "process exit poll: pty=%d pid=%ld rc=%d errno=%d reaped=%d\n",
+                pty, (long)child.pid, exited, errno, child.reaped);
     assert(exited == 1 && !child.reaped);
     assert(snag_child_exited(&child) == 1 && !child.reaped);
     assert(!strcmp(output[0], pty ? "native-pty" : "native-out"));
