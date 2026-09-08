@@ -203,6 +203,14 @@ int main(void)
         subprocess.run([str(binary)], check=True)
 print("PASS: PTY resize preserves ioctl request bits for signed and wide ABIs")
 
+# stdenvNoCC exports empty AR/RANLIB; Android archive commands must name NDK tools.
+android = (root / "nix/android.nix").read_text()
+assert '"-DCMAKE_AR=${tools}/llvm-ar"' in android
+assert '"-DCMAKE_RANLIB=${tools}/llvm-ranlib"' in android
+assert '"-DCMAKE_SYSTEM_NAME=Android"' in android
+assert '"-DCMAKE_ANDROID_NDK=${ndk}"' in android
+print("PASS: Android static libraries use NDK archiving tools and Bionic target")
+
 # Feature-selection macros follow the requested target, including cross-builds.
 for target in ("Linux", "Darwin", "FreeBSD", "OpenBSD", "NetBSD", "Windows_NT"):
     for extra in ([], ["CPPFLAGS=-D_POSIX_C_SOURCE=200809L"]):

@@ -42,6 +42,8 @@ let
         "-DCMAKE_ANDROID_ARCH_ABI=arm64-v8a"
         "-DCMAKE_ANDROID_NDK=${ndk}"
         "-DCMAKE_ANDROID_STL_TYPE=c++_static"
+        "-DCMAKE_AR=${tools}/llvm-ar"
+        "-DCMAKE_RANLIB=${tools}/llvm-ranlib"
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.10"
         "-DCMAKE_PREFIX_PATH=${lib.concatStringsSep ";" dependencies}"
         "-DCMAKE_INSTALL_LIBDIR=lib"
