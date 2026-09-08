@@ -30,6 +30,19 @@ commit_event(struct snag_session *session, const char *type, json_t *data)
 }
 
 static void
+build_context(struct snag_session *session, unsigned int cycle, const json_t *steering,
+              const struct snag_instruction_set *instructions,
+              struct snag_context_projection *projection)
+{
+    char error[512] = {0};
+    int rc = snag_context_build(session, SNAJPAGENT_MODEL, "medium", cycle, steering,
+                               0u, false, NULL, instructions, projection, error, sizeof(error));
+    if (rc != 0)
+        fprintf(stderr, "context: %s\n", error);
+    assert(rc == 0);
+}
+
+static void
 write_file(const char *path, const char *text)
 {
     FILE *f = fopen(path, "wb");
@@ -381,8 +394,7 @@ test_compact_groups(struct snag_store *store, const char *workspace)
         assert(json_object_set_new(data, "count_method", json_string("statistical_upper_estimate")) == 0);
         commit_event(&session, "compaction_completed", data);
         projection = (struct snag_context_projection){0};
-        assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty,
-            0u, false, NULL, &instructions, &projection, error, sizeof(error)) == 0);
+        build_context(&session, 1u, empty, &instructions, &projection);
         json_t *input = json_object_get(projection.create_request.value, "input");
         size_t calls = 0u, results = 0u, users = 0u;
         for (size_t i = 0u; i < json_array_size(input); ++i) {
@@ -490,8 +502,7 @@ test_parallel_journal_recovery(struct snag_store *store, const char *workspace)
     struct snag_instruction_set instructions = {0};
     json_t *snapshot = checked_json(json_pack("[{s:s,s:s}]",
         "id", steer, "text", "fresh steer"));
-    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, snapshot, 0u, false,
-        NULL, &instructions, &projection, error, sizeof(error)) == 0);
+    build_context(&session, 2u, snapshot, &instructions, &projection);
     json_t *input = json_object_get(projection.create_request.value, "input");
     unsigned int user = 0u, steering = 0u;
     for (size_t i = 0u; i < json_array_size(input); ++i) {
@@ -897,8 +908,7 @@ test_durable_irc_input_watermark(struct snag_store *store, const char *path)
         "sequences", (json_int_t)received));
     commit_event(&session, "turn_started", turn_started(turn, 1u,
         "inspect pending room input", path, json_array()));
-    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u, false,
-        NULL, NULL, &projection, error, sizeof(error)) == 0);
+    build_context(&session, 1u, empty, NULL, &projection);
     assert(projection.irc_seq == received);
     json_t *input = json_object_get(projection.create_request.value, "input");
     size_t copies = 0u;
@@ -923,8 +933,7 @@ test_durable_irc_input_watermark(struct snag_store *store, const char *path)
     uint64_t second = session.irc_received_seq;
     commit_event(&session, "irc_admitted", json_pack("{s:[I]}",
         "sequences", (json_int_t)second));
-    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, empty, 0u, false,
-        NULL, NULL, &projection, error, sizeof(error)) == 0);
+    build_context(&session, 2u, empty, NULL, &projection);
     struct snag_buf serialized;
     snag_buf_init(&serialized, SNAG_CONTEXT_MAX_REQUEST);
     assert(snag_json_canonical(projection.create_request.value, &serialized) == 0);
@@ -1022,8 +1031,7 @@ test_input_time_and_recovery(struct snag_store *store, const char *workspace)
         data = json_pack("{s:s,s:s,s:s}", "class", "provider", "message", "capacity unavailable", "turn_id", turn);
         commit_event(&session, "turn_recovery", data);
     }
-    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, snapshot,
-                              0u, false, NULL, &instructions, &projection, error, sizeof(error)) == 0);
+    build_context(&session, 1u, snapshot, &instructions, &projection);
     input = json_object_get(projection.create_request.value, "input");
     size_t metadata = 0, failures = 0;
     for (size_t i = 0; i < json_array_size(input); ++i) {
@@ -1047,8 +1055,7 @@ test_input_time_and_recovery(struct snag_store *store, const char *workspace)
     assert(session.input_received_ms == 1788739200000ULL);
     assert(session.input_first_context_ms == 1788739290000ULL);
     assert(session.recovery_count == 1000u);
-    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, snapshot,
-                              0u, false, NULL, &instructions, &replay, error, sizeof(error)) == 0);
+    build_context(&session, 1u, snapshot, &instructions, &replay);
     assert(json_equal(projection.create_request.value, replay.create_request.value));
     snag_context_projection_free(&projection);
     snag_context_projection_free(&replay);
@@ -1234,10 +1241,7 @@ main(void)
                                   active_model, &compact, compact_output);
         assert(active.active_turn);
         assert(strcmp(active.compact_id, active_compact) == 0);
-        assert(snag_context_build(&active, SNAJPAGENT_MODEL, "medium", 1,
-                                 active_steering, 0u, false, NULL,
-                                 &no_instructions,
-                                 &active_projection, error, sizeof(error)) == 0);
+        build_context(&active, 1, active_steering, &no_instructions, &active_projection);
         assert(active_projection.request_controller_count == 1u);
         input = json_object_get(active_projection.create_request.value, "input");
         assert(json_is_array(input));
@@ -1293,10 +1297,7 @@ main(void)
         commit_event(&steered, "steering_added",
                      steering_added(steer_turn, steer_id2,
                          "and preserve order"));
-        assert(snag_context_build(&steered, SNAJPAGENT_MODEL, "medium", 2,
-                                 snapshot, 0u, false, NULL, &no_instructions,
-                                 &steered_projection,
-                                 error, sizeof(error)) == 0);
+        build_context(&steered, 2, snapshot, &no_instructions, &steered_projection);
         input = json_object_get(steered_projection.create_request.value, "input");
         assert(json_array_size(input) >= 6u);
         assert_string(json_array_get(input, 2), "role", "assistant");
@@ -1358,10 +1359,7 @@ main(void)
                          (int)(sizeof(
                          "still running after steer") -
                          1u))));
-        assert(snag_context_build(&steered, SNAJPAGENT_MODEL, "medium", 2,
-                                 snapshot, 0u, false, NULL, &no_instructions,
-                                 &steered_projection,
-                                 error, sizeof(error)) == 0);
+        build_context(&steered, 2, snapshot, &no_instructions, &steered_projection);
         input = json_object_get(steered_projection.create_request.value, "input");
         assert_string(json_array_get(input, 2), "type", "function_call");
         assert_string(json_array_get(input, 3), "type", "function_call_output");
@@ -1577,10 +1575,7 @@ main(void)
     free(large_tool_output);
     assert(snag_session_process(&session, handle));
     commit_event(&session, "goal_started", goal_started_data(goal, "finish compacted work"));
-    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2,
-                             empty_steering, 0u, false, NULL,
-                             &instructions, &projection,
-                             error, sizeof(error)) == 0);
+    build_context(&session, 2, empty_steering, &instructions, &projection);
     {
         json_t *tools = json_object_get(projection.create_request.value, "tools");
         json_t *input = json_object_get(projection.create_request.value, "input");
@@ -1673,10 +1668,7 @@ main(void)
     assert(json_object_set_new(started, "input_kind", json_string("goal")) == 0);
     commit_event(&session, "turn_started", started);
     assert(session.goal_turn_count == 1u);
-    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
-                             empty_steering, 0u, false, NULL,
-                             &instructions, &projection,
-                             error, sizeof(error)) == 0);
+    build_context(&session, 1, empty_steering, &instructions, &projection);
     {
         json_t *tools = json_object_get(projection.create_request.value, "tools");
         json_t *semantic = json_object_get(projection.model_input.value, "items");
@@ -1772,10 +1764,7 @@ main(void)
     assert(strcmp(session.goal_prompt, "finish compacted work") == 0);
     assert(session.goal_turn_count == 1u && session.goal_revision == 1u);
     assert(session.compact_id[0]);
-    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
-                             empty_steering, 0u, false, NULL,
-                             &instructions, &projection,
-                             error, sizeof(error)) == 0);
+    build_context(&session, 1, empty_steering, &instructions, &projection);
     {
         json_t *tools = json_object_get(projection.create_request.value, "tools");
         json_t *semantic = json_object_get(projection.model_input.value, "items");
@@ -1808,8 +1797,7 @@ main(void)
     snag_session_close(&session);
     snag_session_init(&session);
     assert(snag_session_open(&store, &session, resumed_id, error, sizeof(error)) == 0);
-    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
-        empty_steering, 0u, false, NULL, &instructions, &projection, error, sizeof(error)) == 0);
+    build_context(&session, 1, empty_steering, &instructions, &projection);
     json_t *restored = message_matching(json_object_get(projection.model_input.value, "items"), "Persistent goal ");
     assert(restored && strstr(snag_json_string(restored, "content"), "is blocked"));
     assert(strstr(snag_json_string(restored, "content"), "Recorded blocker:\nretained dependency"));
