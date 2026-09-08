@@ -675,6 +675,9 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         void *target = settings[i].target;
         uint64_t min = settings[i].min, max = settings[i].max;
         switch (settings[i].kind) {
+        case SET_HTTPS:
+            if (strncmp(value, "https://", 8u) != 0 || !value[8]) goto invalid;
+            return copy_value(target, (size_t)max, value);
         case SET_TEXT: return copy_value(target, (size_t)max, value);
         case SET_HEADER: return copy_header_value(target, (size_t)max, value);
         case SET_U32: return parse_u32(value, (uint32_t)min, (uint32_t)max, target);
