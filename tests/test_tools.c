@@ -723,12 +723,13 @@ test_process_capacity_and_ready_collection(void)
     char cwd[4096], error[256] = {0}, handles[SNAG_MAX_PROCESSES][SNAG_ID_HEX_LEN + 1u];
     snag_config_init(&config);
     config.max_parallel_commands = SNAG_MAX_PROCESSES;
+    config.default_timeout_ms = 0;
     snag_credential_clear(&credential);
     assert(getcwd(cwd, sizeof(cwd)));
     for (size_t i = 0u; i < SNAG_MAX_PROCESSES; ++i) {
         uint32_t yield;
         json_t *result = NULL;
-        make_call(&graph, "printf slot", cwd, 0, NULL);
+        make_call(&graph, "printf slot", cwd, -1, NULL);
         struct snag_response_item call = snag_response_graph_item(&graph, 0u);
         assert(snag_tools_prepare(&call, &config, handles[i], &yield, &result) == 0);
         assert(snag_tools_start(&call, &config, &credential, &result, error, sizeof(error)) == 0);
