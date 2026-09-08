@@ -2915,9 +2915,26 @@ test_irc_target_parse(void)
     }
 }
 
+static void
+test_wide_division(void)
+{
+#ifdef __SIZEOF_INT128__
+    __extension__ typedef unsigned __int128 wide_uint;
+    volatile wide_uint dividend = ((wide_uint)1u << 100) + 12345u;
+    volatile wide_uint divisor = ((wide_uint)1u << 64) + 7u;
+    assert(dividend / divisor == UINT64_C(68719476735));
+    assert(dividend % divisor == UINT64_C(0xffffff9000003040));
+    dividend = ((wide_uint)UINT64_C(0xabcdef0123456789) << 64) | UINT64_C(0xfedcba9876543210);
+    divisor = UINT64_C(0xfffffffffffffff1);
+    assert(dividend / divisor == UINT64_C(0xabcdef0123456794));
+    assert(dividend % divisor == UINT64_C(0x0fedbba9876543bc));
+#endif
+}
+
 static int
 run_base(int argc, char **argv)
 {
+    test_wide_division();
 #ifdef _WIN32
     if (argc == 2 && !strcmp(argv[1], "--standard-console-creation")) {
         test_standard_console_creation();

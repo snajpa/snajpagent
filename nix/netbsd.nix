@@ -50,10 +50,13 @@ let
   };
   compilerBuiltins = pkgs.runCommand "compiler-rt-netbsd-${osVersion}" {} ''
     mkdir -p "$out/lib"
-    ${llvm.clang-unwrapped}/bin/clang --target=${target} --sysroot=${sdk} \
-      -Os -g -fPIC -D_NETBSD_SOURCE \
-      -c ${llvm.compiler-rt.src}/compiler-rt/lib/builtins/emutls.c -o emutls.o
-    ${tools}/llvm-ar rcs "$out/lib/libclang_rt.builtins.a" emutls.o
+    # GCC 3's 128-bit division symbols use a pre-Clang calling convention.
+    for file in emutls.c ${lib.optionalString early "udivti3.c umodti3.c udivmodti4.c"}; do
+      ${llvm.clang-unwrapped}/bin/clang --target=${target} --sysroot=${sdk} \
+        -Os -g -fPIC -D_NETBSD_SOURCE \
+        -c ${llvm.compiler-rt.src}/compiler-rt/lib/builtins/"$file" -o "$file.o"
+    done
+    ${tools}/llvm-ar rcs "$out/lib/libclang_rt.builtins.a" ./*.o
   '';
   compilerWrapper = pkgs.runCommand "netbsd-${osVersion}-clang" {} ''
     mkdir -p "$out/bin"
