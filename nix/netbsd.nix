@@ -1,21 +1,26 @@
 # SPDX-License-Identifier: GPL-2.0-only
-{ pkgs, sourcePkgs }:
+{ pkgs, sourcePkgs, osVersion ? "5.2.3" }:
 let
   inherit (pkgs) lib;
-  osVersion = "5.2.3";
-  target = "x86_64-unknown-netbsd5.2";
+  legacy = lib.versionOlder osVersion "6.0";
+  target = "x86_64-unknown-netbsd${if legacy then "5.2" else osVersion}";
+  setSuffix = if legacy then "tgz" else "tar.xz";
+  mirror = if legacy then "https://archive.netbsd.org/pub/NetBSD-archive"
+    else "https://cdn.netbsd.org/pub/NetBSD";
   llvm = pkgs.llvmPackages_21;
   tools = "${llvm.llvm}/bin";
   sdk = pkgs.stdenvNoCC.mkDerivation {
     pname = "netbsd-amd64-sysroot";
     version = osVersion;
     src = pkgs.fetchurl {
-      url = "https://archive.netbsd.org/pub/NetBSD-archive/NetBSD-${osVersion}/amd64/binary/sets/base.tgz";
-      sha256 = "693a8018ec6271cfc8a267ee8364de6a125d1483f47e9bc6bcaec507c2c0f784";
+      url = "${mirror}/NetBSD-${osVersion}/amd64/binary/sets/base.${setSuffix}";
+      sha256 = if legacy then "693a8018ec6271cfc8a267ee8364de6a125d1483f47e9bc6bcaec507c2c0f784"
+        else "ec59d1198dad7de81771bfb93f50425241bc51331b4c50ba7a163ca4d6acd427";
     };
     compilerSet = pkgs.fetchurl {
-      url = "https://archive.netbsd.org/pub/NetBSD-archive/NetBSD-${osVersion}/amd64/binary/sets/comp.tgz";
-      sha256 = "90be70dec28c68db354564d810613f48a7ed2d17d9cff2b381e3f9db4f94f54e";
+      url = "${mirror}/NetBSD-${osVersion}/amd64/binary/sets/comp.${setSuffix}";
+      sha256 = if legacy then "90be70dec28c68db354564d810613f48a7ed2d17d9cff2b381e3f9db4f94f54e"
+        else "02e51e63e05b54f9d30d4d566c55e96e1b8b36fb8e870b1cc3ed9494d93d11f3";
     };
     nativeBuildInputs = [ pkgs.libarchive pkgs.python3 ];
     dontUnpack = true;
@@ -68,14 +73,14 @@ let
     start=(${sdk}/usr/lib/crt0.o ${sdk}/usr/lib/crti.o ${sdk}/usr/lib/crtbegin.o)
     end=(${sdk}/usr/lib/crtend.o ${sdk}/usr/lib/crtn.o)
     # The NetBSD 5 ELF loader accepts only two PT_LOAD segments.
-    flags=(-Wl,-no-pie,--no-rosegment,-z,norelro,-e,_start,--dynamic-linker=/libexec/ld.elf_so)
+    flags=(-Wl,-no-pie,${if legacy then "--no-rosegment,-z,norelro," else "-z,relro,-z,now,"}-e,_start,--dynamic-linker=/libexec/ld.elf_so)
     if [ "$shared" = 1 ]; then
       start=(${sdk}/usr/lib/crti.o ${sdk}/usr/lib/crtbeginS.o)
       end=(${sdk}/usr/lib/crtendS.o ${sdk}/usr/lib/crtn.o)
       flags=()
     fi
     exec "$cc" "''${inlineFlags[@]}" -nostdlib "''${flags[@]}" "''${start[@]}" "$@" \
-      -L${sdk}/usr/lib -L${sdk}/lib -Wl,-Bdynamic "''${extra[@]}" -lpthread -lc ${compilerBuiltins}/lib/libclang_rt.builtins.a ${sdk}/usr/lib/libgcc.a "''${end[@]}"
+      -L${sdk}/usr/lib -L${sdk}/lib -Wl,-Bdynamic "''${extra[@]}" -lpthread -lc ${lib.optionalString legacy "${compilerBuiltins}/lib/libclang_rt.builtins.a"} ${sdk}/usr/lib/libgcc.a "''${end[@]}"
     SH
     chmod +x "$out/bin/clang"
     ln -s clang "$out/bin/clang++"
@@ -83,8 +88,8 @@ let
   compiler = "${compilerWrapper}/bin/clang";
   cxxCompiler = "${compilerWrapper}/bin/clang++";
   # NetBSD 5 lacks the ELF TLS runtime; retain TLS through compiler-rt.
-  cflags = "-Os -g -D_NETBSD_SOURCE -fPIC -fstack-protector-strong -femulated-tls";
-  ldflags = "--ld-path=${llvm.lld}/bin/ld.lld -femulated-tls";
+  cflags = "-Os -g -D_NETBSD_SOURCE -fPIC -fstack-protector-strong ${lib.optionalString legacy "-femulated-tls"}";
+  ldflags = "--ld-path=${llvm.lld}/bin/ld.lld ${lib.optionalString legacy "-femulated-tls"}";
   cmakeLibrary = package: flags: dependencies:
     pkgs.stdenvNoCC.mkDerivation {
       pname = "${package.pname}-netbsd-amd64";
@@ -258,7 +263,7 @@ in {
           'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
           'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\" -DSNAJPAGENT_STATIC_UTF8 -I${regex}/include -I${unistring}/include'
           'CFLAGS=-std=c11 ${cflags} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
-          'LDFLAGS=${ldflags} -Wl,-mllvm,-emulated-tls ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections,--as-needed,-Bstatic'
+          'LDFLAGS=${ldflags} ${lib.optionalString legacy "-Wl,-mllvm,-emulated-tls"} ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections,--as-needed,-Bstatic'
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson) -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
