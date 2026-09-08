@@ -625,3 +625,11 @@ actual = subprocess.check_output(["sed", "-E", expression],
     input="-I/fixture/poppler -DKEEP_FLAG=1 -I/fixture/png", text=True)
 assert actual.split() == ["-isystem", "/fixture/poppler", "-DKEEP_FLAG=1", "-isystem", "/fixture/png"]
 print("PASS: PDF system include paths preserve unrelated compiler flags")
+
+# Nixpkgs defaults to a store-only fallback font directory. Portable binaries
+# retain the host Fontconfig configuration and host font directory fallback.
+assert 'pkgs.lib.hasPrefix "--with-default-fonts=" flag' in linux
+assert '"--with-default-fonts=/usr/share/fonts,/usr/local/share/fonts"' in linux
+pdf_recipe = linux.split("pdf = (static.poppler.override {", 1)[1].split("}).overrideAttrs", 1)[0]
+assert "inherit fontconfig;" in pdf_recipe
+print("PASS: portable PDF font fallback uses host directories")

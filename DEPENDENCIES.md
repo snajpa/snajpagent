@@ -32,6 +32,9 @@ fontconfig builds; upstream test executables exercise the same link interface.
 PDF rendering requires usable embedded or system fonts for visible text. Missing
 fonts fail the page instead of retaining an incomplete rendering; blank pages
 and invisible OCR text do not require a renderable font.
+The Linux static Fontconfig build keeps `/etc/fonts` configuration and uses
+`/usr/share/fonts` and `/usr/local/share/fonts` if that configuration is absent.
+Its fallback font lookup does not depend on fonts in the build host's Nix store.
 
 `src/office.c` runs one disposable child of the same binary through the existing
 bounded child runner. `src/office_package.c` checks ZIP/XML before import;

@@ -37,7 +37,15 @@ let
       runHook postCheck
     '';
   });
+  # The standalone binary must use host fonts, not a build-host store path.
+  fontconfig = static.fontconfig.overrideAttrs (old: {
+    configureFlags = builtins.filter
+      (flag: !(pkgs.lib.hasPrefix "--with-default-fonts=" flag)) old.configureFlags ++ [
+      "--with-default-fonts=/usr/share/fonts,/usr/local/share/fonts"
+    ];
+  });
   pdf = (static.poppler.override {
+    inherit fontconfig;
     minimal = true;
     qt5Support = false;
     qt6Support = false;
@@ -70,7 +78,7 @@ let
     ];
   });
 in {
-  inherit static tls curl av pdf office;
+  inherit static tls curl av pdf office fontconfig;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }: musl.stdenv.mkDerivation {
     pname = packageName;
