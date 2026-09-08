@@ -342,6 +342,8 @@ let
     postPatch = lib.optionalString early ''
       # The native socket/time headers require sys/types.h first. Let curl
       # probe the real headers instead of marking available functions absent.
+      substituteInPlace include/curl/mprintf.h \
+        --replace-fail 'format(printf,' 'format(__printf__,'
       substituteInPlace CMakeLists.txt \
         --replace-fail 'list(APPEND CURL_INCLUDES "sys/socket.h")' \
           'list(APPEND CURL_INCLUDES "sys/types.h" "sys/socket.h")'
