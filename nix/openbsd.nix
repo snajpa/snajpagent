@@ -3,6 +3,11 @@
 let
   inherit (pkgs) lib;
   legacy = lib.versionOlder osVersion "6.0";
+  early = lib.versionOlder osVersion "4.0";
+  libcVersion = if early then "30.3" else "84.2";
+  threadVersion = if early then "2.4" else "20.1";
+  gccRuntime = if early then "x86_64-unknown-openbsd3.5/3.3.2/fpic"
+    else "amd64-unknown-openbsd5.9/4.2.1";
   release = lib.replaceStrings [ "." ] [ "" ] osVersion;
   target = "x86_64-unknown-openbsd${osVersion}";
   llvm = pkgs.llvmPackages_21;
@@ -10,15 +15,26 @@ let
   sdk = pkgs.stdenvNoCC.mkDerivation {
     pname = "openbsd-amd64-sysroot";
     version = osVersion;
-    src = pkgs.fetchurl {
+    src = if early then pkgs.fetchurl {
+      url = "https://ftp.eu.openbsd.org/pub/OpenBSD/3.5/amd64/base35.tgz";
+      sha256 = "1041bed06a9357692ee1cdeab09fe12c9d32862af35b8ca49c70a489f49e3dcb";
+    } else pkgs.fetchurl {
       url = "https://${if legacy then "ftp.eu" else "cdn"}.openbsd.org/pub/OpenBSD/${osVersion}/amd64/install${release}.iso";
       sha256 = {
         "7.9" = "7a4a92e953618035097c796a90b54424a0f3ae775552e1e7d102cf8a5130449f";
         "5.9" = "685262fc665425c61a2952b2820389a2d331ac5558217080e6d564d2ce88eecb";
       }.${osVersion};
     };
+    compilerSet = lib.optionalString early (pkgs.fetchurl {
+      url = "https://ftp.eu.openbsd.org/pub/OpenBSD/3.5/amd64/comp35.tgz";
+      sha256 = "d75980c7d961cab17edbc63e13a6b5a33d206917464e07a980ff1bfd3496da27";
+    });
     nativeBuildInputs = [ pkgs.libarchive pkgs.python3 ];
-    unpackPhase = ''bsdtar -xf "$src" ${osVersion}/amd64/base${release}.tgz ${osVersion}/amd64/comp${release}.tgz'';
+    unpackPhase = if early then ''
+      mkdir -p 3.5/amd64
+      cp "$src" 3.5/amd64/base35.tgz
+      cp "$compilerSet" 3.5/amd64/comp35.tgz
+    '' else ''bsdtar -xf "$src" ${osVersion}/amd64/base${release}.tgz ${osVersion}/amd64/comp${release}.tgz'';
     dontConfigure = true;
     dontBuild = true;
     dontFixup = true;
@@ -73,7 +89,7 @@ let
     done
     cc=${llvm.clang-unwrapped}/bin/clang
     extra=()
-    case "$0" in *++) cc="$cc++"; extra=(${if legacy then "-l:libstdc++.so.57.0" else "-lc++ -lc++abi"});; esac
+    case "$0" in *++) cc="$cc++"; extra=(${if early then "-l:libstdc++.so.32.0" else if legacy then "-l:libstdc++.so.57.0" else "-lc++ -lc++abi"});; esac
     if [ "$link" = 0 ]; then exec "$cc" "$@"; fi
     start=(${sdk}/usr/lib/crt0.o ${sdk}/usr/lib/crtbegin.o)
     end=(${sdk}/usr/lib/crtend.o)
@@ -84,14 +100,15 @@ let
       flags=()
     fi
     exec "$cc" -nostdlib "''${flags[@]}" "''${start[@]}" "$@" \
-      -Wl,-Bdynamic "''${extra[@]}" ${if legacy then "-l:libpthread.so.20.1 -l:libc.so.84.2 ${compilerBuiltins}/lib/libclang_rt.builtins.a ${sdk}/usr/lib/gcc-lib/amd64-unknown-openbsd5.9/4.2.1/libgcc.a" else "-lpthread -lc -lcompiler_rt"} "''${end[@]}"
+      -Wl,-Bdynamic "''${extra[@]}" ${if legacy then "-l:libpthread.so.${threadVersion} -l:libc.so.${libcVersion} ${compilerBuiltins}/lib/libclang_rt.builtins.a ${sdk}/usr/lib/gcc-lib/${gccRuntime}/libgcc.a" else "-lpthread -lc -lcompiler_rt"} "''${end[@]}"
     SH
     chmod +x "$out/bin/clang"
     ln -s clang "$out/bin/clang++"
   '';
   compiler = "${compilerWrapper}/bin/clang";
   cxxCompiler = "${compilerWrapper}/bin/clang++";
-  cflags = "-Os -g -D_BSD_SOURCE -fPIC -fstack-protector-strong"
+  cflags = "-Os -g -D_BSD_SOURCE -fPIC"
+    + (if early then " -fno-stack-protector" else " -fstack-protector-strong")
     # 5.9's endian statement macros predate Clang's token-context diagnostic.
     + lib.optionalString legacy " -Wno-compound-token-split-by-macro";
   ldflags = "--ld-path=${llvm.lld}/bin/ld.lld";
@@ -272,13 +289,13 @@ in {
           'CC=${compiler} --target=${target} --sysroot=${sdk}'
           'STRIP=${tools}/llvm-strip' 'OBJCOPY=${tools}/llvm-objcopy'
           'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
-          'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\" -DSNAJPAGENT_STATIC_UTF8 -I${regex}/include -I${unistring}/include'
+          'CPPFLAGS=${lib.optionalString (!early) "-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 "}-D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\" -DSNAJPAGENT_STATIC_UTF8 -I${regex}/include -I${unistring}/include'
           'CFLAGS=-std=c11 ${cflags} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           'LDFLAGS=--ld-path=${llvm.lld}/bin/ld.lld ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections,--as-needed,-Bstatic'
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson) -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
-          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l(-l)?pthread//g') -lutil -Wl,-Bdynamic ${if legacy then "-l:libpthread.so.20.1" else "-lpthread"}"
+          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l(-l)?pthread//g') -lutil -Wl,-Bdynamic ${if legacy then "-l:libpthread.so.${threadVersion}" else "-lpthread"}"
         )
       '';
       installPhase = ''
