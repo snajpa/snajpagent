@@ -188,42 +188,21 @@ steering_contains(const json_t *steering, const char *needle)
 
 static int
 add_goal_call(struct snag_response_graph *graph, unsigned int cycle,
-              const char *action, const char *text)
+              bool create, const char *action, const char *text)
 {
-    char item_id[128];
-    char call_id[128];
-    json_t *args = json_pack("{s:s,s:s?}", "action", action, "text", text);
+    const char *suffix = create ? "create_goal" : "goal";
+    char item_id[128], call_id[128];
+    json_t *args = create ? json_pack("{s:s}", "objective", text) :
+                           json_pack("{s:s,s:s?}", "action", action, "text", text);
 
     if (!args ||
-        snprintf(item_id, sizeof(item_id),
-                 "item_fixture_goal_%u", cycle) < 0 ||
-        snprintf(call_id, sizeof(call_id),
-                 "call_fixture_goal_%u", cycle) < 0) {
+        snprintf(item_id, sizeof(item_id), "item_fixture_%s_%u", suffix, cycle) < 0 ||
+        snprintf(call_id, sizeof(call_id), "call_fixture_%s_%u", suffix, cycle) < 0) {
         json_decref(args);
         return -1;
     }
     return snag_response_graph_add_call(graph, item_id, call_id,
-                                       "update_goal", args);
-}
-
-static int
-add_create_goal_call(struct snag_response_graph *graph, unsigned int cycle,
-                     const char *objective)
-{
-    char item_id[128];
-    char call_id[128];
-    json_t *args = json_pack("{s:s}", "objective", objective);
-
-    if (!args ||
-        snprintf(item_id, sizeof(item_id),
-                 "item_fixture_create_goal_%u", cycle) < 0 ||
-        snprintf(call_id, sizeof(call_id),
-                 "call_fixture_create_goal_%u", cycle) < 0) {
-        json_decref(args);
-        return -1;
-    }
-    return snag_response_graph_add_call(graph, item_id, call_id,
-                                       "create_goal", args);
+                                       create ? "create_goal" : "update_goal", args);
 }
 
 static bool
@@ -300,33 +279,33 @@ fixture_response(const char *prompt, const json_t *steering,
             goal_turn_count == 1u)
             return final_answer(&out, "msg_fixture_goal_checkpoint", "goal checkpoint");
         if (strcmp(goal_prompt, "rewrite goal") == 0 && cycle == 1u)
-            return add_goal_call(graph, cycle, "rewrite", "rewritten goal");
+            return add_goal_call(graph, cycle, false, "rewrite", "rewritten goal");
         if (strcmp(goal_prompt, "rewritten goal") == 0 && cycle == 2u)
-            return add_goal_call(graph, cycle, "complete", NULL);
+            return add_goal_call(graph, cycle, false, "complete", NULL);
         if (strcmp(goal_prompt, "tiny") == 0 && cycle == 1u)
-            return add_goal_call(graph, cycle, "rewrite", "too long");
+            return add_goal_call(graph, cycle, false, "rewrite", "too long");
         if (strcmp(goal_prompt, "locked goal") == 0 && cycle == 1u) {
             if (emit_public(&out, SNAG_ITEM_ASSISTANT,
                 SNAG_PHASE_COMMENTARY, "msg_fixture_goal_lock_commentary", "preparing goal rewrite\n", 0) < 0)
                 goto allocation;
             if ((control = wait_ticks(&out, 50u)) != 0)
                 return control;
-            return add_goal_call(graph, cycle, "rewrite", "forbidden rewrite");
+            return add_goal_call(graph, cycle, false, "rewrite", "forbidden rewrite");
         }
         if (strcmp(goal_prompt, "blocked goal") == 0 && cycle == 1u)
-            return add_goal_call(graph, cycle, "block",
+            return add_goal_call(graph, cycle, false, "block",
                                  "fixture dependency is unavailable");
         /* The user-control case owns completion even after the slow turn ends. */
         if ((strcmp(goal_prompt, "failing goal") == 0 && cycle == 5u) ||
             (cycle == 1u && strcmp(goal_prompt, "retitled goal") != 0) ||
             ((strcmp(goal_prompt, "locked goal") == 0 ||
               strcmp(goal_prompt, "tiny") == 0) && cycle == 2u))
-            return add_goal_call(graph, cycle, "complete", NULL);
+            return add_goal_call(graph, cycle, false, "complete", NULL);
         return final_answer(&out, "msg_fixture_goal_done", "goal done");
     }
     if (strcmp(prompt, "please create a persistent goal") == 0) {
         if (cycle == 1u)
-            return add_create_goal_call(graph, cycle, "model-created goal");
+            return add_goal_call(graph, cycle, true, NULL, "model-created goal");
         return final_answer(&out, "msg_fixture_model_goal_checkpoint", "model-created checkpoint");
     }
     if (strcmp(prompt, "ro_native") == 0 || strncmp(prompt, "ro_native ", 10u) == 0) {
