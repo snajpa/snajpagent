@@ -894,21 +894,6 @@ test_punctuation_wrapping(void)
     }
 }
 
-static size_t capture_markdown_width(const char *text, bool enabled,
-                                     bool split, enum snag_color_mode color,
-                                     unsigned int columns, char *out,
-                                     size_t out_size,
-                                     struct snag_buf *delivered);
-
-static size_t
-capture_markdown(const char *text, bool enabled, bool split,
-                 enum snag_color_mode color, char *out, size_t out_size,
-                 struct snag_buf *delivered)
-{
-    return capture_markdown_width(text, enabled, split, color, 120u, out,
-                                  out_size, delivered);
-}
-
 static int
 editable_checkpoint(void *opaque)
 {
@@ -918,9 +903,9 @@ editable_checkpoint(void *opaque)
 }
 
 static size_t
-capture_markdown_width(const char *text, bool enabled, bool split,
-                       enum snag_color_mode color, unsigned int columns,
-                       char *out, size_t out_size, struct snag_buf *delivered)
+capture_markdown(const char *text, bool enabled, bool split,
+                 enum snag_color_mode color, unsigned int columns,
+                 char *out, size_t out_size, struct snag_buf *delivered)
 {
     struct snag_render render;
     struct snag_term term;
@@ -1005,14 +990,14 @@ test_markdown_fences(void)
             struct snag_buf delivered;
             snag_buf_init(&delivered, 1024u);
             assert(capture_markdown(cases[i].source, true, split != 0u,
-                                   SNAG_COLOR_NEVER, output, sizeof(output),
+                                   SNAG_COLOR_NEVER, 120u, output, sizeof(output),
                                    &delivered) > 0u);
             assert(strcmp(output, cases[i].expected) == 0);
             assert(snag_buf_terminate(&delivered) == 0);
             assert(strcmp((const char *)delivered.data, cases[i].source) == 0);
             snag_buf_free(&delivered);
         }
-        assert(capture_markdown(cases[i].source, false, true, SNAG_COLOR_NEVER,
+        assert(capture_markdown(cases[i].source, false, true, SNAG_COLOR_NEVER, 120u,
                                output, sizeof(output), NULL) > 0u);
         assert(strcmp(output, cases[i].source) == 0);
     }
@@ -1100,7 +1085,7 @@ test_paragraph_spacing(void)
             struct snag_buf delivered;
             snag_buf_init(&delivered, 4096u);
             assert(capture_markdown(cases[i].source, true, split != 0u,
-                                   SNAG_COLOR_NEVER, output, sizeof(output),
+                                   SNAG_COLOR_NEVER, 120u, output, sizeof(output),
                                    &delivered) > 0u);
             assert(strcmp(output, cases[i].expected) == 0);
             assert(delivered.len == strlen(cases[i].source));
@@ -1469,37 +1454,37 @@ test_markdown_tables(void)
     char output[8192];
 
     struct snag_buf delivered = {.max = sizeof(markdown)};
-    assert(capture_markdown(markdown, true, true, SNAG_COLOR_NEVER,
+    assert(capture_markdown(markdown, true, true, SNAG_COLOR_NEVER, 120u,
                             output, sizeof(output), &delivered) > 0u);
     assert(strcmp(output, rendered) == 0);
     assert(snag_buf_terminate(&delivered) == 0);
     assert(strcmp((const char *)delivered.data, markdown) == 0);
     snag_buf_free(&delivered);
-    assert(capture_markdown(markdown, true, false, SNAG_COLOR_ALWAYS,
+    assert(capture_markdown(markdown, true, false, SNAG_COLOR_ALWAYS, 120u,
                             output, sizeof(output), NULL) > 0u);
     assert(strstr(output, "\033[0;1mName") != NULL);
     assert(strstr(output, "\033[0;1malpha") != NULL);
     assert(strstr(output, "\033[0;33mready") != NULL);
     assert(strstr(output, "\033[0;4;34mhttps://example.test") != NULL);
 
-    assert(capture_markdown_width(markdown, true, true, SNAG_COLOR_NEVER,
-                                  28u, output, sizeof(output), NULL) > 0u);
+    assert(capture_markdown(markdown, true, true, SNAG_COLOR_NEVER,
+                            28u, output, sizeof(output), NULL) > 0u);
     assert(strcmp(output, narrow) == 0);
 
-    assert(capture_markdown_width("| Name |\n| --- |\n", true, true, SNAG_COLOR_NEVER,
-                                  9u, output, sizeof(output), NULL) > 0u);
+    assert(capture_markdown("| Name |\n| --- |\n", true, true, SNAG_COLOR_NEVER,
+                            9u, output, sizeof(output), NULL) > 0u);
     assert(strcmp(output, "┌─ table\n│ Name\n└─\n") == 0);
-    assert(capture_markdown_width("| Name |\n| --- |", true, true, SNAG_COLOR_NEVER,
-                                  9u, output, sizeof(output), NULL) > 0u);
+    assert(capture_markdown("| Name |\n| --- |", true, true, SNAG_COLOR_NEVER,
+                            9u, output, sizeof(output), NULL) > 0u);
     assert(strcmp(output, "┌─ table\n│ Name\n└─") == 0);
 
-    assert(capture_markdown(malformed, true, true, SNAG_COLOR_NEVER,
+    assert(capture_markdown(malformed, true, true, SNAG_COLOR_NEVER, 120u,
                             output, sizeof(output), NULL) > 0u);
     assert(strcmp(output, "\n• | Name | State |\n| -- | nope |\nafter\n\n") == 0);
-    assert(capture_markdown(code_pipe, true, true, SNAG_COLOR_NEVER,
+    assert(capture_markdown(code_pipe, true, true, SNAG_COLOR_NEVER, 120u,
                             output, sizeof(output), NULL) > 0u);
     assert(strcmp(output, code_pipe_rendered) == 0);
-    assert(capture_markdown(markdown, false, false, SNAG_COLOR_NEVER,
+    assert(capture_markdown(markdown, false, false, SNAG_COLOR_NEVER, 120u,
                             output, sizeof(output), NULL) > 0u);
     assert(strcmp(output, markdown) == 0);
 }
@@ -2146,22 +2131,22 @@ main(void)
     test_punctuation_wrapping();
 
     snag_buf_init(&delivered, sizeof(markdown));
-    assert(capture_markdown(markdown, true, true, SNAG_COLOR_NEVER,
+    assert(capture_markdown(markdown, true, true, SNAG_COLOR_NEVER, 120u,
                             output, sizeof(output), &delivered) > 0u);
     assert(strcmp(output, rendered) == 0);
     assert(snag_buf_terminate(&delivered) == 0);
     assert(strcmp((const char *)delivered.data, markdown) == 0);
     snag_buf_free(&delivered);
-    assert(capture_markdown(markdown, false, false, SNAG_COLOR_NEVER,
+    assert(capture_markdown(markdown, false, false, SNAG_COLOR_NEVER, 120u,
                             output, sizeof(output), NULL) > 0u);
     assert(strcmp(output, markdown) == 0);
-    assert(capture_markdown(markdown, true, false, SNAG_COLOR_ALWAYS,
+    assert(capture_markdown(markdown, true, false, SNAG_COLOR_ALWAYS, 120u,
                             output, sizeof(output), NULL) > 0u);
     assert(strstr(output, "\033[0;1;36mLive") != NULL);
     assert(strstr(output, "\033[0;33mcode") != NULL);
     assert(strstr(output, "\033[0;4;34mhttps://example.test") != NULL);
     assert(strstr(output, "\033[0;34;2mold") != NULL);
-    assert(capture_markdown("**", true, true, SNAG_COLOR_NEVER,
+    assert(capture_markdown("**", true, true, SNAG_COLOR_NEVER, 120u,
                             output, sizeof(output), NULL) == strlen("\n• **\n\n"));
     assert(strcmp(output, "\n• **\n\n") == 0);
 
