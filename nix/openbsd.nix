@@ -201,6 +201,12 @@ let
         --replace-fail '#include <time.h>' '#include <time.h>
       #include <sys/time.h>' \
         --replace-fail '|| defined(__HAIKU__)' '|| defined(__HAIKU__) || defined(__OpenBSD__)'
+      # The RSA self-test needs only the native word-sized random API here.
+      substituteInPlace library/rsa.c \
+        --replace-fail '#include <string.h>' '#include <string.h>
+      #include <stdlib.h>' \
+        --replace-fail 'arc4random_buf(output, len);' \
+          'for (size_t i = 0; i < len; ++i) output[i] = (unsigned char) arc4random();'
     '';
   });
   zlib = cmakeLibrary sourcePkgs.zlib [
@@ -232,12 +238,21 @@ let
       # This release's socket headers require sys/types.h first.
       substituteInPlace CMakeLists.txt \
         --replace-fail 'CHECK_INCLUDE_FILES (sys/socket.h' 'CHECK_INCLUDE_FILES ("sys/types.h;sys/socket.h"' \
-        --replace-fail 'CARES_EXTRAINCLUDE_IFSET (HAVE_SYS_SOCKET_H   sys/socket.h)' 'CARES_EXTRAINCLUDE_IFSET (HAVE_SYS_SOCKET_H  "sys/types.h;sys/socket.h")'
+        --replace-fail 'CARES_EXTRAINCLUDE_IFSET (HAVE_SYS_SOCKET_H   sys/socket.h)' 'CARES_EXTRAINCLUDE_IFSET (HAVE_SYS_SOCKET_H  "sys/types.h;sys/socket.h")' \
+        --replace-fail 'CHECK_INCLUDE_FILES (netinet/in.h' 'CHECK_INCLUDE_FILES ("sys/types.h;sys/socket.h;netinet/in.h"' \
+        --replace-fail 'CARES_EXTRAINCLUDE_IFSET (HAVE_NETINET_IN_H   netinet/in.h)' 'CARES_EXTRAINCLUDE_IFSET (HAVE_NETINET_IN_H   "sys/types.h;sys/socket.h;netinet/in.h")'
     '';
   });
-  nghttp2 = cmakeLibrary sourcePkgs.nghttp2 [
+  nghttp2 = (cmakeLibrary sourcePkgs.nghttp2 [
     "-DENABLE_LIB_ONLY=ON" "-DBUILD_STATIC_LIBS=ON" "-DENABLE_DOC=OFF"
-  ] [];
+  ] []).overrideAttrs (_: {
+    postPatch = lib.optionalString early ''
+      # Old inttypes.h has types but no C99 limits; Clang supplies stdint.h.
+      substituteInPlace lib/includes/nghttp2/nghttp2.h \
+        --replace-fail '#  include <inttypes.h>' '#  include <inttypes.h>
+      #  include <stdint.h>'
+    '';
+  });
   iconv = autotoolsLibrary pkgs.libiconvReal [] [];
   unistring = (autotoolsLibrary sourcePkgs.libunistring
     [ "--with-libiconv-prefix=${iconv}" ] [ iconv ]).overrideAttrs (_: lib.optionalAttrs early {
@@ -277,7 +292,9 @@ let
       # replacement decoder accepts UTF-8; select the matching encoder too.
       export gl_cv_func_mbrtoc32_sanitycheck=no
       export gl_cv_func_c32rtomb_sanitycheck=no
-    '' + old.preConfigure;
+    '' + (if early then lib.replaceStrings
+      [ "--m4-base=m4 regex" ] [ "--m4-base=m4 regex errno" ] old.preConfigure
+      else old.preConfigure);
     postInstall = ''
       # OpenBSD sys/cdefs.h defines __used as an attribute. Rename only the
       # public header's private struct member; its layout and library ABI stay.
