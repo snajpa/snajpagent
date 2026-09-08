@@ -3729,6 +3729,83 @@ def run_policy_stop_cases(binary, root, provider, environment):
             provider.runtime_handler = None
 
 
+def run_assistant_phase_case(binary, root):
+    """Preserve public phases on the wire across tools, goal turns and reopen."""
+    case = root / "assistant-phase"
+    workspace = case / "w"
+    workspace.mkdir(mode=0o700, parents=True)
+    state, config = case / "s", case / "c.ini"
+    provider = FakeResponses()
+    write_irc_config(config, provider.port, "host-model")
+    environment = {**os.environ, "SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
+    requests = []
+    terminal = None
+    repeated = "same public text, distinct phases"
+
+    def respond(handler, request, sequence):
+        step = len(requests)
+        requests.append(request)
+        if step == 0:
+            body = provider.function_body(sequence, "phase-goal", "create_goal",
+                {"objective": "Check assistant phase replay"})
+        elif step == 1:
+            response_id = f"resp_phase_{sequence}"
+            body = provider.event("response.created", {"response": {
+                "id": response_id, "status": "in_progress", "output": []}})
+            body += provider.event("response.completed", {"response": {
+                "id": response_id, "status": "completed", "output": [
+                    {"type": "message", "id": f"msg_phase_{sequence}",
+                     "role": "assistant", "status": "completed", "phase": "commentary",
+                     "content": [{"type": "output_text", "text": repeated,
+                                  "annotations": []}]},
+                    {"type": "function_call", "id": f"fc_phase_{sequence}",
+                     "call_id": "phase-tool", "name": "exec_command", "status": "completed",
+                     "arguments": json.dumps({"command": "printf phase-tool-ok",
+                         "workdir": str(workspace), "yield_ms": 1000,
+                         "max_output_tokens": 1000})}],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}})
+        elif step == 2:
+            body = provider.response_body(sequence, repeated)
+        elif step == 3:
+            body = provider.function_body(sequence, "phase-finish", "update_goal",
+                {"action": "complete", "text": None})
+        else:
+            body = provider.response_body(sequence,
+                "phase checks finished" if step == 4 else "phase replay checked")
+        provider.reply(handler, body.encode())
+        handler.wfile.flush()
+
+    provider.runtime_handler = respond
+    try:
+        terminal = TmuxTerminal(case / "t", binary, workspace, state, config,
+                                110, 24, environment=environment)
+        terminal.wait("host-model/medium   0% ›")
+        terminal.submit_wait("phase regression", "phase checks finished", timeout=20)
+        path, events = read_events(state)
+        terminal.exit()
+        terminal.close()
+        terminal = TmuxTerminal(case / "resume", binary, workspace, state, config,
+            110, 24, args=("--resume", path.parent.name), environment=environment)
+        terminal.wait("phase checks finished")
+        terminal.submit_wait("check replay", "phase replay checked")
+        terminal.exit()
+        assert len(requests) == 6, requests
+        for index, request in enumerate(requests):
+            public = [i for i in request["input"] if i.get("content") == repeated]
+            expected = [] if index < 2 else ["commentary"] if index == 2 else [
+                "commentary", "final_answer"]
+            assert [i.get("phase") for i in public] == expected, (index, public)
+            assert all("phase" not in i for i in request["input"]
+                       if i.get("role") != "assistant"), request
+        assert any(e["type"] == "turn_started" and e["data"]["input_kind"] == "goal"
+                   for e in events), events
+        print("assistant phase tools/goal/reopen: ok")
+    finally:
+        if terminal is not None:
+            terminal.close()
+        provider.close()
+
+
 def run_goal_recovery_cases(binary, root, provider, environment):
     for mode in ("capacity", "snapshot", "steer", "cancel", "running"):
         case = root / ("gr-" + mode)
@@ -5333,6 +5410,7 @@ def run_irc_case(binary, root):
     environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
     try:
         run_token_accounting_cases(binary, root / "token-accounting")
+        run_assistant_phase_case(binary, root)
         run_goal_recovery_cases(binary, root, provider, environment)
         run_compaction_text_cases(binary, root)
         run_compacted_goal_cases(binary, root)

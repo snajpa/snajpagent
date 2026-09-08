@@ -552,7 +552,10 @@ append_response_items(struct context_builder *builder, const json_t *items)
             text = (const char *)notice.data;
         }
         if ((item->kind == SNAG_ITEM_ASSISTANT || item->kind == SNAG_ITEM_REFUSAL ?
-             append_message(builder, "assistant", text) : append_tool_call(builder, item)) < 0)
+             json_array_append_new(builder->request_input,
+                 json_pack("{s:s,s:s,s:s}", "role", "assistant", "content", text,
+                           "phase", snag_item_phase_name(item->phase))) :
+             append_tool_call(builder, item)) < 0)
             goto out;
     }
     rc = 0;

@@ -26,6 +26,9 @@ identity around those same items; it does not translate them into a second
 semantic transcript. Create and count requests share the input and tool
 declarations, differing only in their request envelopes. Normal replay and
 compaction use the same event interpreter; compaction selects complete prefixes.
+Assistant messages retain their recorded `commentary` or `final_answer` phase
+through tool follow-ups, goal continuation, interrupted-prefix replay and
+compaction input. User, developer and tool items carry no assistant phase.
 The engine retains that projection through its response cycle, including hashes,
 byte counts and request views, rather than copying it into unrelated locals.
 Mutable session state is staged once per event and adopted only after durable

@@ -314,6 +314,47 @@ tool_finished_data(const char *turn_id, const char *call_id, json_t *result)
 static json_t *message_matching(json_t *, const char *);
 
 static void
+test_public_phase_compaction(struct snag_store *store, const char *workspace)
+{
+    const char *turn = "ca100000000000000000000000000000";
+    const char *response = "ca200000000000000000000000000000";
+    const char *kinds[] = {"assistant", "refusal"};
+    for (size_t kind = 0u; kind < 2u; ++kind) {
+        struct snag_session session;
+        struct snag_context_projection projection = {0};
+        char error[256];
+        create_session(store, &session, workspace, "medium");
+        commit_event(&session, "turn_started", turn_started(turn, 1, "phase", workspace, NULL));
+        commit_event(&session, "response_started", response_started(turn, response, NULL));
+        json_t *data = response_completed(turn, response, "public progress");
+        json_t *items = json_object_get(data, "items");
+        json_t *commentary = json_array_get(items, 0u);
+        assert(json_object_set_new(commentary, "phase", json_string("commentary")) == 0);
+        assert(json_object_set_new(commentary, "local_item_id",
+                                  json_string("ca300000000000000000000000000000")) == 0);
+        assert(json_object_set_new(commentary, "provider_item_id", json_string("msg_progress")) == 0);
+        json_t *final = assistant_item("public final");
+        assert(json_object_set_new(final, "kind", json_string(kinds[kind])) == 0);
+        assert(json_array_append_new(items, final) == 0);
+        commit_event(&session, "response_completed", data);
+        commit_event(&session, "turn_completed", turn_completed(turn, response));
+        assert(snag_context_compact_request_build(&session, session.default_model,
+            session.default_effort, false, 0u, false, &projection, error, sizeof(error)) == 0);
+        json_t *inputs[] = {
+            projection.model_input.value,
+            json_object_get(projection.create_request.value, "input"),
+            json_object_get(projection.count_request.value, "input")};
+        for (size_t i = 0u; i < 3u; ++i) {
+            assert_string(message_matching(inputs[i], "public progress"), "phase", "commentary");
+            assert_string(message_matching(inputs[i], "public final"), "phase", "final_answer");
+            assert(!json_object_get(message_matching(inputs[i], "phase"), "phase"));
+        }
+        snag_context_projection_free(&projection);
+        snag_session_close(&session);
+    }
+}
+
+static void
 test_compact_groups(struct snag_store *store, const char *workspace)
 {
     const char *turn = "a1000000000000000000000000000000";
@@ -1100,6 +1141,7 @@ main(void)
     struct snag_instruction_set instructions = {0};
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
     test_input_time_and_recovery(&store, workspace);
+    test_public_phase_compaction(&store, workspace);
     test_context_meter_usage(&store, workspace);
     test_read_only_and_queue_controllers(&store, workspace);
     test_provider_model_projection(&store, workspace);
@@ -1279,9 +1321,11 @@ main(void)
         commit_event(&steered, "steering_added",
                      steering_added(steer_turn, steer_id,
                          "change direction"));
+        json_t *partial = assistant_item("visible prefix");
+        assert(json_object_set_new(partial, "phase", json_string("commentary")) == 0);
         commit_event(&steered, "response_interrupted",
                      checked_json(json_pack("{s:i,s:s,s:[o],s:s,s:s,s:s}",
-                         "cycle", 1, "origin", "steering", "partial_public", assistant_item("visible prefix"),
+                         "cycle", 1, "origin", "steering", "partial_public", partial,
                          "reason", "steered", "response_id", steer_response, "turn_id", steer_turn)));
         commit_event(&steered, "steering_added",
                      steering_added(steer_turn, steer_id2,
@@ -1291,6 +1335,7 @@ main(void)
         assert(json_array_size(input) >= 6u);
         assert_string(json_array_get(input, 2), "role", "assistant");
         assert_string(json_array_get(input, 2), "content", "visible prefix");
+        assert_string(json_array_get(input, 2), "phase", "commentary");
         assert_string(json_array_get(input, 3), "role", "developer");
         assert(strstr(snag_json_string(json_array_get(input, 3), "content"),
                       "immediate steer") != NULL);

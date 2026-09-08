@@ -2027,6 +2027,10 @@ Queued turns are also paused; use
 to restart FIFO execution.  Interrupted active turns are recovered from their
 durable prefix.
 .PP
+Model requests preserve the distinction between intermediate assistant updates
+and final answers across tool calls, goal continuation, resumed sessions and
+compaction input.
+.PP
 History replay ends with a mode-style "history replayed" banner.  Replayed
 chat timestamps have no per-message "history" label; stored historical flags
 and model-input handling are unchanged.
