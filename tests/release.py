@@ -30,6 +30,30 @@ def rejected(function):
 
 with tempfile.TemporaryDirectory(prefix="release-", dir=root / "build") as tmp:
     tmp = Path(tmp)
+    # Source-size reporting must never reject large files or emit budget warnings.
+    size_tree = tmp / "source-size"
+    size_tree.mkdir()
+    for name in ("Makefile", "META", "config.mk"):
+        shutil.copyfile(root / name, size_tree / name)
+    (size_tree / "src").mkdir()
+    (size_tree / "tests").mkdir()
+    for prod_c, prod_h, test_c in ((65537, 2, 1), (3, 65537, 1),
+                                  (3, 2, 65537), (65537, 65537, 65537),
+                                  (2001, 2, 1), (3, 2, 1)):
+        for name, count in (("src/report.c", prod_c), ("src/report.h", prod_h),
+                            ("tests/report.c", test_c)):
+            (size_tree / name).write_text("\n" * count)
+        result = subprocess.run(["make", "--no-print-directory", "sizecheck",
+                                 "BUILD_VERSION=fixture"], cwd=size_tree,
+                                capture_output=True, text=True)
+        assert result.returncode == 0, result.stdout + result.stderr
+        lines = result.stdout.splitlines()
+        assert lines[:3] == [f"production C lines: {prod_c}",
+                             f"production header lines: {prod_h}",
+                             f"test C lines: {test_c}"], lines
+        assert len(lines) == 4 and lines[3].startswith("largest production C/header file:"), lines
+        assert not any(word in result.stdout.lower() for word in
+                       ("soft", "hard", "limit", "budget", "trigger", "review")), result.stdout
     matrix = tmp / "matrix"
     binary = matrix / "linux-x86_64/bin/snajpagent"
     binary.parent.mkdir(parents=True)

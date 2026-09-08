@@ -24,7 +24,7 @@ Known boundaries:
   platform and live-provider coverage.
 
 Use `make check` for existing local regressions, `make sanitizercheck` for
-ASan/UBSan, and `make sizecheck` for live source counts and unchanged budgets.
+ASan/UBSan, and `make sizecheck` for informational source counts.
 
 Documentation ownership: [README](README.md) introduces use;
 [snajpagent(1)](snajpagent.1) defines syntax, settings and defaults;

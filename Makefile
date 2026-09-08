@@ -328,35 +328,14 @@ sizecheck:
 		sort -z | xargs -0 cat | wc -l | tr -d ' '); \
 	test_c=$$(find tests -type f -name '*.c' -print0 | \
 		sort -z | xargs -0 cat | wc -l | tr -d ' '); \
-	prod_c_soft=32768; prod_c_hard=49152; \
-	prod_h_soft=16384; prod_h_hard=65536; \
-	test_c_soft=16384; test_c_hard=32768; \
 	largest=$$(find src -type f \( -name '*.c' -o -name '*.h' \) -exec wc -l {} + | \
 		awk '$$2 != "total" && $$1 > max { max = $$1; file = $$2 } END { if (file == "") print "0 -"; else print max " " file }'); \
 	largest_lines=$$(printf '%s\n' "$$largest" | awk '{ print $$1 }'); \
 	largest_file=$$(printf '%s\n' "$$largest" | cut -d ' ' -f 2-); \
-	printf 'production C lines: %s / %s soft / %s hard\n' \
-		"$$prod_c" "$$prod_c_soft" "$$prod_c_hard"; \
-	printf 'production header lines: %s / %s soft / %s hard\n' \
-		"$$prod_h" "$$prod_h_soft" "$$prod_h_hard"; \
-	printf 'test C lines: %s / %s soft / %s hard\n' \
-		"$$test_c" "$$test_c_soft" "$$test_c_hard"; \
-	printf 'largest production C/header file: %s lines %s / 2000 review trigger\n' "$$largest_lines" "$$largest_file"; \
-	if [ "$$prod_c" -gt "$$prod_c_soft" ]; then \
-		printf 'source-budget review: production C exceeds the %s-line soft limit\n' "$$prod_c_soft"; \
-	fi; \
-	if [ "$$prod_h" -gt "$$prod_h_soft" ]; then \
-		printf 'source-budget review: production headers exceed the %s-line soft limit\n' "$$prod_h_soft"; \
-	fi; \
-	if [ "$$test_c" -gt "$$test_c_soft" ]; then \
-		printf 'source-budget review: test C exceeds the %s-line soft limit\n' "$$test_c_soft"; \
-	fi; \
-	if [ "$$largest_lines" -gt 2000 ]; then \
-		printf 'line-budget review: %s exceeds the 2000-line simplicity-review trigger\n' "$$largest_file"; \
-	fi; \
-	test "$$prod_c" -le "$$prod_c_hard" && \
-		test "$$prod_h" -le "$$prod_h_hard" && \
-		test "$$test_c" -le "$$test_c_hard"
+	printf 'production C lines: %s\n' "$$prod_c"; \
+	printf 'production header lines: %s\n' "$$prod_h"; \
+	printf 'test C lines: %s\n' "$$test_c"; \
+	printf 'largest production C/header file: %s lines %s\n' "$$largest_lines" "$$largest_file"
 
 clean:
 	rm -f $(BIN) src/*.o src/*.d $(TEST_BIN) tests/update-old tests/update-new tests/update-local tests/update-stable tests/update-aside

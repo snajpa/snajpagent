@@ -20,7 +20,7 @@ separate opt-in tools:
 | `make evidencebundle` / `make evidencecheck` | collects and validates a JSON evidence bundle for one concrete host, including source audits, dependency closure, and PTY terminal evidence when a fixture binary is supplied |
 | `make evidencetoolcheck` | exercises the single-bundle and matrix-evidence checkers against generated valid and invalid bundles, including path-escape, missing-record, duplicate-platform, version-mismatch, and extra-platform cases |
 | `make evidencematrixcheck` | validates a supplied final set of external per-platform bundles for required platform coverage, unique platform ids, consistent versioning, terminal evidence, and live-provider evidence |
-| `make sizecheck` | enforces preferred/hard line budgets and the 2,000-line per-file review trigger |
+| `make sizecheck` | reports source/test line counts and the largest production file, with no thresholds or line-count failures |
 | `tests/test_provider_transport` | exercises the real libcurl create/count/compact transport against a local loopback HTTP server |
 | `tests/pty_*.py` | exercises the interactive terminal composer, live resize, suspend/continue, and TERM/width fallback behavior through a PTY on the current POSIX host |
 | `make tmuxcheck` | asserts the rendered screen/scrollback for deterministic streaming, Markdown enabled/disabled overrides, status, wrapping, steering, resize, queue, durable-text, and instruction-discovery scenarios, then runs one production IRC server plus two production clients against loopback fake Responses endpoints and checks bidirectional Markdown-rendered chat, three-agent model traffic, durable attribution, verbosity, color, peer leaves, and exact cleanup; `make check` runs it whenever tmux is installed |

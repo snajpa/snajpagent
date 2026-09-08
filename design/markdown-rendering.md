@@ -147,5 +147,5 @@ table.
   aligned and narrow tables, exact submitted/model and every-block-type/prompt
   boundaries, the disabled setting, width safety, and absence of raw escape
   leakage.
-- Full optimized and sanitizer suites plus `make sizecheck` must pass without a
-  new production translation unit or dependency.
+- Full optimized and sanitizer suites must pass without a new production
+  translation unit or dependency. `make sizecheck` reports counts only.

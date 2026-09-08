@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Remove all source/test line-count limits and per-file review thresholds.
+  `make sizecheck` remains an informational report without budget warnings
+  or line-count failures.
+
 ## 0.99.3 — 2026-09-08
 
 - Publish the sixteen-target matrix, adding OpenBSD 7.9, 5.9 and 3.5 and

@@ -15,6 +15,10 @@ Preserve the existing passing evidence and report its actual scope honestly.
 Fix known product failures and build failures; do not conceal them behind an
 earlier pass. Publication still requires the operator's shipment authority.
 
+Source and test line counts have no limits or per-file review thresholds.
+`make sizecheck` reports counts only. Keep designs simple through ordinary
+code review; reintroducing numeric limits requires an explicit operator request.
+
 When presenting options, make the simplest viable design the default
 recommendation. Only offer a larger variant as an exception, and spell out the
 current concrete reason it is needed.
@@ -46,11 +50,10 @@ and failure paths, not only the successful example. Temporary probes and manual
 checks support diagnosis but do not replace committed regression coverage.
 
 Prefer Python tests using the existing CLI, PTY/tmux and local fake-provider
-support. Python test code has no line-count budget: add the coverage needed for
-correctness. Keep tests clear and focused, with bounded runtime and resources.
+support. Add the coverage needed for correctness. Keep tests clear and focused,
+with bounded runtime and resources.
 Use C tests when an internal invariant cannot be exercised adequately through
-Python. Preserve existing C budgets; do not impose them on Python or add a new
-test framework solely to enforce this policy.
+Python. Use the existing test framework.
 
 ## User documentation
 
