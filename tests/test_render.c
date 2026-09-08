@@ -856,21 +856,24 @@ test_punctuation_wrapping(void)
         const char *prefix = enabled ? "• " : "";
 
         assert(snprintf(first_output, sizeof(first_output), "%s%s",
-                        prefix, first) > 0);
+                        prefix, "1234567890") > 0);
         for (size_t i = 0u; i < sizeof(punctuation) / sizeof(punctuation[0]);
              ++i) {
 
             assert(snprintf(second, sizeof(second), "%smores",
                             punctuation[i]) > 0);
             assert(snprintf(second_output, sizeof(second_output),
-                            "%s%s%s\n%smores", prefix, first,
-                            punctuation[i], enabled ? "  " : "") > 0);
+                            "%s1234567890", prefix) > 0);
             assert(snprintf(delivered_output, sizeof(delivered_output),
                             "%s%smores", first, punctuation[i]) > 0);
             struct snag_buf delivered = {.max = sizeof(delivered_output)};
             assert(capture_wrapped(first, second, 20u, enabled != 0u,
                                    first_output, second_output, output,
                                    sizeof(output), &delivered) > 0u);
+            assert(snprintf(second_output, sizeof(second_output),
+                            "%s1234567890\n%sword%smores", prefix,
+                            enabled ? "  " : "", punctuation[i]) > 0);
+            assert(strstr(output, second_output));
             assert(snag_buf_terminate(&delivered) == 0);
             assert(strcmp((const char *)delivered.data, delivered_output) == 0);
             snag_buf_free(&delivered);
@@ -878,10 +881,9 @@ test_punctuation_wrapping(void)
         {
 
             assert(snprintf(first_output, sizeof(first_output),
-                            "%s1234567890 ", prefix) > 0);
+                            "%s1234567890", prefix) > 0);
             assert(snprintf(second_output, sizeof(second_output),
-                            "%s1234567890 \n%s-something", prefix,
-                            enabled ? "  " : "") > 0);
+                            "%s1234567890", prefix) > 0);
             struct snag_buf delivered = {.max = 32u};
             assert(capture_wrapped("1234567890 ", "-something", 20u,
                                    enabled != 0u, first_output, second_output,
@@ -930,6 +932,93 @@ capture_markdown(const char *text, bool enabled, bool split,
     used = capture_close(&capture, out, out_size, used);
     snag_term_close(&term);
     return used;
+}
+
+static void
+test_punctuation_word_boundaries(void)
+{
+    static const char *const sources[] = {
+        "1234567890 WAL-like: next",
+        "1234567890 **WAL-like**: next",
+        "1234567890 `WAL-like`: next",
+        "1234567890 record, next",
+        "1234567890 **record**, next",
+        "1234567890 café́界: next",
+        "1234567890 *word*?! next",
+        "1234567890 `word`). next",
+    };
+    static const char *const words[] = {
+        "WAL-like:", "WAL-like:", "WAL-like:", "record,", "record,", "café́界:",
+        "word?!", "word)."
+    };
+    char output[4096], plain[4096];
+
+    for (size_t i = 0u; i < sizeof(sources) / sizeof(sources[0]); ++i) {
+        for (unsigned int columns = 20u; columns <= 26u; ++columns) {
+            for (size_t split = 0u; split < 2u; ++split) {
+                for (size_t color = 0u; color < 2u; ++color) {
+                    struct snag_buf delivered = {.max = 1024u};
+                    assert(capture_markdown(sources[i], true, split != 0u,
+                        color ? SNAG_COLOR_ALWAYS : SNAG_COLOR_NEVER, columns,
+                        output, sizeof(output), &delivered) > 0u);
+                    size_t used = 0u;
+                    for (size_t at = 0u; output[at]; ++at) {
+                        if (output[at] == '\033') {
+                            while (output[at] && output[at] != 'm')
+                                ++at;
+                            assert(output[at] == 'm');
+                        } else {
+                            plain[used++] = output[at];
+                        }
+                    }
+                    plain[used] = '\0';
+                    assert(strstr(plain, words[i]));
+                    assert(!strstr(plain, "\n  :"));
+                    assert(!strstr(plain, "\n  ,"));
+                    if (color && i == 4u)
+                        assert(strstr(output, "\033[0;1mrecord\033[0m,"));
+                    assert(snag_buf_terminate(&delivered) == 0);
+                    assert(strcmp((const char *)delivered.data, sources[i]) == 0);
+                    snag_buf_free(&delivered);
+                }
+            }
+        }
+    }
+}
+
+static void
+test_bounded_wrap_word(void)
+{
+    for (unsigned int markdown = 0u; markdown < 2u; ++markdown) {
+        struct snag_render render;
+        struct snag_term term;
+        char output[8192];
+        struct output_capture capture = capture_terminal(&render, &term, 20u,
+                                                        true, false);
+        assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
+        snag_render_set_markdown(&render, markdown != 0u);
+        assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
+        /* Both display-width and zero-width byte bounds survive arbitrary
+         * provider splits. A later word still starts at a real wrap boundary. */
+        for (size_t i = 0u; i < 5000u; ++i) {
+            assert(snag_render_public(&render, "a", 1u, NULL) == 0);
+            assert(render.wrap_pending.len <= 21u);
+            assert(render.wrap_pending.len == render.wrap_styles.len);
+            (void)drain_available(capture.fd, output, sizeof(output), 0u);
+        }
+        for (size_t i = 0u; i < 3000u; ++i) {
+            assert(snag_render_public(&render, "́", 2u, NULL) == 0);
+            assert(render.wrap_pending.len < 4096u);
+            assert(render.wrap_pending.len == render.wrap_styles.len);
+            (void)drain_available(capture.fd, output, sizeof(output), 0u);
+        }
+        assert(snag_render_public(&render, " record, next", 13u, NULL) == 0);
+        assert(snag_render_public_abort(&render) == 0);
+        (void)capture_close(&capture, output, sizeof(output), 0u);
+        assert(strstr(output, "record,"));
+        assert(strstr(output, "next"));
+        snag_term_close(&term);
+    }
 }
 
 static void
@@ -1181,7 +1270,7 @@ static void
 test_live_paragraph_gap(void)
 {
     const char *frames[SNAG_TERM_SPINNER_COUNT] = {" ", " ", " "};
-    const char *parts[] = {"123456789012345678", "🌙", "́", " fragment", "\n", "\n", "\n", "next"};
+    const char *parts[] = {"123456789012345678 ", "🌙", "́", " fragment", "\n", "\n", "\n", "next"};
     const unsigned int rows[] = {2u, 2u, 2u, 2u, 1u, 0u, 0u, 2u};
     char output[8192];
     struct snag_render render;
@@ -1219,7 +1308,7 @@ test_live_paragraph_gap(void)
     assert(snag_render_before_prompt(&render) == 0);
     assert(drain_available(capture.fd, output, sizeof(output), 0u) == 0u);
     assert(snag_buf_terminate(&delivered) == 0);
-    assert(strcmp((char *)delivered.data, "123456789012345678🌙́ fragment\n\n\nnext") == 0);
+    assert(strcmp((char *)delivered.data, "123456789012345678 🌙́ fragment\n\n\nnext") == 0);
     assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     assert(snag_render_public(&render, "before edit", 11u, NULL) == 0);
     assert(snag_term_set_prompt_template(&term, true, "input › ", frames, 8u, 0u) == 0);
@@ -1412,16 +1501,16 @@ test_markdown_streaming(void)
     assert(snag_render_public(&render, first, sizeof(first) - 1u,
                              &delivered) == 0);
     used = drain_available(capture.fd, output, sizeof(output), used);
-    assert(strcmp(output, "Live") == 0);
+    assert(strcmp(output, "") == 0);
     for (size_t i = 0u; i < sizeof(second) - 1u; ++i)
         assert(snag_render_public(&render, second + i, 1u, &delivered) == 0);
     used = drain_available(capture.fd, output, sizeof(output), used);
-    assert(strcmp(output, "Live café [docs] <") == 0);
+    assert(strcmp(output, "Live café [docs]") == 0);
     assert(snag_render_public(&render, third, sizeof(third) - 1u,
                              &delivered) == 0);
     used = drain_available(capture.fd, output, sizeof(output), used);
     assert(strcmp(output,
-                  "Live café [docs] <https://example.test> and co") == 0);
+                  "Live café [docs] <https://example.test> and") == 0);
     assert(snag_render_public(&render, fourth, sizeof(fourth) - 1u,
                              &delivered) == 0);
     used = drain_available(capture.fd, output, sizeof(output), used);
@@ -1438,7 +1527,7 @@ test_markdown_streaming(void)
     used = drain_available(capture.fd, output, sizeof(output), used);
     assert(strcmp(output,
                   "Live café [docs] <https://example.test> and code\n\n"
-                  "• aborted") == 0);
+                  "•") == 0);
     assert(snag_render_public_abort(&render) == 0);
     assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
     assert(snag_render_public(&render, "literal", 7u, NULL) == 0);
@@ -1476,7 +1565,7 @@ test_markdown_tables(void)
         "│ Count: 7\n"
         "├─ row\n"
         "│ Name: escaped | pipe\n"
-        "│ State: [docs] <https://example.test>\n"
+        "│ State: [docs]\n<https://example.test>\n"
         "│ Count: 42\n"
         "└─\n"
         "\n• after table\n\n";
@@ -2155,7 +2244,7 @@ main(void)
 
     struct snag_buf delivered = {.max = 1024u};
     assert(capture_wrapped("alpha beta gamm", "a delta", 20u, true,
-                           "• alpha beta gamm", "• alpha beta gamma\n  delta",
+                           "• alpha beta", "• alpha beta gamma",
                            output, sizeof(output), &delivered) > 0u);
     assert(strcmp(output, "\n• alpha beta gamma\n  delta\n\n") == 0);
     assert(snag_buf_terminate(&delivered) == 0);
@@ -2165,12 +2254,14 @@ main(void)
     snag_buf_init(&delivered, 64u);
     assert(capture_wrapped("123456789012345678 ", "next", 20u, true,
                            "• 123456789012345678",
-                           "• 123456789012345678\n  next",
+                           "• 123456789012345678",
                            output, sizeof(output), &delivered) > 0u);
     assert(snag_buf_terminate(&delivered) == 0);
     assert(strcmp((const char *)delivered.data,
                   "123456789012345678 next") == 0);
     snag_buf_free(&delivered);
+    test_punctuation_word_boundaries();
+    test_bounded_wrap_word();
     test_punctuation_wrapping();
 
     snag_buf_init(&delivered, sizeof(markdown));

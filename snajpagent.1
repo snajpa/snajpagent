@@ -775,6 +775,10 @@ inside a fence are displayed literally, including pipe tables.
 Top-level prose paragraphs are bulleted, with one empty row above and below,
 even while a paragraph is streaming.  Adjacent paragraphs share that row;
 headings, lists, code, tables and prompts use the same paragraph boundary.
+Streamed terminal text holds the unfinished word until whitespace or the end of
+an item, keeping attached punctuation together across provider chunks and
+Markdown style changes.  Words that fit a row wrap as a unit; longer tokens
+stream in bounded pieces.  Intervening messages flush pending text in order.
 The editable draft also wraps whole words when they fit a terminal row; longer
 words use terminal wrapping.  These displayed wraps do not insert submitted
 newlines.  Explicit newlines and leading whitespace remain part of the draft.

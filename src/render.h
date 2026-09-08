@@ -68,7 +68,6 @@ struct snag_markdown_state {
     bool escape;
     bool previous_word;
     bool delimiter_previous_word;
-    bool style_painted;
     bool prose;
     bool table_line;
     bool table_pending;
@@ -119,12 +118,12 @@ struct snag_render {
     struct snag_render_record *view_tail[SNAG_RENDER_VIEW_COUNT];
     struct snag_render_record *rollout_open;
     struct snag_buf wrap_pending;
+    struct snag_buf wrap_styles;
+    size_t wrap_width;
     size_t public_column;
     char public_style[64u];
     bool wrap_has_word;
     bool wrap_continuation;
-    bool wrap_word_open;
-    bool wrap_break_open;
     unsigned char utf8_pending[4];
     size_t utf8_pending_len;
     struct snag_markdown_state markdown_state;

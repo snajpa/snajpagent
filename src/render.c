@@ -82,6 +82,7 @@ static int render_irc_event_now(struct snag_render *render,
 static int flush_view(struct snag_render *render, enum snag_render_view view);
 static int close_public_output(struct snag_render *render);
 static int markdown_gap(struct snag_render *render);
+static int flush_wrap_pending(struct snag_render *render);
 static int render_tool_record(struct snag_render *render, const struct snag_render_record *record);
 static json_t *source_event(struct snag_render *render, struct snag_render_source source);
 
@@ -276,6 +277,9 @@ write_role_block(struct snag_render *render, unsigned int boundary, int fd, cons
                  render->markdown_prose_bullets && render->markdown_state.prose;
     int rc = 0;
 
+    if (len && render->public_item_open && render->wrap_pending.len &&
+        (flush_wrap_pending(render) < 0 || close_public_output(render) < 0))
+        return -1;
     if (prose) {
         if (markdown_gap(render) < 0 || close_public_output(render) < 0)
             return -1;
@@ -665,7 +669,8 @@ snag_render_before_prompt(struct snag_render *render)
     return 0;
 }
 
-static int public_write(struct snag_render *render, const char *text, size_t len);
+static int public_write(struct snag_render *render, const char *text, size_t len,
+                        unsigned char style);
 static int markdown_finish(struct snag_render *render);
 static int markdown_abort(struct snag_render *render);
 static int markdown_write(struct snag_render *render,
@@ -673,26 +678,44 @@ static int markdown_write(struct snag_render *render,
 static int markdown_table_finish(struct snag_render *render);
 static bool public_terminal(const struct snag_render *render);
 
-static bool
-markdown_has_style(const struct snag_render *render)
+enum markdown_style {
+    MD_HEADING = 1u, MD_QUOTE = 2u, MD_STRONG = 4u, MD_EMPHASIS = 8u,
+    MD_STRIKE = 16u, MD_CODE = 32u, MD_LINK = 64u
+};
+
+static unsigned char
+markdown_style(const struct snag_render *render)
 {
     const struct snag_markdown_state *md = &render->markdown_state;
-
-    return md->heading || md->quote || md->strong ||
-           md->emphasis || md->strike || md->inline_code || md->table_header ||
-           md->fence != '\0' || md->link_url;
+    if (!render->markdown_rendering ||
+        !color_enabled(render, render->public_fd))
+        return 0u;
+    return (md->heading ? MD_HEADING : 0u) |
+           (md->quote ? MD_QUOTE : 0u) |
+           ((md->strong || md->table_header) ? MD_STRONG : 0u) |
+           (md->emphasis ? MD_EMPHASIS : 0u) |
+           (md->strike ? MD_STRIKE : 0u) |
+           ((md->inline_code || md->fence) ? MD_CODE : 0u) |
+           (md->link_url ? MD_LINK : 0u);
 }
 
 static int
-markdown_paint_style(struct snag_render *render)
+markdown_clear_style(struct snag_render *render)
 {
-    const struct snag_markdown_state *md = &render->markdown_state;
+    if (!render->public_style[0])
+        return 0;
+    render->public_style[0] = '\0';
+    return write_literal(render->public_fd, COLOR_RESET);
+}
+
+static int
+markdown_paint_style(struct snag_render *render, unsigned char style)
+{
     char sequence[64];
     size_t len = 3u;
 
-    if (!render->markdown_rendering || md->style_painted ||
-        !color_enabled(render, render->public_fd) || !markdown_has_style(render))
-        return 0;
+    if (!style)
+        return markdown_clear_style(render);
     memcpy(sequence, "\033[0", 3u);
 #define ADD_STYLE(value) do { \
         size_t amount = strlen(value); \
@@ -700,31 +723,20 @@ markdown_paint_style(struct snag_render *render)
         memcpy(sequence + len, value, amount); \
         len += amount; \
     } while (0)
-    if (md->heading) ADD_STYLE(";1;36");
-    if (md->quote) ADD_STYLE(";34");
-    if ((md->strong && !md->heading) || md->table_header) ADD_STYLE(";1");
-    if (md->emphasis) ADD_STYLE(";3");
-    if (md->strike) ADD_STYLE(";2");
-    if (md->inline_code || md->fence) ADD_STYLE(";33");
-    if (md->link_url) ADD_STYLE(";4;34");
+    if (style & MD_HEADING) ADD_STYLE(";1;36");
+    if (style & MD_QUOTE) ADD_STYLE(";34");
+    if ((style & MD_STRONG) && !(style & MD_HEADING)) ADD_STYLE(";1");
+    if (style & MD_EMPHASIS) ADD_STYLE(";3");
+    if (style & MD_STRIKE) ADD_STYLE(";2");
+    if (style & MD_CODE) ADD_STYLE(";33");
+    if (style & MD_LINK) ADD_STYLE(";4;34");
 #undef ADD_STYLE
     sequence[len++] = 'm';
-    memcpy(render->public_style, sequence, len);
-    render->public_style[len] = '\0';
-    if (snag_term_write(render->public_fd, sequence, len) < 0)
-        return -1;
-    render->markdown_state.style_painted = true;
-    return 0;
-}
-
-static int
-markdown_clear_style(struct snag_render *render)
-{
-    if (!render->markdown_state.style_painted)
+    sequence[len] = '\0';
+    if (strcmp(render->public_style, sequence) == 0)
         return 0;
-    render->markdown_state.style_painted = false;
-    render->public_style[0] = '\0';
-    return write_literal(render->public_fd, COLOR_RESET);
+    memcpy(render->public_style, sequence, len + 1u);
+    return snag_term_write(render->public_fd, sequence, len);
 }
 
 int
@@ -755,6 +767,7 @@ snag_render_public_begin(struct snag_render *render, int fd, const char *label)
         write_literal(STDOUT_FILENO, "\n") < 0)
         return -1;
     snag_buf_init(&render->wrap_pending, SNAG_MAX_PUBLIC_ITEM);
+    snag_buf_init(&render->wrap_styles, SNAG_MAX_PUBLIC_ITEM);
     render->public_fd = fd;
     render->public_item_open = true;
     render->public_item_bytes = label_len != 0u;
@@ -762,8 +775,7 @@ snag_render_public_begin(struct snag_render *render, int fd, const char *label)
     render->public_column = label_len ? snag_term_text_width(label, label_len) : 0u;
     render->wrap_has_word = false;
     render->wrap_continuation = false;
-    render->wrap_word_open = false;
-    render->wrap_break_open = false;
+    render->wrap_width = 0u;
     memset(&render->markdown_state, 0, sizeof(render->markdown_state));
     snag_buf_init(&render->markdown_state.table, SNAG_MAX_PUBLIC_ITEM);
     if (render->public_column == SIZE_MAX)
@@ -778,7 +790,7 @@ snag_render_public_begin(struct snag_render *render, int fd, const char *label)
             if (write_literal(fd, color) < 0)
                 goto fail;
         }
-        if (public_write(render, label, label_len) < 0)
+        if (public_write(render, label, label_len, 0u) < 0)
             goto fail;
         if (colored && write_literal(fd, COLOR_RESET) < 0)
             goto fail;
@@ -803,6 +815,7 @@ fail:
         render->public_fd = -1;
         snag_buf_free(&render->markdown_state.table);
         snag_buf_free(&render->wrap_pending);
+        snag_buf_free(&render->wrap_styles);
         errno = saved_errno;
         return -1;
     }
@@ -816,7 +829,8 @@ public_terminal(const struct snag_render *render)
 }
 
 static int
-public_write(struct snag_render *render, const char *text, size_t len)
+public_write(struct snag_render *render, const char *text, size_t len,
+             unsigned char style)
 {
     bool terminal = public_terminal(render);
 
@@ -828,9 +842,9 @@ public_write(struct snag_render *render, const char *text, size_t len)
         if (output_begin(render) < 0)
             return -1;
         render->public_output_open = true;
-        if (markdown_paint_style(render) < 0)
-            return -1;
     }
+    if (markdown_paint_style(render, style) < 0)
+        return -1;
     if (boundary_before(render, render->public_fd, BOUNDARY_CONTENT, text, len) < 0)
         return -1;
     if ((terminal ? snag_term_write_safe(render->public_fd, text, len) :
@@ -867,6 +881,25 @@ close_public_output(struct snag_render *render)
     return rc;
 }
 
+/* Styles follow buffered bytes, so Markdown delimiters are not wrap boundaries. */
+static int
+write_wrap_span(struct snag_render *render, const char *text, size_t len)
+{
+    size_t offset = (size_t)(text - (const char *)render->wrap_pending.data);
+    while (len) {
+        unsigned char style = render->wrap_styles.data[offset];
+        size_t n = 1u;
+        while (n < len && render->wrap_styles.data[offset + n] == style)
+            ++n;
+        if (public_write(render, text, n, style) < 0)
+            return -1;
+        text += n;
+        offset += n;
+        len -= n;
+    }
+    return 0;
+}
+
 static int
 flush_wrap_pending(struct snag_render *render)
 {
@@ -875,6 +908,8 @@ flush_wrap_pending(struct snag_render *render)
     size_t leading = 0u;
     size_t width;
     unsigned int columns;
+    size_t indent = render->markdown_rendering && render->markdown_state.prose &&
+                    render->markdown_prose_bullets ? 2u : 0u;
 
     if (!len)
         return 0;
@@ -887,21 +922,23 @@ flush_wrap_pending(struct snag_render *render)
         return -1;
     if (columns >= 20u && render->public_column == columns && leading == len) {
         snag_buf_reset(&render->wrap_pending);
+        snag_buf_reset(&render->wrap_styles);
+        render->wrap_width = 0u;
         render->wrap_has_word = false;
         render->wrap_continuation = false;
         return 0;
     }
     if (render->wrap_has_word && !render->wrap_continuation &&
-        columns >= 20u && render->public_column != 0u &&
+        columns >= 20u && render->public_column > indent &&
         (width >= columns || render->public_column > columns - width)) {
-        if (public_write(render, "\n", 1u) < 0)
+        if (public_write(render, "\n", 1u, 0u) < 0)
             return -1;
         render->public_column = 0u;
         text += leading;
         len -= leading;
         if (render->markdown_rendering && render->markdown_state.prose &&
             render->markdown_prose_bullets) {
-            if (public_write(render, "  ", 2u) < 0)
+            if (public_write(render, "  ", 2u, 0u) < 0)
                 return -1;
             render->public_column = 2u;
         }
@@ -909,11 +946,9 @@ flush_wrap_pending(struct snag_render *render)
         if (width == SIZE_MAX)
             return -1;
     }
-    /* A continued token has already been displayed; do not buffer or move it
-     * backwards. Materialize its margin wraps too, so punctuation/delta splits
-     * cannot bypass prose indentation. Include combining marks with their base. */
-    if (columns >= 20u && render->markdown_rendering &&
-        render->markdown_state.prose && render->markdown_prose_bullets &&
+    /* Overlong words stream in bounded pieces. Include combining marks with
+     * their base and materialize margin wraps with the same prose indentation. */
+    if (columns >= 20u &&
         (render->public_column >= columns || width > columns - render->public_column)) {
         while (len) {
             size_t used = 0u, cells = 0u;
@@ -926,19 +961,19 @@ flush_wrap_pending(struct snag_render *render)
                 used += n;
                 cells += w;
             }
-            if (used && public_write(render, text, used) < 0)
+            if (used && write_wrap_span(render, text, used) < 0)
                 return -1;
             render->public_column += cells;
             text += used;
             len -= used;
             if (len) {
-                if (public_write(render, "\n  ", 3u) < 0)
+                if (public_write(render, "\n  ", 1u + indent, 0u) < 0)
                     return -1;
-                render->public_column = 2u;
+                render->public_column = indent;
             }
         }
         width = 0u;
-    } else if (public_write(render, text, len) < 0) {
+    } else if (write_wrap_span(render, text, len) < 0) {
         return -1;
     }
     if (render->public_column > SIZE_MAX - width) {
@@ -954,74 +989,64 @@ flush_wrap_pending(struct snag_render *render)
         render->public_column += width;
     }
     snag_buf_reset(&render->wrap_pending);
+    snag_buf_reset(&render->wrap_styles);
+    render->wrap_width = 0u;
     render->wrap_has_word = false;
     render->wrap_continuation = false;
     return 0;
 }
 
-static bool
-wrap_break_after(const unsigned char *text, size_t len)
-{
-    if (len == 1u)
-        return text[0] != '\0' &&
-               strchr("\"-,.;:!?/)]}", (int)text[0]) != NULL;
-    if (len != 3u)
-        return false;
-    return memcmp(text, "\xe2\x80\x90", 3u) == 0 ||
-           memcmp(text, "\xe2\x80\x92", 3u) == 0 ||
-           memcmp(text, "\xe2\x80\x93", 3u) == 0 ||
-           memcmp(text, "\xe2\x80\x94", 3u) == 0 ||
-           memcmp(text, "\xe2\x80\xa6", 3u) == 0;
-}
-
 static int
 write_wrapped(struct snag_render *render, const unsigned char *text, size_t len)
 {
-    size_t i = 0u;
+    unsigned int columns = snag_term_columns(render->term);
+    size_t indent = render->markdown_rendering && render->markdown_state.prose &&
+                    render->markdown_prose_bullets ? 2u : 0u;
+    size_t limit = columns >= 20u ? columns - indent : 1024u;
+    unsigned char style = markdown_style(render);
 
-    while (i < len) {
+    for (size_t i = 0u; i < len;) {
         size_t n = snag_utf8_size(text[i]);
+        bool space = text[i] == ' ' || text[i] == '\t';
 
         if (!n || n > len - i)
             return snag_errno(EILSEQ);
         if (text[i] == '\n') {
             if (flush_wrap_pending(render) < 0 ||
-                public_write(render, "\n", 1u) < 0)
+                public_write(render, "\n", 1u, 0u) < 0)
                 return -1;
             render->public_column = 0u;
-            render->wrap_word_open = false;
-            render->wrap_break_open = false;
+            render->wrap_continuation = false;
         } else {
-            bool space = text[i] == ' ' || text[i] == '\t';
-            bool punctuation = !space && wrap_break_after(text + i, n);
-            bool break_after = punctuation &&
-                               (render->wrap_word_open ||
-                                render->wrap_break_open);
-
-            if (space && render->wrap_has_word &&
-                flush_wrap_pending(render) < 0)
-                return -1;
-            if (!space && !render->wrap_has_word) {
-                render->wrap_continuation =
-                    (render->wrap_word_open || break_after) &&
-                    render->wrap_pending.len == 0u;
-                render->wrap_has_word = true;
-            }
-            if (snag_buf_append(&render->wrap_pending, text + i, n) < 0)
-                return -1;
-            if (break_after) {
+            if (space) {
                 if (flush_wrap_pending(render) < 0)
                     return -1;
-                render->wrap_word_open = false;
-                render->wrap_break_open = true;
-            } else {
-                render->wrap_word_open = !space;
-                render->wrap_break_open = false;
+                render->wrap_continuation = false;
+            }
+            if (snag_buf_reserve(&render->wrap_pending, n) < 0 ||
+                snag_buf_reserve(&render->wrap_styles, n) < 0)
+                return -1;
+            memcpy(render->wrap_pending.data + render->wrap_pending.len, text + i, n);
+            memset(render->wrap_styles.data + render->wrap_styles.len, style, n);
+            render->wrap_pending.len += n;
+            render->wrap_styles.len += n;
+            render->wrap_has_word |= !space;
+            size_t width = snag_term_text_width((const char *)text + i, n);
+            if (width == SIZE_MAX || (!space &&
+                !snag_size_add(render->wrap_width, width, &render->wrap_width)))
+                return -1;
+            /* A whole fitting word waits for its boundary, even across SSE and
+             * style changes. Bound long words/combining sequences independently
+             * of provider chunk size; never retain a paragraph. */
+            if (render->wrap_width > limit || render->wrap_pending.len >= 4096u) {
+                if (flush_wrap_pending(render) < 0)
+                    return -1;
+                render->wrap_continuation = !space;
             }
         }
         i += n;
     }
-    return flush_wrap_pending(render);
+    return 0;
 }
 
 static bool
@@ -1053,6 +1078,8 @@ markdown_text(struct snag_render *render, const void *text, size_t len)
 static int
 markdown_gap(struct snag_render *render)
 {
+    if (flush_wrap_pending(render) < 0)
+        return -1;
     unsigned int count = 2u - render->trailing_newlines;
     return markdown_text(render, "\n\n", count);
 }
@@ -1065,6 +1092,8 @@ markdown_paragraph(struct snag_render *render, bool prose)
     struct snag_markdown_state *md = &render->markdown_state;
     if (md->prose == prose)
         return 0;
+    if (flush_wrap_pending(render) < 0)
+        return -1;
     md->prose = prose;
     if (!render->markdown_prose_bullets || render->markdown_measuring)
         return 0;
@@ -1084,14 +1113,6 @@ markdown_repeat(struct snag_render *render, char value, size_t count)
         count -= amount;
     }
     return 0;
-}
-
-static int
-markdown_style_changed(struct snag_render *render)
-{
-    if (flush_wrap_pending(render) < 0 || markdown_clear_style(render) < 0)
-        return -1;
-    return render->public_output_open ? markdown_paint_style(render) : 0;
 }
 
 static int
@@ -1120,17 +1141,15 @@ markdown_flush_delimiter(struct snag_render *render, bool next_word,
         } else {
             return markdown_repeat(render, delimiter, count);
         }
-        return markdown_style_changed(render);
+        return 0;
     }
     if (delimiter == '~') {
         if (at_end && (!md->strike || !((count / 2u) & 1u)))
             return markdown_repeat(render, delimiter, count);
         if (count & 1u && markdown_repeat(render, '~', 1u) < 0)
             return -1;
-        if ((count / 2u) & 1u) {
+        if ((count / 2u) & 1u)
             md->strike = !md->strike;
-            return markdown_style_changed(render);
-        }
         return 0;
     }
     if (delimiter == '_' && md->delimiter_previous_word && next_word)
@@ -1142,7 +1161,7 @@ markdown_flush_delimiter(struct snag_render *render, bool next_word,
         md->strong = !md->strong;
     if (count & 1u)
         md->emphasis = !md->emphasis;
-    return markdown_style_changed(render);
+    return 0;
 }
 
 static bool
@@ -1186,8 +1205,6 @@ markdown_inline(struct snag_render *render, const unsigned char *text, size_t le
                 if (markdown_text(render, " <", 2u) < 0)
                     return -1;
                 md->link_url = true;
-                if (markdown_style_changed(render) < 0)
-                    return -1;
                 i += n;
                 continue;
             }
@@ -1195,8 +1212,7 @@ markdown_inline(struct snag_render *render, const unsigned char *text, size_t le
         if (md->link_url) {
             if (n == 1u && text[i] == ')') {
                 md->link_url = false;
-                if (markdown_style_changed(render) < 0 ||
-                    markdown_text(render, ">", 1u) < 0)
+                if (markdown_text(render, ">", 1u) < 0)
                     return -1;
             } else if (markdown_text(render, text + i, n) < 0) {
                 return -1;
@@ -1373,8 +1389,7 @@ markdown_inline_tail(struct snag_render *render)
     md->link_after_label = false;
     if (md->link_url) {
         md->link_url = false;
-        if (markdown_style_changed(render) < 0 ||
-            markdown_text(render, ">", 1u) < 0)
+        if (markdown_text(render, ">", 1u) < 0)
             return -1;
     }
     return 0;
@@ -1393,7 +1408,7 @@ markdown_inline_finish(struct snag_render *render)
     md->inline_code = false;
     md->code_ticks = 0u;
     md->previous_word = false;
-    return markdown_style_changed(render);
+    return 0;
 }
 
 static int
@@ -1413,6 +1428,7 @@ markdown_table_cell_width(struct snag_render *render,
     probe.checkpoint = render->checkpoint;
     probe.checkpoint_opaque = render->checkpoint_opaque;
     snag_buf_init(&probe.wrap_pending, SNAG_MAX_PUBLIC_ITEM);
+    snag_buf_init(&probe.wrap_styles, SNAG_MAX_PUBLIC_ITEM);
     rc = markdown_inline(&probe, cell->text, cell->len);
     if (rc == 0)
         rc = markdown_inline_finish(&probe);
@@ -1421,6 +1437,7 @@ markdown_table_cell_width(struct snag_render *render,
     if (rc == 0)
         *width = probe.public_column;
     snag_buf_free(&probe.wrap_pending);
+    snag_buf_free(&probe.wrap_styles);
     return rc;
 }
 
@@ -1451,14 +1468,12 @@ markdown_table_cell(struct snag_render *render,
 {
     render->markdown_state.previous_word = false;
     render->markdown_state.table_header = strong;
-    if (markdown_style_changed(render) < 0)
-        return -1;
     if (markdown_inline(render, cell->text, cell->len) < 0)
         return -1;
     if (markdown_inline_finish(render) < 0)
         return -1;
     render->markdown_state.table_header = false;
-    return markdown_style_changed(render);
+    return 0;
 }
 
 static int
@@ -1877,8 +1892,7 @@ markdown_open_fence(struct snag_render *render, bool newline)
         end = begin;
     md->fence_header = false;
     md->fence_info_len = 0u;
-    if (markdown_style_changed(render) < 0 ||
-        markdown_text(render, "┌─", strlen("┌─")) < 0 ||
+    if (markdown_text(render, "┌─", strlen("┌─")) < 0 ||
         (end > begin &&
          (markdown_text(render, " ", 1u) < 0 ||
           markdown_text(render, md->fence_info + begin, end - begin) < 0)) ||
@@ -1952,7 +1966,7 @@ markdown_line_prefix(struct snag_render *render,
         if (markdown_paragraph(render, false) < 0)
             return -1;
         md->heading = true;
-        return markdown_style_changed(render);
+        return 0;
     }
     if (body[0] == '#' && body_len <= 6u) {
         for (size_t i = 0u; i < body_len; ++i)
@@ -1990,8 +2004,7 @@ markdown_line_prefix(struct snag_render *render,
         md->line_start = false;
         if (markdown_paragraph(render, false) < 0)
             return -1;
-        if (markdown_style_changed(render) < 0 ||
-            markdown_text(render, md->prefix, spaces) < 0)
+        if (markdown_text(render, md->prefix, spaces) < 0)
             return -1;
         return markdown_text(render, marker, strlen(marker));
     }
@@ -2051,7 +2064,7 @@ markdown_newline(struct snag_render *render)
                 return -1;
             md->fence = '\0';
             md->fence_len = 0u;
-            return markdown_style_changed(render);
+            return 0;
         }
         if ((md->fence ? markdown_code_prefix_literal(render) :
                          markdown_prefix_literal(render)) < 0)
@@ -2065,7 +2078,7 @@ markdown_newline(struct snag_render *render)
     md->quote = false;
     md->line_start = true;
     md->prefix_len = 0u;
-    return markdown_style_changed(render);
+    return 0;
 }
 
 static int
@@ -2131,7 +2144,7 @@ markdown_write(struct snag_render *render, const unsigned char *text, size_t len
         }
         i += n;
     }
-    return flush_wrap_pending(render);
+    return 0;
 }
 
 static int
@@ -2237,7 +2250,7 @@ render_public_chunk(struct snag_render *render, const char *text, size_t len,
         goto out;
     if (complete.len) {
         if (public_terminal(render) && render->boundary == BOUNDARY_PROMPT &&
-            markdown_gap(render) < 0)
+            !render->wrap_pending.len && markdown_gap(render) < 0)
             goto out;
         if (delivered && snag_buf_reserve(delivered, complete.len) < 0)
             goto out;
@@ -2245,7 +2258,7 @@ render_public_chunk(struct snag_render *render, const char *text, size_t len,
             (render->markdown_rendering ?
              markdown_write(render, complete.data, complete.len) < 0 :
              write_wrapped(render, complete.data, complete.len) < 0) :
-            public_write(render, (const char *)complete.data, complete.len) < 0)
+            public_write(render, (const char *)complete.data, complete.len, 0u) < 0)
             goto out;
         if (delivered && snag_buf_append(delivered, complete.data, complete.len) < 0)
             goto out;
@@ -2334,10 +2347,10 @@ close_public_item(struct snag_render *render, bool discard_incomplete)
     render->public_fd = -1;
     render->wrap_has_word = false;
     render->wrap_continuation = false;
-    render->wrap_word_open = false;
-    render->wrap_break_open = false;
+    render->wrap_width = 0u;
     snag_buf_free(&render->markdown_state.table);
     snag_buf_free(&render->wrap_pending);
+    snag_buf_free(&render->wrap_styles);
     if (fd == STDOUT_FILENO && had_bytes) {
         render->stdout_item_seen = true;
         render->stdout_item_ended_lf = ended_lf;
@@ -2730,7 +2743,7 @@ render_irc_markdown(struct snag_render *render,
         memset(saved, 0, sizeof(*saved));
     }
     body.markdown_rendering = false;
-    if (!body.public_item_bytes && public_write(&body, "\n", 1u) < 0)
+    if (!body.public_item_bytes && public_write(&body, "\n", 1u, 0u) < 0)
         goto out;
     rc = snag_render_public_end(&body);
     return rc;

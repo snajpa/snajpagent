@@ -869,27 +869,28 @@ def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None, ty
         expected = split + " and finish finalword"
         wait_prose("Paced")
         wait_prose("Paced tokens")
-        _, split_prefix_at = wait_prose(prefix)
-        assert_live_paragraph_gap(terminal, "• Paced", "inter")
+        pending, split_prefix_at = wait_prose("Paced tokens form")
+        assert not prose_pattern(prefix).search(pending), pending
+        assert_live_paragraph_gap(terminal, "• Paced", "form")
         if typing:
             terminal.send_text("steer draft")
             wait_normalized(terminal, f"{DEFAULT_ACTIVE_PROMPT} steer draft")
-            assert_live_paragraph_gap(terminal, "• Paced", "inter")
+            assert_live_paragraph_gap(terminal, "• Paced", "form")
         if resize:
             time.sleep(0.05)
             terminal.resize(resize, 14)
             time.sleep(0.02)
-            assert_live_paragraph_gap(terminal, "• Paced", "inter")
+            assert_live_paragraph_gap(terminal, "• Paced", "form")
         _, split_word_at = wait_prose(split)
         if split_word_at - split_prefix_at < 0.03:
             raise AssertionError(
-                "a complete split-word prefix was withheld until its suffix"
+                "the fixture lost its pause before completing the word"
             )
         if typing:
             terminal.send_text(" more")
             wait_normalized(terminal, f"{DEFAULT_ACTIVE_PROMPT} steer draft more")
-        wait_prose("and finish")
-        final_screen, final_at = wait_prose(expected, timeout=0.35)
+        final_screen, final_at = wait_prose(split + " and finish", timeout=0.35)
+        assert not prose_pattern(expected).search(final_screen), final_screen
         if "working…" in final_screen:
             raise AssertionError(
                 "activity appeared while the paced public item was open"
@@ -897,15 +898,16 @@ def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None, ty
 
         time.sleep(0.45)
         held_screen = terminal.capture(join_wrapped=True)
-        if not prose_pattern(expected).search(held_screen):
-            raise AssertionError("the visible final fragment was erased")
-        assert_live_paragraph_gap(terminal, "• Paced", "finalword")
+        if not prose_pattern(split + " and finish").search(held_screen):
+            raise AssertionError("completed words disappeared during the provider pause")
+        assert not prose_pattern(expected).search(held_screen), held_screen
+        assert_live_paragraph_gap(terminal, "• Paced", "finish")
         if typing:
             screen = terminal.capture(join_wrapped=True)
             normalized = normalize_space(screen)
             if normalized.count("steer draft more") != 1 or normalized.count("steer draft") != 1:
                 raise AssertionError(f"stale steer draft in scrollback:\n{screen}")
-            if len(prose_pattern(expected).findall(screen)) != 1:
+            if len(prose_pattern(split + " and finish").findall(screen)) != 1:
                 raise AssertionError(f"typing split/duplicated live paragraph:\n{screen}")
         if "working…" in held_screen:
             raise AssertionError(
@@ -1483,6 +1485,12 @@ def run_punctuation_case(binary, root):
         "changes and updating\n  the saved state.",
     )
     paragraphs = [sample[2:].replace("\n  ", " ") for sample in samples]
+    paragraphs.append(
+        "That file already records session events and is replayed to reconstruct state. "
+        "Its existing write ordering is WAL-like: persist the event before adopting the "
+        "corresponding in-memory change. But the event log itself is the durable record, "
+        "not a temporary WAL feeding another database."
+    )
     text = "\n\n".join(paragraphs) + "\n\nI haven't changed this: punctuation, not breaks. café́界 wrap-done"
     provider = FakeResponses()
     paused, proceed = threading.Event(), threading.Event()
@@ -1506,7 +1514,7 @@ def run_punctuation_case(binary, root):
                     packet = provider.event(data["type"], dict(data, delta=text[start:end]))
                     handler.wfile.write(packet.encode())
                     handler.wfile.flush()
-                    if text[end - 1] in "'’:" and not proceed.is_set():
+                    if end > 10 and text[end - 1] in "'’:" and not proceed.is_set():
                         paused.set()
                         assert proceed.wait(5.0), "editor did not release paced punctuation"
                     time.sleep(0.012)
@@ -1517,7 +1525,7 @@ def run_punctuation_case(binary, root):
 
     provider.handle = respond
     try:
-        for width, markdown in ((24, True), (110, True), (240, True), (110, False)):
+        for width, markdown in ((24, True), (110, True), (116, True), (240, True), (110, False)):
             paused.clear()
             proceed.clear()
             case = root / f"punct-{width}-{int(markdown)}"
@@ -1533,10 +1541,10 @@ def run_punctuation_case(binary, root):
                     terminal.wait(">")
                     terminal.submit("wrap-boundaries")
                     assert paused.wait(5.0), "provider did not pause at apostrophe"
-                    terminal.wait("I’")
+                    terminal.wait("I’ll fold")
                     terminal.send_text("draft")
                     terminal.wait("> draft")
-                    assert_live_paragraph_gap(terminal, "I’", "I’")
+                    assert_live_paragraph_gap(terminal, "I’ll fold", "I’ll fold")
                     proceed.set()
                     for edit in (" more", " text", " end"):
                         terminal.send_text(edit)
@@ -1550,6 +1558,10 @@ def run_punctuation_case(binary, root):
                     last = next(i for i, row in enumerate(rows) if "wrap-done" in row)
                     visible = "".join(rows[first:last + 1]).replace("• ", "")
                     assert re.sub(r"\s", "", visible) == re.sub(r"\s", "", text), screen
+                    assert "WAL-like:" in screen, screen
+                    assert "record," in screen, screen
+                    assert not any(re.match(r"^\s*[:,.!?;]", row)
+                                   for row in rows[first:last + 1]), screen
                     assert not rows[first - 1].strip(), screen
                     assert not rows[last + 1].strip(), screen
                     assert sum("> draft" in row for row in rows) == 1, screen
