@@ -55,11 +55,12 @@ static void
 test_child_wait_ownership(void)
 {
     struct snag_child child;
-    char *shell = snag_default_shell();
-    assert(shell);
-    char *environment[] = {"PATH=/usr/bin:/bin:/system/bin", NULL};
     snag_child_init(&child);
-    assert(snag_child_spawn(&child, shell, "exit 7", "/", environment, false) == 0);
+    /* Test wait ownership independently of shell startup and its loader. */
+    child.pid = fork();
+    assert(child.pid >= 0);
+    if (child.pid == 0)
+        _exit(7);
     uint64_t deadline = snag_monotonic_ms() + 1000u;
     int exited;
     while ((exited = snag_child_exited(&child)) == 0 && snag_monotonic_ms() < deadline)
@@ -73,7 +74,6 @@ test_child_wait_ownership(void)
     child.pid = getpid();
     assert(snag_child_exited(&child) < 0 && errno == ECHILD && child.reaped);
     snag_child_free(&child);
-    free(shell);
 }
 
 static void
