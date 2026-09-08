@@ -241,57 +241,136 @@ test_structured_keepalives_do_not_end_response(void)
 }
 
 static void
-test_unused_response_events_are_ignored(void)
+test_public_stream(size_t which)
 {
-    static const char wire[] =
-        "event: response.created\n"
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_citation\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "event: response.output_item.added\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_citation\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
-        "event: response.content_part.added\n"
-        "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n"
-        "event: response.output_text.delta\n"
-        "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"delta\":\"Source.\"}\n\n"
-        "event: response.output_text.annotation.added\n"
-        "data: {\"type\":\"response.output_text.annotation.added\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"annotation_index\":0,\"annotation\":{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":7,\"title\":\"Example\",\"url\":\"https://example.com/\"},\"sequence_number\":5}\n\n"
-        "event: response.in_progress\n"
-        "data: {\"type\":\"response.in_progress\",\"payload\":false}\n\n"
-        "event: response.image_generation_call.partial_image\n"
-        "data: {\"type\":\"response.image_generation_call.partial_image\",\"payload\":null}\n\n"
-        "event: response.future.progress\n"
-        "data: {\"type\":\"response.future.progress\",\"payload\":{\"anything\":true}}\n\n"
-        "event: response.output_text.done\n"
-        "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"text\":\"Source.\"}\n\n"
-        "event: response.content_part.done\n"
-        "data: {\"type\":\"response.content_part.done\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"Source.\",\"annotations\":[{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":7,\"title\":\"Example\",\"url\":\"https://example.com/\"}]}}\n\n"
-        "event: response.output_item.done\n"
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_citation\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"Source.\",\"annotations\":[{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":7,\"title\":\"Example\",\"url\":\"https://example.com/\"}]}]}}\n\n"
-        "event: response.completed\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_citation\",\"status\":\"completed\",\"output\":[]}}\n\n";
+    static const struct {
+        const char *name, *wire, *provider_id, *text;
+        size_t chunk, index;
+        enum snag_item_phase emitted_phase;
+    } cases[] = {
+        {"unused_response_events_are_ignored",
+         "event: response.created\n"
+         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_citation\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+         "event: response.output_item.added\n"
+         "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_citation\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
+         "event: response.content_part.added\n"
+         "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n"
+         "event: response.output_text.delta\n"
+         "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"delta\":\"Source.\"}\n\n"
+         "event: response.output_text.annotation.added\n"
+         "data: {\"type\":\"response.output_text.annotation.added\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"annotation_index\":0,\"annotation\":{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":7,\"title\":\"Example\",\"url\":\"https://example.com/\"},\"sequence_number\":5}\n\n"
+         "event: response.in_progress\n"
+         "data: {\"type\":\"response.in_progress\",\"payload\":false}\n\n"
+         "event: response.image_generation_call.partial_image\n"
+         "data: {\"type\":\"response.image_generation_call.partial_image\",\"payload\":null}\n\n"
+         "event: response.future.progress\n"
+         "data: {\"type\":\"response.future.progress\",\"payload\":{\"anything\":true}}\n\n"
+         "event: response.output_text.done\n"
+         "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"text\":\"Source.\"}\n\n"
+         "event: response.content_part.done\n"
+         "data: {\"type\":\"response.content_part.done\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"Source.\",\"annotations\":[{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":7,\"title\":\"Example\",\"url\":\"https://example.com/\"}]}}\n\n"
+         "event: response.output_item.done\n"
+         "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_citation\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"Source.\",\"annotations\":[{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":7,\"title\":\"Example\",\"url\":\"https://example.com/\"}]}]}}\n\n"
+         "event: response.completed\n"
+         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_citation\",\"status\":\"completed\",\"output\":[]}}\n\n",
+         "msg_citation", "Source.", 11u, 0u, SNAG_PHASE_FINAL_ANSWER},
+        {"terminal_snapshot_ignores_unused_text_metadata",
+         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_file\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_file\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_file\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"See file.\",\"annotations\":{\"unused\":true},\"logprobs\":\"unused\"}]}]}}\n\n",
+         "msg_file", "See file.", 13u, 0u, SNAG_PHASE_FINAL_ANSWER},
+        {"phase-absent text",
+         "event: response.created\n"
+         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_pong\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+         "event: response.output_item.added\n"
+         "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_pong\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}\n\n"
+         "event: response.content_part.added\n"
+         "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_pong\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n"
+         "event: response.output_text.delta\n"
+         "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_pong\",\"output_index\":0,\"content_index\":0,\"delta\":\"pong\"}\n\n"
+         "event: response.output_text.done\n"
+         "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_pong\",\"output_index\":0,\"content_index\":0,\"text\":\"pong\"}\n\n"
+         "event: response.output_item.done\n"
+         "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_pong\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"pong\",\"annotations\":[]}]}}\n\n"
+         "event: response.completed\n"
+         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_pong\",\"status\":\"completed\",\"output\":[]}}\n\n",
+         "msg_pong", "pong", 9u, 0u, SNAG_PHASE_COMMENTARY},
+        {"empty_reasoning_item_is_internal_only",
+         "event: response.created\n"
+         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_reasoning\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+         "event: response.output_item.added\n"
+         "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\",\"content\":[],\"summary\":[]}}\n\n"
+         "event: response.output_item.done\n"
+         "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\",\"content\":[],\"summary\":[]}}\n\n"
+         "event: response.output_item.added\n"
+         "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"msg_after_reasoning\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
+         "event: response.content_part.added\n"
+         "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_after_reasoning\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n"
+         "event: response.output_text.delta\n"
+         "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_after_reasoning\",\"output_index\":1,\"content_index\":0,\"delta\":\"ok\"}\n\n"
+         "event: response.output_text.done\n"
+         "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_after_reasoning\",\"output_index\":1,\"content_index\":0,\"text\":\"ok\"}\n\n"
+         "event: response.output_item.done\n"
+         "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_after_reasoning\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\",\"annotations\":[]}]}}\n\n"
+         "event: response.completed\n"
+         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_reasoning\",\"status\":\"completed\",\"output\":[]}}\n\n",
+         "msg_after_reasoning", "ok", 19u, 1u, SNAG_PHASE_FINAL_ANSWER},
+        {"web_search_item_is_internal_only",
+         "event: response.created\n"
+         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_web\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+         "event: response.output_item.added\n"
+         "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"ws_1\",\"type\":\"web_search_call\",\"status\":\"in_progress\",\"action\":{\"type\":\"search\",\"query\":\"selinux 6.18\"}}}\n\n"
+         "event: response.web_search_call.in_progress\n"
+         "data: {\"type\":\"response.web_search_call.in_progress\",\"output_index\":0,\"item_id\":\"ws_1\"}\n\n"
+         "event: response.web_search_call.searching\n"
+         "data: {\"type\":\"response.web_search_call.searching\",\"output_index\":0,\"item_id\":\"ws_1\"}\n\n"
+         "event: response.web_search_call.completed\n"
+         "data: {\"type\":\"response.web_search_call.completed\",\"output_index\":0,\"item_id\":\"ws_1\"}\n\n"
+         "event: response.output_item.done\n"
+         "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"ws_1\",\"type\":\"web_search_call\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"selinux 6.18\"}}}\n\n"
+         "event: response.output_item.added\n"
+         "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"msg_after_web\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
+         "event: response.content_part.added\n"
+         "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_after_web\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n"
+         "event: response.output_text.delta\n"
+         "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_after_web\",\"output_index\":1,\"content_index\":0,\"delta\":\"done\"}\n\n"
+         "event: response.output_text.done\n"
+         "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_after_web\",\"output_index\":1,\"content_index\":0,\"text\":\"done\"}\n\n"
+         "event: response.output_item.done\n"
+         "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_after_web\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\",\"annotations\":[]}]}}\n\n"
+         "event: response.completed\n"
+         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_web\",\"status\":\"completed\",\"output\":[]}}\n\n",
+         "msg_after_web", "done", 23u, 1u, SNAG_PHASE_FINAL_ANSWER},
+        {"future_items_and_content_are_inert",
+         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_inert\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+         "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"future_action\",\"name\":\"exec_command\",\"arguments\":\"{\\\"command\\\":\\\"false\\\"}\"}}\n\n"
+         "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"future_result\",\"output\":\"unused\"}}\n\n"
+         "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"msg_inert\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
+         "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_inert\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"future_content\",\"text\":\"hidden\"}}\n\n"
+         "data: {\"type\":\"response.content_part.done\",\"item_id\":\"msg_inert\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"future_content_result\"}}\n\n"
+         "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_inert\",\"output_index\":1,\"content_index\":1,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n"
+         "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_inert\",\"output_index\":1,\"content_index\":1,\"delta\":\"visible\"}\n\n"
+         "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_inert\",\"output_index\":1,\"content_index\":1,\"text\":\"visible\"}\n\n"
+         "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_inert\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"future_content_result\"},{\"type\":\"output_text\",\"text\":\"visible\"}]}}\n\n"
+         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_inert\",\"status\":\"completed\",\"output\":[]}}\n\n",
+         "msg_inert", "visible", 17u, 1u, SNAG_PHASE_FINAL_ANSWER},
+    };
     struct parsed_stream emitted = parsed_new(1024u);
 
-    assert(parse_stream(wire, 11u, &emitted) == 0);
+    assert(which < sizeof(cases) / sizeof(cases[0]));
+    if (parse_stream(cases[which].wire, cases[which].chunk, &emitted) != 0) {
+        fprintf(stderr, "%s parse: %s\n", cases[which].name, emitted.error);
+        assert(0);
+    }
     assert(emitted.graph.count == 1u);
-    assert(snag_response_graph_item(&emitted.graph, 0).kind == SNAG_ITEM_ASSISTANT);
-    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "Source.") == 0);
-    assert(emitted.calls == 1u);
-    assert(emitted.text.len == 7u);
-    assert(memcmp(emitted.text.data, "Source.", 7u) == 0);
-    parsed_free(&emitted);
-}
-
-static void
-test_terminal_snapshot_ignores_unused_text_metadata(void)
-{
-    static const char wire[] =
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_file\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_file\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_file\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"See file.\",\"annotations\":{\"unused\":true},\"logprobs\":\"unused\"}]}]}}\n\n";
-    struct parsed_stream emitted = parsed_new(1024u);
-
-    assert(parse_stream(wire, 13u, &emitted) == 0);
-    assert(emitted.graph.count == 1u);
-    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "See file.") == 0);
-    assert(emitted.calls == 1u);
+    struct snag_response_item item = snag_response_graph_item(&emitted.graph, 0u);
+    assert(item.kind == SNAG_ITEM_ASSISTANT && item.phase == SNAG_PHASE_FINAL_ANSWER);
+    assert(strcmp(item.provider_item_id, cases[which].provider_id) == 0);
+    assert(strcmp(item.text, cases[which].text) == 0);
+    assert(emitted.calls == 1u && emitted.last_index == cases[which].index);
+    assert(emitted.last_phase == cases[which].emitted_phase);
+    assert(strcmp(emitted.last_provider_id, cases[which].provider_id) == 0);
+    assert(emitted.text.len == strlen(cases[which].text));
+    assert(memcmp(emitted.text.data, cases[which].text, emitted.text.len) == 0);
     parsed_free(&emitted);
 }
 
@@ -332,43 +411,6 @@ test_unused_annotation_shapes_are_ignored(void)
 }
 
 static void
-test_phase_absent_text_becomes_visible_final(void)
-{
-    static const char wire[] =
-        "event: response.created\n"
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_pong\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "event: response.output_item.added\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_pong\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}\n\n"
-        "event: response.content_part.added\n"
-        "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_pong\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n"
-        "event: response.output_text.delta\n"
-        "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_pong\",\"output_index\":0,\"content_index\":0,\"delta\":\"pong\"}\n\n"
-        "event: response.output_text.done\n"
-        "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_pong\",\"output_index\":0,\"content_index\":0,\"text\":\"pong\"}\n\n"
-        "event: response.output_item.done\n"
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_pong\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"pong\",\"annotations\":[]}]}}\n\n"
-        "event: response.completed\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_pong\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct parsed_stream emitted = parsed_new(1024u);
-
-    if (parse_stream(wire, 9u, &emitted) != 0) {
-        fprintf(stderr, "phase-absent text parse: %s\n", emitted.error);
-        assert(0);
-    }
-    assert(emitted.graph.count == 1u);
-    assert(snag_response_graph_item(&emitted.graph, 0).kind == SNAG_ITEM_ASSISTANT);
-    assert(snag_response_graph_item(&emitted.graph, 0).phase == SNAG_PHASE_FINAL_ANSWER);
-    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).provider_item_id, "msg_pong") == 0);
-    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "pong") == 0);
-    assert(emitted.calls == 1u);
-    assert(emitted.last_phase == SNAG_PHASE_COMMENTARY);
-    assert(strcmp(emitted.last_provider_id, "msg_pong") == 0);
-    assert(emitted.text.len == 4u);
-    assert(memcmp(emitted.text.data, "pong", 4u) == 0);
-    parsed_free(&emitted);
-}
-
-static void
 test_phase_absent_text_before_tool_stays_commentary(void)
 {
     static const char wire[] =
@@ -395,115 +437,6 @@ test_phase_absent_text_before_tool_stays_commentary(void)
     assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "Checking.") == 0);
     assert(snag_response_graph_item(&emitted.graph, 1).kind == SNAG_ITEM_TOOL_CALL);
     assert(strcmp(snag_response_graph_item(&emitted.graph, 1).provider_call_id, "call_2") == 0);
-    parsed_free(&emitted);
-}
-
-static void
-test_empty_reasoning_item_is_internal_only(void)
-{
-    static const char wire[] =
-        "event: response.created\n"
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_reasoning\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "event: response.output_item.added\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\",\"content\":[],\"summary\":[]}}\n\n"
-        "event: response.output_item.done\n"
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\",\"content\":[],\"summary\":[]}}\n\n"
-        "event: response.output_item.added\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"msg_after_reasoning\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
-        "event: response.content_part.added\n"
-        "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_after_reasoning\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n"
-        "event: response.output_text.delta\n"
-        "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_after_reasoning\",\"output_index\":1,\"content_index\":0,\"delta\":\"ok\"}\n\n"
-        "event: response.output_text.done\n"
-        "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_after_reasoning\",\"output_index\":1,\"content_index\":0,\"text\":\"ok\"}\n\n"
-        "event: response.output_item.done\n"
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_after_reasoning\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\",\"annotations\":[]}]}}\n\n"
-        "event: response.completed\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_reasoning\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct parsed_stream emitted = parsed_new(1024u);
-
-    assert(parse_stream(wire, 19u, &emitted) == 0);
-    assert(emitted.graph.count == 1u);
-    assert(snag_response_graph_item(&emitted.graph, 0).kind == SNAG_ITEM_ASSISTANT);
-    assert(snag_response_graph_item(&emitted.graph, 0).phase == SNAG_PHASE_FINAL_ANSWER);
-    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).provider_item_id,
-                  "msg_after_reasoning") == 0);
-    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "ok") == 0);
-    assert(emitted.calls == 1u);
-    assert(emitted.last_index == 1u);
-    assert(strcmp(emitted.last_provider_id, "msg_after_reasoning") == 0);
-    assert(emitted.text.len == 2u);
-    assert(memcmp(emitted.text.data, "ok", 2u) == 0);
-    parsed_free(&emitted);
-}
-
-static void
-test_web_search_item_is_internal_only(void)
-{
-    static const char wire[] =
-        "event: response.created\n"
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_web\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "event: response.output_item.added\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"ws_1\",\"type\":\"web_search_call\",\"status\":\"in_progress\",\"action\":{\"type\":\"search\",\"query\":\"selinux 6.18\"}}}\n\n"
-        "event: response.web_search_call.in_progress\n"
-        "data: {\"type\":\"response.web_search_call.in_progress\",\"output_index\":0,\"item_id\":\"ws_1\"}\n\n"
-        "event: response.web_search_call.searching\n"
-        "data: {\"type\":\"response.web_search_call.searching\",\"output_index\":0,\"item_id\":\"ws_1\"}\n\n"
-        "event: response.web_search_call.completed\n"
-        "data: {\"type\":\"response.web_search_call.completed\",\"output_index\":0,\"item_id\":\"ws_1\"}\n\n"
-        "event: response.output_item.done\n"
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"ws_1\",\"type\":\"web_search_call\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"selinux 6.18\"}}}\n\n"
-        "event: response.output_item.added\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"msg_after_web\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
-        "event: response.content_part.added\n"
-        "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_after_web\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\n"
-        "event: response.output_text.delta\n"
-        "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_after_web\",\"output_index\":1,\"content_index\":0,\"delta\":\"done\"}\n\n"
-        "event: response.output_text.done\n"
-        "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_after_web\",\"output_index\":1,\"content_index\":0,\"text\":\"done\"}\n\n"
-        "event: response.output_item.done\n"
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_after_web\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\",\"annotations\":[]}]}}\n\n"
-        "event: response.completed\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_web\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct parsed_stream emitted = parsed_new(1024u);
-
-    assert(parse_stream(wire, 23u, &emitted) == 0);
-    assert(emitted.graph.count == 1u);
-    assert(snag_response_graph_item(&emitted.graph, 0).kind == SNAG_ITEM_ASSISTANT);
-    assert(snag_response_graph_item(&emitted.graph, 0).phase == SNAG_PHASE_FINAL_ANSWER);
-    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).provider_item_id, "msg_after_web") == 0);
-    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "done") == 0);
-    assert(emitted.calls == 1u);
-    assert(emitted.last_index == 1u);
-    assert(strcmp(emitted.last_provider_id, "msg_after_web") == 0);
-    assert(emitted.text.len == 4u);
-    assert(memcmp(emitted.text.data, "done", 4u) == 0);
-    parsed_free(&emitted);
-}
-
-static void
-test_future_items_and_content_are_inert(void)
-{
-    static const char wire[] =
-        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_inert\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"future_action\",\"name\":\"exec_command\",\"arguments\":\"{\\\"command\\\":\\\"false\\\"}\"}}\n\n"
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"future_result\",\"output\":\"unused\"}}\n\n"
-        "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"id\":\"msg_inert\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
-        "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_inert\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"future_content\",\"text\":\"hidden\"}}\n\n"
-        "data: {\"type\":\"response.content_part.done\",\"item_id\":\"msg_inert\",\"output_index\":1,\"content_index\":0,\"part\":{\"type\":\"future_content_result\"}}\n\n"
-        "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_inert\",\"output_index\":1,\"content_index\":1,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n"
-        "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_inert\",\"output_index\":1,\"content_index\":1,\"delta\":\"visible\"}\n\n"
-        "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_inert\",\"output_index\":1,\"content_index\":1,\"text\":\"visible\"}\n\n"
-        "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_inert\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"future_content_result\"},{\"type\":\"output_text\",\"text\":\"visible\"}]}}\n\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_inert\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct parsed_stream emitted = parsed_new(1024u);
-
-    assert(parse_stream(wire, 17u, &emitted) == 0);
-    assert(emitted.graph.count == 1u);
-    assert(snag_response_graph_item(&emitted.graph, 0).kind == SNAG_ITEM_ASSISTANT);
-    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "visible") == 0);
-    assert(emitted.calls == 1u);
-    assert(emitted.last_index == 1u);
     parsed_free(&emitted);
 }
 
@@ -797,14 +730,14 @@ main(void)
     test_empty_public_items_get_specific_correction();
     test_oversized_public_items_get_specific_correction();
     test_structured_keepalives_do_not_end_response();
-    test_unused_response_events_are_ignored();
-    test_terminal_snapshot_ignores_unused_text_metadata();
+    test_public_stream(0u);
+    test_public_stream(1u);
     test_unused_annotation_shapes_are_ignored();
-    test_phase_absent_text_becomes_visible_final();
+    test_public_stream(2u);
     test_phase_absent_text_before_tool_stays_commentary();
-    test_empty_reasoning_item_is_internal_only();
-    test_web_search_item_is_internal_only();
-    test_future_items_and_content_are_inert();
+    test_public_stream(3u);
+    test_public_stream(4u);
+    test_public_stream(5u);
     test_inert_only_response_has_empty_graph();
     test_function_call_arguments();
     test_refusal();
