@@ -22,14 +22,14 @@ assert bytes(buf[blank_start:]).count(b"\n") >= 3, bytes(buf[blank_start:])
 image = Path(WORKSPACE) / "attachment test.png"
 image.write_bytes(base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aKz8AAAAASUVORK5CYII="))
-child.send( ("/attach " + str(image) + "\r").encode())
+child.send(("/attach " + str(image) + "\r").encode())
 child.wait_text(b"1 unsent attachment(s)")
-child.send( b"/detach all\r")
+child.send(b"/detach all\r")
 child.wait_text(b"0 unsent attachment(s)")
 buf.clear()
-child.send( ("/attach " + str(image) + "\r").encode())
+child.send(("/attach " + str(image) + "\r").encode())
 child.wait_text(b"1 unsent attachment(s)")
-child.send( b"ping\r")
+child.send(b"ping\r")
 child.wait_text(b"pong")
 # A prompt redraw can occur while a response is still active.  The durable
 # terminal event is the unambiguous point at which /exit is an idle command.
@@ -48,6 +48,12 @@ terminal_end = buf.find(b"turn_completed synced") + len(b"turn_completed synced"
 # The always-visible composer changes active/idle in place. Its leftmost
 # unchanged cells and final space need not be emitted again.
 child.wait_idle_prompt(start=terminal_end, timeout=5.0)
+# Preserve the original empty-Enter continuation regression after attachment admission.
+continuation_start = len(buf)
+child.send(b"\r")
+child.wait_text(b"fixture answer", start=continuation_start, timeout=5.0)
+terminal_end = child.wait_text(b"turn_completed synced", start=continuation_start, timeout=5.0)
+child.wait_idle_prompt(start=terminal_end)
 child.send(b"slow\r")
 child.wait_text(b"working slowly", timeout=5.0)
 child.send(b"\x03")
