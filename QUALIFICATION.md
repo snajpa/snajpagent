@@ -66,6 +66,16 @@ parallel commands, PTY, resume, TLS trust/name and hostname-connection checks
 in QEMU. That scope applies to the tested CentOS kernel; upstream 2.4 AMD64
 coverage remains unverified. The target list is unchanged.
 
+The experimental `netbsd-amd64-legacy` target uses NetBSD 5.2.3's native
+libc.so.12/libpthread.so.0 ABI, static application libraries and Unicode,
+compiler-rt thread-local emulation, TLS and embedded CA roots. Its 4,172,296-byte
+candidate `a3383b75` passed base/configuration/SSE/IRC, read-only tools and denied
+writes, parallel commands, PTY exit status, CLI/interactive resume and TLS
+trust/hostname checks on an installed NetBSD 5.2.3 guest. Its native two-segment
+ELF has a non-executable stack and stack protection, without PIE or RELRO.
+NetBSD 10.1's libpthread.so.1 cannot load this artifact. Earlier NetBSD releases
+and the modern ABI require separate qualification.
+
 Each release's notes distinguish checks of its exact binaries from earlier
 implementation evidence. Record local fake-provider checks and paid-provider
 runs separately. Do not describe an unperformed platform or live-model

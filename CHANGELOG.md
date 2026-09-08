@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Add an experimental NetBSD 5.2.3 amd64 source-build target with static
+  application libraries and native filesystem, process and terminal support.
+
 ## 0.99.2 — 2026-09-08
 
 - Official standalone binaries install matching updates in the background and
