@@ -115,3 +115,11 @@ for target in ("Linux", "Darwin", "FreeBSD", "OpenBSD", "NetBSD", "Windows_NT"):
                             if "-c src/platform.c" in line)
         assert ("-D_DARWIN_C_SOURCE" in compile_line) == (target == "Darwin"), target
 print("PASS: Darwin feature selection is target-specific")
+
+# Keep the two-load-segment ABI constraint on old NetBSD only. Modern builds
+# use the native shared CRT endpoints with PIE, RELRO and immediate binding.
+netbsd_text = "\n".join(netbsd)
+assert 'if legacy then "crtbegin.o" else "crtbeginS.o"' in netbsd_text
+assert 'if legacy then "crtend.o" else "crtendS.o"' in netbsd_text
+assert 'if legacy then "-no-pie,--no-rosegment,-z,norelro," else "-pie,-z,relro,-z,now,"' in netbsd_text
+print("PASS: NetBSD hardening follows the native loader ABI")

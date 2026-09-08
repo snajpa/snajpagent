@@ -70,10 +70,10 @@ let
     inlineFlags=(-fgnu89-inline)
     case "$0" in *++) cc="$cc++"; inlineFlags=(); extra=(-lstdc++ -lm -lgcc_s);; esac
     if [ "$link" = 0 ]; then exec "$cc" "''${inlineFlags[@]}" "$@"; fi
-    start=(${sdk}/usr/lib/crt0.o ${sdk}/usr/lib/crti.o ${sdk}/usr/lib/crtbegin.o)
-    end=(${sdk}/usr/lib/crtend.o ${sdk}/usr/lib/crtn.o)
+    start=(${sdk}/usr/lib/crt0.o ${sdk}/usr/lib/crti.o ${sdk}/usr/lib/${if legacy then "crtbegin.o" else "crtbeginS.o"})
+    end=(${sdk}/usr/lib/${if legacy then "crtend.o" else "crtendS.o"} ${sdk}/usr/lib/crtn.o)
     # The NetBSD 5 ELF loader accepts only two PT_LOAD segments.
-    flags=(-Wl,-no-pie,${if legacy then "--no-rosegment,-z,norelro," else "-z,relro,-z,now,"}-e,_start,--dynamic-linker=/libexec/ld.elf_so)
+    flags=(-Wl,${if legacy then "-no-pie,--no-rosegment,-z,norelro," else "-pie,-z,relro,-z,now,"}-e,_start,--dynamic-linker=/libexec/ld.elf_so)
     if [ "$shared" = 1 ]; then
       start=(${sdk}/usr/lib/crti.o ${sdk}/usr/lib/crtbeginS.o)
       end=(${sdk}/usr/lib/crtendS.o ${sdk}/usr/lib/crtn.o)
