@@ -1109,9 +1109,8 @@ decode_models(const unsigned char *data, size_t len, bool codex,
                                 SNAG_WIRE_BODY_MAX, json_error,
                                 sizeof(json_error));
     if (!root || !json_is_object(root)) {
-        (void)snprintf(error, error_size, "invalid model-list response: %s",
+        (void)snag_fail(error, error_size, EPROTO, "invalid model-list response: %s",
                        json_error[0] ? json_error : "root is not an object");
-        errno = EPROTO;
         goto out;
     }
     source = json_object_get(root, codex ? "models" : "data");

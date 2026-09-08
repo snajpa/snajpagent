@@ -120,9 +120,8 @@ confirm_delete(struct app_state *app, char prefix[9], char *error,
     }
     if (strcmp(line, prefix) != 0) {
         free(line);
-        snprintf(error, error_size, "delete confirmation did not match %.8s",
+        (void)snag_fail(error, error_size, EINVAL, "delete confirmation did not match %.8s",
                  app->session.id);
-        errno = EINVAL;
         return 1;
     }
     free(line);

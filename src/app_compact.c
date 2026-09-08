@@ -162,9 +162,8 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
     struct snag_response_item final = snag_response_graph_item(&graph, decision.final_index);
     if (decision.outcome != SNAG_GRAPH_FINAL ||
         decision.final_index >= graph.count || !final.text) {
-        snprintf(error, error_size,
+        (void)snag_fail(error, error_size, EPROTO,
                  "Responses compaction did not return a final JSON answer");
-        errno = EPROTO;
         goto out;
     }
     json_t *value = snag_json_load_strict(
@@ -225,9 +224,8 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                          app->session.default_provider : NULL);
     }
     if (!app->turn_provider) {
-        snprintf(error, error_size,
+        (void)snag_fail(error, error_size, ENOENT,
                  "selected provider is not present in the current configuration");
-        errno = ENOENT;
         goto out;
     }
     native = allow_native && app->turn_provider->native_compaction;
@@ -263,9 +261,8 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                                             &projection, error, error_size);
         if (build_rc == 1) {
             if (selection != 0u) {
-                snprintf(error, error_size,
+                (void)snag_fail(error, error_size, EOVERFLOW,
                          "no complete history prefix fits the hard context budget");
-                errno = EOVERFLOW;
                 goto out;
             }
             if (!active_prefix && strcmp(reason, "manual") == 0 &&
@@ -278,8 +275,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         if (build_rc < 0)
             goto out;
         if (projection.model_input.bytes == 0u || projection.model_input.bytes > (size_t)INT64_MAX) {
-            snprintf(error, error_size, "compact source has invalid bounds");
-            errno = EINVAL;
+            (void)snag_fail(error, error_size, EINVAL, "compact source has invalid bounds");
             goto out;
         }
         if (!native) {
@@ -300,9 +296,8 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         if (!projection.create_request.value || !projection.count_request.value ||
             snag_context_provider_model(app->turn_provider, model, projection.create_request.value) < 0 ||
             snag_context_provider_model(app->turn_provider, model, projection.count_request.value) < 0) {
-            snprintf(error, error_size,
+            (void)snag_fail(error, error_size, ENOMEM,
                      "cannot build bounded compaction provider request");
-            errno = ENOMEM;
             goto out;
         }
         if (snag_json_document_measure(&projection.create_request, SNAG_CONTEXT_MAX_COMPACT) < 0 || projection.create_request.bytes == 0u ||
@@ -409,8 +404,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         }
     }
     if (output_tokens_bound > (uint64_t)INT64_MAX) {
-        snprintf(error, error_size, "compact output bound is too large");
-        errno = EOVERFLOW;
+        (void)snag_fail(error, error_size, EOVERFLOW, "compact output bound is too large");
         goto out;
     }
     if (commit_rendered(app, "compaction_completed",
