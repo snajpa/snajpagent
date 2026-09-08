@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Focused packaging/channel regressions; synthetic bytes, no publication."""
 import argparse
+from html.parser import HTMLParser
 import importlib.util
 import json
 import os
@@ -305,3 +306,83 @@ with tempfile.TemporaryDirectory(prefix="release-fetch-", dir=root / "build") as
         if mode != "cached":
             assert "first.test" in fetches[0] and "second.test" in fetches[1], lines
 print("PASS: production bootstrap fallbacks preserve the hash and fail closed")
+
+# Download-page behavior is native HTML: families disclose release tables,
+# including runnable debug files, checksums and installation instructions.
+class Downloads(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.stack = []
+        self.nodes = []
+
+    def handle_starttag(self, tag, attrs):
+        node = {"tag": tag, "attrs": dict(attrs), "parents": tuple(self.stack), "text": ""}
+        self.nodes.append(node)
+        if tag not in ("meta", "link", "br", "hr", "img", "input", "source", "wbr"):
+            self.stack.append(node)
+
+    def handle_endtag(self, tag):
+        assert self.stack and self.stack[-1]["tag"] == tag, (tag, self.stack[-1]["tag"])
+        self.stack.pop()
+
+    def handle_data(self, data):
+        for node in self.stack:
+            node["text"] += data
+
+
+page = Downloads()
+page.feed((root / "www/downloads.html").read_text())
+assert not page.stack
+nodes = page.nodes
+ids = [n["attrs"]["id"] for n in nodes if "id" in n["attrs"]]
+assert len(ids) == len(set(ids)), "duplicate download-page anchor"
+assert not any(n["tag"] == "script" for n in nodes)
+families = [n for n in nodes if n["tag"] == "details"]
+assert {n["attrs"]["id"] for n in families} == {"linux", "macos", "windows", "freebsd", "openbsd", "netbsd"}
+for family in families:
+    assert "open" not in family["attrs"]
+    summaries = [n for n in nodes if n["tag"] == "summary" and n["parents"][-1] is family]
+    assert len(summaries) == 1
+    assert summaries[0]["text"].strip().lower() == family["attrs"]["id"]
+    assert not any(n["tag"] == "a" and summaries[0] in n["parents"] for n in nodes)
+    assert "Install on " in family["text"]
+    tier = next(n for n in reversed(family["parents"]) if n["tag"] == "section")
+    expected = "tier-1" if family["attrs"]["id"] in ("linux", "macos", "windows") else "tier-2"
+    assert tier["attrs"]["aria-labelledby"] == expected
+
+downloads = [n for n in nodes if n["tag"] == "a" and "download" in n["attrs"].get("class", "").split()]
+assert downloads
+counts = {}
+for link in downloads:
+    href = link["attrs"]["href"]
+    assert href.startswith("https://github.com/snajpa/snajpagent/releases/download/")
+    version, filename = href.split("/download/", 1)[1].split("/", 1)
+    counts[version] = counts.get(version, 0) + 1
+    assert not any(word in filename for word in ("symbols", "source", "dependencies"))
+    family = next(n for n in reversed(link["parents"]) if n["tag"] == "details")
+    release_section = next(n for n in reversed(link["parents"]) if n["tag"] == "section")
+    assert family in release_section["parents"]
+    assert version in release_section["text"]
+    row = next(n for n in reversed(link["parents"]) if n["tag"] == "tr")
+    cells = [n for n in nodes if n["tag"] == "td" and n["parents"][-1] is row]
+    assert len(cells) == 3 and all(n["text"].strip() for n in cells)
+    hashes = [n for n in nodes if "sha256" in n["attrs"].get("class", "").split() and row in n["parents"]]
+    assert len(hashes) == 1 and re.fullmatch(r"[0-9a-f]{64}", hashes[0]["text"].strip())
+    if "debug" in filename or "-" in version:
+        position = nodes.index(link)
+        assert any(n["tag"] == "h4" and "Debug" in n["text"] and release_section in n["parents"]
+                   for n in nodes[:position])
+assert counts == {"0.99.3": 16, "0.99.2": 11, "0.99.2-9d98036": 11, "0.99.1": 16}
+for node in nodes:
+    if "coming-soon" in node["attrs"].get("class", "").split():
+        assert node["tag"] == "p" and "(coming soon)" in node["text"]
+        assert not any(n["tag"] in ("a", "details") and node in n["parents"] for n in nodes)
+assert "esp32" not in (root / "www/downloads.html").read_text().lower()
+mac = next(n for n in families if n["attrs"]["id"] == "macos")
+assert "xattr -d com.apple.quarantine ./snajpagent" in mac["text"]
+assert "shasum -a 256 FILE.tar.gz" in mac["text"]
+assert "xattr -r" not in mac["text"] and "spctl --master-disable" not in mac["text"]
+for node in nodes:
+    for target in node["attrs"].get("aria-labelledby", "").split():
+        assert target in ids
+print("PASS: collapsed OS-family downloads, release/debug rows, checksums and setup")

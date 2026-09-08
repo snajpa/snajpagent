@@ -324,12 +324,14 @@ chmod +x ./snajpagent
         hash with the row above. For an archive, check the archive before
         extracting it; the displayed hash belongs to the downloaded file.</p>
       <pre><code>shasum -a 256 ./snajpagent
-chmod +x ./snajpagent</code></pre>
+chmod +x ./snajpagent
+./snajpagent</code></pre>
       <p>If macOS blocks the downloaded file, and you trust it, remove quarantine
         from that executable only, then launch it:</p>
       <pre><code>xattr -d com.apple.quarantine ./snajpagent
 ./snajpagent</code></pre>
-      <p>For a debug archive, use <code>shasum -a 256 FILE.tar.gz</code>, then
+      <p>For a debug archive, use <code>shasum -a 256 FILE.tar.gz</code>, compare
+        it with the archive's row, then
         <code>tar -xzf FILE.tar.gz</code>. Apply the launch steps to the extracted
         <code>snajpagent</code>. These builds are not Developer ID signed or
         notarized. Keep system-wide macOS protections enabled.</p>
@@ -450,6 +452,10 @@ chmod +x ./snajpagent</code></pre>
       <pre><code>Get-FileHash .\snajpagent-*.exe -Algorithm SHA256</code></pre>
       <p>Compare the hash with the row above. Rename the chosen executable to
         <code>snajpagent.exe</code> and run it in your project directory.</p>
+      <p>Stable 0.99.2 and later install updates in the background. Set
+        <code>auto_update = false</code> in <code>[agent]</code> to opt out.
+        Development snapshots default off; set it to <code>true</code> to follow
+        <code>latest-dev</code>. Version 0.99.1 updates manually.</p>
         </div>
       </details>
     </section>

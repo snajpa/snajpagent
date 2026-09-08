@@ -201,6 +201,7 @@ against the download row, and make it executable:
 ```sh
 shasum -a 256 ./snajpagent
 chmod +x ./snajpagent
+./snajpagent
 ```
 
 If macOS blocks the file and you trust it, remove quarantine from that file only:
@@ -210,8 +211,9 @@ xattr -d com.apple.quarantine ./snajpagent
 ./snajpagent
 ```
 
-For a debug archive, check its hash before extracting it; run the commands above
-on the extracted executable. Keep system-wide macOS protections enabled.
+For a debug archive, compare `shasum -a 256 FILE.tar.gz` with the archive's
+download row, then extract it with `tar -xzf FILE.tar.gz`. Make the extracted
+executable runnable and launch it as above. Keep system-wide macOS protections enabled.
 
 Official stable binaries check and install updates in the background on launch.
 The current process keeps running; one banner links to the release log and asks
