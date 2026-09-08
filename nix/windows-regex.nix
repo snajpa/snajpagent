@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-only
 { pkgs, windows ? null, threads ? null, unistring, winver ? "0x0601", cross ? null }:
 let
-  nativeCharset = cross == null;
-  stdenv = if nativeCharset then windows.stdenv else pkgs.stdenvNoCC;
+  windowsTarget = cross == null;
+  stdenv = if windowsTarget then windows.stdenv else pkgs.stdenvNoCC;
   revision = "58df1afe785d3067cfa474ab57ccf283665dfa38";
   gnulib = pkgs.fetchzip {
     name = "gnulib-${revision}";
@@ -53,18 +53,18 @@ let
     const char *locale_charset(void) { return "UTF-8"; }
   '';
 in stdenv.mkDerivation {
-  pname = "snajpagent-regex-${if nativeCharset then "windows" else cross.target}-static";
+  pname = "snajpagent-regex-${if windowsTarget then "windows" else cross.target}-static";
   version = "20260905";
   dontUnpack = true;
   strictDeps = true;
-  configurePlatforms = [];
+  configurePlatforms = if windowsTarget then [ "build" "host" ] else [];
   dontStrip = true;
   nativeBuildInputs = [ pkgs.autoconf pkgs.automake pkgs.python3 pkgs.perl
-                        pkgs.gettext (if nativeCharset then windows.buildPackages.pkg-config else pkgs.pkg-config) ];
+                        pkgs.gettext (if windowsTarget then windows.buildPackages.pkg-config else pkgs.pkg-config) ];
   buildInputs = [ unistring ] ++ pkgs.lib.optional (threads != null) threads;
-  env.CFLAGS = if !nativeCharset then cross.cflags else "-Os -g -D_WIN32_WINNT=${winver} -DWINVER=${winver}"
+  env.CFLAGS = if !windowsTarget then cross.cflags else "-Os -g -D_WIN32_WINNT=${winver} -DWINVER=${winver}"
     + pkgs.lib.optionalString windows.stdenv.cc.isClang " -pthread";
-  preConfigure = pkgs.lib.optionalString (!nativeCharset) ''
+  preConfigure = pkgs.lib.optionalString (!windowsTarget) ''
     export CC="${cross.compiler} --target=${cross.target} --sysroot=${cross.sdk}"
     export CXX="${cross.cxxCompiler} --target=${cross.target} --sysroot=${cross.sdk}"
     export AR=${cross.tools}/llvm-ar RANLIB=${cross.tools}/llvm-ranlib
@@ -85,11 +85,18 @@ in stdenv.mkDerivation {
       --replace-fail 'codeset_name = nl_langinfo (CODESET);' 'codeset_name = "UTF-8";'
     substituteInPlace lib/c32is-impl.h \
       --replace-fail 'if (wc == WEOF || wc == (wchar_t) wc)' 'if (wc == WEOF)'
+    ${pkgs.lib.optionalString (!windowsTarget) ''
+      # c32rtomb otherwise delegates back to old BSD's C-locale wcrtomb.
+      # Use the existing UTF-8 encoder with Gnulib's replacement state too.
+      substituteInPlace lib/c32rtomb.c \
+        --replace-fail '#elif _GL_SMALL_WCHAR_T' \
+          '#elif _GL_SMALL_WCHAR_T || GNULIB_defined_mbstate_t'
+    ''}
     autoreconf -fiv
   '';
   configureFlags = [ "--disable-nls" "--disable-dependency-tracking"
                      "--with-libunistring-prefix=${unistring}" ]
-    ++ pkgs.lib.optionals (!nativeCharset) [
+    ++ pkgs.lib.optionals (!windowsTarget) [
       "--build=${pkgs.stdenv.buildPlatform.config}" "--host=${cross.target}"
       "--disable-shared" "--enable-static" "--with-pic"
     ];

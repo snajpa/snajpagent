@@ -2686,7 +2686,7 @@ test_regex(void)
         {"^[[:alpha:]]+$", "\xc3\xa9", 0, true},
         {"^[[:alpha:]]+$", "\xf0\x9f\x98\x80", 0, false}
     };
-#ifdef _WIN32
+#if defined(_WIN32) || defined(SNAJPAGENT_STATIC_UTF8)
     /* The static engine is UTF-8 even when the legacy CRT is in the C locale. */
     assert(setlocale(LC_CTYPE, "C"));
 #else
