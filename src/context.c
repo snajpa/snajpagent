@@ -13,10 +13,7 @@
 
 struct context_builder {
     const struct snag_session *session;
-    const char *model;
-    const char *effort;
     const struct snag_instruction_set *instructions;
-    const struct snag_config *config;
     unsigned int cycle;
     const json_t *steering;
     json_t *tools;
@@ -39,13 +36,11 @@ struct context_builder {
     size_t base_request_count;
     size_t compact_new_items;
     uint64_t compact_source_seq;
-    uint64_t max_output_tokens;
     uint64_t compact_budget;
     uint64_t compact_best_seq;
     size_t compact_best_request_count;
     bool compact_best_known;
     bool compact_allow_oversized_first;
-    bool max_output_known;
 };
 
 void
@@ -1012,27 +1007,6 @@ fail:
     return NULL;
 }
 
-static json_t *
-model_input_object(struct context_builder *builder)
-{
-    json_t *metadata = snag_instructions_metadata_json(builder->instructions);
-    json_t *input = json_pack("{s:s,s:I,s:s,s:O,s:O,s:s,s:s,s:i,s:O}",
-        "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
-        "cycle", (json_int_t)builder->cycle, "effort", builder->effort,
-        "instructions", metadata, "items", builder->request_input,
-        "model", builder->model, "profile_id", SNAJPAGENT_PROFILE_ID,
-        "tool_schema", 1, "tools", builder->tools);
-
-    json_decref(metadata);
-    if (builder->max_output_known &&
-        snag_json_set_new(input, "max_output_tokens",
-            json_integer((json_int_t)builder->max_output_tokens)) < 0) {
-        json_decref(input);
-        return NULL;
-    }
-    return input;
-}
-
 int
 snag_context_codex_request(json_t *request)
 {
@@ -1070,45 +1044,6 @@ ensure_conversation_input(json_t *input)
         "content", "[snajpagent host continuation — not a new user message]\n"
         "Continue from the existing instructions and retained context. "
         "This marker adds no task, approval or change to the goal state."));
-}
-
-static json_t *
-create_request_object(struct context_builder *builder)
-{
-    json_t *request = json_pack("{s:O,s:s,s:b,s:{s:s},s:b,s:b,s:s,s:O,s:s}",
-        "input", builder->request_input, "model", builder->model,
-        "parallel_tool_calls", builder->session->parallel_tool_calls,
-        "reasoning", "effort", builder->effort,
-        "store", 0, "stream", 1, "tool_choice", "auto",
-        "tools", builder->tools, "truncation", "disabled");
-    const struct snag_provider_config *provider = snag_config_provider(
-        builder->config, builder->session->active_turn_provider);
-
-    if (builder->max_output_known &&
-        snag_json_set_new(request, "max_output_tokens",
-            json_integer((json_int_t)builder->max_output_tokens)) < 0) {
-        json_decref(request);
-        return NULL;
-    }
-    if (provider && provider->auth == SNAG_AUTH_CHATGPT &&
-        snag_context_codex_request(request) < 0) {
-        json_decref(request);
-        return NULL;
-    }
-    return request;
-}
-
-static json_t *
-count_request_object(const json_t *create)
-{
-    /* Jansson 2.14's non-mutating shallow copy takes a non-const pointer. */
-    json_t *request = json_copy((json_t *)create);
-
-    /* Only the envelope differs; input, reasoning and tools stay immutable. */
-    json_object_del(request, "stream");
-    json_object_del(request, "store");
-    json_object_del(request, "max_output_tokens");
-    return request;
 }
 
 static json_t *
@@ -1221,7 +1156,6 @@ snag_context_compact_request_build(struct snag_session *session,
     snag_context_projection_free(projection);
     memset(&builder, 0, sizeof(builder));
     builder.session = session;
-    builder.effort = effort;
     builder.request_input = json_array();
     builder.deferred_steering = json_array();
     builder.input_timing = json_array();
@@ -1352,12 +1286,7 @@ snag_context_build(struct snag_session *session, const char *model,
     snag_context_projection_free(projection);
     memset(&builder, 0, sizeof(builder));
     builder.session = session;
-    builder.model = model;
-    builder.effort = effort;
     builder.instructions = instructions;
-    builder.config = config;
-    builder.max_output_tokens = max_output_tokens;
-    builder.max_output_known = max_output_known;
     builder.networked = config && session && !session->active_read_only &&
         (config->irc.listen_explicit || config->irc.client_count != 0u);
     if (session && session->active_turn_id[0])
@@ -1449,11 +1378,38 @@ snag_context_build(struct snag_session *session, const char *model,
         projection->irc_seq = builder.deferred_irc_seq - 1u;
     if (ensure_conversation_input(builder.request_input) < 0)
         goto out;
-    builder.model = snag_config_model_upstream(
-        snag_config_provider(config, session->active_turn_provider), model);
-    projection->model_input.value = model_input_object(&builder);
-    projection->create_request.value = create_request_object(&builder);
-    projection->count_request.value = count_request_object(projection->create_request.value);
+    const struct snag_provider_config *provider = snag_config_provider(
+        config, session->active_turn_provider);
+    const char *upstream_model = snag_config_model_upstream(provider, model);
+    json_t *metadata = snag_instructions_metadata_json(instructions);
+    projection->model_input.value = json_pack("{s:s,s:I,s:s,s:O,s:O,s:s,s:s,s:i,s:O}",
+        "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
+        "cycle", (json_int_t)cycle, "effort", effort,
+        "instructions", metadata, "items", builder.request_input,
+        "model", upstream_model, "profile_id", SNAJPAGENT_PROFILE_ID,
+        "tool_schema", 1, "tools", builder.tools);
+    json_decref(metadata);
+    if (max_output_known &&
+        snag_json_set_new(projection->model_input.value, "max_output_tokens",
+            json_integer((json_int_t)max_output_tokens)) < 0)
+        goto projection_error;
+    projection->create_request.value = json_pack("{s:O,s:s,s:b,s:{s:s},s:b,s:b,s:s,s:O,s:s}",
+        "input", builder.request_input, "model", upstream_model,
+        "parallel_tool_calls", session->parallel_tool_calls,
+        "reasoning", "effort", effort,
+        "store", 0, "stream", 1, "tool_choice", "auto",
+        "tools", builder.tools, "truncation", "disabled");
+    if ((max_output_known &&
+         snag_json_set_new(projection->create_request.value, "max_output_tokens",
+             json_integer((json_int_t)max_output_tokens)) < 0) ||
+        (provider && provider->auth == SNAG_AUTH_CHATGPT &&
+         snag_context_codex_request(projection->create_request.value) < 0))
+        goto projection_error;
+    /* Only the envelope differs; input, reasoning and tools stay immutable. */
+    projection->count_request.value = json_copy(projection->create_request.value);
+    json_object_del(projection->count_request.value, "stream");
+    json_object_del(projection->count_request.value, "store");
+    json_object_del(projection->count_request.value, "max_output_tokens");
     if (!projection->model_input.value || !projection->create_request.value ||
         !projection->count_request.value ||
         snag_json_document_measure(&projection->model_input, SNAG_CONTEXT_MAX_REQUEST) < 0 ||
@@ -1463,6 +1419,7 @@ snag_context_build(struct snag_session *session, const char *model,
                           &projection->request_input_bytes) < 0 ||
         snag_json_document_measure(&projection->create_request, SNAG_CONTEXT_MAX_REQUEST) < 0 ||
         snag_json_document_measure(&projection->count_request, SNAG_CONTEXT_MAX_REQUEST) < 0) {
+projection_error:
         snag_errorf(error, error_size, "response request projection exceeds 32 MiB");
         goto out;
     }
