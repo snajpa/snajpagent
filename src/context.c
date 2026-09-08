@@ -14,7 +14,6 @@
 struct context_builder {
     const struct snag_session *session;
     const struct snag_instruction_set *instructions;
-    unsigned int cycle;
     const json_t *steering;
     json_t *tools;
     json_t *request_input;
@@ -1292,7 +1291,6 @@ snag_context_build(struct snag_session *session, const char *model,
     if (session && session->active_turn_id[0])
         memcpy(builder.target_turn_id, session->active_turn_id,
                sizeof(builder.target_turn_id));
-    builder.cycle = cycle;
     projection->irc_seq = session ? session->irc_received_seq : 0u;
     builder.steering = steering;
     builder.request_input = json_array();
