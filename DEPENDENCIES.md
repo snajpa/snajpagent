@@ -210,6 +210,30 @@ status with waitpid. Source checks and the focused tests cover this path indepen
 qualification. The old libc realpath call uses a caller-owned buffer and checks
 that the original path exists before normalization.
 
+## OpenBSD amd64
+
+`make prod-openbsd-amd64` builds the OpenBSD 7.9 executable at
+`build/matrix/openbsd-amd64/bin/snajpagent`, with matching symbols in `.debug`.
+The SHA-256-pinned official installation image supplies the native headers,
+startup objects and OS libraries. The PIE executable imports only
+`libc.so.103.0` and `libpthread.so.28.1`, with `/usr/libexec/ld.so` as its loader.
+Application dependencies, libutil, the Unicode regex/width engine and compressed
+CA bundle are static. Other OpenBSD releases require separate ABI qualification.
+
+The shared Gnulib regex recipe uses its UTF-8 decoder and encoder replacements
+and libunistring with the C character locale. This preserves non-ASCII matching,
+case-folding and character classes independently of native libc regex. The
+SDK-only unversioned library aliases serve the cross-linker; the executable
+retains native versioned imports and requires no runtime aliases. Cross-build
+helpers run on the build host; native startup/runtime bytes come from the SDK.
+Preserve the base-system and dependency notices when redistributing.
+
+OpenBSD 7.9 qualification covers base/IRC/SSE tests, internal read-only
+inspection and denied writes, parallel commands, PTY execution, durable resume,
+and TLS trust and hostname checks with local fixtures. The IRC capacity test
+raises its own descriptor soft limit to 256 because it holds both endpoints of
+64 connections in one process. Ordinary agent checks use the default limit.
+
 ## macOS ARM64 and Intel cross-builds
 
 `make prod-macos-arm64` and `make prod-macos-x86_64` use the same pinned upstream dependency sources via
@@ -267,7 +291,8 @@ compatibility, signing identity or notarization.
 ## Parallel production matrix
 
 `make -jN prod-matrix` explicitly builds Linux x86-64/AArch64/i686 and legacy i686, macOS
-ARM64/Intel/universal, and Windows x86-64/ARM64. This is the full implemented
+ARM64/Intel/universal, Windows x86-64/ARM64, FreeBSD amd64/current and legacy,
+and OpenBSD 7.9 amd64. This is the full implemented
 set, not the completed legacy/exotic portability roadmap. The remaining ports
 are still in development. SDK availability never silently
 reduces the requested set; a failed target fails the command.
@@ -349,7 +374,7 @@ and LLVM's Apache-2.0 WITH LLVM-exception terms. Older Windows still needs
 runtime qualification; a DLL import archive renamed to `.a` is never
 a self-contained static dependency.
 
-The Windows and early-FreeBSD `regex` library attribute imports Gnulib's POSIX ERE module
+The Windows, early-FreeBSD and OpenBSD `regex` library attribute imports Gnulib's POSIX ERE module
 at pinned revision `58df1afe785d3067cfa474ab57ccf283665dfa38` through
 `nix/windows-regex.nix`. Only its LGPLv2-compatible module closure is compiled;
 no third-party implementation is vendored and no external grep executable is
@@ -360,7 +385,7 @@ The static engine handles UTF-8 internally, independently of msvcrt's locale
 support: its charset, multibyte width, DFA fast path and Unicode character
 classes consistently use UTF-8/Unicode. It does not change the process-global
 CRT locale or require UCRT or a separately installed regex DLL. The FreeBSD
-5.1-based target uses the same UTF-8 engine with Gnulib multibyte-state and
+5.1-based and OpenBSD targets use the same UTF-8 engine with Gnulib multibyte-state and
 encoding replacements. Other POSIX builds continue using libc regex.
 
 `src/snag_jansson.h` is the only Jansson include surface in first-party C code. It

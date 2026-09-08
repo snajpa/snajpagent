@@ -55,6 +55,10 @@ in assert buildRevision == null || buildRevision == revision; rec {
   linux-i686 = (linux pkgs.pkgsCross.musl32).application (args "linux-i686");
   linux-i686-legacy = (import ./linux-legacy.nix { inherit pkgs; }).application (args "linux-i686-legacy");
   linux-aarch64 = (linux pkgs.pkgsCross.aarch64-multiplatform-musl).application (args "linux-aarch64");
+  openbsd-amd64 = (import ./openbsd.nix {
+    inherit pkgs;
+    sourcePkgs = static;
+  }).application (args "openbsd-amd64");
   freebsd-amd64 = (import ./freebsd.nix {
     inherit pkgs;
     sourcePkgs = static;

@@ -15,6 +15,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifndef _WIN32
+#include <sys/resource.h>
+#endif
 
 static void
 set_user(const char *value)
@@ -1457,6 +1460,15 @@ test_callback_failure(void)
 int
 main(void)
 {
+#ifndef _WIN32
+    /* The 64-peer capacity case holds both endpoints in this process. */
+    struct rlimit files;
+    assert(getrlimit(RLIMIT_NOFILE, &files) == 0);
+    if (files.rlim_cur < 256u) {
+        files.rlim_cur = 256u;
+        assert(setrlimit(RLIMIT_NOFILE, &files) == 0);
+    }
+#endif
     engine_thread = pthread_self();
     assert(snag_network_init() == 0);
     set_user("root");
