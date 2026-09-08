@@ -12,7 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-
 struct ui_snapshot {
     enum snag_render_view view;
     bool opened, prompt_wanted, active;
