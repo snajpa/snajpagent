@@ -57,6 +57,7 @@ in assert buildRevision == null || buildRevision == revision; rec {
   linux-i686-legacy = (import ./linux-legacy.nix { inherit pkgs; }).application (args "linux-i686-legacy");
   linux-aarch64 = (linux pkgs.pkgsCross.aarch64-multiplatform-musl).application (args "linux-aarch64");
   linux-armv6 = (linux pkgs.pkgsCross.muslpi).application (args "linux-armv6");
+  linux-riscv64 = (linux pkgs.pkgsCross.riscv64-musl).application (args "linux-riscv64");
   netbsd-amd64 = (import ./netbsd.nix {
     inherit pkgs;
     sourcePkgs = static;

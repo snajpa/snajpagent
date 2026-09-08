@@ -203,6 +203,12 @@ assert ('linux-armv6 = (linux pkgs.pkgsCross.muslpi).application '
 assert "linux-armv7" not in release.targets()
 print("PASS: shared 32-bit ARM target retains its ARMv6 toolchain and identity")
 
+assert "linux-riscv64" in release.targets()
+assert ('linux-riscv64 = (linux pkgs.pkgsCross.riscv64-musl).application '
+        '(args "linux-riscv64");') in portable
+print("PASS: RISC-V matrix target uses the static musl recipe and its own identity")
+
+
 
 # Bootstrap download failure must try the next pinned URL before nix-build.
 # Stub only Nix commands, exercising the actual production Make recipe offline.

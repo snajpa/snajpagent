@@ -222,6 +222,7 @@ for platform scope.
 [platform notes](DEPENDENCIES.md) for target-specific requirements.
 `make prod-linux-armv6` builds one hard-float static PIE for ARMv6 Raspberry Pi
 1/Zero-class systems and ARMv7, with an ARMv6KZ/VFPv2 baseline.
+`make prod-linux-riscv64` builds a RISC-V RV64GC/LP64D static PIE.
 `make prod-linux-i686` builds modern 32-bit Linux static PIE.
 `make prod-linux-i686-legacy` builds a separate static non-PIE executable for
 Linux 2.4.27, with embedded TLS, roots and locale data.

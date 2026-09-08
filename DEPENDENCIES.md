@@ -33,6 +33,15 @@ so 32-bit libc builds retain large-file seek/stat/truncate support. Keep that
 feature macro when replacing CPPFLAGS. This does not enlarge a 32-bit address
 space or claim that every old kernel supports modern time/thread APIs.
 
+`make prod-linux-riscv64` uses the pinned RISC-V musl toolchain with an
+RV64GC instruction baseline and LP64D ABI. Application libraries, TLS and
+trust roots are embedded. The static PIE needs no ELF interpreter or shared
+libraries; archive symbols bind locally so allocator callbacks use relative
+startup relocations. Existing base/configuration/SSE/IRC tests and full-agent
+read-only, parallel-command, PTY, resume and TLS checks run on Alpine 3.22.5
+with Linux 6.12.94 under QEMU's RV64 CPU. Earlier kernels and physical-board
+performance remain unmeasured.
+
 `make prod-linux-armv6` uses the pinned `muslpi` toolchain for an ARMv6KZ/VFPv2
 hard-float baseline. One static PIE covers ARMv6 Raspberry Pi 1/Zero-class
 systems and ARMv7; application libraries, TLS and trust roots are embedded.
