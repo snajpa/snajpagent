@@ -201,6 +201,8 @@ let
         --replace-fail '#include <time.h>' '#include <time.h>
       #include <sys/time.h>' \
         --replace-fail '|| defined(__HAIKU__)' '|| defined(__HAIKU__) || defined(__OpenBSD__)'
+      substituteInPlace library/threading.c \
+        --replace-fail '_POSIX_THREAD_SAFE_FUNCTIONS >= 200112L' '(_POSIX_THREAD_SAFE_FUNCTIONS + 0) >= 200112L'
       # The RSA self-test needs only the native word-sized random API here.
       substituteInPlace library/rsa.c \
         --replace-fail '#include <string.h>' '#include <string.h>
@@ -237,6 +239,7 @@ let
     '' + lib.optionalString early ''
       # This release's socket headers require sys/types.h first.
       substituteInPlace CMakeLists.txt \
+        --replace-fail '"sys/socket.h;net/if.h"' '"sys/types.h;sys/socket.h;net/if.h"' \
         --replace-fail 'CHECK_INCLUDE_FILES (sys/socket.h' 'CHECK_INCLUDE_FILES ("sys/types.h;sys/socket.h"' \
         --replace-fail 'CARES_EXTRAINCLUDE_IFSET (HAVE_SYS_SOCKET_H   sys/socket.h)' 'CARES_EXTRAINCLUDE_IFSET (HAVE_SYS_SOCKET_H  "sys/types.h;sys/socket.h")' \
         --replace-fail 'CHECK_INCLUDE_FILES (netinet/in.h' 'CHECK_INCLUDE_FILES ("sys/types.h;sys/socket.h;netinet/in.h"' \
