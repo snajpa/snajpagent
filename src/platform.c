@@ -2349,6 +2349,8 @@ snag_truncate(int fd, int64_t size)
 ssize_t
 snag_pread(int fd, void *buffer, size_t size, int64_t offset)
 {
+    if (offset < 0)
+        return snag_errno(EINVAL);
     if ((int64_t)(off_t)offset != offset)
         return snag_errno(EOVERFLOW);
     return pread(fd, buffer, size, (off_t)offset);
