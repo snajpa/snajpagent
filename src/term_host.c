@@ -1397,6 +1397,44 @@ snag_term_controls_restore(struct snag_term_host *host)
     (void)sigaction(SIGINT, &host->sigint, NULL);
 }
 
+#if defined(__NetBSD__) && __NetBSD_Version__ < 400000000
+/* Older ttyname uses shared storage. Match the held terminal using local state. */
+static int
+output_terminal_path(int fd, char *path, size_t capacity)
+{
+    snag_file_info original, entry;
+    const char *directories[] = {"/dev", "/dev/pts"};
+    if (snag_fstat(fd, &original) < 0 || !snag_isatty(fd))
+        return errno;
+    for (size_t i = 0; i < sizeof(directories) / sizeof(directories[0]); ++i) {
+        int root = snag_open_read(directories[i], true);
+        if (root < 0)
+            continue;
+        struct snag_directory *dir = snag_directory_open(root);
+        if (!dir) {
+            (void)close(root);
+            continue;
+        }
+        const char *name;
+        bool found = false;
+        while ((name = snag_directory_next(dir))) {
+            int length = snprintf(path, capacity, "%s/%s", directories[i], name);
+            if (length < 0 || (size_t)length >= capacity)
+                continue;
+            if (snag_lstat(path, &entry) == 0 && S_ISCHR(entry.st_mode) &&
+                entry.st_dev == original.st_dev && entry.st_ino == original.st_ino) {
+                found = true;
+                break;
+            }
+        }
+        (void)snag_directory_close(dir);
+        if (found)
+            return 0;
+    }
+    return ENOTTY;
+}
+#endif
+
 int
 snag_term_output_open(struct snag_term_host *host, int fd)
 {
@@ -1417,6 +1455,8 @@ snag_term_output_open(struct snag_term_host *host, int fd)
         else if (!size || size > sizeof(path) - 5u || path[5u + size - 1u])
             error = ENOTTY;
     }
+#elif defined(__NetBSD__) && __NetBSD_Version__ < 400000000
+    int error = output_terminal_path(fd, path, sizeof(path));
 #else
     int error = ttyname_r(fd, path, sizeof(path));
 #endif

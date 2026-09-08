@@ -2138,6 +2138,14 @@ test_input_mode(void)
     int sink = _open("NUL", _O_WRONLY | _O_BINARY);
     assert(sink >= 0 && !snag_isatty(sink) && close(sink) == 0);
 #endif
+#ifndef _WIN32
+    struct snag_term_host invalid_output = {0};
+    assert(snag_term_output_open(&invalid_output, -1) == -1 && errno == EBADF);
+    int nonterminal = open("/dev/null", O_WRONLY);
+    assert(nonterminal >= 0);
+    assert(snag_term_output_open(&invalid_output, nonterminal) == -1 && errno == ENOTTY);
+    assert(close(nonterminal) == 0);
+#endif
     if (snag_isatty(2)) {
         struct snag_term_host output_host = {0};
 #ifdef _WIN32
@@ -2164,6 +2172,9 @@ test_input_mode(void)
 #else
         int flags = fcntl(copy, F_GETFD);
         assert(flags >= 0 && (flags & FD_CLOEXEC) != 0);
+        snag_file_info original, reopened;
+        assert(snag_fstat(2, &original) == 0 && snag_fstat(copy, &reopened) == 0);
+        assert(S_ISCHR(reopened.st_mode) && original.st_rdev == reopened.st_rdev);
 #endif
         snag_term_host_close(&output_host);
 #ifdef _WIN32
