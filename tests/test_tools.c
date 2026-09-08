@@ -728,14 +728,17 @@ test_process_capacity_and_ready_collection(void)
     for (size_t i = 0u; i < SNAG_MAX_PROCESSES; ++i) {
         uint32_t yield;
         json_t *result = NULL;
-        make_call(&graph, "printf slot", cwd, 1000, NULL);
+        make_call(&graph, "printf slot", cwd, 0, NULL);
         struct snag_response_item call = snag_response_graph_item(&graph, 0u);
         assert(snag_tools_prepare(&call, &config, handles[i], &yield, &result) == 0);
         assert(snag_tools_start(&call, &config, &credential, &result, error, sizeof(error)) == 0);
         assert(!result);
         snag_response_graph_free(&graph);
     }
-    uint64_t deadline = snag_monotonic_ms() + 3000u;
+    /* All 32 shell loaders share a single CPU on some targets. Budget the
+     * existing per-child allowance across the batch; this tests slot ownership,
+     * not command timeout enforcement. Keep all children started concurrently. */
+    uint64_t deadline = snag_monotonic_ms() + 3000u * SNAG_MAX_PROCESSES;
     while (snag_tools_busy()) {
         assert(snag_monotonic_ms() < deadline);
         assert(snag_tools_service(10, -1, error, sizeof(error)) == 0);
