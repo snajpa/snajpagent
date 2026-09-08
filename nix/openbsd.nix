@@ -89,8 +89,10 @@ let
     done
     cc=${llvm.clang-unwrapped}/bin/clang
     extra=()
-    case "$0" in *++) cc="$cc++"; extra=(${if early then "-l:libstdc++.so.32.0 -l:libm.so.1.0" else if legacy then "-l:libstdc++.so.57.0" else "-lc++ -lc++abi"});; esac
-    if [ "$link" = 0 ]; then exec "$cc" "$@"; fi
+    # The 3.5 C headers use GNU89 extern-inline semantics. C++ is unchanged.
+    inlineFlags=(${lib.optionalString early "-fgnu89-inline"})
+    case "$0" in *++) cc="$cc++"; inlineFlags=(); extra=(${if early then "-l:libstdc++.so.32.0 -l:libm.so.1.0" else if legacy then "-l:libstdc++.so.57.0" else "-lc++ -lc++abi"});; esac
+    if [ "$link" = 0 ]; then exec "$cc" "''${inlineFlags[@]}" "$@"; fi
     start=(${sdk}/usr/lib/crt0.o ${sdk}/usr/lib/crtbegin.o)
     end=(${sdk}/usr/lib/crtend.o)
     flags=(${if early then "-Wl,-no-pie" else "-pie"} -Wl,-e,__start,--dynamic-linker=/usr/libexec/ld.so)
@@ -99,7 +101,7 @@ let
       end=(${sdk}/usr/lib/crtendS.o)
       flags=()
     fi
-    exec "$cc" -nostdlib "''${flags[@]}" "''${start[@]}" "$@" \
+    exec "$cc" "''${inlineFlags[@]}" -nostdlib "''${flags[@]}" "''${start[@]}" "$@" \
       -Wl,-Bdynamic "''${extra[@]}" ${if legacy then "-l:libpthread.so.${threadVersion} -l:libc.so.${libcVersion} ${compilerBuiltins}/lib/libclang_rt.builtins.a ${sdk}/usr/lib/gcc-lib/${gccRuntime}/libgcc.a" else "-lpthread -lc -lcompiler_rt"} "''${end[@]}"
     SH
     chmod +x "$out/bin/clang"
@@ -193,6 +195,10 @@ let
       substituteInPlace library/net_sockets.c \
         --replace-fail 'fd >= FD_SETSIZE' '(unsigned int) fd >= FD_SETSIZE'
     '' + lib.optionalString early ''
+      # 3.5 hides fd_set/select behind these newer feature requests.
+      substituteInPlace library/net_sockets.c \
+        --replace-fail '#define _POSIX_C_SOURCE 200112L' '/* Native BSD declarations. */' \
+        --replace-fail '#define _XOPEN_SOURCE 600' '/* Native BSD declarations. */'
       # Keep the library's volatile zeroizer when libc has no explicit_bzero.
       # 3.5 has native clocks in sys/time.h and an empty POSIX threads macro.
       substituteInPlace library/platform_util.c \

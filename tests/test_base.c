@@ -2445,7 +2445,11 @@ test_platform(void)
     struct snag_signal_mask saved;
     assert(snag_term_signals_block(&saved) == 0);
 #ifndef _WIN32
-    sigset_t current;
+    sigset_t current, sample;
+    assert(sigemptyset(&sample) == 0 && !sigismember(&sample, SIGINT));
+    assert(sigaddset(&sample, SIGINT) == 0 && sigismember(&sample, SIGINT));
+    assert(!sigismember(&sample, SIGTERM));
+    assert(sigdelset(&sample, SIGINT) == 0 && !sigismember(&sample, SIGINT));
     assert(pthread_sigmask(SIG_SETMASK, NULL, &current) == 0);
     assert(sigismember(&current, SIGINT) && sigismember(&current, SIGWINCH));
 #endif
