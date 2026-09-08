@@ -528,20 +528,18 @@ render_banner(struct snag_render *render, const char *text)
                             strlen(text), strlen(text), render->stderr_terminal, true);
 }
 
-int
-snag_render_history(struct snag_render *render,
-                    const char *user, const char *assistant)
+static int
+render_history_turn(struct snag_render *render,
+                    const struct snag_history_turn *turn)
 {
+    const char *user = turn->user, *assistant = turn->assistant;
     int rc = 0;
 
-    if (!user && !assistant)
-        return 0;
     struct snag_buf line = {.max = 4u * 1024u * 1024u};
-    if (render_banner(render, "── history ──\n") < 0 ||
-        (user &&
-         (snag_buf_append(&line, "user: ", 6u) < 0 ||
-          snag_buf_append(&line, user, strlen(user)) < 0 ||
-          snag_buf_putc(&line, '\n') < 0)))
+    if (user &&
+        (snag_buf_append(&line, "user: ", 6u) < 0 ||
+         snag_buf_append(&line, user, strlen(user)) < 0 ||
+         snag_buf_putc(&line, '\n') < 0))
         rc = -1;
     else if (line.len)
         rc = write_block(render, STDERR_FILENO, (char *)line.data, line.len,
@@ -559,10 +557,22 @@ snag_render_history(struct snag_render *render,
             rc = snag_render_public_end(render);
         }
     }
-    if (rc == 0)
-        rc = render_banner(render, "── history replayed ──\n");
     snag_buf_free(&line);
     return rc;
+}
+
+int
+snag_render_history(struct snag_render *render,
+                    const struct snag_history_turn *turns, size_t count)
+{
+    if (!count)
+        return 0;
+    if (render_banner(render, "── history ──\n") < 0)
+        return -1;
+    for (size_t i = 0u; i < count; ++i)
+        if (render_history_turn(render, &turns[i]) < 0)
+            return -1;
+    return render_banner(render, "── history replayed ──\n");
 }
 
 int

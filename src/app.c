@@ -2024,7 +2024,7 @@ handle_common_command(struct app_state *app, const char *line, bool active,
     if (strcmp(line, "/status") == 0)
         return render_status(app);
     if (strcmp(line, "/history") == 0)
-        return snag_ui_history(&app->ui, &app->session);
+        return snag_ui_history(&app->ui, &app->session, 1u);
     if (strcmp(line, "/chat") == 0) {
         int rc = select_view(app, SNAG_RENDER_CHAT, active);
 
@@ -4379,8 +4379,8 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     if (snag_ui_orientation(&app.ui, &app.session, cli->resume) < 0 ||
         (app.networked && snag_irc_replay_hosted_history(
             app.irc, render_room_history, &app.ui) < 0) ||
-        (cli->resume && config.resume_history_turns != 0u && !app.networked &&
-         snag_ui_history(&app.ui, &app.session) < 0) ||
+        (cli->resume && !app.networked &&
+         snag_ui_history(&app.ui, &app.session, config.resume_history_turns) < 0) ||
         (cli->resume && app.session.goal_status != SNAG_GOAL_NONE &&
          snag_app_goal_command(&app, "/goal", false) < 0) ||
         (cli->resume && app.session.pending_queue_count != 0u &&

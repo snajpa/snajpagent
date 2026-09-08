@@ -55,6 +55,7 @@ struct snag_ui_command {
         struct { uint32_t typing_pause_ms, tool_spinner_off_delay_ms; } timing;
         struct { int fd; enum snag_presentation kind; } public;
         struct { uint64_t turns; size_t queued; bool resumed; } orientation;
+        struct { const struct snag_history_turn *turns; size_t count; } replay;
         const struct snag_irc_event *irc;
         struct { int fd; struct snag_render_source source;
                  uint32_t timeout_ms, max_output_bytes; } durable;
@@ -100,7 +101,7 @@ int snag_ui_public(struct snag_ui *ui, const char *text, size_t len,
                    struct snag_buf *delivered);
 int snag_ui_orientation(struct snag_ui *ui, const struct snag_session *session,
                          bool resumed);
-int snag_ui_history(struct snag_ui *ui, const struct snag_session *session);
+int snag_ui_history(struct snag_ui *ui, struct snag_session *session, unsigned int count);
 int snag_ui_history_open(struct snag_ui *ui, const char *dotdir);
 int snag_ui_history_add(struct snag_ui *ui, const char *text);
 bool snag_ui_history_warning(struct snag_ui *ui);

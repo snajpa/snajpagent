@@ -1323,12 +1323,14 @@ capture_static_markdown(unsigned int verbosity, char *out, size_t out_size)
         strcpy(event.text, events[i].text);
         assert(snag_render_irc_event(&render, &event) == 0);
     }
-    assert(snag_render_history(&render, "**literal user**", "## Saved *answer*") == 0);
+    assert(snag_render_history(&render, &(struct snag_history_turn){
+        .user = "**literal user**", .assistant = "## Saved *answer*"}, 1u) == 0);
     snag_render_set_markdown(&render, false);
     event.kind = SNAG_IRC_MESSAGE;
     memcpy(event.text, "**literal agent**", 18u);
     assert(snag_render_irc_event(&render, &event) == 0);
-    assert(snag_render_history(&render, NULL, "## Literal assistant") == 0);
+    assert(snag_render_history(&render, &(struct snag_history_turn){
+        .assistant = "## Literal assistant"}, 1u) == 0);
     return capture_close(&capture, out, out_size, 0u);
 }
 
@@ -1340,12 +1342,44 @@ test_history_failure(void)
     snag_render_init(&render, 0u);
     render.stderr_terminal = true;
     errno = 0;
-    assert(snag_render_history(&render, NULL, "\xff") < 0);
+    assert(snag_render_history(&render, &(struct snag_history_turn){
+        .assistant = "\xff"}, 1u) < 0);
     assert(errno == EILSEQ && !render.public_item_open);
     assert(snag_render_public_begin(&render, STDERR_FILENO, NULL) == 0);
     assert(snag_render_public_end(&render) == 0);
     capture_restore(&capture);
     close(capture.fd);
+}
+
+static void
+test_history_turns(void)
+{
+    const struct snag_history_turn turns[] = {
+        {.user = "first input", .assistant = "first answer"},
+        {.user = "second input", .assistant = "second answer"},
+        {.user = "unanswered input"}
+    };
+    struct snag_render render;
+    char output[4096];
+    struct output_capture capture = capture_open(false, true);
+    snag_render_init(&render, 0u);
+    snag_render_set_color(&render, SNAG_COLOR_NEVER);
+    assert(snag_render_history(&render, NULL, 0u) == 0);
+    assert(snag_render_history(&render, turns, 3u) == 0);
+    assert(capture_close(&capture, output, sizeof(output), 0u) > 0u);
+    assert(count_text(output, "── history ──") == 1u);
+    assert(count_text(output, "── history replayed ──") == 1u);
+    const char *position = output;
+    const char *const fragments[] = {
+        "user: first input", "first answer", "user: second input", "second answer",
+        "user: unanswered input", "── history replayed ──"
+    };
+    for (size_t i = 0u; i < sizeof(fragments) / sizeof(fragments[0]); ++i) {
+        position = strstr(position, fragments[i]);
+        assert(position);
+        position += strlen(fragments[i]);
+    }
+    assert(count_text(output, "assistant:") == 2u);
 }
 
 static void
@@ -2173,6 +2207,7 @@ main(void)
     assert(strstr(output, "remote › **literal agent**\n") != NULL);
     assert(strstr(output, "assistant: ## Literal assistant\n") != NULL);
     test_history_failure();
+    test_history_turns();
     test_prompt_history();
     test_prompt_clock();
     test_prompt_spinners();

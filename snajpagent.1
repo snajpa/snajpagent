@@ -817,7 +817,7 @@ Show session, selection, queue, verbosity, capacity, token accounting, requested
 network roles and actual connection state.
 .TP
 .B /history
-Show the most recent retained user and assistant exchange.
+Show the most recent turn's input and latest saved assistant reply.
 .TP
 .BR /model " [list]"
 Read the local provider/model catalog.  No provider request is made.
@@ -1415,10 +1415,13 @@ Render supported terminal Markdown.  Default:
 .BR true .
 .TP
 .B resume_history_turns
-Resume-history switch, parsed from 0 through 100.  Zero disables display; any
-nonzero value shows the single most recent retained user and assistant
-exchange on a non-networked resume.  Default: 2.  Network chat uses actual
-room history instead of privately generated assistant text.
+Number of recent turns displayed on a non-networked resume, from 0 through
+100.  Default: 2.  Zero disables display.  Available turns appear oldest first,
+with each turn's input and latest saved assistant reply, including refusals.
+Unanswered and interrupted turns count; an unanswered turn shows only its input.
+Goal-continuation turns count as turns.  A value larger than the session's turn
+count displays all turns.  Display reads the session log, including turns before
+compaction, independently of model context.  Network chat uses room history.
 .TP
 .B typing_pause_ms
 Output pause after an input edit, 0 through 5000.  Default: 500.

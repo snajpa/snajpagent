@@ -127,7 +127,6 @@ struct snag_session {
     char *dir_path;
     const char *first_user;
     const char *last_user;
-    const char *last_assistant;
     const char *goal_prompt;
     const char *goal_blocker;
     /* Private immutable string owners; text fields above and in pending inputs borrow. */

@@ -1149,7 +1149,7 @@ main(void)
     commit_event(&session, "response_completed", json_incref(completed));
     assert(json_string_set(json_object_get(json_array_get(json_object_get(completed, "items"), 0u),
                                           "text"), "caller changed") == 0);
-    assert(!strcmp(session.last_assistant, "pong"));
+    assert(session.response_complete);
     json_decref(completed);
     assert(session.usage_anchor.model_input_bytes == 4000u);
     assert(session.usage_anchor.request_input_bytes == 3000u);

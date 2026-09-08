@@ -18,6 +18,10 @@ enum snag_render_view {
     SNAG_RENDER_VIEW_COUNT
 };
 
+struct snag_history_turn {
+    char *user, *assistant;
+};
+
 enum snag_presentation {
     SNAG_PRESENT_CONVERSATION, SNAG_PRESENT_TOOL, SNAG_PRESENT_ARGUMENTS,
     SNAG_PRESENT_OUTPUT, SNAG_PRESENT_CONTEXT,
@@ -140,7 +144,7 @@ int snag_render_orientation(struct snag_render *render,
                            const char *workspace, const char *id,
                            uint64_t turns, size_t queued, bool resumed);
 int snag_render_history(struct snag_render *render,
-                       const char *user, const char *assistant);
+                       const struct snag_history_turn *turns, size_t count);
 int snag_render_submitted(struct snag_render *render, const char *label,
                          const char *text);
 int snag_render_input_submitted(struct snag_render *render, const char *label,

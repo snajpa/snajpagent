@@ -1483,13 +1483,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         for (size_t i = 0; i < graph.count; ++i) {
             struct snag_response_item view = snag_response_graph_item(&graph, i);
             const struct snag_response_item *item = &view;
-            if (item->kind == SNAG_ITEM_ASSISTANT ||
-                item->kind == SNAG_ITEM_REFUSAL) {
-                if (replace_text(session, &session->last_assistant, "last_assistant", item->text,
-                                 SNAG_MAX_PUBLIC_ITEM) < 0) {
-                    return -1;
-                }
-            }
             if (item->kind == SNAG_ITEM_TOOL_CALL) {
                 struct snag_pending_call *pending;
                 if (session->pending_call_count >= SNAG_MAX_CALLS_PER_RESPONSE) {
