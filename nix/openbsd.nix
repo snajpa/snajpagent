@@ -93,7 +93,7 @@ let
     if [ "$link" = 0 ]; then exec "$cc" "$@"; fi
     start=(${sdk}/usr/lib/crt0.o ${sdk}/usr/lib/crtbegin.o)
     end=(${sdk}/usr/lib/crtend.o)
-    flags=(${if early then "-no-pie" else "-pie"} -Wl,-e,__start,--dynamic-linker=/usr/libexec/ld.so)
+    flags=(${if early then "-Wl,-no-pie" else "-pie"} -Wl,-e,__start,--dynamic-linker=/usr/libexec/ld.so)
     if [ "$shared" = 1 ]; then
       start=(${sdk}/usr/lib/crtbeginS.o)
       end=(${sdk}/usr/lib/crtendS.o)
