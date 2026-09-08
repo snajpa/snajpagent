@@ -89,6 +89,15 @@ let
   '';
   cflags = "-Os -g -D__BSD_VISIBLE=1" + lib.optionalString (!legacy) " -fstack-protector-strong";
   ldflags = "--ld-path=${llvm.lld}/bin/ld.lld -static";
+  compilerBuiltins = pkgs.runCommand "compiler-rt-freebsd-${osVersion}" {} ''
+    mkdir -p "$out/lib"
+    for file in udivti3.c udivmodti4.c; do
+      ${compiler} --target=${target} --sysroot=${sdk} -Os -g -fno-stack-protector \
+        -c ${llvm.compiler-rt.src}/compiler-rt/lib/builtins/"$file" \
+        -o "$file.o"
+    done
+    ${tools}/llvm-ar rcs "$out/lib/libclang_rt.builtins.a" ./*.o
+  '';
   cmakeLibrary = package: flags: dependencies:
     pkgs.stdenvNoCC.mkDerivation {
       pname = "${package.pname}-freebsd-amd64";
@@ -265,7 +274,7 @@ in {
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson)"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
-          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l-?pthread//g') -lutil -Wl,-Bdynamic -l${threads}"
+          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l-?pthread//g') -lutil${lib.optionalString early " ${compilerBuiltins}/lib/libclang_rt.builtins.a"} -Wl,-Bdynamic -l${threads}"
         )
       '';
       installPhase = ''
