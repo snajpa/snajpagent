@@ -15,7 +15,17 @@ independently of the conversion working directory. Such builds supply explicit
 `OFFICE_CFLAGS` and `OFFICE_LIBS`; a relative root alone does not package the
 runtime or make its dynamic dependencies relocatable.
 The distribution recipes still need reconciliation with the all-linked
-portable matrix. `WITH_OFFICE=0` supplies explicit unsupported-operation stubs.
+portable matrix. Linux musl recipes include static FFmpeg built-in codecs
+(zlib enabled; network/programs/GPL-only codecs disabled), Poppler core/Splash, libpng,
+libarchive, libxml2 and the pinned miniaudio header. LibreOffice's component
+runtime and its dependencies still require portable packaging; these recipe
+inputs alone do not produce a complete distribution. `WITH_OFFICE=0` supplies
+explicit unsupported-operation stubs for custom builds.
+The Linux library-only FFmpeg profile runs upstream `testprogs fate`; the broad
+`check` target also builds tools/examples requiring omitted avfilter/device
+libraries. `nix/office-linux.nix` defines the headless static LibreOfficeKit
+dependency build using the source's component registration; its archives,
+runtime layout and application linkage still need build validation.
 
 `src/office.c` runs one disposable child of the same binary through the existing
 bounded child runner. `src/office_package.c` checks ZIP/XML before import;
