@@ -754,27 +754,36 @@ test_process_capacity_and_ready_collection(void)
     snag_config_free(&config);
 }
 
+struct input_steering {
+    unsigned int calls;
+    uint64_t delivered_at;
+};
+
 static int
 steer_after_input(void *opaque, unsigned int timeout_ms)
 {
-    unsigned int *calls = opaque;
+    struct input_steering *steering = opaque;
     (void)timeout_ms;
-    return ++*calls == 3u ? 1 : 0;
+    if (++steering->calls != 3u)
+        return 0;
+    steering->delivered_at = snag_monotonic_ms();
+    return 1;
 }
 
 static void
 test_steering_with_blocked_stdin(void)
 {
     char *input = malloc(1024u * 1024u + 1u);
-    unsigned int calls = 0u;
+    struct input_steering steering = {0};
     assert(input);
     memset(input, 'x', 1024u * 1024u);
     input[1024u * 1024u] = '\0';
-    uint64_t start = snag_monotonic_ms();
     json_t *result = run_command_full("sleep 5", 5000, NULL, input,
-                                     steer_after_input, &calls, -1, 6000u);
+                                     steer_after_input, &steering, -1, 6000u);
     free(input);
-    assert(snag_monotonic_ms() - start < 1000u);
+    /* Time the delivered steer, excluding the 1 MiB JSON fixture setup. */
+    assert(steering.calls == 3u && steering.delivered_at != 0u);
+    assert(snag_monotonic_ms() - steering.delivered_at < 1000u);
     assert(!strcmp(snag_json_string(result, "status"), "running"));
     json_t *ref = json_object_get(result, "output_ref");
     assert(json_int_member(ref, "stdin_accepted") == 1024 * 1024);
