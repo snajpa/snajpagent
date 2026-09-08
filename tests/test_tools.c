@@ -499,6 +499,16 @@ test_managed_process_accepts_repeated_write_stdin(void)
     assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
     next = run_write_stdin_call(handle, "one\n", false, 50, -1);
     assert(strcmp(snag_json_string(next, "status"), "running") == 0);
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
+    while (!strstr(snag_json_string(json_object_get(next, "stdout"), "retained"),
+                   "first:one")) {
+        /* A running reply can precede the child's first output. Consume it
+         * before the second write so the no-replay assertions stay meaningful. */
+        assert(snag_monotonic_ms() < deadline);
+        json_decref(next);
+        next = run_write_stdin_call(handle, "", false, 50, -1);
+        assert(strcmp(snag_json_string(next, "status"), "running") == 0);
+    }
     done = run_write_stdin_call(handle, "two\n", true, 5000, -1);
     assert(strcmp(snag_json_string(done, "status"), "succeeded") == 0);
     assert(strstr(snag_json_string(json_object_get(next, "stdout"),
