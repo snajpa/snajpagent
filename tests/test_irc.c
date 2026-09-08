@@ -331,15 +331,21 @@ test_listener_collision(void)
         init_server_config(&config, port);
         assert(snprintf(config.irc.listen, sizeof(config.irc.listen),
                         "%s:%u", hosts[i], (unsigned int)port) > 0);
+        fprintf(stderr, "collision %s: open\n", hosts[i]);
         server = open_server(&config, &capture);
+        fprintf(stderr, "collision %s: duplicate\n", hosts[i]);
         assert(snag_irc_open(&duplicate, &config, "/duplicate", capture_event,
                             capture_trace, &capture, error, sizeof(error)) < 0);
         assert(!duplicate);
         assert(strstr(error, config.irc.listen));
         assert(strstr(error, strerror(EADDRINUSE)));
+        fprintf(stderr, "collision %s: send\n", hosts[i]);
         assert(send_all(server, true, SNAG_IRC_MESSAGE, "still here", error, sizeof(error)) == 0);
+        fprintf(stderr, "collision %s: close\n", hosts[i]);
         snag_irc_close(server);
+        fprintf(stderr, "collision %s: open\n", hosts[i]);
         server = open_server(&config, &capture);
+        fprintf(stderr, "collision %s: close\n", hosts[i]);
         snag_irc_close(server);
         snag_config_free(&config);
     }
