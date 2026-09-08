@@ -870,7 +870,10 @@ main(void)
             '=', '1', '\0', '\n'
         };
         write_bytes(path, with_nul, sizeof(with_nul));
-        expect_invalid(path);
+        snag_config_init(&config);
+        assert(snag_config_load(&config, path, NULL, error, sizeof(error)) < 0);
+        assert(errno == EILSEQ && strstr(error, "valid UTF-8"));
+        snag_config_free(&config);
     }
     {
         char *large = malloc(SNAG_CONFIG_FILE_MAX + 1u);
