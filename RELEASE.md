@@ -72,11 +72,9 @@ The current required outputs are:
 | `openbsd-amd64-legacy` | `snajpagent` | OpenBSD 5.9 libc/thread ABI, static application libraries; experimental |
 | `openbsd-amd64-early` | `snajpagent` | OpenBSD 3.5 libc/thread ABI, non-PIE, static application libraries; experimental |
 
-macOS first-launch qualification includes a browser-downloaded file with its
-quarantine attribute intact. Running after removing quarantine proves only the
-manual-exception path. Current builds are not Developer ID signed or notarized;
-keep the per-file exception in the download instructions until that changes.
-Ad-hoc code signatures alone do not establish distribution trust.
+Current macOS builds are not Developer ID signed or notarized. Keep the
+per-file quarantine exception in the macOS installation instructions and README;
+apply it only to the selected file after comparing its SHA-256.
 
 Both macOS standalone slices and the universal executable ship. Experimental
 does not mean optional: publish implemented builds with their actual testing
@@ -137,9 +135,14 @@ usable without JavaScript. Link it from the home page, README, and manual.
 Keep source-build commands and additional source-only platform guidance in the
 README and build documentation, off the downloads page. Downloadable source
 archives and their license companions remain appropriate release downloads.
-The main table serves executable selection, not release maintenance. Keep debug
-builds in a separate section; symbol archives for production crash diagnosis
-remain available on the Release, not as a column beside every normal download.
+Group the overview by the three portability tiers and OS families. Published
+families use closed details/summary panels; planned families are plain
+“(coming soon)” rows. Omit ESP32. Keep OS version/range and ABI information inside
+explicit release tables, together with architecture, download size and full
+SHA-256. Put runnable debug files below their corresponding release and setup
+instructions inside the family panel; use no separate top-level debug section.
+Add new OS families according to published assets and the roadmap, not a fixed
+six-family list. Symbol archives remain linked from the release page.
 Runnable debug builds must contain an executable, identify the actual build
 profile/source and retain their platform qualifications. Do not relabel a
 symbol-only file as a debug build. Additions to a published release use distinct

@@ -4,121 +4,630 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Download snajpagent for Linux, macOS, Windows and BSD. Stable and debug development builds.">
+  <meta name="description" content="Download snajpagent by operating system. Releases, debug builds, SHA-256 checksums and installation steps.">
   <title>Download snajpagent</title>
   <link rel="canonical" href="https://agent.snajpa.net/downloads.html">
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="downloads">
   <header>
     <h1>Download snajpagent</h1>
-    <p class="intro">A coding agent for your terminal.</p>
+    <p class="intro">Choose your operating system to see releases and setup steps.</p>
     <nav aria-label="Project">
       <a href="index.html">Home</a> · <a href="manual.html">User manual</a> ·
-      <a href="https://github.com/snajpa/snajpagent/releases">Releases</a> ·
+      <a href="#changelog">Release log</a> ·
       <a href="https://github.com/snajpa/snajpagent">Source</a>
     </nav>
   </header>
   <main>
-    <section aria-labelledby="availability-heading">
-      <h2 id="availability-heading">0.99.3</h2>
-      <p>Released September 8, 2026. Choose your operating system and architecture.
-        <a href="#changelog">Release log</a></p>
-      <div class="table-scroll" role="region" aria-label="Stable downloads" tabindex="0">
-        <table>
-          <caption>Stable executables</caption>
-          <thead><tr><th scope="col">Platform</th><th scope="col">Download</th></tr></thead>
-          <tbody>
-            <tr><th scope="row">Linux x86-64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-linux-x86_64">Download</a></td></tr>
-            <tr><th scope="row">Linux ARM64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-linux-aarch64">Download</a></td></tr>
-            <tr><th scope="row">Linux i686</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-linux-i686">Download</a></td></tr>
-            <tr><th scope="row">Linux i686 legacy</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-linux-i686-legacy">Download</a></td></tr>
-            <tr><th scope="row">macOS Apple Silicon</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-macos-arm64">Download</a></td></tr>
-            <tr><th scope="row">macOS Intel</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-macos-x86_64">Download</a></td></tr>
-            <tr><th scope="row">macOS universal</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-macos-universal">Download</a></td></tr>
-            <tr><th scope="row">Windows x64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-windows-x86_64.exe">Download</a></td></tr>
-            <tr><th scope="row">Windows ARM64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-windows-arm64.exe">Download</a></td></tr>
-            <tr><th scope="row">FreeBSD amd64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-freebsd-amd64">Download</a></td></tr>
-            <tr><th scope="row">FreeBSD amd64 legacy</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-freebsd-amd64-legacy">Download</a></td></tr>
-            <tr><th scope="row">OpenBSD 7.9 amd64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-openbsd-amd64">Download</a></td></tr>
-            <tr><th scope="row">OpenBSD 5.9 amd64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-openbsd-amd64-legacy">Download</a></td></tr>
-            <tr><th scope="row">OpenBSD 3.5 amd64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-openbsd-amd64-early">Download</a></td></tr>
-            <tr><th scope="row">NetBSD 10.1 amd64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-netbsd-amd64">Download</a></td></tr>
-            <tr><th scope="row">NetBSD 5.2.3 amd64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-netbsd-amd64-legacy">Download</a></td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/SHA256SUMS">Checksums</a> ·
-        <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.3">Release notes and files</a> ·
-        <a href="https://github.com/snajpa/snajpagent/releases">All releases</a></p>
-      <p>On Linux, macOS or BSD, rename the downloaded file to
-        <code>snajpagent</code>, run <code>chmod +x snajpagent</code> and keep it
-        in a user-owned directory. On Windows, keep the <code>.exe</code>
-        extension. Run it in your project directory to set up a provider.</p>
-      <p><strong>macOS first launch:</strong> these downloads are not notarized.
-        macOS can block a quarantined download with <code>Killed: 9</code>.
-        After checking its SHA-256 against the release checksums, and only if
-        you trust the file, remove quarantine from that executable:</p>
-      <pre><code>shasum -a 256 ./snajpagent
-xattr -d com.apple.quarantine ./snajpagent
-./snajpagent</code></pre>
-      <p>This exception applies to that file only; keep macOS security protections
-        enabled. <code>chmod +x</code> alone does not clear quarantine.</p>
-      <p>Stable binaries install updates in the background. The running process
-        continues using its original version; one banner tells you when to
-        restart. Set <code>auto_update = false</code> in <code>[agent]</code>
-        to opt out. See the <a href="manual.html">manual</a> for update URLs,
-        permissions and recovery.</p>
-    </section>
-    <section aria-labelledby="compatibility-heading">
-      <h2 id="compatibility-heading">Requirements</h2>
-      <ul>
-        <li><strong>Linux:</strong> the standard builds require a modern Linux
-          kernel. The separate i686 legacy build supports Linux 2.4.27 with
-          procfs and secure OS entropy; PTY commands also need devpts.</li>
-        <li><strong>macOS:</strong> experimental; macOS 11 or later. Universal
-          includes Intel and Apple Silicon. ARM64 is ad-hoc signed; Intel is
-          unsigned. Neither is Developer ID signed or notarized.</li>
-        <li><strong>Windows:</strong> experimental x64 and ARM64 builds using
-          Windows system DLLs; ARM64 needs the OS UCRT.</li>
-        <li><strong>FreeBSD:</strong> amd64 with the libc.so.7 ABI, including
-          8.4 and 14.4. The separate legacy build uses FreeBSD 5.1/5.5's libc.so.5
-          and libc_r.so.5 ABI.</li>
-        <li><strong>OpenBSD:</strong> experimental amd64 executables for 7.9,
-          5.9 and early 3.5. Choose the exact OS variant.</li>
-        <li><strong>NetBSD:</strong> experimental amd64 executables for 10.1
-          and legacy 5.2.3, with separate native thread-library ABIs.</li>
-      </ul>
-    </section>
-    <section aria-labelledby="development-heading" id="debug">
-      <h2 id="development-heading">Development builds</h2>
-      <details>
-        <summary>0.99.2-9d98036 — debug executables</summary>
-        <p>Development builds retain debugging information and default to
-          automatic updates off. Set <code>auto_update = true</code> in
-          <code>[agent]</code> to follow the development channel.</p>
-        <div class="table-scroll" role="region" aria-label="Development downloads" tabindex="0">
-          <table>
-            <caption>Debug development executables</caption>
-            <thead><tr><th scope="col">Platform</th><th scope="col">Download</th></tr></thead>
+    <p>Latest stable: <strong>0.99.3</strong> · September 8, 2026.
+      Tiers follow the project's platform development priorities.</p>
+
+    <section aria-labelledby="tier-1">
+      <h2 id="tier-1">Tier 1 — Mainstream native</h2>
+      <details class="os-family" id="linux">
+        <summary>Linux</summary>
+        <div class="family-content">
+        <section class="release" aria-labelledby="linux-0.99.3">
+          <h3 id="linux-0.99.3">snajpagent 0.99.3</h3>
+        <div class="table-scroll" role="region" aria-label="Linux 0.99.3 downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
             <tbody>
-            <tr><th scope="row">Linux x86-64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-linux-x86_64">Download</a></td></tr>
-            <tr><th scope="row">Linux ARM64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-linux-aarch64">Download</a></td></tr>
-            <tr><th scope="row">Linux i686</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-linux-i686">Download</a></td></tr>
-            <tr><th scope="row">Linux i686 legacy</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-linux-i686-legacy">Download</a></td></tr>
-            <tr><th scope="row">macOS Apple Silicon</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-macos-arm64">Download</a></td></tr>
-            <tr><th scope="row">macOS Intel</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-macos-x86_64">Download</a></td></tr>
-            <tr><th scope="row">macOS universal</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-macos-universal">Download</a></td></tr>
-            <tr><th scope="row">Windows x64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-windows-x86_64.exe">Download</a></td></tr>
-            <tr><th scope="row">Windows ARM64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-windows-arm64.exe">Download</a></td></tr>
-            <tr><th scope="row">FreeBSD amd64</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-freebsd-amd64">Download</a></td></tr>
-            <tr><th scope="row">FreeBSD amd64 legacy</th><td><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-freebsd-amd64-legacy">Download</a></td></tr>
+              <tr>
+                <td>Linux 6.12 (modern kernel)</td><td>ARM64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-linux-aarch64" title="snajpagent-0.99.3-linux-aarch64">Download</a> <span class="file-size">3.69 MiB</span>
+                  <code class="sha256">982b7e976cc9f30518a39e6b713dbb765f5713ba194538871ca813dc0820976d</code></td>
+              </tr>
+              <tr>
+                <td>Linux 6.12 (modern kernel)</td><td>i686</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-linux-i686" title="snajpagent-0.99.3-linux-i686">Download</a> <span class="file-size">3.89 MiB</span>
+                  <code class="sha256">690c43bb3d0c83d44b51d81dcb22d89158b97cd4f3674280f9bb4218f96c58cb</code></td>
+              </tr>
+              <tr>
+                <td>Linux 6.12 (modern kernel)</td><td>x86-64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-linux-x86_64" title="snajpagent-0.99.3-linux-x86_64">Download</a> <span class="file-size">3.61 MiB</span>
+                  <code class="sha256">72d8ef4300f3b118190ec693b9bada719394f4e632e65d94a7fdfb7b8182d8a4</code></td>
+              </tr>
+              <tr>
+                <td>Linux 2.4.27 (legacy)</td><td>i686</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-linux-i686-legacy" title="snajpagent-0.99.3-linux-i686-legacy">Download</a> <span class="file-size">3.87 MiB</span>
+                  <code class="sha256">397a3a015c57e25fd2a344bfd3f12421870f3738c08c8c69dc79471f92bac7a9</code></td>
+              </tr>
             </tbody>
           </table>
         </div>
-        <p><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/SHA256SUMS">Checksums</a> ·
-          <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.2-9d98036">Files and symbols</a></p>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.3">Release notes, symbols and source</a></p>
+        </section>
+        <section class="release" aria-labelledby="linux-0.99.2">
+          <h3 id="linux-0.99.2">snajpagent 0.99.2</h3>
+        <div class="table-scroll" role="region" aria-label="Linux 0.99.2 downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Linux 6.12 (modern kernel)</td><td>ARM64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2/snajpagent-0.99.2-linux-aarch64" title="snajpagent-0.99.2-linux-aarch64">Download</a> <span class="file-size">3.69 MiB</span>
+                  <code class="sha256">b11c85ea9f8cbf803518f5a701e4fe4a201c8160278903a64009b05fdcdf51d5</code></td>
+              </tr>
+              <tr>
+                <td>Linux 6.12 (modern kernel)</td><td>i686</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2/snajpagent-0.99.2-linux-i686" title="snajpagent-0.99.2-linux-i686">Download</a> <span class="file-size">3.89 MiB</span>
+                  <code class="sha256">281dc6294c544ec8d4217c5473fdfd5807416d2107db0147332dc5620f23696f</code></td>
+              </tr>
+              <tr>
+                <td>Linux 6.12 (modern kernel)</td><td>x86-64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2/snajpagent-0.99.2-linux-x86_64" title="snajpagent-0.99.2-linux-x86_64">Download</a> <span class="file-size">3.62 MiB</span>
+                  <code class="sha256">e080c00582fd4801ee1f40f1522e637f084f5f16e95fcb8b232c83304a4573b0</code></td>
+              </tr>
+              <tr>
+                <td>Linux 2.4.27 (legacy)</td><td>i686</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2/snajpagent-0.99.2-linux-i686-legacy" title="snajpagent-0.99.2-linux-i686-legacy">Download</a> <span class="file-size">3.87 MiB</span>
+                  <code class="sha256">0c3df48549089f91ade545f7758e99c73d6b28b37171fe3d51618ca1672ffc1b</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.2">Release notes, symbols and source</a></p>
+          <h4 id="linux-0.99.2-debug">Debug development · 0.99.2-9d98036</h4>
+          <p>Debug executable with symbols retained. Automatic updates default off.</p>
+        <div class="table-scroll" role="region" aria-label="Linux 0.99.2-9d98036 downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Linux 6.12 (modern kernel)</td><td>ARM64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-linux-aarch64" title="snajpagent-0.99.2-9d98036-linux-aarch64">Download</a> <span class="file-size">5.89 MiB</span>
+                  <code class="sha256">ff44bedd6e6f5d88686b1f56bc31f91c5fc4bb3ec82bcd91ddca77c597c1a463</code></td>
+              </tr>
+              <tr>
+                <td>Linux 6.12 (modern kernel)</td><td>i686</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-linux-i686" title="snajpagent-0.99.2-9d98036-linux-i686">Download</a> <span class="file-size">5.70 MiB</span>
+                  <code class="sha256">74403cb746491f32cff13e48c4e80d52ab3d6c92403c471777c6ed7ded6bcf7e</code></td>
+              </tr>
+              <tr>
+                <td>Linux 6.12 (modern kernel)</td><td>x86-64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-linux-x86_64" title="snajpagent-0.99.2-9d98036-linux-x86_64">Download</a> <span class="file-size">5.71 MiB</span>
+                  <code class="sha256">1890a49a817d25e5c26f50eacf977c8314da82126e350497326e2a0a0b560148</code></td>
+              </tr>
+              <tr>
+                <td>Linux 2.4.27 (legacy)</td><td>i686</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-linux-i686-legacy" title="snajpagent-0.99.2-9d98036-linux-i686-legacy">Download</a> <span class="file-size">5.51 MiB</span>
+                  <code class="sha256">3cae49b02acb9ecc11d69ae0858ae7565cb4f8abad1c6c85fc219f2b85b34af3</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.2-9d98036">Release notes, symbols and source</a></p>
+        </section>
+        <section class="release" aria-labelledby="linux-0.99.1">
+          <h3 id="linux-0.99.1">snajpagent 0.99.1</h3>
+        <div class="table-scroll" role="region" aria-label="Linux 0.99.1 downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Linux 6.12 (modern kernel)</td><td>ARM64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-linux-aarch64" title="snajpagent-0.99.1-linux-aarch64">Download</a> <span class="file-size">3.69 MiB</span>
+                  <code class="sha256">8915e3636887ecb1af4d72b7b7102957e56a9bec093dc870d51d523fb6e54969</code></td>
+              </tr>
+              <tr>
+                <td>Linux 6.12 (modern kernel)</td><td>i686</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-linux-i686" title="snajpagent-0.99.1-linux-i686">Download</a> <span class="file-size">3.87 MiB</span>
+                  <code class="sha256">8053366985e95f5eeefe180273928e9e8a5dda9ab883e85860c04fdd2dc6d875</code></td>
+              </tr>
+              <tr>
+                <td>Linux 6.12 (modern kernel)</td><td>x86-64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-linux-x86_64" title="snajpagent-0.99.1-linux-x86_64">Download</a> <span class="file-size">3.61 MiB</span>
+                  <code class="sha256">06dd73f9d8e5be4cb373ca04276b329f31e5f85307d6ad950d51c30e7d246059</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.1">Release notes, symbols and source</a></p>
+          <h4 id="linux-0.99.1-debug">Debug builds · 0.99.1</h4>
+          <p>Runnable executables with debugging information.</p>
+        <div class="table-scroll" role="region" aria-label="Linux 0.99.1 debug downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Linux 6.12 (modern kernel)</td><td>ARM64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-linux-aarch64-debug" title="snajpagent-0.99.1-linux-aarch64-debug">Download</a> <span class="file-size">6.01 MiB</span>
+                  <code class="sha256">0b4b73a6be7550f1fddf41b6d4778371e4a75cb646a0790bc168dde5233f9d1c</code></td>
+              </tr>
+              <tr>
+                <td>Linux 6.12 (modern kernel)</td><td>i686</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-linux-i686-debug" title="snajpagent-0.99.1-linux-i686-debug">Download</a> <span class="file-size">5.72 MiB</span>
+                  <code class="sha256">a03985c85886cbd55e6d2d3cbec090162fe97d91bfce6da9218621706929e94d</code></td>
+              </tr>
+              <tr>
+                <td>Linux 6.12 (modern kernel)</td><td>x86-64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-linux-x86_64-debug" title="snajpagent-0.99.1-linux-x86_64-debug">Download</a> <span class="file-size">5.79 MiB</span>
+                  <code class="sha256">bd55ae843b3650a5932c4ba20f5b66045f913ef2c1952fb95ed6b910ef21e98f</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/DEBUG-SHA256SUMS">DEBUG-SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.1">Release notes, symbols and source</a></p>
+        </section>
+      <h3>Install on Linux</h3>
+      <p>Rename the chosen executable to <code>snajpagent</code> and compare its
+        hash with the row above. For an archive, check the archive before
+        extracting it; the displayed hash belongs to the downloaded file.</p>
+      <pre><code>sha256sum ./snajpagent
+chmod +x ./snajpagent
+./snajpagent</code></pre>
+      <p>Keep the executable in a user-owned directory. Choose the listed OS/ABI
+        for each binary; legacy variants use their own system-library ABI.</p>
+      <p>The legacy i686 executable requires procfs and secure OS entropy;
+        PTY commands also require devpts.</p>
+      <p>Stable 0.99.2 and later install updates in the background. Set
+        <code>auto_update = false</code> in <code>[agent]</code> to opt out.
+        Development snapshots default off; set it to <code>true</code> to follow
+        <code>latest-dev</code>. Version 0.99.1 updates manually.</p>
+        </div>
       </details>
+      <details class="os-family" id="macos">
+        <summary>macOS</summary>
+        <div class="family-content">
+        <section class="release" aria-labelledby="macos-0.99.3">
+          <h3 id="macos-0.99.3">snajpagent 0.99.3</h3>
+        <div class="table-scroll" role="region" aria-label="macOS 0.99.3 downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>macOS 11 or later</td><td>Apple Silicon</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-macos-arm64" title="snajpagent-0.99.3-macos-arm64">Download</a> <span class="file-size">3.35 MiB</span>
+                  <code class="sha256">d759662a5dcc6768f2747989ae630b54df270de00d4970320764a5b6e24c8813</code></td>
+              </tr>
+              <tr>
+                <td>macOS 11 or later</td><td>Intel + Apple Silicon</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-macos-universal" title="snajpagent-0.99.3-macos-universal">Download</a> <span class="file-size">6.79 MiB</span>
+                  <code class="sha256">c5dc90ec1207b3459b5dfb4cdc99e41aa98936c0e7c450c00b81af4fc4b3b7d5</code></td>
+              </tr>
+              <tr>
+                <td>macOS 11 or later</td><td>Intel</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-macos-x86_64" title="snajpagent-0.99.3-macos-x86_64">Download</a> <span class="file-size">3.43 MiB</span>
+                  <code class="sha256">d74448f549daf9323f42232a50a98caaa7a6e724df31bca66c20321319332309</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.3">Release notes, symbols and source</a></p>
+        </section>
+        <section class="release" aria-labelledby="macos-0.99.2">
+          <h3 id="macos-0.99.2">snajpagent 0.99.2</h3>
+        <div class="table-scroll" role="region" aria-label="macOS 0.99.2 downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>macOS 11 or later</td><td>Apple Silicon</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2/snajpagent-0.99.2-macos-arm64" title="snajpagent-0.99.2-macos-arm64">Download</a> <span class="file-size">3.35 MiB</span>
+                  <code class="sha256">18e5a3b7f493c4fd90cae65f9c7b21d05d86523e7d1de2f56035784feea8d9b9</code></td>
+              </tr>
+              <tr>
+                <td>macOS 11 or later</td><td>Intel + Apple Silicon</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2/snajpagent-0.99.2-macos-universal" title="snajpagent-0.99.2-macos-universal">Download</a> <span class="file-size">6.79 MiB</span>
+                  <code class="sha256">136a44784c5189f76e3b45696d9fdbce551a7fa91dfea651863487ce96cd3cbc</code></td>
+              </tr>
+              <tr>
+                <td>macOS 11 or later</td><td>Intel</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2/snajpagent-0.99.2-macos-x86_64" title="snajpagent-0.99.2-macos-x86_64">Download</a> <span class="file-size">3.43 MiB</span>
+                  <code class="sha256">c94bcbd77b921d1d767770134c8332bed19d4bde9578cce1d388b43aa487102e</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.2">Release notes, symbols and source</a></p>
+          <h4 id="macos-0.99.2-debug">Debug development · 0.99.2-9d98036</h4>
+          <p>Debug executable with symbols retained. Automatic updates default off.</p>
+        <div class="table-scroll" role="region" aria-label="macOS 0.99.2-9d98036 downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>macOS 11 or later</td><td>Apple Silicon</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-macos-arm64" title="snajpagent-0.99.2-9d98036-macos-arm64">Download</a> <span class="file-size">4.28 MiB</span>
+                  <code class="sha256">43e4712cb5aae17873bff780a709e8918fb650ece6e845f657f14441305a48d0</code></td>
+              </tr>
+              <tr>
+                <td>macOS 11 or later</td><td>Intel + Apple Silicon</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-macos-universal" title="snajpagent-0.99.2-9d98036-macos-universal">Download</a> <span class="file-size">8.67 MiB</span>
+                  <code class="sha256">1f6304b5097353f5e44759a592cbbad80949063e6d96ccc21b70c78d5336701b</code></td>
+              </tr>
+              <tr>
+                <td>macOS 11 or later</td><td>Intel</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-macos-x86_64" title="snajpagent-0.99.2-9d98036-macos-x86_64">Download</a> <span class="file-size">4.37 MiB</span>
+                  <code class="sha256">34e0e7e0e372752881093847055bdc5214368c73588c56f37e8f6f849399bdba</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.2-9d98036">Release notes, symbols and source</a></p>
+        </section>
+        <section class="release" aria-labelledby="macos-0.99.1">
+          <h3 id="macos-0.99.1">snajpagent 0.99.1</h3>
+        <div class="table-scroll" role="region" aria-label="macOS 0.99.1 downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>macOS 11 or later</td><td>Apple Silicon</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-macos-arm64" title="snajpagent-0.99.1-macos-arm64">Download</a> <span class="file-size">3.35 MiB</span>
+                  <code class="sha256">9aadba2fceb0e072910cddf802ce1f735b07dff55c8cf855ce3e44189b0b1ffc</code></td>
+              </tr>
+              <tr>
+                <td>macOS 11 or later</td><td>Intel + Apple Silicon</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-macos-universal" title="snajpagent-0.99.1-macos-universal">Download</a> <span class="file-size">6.79 MiB</span>
+                  <code class="sha256">d8dfec270e5910499cd821e8fd4390eeeafc6c27494f2b994ad32a15e06d11a5</code></td>
+              </tr>
+              <tr>
+                <td>macOS 11 or later</td><td>Intel</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-macos-x86_64" title="snajpagent-0.99.1-macos-x86_64">Download</a> <span class="file-size">3.43 MiB</span>
+                  <code class="sha256">8e78d45d64def2c14ffd86828ee70de9f3c12615db58ac0dbce50b51abbb7171</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.1">Release notes, symbols and source</a></p>
+          <h4 id="macos-0.99.1-debug">Debug builds · 0.99.1</h4>
+          <p>Runnable debug builds. The macOS archives include the executable and dSYM.</p>
+        <div class="table-scroll" role="region" aria-label="macOS 0.99.1 debug downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>macOS 11 or later</td><td>Apple Silicon</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-macos-arm64-debug.tar.gz" title="snajpagent-0.99.1-macos-arm64-debug.tar.gz">Download archive</a> <span class="file-size">5.31 MiB</span>
+                  <code class="sha256">03679526905796e1e75f6daa2816426979b38fe5bb577c1f81acc43d9f6c9761</code></td>
+              </tr>
+              <tr>
+                <td>macOS 11 or later</td><td>Intel + Apple Silicon</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-macos-universal-debug.tar.gz" title="snajpagent-0.99.1-macos-universal-debug.tar.gz">Download archive</a> <span class="file-size">10.67 MiB</span>
+                  <code class="sha256">8c25ee501765a312e67401cf463d20f9a478fab3b9577867e41eb4f1ddb36a76</code></td>
+              </tr>
+              <tr>
+                <td>macOS 11 or later</td><td>Intel</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-macos-x86_64-debug.tar.gz" title="snajpagent-0.99.1-macos-x86_64-debug.tar.gz">Download archive</a> <span class="file-size">5.62 MiB</span>
+                  <code class="sha256">420c6c9c235b966f6d6bf9eed3b9025d9fae6442e1117f1433a34e667b6aed56</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/DEBUG-SHA256SUMS">DEBUG-SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.1">Release notes, symbols and source</a></p>
+        </section>
+      <h3>Install on macOS</h3>
+      <p>Rename the chosen executable to <code>snajpagent</code> and compare its
+        hash with the row above. For an archive, check the archive before
+        extracting it; the displayed hash belongs to the downloaded file.</p>
+      <pre><code>shasum -a 256 ./snajpagent
+chmod +x ./snajpagent</code></pre>
+      <p>If macOS blocks the downloaded file, and you trust it, remove quarantine
+        from that executable only, then launch it:</p>
+      <pre><code>xattr -d com.apple.quarantine ./snajpagent
+./snajpagent</code></pre>
+      <p>For a debug archive, use <code>shasum -a 256 FILE.tar.gz</code>, then
+        <code>tar -xzf FILE.tar.gz</code>. Apply the launch steps to the extracted
+        <code>snajpagent</code>. These builds are not Developer ID signed or
+        notarized. Keep system-wide macOS protections enabled.</p>
+      <p>Stable 0.99.2 and later install updates in the background. Set
+        <code>auto_update = false</code> in <code>[agent]</code> to opt out.
+        Development snapshots default off; set it to <code>true</code> to follow
+        <code>latest-dev</code>. Version 0.99.1 updates manually.</p>
+        </div>
+      </details>
+      <details class="os-family" id="windows">
+        <summary>Windows</summary>
+        <div class="family-content">
+        <section class="release" aria-labelledby="windows-0.99.3">
+          <h3 id="windows-0.99.3">snajpagent 0.99.3</h3>
+        <div class="table-scroll" role="region" aria-label="Windows 0.99.3 downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Windows 10 / 11, OS UCRT</td><td>ARM64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-windows-arm64.exe" title="snajpagent-0.99.3-windows-arm64.exe">Download</a> <span class="file-size">3.96 MiB</span>
+                  <code class="sha256">7a7a952e8914a8ea451ba642a28cd6e1cda160c79f026d1ec59f9edce70da167</code></td>
+              </tr>
+              <tr>
+                <td>Windows 10 / 11</td><td>x86-64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-windows-x86_64.exe" title="snajpagent-0.99.3-windows-x86_64.exe">Download</a> <span class="file-size">4.24 MiB</span>
+                  <code class="sha256">feba2d7c428fc8dc739a73e9a268c32e3d8c3bdf23b57ea7b4da6070b02e70d4</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.3">Release notes, symbols and source</a></p>
+        </section>
+        <section class="release" aria-labelledby="windows-0.99.2">
+          <h3 id="windows-0.99.2">snajpagent 0.99.2</h3>
+        <div class="table-scroll" role="region" aria-label="Windows 0.99.2 downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Windows 10 / 11, OS UCRT</td><td>ARM64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2/snajpagent-0.99.2-windows-arm64.exe" title="snajpagent-0.99.2-windows-arm64.exe">Download</a> <span class="file-size">3.96 MiB</span>
+                  <code class="sha256">ca3c6f29a80088c78662b0f9debebbc053844ed08a3b1c7f4d5e2acaac0a5287</code></td>
+              </tr>
+              <tr>
+                <td>Windows 10 / 11</td><td>x86-64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2/snajpagent-0.99.2-windows-x86_64.exe" title="snajpagent-0.99.2-windows-x86_64.exe">Download</a> <span class="file-size">4.24 MiB</span>
+                  <code class="sha256">b9886a0bfe10a63975084ef03389e14610baec1cc879963bacab64af576194eb</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.2">Release notes, symbols and source</a></p>
+          <h4 id="windows-0.99.2-debug">Debug development · 0.99.2-9d98036</h4>
+          <p>Debug executable with symbols retained. Automatic updates default off.</p>
+        <div class="table-scroll" role="region" aria-label="Windows 0.99.2-9d98036 downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Windows 10 / 11, OS UCRT</td><td>ARM64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-windows-arm64.exe" title="snajpagent-0.99.2-9d98036-windows-arm64.exe">Download</a> <span class="file-size">7.62 MiB</span>
+                  <code class="sha256">2dd1ac5937e8435929bb37f1eba3853a53ec046e9b0129151723b70fae686a43</code></td>
+              </tr>
+              <tr>
+                <td>Windows 10 / 11</td><td>x86-64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-windows-x86_64.exe" title="snajpagent-0.99.2-9d98036-windows-x86_64.exe">Download</a> <span class="file-size">8.90 MiB</span>
+                  <code class="sha256">f1927bf56243fd1fd37f8108488dbd6fe111d5a370fe8a48aa46d91a558a126f</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.2-9d98036">Release notes, symbols and source</a></p>
+        </section>
+        <section class="release" aria-labelledby="windows-0.99.1">
+          <h3 id="windows-0.99.1">snajpagent 0.99.1</h3>
+        <div class="table-scroll" role="region" aria-label="Windows 0.99.1 downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Windows 10 / 11, OS UCRT</td><td>ARM64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-windows-arm64.exe" title="snajpagent-0.99.1-windows-arm64.exe">Download</a> <span class="file-size">3.95 MiB</span>
+                  <code class="sha256">7cc8bb622cfa89c8056ad5499956fb23082a073bb56df7368b59216cdd13f078</code></td>
+              </tr>
+              <tr>
+                <td>Windows 10 / 11</td><td>x86-64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-windows-x86_64.exe" title="snajpagent-0.99.1-windows-x86_64.exe">Download</a> <span class="file-size">3.82 MiB</span>
+                  <code class="sha256">048b0ef4aa33f947a5a310cb4b016f815944b6746918fb1605c48764b012f2f0</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.1">Release notes, symbols and source</a></p>
+          <h4 id="windows-0.99.1-debug">Debug builds · 0.99.1</h4>
+          <p>Runnable executables with debugging information.</p>
+        <div class="table-scroll" role="region" aria-label="Windows 0.99.1 debug downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Windows 10 / 11, OS UCRT</td><td>ARM64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-windows-arm64-debug.exe" title="snajpagent-0.99.1-windows-arm64-debug.exe">Download</a> <span class="file-size">7.66 MiB</span>
+                  <code class="sha256">b6f522d1f70155f8e210765da95ccfb617acb140bbdb1d6bf47447976e1edca4</code></td>
+              </tr>
+              <tr>
+                <td>Windows 10 / 11</td><td>x86-64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/snajpagent-0.99.1-windows-x86_64-debug.exe" title="snajpagent-0.99.1-windows-x86_64-debug.exe">Download</a> <span class="file-size">6.56 MiB</span>
+                  <code class="sha256">5a973afc8af6afc703cb6492537abe7702ec195133504a83ee816bfb0895cc1f</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/DEBUG-SHA256SUMS">DEBUG-SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.1">Release notes, symbols and source</a></p>
+        </section>
+      <h3>Install on Windows</h3>
+      <p>Check the selected file in PowerShell before running it:</p>
+      <pre><code>Get-FileHash .\snajpagent-*.exe -Algorithm SHA256</code></pre>
+      <p>Compare the hash with the row above. Rename the chosen executable to
+        <code>snajpagent.exe</code> and run it in your project directory.</p>
+        </div>
+      </details>
+    </section>
+    <section aria-labelledby="tier-2">
+      <h2 id="tier-2">Tier 2 — Legacy and practical breadth</h2>
+      <details class="os-family" id="freebsd">
+        <summary>FreeBSD</summary>
+        <div class="family-content">
+        <section class="release" aria-labelledby="freebsd-0.99.3">
+          <h3 id="freebsd-0.99.3">snajpagent 0.99.3</h3>
+        <div class="table-scroll" role="region" aria-label="FreeBSD 0.99.3 downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>FreeBSD 8.4 / 14.4; libc.so.7</td><td>amd64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-freebsd-amd64" title="snajpagent-0.99.3-freebsd-amd64">Download</a> <span class="file-size">3.81 MiB</span>
+                  <code class="sha256">82f918b039e92f3e6f1d86d64ded9eda67ca3fb3272a21a70fe34953c154c700</code></td>
+              </tr>
+              <tr>
+                <td>FreeBSD 5.1 / 5.5; libc.so.5, libc_r.so.5</td><td>amd64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-freebsd-amd64-legacy" title="snajpagent-0.99.3-freebsd-amd64-legacy">Download</a> <span class="file-size">3.92 MiB</span>
+                  <code class="sha256">fa95b6116ae90fba5ba067f4dca932399ff571f99a18947aef3240f2187f45d9</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.3">Release notes, symbols and source</a></p>
+        </section>
+        <section class="release" aria-labelledby="freebsd-0.99.2">
+          <h3 id="freebsd-0.99.2">snajpagent 0.99.2</h3>
+        <div class="table-scroll" role="region" aria-label="FreeBSD 0.99.2 downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>FreeBSD 8.4 / 14.4; libc.so.7</td><td>amd64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2/snajpagent-0.99.2-freebsd-amd64" title="snajpagent-0.99.2-freebsd-amd64">Download</a> <span class="file-size">3.81 MiB</span>
+                  <code class="sha256">b44f2164860dbef6f4c2c670fff307f9be79587ec4213f6adba7cd05b98d555e</code></td>
+              </tr>
+              <tr>
+                <td>FreeBSD 5.5; libc.so.5, libpthread.so.1</td><td>amd64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2/snajpagent-0.99.2-freebsd-amd64-legacy" title="snajpagent-0.99.2-freebsd-amd64-legacy">Download</a> <span class="file-size">3.72 MiB</span>
+                  <code class="sha256">44ea64d986b2f777f97382e3a7deaafa4c270b43aa17d0c0ce137a76be9cb2d7</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.2">Release notes, symbols and source</a></p>
+          <h4 id="freebsd-0.99.2-debug">Debug development · 0.99.2-9d98036</h4>
+          <p>Debug executable with symbols retained. Automatic updates default off.</p>
+        <div class="table-scroll" role="region" aria-label="FreeBSD 0.99.2-9d98036 downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>FreeBSD 8.4 / 14.4; libc.so.7</td><td>amd64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-freebsd-amd64" title="snajpagent-0.99.2-9d98036-freebsd-amd64">Download</a> <span class="file-size">14.62 MiB</span>
+                  <code class="sha256">1e8883361a362282e70ad325861401518f378e41d84b82f99e9f180194dfa87f</code></td>
+              </tr>
+              <tr>
+                <td>FreeBSD 5.5; libc.so.5, libpthread.so.1</td><td>amd64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-freebsd-amd64-legacy" title="snajpagent-0.99.2-9d98036-freebsd-amd64-legacy">Download</a> <span class="file-size">14.49 MiB</span>
+                  <code class="sha256">748f7f2c82132edb8e800b9cefa4ae4f08bf2f170a1a0582b245a993924e4a71</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.2-9d98036">Release notes, symbols and source</a></p>
+        </section>
+      <h3>Install on FreeBSD</h3>
+      <p>Rename the chosen executable to <code>snajpagent</code> and compare its
+        hash with the row above. For an archive, check the archive before
+        extracting it; the displayed hash belongs to the downloaded file.</p>
+      <pre><code>sha256 -q ./snajpagent
+chmod +x ./snajpagent
+./snajpagent</code></pre>
+      <p>Keep the executable in a user-owned directory. Choose the listed OS/ABI
+        for each binary; legacy variants use their own system-library ABI.</p>
+      <p>Stable 0.99.2 and later install updates in the background. Set
+        <code>auto_update = false</code> in <code>[agent]</code> to opt out.
+        Development snapshots default off; set it to <code>true</code> to follow
+        <code>latest-dev</code>. Version 0.99.1 updates manually.</p>
+        </div>
+      </details>
+      <details class="os-family" id="openbsd">
+        <summary>OpenBSD</summary>
+        <div class="family-content">
+        <section class="release" aria-labelledby="openbsd-0.99.3">
+          <h3 id="openbsd-0.99.3">snajpagent 0.99.3</h3>
+        <div class="table-scroll" role="region" aria-label="OpenBSD 0.99.3 downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>OpenBSD 7.9</td><td>amd64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-openbsd-amd64" title="snajpagent-0.99.3-openbsd-amd64">Download</a> <span class="file-size">4.13 MiB</span>
+                  <code class="sha256">ed27b02373ed54bfdefb463fd53ac2cff748cb385b78b9a0827d47c38018da29</code></td>
+              </tr>
+              <tr>
+                <td>OpenBSD 3.5</td><td>amd64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-openbsd-amd64-early" title="snajpagent-0.99.3-openbsd-amd64-early">Download</a> <span class="file-size">3.90 MiB</span>
+                  <code class="sha256">9936d361dc69e36aa48a05e2697568c6711278a52ce9952444b8a88757511cfa</code></td>
+              </tr>
+              <tr>
+                <td>OpenBSD 5.9</td><td>amd64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-openbsd-amd64-legacy" title="snajpagent-0.99.3-openbsd-amd64-legacy">Download</a> <span class="file-size">4.13 MiB</span>
+                  <code class="sha256">74744025685f68d7b96bd8e040e73cce9b1593509c2e10c505fb22505e2a9be0</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.3">Release notes, symbols and source</a></p>
+        </section>
+      <h3>Install on OpenBSD</h3>
+      <p>Rename the chosen executable to <code>snajpagent</code> and compare its
+        hash with the row above. For an archive, check the archive before
+        extracting it; the displayed hash belongs to the downloaded file.</p>
+      <pre><code>sha256 -q ./snajpagent
+chmod +x ./snajpagent
+./snajpagent</code></pre>
+      <p>Keep the executable in a user-owned directory. Choose the listed OS/ABI
+        for each binary; legacy variants use their own system-library ABI.</p>
+      <p>Stable 0.99.2 and later install updates in the background. Set
+        <code>auto_update = false</code> in <code>[agent]</code> to opt out.
+        Development snapshots default off; set it to <code>true</code> to follow
+        <code>latest-dev</code>. Version 0.99.1 updates manually.</p>
+        </div>
+      </details>
+      <details class="os-family" id="netbsd">
+        <summary>NetBSD</summary>
+        <div class="family-content">
+        <section class="release" aria-labelledby="netbsd-0.99.3">
+          <h3 id="netbsd-0.99.3">snajpagent 0.99.3</h3>
+        <div class="table-scroll" role="region" aria-label="NetBSD 0.99.3 downloads" tabindex="0">
+          <table class="download-table">
+            <thead><tr><th scope="col">OS version / ABI</th><th scope="col">Architecture</th><th scope="col">Download · size · SHA-256</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>NetBSD 10.1; libpthread.so.1</td><td>amd64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-netbsd-amd64" title="snajpagent-0.99.3-netbsd-amd64">Download</a> <span class="file-size">4.08 MiB</span>
+                  <code class="sha256">2d8333677a97329f2b7ba3dbcbff9ee5996e667e8d600255d3fa5a0efa7419e5</code></td>
+              </tr>
+              <tr>
+                <td>NetBSD 5.2.3; libpthread.so.0</td><td>amd64</td>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/snajpagent-0.99.3-netbsd-amd64-legacy" title="snajpagent-0.99.3-netbsd-amd64-legacy">Download</a> <span class="file-size">3.98 MiB</span>
+                  <code class="sha256">aace5895082c9ad9bdafe9f1bc145076fa50540c829e39b335474b0ce3fdddef</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.3">Release notes, symbols and source</a></p>
+        </section>
+      <h3>Install on NetBSD</h3>
+      <p>Rename the chosen executable to <code>snajpagent</code> and compare its
+        hash with the row above. For an archive, check the archive before
+        extracting it; the displayed hash belongs to the downloaded file.</p>
+      <pre><code>sha256 ./snajpagent
+chmod +x ./snajpagent
+./snajpagent</code></pre>
+      <p>Keep the executable in a user-owned directory. Choose the listed OS/ABI
+        for each binary; legacy variants use their own system-library ABI.</p>
+      <p>Stable 0.99.2 and later install updates in the background. Set
+        <code>auto_update = false</code> in <code>[agent]</code> to opt out.
+        Development snapshots default off; set it to <code>true</code> to follow
+        <code>latest-dev</code>. Version 0.99.1 updates manually.</p>
+        </div>
+      </details>
+      <p class="coming-soon">Android / Termux <span>(coming soon)</span></p>
+    </section>
+    <section aria-labelledby="tier-3">
+      <h2 id="tier-3">Tier 3 — Exotic and experimental</h2>
+      <p class="coming-soon">Redox <span>(coming soon)</span></p>
+      <p class="coming-soon">DragonFly BSD <span>(coming soon)</span></p>
+      <p class="coming-soon">illumos / OpenIndiana <span>(coming soon)</span></p>
+      <p class="coming-soon">AIX <span>(coming soon)</span></p>
+      <p class="coming-soon">Haiku <span>(coming soon)</span></p>
+      <p class="coming-soon">ReactOS <span>(coming soon)</span></p>
     </section>
     <section aria-labelledby="changelog">
       <h2 id="changelog">Release log</h2>
@@ -153,9 +662,6 @@ First standalone binary release.
         dependencies retain their own licenses.</p>
     </section>
   </main>
-  <footer>
-    <p><a href="index.html">snajpagent</a> ·
-      <a href="https://github.com/snajpa/snajpagent/blob/master/COPYING">GPL-2.0-only</a></p>
-  </footer>
+  <footer>snajpagent · <a href="https://github.com/snajpa/snajpagent/blob/master/COPYING">GPL-2.0-only</a></footer>
 </body>
 </html>

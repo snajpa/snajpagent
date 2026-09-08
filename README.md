@@ -193,8 +193,25 @@ snajpagent is written in C so the agent itself can run on more of the systems
 where development happens, including unfamiliar ones.
 
 [Download an executable](https://agent.snajpa.net/downloads.html) for your platform
-and verify `SHA256SUMS`. [Debug builds](https://agent.snajpa.net/downloads.html#debug)
-are also available.
+and verify `SHA256SUMS`. Runnable debug builds appear below their release in each operating-system panel.
+
+On macOS, rename the downloaded executable to `snajpagent`, check its SHA-256
+against the download row, and make it executable:
+
+```sh
+shasum -a 256 ./snajpagent
+chmod +x ./snajpagent
+```
+
+If macOS blocks the file and you trust it, remove quarantine from that file only:
+
+```sh
+xattr -d com.apple.quarantine ./snajpagent
+./snajpagent
+```
+
+For a debug archive, check its hash before extracting it; run the commands above
+on the extracted executable. Keep system-wide macOS protections enabled.
 
 Official stable binaries check and install updates in the background on launch.
 The current process keeps running; one banner links to the release log and asks

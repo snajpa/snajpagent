@@ -159,3 +159,26 @@ footer {
   .manual-text pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .manual-text a { color: inherit; }
 }
+
+/* OS-family disclosures keep every file and its checksum together. */
+.downloads .os-family { border-bottom: 1px solid var(--rule); }
+.downloads .os-family > summary { cursor: pointer; padding: 0.8rem 0; font-size: 1.15rem; }
+.downloads summary:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; }
+.downloads .family-content { padding: 0 0 1.5rem; }
+.downloads .release { margin: 1.5rem 0 2.5rem; }
+.downloads .release h3 { margin-bottom: 0.5rem; }
+.downloads .release h4 { margin: 1.5rem 0 0.5rem; }
+.downloads .download-table { table-layout: fixed; }
+.downloads .download-table th:nth-child(1) { width: 27%; }
+.downloads .download-table th:nth-child(2) { width: 17%; }
+.downloads .download-table td { vertical-align: top; overflow-wrap: anywhere; }
+.downloads .sha256 { display: block; overflow-wrap: anywhere; user-select: all; font-size: 0.8rem; line-height: 1.5; margin-top: 0.5rem; }
+.downloads .file-size, .downloads .coming-soon span { color: var(--dim); }
+.downloads .coming-soon { padding: 0.8rem 0; margin: 0; border-bottom: 1px solid var(--rule); }
+@media (max-width: 36rem) {
+  .downloads .download-table { font-size: 0.85rem; }
+  .downloads .download-table th, .downloads .download-table td { padding: 0.5rem 0.25rem; }
+  .downloads .download-table th:nth-child(1) { width: 29%; }
+  .downloads .download-table th:nth-child(2) { width: 21%; }
+  .downloads .sha256 { font-size: 0.72rem; }
+}
