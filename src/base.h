@@ -8,7 +8,6 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <time.h>
-#include <errno.h>
 
 #ifndef EOVERFLOW
 #define EOVERFLOW ERANGE /* Old BSD reports range overflow without a distinct errno. */

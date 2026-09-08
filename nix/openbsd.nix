@@ -310,6 +310,9 @@ let
       # public header's private struct member; its layout and library ABI stay.
       substituteInPlace "$out/include/snajpagent-gnulib-regex.h" \
         --replace-fail '__REPB_PREFIX(used)' '__REPB_PREFIX(snag_used)'
+    '' + lib.optionalString early ''
+      # Export the same missing errno values used inside the Unicode library.
+      cp lib/errno.h "$out/include/errno.h"
     '';
   });
   networkLibraries = [ tls zlib brotli zstd cares nghttp2 iconv unistring idn2 ];
