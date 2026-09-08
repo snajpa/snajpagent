@@ -87,7 +87,11 @@ let
     chmod +x "$out/bin/clang"
     ln -s clang "$out/bin/clang++"
   '';
-  cflags = "-Os -g -D__BSD_VISIBLE=1" + lib.optionalString (!legacy) " -fstack-protector-strong";
+  # Early libc_r enters user thread stacks eight bytes off the amd64 ABI.
+  # Realign compiled entry points, including library callbacks and workers.
+  cflags = "-Os -g -D__BSD_VISIBLE=1"
+    + lib.optionalString early " -mstackrealign"
+    + lib.optionalString (!legacy) " -fstack-protector-strong";
   ldflags = "--ld-path=${llvm.lld}/bin/ld.lld -static";
   compilerBuiltins = pkgs.runCommand "compiler-rt-freebsd-${osVersion}" {} ''
     mkdir -p "$out/lib"
