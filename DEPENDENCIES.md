@@ -33,6 +33,16 @@ so 32-bit libc builds retain large-file seek/stat/truncate support. Keep that
 feature macro when replacing CPPFLAGS. This does not enlarge a 32-bit address
 space or claim that every old kernel supports modern time/thread APIs.
 
+`make prod-linux-ppc32` uses the pinned big-endian PowerPC musl toolchain,
+32-bit hard-float ABI and static compiler atomics for 64-bit shared state.
+The static PIE embeds application libraries, TLS and trust roots and has no
+ELF interpreter or shared-library dependency. Existing base/configuration/SSE/
+IRC/tools tests and full-agent read-only, parallel-command, PTY, resume and TLS
+checks run on Debian 8.11 / Linux 3.16.0-6-powerpc with QEMU's PowerPC 750 CPU.
+The guest requires a working OS entropy source; pre-5.6 Linux `/dev/random`
+can block when its pool is depleted. Earlier kernels, soft-float systems and
+physical-system performance remain unmeasured.
+
 `make prod-linux-ppc64le` uses the pinned musl POWER8 little-endian toolchain
 and ELFv2 ABI. The static PIE embeds application libraries, TLS and trust
 roots, and needs no ELF interpreter or shared libraries. Existing

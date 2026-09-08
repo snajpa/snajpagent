@@ -272,6 +272,12 @@ assert ('linux-ppc64le = (linux pkgs.pkgsCross.musl-power).application '
         '(args "linux-ppc64le");') in portable
 print("PASS: POWER8 Linux matrix target uses static musl and its own identity")
 
+assert "linux-ppc32" in release.targets()
+assert 'linux-ppc32 = (linux (import pkgs.path {' in portable
+assert 'crossSystem.config = "powerpc-unknown-linux-musl";' in portable
+assert '})).application (args "linux-ppc32");' in portable
+print("PASS: big-endian PowerPC32 matrix target selects static musl")
+
 
 
 # Bootstrap download failure must try the next pinned URL before nix-build.

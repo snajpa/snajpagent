@@ -59,6 +59,10 @@ in assert buildRevision == null || buildRevision == revision; rec {
   linux-armv6 = (linux pkgs.pkgsCross.muslpi).application (args "linux-armv6");
   linux-riscv64 = (linux pkgs.pkgsCross.riscv64-musl).application (args "linux-riscv64");
   linux-ppc64le = (linux pkgs.pkgsCross.musl-power).application (args "linux-ppc64le");
+  linux-ppc32 = (linux (import pkgs.path {
+    crossSystem.config = "powerpc-unknown-linux-musl";
+    overlays = [ (import ./source-mirrors.nix) ];
+  })).application (args "linux-ppc32");
   netbsd-amd64 = (import ./netbsd.nix {
     inherit pkgs;
     sourcePkgs = static;

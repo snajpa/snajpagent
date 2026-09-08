@@ -243,6 +243,7 @@ for platform scope.
 1/Zero-class systems and ARMv7, with an ARMv6KZ/VFPv2 baseline.
 `make prod-linux-riscv64` builds a RISC-V RV64GC/LP64D static PIE.
 `make prod-linux-ppc64le` builds a little-endian POWER8 ELFv2 static PIE.
+`make prod-linux-ppc32` builds a separate 32-bit big-endian PowerPC static PIE.
 `make prod-linux-i686` builds modern 32-bit Linux static PIE.
 `make prod-linux-i686-legacy` builds a separate static non-PIE executable for
 Linux 2.4.27, with embedded TLS, roots and locale data.

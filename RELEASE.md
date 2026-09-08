@@ -58,6 +58,7 @@ The current required outputs are:
 | `linux-armv6` | `snajpagent` | Shared ARMv6/ARMv7 hard-float static PIE; ARMv6KZ/VFPv2 baseline; experimental |
 | `linux-riscv64` | `snajpagent` | RV64GC/LP64D static PIE with embedded application libraries and trust roots; experimental |
 | `linux-ppc64le` | `snajpagent` | POWER8 little-endian ELFv2 static PIE with embedded application libraries and trust roots; experimental |
+| `linux-ppc32` | `snajpagent` | 32-bit big-endian PowerPC hard-float static PIE; needs secure OS entropy; experimental |
 | `linux-i686` | `snajpagent` | 32-bit self-contained static PIE; not Linux 2.4 qualification |
 | `linux-i686-legacy` | `snajpagent` | Static non-PIE LinuxThreads; Linux 2.4.27 exercised; added after 0.99.1 |
 | `macos-x86_64` | `snajpagent` | Intel, static application libraries; experimental |
