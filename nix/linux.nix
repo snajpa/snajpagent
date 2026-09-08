@@ -55,6 +55,42 @@ let
     patches = (old.patches or []) ++ [ ./poppler-static-fonts.patch ];
   });
   office = import ./office-linux.nix { inherit pkgs musl static; };
+  # Static musl cannot load miniaudio's usual shared backend libraries.
+  alsa = static.alsa-lib.overrideAttrs (old: {
+    # Change the runtime default only; installation stays inside the Nix output.
+    postConfigure = (old.postConfigure or "") + ''
+      substituteInPlace include/config.h \
+        --replace-fail "#define ALSA_CONFIG_DIR \"$out/share/alsa\"" \
+                       '#define ALSA_CONFIG_DIR "/usr/share/alsa"'
+    '';
+  });
+  pulse = static.libpulseaudio.overrideAttrs (old: {
+    # Upstream forces shared client libraries. Build only the client statically.
+    meta = old.meta // { badPlatforms = []; };
+    nativeBuildInputs = [ pkgs.meson pkgs.ninja pkgs.pkg-config pkgs.gettext pkgs.perl pkgs.m4 ];
+    buildInputs = [ static.check ];
+    propagatedBuildInputs = [ static.libsndfile ];
+    postPatch = (old.postPatch or "") + ''
+      substituteInPlace src/meson.build src/pulse/meson.build \
+        --replace-fail 'shared_library(' 'library('
+      substituteInPlace meson.build \
+        --replace-fail "dependency('sndfile', version : '>= 1.0.20')" \
+                       "dependency('sndfile', version : '>= 1.0.20', static : true)"
+    '';
+    mesonFlags = [
+      "--default-library=static" "-Dauto_features=disabled" "--sysconfdir=/etc"
+      "-Dsysconfdir_install=${placeholder "out"}/etc"
+      "-Ddaemon=false" "-Dclient=true" "-Ddoxygen=false" "-Dman=false"
+      "-Dtests=true" "-Ddatabase=simple" "-Ddbus=disabled" "-Dglib=disabled"
+      "-Dsystemd=disabled" "-Doss-output=disabled"
+    ];
+    doInstallCheck = false;
+    postInstall = ''
+      sed -i '/^Libs.private:/ s/$/ -lm -pthread -lrt/' "$out/lib/pkgconfig/libpulse.pc"
+      printf '\nRequires.private: sndfile\n' >> "$out/lib/pkgconfig/libpulse.pc"
+    '';
+    preFixup = "";
+  });
   tls = static.mbedtls;
   curl = (static.curlMinimal.override {
     opensslSupport = false;
@@ -79,7 +115,7 @@ let
     ];
   });
 in {
-  inherit static tls curl av pdf office fontconfig;
+  inherit static tls curl av pdf office fontconfig alsa pulse;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }: musl.stdenv.mkDerivation {
     pname = packageName;
@@ -87,7 +123,7 @@ in {
     src = source;
     outputs = [ "out" "debug" ];
     nativeBuildInputs = [ musl.buildPackages.pkg-config ];
-    buildInputs = [ static.jansson curl av pdf static.libpng static.libarchive static.libxml2 ];
+    buildInputs = [ static.jansson curl av pdf static.libpng static.libarchive static.libxml2 alsa pulse ];
     enableParallelBuilding = true;
     dontStrip = true;
     preBuild = ''
@@ -113,7 +149,8 @@ in {
         "AV_LIBS=$($PKG_CONFIG --static --libs libavformat libavcodec libavutil libswresample libswscale)"
         "PDF_CFLAGS=$($PKG_CONFIG --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')"
         "PDF_LIBS=$($PKG_CONFIG --static --libs poppler libpng) -lstdc++"
-        'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}'
+        "MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src} $($PKG_CONFIG --cflags alsa libpulse) -DMA_NO_RUNTIME_LINKING -DMA_ENABLE_ONLY_SPECIFIC_BACKENDS -DMA_ENABLE_ALSA -DMA_ENABLE_PULSEAUDIO"
+        "AUDIO_DEVICE_LIBS=$($PKG_CONFIG --static --libs alsa libpulse)"
       )
     '';
     installPhase = ''

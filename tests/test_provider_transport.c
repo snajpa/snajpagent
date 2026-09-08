@@ -31,6 +31,28 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#if SNAJPAGENT_AUDIO_DEVICE && defined(MA_NO_RUNTIME_LINKING) && defined(MA_ENABLE_ALSA)
+#include <alsa/asoundlib.h>
+
+/* Read configuration defaults only; never enumerate or open an audio device. */
+static void test_static_alsa_config(void)
+{
+    const char *dirs[] = {NULL, "/fixture/alsa"};
+    for (size_t i = 0; i < sizeof(dirs) / sizeof(dirs[0]); ++i) {
+        pid_t child = fork();
+        assert(child >= 0);
+        if (!child) {
+            assert((dirs[i] ? setenv("ALSA_CONFIG_DIR", dirs[i], 1) : unsetenv("ALSA_CONFIG_DIR")) == 0);
+            assert(!strcmp(snd_config_topdir(), dirs[i] ? dirs[i] : "/usr/share/alsa"));
+            _exit(0);
+        }
+        int status; pid_t done;
+        do { done = waitpid(child, &status, 0); } while (done < 0 && errno == EINTR);
+        assert(done == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    }
+}
+#endif
+
 #define REQUEST_MAX (64u * 1024u)
 #define BODY_MAX (32u * 1024u)
 
@@ -2423,6 +2445,9 @@ int
 main(void)
 {
     test_irc_failed_intent_retains_pending();
+#if SNAJPAGENT_AUDIO_DEVICE && defined(MA_NO_RUNTIME_LINKING) && defined(MA_ENABLE_ALSA)
+    test_static_alsa_config();
+#endif
     test_voice_protocol();
     test_voice_async_asr();
     test_voice_captions();

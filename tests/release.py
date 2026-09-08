@@ -639,3 +639,15 @@ print("PASS: portable PDF font fallback uses host directories")
 curl_recipe = linux.split("curl = (static.curlMinimal.override {", 1)[1].split("}).overrideAttrs", 1)[0]
 assert "websocketSupport = true;" in curl_recipe
 print("PASS: portable Linux curl enables realtime WebSockets")
+
+# Static musl needs linked device clients rather than miniaudio's dlopen path.
+for flag in ("MA_NO_RUNTIME_LINKING", "MA_ENABLE_ONLY_SPECIFIC_BACKENDS",
+             "MA_ENABLE_ALSA", "MA_ENABLE_PULSEAUDIO"):
+    assert "-D" + flag in linux
+assert '"AUDIO_DEVICE_LIBS=$($PKG_CONFIG --static --libs alsa libpulse)"' in linux
+assert 'propagatedBuildInputs = [ static.libsndfile ];' in linux
+assert 'Requires.private: sndfile' in linux
+assert '#define ALSA_CONFIG_DIR "/usr/share/alsa"' in linux
+assert 'substituteInPlace include/config.h' in linux
+assert '"-Ddaemon=false" "-Dclient=true"' in linux
+print("PASS: portable Linux links audio clients and uses host ALSA configuration")

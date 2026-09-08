@@ -3388,6 +3388,11 @@ Build a custom executable without capture, playback or audio-device enumeration.
 The default is WITH_AUDIO_DEVICE=1. MINIAUDIO_CFLAGS supplies the path to
 miniaudio.h; AUDIO_DEVICE_LIBS overrides platform backend link flags.
 The device adapter uses miniaudio's low-level API, without its engine or decoders.
+Portable Linux builds link PulseAudio and ALSA clients. A PulseAudio-compatible
+server must already be running; the agent does not start one.
+ALSA uses the host's /usr/share/alsa configuration; ALSA_CONFIG_DIR can select
+another configuration directory. External shared ALSA plugins cannot be loaded
+by the static executable.
 .TP
 .B make DEBUG=1
 Build unstripped debug code with frame pointers.  Both profiles keep the same

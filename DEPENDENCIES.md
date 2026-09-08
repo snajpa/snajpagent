@@ -120,6 +120,15 @@ selects MIT No Attribution (MIT-0). Upstream's license applies to the header;
 the first-party adapter remains GPL-2.0-only. FFmpeg's enabled components and
 Poppler's GPL terms must be retained in each final release closure.
 
+Portable Linux links ALSA and the PulseAudio client statically: musl's static
+loader cannot load miniaudio's normal shared-library backends. The PulseAudio
+client uses an existing server (including a compatible PipeWire Pulse server);
+the agent does not start one. ALSA uses host configuration under
+`/usr/share/alsa`, with its existing `ALSA_CONFIG_DIR` override. External shared
+ALSA plugins cannot be loaded by the static binary. ALSA's LGPL-2.1-or-later and
+the PulseAudio client's LGPL-2.1-or-later terms, plus the static libsndfile
+dependency closure, belong in the release's source/relinking materials.
+
 Custom lean builds may set `WITH_AV=0`, `WITH_OFFICE=0`, or
 `WITH_AUDIO_DEVICE=0`; `WITH_PDF=0` also requires `WITH_OFFICE=0` because Office
 page validation/rendering uses Poppler. Official desktop releases require all
