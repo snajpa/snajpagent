@@ -150,6 +150,58 @@ assert "${ldflags}" in application_link, application_link
 assert "-Wl,-mllvm,-emulated-tls" in application_link, application_link
 print("PASS: NetBSD emulated TLS reaches the LTO linker")
 
+# PowerPC Linux encodes the write direction in bit31. musl ioctl takes int,
+# whereas BSD/glibc take unsigned long: preserve the request bits with either ABI.
+process_host = (root / "src/process_host.c").read_text()
+resize = re.search(r"static void\npty_apply_current_size\(.*?\n}\n",
+                   process_host, re.S).group()
+# GCC14 diagnoses the implicit conversion; GCC13 may silently accept it.
+assert "ioctl(fd, (unsigned int)TIOCSWINSZ, &ws)" in resize
+with tempfile.TemporaryDirectory(prefix="release-ioctl-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    for request_type in ("int", "unsigned long"):
+        source = tmp / "resize.c"
+        source.write_text("""
+#include <assert.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#undef TIOCSWINSZ
+#define TIOCSWINSZ 0x80087467UL
+#define ioctl checked_ioctl
+static int calls, fail;
+static void host_winsize(unsigned short *rows, unsigned short *cols)
+{ *rows = 37; *cols = 101; }
+static int checked_ioctl(int fd, REQUEST_TYPE request, struct winsize *ws)
+{
+    assert(fd == 7);
+    assert((unsigned long)request == (unsigned long)(REQUEST_TYPE)TIOCSWINSZ);
+    assert(ws->ws_row == 37 && ws->ws_col == 101);
+    ++calls;
+    return fail ? -1 : 0;
+}
+""".replace("REQUEST_TYPE", request_type) + resize + """
+int main(void)
+{
+    unsigned short rows = 24, cols = 80;
+    pty_apply_current_size(-1, &rows, &cols);
+    assert(calls == 0 && rows == 24 && cols == 80);
+    fail = 1;
+    pty_apply_current_size(7, &rows, &cols);
+    assert(calls == 1 && rows == 24 && cols == 80);
+    fail = 0;
+    pty_apply_current_size(7, &rows, &cols);
+    assert(calls == 2 && rows == 37 && cols == 101);
+    pty_apply_current_size(7, &rows, &cols);
+    assert(calls == 2);
+    return 0;
+}
+""")
+        binary = tmp / "resize"
+        subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                        str(source), "-o", str(binary)], check=True)
+        subprocess.run([str(binary)], check=True)
+print("PASS: PTY resize preserves ioctl request bits for signed and wide ABIs")
+
 # Feature-selection macros follow the requested target, including cross-builds.
 for target in ("Linux", "Darwin", "FreeBSD", "OpenBSD", "NetBSD", "Windows_NT"):
     for extra in ([], ["CPPFLAGS=-D_POSIX_C_SOURCE=200809L"]):

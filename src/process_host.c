@@ -1575,7 +1575,7 @@ pty_apply_current_size(int fd, unsigned short *rows, unsigned short *cols)
     memset(&ws, 0, sizeof(ws));
     ws.ws_row = new_rows;
     ws.ws_col = new_cols;
-    if (ioctl(fd, TIOCSWINSZ, &ws) == 0) {
+    if (ioctl(fd, (unsigned int)TIOCSWINSZ, &ws) == 0) {
         *rows = new_rows;
         *cols = new_cols;
     }
