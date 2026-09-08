@@ -6,6 +6,7 @@ extern "C" {
 }
 #include <PDFDoc.h>
 #include <GlobalParams.h>
+#include <GfxState.h>
 #include <Stream.h>
 #include <TextOutputDev.h>
 #include <SplashOutputDev.h>
@@ -64,6 +65,18 @@ public:
     }
 };
 static std::once_flag initialized;
+class Render final : public SplashOutputDev {
+public:
+    using SplashOutputDev::SplashOutputDev;
+    bool missing_font = false;
+    void drawChar(GfxState *state, double x, double y, double dx, double dy,
+                  double originX, double originY, CharCode code, int nBytes,
+                  const Unicode *u, int uLen) override {
+        SplashOutputDev::drawChar(state, x, y, dx, dy, originX, originY, code, nBytes, u, uLen);
+        // Splash silently skips visible text when it cannot load a font.
+        if (state->getRender() != 3 && !getCurrentFont()) missing_font = true;
+    }
+};
 static bool abort_page(void *opaque) { return static_cast<Input *>(opaque)->stop(); }
 static void text_write(void *opaque, const char *data, int size) {
     auto *input = static_cast<Input *>(opaque);
@@ -130,6 +143,7 @@ snag_pdf_page(struct snag_pdf *pdf, unsigned int page, struct snag_buf *text,
                struct snag_buf *image, char *error, size_t size)
 {
     size_t text_start = text->len, image_start = image->len;
+    bool missing_font = false;
     try {
         auto &in = *pdf->input;
         if (!page || page > static_cast<unsigned int>(pdf->doc->getNumPages()) || in.stop()) throw 0;
@@ -141,16 +155,20 @@ snag_pdf_page(struct snag_pdf *pdf, unsigned int page, struct snag_buf *text,
         if (in.stop() || (text->len != text_start && !snag_utf8_valid(text->data + text_start, text->len - text_start, true))) throw 0;
         double dpi = 72.0 * 1600.0 / std::max(width, height);
         SplashColor white = {255, 255, 255};
-        SplashOutputDev render(splashModeRGB8, 4, false, white, true);
+        Render render(splashModeRGB8, 4, false, white, true);
         render.startDoc(pdf->doc.get());
         pdf->doc->displayPage(&render, page, dpi, dpi, 0, false, true, false, abort_page, &in);
+        missing_font = render.missing_font;
+        if (missing_font) throw 0;
         SplashBitmap *bitmap = render.getBitmap();
         if (in.stop() || !bitmap || bitmap->getWidth() < 1 || bitmap->getHeight() < 1 ||
             bitmap->getWidth() > 1601 || bitmap->getHeight() > 1601 || bitmap_png(bitmap, &in, image) < 0) throw 0;
         return 0;
     } catch (...) {
         text->len = text_start; image->len = image_start;
-        snag_errorf(error, size, "PDF page failed, interrupted or exceeded its text/image bounds");
+        snag_errorf(error, size, "%s", missing_font ?
+            "PDF page font unavailable or unusable; install suitable system fonts or use a PDF with embedded fonts" :
+            "PDF page failed, interrupted or exceeded its text/image bounds");
         return pdf->input->stopped == 2 ? 2 : -1;
     }
 }

@@ -20,6 +20,9 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#if SNAJPAGENT_PDF
+#include <png.h>
+#endif
 #if SNAJPAGENT_OFFICE
 #define LOK_USE_UNSTABLE_API
 #include <LibreOfficeKit/LibreOfficeKit.h>
@@ -1595,6 +1598,67 @@ video_audio_result(void *opaque, const json_t *source, uint64_t start, uint64_t 
     return state->mode;
 }
 
+#if SNAJPAGENT_PDF
+static void write_pdf_fixture(const char *pdf, const char *stream)
+{
+    FILE *f = fopen(pdf, "wb");
+    long offsets[6] = {0};
+    assert(f); fputs("%PDF-1.4\n", f);
+    const char *objects[] = {"<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 160 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"};
+    for (size_t i = 0; i < 4u; ++i) { offsets[i+1u] = ftell(f); fprintf(f, "%zu 0 obj\n%s\nendobj\n", i+1u, objects[i]); }
+    offsets[5] = ftell(f);
+    fprintf(f, "5 0 obj\n<< /Length %zu >>\nstream\n%sendstream\nendobj\n", strlen(stream), stream);
+    long xref = ftell(f);
+    fputs("xref\n0 6\n0000000000 65535 f \n", f);
+    for (size_t i=1;i<6;++i) fprintf(f, "%010ld 00000 n \n", offsets[i]);
+    fprintf(f, "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n%ld\n%%%%EOF\n", xref);
+    assert(fclose(f) == 0);
+}
+
+static void assert_pdf_ink(const struct snag_buf *png, size_t offset, bool expected)
+{
+    png_image image={.version=PNG_IMAGE_VERSION};
+    assert(png->len>offset && png_image_begin_read_from_memory(&image,png->data+offset,png->len-offset));
+    assert(image.width<=1601u && image.height<=1601u);
+    image.format=PNG_FORMAT_RGB;
+    unsigned char *rgb=malloc(PNG_IMAGE_SIZE(image));assert(rgb);
+    assert(png_image_finish_read(&image,NULL,rgb,0,NULL));
+    bool ink=false;
+    for(size_t i=0;i<PNG_IMAGE_SIZE(image);++i)if(rgb[i]<240u){ink=true;break;}
+    assert(ink==expected);free(rgb);png_image_free(&image);
+}
+#endif
+
+#if SNAJPAGENT_PDF && defined(__linux__)
+static const char *test_program;
+static void test_pdf_missing_font(const char *root)
+{
+    char *config=snag_path_join(root,"fonts.conf"),*pdf=snag_path_join(root,"font.pdf");
+    char error[256];
+    write_file(config,"<?xml version=\"1.0\"?><fontconfig><dir>/no-snajpagent-font-fixture</dir></fontconfig>");
+    assert(setenv("FONTCONFIG_FILE",config,1)==0);
+    const char *streams[]={"", "BT /F1 14 Tf 3 Tr 10 50 Td (hidden) Tj ET\n",
+        "BT /F1 14 Tf 10 50 Td (visible) Tj ET\n"};
+    for(size_t i=0;i<3u;++i) {
+        write_pdf_fixture(pdf,streams[i]);
+        struct snag_pdf *doc=NULL;unsigned int pages=0;
+        struct snag_buf text,image;snag_buf_init(&text,4096u);snag_buf_init(&image,1024u*1024u);
+        assert(snag_pdf_open(pdf,NULL,NULL,&doc,&pages,error,sizeof(error))==0 && pages==1u);
+        assert(snag_buf_append(&text,"keep",4u)==0 && snag_buf_append(&image,"keep",4u)==0);
+        int rc=snag_pdf_page(doc,1u,&text,&image,error,sizeof(error));
+        if(i==2u) {
+            assert(rc<0 && strstr(error,"font") && text.len==4u && image.len==4u);
+        } else {
+            assert(rc==0);assert_pdf_ink(&image,4u,false);
+        }
+        snag_pdf_close(doc);snag_buf_free(&text);snag_buf_free(&image);
+    }
+    assert(unlink(pdf)==0 && unlink(config)==0);free(pdf);free(config);
+}
+#endif
+
 static void
 test_document_conversion(void)
 {
@@ -1605,6 +1669,14 @@ test_document_conversion(void)
     struct snag_response_item call = {.kind = SNAG_ITEM_TOOL_CALL, .name = "read_document"};
     json_t *result = NULL;
     assert(root && mkdtemp(root));
+#if SNAJPAGENT_PDF && defined(__linux__)
+    struct snag_buf child_output;snag_buf_init(&child_output,4096u);
+    char *program=snag_program_path(test_program);assert(program);
+    const char *args[]={program,"--pdf-missing-font-fixture",root,NULL};
+    int rc=snag_convert_internal(args,root,&child_output,NULL,NULL,SNAG_WAKE_INVALID,error,sizeof(error));
+    if(rc)fprintf(stderr,"PDF missing-font fixture: %s\n",error);
+    assert(rc==0);free(program);snag_buf_free(&child_output);
+#endif
     snag_store_init(&store); snag_session_init(&session);
     assert(snag_store_open(&store, root, error, sizeof(error)) == 0);
     assert(snag_session_create(&store, &session, root, "default", SNAJPAGENT_MODEL,
@@ -1621,21 +1693,9 @@ test_document_conversion(void)
     json_decref(result); json_decref(call.arguments);
     if (getenv("SNAJPAGENT_TEST_MEDIA")) {
         char *pdf = snag_path_join(root, "page.pdf");
-        FILE *f = fopen(pdf, "wb");
-        long offsets[6] = {0};
-        assert(f); fputs("%PDF-1.4\n", f);
-        const char *objects[] = {"<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 160 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
-            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"};
-        for (size_t i = 0; i < 4u; ++i) { offsets[i+1u] = ftell(f); fprintf(f, "%zu 0 obj\n%s\nendobj\n", i+1u, objects[i]); }
-        const char *stream = "BT /F1 14 Tf 10 50 Td (MEDIA PAGE) Tj ET\n";
-        offsets[5] = ftell(f);
-        fprintf(f, "5 0 obj\n<< /Length %zu >>\nstream\n%sendstream\nendobj\n", strlen(stream), stream);
-        long xref = ftell(f);
-        fputs("xref\n0 6\n0000000000 65535 f \n", f);
-        for (size_t i=1;i<6;++i) fprintf(f, "%010ld 00000 n \n", offsets[i]);
-        fprintf(f, "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n%ld\n%%%%EOF\n", xref);
-        assert(fclose(f) == 0);
+#if SNAJPAGENT_PDF
+        write_pdf_fixture(pdf,"BT /F1 14 Tf 10 50 Td (MEDIA PAGE) Tj ET\n");
+#endif
         call.arguments = json_pack("{s:s,s:i,s:i}", "path", pdf, "first", 1, "last", 1);
         assert(snag_tools_document(&call, &session, NULL, NULL, SNAG_WAKE_INVALID, &result) == 0);
         if (strcmp(snag_json_string(result, "status"), "succeeded")) fprintf(stderr, "pdf: %s\n", snag_json_string(result, "model_text"));
@@ -1657,6 +1717,9 @@ test_document_conversion(void)
         assert(unlink(pdf) == 0); /* Rendering keeps the original descriptor. */
         assert(snag_pdf_page(document, 1u, &page_text, &page_image, error, sizeof(error)) == 0);
         assert(page_text.len > 4u && page_image.len > 4u && !memcmp(page_text.data, "kept", 4u));
+#if SNAJPAGENT_PDF
+        assert_pdf_ink(&page_image,4u,true);
+#endif
         size_t kept_text = page_text.len, kept_image = page_image.len;
         stop = 2;
         assert(snag_pdf_page(document, 1u, &page_text, &page_image, error, sizeof(error)) == 2);
@@ -2254,6 +2317,12 @@ static void test_office_limits(void)
 int
 main(int argc, char **argv)
 {
+#if SNAJPAGENT_PDF && defined(__linux__)
+    test_program=argv[0];
+    if(argc==3 && !strcmp(argv[1],"--pdf-missing-font-fixture")) {
+        test_pdf_missing_font(argv[2]);return 0;
+    }
+#endif
     snag_office_program(argv[0]);
     (void)snag_office_worker(argc,argv);
     test_office_limits();

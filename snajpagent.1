@@ -2669,7 +2669,10 @@ Office pages from DOCX/ODT, PPTX/ODP and XLSX/ODS.  The first and last
 selectors are inclusive and 1-based; null selects the first page/record, or last
 matching first.  Select at most four PDF pages or 200 text records per call.
 PDF results contain extracted text followed by a rendered page, including scans
-with no extractable text.  CSV quoted multiline fields count as one record;
+with no extractable text.  Visible text requires an embedded or suitable system
+font; an unavailable or unusable font fails the page without retaining a partial
+rendering.  Blank pages and invisible OCR text remain supported.
+CSV quoted multiline fields count as one record;
 TSV uses lines.  Text selections and individual records have a 256 KiB bound.
 Only selected content is inspected.
 .PP

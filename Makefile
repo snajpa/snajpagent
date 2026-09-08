@@ -181,6 +181,8 @@ tests/test_provider_retry: src/provider_retry.c tests/test_provider_retry.c src/
 
 tests/test_provider_transport: $(COMMON_SRC) tests/test_provider_transport.c $(HEADERS) $(PDF_OBJ) $(AUDIO_DEVICE_OBJ)
 
+tests/test_context: CPPFLAGS += $(PDF_CFLAGS)
+
 tests/test_context: $(PLATFORM_SRC) src/config.c src/secret_source.c src/json.c src/instructions.c src/context.c src/media.c src/turn.c src/store.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_media.c src/tools_document.c src/convert.c src/process_host.c src/av.c src/office.c src/office_package.c src/office_confine.c src/office_sheet.c tests/test_context.c $(HEADERS) $(PDF_OBJ) $(AUDIO_DEVICE_OBJ)
 
 tests/test_model_cache: $(PLATFORM_SRC) src/config.c src/secret_source.c src/json.c src/instructions.c src/media.c src/turn.c src/store.c src/irc_event.c src/model_cache.c tests/test_model_cache.c $(HEADERS)

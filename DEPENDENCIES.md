@@ -29,6 +29,9 @@ runtime layout and application linkage still need build validation.
 Static Poppler consumers retain Fontconfig/FreeType's ordered pkg-config
 dependencies, including Expat, Brotli and bzip2. The patch applies to static
 fontconfig builds; upstream test executables exercise the same link interface.
+PDF rendering requires usable embedded or system fonts for visible text. Missing
+fonts fail the page instead of retaining an incomplete rendering; blank pages
+and invisible OCR text do not require a renderable font.
 
 `src/office.c` runs one disposable child of the same binary through the existing
 bounded child runner. `src/office_package.c` checks ZIP/XML before import;
