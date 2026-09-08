@@ -143,7 +143,6 @@ json_t *snag_app_steering_snapshot(const struct snag_session *session);
 int snag_app_request_build(struct app_state *app, const json_t *steering,
                        unsigned int cycle,
                        const struct snag_credential *credential,
-                       const char *provider_source_sha256,
                        struct snag_context_projection *projection,
                        const char **count_method, struct snag_buf *request_body,
                        char *error, size_t error_size);

@@ -2984,8 +2984,7 @@ run_turn(struct app_state *app, const char *prompt,
         steering = snag_app_steering_snapshot(&app->session);
         error[0] = '\0';
         if (!steering || snag_random_id(response_id) < 0 ||
-            snag_app_request_build(app, steering, cycle, &credential,
-                                   provider_source_hash, &projection,
+            snag_app_request_build(app, steering, cycle, &credential, &projection,
                                    &count_method, &request_body, error, sizeof(error)) < 0) {
             result = finish_turn_failure(app, turn_id, NULL, "context",
                 error[0] ? error : "response context projection failed",

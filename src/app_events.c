@@ -486,12 +486,10 @@ int
 snag_app_request_build(struct app_state *app, const json_t *steering,
                        unsigned int cycle,
                        const struct snag_credential *credential,
-                       const char *provider_source_sha256,
                        struct snag_context_projection *projection,
                        const char **count_method, struct snag_buf *request_body,
                        char *error, size_t error_size)
 {
-    (void)provider_source_sha256;
     int rc;
 
     app->request_networked = snag_irc_enabled(app->config) &&
