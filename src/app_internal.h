@@ -139,11 +139,6 @@ enum queue_command_kind {
     QUEUE_COMMAND_POP
 };
 
-json_t *snag_app_turn_started_data(const struct app_state *app,
-                                  const char *prompt,
-                                  const char *turn_id,
-                                  const struct snag_queued_turn *queued,
-                                  bool goal_turn, bool read_only);
 json_t *snag_app_steering_snapshot(const struct snag_session *session);
 int snag_app_request_build(struct app_state *app, const json_t *steering,
                        unsigned int cycle,
@@ -167,10 +162,6 @@ json_t *snag_app_response_capacity_rejected_data(
                                       const struct snag_provider_failure *failure,
                                       const struct snag_model_capacity *capacity,
                                       const char *provider_source_sha256);
-json_t *snag_app_response_completed_data(const char *turn_id,
-                                        const char *response_id,
-                                        unsigned int cycle,
-                                        const struct snag_response_graph *graph);
 json_t *snag_app_turn_completed_data(const char *turn_id,
                                     const char *response_id,
                                     const char *item_id);
@@ -183,9 +174,6 @@ json_t *snag_app_response_interrupted_data(const char *turn_id,
                                           const char *origin,
                                           const char *reason,
                                           json_t *partial_public);
-json_t *snag_app_turn_interrupted_data(const char *turn_id,
-                                      const char *origin,
-                                      const char *reason);
 json_t *snag_app_turn_failed_data(const char *turn_id,
                                  const char *class_name,
                                  const char *message);

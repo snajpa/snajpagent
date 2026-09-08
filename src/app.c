@@ -2390,7 +2390,8 @@ interrupt_turn(struct app_state *app, const char *turn_id,
     return close_active_process_for_turn(app, turn_id, cause, user_interrupt,
                                          error, error_size) < 0 ||
            commit_event(app, "turn_interrupted",
-                        snag_app_turn_interrupted_data(turn_id, origin, reason),
+                        json_pack("{s:s,s:s,s:s}", "origin", origin,
+                         "reason", reason, "turn_id", turn_id),
                         error, error_size) < 0 ? -1 : 0;
 }
 
@@ -2915,8 +2916,25 @@ run_turn(struct app_state *app, const char *prompt,
         goto fail;
     }
     if (!continuing && commit_event(app, "turn_started",
-                     snag_app_turn_started_data(app, prompt, turn_id, queued,
-                                               goal_turn, read_only),
+                     json_pack("{s:{s:s,s:s,s:o,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b},"
+                         "s:s,s:o,s:I,s:b,s:s?,s:o,s:s,s:s,s:I,s:s}",
+                         "config", "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
+                         "effort", app->turn_effort, "max_output_tokens",
+                         app->turn_capacity.max_output_tokens ?
+                             json_integer((json_int_t)app->turn_capacity.max_output_tokens) : json_null(),
+                         "model", app->turn_model,
+                         "provider", app->turn_provider->name, "profile_id", SNAJPAGENT_PROFILE_ID,
+                         "prompt_schema", 1, "replay_schema", 1, "tool_schema", 1,
+                         "max_parallel_commands", (int)app->config->max_parallel_commands,
+                         "parallel_tool_calls", app->turn_provider->parallel_tool_calls,
+                         "input_kind", goal_turn ? "goal" : queued ? "queued" : "direct",
+                         "instructions", snag_instructions_metadata_json(&app->turn_instructions),
+                         "received_at_ms", (json_int_t)(queued ? queued->received_ms : app->input_received_ms),
+                         "read_only", read_only, "queue_id", queued ? queued->queue_id : NULL,
+                         "queue_seq", queued ? json_integer((json_int_t)queued->seq) : json_null(),
+                         "text", prompt, "turn_id", turn_id,
+                         "turn_number", (json_int_t)(app->session.turn_count + 1u),
+                         "workspace", app->session.workspace),
                      error, sizeof(error)) < 0) {
         goto fail;
     }
@@ -3312,7 +3330,11 @@ run_turn(struct app_state *app, const char *prompt,
         }
         if (decision.outcome != SNAG_GRAPH_REFUSAL) app->recovery_delay_ms = 0u;
         if (commit_event(app, "response_completed",
-                         snag_app_response_completed_data(turn_id, response_id, cycle, &graph),
+                         json_pack("{s:I,s:o,s:s,s:s,s:s,s:s,s:o}",
+                         "cycle", (json_int_t)cycle, "items", snag_response_graph_json(&graph),
+                         "provider_response_id", graph.provider_response_id,
+                         "response_id", response_id, "status", "completed",
+                         "turn_id", turn_id, "usage", snag_response_usage_json(&graph.usage)),
                          error, sizeof(error)) < 0) {
             goto fail;
         }
