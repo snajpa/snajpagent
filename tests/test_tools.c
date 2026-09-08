@@ -127,15 +127,19 @@ read_output(void *opaque, const char *handle, unsigned int stream,
            snag_buf_append(out, source->data + to - tail, tail) < 0 ? -1 : 0;
 }
 
-static int
-close_command(const char *handle, bool user_interrupt, snag_tool_pump_fn pump,
-                void *opaque, int wake_fd, json_t **result, char *error, size_t size)
+static json_t *
+close_command(const char *handle)
 {
-    int rc = snag_tools_close_managed(handle, user_interrupt, pump, opaque, wake_fd,
-                                     result, error, size);
+    json_t *result = NULL;
+    char error[256] = {0};
+    int rc = snag_tools_close_managed(handle, false, NULL, NULL, -1,
+                                     &result, error, sizeof(error));
     if (rc == 0)
         snag_tools_collected(handle);
-    return rc;
+    if (rc != 0)
+        fprintf(stderr, "close command: %s\n", error);
+    assert(rc == 0 && result && snag_tool_result_valid(result) == 0);
+    return result;
 }
 
 static json_t *
@@ -376,9 +380,7 @@ test_managed_process_hands_off_on_steering(void)
     char cwd[4096];
     json_t *args;
     json_t *result;
-    json_t *closed = NULL;
     const char *handle;
-    char error[256] = {0};
     uint64_t started = snag_time_ms();
     bool requested = false;
 
@@ -396,9 +398,7 @@ test_managed_process_hands_off_on_steering(void)
                   "steering arrived") != NULL);
     handle = snag_json_string(result, "handle");
     assert(handle != NULL);
-    assert(close_command(handle, false, NULL, NULL, -1,
-                                   &closed, error, sizeof(error)) == 0);
-    assert(closed != NULL && snag_tool_result_valid(closed) == 0);
+    json_t *closed = close_command(handle);
     assert(json_integer_value(json_object_get(closed,
                "max_output_tokens")) == 6000);
     json_decref(closed);
@@ -427,8 +427,6 @@ test_managed_output_ceiling(void)
     json_t *started = run_managed_exec("read line; printf '%s' \"$line\"", 5000, 1);
     const char *handle = snag_json_string(started, "handle");
     static const int requests[] = {-1, 42, 6000, 6001};
-    json_t *closed = NULL;
-    char error[256] = {0};
 
     assert(handle != NULL);
     for (size_t i = 0u; i < sizeof(requests) / sizeof(requests[0]); ++i) {
@@ -439,8 +437,7 @@ test_managed_output_ceiling(void)
                (requests[i] == 42 ? 42 : 6000));
         json_decref(result);
     }
-    assert(close_command(handle, false, NULL, NULL, -1,
-                                   &closed, error, sizeof(error)) == 0);
+    json_t *closed = close_command(handle);
     assert(json_integer_value(json_object_get(closed, "max_output_tokens")) == 6000);
     json_decref(closed);
     json_decref(started);
@@ -580,18 +577,12 @@ test_managed_process_close_returns_terminal_result(void)
         "printf 'ready\n'; sleep 5",
         5000, 100);
     const char *handle;
-    json_t *closed = NULL;
     const char *status;
-    char error[256];
 
     assert(strcmp(snag_json_string(result, "status"), "running") == 0);
     handle = snag_json_string(result, "handle");
     assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
-    error[0] = '\0';
-    assert(close_command(handle, false, NULL, NULL, -1,
-                                   &closed, error, sizeof(error)) == 0);
-    assert(closed != NULL);
-    assert(snag_tool_result_valid(closed) == 0);
+    json_t *closed = close_command(handle);
     assert(json_integer_value(json_object_get(closed,
                "max_output_tokens")) == 6000);
     status = snag_json_string(closed, "status");
@@ -608,9 +599,7 @@ test_managed_close_kills_process_family(void)
     char marker[4096];
     char command[8192];
     json_t *result;
-    json_t *closed = NULL;
     const char *handle;
-    char error[256];
 
     join_path(marker, sizeof(marker), dir, "managed-leaked.txt");
     assert(snprintf(command, sizeof(command),
@@ -620,11 +609,7 @@ test_managed_close_kills_process_family(void)
     assert(strcmp(snag_json_string(result, "status"), "running") == 0);
     handle = snag_json_string(result, "handle");
     assert(handle != NULL && snag_hex_is_lower(handle, SNAG_ID_HEX_LEN));
-    error[0] = '\0';
-    assert(close_command(handle, false, NULL, NULL, -1,
-                                   &closed, error, sizeof(error)) == 0);
-    assert(closed != NULL);
-    assert(snag_tool_result_valid(closed) == 0);
+    json_t *closed = close_command(handle);
     sleep_ms(500);
     assert(access(marker, F_OK) < 0 && errno == ENOENT);
     json_decref(closed);
