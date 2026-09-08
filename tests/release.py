@@ -186,6 +186,14 @@ assert 'musl.stdenv.hostPlatform.isAarch32' in link
 assert '" -Wl,-Bstatic,--no-dynamic-linker,-z,text"' in link
 print("PASS: 32-bit ARM static PIE explicitly omits the dynamic runtime")
 
+# RISC-V can leave exported archive callbacks as R_RISCV_64 in static PIE.
+# musl rcrt1 processes relative relocations only; Jansson's malloc then stays
+# null. Local archive symbols force relative callbacks without a loader.
+assert ('musl.stdenv.hostPlatform.isRiscV '
+        '" -Wl,--exclude-libs,ALL"') in link
+print("PASS: RISC-V static archive callbacks use local relocation binding")
+
+
 # One baseline artifact serves both 32-bit ARM generations. Its channel target
 # must come from the actual recipe, not an ARMv7 alias with a higher ISA floor.
 assert "linux-armv6" in release.targets()
