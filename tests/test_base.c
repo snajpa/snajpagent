@@ -2863,6 +2863,8 @@ run_base(int argc, char **argv)
     assert(snag_utf8_valid(valid, sizeof(valid) - 1u, true));
     assert(!snag_utf8_valid(invalid, sizeof(invalid), true));
     assert(!snag_utf8_valid((const unsigned char *)"a\0b", 3u, true));
+    const char bounded[] = {'a', 'b', 'c', 'd'};
+    assert(!snag_text_valid(bounded, 0u, sizeof(bounded) - 1u));
     assert(snag_text_valid("", 0u, 0u));
     assert(!snag_text_valid("", 1u, 4u));
     assert(!snag_text_valid(NULL, 0u, SIZE_MAX));

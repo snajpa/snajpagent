@@ -354,8 +354,10 @@ snag_text_valid(const char *text, size_t min, size_t max)
 {
     if (!text)
         return false;
-    size_t len = max == SIZE_MAX ? strlen(text) : strnlen(text, max + 1u);
-    return len >= min && len <= max &&
+    size_t len = 0u;
+    while (len < max && text[len])
+        ++len;
+    return !text[len] && len >= min &&
            snag_utf8_valid((const unsigned char *)text, len, true);
 }
 
