@@ -199,6 +199,9 @@ let
       substituteInPlace library/net_sockets.c \
         --replace-fail 'fd >= FD_SETSIZE' '(unsigned int) fd >= FD_SETSIZE'
     '' + lib.optionalString early ''
+      # 3.5's disabled /dev/random returns EIO; use the native urandom
+      # device, also used by the application's OS entropy path.
+      perl scripts/config.pl set MBEDTLS_PLATFORM_DEV_RANDOM '"/dev/urandom"'
       # 3.5 hides fd_set/select behind these newer feature requests.
       substituteInPlace library/net_sockets.c \
         --replace-fail '#define _POSIX_C_SOURCE 200112L' '/* Native BSD declarations. */' \
