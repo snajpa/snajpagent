@@ -71,6 +71,7 @@ struct snag_pending_steering {
     uint64_t seq;
     uint64_t received_ms, first_context_ms;
     const char *text;
+    json_t *content;
 };
 
 struct snag_queued_turn {
@@ -78,6 +79,7 @@ struct snag_queued_turn {
     uint64_t seq;
     uint64_t received_ms, first_context_ms;
     const char *text;
+    json_t *content;
     bool read_only;
 };
 
@@ -246,6 +248,18 @@ int snag_session_complete_delete(struct snag_store *store,
                                 struct snag_session *session,
                                 char *error, size_t error_size);
 
+/* Called by the sole session owner after finalized voice input. Acceptance is
+ * one queued-input event; repeated connection/input IDs never enqueue twice,
+ * including after queue consumption, deletion, or session replay. */
+int snag_session_voice_queue(struct snag_session *,const json_t *,char id[SNAG_ID_HEX_LEN+1u],
+                             bool *duplicate,char *,size_t);
+/* Read the original queue/turn state, including after disconnect or replay.
+ * Caller owns *result: status, turn_id (empty while queued), and text. */
+int snag_session_voice_status(struct snag_session *,const char *queue_id,json_t **result,char *,size_t);
+/* Bounded textual seed for an explicitly opened connection; never actions or
+ * orphaned function outputs. Includes recent captions and latest handoff state. */
+int snag_session_voice_context(struct snag_session *,json_t **result,char *,size_t);
+
 /* Full replay supplies validated post-event state; cursor scans supply NULL. */
 typedef int (*snag_session_event_fn)(void *opaque, const struct snag_session *state,
                                    uint64_t seq,
@@ -262,5 +276,9 @@ int snag_session_each_event_since(struct snag_session *, const struct snag_proce
 int snag_session_commit(struct snag_session *session, const char *type,
                        json_t *data, uint64_t *written_seq,
                        char *error, size_t error_size);
+
+int snag_session_media(struct snag_session *session, const char *path, const char *mime,
+                       int (*pump)(void *, unsigned int), void *opaque,
+                       json_t **asset, char **retained_path, char *error, size_t error_size);
 
 #endif

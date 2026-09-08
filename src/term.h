@@ -47,7 +47,9 @@ enum snag_term_action {
     SNAG_TERM_VIEW,
     SNAG_TERM_CANCEL,
     SNAG_TERM_INTERRUPT,
-    SNAG_TERM_EXIT
+    SNAG_TERM_EXIT,
+    SNAG_TERM_DICTATE_DONE,
+    SNAG_TERM_DICTATE_CANCEL
 };
 
 struct snag_term_command {
@@ -59,7 +61,9 @@ struct snag_term {
     int (*input_checkpoint)(void *);
     void *input_opaque;
     int output_fd[2];
-    bool input_only, cancel_pending;
+    bool input_only, cancel_pending, dictating;
+    char audio_label[64];
+    char caption[2][384]; /* Display-only recent text, never composer input. */
     struct snag_term_host host;
     struct snag_buf draft;
     struct snag_buf search_label;
@@ -116,7 +120,7 @@ struct snag_term {
     size_t input_len;
     size_t paste_end_match;
     char label[SNAG_TERM_LABEL_BYTES];
-    char destination_label[SNAG_TERM_LABEL_BYTES + 128u];
+    char destination_label[SNAG_TERM_LABEL_BYTES + 192u];
     char prompt_template[SNAG_TERM_LABEL_BYTES];
     struct snag_prompt_clock prompt_clock;
     struct snag_term_spinner spinner[SNAG_TERM_SPINNER_COUNT];
@@ -179,6 +183,9 @@ int snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
 int snag_term_history_set(struct snag_term *term,
                          struct snag_history_snapshot *snapshot, bool refresh);
 int snag_term_restore_draft(struct snag_term *term, const char *text);
+int snag_term_insert_draft(struct snag_term *, const char *);
+int snag_term_audio(struct snag_term *, const char *, bool);
+int snag_term_caption(struct snag_term *, unsigned int speaker, const char *);
 void snag_term_set_typing_pause(struct snag_term *term, uint32_t pause_ms);
 void snag_term_set_color(struct snag_term *term, bool enabled);
 uint32_t snag_term_typing_pause_remaining(const struct snag_term *term,

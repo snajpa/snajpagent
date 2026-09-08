@@ -6,6 +6,10 @@ KISS is the first engineering rule for this repository. Use the smallest design
 that correctly solves the current problem. A larger design needs a concrete
 reason from the code in front of you, not a guess about future needs.
 
+Every new limit or abstraction needs a concrete resource or correctness reason.
+Proposed defensive caps are not requirements. Preserve actual safety contracts
+without inventing session-wide quotas or adding accounting policy for convenience.
+
 Shipment policy: once relevant tests have passed at least once, rebase onto
 current master and compile the combined tree. A successful post-rebase build
 is sufficient, including after conflict resolution, to integrate and push

@@ -2,6 +2,7 @@
 #include "app_internal.h"
 
 #include "context.h"
+#include "media.h"
 #include "json.h"
 #include "secret.h"
 #include "snajpagent.h"
@@ -501,6 +502,10 @@ snag_app_steering_snapshot(const struct snag_session *session)
         json_t *item = json_pack("{s:s,s:s}",
             "id", session->pending_steering[i].steering_id,
             "text", session->pending_steering[i].text);
+        json_t *content = session->pending_steering[i].content;
+        if (content && snag_json_set_new(item, "content", json_incref((json_t *)content)) < 0) {
+            json_decref(item); json_decref(array); return NULL;
+        }
         if (!item || json_array_append_new(array, item) < 0) {
             json_decref(array);
             return NULL;
@@ -594,7 +599,7 @@ snag_app_request_build(struct app_state *app, const json_t *steering,
         snag_buf_init(request_body, SNAG_WIRE_BODY_MAX);
         struct snag_buf encoded = {.max = SNAG_WIRE_BODY_MAX};
         if (snag_secret_set_build(&secrets, app->config, credential, error, error_size) < 0 ||
-            projection->create_request.bytes > SNAG_WIRE_BODY_MAX ||
+            snag_media_request_has_images(projection->create_request.value) || projection->create_request.bytes > SNAG_WIRE_BODY_MAX ||
             snag_json_canonical(projection->create_request.value, &encoded) < 0 ||
             snag_wire_json_redact(encoded.data, encoded.len, &secrets.wire,
                                  request_body, error, error_size) < 0) {

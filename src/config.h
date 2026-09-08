@@ -110,7 +110,18 @@ struct snag_model_limit_config {
     uint64_t max_output_tokens;
 };
 
+struct snag_audio_config {
+    char provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
+    char listen_model[SNAG_CONFIG_MODEL_MAX];
+    char transcribe_model[SNAG_CONFIG_MODEL_MAX];
+    char speech_model[SNAG_CONFIG_MODEL_MAX];
+    char realtime_model[SNAG_CONFIG_MODEL_MAX];
+    char voice[128];
+    char capture_device[256], playback_device[256];
+};
+
 struct snag_config {
+    struct snag_audio_config audio;
     char provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
     char model[SNAG_CONFIG_MODEL_MAX];
     char reasoning_effort[SNAG_CONFIG_EFFORT_MAX];

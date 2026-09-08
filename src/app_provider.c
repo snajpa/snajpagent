@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "app_internal.h"
+#include "media.h"
 #include "provider.h"
 #include "context.h"
 #include "json.h"
@@ -114,6 +115,18 @@ snag_app_exact_count_enabled(enum snag_token_count_mode mode,
          capability != SNAG_COUNT_UNSUPPORTED);
 }
 
+#ifndef SNAJPAGENT_TEST_FIXTURE
+static int
+media_count(struct app_state *app, const json_t *request, uint64_t *tokens,
+             const char **method, char *error, size_t size)
+{
+    if (snag_media_token_bound(request, app->turn_provider, tokens, error, size) < 0) return -1;
+    *method = "media_upper_bound";
+    if (size) *error = '\0';
+    return SNAG_APP_COUNT_SKIPPED;
+}
+#endif
+
 int
 snag_app_provider_count(struct app_state *app, const json_t *count_request,
                        const struct snag_credential *credential,
@@ -166,10 +179,14 @@ snag_app_provider_count(struct app_state *app, const json_t *count_request,
     uint64_t exact_tokens = 0u;
     int rc;
 
+    bool images = snag_media_request_has_images(count_request);
     if (!snag_app_exact_count_enabled(
             app->turn_provider->exact_token_count,
             app->turn_capacity.count_capability))
+ {
+        if (images) return media_count(app,count_request,input_tokens,count_method,error,error_size);
         return SNAG_APP_COUNT_SKIPPED;
+    }
     rc = snag_provider_responses_count((struct snag_provider_connection){
         app->config, app->turn_provider, credential, &app->ui,
         snag_app_provider_input_pump, app},
@@ -185,6 +202,7 @@ snag_app_provider_count(struct app_state *app, const json_t *count_request,
     snag_app_record_model_accounting(app, SNAG_COUNT_UNSUPPORTED, 0u);
     if (app->turn_provider->exact_token_count == SNAG_TOKEN_COUNT_STRICT)
         return rc;
+    if (images) return media_count(app, count_request, input_tokens, count_method, error, error_size);
     if (error_size)
         error[0] = '\0';
     return SNAG_APP_COUNT_SKIPPED;
@@ -353,11 +371,43 @@ irc_tool_route(const struct app_state *app, const json_t *destination,
     return false;
 }
 
+static int
+video_transcribe(void *opaque, const json_t *source, uint64_t start, uint64_t end, json_t **result)
+{
+    struct app_state *app = opaque;
+    return snag_tools_transcribe_asset(&app->session, source, start, end, app->store.root_fd,
+        app->config, snag_app_active_input_pump, app, snag_ui_wake_fd(&app->ui), result);
+}
+
 int
 snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
                  const struct snag_credential *credential, json_t **result,
                  char *error, size_t error_size)
 {
+    if (call && call->name && (!strcmp(call->name, "read_document") ||
+        !strcmp(call->name, "view_video") || !strcmp(call->name, "view_image") ||
+        !strcmp(call->name, "listen_audio") || !strcmp(call->name, "transcribe_audio") ||
+        (!app->session.active_read_only && !strcmp(call->name, "speak_text")))) {
+        struct snag_secret_set secrets = {0};
+        int rc = snag_secret_set_build(&secrets, app->config, credential, error, error_size);
+        if (!rc) {
+            if (!strcmp(call->name, "read_document"))
+                rc = snag_tools_document(call, &app->session, snag_app_active_input_pump, app,
+                                         snag_ui_wake_fd(&app->ui), result);
+            else if (!strcmp(call->name, "view_video"))
+                rc = snag_tools_video(call, &app->session, snag_app_active_input_pump, app,
+                                      snag_ui_wake_fd(&app->ui), video_transcribe, result);
+            else if (!strcmp(call->name, "view_image"))
+                rc = snag_tools_image(call, &app->session,
+                                      snag_app_active_input_pump, app, result);
+            else
+                rc = snag_tools_audio(call, &app->session, app->store.root_fd, app->config,
+                                      snag_app_active_input_pump, app, snag_ui_wake_fd(&app->ui), result);
+        }
+        if (!rc && *result) rc = snag_secret_result(&secrets, *result, error, error_size);
+        snag_secret_set_free(&secrets);
+        return rc;
+    }
     if (app->session.active_read_only) {
         if (call && snag_read_only_tool(call->name)) {
             struct snag_secret_set secrets = {0};
@@ -371,7 +421,7 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
             return rc;
         }
         *result = snag_tool_result_terminal(false,
-            "Tool unavailable: this turn is read-only; use list_files, read_file or grep.");
+            "Tool unavailable: this turn is read-only; use list_files, read_file, grep or view_image.");
         return *result ? 0 : -1;
     }
     if (call && snag_read_only_tool(call->name)) {

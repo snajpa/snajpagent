@@ -855,6 +855,63 @@ test_completion_choices(void)
 }
 
 static void
+test_dictation_editor(void)
+{
+    struct snag_term term;
+    enum snag_term_action action;
+    char *text = NULL;
+    snag_term_init(&term);
+    assert(snag_term_restore_draft(&term, "keep typed") == 0);
+    assert(snag_term_audio(&term, "[mic] ", true) < 0); /* no capture on a pipe */
+    int input[2], output[2], saved_in = dup(STDIN_FILENO), saved_out = dup(STDERR_FILENO);
+    assert(saved_in >= 0 && saved_out >= 0 && pipe(input) == 0 && pipe(output) == 0);
+    assert(dup2(input[0], STDIN_FILENO) >= 0 && dup2(output[1], STDERR_FILENO) >= 0);
+    close(input[0]); close(output[1]);
+    term.raw = term.opened = term.capable = term.active = true;
+    term.columns = 160u;
+    assert(snag_term_audio(&term, "[mic] ", true) == 0);
+    assert(term.prompt_wanted);
+    const char *keys[] = {"\r", "\003", "\t"};
+    const enum snag_term_action expected[] = {SNAG_TERM_DICTATE_DONE, SNAG_TERM_DICTATE_CANCEL, SNAG_TERM_NONE};
+    for (size_t i = 0; i < 3u; ++i) {
+        term.input_pos = 0; term.input_len = 1; term.input[0] = (unsigned char)*keys[i];
+        (void)snag_term_poll(&term, 0, -1, &action, &text);
+        assert(action == expected[i] && !text && term.dictating);
+        assert(term.draft.len == 10u && !memcmp(term.draft.data, "keep typed", 10u));
+    }
+    term.cursor = 5u;
+    assert(snag_term_insert_draft(&term, "spoken ") == 0);
+    assert(term.draft.len == 17u && !memcmp(term.draft.data, "keep spoken typed", 17u));
+    assert(snag_term_insert_draft(&term, "\xff") < 0 && term.draft.len == 17u);
+    term.input_pos = 0; term.input_len = 1; term.input[0] = 0x1bu;
+    assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
+    assert(snag_term_poll(&term, 0, -1, &action, &text) == 1);
+    assert(action == SNAG_TERM_DICTATE_CANCEL && term.draft.len == 17u);
+    assert(snag_term_audio(&term, "", false) == 0 && !term.dictating);
+    assert(snag_term_audio(&term, "[voice mic] ", false) == 0);
+    assert(snag_term_caption(&term, 0u, "spoken partial") == 0);
+    assert(snag_term_caption(&term, 1u, "reply \033[2J\nnext") == 0);
+    assert(term.cursor == 12u && term.draft.len == 17u && !term.dictating);
+    assert(snag_buf_terminate(&term.painted_prompt) == 0);
+    assert(strstr((char *)term.painted_prompt.data, "voice you [partial]: spoken partial"));
+    assert(!strstr((char *)term.painted_prompt.data, "\033[2J"));
+    assert(snag_term_caption(&term, 0u, "\xff") < 0);
+    assert(!strcmp(term.caption[0], "spoken partial"));
+    assert(snag_term_restore_draft(&term, "first\nsecond") == 0);
+    assert(term.rendered_rows >= 4u);
+    term.input_pos = 0; term.input_len = 1; term.input[0] = '\r';
+    assert(snag_term_poll(&term, 0, -1, &action, &text) == 1);
+    assert(action == SNAG_TERM_SUBMIT && text && !strcmp(text, "first\nsecond"));
+    free(text); text = NULL;
+    assert(snag_term_audio(&term, "", false) == 0);
+    assert(!term.caption[0][0] && !term.caption[1][0]);
+    term.raw = false;
+    snag_term_close(&term);
+    assert(dup2(saved_in, STDIN_FILENO) >= 0 && dup2(saved_out, STDERR_FILENO) >= 0);
+    close(saved_in); close(saved_out); close(input[1]); close(output[0]);
+}
+
+static void
 test_destination_editor(void)
 {
     static const struct {
@@ -2793,6 +2850,7 @@ main(void)
     test_retained_prompt();
     test_mention_completion();
     test_completion_choices();
+    test_dictation_editor();
     test_destination_editor();
     test_markdown_streaming();
     test_markdown_fences();

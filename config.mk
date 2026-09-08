@@ -20,3 +20,62 @@ JANSSON_LIBS = $(shell pkg-config --libs jansson 2>/dev/null || printf '%s' '-l:
 LDLIBS = $(JANSSON_LIBS)
 CURL_CFLAGS =
 CURL_LIBS = -lcurl
+WITH_AV ?= 1
+ifeq ($(WITH_AV),1)
+AV_CFLAGS ?= $(shell pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)
+AV_LIBS ?= $(shell pkg-config --libs libavformat libavcodec libavutil libswresample libswscale)
+else ifeq ($(WITH_AV),0)
+AV_CFLAGS =
+AV_LIBS =
+else
+$(error WITH_AV must be 1 (linked audio/video) or 0 (custom lean build))
+endif
+override CPPFLAGS += -DSNAJPAGENT_AV=$(WITH_AV) $(AV_CFLAGS)
+override LDLIBS += $(AV_LIBS)
+WITH_PDF ?= 1
+ifeq ($(WITH_PDF),1)
+CXX ?= c++
+CXXFLAGS ?= $(filter-out -std=c11,$(CFLAGS)) -std=c++20
+PDF_CFLAGS ?= $(shell pkg-config --cflags poppler libpng)
+PDF_LIBS ?= $(shell pkg-config --libs poppler libpng) -lstdc++
+PDF_OBJ = src/pdf.o
+else ifeq ($(WITH_PDF),0)
+PDF_CFLAGS =
+PDF_LIBS =
+PDF_OBJ = src/pdf_stub.o
+else
+$(error WITH_PDF must be 1 (linked PDF) or 0 (custom lean build))
+endif
+override CPPFLAGS += -DSNAJPAGENT_PDF=$(WITH_PDF)
+override LDLIBS += $(PDF_LIBS)
+WITH_AUDIO_DEVICE ?= 1
+ifeq ($(WITH_AUDIO_DEVICE),1)
+MINIAUDIO_CFLAGS ?= $(shell pkg-config --cflags miniaudio)
+AUDIO_DEVICE_LIBS ?= $(if $(filter Windows_NT,$(TARGET_OS)),-lole32 -lwinmm,$(if $(filter Darwin,$(TARGET_OS)),-framework CoreFoundation -framework CoreAudio -framework AudioToolbox,-ldl -lm))
+AUDIO_DEVICE_OBJ = src/miniaudio.o
+else ifeq ($(WITH_AUDIO_DEVICE),0)
+MINIAUDIO_CFLAGS =
+AUDIO_DEVICE_LIBS =
+AUDIO_DEVICE_OBJ =
+else
+$(error WITH_AUDIO_DEVICE must be 1 or 0 (custom lean build))
+endif
+override CPPFLAGS += -DSNAJPAGENT_AUDIO_DEVICE=$(WITH_AUDIO_DEVICE) $(MINIAUDIO_CFLAGS)
+override LDLIBS += $(AUDIO_DEVICE_LIBS)
+
+WITH_OFFICE ?= 1
+ifeq ($(WITH_OFFICE),1)
+ifneq ($(WITH_PDF),1)
+$(error WITH_OFFICE=1 requires WITH_PDF=1; disable both for a lean build)
+endif
+OFFICE_ROOT ?= /usr/lib/libreoffice
+OFFICE_CFLAGS ?= $(shell pkg-config --cflags libarchive libxml-2.0 libpng) -I$(OFFICE_ROOT)/../../include
+OFFICE_LIBS ?= $(shell pkg-config --libs libarchive libxml-2.0 libpng) -L$(OFFICE_ROOT)/program -Wl,-rpath,$(OFFICE_ROOT)/program -lsofficeapp
+else ifeq ($(WITH_OFFICE),0)
+OFFICE_CFLAGS =
+OFFICE_LIBS =
+else
+$(error WITH_OFFICE must be 1 or 0 (custom lean build))
+endif
+override CPPFLAGS += -DSNAJPAGENT_OFFICE=$(WITH_OFFICE) -DSNAJPAGENT_OFFICE_ROOT='"$(OFFICE_ROOT)"' $(OFFICE_CFLAGS)
+override LDLIBS += $(OFFICE_LIBS)

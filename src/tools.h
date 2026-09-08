@@ -41,6 +41,19 @@ void snag_tools_process_state(struct snag_process_state *state);
 void snag_tools_close_all(bool user_interrupt);
 void snag_tools_shutdown(void);
 
+struct snag_session;
+int snag_tools_document(const struct snag_response_item *, struct snag_session *,
+                        snag_tool_pump_fn, void *, snag_wake_fd, json_t **);
+typedef int (*snag_video_audio_fn)(void *, const json_t *, uint64_t, uint64_t, json_t **);
+int snag_tools_video(const struct snag_response_item *, struct snag_session *,
+                     snag_tool_pump_fn, void *, snag_wake_fd, snag_video_audio_fn, json_t **);
+struct snag_image_crop;
+int snag_image_prepare(struct snag_session *, const char *, uint32_t, const struct snag_image_crop *,
+                        snag_tool_pump_fn, void *, json_t **, char *, size_t);
+int snag_tools_image(const struct snag_response_item *call, struct snag_session *session,
+                     snag_tool_pump_fn pump, void *opaque,
+                     json_t **result);
+
 int snag_tools_read_only(const struct snag_response_item *call,
                         const char *workspace, snag_tool_pump_fn pump,
                         void *opaque, json_t **result);
@@ -61,5 +74,12 @@ int snag_tools_close_managed(const char *handle, bool user_interrupt,
                             snag_tool_pump_fn pump, void *pump_opaque, snag_wake_fd wake_fd,
                             json_t **result,
                             char *error, size_t error_size);
+
+int snag_tools_audio(const struct snag_response_item *call, struct snag_session *session,
+                     int root_fd, const struct snag_config *config, snag_tool_pump_fn pump,
+                     void *opaque, snag_wake_fd wake, json_t **result);
+/* Host-owned snapshot only: no journal lookup or second copy of the original. */
+int snag_tools_transcribe_asset(struct snag_session *, const json_t *, uint64_t, uint64_t,
+                     int, const struct snag_config *, snag_tool_pump_fn, void *, snag_wake_fd, json_t **);
 
 #endif

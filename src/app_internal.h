@@ -34,8 +34,14 @@ struct partial_public_item {
     size_t committed;
 };
 
+struct app_audio;
+struct app_voice;
 struct app_state {
+    struct app_audio *audio;
+    struct app_voice *voice;
     struct snag_store store;
+    json_t *draft_content;
+    bool attaching;
     struct snag_session session;
     struct snag_ui ui;
     struct snag_irc *irc;
@@ -100,6 +106,23 @@ struct app_state {
     size_t queue_edit_number;
     char capacity_cache_error[256];
 };
+
+int snag_app_audio_command(struct app_state *, const char *, bool *);
+int snag_app_audio_service(struct app_state *);
+int snag_app_audio_action(struct app_state *, enum snag_term_action);
+void snag_app_audio_close(struct app_state *);
+int snag_app_voice_command(struct app_state *,const char *,bool *);
+int snag_app_voice_service(struct app_state *);
+void snag_app_voice_close(struct app_state *);
+void snag_app_voice_event(struct app_state *,const char *,const json_t *);
+#ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
+int snag_app_voice_fixture(struct app_state *,const json_t *notices,bool done);
+int snag_app_voice_fixture_mute(struct app_state *);
+#endif
+bool snag_app_shutdown(struct app_state *);
+int snag_app_queue_arm(struct app_state *, bool);
+
+int snag_app_media_command(struct app_state *app, const char *line, bool *handled);
 
 int snag_app_tool_output(void *, const char *, unsigned int, uint64_t, const void *, size_t);
 int snag_app_tool_read(void *, const char *, unsigned int, uint64_t, uint64_t, struct snag_buf *);

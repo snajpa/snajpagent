@@ -153,6 +153,7 @@ struct snag_sha256 {
 void snag_sha256_init(struct snag_sha256 *ctx);
 void snag_sha256_update(struct snag_sha256 *ctx, const void *data, size_t len);
 void snag_sha256_final(struct snag_sha256 *ctx, unsigned char out[32]);
+void snag_sha256_final_hex(struct snag_sha256 *ctx, char out[SNAG_SHA256_HEX_LEN + 1u]);
 void snag_sha256_hex(const void *data, size_t len,
                     char out[SNAG_SHA256_HEX_LEN + 1u]);
 bool snag_hex_is_lower(const char *s, size_t len);

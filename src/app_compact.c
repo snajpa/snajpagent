@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "app_internal.h"
+#include "media.h"
 
 #include "context.h"
 #include "json.h"
@@ -318,7 +319,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         input_tokens_bound = 0u;
         count_method = "unknown";
         stage_rc = SNAG_APP_COUNT_SKIPPED;
-        if (use_exact) {
+        if (use_exact || snag_media_request_has_images(projection.count_request.value)) {
             if (snag_app_provider_activity(app, true) < 0) goto out;
             stage_rc = snag_app_provider_count(app, projection.count_request.value, credential,
                 &input_tokens_bound, &count_method,

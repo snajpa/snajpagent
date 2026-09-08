@@ -18,6 +18,7 @@
 enum section {
     SECTION_NONE,
     SECTION_AGENT,
+    SECTION_AUDIO,
     SECTION_PROVIDER,
     SECTION_MODEL_LIMIT,
     SECTION_MODEL_ALIAS,
@@ -572,6 +573,8 @@ set_section(struct parse_state *state, char *name)
         return set_model_limit_section(state, trim(name + 12u));
     else if (strncmp(name, "model-alias ", 12u) == 0)
         return set_model_alias_section(state, trim(name + 12u));
+    else if (strcmp(name, "audio") == 0)
+        section = SECTION_AUDIO;
     else if (strcmp(name, "ui") == 0)
         section = SECTION_UI;
     else if (strcmp(name, "irc") == 0)
@@ -611,8 +614,24 @@ enum setting_kind {
 };
 
 static int
+parse_audio(struct parse_state *state, const char *key, const char *value)
+{
+    struct snag_audio_config *audio = &state->config->audio;
+    if (!strcmp(key, "provider")) return copy_header_value(audio->provider, sizeof(audio->provider), value);
+    if (!strcmp(key, "listen_model")) return copy_header_value(audio->listen_model, sizeof(audio->listen_model), value);
+    if (!strcmp(key, "transcribe_model")) return copy_header_value(audio->transcribe_model, sizeof(audio->transcribe_model), value);
+    if (!strcmp(key, "speech_model")) return copy_header_value(audio->speech_model, sizeof(audio->speech_model), value);
+    if (!strcmp(key, "realtime_model")) return copy_header_value(audio->realtime_model, sizeof(audio->realtime_model), value);
+    if (!strcmp(key, "voice")) return copy_header_value(audio->voice, sizeof(audio->voice), value);
+    if (!strcmp(key, "capture_device")) return copy_value(audio->capture_device, sizeof(audio->capture_device), value);
+    if (!strcmp(key, "playback_device")) return copy_value(audio->playback_device, sizeof(audio->playback_device), value);
+    errno = EINVAL; return -1;
+}
+
+static int
 parse_setting(struct parse_state *state, const char *key, const char *value)
 {
+    if(state->section==SECTION_AUDIO)return parse_audio(state,key,value);
     struct snag_config *config = state->config;
     struct snag_provider_config *provider = &config->providers[state->provider_index];
     struct snag_model_limit_config *limit = &config->model_limits[state->model_limit_index];
@@ -1021,6 +1040,16 @@ validate_config(struct snag_config *config, bool private_file,
     }
     if (validate_shell(config, error, error_size) < 0)
         return -1;
+    const struct snag_audio_config *audio = &config->audio;
+    const struct snag_provider_config *audio_provider = snag_config_provider(config, audio->provider);
+    if ((audio->provider[0] && (!audio_provider || audio_provider->auth != SNAG_AUTH_API_KEY)) ||
+        (!audio->provider[0] && (audio->listen_model[0] || audio->transcribe_model[0] ||
+            audio->speech_model[0] || audio->realtime_model[0] || audio->voice[0])) ||
+        (!!(audio->speech_model[0] || audio->realtime_model[0]) != !!audio->voice[0]) ||
+        (audio->realtime_model[0] && !audio->transcribe_model[0])) {
+        snag_errorf(error, error_size, "audio needs an API-key provider; speech/realtime requires voice, and realtime requires transcribe_model");
+        errno = EINVAL; return -1;
+    }
     if (config->provider[0] && !snag_config_provider(config, config->provider)) {
         return snag_fail(error, error_size, EINVAL,
                   "configured agent provider is not defined");

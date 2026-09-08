@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "base.h"
+#include "base64.h"
 
 #include <errno.h>
 #include <ctype.h>
@@ -614,11 +615,16 @@ void
 snag_sha256_hex(const void *data, size_t len, char out[SNAG_SHA256_HEX_LEN + 1u])
 {
     struct snag_sha256 ctx;
-    unsigned char digest[32];
-
     snag_sha256_init(&ctx);
     snag_sha256_update(&ctx, data, len);
-    snag_sha256_final(&ctx, digest);
+    snag_sha256_final_hex(&ctx, out);
+}
+
+void
+snag_sha256_final_hex(struct snag_sha256 *ctx, char out[SNAG_SHA256_HEX_LEN + 1u])
+{
+    unsigned char digest[32];
+    snag_sha256_final(ctx, digest);
     hex_encode(digest, sizeof(digest), out);
 }
 
@@ -634,37 +640,18 @@ snag_hex_is_lower(const char *s, size_t len)
 static const char b64[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+static int
+base64_buffer(void *opaque, const unsigned char *data, size_t len)
+{
+    return snag_buf_append(opaque, data, len);
+}
+
 int
 snag_base64_append(struct snag_buf *out, const unsigned char *data, size_t len)
 {
-    size_t i = 0;
-    while (i + 3u <= len) {
-        unsigned int v = ((unsigned int)data[i] << 16) |
-                         ((unsigned int)data[i + 1u] << 8) |
-                         (unsigned int)data[i + 2u];
-        unsigned char enc[4] = {
-            (unsigned char)b64[(v >> 18) & 63u],
-            (unsigned char)b64[(v >> 12) & 63u],
-            (unsigned char)b64[(v >> 6) & 63u],
-            (unsigned char)b64[v & 63u]
-        };
-        if (snag_buf_append(out, enc, sizeof(enc)) < 0)
-            return -1;
-        i += 3u;
-    }
-    if (i < len) {
-        unsigned int v = (unsigned int)data[i] << 16;
-        unsigned char enc[4];
-        if (i + 1u < len)
-            v |= (unsigned int)data[i + 1u] << 8;
-        enc[0] = (unsigned char)b64[(v >> 18) & 63u];
-        enc[1] = (unsigned char)b64[(v >> 12) & 63u];
-        enc[2] = (i + 1u < len) ? (unsigned char)b64[(v >> 6) & 63u] : '=';
-        enc[3] = '=';
-        if (snag_buf_append(out, enc, sizeof(enc)) < 0)
-            return -1;
-    }
-    return 0;
+    struct snag_base64_stream stream = {0};
+    return snag_base64_write(&stream, data, len, base64_buffer, out) < 0 ||
+           snag_base64_finish(&stream, base64_buffer, out) < 0 ? -1 : 0;
 }
 
 int

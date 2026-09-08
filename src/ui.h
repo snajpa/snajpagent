@@ -27,7 +27,7 @@ enum snag_ui_operation {
     SNAG_UI_ROLLOUT_END, SNAG_UI_ROLLOUT_ABORT, SNAG_UI_CLOSE,
     SNAG_UI_LEVEL, SNAG_UI_COLOR, SNAG_UI_MARKDOWN, SNAG_UI_DESTINATIONS,
     SNAG_UI_SELECT, SNAG_UI_ROUTE, SNAG_UI_COMMANDS, SNAG_UI_PAUSE,
-    SNAG_UI_OPEN, SNAG_UI_EXTERNAL, SNAG_UI_PROMPT, SNAG_UI_SPINNERS, SNAG_UI_DRAFT,
+    SNAG_UI_OPEN, SNAG_UI_EXTERNAL, SNAG_UI_PROMPT, SNAG_UI_SPINNERS, SNAG_UI_DRAFT, SNAG_UI_INSERT, SNAG_UI_AUDIO, SNAG_UI_CAPTION,
     SNAG_UI_VIEW, SNAG_UI_SUBMITTED, SNAG_UI_PUBLIC_BEGIN, SNAG_UI_PUBLIC, SNAG_UI_VALIDATE,
     SNAG_UI_ORIENTATION, SNAG_UI_HISTORY, SNAG_UI_IRC, SNAG_UI_DURABLE, SNAG_UI_EVENT,
     SNAG_UI_RESUME, SNAG_UI_PROTOCOL, SNAG_UI_TRANSPORT, SNAG_UI_RAW, SNAG_UI_HISTORY_SNAPSHOT, SNAG_UI_UPDATE, SNAG_UI_STOP
@@ -96,6 +96,11 @@ int snag_ui_validate_prompt(struct snag_ui *ui, const char *label,
                     uint32_t per_second);
 int snag_ui_simple_prompt(struct snag_ui *ui, bool active);
 bool snag_ui_leaving(const struct snag_ui *ui);
+int snag_ui_insert_draft(struct snag_ui *, const char *);
+int snag_ui_audio(struct snag_ui *, const char *, bool);
+/* Acknowledged live-capture label, with normal keyboard submission enabled. */
+int snag_ui_voice(struct snag_ui *, const char *);
+int snag_ui_caption(struct snag_ui *, unsigned int speaker, const char *);
 int snag_ui_poll(struct snag_ui *ui, int timeout_ms,
                  enum snag_term_action *action, char **text);
 int snag_ui_submitted(struct snag_ui *ui, const char *label, const char *text,

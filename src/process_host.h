@@ -30,6 +30,9 @@ void snag_child_init(struct snag_child *child);
 /* A child and its streams stay owned by one caller thread through cleanup. */
 int snag_child_spawn(struct snag_child *child, const char *shell, const char *command,
                      const char *directory, char **environment, bool pty);
+/* Direct executable invocation, no shell expansion. argv[0] must be absolute. */
+int snag_child_spawn_argv(struct snag_child *child, const char *const *argv,
+                          const char *directory, char **environment);
 void snag_child_signal(struct snag_child *child, enum snag_child_signal signal);
 /* 1 exited without reaping, 0 running, -1 error/lost ownership. */
 int snag_child_exited(struct snag_child *child);

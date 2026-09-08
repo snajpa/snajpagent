@@ -2,6 +2,88 @@
 
 # Dependency and vendoring inventory
 
+## Linked Office import (native development)
+
+`WITH_OFFICE=1` links LibreOfficeKit through `libsofficeapp`, libarchive 3.8.7
+and libxml2 2.15.1. The current runtime is LibreOffice 25.2.6.2 from the pinned
+nixpkgs source already used by `nix/portable.nix`; it is a native dependency,
+not an installed executable invoked from PATH. `OFFICE_ROOT` selects its
+`lib/libreoffice` directory including runtime components/configuration/fonts.
+The distribution recipes still need reconciliation with the all-linked
+portable matrix. `WITH_OFFICE=0` supplies explicit unsupported-operation stubs.
+
+`src/office.c` runs one disposable child of the same binary through the existing
+bounded child runner. `src/office_package.c` checks ZIP/XML before import;
+`src/office_confine.c` denies Linux network/exec syscalls and applies available
+Landlock filesystem restrictions. Missing Landlock is labelled in results;
+other target confinement implementations are unfinished. This is not a proof
+that all parser vulnerabilities are confined. Macro execution is disabled by
+the load call and active/external package features are rejected before loading.
+The worker exits without invoking LibreOffice global teardown after synchronous
+export; the native runtime crashed in teardown in a generated-file probe.
+Sources and selected PDF/image derivatives stay in the existing asset store.
+The worker independently applies its limits and clears its environment. Its
+locked `office-work` directory has a 256 MiB per-conversion scratch limit;
+the existing conversion loop checks profile/output growth, depth and entry
+count at 50 ms checkpoints and before accepting output. Session
+reopening/deletion removes unowned residue, preserving a surviving worker's
+locked tree. Polling can overshoot before termination; see the manual's limits.
+
+LibreOffice source is MPL-2.0 with secondary LGPL-3.0+ licensing and bundled
+components have additional licenses. libarchive uses BSD terms; libxml2 uses
+MIT terms. Preserve their exact runtime license notices in release packaging.
+The unstable LOK rendering ABI requires matching headers and runtime.
+`src/office_sheet.c` selects a named-by-number sheet and cell rectangle, waits
+for the correlated GoToCell completion, validates its cursor, then exports
+selected HTML as coordinate-labelled cells and renders the same tile via
+libpng. Selected HTML is never executed. Merge spans and sparse/quoted cells
+are checked by generated ODS/XLSX fixtures; a selection with ambiguous merged
+boundaries fails instead of assigning guessed coordinates.
+
+## Image token bounds
+
+The OpenAI vision sizing/multiplier table at
+`https://developers.openai.com/api/docs/guides/images-vision` was checked on
+2026-09-07. The implementation fixes `detail=high` and uses maximum processed
+size rather than parsing untrusted compressed-image dimensions for accounting.
+GPT-5.6 Sol/Terra/Luna, 5.5 and 5.4/mini/nano permit 2,500 patches at 1.2×;
+5.2 permits 6,144 at 1.2×; 4.1-mini permits 6,144 at 1.62×. Ceilings round
+up and add one token for the documented floating-point rounding discrepancy.
+Tile models fit within 2048×2048: budgeting all sixteen 512×512 tiles is
+conservative even before the additional shortest-side resize. Token ceilings
+include the documented base and tile costs. The manual lists each exact model
+name accepted; other variants do not inherit an unverified family estimate.
+The text bound excludes image URLs, uses canonical request bytes, and adds
+1,024 request plus 32 per input-item tokens for framing. Request hashes still
+cover the original data URLs. No input is downsampled or silently discarded by
+the accounting fallback. Billing/capacity responses remain provider authority.
+
+## Linked multimodal dependencies (feature branch)
+
+Default native builds additionally use FFmpeg (libavformat, libavcodec,
+libavutil, libswresample, libswscale), Poppler, libpng, and miniaudio 0.11.23.
+FFmpeg and Poppler are reached through narrow file-only adapters in `src/av.c`
+and `src/pdf.cpp`; PDF requires C++20. Miniaudio is compiled once in
+`src/miniaudio.c` from its dependency header. The low-level device callback
+moves native PCM only; engine, resource manager, node graph and file decoders
+are disabled. No third-party source is copied into the repository.
+
+Supply the miniaudio header using `MINIAUDIO_CFLAGS=-I/PATH/TO/HEADERS` when
+pkg-config metadata is unavailable. The selected source is
+`https://github.com/mackron/miniaudio/archive/refs/tags/0.11.23.tar.gz`;
+its upstream LICENSE offers Unlicense or MIT No Attribution. This integration
+selects MIT No Attribution (MIT-0). Upstream's license applies to the header;
+the first-party adapter remains GPL-2.0-only. FFmpeg's enabled components and
+Poppler's GPL terms must be retained in each final release closure.
+
+Custom lean builds may set `WITH_AV=0`, `WITH_OFFICE=0`, or
+`WITH_AUDIO_DEVICE=0`; `WITH_PDF=0` also requires `WITH_OFFICE=0` because Office
+page validation/rendering uses Poppler. Official desktop releases require all
+four enabled.
+The branch's portable recipes have not yet been reconciled with these inputs;
+the historical closure descriptions below do not qualify multimodal artifacts.
+
+
 This repository intentionally does **not** vendor third-party implementation
 source. Ordinary native builds use first-party source plus platform/POSIX
 interfaces, system libcurl, and system Jansson. That source policy is machine-checked
@@ -25,6 +107,29 @@ The linked/runtime dependencies for a normal provider-capable build are:
 | system libcurl | not vendored | bounded Responses create/count/compact/catalog, authentication and updater HTTPS transport |
 | libcurl backend closure | not vendored | TLS, resolver, compression, HTTP, and other backends selected by the system libcurl build |
 | tmux | not vendored; test-only | optional rendered-screen regression in `make check`; required by `make tmuxcheck` and `make terminallivecheck` |
+
+## Multimodal development adapters
+
+Audio/video decoding links FFmpeg libraries through `pkg-config` (libavformat,
+libavcodec, libavutil, libswresample and libswscale). `WITH_AV=1` is the default;
+`WITH_AV=0` omits file decoding for custom lean builds. `AV_CFLAGS`/`AV_LIBS`
+accept cross-toolchain flags. PDF text and page rendering link Poppler's core
+and libpng through a narrow C++20 adapter, using the existing retained-file
+reader. `WITH_PDF=1` is the default; `WITH_PDF=0` omits PDF support without a
+C++ compiler/runtime dependency. `CXX`, `CXXFLAGS`, `PDF_CFLAGS` and `PDF_LIBS`
+select matching toolchain and library flags. Poppler's core API requires
+matching build headers and libraries; the current pinned recipe uses 25.10.0.
+The application does not invoke FFmpeg/Poppler executables for inspection.
+FFmpeg is used only to generate local test fixtures.
+
+Office/realtime dependencies and full portable static closure remain unfinished.
+File-audio API adapters are implemented; real-provider qualification remains
+outstanding. Decoder byte, output and cooperative cancellation bounds are not
+an OS security sandbox or a guarantee against defects in third-party parsers.
+
+Default desktop releases must link in and enable all modalities; build-time
+modularity is for custom lean builds. That requirement has **not** yet been
+satisfied by the subprocess adapters or the existing portable build recipes.
 
 ## Self-contained Linux builds
 

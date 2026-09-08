@@ -2,6 +2,13 @@
 #include "checked_json.h"
 #include "context.h"
 #include "credential.h"
+#include "media.h"
+#include "convert.h"
+#include "av.h"
+#include "pdf.h"
+#include "office.h"
+#include "tools.h"
+#include "fs.h"
 #include "irc.h"
 #include "base.h"
 #include "json.h"
@@ -13,6 +20,14 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#if SNAJPAGENT_OFFICE
+#include <archive.h>
+#include <archive_entry.h>
+#if defined(__linux__)
+#include <sys/resource.h>
+#include <sys/wait.h>
+#endif
+#endif
 
 static void
 assert_string(const json_t *object, const char *key, const char *expected)
@@ -149,6 +164,53 @@ response_completed(const char *turn_id, const char *response_id,
     return checked_json(json_pack("{s:i,s:[o],s:s,s:s,s:s,s:s,s:o}",
         "cycle", 1, "items", assistant_item(text), "provider_response_id", "resp_1",
         "response_id", response_id, "status", "completed", "turn_id", turn_id, "usage", usage()));
+}
+
+static void test_voice_completed_result(struct snag_store *store,const char *workspace)
+{
+    struct snag_session session;snag_session_init(&session);
+    char id[33],queue[33],error[256];bool duplicate;json_t *result=NULL;
+    const char *turn="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",*response="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    assert(snag_session_create(store,&session,workspace,"default",SNAJPAGENT_MODEL,"medium",error,sizeof(error))==0);
+    strcpy(id,session.id);
+    json_t *source=json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s}",
+        "connection_id","0123456789abcdef0123456789abcdef","input_id","input-1","response_id","voice-1",
+        "call_id","call-1","provider","default","model","voice-fixture","transcript","inspect","request","inspect");
+    assert(snag_session_voice_queue(&session,source,queue,&duplicate,error,sizeof(error))==0 && !duplicate);
+    json_decref(source);
+    json_t *started=turn_started(turn,1u,session.pending_queue[0].text,workspace,NULL);
+    assert(json_object_set_new(started,"input_kind",json_string("queued"))==0);
+    assert(json_object_set_new(started,"queue_id",json_string(queue))==0);
+    assert(json_object_set_new(started,"queue_seq",json_integer((json_int_t)session.pending_queue[0].seq))==0);
+    assert(snag_session_commit(&session,"turn_started",started,NULL,error,sizeof(error))==0);
+    assert(snag_session_commit(&session,"response_started",response_started(turn,response,NULL),NULL,error,sizeof(error))==0);
+    assert(snag_session_commit(&session,"response_completed",response_completed(turn,response,"original coding result"),NULL,error,sizeof(error))==0);
+    assert(snag_session_commit(&session,"turn_completed",json_pack("{s:s,s:s,s:s}","turn_id",turn,
+        "final_item_id",session.final_item_id,"final_response_id",session.final_response_id),NULL,error,sizeof(error))==0);
+    /* A later keyboard response changes last_assistant, not the voice result. */
+    const char *keyboard="cccccccccccccccccccccccccccccccc",*later="dddddddddddddddddddddddddddddddd";
+    assert(snag_session_commit(&session,"turn_started",turn_started(keyboard,2u,"keyboard",workspace,NULL),NULL,error,sizeof(error))==0);
+    assert(snag_session_commit(&session,"response_started",response_started(keyboard,later,NULL),NULL,error,sizeof(error))==0);
+    assert(snag_session_commit(&session,"response_completed",response_completed(keyboard,later,"unrelated later result"),NULL,error,sizeof(error))==0);
+    for(unsigned int pass=0;pass<2u;++pass) {
+        if(pass) {
+            snag_session_close(&session);snag_session_init(&session);
+            assert(snag_session_open(store,&session,id,error,sizeof(error))==0);
+        }
+        assert(snag_session_voice_status(&session,queue,&result,error,sizeof(error))==0);
+        assert(!strcmp(snag_json_string(result,"status"),"completed"));
+        assert(!strcmp(snag_json_string(result,"turn_id"),turn));
+        assert(!strcmp(snag_json_string(result,"text"),"original coding result"));
+        json_decref(result);result=NULL;
+        uint64_t seq=session.next_seq;
+        assert(snag_session_voice_context(&session,&result,error,sizeof(error))==0);
+        const json_t *handoff=json_object_get(result,"latest_voice_handoff");
+        assert(!strcmp(snag_json_string(handoff,"queue_id"),queue));
+        assert(!strcmp(snag_json_string(handoff,"text"),"original coding result"));
+        assert(!strcmp(snag_json_string(result,"active_turn_id"),keyboard));
+        assert(session.next_seq==seq);json_decref(result);result=NULL;
+    }
+    snag_session_close(&session);
 }
 
 static json_t *
@@ -865,12 +927,13 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
             assert(web && json_object_size(web) == 1u);
             assert(!item_by_field(ts, "type", openrouter ? "web_search" : "openrouter:web_search"));
             if (pass == 0u) {
-                assert(json_array_size(ts) == 4u);
+                assert(json_array_size(ts) == 9u);
                 assert(item_by_field(ts, "name", "list_files") && item_by_field(ts, "name", "read_file") &&
                        item_by_field(ts, "name", "grep"));
                 (void)assert_optional_tool_contract(item_by_field(ts, "name", "list_files"));
                 (void)assert_optional_tool_contract(item_by_field(ts, "name", "read_file"));
                 (void)assert_optional_tool_contract(item_by_field(ts, "name", "grep"));
+                assert(item_by_field(ts,"name","view_image"));
             } else {
                 assert(item_by_field(ts, "name", "exec_command"));
                 assert(item_by_field(ts, "name", "update_goal"));
@@ -942,6 +1005,7 @@ test_provider_model_projection(struct snag_store *store, const char *temp)
     snag_session_close(&session);
     snag_config_free(&config);
     json_decref(empty);
+    free(temp);
 }
 
 static void
@@ -1235,10 +1299,842 @@ test_reasoning_continuation(struct snag_store *store, const char *workspace)
     snag_config_free(&config);
 }
 
-int
-main(void)
+static void
+test_image_tool_replay(void)
 {
-    char temp[] = "/tmp/snajpagent-context-XXXXXX";
+    const char *png64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aKz8AAAAASUVORK5CYII=";
+    char *temp = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", "snag-image-XXXXXX");
+    char error[256], id[SNAG_ID_HEX_LEN + 1u], expected_hash[SNAG_SHA256_HEX_LEN + 1u];
+    const char *turn = "01010101010101010101010101010101";
+    const char *response = "02020202020202020202020202020202";
+    const char *call_id = "03030303030303030303030303030303";
+    struct snag_store store;
+    struct snag_session session;
+    struct snag_context_projection projection;
+    struct snag_buf png, expected;
+    json_t *empty = json_array(), *result = NULL;
+    assert(temp && mkdtemp(temp));
+    snag_store_init(&store); snag_session_init(&session); snag_context_projection_init(&projection);
+    assert(snag_store_open(&store, temp, error, sizeof(error)) == 0);
+    assert(snag_session_create(&store, &session, temp, "default", SNAJPAGENT_MODEL,
+                               "medium", error, sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+    snag_buf_init(&png, 4096u); snag_buf_init(&expected, 4096u);
+    assert(snag_base64_decode(&png, png64) == 0);
+    int fd = snag_create_private_at(session.dir_fd, "source.png", true);
+    assert(fd >= 0 && snag_write_full(fd, png.data, png.len) == 0); close(fd);
+    char *source = snag_path_join(session.dir_path, "source.png");
+    assert(source);
+    assert(snag_session_commit(&session, "turn_started",
+        turn_started(turn, 1u, "inspect image", temp, NULL), NULL, error, sizeof(error)) == 0);
+    json_t *image_start = response_started(turn, response, NULL);
+    assert(json_object_set_new(image_start, "count_method", json_string("media_upper_bound")) == 0);
+    assert(snag_session_commit(&session, "response_started", image_start, NULL, error, sizeof(error)) == 0);
+    json_t *done = response_completed_call(turn, response, call_id, temp);
+    json_t *item = json_array_get(json_object_get(done, "items"), 0u);
+    assert(snag_json_set_new(item, "name", json_string("view_image")) == 0);
+    assert(snag_json_set_new(item, "arguments", json_pack("{s:s}", "path", source)) == 0);
+    assert(snag_session_commit(&session, "response_completed", done, NULL, error, sizeof(error)) == 0);
+    assert(snag_session_commit(&session, "tool_started",
+        tool_started_data(turn, call_id, session.pending_calls[0].action_sha256, temp),
+        NULL, error, sizeof(error)) == 0);
+    struct snag_response_item call = {.kind = SNAG_ITEM_TOOL_CALL, .name = "view_image",
+                                      .arguments = json_pack("{s:s}", "path", source)};
+    assert(snag_tools_image(&call, &session, NULL, NULL, &result) == 0);
+    json_decref(call.arguments);
+    assert(result && snag_tool_result_valid(result) == 0);
+    json_t *parts = json_object_get(result, "content");
+    json_t *asset = json_incref(json_object_get(json_array_get(parts, 0u), "asset"));
+    assert(snag_media_valid(asset));
+#if SNAJPAGENT_AV
+    const char *source_key="source";
+    assert(strstr(snag_json_string(json_array_get(parts,0u),"note"),"frame 0 only"));
+    const size_t image_index=3u;
+#else
+    const char *source_key="asset";
+    assert(!json_object_get(json_array_get(parts,0u),"source"));
+    assert(!json_object_get(json_array_get(parts,0u),"note"));
+    const size_t image_index=2u;
+#endif
+    json_t *original = json_incref(json_object_get(json_array_get(parts, 0u), source_key));
+    assert(snag_media_valid(original));
+    struct snag_buf normalized;
+    snag_buf_init(&normalized, 4096u);
+    assert(snag_media_read(session.dir_fd, asset, &normalized, error, sizeof(error)) == 0);
+    assert(normalized.len > 24u && !memcmp(normalized.data, "\211PNG\r\n\032\n", 8u));
+    assert(snag_buf_append(&expected, "data:image/png;base64,", 22u) == 0);
+    assert(snag_base64_append(&expected, normalized.data, normalized.len) == 0);
+    assert(snag_buf_terminate(&expected) == 0);
+    snag_buf_free(&normalized);
+    /* Mixed parts and tool label have distinct order; no JSON-stringified media. */
+    json_t *mixed = json_pack("[{s:s,s:s}]", "type", "input_text", "text", "before");
+    assert(json_array_extend(mixed, parts) == 0);
+    assert(json_array_append_new(mixed, json_pack("{s:s,s:s}", "type", "input_text", "text", "after")) == 0);
+    assert(snag_json_set_new(result, "content", mixed) == 0);
+    assert(snag_session_commit(&session, "tool_finished", tool_finished_data(turn, call_id, result),
+                               NULL, error, sizeof(error)) == 0);
+    assert(unlink(source) == 0);
+    char reference[64];
+    assert(snprintf(reference, sizeof(reference), "asset:%s", snag_json_string(original, "id")) > 0);
+    call.arguments = json_pack("{s:s}", "path", reference);
+    json_t *reused = NULL;
+    assert(snag_tools_image(&call, &session, NULL, NULL, &reused) == 0);
+    assert(!strcmp(snag_json_string(reused, "status"), "succeeded"));
+    assert(json_equal(json_object_get(json_array_get(json_object_get(reused, "content"), 0u), source_key), original));
+    assert(!strcmp(snag_json_string(json_object_get(json_array_get(json_object_get(reused, "content"), 0u), "asset"), "sha256"),
+        snag_json_string(asset, "sha256")));
+    json_decref(reused); json_decref(call.arguments);
+    call.arguments = json_pack("{s:s}", "path", "asset:00000000000000000000000000000000");
+    assert(snag_tools_image(&call, &session, NULL, NULL, &reused) == 0);
+    assert(!strcmp(snag_json_string(reused, "status"), "failed"));
+    json_decref(reused); json_decref(call.arguments);
+
+    for (unsigned int replay = 0; replay < 2u; ++replay) {
+        assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, empty, 0u, false,
+            NULL, NULL, &projection, error, sizeof(error)) == 0);
+        assert(snag_media_request_has_images(projection.create_request));
+        assert(snag_media_request_check(projection.create_request, error, sizeof(error)) == 0);
+        json_t *input = json_object_get(projection.create_request, "input");
+        assert(input == json_object_get(projection.count_request, "input"));
+        json_t *out = tool_by_type(input, "function_call_output");
+        assert(out && !strcmp(snag_json_string(out, "call_id"), call_id));
+        json_t *content = json_object_get(out, "output");
+        assert(json_is_array(content) && json_array_size(content) == image_index+2u);
+        assert(!strcmp(snag_json_string(json_array_get(content, 1u), "text"), "before"));
+        assert(!strcmp(snag_json_string(json_array_get(content, image_index+1u), "text"), "after"));
+        assert(!strcmp(snag_json_string(json_array_get(content, image_index), "image_url"), (char *)expected.data));
+        struct snag_provider_config provider;
+        snag_config_provider_init(&provider, "default");
+        json_t *budget_request = json_copy(projection.count_request);
+        assert(json_object_set_new(budget_request, "model", json_string("gpt-5.5")) == 0);
+        uint64_t budget = 0, larger = 0;
+        assert(snag_media_token_bound(budget_request, &provider, &budget, error, sizeof(error)) == 0);
+        assert(budget > 3001u && budget < projection.model_input_bytes + 10000u);
+        assert(!strcmp(snag_json_string(json_array_get(content, image_index), "image_url"), (char *)expected.data));
+        assert(json_object_set_new(budget_request, "model", json_string("gpt-4o-mini")) == 0);
+        assert(snag_media_token_bound(budget_request, &provider, &larger, error, sizeof(error)) == 0);
+        assert(larger > budget + 90000u);
+        assert(json_object_set_new(budget_request, "model", json_string("gpt-5.5-specialized-unknown")) == 0);
+        larger = 91u;
+        assert(snag_media_token_bound(budget_request, &provider, &larger, error, sizeof(error)) < 0 && larger == 91u);
+        assert(json_object_set_new(budget_request, "model", json_string("gpt-5.5")) == 0);
+        strcpy(provider.base_url, "https://api.openai.com.attacker.invalid");
+        assert(snag_media_token_bound(budget_request, &provider, &larger, error, sizeof(error)) < 0);
+        strcpy(provider.base_url, SNAG_CHATGPT_BASE); provider.auth = SNAG_AUTH_CHATGPT;
+        assert(snag_media_token_bound(budget_request, &provider, &larger, error, sizeof(error)) == 0 && larger == budget);
+        json_decref(budget_request);
+        if (!replay) {
+            json_t *many = json_deep_copy(projection.create_request);
+            json_t *all = json_object_get(many, "input");
+            json_t *image_result = tool_by_type(all, "function_call_output");
+            for (unsigned int extra = 0; extra < 7u; ++extra)
+                assert(json_array_append(all, image_result) == 0);
+            assert(snag_media_request_check(many, error, sizeof(error)) == 0);
+            assert(json_array_append(all, image_result) == 0);
+            assert(snag_media_request_check(many, error, sizeof(error)) < 0);
+            json_decref(many);
+        }
+        if (replay) assert(!strcmp(expected_hash, projection.request_sha256));
+        else memcpy(expected_hash, projection.request_sha256, sizeof(expected_hash));
+        snag_context_projection_free(&projection);
+        if (!replay) {
+            /* Auxiliary usage is durable but must not change the coding request
+             * (including its hash) or reopen audio when replayed. */
+            assert(snag_session_commit(&session,"audio_usage",
+                json_pack("{s:s,s:s,s:s,s:s}","operation","dictation","provider","default",
+                    "model","fixture-transcribe","report","separate usage marker"),NULL,error,sizeof(error))==0);
+            snag_session_close(&session); snag_session_init(&session);
+            assert(snag_session_open(&store, &session, id, error, sizeof(error)) == 0);
+        }
+    }
+    /* The same immutable content belongs to a specific steer/queued turn. */
+    const char *steer = "04040404040404040404040404040404";
+    const char *queue = "05050505050505050505050505050505";
+    const char *next_turn = "06060606060606060606060606060606";
+    json_t *attached = json_pack("[{s:s,s:O}]", "type", "input_image", "asset", asset);
+    json_t *input_event = steering_added(turn, steer, "look here");
+    assert(snag_json_set_new(input_event, "content", json_incref(attached)) == 0);
+    assert(snag_session_commit(&session, "steering_added", input_event, NULL, error, sizeof(error)) == 0);
+    input_event = json_pack("{s:s,s:b,s:s,s:s,s:O}", "queue_id", queue, "read_only", 0,
+        "text", "queued image", "while_turn_id", turn, "content", attached);
+    assert(snag_session_commit(&session, "future_turn_queued", input_event, NULL, error, sizeof(error)) == 0);
+    uint64_t queued_seq = session.pending_queue[0].seq;
+    json_t *snapshot = json_pack("[{s:s,s:s,s:O}]", "id", steer, "text", "look here", "content", attached);
+    for (unsigned int replay = 0; replay < 2u; ++replay) {
+        assert(json_equal(session.pending_queue[0].content, attached));
+        assert(json_equal(session.pending_steering[0].content, attached));
+        assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, snapshot, 0u, false,
+            NULL, NULL, &projection, error, sizeof(error)) == 0);
+        json_t *inputs = json_object_get(projection.create_request, "input");
+        bool found = false;
+        for (size_t i = 0; i < json_array_size(inputs); ++i) {
+            json_t *message = json_array_get(inputs, i);
+            json_t *content = json_object_get(message, "content");
+            if (!json_is_array(content)) continue;
+            assert(!strcmp(snag_json_string(message, "role"), "user"));
+            assert(!strcmp(snag_json_string(json_array_get(content, 0u), "text"), "look here"));
+            assert(!strcmp(snag_json_string(json_array_get(content, 1u), "image_url"), (char *)expected.data));
+            found = true;
+        }
+        assert(found);
+        snag_context_projection_free(&projection);
+        if (!replay) {
+            snag_session_close(&session); snag_session_init(&session);
+            assert(snag_session_open(&store, &session, id, error, sizeof(error)) == 0);
+        }
+    }
+    json_t *wrong_snapshot = json_deep_copy(snapshot);
+    assert(json_object_del(json_array_get(wrong_snapshot, 0u), "content") == 0);
+    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, wrong_snapshot, 0u, false,
+        NULL, NULL, &projection, error, sizeof(error)) < 0);
+    json_decref(wrong_snapshot); json_decref(snapshot);
+    assert(snag_session_commit(&session, "turn_failed", json_pack("{s:s,s:s,s:s}",
+        "class", "provider", "message", "test failure", "turn_id", turn), NULL, error, sizeof(error)) == 0);
+    input_event = turn_started(next_turn, 2u, "queued image", temp, NULL);
+    assert(snag_json_set_new(input_event, "input_kind", json_string("queued")) == 0);
+    assert(snag_json_set_new(input_event, "queue_id", json_string(queue)) == 0);
+    assert(snag_json_set_new(input_event, "queue_seq", json_integer((json_int_t)queued_seq)) == 0);
+    uint64_t before = session.next_seq;
+    assert(snag_session_commit(&session, "turn_started", json_deep_copy(input_event), NULL, error, sizeof(error)) < 0);
+    assert(session.next_seq == before && session.pending_queue_count == 1u);
+    assert(snag_json_set_new(input_event, "content", json_incref(attached)) == 0);
+    assert(snag_session_commit(&session, "turn_started", input_event, NULL, error, sizeof(error)) == 0);
+    assert(!session.pending_queue_count && !session.pending_steering_count);
+    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u, false,
+        NULL, NULL, &projection, error, sizeof(error)) == 0);
+    assert(snag_media_request_has_images(projection.create_request));
+    snag_context_projection_free(&projection);
+    json_decref(attached);
+    int media_fd = snag_open_read_at(session.dir_fd, "media", true);
+    assert(media_fd >= 0 && snag_unlink_at(media_fd, snag_json_string(asset, "id"), false) == 0);
+    close(media_fd);
+    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, empty, 0u, false,
+        NULL, NULL, &projection, error, sizeof(error)) < 0);
+    json_decref(original); json_decref(asset); json_decref(empty);
+    snag_buf_free(&png); snag_buf_free(&expected);
+    snag_context_projection_free(&projection);
+    snag_session_close(&session); snag_store_close(&store);
+    free(temp); free(source);
+}
+
+static int pdf_stop(void *opaque, unsigned int ms) { (void)ms; return *(int *)opaque; }
+
+static unsigned int
+png_dimension(const struct snag_buf *png, size_t at)
+{
+    assert(png->len >= 26u && !memcmp(png->data, "\211PNG\r\n\032\n", 8u));
+    return (unsigned int)png->data[at] << 24 | (unsigned int)png->data[at+1] << 16 |
+        (unsigned int)png->data[at+2] << 8 | png->data[at+3];
+}
+
+static void
+test_image_normalization(void)
+{
+    if (!getenv("SNAJPAGENT_TEST_MEDIA")) return;
+    char *root = snag_path_join(getenv("TMPDIR"), "snag-image-codecs-XXXXXX");
+    assert(root && mkdtemp(root));
+    const char *extensions[] = {"png", "jpg", "bmp", "tiff", "webp", "gif"};
+    struct snag_buf output, png;
+    snag_buf_init(&output, 4096u); snag_buf_init(&png, 1024u * 1024u);
+    char error[256], label[768], path[4096];
+    for (size_t i = 0; i < 6u; ++i) {
+        snprintf(path, sizeof(path), "%s/image.%s", root, extensions[i]);
+        const char *args[] = {"ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i",
+            "color=red:s=64x32:r=2:d=1", "-frames:v", i == 5u ? "2" : "1", "-threads", "1", "-y", path, NULL};
+        assert(snag_convert(args, root, &output, NULL, NULL, SNAG_WAKE_INVALID, error, sizeof(error)) == 0);
+        snag_buf_reset(&png);
+        int rc = snag_av_image(path, i == 5u ? 1u : 0u, NULL, &png, label, sizeof(label), NULL, NULL, error, sizeof(error));
+        if (rc) fprintf(stderr, "%s: %s\n", path, error);
+        assert(rc == 0 && png_dimension(&png, 16u) == 64u && png_dimension(&png, 20u) == 32u);
+        assert(png.data[25] == 6u); /* RGBA, not discarded alpha */
+        assert(strstr(label, i == 5u ? "frame 1 only" : "frame 0 only"));
+        struct snag_image_crop crop = {1u, 3u, 17u, 9u};
+        snag_buf_reset(&png);
+        assert(snag_av_image(path, 0u, &crop, &png, label, sizeof(label), NULL, NULL, error, sizeof(error)) == 0);
+        assert(png_dimension(&png, 16u) == 17u && png_dimension(&png, 20u) == 9u);
+        assert(strstr(label, "crop [1,3,17,9]"));
+        size_t kept = png.len;
+        crop.x = 64u;
+        assert(snag_av_image(path, 0u, &crop, &png, label, sizeof(label), NULL, NULL, error, sizeof(error)) < 0 && png.len == kept);
+        int stop = 2;
+        assert(snag_av_image(path, 0u, NULL, &png, label, sizeof(label), pdf_stop, &stop, error, sizeof(error)) == 2 && png.len == kept);
+        assert(snag_av_image(path, 999u, NULL, &png, label, sizeof(label), NULL, NULL, error, sizeof(error)) < 0 && png.len == kept);
+        assert(unlink(path) == 0);
+    }
+    snprintf(path, sizeof(path), "%s/oriented.jpg", root);
+    const char *args[] = {"ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=red:s=64x32",
+        "-frames:v", "1", "-threads", "1", "-y", path, NULL};
+    assert(snag_convert(args, root, &output, NULL, NULL, SNAG_WAKE_INVALID, error, sizeof(error)) == 0);
+    FILE *f = fopen(path, "rb");
+    assert(f); unsigned char jpeg[4096]; size_t len = fread(jpeg, 1u, sizeof(jpeg), f); assert(feof(f) && len > 2u); fclose(f);
+    /* APP1 Exif: IFD0 Orientation=6, rotate 90 degrees clockwise. */
+    const unsigned char exif[] = {0xff,0xe1,0,34,'E','x','i','f',0,0,'I','I',42,0,8,0,0,0,
+        1,0,0x12,1,3,0,1,0,0,0,6,0,0,0,0,0,0,0};
+    f = fopen(path, "wb"); assert(f);
+    assert(fwrite(jpeg,1u,2u,f) == 2u && fwrite(exif,1u,sizeof(exif),f) == sizeof(exif) &&
+        fwrite(jpeg+2u,1u,len-2u,f) == len-2u && fclose(f) == 0);
+    snag_buf_reset(&png);
+    assert(snag_av_image(path, 0u, NULL, &png, label, sizeof(label), NULL, NULL, error, sizeof(error)) == 0);
+    fprintf(stderr, "EXIF fixture: %s\n", label);
+    assert(png_dimension(&png, 16u) == 32u && png_dimension(&png, 20u) == 64u);
+    assert(unlink(path) == 0);
+    snag_buf_free(&output); snag_buf_free(&png); assert(rmdir(root) == 0); free(root);
+}
+
+struct video_audio_result { unsigned int calls; int mode; };
+
+static int
+video_audio_result(void *opaque, const json_t *source, uint64_t start, uint64_t end, json_t **result)
+{
+    struct video_audio_result *state = opaque;
+    ++state->calls;
+    assert(snag_media_valid(source) && start == 0u && end == 2u);
+    *result = snag_tool_result_terminal(false, "Fixture transcription unavailable");
+    assert(*result);
+    return state->mode;
+}
+
+static void
+test_document_conversion(void)
+{
+    char *root = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", "snag-docs-XXXXXX");
+    char error[256];
+    struct snag_store store;
+    struct snag_session session;
+    struct snag_response_item call = {.kind = SNAG_ITEM_TOOL_CALL, .name = "read_document"};
+    json_t *result = NULL;
+    assert(root && mkdtemp(root));
+    snag_store_init(&store); snag_session_init(&session);
+    assert(snag_store_open(&store, root, error, sizeof(error)) == 0);
+    assert(snag_session_create(&store, &session, root, "default", SNAJPAGENT_MODEL,
+        "medium", error, sizeof(error)) == 0);
+    char *csv = snag_path_join(root, "quoted.csv");
+    write_file(csv, "name,value\n\"two\nlines\",\"a,b\"\nlast,record\n");
+    call.arguments = json_pack("{s:s,s:i,s:i}", "path", csv, "first", 2, "last", 2);
+    assert(snag_tools_document(&call, &session, NULL, NULL, SNAG_WAKE_INVALID, &result) == 0);
+    assert(result && !strcmp(snag_json_string(result, "status"), "succeeded"));
+    assert(snag_tool_result_valid(result) == 0);
+    json_t *parts = json_object_get(result, "content");
+    assert(strstr(snag_json_string(json_array_get(parts, 1u), "text"), "two\nlines"));
+    assert(!strstr(snag_json_string(json_array_get(parts, 1u), "text"), "last,record"));
+    json_decref(result); json_decref(call.arguments);
+    if (getenv("SNAJPAGENT_TEST_MEDIA")) {
+        char *pdf = snag_path_join(root, "page.pdf");
+        FILE *f = fopen(pdf, "wb");
+        long offsets[6] = {0};
+        assert(f); fputs("%PDF-1.4\n", f);
+        const char *objects[] = {"<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 160 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"};
+        for (size_t i = 0; i < 4u; ++i) { offsets[i+1u] = ftell(f); fprintf(f, "%zu 0 obj\n%s\nendobj\n", i+1u, objects[i]); }
+        const char *stream = "BT /F1 14 Tf 10 50 Td (MEDIA PAGE) Tj ET\n";
+        offsets[5] = ftell(f);
+        fprintf(f, "5 0 obj\n<< /Length %zu >>\nstream\n%sendstream\nendobj\n", strlen(stream), stream);
+        long xref = ftell(f);
+        fputs("xref\n0 6\n0000000000 65535 f \n", f);
+        for (size_t i=1;i<6;++i) fprintf(f, "%010ld 00000 n \n", offsets[i]);
+        fprintf(f, "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n%ld\n%%%%EOF\n", xref);
+        assert(fclose(f) == 0);
+        call.arguments = json_pack("{s:s,s:i,s:i}", "path", pdf, "first", 1, "last", 1);
+        assert(snag_tools_document(&call, &session, NULL, NULL, SNAG_WAKE_INVALID, &result) == 0);
+        if (strcmp(snag_json_string(result, "status"), "succeeded")) fprintf(stderr, "pdf: %s\n", snag_json_string(result, "model_text"));
+        assert(!strcmp(snag_json_string(result, "status"), "succeeded"));
+        parts = json_object_get(result, "content");
+        assert(strstr(snag_json_string(json_array_get(parts, 2u), "text"), "MEDIA PAGE"));
+        assert(!strcmp(snag_json_string(json_array_get(parts, 3u), "type"), "input_image"));
+        assert(snag_tool_result_valid(result) == 0);
+        json_decref(result); json_decref(call.arguments);
+        struct snag_pdf *document = NULL; unsigned int pages = 0; int stop = 2;
+        assert(snag_pdf_open(pdf, pdf_stop, &stop, &document, &pages, error, sizeof(error)) == 2 && !document);
+        stop = 0;
+        assert(snag_pdf_open(pdf, pdf_stop, &stop, &document, &pages, error, sizeof(error)) == 0 && pages == 1u);
+        struct snag_buf page_text, page_image;
+        snag_buf_init(&page_text, 4096u); snag_buf_init(&page_image, 1024u * 1024u);
+        assert(snag_buf_append(&page_text, "kept", 4u) == 0 && snag_buf_append(&page_image, "kept", 4u) == 0);
+        assert(snag_pdf_page(document, 2u, &page_text, &page_image, error, sizeof(error)) < 0);
+        assert(page_text.len == 4u && page_image.len == 4u);
+        assert(unlink(pdf) == 0); /* Rendering keeps the original descriptor. */
+        assert(snag_pdf_page(document, 1u, &page_text, &page_image, error, sizeof(error)) == 0);
+        assert(page_text.len > 4u && page_image.len > 4u && !memcmp(page_text.data, "kept", 4u));
+        size_t kept_text = page_text.len, kept_image = page_image.len;
+        stop = 2;
+        assert(snag_pdf_page(document, 1u, &page_text, &page_image, error, sizeof(error)) == 2);
+        assert(page_text.len == kept_text && page_image.len == kept_image);
+        snag_pdf_close(document); document = NULL;
+        write_file(pdf, "%PDF-1.4\nthis is not a document\n");
+        assert(snag_pdf_open(pdf, NULL, NULL, &document, &pages, error, sizeof(error)) < 0 && !document);
+        snag_buf_free(&page_text); snag_buf_free(&page_image); free(pdf);
+        char *video = snag_path_join(root, "clip.mp4");
+        const char *args[] = {"ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=red:s=64x32:r=4:d=2",
+            "-c:v", "mpeg4", "-threads", "1", video, NULL};
+        struct snag_buf out; snag_buf_init(&out, 4096u);
+        assert(snag_convert(args, root, &out, NULL, NULL, SNAG_WAKE_INVALID, error, sizeof(error)) == 0);
+        call.name = "view_video";
+        call.arguments = json_pack("{s:s,s:i,s:i,s:i}", "path", video, "start_s", 0, "end_s", 2, "frames", 2);
+        assert(snag_tools_video(&call, &session, NULL, NULL, SNAG_WAKE_INVALID, NULL, &result) == 0);
+        if (strcmp(snag_json_string(result, "status"), "succeeded")) fprintf(stderr, "video: %s\n", snag_json_string(result, "model_text"));
+        assert(!strcmp(snag_json_string(result, "status"), "succeeded"));
+        parts = json_object_get(result, "content");
+        assert(strstr(snag_json_string(json_array_get(parts, 2u), "text"), "PTS 0.000000s"));
+        assert(strstr(snag_json_string(json_array_get(parts, 4u), "text"), "PTS 1.750000s"));
+        assert(snag_tool_result_valid(result) == 0);
+        json_decref(result); json_decref(call.arguments);
+        char *rotated = snag_path_join(root, "rotated.mp4");
+        const char *rotate_args[] = {"ffmpeg", "-nostdin", "-v", "error", "-display_rotation", "90", "-i", video,
+            "-c", "copy", rotated, NULL};
+        snag_buf_reset(&out);
+        assert(snag_convert(rotate_args, root, &out, NULL, NULL, SNAG_WAKE_INVALID, error, sizeof(error)) == 0);
+        call.arguments = json_pack("{s:s,s:i,s:i,s:i}", "path", rotated, "start_s", 0, "end_s", 2, "frames", 1);
+        assert(snag_tools_video(&call, &session, NULL, NULL, SNAG_WAKE_INVALID, NULL, &result) == 0);
+        assert(!strcmp(snag_json_string(result, "status"), "succeeded"));
+        parts = json_object_get(result, "content");
+        const json_t *rendered = json_object_get(json_array_get(parts, 3u), "asset");
+        snag_buf_reset(&out);
+        assert(snag_media_read(session.dir_fd, rendered, &out, error, sizeof(error)) == 0);
+        assert(out.len > 24u && out.data[19] == 32u && out.data[23] == 64u);
+        assert(strstr(snag_json_string(json_array_get(parts, 2u), "text"), "display [0"));
+        json_decref(result); json_decref(call.arguments); free(rotated);
+        char *playlist = snag_path_join(root, "playlist.mp4");
+        write_file(playlist, "#EXTM3U\n#EXTINF:1,\nfile:///etc/passwd\n");
+        struct snag_av_video *decoder = NULL; struct snag_av_video_info meta;
+        assert(snag_av_video_open(playlist, NULL, NULL, &decoder, &meta, error, sizeof(error)) < 0 && !decoder);
+        assert(unlink(playlist) == 0); free(playlist);
+        char *av = snag_path_join(root, "sound.mp4");
+        const char *av_args[] = {"ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=red:s=64x64:r=4:d=2",
+            "-f", "lavfi", "-i", "anullsrc=r=24000:cl=stereo", "-t", "2", "-c:v", "mpeg4", "-c:a", "aac",
+            "-threads", "1", av, NULL};
+        snag_buf_reset(&out);
+        assert(snag_convert(av_args, root, &out, NULL, NULL, SNAG_WAKE_INVALID, error, sizeof(error)) == 0);
+        call.arguments = json_pack("{s:s,s:i,s:i,s:i}", "path", av, "start_s", 0, "end_s", 2, "frames", 1);
+        for (int mode = 0; mode <= 2; ++mode) {
+            struct video_audio_result state = {.mode = mode};
+            assert(snag_tools_video(&call, &session, NULL, &state, SNAG_WAKE_INVALID,
+                video_audio_result, &result) == (mode == 2 ? 2 : 0));
+            assert(state.calls == 1u && snag_tool_result_valid(result) == 0);
+            assert(!strcmp(snag_json_string(result, "status"), mode == 2 ? "failed" : "succeeded"));
+            if (mode != 2) {
+                parts = json_object_get(result, "content");
+                assert(!strcmp(snag_json_string(json_array_get(parts, 3u), "type"), "input_image"));
+                assert(strstr(snag_json_string(json_array_get(parts, 4u), "text"), "audio uninspected"));
+            }
+            json_decref(result);
+        }
+        json_decref(call.arguments); snag_buf_free(&out); free(av); free(video);
+    }
+    free(csv); free(root); snag_session_close(&session); snag_store_close(&store);
+}
+
+#if SNAJPAGENT_OFFICE
+static void
+write_office_zip(const char *path, const char *const *names, const char *const *bodies, size_t count)
+{
+    struct archive *zip=archive_write_new();
+    assert(zip && archive_write_set_format_zip(zip) == ARCHIVE_OK);
+    assert(archive_write_open_filename(zip,path) == ARCHIVE_OK);
+    for (size_t i=0; i<count; ++i) {
+        struct archive_entry *entry=archive_entry_new();
+        assert(entry); archive_entry_set_pathname(entry,names[i]);
+        archive_entry_set_size(entry,(la_int64_t)strlen(bodies[i]));
+        archive_entry_set_filetype(entry,AE_IFREG); archive_entry_set_perm(entry,0600);
+        assert(archive_write_header(zip,entry) == ARCHIVE_OK);
+        assert(archive_write_data(zip,bodies[i],strlen(bodies[i])) == (la_ssize_t)strlen(bodies[i]));
+        archive_entry_free(entry);
+    }
+    assert(archive_write_close(zip) == ARCHIVE_OK); archive_write_free(zip);
+}
+
+static void
+check_office_pages(struct snag_session *session,const char *path,const char *kind)
+{
+    struct snag_response_item call={.kind=SNAG_ITEM_TOOL_CALL,.name="read_document"};
+    for(unsigned int mode=0;mode<4u;++mode) {
+        unsigned int first=mode==1u?1u:mode==3u?3u:2u;
+        unsigned int last=mode<2u?2u:3u;
+        call.arguments=json_pack("{s:s,s:i,s:i}","path",path,"first",(int)first,"last",(int)last);
+        json_t *result=NULL;
+        assert(snag_tools_document(&call,session,NULL,NULL,SNAG_WAKE_INVALID,&result)==0);
+        const char *status=snag_json_string(result,"status");
+        if(mode<2u) {
+            if(strcmp(status,"succeeded"))fprintf(stderr,"Office page %s: %s\n",path,snag_json_string(result,"model_text"));
+            assert(!strcmp(status,"succeeded"));
+            json_t *parts=json_object_get(result,"content");
+            assert(json_array_size(parts)==(mode==0u?6u:9u));
+            const char *label=snag_json_string(json_array_get(parts,3u),"text");
+            assert(label && strstr(label,kind));
+            const char *text=snag_json_string(json_array_get(parts,mode==0u?4u:7u),"text");
+            assert(text && strstr(text,"Selected second") && !strstr(text,"Unselected first") && !strstr(text,"Private notes"));
+            if(mode==1u)assert(strstr(snag_json_string(json_array_get(parts,4u),"text"),"Unselected first"));
+            const json_t *asset=json_object_get(json_array_get(parts,2u),"asset");
+            char *dir=snag_path_join(session->dir_path,"media");
+            char *pdf_path=snag_path_join(dir,snag_json_string(asset,"id"));
+            struct snag_pdf *pdf=NULL;unsigned int count=0;char error[256];
+            assert(snag_pdf_open(pdf_path,NULL,NULL,&pdf,&count,error,sizeof(error))==0);
+            assert(count==(mode==0u?1u:2u));
+            snag_pdf_close(pdf);free(pdf_path);free(dir);
+        } else {
+            assert(!strcmp(status,"failed"));
+            assert(json_array_size(json_object_get(result,"content"))==0u);
+        }
+        json_decref(result);json_decref(call.arguments);
+    }
+}
+
+static void
+test_office_import(void)
+{
+    struct snag_sheet_range selection={2u,3u,2u,2u,3u};
+    struct snag_buf cells_text;snag_buf_init(&cells_text,4096u);
+    const char *html="<html><body><table><tr><td colspan=2>merged</td><td>x&amp;y</td></tr>"
+        "<tr><td></td><td>line<br>two</td><td>tail</td></tr></table></body></html>";
+    assert(snag_office_sheet_html(html,&selection,&cells_text)==0 && snag_buf_terminate(&cells_text)==0);
+    assert(strstr((char *)cells_text.data,"B3 (merged through C3): \"merged\""));
+    assert(strstr((char *)cells_text.data,"C3: covered by merged B3"));
+    assert(strstr((char *)cells_text.data,"D3: \"x&y\""));
+    assert(strstr((char *)cells_text.data,"C4: \"line\\u000atwo\""));
+    size_t kept=cells_text.len;
+    selection.rows=1u;
+    assert(snag_office_sheet_html(html,&selection,&cells_text)<0 && cells_text.len==kept);
+    snag_buf_free(&cells_text);
+    if (!getenv("SNAJPAGENT_TEST_MEDIA")) return;
+    char *root=snag_path_join(getenv("TMPDIR"),"snag-office-XXXXXX"), error[256];
+    assert(root && mkdtemp(root));
+#if defined(__linux__)
+    pid_t child=fork();assert(child>=0);
+    if(!child) {
+        assert(chdir(root)==0 && setenv("SNAJPAGENT_OFFICE_SECRET","must disappear",1)==0);
+        assert(snag_office_worker_limits(root,error,sizeof(error))==0);
+        assert(!getenv("SNAJPAGENT_OFFICE_SECRET") && !strcmp(getenv("HOME"),root));
+        const int limits[]={RLIMIT_CPU,RLIMIT_AS,RLIMIT_FSIZE,RLIMIT_CORE};
+        const rlim_t values[]={60u,2ull<<30,32u<<20,0u};
+        for(size_t i=0;i<4u;++i) {
+            struct rlimit bound;assert(getrlimit(limits[i],&bound)==0);
+            assert(bound.rlim_cur==values[i] && bound.rlim_max==values[i]);
+        }
+        _Exit(0);
+    }
+    int status;assert(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0);
+#endif
+    char *path=snag_path_join(root,"test.odt");
+    const char *names[]={"mimetype","content.xml","META-INF/manifest.xml"};
+    const char *bodies[]={"application/vnd.oasis.opendocument.text",
+        "<office:document-content xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" "
+        "xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" office:version=\"1.2\">"
+        "<office:body><office:text><text:p>Linked Office fixture</text:p></office:text></office:body></office:document-content>",
+        "<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\">"
+        "<manifest:file-entry manifest:full-path=\"/\" manifest:media-type=\"application/vnd.oasis.opendocument.text\"/>"
+        "<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/></manifest:manifest>"};
+    write_office_zip(path,names,bodies,3u);
+    assert(snag_office_package(path,error,sizeof(error)) == 0);
+    struct snag_store store; struct snag_session session;
+    snag_store_init(&store); snag_session_init(&session);
+    assert(snag_store_open(&store,root,error,sizeof(error)) == 0);
+    assert(snag_session_create(&store,&session,root,"default",SNAJPAGENT_MODEL,"medium",error,sizeof(error)) == 0);
+    struct snag_response_item call={.kind=SNAG_ITEM_TOOL_CALL,.name="read_document",
+        .arguments=json_pack("{s:s,s:i,s:i}","path",path,"first",1,"last",1)};
+    json_t *result=NULL;
+    assert(snag_tools_document(&call,&session,NULL,NULL,SNAG_WAKE_INVALID,&result) == 0);
+    if (strcmp(snag_json_string(result,"status"),"succeeded")) fprintf(stderr,"Office: %s\n",snag_json_string(result,"model_text"));
+    assert(!strcmp(snag_json_string(result,"status"),"succeeded"));
+    json_t *parts=json_object_get(result,"content");
+    assert(json_array_size(parts)==6u);
+    assert(strstr(snag_json_string(json_array_get(parts,1u),"text"),"filesystem confinement"));
+    assert(strstr(snag_json_string(json_array_get(parts,4u),"text"),"Linked Office fixture"));
+    json_decref(result); json_decref(call.arguments);
+    char *sheet_path=snag_path_join(root,"two sheets.ods");
+    const char *sheet_bodies[]={"application/vnd.oasis.opendocument.spreadsheet",
+        "<office:document-content xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" "
+        "xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" "
+        "office:version=\"1.2\"><office:body><office:spreadsheet>"
+        "<table:table table:name=\"First\"><table:table-column table:number-columns-repeated=\"4\"/>"
+        "<table:table-row><table:table-cell office:value-type=\"string\"><text:p>Unselected secret marker</text:p>"
+        "</table:table-cell></table:table-row></table:table><table:table table:name=\"Second\">"
+        "<table:table-column table:number-columns-repeated=\"4\"/>"
+        "<table:table-row><table:table-cell office:value-type=\"string\"><text:p>Selected</text:p></table:table-cell>"
+        "<table:table-cell table:number-columns-repeated=\"2\"/><table:table-cell office:value-type=\"string\">"
+        "<text:p>comma,quote&quot;</text:p></table:table-cell></table:table-row>"
+        "<table:table-row><table:table-cell office:value-type=\"string\" table:number-columns-spanned=\"2\">"
+        "<text:p>merged</text:p></table:table-cell><table:covered-table-cell/></table:table-row>"
+        "<table:table-row/><table:table-row><table:table-cell/><table:table-cell office:value-type=\"string\">"
+        "<text:p>tail</text:p><text:p>newline</text:p></table:table-cell></table:table-row>"
+        "</table:table></office:spreadsheet></office:body></office:document-content>",
+        "<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\">"
+        "<manifest:file-entry manifest:full-path=\"/\" manifest:media-type=\"application/vnd.oasis.opendocument.spreadsheet\"/>"
+        "<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/></manifest:manifest>"};
+    write_office_zip(sheet_path,names,sheet_bodies,3u);
+    call.arguments=json_pack("{s:s,s:n,s:n,s:{s:i,s:i,s:i,s:i,s:i}}","path",sheet_path,"first","last","sheet_range",
+        "sheet",2,"row",1,"column",1,"rows",4,"columns",4);
+    assert(snag_tools_document(&call,&session,NULL,NULL,SNAG_WAKE_INVALID,&result)==0);
+    if(strcmp(snag_json_string(result,"status"),"succeeded"))fprintf(stderr,"Sheet: %s\n",snag_json_string(result,"model_text"));
+    assert(!strcmp(snag_json_string(result,"status"),"succeeded"));
+    parts=json_object_get(result,"content");
+    assert(json_array_size(parts)==5u && strstr(snag_json_string(json_array_get(parts,2u),"text"),"Second"));
+    const char *cells=snag_json_string(json_array_get(parts,3u),"text");
+    assert(cells && strstr(cells,"A1: \"Selected\"") && strstr(cells,"B1: \"\""));
+    assert(strstr(cells,"A2 (merged through B2)") && strstr(cells,"B2: covered by merged A2"));
+    assert(strstr(cells,"B4: \"tail\\u000anewline\"") && !strstr(cells,"Unselected"));
+    assert(!strcmp(snag_json_string(json_array_get(parts,4u),"type"),"input_image"));
+    json_decref(result);
+    assert(json_object_set_new(call.arguments,"first",json_integer(1))==0);
+    assert(snag_tools_document(&call,&session,NULL,NULL,SNAG_WAKE_INVALID,&result)==0);
+    assert(!strcmp(snag_json_string(result,"status"),"failed"));
+    json_decref(result);json_decref(call.arguments);
+    call.arguments=json_pack("{s:s,s:n,s:n,s:n}","path",sheet_path,"first","last","sheet_range");
+    assert(snag_tools_document(&call,&session,NULL,NULL,SNAG_WAKE_INVALID,&result)==0);
+    if(strcmp(snag_json_string(result,"status"),"succeeded"))fprintf(stderr,"Default sheet: %s\n",snag_json_string(result,"model_text"));
+    assert(!strcmp(snag_json_string(result,"status"),"succeeded"));
+    assert(strstr(snag_json_string(json_array_get(json_object_get(result,"content"),2u),"text"),"First"));
+    json_decref(result);json_decref(call.arguments);
+    call.arguments=json_pack("{s:s,s:n,s:n,s:{s:i,s:i,s:i,s:i,s:i}}","path",sheet_path,"first","last","sheet_range",
+        "sheet",3,"row",1,"column",1,"rows",4,"columns",4);
+    assert(snag_tools_document(&call,&session,NULL,NULL,SNAG_WAKE_INVALID,&result)==0);
+    assert(!strcmp(snag_json_string(result,"status"),"failed"));json_decref(result);
+    json_t *range_args=json_object_get(call.arguments,"sheet_range");
+    assert(json_object_set_new(range_args,"sheet",json_integer(2))==0);
+    assert(json_object_set_new(range_args,"row",json_integer(2))==0);
+    assert(json_object_set_new(range_args,"column",json_integer(2))==0);
+    assert(json_object_set_new(range_args,"rows",json_integer(1))==0);
+    assert(json_object_set_new(range_args,"columns",json_integer(1))==0);
+    assert(snag_tools_document(&call,&session,NULL,NULL,SNAG_WAKE_INVALID,&result)==0);
+    assert(!strcmp(snag_json_string(result,"status"),"failed")); /* selection starts inside merged A2:B2 */
+    json_decref(result);json_decref(call.arguments);
+    assert(unlink(sheet_path)==0);free(sheet_path);
+    char *xlsx=snag_path_join(root,"sparse.xlsx");
+    const char *xlsx_names[]={"[Content_Types].xml","_rels/.rels","xl/workbook.xml","xl/_rels/workbook.xml.rels","xl/worksheets/sheet1.xml"};
+    const char *xlsx_bodies[]={
+        "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+        "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+        "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
+        "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>"
+        "<Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/></Types>",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>",
+        "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
+        "<sheets><sheet name=\"XLSX data\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/></Relationships>",
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><dimension ref=\"C4:E6\"/>"
+        "<sheetData><row r=\"4\"><c r=\"C4\" t=\"inlineStr\"><is><t>anchor</t></is></c><c r=\"E4\"><v>42</v></c></row>"
+        "<row r=\"6\"><c r=\"D6\" t=\"inlineStr\"><is><t>line&#10;quote&quot;</t></is></c></row></sheetData>"
+        "<mergeCells count=\"1\"><mergeCell ref=\"C4:D4\"/></mergeCells></worksheet>"};
+    write_office_zip(xlsx,xlsx_names,xlsx_bodies,5u);
+    assert(snag_office_package(xlsx,error,sizeof(error))==0);
+    call.arguments=json_pack("{s:s,s:n,s:n,s:{s:i,s:i,s:i,s:i,s:i}}","path",xlsx,"first","last","sheet_range",
+        "sheet",1,"row",4,"column",3,"rows",3,"columns",3);
+    assert(snag_tools_document(&call,&session,NULL,NULL,SNAG_WAKE_INVALID,&result)==0);
+    if(strcmp(snag_json_string(result,"status"),"succeeded"))fprintf(stderr,"XLSX: %s\n",snag_json_string(result,"model_text"));
+    assert(!strcmp(snag_json_string(result,"status"),"succeeded"));
+    cells=snag_json_string(json_array_get(json_object_get(result,"content"),3u),"text");
+    assert(cells && strstr(cells,"C4 (merged through D4): \"anchor\"") && strstr(cells,"D4: covered by merged C4"));
+    assert(strstr(cells,"E4: \"42\"") && strstr(cells,"C5: \"\""));
+    assert(strstr(cells,"D6: \"line\\u000aquote\\\"\""));
+    json_decref(result);json_decref(call.arguments);assert(unlink(xlsx)==0);free(xlsx);
+    const char *docx_names[]={"[Content_Types].xml","_rels/.rels","word/document.xml"};
+    const char *docx_bodies[]={
+        "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+        "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+        "<Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/>"
+        "</Types>",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"word/document.xml\"/>"
+        "</Relationships>",
+        "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">"
+        "<w:body>"
+        "<w:p>"
+        "<w:r>"
+        "<w:t>Unselected first</w:t>"
+        "</w:r>"
+        "</w:p>"
+        "<w:p>"
+        "<w:pPr>"
+        "<w:pageBreakBefore/>"
+        "</w:pPr>"
+        "<w:r>"
+        "<w:t>Selected second</w:t>"
+        "</w:r>"
+        "</w:p>"
+        "<w:sectPr>"
+        "<w:pgSz w:w=\"12240\" w:h=\"15840\"/>"
+        "<w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\"/>"
+        "</w:sectPr>"
+        "</w:body>"
+        "</w:document>",
+    };
+    char *docx=snag_path_join(root,"two pages.docx");
+    write_office_zip(docx,docx_names,docx_bodies,3u);
+    check_office_pages(&session,docx,"Imported document page");
+    assert(unlink(docx)==0);free(docx);
+    const char *odp_names[]={"mimetype","content.xml","META-INF/manifest.xml"};
+    const char *odp_bodies[]={
+        "application/vnd.oasis.opendocument.presentation",
+        "<office:document-content xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\" xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" xmlns:presentation=\"urn:oasis:names:tc:opendocument:xmlns:presentation:1.0\" xmlns:svg=\"urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0\" office:version=\"1.2\">"
+        "<office:automatic-styles>"
+        "<style:style style:name=\"hidden\" style:family=\"drawing-page\">"
+        "<style:drawing-page-properties presentation:visibility=\"hidden\"/>"
+        "</style:style>"
+        "</office:automatic-styles>"
+        "<office:body>"
+        "<office:presentation>"
+        "<draw:page draw:name=\"First\">"
+        "<draw:frame svg:x=\"2cm\" svg:y=\"2cm\" svg:width=\"15cm\" svg:height=\"3cm\">"
+        "<draw:text-box>"
+        "<text:p>Unselected first</text:p>"
+        "</draw:text-box>"
+        "</draw:frame>"
+        "</draw:page>"
+        "<draw:page draw:name=\"Second\" draw:style-name=\"hidden\">"
+        "<draw:frame svg:x=\"2cm\" svg:y=\"2cm\" svg:width=\"15cm\" svg:height=\"3cm\">"
+        "<draw:text-box>"
+        "<text:p>Selected second</text:p>"
+        "</draw:text-box>"
+        "</draw:frame>"
+        "<presentation:notes>"
+        "<draw:frame presentation:class=\"notes\" svg:x=\"2cm\" svg:y=\"2cm\" svg:width=\"15cm\" svg:height=\"3cm\">"
+        "<draw:text-box>"
+        "<text:p>Private notes</text:p>"
+        "</draw:text-box>"
+        "</draw:frame>"
+        "</presentation:notes>"
+        "</draw:page>"
+        "</office:presentation>"
+        "</office:body>"
+        "</office:document-content>",
+        "<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\">"
+        "<manifest:file-entry manifest:full-path=\"/\" manifest:media-type=\"application/vnd.oasis.opendocument.presentation\"/>"
+        "<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/>"
+        "</manifest:manifest>",
+    };
+    char *odp=snag_path_join(root,"two pages.odp");
+    write_office_zip(odp,odp_names,odp_bodies,3u);
+    check_office_pages(&session,odp,"Source slide");
+    assert(unlink(odp)==0);free(odp);
+    const char *pptx_names[]={"[Content_Types].xml","_rels/.rels","ppt/presentation.xml","ppt/_rels/presentation.xml.rels","ppt/slides/slide1.xml","ppt/slides/slide2.xml"};
+    const char *pptx_bodies[]={
+        "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+        "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+        "<Override PartName=\"/ppt/presentation.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml\"/>"
+        "<Override PartName=\"/ppt/slides/slide1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
+        "<Override PartName=\"/ppt/slides/slide2.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
+        "</Types>",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"ppt/presentation.xml\"/>"
+        "</Relationships>",
+        "<p:presentation xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
+        "<p:sldIdLst>"
+        "<p:sldId id=\"256\" r:id=\"rId1\"/>"
+        "<p:sldId id=\"257\" r:id=\"rId2\"/>"
+        "</p:sldIdLst>"
+        "<p:sldSz cx=\"9144000\" cy=\"6858000\"/>"
+        "<p:notesSz cx=\"6858000\" cy=\"9144000\"/>"
+        "</p:presentation>",
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide\" Target=\"slides/slide1.xml\"/>"
+        "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide\" Target=\"slides/slide2.xml\"/>"
+        "</Relationships>",
+        "<p:sld xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" show=\"1\">"
+        "<p:cSld>"
+        "<p:spTree>"
+        "<p:nvGrpSpPr>"
+        "<p:cNvPr id=\"1\" name=\"\"/>"
+        "<p:cNvGrpSpPr/>"
+        "<p:nvPr/>"
+        "</p:nvGrpSpPr>"
+        "<p:grpSpPr/>"
+        "<p:sp>"
+        "<p:nvSpPr>"
+        "<p:cNvPr id=\"2\" name=\"Text\"/>"
+        "<p:cNvSpPr txBox=\"1\"/>"
+        "<p:nvPr/>"
+        "</p:nvSpPr>"
+        "<p:spPr>"
+        "<a:xfrm>"
+        "<a:off x=\"720000\" y=\"720000\"/>"
+        "<a:ext cx=\"5400000\" cy=\"1080000\"/>"
+        "</a:xfrm>"
+        "<a:prstGeom prst=\"rect\">"
+        "<a:avLst/>"
+        "</a:prstGeom>"
+        "</p:spPr>"
+        "<p:txBody>"
+        "<a:bodyPr/>"
+        "<a:lstStyle/>"
+        "<a:p>"
+        "<a:r>"
+        "<a:rPr lang=\"en-US\" sz=\"2400\"/>"
+        "<a:t>Unselected first</a:t>"
+        "</a:r>"
+        "</a:p>"
+        "</p:txBody>"
+        "</p:sp>"
+        "</p:spTree>"
+        "</p:cSld>"
+        "</p:sld>",
+        "<p:sld xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" show=\"0\">"
+        "<p:cSld>"
+        "<p:spTree>"
+        "<p:nvGrpSpPr>"
+        "<p:cNvPr id=\"1\" name=\"\"/>"
+        "<p:cNvGrpSpPr/>"
+        "<p:nvPr/>"
+        "</p:nvGrpSpPr>"
+        "<p:grpSpPr/>"
+        "<p:sp>"
+        "<p:nvSpPr>"
+        "<p:cNvPr id=\"2\" name=\"Text\"/>"
+        "<p:cNvSpPr txBox=\"1\"/>"
+        "<p:nvPr/>"
+        "</p:nvSpPr>"
+        "<p:spPr>"
+        "<a:xfrm>"
+        "<a:off x=\"720000\" y=\"720000\"/>"
+        "<a:ext cx=\"5400000\" cy=\"1080000\"/>"
+        "</a:xfrm>"
+        "<a:prstGeom prst=\"rect\">"
+        "<a:avLst/>"
+        "</a:prstGeom>"
+        "</p:spPr>"
+        "<p:txBody>"
+        "<a:bodyPr/>"
+        "<a:lstStyle/>"
+        "<a:p>"
+        "<a:r>"
+        "<a:rPr lang=\"en-US\" sz=\"2400\"/>"
+        "<a:t>Selected second</a:t>"
+        "</a:r>"
+        "</a:p>"
+        "</p:txBody>"
+        "</p:sp>"
+        "</p:spTree>"
+        "</p:cSld>"
+        "</p:sld>",
+    };
+    char *pptx=snag_path_join(root,"two pages.pptx");
+    write_office_zip(pptx,pptx_names,pptx_bodies,6u);
+    check_office_pages(&session,pptx,"Source slide");
+    assert(unlink(pptx)==0);free(pptx);
+    const char *bad[]={
+        "<!DOCTYPE document [<!ENTITY x SYSTEM 'file:///etc/passwd'>]><document>&x;</document>",
+        "<office:script xmlns:office='urn:oasis:names:tc:opendocument:xmlns:office:1.0'/>",
+        "<draw:image xmlns:draw='urn:oasis:names:tc:opendocument:xmlns:drawing:1.0' xmlns:xlink='http://www.w3.org/1999/xlink' xlink:href='file:///etc/passwd'/>",
+        "<Relationships><Relationship Type='image' TargetMode='External' Target='https://example.test/image.png'/></Relationships>",
+        "<document xml:base='file:///root/'/>"};
+    for (size_t i=0;i<sizeof(bad)/sizeof(bad[0]);++i) {
+        bodies[1]=bad[i]; write_office_zip(path,names,bodies,3u);
+        assert(snag_office_package(path,error,sizeof(error)) < 0);
+    }
+    assert(unlink(path)==0); free(path); free(root);
+    snag_session_close(&session); snag_store_close(&store);
+}
+#else
+static void test_office_import(void) {}
+#endif
+
+int
+main(int argc, char **argv)
+{
+    snag_office_program(argv[0]);
+    (void)snag_office_worker(argc,argv);
+    char *temp = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
+                                "snajpagent-context-XXXXXX");
     char state[4096];
     char workspace[4096];
     char agents[4096];
@@ -1261,11 +2157,18 @@ main(void)
     char large_tool_hash[SNAG_SHA256_HEX_LEN + 1u];
     char closure_output[4097];
 
+    test_image_tool_replay();
+    test_image_normalization();
+    test_office_import();
+    test_document_conversion();
     assert(mkdtemp(temp));
     assert(snprintf(state, sizeof(state), "%s/state", temp) > 0);
     assert(snprintf(workspace, sizeof(workspace), "%s/work", temp) > 0);
     assert(mkdir(state, 0700) == 0);
     assert(mkdir(workspace, 0700) == 0);
+    /* Isolate discovery even when TMPDIR is nested in a checkout. */
+    assert(snprintf(agents, sizeof(agents), "%s/.git", workspace) > 0);
+    assert(mkdir(agents, 0700) == 0);
     assert(snprintf(agents, sizeof(agents), "%s/AGENTS.md", workspace) > 0);
     write_file(agents, "context guidance\n");
     snag_store_init(&store);
@@ -1280,6 +2183,7 @@ main(void)
     test_reasoning_continuation(&store, workspace);
     test_durable_irc_input_watermark(&store, workspace);
     test_compact_groups(&store, workspace);
+    test_voice_completed_result(&store, workspace);
     test_parallel_journal_recovery(&store, workspace);
     test_accounting_lineage(&store, workspace);
     create_session(&store, &session, workspace, "default");
@@ -1648,7 +2552,7 @@ main(void)
     assert_string(projection.count_request.value, "model", SNAJPAGENT_MODEL);
     {
         json_t *tools = json_object_get(projection.create_request.value, "tools");
-        assert(json_array_size(tools) == 5u);
+        assert(json_array_size(tools) == 11u);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
         assert(item_by_field(tools, "name", "create_goal") != NULL);
         assert(item_by_field(tools, "name", "update_goal") == NULL);
@@ -1744,7 +2648,7 @@ main(void)
         json_t *gate;
         const char *gate_text;
         assert(json_is_array(tools));
-        assert(json_array_size(tools) == 5);
+        assert(json_array_size(tools) == 11);
         assert(item_by_field(tools, "name", "create_goal") == NULL);
         assert(item_by_field(tools, "name", "update_goal") != NULL);
         assert(item_by_field(tools, "name", "exec_command") != NULL);
@@ -1786,7 +2690,7 @@ main(void)
                                  error, sizeof(error)) == 0);
         tools = json_object_get(projection.create_request.value, "tools");
         input = json_object_get(projection.create_request.value, "input");
-        assert(json_array_size(tools) == 8u);
+        assert(json_array_size(tools) == 14u);
         assert(item_by_field(tools, "name", "irc_send"));
         assert(item_by_field(tools, "name", "irc_state"));
         assert(item_by_field(tools, "name", "irc_topic"));
@@ -1841,7 +2745,7 @@ main(void)
             "function_call_output");
         const char *historical_text;
 
-        assert(json_array_size(tools) == 5u);
+        assert(json_array_size(tools) == 8u);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
         assert(item_by_field(tools, "name", "create_goal") == NULL);
         assert(item_by_field(tools, "name", "update_goal") != NULL);
@@ -1891,7 +2795,7 @@ main(void)
         tools = json_object_get(projection.create_request.value, "tools");
         semantic = json_object_get(projection.model_input.value, "items");
         harness = message_matching(semantic, "IRC chat mode is active.");
-        assert(json_array_size(tools) == 8u);
+        assert(json_array_size(tools) == 11u);
         assert_context_tool_schemas(tools, NULL, 7654321u, 6000u);
         assert(item_by_field(tools, "name", "irc_send") != NULL);
         assert(item_by_field(tools, "name", "irc_state") != NULL);
@@ -1930,7 +2834,7 @@ main(void)
         json_t *tools = json_object_get(projection.create_request.value, "tools");
         json_t *semantic = json_object_get(projection.model_input.value, "items");
 
-        assert(json_array_size(tools) == 4u);
+        assert(json_array_size(tools) == 7u);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
         assert(item_by_field(tools, "name", "create_goal") == NULL);
         assert(item_by_field(tools, "name", "update_goal") == NULL);
@@ -1969,6 +2873,7 @@ main(void)
     snag_instructions_free(&instructions);
     snag_session_close(&session);
     snag_store_close(&store);
+    free(temp);
     puts("test_context: ok");
     return 0;
 }

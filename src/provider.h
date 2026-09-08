@@ -33,6 +33,30 @@ struct snag_provider_connection {
     void *pump_opaque;
 };
 
+enum snag_audio_operation { SNAG_AUDIO_LISTEN, SNAG_AUDIO_TRANSCRIBE, SNAG_AUDIO_SPEAK };
+/* One paid request only: no automatic retry, body diagnostics or coding history.
+ * Listen takes {model,question} metadata and streams WAV as base64. Both input
+ * operations borrow WAV bytes for the duration of the call. Output rolls
+ * back on failure. ChatGPT subscription credentials are never accepted. */
+int snag_provider_audio(enum snag_audio_operation operation, const json_t *request,
+                         const struct snag_buf *wav, const struct snag_config *config,
+                         const struct snag_provider_config *provider,
+                         const struct snag_credential *credential,
+                         snag_provider_pump_fn pump, void *opaque, struct snag_buf *output,
+                         char *error, size_t error_size);
+
+/* One owner, one realtime WSS connection. No device, journal, retry or coding
+ * executor here. Caller owns message buffers and retries only unsent bytes.
+ * receive: 1 whole text message, 0 incomplete/would-block, -1 stopped/error.
+ * Clear the receive buffer after each whole message; preserve it otherwise. */
+struct snag_voice_socket;
+int snag_provider_voice_open(const struct snag_provider_config *,const struct snag_credential *,
+    const char *model,snag_provider_pump_fn,void *,struct snag_voice_socket **,char *,size_t);
+int snag_provider_voice_send(struct snag_voice_socket *,const void *,size_t,size_t *,char *,size_t);
+int snag_provider_voice_receive(struct snag_voice_socket *,struct snag_buf *,char *,size_t);
+int snag_provider_voice_wait(struct snag_voice_socket *,bool writing,unsigned int timeout);
+void snag_provider_voice_close(struct snag_voice_socket *);
+
 /* Fixed-issuer auth transport: bounded, cancellable, and never body-logged. */
 int snag_provider_auth_post(const char *issuer, const char *path, const char *type,
                             const void *body, size_t size, json_t **response,

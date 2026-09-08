@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store_internal.h"
+#include "media.h"
 #include "fs.h"
 #include "base.h"
 #include "json.h"
@@ -72,6 +73,8 @@ remove_deleted_session(struct snag_store *store, struct snag_session *session,
     if (close_fd_slot(&session->log_fd) < 0)
         return snag_errorf(error, error_size, "cannot close deleted-session files: %s",
                   strerror(errno));
+    if (snag_media_work_remove(session->dir_fd,error,error_size)!=0)return -1;
+    if (snag_media_remove(session->dir_fd,error,error_size)<0)return -1;
     /* Keep the durable delete intent until other content is gone. The private
      * trash name remains the deletion marker after the final log unlink. */
     if (unlink_expected_file(session->dir_fd, "prompt_history", true, error, error_size) < 0 ||

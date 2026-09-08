@@ -569,3 +569,23 @@ Buffered assistant history and non-operator IRC model messages use the same
 presentation, with fenced-code state isolated by endpoint and sender. Operator
 messages and other IRC events remain literal. Markdown and color can be disabled
 independently, and neither changes stored, provider, redirected, or IRC bytes.
+
+## Media streaming boundary (in development)
+
+`base64.c/h` encodes incrementally into a synchronous byte sink with no allocation,
+files, JSON, process or device dependency. It retains at most two pending input
+bytes and uses a 256-byte output block. Finalization supplies padding exactly
+once; sink failure is sticky, so partial delivery cannot be silently replayed.
+`base.c` uses this encoder for existing whole-buffer callers. The desktop retained
+asset reader verifies the digest while feeding 3 KiB blocks into the encoder;
+failed reads roll back the private result buffer before it becomes request data.
+
+Image projection no longer holds the whole raw image alongside its encoding,
+but the desktop JSON/request layer still materializes data URLs. This is not
+bounded-memory live transport yet. Future ESP32 live audio **and video** must use
+bounded capture/transport buffers independently of recording duration, without
+a shell, document stack, filesystem journal, or desktop UI. Large flash does not
+relax peak RAM limits. No firmware port or device qualification is claimed.
+Desktop conversion is a separate boundary; capture requires explicit activation
+and visible mute/stop. Default desktop releases remain fully linked/enabled;
+custom exclusions must not change that default.

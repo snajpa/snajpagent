@@ -8,6 +8,7 @@
 #include "tools.h"
 #include "tools_patch.h"
 #include "process_host.h"
+#include "convert.h"
 #include "turn.h"
 
 #include <assert.h>
@@ -106,6 +107,76 @@ test_child_interrupt_mask(void)
     assert(sigprocmask(SIG_SETMASK, NULL, &current) == 0 && sigismember(&current, SIGINT));
     assert(sigprocmask(SIG_SETMASK, &saved, NULL) == 0);
     free(shell);
+}
+
+static void
+test_direct_argv(void)
+{
+    struct snag_child child;
+    char *environment[] = {"PATH=/usr/bin:/bin", NULL};
+    const char *args[] = {"/usr/bin/printf", "%s|%s|%s", "$(touch forbidden)", "with spaces", "", NULL};
+    char bytes[256]; size_t used = 0;
+    snag_child_init(&child);
+    assert(snag_child_spawn_argv(&child, args, "/", environment) == 0);
+    snag_child_close_stream(&child, 2u);
+    uint64_t deadline = snag_monotonic_ms() + 3000u;
+    bool eof = false;
+    while (!eof && snag_monotonic_ms() < deadline) {
+        struct snag_child_event event = {&child, 0u, SNAG_CHILD_READ, 0};
+        assert(snag_child_wait(&event, 1u, SNAG_WAKE_INVALID, 50) >= 0);
+        ssize_t n = snag_child_read(&child, 0u, bytes + used, sizeof(bytes) - used - 1u);
+        if (n > 0) used += (size_t)n;
+        else if (!n) eof = true;
+        else assert(errno == EAGAIN || errno == EINTR);
+    }
+    bytes[used] = '\0';
+    assert(eof && !strcmp(bytes, "$(touch forbidden)|with spaces|"));
+    while (!snag_child_exited(&child) && snag_monotonic_ms() < deadline)
+        (void)snag_sleep_ms(1u);
+    assert(snag_child_exited(&child) == 1 && snag_child_reap(&child) == 0 && child.exit_code == 0);
+    snag_child_free(&child);
+}
+
+static int
+cancel_conversion(void *opaque, unsigned int wait)
+{
+    (void)opaque; (void)wait;
+    return 2;
+}
+
+static void
+test_converter_boundary(void)
+{
+    struct snag_buf output;
+    char error[256];
+    char *root = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", "convert-XXXXXX");
+    char *saved_path = snag_environment("PATH");
+    assert(root && mkdtemp(root));
+    assert(setenv("PATH", ":relative::/usr/bin:/bin:", 1) == 0);
+    snag_buf_init(&output, 128u);
+    const char *args[] = {"printf", "%s", "literal $(touch no); | &", NULL};
+    assert(snag_convert(args, root, &output, NULL, NULL, SNAG_WAKE_INVALID, error, sizeof(error)) == 0);
+    assert(snag_buf_terminate(&output) == 0 && !strcmp((char *)output.data, args[2]));
+    snag_buf_reset(&output);
+    const char *env[] = {"env", NULL};
+    assert(setenv("SNAJ_TEST_SECRET", "must-not-reach-converter", 1) == 0);
+    /* Tiny bound fails atomically even if the child supplied a partial result. */
+    assert(snag_convert(env, root, &output, NULL, NULL, SNAG_WAKE_INVALID, error, sizeof(error)) < 0);
+    assert(output.len == 0u);
+    snag_buf_free(&output); snag_buf_init(&output, 8192u);
+    assert(snag_convert(env, root, &output, NULL, NULL, SNAG_WAKE_INVALID, error, sizeof(error)) == 0);
+    assert(snag_buf_terminate(&output) == 0 && !strstr((char *)output.data, "SNAJ_TEST_SECRET"));
+    assert(strstr((char *)output.data, root));
+    size_t retained = output.len;
+    assert(snag_convert(args, root, &output, cancel_conversion, NULL, SNAG_WAKE_INVALID,
+                        error, sizeof(error)) == 2 && output.len == retained);
+    const char *missing[] = {"snajpagent-nonexistent-converter", NULL};
+    assert(snag_convert(missing, root, &output, NULL, NULL, SNAG_WAKE_INVALID,
+                        error, sizeof(error)) < 0 && output.len == retained);
+    assert(unsetenv("SNAJ_TEST_SECRET") == 0);
+    assert(saved_path ? setenv("PATH", saved_path, 1) == 0 : unsetenv("PATH") == 0);
+    assert(rmdir(root) == 0);
+    snag_buf_free(&output); free(root); free(saved_path);
 }
 
 static struct {
@@ -716,7 +787,12 @@ test_secret_snapshot_rotation(void)
     assert(!strstr((const char *)result.data, "literal-protected"));
     {
         json_t *native = snag_tool_result_terminal(true, "old-protected literal-protected");
+        assert(native && json_object_set_new(native, "content", json_pack("[{s:s,s:s}]",
+            "type", "input_text", "text", "new-protected old-protected extracted document")) == 0);
         assert(native && snag_secret_result(&secrets, native, error, sizeof(error)) == 0);
+        const char *derived = snag_json_string(json_array_get(json_object_get(native, "content"), 0), "text");
+        assert(derived && strstr(derived, "extracted document") && strstr(derived, "<redacted:secret>"));
+        assert(!strstr(derived, "new-protected") && !strstr(derived, "old-protected"));
         assert(strcmp(snag_json_string(native, "status"), "succeeded") == 0);
         assert(strstr(snag_json_string(native, "model_text"), "<redacted:secret>"));
         assert(!strstr(snag_json_string(native, "model_text"), "old-protected"));
@@ -940,6 +1016,8 @@ main(void)
     test_atomic_sequence();
     test_child_wait_ownership();
     test_child_interrupt_mask();
+    test_direct_argv();
+    test_converter_boundary();
     (void)signal(SIGPIPE, SIG_IGN);
     snag_tools_journal(retain_output, read_output, NULL);
     test_minimal_command_contract();

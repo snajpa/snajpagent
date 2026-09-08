@@ -23,6 +23,7 @@ static int compose_frame(struct snag_term *term, struct snag_buf *out, size_t *l
                          size_t *cursor_row, size_t *cursor_col,
                          size_t *end_row, size_t *end_col, size_t *source_offset);
 static bool word_space(unsigned char c);
+static int insert_bytes(struct snag_term *,const unsigned char *,size_t);
 static void frame_position(const struct snag_buf *frame, size_t offset, unsigned int columns,
                            size_t *row, size_t *col);
 
@@ -692,7 +693,8 @@ prompt_label(struct snag_term *term, size_t *len)
     }
     snag_term_destination_prefix(term, term->destination_label, 128u);
     size_t prefix = strlen(term->destination_label);
-    memcpy(term->destination_label + prefix, term->label, strlen(term->label) + 1u);
+    (void)snprintf(term->destination_label + prefix, sizeof(term->destination_label) - prefix,
+                    "%s%s", term->audio_label, term->label);
     *len = strlen(term->destination_label);
     return term->destination_label;
 }
@@ -988,6 +990,28 @@ frame_position(const struct snag_buf *frame, size_t offset, unsigned int columns
 }
 
 static int
+caption_line(struct snag_buf *out, const char *label, const char *text, unsigned int columns)
+{
+    if(!*text)return 0;
+    char line[448];
+    int n=snprintf(line,sizeof(line),"%s%s",label,text);
+    if(n<0 || (size_t)n>=sizeof(line))return -1;
+    for(char *p=line;*p;++p)if(*p=='\n' || *p=='\r')*p=' ';
+    struct snag_buf safe;snag_buf_init(&safe,4u*sizeof(line));
+    int rc=snag_term_append_safe(&safe,line,strlen(line));
+    size_t len=0,width=0;
+    while(!rc && len<safe.len) {
+        uint32_t cp;size_t bytes=snag_utf8_decode(safe.data+len,safe.len-len,&cp);
+        int w=snag_char_width(cp);
+        if(!bytes || w<0 || width+(size_t)w>=columns)break;
+        width+=(size_t)w;len+=bytes;
+    }
+    if(!rc)rc=snag_buf_append(out,safe.data,len);
+    if(!rc)rc=snag_buf_append(out,"\r\n",2u);
+    snag_buf_free(&safe);return rc;
+}
+
+static int
 compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes,
                size_t *cursor_row, size_t *cursor_col, size_t *end_row, size_t *end_col,
                size_t *source_offset)
@@ -999,7 +1023,10 @@ compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes,
     snag_buf_init(out, 0u);
     if (label_len > (SIZE_MAX - 32u) / 4u)
         return snag_errno(EOVERFLOW);
-    out->max = label_len * 4u + 32u;
+    out->max = label_len * 4u + 32u + sizeof(term->caption)*4u + 256u;
+    if(caption_line(out,"voice you [partial]: ",term->caption[0],term->columns)<0 ||
+        caption_line(out,"voice reply [generated]: ",term->caption[1],term->columns)<0)return -1;
+    size_t caption_rows=(term->caption[0][0]!=0)+(term->caption[1][0]!=0);
     /* Search labels can contain a multiline draft; keep labels on their
      * logical line instead of letting a bare LF desynchronize row layout. */
     for (size_t start = 0u, pos = 0u; pos <= label_len; ++pos) {
@@ -1012,7 +1039,7 @@ compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes,
     }
     *label_bytes = out->len;
     frame_position(out, out->len, term->columns, end_row, end_col);
-    indent = *end_row * term->columns + *end_col;
+    indent = (*end_row-caption_rows) * term->columns + *end_col;
     if (prompt_render_max(term->draft.data, term->draft.len, indent,
                           out->len + 64u, &max) < 0)
         return -1;
@@ -1788,6 +1815,33 @@ replace_range(struct snag_term *term, size_t start, size_t end,
     return redraw(term);
 }
 
+int
+snag_term_insert_draft(struct snag_term *term, const char *text)
+{
+    size_t len = strlen(text);
+    if (!snag_utf8_valid((const unsigned char *)text, len, true)) { errno = EILSEQ; return -1; }
+    return insert_bytes(term, (const unsigned char *)text, len);
+}
+
+int
+snag_term_audio(struct snag_term *term, const char *label, bool dictating)
+{
+    if (dictating && (!term->opened || !term->raw || !term->capable || term->input_only || term->output_depth)) { errno = ENOTTY; return -1; }
+    if (!snag_strcpy(term->audio_label, sizeof(term->audio_label), label)) return -1;
+    if(!*label)memset(term->caption,0,sizeof(term->caption));
+    term->dictating = dictating;
+    if (*label) term->prompt_wanted = true;
+    if (dictating && term->searching && search_accept(term, false) < 0) return -1;
+    return redraw(term);
+}
+
+int snag_term_caption(struct snag_term *term, unsigned int speaker, const char *text)
+{
+    if(speaker>1u || !text || !snag_utf8_valid((const unsigned char *)text,strlen(text),true))return -1;
+    if(!snag_strcpy(term->caption[speaker],sizeof(term->caption[speaker]),text))return -1;
+    return redraw(term);
+}
+
 static int
 insert_bytes(struct snag_term *term, const unsigned char *data, size_t len)
 {
@@ -2063,6 +2117,7 @@ static int
 complete_action(struct snag_term *term, enum snag_term_action action,
                 enum snag_term_action *out, char **text)
 {
+    if (term->dictating) return 0; /* Never queue/submit a draft during capture or transcription. */
     char *copy;
     uint32_t target;
     size_t body;
@@ -2415,6 +2470,12 @@ static int
 feed_byte(struct snag_term *term, unsigned char byte,
           enum snag_term_action *action, char **text)
 {
+    if (term->dictating && (byte == 0x03u || (!term->paste && !term->escape_len &&
+        (byte == '\r' || (!term->capable && byte == '\n'))))) {
+        if (byte == 0x03u) { term->escape_len = term->paste_end_match = 0u; term->paste = false; }
+        *action = byte == 0x03u ? SNAG_TERM_DICTATE_CANCEL : SNAG_TERM_DICTATE_DONE;
+        return 1;
+    }
     if (byte != '\t')
         term->completion_armed = false;
     if (byte == 0x03u) {
@@ -2515,7 +2576,7 @@ feed_byte(struct snag_term *term, unsigned char byte,
     case 0x07u:
         return term->searching ? search_accept(term, true) : 0;
     case 0x12u:
-        return search_begin(term);
+        return term->dictating ? 0 : search_begin(term);
     default:
         return feed_text_byte(term, byte);
     }
@@ -2592,7 +2653,7 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
     if (term->input_pos == term->input_len) {
         term->input_pos = 0u;
         term->input_len = 0u;
-        if (term->searching && term->escape_len == 1u &&
+        if ((term->searching || term->dictating) && term->escape_len == 1u &&
             (timeout_ms < 0 || timeout_ms > 30))
             timeout_ms = 30;
         timeout_ms = term->history_pending ? 0 : spinner_timeout(term, timeout_ms);
@@ -2606,6 +2667,11 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
                 return -1;
             if (rc < 0 && errno == EINTR)
                 return 0;
+        }
+        if (rc == 0 && term->dictating && term->escape_len == 1u) {
+            term->escape_len = 0u;
+            *action = SNAG_TERM_DICTATE_CANCEL;
+            return 1;
         }
         if (rc == 0 && term->searching && term->escape_len == 1u) {
             term->escape_len = 0u;

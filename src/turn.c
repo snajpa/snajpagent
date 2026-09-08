@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "turn.h"
+#include "media.h"
 #include "config.h"
 
 #include <ctype.h>
@@ -37,7 +38,7 @@ snag_prompt_command(const char *text)
 bool
 snag_read_only_tool(const char *name)
 {
-    return snag_string_in(name, "list_files read_file grep");
+    return snag_string_in(name, "list_files read_file grep view_image view_video read_document listen_audio transcribe_audio");
 }
 
 const char *
@@ -270,7 +271,7 @@ static bool
 tool_name_valid(const char *name)
 {
     return snag_read_only_tool(name) || snag_string_in(name,
-        "exec_command write_stdin apply_patch create_goal update_goal irc_send irc_state "
+        "exec_command write_stdin speak_text apply_patch create_goal update_goal irc_send irc_state "
         "irc_topic");
 }
 
@@ -657,6 +658,7 @@ snag_tool_result_valid(const json_t *result)
     /* Optional fields extend the same required set, in dependency order. */
     const char *keys = "output_ref max_output_tokens duration_ms exit_code handle "
                        "model_text reason signal status stderr stdout";
+    char content_keys[256];
     const char *status;
     const char *reason;
     const char *model_text;
@@ -670,6 +672,11 @@ snag_tool_result_valid(const json_t *result)
     if (!json_object_get(result, "output_ref"))
         keys += json_object_get(result, "max_output_tokens") ?
                 sizeof("output_ref") : sizeof("output_ref max_output_tokens");
+    json_t *content=json_object_get(result,"content");
+    if (content) {
+        if (!snag_media_content_valid(content))return -1;
+        snprintf(content_keys,sizeof(content_keys),"content %s",keys);keys=content_keys;
+    }
     if (!snag_json_exact_keys(result, keys) ||
         snag_json_integer_u64(result, "duration_ms", &duration) < 0 ||
         !(status = snag_json_string(result, "status")) ||

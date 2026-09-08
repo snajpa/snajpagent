@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store_internal.h"
+#include "media.h"
 #include "base.h"
 #include "fs.h"
 
@@ -151,6 +152,7 @@ open_full_id(struct snag_store *store, struct snag_session *session,
         snag_store_scan_log(session, SNAG_TAIL_TRUNCATE,
                            error, error_size) < 0)
         return -1;
+    if (snag_media_work_remove(session->dir_fd,error,error_size)<0)return -1;
     if (session->delete_requested) {
         if (snag_session_complete_delete(store, session, error, error_size) < 0)
             return -1;

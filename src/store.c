@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store_internal.h"
+#include "media.h"
 #include "fs.h"
 #include "instructions.h"
 #include "irc.h"
@@ -165,6 +166,8 @@ clear_pending_steering(struct snag_session *session)
     for (size_t i = 0; i < session->pending_steering_count; ++i) {
         json_object_del(session->strings, session->pending_steering[i].steering_id);
         session->pending_steering[i].text = NULL;
+        json_decref(session->pending_steering[i].content);
+        session->pending_steering[i].content = NULL;
     }
     session->pending_steering_count = 0;
     session->pending_steering_bytes = 0;
@@ -183,6 +186,8 @@ snag_session_init(struct snag_session *session)
 static void
 free_session_state(struct snag_session *session)
 {
+    for(size_t i=0;i<session->pending_steering_count;++i)json_decref(session->pending_steering[i].content);
+    for(size_t i=0;i<session->pending_queue_count;++i)json_decref(session->pending_queue[i].content);
     json_decref(session->strings);
     json_decref(session->compact_output);
     json_decref(session->pending_input);
@@ -576,6 +581,7 @@ consume_oldest_queue(struct snag_session *session)
         return snag_errno(EINVAL);
     len = strlen(session->pending_queue[0].text);
     json_object_del(session->strings, session->pending_queue[0].queue_id);
+    json_decref(session->pending_queue[0].content);
     if (session->pending_queue_count > 1u)
         memmove(&session->pending_queue[0], &session->pending_queue[1],
                 (session->pending_queue_count - 1u) *
@@ -606,6 +612,49 @@ snag_goal_unfinished(enum snag_goal_status status)
 {
     return status == SNAG_GOAL_ACTIVE || status == SNAG_GOAL_PAUSED ||
            status == SNAG_GOAL_BLOCKED;
+}
+
+/* Typed parts extend the original text/timing event fields. */
+static bool
+input_fields_valid(const json_t *data,const char *keys)
+{
+    const json_t *content=json_object_get(data,"content");
+    char fields[256];
+    if(content) {
+        if(!snag_media_content_valid(content))return false;
+        int n=snprintf(fields,sizeof(fields),"%s content",keys);
+        if(n<0 || (size_t)n>=sizeof(fields))return false;
+        keys=fields;
+    }
+    return snag_json_exact_keys(data,keys);
+}
+
+/* Host-supplied voice provenance accompanies the existing queued input. It
+ * does not authenticate a speaker or expand the coding session's authority. */
+static bool
+voice_source_valid(const json_t *voice)
+{
+    static const char *const keys[]={"connection_id","input_id","response_id","call_id",
+        "provider","model","transcript","request"};
+    if(!snag_json_exact_keys(voice,"connection_id input_id response_id call_id provider model transcript request") ||
+        !snag_hex_is_lower(snag_json_string(voice,"connection_id"),SNAG_ID_HEX_LEN))return false;
+    for(size_t i=1u;i<4u;++i)
+        if(!snag_text_valid(snag_json_string(voice,keys[i]),1u,(SNAG_MAX_PROVIDER_ID+1u)-1u))return false;
+    return snag_text_valid(snag_json_string(voice,"provider"),1u,(SNAG_CONFIG_PROVIDER_NAME_MAX+1u)-1u) &&
+        snag_text_valid(snag_json_string(voice,"model"),1u,(SNAG_MODEL_MAX_BYTES)-1u) &&
+        snag_text_valid(snag_json_string(voice,"transcript"),1u,(SNAG_MAX_QUEUED_TEXT)-1u) &&
+        snag_text_valid(snag_json_string(voice,"request"),1u,(SNAG_MAX_QUEUED_TEXT)-1u);
+}
+
+static int
+voice_queue_id(const json_t *voice,char id[SNAG_ID_HEX_LEN+1u])
+{
+    json_t *key=json_pack("{s:s,s:s}","connection_id",snag_json_string(voice,"connection_id"),
+        "input_id",snag_json_string(voice,"input_id"));
+    char digest[SNAG_SHA256_HEX_LEN+1u];
+    int rc=key?snag_json_digest(key,digest):-1;json_decref(key);
+    if(!rc) {memcpy(id,digest,SNAG_ID_HEX_LEN);id[SNAG_ID_HEX_LEN]=0;}
+    return rc;
 }
 
 /* Counts and lineage always describe the request actually measured. */
@@ -655,6 +704,29 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
     } else if (session->delete_requested) {
         goto invalid;
+    } else if (strcmp(type, "audio_usage") == 0) {
+        /* Auxiliary billing is retained for inspection only. It changes no
+         * coding context, token counters, queue or executor state. */
+
+        const char *operation=snag_json_string(data,"operation");
+        if(!snag_json_exact_keys(data,"operation provider model report") || !operation || strcmp(operation,"dictation") ||
+            !snag_text_valid(snag_json_string(data,"provider"),1u,(SNAG_CONFIG_PROVIDER_NAME_MAX+1u)-1u) ||
+            !snag_text_valid(snag_json_string(data,"model"),1u,(SNAG_MODEL_MAX_BYTES)-1u) ||
+            !snag_text_valid(snag_json_string(data,"report"),1u,(256u*1024u)-1u))goto invalid;
+    } else if (strcmp(type,"voice_event")==0) {
+
+        static const char types[]="voice_started voice_stopped voice_transcript voice_usage voice_asr_failed voice_interrupted voice_response voice_result voice_muted";
+        const json_t *event=json_object_get(data,"event");
+        const char *kind=snag_json_string(event,"type");
+        char digest[SNAG_SHA256_HEX_LEN+1u];size_t bytes;
+        if(!snag_json_exact_keys(data,"connection_id provider model event") ||
+            !snag_hex_is_lower(snag_json_string(data,"connection_id"),SNAG_ID_HEX_LEN) ||
+            !snag_text_valid(snag_json_string(data,"provider"),1u,(SNAG_CONFIG_PROVIDER_NAME_MAX+1u)-1u) ||
+            !snag_text_valid(snag_json_string(data,"model"),1u,(SNAG_MODEL_MAX_BYTES)-1u) ||
+            !snag_string_in(kind,types) ||
+            snag_json_digest_bounded(event,2u*1024u*1024u,digest,&bytes)<0)goto invalid;
+        /* Transcript/status provenance only. Coding work enters through the
+         * existing queued-input event, never through a voice notice. */
     } else if (strcmp(type, "irc_event") == 0) {
         struct snag_irc_event event;
         if (snag_irc_event_read(data, &event) < 0)
@@ -817,7 +889,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             session->queue_armed = true;
     } else if (strcmp(type, "compaction_started") == 0) {
         static const char methods[] =
-            "exact unknown anchored_upper_bound statistical_upper_estimate qualified_upper_bound";
+            "exact media_upper_bound unknown anchored_upper_bound statistical_upper_estimate qualified_upper_bound";
         static const char reasons[] =
             "manual proactive hard_budget provider_rejection";
         const char *compact_id = snag_json_string(data, "compact_id");
@@ -884,7 +956,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         clear_compaction_state(session);
     } else if (strcmp(type, "compaction_completed") == 0) {
         static const char methods[] =
-            "exact unknown statistical_upper_estimate qualified_upper_bound";
+            "exact media_upper_bound unknown statistical_upper_estimate qualified_upper_bound";
         const char *compact_id = snag_json_string(data, "compact_id");
         const char *method = snag_json_string(data, "count_method");
         const char *output_method = snag_json_string(data, "output_count_method");
@@ -996,7 +1068,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         size_t len;
         bool reminder = strcmp(type, "irc_reply_reminder") == 0;
 
-        if (!snag_json_exact_keys(data, json_object_get(data, "received_at_ms") ?
+        if (!input_fields_valid(data, json_object_get(data, "received_at_ms") ?
                 "steering_id text turn_id received_at_ms" : "steering_id text turn_id") || !current_turn ||
             session->response_terminal == SNAG_RESPONSE_TERMINAL_FAILED ||
             session->response_terminal == SNAG_RESPONSE_TERMINAL_INTERRUPTED ||
@@ -1017,6 +1089,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (add_pending_steering(session, steering_id, text, len, seq) < 0)
             return -1;
         if (!reminder) session->policy_stopped = SNAG_POLICY_STOP_NONE;
+        session->pending_steering[session->pending_steering_count-1u].content=json_incref(json_object_get(data,"content"));
         if (json_object_get(data, "received_at_ms") &&
             snag_json_integer_u64(data, "received_at_ms",
                 &session->pending_steering[session->pending_steering_count - 1u].received_ms) < 0)
@@ -1047,7 +1120,14 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 "armed queue_id read_only text received_at_ms" : "armed queue_id read_only text") :
              (json_object_get(data, "received_at_ms") ? "queue_id read_only text received_at_ms" :
                                                      "queue_id read_only text"));
-        if (!snag_json_exact_keys(data, keys) ||
+        const json_t *voice=json_object_get(data,"voice");
+        char voice_id[SNAG_ID_HEX_LEN+1u],voice_keys[256];
+        if(voice) {
+            if(!adding || read_only || json_object_get(data,"content") || !voice_source_valid(voice) ||
+                voice_queue_id(voice,voice_id)<0 || !queue_id || strcmp(voice_id,queue_id))goto invalid;
+            snprintf(voice_keys,sizeof(voice_keys),"%s voice",keys);keys=voice_keys;
+        }
+        if (!input_fields_valid(data, keys) ||
             (has_arm && !json_is_boolean(json_object_get(data, "armed"))) ||
             !json_is_boolean(json_object_get(data, "read_only")) ||
             !queue_id || !snag_hex_is_lower(queue_id, SNAG_ID_HEX_LEN) ||
@@ -1082,6 +1162,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (adding) {
             ++session->pending_queue_count;
             memcpy(queued->queue_id, queue_id, sizeof(queued->queue_id));
+            queued->content=json_incref(json_object_get(data,"content"));
             queued->seq = seq;
         }
         if (has_arm) session->queue_armed = json_is_true(json_object_get(data, "armed"));
@@ -1106,6 +1187,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             if (id && !strcmp(queued->queue_id, id)) {
                 session->pending_queue_bytes -= strlen(queued->text);
                 json_object_del(session->strings, queued->queue_id);
+                json_decref(queued->content);
                 ++removed;
             } else {
                 if (out != i)
@@ -1120,7 +1202,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->pending_queue_count = out;
     } else if (strcmp(type, "input_received") == 0) {
         if (session->active_turn || session->pending_input ||
-            !snag_json_exact_keys(data, "effort instructions model provider read_only received_at_ms text") ||
+            !input_fields_valid(data, "effort instructions model provider read_only received_at_ms text") ||
             !snag_text_valid(snag_json_string(data, "text"), 1u, SNAG_MAX_DIRECT_PROMPT) ||
             !snag_text_valid(snag_json_string(data, "model"), 1u, SNAG_MODEL_MAX_BYTES - 1u) ||
             !snag_text_valid(snag_json_string(data, "effort"), 1u, SNAG_EFFORT_MAX_BYTES - 1u) ||
@@ -1153,7 +1235,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
 
         if (session->active_turn || session->process_count != 0u ||
             session->pending_steering_count != 0u ||
-            !snag_json_exact_keys(data, json_object_get(data, "received_at_ms") ?
+            !input_fields_valid(data, json_object_get(data, "received_at_ms") ?
                 "config input_kind instructions queue_id queue_seq read_only text turn_id turn_number workspace received_at_ms" : "config input_kind instructions queue_id queue_seq read_only text turn_id turn_number workspace") ||
             !json_is_boolean(json_object_get(data, "read_only")) ||
             !(turn_id = snag_json_string(data, "turn_id")) ||
@@ -1188,10 +1270,13 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 strcmp(model, snag_json_string(pending, "model")) ||
                 strcmp(provider, snag_json_string(pending, "provider")) ||
                 strcmp(effort, snag_json_string(pending, "effort")) ||
+                (json_object_get(data, "content") != json_object_get(pending, "content") &&
+                 !json_equal(json_object_get(data, "content"), json_object_get(pending, "content"))) ||
                 json_is_true(json_object_get(data, "read_only")) !=
                     json_is_true(json_object_get(pending, "read_only"))) goto invalid;
         }
         if (goal) {
+            if (json_object_get(data, "content")) goto invalid;
             if (session->goal_status != SNAG_GOAL_ACTIVE ||
                 json_is_true(json_object_get(data, "read_only")) ||
                 !json_is_null(json_object_get(data, "queue_id")) ||
@@ -1211,6 +1296,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 strcmp(queue_id, session->pending_queue[0].queue_id) != 0 ||
                 queue_seq != session->pending_queue[0].seq ||
                 strcmp(text, session->pending_queue[0].text) != 0 ||
+                (json_object_get(data, "content") != session->pending_queue[0].content &&
+                 !json_equal(json_object_get(data, "content"), session->pending_queue[0].content)) ||
                 session->pending_queue[0].read_only !=
                     json_is_true(json_object_get(data, "read_only")) ||
                 strlen(text) > SNAG_MAX_QUEUED_TEXT)
@@ -1342,7 +1429,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             session->response_irc_seq > session->irc_received_seq || !current_turn ||
             !state_allows_start || !response_id ||
             !snag_hex_is_lower(response_id, SNAG_ID_HEX_LEN) || !method ||
-            (!snag_string_in(method, "exact unknown anchored_upper_bound statistical_upper_estimate qualified_upper_bound")) ||
+            (!snag_string_in(method, "exact media_upper_bound unknown anchored_upper_bound statistical_upper_estimate qualified_upper_bound")) ||
             !capability || strcmp(capability, SNAJPAGENT_CAPABILITY_VERSION) != 0 ||
             !snag_strcpy(value.model, sizeof(value.model),
                          snag_json_string(data, "model")) ||
@@ -2126,6 +2213,10 @@ clone_session_state(const struct snag_session *source,
 {
     *staged = *source;
     staged->strings = source->strings ? json_copy(source->strings) : NULL;
+    for(size_t i=0;i<staged->pending_steering_count;++i)
+        staged->pending_steering[i].content=json_incref(source->pending_steering[i].content);
+    for(size_t i=0;i<staged->pending_queue_count;++i)
+        staged->pending_queue[i].content=json_incref(source->pending_queue[i].content);
     staged->compact_output = json_incref(source->compact_output);
     staged->pending_input = json_incref(source->pending_input);
     staged->active_instructions = json_incref(source->active_instructions);
@@ -2183,6 +2274,175 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
         *session = staged;
     }
     return rc;
+}
+
+struct voice_queue_lookup {
+    const json_t *source;
+    const char *queue_id;
+    bool found;
+};
+
+static int
+voice_queue_find(void *opaque,const struct snag_session *state,uint64_t seq,const char *type,const json_t *data,char *error,size_t size)
+{
+    (void)state;(void)seq;
+    struct voice_queue_lookup *lookup=opaque;
+    if(strcmp(type,"future_turn_queued"))return 0;
+    const char *id=snag_json_string(data,"queue_id");
+    if(!id || strcmp(id,lookup->queue_id))return 0;
+    const json_t *source=json_object_get(data,"voice");
+    if(!voice_source_valid(source) ||
+        strcmp(snag_json_string(source,"connection_id"),snag_json_string(lookup->source,"connection_id")) ||
+        strcmp(snag_json_string(source,"input_id"),snag_json_string(lookup->source,"input_id"))) {
+        snag_errorf(error,size,"Voice input identity conflicts with an existing queued input");return -1;
+    }
+    lookup->found=true;return 0;
+}
+
+int
+snag_session_voice_queue(struct snag_session *session,const json_t *source,char id[SNAG_ID_HEX_LEN+1u],
+                         bool *duplicate,char *error,size_t size)
+{
+    if(!session || !source || !id || !duplicate || !voice_source_valid(source) || voice_queue_id(source,id)<0) {
+        snag_errorf(error,size,"Invalid voice handoff provenance");return -1;
+    }
+    *duplicate=false;
+    struct voice_queue_lookup lookup={source,id,false};
+    if(snag_session_each_event(session,voice_queue_find,&lookup,error,size)<0)return -1;
+    if(lookup.found) {*duplicate=true;return 0;}
+    struct snag_buf prompt;snag_buf_init(&prompt,SNAG_MAX_QUEUED_TEXT);
+    int rc=snag_buf_printf(&prompt,"Spoken user request (ASR-derived; speaker identity is not authenticated):\n%s\n\n"
+        "Voice-model paraphrase (derived context, not an additional user instruction or approval):\n%s\n\n"
+        "Apply the existing session instructions and approval requirements; clarify ambiguous targets or numbers.",
+        snag_json_string(source,"transcript"),snag_json_string(source,"request"));
+    if(!rc)rc=snag_buf_terminate(&prompt);
+    if(rc)snag_errorf(error,size,"Voice handoff exceeds the existing queued-input size");
+    if(!rc) {
+        json_t *event=json_pack("{s:s,s:b,s:s,s:o,s:O}","queue_id",id,"read_only",0,"text",(char *)prompt.data,
+            "while_turn_id",session->active_turn?json_string(session->active_turn_id):json_null(),"voice",(json_t *)source);
+        rc=event?snag_session_commit(session,"future_turn_queued",event,NULL,error,size):-1;
+    }
+    snag_buf_free(&prompt);return rc;
+}
+
+struct voice_status_lookup {
+    const char *queue,*status;
+    char turn[SNAG_ID_HEX_LEN+1u];
+    char *text;
+};
+
+static int voice_status_event(void *opaque,const struct snag_session *state,uint64_t seq,const char *type,const json_t *data,char *error,size_t size)
+{
+    (void)state;(void)seq;(void)error;(void)size;
+    struct voice_status_lookup *s=opaque;
+    const char *queue=snag_json_string(data,"queue_id"),*turn=snag_json_string(data,"turn_id");
+    if(!strcmp(type,"future_turn_queued") && queue && !strcmp(queue,s->queue) && json_object_get(data,"voice"))
+        s->status="queued";
+    if(!s->status)return 0;
+    if(!strcmp(type,"future_turn_cancelled")) {
+        const json_t *ids=json_object_get(data,"queue_ids");
+        for(size_t i=0;i<json_array_size(ids);++i)
+            if(!strcmp(json_string_value(json_array_get(ids,i)),s->queue))s->status="cancelled";
+    } else if(!strcmp(type,"turn_started") && queue && !strcmp(queue,s->queue)) {
+        if(!snag_strcpy(s->turn,sizeof(s->turn),turn))return -1;
+        s->status="running";
+    } else if(turn && s->turn[0] && !strcmp(turn,s->turn)) {
+        if(!strcmp(type,"response_completed")) {
+            const json_t *items=json_object_get(data,"items");
+            for(size_t i=0;i<json_array_size(items);++i) {
+                const json_t *item=json_array_get(items,i);
+                const char *kind=snag_json_string(item,"kind"),*text=snag_json_string(item,"text");
+                if(!kind || (strcmp(kind,"assistant") && strcmp(kind,"refusal")) || !text)continue;
+                if(strlen(text)>=SNAG_MAX_QUEUED_TEXT)text="Coding result exceeds the voice message limit; inspect the coding session.";
+                char *copy=snag_strdup_checked(text,SNAG_MAX_QUEUED_TEXT);if(!copy)return -1;
+                free(s->text);s->text=copy;
+            }
+        } else if(!strcmp(type,"turn_completed"))s->status="completed";
+        else if(!strcmp(type,"turn_completed_silent"))s->status="completed_silent";
+        else if(!strcmp(type,"turn_interrupted"))s->status="interrupted";
+        else if(!strcmp(type,"turn_failed"))s->status="failed";
+    }
+    return 0;
+}
+
+int snag_session_voice_status(struct snag_session *session,const char *queue,json_t **result,char *error,size_t size)
+{
+    if(!session || !queue || !result || !snag_hex_is_lower(queue,SNAG_ID_HEX_LEN))return -1;
+    *result=NULL;struct voice_status_lookup s={.queue=queue};
+    int rc=snag_session_each_event(session,voice_status_event,&s,error,size);
+    if(!rc && !s.status) {snag_errorf(error,size,"Voice handoff is not in the session journal");rc=-1;}
+    if(!rc) {
+        const char *text="Coding request is queued.";
+        if(!strcmp(s.status,"running"))text="Coding turn is running under the existing session owner.";
+        else if(!strcmp(s.status,"cancelled"))text="Coding request cancelled before execution.";
+        else if(!strcmp(s.status,"interrupted"))text="Coding turn interrupted by the existing session controls.";
+        else if(!strcmp(s.status,"failed"))text="Coding turn failed. Inspect the coding session for the error.";
+        else if(!strcmp(s.status,"completed_silent"))text="Coding turn completed without a spoken result.";
+        else if(!strcmp(s.status,"completed"))text=s.text?s.text:"Coding turn completed.";
+        *result=json_pack("{s:s,s:s,s:s}","status",s.status,"turn_id",s.turn,"text",text);
+        if(!*result)rc=-1;
+    }
+    free(s.text);return rc;
+}
+
+struct voice_context_lookup {
+    char *transcript[2];
+    char queue[SNAG_ID_HEX_LEN+1u];
+};
+
+/* Three 8 KiB excerpts leave room for escaped JSON inside a realtime text
+ * message and live history within 256 KiB. This bounds a snapshot, not storage. */
+static char *voice_excerpt(const char *text)
+{
+    if(!text)return NULL;
+    const size_t limit=SNAG_MAX_QUEUED_TEXT/32u;
+    size_t len=strlen(text);if(len<limit)return snag_strdup_checked(text,limit);
+    size_t end=limit-32u;
+    while(end && ((unsigned char)text[end]&0xc0u)==0x80u)--end;
+    char *out=malloc(end+32u);if(!out)return NULL;
+    memcpy(out,text,end);strcpy(out+end,"\n[excerpt truncated]");return out;
+}
+
+static int voice_context_event(void *opaque,const struct snag_session *state,uint64_t seq,const char *type,const json_t *data,char *error,size_t size)
+{
+    (void)state;(void)seq;(void)error;(void)size;
+    struct voice_context_lookup *s=opaque;
+    if(!strcmp(type,"future_turn_queued") && json_object_get(data,"voice")) {
+        if(!snag_strcpy(s->queue,sizeof(s->queue),snag_json_string(data,"queue_id")))return -1;
+    } else if(!strcmp(type,"voice_event")) {
+        const json_t *event=json_object_get(data,"event");
+        const char *kind=snag_json_string(event,"type"),*speaker=snag_json_string(event,"speaker");
+        if(!kind || strcmp(kind,"voice_transcript") || !speaker)return 0;
+        unsigned int who=!strcmp(speaker,"assistant");
+        const char *text=snag_json_string(event,"text");if(!text)return 0;
+        char *copy=voice_excerpt(text);if(!copy)return -1;
+        free(s->transcript[who]);s->transcript[who]=copy;
+    }
+    return 0;
+}
+
+int snag_session_voice_context(struct snag_session *session,json_t **result,char *error,size_t size)
+{
+    if(!session || !result)return -1;
+    *result=NULL;struct voice_context_lookup s={0};json_t *handoff=NULL;
+    int rc=snag_session_each_event(session,voice_context_event,&s,error,size);
+    if(!rc && s.queue[0])rc=snag_session_voice_status(session,s.queue,&handoff,error,size);
+    if(!rc && handoff) {
+        char *text=voice_excerpt(snag_json_string(handoff,"text"));
+        if(!text || json_object_set_new(handoff,"text",json_string(text))<0 ||
+            json_object_set_new(handoff,"queue_id",json_string(s.queue))<0)rc=-1;
+        free(text);
+    }
+    if(!rc) {
+        *result=json_pack("{s:s,s:s,s:s,s:i,s:s,s:s,s:O}","kind","session_context",
+            "session_id",session->id,"active_turn_id",session->active_turn?session->active_turn_id:"",
+            "queued_inputs",(int)session->pending_queue_count,
+            "recent_asr",s.transcript[0]?s.transcript[0]:"",
+            "recent_generated_reply",s.transcript[1]?s.transcript[1]:"",
+            "latest_voice_handoff",handoff?handoff:json_null());
+        if(!*result)rc=-1;
+    }
+    json_decref(handoff);free(s.transcript[0]);free(s.transcript[1]);return rc;
 }
 
 static char *
@@ -2301,4 +2561,67 @@ snag_session_create(struct snag_store *store, struct snag_session *session,
                              error, error_size) < 0)
         return -1;
     return snag_session_persist(store, session, error, error_size);
+}
+
+struct media_lookup {
+    const char *id;
+    json_t *found;
+    int (*pump)(void *, unsigned int);
+    void *opaque;
+};
+
+static int
+find_asset_event(void *opaque, const struct snag_session *state, uint64_t seq, const char *type, const json_t *data,
+                 char *error, size_t error_size)
+{
+    struct media_lookup *lookup = opaque;
+    (void)state;(void)seq;
+    if (lookup->pump && lookup->pump(lookup->opaque, 0u)) {
+        snag_errorf(error, error_size, "Asset lookup interrupted"); return -1;
+    }
+    if (lookup->found) return 0;
+    /* Only accepted input/result content is authority for a retained reference.
+     * Never treat model tool arguments or arbitrary JSON in a log as assets. */
+    const json_t *content = NULL;
+    if (!strcmp(type, "tool_finished")) content = json_object_get(json_object_get(data, "result"), "content");
+    else if (!strcmp(type, "input_received") || !strcmp(type, "turn_started") || !strcmp(type, "steering_added") ||
+             !strcmp(type, "future_turn_queued")) content = json_object_get(data, "content");
+    for (size_t i = 0; i < json_array_size(content); ++i) {
+        json_t *part = json_array_get(content, i);
+        const char *keys[] = {"asset", "source"};
+        for (size_t j = 0; j < 2u; ++j) {
+            json_t *asset = json_object_get(part, keys[j]);
+            if (snag_media_valid(asset) && !strcmp(snag_json_string(asset, "id"), lookup->id)) {
+                lookup->found = json_incref(asset); return 0;
+            }
+        }
+    }
+    return 0;
+}
+
+int
+snag_session_media(struct snag_session *session, const char *path, const char *mime,
+                    int (*pump)(void *, unsigned int), void *opaque,
+                    json_t **asset, char **retained_path, char *error, size_t error_size)
+{
+    *asset = NULL; *retained_path = NULL;
+    if (!path || !*path) return -1;
+    if (!strncmp(path, "asset:", 6u)) {
+        struct media_lookup lookup = {.id = path + 6u, .pump = pump, .opaque = opaque};
+        if (!snag_hex_is_lower(lookup.id, SNAG_ID_HEX_LEN) ||
+            snag_session_each_event(session, find_asset_event, &lookup, error, error_size) < 0) {
+            json_decref(lookup.found); return -1;
+        }
+        if (!lookup.found) { snag_errorf(error, error_size, "No accepted asset with that ID in this session"); return -1; }
+        *asset = lookup.found;
+    } else if (snag_media_snapshot(session->dir_fd, session->workspace, path, mime,
+              SNAG_MEDIA_FILE_MAX, pump, opaque, asset, error, error_size) < 0) return -1;
+    if (snag_media_verify(session->dir_fd, *asset, pump, opaque, error, error_size) < 0) {
+        json_decref(*asset); *asset = NULL; return -1;
+    }
+    char *dir = snag_path_join(session->dir_path, "media");
+    if (dir) *retained_path = snag_path_join(dir, snag_json_string(*asset, "id"));
+    free(dir);
+    if (!*retained_path) { json_decref(*asset); *asset = NULL; return -1; }
+    return 0;
 }

@@ -15,6 +15,26 @@ rebuilding or updating an executable affects new launches, not an open session.
 
 ## 1. Work on a project
 
+## Multimodal development status
+
+This branch implements retained image attachments, frame/crop selection and
+normalized native image results,
+PDF/text/CSV inspection, timestamped video frame sampling, and file-audio
+understanding, transcription and speech generation through a configured API.
+Audio/video decoding links FFmpeg libraries; PDF rendering links Poppler and
+libpng. `/dictate` inserts a microphone transcript into the editable draft;
+`/play asset:ID` explicitly plays an accepted audio asset. Both use one linked
+miniaudio device owner. `/voice on` starts a configured realtime conversation
+with continuous capture, streamed reply audio and the existing coding queue;
+`/voice mute` pauses capture and `/voice off` stops voice. Office page import and
+spreadsheet range selection are available in the native development build.
+Realtime recovery and portable packaging remain in progress.
+Image budgeting uses exact counts or documented model-specific conservative bounds.
+See the manual for selectors, privacy, resource limits and checkpoint caveats.
+The required default release will include all modalities linked in; custom lean
+builds must not become a reduced official default. Nothing starts a microphone
+or camera automatically.
+
 After [installing and choosing a provider](#install-and-choose-a-provider),
 start in the project you want to change:
 

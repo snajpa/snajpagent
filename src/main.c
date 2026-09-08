@@ -3,6 +3,7 @@
 #include "base.h"
 #include "cli.h"
 #include "login.h"
+#include "office.h"
 #include "render.h"
 #include "snajpagent.h"
 #ifdef _WIN32
@@ -21,6 +22,8 @@ run(int argc, char **argv)
     int rc;
 
     snag_ignore_sigpipe();
+    snag_office_program(argv[0]);
+    (void)snag_office_worker(argc,argv);
     snag_cli_init(&cli);
     if (snag_cli_parse(&cli, argc, argv, error, sizeof(error)) < 0) {
         struct snag_render render;

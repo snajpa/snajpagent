@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "base.h"
+#include "base64.h"
+#include "pcm.h"
 #include "fs.h"
 #include "wake.h"
 #include "net.h"
@@ -2952,6 +2954,163 @@ test_wide_division(void)
     assert(dividend / divisor == UINT64_C(0xabcdef0123456794));
     assert(dividend % divisor == UINT64_C(0x0fedbba9876543bc));
 #endif
+struct encoder_output {
+    unsigned char bytes[8192];
+    size_t len, calls, largest;
+    bool reject;
+};
+
+static int
+encoder_sink(void *opaque, const unsigned char *bytes, size_t size)
+{
+    struct encoder_output *out = opaque;
+    ++out->calls;
+    if (size > out->largest) out->largest = size;
+    if (out->reject) return -1;
+    assert(size <= sizeof(out->bytes) - out->len);
+    memcpy(out->bytes + out->len, bytes, size);
+    out->len += size;
+    return 0;
+}
+
+static void
+test_streaming_base64(void)
+{
+    static const char *const raw[] = {"", "f", "fo", "foo", "foob", "fooba", "foobar"};
+    static const char *const expected[] = {"", "Zg==", "Zm8=", "Zm9v", "Zm9vYg==", "Zm9vYmE=", "Zm9vYmFy"};
+    for (size_t i = 0; i < sizeof(raw)/sizeof(raw[0]); ++i)
+        for (size_t split = 0; split <= strlen(raw[i]); ++split) {
+            struct snag_base64_stream stream = {0};
+            struct encoder_output out = {0};
+            assert(snag_base64_write(&stream, raw[i], split, encoder_sink, &out) == 0);
+            assert(snag_base64_write(&stream, raw[i] + split, strlen(raw[i]) - split, encoder_sink, &out) == 0);
+            assert(snag_base64_finish(&stream, encoder_sink, &out) == 0);
+            assert(out.len == strlen(expected[i]) && !memcmp(out.bytes, expected[i], out.len));
+            size_t calls = out.calls;
+            assert(snag_base64_finish(&stream, encoder_sink, &out) < 0);
+            assert(snag_base64_write(&stream, raw[i], strlen(raw[i]), encoder_sink, &out) < 0);
+            assert(out.calls == calls);
+        }
+    unsigned char raw_bytes[4097];
+    for (size_t i = 0; i < sizeof(raw_bytes); ++i) raw_bytes[i] = (unsigned char)i;
+    for (size_t chunk = 1; chunk <= 1024u; chunk *= 2u) {
+        struct snag_base64_stream stream = {0};
+        struct encoder_output out = {0};
+        struct snag_buf decoded;
+        for (size_t offset = 0; offset < sizeof(raw_bytes);) {
+            size_t take = sizeof(raw_bytes) - offset;
+            if (take > chunk) take = chunk;
+            assert(snag_base64_write(&stream, raw_bytes + offset, take, encoder_sink, &out) == 0);
+            offset += take;
+        }
+        assert(snag_base64_finish(&stream, encoder_sink, &out) == 0);
+        assert(out.largest <= 256u && sizeof(stream) <= 8u);
+        out.bytes[out.len] = 0;
+        snag_buf_init(&decoded, sizeof(raw_bytes));
+        assert(snag_base64_decode(&decoded, (char *)out.bytes) == 0);
+        assert(decoded.len == sizeof(raw_bytes) && !memcmp(decoded.data, raw_bytes, decoded.len));
+        snag_buf_free(&decoded);
+    }
+    for (unsigned int final = 0; final < 2u; ++final) {
+        struct snag_base64_stream stream = {0};
+        struct encoder_output out = {.reject = true};
+        if (final) {
+            assert(snag_base64_write(&stream, "f", 1u, encoder_sink, &out) == 0);
+            assert(snag_base64_finish(&stream, encoder_sink, &out) < 0);
+        } else assert(snag_base64_write(&stream, "foo", 3u, encoder_sink, &out) < 0);
+        assert(stream.failed && out.calls == 1u);
+        out.reject = false;
+        assert(snag_base64_write(&stream, "foo", 3u, encoder_sink, &out) < 0);
+        assert(snag_base64_finish(&stream, encoder_sink, &out) < 0);
+        assert(out.calls == 1u);
+    }
+}
+
+static void
+test_pcm(void)
+{
+    struct snag_pcm ring;
+    int16_t memory[8], input[16], out[16];
+    for (int i = 0; i < 16; ++i) input[i] = (int16_t)(i + 1);
+    assert(snag_pcm_init(&ring, memory, 7u) < 0);
+    assert(snag_pcm_init(&ring, memory, 8u) == 0);
+    assert(snag_pcm_write(&ring, input, 10u) == 8u && snag_pcm_available(&ring) == 8u);
+    assert(snag_pcm_read(&ring, out, 3u) == 3u && !memcmp(out, input, 6u));
+    assert(snag_pcm_write(&ring, input + 8, 3u) == 3u);
+    assert(snag_pcm_read(&ring, out, 8u) == 8u && !memcmp(out, input + 3, 16u));
+    atomic_store(&ring.read, UINT32_MAX - 3u); atomic_store(&ring.written, UINT32_MAX - 3u);
+    assert(snag_pcm_write(&ring, input, 8u) == 8u);
+    assert(snag_pcm_read(&ring, out, 8u) == 8u && !memcmp(out, input, 16u));
+    assert(snag_pcm_write(&ring, input, 4u) == 4u);
+    snag_pcm_flush(&ring);
+    assert(snag_pcm_write(&ring, input + 4u, 3u) == 3u);
+    assert(snag_pcm_read(&ring, out, 8u) == 3u && !memcmp(out, input + 4u, 6u));
+    /* An ancient flush must not become active after cursor half-wrap. */
+    atomic_store(&ring.read, 0x80000010u); atomic_store(&ring.written, 0x80000010u);
+    assert(snag_pcm_write(&ring, input, 8u) == 8u);
+    assert(snag_pcm_read(&ring, out, 8u) == 8u && !memcmp(out, input, 16u));
+    assert(snag_pcm_write(&ring, input, 6u) == 6u);
+    snag_pcm_discard(&ring);
+    assert(snag_pcm_available(&ring) == 0u);
+
+    /* Deterministic playback timing: two samples stand for one 20 ms chunk.
+     * Storage stays fixed while the consumer adjusts its prefill target. */
+    struct snag_pcm_playout p;
+    int16_t storage[32], stream[64], played[64];
+    for(int i=0;i<64;++i)stream[i]=(int16_t)(i+1);
+    assert(snag_pcm_init(&ring,storage,32u)==0);
+    snag_pcm_playout_init(&p,2u);
+    assert(p.target==6u && p.maximum==20u);
+    for(unsigned i=0;i<8u;++i)assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
+    assert(!atomic_load(&p.gaps) && !p.clean);
+    assert(snag_pcm_write(&ring,stream,2u)==2u);
+    assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
+    assert(snag_pcm_write(&ring,stream+2u,4u)==4u);
+    assert(snag_pcm_playout_read(&p,&ring,played,2u)==2u && !memcmp(played,stream,4u));
+    assert(snag_pcm_playout_read(&p,&ring,played,4u)==4u && !memcmp(played,stream+2u,8u));
+    for(unsigned i=0;i<8u;++i)assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
+    assert(!atomic_load(&p.gaps)); /* could still be delayed EOF */
+    assert(snag_pcm_write(&ring,stream+6u,2u)==2u);
+    assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
+    assert(p.target==8u && atomic_load(&p.gaps)==1u);
+    assert(snag_pcm_write(&ring,stream+8u,6u)==6u);
+    assert(snag_pcm_playout_read(&p,&ring,played,8u)==8u && !memcmp(played,stream+6u,16u));
+    snag_pcm_playout_end(&p,&ring);
+    assert(snag_pcm_playout_read(&p,&ring,played,2u)==0 && p.target==8u);
+    for(unsigned i=0;i<8u;++i) {
+        assert(snag_pcm_write(&ring,stream,1u)==1u);
+        snag_pcm_playout_end(&p,&ring); /* one-sample reply drains immediately */
+        assert(snag_pcm_playout_read(&p,&ring,played,2u)==1u && played[0]==stream[0]);
+        assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
+    }
+    assert(p.target==6u && atomic_load(&p.gaps)==1u);
+    /* Late EOF after an empty callback does not inflate the target. */
+    assert(snag_pcm_write(&ring,stream,6u)==6u);
+    assert(snag_pcm_playout_read(&p,&ring,played,6u)==6u);
+    assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
+    snag_pcm_playout_end(&p,&ring);
+    assert(snag_pcm_playout_read(&p,&ring,played,2u)==0 && atomic_load(&p.gaps)==1u);
+    /* Cancel a prefill, then drain only the new generation's short reply. */
+    assert(snag_pcm_write(&ring,stream,2u)==2u);
+    assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
+    snag_pcm_flush(&ring);snag_pcm_playout_end(&p,&ring);
+    assert(snag_pcm_write(&ring,stream+20u,1u)==1u);
+    snag_pcm_playout_end(&p,&ring);
+    assert(snag_pcm_playout_read(&p,&ring,played,2u)==1u && played[0]==stream[20]);
+    assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
+    /* Repeated real starvation stops growing at the delay budget. */
+    for(unsigned i=0;i<16u;++i) {
+        assert(snag_pcm_write(&ring,stream,20u)==20u);
+        assert(snag_pcm_playout_read(&p,&ring,played,21u)==20u);
+        assert(!memcmp(played,stream,40u));
+    }
+    assert(p.target==p.maximum && ring.capacity==32u && ring.samples==storage);
+    snag_pcm_playout_end(&p,&ring);
+    assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
+    /* A slow producer cannot hold a small prefix indefinitely. */
+    assert(snag_pcm_write(&ring,stream,1u)==1u);
+    for(unsigned i=0;i<10u;++i)assert(snag_pcm_playout_read(&p,&ring,played,2u)==0);
+    assert(snag_pcm_playout_read(&p,&ring,played,2u)==1u);
 }
 
 static int
@@ -3148,6 +3307,8 @@ run_base(int argc, char **argv)
         for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i)
             assert(snag_parse_count(invalid[i], &count) < 0);
     }
+    test_streaming_base64();
+    test_pcm();
     test_irc_target_parse();
     test_path_join();
     test_platform();

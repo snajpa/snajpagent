@@ -66,11 +66,11 @@ failed:
     return snag_errorf(error, error_size, "cannot retain secret protection snapshot");
 }
 
-int
-snag_secret_result(const struct snag_secret_set *set, json_t *result,
+static int
+redact_text(const struct snag_secret_set *set, json_t *result, const char *key,
                    char *error, size_t error_size)
 {
-    json_t *text = json_object_get(result, "model_text");
+    json_t *text = json_object_get(result, key);
     json_t *wrapper = NULL, *redacted = NULL;
     int rc = -1;
 
@@ -84,7 +84,7 @@ snag_secret_result(const struct snag_secret_set *set, json_t *result,
         snag_wire_json_redact(encoded.data, encoded.len, &set->wire, &clean, error, error_size) == 0)
         redacted = json_loadb((const char *)clean.data, clean.len, JSON_REJECT_DUPLICATES, NULL);
     if (redacted && json_is_string(json_object_get(redacted, "text")))
-        rc = json_object_set_new(result, "model_text", json_incref(json_object_get(redacted, "text")));
+        rc = json_object_set_new(result, key, json_incref(json_object_get(redacted, "text")));
     if (rc < 0)
         snag_errorf(error, error_size, "cannot redact native tool result safely");
     json_decref(wrapper);
@@ -93,4 +93,19 @@ snag_secret_result(const struct snag_secret_set *set, json_t *result,
     snag_buf_free(&encoded);
     snag_buf_free(&clean);
     return rc;
+}
+
+int
+snag_secret_result(const struct snag_secret_set *set, json_t *result,
+                   char *error, size_t error_size)
+{
+    if (redact_text(set, result, "model_text", error, error_size) < 0) return -1;
+    json_t *content = json_object_get(result, "content");
+    for (size_t i = 0; i < json_array_size(content); ++i) {
+        json_t *part = json_array_get(content, i);
+        const char *type = snag_json_string(part, "type");
+        if (type && !strcmp(type, "input_text") &&
+            redact_text(set, part, "text", error, error_size) < 0) return -1;
+    }
+    return 0;
 }

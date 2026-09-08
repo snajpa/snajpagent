@@ -7,8 +7,14 @@
 #include "json.h"
 #include "model_cache.h"
 #include "provider.h"
+#include "tools.h"
+#include "convert.h"
+#include "media.h"
+#include "av.h"
 #include "snajpagent.h"
 #include "turn.h"
+#include "voice.h"
+#include "audio_device.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -68,6 +74,10 @@ enum model_fixture {
     MODEL_COUNT_OVERFLOW,
     MODEL_COMPACT_404,
     MODEL_COMPACT_403,
+    MODEL_AUDIO_LISTEN,
+    MODEL_AUDIO_TRANSCRIBE,
+    MODEL_AUDIO_SPEAK,
+    MODEL_AUDIO_FAILURE,
     MODEL_AUTH_DEVICE,
     MODEL_AUTH_CANCEL,
     MODEL_AUTH_EXPIRED,
@@ -332,9 +342,88 @@ auth_server_child(int listen_fd, enum model_fixture fixture)
     _exit(0);
 }
 
+static unsigned char fixture_wav[1004];
+static const unsigned char *audio_expected = fixture_wav;
+static size_t audio_expected_len = sizeof(fixture_wav);
+
+static void
+make_fixture_wav(void)
+{
+    memcpy(fixture_wav, "RIFF", 4u);
+    fixture_wav[4] = 0xe4; fixture_wav[5] = 3; /* 996 bytes after RIFF header. */
+    memcpy(fixture_wav + 8u, "WAVEfmt ", 8u);
+    fixture_wav[16] = 16; fixture_wav[20] = 1; fixture_wav[22] = 2;
+    fixture_wav[24] = 0xc0; fixture_wav[25] = 0x5d; /* 24000 Hz. */
+    fixture_wav[28] = 0; fixture_wav[29] = 0x77; fixture_wav[30] = 1; /* 96000 B/s. */
+    fixture_wav[32] = 4; fixture_wav[34] = 16;
+    memcpy(fixture_wav + 36u, "data", 4u);
+    fixture_wav[40] = 0xc0; fixture_wav[41] = 3;
+}
+
+static void
+audio_server_child(int listen_fd, enum model_fixture mode)
+{
+    struct http_request req;
+    int fd = accept(listen_fd, NULL, NULL);
+    if (fd < 0) server_fail("audio accept failed");
+    read_request(fd, &req);
+    if (strcmp(req.method, "POST")) server_fail("audio method mismatch");
+    if (mode == MODEL_AUDIO_TRANSCRIBE) {
+        if (strcmp(req.path, "/v1/audio/transcriptions") ||
+            !strstr(req.headers, "Content-Type: multipart/form-data; boundary=") ||
+            !strstr(req.body, "name=\"file\"") || !strstr(req.body, "filename=\"segment.wav\""))
+            server_fail("audio multipart path/header mismatch");
+        /* The WAV contains NUL bytes, so inspect the complete binary body. */
+        bool found = false, model = false;
+        for (size_t i = 0; i < req.body_len; ++i) {
+            if (i + sizeof(fixture_wav) <= req.body_len && !memcmp(req.body + i, fixture_wav, sizeof(fixture_wav))) found = true;
+            if (i + 13u <= req.body_len && !memcmp(req.body + i, "audio-fixture", 13u)) model = true;
+        }
+        if (!found || !model) server_fail("multipart WAV/model missing");
+        send_status(fd, 200u, "{\"text\":\"fixture transcript\",\"usage\":{\"type\":\"duration\",\"seconds\":0.01}}");
+    } else {
+        json_t *body = json_loadb(req.body, req.body_len, JSON_REJECT_DUPLICATES, NULL);
+        const char *model = snag_json_string(body, "model");
+        if (!body || !model || strcmp(model, "audio-fixture") || json_object_get(body, "tools"))
+            server_fail("audio request must be one model without tools");
+        if (mode == MODEL_AUDIO_SPEAK) {
+            if (strcmp(req.path, "/v1/audio/speech") || strcmp(snag_json_string(body, "response_format"), "wav"))
+                server_fail("speech path/format mismatch");
+            char header[160];
+            int n = snprintf(header, sizeof(header), "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n", sizeof(fixture_wav));
+            write_all_or_die(fd, header, (size_t)n);
+            write_all_or_die(fd, (char *)fixture_wav, sizeof(fixture_wav));
+        } else {
+            if (strcmp(req.path, "/v1/chat/completions")) server_fail("audio chat path mismatch");
+            json_t *messages = json_object_get(body, "messages");
+            if (!messages) server_fail("audio chat messages missing");
+            if (messages) {
+                json_t *user = json_array_get(messages, 1u);
+                json_t *audio = json_object_get(json_array_get(json_object_get(user, "content"), 1u), "input_audio");
+                struct snag_buf decoded;
+                snag_buf_init(&decoded, 32768u);
+                const char *base64 = snag_json_string(audio, "data");
+                if (json_array_size(messages) != 2u || !base64 ||
+                    snag_base64_decode(&decoded, base64) < 0 || decoded.len != audio_expected_len ||
+                    memcmp(decoded.data, audio_expected, audio_expected_len)) server_fail("audio chat lost WAV data");
+                snag_buf_free(&decoded);
+            }
+            send_status(fd, mode == MODEL_AUDIO_FAILURE ? 503u : 200u,
+                mode == MODEL_AUDIO_FAILURE ? "{\"error\":\"private audio diagnostic\"}" :
+                "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"fixture sound answer\"}}],"
+                "\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4,\"total_tokens\":14}}");
+        }
+        json_decref(body);
+    }
+    (void)close(fd);
+    _exit(0);
+}
+
 static void
 server_child(int listen_fd, enum model_fixture models, bool transport)
 {
+    if (models >= MODEL_AUDIO_LISTEN && models <= MODEL_AUDIO_FAILURE)
+        audio_server_child(listen_fd, models);
     if (models >= MODEL_AUTH_DEVICE)
         auth_server_child(listen_fd, models);
     if (models == MODEL_COMPACT_404 || models == MODEL_COMPACT_403) {
@@ -1034,21 +1123,24 @@ test_count_modes(void)
         enum snag_token_count_mode mode;
         int result;
         enum snag_count_capability capability;
-        bool openrouter;
+        bool openrouter, images;
     } cases[] = {
         {MODEL_COUNT_405, SNAG_TOKEN_COUNT_AUTO,
-         SNAG_APP_COUNT_SKIPPED, SNAG_COUNT_UNSUPPORTED, false},
-        {MODEL_COUNT_405, SNAG_TOKEN_COUNT_STRICT, -1, SNAG_COUNT_UNSUPPORTED, false},
-        {MODEL_COUNT_404, SNAG_TOKEN_COUNT_AUTO, SNAG_APP_COUNT_SKIPPED, SNAG_COUNT_UNSUPPORTED, false},
+         SNAG_APP_COUNT_SKIPPED, SNAG_COUNT_UNSUPPORTED, false, false},
+        {MODEL_COUNT_405, SNAG_TOKEN_COUNT_STRICT, -1, SNAG_COUNT_UNSUPPORTED, false, false},
+        {MODEL_COUNT_404, SNAG_TOKEN_COUNT_AUTO, SNAG_APP_COUNT_SKIPPED, SNAG_COUNT_UNSUPPORTED, false, false},
         {MODEL_COUNT_404, SNAG_TOKEN_COUNT_AUTO,
-         SNAG_APP_COUNT_SKIPPED, SNAG_COUNT_UNSUPPORTED, true},
-        {MODEL_COUNT_404, SNAG_TOKEN_COUNT_STRICT, -1, SNAG_COUNT_UNSUPPORTED, true},
-        {MODEL_COUNT_401, SNAG_TOKEN_COUNT_AUTO, -1, SNAG_COUNT_UNKNOWN, true},
-        {MODEL_COUNT_403, SNAG_TOKEN_COUNT_AUTO, -1, SNAG_COUNT_UNKNOWN, true},
-        {MODEL_COUNT_MODEL_404, SNAG_TOKEN_COUNT_AUTO, -1, SNAG_COUNT_UNKNOWN, false},
-        {MODEL_COUNT_OVERFLOW, SNAG_TOKEN_COUNT_AUTO, SNAG_PROVIDER_CONTEXT_OVERFLOW, SNAG_COUNT_UNKNOWN, false},
-        {MODEL_COUNT_OK, SNAG_TOKEN_COUNT_AUTO, 0, SNAG_COUNT_SUPPORTED, false},
-        {MODEL_COUNT_OK, SNAG_TOKEN_COUNT_STRICT, 0, SNAG_COUNT_SUPPORTED, false}
+         SNAG_APP_COUNT_SKIPPED, SNAG_COUNT_UNSUPPORTED, true, false},
+        {MODEL_COUNT_404, SNAG_TOKEN_COUNT_STRICT, -1, SNAG_COUNT_UNSUPPORTED, true, false},
+        {MODEL_COUNT_401, SNAG_TOKEN_COUNT_AUTO, -1, SNAG_COUNT_UNKNOWN, true, false},
+        {MODEL_COUNT_403, SNAG_TOKEN_COUNT_AUTO, -1, SNAG_COUNT_UNKNOWN, true, false},
+        {MODEL_COUNT_MODEL_404, SNAG_TOKEN_COUNT_AUTO, -1, SNAG_COUNT_UNKNOWN, false, false},
+        {MODEL_COUNT_OVERFLOW, SNAG_TOKEN_COUNT_AUTO, SNAG_PROVIDER_CONTEXT_OVERFLOW, SNAG_COUNT_UNKNOWN, false, false},
+        {MODEL_COUNT_OK, SNAG_TOKEN_COUNT_AUTO, 0, SNAG_COUNT_SUPPORTED, false, false},
+        {MODEL_COUNT_OK, SNAG_TOKEN_COUNT_STRICT, 0, SNAG_COUNT_SUPPORTED, false, false},
+        {MODEL_COUNT_405, SNAG_TOKEN_COUNT_AUTO, SNAG_APP_COUNT_SKIPPED, SNAG_COUNT_UNSUPPORTED, false, true},
+        {MODEL_COUNT_405, SNAG_TOKEN_COUNT_STRICT, -1, SNAG_COUNT_UNSUPPORTED, false, true},
+        {MODEL_COUNT_401, SNAG_TOKEN_COUNT_AUTO, -1, SNAG_COUNT_UNKNOWN, false, true}
     };
 
     assert(!snag_app_exact_count_enabled(SNAG_TOKEN_COUNT_OFF,
@@ -1070,14 +1162,30 @@ test_count_modes(void)
             "anchored_upper_bound" : "unknown";
         uint64_t tokens = 99u;
         char error[256] = {0};
-        char temp[] = "/tmp/snajpagent-count-mode-XXXXXX";
+        char temp[4096];
         int rc;
 
+        assert(snprintf(temp, sizeof(temp), "%s/snajpagent-count-mode-XXXXXX",
+            getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp") > 0);
         assert(mkdtemp(temp));
-        start_server(&server, cases[i].fixture, false, "/v1");
-        (void)transport_connection(&config, &credential,
-            cases[i].openrouter ? "https://openrouter.ai/api/v1" : server.endpoint);
-        assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
+        start_server(&server, cases[i].fixture, false);
+        assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u/v1",
+                        (unsigned int)server.port) > 0);
+        snag_config_init(&config);
+        assert(snprintf(config.providers[0].base_url,
+                        sizeof(config.providers[0].base_url), "%s",
+                        cases[i].images ? "https://api.openai.com" :
+                        cases[i].openrouter ? "https://openrouter.ai/api/v1" : endpoint) > 0);
+        assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
+        assert(snprintf(config.providers[0].openrouter_referer,
+                        sizeof(config.providers[0].openrouter_referer), "%s",
+                        "https://github.com/snajpa/snajpagent") > 0);
+        assert(snprintf(config.providers[0].openrouter_title,
+                        sizeof(config.providers[0].openrouter_title), "%s",
+                        "snajpagent") > 0);
+        config.providers[0].connect_timeout_ms = 1000u;
+        config.providers[0].idle_timeout_ms = 1000u;
+        config.providers[0].request_timeout_ms = 3000u;
         config.providers[0].exact_token_count = cases[i].mode;
         memset(&app, 0, sizeof(app));
         snag_store_init(&app.store);
@@ -1087,14 +1195,22 @@ test_count_modes(void)
         app.config = &config;
         app.turn_provider = &config.providers[0];
         app.turn_model = "gpt-transport-test";
+        uint64_t expected = tokens;
+        if (cases[i].images) {
+            app.turn_model = "gpt-5.5";
+            assert(json_object_set_new(request, "model", json_string("gpt-5.5")) == 0);
+            json_t *item = json_pack("{s:s,s:[{s:s,s:s,s:s}]}", "role", "user", "content",
+                "type", "input_image", "detail", "high", "image_url", "data:image/png;base64,YWJj");
+            assert(json_array_append_new(json_object_get(request, "input"), item) == 0);
+            assert(snag_media_token_bound(request, app.turn_provider, &expected, error, sizeof(error)) == 0);
+        }
         rc = snag_app_provider_count(&app, request, &credential,
                                     &tokens, &method, error, sizeof(error));
         assert((cases[i].result < 0 && rc < 0) || rc == cases[i].result);
         assert(app.turn_capacity.count_capability == cases[i].capability);
-        if (cases[i].fixture == MODEL_COUNT_OK)
-            assert(tokens == 42u && !strcmp(method, "exact"));
-        else
-            assert(tokens == 99u);
+        if (cases[i].images && rc == SNAG_APP_COUNT_SKIPPED)
+            assert(tokens == expected && !strcmp(method, "media_upper_bound"));
+        else assert(tokens == 99u && strcmp(method, "qualified_upper_bound") == 0);
         assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
         snag_ui_free(&app.ui);
         snag_model_cache_free(&app.model_cache);
@@ -1187,7 +1303,7 @@ test_read_only_dispatch(void)
     static const char *const denied[] = {
         "exec_command", "write_stdin", "apply_patch", "create_goal",
         "update_goal", "irc_send", "irc_topic", "irc_state", "unknown",
-        "web_search", "openrouter:web_search"
+        "web_search", "openrouter:web_search", "speak_text"
     };
     struct app_state app = {0};
     struct snag_response_item call = {0};
@@ -1212,6 +1328,131 @@ test_read_only_dispatch(void)
     assert(strstr(snag_json_string(result, "model_text"), "only in /ro"));
     json_decref(result);
     json_decref(call.arguments);
+}
+
+static void
+test_media_count_fallback(void)
+{
+    struct snag_config config;
+    struct app_state app = {0};
+    struct snag_credential credential;
+    snag_config_init(&config); app.config = &config;
+    app.turn_provider = &config.providers[0]; app.turn_model = "gpt-5.5";
+    snag_credential_clear(&credential);
+    assert(snag_ui_init(&app.ui) == 0);
+    json_t *part = json_pack("{s:s,s:s,s:s}", "type", "input_image", "detail", "high",
+        "image_url", "data:image/png;base64,YWJj");
+    json_t *request = json_pack("{s:s,s:[{s:s,s:[O]}]}", "model", "gpt-5.5", "input", "role", "user", "content", part);
+    uint64_t tokens = 0, expected = 0;
+    const char *method = "qualified_upper_bound";
+    char error[256] = {0};
+    assert(snag_media_token_bound(request, app.turn_provider, &expected, error, sizeof(error)) == 0);
+    config.providers[0].exact_token_count = SNAG_TOKEN_COUNT_OFF;
+    assert(snag_app_provider_count(&app, request, &credential, 100u, &tokens, &method, error, sizeof(error)) == SNAG_APP_COUNT_SKIPPED);
+    assert(tokens == expected && !strcmp(method, "media_upper_bound"));
+    config.providers[0].exact_token_count = SNAG_TOKEN_COUNT_AUTO;
+    app.turn_capacity.count_capability = SNAG_COUNT_UNSUPPORTED;
+    assert(snag_app_provider_count(&app, request, &credential, 100u, &tokens, &method, error, sizeof(error)) == SNAG_APP_COUNT_SKIPPED);
+    /* Compressed payload length changes neither vision budget nor textual count. */
+    assert(json_object_set_new(part, "image_url", json_string("data:image/png;base64,YWJjYWJjYWJjYWJj")) == 0);
+    assert(snag_app_provider_count(&app, request, &credential, 100u, &tokens, &method, error, sizeof(error)) == SNAG_APP_COUNT_SKIPPED && tokens == expected);
+    assert(json_object_set_new(part, "detail", json_string("original")) == 0);
+    assert(snag_app_provider_count(&app, request, &credential, 100u, &tokens, &method, error, sizeof(error)) < 0);
+    assert(json_object_set_new(part, "detail", json_string("high")) == 0);
+    assert(json_object_set_new(request, "model", json_string("unknown")) == 0);
+    assert(snag_app_provider_count(&app, request, &credential, 100u, &tokens, &method, error, sizeof(error)) < 0);
+    json_decref(part); json_decref(request);
+    snag_ui_free(&app.ui); snag_config_free(&config);
+}
+
+static void
+test_local_audio_admission(void)
+{
+    struct app_state app = {0};
+    struct snag_config config;
+    bool handled = false;
+    snag_config_init(&config); app.config = &config;
+    assert(snag_ui_init(&app.ui) == 0);
+    assert(snag_app_voice_command(&app, "/voice on", &handled) == 0 && handled && !app.voice);
+    assert(snag_app_audio_command(&app, "/dictate", &handled) == 0 && handled && !app.audio);
+    config.providers[0].auth = SNAG_AUTH_API_KEY;
+    strcpy(config.audio.provider, config.providers[0].name);
+    strcpy(config.audio.transcribe_model, "fixture");
+    /* UI not opened: must reject before calling a device backend. */
+    assert(snag_app_audio_command(&app, "/dictate", &handled) == 0 && handled && !app.audio);
+    assert(snag_app_audio_command(&app, "/play /unaccepted.wav", &handled) == 0 && handled && !app.audio);
+    assert(snag_app_audio_command(&app, "/play stop", &handled) == 0 && handled && !app.audio);
+    assert(snag_app_audio_command(&app, "/other", &handled) == 0 && !handled);
+    strcpy(config.audio.realtime_model, "fixture-realtime");
+    strcpy(config.audio.voice, "fixture-voice");
+    assert(snag_app_voice_command(&app, "/voice on", &handled) == 0 && handled && !app.voice);
+    assert(snag_app_voice_command(&app, "/voice off", &handled) == 0 && handled && !app.voice);
+    assert(snag_app_voice_command(&app, "/voice mute", &handled) == 0 && handled && !app.voice);
+    assert(snag_app_voice_command(&app, "/other", &handled) == 0 && !handled);
+    assert(snag_ui_insert_draft(&app.ui, "UI still works") == 0);
+    snag_app_audio_close(&app); snag_ui_free(&app.ui); snag_config_free(&config);
+}
+
+static int voice_close_record(void *opaque,const struct snag_session *state,uint64_t seq,const char *type,const json_t *data,char *error,size_t size)
+{
+    (void)state;(void)seq;(void)error;(void)size;
+    if(strcmp(type,"voice_event"))return 0;
+    unsigned int *counts=opaque;
+    const char *kind=snag_json_string(json_object_get(data,"event"),"type");
+    if(!strcmp(kind,"voice_transcript"))++counts[0];
+    else if(!strcmp(kind,"voice_stopped"))++counts[1];
+    else assert(false);
+    return 0;
+}
+
+static void test_voice_close(void)
+{
+    char path[4096],error[256],id[33];const char *tmp=getenv("TMPDIR");
+    assert(snprintf(path,sizeof(path),"%s/snajpagent-voice-close-XXXXXX",tmp?tmp:"/tmp")>0);
+    assert(mkdtemp(path));
+    struct app_state app={0};
+    struct snag_config config;snag_config_init(&config);app.config=&config;
+    snag_store_init(&app.store);snag_session_init(&app.session);
+    assert(snag_store_open(&app.store,path,error,sizeof(error))==0);
+    assert(snag_ui_init(&app.ui)==0);
+    for(unsigned int mode=0;mode<3u;++mode) {
+        assert(snag_session_create(&app.store,&app.session,path,"default","fixture","medium",error,sizeof(error))==0);
+        strcpy(id,app.session.id);
+        json_t *events=json_pack("[{s:s},{s:s,s:s,s:s,s:s},{s:s},{s:s},{s:s}]",
+            "type","voice_ready","type","voice_transcript","speaker","user","item_id","input-1","text","final words",
+            "type","voice_handoff","type","voice_buffering","type","voice_expiring");
+        assert(events && snag_app_voice_fixture(&app,events,mode!=0u)==0);json_decref(events);
+        if(!mode)snag_app_voice_close(&app);
+        else if(mode==1u) {
+            bool handled=false;assert(snag_app_voice_command(&app,"/voice off",&handled)==0 && handled);
+        } else assert(snag_app_voice_service(&app)==0);
+        assert(!app.voice && !app.session.pending_queue_count);
+        snag_session_close(&app.session);snag_session_init(&app.session);
+        assert(snag_session_open(&app.store,&app.session,id,error,sizeof(error))==0);
+        unsigned int counts[2]={0};
+        assert(snag_session_each_event(&app.session,voice_close_record,counts,error,sizeof(error))==0);
+        assert(counts[0]==1u && counts[1]==1u && !app.session.pending_queue_count);
+        snag_app_voice_close(&app); /* Repeated close cannot append another stop. */
+        snag_session_close(&app.session);snag_session_init(&app.session);
+    }
+    snag_ui_free(&app.ui);snag_store_close(&app.store);snag_config_free(&config);
+}
+
+static void test_voice_owner_mute(void)
+{
+    struct app_state app={0};
+    assert(snag_app_voice_fixture(&app,NULL,false)==0);
+    assert(snag_app_voice_fixture_mute(&app)==0);
+    /* The close fixture separately tests durable notice draining. This owner
+     * fixture needs a real private session for that same close path. */
+    char path[4096],error[256];const char *tmp=getenv("TMPDIR");
+    assert(snprintf(path,sizeof(path),"%s/snajpagent-voice-mute-XXXXXX",tmp?tmp:"/tmp")>0 && mkdtemp(path));
+    struct snag_config config;snag_config_init(&config);app.config=&config;
+    snag_store_init(&app.store);snag_session_init(&app.session);assert(snag_ui_init(&app.ui)==0);
+    assert(snag_store_open(&app.store,path,error,sizeof(error))==0);
+    assert(snag_session_create(&app.store,&app.session,path,"default","fixture","medium",error,sizeof(error))==0);
+    snag_app_voice_close(&app);snag_session_close(&app.session);snag_store_close(&app.store);
+    snag_ui_free(&app.ui);snag_config_free(&config);
 }
 
 static void
@@ -1242,6 +1483,11 @@ test_ui_output_order_and_failure(void)
     }
     assert(close(pipefd[0]) == 0);
     assert(snag_ui_init(&ui) == 0);
+    /* Capture may not start without an interactive raw prompt; rejection and
+     * invalid transcript insertion must not poison the presentation owner. */
+    assert(snag_ui_audio(&ui, "[mic] ", true) == 1);
+    assert(snag_ui_insert_draft(&ui, "\xff") == 1);
+    assert(snag_ui_insert_draft(&ui, "kept draft") == 0);
     for (unsigned int i = 0u; i < 128u; ++i) {
         memset(text, (int)i, sizeof(text));
         assert(snag_ui_send(&ui, (struct snag_ui_command){
@@ -1497,11 +1743,711 @@ test_irc_failed_intent_retains_pending(void)
     snag_session_close(&app.session);
 }
 
+static int
+audio_cancel(void *opaque, unsigned int wait_ms)
+{
+    (void)opaque; (void)wait_ms; return 2;
+}
+
+struct video_audio_fixture {
+    struct snag_session *session;
+    const struct snag_config *config;
+    int root_fd;
+    const char *original;
+    unsigned int calls;
+    char source[SNAG_ID_HEX_LEN + 1u];
+};
+
+static int
+fixture_video_transcribe(void *opaque, const json_t *source, uint64_t start, uint64_t end, json_t **result)
+{
+    struct video_audio_fixture *fixture = opaque;
+    assert(start == 0u && end == 1u && ++fixture->calls == 1u);
+    strcpy(fixture->source, snag_json_string(source, "id"));
+    /* The source snapshot serves both operations after the original is gone. */
+    assert(unlink(fixture->original) == 0);
+    return snag_tools_transcribe_asset(fixture->session, source, start, end, fixture->root_fd,
+        fixture->config, NULL, NULL, SNAG_WAKE_INVALID, result);
+}
+
+static void
+test_audio_transport(void)
+{
+    struct snag_config config;
+    struct snag_credential credential;
+    struct snag_buf wav, out;
+    struct local_server server;
+    char endpoint[128], error[256];
+    make_fixture_wav();
+    snag_config_init(&config);
+    config.providers[0].auth = SNAG_AUTH_API_KEY;
+    config.providers[0].request_timeout_ms = 1500u;
+    strcpy(config.providers[0].base_url, "https://openrouter.ai/api/v1");
+    strcpy(config.providers[0].openrouter_referer, "https://github.com/snajpa/snajpagent");
+    strcpy(config.providers[0].openrouter_title, "snajpagent");
+    credential_set(&credential, "transport-secret");
+    snag_buf_init(&wav, 2048u); snag_buf_init(&out, 4096u);
+    assert(snag_buf_append(&wav, fixture_wav, sizeof(fixture_wav)) == 0);
+    json_t *request = json_pack("{s:s,s:s,s:s,s:s}", "model", "audio-fixture",
+        "response_format", "wav", "voice", "alloy", "input", "fixture text");
+    assert(json_object_set_new(request, "question", json_string("What sounds?")) == 0);
+    for (int mode = MODEL_AUDIO_LISTEN; mode <= MODEL_AUDIO_FAILURE; ++mode) {
+        enum snag_audio_operation op = mode == MODEL_AUDIO_TRANSCRIBE ? SNAG_AUDIO_TRANSCRIBE :
+            mode == MODEL_AUDIO_SPEAK ? SNAG_AUDIO_SPEAK : SNAG_AUDIO_LISTEN;
+        start_server(&server, (enum model_fixture)mode, false);
+        snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u/v1", server.port);
+        assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
+        snag_buf_reset(&out);
+        assert(snag_buf_append(&out, "kept:", 5u) == 0);
+        int rc = snag_provider_audio(op, request, &wav, &config, &config.providers[0],
+            &credential, NULL, NULL, &out, error, sizeof(error));
+        if (mode == MODEL_AUDIO_FAILURE) {
+            assert(rc < 0 && out.len == 5u && strstr(error, "HTTP 503") && strstr(error, "not retried"));
+            assert(!strstr(error, "private audio"));
+        } else {
+            assert(rc == 0 && out.len > 5u);
+            if (mode == MODEL_AUDIO_SPEAK) assert(out.len == 5u + wav.len && !memcmp(out.data + 5u, wav.data, wav.len));
+        }
+        stop_server(&server);
+    }
+    /* Callback cancellation is before transport; no server/device necessary. */
+    size_t kept = out.len;
+    assert(snag_provider_audio(SNAG_AUDIO_LISTEN, request, &wav, &config, &config.providers[0],
+        &credential, audio_cancel, NULL, &out, error, sizeof(error)) == 2 && out.len == kept);
+    config.providers[0].auth = SNAG_AUTH_CHATGPT;
+    assert(snag_provider_audio(SNAG_AUDIO_LISTEN, request, &wav, &config, &config.providers[0],
+        &credential, NULL, NULL, &out, error, sizeof(error)) < 0 && out.len == kept);
+    config.providers[0].auth = SNAG_AUTH_API_KEY;
+    /* Cross curl's upload-buffer boundary, exercise every base64 remainder,
+     * and verify escaped question metadata without materialized base64 input. */
+    struct snag_buf large;
+    snag_buf_init(&large, 24000u);
+    for (size_t i = 0; i < 20003u; ++i) assert(snag_buf_putc(&large, (unsigned char)i) == 0);
+    assert(json_object_set_new(request, "question", json_string("What \"sounds\"?\n\\details")) == 0);
+    for (size_t n = 20001u; n <= 20003u; ++n) {
+        large.len = n; audio_expected = large.data; audio_expected_len = n;
+        start_server(&server, MODEL_AUDIO_LISTEN, false);
+        snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u/v1", server.port);
+        assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
+        snag_buf_reset(&out);
+        assert(snag_provider_audio(SNAG_AUDIO_LISTEN, request, &large, &config, &config.providers[0],
+            &credential, NULL, NULL, &out, error, sizeof(error)) == 0);
+        stop_server(&server);
+    }
+    audio_expected = fixture_wav; audio_expected_len = sizeof(fixture_wav);
+    snag_buf_free(&large);
+    if (getenv("SNAJPAGENT_TEST_MEDIA")) {
+        struct snag_store store;
+        struct snag_session session;
+        char *temp = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", "snag-audio-XXXXXX");
+        assert(temp && mkdtemp(temp));
+        snag_store_init(&store); snag_session_init(&session);
+        assert(snag_store_open(&store, temp, error, sizeof(error)) == 0);
+        assert(snag_session_create(&store, &session, temp, "default", "audio-fixture", "medium", error, sizeof(error)) == 0);
+        char *file = snag_path_join(temp, "fixture audio.wav");
+        int fd = open(file, O_WRONLY | O_CREAT | O_EXCL, 0600);
+        assert(fd >= 0 && write(fd, fixture_wav, sizeof(fixture_wav)) == (ssize_t)sizeof(fixture_wav) && close(fd) == 0);
+        struct snag_buf decoded;
+        snag_buf_init(&decoded, 96004u);
+        assert(snag_buf_append(&decoded, "kept", 4u) == 0);
+        assert(snag_av_pcm(file, 0u, 1u, &decoded, audio_cancel, NULL, error, sizeof(error)) == 2 && decoded.len == 4u);
+        assert(snag_av_pcm(file, 1u, 0u, &decoded, NULL, NULL, error, sizeof(error)) < 0 && decoded.len == 4u);
+        char *resample_path = snag_path_join(temp, "stereo48.wav");
+        FILE *pcm_file = fopen(resample_path, "wb");
+        unsigned char header48[44]; memcpy(header48, fixture_wav, sizeof(header48));
+        const uint32_t values[] = {384036u, 48000u, 192000u, 384000u};
+        const size_t offsets[] = {4u, 24u, 28u, 40u};
+        for (size_t k = 0; k < 4u; ++k)
+            for (size_t b = 0; b < 4u; ++b) header48[offsets[k] + b] = (unsigned char)(values[k] >> (b * 8u));
+        assert(pcm_file && fwrite(header48, 1u, sizeof(header48), pcm_file) == sizeof(header48));
+        for (size_t i = 0; i < 96000u; ++i) {
+            uint16_t left = i < 48000u ? 1000u : 2000u, right = (uint16_t)(0u - left);
+            unsigned char pair[] = {(unsigned char)left, (unsigned char)(left >> 8),
+                                    (unsigned char)right, (unsigned char)(right >> 8)};
+            assert(fwrite(pair, 1u, 4u, pcm_file) == 4u);
+        }
+        assert(fclose(pcm_file) == 0);
+        assert(snag_av_pcm(resample_path, 1u, 2u, &decoded, NULL, NULL, error, sizeof(error)) == 0);
+        assert(decoded.len == 96004u && !memcmp(decoded.data, "kept", 4u));
+        assert(decoded.data[48004] == 0xd0 && decoded.data[48005] == 0x07 &&
+               decoded.data[48006] == 0x30 && decoded.data[48007] == 0xf8);
+        snag_buf_reset(&decoded); assert(snag_buf_append(&decoded, "kept", 4u) == 0);
+        decoded.max = 20u;
+        assert(snag_av_pcm(file, 0u, 1u, &decoded, NULL, NULL, error, sizeof(error)) < 0 && decoded.len == 4u);
+        struct snag_av_audio *reader = NULL;
+        assert(snag_av_audio_open(resample_path, 1u, 2u, NULL, NULL, &reader, error, sizeof(error)) == 0);
+        assert(unlink(resample_path) == 0); /* Open decoder retains its descriptor. */
+        uint32_t frames = 0, total = 0, chunks = 0;
+        int16_t samples[16384];
+        do {
+            assert(snag_av_audio_read(reader, samples, &frames, error, sizeof(error)) == 0);
+            assert(frames <= 8192u);
+            total += frames; ++chunks;
+        } while (frames);
+        assert(total == 24000u && chunks > 2u);
+        assert(snag_av_audio_read(reader, samples, &frames, error, sizeof(error)) == 0 && !frames);
+        snag_av_audio_close(reader);
+        free(resample_path); snag_buf_free(&decoded);
+        strcpy(config.audio.provider, config.providers[0].name);
+        strcpy(config.audio.listen_model, "audio-fixture"); strcpy(config.audio.transcribe_model, "audio-fixture");
+        strcpy(config.audio.speech_model, "audio-fixture"); strcpy(config.audio.voice, "alloy");
+        assert(snag_secret_source_parse(&config.providers[0].api_key, "\"transport-secret\"", NULL, error, sizeof(error)) == 0);
+        const char *names[] = {"listen_audio", "transcribe_audio", "speak_text"};
+        /* The real graph and context surface must accept every declared tool. */
+        struct app_state app = {.config = &config, .session = session,
+            .turn_model = "audio-fixture", .turn_effort = "medium",
+            .turn_provider = &config.providers[0]};
+        json_t *started = snag_app_turn_started_data(&app, "Inspect fixture sound",
+            "01010101010101010101010101010101", NULL, false, false, NULL);
+        assert(started && snag_session_commit(&session, "turn_started", started,
+            NULL, error, sizeof(error)) == 0);
+        struct snag_context_projection projection;
+        snag_context_projection_init(&projection);
+        json_t *steering = json_array();
+        assert(snag_context_build(&session, "audio-fixture", "medium", 1u, steering, 2048u, true,
+            &config, NULL, &projection, error, sizeof(error)) == 0);
+        json_t *tools = json_object_get(projection.create_request, "tools");
+        for (size_t i = 0; i < 3u; ++i) {
+            bool declared = false;
+            for (size_t j = 0; j < json_array_size(tools); ++j) {
+                const char *name = snag_json_string(json_array_get(tools, j), "name");
+                if (name && !strcmp(name, names[i])) declared = true;
+            }
+            assert(declared);
+        }
+        snag_context_projection_free(&projection); json_decref(steering);
+        for (int mode = MODEL_AUDIO_LISTEN; mode <= MODEL_AUDIO_SPEAK; ++mode) {
+            start_server(&server, (enum model_fixture)mode, false);
+            snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u/v1", server.port);
+            assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
+            struct snag_response_item call = {.name = (char *)names[mode - MODEL_AUDIO_LISTEN]};
+            call.arguments = mode == MODEL_AUDIO_SPEAK ? json_pack("{s:s}", "text", "fixture text") :
+                json_pack("{s:s,s:i,s:i}", "path", file, "start_s", 0, "end_s", 1);
+            if (mode == MODEL_AUDIO_LISTEN) assert(json_object_set_new(call.arguments, "question", json_string("What sounds?")) == 0);
+            struct snag_response_graph graph;
+            snag_response_graph_init(&graph);
+            assert(snag_response_graph_add_call(&graph, "audio-item", "audio-call", call.name,
+                json_incref(call.arguments)) == 0);
+            snag_response_graph_free(&graph);
+            json_t *result = NULL;
+            assert(snag_tools_audio(&call, &session, store.root_fd, &config, NULL, NULL, SNAG_WAKE_INVALID, &result) == 0);
+            if (strcmp(snag_json_string(result, "status"), "succeeded")) fprintf(stderr, "audio: %s\n", snag_json_string(result, "model_text"));
+            assert(!strcmp(snag_json_string(result, "status"), "succeeded") && snag_tool_result_valid(result) == 0);
+            assert(strstr(snag_json_string(result, "model_text"), "audio-fixture"));
+            json_t *parts = json_object_get(result, "content");
+            assert(json_array_size(parts) == (mode == MODEL_AUDIO_SPEAK ? 1u : 5u));
+            if (mode != MODEL_AUDIO_SPEAK) {
+                assert(strstr(snag_json_string(json_array_get(parts, 3u), "text"), "Auxiliary audio API usage"));
+                const char *reported = snag_json_string(json_array_get(parts, 4u), "text");
+                assert(reported && strstr(reported, mode == MODEL_AUDIO_LISTEN ? "total_tokens" : "seconds"));
+            }
+            json_decref(result); json_decref(call.arguments);
+            stop_server(&server);
+        }
+        char *video = snag_path_join(temp, "sound.mkv");
+        const char *args[] = {"ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i",
+            "color=red:s=64x64:r=4:d=1", "-i", file, "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "mpeg4", "-c:a", "copy", "-threads", "1", video, NULL};
+        snag_buf_reset(&out);
+        assert(snag_convert(args, temp, &out, NULL, NULL, SNAG_WAKE_INVALID, error, sizeof(error)) == 0);
+        struct snag_response_item call = {.kind = SNAG_ITEM_TOOL_CALL, .name = "view_video"};
+        call.arguments = json_pack("{s:s,s:i,s:i,s:i}", "path", video, "start_s", 0, "end_s", 1, "frames", 2);
+        struct video_audio_fixture fixture = {.session = &session, .config = &config,
+            .root_fd = store.root_fd, .original = video};
+        start_server(&server, MODEL_AUDIO_TRANSCRIBE, false);
+        snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u/v1", server.port);
+        assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
+        json_t *result = NULL;
+        assert(snag_tools_video(&call, &session, NULL, &fixture, SNAG_WAKE_INVALID,
+            fixture_video_transcribe, &result) == 0);
+        if (strcmp(snag_json_string(result, "status"), "succeeded")) fprintf(stderr, "video audio: %s\n", snag_json_string(result, "model_text"));
+        assert(!strcmp(snag_json_string(result, "status"), "succeeded") && snag_tool_result_valid(result) == 0);
+        json_t *parts = json_object_get(result, "content");
+        assert(fixture.calls == 1u && !strcmp(fixture.source,
+            snag_json_string(json_object_get(json_array_get(parts, 0u), "asset"), "id")));
+        bool transcript_seen = false;
+        for (size_t i = 0; i < json_array_size(parts); ++i) {
+            const char *text = snag_json_string(json_array_get(parts, i), "text");
+            if (text && !strcmp(text, "fixture transcript")) transcript_seen = true;
+        }
+        assert(transcript_seen);
+        json_decref(result); json_decref(call.arguments); free(video); stop_server(&server);
+        assert(unlink(file) == 0); free(file);
+        snag_session_close(&session); snag_store_close(&store); free(temp);
+    }
+    assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
+    json_decref(request); snag_buf_free(&out); snag_buf_free(&wav); snag_config_free(&config);
+}
+
+/* Small RFC 6455 wire fixture only; production framing belongs to libcurl. */
+static void
+ws_read_full(int fd,void *data,size_t length)
+{
+    unsigned char *p=data;
+    while(length) {
+        ssize_t n=read(fd,p,length);
+        if(n<0 && errno==EINTR)continue;
+        if(n<=0)server_fail("WebSocket fixture read failed");
+        p+=n;length-=(size_t)n;
+    }
+}
+
+static unsigned int
+ws_read_client(int fd,size_t expected,unsigned char byte)
+{
+    unsigned char h[2],mask[4],extended[8],buffer[4096];
+    ws_read_full(fd,h,2u);
+    if(!(h[0]&0x80u) || !(h[1]&0x80u))server_fail("WebSocket fixture expected final masked frame");
+    uint64_t length=h[1]&127u;
+    if(length>=126u) {
+        size_t n=length==126u?2u:8u;length=0;
+        ws_read_full(fd,extended,n);
+        for(size_t i=0;i<n;++i)length=(length<<8u)|extended[i];
+    }
+    if(length!=expected)server_fail("WebSocket fixture payload length mismatch");
+    ws_read_full(fd,mask,4u);
+    for(size_t offset=0;offset<expected;) {
+        size_t n=expected-offset;if(n>sizeof(buffer))n=sizeof(buffer);
+        ws_read_full(fd,buffer,n);
+        for(size_t i=0;i<n;++i)
+            if((buffer[i]^mask[(offset+i)%4u])!=byte)server_fail("WebSocket fixture duplicated or changed payload");
+        offset+=n;
+    }
+    return h[0]&15u;
+}
+
+static void
+ws_server(unsigned int mode,int listen_fd)
+{
+    alarm(15u);
+    int fd=accept(listen_fd,NULL,NULL);if(fd<0)server_fail("WebSocket fixture accept failed");
+    struct http_request request;read_request(fd,&request);
+    if(strcmp(request.method,"GET") || strcmp(request.path,"/v1/realtime?model=fixture%20voice") ||
+        !header_contains(request.headers,"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ=="))
+        server_fail("WebSocket handshake URL/nonce mismatch");
+    if(mode==4u) {
+        send_status(fd,401u,"{\"error\":\"private denied body\"}");close(fd);_Exit(0);
+    }
+    if(mode==5u) {while(read(fd,&mode,1u)>0){}close(fd);_Exit(0);}
+    const char *upgrade="HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"
+        "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n";
+    write_all_or_die(fd,upgrade,strlen(upgrade));
+    if(mode) {
+        const char *frame=mode==1u?"\202\001x":mode==2u?"\201\176\020\000x":"\201\002\377\377";
+        write_all_or_die(fd,frame,mode==1u?3u:mode==2u?5u:4u);
+        char discard;while(read(fd,&discard,1u)>0){}close(fd);_Exit(0);
+    }
+    if(ws_read_client(fd,4u*1024u*1024u,'q')!=1u)server_fail("Expected one complete client text message");
+    /* Fragmented text, interleaved ping, and a UTF-8 sequence across fragments. */
+    const unsigned char frames[]={0x01,2,'A',0xe2,0x89,1,'p',0x80,3,0x82,0xac,'B'};
+    for(size_t i=0;i<sizeof(frames);++i)write_all_or_die(fd,(const char *)frames+i,1u);
+    if(ws_read_client(fd,1u,'p')!=10u)server_fail("WebSocket automatic pong missing");
+    const unsigned char large[]={0x81,126,0x80,1};
+    write_all_or_die(fd,(const char *)large,sizeof(large));
+    char block[4096];memset(block,'x',sizeof(block));
+    for(size_t left=32769u;left;) {
+        size_t n=left>sizeof(block)?sizeof(block):left;
+        write_all_or_die(fd,block,n);left-=n;
+    }
+    write_all_or_die(fd,"\210\002\003\350",4u);
+    char discard;while(read(fd,&discard,1u)>0){}close(fd);_Exit(0);
+}
+
+static int
+ws_cancel(void *opaque,unsigned int timeout)
+{
+    (void)timeout;
+    return snag_monotonic_ms()>=*(uint64_t *)opaque?2:0;
+}
+
+static void
+test_voice_socket(void)
+{
+    struct snag_provider_config provider;struct snag_credential credential;
+    snag_config_provider_init(&provider,"default");snag_credential_clear(&credential);
+    provider.auth=SNAG_AUTH_API_KEY;provider.connect_timeout_ms=2000u;
+    strcpy(provider.openrouter_referer,"https://github.com/snajpa/snajpagent");
+    strcpy(provider.openrouter_title,"snajpagent");
+    strcpy(credential.value,"transport-secret");credential.len=strlen(credential.value);
+    struct snag_voice_socket *voice=NULL;char error[256];
+    strcpy(provider.base_url,"http://remote.invalid");
+    assert(snag_provider_voice_open(&provider,&credential,"fixture",NULL,NULL,&voice,error,sizeof(error))<0 && !voice);
+    for(unsigned int mode=0;mode<6u;++mode) {
+        fprintf(stderr,"WebSocket fixture mode %u\n",mode);
+        struct local_server server;
+        struct sockaddr_in address; socklen_t address_size=sizeof(address);
+        memset(&server,0,sizeof(server));memset(&address,0,sizeof(address));
+        server.fd=socket(AF_INET,SOCK_STREAM,0);assert(server.fd>=0);
+        address.sin_family=AF_INET;address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+        assert(bind(server.fd,(struct sockaddr *)&address,sizeof(address))==0 && listen(server.fd,1)==0);
+        assert(getsockname(server.fd,(struct sockaddr *)&address,&address_size)==0);
+        server.port=ntohs(address.sin_port);
+        server.pid=fork();assert(server.pid>=0);
+        if(!server.pid)ws_server(mode,server.fd);
+        close(server.fd);server.fd=-1;
+        snprintf(provider.base_url,sizeof(provider.base_url),"http://127.0.0.1:%u/v1/",server.port);
+        uint64_t deadline=snag_monotonic_ms()+200u;
+        int rc=snag_provider_voice_open(&provider,&credential,"fixture voice",mode==5u?ws_cancel:NULL,
+            &deadline,&voice,error,sizeof(error));
+        if(mode>=4u) {
+            assert(rc==(mode==5u?2:-1) && !voice);
+            if(mode==4u)assert(strstr(error,"401") && !strstr(error,"private denied body"));
+            stop_server(&server);continue;
+        }
+        if(rc)fprintf(stderr,"WebSocket fixture: %s\n",error);
+        assert(rc==0 && voice);
+        struct snag_buf received;snag_buf_init(&received,mode?64u:65536u);
+        deadline=snag_monotonic_ms()+10000u;
+        if(!mode) {
+            size_t length=4u*1024u*1024u,offset=0u;char *payload=malloc(length);assert(payload);
+            memset(payload,'q',length);
+            while(offset<length) {
+                assert(snag_monotonic_ms()<deadline);
+                assert(snag_provider_voice_send(voice,payload,length,&offset,error,sizeof(error))==0);
+                if(offset<length)assert(snag_provider_voice_wait(voice,true,20u)==0);
+            }
+            free(payload);
+        }
+        unsigned int messages=0;
+        do {
+            assert(snag_monotonic_ms()<deadline);
+            rc=snag_provider_voice_receive(voice,&received,error,sizeof(error));
+            if(rc==1) {
+                assert(!mode && messages<2u);
+                if(!messages)assert(received.len==5u && !memcmp(received.data,"A\342\202\254B",5u));
+                else {
+                    assert(received.len==32769u);
+                    for(size_t i=0;i<received.len;++i)assert(received.data[i]=='x');
+                }
+                ++messages;snag_buf_reset(&received);
+            }
+            if(rc==0)assert(snag_provider_voice_wait(voice,false,20u)==0);
+        }while(rc>=0);
+        assert(messages==(mode?0u:2u));
+        snag_provider_voice_close(voice);voice=NULL;snag_buf_free(&received);
+        stop_server(&server);
+    }
+    snag_credential_clear(&credential);
+}
+
+struct voice_fixture {
+    json_t *sent,*notices;
+    uint32_t played,frames,interrupts,ends;
+};
+static int voice_send(void *opaque,const json_t *event)
+{
+    return json_array_append(((struct voice_fixture *)opaque)->sent,(json_t *)event);
+}
+static int voice_notice(void *opaque,const json_t *event)
+{
+    return json_array_append(((struct voice_fixture *)opaque)->notices,(json_t *)event);
+}
+static int voice_play(void *opaque,const char *item,const int16_t *pcm,uint32_t frames)
+{
+    struct voice_fixture *f=opaque;assert(!strcmp(item,"audio-1"));
+    if(!frames) {assert(!pcm);++f->ends;return 0;}
+    assert(frames==24u);
+    for(uint32_t i=0;i<frames;++i)assert(pcm[i]==(int16_t)i-12);
+    f->frames+=frames;return 0;
+}
+static uint32_t voice_interrupt(void *opaque)
+{
+    struct voice_fixture *f=opaque;++f->interrupts;return f->played;
+}
+static json_t *voice_last(json_t *events)
+{
+    assert(json_array_size(events));return json_array_get(events,json_array_size(events)-1u);
+}
+static int voice_deliver(struct snag_voice *voice,json_t *event)
+{
+    char error[256];assert(event);
+    int rc=snag_voice_event(voice,event,error,sizeof(error));json_decref(event);return rc;
+}
+static struct snag_voice *voice_start(struct voice_fixture *f)
+{
+    memset(f,0,sizeof(*f));f->sent=json_array();f->notices=json_array();assert(f->sent && f->notices);
+    struct snag_voice_io io={voice_send,voice_notice,voice_play,voice_interrupt};
+    struct snag_voice *voice=snag_voice_new(&io,f,"fixture-model","fixture-asr","fixture-voice");
+    char error[256];assert(voice && !snag_voice_ready(voice));
+    assert(snag_voice_begin(voice,error,sizeof(error))==0);
+    json_t *session=json_object_get(voice_last(f->sent),"session");assert(json_is_object(session));
+    assert(json_array_size(json_object_get(session,"tools"))==1u);
+    assert(voice_deliver(voice,json_pack("{s:s,s:O}","type","session.updated","session",session))==0);
+    assert(snag_voice_ready(voice));return voice;
+}
+static void voice_end(struct snag_voice *voice,struct voice_fixture *f)
+{
+    snag_voice_free(voice);json_decref(f->sent);json_decref(f->notices);
+}
+static void voice_commit(struct snag_voice *voice,const char *id,const char *transcript)
+{
+    assert(voice_deliver(voice,json_pack("{s:s,s:s}","type","input_audio_buffer.committed","item_id",id))==0);
+    if(transcript)assert(voice_deliver(voice,json_pack("{s:s,s:s,s:s,s:i}","type",
+        "conversation.item.input_audio_transcription.completed","item_id",id,"transcript",transcript,"content_index",0))==0);
+}
+static void voice_created(struct snag_voice *voice,struct voice_fixture *f,const char *id)
+{
+    json_t *request=voice_last(f->sent);assert(!strcmp(snag_json_string(request,"type"),"response.create"));
+    json_t *meta=json_object_get(json_object_get(request,"response"),"metadata");
+    assert(voice_deliver(voice,json_pack("{s:s,s:{s:s,s:O}}","type","response.created","response","id",id,"metadata",meta))==0);
+}
+static json_t *voice_call_response(const char *id,const char *status)
+{
+    return json_pack("{s:s,s:{s:s,s:s,s:[{s:s,s:s,s:s,s:s,s:s}]}}","type","response.done","response",
+        "id",id,"status",status,"output","id","function-1","type","function_call","name","ask_agent",
+        "call_id","call-1","arguments","{\"request\":\"voice paraphrase\"}");
+}
+static size_t voice_notice_count(const struct voice_fixture *f,const char *type)
+{
+    size_t count=0;
+    for(size_t i=0;i<json_array_size(f->notices);++i)
+        if(!strcmp(snag_json_string(json_array_get(f->notices,i),"type"),type))++count;
+    return count;
+}
+static void test_voice_protocol(void)
+{
+    struct voice_fixture f;char error[256];struct snag_voice *voice=voice_start(&f);
+    voice_commit(voice,"input-1",NULL);voice_commit(voice,"input-2","later words");
+    size_t sent=json_array_size(f.sent);
+    /* Audio can be answered before independent ASR completes. The later
+     * transcript must not hold up speech or become input-1's coding request. */
+    assert(snag_voice_respond(voice,true,error,sizeof(error))==0 && json_array_size(f.sent)==sent+1u);
+    json_t *request=json_object_get(voice_last(f.sent),"response");
+    assert(!strcmp(snag_json_string(json_object_get(request,"metadata"),"voice_input_item"),"input-1"));
+    json_t *input=json_object_get(request,"input");
+    assert(json_array_size(input)==1u && !strcmp(snag_json_string(json_array_get(input,0u),"id"),"input-1"));
+    voice_created(voice,&f,"response-1");
+    int16_t continuing_pcm[480]={0};
+    assert(snag_voice_input(voice,continuing_pcm,480u,error,sizeof(error))==0);
+    assert(!strcmp(snag_json_string(voice_last(f.sent),"type"),"input_audio_buffer.append"));
+    assert(voice_deliver(voice,json_pack("{s:s,s:s}","type","response.function_call_arguments.done","response_id","response-1"))==0);
+    assert(!voice_notice_count(&f,"voice_handoff"));
+    assert(voice_deliver(voice,voice_call_response("response-1","completed"))==0);
+    assert(!voice_notice_count(&f,"voice_handoff"));
+    assert(voice_deliver(voice,voice_call_response("response-1","completed"))==0);
+    assert(!voice_notice_count(&f,"voice_handoff"));
+    assert(voice_deliver(voice,json_pack("{s:s,s:s,s:s,s:i}","type","conversation.item.input_audio_transcription.completed",
+        "item_id","input-1","transcript","original words","content_index",0))==0);
+    assert(voice_notice_count(&f,"voice_handoff")==1u);
+    json_t *handoff=voice_last(f.notices);
+    assert(!strcmp(snag_json_string(handoff,"transcript"),"original words"));
+    assert(!strcmp(snag_json_string(handoff,"request"),"voice paraphrase"));
+    assert(voice_deliver(voice,voice_call_response("response-1","completed"))==0 && voice_notice_count(&f,"voice_handoff")==1u);
+    assert(snag_voice_respond(voice,true,error,sizeof(error))==0);
+    request=json_object_get(voice_last(f.sent),"response");
+    assert(!strcmp(snag_json_string(request,"tool_choice"),"none"));
+    assert(!strcmp(snag_json_string(json_object_get(request,"metadata"),"voice_input_item"),"input-2"));
+    voice_created(voice,&f,"response-2");
+    assert(snag_voice_result(voice,"call-1","coding still has one owner",error,sizeof(error))==0);
+    assert(!strcmp(snag_json_string(json_object_get(voice_last(f.sent),"item"),"call_id"),"call-1"));
+    assert(voice_deliver(voice,json_pack("{s:s,s:{s:s,s:s,s:[]}}","type","response.done","response",
+        "id","response-2","status","completed","output"))==0);
+    assert(snag_voice_respond(voice,true,error,sizeof(error))==0);
+    assert(!strcmp(snag_json_string(json_object_get(voice_last(f.sent),"response"),"tool_choice"),"none"));
+    voice_end(voice,&f);
+
+    for(unsigned int mode=0;mode<3u;++mode) {
+        voice=voice_start(&f);voice_commit(voice,"input-1","do the work");
+        assert(snag_voice_respond(voice,true,error,sizeof(error))==0);voice_created(voice,&f,"response-1");
+        if(mode) {
+            unsigned char pcm[48];
+            for(unsigned int i=0;i<24u;++i) {uint16_t v=(uint16_t)((int)i-12);pcm[2u*i]=(unsigned char)v;pcm[2u*i+1u]=(unsigned char)(v>>8u);}
+            struct snag_buf encoded;snag_buf_init(&encoded,128u);
+            assert(snag_base64_append(&encoded,pcm,sizeof(pcm))==0 && snag_buf_terminate(&encoded)==0);
+            json_t *audio=json_pack("{s:s,s:s,s:s,s:i,s:s}","type","response.output_audio.delta","response_id","response-1",
+                "item_id","audio-1","content_index",0,"delta",(char *)encoded.data);
+            assert(voice_deliver(voice,json_incref(audio))==0 && f.frames==24u);
+            f.played=100u;
+            assert(voice_deliver(voice,json_pack("{s:s,s:s}","type","input_audio_buffer.speech_started","item_id","barge-in"))==0);
+            assert(!strcmp(snag_json_string(voice_last(f.sent),"type"),"conversation.item.truncate"));
+            assert(json_integer_value(json_object_get(voice_last(f.sent),"audio_end_ms"))==1);
+            assert(voice_deliver(voice,audio)==0 && f.frames==24u);snag_buf_free(&encoded);
+        }
+        assert(voice_deliver(voice,voice_call_response("response-1",mode==2u?"completed":"cancelled"))==0);
+        assert(!voice_notice_count(&f,"voice_handoff"));
+        if(mode)assert(voice_notice_count(&f,"voice_interrupted")==1u);
+        voice_end(voice,&f);
+    }
+    voice=voice_start(&f);voice_commit(voice,"input-1","earlier utterance");
+    assert(voice_deliver(voice,json_pack("{s:s,s:s}","type","input_audio_buffer.speech_started","item_id","input-2"))==0);
+    sent=json_array_size(f.sent);
+    assert(snag_voice_respond(voice,true,error,sizeof(error))==0 && json_array_size(f.sent)==sent);
+    assert(voice_deliver(voice,json_pack("{s:s,s:s}","type","input_audio_buffer.speech_stopped","item_id","input-2"))==0);
+    assert(snag_voice_respond(voice,true,error,sizeof(error))==0 && json_array_size(f.sent)==sent+1u);
+    voice_end(voice,&f);
+    voice=voice_start(&f);int16_t pcm[480]={0};
+    assert(snag_voice_mute(voice,true,error,sizeof(error))==0);
+    sent=json_array_size(f.sent);
+    assert(snag_voice_input(voice,pcm,480u,error,sizeof(error))==0 && json_array_size(f.sent)==sent);
+    assert(snag_voice_mute(voice,false,error,sizeof(error))==0 && snag_voice_input(voice,pcm,480u,error,sizeof(error))==0);
+    assert(json_array_size(f.sent)==sent+1u);
+    assert(voice_deliver(voice,json_pack("{s:s,s:s}","type","response.output_audio.delta","response_id","unknown"))<0);
+    assert(!snag_voice_ready(voice));voice_end(voice,&f);
+    voice=voice_start(&f);
+    for(unsigned int i=0;i<8u;++i) {char id[32];snprintf(id,sizeof(id),"input-%u",i);voice_commit(voice,id,NULL);}
+    assert(voice_deliver(voice,json_pack("{s:s,s:s}","type","input_audio_buffer.committed","item_id","input-overflow"))<0);
+    voice_end(voice,&f);
+}
+
+static void test_voice_async_asr(void)
+{
+    struct voice_fixture f;char error[256];
+    /* Failed ASR can arrive on either side of response.done. Neither ordering
+     * submits work; the pending remote call gets one explicit failure result. */
+    for(unsigned int early=0;early<2u;++early) {
+        struct snag_voice *voice=voice_start(&f);
+        voice_commit(voice,"input-1",NULL);
+        assert(snag_voice_respond(voice,true,error,sizeof(error))==0);
+        voice_created(voice,&f,"response-1");
+        json_t *failed=json_pack("{s:s,s:s,s:i}","type",
+            "conversation.item.input_audio_transcription.failed","item_id","input-1","content_index",0);
+        if(early)assert(voice_deliver(voice,json_incref(failed))==0);
+        assert(voice_deliver(voice,voice_call_response("response-1","completed"))==0);
+        if(!early)assert(voice_deliver(voice,json_incref(failed))==0);
+        json_decref(failed);
+        assert(!voice_notice_count(&f,"voice_handoff") && voice_notice_count(&f,"voice_asr_failed")==1u);
+        json_t *item=json_object_get(voice_last(f.sent),"item");
+        assert(!strcmp(snag_json_string(item,"call_id"),"call-1"));
+        assert(strstr(snag_json_string(item,"output"),"no coding work was submitted"));
+        size_t sent=json_array_size(f.sent);
+        assert(voice_deliver(voice,voice_call_response("response-1","completed"))==0);
+        assert(json_array_size(f.sent)==sent);
+        voice_end(voice,&f);
+    }
+    struct snag_voice *voice=voice_start(&f);
+    voice_commit(voice,"input-1",NULL);
+    assert(snag_voice_respond(voice,true,error,sizeof(error))==0);
+    voice_created(voice,&f,"response-1");
+    /* Output audio is consumed before the separate transcript arrives; capture
+     * can append on both sides of that output event without ending the input. */
+    int16_t pcm[480]={0};unsigned char raw[48];
+    for(unsigned int i=0;i<24u;++i) {uint16_t v=(uint16_t)((int)i-12);raw[i*2u]=(unsigned char)v;raw[i*2u+1u]=(unsigned char)(v>>8u);}
+    struct snag_buf encoded;snag_buf_init(&encoded,128u);
+    assert(snag_base64_append(&encoded,raw,sizeof(raw))==0 && snag_buf_terminate(&encoded)==0);
+    assert(snag_voice_input(voice,pcm,480u,error,sizeof(error))==0);
+    assert(voice_deliver(voice,json_pack("{s:s,s:s,s:s,s:i,s:s}","type","response.output_audio.delta",
+        "response_id","response-1","item_id","audio-1","content_index",0,"delta",(char *)encoded.data))==0);
+    assert(f.frames==24u && !voice_notice_count(&f,"voice_transcript"));
+    assert(snag_voice_input(voice,pcm,480u,error,sizeof(error))==0);
+    snag_buf_free(&encoded);
+    json_t *audio_end=json_pack("{s:s,s:s,s:s,s:i}","type","response.output_audio.done",
+        "response_id","response-1","item_id","audio-1","content_index",0);
+    assert(voice_deliver(voice,json_incref(audio_end))==0 && f.ends==1u);
+    assert(voice_deliver(voice,audio_end)==0 && f.ends==1u);
+    assert(voice_deliver(voice,json_pack("{s:s,s:{s:s,s:s,s:[]}}","type","response.done","response",
+        "id","response-1","status","completed","output"))==0);
+    assert(f.ends==1u);
+    /* Finished responses retain only unresolved input slots; late ASR releases
+     * them. More than eight sequential late captions must not exhaust slots. */
+    for(unsigned int i=0;i<12u;++i) {
+        char input[32],response[32];snprintf(input,sizeof(input),"input-%u",i+2u);
+        snprintf(response,sizeof(response),"response-%u",i+2u);
+        voice_commit(voice,input,NULL);
+        assert(snag_voice_respond(voice,true,error,sizeof(error))==0);
+        voice_created(voice,&f,response);
+        assert(voice_deliver(voice,json_pack("{s:s,s:{s:s,s:s,s:[]}}","type","response.done","response",
+            "id",response,"status","completed","output"))==0);
+        assert(voice_deliver(voice,json_pack("{s:s,s:s,s:s,s:i}","type",
+            "conversation.item.input_audio_transcription.completed","item_id",input,"transcript","late words","content_index",0))==0);
+    }
+    assert(voice_deliver(voice,json_pack("{s:s,s:s,s:s,s:i}","type",
+        "conversation.item.input_audio_transcription.completed","item_id","input-1","transcript","oldest words","content_index",0))==0);
+    assert(voice_notice_count(&f,"voice_transcript")==13u && !voice_notice_count(&f,"voice_handoff"));
+    voice_end(voice,&f);
+}
+
+static void test_voice_muted_input(void)
+{
+    struct voice_fixture f;char error[256];struct snag_voice *voice=voice_start(&f);
+    assert(voice_deliver(voice,json_pack("{s:s,s:s}","type","input_audio_buffer.speech_started","item_id","muted-input"))==0);
+    assert(snag_voice_mute(voice,true,error,sizeof(error))==0);
+    assert(voice_notice_count(&f,"voice_asr_failed")==1u);
+    assert(!strcmp(snag_json_string(voice_last(f.notices),"reason"),"muted_incomplete"));
+    assert(snag_voice_mute(voice,false,error,sizeof(error))==0);
+    assert(voice_deliver(voice,json_pack("{s:s,s:s}","type","input_audio_buffer.speech_stopped","item_id","muted-input"))==0);
+    voice_commit(voice,"muted-input","truncated request must not execute");
+    size_t sent=json_array_size(f.sent);
+    assert(snag_voice_respond(voice,true,error,sizeof(error))==0 && json_array_size(f.sent)==sent);
+    assert(!voice_notice_count(&f,"voice_handoff") && !voice_notice_count(&f,"voice_transcript"));
+    for(unsigned int i=0;i<12u;++i) {
+        char item[32];snprintf(item,sizeof(item),"cleared-%u",i);
+        assert(voice_deliver(voice,json_pack("{s:s,s:s}","type","input_audio_buffer.speech_started","item_id",item))==0);
+        assert(snag_voice_mute(voice,true,error,sizeof(error))==0);
+        assert(voice_deliver(voice,json_pack("{s:s}","type","input_audio_buffer.cleared"))==0);
+        assert(snag_voice_mute(voice,false,error,sizeof(error))==0);
+    }
+    sent=json_array_size(f.sent);
+    voice_commit(voice,"fresh-input","new words");
+    assert(snag_voice_respond(voice,true,error,sizeof(error))==0 && json_array_size(f.sent)==sent+1u);
+    assert(voice_notice_count(&f,"voice_transcript")==1u);
+    voice_end(voice,&f);
+}
+
+static void test_voice_context(void)
+{
+    struct voice_fixture f;char error[256];struct snag_voice *voice=voice_start(&f);
+    size_t sent=json_array_size(f.sent);json_t *context=json_pack("{s:s,s:s}","kind","session_context","status","old state");
+    assert(context && snag_voice_context(voice,context,error,sizeof(error))==0);
+    assert(json_object_set_new(context,"status",json_string("completed earlier"))==0);
+    assert(snag_voice_context(voice,context,error,sizeof(error))==0);json_decref(context);
+    assert(snag_voice_respond(voice,true,error,sizeof(error))==0 && json_array_size(f.sent)==sent);
+    assert(!voice_notice_count(&f,"voice_handoff"));
+    voice_commit(voice,"input-1","what happened earlier?");
+    assert(snag_voice_respond(voice,true,error,sizeof(error))==0);
+    const json_t *response=json_object_get(voice_last(f.sent),"response"),*input=json_object_get(response,"input");
+    assert(json_array_size(input)==2u);
+    const json_t *item=json_array_get(input,0u);
+    const char *text=snag_json_string(json_array_get(json_object_get(item,"content"),0u),"text");
+    assert(!strcmp(snag_json_string(item,"type"),"message") && !snag_json_string(item,"call_id"));
+    assert(text && strstr(text,"completed earlier") && strstr(text,"not a new request") && !strstr(text,"old state"));
+    assert(!strcmp(snag_json_string(json_array_get(input,1u),"id"),"input-1"));
+    voice_end(voice,&f);
+}
+
+static void test_voice_captions(void)
+{
+    struct voice_fixture f;char error[256];struct snag_voice *voice=voice_start(&f);
+    assert(voice_deliver(voice,json_pack("{s:s,s:s}","type","input_audio_buffer.speech_started","item_id","input-1"))==0);
+    assert(voice_deliver(voice,json_pack("{s:s,s:s,s:s,s:i}","type","conversation.item.input_audio_transcription.delta",
+        "item_id","input-1","delta","still speaking","content_index",0))==0);
+    assert(voice_notice_count(&f,"voice_caption")==1u && !voice_notice_count(&f,"voice_transcript"));
+    assert(!voice_notice_count(&f,"voice_handoff"));
+    assert(voice_deliver(voice,json_pack("{s:s,s:s}","type","input_audio_buffer.speech_stopped","item_id","input-1"))==0);
+    voice_commit(voice,"input-1","final words");
+    assert(snag_voice_respond(voice,true,error,sizeof(error))==0);voice_created(voice,&f,"response-1");
+    json_t *caption=json_pack("{s:s,s:s,s:s,s:s,s:i}","type","response.output_audio_transcript.delta",
+        "response_id","response-1","item_id","audio-1","delta","answer so far","content_index",0);
+    assert(voice_deliver(voice,json_incref(caption))==0 && voice_notice_count(&f,"voice_caption")==2u);
+    assert(!strcmp(snag_json_string(voice_last(f.notices),"speaker"),"assistant"));
+    assert(!voice_notice_count(&f,"voice_interrupted"));
+    assert(voice_deliver(voice,json_pack("{s:s,s:s}","type","input_audio_buffer.speech_started","item_id","input-2"))==0);
+    assert(voice_notice_count(&f,"voice_interrupted")==1u);
+    assert(!snag_json_string(voice_last(f.notices),"item_id"));
+    assert(!strcmp(snag_json_string(voice_last(f.sent),"type"),"response.cancel"));
+    assert(voice_deliver(voice,caption)==0 && voice_notice_count(&f,"voice_caption")==2u);
+    assert(!voice_notice_count(&f,"voice_handoff"));
+    voice_end(voice,&f);
+}
+
 int
 main(void)
 {
     test_irc_failed_intent_retains_pending();
+    test_voice_protocol();
+    test_voice_async_asr();
+    test_voice_captions();
+    test_voice_context();
+    test_voice_muted_input();
+#if SNAJPAGENT_AUDIO_DEVICE
+    assert(snag_audio_fixture_capture()==0);
+#endif
+    test_voice_close();
+    test_voice_owner_mute();
+    test_voice_socket();
+    test_audio_transport();
     test_provider_auth();
+    test_media_count_fallback();
+    test_local_audio_admission();
     test_ui_output_order_and_failure();
     test_read_only_dispatch();
     test_local_provider_transport();

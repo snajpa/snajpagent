@@ -3383,3 +3383,94 @@ snag_write_full(int fd, const void *data, size_t len)
     }
     return 0;
 }
+
+/* Reject special files before opening; O_NONBLOCK also prevents FIFO races.
+ * O_NOFOLLOW on every component prevents symlink traversal, including parents. */
+int
+snag_open_inspect_at(int parent, const char *name)
+{
+    snag_file_info before, after;
+    int fd;
+
+    if (snag_lstat_at(parent, name, &before) < 0)
+        return -1;
+    if (!S_ISREG(before.st_mode) && !S_ISDIR(before.st_mode)) {
+        errno = EINVAL;
+        return -1;
+    }
+    fd = snag_open_read_at(parent, name, false);
+    if (fd < 0)
+        return -1;
+    if (snag_fstat(fd, &after) < 0 || before.st_dev != after.st_dev ||
+        before.st_ino != after.st_ino ||
+        (!S_ISREG(after.st_mode) && !S_ISDIR(after.st_mode))) {
+        close(fd);
+        errno = EINVAL;
+        return -1;
+    }
+    return fd;
+}
+
+int
+snag_open_inspect_path(const char *workspace, const char *path)
+{
+    char *copy, *part, *save = NULL;
+    struct snag_buf full;
+    int fd = -1;
+    int *ancestors = NULL;
+    size_t count = 0;
+    bool absolute = snag_path_root_len(path) != 0u;
+
+    snag_buf_init(&full, 8192u);
+    if (snag_buf_printf(&full, "%s%s%s", absolute ? "" : workspace,
+                       absolute ? "" : "/", path) < 0 ||
+        snag_buf_terminate(&full) < 0)
+        goto out;
+    copy = (char *)full.data;
+    ancestors = malloc((full.len + 1u) * sizeof(*ancestors));
+    if (!ancestors)
+        goto out;
+    snag_path_slashes(copy);
+    size_t root = snag_path_root_len(copy);
+    if (!root) {
+        errno = EINVAL;
+        goto out;
+    }
+    char first = copy[root];
+    copy[root] = '\0';
+    int root_fd = snag_open_read(copy, true);
+    copy[root] = first;
+    if (root_fd < 0)
+        goto out;
+    ancestors[count++] = root_fd;
+    for (part = strtok_r(copy + root, "/", &save); part;
+         part = strtok_r(NULL, "/", &save)) {
+        if (!strcmp(part, ".") || !strcmp(part, "..")) {
+            snag_file_info info;
+            if (snag_fstat(ancestors[count - 1u], &info) < 0)
+                goto out;
+            if (!S_ISDIR(info.st_mode)) {
+                errno = ENOTDIR;
+                goto out;
+            }
+            if (part[1] == '.' && count > 1u)
+                (void)close(ancestors[--count]);
+        } else {
+            int next = snag_open_inspect_at(ancestors[count - 1u], part);
+            if (next < 0)
+                goto out;
+            ancestors[count++] = next;
+        }
+    }
+    fd = ancestors[--count];
+out:
+    {
+        int saved = errno;
+        while (count)
+            (void)close(ancestors[--count]);
+        free(ancestors);
+        errno = saved;
+    }
+    snag_buf_free(&full);
+    return fd;
+}

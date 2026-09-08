@@ -44,93 +44,6 @@ checkpoint(struct read_query *q)
     return 0;
 }
 
-/* Reject special files before opening; O_NONBLOCK also prevents FIFO races.
- * O_NOFOLLOW on every component prevents symlink traversal, including parents. */
-static int
-open_entry(int parent, const char *name)
-{
-    snag_file_info before, after;
-    int fd;
-
-    if (snag_lstat_at(parent, name, &before) < 0)
-        return -1;
-    if (!S_ISREG(before.st_mode) && !S_ISDIR(before.st_mode))
-        return snag_errno(EINVAL);
-    fd = snag_open_read_at(parent, name, false);
-    if (fd < 0)
-        return -1;
-    if (snag_fstat(fd, &after) < 0 || before.st_dev != after.st_dev ||
-        before.st_ino != after.st_ino ||
-        (!S_ISREG(after.st_mode) && !S_ISDIR(after.st_mode))) {
-        close(fd);
-        return snag_errno(EINVAL);
-    }
-    return fd;
-}
-
-static int
-open_path(const char *workspace, const char *path)
-{
-    char *copy, *part, *save = NULL;
-    int fd = -1;
-    int *ancestors = NULL;
-    size_t count = 0;
-    bool absolute = snag_path_root_len(path) != 0u;
-
-    struct snag_buf full = {.max = 8192u};
-    if (snag_buf_printf(&full, "%s%s%s", absolute ? "" : workspace,
-                       absolute ? "" : "/", path) < 0 ||
-        snag_buf_terminate(&full) < 0)
-        goto out;
-    copy = (char *)full.data;
-    ancestors = malloc((full.len + 1u) * sizeof(*ancestors));
-    if (!ancestors)
-        goto out;
-    snag_path_slashes(copy);
-    size_t root = snag_path_root_len(copy);
-    if (!root) {
-        errno = EINVAL;
-        goto out;
-    }
-    char first = copy[root];
-    copy[root] = '\0';
-    int root_fd = snag_open_read(copy, true);
-    copy[root] = first;
-    if (root_fd < 0)
-        goto out;
-    ancestors[count++] = root_fd;
-    for (part = strtok_r(copy + root, "/", &save); part;
-         part = strtok_r(NULL, "/", &save)) {
-        if (!strcmp(part, ".") || !strcmp(part, "..")) {
-            snag_file_info info;
-            if (snag_fstat(ancestors[count - 1u], &info) < 0)
-                goto out;
-            if (!S_ISDIR(info.st_mode)) {
-                errno = ENOTDIR;
-                goto out;
-            }
-            if (part[1] == '.' && count > 1u)
-                (void)close(ancestors[--count]);
-        } else {
-            int next = open_entry(ancestors[count - 1u], part);
-            if (next < 0)
-                goto out;
-            ancestors[count++] = next;
-        }
-    }
-    fd = ancestors[--count];
-out:
-    {
-        int saved = errno;
-        while (count)
-            (void)close(ancestors[--count]);
-        free(ancestors);
-        errno = saved;
-    }
-    snag_buf_free(&full);
-    return fd;
-}
-
 static bool
 literal_match(const char *line, const char *pattern, bool ignore_case)
 {
@@ -346,7 +259,7 @@ walk(struct read_query *q, int fd, const char *path, unsigned int depth)
             if (depth >= RO_DEPTH) {
                 q->problem = "Directory depth limit reached; narrow the path.";
                 rc = -1;
-            } else if ((next = open_entry(fd, names[i])) < 0) {
+            } else if ((next = snag_open_inspect_at(fd, names[i])) < 0) {
                 rc = -1;
             } else rc = walk(q, next, (char *)child.data, depth + 1u);
         }
@@ -421,7 +334,7 @@ snag_tools_read_only(const struct snag_response_item *call, const char *workspac
         }
     }
     q.problem = NULL;
-    fd = open_path(workspace, path);
+    fd = snag_open_inspect_path(workspace, path);
     if (fd < 0) {
         q.problem = "Cannot open path: missing, inaccessible, symlink, or non-regular special file.";
         goto out;

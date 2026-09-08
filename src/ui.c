@@ -55,7 +55,7 @@ struct snag_ui_runtime {
     struct snag_signal_mask saved_mask;
     atomic_int fatal;
     atomic_bool exit_requested, cancel;
-    atomic_uint steering_pending;
+    atomic_uint steering_pending, dictation_control;
     atomic_uint level, view;
     _Atomic uint64_t interrupt;
     _Atomic uint64_t pause_until;
@@ -335,6 +335,17 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         display->prompt.states = command->data.value;
         return snag_term_set_spinner_states(term, command->data.value);
     case SNAG_UI_DRAFT: return snag_term_restore_draft(term, command->text);
+    case SNAG_UI_INSERT: {
+        int rc = snag_term_insert_draft(term, command->text);
+        return rc < 0 && (errno == EOVERFLOW || errno == EILSEQ) ? 1 : rc;
+    }
+    case SNAG_UI_AUDIO: {
+        bool voice=command->data.value==2u;
+        if(voice && (!term->opened || !term->raw || !term->capable || term->input_only || term->output_depth))return 1;
+        int rc = snag_term_audio(term, command->text, command->data.value == 1u);
+        return rc < 0 && errno == ENOTTY ? 1 : rc;
+    }
+    case SNAG_UI_CAPTION: return snag_term_caption(term,command->data.value,command->text);
     case SNAG_UI_VIEW:
         term->defer_redraw = true;
         term->chat = command->data.value == SNAG_RENDER_CHAT;
@@ -470,7 +481,14 @@ read_input(struct snag_ui_display *display, int timeout_ms)
         display->local_acknowledged = false;
         return 0;
     }
-    if (item->action == SNAG_TERM_INTERRUPT) {
+    if (item->action == SNAG_TERM_DICTATE_DONE || item->action == SNAG_TERM_DICTATE_CANCEL) {
+        if (item->action == SNAG_TERM_DICTATE_CANCEL)
+            atomic_store(&runtime->dictation_control, (unsigned int)item->action);
+        else {
+            unsigned int empty = 0u;
+            (void)atomic_compare_exchange_strong(&runtime->dictation_control, &empty, (unsigned int)item->action);
+        }
+    } else if (item->action == SNAG_TERM_INTERRUPT) {
         atomic_store(&runtime->interrupt, display->turn_generation);
     } else if (item->action == SNAG_TERM_EXIT) {
         atomic_store(&runtime->exit_requested, true);
@@ -730,6 +748,7 @@ snag_ui_init(struct snag_ui *ui)
     atomic_init(&runtime->exit_requested, false);
     atomic_init(&runtime->cancel, false);
     atomic_init(&runtime->steering_pending, 0u);
+    atomic_init(&runtime->dictation_control, 0u);
     atomic_init(&runtime->pause_until, 0u);
     atomic_init(&runtime->level, 0u);
     atomic_init(&runtime->view, SNAG_RENDER_ROLLOUT);
@@ -922,6 +941,30 @@ snag_ui_simple_prompt(struct snag_ui *ui, bool active)
     return snag_ui_prompt(ui, active, active ? "» " : "› ", frames, 1u, 0u);
 }
 
+int snag_ui_insert_draft(struct snag_ui *ui, const char *text)
+{
+    return snag_ui_send(ui,(struct snag_ui_command){.kind=SNAG_UI_INSERT,.text=text});
+}
+int snag_ui_audio(struct snag_ui *ui, const char *label, bool dictating)
+{
+    struct snag_ui_command message = {.kind = SNAG_UI_AUDIO, .data.value = dictating};
+    int rc = snag_ui_send(ui,(struct snag_ui_command){.kind=message.kind,.data=message.data,.text=label});
+    if (!dictating) atomic_store(&ui->runtime->dictation_control, 0u);
+    return rc;
+}
+
+int snag_ui_voice(struct snag_ui *ui,const char *label)
+{
+    struct snag_ui_command message={.kind=SNAG_UI_AUDIO,.data.value=2u};
+    return snag_ui_send(ui,(struct snag_ui_command){.kind=message.kind,.data=message.data,.text=label});
+}
+
+int snag_ui_caption(struct snag_ui *ui,unsigned int speaker,const char *text)
+{
+    struct snag_ui_command message={.kind=SNAG_UI_CAPTION,.data.value=speaker};
+    return snag_ui_send(ui,(struct snag_ui_command){.kind=message.kind,.data=message.data,.text=text});
+}
+
 static int history_snapshot(struct snag_ui *ui, bool refresh);
 
 bool
@@ -957,6 +1000,8 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms,
             *action = SNAG_TERM_EXIT;
             return 1;
         }
+        unsigned int dictation = atomic_exchange(&runtime->dictation_control, 0u);
+        if (dictation) { *action = (enum snag_term_action)dictation; return 1; }
         uint64_t interrupted = atomic_exchange(&runtime->interrupt, 0u);
         if (interrupted && interrupted == ui->turn_generation) {
             *action = SNAG_TERM_INTERRUPT;

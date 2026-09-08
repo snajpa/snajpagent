@@ -433,6 +433,8 @@ main(void)
         "reasoning_effort = future-effort\n"
         "max_goal_prompt_bytes = 123456\n"
         "read_agents_md = false\n"
+        "\n[audio]\nprovider=backup\nlisten_model=listen-fixture\ntranscribe_model=transcribe-fixture\n"
+        "speech_model=speech-fixture\nrealtime_model=realtime-fixture\nvoice=alloy\ncapture_device=USB microphone\nplayback_device=USB speaker\n"
         "\n[provider default]\n"
         "connect_timeout_ms = 1000\n"
         "idle_timeout_ms = 2000\n"
@@ -599,6 +601,14 @@ main(void)
                            error, sizeof(error)) == 0);
     assert(strcmp(config.model, "gpt-5.5") == 0);
     assert(strcmp(config.provider, "backup") == 0);
+    assert(!strcmp(config.audio.provider, "backup"));
+    assert(!strcmp(config.audio.listen_model, "listen-fixture"));
+    assert(!strcmp(config.audio.transcribe_model, "transcribe-fixture"));
+    assert(!strcmp(config.audio.speech_model, "speech-fixture"));
+    assert(!strcmp(config.audio.realtime_model, "realtime-fixture"));
+    assert(!strcmp(config.audio.voice, "alloy"));
+    assert(!strcmp(config.audio.capture_device, "USB microphone"));
+    assert(!strcmp(config.audio.playback_device, "USB speaker"));
     assert(strcmp(config.reasoning_effort, "future-effort") == 0);
     assert(config.max_goal_prompt_bytes == 123456u);
     assert(!config.read_agents_md);
