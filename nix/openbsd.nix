@@ -332,11 +332,6 @@ let
         --replace-fail 'list(APPEND CURL_INCLUDES "sys/socket.h")' \
           'list(APPEND CURL_INCLUDES "sys/types.h" "sys/socket.h")'
     '';
-    postInstall = lib.optionalString early ''
-      # Old-ABI feature detection leaves -lidn2 as an already prefixed item.
-      substituteInPlace "$out/lib/pkgconfig/libcurl.pc" \
-        --replace-fail '-l-lidn2' '-lidn2'
-    '';
   });
 in {
   inherit sdk target compiler tools cflags ldflags jansson tls curl regex unistring;
