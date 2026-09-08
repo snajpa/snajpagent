@@ -4,6 +4,7 @@
 assert builtins.elem arch [ "i686" "x86_64" ];
 let
   windows = import pkgs.path {
+    inherit (pkgs) overlays;
     localSystem = pkgs.stdenv.buildPlatform.system;
     crossSystem = {
       config = "${arch}-w64-mingw32";

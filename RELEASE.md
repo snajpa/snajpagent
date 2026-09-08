@@ -105,7 +105,7 @@ requires an explicit scope decision, recorded in the release notes.
   Retain matching debug symbols and publish them separately from the runnable
   file; never require a symbol sidecar to start the application.
 - Publish `SHA256SUMS` for the downloadable files, release notes, and the exact
-  source/build instructions and dependency license/source material described in
+  source/build instructions and dependency license notices described in
   [DEPENDENCIES.md](DEPENDENCIES.md). Include the manual and licensing notices
   as companion downloads; keep the executable usable by itself.
 - Keep versioned assets available. Do not overwrite a published version with
@@ -212,7 +212,7 @@ For an explicitly versioned custom build, use `--version VERSION --revision
 REVISION --release HTTPS_PREFIX`; development suffixes must identify that commit.
 Each staged release includes the matrix at its source revision; older channels
 retain their original targets when a newer release adds a platform.
-Add the corresponding dependency sources, notices, and checksums to the stage;
+Add dependency notices and checksums to the stage;
 publish those immutable files, then copy the descriptors to `www/latest/` or
 `www/latest-dev/`. Update the downloads page and run the manual Pages workflow.
 `python3 tools/release.py pages` performs the same channel materialization locally.

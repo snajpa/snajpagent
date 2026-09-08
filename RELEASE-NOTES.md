@@ -21,7 +21,7 @@ Broader BSD support and a tag-driven release workflow.
 
 Choose the executable for the exact OS/ABI and architecture and verify
 `SHA256SUMS`. Each target includes matching symbols; the release also contains
-source, build instructions, the manual and dependency sources/license notices.
+source, build instructions, the manual and dependency license notices.
 Use the separate legacy variant only on its matching OS ABI.
 
 Official stable standalone binaries install matching updates in the background.

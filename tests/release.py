@@ -4,6 +4,7 @@
 import argparse
 import importlib.util
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -179,3 +180,47 @@ assert '-static-pie' in link
 assert 'musl.stdenv.hostPlatform.isAarch32' in link
 assert '" -Wl,-Bstatic,--no-dynamic-linker,-z,text"' in link
 print("PASS: 32-bit ARM static PIE explicitly omits the dynamic runtime")
+
+# Bootstrap download failure must try the next pinned URL before nix-build.
+# Stub only Nix commands, exercising the actual production Make recipe offline.
+with tempfile.TemporaryDirectory(prefix="release-fetch-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    for name in ("Makefile", "META", "config.mk"):
+        shutil.copyfile(root / name, tmp / name)
+    commands = tmp / "bin"
+    commands.mkdir()
+    for name, body in {
+        "nix-instantiate": '''case "$*" in
+            *sha256*) echo '"sha256-fixture"';;
+            *) echo '"https://first.test/source https://second.test/source"';;
+        esac''',
+        "nix-prefetch-url": '''printf '%s\\n' "$*" >> "$FETCH_LOG"
+        case "$FETCH_MODE:$*" in
+            cached:*) exit 0;;
+            fallback:*second.test*) exit 0;;
+        esac
+        exit 1''',
+        "nix-build": 'echo build >> "$FETCH_LOG"',
+    }.items():
+        path = commands / name
+        path.write_text("#!/bin/sh\n" + body + "\n")
+        path.chmod(0o755)
+    log = tmp / "fetch.log"
+    env = dict(os.environ, PATH=str(commands) + os.pathsep + os.environ["PATH"],
+               FETCH_LOG=str(log))
+    for mode, expected, success in (("fallback", 2, True), ("cached", 1, True),
+                                    ("failed", 2, False)):
+        log.write_text("")
+        result = subprocess.run(["make", "-s", "prod-linux-x86_64", "BUILD_VERSION=fixture"],
+                                cwd=tmp, env=dict(env, FETCH_MODE=mode),
+                                capture_output=True, text=True)
+        lines = log.read_text().splitlines()
+        fetches = [line for line in lines if line != "build"]
+        assert len(fetches) == expected, (mode, result, lines)
+        assert all("--unpack --name source" in line and "sha256-fixture" in line
+                   for line in fetches), lines
+        assert (result.returncode == 0) == success, (mode, result)
+        assert (lines[-1] == "build") == success, (mode, lines)
+        if mode != "cached":
+            assert "first.test" in fetches[0] and "second.test" in fetches[1], lines
+print("PASS: production bootstrap fallbacks preserve the hash and fail closed")

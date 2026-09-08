@@ -411,7 +411,17 @@ prod-matrix: $(PROD_TARGETS)
 
 prod-macos-universal: prod-macos-arm64 prod-macos-x86_64
 
-$(PROD_TARGETS):
+.PHONY: prod-nixpkgs
+prod-nixpkgs:
+	@hash=$$(nix-instantiate --eval --strict --expr '(import ./nix/nixpkgs.nix).sha256' | tr -d '"'); \
+	urls=$$(nix-instantiate --eval --strict --expr 'builtins.concatStringsSep " " (import ./nix/nixpkgs.nix).urls' | tr -d '"'); \
+	test -n "$$hash" && test -n "$$urls" || exit 1; \
+	for url in $$urls; do \
+		nix-prefetch-url --unpack --name source --option connect-timeout 15 \
+			--option download-attempts 2 "$$url" "$$hash" && exit 0; \
+	done; exit 1
+
+$(PROD_TARGETS): | prod-nixpkgs
 	@mkdir -p build/matrix
 	nix-build nix/portable.nix -A $(patsubst prod-%,%,$@) \
 		--argstr buildVersion '$(BUILD_VERSION)' --argstr buildRevision '$(GIT_HEAD)' \

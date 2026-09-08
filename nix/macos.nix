@@ -22,7 +22,13 @@ let
     dontFixup = true;
     installPhase = ''mv Library/Developer/CommandLineTools/SDKs/MacOSX.sdk "$out"'';
   } else (pkgs.callPackage
-    (pkgs.path + "/pkgs/by-name/ap/apple-sdk/common/fetch-sdk.nix") {}) sdkInfo;
+    (pkgs.path + "/pkgs/by-name/ap/apple-sdk/common/fetch-sdk.nix") {}) (sdkInfo // {
+      urls = [
+        (builtins.head sdkInfo.urls)
+        (lib.replaceStrings [ "swcdn.apple.com" ] [ "swdist.apple.com" ]
+          (builtins.head sdkInfo.urls))
+      ] ++ builtins.tail sdkInfo.urls;
+    });
   target = "${arch}-apple-macos${deployment}";
   processor = if arch == "arm64" then "aarch64" else arch;
   compiler = "${llvm.clang-unwrapped}/bin/clang";

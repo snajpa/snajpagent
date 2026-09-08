@@ -110,7 +110,7 @@ def stage(args):
         subprocess.run(["git", "archive", "--format=tar.gz", f"--prefix=snajpagent-{version}/", revision],
                        cwd=ROOT, stdout=output, check=True)
     print(f"Staged {len(required)} executables and matching symbols in {args.output}")
-    print("Add corresponding dependency sources/notices and SHA256SUMS before publishing.")
+    print("Add dependency notices and SHA256SUMS before publishing.")
 
 
 def pages(args):

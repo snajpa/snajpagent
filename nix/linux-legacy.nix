@@ -13,7 +13,7 @@ let
         UCLIBC_HAS_STDIO_FUTEXES n
       '';
     };
-    overlays = [ (_: previous: {
+    overlays = pkgs.overlays ++ [ (_: previous: {
       uclibc-ng = (previous.uclibc-ng.override {
         extraConfig = ''
           UCLIBC_HAS_LIBUTIL y

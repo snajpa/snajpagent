@@ -12,21 +12,31 @@ let
   target = "x86_64-unknown-openbsd${osVersion}";
   llvm = pkgs.llvmPackages_21;
   tools = "${llvm.llvm}/bin";
+  mirrors = (lib.optionals (!legacy) [
+    "https://cdn.openbsd.org/pub/OpenBSD"
+    "https://ftp.hostserver.de/pub/OpenBSD"
+    "https://ftp.fau.de/pub/OpenBSD"
+  ]) ++ [
+    "https://ftp.eu.openbsd.org/pub/OpenBSD"
+    "https://ftp.lysator.liu.se/pub/OpenBSD"
+    "https://mirror.yandex.ru/pub/OpenBSD"
+  ];
+  urls = file: map (mirror: "${mirror}/${osVersion}/amd64/${file}") mirrors;
   sdk = pkgs.stdenvNoCC.mkDerivation {
     pname = "openbsd-amd64-sysroot";
     version = osVersion;
     src = if early then pkgs.fetchurl {
-      url = "https://ftp.eu.openbsd.org/pub/OpenBSD/3.5/amd64/base35.tgz";
+      urls = urls "base35.tgz";
       sha256 = "1041bed06a9357692ee1cdeab09fe12c9d32862af35b8ca49c70a489f49e3dcb";
     } else pkgs.fetchurl {
-      url = "https://${if legacy then "ftp.eu" else "cdn"}.openbsd.org/pub/OpenBSD/${osVersion}/amd64/install${release}.iso";
+      urls = urls "install${release}.iso";
       sha256 = {
         "7.9" = "7a4a92e953618035097c796a90b54424a0f3ae775552e1e7d102cf8a5130449f";
         "5.9" = "685262fc665425c61a2952b2820389a2d331ac5558217080e6d564d2ce88eecb";
       }.${osVersion};
     };
     compilerSet = lib.optionalString early (pkgs.fetchurl {
-      url = "https://ftp.eu.openbsd.org/pub/OpenBSD/3.5/amd64/comp35.tgz";
+      urls = urls "comp35.tgz";
       sha256 = "d75980c7d961cab17edbc63e13a6b5a33d206917464e07a980ff1bfd3496da27";
     });
     nativeBuildInputs = [ pkgs.libarchive pkgs.python3 ];
