@@ -223,6 +223,10 @@ let
       runHook postInstall
     '';
   });
+  regex = import ./windows-regex.nix {
+    inherit pkgs unistring;
+    cross = { inherit compiler cxxCompiler target sdk tools cflags ldflags; };
+  };
   networkLibraries = [ tls zlib brotli zstd cares nghttp2 iconv unistring idn2 ];
   curl = (cmakeLibrary sourcePkgs.curlMinimal [
     "-DBUILD_STATIC_LIBS=ON" "-DBUILD_CURL_EXE=OFF" "-DCURL_BUILD_EVERYTHING=OFF"
@@ -240,7 +244,7 @@ let
     '';
   });
 in {
-  inherit sdk target compiler tools cflags ldflags jansson tls curl;
+  inherit sdk target compiler tools cflags ldflags jansson tls curl regex;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }:
     pkgs.stdenvNoCC.mkDerivation {

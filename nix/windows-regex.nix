@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-only
-{ pkgs, windows, threads, unistring, winver ? "0x0601" }:
+{ pkgs, windows ? null, threads ? null, unistring, winver ? "0x0601", cross ? null }:
 let
+  nativeCharset = cross == null;
+  stdenv = if nativeCharset then windows.stdenv else pkgs.stdenvNoCC;
   revision = "58df1afe785d3067cfa474ab57ccf283665dfa38";
   gnulib = pkgs.fetchzip {
     name = "gnulib-${revision}";
@@ -50,17 +52,28 @@ let
     #include "localcharset.h"
     const char *locale_charset(void) { return "UTF-8"; }
   '';
-in windows.stdenv.mkDerivation {
-  pname = "snajpagent-regex-windows-static";
+in stdenv.mkDerivation {
+  pname = "snajpagent-regex-${if nativeCharset then "windows" else cross.target}-static";
   version = "20260905";
   dontUnpack = true;
   strictDeps = true;
+  configurePlatforms = [];
   nativeBuildInputs = [ pkgs.autoconf pkgs.automake pkgs.python3 pkgs.perl
-                        pkgs.gettext windows.buildPackages.pkg-config ];
-  buildInputs = [ threads unistring ];
-  env.CFLAGS = "-Os -g -D_WIN32_WINNT=${winver} -DWINVER=${winver}"
+                        pkgs.gettext (if nativeCharset then windows.buildPackages.pkg-config else pkgs.pkg-config) ];
+  buildInputs = [ unistring ] ++ pkgs.lib.optional (threads != null) threads;
+  env.CFLAGS = if !nativeCharset then cross.cflags else "-Os -g -D_WIN32_WINNT=${winver} -DWINVER=${winver}"
     + pkgs.lib.optionalString windows.stdenv.cc.isClang " -pthread";
-  preConfigure = ''
+  preConfigure = pkgs.lib.optionalString (!nativeCharset) ''
+    export CC="${cross.compiler} --target=${cross.target} --sysroot=${cross.sdk}"
+    export CXX="${cross.cxxCompiler} --target=${cross.target} --sysroot=${cross.sdk}"
+    export AR=${cross.tools}/llvm-ar RANLIB=${cross.tools}/llvm-ranlib
+    export NM=${cross.tools}/llvm-nm STRIP=${cross.tools}/llvm-strip
+    export LDFLAGS='${cross.ldflags}'
+    # Use Gnulib's complete UTF-8 state/conversion replacements. Old BSD's
+    # libc multibyte and regex implementations require missing locale data.
+    export gl_cv_func_mbrtowc_incomplete_state=no
+    export gl_cv_func_mbrtowc_sanitycheck=no
+  '' + '' 
     cp ${configure} configure.ac
     cp ${makefile} Makefile.am
     chmod u+w configure.ac Makefile.am
@@ -74,7 +87,11 @@ in windows.stdenv.mkDerivation {
     autoreconf -fiv
   '';
   configureFlags = [ "--disable-nls" "--disable-dependency-tracking"
-                     "--with-libunistring-prefix=${unistring}" ];
+                     "--with-libunistring-prefix=${unistring}" ]
+    ++ pkgs.lib.optionals (!nativeCharset) [
+      "--build=${pkgs.stdenv.buildPlatform.config}" "--host=${cross.target}"
+      "--disable-shared" "--enable-static" "--with-pic"
+    ];
   enableParallelBuilding = true;
   installPhase = ''
     runHook preInstall
