@@ -147,6 +147,9 @@ let
     postPatch = ''
       perl scripts/config.pl set MBEDTLS_THREADING_C
       perl scripts/config.pl set MBEDTLS_THREADING_PTHREAD
+      # NetBSD 5 exposes native monotonic clocks but advertises POSIX 1990.
+      substituteInPlace library/platform_util.c \
+        --replace-fail '|| defined(__HAIKU__)' '|| defined(__HAIKU__) || defined(__NetBSD__)'
       substituteInPlace library/net_sockets.c \
         --replace-fail 'fd >= FD_SETSIZE' '(unsigned int) fd >= FD_SETSIZE'
       # The RSA self-test uses the word-sized API provided by this native libc.
