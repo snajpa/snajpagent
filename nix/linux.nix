@@ -37,13 +37,15 @@ let
       runHook postCheck
     '';
   });
-  pdf = static.poppler.override {
+  pdf = (static.poppler.override {
     minimal = true;
     qt5Support = false;
     qt6Support = false;
     introspectionSupport = false;
     utils = false;
-  };
+  }).overrideAttrs (old: {
+    patches = (old.patches or []) ++ [ ./poppler-static-fonts.patch ];
+  });
   office = import ./office-linux.nix { inherit pkgs musl static; };
   tls = static.mbedtls;
   curl = (static.curlMinimal.override {

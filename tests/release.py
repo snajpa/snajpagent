@@ -597,3 +597,15 @@ for node in nodes:
     for target in node["attrs"].get("aria-labelledby", "").split():
         assert target in ids
 print("PASS: latest-stable-only downloads match all channel assets, requirements, hashes and sizes")
+
+
+# Keep Poppler's own static test consumers linked through the same ordered
+# font dependencies as the application; CMake's imported archives omit them.
+linux = (root / "nix/linux.nix").read_text()
+assert "./poppler-static-fonts.patch" in linux
+fonts = (root / "nix/poppler-static-fonts.patch").read_text()
+assert "+  if(NOT BUILD_SHARED_LIBS)" in fonts
+assert "+    pkg_check_modules(STATIC_FONTS REQUIRED fontconfig freetype2)" in fonts
+assert "+    set_property(TARGET Fontconfig::Fontconfig APPEND PROPERTY" in fonts
+assert 'INTERFACE_LINK_LIBRARIES "${STATIC_FONTS_STATIC_LDFLAGS}"' in fonts
+print("PASS: static PDF consumers retain ordered font-library dependencies")

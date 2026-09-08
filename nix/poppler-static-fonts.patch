@@ -1,0 +1,21 @@
+From: snajpagent maintainers
+Subject: Retain static font-library dependency order in Poppler consumers
+
+CMake's Fontconfig and FreeType imported targets name the archives without
+their private dependencies. Use the installed pkg-config metadata for static
+consumers, including Poppler's own test executables. Keep shared builds intact.
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -159,6 +159,11 @@
+ find_package(Freetype ${FREETYPE_VERSION} REQUIRED)
+ if(WITH_FONTCONFIGURATION_FONTCONFIG)
+   find_package(Fontconfig ${FONTCONFIG_VERSION} REQUIRED)
++  if(NOT BUILD_SHARED_LIBS)
++    pkg_check_modules(STATIC_FONTS REQUIRED fontconfig freetype2)
++    set_property(TARGET Fontconfig::Fontconfig APPEND PROPERTY
++      INTERFACE_LINK_LIBRARIES "${STATIC_FONTS_STATIC_LDFLAGS}")
++  endif()
+ elseif(WITH_FONTCONFIGURATION_ANDROID)
+   find_library(Androidlib NAMES android REQUIRED)
+ endif()

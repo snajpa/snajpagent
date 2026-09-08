@@ -26,6 +26,9 @@ The Linux library-only FFmpeg profile runs upstream `testprogs fate`; the broad
 libraries. `nix/office-linux.nix` defines the headless static LibreOfficeKit
 dependency build using the source's component registration; its archives,
 runtime layout and application linkage still need build validation.
+Static Poppler consumers retain Fontconfig/FreeType's ordered pkg-config
+dependencies, including Expat, Brotli and bzip2. The patch applies to static
+fontconfig builds; upstream test executables exercise the same link interface.
 
 `src/office.c` runs one disposable child of the same binary through the existing
 bounded child runner. `src/office_package.c` checks ZIP/XML before import;
