@@ -214,6 +214,40 @@ assert '"-DANDROID_PLATFORM=android-${api}"' in android
 assert '"-DCMAKE_FIND_ROOT_PATH=${lib.concatStringsSep ";" dependencies}"' in android
 print("PASS: Android static libraries use NDK archiving tools and Bionic target")
 
+# Android API24 lacks nl_langinfo; select Bionic's built-in UTF-8 locale directly.
+platform = (root / "src/platform.c").read_text()
+locale_init = re.findall(r"bool\nsnag_text_locale_init\(void\)\n\{.*?\n}",
+                         platform, re.S)[-1]
+with tempfile.TemporaryDirectory(prefix="android-locale-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    source = tmp / "locale.c"
+    source.write_text("""
+#include <assert.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <string.h>
+#define __ANDROID__ 1
+#define LC_CTYPE 0
+static bool fail;
+static char *setlocale(int category, const char *name)
+{
+    assert(category == LC_CTYPE && !strcmp(name, "C.UTF-8"));
+    return fail ? NULL : "C.UTF-8";
+}
+""" + locale_init + """
+int main(void)
+{
+    assert(snag_text_locale_init());
+    fail = true;
+    assert(!snag_text_locale_init());
+    return 0;
+}
+""")
+    subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
+                    "-o", str(tmp / "locale")], check=True)
+    subprocess.run([str(tmp / "locale")], check=True)
+print("PASS: Android locale initialization needs no API26 langinfo symbol")
+
 # Feature-selection macros follow the requested target, including cross-builds.
 for target in ("Linux", "Darwin", "FreeBSD", "OpenBSD", "NetBSD", "Windows_NT"):
     for extra in ([], ["CPPFLAGS=-D_POSIX_C_SOURCE=200809L"]):

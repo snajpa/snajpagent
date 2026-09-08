@@ -2336,6 +2336,9 @@ snag_text_locale_init(void)
 #ifdef SNAJPAGENT_STATIC_UTF8
     /* UTF-8 decoding, regex and width use the static Unicode libraries. */
     return setlocale(LC_CTYPE, "C") != NULL;
+#elif defined(__ANDROID__)
+    /* Bionic has built-in UTF-8; nl_langinfo requires Android API26. */
+    return setlocale(LC_CTYPE, "C.UTF-8") != NULL;
 #else
     const char *locale = setlocale(LC_CTYPE, "");
     const char *codeset = locale ? nl_langinfo(CODESET) : NULL;
