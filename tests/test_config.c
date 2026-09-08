@@ -64,90 +64,56 @@ expect_ui(const char *path, const char *key, const char *value, bool valid)
 }
 
 static void
-test_compact_setting(const char *path)
-{
-    static const struct {
-        const char *text;
-        uint32_t expected;
-        bool valid;
-    } cases[] = {
-        {"auto", SNAG_CONFIG_COMPACT_AUTO, true},
-        {"0", 0u, true},
-        {"1", 1u, true},
-        {"120000", 120000u, true},
-        {"4000000", 4000000u, true},
-        {"4000001", 0u, false},
-        {"4294967295", 0u, false},
-        {"-1", 0u, false},
-        {"90%", 0u, false},
-        {"automatic", 0u, false},
-        {"auto\nauto_compact_input_tokens=1", 0u, false}
-    };
-
-    for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
-        struct snag_config config;
-        char data[256], error[256] = {0};
-        int n = snprintf(data, sizeof(data),
-                         "[provider first]\nauto_compact_input_tokens=%s\n"
-                         "[provider second]\n", cases[i].text);
-
-        assert(n > 0 && (size_t)n < sizeof(data));
-        write_bytes(path, data, (size_t)n);
-        snag_config_init(&config);
-        assert((snag_config_load(&config, path, NULL,
-                                error, sizeof(error)) == 0) == cases[i].valid);
-        if (cases[i].valid) {
-            assert(config.providers[0].auto_compact_input_tokens ==
-                   cases[i].expected);
-            assert(config.providers[1].auto_compact_input_tokens ==
-                   SNAG_CONFIG_COMPACT_AUTO);
-        } else {
-            assert(error[0]);
-        }
-        snag_config_free(&config);
-    }
-}
-
-static void
 test_numeric_settings(const char *path)
 {
     struct snag_config config;
     const struct {
-        const char *format, *duplicate, *values[9];
+        const char *format, *duplicate, *values[11];
         uint32_t *value, initial;
-        size_t first, end, count;
+        size_t first, end, count, capacity;
     } cases[] = {
+        {"[provider first]\nauto_compact_input_tokens=%s\n[provider second]\n", NULL,
+         {"auto", "0", "1", "120000", "4000000", "4000001", "4294967295", "-1",
+          "90%", "automatic", "auto\nauto_compact_input_tokens=1"},
+         &config.providers[0].auto_compact_input_tokens, SNAG_CONFIG_COMPACT_AUTO, 0u, 5u, 11u, 256u},
         {"[tool]\nmax_parallel_commands=%s\n[provider openai]\nparallel_tool_calls=false\n",
          "[tool]\nmax_parallel_commands=4\nmax_parallel_commands=2\n",
-         {"0", "1", "4", "32", "33", "-1", "no"}, &config.max_parallel_commands, 4u, 1u, 4u, 7u},
+         {"0", "1", "4", "32", "33", "-1", "no"}, &config.max_parallel_commands, 4u, 1u, 4u, 7u, 128u},
         {"[tool]\nmax_wait_ms=%s\n", "[tool]\nmax_wait_ms=1\nmax_wait_ms=2\n",
          {"1", "60000", "4294967295", "0", "-1", "4294967296", "never"},
-         &config.max_wait_ms, 60000u, 0u, 3u, 7u},
+         &config.max_wait_ms, 60000u, 0u, 3u, 7u, 96u},
         {"[agent]\nmax_turn_retries=%s\n", "[agent]\nmax_turn_retries=3\nmax_turn_retries=0\n",
          {"0", "1", "3", "17", "4294967295", "4294967296", "-1", "3.5", "never"},
-         &config.max_turn_retries, 5u, 0u, 5u, 9u}
+         &config.max_turn_retries, 5u, 0u, 5u, 9u, 96u}
     };
     for (size_t c = 0u; c < sizeof(cases) / sizeof(cases[0]); ++c) {
         for (size_t i = 0u; i < cases[c].count; ++i) {
-            char text[128], error[256] = {0};
-            size_t capacity = c == 0u ? sizeof(text) : 96u;
+            char text[256], error[256] = {0};
+            size_t capacity = cases[c].capacity;
             int n = snprintf(text, capacity, cases[c].format, cases[c].values[i]);
             assert(n > 0 && (size_t)n < capacity);
             write_bytes(path, text, (size_t)n);
             snag_config_init(&config);
             assert(*cases[c].value == cases[c].initial);
             bool valid = i >= cases[c].first && i < cases[c].end;
-            assert((snag_config_load(&config, path, c == 2u ? "/tmp" : NULL,
+            assert((snag_config_load(&config, path, c == 3u ? "/tmp" : NULL,
                                     error, sizeof(error)) == 0) == valid);
             if (valid) {
-                assert(*cases[c].value == (uint32_t)strtoul(cases[c].values[i], NULL, 10));
+                assert(*cases[c].value == (!strcmp(cases[c].values[i], "auto") ?
+                    SNAG_CONFIG_COMPACT_AUTO : (uint32_t)strtoul(cases[c].values[i], NULL, 10)));
                 if (c == 0u)
+                    assert(config.providers[1].auto_compact_input_tokens == SNAG_CONFIG_COMPACT_AUTO);
+                if (c == 1u)
                     assert(!config.providers[0].parallel_tool_calls);
+            } else {
+                assert(error[0]);
             }
             snag_config_free(&config);
         }
-        write_bytes(path, cases[c].duplicate, strlen(cases[c].duplicate));
-        expect_invalid(path);
+        if (cases[c].duplicate) {
+            write_bytes(path, cases[c].duplicate, strlen(cases[c].duplicate));
+            expect_invalid(path);
+        }
     }
 }
 
@@ -786,7 +752,6 @@ main(void)
             values, 0xfdu, expanded, sizeof(expanded)) < 0);
     }
 
-    test_compact_setting(path);
     test_numeric_settings(path);
     test_auth_settings(path);
     expect_ui(path, "prompt", "{chat:{rollout-idle:x}}{rollout-idle:y}{rollout-active:z}", false);
