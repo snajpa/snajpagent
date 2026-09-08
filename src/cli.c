@@ -314,9 +314,7 @@ parse_options(struct snag_cli *cli, int argc, char **argv, int *index,
                 return -1;
         } else if (strcmp(name, "--color") == 0) {
             if (!attached && *index + 1 < argc &&
-                (strcmp(argv[*index + 1], "auto") == 0 ||
-                 strcmp(argv[*index + 1], "always") == 0 ||
-                 strcmp(argv[*index + 1], "never") == 0))
+                snag_string_in(argv[*index + 1], "auto always never"))
                 attached = argv[++*index];
             if ((attached ? parse_color_value(cli, attached, name, error, error_size) :
                  set_color(cli, SNAG_CLI_COLOR_ALWAYS, name, error, error_size)) < 0)

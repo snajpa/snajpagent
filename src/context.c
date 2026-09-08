@@ -792,8 +792,7 @@ context_event(void *opaque, const struct snag_session *state,
         return append_message(builder, "user", text);
     if (!strcmp(type, "response_started"))
         return append_deferred_steering(builder);
-    if (!strcmp(type, "steering_added") || !strcmp(type, "irc_reply_reminder") ||
-        !strcmp(type, "response_output_correction")) {
+    if (snag_string_in(type, "steering_added irc_reply_reminder response_output_correction")) {
         bool correction = !strcmp(type, "response_output_correction");
         const char *id = snag_json_string(data, correction ? "correction_id" : "steering_id");
         bool pending = builder->steering && builder->steering_seen <
@@ -816,8 +815,7 @@ context_event(void *opaque, const struct snag_session *state,
     if (!strcmp(type, "process_closed"))
         return append_process_closed(builder, snag_json_string(data, "cause"),
                                       json_object_get(data, "result"));
-    if (!strcmp(type, "turn_completed") || !strcmp(type, "turn_completed_silent") ||
-        !strcmp(type, "turn_failed") || !strcmp(type, "turn_interrupted")) {
+    if (snag_string_in(type, "turn_completed turn_completed_silent turn_failed turn_interrupted")) {
         if (append_deferred_steering(builder) < 0)
             return -1;
         if (!strcmp(type, "turn_failed"))
@@ -1171,8 +1169,7 @@ compact_event(void *opaque, const struct snag_session *state,
     struct context_builder *builder = opaque;
     size_t before = json_array_size(builder->request_input);
     bool was_active = builder->active_turn;
-    bool group = !strcmp(type, "response_completed") ||
-                 !strcmp(type, "tool_finished") || !strcmp(type, "process_closed");
+    bool group = snag_string_in(type, "response_completed tool_finished process_closed");
 
     if (builder->compact_stopped)
         return 0;

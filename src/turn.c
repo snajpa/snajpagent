@@ -236,7 +236,7 @@ item_valid(const json_t *value)
             provider_id_valid(snag_json_string(value, "provider_call_id")) &&
             tool_name_valid(snag_json_string(value, "name")) &&
             arguments_bounded(json_object_get(value, "arguments"));
-    return (!strcmp(kind, "assistant") || !strcmp(kind, "refusal")) &&
+    return snag_string_in(kind, "assistant refusal") &&
         snag_json_exact_keys(value, "kind local_item_id phase provider_item_id text") &&
         phase && (!strcmp(phase, "final_answer") ||
                   (!strcmp(kind, "assistant") && !strcmp(phase, "commentary"))) &&
@@ -653,7 +653,7 @@ snag_tool_result_valid(const json_t *result)
     if (!json_is_null(handle) ||
         (!json_is_null(reason_value) &&
          !(reason && strcmp(reason, "output_drain_timeout") == 0 &&
-           (!strcmp(status, "succeeded") || !strcmp(status, "failed") || !strcmp(status, "signaled")))))
+           snag_string_in(status, "succeeded failed signaled"))))
         return -1;
     if (snag_string_in(status, "succeeded failed"))
         return json_is_integer(exit_value) && json_is_null(signal_value) ? 0 : -1;

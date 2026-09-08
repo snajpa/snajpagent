@@ -332,8 +332,7 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
 {
     uint64_t seq;
     if (app->ui.input_received_ms &&
-        (!strcmp(type, "steering_added") || !strcmp(type, "future_turn_queued") ||
-         !strcmp(type, "future_turn_edited")) &&
+        snag_string_in(type, "steering_added future_turn_queued future_turn_edited") &&
         snag_json_set_new(data, "received_at_ms",
                          json_integer((json_int_t)app->ui.input_received_ms)) < 0) {
         json_decref(data);

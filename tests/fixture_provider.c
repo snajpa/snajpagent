@@ -229,11 +229,8 @@ add_create_goal_call(struct snag_response_graph *graph, unsigned int cycle,
 static bool
 managed_prompt(const char *prompt)
 {
-    return strcmp(prompt, "managed_wrong_handle") == 0 ||
-           strcmp(prompt, "managed_malformed") == 0 ||
-           strcmp(prompt, "managed_final_violation") == 0 ||
-           strcmp(prompt, "managed_wrong_tool_violation") == 0 ||
-           strcmp(prompt, "managed_multiple_violation") == 0;
+    return snag_string_in(prompt, "managed_wrong_handle managed_malformed "
+        "managed_final_violation managed_wrong_tool_violation managed_multiple_violation");
 }
 
 static int
@@ -729,9 +726,7 @@ flood_done:
         }
         return final_answer(&out, "msg_fixture_one_shot_signal_final", "shutdown was not requested");
     }
-    if (strcmp(prompt, "slow") == 0 || strcmp(prompt, "slow_utf8") == 0 ||
-        strcmp(prompt, "queue_slow") == 0 ||
-        strcmp(prompt, "slow_resteer") == 0) {
+    if (snag_string_in(prompt, "slow slow_utf8 queue_slow slow_resteer")) {
         if (cycle == 1u) {
             if (strcmp(prompt, "slow_utf8") == 0) {
                 static const char euro[] = "€";
@@ -989,9 +984,7 @@ snag_fixture_response(const char *prompt, const json_t *steering, const json_t *
     rc = fixture_response((char *)resolved.data, expanded, workspace, cycle,
                            goal_prompt, goal_turn_count, emit, pump, opaque, graph, failure, error, error_size);
     if (rc == 0 && !graph->usage.input_known &&
-        (!strcmp((char *)resolved.data, "ping") ||
-         !strcmp((char *)resolved.data, "native_compact_unavailable") ||
-         !strcmp((char *)resolved.data, "compact_budget")))
+        snag_string_in((char *)resolved.data, "ping native_compact_unavailable compact_budget"))
         set_usage(graph, !strcmp((char *)resolved.data, "compact_budget") ? 90000u : 1000u, 1u);
 out:
     json_decref(expanded); snag_buf_free(&resolved); return rc;
