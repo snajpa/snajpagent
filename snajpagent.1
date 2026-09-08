@@ -47,6 +47,24 @@ IRC connections.  Agents and channel operators share the room; the runtime
 owns joining, history, and reconnection.  Startup flags and runtime slash
 commands control this native networking without changing session identity.
 .SH "Getting started"
+.SS "Downloaded macOS executables"
+The macOS downloads are not Developer ID signed or notarized. A quarantined
+browser download can be blocked at first launch with
+.BR "Killed: 9" .
+After renaming the executable to
+.B snajpagent
+and granting execute permission, compare its SHA-256 with the release's
+published checksums. Only if you trust that file, remove its quarantine
+attribute and launch it:
+.PP
+.nf
+shasum -a 256 ./snajpagent
+xattr -d com.apple.quarantine ./snajpagent
+./snajpagent
+.fi
+.PP
+This is a per-file security exception. Keep system-wide macOS protections
+enabled; execute permission alone does not clear quarantine.
 .SS Provider setup
 On a fresh interactive launch without configuration or existing environment
 credentials, choose ChatGPT/Codex, OpenRouter, OpenAI, or a custom provider.

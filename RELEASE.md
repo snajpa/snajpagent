@@ -70,6 +70,12 @@ The current required outputs are:
 | `openbsd-amd64-legacy` | `snajpagent` | OpenBSD 5.9 libc/thread ABI, static application libraries; experimental |
 | `openbsd-amd64-early` | `snajpagent` | OpenBSD 3.5 libc/thread ABI, non-PIE, static application libraries; experimental |
 
+macOS first-launch qualification includes a browser-downloaded file with its
+quarantine attribute intact. Running after removing quarantine proves only the
+manual-exception path. Current builds are not Developer ID signed or notarized;
+keep the per-file exception in the download instructions until that changes.
+Ad-hoc code signatures alone do not establish distribution trust.
+
 Both macOS standalone slices and the universal executable ship. Experimental
 does not mean optional: publish implemented builds with their actual testing
 status, minimum build target, tested OS versions, and known limitations.

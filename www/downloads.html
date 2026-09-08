@@ -55,6 +55,15 @@
         <code>snajpagent</code>, run <code>chmod +x snajpagent</code> and keep it
         in a user-owned directory. On Windows, keep the <code>.exe</code>
         extension. Run it in your project directory to set up a provider.</p>
+      <p><strong>macOS first launch:</strong> these downloads are not notarized.
+        macOS can block a quarantined download with <code>Killed: 9</code>.
+        After checking its SHA-256 against the release checksums, and only if
+        you trust the file, remove quarantine from that executable:</p>
+      <pre><code>shasum -a 256 ./snajpagent
+xattr -d com.apple.quarantine ./snajpagent
+./snajpagent</code></pre>
+      <p>This exception applies to that file only; keep macOS security protections
+        enabled. <code>chmod +x</code> alone does not clear quarantine.</p>
       <p>Stable binaries install updates in the background. The running process
         continues using its original version; one banner tells you when to
         restart. Set <code>auto_update = false</code> in <code>[agent]</code>
