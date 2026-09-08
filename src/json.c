@@ -371,6 +371,24 @@ snag_json_integer_u64(const json_t *object, const char *key, uint64_t *out)
     return 0;
 }
 
+/* Advertised/configured limits are positive; zero is internal absence only. */
+bool
+snag_json_nullable_limit(const json_t *object, const char *key, uint64_t max,
+               uint64_t *value)
+{
+    json_t *entry = json_object_get(object, key);
+    json_int_t integer;
+
+    *value = 0u;
+    if (json_is_null(entry))
+        return true;
+    if (!json_is_integer(entry) || (integer = json_integer_value(entry)) <= 0 ||
+        (uint64_t)integer > max)
+        return false;
+    *value = (uint64_t)integer;
+    return true;
+}
+
 int
 snag_json_optional_u64(const json_t *object, const char *key, uint64_t *out, bool *known)
 {

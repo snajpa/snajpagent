@@ -1214,8 +1214,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         json_t *steering_ids = json_object_get(data, "steering_ids");
         struct snag_input_observation value = {.valid = true};
         uint64_t cycle;
-        bool requested_output_known =
-            !json_is_null(json_object_get(data, "requested_output_tokens"));
         bool state_allows_start;
 
         state_allows_start = !session->response_open &&
@@ -1257,11 +1255,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
              !json_is_false(json_object_get(data, "source_bound"))) ||
             (!json_is_null(json_object_get(data, "hard_input_tokens")) &&
              snag_json_integer_u64(data, "hard_input_tokens", &n) < 0) ||
-            (requested_output_known &&
-             (snag_json_integer_u64(data, "requested_output_tokens",
-                                   &value.requested_output_tokens) < 0 ||
-              value.requested_output_tokens == 0u ||
-              value.requested_output_tokens > SNAG_CONFIG_TOKEN_LIMIT_MAX)) ||
+            !snag_json_nullable_limit(data, "requested_output_tokens",
+                                     SNAG_CONFIG_TOKEN_LIMIT_MAX, &value.requested_output_tokens) ||
             !profile || strcmp(profile, SNAJPAGENT_PROFILE_ID) != 0 ||
             (strcmp(method, "anchored_upper_bound") == 0 ?
                 (!snag_input_observation_matches(&session->usage_anchor,
@@ -1332,10 +1327,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *provider_source_sha256 =
             snag_json_string(data, "provider_source_sha256");
         const char *request_hash = snag_json_string(data, "request_sha256");
-        json_t *context_limit =
-            json_object_get(data, "context_limit_tokens");
-        json_t *requested_input =
-            json_object_get(data, "requested_input_tokens");
         json_t *observed_ceiling =
             json_object_get(data, "observed_hard_input_tokens");
         uint64_t context_limit_tokens = 0u;
@@ -1358,23 +1349,12 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                                                 SNAG_SHA256_HEX_LEN) ||
             strcmp(request_hash,
                    session->active_accounting.request_sha256) != 0 ||
-            (!json_is_null(context_limit) &&
-             (snag_json_integer_u64(data, "context_limit_tokens",
-                                   &context_limit_tokens) < 0 ||
-              context_limit_tokens == 0u ||
-              context_limit_tokens >
-                  SNAG_CONFIG_TOKEN_LIMIT_MAX)) ||
-            (!json_is_null(requested_input) &&
-             (snag_json_integer_u64(data, "requested_input_tokens",
-                                   &requested_input_tokens) < 0 ||
-              requested_input_tokens == 0u ||
-              requested_input_tokens >
-                  SNAG_CONFIG_TOKEN_LIMIT_MAX)) ||
-            (!json_is_null(observed_ceiling) &&
-             (snag_json_integer_u64(data, "observed_hard_input_tokens",
-                                   &recorded_ceiling) < 0 ||
-              recorded_ceiling == 0u ||
-              recorded_ceiling > SNAG_CONFIG_TOKEN_LIMIT_MAX)))
+            !snag_json_nullable_limit(data, "context_limit_tokens",
+                                     SNAG_CONFIG_TOKEN_LIMIT_MAX, &context_limit_tokens) ||
+            !snag_json_nullable_limit(data, "requested_input_tokens",
+                                     SNAG_CONFIG_TOKEN_LIMIT_MAX, &requested_input_tokens) ||
+            !snag_json_nullable_limit(data, "observed_hard_input_tokens",
+                                     SNAG_CONFIG_TOKEN_LIMIT_MAX, &recorded_ceiling))
             goto invalid;
         expected_ceiling = snag_capacity_safety_ceiling(
             context_limit_tokens, requested_input_tokens,

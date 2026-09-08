@@ -38,24 +38,6 @@ cache_string(const json_t *value, size_t max)
            snag_utf8_valid((const unsigned char *)text, len, true);
 }
 
-/* Advertised/configured limits are positive; zero is internal absence only. */
-static bool
-nullable_limit(const json_t *object, const char *key, uint64_t max,
-               uint64_t *value)
-{
-    json_t *entry = json_object_get(object, key);
-    json_int_t integer;
-
-    *value = 0u;
-    if (json_is_null(entry))
-        return true;
-    if (!json_is_integer(entry) || (integer = json_integer_value(entry)) <= 0 ||
-        (uint64_t)integer > max)
-        return false;
-    *value = (uint64_t)integer;
-    return true;
-}
-
 static bool
 capacity_limits_valid(const struct snag_model_capacity *c)
 {
@@ -77,19 +59,19 @@ read_limits(const json_t *limits, struct snag_model_capacity *c)
     if (!snag_json_exact_keys(limits,
         "auto_compact_input_tokens context_window_tokens effective_context_window_percent "
         "input_context_window_tokens max_context_window_tokens max_input_tokens max_output_tokens") ||
-        !nullable_limit(limits, "context_window_tokens",
+        !snag_json_nullable_limit(limits, "context_window_tokens",
                         SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->context_window_tokens) ||
-        !nullable_limit(limits, "max_context_window_tokens",
+        !snag_json_nullable_limit(limits, "max_context_window_tokens",
                         SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->max_context_window_tokens) ||
-        !nullable_limit(limits, "input_context_window_tokens",
+        !snag_json_nullable_limit(limits, "input_context_window_tokens",
                         SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->input_context_window_tokens) ||
-        !nullable_limit(limits, "max_input_tokens",
+        !snag_json_nullable_limit(limits, "max_input_tokens",
                         SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->max_input_tokens) ||
-        !nullable_limit(limits, "max_output_tokens",
+        !snag_json_nullable_limit(limits, "max_output_tokens",
                         SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->max_output_tokens) ||
-        !nullable_limit(limits, "auto_compact_input_tokens",
+        !snag_json_nullable_limit(limits, "auto_compact_input_tokens",
                         SNAG_CONFIG_TOKEN_LIMIT_MAX, &c->auto_compact_input_tokens) ||
-        !nullable_limit(limits, "effective_context_window_percent", 100u, &percent))
+        !snag_json_nullable_limit(limits, "effective_context_window_percent", 100u, &percent))
         return false;
     c->effective_context_window_percent = (unsigned int)percent;
     return capacity_limits_valid(c);

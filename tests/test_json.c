@@ -121,6 +121,16 @@ main(void)
     assert(json_object_del(fields, "name_suffix") == 0);
     assert(snag_json_exact_keys(fields, ""));
     json_decref(fields);
+    const char *limits[] = {"{}", "{\"n\":null}", "{\"n\":0}", "{\"n\":1}", "{\"n\":100}",
+        "{\"n\":101}", "{\"n\":-1}", "{\"n\":1.0}", "{\"n\":true}", "{\"n\":\"1\"}"};
+    for (size_t i = 0; i < sizeof(limits) / sizeof(limits[0]); ++i) {
+        json_t *limit = json_loadb(limits[i], strlen(limits[i]), 0, NULL);
+        uint64_t value = 999u;
+        assert(limit);
+        assert(snag_json_nullable_limit(limit, "n", 100u, &value) == (i == 1u || i == 3u || i == 4u));
+        assert(value == (i == 3u ? 1u : i == 4u ? 100u : 0u));
+        json_decref(limit);
+    }
     struct snag_json_document document = {0};
     json_t *value = json_pack("{s:i}", "a", 1);
     char expected[SNAG_SHA256_HEX_LEN + 1u];
