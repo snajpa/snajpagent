@@ -849,9 +849,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             strcmp(compact_id, session->active_compact_id) != 0 ||
             !snag_string_in(reason, reasons))
             goto invalid;
-        session->active_compact_id[0] = '\0';
-        session->active_compact_source_sha256[0] = '\0';
-        session->active_compact_source_seq = 0u;
+        clear_compaction_state(session);
     } else if (strcmp(type, "compaction_completed") == 0) {
         static const char methods[] =
             "exact unknown statistical_upper_estimate qualified_upper_bound";
@@ -892,9 +890,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             return -1;
         memcpy(session->compact_id, compact_id, sizeof(session->compact_id));
         session->compact_seq = session->active_compact_source_seq;
-        session->active_compact_id[0] = '\0';
-        session->active_compact_source_sha256[0] = '\0';
-        session->active_compact_source_seq = 0u;
+        clear_compaction_state(session);
     } else if (strcmp(type, "model_selection_changed") == 0) {
         const char *old_provider = snag_json_string(data, "old_provider");
         const char *new_provider = snag_json_string(data, "new_provider");
@@ -1882,9 +1878,7 @@ snag_store_scan_log(struct snag_session *session,
     if (next_seq == 1) {
         return snag_fail(error, error_size, EINVAL, "session event log is empty");
     }
-    session->active_compact_id[0] = '\0';
-    session->active_compact_source_sha256[0] = '\0';
-    session->active_compact_source_seq = 0u;
+    clear_compaction_state(session);
     return 0;
 }
 
