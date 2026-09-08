@@ -969,6 +969,44 @@ capture_markdown_width(const char *text, bool enabled, bool split,
 }
 
 static void
+test_update_banner(void)
+{
+    const char *const sources[] = {"streamed", "```c\nint", "**bold", "# heading"};
+    const char *banner = "=== snajpagent updated ===\nInstalled test. Restart when convenient.\nChangelog: https://example.test/#changelog\n";
+    for (size_t i = 0; i < sizeof(sources) / sizeof(sources[0]); ++i) {
+        struct snag_render render;
+        struct snag_term term;
+        struct snag_buf delivered;
+        char output[4096];
+        struct output_capture capture = capture_open(false, true);
+        snag_term_init(&term);
+        term.columns = 120u;
+        assert(snag_term_restore_draft(&term, "keep my draft") == 0);
+        size_t cursor = term.cursor;
+        snag_render_init(&render, 0u);
+        render.stderr_terminal = true;
+        snag_render_set_color(&render, SNAG_COLOR_NEVER);
+        snag_render_attach_term(&render, &term);
+        snag_buf_init(&delivered, 1024u);
+        assert(snag_render_public_begin(&render, STDERR_FILENO, NULL) == 0);
+        assert(snag_render_public(&render, sources[i], strlen(sources[i]), &delivered) == 0);
+        assert(snag_render_update(&render, banner) == 0);
+        assert(term.cursor == cursor && term.draft.len == strlen("keep my draft"));
+        assert(memcmp(term.draft.data, "keep my draft", term.draft.len) == 0);
+        assert(snag_render_public(&render, " tail", 5u, &delivered) == 0);
+        assert(snag_render_public_end(&render) == 0);
+        assert(delivered.len == strlen(sources[i]) + 5u);
+        assert(memcmp(delivered.data, sources[i], strlen(sources[i])) == 0);
+        snag_buf_free(&delivered);
+        snag_render_free(&render);
+        snag_term_close(&term);
+        assert(capture_close(&capture, output, sizeof(output), 0u) > 0u);
+        assert(strstr(output, "\n\n=== snajpagent updated ===\n"));
+        assert(strstr(output, "#changelog\n\n"));
+    }
+}
+
+static void
 test_markdown_fences(void)
 {
     static const struct { const char *source, *expected; } cases[] = {
@@ -2190,6 +2228,7 @@ main(void)
     test_destination_editor();
     test_markdown_streaming();
     test_markdown_fences();
+    test_update_banner();
     test_markdown_tables();
     test_tool_previews();
     test_semantic_history();

@@ -104,6 +104,9 @@ with tempfile.TemporaryDirectory(prefix="update-", dir=os.environ["TMPDIR"]) as 
         ("version-invalid", dict(version="broken")), ("insecure", dict(url="http://example.com/update")),
     ]:
         exe = reset(label, **changes); unchanged(exe, run(exe))
+    for index, bad in enumerate(["+0.99.2", "-1.99.2", "0.99.+2", "00.99.2", "0.99.2-a",
+                                 "4294967296.99.2", "9" * 80 + ".1.2", "0.99.2-deadbeef-dirty"]):
+        exe = reset(f"bad-version-{index}", version=bad); unchanged(exe, run(exe))
     for label, data in [("identity", new.read_bytes().replace(b"linux-x86_64", b"wrong-target")),
                         ("publisher", new.read_bytes().replace(b"https://publisher.test", b"https://wrongpubr.test"))]:
         exe = reset(label, data=data); unchanged(exe, run(exe))
