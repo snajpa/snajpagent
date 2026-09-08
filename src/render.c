@@ -3208,9 +3208,9 @@ render_tool_record(struct snag_render *render, const struct snag_render_record *
         unsigned int columns = render->term ? render->term->columns : 0u;
         if (record->tool_start) {
             struct snag_response_item call = {
-                .name = (char *)name, .arguments = json_object_get(item, "arguments")
+                .name = (char *)name, .arguments = json_object_get(item, "arguments"),
+                .call_id = strlen(call_id) <= SNAG_ID_HEX_LEN ? call_id : ""
             };
-            (void)snag_strcpy(call.call_id, sizeof(call.call_id), call_id);
             const char *workdir = snag_json_string(data, "resolved_workdir");
             rc = snag_render_prepare_tool_start(&block, &call, workdir ? workdir : "?",
                   record->timeout_ms, render->verbosity, columns);

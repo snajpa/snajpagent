@@ -99,22 +99,19 @@ snag_response_graph_item(const struct snag_response_graph *graph, size_t index)
     const char *phase = snag_json_string(value, "phase");
     const char *local = snag_json_string(value, "local_item_id");
     const char *call = snag_json_string(value, "call_id");
-    struct snag_response_item item = {
+    return (struct snag_response_item){
         .kind = kind && !strcmp(kind, "assistant") ? SNAG_ITEM_ASSISTANT :
                 kind && !strcmp(kind, "refusal") ? SNAG_ITEM_REFUSAL : SNAG_ITEM_TOOL_CALL,
         .phase = phase && !strcmp(phase, "commentary") ? SNAG_PHASE_COMMENTARY :
                  phase && !strcmp(phase, "final_answer") ? SNAG_PHASE_FINAL_ANSWER : SNAG_PHASE_NONE,
+        .local_item_id = local && snag_hex_is_lower(local, SNAG_ID_HEX_LEN) ? local : "",
+        .call_id = call && snag_hex_is_lower(call, SNAG_ID_HEX_LEN) ? call : "",
         .provider_item_id = (char *)snag_json_string(value, "provider_item_id"),
         .provider_call_id = (char *)snag_json_string(value, "provider_call_id"),
         .name = (char *)snag_json_string(value, "name"),
         .text = (char *)snag_json_string(value, "text"),
         .arguments = json_object_get(value, "arguments")
     };
-    if (local && snag_hex_is_lower(local, SNAG_ID_HEX_LEN))
-        memcpy(item.local_item_id, local, sizeof(item.local_item_id));
-    if (call && snag_hex_is_lower(call, SNAG_ID_HEX_LEN))
-        memcpy(item.call_id, call, sizeof(item.call_id));
-    return item;
 }
 
 int

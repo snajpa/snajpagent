@@ -172,6 +172,10 @@ main(void)
     assert(snag_response_graph_from_json(&copy, encoded,
                                         error, sizeof(error)) == 0);
     assert(snag_response_graph_item(&copy, 1).local_item_id[0] == '\0');
+    assert(snag_response_graph_item(&copy, 0).local_item_id ==
+           snag_json_string(json_array_get(copy.items, 0), "local_item_id"));
+    assert(snag_response_graph_item(&copy, 1).call_id ==
+           snag_json_string(json_array_get(copy.items, 1), "call_id"));
     assert(copy.count == 2u);
     assert(snag_response_graph_classify(&copy, &decision,
                                        error, sizeof(error)) == 0);

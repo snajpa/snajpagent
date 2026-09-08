@@ -69,8 +69,7 @@ enum snag_item_phase {
 struct snag_response_item {
     enum snag_item_kind kind;
     enum snag_item_phase phase;
-    char local_item_id[SNAG_ID_HEX_LEN + 1u];
-    char call_id[SNAG_ID_HEX_LEN + 1u];
+    const char *local_item_id, *call_id;
     char *provider_item_id;
     char *provider_call_id;
     char *text;

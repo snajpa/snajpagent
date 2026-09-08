@@ -142,7 +142,7 @@ snag_render_prepare_tool_start(struct snag_render_block *block,
     if (snag_buf_printf(&row, "→ %s", call->name) < 0)
         goto out;
     size_t colored_len = row.len;
-    if (call->call_id[0] && snag_buf_printf(&row, " [%.8s]", call->call_id) < 0)
+    if (call->call_id && call->call_id[0] && snag_buf_printf(&row, " [%.8s]", call->call_id) < 0)
         goto out;
     if (snag_buf_append(&row, "  ", 2u) < 0 ||
         preview(&row, (const char *)args.data, args.len, 95u, 95u, true, &truncated) < 0 ||
