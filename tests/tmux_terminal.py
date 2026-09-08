@@ -1521,10 +1521,7 @@ def run_punctuation_case(binary, root):
             paused.clear()
             proceed.clear()
             case = root / f"punct-{width}-{int(markdown)}"
-            workspace = case / "w"
-            workspace.mkdir(mode=0o700, parents=True)
-            config = case / "config.ini"
-            write_irc_config(config, provider.port, "host-model")
+            workspace, config = irc_workspace(case / "w", provider.port, "host-model")
             config.write_text(config.read_text().replace("typing_pause_ms = 50", "typing_pause_ms = 0"))
             with config.open("a") as out:
                 out.write("prompt = {chat::}{rollout-idle:>}{rollout-active:>}\n")
@@ -2020,6 +2017,13 @@ def write_irc_config(path, provider_port, model):
     )
 
 
+def irc_workspace(workspace, provider_port, model):
+    workspace.mkdir(mode=0o700, parents=True)
+    config = workspace.parent / "config.ini"
+    write_irc_config(config, provider_port, model)
+    return workspace, config
+
+
 def write_catalog_config(path, provider_port):
     path.write_text(
         "[agent]\nmodel = uncached-start\nreasoning_effort = low\n"
@@ -2346,10 +2350,7 @@ def run_destination_case(binary, root, provider, environment):
     try:
         for name, model, args in specs:
             case = root / ("dest-" + name)
-            workspace = case / "work"
-            workspace.mkdir(mode=0o700, parents=True)
-            config = case / "config.ini"
-            write_irc_config(config, provider.port, model)
+            workspace, config = irc_workspace(case / "work", provider.port, model)
             terminal = TmuxTerminal(case / "terminal", binary, workspace,
                 case / "state", config, 120, 24, args=args, environment=environment)
             terminals[name] = terminal
@@ -2425,10 +2426,7 @@ def run_listener_collision_case(binary, root, provider, environment):
     try:
         for number in (1, 2):
             case = root / f"listener-{number}"
-            workspace = case / "work"
-            workspace.mkdir(mode=0o700, parents=True)
-            config = case / "config.ini"
-            write_irc_config(config, provider.port, "host-model")
+            workspace, config = irc_workspace(case / "work", provider.port, "host-model")
             terminal = TmuxTerminal(case / "terminal", binary, workspace,
                 case / "state", config, 120, 24,
                 args=("-s", endpoint, "-n", f"agent{number}",
@@ -2682,10 +2680,7 @@ def run_runtime_networking_cases(binary, root, provider, environment):
     for level in range(7):
         for view in (("chat", "rollout", "burst") if level == 0 else ("chat", "rollout")):
             case = root / f"runtime-{level}-{view}"
-            workspace = case / "work"
-            workspace.mkdir(mode=0o700, parents=True)
-            config = case / "config.ini"
-            write_irc_config(config, provider.port, "host-model")
+            workspace, config = irc_workspace(case / "work", provider.port, "host-model")
             endpoint = f"127.0.0.1:{free_loopback_port()}"
             arrived, release = threading.Event(), threading.Event()
             requests = []
@@ -2810,10 +2805,7 @@ def run_runtime_routing_cases(binary, root, provider, environment):
               ("irc_send", "off", "count"), ("irc_send", "off", "retry")]
     for tool, change, phase in cases:
         case = root / f"route-{tool}-{change}-{phase}"
-        workspace = case / "work"
-        workspace.mkdir(mode=0o700, parents=True)
-        config = case / "config.ini"
-        write_irc_config(config, provider.port, "host-model")
+        workspace, config = irc_workspace(case / "work", provider.port, "host-model")
         if phase == "count":
             config.write_text(config.read_text().replace("exact_token_count = false", "exact_token_count = true"))
         endpoint = f"127.0.0.1:{free_loopback_port()}"
@@ -2939,10 +2931,7 @@ def run_runtime_routing_cases(binary, root, provider, environment):
 def run_runtime_boundary_cases(binary, root, provider, environment):
     for boundary in ("tool", "steer", "queue", "goal"):
         case = root / f"boundary-{boundary}"
-        workspace = case / "work"
-        workspace.mkdir(mode=0o700, parents=True)
-        config = case / "config.ini"
-        write_irc_config(config, provider.port, "host-model")
+        workspace, config = irc_workspace(case / "work", provider.port, "host-model")
         endpoint = f"127.0.0.1:{free_loopback_port()}"
         arrived, release = threading.Event(), threading.Event()
         requests = []
@@ -3084,10 +3073,7 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
 
 def run_runtime_history_case(binary, root, provider, environment):
     case = root / "runtime-history"
-    workspace = case / "work"
-    workspace.mkdir(mode=0o700, parents=True)
-    config = case / "config.ini"
-    write_irc_config(config, provider.port, "host-model")
+    workspace, config = irc_workspace(case / "work", provider.port, "host-model")
     arrived, release = threading.Event(), threading.Event()
     requests = []
     history = "agent7: historical mention café must stay historical"
@@ -3181,10 +3167,7 @@ def run_runtime_history_case(binary, root, provider, environment):
 def run_provider_retry_input_cases(binary, root, provider, environment):
     for mode in ("steer", "chat", "mention", "queue", "command", "before", "zero", "healthy"):
         case = root / ("retry-" + mode)
-        workspace = case / "work"
-        workspace.mkdir(mode=0o700, parents=True)
-        config = case / "config.ini"
-        write_irc_config(config, provider.port, "host-model")
+        workspace, config = irc_workspace(case / "work", provider.port, "host-model")
         endpoint = f"127.0.0.1:{free_loopback_port()}"
         arrived, release = threading.Event(), threading.Event()
         requests = []
@@ -3939,10 +3922,7 @@ def run_manual_retry_cases(binary, root, provider, environment):
 
 def run_tool_cases(binary, root, provider, environment):
     case = root / "patch"
-    workspace = case / "work"
-    workspace.mkdir(mode=0o700, parents=True)
-    config = case / "config.ini"
-    write_irc_config(config, provider.port, "host-model")
+    workspace, config = irc_workspace(case / "work", provider.port, "host-model")
     config.write_text(config.read_text() +
                       "[tool]\ndefault_timeout_ms=0\nmax_timeout_ms=5000\n")
     call_id, name, arguments = "", "", {}
@@ -4573,10 +4553,7 @@ def run_token_accounting_cases(binary, root):
 def run_tool_yield_cases(binary, root, provider, environment):
     for mode in ("timeout", "operator", "timeout-close", "operator-close"):
         case = root / ("tool-yield-" + mode)
-        workspace = case / "workspace"
-        workspace.mkdir(mode=0o700, parents=True)
-        config = case / "config.ini"
-        write_irc_config(config, provider.port, "host-model")
+        workspace, config = irc_workspace(case / "workspace", provider.port, "host-model")
         operator = mode.startswith("operator")
         closing = mode.endswith("close")
         with config.open("a") as out:
@@ -4864,10 +4841,7 @@ def run_irc_chat_case(binary, root):
     try:
         for name, model, _agent, operator, args in specs:
             case = root / name
-            workspace = case / "workspace"
-            workspace.mkdir(mode=0o700, parents=True)
-            config = case / "config.ini"
-            write_irc_config(config, provider.port, model)
+            workspace, config = irc_workspace(case / "workspace", provider.port, model)
             terminal = TmuxTerminal(
                 case / "terminal", binary, workspace, case / "state", config,
                 100, 24, args=args, environment=environment,
