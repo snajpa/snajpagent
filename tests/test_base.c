@@ -2519,6 +2519,17 @@ test_platform(void)
     assert(snag_fd_privacy(-1, NULL) == -1 && errno == EINVAL);
 }
 
+#ifndef _WIN32
+static void *
+thread_wakeup_worker(void *opaque)
+{
+    snag_wake_fd *pair = opaque;
+    assert(snag_wakeup_wait(pair[0], 1000) == 1);
+    snag_wakeup_drain(pair[0]);
+    return opaque;
+}
+#endif
+
 static void
 test_wakeup(void)
 {
@@ -2542,6 +2553,16 @@ test_wakeup(void)
     snag_wakeup_send(pair[1]);
     assert(snag_wakeup_wait(pair[0], -1) == 1);
     snag_wakeup_drain(pair[0]);
+#ifndef _WIN32
+    for (unsigned int i = 0u; i < 4u; ++i) {
+        pthread_t thread;
+        void *result = NULL;
+        assert(pthread_create(&thread, NULL, thread_wakeup_worker, pair) == 0);
+        snag_wakeup_send(pair[1]);
+        assert(pthread_join(thread, &result) == 0 && result == pair);
+        assert(snag_wakeup_wait(pair[0], 0) == 0);
+    }
+#endif
     snag_wakeup_close(pair);
     assert(pair[0] == SNAG_WAKE_INVALID && pair[1] == SNAG_WAKE_INVALID);
     snag_wakeup_close(pair);

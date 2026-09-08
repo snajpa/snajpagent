@@ -205,7 +205,6 @@ run_owner(void *opaque)
         request = owner->request;
         owner->request = NULL;
         pthread_mutex_unlock(&irc->mutex);
-        fprintf(stderr, "owner loop stop=%d wake=%d\n", stopping, (int)owner->wake[0]);
         if (stopping)
             break;
         if (ack.stream[0] && snag_irc_core_ack(owner->core, &ack) < 0) {
@@ -240,11 +239,9 @@ run_owner(void *opaque)
         }
     }
     pthread_mutex_lock(&irc->mutex);
-    fprintf(stderr, "owner finished\n");
     owner->finished = true;
     snag_wakeup_send(irc->wake[1]);
     pthread_mutex_unlock(&irc->mutex);
-    fprintf(stderr, "owner return\n");
     return NULL;
 }
 
@@ -277,7 +274,6 @@ stop_owners(struct snag_irc *irc)
 {
     pthread_mutex_lock(&irc->mutex);
     irc->stopping = true;
-    fprintf(stderr, "stop owners count=%zu\n", irc->owner_count);
     pthread_cond_broadcast(&irc->changed);
     for (size_t i = 0u; i < irc->owner_count; ++i)
         if (irc->owners[i]->started)
@@ -285,9 +281,7 @@ stop_owners(struct snag_irc *irc)
     pthread_mutex_unlock(&irc->mutex);
     for (size_t i = 0u; i < irc->owner_count; ++i)
         if (irc->owners[i]->started) {
-            fprintf(stderr, "joining owner %zu\n", i);
             pthread_join(irc->owners[i]->thread, NULL);
-            fprintf(stderr, "joined owner %zu\n", i);
             irc->owners[i]->started = false;
         }
 }

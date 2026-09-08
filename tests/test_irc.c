@@ -331,21 +331,15 @@ test_listener_collision(void)
         init_server_config(&config, port);
         assert(snprintf(config.irc.listen, sizeof(config.irc.listen),
                         "%s:%u", hosts[i], (unsigned int)port) > 0);
-        fprintf(stderr, "collision %s: open\n", hosts[i]);
         server = open_server(&config, &capture);
-        fprintf(stderr, "collision %s: duplicate\n", hosts[i]);
         assert(snag_irc_open(&duplicate, &config, "/duplicate", capture_event,
                             capture_trace, &capture, error, sizeof(error)) < 0);
         assert(!duplicate);
         assert(strstr(error, config.irc.listen));
         assert(strstr(error, strerror(EADDRINUSE)));
-        fprintf(stderr, "collision %s: send\n", hosts[i]);
         assert(send_all(server, true, SNAG_IRC_MESSAGE, "still here", error, sizeof(error)) == 0);
-        fprintf(stderr, "collision %s: close\n", hosts[i]);
         snag_irc_close(server);
-        fprintf(stderr, "collision %s: open\n", hosts[i]);
         server = open_server(&config, &capture);
-        fprintf(stderr, "collision %s: close\n", hosts[i]);
         snag_irc_close(server);
         snag_config_free(&config);
     }
@@ -1465,29 +1459,17 @@ main(void)
     engine_thread = pthread_self();
     assert(snag_network_init() == 0);
     set_user("root");
-    fprintf(stderr, "test_irc: test_validation()\n");
     test_validation();
-    fprintf(stderr, "test_irc: test_cli_network_roles()\n");
     test_cli_network_roles();
-    fprintf(stderr, "test_irc: test_listener_collision()\n");
     test_listener_collision();
-    fprintf(stderr, "test_irc: test_runtime_roles()\n");
     test_runtime_roles();
-    fprintf(stderr, "test_irc: test_server()\n");
     test_server();
-    fprintf(stderr, "test_irc: test_client_reconnect()\n");
     test_client_reconnect();
-    fprintf(stderr, "test_irc: test_default_nick_sequence()\n");
     test_default_nick_sequence();
-    fprintf(stderr, "test_irc: test_client_nick_collision(true)\n");
     test_client_nick_collision(true);
-    fprintf(stderr, "test_irc: test_client_nick_collision(false)\n");
     test_client_nick_collision(false);
-    fprintf(stderr, "test_irc: test_client_events()\n");
     test_client_events();
-    fprintf(stderr, "test_irc: test_independent_owners()\n");
     test_independent_owners();
-    fprintf(stderr, "test_irc: test_callback_failure()\n");
     test_callback_failure();
     snag_network_free();
     puts("test_irc: ok");

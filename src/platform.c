@@ -2324,6 +2324,24 @@ snag_ignore_sigpipe(void)
     (void)signal(SIGPIPE, SIG_IGN);
 }
 
+#ifdef SNAJPAGENT_LEGACY_BSD_JOIN
+#include <pthread.h>
+int __real_pthread_join(pthread_t thread, void **result);
+
+int
+__wrap_pthread_join(pthread_t thread, void **result)
+{
+    if (pthread_equal(thread, pthread_self()))
+        return EDEADLK;
+    /* 5.1 libc_r can lose the live thread's join notification. Its kill(0)
+     * checks the active list only; join retains ownership of the dead entry. */
+    int rc;
+    while ((rc = pthread_kill(thread, 0)) == 0)
+        (void)snag_sleep_ms(1u);
+    return rc == ESRCH ? __real_pthread_join(thread, result) : rc;
+}
+#endif
+
 bool
 snag_text_locale_init(void)
 {
