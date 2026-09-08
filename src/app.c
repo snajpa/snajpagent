@@ -2428,7 +2428,8 @@ static int
 recover_session(struct app_state *app, char *error, size_t error_size)
 {
     char turn_id[SNAG_ID_HEX_LEN + 1u];
-    const char *message;
+    const char *message, *cause = "protocol_failure", *class_name = "protocol";
+    const char *warning = "recovered an interrupted turn";
     bool has_steering;
     if (!app->session.active_turn)
         return 0;
@@ -2441,44 +2442,34 @@ recover_session(struct app_state *app, char *error, size_t error_size)
                                                    app->session.active_cycle,
                                                    "recovery", "process_lost",
                                                    NULL),
-                         error, error_size) < 0 ||
-            interrupt_turn(app, turn_id, "internal_failure", false,
-                           "recovery", "session_recovered",
-                           error, error_size) < 0)
+                         error, error_size) < 0)
             return -1;
-        return app_warning(app, "recovered an interrupted turn");
+        goto interrupted;
     }
     if (app->session.response_complete) {
         if (app->session.response_outcome == SNAG_GRAPH_CONFLICT) {
             message = "provider response had conflicting terminal actions";
+            warning = "recovered a protocol-conflicted turn";
             if (terminalize_pending(app, turn_id, "protocol_conflict",
-                                    error, error_size) < 0 ||
-                fail_turn(app, turn_id, "protocol_failure",
-                          "protocol", message, error, error_size) < 0)
+                                    error, error_size) < 0)
                 return -1;
-            return app_warning(app, "recovered a protocol-conflicted turn");
+            goto failed;
         }
         if (has_steering) {
             if (app->session.response_outcome == SNAG_GRAPH_CALLS &&
                 terminalize_pending(app, turn_id, "superseded_by_steering",
                                     error, error_size) < 0)
                 return -1;
-            if (interrupt_turn(app, turn_id, "internal_failure", false,
-                               "recovery", "session_recovered",
-                               error, error_size) < 0)
-                return -1;
-            return app_warning(app,
-                "recovered a turn whose pending active-turn input could not be resumed automatically");
+            warning = "recovered a turn whose pending active-turn input could not be resumed automatically";
+            goto interrupted;
         }
         switch (app->session.response_outcome) {
         case SNAG_GRAPH_FINAL:
         case SNAG_GRAPH_REFUSAL:
             if (app->session.process_count) {
                 message = "recovered terminal response while a managed process was unresolved";
-                if (fail_turn(app, turn_id, "protocol_failure",
-                              "protocol", message, error, error_size) < 0)
-                    return -1;
-                return app_warning(app, "recovered a terminal response that violated managed process ordering");
+                warning = "recovered a terminal response that violated managed process ordering";
+                goto failed;
             }
             if (commit_event(app, "turn_completed",
                              snag_app_turn_completed_data(turn_id,
@@ -2489,34 +2480,32 @@ recover_session(struct app_state *app, char *error, size_t error_size)
             return app_warning(app, "recovered a durably completed turn");
         case SNAG_GRAPH_CALLS:
             if (terminalize_pending(app, turn_id, "recovery_unstarted",
-                                    error, error_size) < 0 ||
-                interrupt_turn(app, turn_id, "internal_failure", false,
-                               "recovery", "session_recovered",
-                               error, error_size) < 0)
+                                    error, error_size) < 0)
                 return -1;
-            return app_warning(app, "recovered a turn with unfinished tool work");
+            warning = "recovered a turn with unfinished tool work";
+            goto interrupted;
         case SNAG_GRAPH_CONFLICT:
             break;
         case SNAG_GRAPH_NONPRODUCTIVE:
             message = "provider completed without a final answer, refusal, or tool call";
-            if (fail_turn(app, turn_id, "protocol_failure",
-                          "protocol", message, error, error_size) < 0)
-                return -1;
-            return app_warning(app, "recovered a nonproductive response");
+            warning = "recovered a nonproductive response";
+            goto failed;
         }
     }
     if (app->session.response_terminal == SNAG_RESPONSE_TERMINAL_FAILED) {
         message = "provider response had already failed before process recovery";
-        if (fail_turn(app, turn_id, "provider_failure",
-                      "provider", message, error, error_size) < 0)
-            return -1;
-        return app_warning(app, "recovered a provider-failed turn");
+        cause = "provider_failure";
+        class_name = "provider";
+        warning = "recovered a provider-failed turn";
+        goto failed;
     }
-    if (interrupt_turn(app, turn_id, "internal_failure", false,
-                       "recovery", "session_recovered",
-                       error, error_size) < 0)
-        return -1;
-    return app_warning(app, "recovered an interrupted turn");
+interrupted:
+    return interrupt_turn(app, turn_id, "internal_failure", false,
+                          "recovery", "session_recovered", error, error_size) < 0 ?
+           -1 : app_warning(app, warning);
+failed:
+    return fail_turn(app, turn_id, cause, class_name, message, error, error_size) < 0 ?
+           -1 : app_warning(app, warning);
 }
 static int
 finish_call(struct app_state *app, const char *turn_id,
