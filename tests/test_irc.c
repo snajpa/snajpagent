@@ -859,6 +859,31 @@ wait_pair_event(struct snag_irc *server, struct snag_irc *client,
     assert(capture->events[kind] >= count);
 }
 
+static void
+wait_pair_state(struct snag_irc *server, struct snag_irc *client,
+                const char *joined)
+{
+    uint64_t deadline = snag_monotonic_ms() + 10000u;
+    struct snag_buf state;
+    char error[256] = {0};
+
+    snag_buf_init(&state, SNAG_MAX_IRC_SNAPSHOT);
+    for (;;) {
+        pump_pair(server, client, 1u);
+        snag_buf_reset(&state);
+        assert(snag_irc_state(client, &state, error, sizeof(error)) == 0);
+        assert(snag_buf_terminate(&state) == 0);
+        if (strstr((const char *)state.data, joined) &&
+            strstr((const char *)state.data, "]: /workspace"))
+            break;
+        if (snag_monotonic_ms() >= deadline) {
+            (void)fprintf(stderr, "missing IRC state %s: %s\n", joined, state.data);
+            abort();
+        }
+    }
+    snag_buf_free(&state);
+}
+
 static void __attribute__((noinline))
 test_client_reconnect(void)
 {
@@ -1000,6 +1025,7 @@ test_client_reconnect(void)
     assert(strcmp(next_capture.last_message.nick, "remoteagent") == 0);
     assert(strcmp(next_capture.last_message.text,
                   "retained while disconnected") == 0);
+    wait_pair_state(next_server, client, "joined #lab");
     snag_buf_init(&snapshot, SNAG_MAX_IRC_SNAPSHOT);
     assert(snag_irc_snapshot(client, &snapshot, error, sizeof(error)) == 0);
     assert(snag_buf_terminate(&snapshot) == 0);
@@ -1015,7 +1041,7 @@ test_client_reconnect(void)
     tick(client, 50u);
     memcpy(server_config.irc.room_name, "#other", sizeof("#other"));
     next_server = open_server(&server_config, &next_capture);
-    pump_pair(next_server, client, 800u);
+    wait_pair_state(next_server, client, "joined #other");
     assert(snag_irc_routing_revision(client) > revision);
     snag_buf_init(&snapshot, SNAG_MAX_IRC_SNAPSHOT);
     assert(snag_irc_state(client, &snapshot, error, sizeof(error)) == 0);
@@ -1175,7 +1201,7 @@ test_client_nick_collision(bool explicit_zero)
         tick(client, 1u);
     assert(client_capture.events[SNAG_IRC_DISCONNECTED] != 0u);
     next_server = open_server(&server_config, &next_capture);
-    pump_pair(next_server, client, 800u);
+    wait_pair_state(next_server, client, "joined #lab");
     assert(client_capture.events[SNAG_IRC_CONNECTED] == 2u);
     messages = client_capture.events[SNAG_IRC_MESSAGE];
     assert(send_all(client, false, SNAG_IRC_MESSAGE, "stable operator alias",
