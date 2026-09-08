@@ -83,7 +83,7 @@ print("PASS: staging, immutable source selection, channel growth, hash failure, 
 # Native BSD pthread DSOs must follow the static application libraries. Curl
 # can prefix the imported Threads flag twice; stripping must leave no bare -l
 # that would consume the following library name.
-for recipe in ("freebsd.nix", "openbsd.nix"):
+for recipe in ("freebsd.nix", "openbsd.nix", "netbsd.nix"):
     line = next(line for line in (root / "nix" / recipe).read_text().splitlines()
                 if '"CURL_LIBS=' in line)
     expression = re.search(r"sed -E '([^']+)'", line).group(1)
@@ -93,3 +93,13 @@ for recipe in ("freebsd.nix", "openbsd.nix"):
                                 capture_output=True, text=True, check=True).stdout
         assert actual.split() == ["-lidn2"], (recipe, flags, actual)
 print("PASS: BSD static dependency flags preserve the following library")
+
+# ELF TLS lowering happens again during LTO. NetBSD 5 needs emulation at
+# compile and final link; a compile-only flag leaves a crashing native TLS load.
+netbsd = (root / "nix/netbsd.nix").read_text().splitlines()
+for variable in ("cflags", "ldflags"):
+    assignment = next(line for line in netbsd if line.startswith(f"  {variable} ="))
+    assert "-femulated-tls" in assignment, (variable, assignment)
+application_link = next(line for line in netbsd if "'LDFLAGS=" in line)
+assert "${ldflags}" in application_link, application_link
+print("PASS: NetBSD emulated TLS reaches the LTO linker")
