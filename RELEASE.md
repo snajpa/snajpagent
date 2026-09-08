@@ -126,6 +126,9 @@ do not change the binaries' tagged source identity.
 
 `www/downloads.html` is the public download entry point. Keep it static and
 usable without JavaScript. Link it from the home page, README, and manual.
+Keep source-build commands and additional source-only platform guidance in the
+README and build documentation, off the downloads page. Downloadable source
+archives and their license companions remain appropriate release downloads.
 The main table serves executable selection, not release maintenance. Keep debug
 builds in a separate section; symbol archives for production crash diagnosis
 remain available on the Release, not as a column beside every normal download.

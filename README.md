@@ -229,6 +229,11 @@ For experimental Windows x64 or ARM64, use `make prod-windows-x86_64` or
 `make prod-windows-arm64` with pinned Nix dependencies. Copy the resulting
 `build/matrix/windows-ARCH/bin/snajpagent.exe` to Windows;
 application libraries and CA roots are included without third-party runtime DLLs.
+
+For experimental NetBSD amd64 source builds, use `make prod-netbsd-amd64`
+for 10.1 or `make prod-netbsd-amd64-legacy` for 2.0 and 5.2.3. These use
+separate native pthread ABIs; see the [platform notes](DEPENDENCIES.md).
+
 Plain `make` builds only the host platform.
 
 Without configuration or existing credentials, the first interactive launch
