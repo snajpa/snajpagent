@@ -71,6 +71,39 @@ thread_local_worker(void *unused)
 }
 
 static void
+test_memory_primitives(void)
+{
+    _Alignas(16) unsigned char bytes[128], expected[128];
+    void *(*volatile copy)(void *, const void *, size_t) = memcpy;
+    void *(*volatile move)(void *, const void *, size_t) = memmove;
+    void *(*volatile fill)(void *, int, size_t) = memset;
+    for (size_t size = 0u; size <= 32u; ++size) {
+        for (size_t offset = 0u; offset < 8u; ++offset) {
+            for (size_t i = 0u; i < sizeof(bytes); ++i)
+                bytes[i] = expected[i] = (unsigned char)i;
+            assert(copy(bytes + offset, bytes + 64u, size) == bytes + offset);
+            for (size_t i = 0u; i < size; ++i)
+                expected[offset + i] = (unsigned char)(64u + i);
+            assert(!memcmp(bytes, expected, sizeof(bytes)));
+            assert(move(bytes + 64u, bytes + 64u + offset, size) == bytes + 64u);
+            for (size_t i = 0u; i < size; ++i)
+                expected[64u + i] = (unsigned char)(64u + offset + i);
+            assert(!memcmp(bytes, expected, sizeof(bytes)));
+            for (size_t i = 0u; i < sizeof(bytes); ++i)
+                bytes[i] = expected[i] = (unsigned char)i;
+            assert(move(bytes + 64u + offset, bytes + 64u, size) == bytes + 64u + offset);
+            for (size_t i = 0u; i < size; ++i)
+                expected[64u + offset + i] = (unsigned char)(64u + i);
+            assert(!memcmp(bytes, expected, sizeof(bytes)));
+            assert(fill(bytes + offset, 0xa5, size) == bytes + offset);
+            for (size_t i = 0u; i < size; ++i)
+                expected[offset + i] = 0xa5;
+            assert(!memcmp(bytes, expected, sizeof(bytes)));
+        }
+    }
+}
+
+static void
 test_thread_local(void)
 {
 #if (!defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070) && \
@@ -2991,6 +3024,7 @@ run_base(int argc, char **argv)
     test_private_directory();
     test_regex();
     test_wakeup();
+    test_memory_primitives();
     test_thread_local();
     test_sockets();
     test_input_mode();
