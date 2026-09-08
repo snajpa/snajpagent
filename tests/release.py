@@ -126,7 +126,8 @@ for recipe in ("freebsd.nix", "openbsd.nix", "netbsd.nix"):
                 if '"CURL_LIBS=' in line)
     expression = re.search(r"sed -E '([^']+)'", line).group(1)
     for flags in ("-lpthread -lidn2", "-l-lpthread -lidn2", "-lidn2 -lpthread",
-                  "-l-lpthread -lpthread -lidn2"):
+                  "-l-lpthread -lpthread -lidn2", "-l-pthread -lidn2", "-pthread -lidn2",
+                  "-l-pthread -pthread -lpthread -lidn2"):
         actual = subprocess.run(["sed", "-E", expression], input=flags,
                                 capture_output=True, text=True, check=True).stdout
         assert actual.split() == ["-lidn2"], (recipe, flags, actual)
