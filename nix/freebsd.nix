@@ -265,7 +265,7 @@ in {
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson)"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
-          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed 's/-lpthread//g') -lutil -Wl,-Bdynamic -l${threads}"
+          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l-?pthread//g') -lutil -Wl,-Bdynamic -l${threads}"
         )
       '';
       installPhase = ''
