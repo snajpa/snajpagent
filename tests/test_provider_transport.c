@@ -452,55 +452,46 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
                   "application/json", body);
         _exit(0);
     }
-    if (models == MODEL_CREATE_HTTP_FAILURE) {
-        serve_one(listen_fd, 400u, "POST", "/v1/responses", NULL, "application/json",
-            "{\"error\":{\"code\":\"context_length_exceeded\","
-            "\"message\":\"too large\",\"max_context_tokens\":272000,"
-            "\"requested_input_tokens\":300000}}");
-        _exit(0);
-    }
-    if (models == MODEL_CREATE_SSE_FAILURE) {
-        serve_one(listen_fd, 200u, "POST", "/v1/responses", NULL,
-                  "text/event-stream",
-                  "event: response.failed\n"
-                  "data: {\"type\":\"response.failed\",\"response\":{"
-                  "\"error\":{\"code\":\"context_length_exceeded\","
-                  "\"message\":\"stream too large transport-secret\","
-                  "\"context_length\":872000}}}\n\n");
-        _exit(0);
-    }
-
-    if (models == MODEL_CODEX_FAILURE) {
-        serve_one(listen_fd, 400u, "GET",
-                  "/backend-api/codex/models?client_version=0.146.0", NULL,
-                  "application/json", "{\"error\":{\"message\":\"catalog rejected\"}}");
-        _exit(0);
-    }
-    if (models == MODEL_CODEX_MALFORMED) {
-        serve_one(listen_fd, 200u, "GET",
-                  "/backend-api/codex/models?client_version=0.146.0", NULL,
-                  "application/json",
-                  "{\"models\":[{\"slug\":\"malformed\",\"visibility\":\"list\",\"priority\":1,\"supported_reasoning_levels\":[\"high\"]}]}");
-    } else if (models == MODEL_CODEX_LOOKALIKE) {
-        serve_one(listen_fd, 200u, "GET", "/backend-api/codexish/v1/models", NULL,
-                  "application/json",
-                  "{\"data\":[{\"id\":\"lookalike-openai\"}]}");
-    } else if (models == MODEL_LIMIT_CONFLICT) {
-        serve_one(listen_fd, 200u, "GET", "/v1/models", NULL,
-                  "application/json",
-                  "{\"data\":[{\"id\":\"conflict\",\"context_length\":100,"
-                  "\"metadata\":{\"contextWindow\":101}}]}");
-    } else {
-        serve_one(listen_fd, 200u, "GET", "/v1/models", NULL,
-                  "application/json",
-                  "{\"object\":\"list\",\"data\":[{\"id\":\"gpt-standard\","
-                  "\"contextLength\":100000,\"metadata\":{\"context_window\":100000,"
-                  "\"inputContextWindow\":90000,\"supported_reasoning_levels\":[\"medium\",\"high\"],"
-                  "\"default_reasoning_level\":\"medium\"},\"capabilities\":{"
-                  "\"maxOutputTokens\":10000,\"effective_context_window_percent\":80}},"
-                  "{\"id\":\"future-standard\",\"supported_reasoning_levels\":[\"quantum\",\"cosmic\"]}]}");
-    }
-    if (!transport)
+    static const struct {
+        enum model_fixture fixture;
+        unsigned int status;
+        const char *method, *path, *content_type, *body;
+    } replies[] = {
+        {MODEL_CREATE_HTTP_FAILURE, 400u, "POST", "/v1/responses", "application/json",
+         "{\"error\":{\"code\":\"context_length_exceeded\","
+         "\"message\":\"too large\",\"max_context_tokens\":272000,"
+         "\"requested_input_tokens\":300000}}"},
+        {MODEL_CREATE_SSE_FAILURE, 200u, "POST", "/v1/responses", "text/event-stream",
+         "event: response.failed\n"
+         "data: {\"type\":\"response.failed\",\"response\":{"
+         "\"error\":{\"code\":\"context_length_exceeded\","
+         "\"message\":\"stream too large transport-secret\","
+         "\"context_length\":872000}}}\n\n"},
+        {MODEL_CODEX_FAILURE, 400u, "GET", "/backend-api/codex/models?client_version=0.146.0", "application/json",
+         "{\"error\":{\"message\":\"catalog rejected\"}}"},
+        {MODEL_CODEX_MALFORMED, 200u, "GET", "/backend-api/codex/models?client_version=0.146.0", "application/json",
+         "{\"models\":[{\"slug\":\"malformed\",\"visibility\":\"list\",\"priority\":1,\"supported_reasoning_levels\":[\"high\"]}]}"},
+        {MODEL_CODEX_LOOKALIKE, 200u, "GET", "/backend-api/codexish/v1/models", "application/json",
+         "{\"data\":[{\"id\":\"lookalike-openai\"}]}"},
+        {MODEL_LIMIT_CONFLICT, 200u, "GET", "/v1/models", "application/json",
+         "{\"data\":[{\"id\":\"conflict\",\"context_length\":100,"
+         "\"metadata\":{\"contextWindow\":101}}]}"},
+        {MODEL_OPENAI, 200u, "GET", "/v1/models", "application/json",
+         "{\"object\":\"list\",\"data\":[{\"id\":\"gpt-standard\","
+         "\"contextLength\":100000,\"metadata\":{\"context_window\":100000,"
+         "\"inputContextWindow\":90000,\"supported_reasoning_levels\":[\"medium\",\"high\"],"
+         "\"default_reasoning_level\":\"medium\"},\"capabilities\":{"
+         "\"maxOutputTokens\":10000,\"effective_context_window_percent\":80}},"
+         "{\"id\":\"future-standard\",\"supported_reasoning_levels\":[\"quantum\",\"cosmic\"]}]}"}
+    };
+    size_t reply = sizeof(replies) / sizeof(replies[0]) - 1u;
+    for (size_t i = 0; i < sizeof(replies) / sizeof(replies[0]); ++i)
+        if (replies[i].fixture == models)
+            reply = i;
+    serve_one(listen_fd, replies[reply].status, replies[reply].method,
+              replies[reply].path, NULL, replies[reply].content_type, replies[reply].body);
+    if (!transport || models == MODEL_CREATE_HTTP_FAILURE ||
+        models == MODEL_CREATE_SSE_FAILURE || models == MODEL_CODEX_FAILURE)
         _exit(0);
     serve_one(listen_fd, 200u, "POST", "/v1/responses/input_tokens", "transport-count",
               "application/json",
