@@ -1,0 +1,9 @@
+{
+  "name": "snajpagent",
+  "target": "windows-x86_64",
+  "version": "0.99.2-9d98036",
+  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-windows-x86_64.exe",
+  "sha256": "f1927bf56243fd1fd37f8108488dbd6fe111d5a370fe8a48aa46d91a558a126f",
+  "size": 9327616,
+  "changelog": "https://agent.snajpa.net/downloads.html#changelog"
+}
