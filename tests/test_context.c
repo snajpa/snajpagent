@@ -355,11 +355,10 @@ test_compact_groups(struct snag_store *store, const char *workspace)
     commit_event(&session, "turn_completed", turn_completed(turn, last_response));
     data = turn_started(next_turn, 2u, "active user stays verbatim", workspace, NULL);
     assert(json_object_set_new(data, "received_at_ms", json_integer(1788739200000LL)) == 0);
-    assert(snag_session_commit(&session, "turn_started", data, NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "input_admitted",
+    commit_event(&session, "turn_started", data);
+    commit_event(&session, "input_admitted",
         json_pack("{s:[],s:I,s:s}", "steering_ids", "time_ms",
-                  (json_int_t)1788739290000LL, "turn_id", next_turn),
-        NULL, error, sizeof(error)) == 0);
+                  (json_int_t)1788739290000LL, "turn_id", next_turn));
 
     for (unsigned int part = 0u; part < 2u; ++part) {
         struct snag_context_projection prefix = {0};
@@ -887,17 +886,17 @@ test_durable_irc_input_watermark(struct snag_store *store, const char *path)
         .endpoint = "localhost:6667", .room = "#lab", .nick = "peer",
         .text = "unique missed message", .stream = "11111111111111111111111111111111",
         .sequence = 1u, .historical = true, .input = true};
-    assert(snag_session_commit(&session, "irc_event", snag_irc_event_data(&event), NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "irc_event", snag_irc_event_data(&event));
     uint64_t received = session.irc_received_seq;
     assert(received && !session.irc_consumed_seq);
     snag_session_close(&session); snag_session_init(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     assert(session.irc_received_seq == received && !session.irc_consumed_seq);
     const char *turn = "22222222222222222222222222222222", *response = "33333333333333333333333333333333";
-    assert(snag_session_commit(&session, "irc_admitted", json_pack("{s:[I]}",
-        "sequences", (json_int_t)received), NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "turn_started", turn_started(turn, 1u,
-        "inspect pending room input", path, json_array()), NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "irc_admitted", json_pack("{s:[I]}",
+        "sequences", (json_int_t)received));
+    commit_event(&session, "turn_started", turn_started(turn, 1u,
+        "inspect pending room input", path, json_array()));
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u, false,
         NULL, NULL, &projection, error, sizeof(error)) == 0);
     assert(projection.irc_seq == received);
@@ -910,11 +909,11 @@ test_durable_irc_input_watermark(struct snag_store *store, const char *path)
     assert(copies == 1u);
     json_t *started = response_started(turn, response, NULL);
     assert(json_object_set_new(started, "irc_seq", json_integer((json_int_t)projection.irc_seq)) == 0);
-    assert(snag_session_commit(&session, "response_started", started, NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "response_started", started);
     event.sequence = 2u;
     strcpy(event.text, "arrived after request froze");
-    assert(snag_session_commit(&session, "irc_event", snag_irc_event_data(&event), NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "response_completed", response_completed(turn, response, "seen first"), NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "irc_event", snag_irc_event_data(&event));
+    commit_event(&session, "response_completed", response_completed(turn, response, "seen first"));
     assert(session.irc_consumed_seq == received && session.irc_received_seq > received);
     snag_session_close(&session); snag_session_init(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
@@ -922,8 +921,8 @@ test_durable_irc_input_watermark(struct snag_store *store, const char *path)
     /* A copied session resumes already-admitted but unconsumed input, then a
      * later admission makes still-pending input visible exactly once. */
     uint64_t second = session.irc_received_seq;
-    assert(snag_session_commit(&session, "irc_admitted", json_pack("{s:[I]}",
-        "sequences", (json_int_t)second), NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "irc_admitted", json_pack("{s:[I]}",
+        "sequences", (json_int_t)second));
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, empty, 0u, false,
         NULL, NULL, &projection, error, sizeof(error)) == 0);
     struct snag_buf serialized;
@@ -958,9 +957,8 @@ test_context_meter_usage(struct snag_store *store, const char *temp)
 
         assert(snprintf(turn, sizeof(turn), "%032x", i + 1u) == SNAG_ID_HEX_LEN);
         assert(snprintf(response, sizeof(response), "%032x", i + 10u) == SNAG_ID_HEX_LEN);
-        assert(snag_session_commit(&session, "turn_started",
-                    turn_started(turn, i + 1u, "next", temp, NULL),
-                    NULL, error, sizeof(error)) == 0);
+        commit_event(&session, "turn_started",
+                    turn_started(turn, i + 1u, "next", temp, NULL));
         data = response_started(turn, response, NULL);
         assert(json_object_set_new(data, "input_tokens_bound",
                                    json_integer((json_int_t)bounds[i])) == 0);
@@ -972,19 +970,17 @@ test_context_meter_usage(struct snag_store *store, const char *temp)
             if (i > 1u)
                 assert(json_object_set_new(data, "input_tokens_bound", json_integer(0)) == 0);
         }
-        assert(snag_session_commit(&session, "response_started", data,
-                                   NULL, error, sizeof(error)) == 0);
+        commit_event(&session, "response_started", data);
         assert(session.context_meter.input_tokens == (i ? measured[i - 1u] : bounds[0]));
         data = response_completed(turn, response, "answer");
         assert(json_object_set_new(data, "usage",
                     json_pack("{s:o,s:n,s:n,s:n}", "input_tokens",
                         i == 3u ? json_null() : json_integer((json_int_t)measured[i]),
                         "output_tokens", "reasoning_tokens", "total_tokens")) == 0);
-        assert(snag_session_commit(&session, "response_completed", data,
-                                   NULL, error, sizeof(error)) == 0);
+        commit_event(&session, "response_completed", data);
         assert(session.context_meter.input_tokens == measured[i]);
-        assert(snag_session_commit(&session, "turn_completed",
-                    turn_completed(turn, response), NULL, error, sizeof(error)) == 0);
+        commit_event(&session, "turn_completed",
+                    turn_completed(turn, response));
         snag_session_close(&session);
         assert(snag_session_open(store, &session, session_id,
                                  error, sizeof(error)) == 0);
@@ -1013,19 +1009,18 @@ test_input_time_and_recovery(struct snag_store *store, const char *workspace)
     memcpy(session_id, session.id, sizeof(session_id));
     data = turn_started(turn, 1u, "unchanged prompt", workspace, NULL);
     assert(json_object_set_new(data, "received_at_ms", json_integer(1788739200000LL)) == 0);
-    assert(snag_session_commit(&session, "turn_started", data, NULL, error, sizeof(error)) == 0);
-    assert(snag_session_commit(&session, "steering_added", steering_added(turn, steer, "unchanged steer"),
-                               NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "turn_started", data);
+    commit_event(&session, "steering_added", steering_added(turn, steer, "unchanged steer"));
     uint64_t steer_received = session.pending_steering[0].received_ms;
     data = json_pack("{s:[s],s:I,s:s}", "steering_ids", steer,
                      "time_ms", (json_int_t)1788739290000LL, "turn_id", turn);
-    assert(snag_session_commit(&session, "input_admitted", data, NULL, error, sizeof(error)) == 0);
+    commit_event(&session, "input_admitted", data);
     assert(session.pending_steering[0].first_context_ms == 1788739290000ULL);
     assert(json_array_append_new(snapshot, json_pack("{s:s,s:s}", "id", steer, "text", "unchanged steer")) == 0);
     /* Enough retries to expose accidental one-message-per-failure growth. */
     for (unsigned int i = 0; i < 1000u; ++i) {
         data = json_pack("{s:s,s:s,s:s}", "class", "provider", "message", "capacity unavailable", "turn_id", turn);
-        assert(snag_session_commit(&session, "turn_recovery", data, NULL, error, sizeof(error)) == 0);
+        commit_event(&session, "turn_recovery", data);
     }
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, snapshot,
                               0u, false, NULL, &instructions, &projection, error, sizeof(error)) == 0);
