@@ -851,31 +851,13 @@ struct limit_key {
 };
 
 static int
-merge_limit(const json_t *object, const char *key, uint64_t max,
-            uint64_t *out)
-{
-    json_t *value;
-    json_int_t integer;
-
-    if (!object || !(value = json_object_get(object, key)) ||
-        json_is_null(value))
-        return 0;
-    if (!json_is_integer(value) || (integer = json_integer_value(value)) <= 0 ||
-        (uint64_t)integer > max ||
-        (*out && *out != (uint64_t)integer))
-        return -1;
-    *out = (uint64_t)integer;
-    return 0;
-}
-
-static int
 collect_limits(const json_t *const *objects, size_t object_count,
                const struct limit_key *keys, size_t key_count,
                uint64_t limits[LIMIT_COUNT])
 {
     for (size_t i = 0; i < object_count; ++i)
         for (size_t j = 0; j < key_count; ++j)
-            if (merge_limit(objects[i], keys[j].key,
+            if (snag_json_merge_limit(objects[i], keys[j].key,
                     keys[j].field == LIMIT_EFFECTIVE ? 100u :
                     SNAG_CONFIG_TOKEN_LIMIT_MAX, &limits[keys[j].field]) < 0)
                 return -1;

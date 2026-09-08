@@ -36,6 +36,8 @@ int snag_json_set_new(json_t *object, const char *key, json_t *value);
 int snag_json_integer_u64(const json_t *object, const char *key, uint64_t *out);
 /* Null is absence (zero); present limits are positive, bounded integers. */
 bool snag_json_nullable_limit(const json_t *object, const char *key, uint64_t max, uint64_t *value);
+/* Missing/null leaves zero-or-positive value unchanged; conflicting aliases reject. */
+int snag_json_merge_limit(const json_t *object, const char *key, uint64_t max, uint64_t *value);
 /* Missing or null is unknown; a present value must be a nonnegative integer. */
 int snag_json_optional_u64(const json_t *object, const char *key, uint64_t *out, bool *known);
 

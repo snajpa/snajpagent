@@ -21,23 +21,6 @@ stream_fail(struct snag_responses_stream *stream, int code, const char *fmt, ...
     return -1;
 }
 
-static int
-failure_limit(const json_t *object, const char *key, uint64_t *value)
-{
-    json_t *entry;
-    json_int_t integer;
-
-    if (!object || !(entry = json_object_get(object, key)) ||
-        json_is_null(entry))
-        return 0;
-    if (!json_is_integer(entry) || (integer = json_integer_value(entry)) <= 0 ||
-        (uint64_t)integer > SNAG_CONFIG_TOKEN_LIMIT_MAX ||
-        (*value && *value != (uint64_t)integer))
-        return -1;
-    *value = (uint64_t)integer;
-    return 0;
-}
-
 bool
 snag_provider_failure_is_capacity(const struct snag_provider_failure *failure)
 {
@@ -119,11 +102,11 @@ snag_provider_failure_from_json(const json_t *root,
     if (snag_text_valid(message, 0u, sizeof(failure->message) - 1u))
         memcpy(failure->message, message, strlen(message) + 1u);
     for (size_t i = 0; i < sizeof(limit_keys) / sizeof(limit_keys[0]); ++i)
-        if (failure_limit(object, limit_keys[i],
+        if (snag_json_merge_limit(object, limit_keys[i], SNAG_CONFIG_TOKEN_LIMIT_MAX,
                           &failure->context_limit_tokens) < 0)
             return -1;
     for (size_t i = 0; i < sizeof(requested_keys) / sizeof(requested_keys[0]); ++i)
-        if (failure_limit(object, requested_keys[i],
+        if (snag_json_merge_limit(object, requested_keys[i], SNAG_CONFIG_TOKEN_LIMIT_MAX,
                           &failure->requested_input_tokens) < 0)
             return -1;
     if ((typed && !strcmp(typed, "context_length_exceeded")) ||
