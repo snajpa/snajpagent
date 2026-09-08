@@ -418,7 +418,9 @@ test_runtime_roles(void)
     tick(runtime, 3u);
     drain_ready(runtime, human, wire, sizeof(wire));
     assert(strstr(wire, "shared-before-stop"));
-    for (size_t i = 0u; i < 40u && capture.events[SNAG_IRC_MESSAGE] < 2u; ++i) {
+    uint64_t shared_deadline = snag_monotonic_ms() + 1000u;
+    while (capture.events[SNAG_IRC_MESSAGE] < 2u &&
+           snag_monotonic_ms() < shared_deadline) {
         tick(upstream, 1u);
         tick(runtime, 1u);
     }
