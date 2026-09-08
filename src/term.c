@@ -1474,13 +1474,6 @@ history_reset_navigation(struct snag_term *term)
     term->history_pos = SIZE_MAX;
 }
 
-static void
-history_clear(struct snag_term *term)
-{
-    history_reset_navigation(term);
-    snag_history_snapshot_free(&term->history);
-}
-
 static int
 replace_draft(struct snag_term *term, const char *text)
 {
@@ -2641,7 +2634,8 @@ snag_term_close(struct snag_term *term)
     if (term->controls_installed)
         snag_term_controls_restore(&term->host);
     snag_term_host_close(&term->host);
-    history_clear(term);
+    history_reset_navigation(term);
+    snag_history_snapshot_free(&term->history);
     free(term->search_original);
     free(term->destinations);
     snag_buf_free(&term->search_label);

@@ -411,12 +411,6 @@ parse_prompt(const char *text, unsigned int selected,
                        selected, &seen, out);
 }
 
-static int
-validate_prompt(const char *text)
-{
-    return parse_prompt(text, 3u, NULL, 0u, NULL);
-}
-
 int
 snag_config_prompt_expand(const char *text, unsigned int mode,
                          const char *const values[SNAG_PROMPT_FIELD_COUNT],
@@ -729,7 +723,7 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         }
         if (!strcmp(key, "prompt"))
             return copy_value(config->prompt, sizeof(config->prompt), value) < 0 ?
-                -1 : validate_prompt(config->prompt);
+                -1 : parse_prompt(config->prompt, 3u, NULL, 0u, NULL);
         break;
     case SECTION_IRC:
         if (!strcmp(key, "client")) {

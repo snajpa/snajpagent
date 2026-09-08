@@ -484,13 +484,6 @@ snag_process_output_decode(const json_t *data, struct snag_buf *bytes)
         return snag_buf_append(bytes, text, strlen(text));
     return !strcmp(encoding, "base64") ? snag_base64_decode(bytes, text) : -1;
 }
-static bool
-process_close_status(const char *status)
-{
-    return snag_string_in(status,
-        "succeeded failed signaled timed_out cancelled outcome_unknown io_failed");
-}
-
 static int
 compact_output_digest(const json_t *output,
                       char out[SNAG_SHA256_HEX_LEN + 1u], size_t *bytes)
@@ -1680,7 +1673,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !process ||
             !snag_string_in(cause, causes) ||
             snag_tool_result_valid(result) < 0 ||
-            !process_close_status(status))
+            !snag_string_in(status,
+                "succeeded failed signaled timed_out cancelled outcome_unknown io_failed"))
             goto invalid;
         remove_process(session, process);
     } else if (snag_string_in(type,

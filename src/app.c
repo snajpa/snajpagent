@@ -1200,14 +1200,6 @@ append_catalog_limits(struct snag_buf *text, const json_t *model)
     return 0;
 }
 
-static int
-model_picker_entry(struct app_state *app, size_t index,
-                    const char **provider, const char **model, const char **effort)
-{
-    return snag_model_entry(&app->model_cache, app->config, index,
-                            resolve_effort(app->config->reasoning_effort), provider, model, effort);
-}
-
 struct model_catalog_view {
     const struct snag_config *config;
     struct snag_buf *text;
@@ -1400,7 +1392,8 @@ select_cached_model(struct app_state *app, const char *value, bool save)
         return 1;
     if (load_model_cache(app, false, error, sizeof(error)) < 0)
         return app_error(app, error);
-    entry_rc = model_picker_entry(app, index, &provider, &model, &effort);
+    entry_rc = snag_model_entry(&app->model_cache, app->config, index,
+        resolve_effort(app->config->reasoning_effort), &provider, &model, &effort);
     if (entry_rc != 0)
         return app_error(app, "model index is not in the displayed cache");
     provider_config = snag_config_provider(app->config, provider);
@@ -3662,11 +3655,6 @@ resolve_workspace_path(const char *path, const char *label,
     }
     return resolved;
 }
-static char *
-current_workspace(char *error, size_t error_size)
-{
-    return resolve_workspace_path(".", "current", error, error_size);
-}
 char *
 snag_app_dotdir(const char *override, char *error, size_t error_size)
 {
@@ -4249,7 +4237,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     if (!cli->list && config.auto_update)
         (void)snag_ui_update(&app.ui, program, config.update_url);
 #endif
-    workspace = current_workspace(error, sizeof(error));
+    workspace = resolve_workspace_path(".", "current", error, sizeof(error));
     if (!workspace) {
         goto fail;
     }

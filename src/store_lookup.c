@@ -43,12 +43,6 @@ open_sessions_dir(struct snag_store *store, char *error, size_t error_size)
                           error, error_size);
 }
 
-static struct snag_directory *
-open_trash_dir(struct snag_store *store, char *error, size_t error_size)
-{
-    return open_store_dir(store, "trash", "trash directory", error, error_size);
-}
-
 static int
 finish_directory(struct snag_directory *dir, char *error, size_t error_size)
 {
@@ -116,7 +110,7 @@ resolve_prefix(struct snag_store *store, const char *prefix,
     if (finish_directory(dir, error, error_size) < 0)
         return -1;
 
-    dir = open_trash_dir(store, error, error_size);
+    dir = open_store_dir(store, "trash", "trash directory", error, error_size);
     if (!dir)
         return -1;
     while ((entry = snag_directory_next(dir)) != NULL) {
