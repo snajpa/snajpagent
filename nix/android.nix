@@ -38,6 +38,10 @@ let
       '';
       cmakeFlags = [
         "-DCMAKE_SYSTEM_NAME=Android"
+        "-DCMAKE_TOOLCHAIN_FILE=${ndk}/build/cmake/android.toolchain.cmake"
+        "-DANDROID_ABI=arm64-v8a"
+        "-DANDROID_PLATFORM=android-${api}"
+        "-DANDROID_STL=c++_static"
         "-DCMAKE_SYSTEM_VERSION=${api}"
         "-DCMAKE_ANDROID_ARCH_ABI=arm64-v8a"
         "-DCMAKE_ANDROID_NDK=${ndk}"

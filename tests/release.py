@@ -209,6 +209,8 @@ assert '"-DCMAKE_AR=${tools}/llvm-ar"' in android
 assert '"-DCMAKE_RANLIB=${tools}/llvm-ranlib"' in android
 assert '"-DCMAKE_SYSTEM_NAME=Android"' in android
 assert '"-DCMAKE_ANDROID_NDK=${ndk}"' in android
+assert '"-DCMAKE_TOOLCHAIN_FILE=${ndk}/build/cmake/android.toolchain.cmake"' in android
+assert '"-DANDROID_PLATFORM=android-${api}"' in android
 print("PASS: Android static libraries use NDK archiving tools and Bionic target")
 
 # Feature-selection macros follow the requested target, including cross-builds.
