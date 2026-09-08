@@ -1856,8 +1856,8 @@ snag_child_exited(struct snag_child *child)
         errno = error;
     }
     return rc;
-#elif defined(__FreeBSD__)
-    /* FreeBSD supports polling without releasing child ownership. */
+#elif defined(__FreeBSD__) || defined(__NetBSD__)
+    /* BSD waitpid supports polling without releasing child ownership. */
     int status;
     pid_t pid = waitpid(child->pid, &status, WNOHANG | WNOWAIT);
     if (pid < 0 && errno == ECHILD)
