@@ -98,70 +98,46 @@ test_compact_setting(const char *path)
 }
 
 static void
-test_batch_settings(const char *path)
+test_numeric_settings(const char *path)
 {
-    static const char *const values[] = {"0", "1", "4", "32", "33", "-1", "no"};
-    for (size_t i = 0u; i < sizeof(values) / sizeof(values[0]); ++i) {
-        struct snag_config config;
-        char text[128], error[256] = {0};
-        int n = snprintf(text, sizeof(text), "[tool]\nmax_parallel_commands=%s\n"
-                         "[provider openai]\nparallel_tool_calls=false\n", values[i]);
-        write_bytes(path, text, (size_t)n);
-        snag_config_init(&config);
-        bool valid = i >= 1u && i <= 3u;
-        assert((snag_config_load(&config, path, NULL, error, sizeof(error)) == 0) == valid);
-        if (valid) {
-            assert(config.max_parallel_commands == (uint32_t)strtoul(values[i], NULL, 10));
-            assert(!config.providers[0].parallel_tool_calls);
+    struct snag_config config;
+    const struct {
+        const char *format, *duplicate, *values[9];
+        uint32_t *value, initial;
+        size_t first, end, count;
+    } cases[] = {
+        {"[tool]\nmax_parallel_commands=%s\n[provider openai]\nparallel_tool_calls=false\n",
+         "[tool]\nmax_parallel_commands=4\nmax_parallel_commands=2\n",
+         {"0", "1", "4", "32", "33", "-1", "no"}, &config.max_parallel_commands, 4u, 1u, 4u, 7u},
+        {"[tool]\nmax_wait_ms=%s\n", "[tool]\nmax_wait_ms=1\nmax_wait_ms=2\n",
+         {"1", "60000", "4294967295", "0", "-1", "4294967296", "never"},
+         &config.max_wait_ms, 60000u, 0u, 3u, 7u},
+        {"[agent]\nmax_turn_retries=%s\n", "[agent]\nmax_turn_retries=3\nmax_turn_retries=0\n",
+         {"0", "1", "3", "17", "4294967295", "4294967296", "-1", "3.5", "never"},
+         &config.max_turn_retries, 3u, 0u, 5u, 9u}
+    };
+    for (size_t c = 0u; c < sizeof(cases) / sizeof(cases[0]); ++c) {
+        for (size_t i = 0u; i < cases[c].count; ++i) {
+            char text[128], error[256] = {0};
+            size_t capacity = c == 0u ? sizeof(text) : 96u;
+            int n = snprintf(text, capacity, cases[c].format, cases[c].values[i]);
+            assert(n > 0 && (size_t)n < capacity);
+            write_bytes(path, text, (size_t)n);
+            snag_config_init(&config);
+            assert(*cases[c].value == cases[c].initial);
+            bool valid = i >= cases[c].first && i < cases[c].end;
+            assert((snag_config_load(&config, path, c == 2u ? "/tmp" : NULL,
+                                    error, sizeof(error)) == 0) == valid);
+            if (valid) {
+                assert(*cases[c].value == (uint32_t)strtoul(cases[c].values[i], NULL, 10));
+                if (c == 0u)
+                    assert(!config.providers[0].parallel_tool_calls);
+            }
+            snag_config_free(&config);
         }
-        snag_config_free(&config);
+        write_bytes(path, cases[c].duplicate, strlen(cases[c].duplicate));
+        expect_invalid(path);
     }
-    static const char duplicate[] = "[tool]\nmax_parallel_commands=4\nmax_parallel_commands=2\n";
-    write_bytes(path, duplicate, sizeof(duplicate) - 1u);
-    expect_invalid(path);
-}
-
-static void
-test_tool_max_wait(const char *path)
-{
-    const char *values[] = {"1", "60000", "4294967295", "0", "-1", "4294967296", "never"};
-    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
-        struct snag_config config;
-        char text[96], error[256] = {0};
-        int n = snprintf(text, sizeof(text), "[tool]\nmax_wait_ms=%s\n", values[i]);
-        write_bytes(path, text, (size_t)n);
-        snag_config_init(&config);
-        assert(config.max_wait_ms == 60000u);
-        assert((snag_config_load(&config, path, NULL, error, sizeof(error)) == 0) == (i < 3u));
-        if (i < 3u)
-            assert(config.max_wait_ms == (uint32_t)strtoul(values[i], NULL, 10));
-        snag_config_free(&config);
-    }
-    const char duplicate[] = "[tool]\nmax_wait_ms=1\nmax_wait_ms=2\n";
-    write_bytes(path, duplicate, sizeof(duplicate) - 1u);
-    expect_invalid(path);
-}
-
-static void
-test_turn_retries(const char *path)
-{
-    const char *values[] = {"0", "1", "3", "17", "4294967295", "4294967296", "-1", "3.5", "never"};
-    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
-        struct snag_config config;
-        char text[96], error[256];
-        int n = snprintf(text, sizeof(text), "[agent]\nmax_turn_retries=%s\n", values[i]);
-        assert(n > 0 && (size_t)n < sizeof(text));
-        write_bytes(path, text, (size_t)n);
-        snag_config_init(&config);
-        assert(config.max_turn_retries == 3u);
-        int rc = snag_config_load(&config, path, "/tmp", error, sizeof(error));
-        assert((rc == 0) == (i < 5u));
-        if (rc == 0) assert(config.max_turn_retries == (uint32_t)strtoul(values[i], NULL, 10));
-        snag_config_free(&config);
-    }
-    static const char duplicate[] = "[agent]\nmax_turn_retries=3\nmax_turn_retries=0\n";
-    write_bytes(path, duplicate, sizeof(duplicate) - 1u);
-    expect_invalid(path);
 }
 
 static void
@@ -809,9 +785,7 @@ main(void)
     }
 
     test_compact_setting(path);
-    test_batch_settings(path);
-    test_tool_max_wait(path);
-    test_turn_retries(path);
+    test_numeric_settings(path);
     test_auth_settings(path);
     expect_ui(path, "prompt", "{chat:{rollout-idle:x}}{rollout-idle:y}{rollout-active:z}", false);
     expect_ui(path, "prompt", "{chat:{queued:{goal_spinner}{queued:{goal_spinner}}}}"
