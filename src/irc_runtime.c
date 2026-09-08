@@ -205,6 +205,7 @@ run_owner(void *opaque)
         request = owner->request;
         owner->request = NULL;
         pthread_mutex_unlock(&irc->mutex);
+        fprintf(stderr, "owner loop stop=%d wake=%d\n", stopping, (int)owner->wake[0]);
         if (stopping)
             break;
         if (ack.stream[0] && snag_irc_core_ack(owner->core, &ack) < 0) {
@@ -239,9 +240,11 @@ run_owner(void *opaque)
         }
     }
     pthread_mutex_lock(&irc->mutex);
+    fprintf(stderr, "owner finished\n");
     owner->finished = true;
     snag_wakeup_send(irc->wake[1]);
     pthread_mutex_unlock(&irc->mutex);
+    fprintf(stderr, "owner return\n");
     return NULL;
 }
 
