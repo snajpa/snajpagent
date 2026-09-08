@@ -229,13 +229,7 @@ let
     "-DCURL_USE_LIBPSL=OFF" "-DCURL_USE_LIBSSH2=OFF" "-DCURL_USE_LIBSSH=OFF"
     "-DCURL_DISABLE_LDAP=ON" "-DCURL_DISABLE_LDAPS=ON"
     "-DCURL_CA_BUNDLE=none" "-DCURL_CA_PATH=none"
-  ] networkLibraries).overrideAttrs (_: {
-    postInstall = ''
-      # curl prefixes the imported Threads target's -lpthread flag twice.
-      substituteInPlace "$out/lib/pkgconfig/libcurl.pc" \
-        --replace-fail '-l-lpthread' '-lpthread'
-    '';
-  });
+  ] networkLibraries);
 in {
   inherit sdk target compiler tools cflags ldflags jansson tls curl regex unistring;
   application = { source, packageName, version, revision, debug ? false,
