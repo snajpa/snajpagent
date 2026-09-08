@@ -169,8 +169,7 @@ devfs; the qualification guest used `en_US.UTF-8` and UFS for large sparse files
 mini-install disc into `build/matrix/freebsd-amd64-legacy/bin/snajpagent`, with
 matching symbols in `.debug`. Application libraries and libutil are static;
 only native `libc.so.5` and `libc_r.so.5` are imported through
-`/usr/libexec/ld-elf.so.1`. This is a separate
-ABI from the 8.4-based output, which remains available for 8.4 and 14.4.
+`/usr/libexec/ld-elf.so.1`. This is a separate ABI from the 8.4-based output, which remains available for 8.4 and 14.4.
 The old compiler driver uses the release's actual CRT and libgcc ordering;
 these runtimes predate crtbeginT.o, libgcc_eh and stack-protector support.
 The legacy executable is non-PIE and has a non-executable stack.
@@ -206,8 +205,8 @@ these kernels. Native at-family APIs remain selected on newer build baselines.
 For old kernels lacking non-reaping wait flags, process-list snapshots preserve
 child ownership. PID and parentage are checked before interpreting the old
 zombie representation. FreeBSD 5.1 omits zombie PIDs, so it also accepts the
-child-owned process group with matching parentage; the owner still collects status with waitpid. Source
-checks and the focused tests cover this path independently of full-agent
+child-owned process group with matching parentage; the owner still collects
+status with waitpid. Source checks and the focused tests cover this path independently of full-agent
 qualification. The old libc realpath call uses a caller-owned buffer and checks
 that the original path exists before normalization.
 

@@ -266,18 +266,18 @@ in {
           ${pkgs.cacert}/etc/ssl/certs/ca-no-trust-rules-bundle.crt -o build/ca_bundle.zst
         od -An -v -t u1 build/ca_bundle.zst |
           sed -E 's/([0-9]+)/\1,/g' > build/ca_bundle.inc
-        # Native libc reads each release's locale data. Keep application libs
-        # and libutil static, but use one native threading runtime with libc.
+        # Keep application/Unicode libraries and libutil static; use one
+        # native threading runtime with libc.
         # c-ares' pkg-config pthread flags must not pull in old static libthr.
         makeFlagsArray+=(
-        'DEBUG=${if debug then "1" else "0"}'
-        ${pkgs.lib.optionalString (updateBase != "") "'UPDATE_BASE_URL=${updateBase}' 'UPDATE_TARGET=${updateTarget}'"}
+          'DEBUG=${if debug then "1" else "0"}'
+          ${pkgs.lib.optionalString (updateBase != "") "'UPDATE_BASE_URL=${updateBase}' 'UPDATE_TARGET=${updateTarget}'"}
           'TARGET_OS=FreeBSD'
           'CC=${compiler} --target=${target} --sysroot=${sdk}'
           'STRIP=${tools}/llvm-strip' 'OBJCOPY=${tools}/llvm-objcopy'
           'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
           'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"${lib.optionalString early " -DSNAJPAGENT_LEGACY_BSD_JOIN -DSNAJPAGENT_STATIC_UTF8 -I${regex}/include -I${unistring}/include"}'
-          'CFLAGS=-std=c11 ${if debug then "-Og -g -fno-omit-frame-pointer" else cflags + " -flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
+          'CFLAGS=-std=c11 ${cflags} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           'LDFLAGS=--ld-path=${llvm.lld}/bin/ld.lld ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections,--as-needed,-Bstatic${lib.optionalString early " -Wl,--wrap=pthread_join"}'
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson)${lib.optionalString early " -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"}"
