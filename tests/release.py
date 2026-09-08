@@ -102,4 +102,5 @@ for variable in ("cflags", "ldflags"):
     assert "-femulated-tls" in assignment, (variable, assignment)
 application_link = next(line for line in netbsd if "'LDFLAGS=" in line)
 assert "${ldflags}" in application_link, application_link
+assert "-Wl,-mllvm,-emulated-tls" in application_link, application_link
 print("PASS: NetBSD emulated TLS reaches the LTO linker")

@@ -247,6 +247,7 @@ in {
           ${pkgs.cacert}/etc/ssl/certs/ca-no-trust-rules-bundle.crt -o build/ca_bundle.zst
         od -An -v -t u1 build/ca_bundle.zst |
           sed -E 's/([0-9]+)/\1,/g' > build/ca_bundle.inc
+        # NetBSD clang does not forward emulated TLS to LTO; pass it to LLD.
         # Keep application/Unicode libraries static with native OS runtimes.
         makeFlagsArray+=(
           'DEBUG=${if debug then "1" else "0"}'
@@ -257,7 +258,7 @@ in {
           'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
           'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\" -DSNAJPAGENT_STATIC_UTF8 -I${regex}/include -I${unistring}/include'
           'CFLAGS=-std=c11 ${cflags} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
-          'LDFLAGS=${ldflags} ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections,--as-needed,-Bstatic'
+          'LDFLAGS=${ldflags} -Wl,-mllvm,-emulated-tls ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections,--as-needed,-Bstatic'
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson) -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
