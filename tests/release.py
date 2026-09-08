@@ -186,6 +186,16 @@ assert 'musl.stdenv.hostPlatform.isAarch32' in link
 assert '" -Wl,-Bstatic,--no-dynamic-linker,-z,text"' in link
 print("PASS: 32-bit ARM static PIE explicitly omits the dynamic runtime")
 
+# One baseline artifact serves both 32-bit ARM generations. Its channel target
+# must come from the actual recipe, not an ARMv7 alias with a higher ISA floor.
+assert "linux-armv6" in release.targets()
+portable = (root / "nix/portable.nix").read_text()
+assert ('linux-armv6 = (linux pkgs.pkgsCross.muslpi).application '
+        '(args "linux-armv6");') in portable
+assert "linux-armv7" not in release.targets()
+print("PASS: shared 32-bit ARM target retains its ARMv6 toolchain and identity")
+
+
 # Bootstrap download failure must try the next pinned URL before nix-build.
 # Stub only Nix commands, exercising the actual production Make recipe offline.
 with tempfile.TemporaryDirectory(prefix="release-fetch-", dir=root / "build") as tmp:

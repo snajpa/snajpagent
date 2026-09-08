@@ -33,6 +33,22 @@ so 32-bit libc builds retain large-file seek/stat/truncate support. Keep that
 feature macro when replacing CPPFLAGS. This does not enlarge a 32-bit address
 space or claim that every old kernel supports modern time/thread APIs.
 
+`make prod-linux-armv6` uses the pinned `muslpi` toolchain for an ARMv6KZ/VFPv2
+hard-float baseline. One static PIE covers ARMv6 Raspberry Pi 1/Zero-class
+systems and ARMv7; application libraries, TLS and trust roots are embedded.
+It requires a Linux hard-float environment and the native shell/tool commands
+used by the agent. It has no separate interpreter or shared-library dependency.
+Soft-float userlands and older kernels need separate qualification.
+
+The same binary runs on local Alpine 3.22.5 ARM1176 and Cortex-A7 guests.
+The Raspberry Pi QEMU guest uses the original Alpine kernel/userland with a
+device tree adapted for unimplemented power and SD-DMA hardware, and QEMU's
+instruction-counted clock for reliable timer interrupts. These are emulator
+settings; they do not establish physical-board performance. Musl carries
+separate ARMv6/ARMv7 atomic routines and selects them from the kernel's CPU
+capabilities at startup, so its merged ELF instruction attributes include
+routines above the executable's baseline.
+
 `make prod-linux-i686` builds the full 32-bit static-PIE agent with the same
 application libraries and compressed embedded roots. It uses an i686 baseline,
 64-bit musl file offsets/time_t, and no required extra runtime libraries.
