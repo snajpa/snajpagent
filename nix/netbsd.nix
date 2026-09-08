@@ -3,7 +3,8 @@
 let
   inherit (pkgs) lib;
   legacy = lib.versionOlder osVersion "6.0";
-  target = "x86_64-unknown-netbsd${if legacy then "5.2" else osVersion}";
+  early = lib.versionOlder osVersion "4.0";
+  target = "x86_64-unknown-netbsd${if early then "2.0" else if legacy then "5.2" else osVersion}";
   setSuffix = if legacy then "tgz" else "tar.xz";
   mirror = if legacy then "https://archive.netbsd.org/pub/NetBSD-archive"
     else "https://cdn.netbsd.org/pub/NetBSD";
@@ -14,12 +15,14 @@ let
     version = osVersion;
     src = pkgs.fetchurl {
       url = "${mirror}/NetBSD-${osVersion}/amd64/binary/sets/base.${setSuffix}";
-      sha256 = if legacy then "693a8018ec6271cfc8a267ee8364de6a125d1483f47e9bc6bcaec507c2c0f784"
+      sha256 = if early then "38ee62cbf6a62e2e7246aae60890651e99ad042cbfd85d47531d26bbea9e2629"
+        else if legacy then "693a8018ec6271cfc8a267ee8364de6a125d1483f47e9bc6bcaec507c2c0f784"
         else "ec59d1198dad7de81771bfb93f50425241bc51331b4c50ba7a163ca4d6acd427";
     };
     compilerSet = pkgs.fetchurl {
       url = "${mirror}/NetBSD-${osVersion}/amd64/binary/sets/comp.${setSuffix}";
-      sha256 = if legacy then "90be70dec28c68db354564d810613f48a7ed2d17d9cff2b381e3f9db4f94f54e"
+      sha256 = if early then "3021879518b90a9dfe701fb4a2c9e16b3ed76b715cb49631fc59d4b33fe541cb"
+        else if legacy then "90be70dec28c68db354564d810613f48a7ed2d17d9cff2b381e3f9db4f94f54e"
         else "02e51e63e05b54f9d30d4d566c55e96e1b8b36fb8e870b1cc3ed9494d93d11f3";
     };
     nativeBuildInputs = [ pkgs.libarchive pkgs.python3 ];
@@ -88,7 +91,7 @@ let
   compiler = "${compilerWrapper}/bin/clang";
   cxxCompiler = "${compilerWrapper}/bin/clang++";
   # NetBSD 5 lacks the ELF TLS runtime; retain TLS through compiler-rt.
-  cflags = "-Os -g -D_NETBSD_SOURCE -fPIC -fstack-protector-strong ${lib.optionalString legacy "-femulated-tls"}";
+  cflags = "-Os -g -D_NETBSD_SOURCE -fPIC ${if early then "-fno-stack-protector" else "-fstack-protector-strong"} ${lib.optionalString legacy "-femulated-tls"}";
   ldflags = "--ld-path=${llvm.lld}/bin/ld.lld ${lib.optionalString legacy "-femulated-tls"}";
   cmakeLibrary = package: flags: dependencies:
     pkgs.stdenvNoCC.mkDerivation {
