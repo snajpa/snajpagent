@@ -274,6 +274,7 @@ stop_owners(struct snag_irc *irc)
 {
     pthread_mutex_lock(&irc->mutex);
     irc->stopping = true;
+    fprintf(stderr, "stop owners count=%zu\n", irc->owner_count);
     pthread_cond_broadcast(&irc->changed);
     for (size_t i = 0u; i < irc->owner_count; ++i)
         if (irc->owners[i]->started)
@@ -281,7 +282,9 @@ stop_owners(struct snag_irc *irc)
     pthread_mutex_unlock(&irc->mutex);
     for (size_t i = 0u; i < irc->owner_count; ++i)
         if (irc->owners[i]->started) {
+            fprintf(stderr, "joining owner %zu\n", i);
             pthread_join(irc->owners[i]->thread, NULL);
+            fprintf(stderr, "joined owner %zu\n", i);
             irc->owners[i]->started = false;
         }
 }
