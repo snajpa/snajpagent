@@ -817,12 +817,12 @@ Show session, selection, queue, verbosity, capacity, token accounting, requested
 network roles and actual connection state.
 .TP
 .BR /history " [N]"
-Show the newest N turns, oldest first, with each turn's input and latest saved
-assistant reply.  N is a decimal integer from 0 through 100; omitted N defaults
-to 1 and zero displays nothing.  A count greater than the available turns shows
-all turns.  This command uses the same turn selection as
+Show the last N completed turns, oldest first.  Default: 1.  Available during
+active work.  N is a nonnegative decimal count; large counts show all completed
+turns.  Zero shows only the counts.  Every replay ends with shown, completed and
+total session turns.  Uses the same replay as
 .B resume_history_turns
-without changing the configured resume count or model context.
+without changing configuration or model context.
 .TP
 .BR /model " [list]"
 Read the local provider/model catalog.  No provider request is made.
@@ -1420,13 +1420,12 @@ Render supported terminal Markdown.  Default:
 .BR true .
 .TP
 .B resume_history_turns
-Number of recent turns displayed on a non-networked resume, from 0 through
-100.  Default: 2.  Zero disables display.  Available turns appear oldest first,
-with each turn's input and latest saved assistant reply, including refusals.
-Unanswered and interrupted turns count; an unanswered turn shows only its input.
-Goal-continuation turns count as turns.  A value larger than the session's turn
-count displays all turns.  Display reads the session log, including turns before
-compaction, independently of model context.  Network chat uses room history.
+Completed turns to show on a non-networked resume.  Default: 1.  Accepts any
+nonnegative decimal count; large counts show all completed turns.  Zero shows
+only the counts.  Replay ends with shown, completed and total session turns.
+Active, failed and interrupted turns are excluded from replay.  Completed
+refusals and goal turns are included.  History before compaction remains
+available.  Network chat uses room history.
 .TP
 .B typing_pause_ms
 Output pause after an input edit, 0 through 5000.  Default: 500.

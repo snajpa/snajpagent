@@ -24,6 +24,8 @@
 #define SNAG_VERBOSITY_MAX 6u
 
 bool snag_verbosity_command(const char *text, size_t len);
+/* Decimal count; values beyond uint64_t saturate to cover any stored history. */
+int snag_parse_count(const char *text, uint64_t *count);
 
 #define SNAG_ID_HEX_LEN 32u
 #define SNAG_SHA256_HEX_LEN 64u

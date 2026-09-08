@@ -507,7 +507,7 @@ main(void)
     assert(!config.auto_update && !config.update_url[0]);
 #endif
     assert(config.markdown);
-    assert(config.resume_history_turns == 2u);
+    assert(config.resume_history_turns == 1u);
     assert(config.typing_pause_ms == 500u);
     assert(strstr(config.prompt,
                   "{activity_spinner}{goal_spinner} {hour:02}:{minute:02}:{second:02} ") ==

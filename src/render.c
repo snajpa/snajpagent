@@ -529,6 +529,18 @@ render_banner(struct snag_render *render, const char *text)
 }
 
 static int
+pause_rollout(struct snag_render *render)
+{
+    struct snag_render_record *open = render->rollout_open;
+    if (open && open->physical_open) {
+        if (snag_render_public_end(render) < 0)
+            return -1;
+        open->physical_open = false;
+    }
+    return 0;
+}
+
+static int
 render_history_turn(struct snag_render *render,
                     const struct snag_history_turn *turn)
 {
@@ -562,17 +574,21 @@ render_history_turn(struct snag_render *render,
 }
 
 int
-snag_render_history(struct snag_render *render,
-                    const struct snag_history_turn *turns, size_t count)
+snag_render_history(struct snag_render *render, const struct snag_history_turn *turn,
+                    uint64_t shown, uint64_t completed, uint64_t total)
 {
-    if (!count)
-        return 0;
-    if (render_banner(render, "── history ──\n") < 0)
+    if (pause_rollout(render) < 0)
         return -1;
-    for (size_t i = 0u; i < count; ++i)
-        if (render_history_turn(render, &turns[i]) < 0)
+    if (turn) {
+        if (shown == 1u && render_banner(render, "── history ──\n") < 0)
             return -1;
-    return render_banner(render, "── history replayed ──\n");
+        return render_history_turn(render, turn);
+    }
+    char footer[160];
+    (void)snprintf(footer, sizeof(footer),
+        "── history: %llu shown · %llu completed · %llu total ──\n",
+        (unsigned long long)shown, (unsigned long long)completed, (unsigned long long)total);
+    return render_banner(render, footer);
 }
 
 int
@@ -2973,20 +2989,13 @@ snag_render_set_view(struct snag_render *render, enum snag_render_view view)
     static const char *const boundaries[SNAG_RENDER_VIEW_COUNT] = {
         "── chat ──\n", "── rollout ──\n"
     };
-    struct snag_render_record *open;
 
     if (!render || (view != SNAG_RENDER_CHAT && view != SNAG_RENDER_ROLLOUT))
         return snag_errno(EINVAL);
     if (render->view == view)
         return 0;
-    open = render->rollout_open;
-    if (open && open->physical_open) {
-        /* Finish the visible fragment so buffered Markdown/wrap text is not
-         * lost when the logical stream resumes after visiting chat. */
-        if (snag_render_public_end(render) < 0)
-            return -1;
-        open->physical_open = false;
-    }
+    if (pause_rollout(render) < 0)
+        return -1;
     render->view = view;
     if (render_banner(render, boundaries[view]) < 0 ||
         flush_view(render, view) < 0)

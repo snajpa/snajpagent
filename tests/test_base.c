@@ -3113,6 +3113,18 @@ run_base(int argc, char **argv)
     assert(snag_buf_read(&buf, -1) == -1 && errno == EBADF);
     assert(fclose(file) == 0);
     snag_buf_free(&buf);
+    {
+        uint64_t count;
+        const char *const invalid[] = {"", "  ", "-1", "+2", "1.5", "2 3", "#2",
+            "999999999999999999999999999999x"};
+        assert(snag_parse_count("0", &count) == 0 && count == 0u);
+        assert(snag_parse_count("  00101\t", &count) == 0 && count == 101u);
+        assert(snag_parse_count("4294967296", &count) == 0 && count == UINT64_C(4294967296));
+        assert(snag_parse_count("18446744073709551615", &count) == 0 && count == UINT64_MAX);
+        assert(snag_parse_count("999999999999999999999999999999", &count) == 0 && count == UINT64_MAX);
+        for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i)
+            assert(snag_parse_count(invalid[i], &count) < 0);
+    }
     test_irc_target_parse();
     test_path_join();
     test_platform();

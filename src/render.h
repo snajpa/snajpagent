@@ -144,7 +144,8 @@ int snag_render_orientation(struct snag_render *render,
                            const char *workspace, const char *id,
                            uint64_t turns, size_t queued, bool resumed);
 int snag_render_history(struct snag_render *render,
-                       const struct snag_history_turn *turns, size_t count);
+                       const struct snag_history_turn *turn, uint64_t shown,
+                       uint64_t completed, uint64_t total);
 int snag_render_submitted(struct snag_render *render, const char *label,
                          const char *text);
 int snag_render_input_submitted(struct snag_render *render, const char *label,

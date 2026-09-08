@@ -1993,16 +1993,16 @@ def run_resume_history_case(binary, root):
         session = next((state / "sessions").iterdir()).name
     log = state / "sessions" / session / "events.jsonl"
     before = log.read_bytes()
-    for setting in (0, 1, 2, 3, 100, None):
-        count = 2 if setting is None else setting
+    for setting in (0, 1, 2, 3, 101, 2**64, 10**100, None):
+        count = 1 if setting is None else setting
         config.write_text("[provider openai]\n[ui]\n" + (
             f"resume_history_turns = {count}\n" if setting is not None else ""))
-        with TmuxTerminal(case / str(setting), binary, workspace, state, config, 100, 40,
+        with TmuxTerminal(case / ("default" if setting is None else str(len(str(setting))) + "-" + str(setting)[:8]), binary, workspace, state, config, 100, 40,
                 args=("--no-listen", "--no-client", "--resume", session)) as terminal:
             screen = terminal.wait("% ›", join_wrapped=True)
             selected = pairs[-count:] if count else []
             assert screen.count("── history ──") == bool(selected), (count, screen)
-            assert screen.count("── history replayed ──") == bool(selected), (count, screen)
+            assert f"history: {len(selected)} shown · 5 completed · 5 total" in screen, screen
             fragments = []
             for user, assistant in pairs:
                 text = f"user: {user}"
@@ -2013,7 +2013,7 @@ def run_resume_history_case(binary, root):
             assert "Working." not in screen, screen
             terminal.exit()
         assert log.read_bytes() == before, "display changed durable session history"
-    for invalid in (-1, 101, "one", "2.5"):
+    for invalid in (-1, "+2", "one", "2.5", "2 3"):
         config.write_text(f"[provider openai]\n[ui]\nresume_history_turns = {invalid}\n")
         result = subprocess.run(base + ["-e", "--resume", session, "--", "ping"],
                                 cwd=workspace, capture_output=True, text=True)
@@ -2022,10 +2022,11 @@ def run_resume_history_case(binary, root):
     config.write_text("[provider openai]\n[ui]\nresume_history_turns = 0\n")
     saved_config = config.read_bytes()
     commands = [("/history", 1), ("/history 0", 0), ("/history 1", 1),
-                ("/history 2", 2), ("/history 3", 3), ("/history 100", 100),
+                ("/history 2", 2), ("/history 3", 3), ("/history 101", 101),
+                ("/history " + "9" * 100, 10**100),
                 ("/history   002  ", 2), ("/history ", 1)]
     commands += [("/history " + value, None) for value in
-                 ("-1", "+2", "101", "one", "2.5", "2 3", "#2", "9" * 40)]
+                 ("-1", "+2", "one", "2.5", "2 3", "#2", "9" * 40 + "x")]
     for index, (command, count) in enumerate(commands):
         with TmuxTerminal(case / f"cmd{index}", binary, workspace, state, config, 100, 40,
                 args=("--no-listen", "--no-client", "--resume", session)) as terminal:
@@ -2033,7 +2034,7 @@ def run_resume_history_case(binary, root):
             terminal.submit(command)
             screen = terminal.submit_wait("/status", "session:", join_wrapped=True)
             if count is None:
-                assert "usage: /history [0..100]" in screen, screen
+                assert "usage: /history [N]" in screen, screen
                 selected = []
             else:
                 assert "usage: /history" not in screen and "unknown slash command" not in screen, screen
@@ -2046,13 +2047,17 @@ def run_resume_history_case(binary, root):
                 if (user, assistant) in selected:
                     fragments.extend((text, "assistant:", assistant))
             assert_order(screen, fragments)
+            expected_footer = f"history: {len(selected)} shown · 5 completed · 5 total"
+            assert screen.count(expected_footer) == (2 if count == 0 else 1), screen
             terminal.exit()
         assert log.read_bytes() == before, "history command changed the session log"
         assert config.read_bytes() == saved_config, "history command changed configuration"
     with TmuxTerminal(case / "compact", binary, workspace, state, config, 100, 40,
             args=("--no-listen", "--no-client", "--resume", session)) as terminal:
         terminal.wait("% ›", join_wrapped=True)
-        screen = terminal.submit_wait("/history", "── history replayed ──", join_wrapped=True)
+        terminal.submit("/history")
+        screen = terminal.wait_until(lambda text: "history: 1 shown · 5 completed · 5 total" in text,
+                                     "completed history footer", join_wrapped=True)
         assert "user: multi_item" in screen and "user: refuse" not in screen, screen
         terminal.submit_wait("/compact", "Compacted", timeout=10)
         terminal.exit()
@@ -2064,18 +2069,39 @@ def run_resume_history_case(binary, root):
     with TmuxTerminal(case / "interrupted", binary, workspace, state, config, 100, 40,
             args=("--no-listen", "--no-client", "--resume", session)) as terminal:
         screen = terminal.wait("% ›", join_wrapped=True)
-        assert screen.count("user:") == len(pairs) + 1, screen
+        assert screen.count("user:") == len(pairs), screen
+        assert "user: crash" not in screen, screen
+        assert "history: 5 shown · 5 completed · 6 total" in screen, screen
         assert screen.count("assistant:") == len(pairs), screen
         assert_order(screen, ["user: ping", "pong", "user: multi_item", "Done.",
-                              "user: crash", "── history replayed ──"])
+                              "history: 5 shown · 5 completed · 6 total"])
         terminal.exit()
+    config.write_text("[provider openai]\n[ui]\nresume_history_turns = 0\n")
+    with TmuxTerminal(case / "active", binary, workspace, state, config, 100, 40,
+            args=("--no-listen", "--no-client", "--resume", session)) as terminal:
+        terminal.wait("% ›", join_wrapped=True)
+        terminal.submit("slow_utf8")
+        wait_event_count(state, "turn_started", 7)
+        terminal.submit("/history 2")
+        screen = terminal.wait("history: 2 shown · 5 completed · 7 total", join_wrapped=True)
+        assert_order(screen, ["user: refuse", "I can’t do that.", "user: multi_item", "Done.",
+                              "history: 2 shown · 5 completed · 7 total"])
+        assert "user: slow_utf8" not in screen and "user: crash" not in screen, screen
+        terminal.wait("slow complete")
+        wait_event_count(state, "turn_completed", 6)
+        assert len(event_list(read_events(state)[1], "turn_started")) == 7
+        terminal.submit("/history")
+        screen = terminal.wait("history: 1 shown · 6 completed · 7 total", join_wrapped=True)
+        assert "user: slow_utf8" in screen, screen
+        terminal.exit()
+    config.write_text("[provider openai]\n[ui]\nresume_history_turns = 100\n")
     goal_state = case / "goal-state"
     with TmuxTerminal(case / "goal", binary, workspace, goal_state, config, 100, 40,
             args=("--no-listen", "--no-client")) as terminal:
         terminal.wait("% ›", join_wrapped=True)
         terminal.submit("/history")
         screen = terminal.submit_wait("/status", "session:", join_wrapped=True)
-        assert "── history" not in screen, screen
+        assert "history: 0 shown · 0 completed · 0 total" in screen, screen
         terminal.submit("/goal automatic goal")
         wait_event_count(goal_state, "goal_completed", 1)
         wait_event_count(goal_state, "turn_completed", 2)
@@ -2088,8 +2114,31 @@ def run_resume_history_case(binary, root):
             args=("--no-listen", "--no-client", "--resume", goal_session)) as terminal:
         screen = terminal.wait("% ›", join_wrapped=True)
         assert screen.count("user: Continue the active goal from its durable state.") == 2, screen
-        assert_order(screen, ["goal checkpoint", "goal done", "── history replayed ──"])
+        assert_order(screen, ["goal checkpoint", "goal done", "history: 2 shown · 2 completed · 2 total"])
         terminal.exit()
+    # Exercise actual history beyond the removed 100-turn boundary, not just
+    # an oversized request against a small session.
+    config.write_text("[provider openai]\n[ui]\nresume_history_turns = 0\n")
+    for _ in range(96):
+        result = subprocess.run(base + ["-e", "--resume", session, "--", "ping"],
+                                cwd=workspace, capture_output=True)
+        assert result.returncode == 0, result.stderr
+    before = log.read_bytes()
+    for setting, count in ((None, 1), (101, 101)):
+        config.write_text("[provider openai]\n[ui]\n" + (
+            f"resume_history_turns = {setting}\n" if setting is not None else ""))
+        with TmuxTerminal(case / f"long{setting}", binary, workspace, state, config, 100, 40,
+                args=("--no-listen", "--no-client", "--resume", session)) as terminal:
+            screen = terminal.wait(f"history: {count} shown · 102 completed · 103 total",
+                                   timeout=20, join_wrapped=True)
+            assert screen.count("user:") == count, screen
+            terminal.submit("/history 999999999999999999999999999999")
+            screen = terminal.wait("history: 102 shown · 102 completed · 103 total",
+                                   timeout=20, join_wrapped=True)
+            assert screen.count("user:") == count + 102, screen
+            assert "user: crash" not in screen, screen
+            terminal.exit()
+        assert log.read_bytes() == before
     print("resume_history_count: ok")
 
 

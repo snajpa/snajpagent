@@ -145,7 +145,7 @@ static const struct snag_term_command commands[] = {
     {"/help", "commands and keys"},
     {"/?", "commands and keys (alias for /help)"},
     {"/status", "session and next-turn settings"},
-    {"/history [N]", "recent turns (0..100; default 1)"},
+    {"/history [N]", "completed turns (default 1)"},
     {"/model [list|cache|#|SELECTOR [save|s]]", "list, refresh, or select a model"},
     {"/config", "edit and reload the active configuration"},
     {"/effort [LEVEL]", "show or set next-turn effort"},
@@ -2033,19 +2033,12 @@ handle_common_command(struct app_state *app, const char *line, bool active,
     if (strncmp(line, "/history", 8u) == 0 &&
         (!line[8] || isspace((unsigned char)line[8]))) {
         const char *argument = line + 8u;
-        unsigned long count = 1u;
+        uint64_t count = 1u;
         while (isspace((unsigned char)*argument))
             ++argument;
-        if (*argument) {
-            char *end;
-            errno = 0;
-            count = strtoul(argument, &end, 10);
-            while (isspace((unsigned char)*end))
-                ++end;
-            if (*argument < '0' || *argument > '9' || *end || errno == ERANGE || count > 100u)
-                return app_error(app, "usage: /history [0..100]");
-        }
-        return snag_ui_history(&app->ui, &app->session, (unsigned int)count);
+        if (*argument && snag_parse_count(argument, &count) < 0)
+            return app_error(app, "usage: /history [N]");
+        return snag_ui_history(&app->ui, &app->session, count);
     }
     if (strcmp(line, "/chat") == 0) {
         int rc = select_view(app, SNAG_RENDER_CHAT, active);

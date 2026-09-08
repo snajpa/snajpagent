@@ -110,7 +110,7 @@ snag_config_init(struct snag_config *config)
 #endif
     config->color = SNAG_COLOR_AUTO;
     config->markdown = true;
-    config->resume_history_turns = 2u;
+    config->resume_history_turns = 1u;
     config->typing_pause_ms = 500u;
     memcpy(config->prompt, prompt, sizeof(prompt));
     memcpy(config->prompt_spinner_goal, " ⚑", sizeof(" ⚑"));
@@ -714,13 +714,8 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
                     return 0;
                 }
         }
-        if (!strcmp(key, "resume_history_turns")) {
-            uint32_t parsed;
-            if (parse_u32(value, 0, 100, &parsed) < 0)
-                return -1;
-            config->resume_history_turns = (unsigned int)parsed;
-            return 0;
-        }
+        if (!strcmp(key, "resume_history_turns"))
+            return snag_parse_count(value, &config->resume_history_turns);
         if (!strcmp(key, "prompt"))
             return copy_value(config->prompt, sizeof(config->prompt), value) < 0 ?
                 -1 : parse_prompt(config->prompt, 3u, NULL, 0u, NULL);

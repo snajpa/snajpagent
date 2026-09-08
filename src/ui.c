@@ -338,8 +338,8 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
                     command->data.orientation.queued,
                     command->data.orientation.resumed);
     case SNAG_UI_HISTORY:
-        return snag_render_history(render, command->data.replay.turns,
-                                   command->data.replay.count);
+        return snag_render_history(render, command->data.replay.turn,
+            command->data.replay.shown, command->data.replay.completed, command->data.replay.total);
     case SNAG_UI_IRC: return snag_render_irc_event(render, command->data.irc);
     case SNAG_UI_DURABLE:
         return snag_render_durable(render, command->data.durable.fd,
@@ -1022,20 +1022,39 @@ snag_ui_orientation(struct snag_ui *ui, const struct snag_session *session,
 }
 
 struct history_replay {
-    struct snag_history_turn *turns;
-    uint64_t first;
+    struct snag_ui *ui;
+    struct snag_history_turn turn;
+    uint64_t completed, skip, shown, total;
 };
+
+static int
+history_display(struct history_replay *history, const struct snag_history_turn *turn)
+{
+    return snag_ui_send(history->ui, (struct snag_ui_command){.kind = SNAG_UI_HISTORY,
+        .data.replay = {.turn = turn, .shown = history->shown,
+            .completed = history->completed, .total = history->total}});
+}
 
 static int
 history_event(void *opaque, const struct snag_session *state, uint64_t seq,
               const char *type, const json_t *data, char *error, size_t error_size)
 {
     struct history_replay *history = opaque;
-    (void)seq; (void)error; (void)error_size;
-    if (state->turn_count < history->first)
+    struct snag_history_turn *turn = &history->turn;
+    bool completed = snag_string_in(type, "turn_completed turn_completed_silent");
+    (void)state; (void)seq; (void)error; (void)error_size;
+    if (!history->ui) {
+        history->completed += completed;
         return 0;
-    struct snag_history_turn *turn = &history->turns[state->turn_count - history->first];
+    }
+    if (history->skip) {
+        history->skip -= completed;
+        return 0;
+    }
     if (!strcmp(type, "turn_started")) {
+        free(turn->user);
+        free(turn->assistant);
+        turn->assistant = NULL;
         turn->user = strdup(snag_json_string(data, "text"));
         if (!turn->user)
             return -1;
@@ -1052,32 +1071,27 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
             turn->assistant = text;
             break;
         }
+    } else if (completed) {
+        ++history->shown;
+        return history_display(history, turn);
     }
     return 0;
 }
 
 int
-snag_ui_history(struct snag_ui *ui, struct snag_session *session, unsigned int count)
+snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count)
 {
-    if (count > session->turn_count)
-        count = (unsigned int)session->turn_count;
-    if (!count)
-        return 0;
-    struct history_replay history = {
-        .turns = calloc(count, sizeof(*history.turns)),
-        .first = session->turn_count - count + 1u
-    };
-    if (!history.turns)
-        return -1;
+    struct history_replay history = {.total = session->turn_count};
     int rc = snag_session_each_event(session, history_event, &history, NULL, 0u);
-    if (rc == 0)
-        rc = snag_ui_send(ui, (struct snag_ui_command){.kind = SNAG_UI_HISTORY,
-            .data.replay = {.turns = history.turns, .count = count}});
-    for (unsigned int i = 0u; i < count; ++i) {
-        free(history.turns[i].user);
-        free(history.turns[i].assistant);
+    history.ui = ui;
+    if (rc == 0 && count && history.completed) {
+        history.skip = history.completed > count ? history.completed - count : 0u;
+        rc = snag_session_each_event(session, history_event, &history, NULL, 0u);
     }
-    free(history.turns);
+    if (rc == 0)
+        rc = history_display(&history, NULL);
+    free(history.turn.user);
+    free(history.turn.assistant);
     return rc;
 }
 

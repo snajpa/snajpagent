@@ -2,12 +2,33 @@
 #include "base.h"
 
 #include <errno.h>
+#include <ctype.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+int
+snag_parse_count(const char *text, uint64_t *count)
+{
+    uint64_t value = 0u;
+    while (isspace((unsigned char)*text))
+        ++text;
+    if (*text < '0' || *text > '9')
+        return snag_errno(EINVAL);
+    while (*text >= '0' && *text <= '9') {
+        unsigned int digit = (unsigned int)(*text++ - '0');
+        value = value > (UINT64_MAX - digit) / 10u ? UINT64_MAX : value * 10u + digit;
+    }
+    while (isspace((unsigned char)*text))
+        ++text;
+    if (*text)
+        return snag_errno(EINVAL);
+    *count = value;
+    return 0;
+}
 
 bool
 snag_verbosity_command(const char *text, size_t len)

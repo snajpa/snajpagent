@@ -125,7 +125,7 @@ struct snag_config {
     size_t model_limit_count;
     enum snag_color_mode color;
     bool markdown;
-    unsigned int resume_history_turns;
+    uint64_t resume_history_turns;
     uint32_t typing_pause_ms;
     char prompt[SNAG_CONFIG_PROMPT_MAX + 1u];
     char prompt_spinner_goal[SNAG_CONFIG_SPINNER_MAX];
