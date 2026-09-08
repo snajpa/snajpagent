@@ -183,6 +183,11 @@ let
     "--disable-doc" "--with-libiconv-prefix=${iconv}"
     "--with-libunistring-prefix=${unistring}"
   ] [ iconv unistring ]).overrideAttrs (_: {
+    postPatch = ''
+      # Bundled older libtool assumes native ranlib's timestamp-only option.
+      # LLVM rebuilds the deterministic archive index instead.
+      substituteInPlace configure --replace-fail 'RANLIB -t' 'RANLIB'
+    '';
     buildPhase = ''
       runHook preBuild
       make -j"$NIX_BUILD_CORES" -C gl
@@ -197,10 +202,17 @@ let
       runHook postInstall
     '';
   });
-  regex = import ./windows-regex.nix {
+  regex = (import ./windows-regex.nix {
     inherit pkgs unistring;
     cross = { inherit compiler cxxCompiler target sdk tools cflags ldflags; };
-  };
+  }).overrideAttrs (_: {
+    postInstall = ''
+      # OpenBSD sys/cdefs.h defines __used as an attribute. Rename only the
+      # public header's private struct member; its layout and library ABI stay.
+      substituteInPlace "$out/include/snajpagent-gnulib-regex.h" \
+        --replace-fail '__REPB_PREFIX(used)' '__REPB_PREFIX(snag_used)'
+    '';
+  });
   networkLibraries = [ tls zlib brotli zstd cares nghttp2 iconv unistring idn2 ];
   curl = (cmakeLibrary sourcePkgs.curlMinimal [
     "-DBUILD_STATIC_LIBS=ON" "-DBUILD_CURL_EXE=OFF" "-DCURL_BUILD_EVERYTHING=OFF"
