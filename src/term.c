@@ -1738,35 +1738,40 @@ next_cp(const unsigned char *s, size_t len, size_t pos)
 }
 
 static int
-insert_bytes(struct snag_term *term, const unsigned char *data, size_t len)
+replace_range(struct snag_term *term, size_t start, size_t end,
+              const void *data, size_t len)
 {
-    if (len > SNAG_MAX_DIRECT_PROMPT - term->draft.len)
+    if (start > end || end > term->draft.len)
+        return snag_errno(EINVAL);
+    size_t next_len = term->draft.len - (end - start);
+    if (len > SNAG_MAX_DIRECT_PROMPT - next_len)
         return snag_errno(EOVERFLOW);
-    if (snag_buf_reserve(&term->draft, len) < 0)
+    next_len += len;
+    if (next_len > term->draft.len &&
+        snag_buf_reserve(&term->draft, next_len - term->draft.len) < 0)
         return -1;
-    memmove(term->draft.data + term->cursor + len,
-            term->draft.data + term->cursor,
-            term->draft.len - term->cursor);
-    memcpy(term->draft.data + term->cursor, data, len);
-    term->draft.len += len;
-    term->cursor += len;
+    if (end < term->draft.len)
+        memmove(term->draft.data + start + len, term->draft.data + end,
+                term->draft.len - end);
+    if (len)
+        memcpy(term->draft.data + start, data, len);
+    term->draft.len = next_len;
+    term->cursor = start + len;
     history_reset_navigation(term);
     mark_input_activity(term);
     return redraw(term);
 }
 
 static int
+insert_bytes(struct snag_term *term, const unsigned char *data, size_t len)
+{
+    return replace_range(term, term->cursor, term->cursor, data, len);
+}
+
+static int
 delete_range(struct snag_term *term, size_t start, size_t end)
 {
-    if (start > end || end > term->draft.len)
-        return snag_errno(EINVAL);
-    memmove(term->draft.data + start, term->draft.data + end,
-            term->draft.len - end);
-    term->draft.len -= end - start;
-    term->cursor = start;
-    history_reset_navigation(term);
-    mark_input_activity(term);
-    return redraw(term);
+    return replace_range(term, start, end, NULL, 0u);
 }
 
 static bool
@@ -1784,38 +1789,6 @@ command_name_length(const struct snag_term_command *command)
            !word_space((unsigned char)command->syntax[len]))
         ++len;
     return len;
-}
-
-static int
-replace_completion(struct snag_term *term, const char *name, size_t name_len,
-                   size_t token_start, size_t token_end, bool unique)
-{
-    bool space = unique && (token_end == term->draft.len ||
-                            term->draft.data[token_end] != ' ');
-    size_t tail_len = term->draft.len - token_end;
-    size_t next_len;
-
-    if (!snag_size_add(name_len, tail_len, &next_len) ||
-        !snag_size_add(next_len, token_start + (size_t)space, &next_len) ||
-        next_len > SNAG_MAX_DIRECT_PROMPT)
-        return snag_errno(EOVERFLOW);
-    if (next_len > term->draft.len &&
-        snag_buf_reserve(&term->draft, next_len - term->draft.len) < 0)
-        return -1;
-    memmove(term->draft.data + token_start + name_len + (size_t)space,
-            term->draft.data + token_end,
-            tail_len);
-    memcpy(term->draft.data + token_start, name, name_len);
-    if (space)
-        term->draft.data[token_start + name_len] = ' ';
-    term->draft.len = next_len;
-    term->cursor = token_start + name_len + (size_t)space;
-    if (unique && !space && term->cursor < term->draft.len &&
-        term->draft.data[term->cursor] == ' ')
-        ++term->cursor;
-    history_reset_navigation(term);
-    mark_input_activity(term);
-    return redraw(term);
 }
 
 /* One matching/replacement/listing policy for commands, destinations and nicks. */
@@ -1900,10 +1873,17 @@ finish_completion(struct snag_term *term, struct completion *matches,
     while (matches->common &&
            !snag_utf8_valid(matches->names.data, matches->common, true))
         --matches->common;
-    if (matches->count == 1u || matches->common > term->cursor - start)
-        if (replace_completion(term, (const char *)matches->names.data,
-                               matches->common, start, end, matches->count == 1u) < 0)
+    if (matches->count == 1u || matches->common > term->cursor - start) {
+        size_t len = matches->common;
+        if (matches->count == 1u) {
+            /* Reuse the sole candidate's terminator for its trailing space. */
+            matches->names.data[len++] = ' ';
+            if (end < term->draft.len && term->draft.data[end] == ' ')
+                ++end;
+        }
+        if (replace_range(term, start, end, matches->names.data, len) < 0)
             return -1;
+    }
     if (!list)
         return 0;
     snag_buf_reset(&term->completion_output);
