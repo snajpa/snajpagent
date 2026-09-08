@@ -69,27 +69,10 @@ snag_store_trash_id(const char *name, char id[SNAG_ID_HEX_LEN + 1u])
     return snag_hex_is_lower(id, SNAG_ID_HEX_LEN);
 }
 
-static void
-record_resolved(struct resolved_session *target, const char *id,
-                const char *trash_name, unsigned int *matches)
-{
-    if (*matches == 0u) {
-        memcpy(target->id, id, SNAG_ID_HEX_LEN + 1u);
-        target->trash = trash_name != NULL;
-        if (trash_name)
-            memcpy(target->trash_name, trash_name, SNAG_TRASH_NAME_LEN + 1u);
-        else
-            target->trash_name[0] = '\0';
-    }
-    ++*matches;
-}
-
 static int
 resolve_prefix(struct snag_store *store, const char *prefix,
                struct resolved_session *target, char *error, size_t error_size)
 {
-    struct snag_directory *dir;
-    const char *entry;
     size_t len = strlen(prefix);
     unsigned int matches = 0;
 
@@ -97,31 +80,35 @@ resolve_prefix(struct snag_store *store, const char *prefix,
     if (len < 8u || len > SNAG_ID_HEX_LEN || !snag_hex_is_lower(prefix, len)) {
         return snag_fail(error, error_size, EINVAL, "session id must be 8..32 lowercase hex characters");
     }
-    dir = open_sessions_dir(store, error, error_size);
-    if (!dir)
-        return -1;
-    while ((entry = snag_directory_next(dir)) != NULL) {
-        if (strlen(entry) != SNAG_ID_HEX_LEN ||
-            !snag_hex_is_lower(entry, SNAG_ID_HEX_LEN) ||
-            strncmp(entry, prefix, len) != 0)
-            continue;
-        record_resolved(target, entry, NULL, &matches);
+    for (unsigned int trash = 0u; trash < 2u; ++trash) {
+        struct snag_directory *dir = open_store_dir(store, trash ? "trash" : "sessions",
+            trash ? "trash directory" : "sessions directory", error, error_size);
+        const char *entry;
+        if (!dir)
+            return -1;
+        while ((entry = snag_directory_next(dir)) != NULL) {
+            char id[SNAG_ID_HEX_LEN + 1u];
+            if (trash) {
+                if (!snag_store_trash_id(entry, id))
+                    continue;
+            } else {
+                if (strlen(entry) != SNAG_ID_HEX_LEN ||
+                    !snag_hex_is_lower(entry, SNAG_ID_HEX_LEN))
+                    continue;
+                memcpy(id, entry, sizeof(id));
+            }
+            if (strncmp(id, prefix, len) != 0)
+                continue;
+            if (matches++ == 0u) {
+                memcpy(target->id, id, sizeof(target->id));
+                target->trash = trash != 0u;
+                if (trash)
+                    memcpy(target->trash_name, entry, sizeof(target->trash_name));
+            }
+        }
+        if (finish_directory(dir, error, error_size) < 0)
+            return -1;
     }
-    if (finish_directory(dir, error, error_size) < 0)
-        return -1;
-
-    dir = open_store_dir(store, "trash", "trash directory", error, error_size);
-    if (!dir)
-        return -1;
-    while ((entry = snag_directory_next(dir)) != NULL) {
-        char id[SNAG_ID_HEX_LEN + 1u];
-        if (!snag_store_trash_id(entry, id) ||
-            strncmp(id, prefix, len) != 0)
-            continue;
-        record_resolved(target, id, entry, &matches);
-    }
-    if (finish_directory(dir, error, error_size) < 0)
-        return -1;
 
     if (matches != 1u) {
         snag_errorf(error, error_size, matches ? "session id prefix is ambiguous" :
