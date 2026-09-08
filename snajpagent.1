@@ -925,8 +925,8 @@ Active turns cannot be retried. Queued work and paused goals stay paused.
 Ordinary turns retry failures automatically up to
 .B max_turn_retries
 additional times (default five), then display the manual retry hint.
-A manual retry starts a fresh retry budget. Active goals recover without an
-attempt limit. Automatic recovery retains the turn, completed tool results and
+A successful actionable response or a manual retry starts a fresh retry budget.
+Active goals recover without an attempt limit. Automatic recovery retains the turn, completed tool results and
 live command handles.
 .SS Input timestamps
 New prompts and steers carry separate host-generated timing metadata in model
@@ -1176,11 +1176,11 @@ and
 Goal wording limit, 1 through 1048576.  Default: 262144.
 .TP
 .B max_turn_retries
-Additional automatic retries of an ordinary failed turn, 0 through 4294967295.
-Default: 5 (six attempts including the first).  Zero disables ordinary automatic
-retries. The budget is captured at turn start, including an explicit
-.BR /retry ,
-and is not reset by successful intermediate responses or tools.
+Additional automatic retries per consecutive failure sequence, 0 through
+4294967295. Default: 5 (six attempts including the first). Zero disables
+ordinary automatic retries. A successful actionable response resets the count.
+The configured limit is captured at turn start, including an explicit
+.BR /retry .
 Active goals ignore this limit and retain unlimited recovery. Paused and blocked
 goals keep their state while ordinary prompts retry.
 .TP
@@ -2250,7 +2250,8 @@ unknown data.  Archive/deletion of a session does not erase shared prompt histor
 .SS Provider failures
 Ordinary failures that otherwise offer
 .B /retry
-receive up to five automatic retries by default. Configure
+receive up to five automatic retries per consecutive failure sequence by default.
+A successful actionable response renews the budget for later failures. Configure
 .B max_turn_retries
 in the
 .B agent
@@ -2293,7 +2294,9 @@ retry loop. Access, quota and unknown failures retain paced turn recovery.
 For a pre-output
 .B cyber_policy
 rejection, the model receives a durable clarification instruction immediately,
-with up to five clarification attempts per turn. Reasoning-only stream events
+with up to five attempts per consecutive clarification sequence. The count
+resets when the response continues normally or clarification stops, including
+when its limit is exhausted. Reasoning-only stream events
 do not delay clarification.  The original task remains intact: the instruction asks
 for accurate restatement of ambiguous phrasing with purpose, actions, targets
 and authorization unchanged, and operator clarification where needed.  New input

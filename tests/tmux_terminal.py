@@ -3504,6 +3504,70 @@ def run_provider_clarification_cases(binary, root, provider, environment):
             provider.runtime_handler = None
 
 
+def run_clarification_episode_cases(binary, root, provider, environment):
+    for exhausted in (False, True):
+        case = root / ("clarify-episode-stop" if exhausted else "clarify-episode-success")
+        case.mkdir(parents=True)
+        config, state = case / "config.ini", case / "state"
+        write_irc_config(config, provider.port, "host-model")
+        requests, failures = [], []
+
+        def respond(handler, request, sequence):
+            requests.append(request)
+            n = len(requests)
+            if n == 6:
+                body = provider.function_body(sequence, "once", "exec_command", {
+                    "command": "printf x >> once", "workdir": str(case),
+                    "stdin": None, "pty": False, "timeout_ms": None,
+                    "yield_ms": 1000, "max_output_tokens": 1000})
+            elif n <= 11 or (exhausted and n <= 17):
+                failures.append(n)
+                body = provider.event("response.failed", {"type": "response.failed",
+                    "response": {"error": {"code": "cyber_policy", "message": "episode rejection"}}})
+            else:
+                body = provider.response_body(sequence, "two clarification episodes finished")
+            provider.reply(handler, body.encode())
+
+        provider.runtime_handler = respond
+        terminal = TmuxTerminal(case / "term", binary, case, state, config, 140, 28,
+                                environment=environment)
+        try:
+            terminal.wait("host-model/medium")
+            terminal.submit("Inspect the local fixture file.")
+            terminal.wait("turn failed; try /retry" if exhausted else
+                          "two clarification episodes finished", timeout=15)
+            wait_irc_idle([terminal])
+            _, events = read_events(state)
+            assert len(requests) == 12, len(requests)
+            assert len(failures) == 10 + int(exhausted), failures
+            assert len(event_list(events, "response_output_correction")) == 10
+            assert len(event_list(events, "turn_failed")) == int(exhausted)
+            assert len(event_list(events, "turn_started")) == 1
+            assert len(event_list(events, "tool_started")) == 1
+            assert (case / "once").read_text() == "x"
+            screen = terminal.capture()
+            for attempt in range(1, 6):
+                assert screen.count(f"provider clarification {attempt}/5 after cyber_policy") == 2, screen
+            if exhausted:
+                # Abandoning one episode and manually continuing starts from zero.
+                terminal.submit("/retry")
+                terminal.wait("two clarification episodes finished")
+                wait_irc_idle([terminal])
+                assert (case / "once").read_text() == "x"
+                _, events = read_events(state)
+                assert len(event_list(events, "response_output_correction")) == 15
+                assert len(requests) == 18
+                assert len(event_list(events, "turn_started")) == 2
+            terminal.exit()
+            replay = subprocess.run([binary, "--dotdir", str(state), "-l"],
+                capture_output=True, text=True, env={**os.environ, **environment})
+            assert replay.returncode == 0, replay.stderr
+            print("clarification episodes", "exhausted" if exhausted else "success", "PASS", flush=True)
+        finally:
+            terminal.close()
+            provider.runtime_handler = None
+
+
 def run_policy_stop_cases(binary, root, provider, environment):
     for mode in ("goal", "running", "goal-running", "content-filter", "refusal"):
         case = root / ("policy-stop-" + mode)
@@ -3951,7 +4015,7 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
 
 
 def run_automatic_turn_retry_cases(binary, root, provider, environment):
-    modes = ("success", "exhaust", "zero", "one", "budget", "steer", "cancel", "running", "paused", "one-shot", "server")
+    modes = ("success", "exhaust", "zero", "one", "budget", "steer", "cancel", "running", "paused", "one-shot", "server", "renewed")
     for mode in modes:
         case = root / ("ar-" + mode)
         workspace = case / "w"
@@ -3988,11 +4052,12 @@ def run_automatic_turn_retry_cases(binary, root, provider, environment):
                         "command": command, "workdir": str(workspace), "stdin": None, "pty": False,
                         "timeout_ms": None, "yield_ms": 1 if mode == "running" else 1000,
                         "max_output_tokens": 1000})
-            elif mode == "budget" and n == 3:
+            elif (mode == "budget" and n == 3) or (mode == "renewed" and n == 7):
                 body = provider.function_body(sequence, "read", "read_file", {
                     "path": "input.txt", "start_line": None, "end_line": None})
             elif (mode in ("exhaust", "zero", "one", "budget", "cancel", "paused", "one-shot", "server") or
-                    len(failures) < 2) and not (mode == "steer" and provider.latest_user(request) == "fresh retry steer"):
+                    (mode == "renewed" and len(failures) < 10) or
+                    (mode != "renewed" and len(failures) < 2)) and not (mode == "steer" and provider.latest_user(request) == "fresh retry steer"):
                 failures.append(n)
                 body = provider.event("response.output_item.added", {
                     "type": "response.output_item.added", "output_index": 0,
@@ -4041,18 +4106,22 @@ def run_automatic_turn_retry_cases(binary, root, provider, environment):
                         terminal.submit("fresh retry steer")
                 if mode != "cancel":
                     terminal.wait("turn failed; try /retry" if mode in ("exhaust", "zero", "one", "budget", "paused", "server")
-                                  else "automatic retry finished", timeout=20)
+                                  else "automatic retry finished", timeout=30 if mode == "renewed" else 20)
                 screen = terminal.capture()
             _, events = read_events(case / "s")
             assert len(event_list(events, "turn_started")) == (2 if mode == "paused" else 1)
             exhausted = mode in ("exhaust", "zero", "one", "budget", "paused", "one-shot", "server")
             if exhausted:
-                assert len(failures) == limit + 1, (mode, failures)
-                assert len(event_list(events, "turn_recovery")) == limit
+                assert len(failures) == limit + 1 + int(mode == "budget"), (mode, failures)
+                assert len(event_list(events, "turn_recovery")) == limit + int(mode == "budget")
                 assert len(event_list(events, "turn_failed")) == 1
                 assert screen.count("turn failed; try /retry") == 1
             else:
                 assert not event_list(events, "turn_failed")
+            if mode == "renewed":
+                assert len(failures) == 10
+                assert len(event_list(events, "turn_recovery")) == 10
+                assert len(event_list(events, "tool_started")) == 2
             if mode == "paused":
                 assert len(event_list(events, "goal_paused")) == 1
                 assert not event_list(events, "goal_resumed")
@@ -5196,6 +5265,7 @@ def run_irc_case(binary, root):
         run_manual_retry_cases(binary, root, provider, environment)
         run_provider_retry_input_cases(binary, root, provider, environment)
         run_provider_clarification_cases(binary, root, provider, environment)
+        run_clarification_episode_cases(binary, root, provider, environment)
         run_policy_stop_cases(binary, root, provider, environment)
         run_runtime_networking_cases(binary, root, provider, environment)
         run_runtime_routing_cases(binary, root, provider, environment)

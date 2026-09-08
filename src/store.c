@@ -1140,7 +1140,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->active_cycle = 0;
         session->irc_reply_reminded = false;
         session->output_correction_used = false;
-        session->cyber_clarifications = 0u;
         clear_response_state(session);
         if (!goal && ((!session->first_user &&
              replace_text(session, &session->first_user, "first_user", text, SNAG_MAX_DIRECT_PROMPT) < 0) ||
@@ -1381,8 +1380,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (!snag_json_exact_keys(data,
             "correction_id cycle partial_public response_id text "
             "turn_id") || !current_response(session, data) ||
-            (cyber ? session->cyber_clarifications >= SNAG_CYBER_CLARIFICATIONS_MAX :
-                     session->output_correction_used) ||
+            (!cyber && session->output_correction_used) ||
             !correction_id ||
             !snag_hex_is_lower(correction_id, SNAG_ID_HEX_LEN) ||
             pending_user_id_exists(session, correction_id) ||
@@ -1399,9 +1397,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (add_pending_steering(session, correction_id, text, len, seq) < 0)
             return -1;
         clear_response_state(session);
-        if (cyber)
-            ++session->cyber_clarifications;
-        else
+        if (!cyber)
             session->output_correction_used = true;
     } else if (strcmp(type, "response_interrupted") == 0) {
         static const char origins[] = "user steering recovery output";

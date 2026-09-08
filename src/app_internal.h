@@ -80,10 +80,7 @@ struct app_state {
     bool queue_armed;
     bool goal_armed;
     bool recovery_wait;
-    bool turn_retry_pending;
     bool turn_policy_stopped;
-    uint32_t turn_retries, turn_retry_limit;
-    enum snag_goal_status turn_goal_status;
     uint64_t input_received_ms;
     unsigned int recovery_delay_ms;
     uint64_t recovery_notice_ms, recovery_status_ms;

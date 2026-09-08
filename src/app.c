@@ -59,20 +59,27 @@ capture_shutdown_signal(struct app_state *app)
     return true;
 }
 
+/* Owned by run_tracked_turn; never retained in app or session state. */
+struct turn_retry {
+    uint32_t attempts, limit;
+    enum snag_goal_status goal_status;
+    bool pending;
+};
+
 static bool
-turn_retry_available(const struct app_state *app)
+turn_retry_available(const struct app_state *app, const struct turn_retry *retry)
 {
     return !app->turn_policy_stopped && !app->interrupt_requested && !app->input_closed &&
         (app->session.goal_status == SNAG_GOAL_ACTIVE ||
-         (app->session.goal_status == app->turn_goal_status &&
-          app->turn_retries < app->turn_retry_limit));
+         (app->session.goal_status == retry->goal_status &&
+          retry->attempts < retry->limit));
 }
 
 static int
 app_error(struct app_state *app, const char *message)
 {
     uint64_t now = snag_monotonic_ms();
-    if ((app->session.goal_status == SNAG_GOAL_ACTIVE || app->turn_retry_pending) &&
+    if ((app->session.goal_status == SNAG_GOAL_ACTIVE || app->session.active_turn) &&
         app->recovery_delay_ms &&
         !strcmp(app->recovery_error, message) && now - app->recovery_notice_ms < 30000u)
         return 0;
@@ -2364,15 +2371,15 @@ close_active_process_for_turn(struct app_state *app, const char *turn_id,
     return 0;
 }
 static int
-fail_turn(struct app_state *app, const char *turn_id, const char *cause,
+fail_turn(struct app_state *app, struct turn_retry *retry, const char *turn_id, const char *cause,
           const char *class_name, const char *message,
           char *error, size_t error_size)
 {
-    if (turn_retry_available(app) ||
+    if (turn_retry_available(app, retry) ||
         (app->turn_policy_stopped && app->session.process_count && !app->execute)) {
         int rc = commit_event(app, "turn_recovery",
             snag_app_turn_failed_data(turn_id, class_name, message), error, error_size);
-        if (rc == 0) app->turn_retry_pending = !app->turn_policy_stopped;
+        if (rc == 0) retry->pending = !app->turn_policy_stopped;
         return rc;
     }
     return close_active_process_for_turn(app, turn_id, cause, false,
@@ -2397,7 +2404,7 @@ interrupt_turn(struct app_state *app, const char *turn_id,
 }
 
 static int
-fail_response(struct app_state *app, const char *turn_id,
+fail_response(struct app_state *app, struct turn_retry *retry, const char *turn_id,
               const char *response_id, unsigned int cycle,
               const char *class_name, const char *message, json_t *partial,
               unsigned int retry_count, const char *cause,
@@ -2414,7 +2421,7 @@ fail_response(struct app_state *app, const char *turn_id,
     if (!data)
         return snag_errorf(error, error_size, "cannot allocate response failure event");
     return commit_event(app, "response_failed", data, error, error_size) < 0 ||
-           fail_turn(app, turn_id, cause, class_name, message,
+           fail_turn(app, retry, turn_id, cause, class_name, message,
                      error, error_size) < 0 ? -1 : 0;
 }
 
@@ -2425,6 +2432,7 @@ recover_session(struct app_state *app, char *error, size_t error_size)
     const char *message, *cause = "protocol_failure", *class_name = "protocol";
     const char *warning = "recovered an interrupted turn";
     bool has_steering;
+    struct turn_retry retry = {0};
     if (!app->session.active_turn)
         return 0;
     memcpy(turn_id, app->session.active_turn_id, sizeof(turn_id));
@@ -2498,7 +2506,7 @@ interrupted:
                           "recovery", "session_recovered", error, error_size) < 0 ?
            -1 : app_warning(app, warning);
 failed:
-    return fail_turn(app, turn_id, cause, class_name, message, error, error_size) < 0 ?
+    return fail_turn(app, &retry, turn_id, cause, class_name, message, error, error_size) < 0 ?
            -1 : app_warning(app, warning);
 }
 static int
@@ -2749,12 +2757,12 @@ handoff:
 /* Return the command exit status after the durable transition. Pre-response
  * failures retain process ownership while a retry remains available. */
 static int
-finish_turn_failure(struct app_state *app, const char *turn_id,
+finish_turn_failure(struct app_state *app, struct turn_retry *retry, const char *turn_id,
                     const char *cause, const char *class_name,
                     const char *message, char *error, size_t error_size)
 {
-    int rc = (cause || turn_retry_available(app) || app->turn_retries || app->session.process_count) ?
-        fail_turn(app, turn_id, cause ? cause : "internal_failure", class_name, message,
+    int rc = (cause || turn_retry_available(app, retry) || retry->attempts || app->session.process_count) ?
+        fail_turn(app, retry, turn_id, cause ? cause : "internal_failure", class_name, message,
                                error, error_size) :
         commit_event(app, "turn_failed",
                      snag_app_turn_failed_data(turn_id, class_name, message),
@@ -2779,7 +2787,7 @@ finish_user_interrupt(struct app_state *app, const char *turn_id,
 
 /* The caller owns the ordinary-turn budget; active goals have no ceiling. */
 static int
-turn_recovery_wait(struct app_state *app)
+turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
 {
     enum snag_goal_status initial_goal_status = app->session.goal_status;
     bool goal = initial_goal_status == SNAG_GOAL_ACTIVE;
@@ -2799,7 +2807,7 @@ turn_recovery_wait(struct app_state *app)
         else
             (void)app_textf(app, SNAG_UI_HOST,
                 "Retrying turn after error (%u/%u) in %.2f seconds (Ctrl-C interrupts)",
-                app->turn_retries, app->turn_retry_limit, delay / 1000.0);
+                retry->attempts, retry->limit, delay / 1000.0);
         app->recovery_status_ms = snag_monotonic_ms();
     }
     while (!app->input_closed &&
@@ -2852,7 +2860,7 @@ admit_input(struct app_state *app, char *error, size_t error_size)
 }
 
 static int
-run_turn(struct app_state *app, const char *prompt,
+run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
          const struct snag_queued_turn *queued, bool goal_turn, bool read_only)
 {
     char turn_id[SNAG_ID_HEX_LEN + 1u];
@@ -2862,7 +2870,7 @@ run_turn(struct app_state *app, const char *prompt,
     char provider_source_hash[SNAG_SHA256_HEX_LEN + 1u];
     char rejected_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
     char over_budget_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
-    unsigned int hard_compaction_attempts = 0u;
+    unsigned int hard_compaction_attempts = 0u, cyber_clarifications = 0u;
     bool capacity_recovery_used = false;
     bool continuing = app->session.active_turn;
     unsigned int next_cycle = continuing ? app->session.active_cycle + 1u : 1u;
@@ -2986,7 +2994,7 @@ run_turn(struct app_state *app, const char *prompt,
         if (!steering || snag_random_id(response_id) < 0 ||
             snag_app_request_build(app, steering, cycle, &credential, &projection,
                                    &count_method, &request_body, error, sizeof(error)) < 0) {
-            result = finish_turn_failure(app, turn_id, NULL, "context",
+            result = finish_turn_failure(app, retry, turn_id, NULL, "context",
                 error[0] ? error : "response context projection failed",
                 error, sizeof(error));
             goto out;
@@ -3009,13 +3017,13 @@ run_turn(struct app_state *app, const char *prompt,
                 goto steered_before_response;
             if (recovery == 2 && app->interrupt_requested)
                 goto user_interrupted;
-            result = finish_turn_failure(app, turn_id, NULL, "context",
+            result = finish_turn_failure(app, retry, turn_id, NULL, "context",
                 error[0] ? error : "input-token counter rejected irreducible context",
                 error, sizeof(error));
             goto out;
         }
         if (provider_rc != 0 && provider_rc != SNAG_APP_COUNT_SKIPPED) {
-            result = finish_turn_failure(app, turn_id, NULL, "provider",
+            result = finish_turn_failure(app, retry, turn_id, NULL, "provider",
                 error[0] ? error : "input-token count failed", error, sizeof(error));
             goto out;
         }
@@ -3039,7 +3047,7 @@ run_turn(struct app_state *app, const char *prompt,
                         "context compaction repeated an over-budget request",
                     (unsigned long long)projection.input_tokens_bound, count_method,
                     (unsigned long long)app->turn_capacity.hard_input_tokens);
-                result = finish_turn_failure(app, turn_id, NULL, "context",
+                result = finish_turn_failure(app, retry, turn_id, NULL, "context",
                                               failure, error, sizeof(error));
                 goto out;
             }
@@ -3054,7 +3062,7 @@ run_turn(struct app_state *app, const char *prompt,
             if (compact_rc == 2 && app->interrupt_requested)
                 goto user_interrupted;
             if (compact_rc != 0) {
-                result = finish_turn_failure(app, turn_id, NULL,
+                result = finish_turn_failure(app, retry, turn_id, NULL,
                     over_hard ? "context" : "provider",
                     error[0] ? error : "pre-response compaction failed",
                     error, sizeof(error));
@@ -3070,7 +3078,7 @@ run_turn(struct app_state *app, const char *prompt,
             strcmp(rejected_request_hash, projection.create_request.sha256) == 0) {
             static const char failure[] =
                 "capacity recovery produced an identical provider request";
-            result = finish_turn_failure(app, turn_id, NULL, "context",
+            result = finish_turn_failure(app, retry, turn_id, NULL, "context",
                                           failure, error, sizeof(error));
             goto out;
         }
@@ -3102,7 +3110,7 @@ run_turn(struct app_state *app, const char *prompt,
             json_t *partial = json_array();
             static const char failure[] =
                 "request diagnostics could not be rendered";
-            if (!partial || fail_response(app, turn_id, response_id, cycle,
+            if (!partial || fail_response(app, retry, turn_id, response_id, cycle,
                                           "output", failure, partial, 0u,
                                           "output_failure", error,
                                           sizeof(error)) < 0) {
@@ -3148,15 +3156,17 @@ run_turn(struct app_state *app, const char *prompt,
                     "interruption could not be persisted";
                 goto fail;
             }
-            if (steered)
+            if (steered) {
+                cyber_clarifications = 0u;
                 continue;
+            }
             goto user_interrupted;
         }
         bool cyber_clarification = provider_failure.output_correction ==
                                    SNAG_OUTPUT_CORRECTION_CYBER_POLICY;
         if (provider_failure.output_correction !=
                 SNAG_OUTPUT_CORRECTION_NONE && !app->stream_failed &&
-            (!cyber_clarification || app->session.cyber_clarifications <
+            (!cyber_clarification || cyber_clarifications <
                                      SNAG_CYBER_CLARIFICATIONS_MAX)) {
             static const char repeated[] =
                 "assistant output remained invalid after one model-facing correction";
@@ -3195,7 +3205,7 @@ run_turn(struct app_state *app, const char *prompt,
                     char notice[128];
                     snprintf(notice, sizeof(notice),
                         "provider clarification %u/%u after cyber_policy; preserving original task scope",
-                        app->session.cyber_clarifications, SNAG_CYBER_CLARIFICATIONS_MAX);
+                        ++cyber_clarifications, SNAG_CYBER_CLARIFICATIONS_MAX);
                     if (app_warning(app, notice) < 0) {
                         result = 6;
                         goto out;
@@ -3204,6 +3214,7 @@ run_turn(struct app_state *app, const char *prompt,
                 continue;
             }
         }
+        cyber_clarifications = 0u;
         if (provider_rc < 0 || app->stream_failed) {
             bool capacity_failure = provider_rc < 0 &&
                 snag_provider_failure_is_capacity(&provider_failure);
@@ -3281,7 +3292,7 @@ run_turn(struct app_state *app, const char *prompt,
                         "context capacity rejection could not be reduced%s%.*s",
                         error[0] ? ": " : "", 190,
                         error[0] ? error : "");
-                    result = finish_turn_failure(app, turn_id, NULL, "context",
+                    result = finish_turn_failure(app, retry, turn_id, NULL, "context",
                                                   failure, error, sizeof(error));
                     goto out;
                 }
@@ -3296,8 +3307,8 @@ run_turn(struct app_state *app, const char *prompt,
                 app->turn_policy_stopped = true;
             if (!app->stream_failed && provider_failure.new_input &&
                 app->session.goal_status != SNAG_GOAL_ACTIVE)
-                app->turn_retry_limit = app->turn_retries;
-            if (fail_response(app, turn_id, response_id, cycle, class_name,
+                retry->limit = retry->attempts;
+            if (fail_response(app, retry, turn_id, response_id, cycle, class_name,
                               failure, partial, provider_retry_count,
                               app->stream_failed ?
                               (app->stream_errno == EPROTO ?
@@ -3329,7 +3340,7 @@ run_turn(struct app_state *app, const char *prompt,
                 report_message = "invalid response prefix could not be retained";
                 goto fail;
             }
-            if (fail_response(app, turn_id, response_id, cycle, "protocol",
+            if (fail_response(app, retry, turn_id, response_id, cycle, "protocol",
                               failure, partial, provider_retry_count,
                               "protocol_failure", error, sizeof(error)) < 0) {
                 goto fail;
@@ -3338,7 +3349,6 @@ run_turn(struct app_state *app, const char *prompt,
             result = 4;
             goto out;
         }
-        if (decision.outcome != SNAG_GRAPH_REFUSAL) app->recovery_delay_ms = 0u;
         if (commit_event(app, "response_completed",
                          json_pack("{s:I,s:o,s:s,s:s,s:s,s:s,s:o}",
                          "cycle", (json_int_t)cycle, "items", snag_response_graph_json(&graph),
@@ -3383,7 +3393,7 @@ run_turn(struct app_state *app, const char *prompt,
                 "provider response contained conflicting actions";
             if (terminalize_pending(app, turn_id, "protocol_conflict",
                                     error, sizeof(error)) < 0 ||
-                fail_turn(app, turn_id, "protocol_failure",
+                fail_turn(app, retry, turn_id, "protocol_failure",
                           "protocol", message, error, sizeof(error)) < 0) {
                 goto fail;
             }
@@ -3403,13 +3413,17 @@ run_turn(struct app_state *app, const char *prompt,
             app->turn_policy_stopped = true;
         if (app->session.process_count && decision.outcome != SNAG_GRAPH_CALLS) {
             const char *message = "Unsettled commands remain; collect their terminal results before a final answer.";
-            if (fail_turn(app, turn_id, "protocol_failure", "protocol", message,
+            if (fail_turn(app, retry, turn_id, "protocol_failure", "protocol", message,
                            error, sizeof(error)) < 0)
                 (void)app_error(app, error);
             else
                 (void)app_error(app, message);
             result = 4;
             goto out;
+        }
+        if (decision.outcome == SNAG_GRAPH_CALLS || decision.outcome == SNAG_GRAPH_FINAL) {
+            retry->attempts = 0u;
+            app->recovery_delay_ms = 0u;
         }
         if (app->networked && !app->session.active_read_only &&
             app->irc_turn_replies.count && !app->session.irc_reply_reminded &&
@@ -3501,7 +3515,7 @@ run_turn(struct app_state *app, const char *prompt,
         {
             const char *message = decision.message ? decision.message :
                 "provider response was not actionable";
-            result = finish_turn_failure(app, turn_id, "protocol_failure",
+            result = finish_turn_failure(app, retry, turn_id, "protocol_failure",
                                           "protocol", message, error, sizeof(error));
             goto out;
         }
@@ -3512,7 +3526,7 @@ rebuild_request:
     }
     {
         static const char message[] = "response-cycle counter exhausted";
-        result = finish_turn_failure(app, turn_id, "internal_failure",
+        result = finish_turn_failure(app, retry, turn_id, "internal_failure",
                                       "resource", message, error, sizeof(error));
     }
     goto out;
@@ -3549,11 +3563,12 @@ run_tracked_turn(struct app_state *app, const char *prompt,
     struct snag_queued_turn queued_copy;
     int rc;
     if (!retained) return 3;
-    app->turn_retries = 0u;
     app->turn_policy_stopped = false;
-    app->turn_retry_limit = app->config->max_turn_retries;
-    app->turn_goal_status = app->session.goal_status;
-    if (app->turn_goal_status != SNAG_GOAL_ACTIVE) app->recovery_delay_ms = 0u;
+    struct turn_retry retry = {
+        .limit = app->config->max_turn_retries,
+        .goal_status = app->session.goal_status
+    };
+    if (retry.goal_status != SNAG_GOAL_ACTIVE) app->recovery_delay_ms = 0u;
     if (queued) {
         queued_copy = *queued;
         queued_copy.text = retained;
@@ -3571,7 +3586,7 @@ run_tracked_turn(struct app_state *app, const char *prompt,
             if (!current) { rc = SNAG_APP_INPUT_READY; break; }
             if (strcmp(current->text, retained)) {
                 char *updated = snag_strdup_checked(current->text, SNAG_MAX_QUEUED_TEXT);
-                if (!updated) { if (turn_recovery_wait(app)) { rc = 1; break; } continue; }
+                if (!updated) { if (turn_recovery_wait(app, &retry)) { rc = 1; break; } continue; }
                 free(retained);
                 retained = updated;
             }
@@ -3579,10 +3594,11 @@ run_tracked_turn(struct app_state *app, const char *prompt,
             queued_copy.text = retained;
             read_only = queued_copy.read_only;
         }
-        app->turn_retry_pending = false;
-        rc = run_turn(app, retained, queued, goal_turn, read_only);
+        retry.pending = false;
+        rc = run_turn(app, &retry, retained, queued, goal_turn, read_only);
         if (app->session.turn_count != turns) queued = NULL;
         if (app->turn_policy_stopped) {
+            retry.attempts = 0u;
             char error[256] = {0};
             if (snag_app_goal_pause(app, "refusal", error, sizeof(error)) < 0) {
                 (void)app_error(app, error);
@@ -3591,16 +3607,16 @@ run_tracked_turn(struct app_state *app, const char *prompt,
             }
         }
         if (app->turn_policy_stopped && app->session.process_count && !app->execute) {
-            if (turn_recovery_wait(app) == 0 && !app->turn_policy_stopped)
+            if (turn_recovery_wait(app, &retry) == 0 && !app->turn_policy_stopped)
                 continue;
         }
         bool goal = app->session.goal_status == SNAG_GOAL_ACTIVE;
-        if (app->turn_policy_stopped || (!goal && !app->turn_retry_pending) || app->input_closed ||
+        if (app->turn_policy_stopped || (!goal && !retry.pending) || app->input_closed ||
             app->interrupt_requested || rc == 0 ||
             (rc == SNAG_APP_INPUT_READY && !app->session.active_turn))
             break;
-        if (!goal) ++app->turn_retries;
-        int wait_rc = turn_recovery_wait(app);
+        if (!goal) ++retry.attempts;
+        int wait_rc = turn_recovery_wait(app, &retry);
         if (wait_rc) {
             if (app->session.active_turn) {
                 char error[256] = {0};
@@ -3638,7 +3654,7 @@ run_tracked_turn(struct app_state *app, const char *prompt,
                             "recovering failed turn state"), error, sizeof(error));
                 if (!repair) break;
                 (void)app_error(app, error);
-                if (!goal || turn_recovery_wait(app)) break;
+                if (!goal || turn_recovery_wait(app, &retry)) break;
             }
             if (!goal && repair) { rc = 3; break; }
             if (app->interrupt_requested || app->input_closed ||
@@ -3657,8 +3673,7 @@ run_tracked_turn(struct app_state *app, const char *prompt,
                            "user", "cancelled", error, sizeof(error)) < 0)
             (void)app_error(app, error);
     }
-    app->turn_retry_limit = 0u;
-    app->turn_retry_pending = false;
+    app->recovery_delay_ms = 0u;
     app->input_received_ms = 0u;
     app->ui.input_received_ms = 0u;
     app->irc_turn_replies.count = 0u;
