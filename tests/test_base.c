@@ -53,6 +53,9 @@ static void *
 #endif
 thread_local_worker(void *unused)
 {
+    _Alignas(16) volatile unsigned char aligned[16] = {0};
+    volatile uintptr_t address = (uintptr_t)aligned;
+    assert(address % 16u == 0u && aligned[0] == 0u);
     (void)unused;
 #if (!defined(__APPLE__) || __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 1070) && \
     (!defined(__FreeBSD__) || __FreeBSD__ >= 6)
@@ -64,7 +67,6 @@ thread_local_worker(void *unused)
     assert(snag_term_output_owner() == (struct snag_term *)&thread_child_owner);
     snag_term_output_bind(NULL);
     assert(snag_term_output_owner() == NULL);
-    snag_term_output_bind(NULL);
     return 0;
 }
 
