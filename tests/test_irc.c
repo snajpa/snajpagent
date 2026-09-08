@@ -845,7 +845,9 @@ wait_pair_event(struct snag_irc *server, struct snag_irc *client,
                 const struct capture *capture, enum snag_irc_event_kind kind,
                 unsigned int count)
 {
-    uint64_t deadline = snag_monotonic_ms() + 1000u;
+    /* Registration includes names/history exchange on both client identities. */
+    uint64_t deadline = snag_monotonic_ms() +
+                        (kind == SNAG_IRC_HISTORY_READY ? 10000u : 1000u);
     while (capture->events[kind] < count && snag_monotonic_ms() < deadline) {
         if (server)
             pump_pair(server, client, 1u);
