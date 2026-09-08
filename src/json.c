@@ -356,6 +356,15 @@ snag_json_string(const json_t *object, const char *key)
     return json_is_string(value) ? json_string_value(value) : NULL;
 }
 
+const char *
+snag_json_bounded_string(const json_t *value, size_t max)
+{
+    const char *text = json_string_value(value);
+    size_t len = json_string_length(value);
+    return text && len && len <= max && strlen(text) == len &&
+        snag_utf8_valid((const unsigned char *)text, len, true) ? text : NULL;
+}
+
 int
 snag_json_integer_u64(const json_t *object, const char *key, uint64_t *out)
 {

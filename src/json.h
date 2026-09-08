@@ -32,6 +32,8 @@ int snag_json_digest_bounded(const json_t *value, size_t max,
 /* Fixed field names separated by single spaces; empty means an empty object. */
 bool snag_json_exact_keys(const json_t *object, const char *keys);
 const char *snag_json_string(const json_t *object, const char *key);
+/* Borrow nonempty, bounded UTF-8 without embedded NUL bytes. */
+const char *snag_json_bounded_string(const json_t *value, size_t max);
 int snag_json_set_new(json_t *object, const char *key, json_t *value);
 int snag_json_integer_u64(const json_t *object, const char *key, uint64_t *out);
 /* Null is absence (zero); present limits are positive, bounded integers. */

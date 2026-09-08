@@ -27,18 +27,6 @@ snag_model_cache_free(struct snag_model_cache *cache)
 }
 
 static bool
-cache_string(const json_t *value, size_t max)
-{
-    const char *text;
-    size_t len;
-    return json_is_string(value) &&
-           (text = json_string_value(value)) != NULL &&
-           (len = json_string_length(value)) != 0u && len <= max &&
-           strlen(text) == len &&
-           snag_utf8_valid((const unsigned char *)text, len, true);
-}
-
-static bool
 capacity_limits_valid(const struct snag_model_capacity *c)
 {
     return !c->context_window_tokens ||
@@ -115,14 +103,14 @@ model_valid(const json_t *model, bool cached)
             cached ? "count_capability default_effort efforts id limits "
                      "observed_hard_input_tokens observed_input_tokens observed_input_bytes" :
                      "default_effort efforts id limits") ||
-        !cache_string(json_object_get(model, "id"), SNAG_CONFIG_MODEL_MAX - 1u) ||
+        !snag_json_bounded_string(json_object_get(model, "id"), SNAG_CONFIG_MODEL_MAX - 1u) ||
         !snag_model_limits_valid(json_object_get(model, "limits")))
         return false;
     if (cached && !accounting_valid(model))
         return false;
     fallback = json_object_get(model, "default_effort");
     if (!json_is_null(fallback) &&
-        !cache_string(fallback, SNAG_CONFIG_EFFORT_MAX - 1u))
+        !snag_json_bounded_string(fallback, SNAG_CONFIG_EFFORT_MAX - 1u))
         return false;
     efforts = json_object_get(model, "efforts");
     if (!json_is_array(efforts) ||
@@ -130,7 +118,7 @@ model_valid(const json_t *model, bool cached)
         return false;
     for (size_t i = 0; i < json_array_size(efforts); ++i) {
         json_t *effort = json_array_get(efforts, i);
-        if (!cache_string(effort, SNAG_CONFIG_EFFORT_MAX - 1u))
+        if (!snag_json_bounded_string(effort, SNAG_CONFIG_EFFORT_MAX - 1u))
             return false;
         for (size_t j = 0; j < i; ++j)
             if (strcmp(json_string_value(json_array_get(efforts, j)),
@@ -157,11 +145,11 @@ providers_valid(const json_t *providers, bool cached)
 
         if (!json_is_object(provider) ||
             !snag_json_exact_keys(provider, "base_url models name protocol") ||
-            !cache_string(json_object_get(provider, "name"),
+            !snag_json_bounded_string(json_object_get(provider, "name"),
                           SNAG_CONFIG_PROVIDER_NAME_MAX) ||
-            !cache_string(json_object_get(provider, "base_url"),
+            !snag_json_bounded_string(json_object_get(provider, "base_url"),
                           SNAG_CONFIG_URL_MAX) ||
-            !cache_string(json_object_get(provider, "protocol"), 6u) ||
+            !snag_json_bounded_string(json_object_get(provider, "protocol"), 6u) ||
             !(protocol = snag_json_string(provider, "protocol")) ||
             (!snag_string_in(protocol, "codex openai")) ||
             !(name = snag_json_string(provider, "name")) ||

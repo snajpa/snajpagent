@@ -942,23 +942,6 @@ fail:
     return -1;
 }
 
-static bool
-bounded_utf8_string(const json_t *value, size_t max, const char **out)
-{
-    const char *text;
-    size_t len;
-
-    if (!json_is_string(value))
-        return false;
-    text = json_string_value(value);
-    len = json_string_length(value);
-    if (!text || !len || len > max || strlen(text) != len ||
-        !snag_utf8_valid((const unsigned char *)text, len, true))
-        return false;
-    *out = text;
-    return true;
-}
-
 static int
 append_efforts(json_t *out, const json_t *source, bool codex)
 {
@@ -976,8 +959,7 @@ append_efforts(json_t *out, const json_t *source, bool codex)
             value = json_object_get(value, "effort");
         else if (codex)
             return -1;
-        if (!bounded_utf8_string(value, SNAG_CONFIG_EFFORT_MAX - 1u,
-                                 &effort))
+        if (!(effort = snag_json_bounded_string(value, SNAG_CONFIG_EFFORT_MAX - 1u)))
             return -1;
         for (size_t j = 0; j < json_array_size(out); ++j)
             if (strcmp(json_string_value(json_array_get(out, j)), effort) == 0) {
@@ -1002,8 +984,8 @@ append_model(json_t *out, const json_t *source, bool codex)
     json_t *limits = NULL;
 
     if (!json_is_object(source) ||
-        !bounded_utf8_string(json_object_get(source, codex ? "slug" : "id"),
-                             SNAG_CONFIG_MODEL_MAX - 1u, &id))
+        !(id = snag_json_bounded_string(json_object_get(source, codex ? "slug" : "id"),
+                                        SNAG_CONFIG_MODEL_MAX - 1u)))
         return -1;
     for (size_t i = 0; i < json_array_size(out); ++i) {
         const char *existing = snag_json_string(json_array_get(out, i), "id");
@@ -1023,8 +1005,7 @@ append_model(json_t *out, const json_t *source, bool codex)
         if (!value && metadata)
             value = json_object_get(metadata, "default_reasoning_level");
         if (value && !json_is_null(value) &&
-            !bounded_utf8_string(value, SNAG_CONFIG_EFFORT_MAX - 1u,
-                                 &default_effort))
+            !(default_effort = snag_json_bounded_string(value, SNAG_CONFIG_EFFORT_MAX - 1u)))
             return -1;
     }
     if (codex && default_effort && !effort_source)

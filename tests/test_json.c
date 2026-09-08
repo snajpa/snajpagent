@@ -131,6 +131,17 @@ main(void)
         assert(value == (i == 3u ? 1u : i == 4u ? 100u : 0u));
         json_decref(limit);
     }
+    json_t *strings = json_pack("[n,b,s,s,s,s%]", 1, "", "okay", "café", "a\0b", (size_t)3u);
+    assert(strings && !snag_json_bounded_string(NULL, 5u));
+    for (size_t i = 0u; i < json_array_size(strings); ++i) {
+        json_t *string = json_array_get(strings, i);
+        const char *text = snag_json_bounded_string(string, 5u);
+        assert((text != NULL) == (i == 3u || i == 4u));
+        assert(!text || text == json_string_value(string));
+        assert((snag_json_bounded_string(string, 4u) != NULL) == (i == 3u));
+        assert(!snag_json_bounded_string(string, 0u));
+    }
+    json_decref(strings);
     struct snag_json_document document = {0};
     json_t *value = json_pack("{s:i}", "a", 1);
     char expected[SNAG_SHA256_HEX_LEN + 1u];
