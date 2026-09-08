@@ -1458,8 +1458,10 @@ test_callback_failure(void)
 }
 
 int
-main(void)
+main(int argc, char **argv)
 {
+    (void)argc;
+    (void)argv;
 #ifndef _WIN32
     /* The 64-peer capacity case holds both endpoints in this process. */
     struct rlimit files;
@@ -1467,6 +1469,10 @@ main(void)
     if (files.rlim_cur < 256u) {
         files.rlim_cur = 256u;
         assert(setrlimit(RLIMIT_NOFILE, &files) == 0);
+        /* Early BSD libpthread caches its fd table size before main(). */
+        execv(argv[0], argv);
+        perror("exec after raising the descriptor limit");
+        abort();
     }
 #endif
     engine_thread = pthread_self();
