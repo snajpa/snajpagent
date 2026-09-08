@@ -12,7 +12,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifndef SNAJPAGENT_STATIC_UTF8
 #include <wchar.h>
+#endif
 #include <locale.h>
 #include <regex.h>
 #include <signal.h>

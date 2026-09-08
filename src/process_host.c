@@ -1569,7 +1569,8 @@ exec_child(const char *shell, const char *command, const char *workdir,
         _exit(125);
     for (int fd = 3; fd < 256; ++fd)
         (void)close(fd);
-    execle(shell, shell, "-c", command, (char *)NULL, env);
+    char *args[] = {(char *)shell, "-c", (char *)command, NULL};
+    execve(shell, args, env);
     _exit(errno == ENOENT ? 127 : 126);
 }
 
@@ -1787,8 +1788,13 @@ int
 snag_child_exited(struct snag_child *child)
 {
 #if defined(__OpenBSD__) && !defined(WNOWAIT)
+#ifdef KERN_PROC2
+    struct kinfo_proc2 info = {0};
+    int mib[] = {CTL_KERN, KERN_PROC2, KERN_PROC_PID, child->pid, sizeof(info), 1};
+#else
     struct kinfo_proc info = {0};
     int mib[] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, child->pid, sizeof(info), 1};
+#endif
     size_t size = sizeof(info);
     if (sysctl(mib, 6u, &info, &size, NULL, 0) < 0)
         return -1;
@@ -1797,7 +1803,11 @@ snag_child_exited(struct snag_child *child)
         return snag_errno(ECHILD);
     }
     /* Preserve waitpid ownership while observing the native zombie state. */
+#ifdef KERN_PROC2
+    return info.p_stat == SZOMB;
+#else
     return (info.p_psflags & PS_ZOMBIE) != 0;
+#endif
 #elif defined(__FreeBSD__) && !defined(WNOWAIT)
     /* KERN_PROC_PID omits zombies on old FreeBSD; the process list includes
      * them. Validate parentage and leave reaping exclusively to the owner. */

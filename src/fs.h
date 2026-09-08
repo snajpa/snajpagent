@@ -10,7 +10,11 @@
 #include <errno.h>
 #include <limits.h>
 
-#if defined(__FreeBSD__) && __FreeBSD__ < 8
+#ifdef __OpenBSD__
+#include <fcntl.h>
+#endif
+
+#if (defined(__FreeBSD__) && __FreeBSD__ < 8) || (defined(__OpenBSD__) && !defined(AT_FDCWD))
 #define SNAG_LEGACY_BSD_AT 1
 #include <fcntl.h>
 #ifndef O_CLOEXEC

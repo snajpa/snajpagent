@@ -2071,13 +2071,16 @@ snag_fsync(int fd)
 #include <fcntl.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/time.h>
+#ifndef SNAJPAGENT_STATIC_UTF8
 #include <wchar.h>
+#include <langinfo.h>
+#endif
 #include <sys/stat.h>
 #include <dirent.h>
 #include <sys/file.h>
 #include <poll.h>
 #include <signal.h>
-#include <langinfo.h>
 #include <strings.h>
 #include <sys/wait.h>
 #if defined(__APPLE__)
@@ -3361,7 +3364,7 @@ snag_monotonic_ms(void)
 int
 snag_sync_file(int fd)
 {
-#if defined(__APPLE__) || defined(__FreeBSD__)
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__)
     return fsync(fd);
 #else
     if (fdatasync(fd) == 0)

@@ -10,6 +10,14 @@
 #include <time.h>
 #include <errno.h>
 
+#ifndef EOVERFLOW
+#define EOVERFLOW ERANGE /* Old BSD reports range overflow without a distinct errno. */
+#endif
+
+#ifndef ENOTSUP
+#define ENOTSUP EOPNOTSUPP
+#endif
+
 #ifndef EPROTO
 #define EPROTO EIO /* Old BSD has no distinct protocol-error number. */
 #endif
