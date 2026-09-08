@@ -8,6 +8,23 @@ prereleases. A tag, source push, successful local build, or source-only release
 does not fulfill this policy. The website download page and published assets
 are part of the release, not follow-up work.
 
+## Version authority
+
+The operator decides when the version changes and selects or explicitly approves
+its value. Permission to implement or ship a feature, deploy the website or
+finish a goal does not authorize a version bump or a new stable release.
+The matrix requirements below describe an authorized release's contents; they
+do not require creating a new version for each change.
+
+Before changing release versions in metadata, notes or build commands, creating
+release tags, or publishing a newly versioned release, confirm the operator's
+actual version decision. If absent, retain the approved version, continue safe
+in-scope implementation and ask before the version-changing step. Test fixtures,
+agent-written plans, successful builds and push-approval tokens are not version
+authority. An explicitly authorized development-snapshot workflow uses the
+existing approved base plus its actual Git suffix; it does not advance the base
+or promote the snapshot to stable. Previously published assets remain immutable.
+
 ## Required matrix
 
 `PROD_TARGETS` in `Makefile` defines the implemented production matrix.
@@ -95,7 +112,7 @@ symbol-only file as a debug build. Additions to a published release use distinct
 names and checksums; do not replace existing executable bytes or tags.
 
 
-For each new version:
+For each operator-approved new version:
 
 1. Prepare the release commit/tag and notes, build the entire implemented
    matrix, and retain the relevant existing test results. Follow the repository

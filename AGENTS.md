@@ -25,6 +25,16 @@ one clear behavior is enough.
 When a provider lacks an optional native endpoint, keep the user-facing behavior
 working through the existing provider path whenever practical.
 
+## Version authority
+
+The operator alone decides when versions change and approves the version.
+“Ship it” authorizes only the requested scope, not a version bump or a new stable
+release. The complete-matrix policy applies after that decision. Keep the
+approved base for authorized Git-suffixed development builds; fixture versions,
+agent plans and push tokens never authorize a new base or stable promotion.
+Ask before a version-changing step when the operator's decision is absent.
+See `RELEASE.md` for the release boundary.
+
 ## Regression tests
 
 Every bug fix must include a permanent regression test in the same change.
