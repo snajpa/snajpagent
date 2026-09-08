@@ -239,6 +239,12 @@ assert 'musl.stdenv.hostPlatform.isAarch32' in link
 assert '" -Wl,-Bstatic,--no-dynamic-linker,-z,text"' in link
 print("PASS: 32-bit ARM static PIE explicitly omits the dynamic runtime")
 
+# PowerPC32 needs the compiler's static implementation for 64-bit C11 atomics.
+assert "atomicFallback = musl.stdenv.hostPlatform.isPower && musl.stdenv.hostPlatform.is32bit;" in linux
+libraries = next(line for line in linux.splitlines() if '"LDLIBS=' in line)
+assert '${pkgs.lib.optionalString atomicFallback " -latomic"}' in libraries
+print("PASS: PowerPC32 links its 64-bit atomics statically after application objects")
+
 # RISC-V can leave exported archive callbacks as R_RISCV_64 in static PIE.
 # musl rcrt1 processes relative relocations only; Jansson's malloc then stays
 # null. Local archive symbols force relative callbacks without a loader.

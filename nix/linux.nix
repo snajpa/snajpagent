@@ -2,6 +2,7 @@
 { pkgs, musl, static ? musl.pkgsStatic }:
 let
   clockFallback = musl.stdenv.hostPlatform.isx86_64;
+  atomicFallback = musl.stdenv.hostPlatform.isPower && musl.stdenv.hostPlatform.is32bit;
   tls = static.mbedtls;
   curl = (static.curlMinimal.override {
     opensslSupport = false;
@@ -52,7 +53,7 @@ in {
         'CFLAGS=-std=c11 ${if debug then "-Og -g -fno-omit-frame-pointer" else "-Os -g -flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
         'LDFLAGS=-static-pie ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections${pkgs.lib.optionalString clockFallback ",--wrap=clock_gettime"}${pkgs.lib.optionalString musl.stdenv.hostPlatform.isAarch32 " -Wl,-Bstatic,--no-dynamic-linker,-z,text"}${pkgs.lib.optionalString musl.stdenv.hostPlatform.isRiscV " -Wl,--exclude-libs,ALL"}'
         "JANSSON_CFLAGS=$($PKG_CONFIG --cflags jansson)"
-        "LDLIBS=$($PKG_CONFIG --static --libs jansson)"
+        "LDLIBS=$($PKG_CONFIG --static --libs jansson)${pkgs.lib.optionalString atomicFallback " -latomic"}"
         "CURL_CFLAGS=$($PKG_CONFIG --cflags libcurl)"
         "CURL_LIBS=$($PKG_CONFIG --static --libs libcurl)"
       )

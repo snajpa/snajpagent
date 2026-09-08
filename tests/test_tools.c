@@ -14,6 +14,8 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <signal.h>
+#include <stdatomic.h>
+#include <pthread.h>
 #include "snag_jansson.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +24,32 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+static _Atomic uint64_t atomic_sequence;
+
+static void *
+advance_atomic_sequence(void *unused)
+{
+    (void)unused;
+    for (unsigned int i = 0; i < 1024u; ++i)
+        atomic_fetch_add(&atomic_sequence, 1u);
+    return NULL;
+}
+
+static void
+test_atomic_sequence(void)
+{
+    const uint64_t initial = UINT64_C(0x12345678fffffc00);
+    pthread_t thread;
+    void *result;
+    atomic_store(&atomic_sequence, initial);
+    assert(pthread_create(&thread, NULL, advance_atomic_sequence, NULL) == 0);
+    (void)advance_atomic_sequence(NULL);
+    assert(pthread_join(thread, &result) == 0 && result == NULL);
+    assert(atomic_load(&atomic_sequence) == initial + 2048u);
+    assert(atomic_exchange(&atomic_sequence, 0u) == initial + 2048u);
+    assert(atomic_load(&atomic_sequence) == 0u);
+}
 
 static void
 test_child_wait_ownership(void)
@@ -798,6 +826,7 @@ test_journal_failure_closes_owned_commands(void)
 int
 main(void)
 {
+    test_atomic_sequence();
     test_child_wait_ownership();
     test_child_interrupt_mask();
     (void)signal(SIGPIPE, SIG_IGN);
