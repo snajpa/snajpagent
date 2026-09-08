@@ -2609,6 +2609,8 @@ legacy_at_path(int dirfd, const char *path, char out[PATH_MAX])
 static int
 open_at(int dirfd, const char *path, int flags, mode_t mode)
 {
+    /* Absolute names ignore the parent descriptor, including invalid ones. */
+    dirfd = *path == '/' ? AT_FDCWD : dirfd;
 #ifdef SNAG_LEGACY_MAC_AT
     int fd;
     if (openat != NULL) {
@@ -2876,6 +2878,7 @@ snag_lstat(const char *path, snag_file_info *out)
 int
 snag_lstat_at(int dirfd, const char *path, snag_file_info *out)
 {
+    dirfd = *path == '/' ? AT_FDCWD : dirfd;
 #if defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
 #ifdef SNAG_LEGACY_MAC_AT
     if (fstatat != NULL)
@@ -2900,6 +2903,7 @@ snag_lstat_at(int dirfd, const char *path, snag_file_info *out)
 int
 snag_unlink_at(int dirfd, const char *path, bool directory)
 {
+    dirfd = *path == '/' ? AT_FDCWD : dirfd;
 #if defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
 #ifdef SNAG_LEGACY_MAC_AT
     if (unlinkat != NULL)
@@ -2924,6 +2928,8 @@ snag_unlink_at(int dirfd, const char *path, bool directory)
 int
 snag_rename_at(int from_dir, const char *from, int to_dir, const char *to)
 {
+    from_dir = *from == '/' ? AT_FDCWD : from_dir;
+    to_dir = *to == '/' ? AT_FDCWD : to_dir;
 #if defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
 #ifdef SNAG_LEGACY_MAC_AT
     if (renameat != NULL)
@@ -2950,6 +2956,8 @@ snag_rename_at(int from_dir, const char *from, int to_dir, const char *to)
 int
 snag_link_at(int from_dir, const char *from, int to_dir, const char *to)
 {
+    from_dir = *from == '/' ? AT_FDCWD : from_dir;
+    to_dir = *to == '/' ? AT_FDCWD : to_dir;
 #if defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
 #ifdef SNAG_LEGACY_MAC_AT
     if (linkat != NULL)
@@ -2988,6 +2996,7 @@ snag_mkdir_private(const char *path)
 int
 snag_mkdir_private_at(int dirfd, const char *path)
 {
+    dirfd = *path == '/' ? AT_FDCWD : dirfd;
 #if defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
 #ifdef SNAG_LEGACY_MAC_AT
     if (mkdirat != NULL)

@@ -1331,6 +1331,30 @@ test_private_directory(void)
     errno = 0;
     assert(snag_mkdir_private_at(-1, "relative") == -1 && errno == EBADF);
     assert(snag_mkdir_private_at(-1, absolute) == 0);
+    {
+        char *source = snag_path_join(absolute, "source");
+        char *target = snag_path_join(absolute, "target");
+        assert(source && target);
+        int file = snag_create_private_at(-1, source, true);
+        assert(file >= 0 && close(file) == 0);
+        file = snag_open_read_at(-1, source, false);
+        assert(file >= 0 && close(file) == 0);
+        assert(snag_lstat_at(-1, source, &path_info) == 0);
+        assert(snag_link_at(-1, source, -1, target) == 0);
+        assert(snag_unlink_at(-1, source, false) == 0);
+        assert(snag_rename_at(-1, target, -1, source) == 0);
+        assert(snag_unlink_at(-1, source, false) == 0);
+        errno = 0;
+        assert(snag_lstat_at(-1, "relative", &path_info) == -1 && errno == EBADF);
+        errno = 0;
+        assert(snag_unlink_at(-1, "relative", false) == -1 && errno == EBADF);
+        errno = 0;
+        assert(snag_link_at(-1, "relative", -1, target) == -1 && errno == EBADF);
+        errno = 0;
+        assert(snag_rename_at(-1, "relative", -1, target) == -1 && errno == EBADF);
+        free(source);
+        free(target);
+    }
     errno = 0;
     assert(snag_unlink_at(fd, "child", false) == -1 &&
            (errno == EISDIR || errno == EPERM));
