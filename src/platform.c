@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <locale.h>
-#ifdef SNAJPAGENT_STATIC_UTF8
+#if defined(SNAJPAGENT_STATIC_UTF8) || defined(__ANDROID__)
 #include <uniwidth.h>
 #endif
 
@@ -3122,7 +3122,7 @@ snag_char_width(uint32_t cp)
 {
     if (cp > 0x10ffffu || (cp >= 0xd800u && cp <= 0xdfffu))
         return -1;
-#ifdef SNAJPAGENT_STATIC_UTF8
+#if defined(SNAJPAGENT_STATIC_UTF8) || defined(__ANDROID__)
     return uc_width(cp, "UTF-8");
 #else
     return cp <= (uint32_t)WCHAR_MAX ? wcwidth((wchar_t)cp) : -1;

@@ -175,11 +175,11 @@ in {
           'TARGET_OS=Linux' 'CC=${compiler}'
           'STRIP=${tools}/llvm-strip' 'OBJCOPY=${tools}/llvm-objcopy'
           'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
-          'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
+          'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -I${unistring}/include -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
           'CFLAGS=-std=c11 ${if debug then "-Og -g -fno-omit-frame-pointer" else cflags + " -flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           'LDFLAGS=-pie ${ldflags} ${lib.optionalString (!debug) "-flto -Wl,--gc-sections"}'
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
-          "LDLIBS=$(pkg-config --static --libs jansson)"
+          "LDLIBS=$(pkg-config --static --libs jansson) -L${unistring}/lib -lunistring"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
           "CURL_LIBS=$(pkg-config --static --libs libcurl | sed 's/-l-pthread/-pthread/g')"
         )

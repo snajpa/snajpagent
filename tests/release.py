@@ -279,6 +279,42 @@ int main(void)
     subprocess.run([str(tmp / "locale")], check=True)
 print("PASS: Android locale initialization needs no API26 langinfo symbol")
 
+# API25 Bionic wcwidth treats every nonzero character as one cell.
+width = re.findall(r"int\nsnag_char_width\(uint32_t cp\)\n\{.*?\n}", platform, re.S)[-1]
+with tempfile.TemporaryDirectory(prefix="android-width-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    source = tmp / "width.c"
+    source.write_text(r"""
+#include <assert.h>
+#include <stdint.h>
+#include <string.h>
+#include <wchar.h>
+#define __ANDROID__ 1
+#define wcwidth(cp) ((cp) > 0)
+#define uc_width(cp, encoding) (assert(!strcmp(encoding, "UTF-8")), \
+    (cp) == 0 ? 0 : (cp) == '\n' ? -1 : (cp) == 0x301 ? 0 : \
+    (cp) == 0x4e2d || (cp) == 0x1f600 ? 2 : 1)
+""" + width + r"""
+int main(void)
+{
+    assert(snag_char_width('A') == 1);
+    assert(snag_char_width('\n') == -1);
+    assert(snag_char_width(0) == 0);
+    assert(snag_char_width(0x301) == 0);
+    assert(snag_char_width(0x4e2d) == 2);
+    assert(snag_char_width(0x1f600) == 2);
+    assert(snag_char_width(0xd800) == -1);
+    assert(snag_char_width(0x110000) == -1);
+    return 0;
+}
+""")
+    subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
+                    "-o", str(tmp / "width")], check=True)
+    subprocess.run([str(tmp / "width")], check=True)
+assert '-I${unistring}/include' in android
+assert '-L${unistring}/lib -lunistring' in android
+print("PASS: Android character widths use the static Unicode library")
+
 # The system shell is shared by command defaults and EDITOR on Android.
 assert 'execl(SNAG_SYSTEM_SHELL, "sh", "-c",' in platform
 shell_start = platform.index("#if defined(__ANDROID__)\n#define SNAG_SYSTEM_SHELL")

@@ -189,7 +189,7 @@ tests/test_store: $(PLATFORM_SRC) src/json.c src/instructions.c src/turn.c src/s
 tests/test_context tests/test_store tests/test_tools tests/test_turn: tests/checked_json.h
 
 tests/test_base tests/test_sse tests/test_provider_retry:
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ $(filter %.c,$^)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ $(filter %.c,$^) $(LDLIBS)
 
 tests/test_config tests/test_irc tests/test_credential tests/test_instructions tests/test_json tests/test_wire tests/test_responses tests/test_context tests/test_model_cache tests/test_render tests/test_turn:
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
