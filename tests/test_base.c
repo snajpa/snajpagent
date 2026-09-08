@@ -2274,7 +2274,7 @@ test_posix_child_ownership(void)
     assert(snag_child_exited(&waiting) == 0 && !waiting.reaped);
     snag_child_free(&exited);
     snag_child_free(&waiting);
-    snag_environment_free(env);
+    snag_environment_entries_free(env);
     free(directory);
 }
 
