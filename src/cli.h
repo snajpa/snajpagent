@@ -10,12 +10,6 @@
 
 #define SNAG_CLI_IRC_CLIENT_MAX 16u
 
-enum snag_cli_markdown_mode {
-    SNAG_CLI_MARKDOWN_UNSET,
-    SNAG_CLI_MARKDOWN_ENABLED,
-    SNAG_CLI_MARKDOWN_DISABLED
-};
-
 enum snag_cli_auth_command {
     SNAG_CLI_AUTH_NONE,
     SNAG_CLI_LOGIN,
@@ -39,9 +33,8 @@ struct snag_cli {
     bool update_model_cache;
     bool version;
     unsigned int verbosity;
-    enum snag_cli_markdown_mode markdown;
     /* Immutable option values borrow argv for the lifetime of the CLI. */
-    const char *color; /* NULL means use configuration. */
+    const char *color, *markdown; /* NULL means use configuration. */
     const char *workspace;
     struct snag_instruction_set doc_instructions;
     const char *dotdir;

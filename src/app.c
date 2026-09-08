@@ -3751,11 +3751,7 @@ build_resume_command(const struct app_state *app, const char *program,
     }
     if (cli->color && snag_buf_printf(command, " --color=%s", cli->color) < 0)
         goto out;
-    if (cli->markdown == SNAG_CLI_MARKDOWN_ENABLED &&
-        append_command_literal(command, "--markdown") < 0)
-        goto out;
-    if (cli->markdown == SNAG_CLI_MARKDOWN_DISABLED &&
-        append_command_literal(command, "--no-markdown") < 0)
+    if (cli->markdown && append_command_literal(command, cli->markdown) < 0)
         goto out;
     for (unsigned int i = 0u; i < snag_ui_verbosity(&app->ui); ++i)
         if (append_command_literal(command, "-v") < 0)

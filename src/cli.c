@@ -18,7 +18,6 @@ void
 snag_cli_init(struct snag_cli *cli)
 {
     memset(cli, 0, sizeof(*cli));
-    cli->markdown = SNAG_CLI_MARKDOWN_UNSET;
 }
 
 enum snag_color_mode
@@ -35,8 +34,7 @@ snag_cli_color(const struct snag_cli *cli, enum snag_color_mode fallback)
 bool
 snag_cli_markdown(const struct snag_cli *cli, bool fallback)
 {
-    return cli->markdown == SNAG_CLI_MARKDOWN_ENABLED ? true :
-           cli->markdown == SNAG_CLI_MARKDOWN_DISABLED ? false : fallback;
+    return cli->markdown ? !strcmp(cli->markdown, "--markdown") : fallback;
 }
 
 void
@@ -101,17 +99,6 @@ optional_endpoint(int argc, char **argv, int *index, const char *attached)
         return argv[*index];
     }
     return "localhost:6667";
-}
-
-static int
-set_markdown(struct snag_cli *cli, enum snag_cli_markdown_mode markdown,
-             const char *name, char *error, size_t error_size)
-{
-    if (cli->markdown != SNAG_CLI_MARKDOWN_UNSET) {
-        return snag_fail(error, error_size, EINVAL, "duplicate %s option", name);
-    }
-    cli->markdown = markdown;
-    return 0;
 }
 
 static int
@@ -299,9 +286,7 @@ parse_options(struct snag_cli *cli, int argc, char **argv, int *index,
         } else if (strcmp(name, "--no-color") == 0) {
             if (set_once(&cli->color, "never", name, error, error_size) < 0)
                 return -1;
-        } else if (set_markdown(cli, strcmp(name, "--markdown") == 0 ?
-                               SNAG_CLI_MARKDOWN_ENABLED : SNAG_CLI_MARKDOWN_DISABLED,
-                               name, error, error_size) < 0) {
+        } else if (set_once(&cli->markdown, name, name, error, error_size) < 0) {
             return -1;
         }
         if (long_option || option->argument)
