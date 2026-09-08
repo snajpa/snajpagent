@@ -461,30 +461,23 @@ test_command_output_limit_is_required_and_positive(void)
     snag_credential_clear(&credential);
     make_call(&graph, "printf never-run", cwd, 1000, NULL);
     struct snag_response_item call = snag_response_graph_item(&graph, 0u);
-    assert(json_object_del(call.arguments,
-                           "max_output_tokens") == 0);
-    assert(snag_tools_run(&call, &config, &credential, cwd,
-                         NULL, NULL, -1, &result, error, sizeof(error)) == 0);
-    assert(!strcmp(snag_json_string(result, "status"), "not_run"));
-    json_decref(result);
-    result = snag_tool_result_terminal(false, "invalid arguments");
-    assert(result != NULL);
-    config.max_output_tokens = 123u;
-    assert(snag_tools_attach_output_limit(&call, &config, result) == 0);
-    assert(json_integer_value(json_object_get(result, "max_output_tokens")) == 123);
-    json_decref(result);
-    result = NULL;
-    assert(json_object_set_new(call.arguments,
-               "max_output_tokens", json_integer(0)) == 0);
-    assert(snag_tools_run(&call, &config, &credential, cwd,
-                         NULL, NULL, -1, &result, error, sizeof(error)) == 0);
-    assert(!strcmp(snag_json_string(result, "status"), "not_run"));
-    json_decref(result);
-    result = snag_tool_result_terminal(false, "invalid arguments");
-    assert(result != NULL);
-    assert(snag_tools_attach_output_limit(&call, &config, result) == 0);
-    assert(json_integer_value(json_object_get(result, "max_output_tokens")) == 123);
-    json_decref(result);
+    for (unsigned int i = 0u; i < 2u; ++i) {
+        if (!i)
+            assert(json_object_del(call.arguments, "max_output_tokens") == 0);
+        else
+            assert(json_object_set_new(call.arguments, "max_output_tokens", json_integer(0)) == 0);
+        result = NULL;
+        assert(snag_tools_run(&call, &config, &credential, cwd,
+                             NULL, NULL, -1, &result, error, sizeof(error)) == 0);
+        assert(!strcmp(snag_json_string(result, "status"), "not_run"));
+        json_decref(result);
+        result = snag_tool_result_terminal(false, "invalid arguments");
+        assert(result != NULL);
+        config.max_output_tokens = 123u;
+        assert(snag_tools_attach_output_limit(&call, &config, result) == 0);
+        assert(json_integer_value(json_object_get(result, "max_output_tokens")) == 123);
+        json_decref(result);
+    }
     snag_response_graph_free(&graph);
     snag_config_free(&config);
 }
