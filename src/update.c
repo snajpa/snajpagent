@@ -9,7 +9,7 @@ snag_update_start(const char *program, const char *url, snag_wake_fd wake)
     return 0;
 }
 const char *snag_update_take(struct snag_update *update) { (void)update; return 0; }
-void snag_update_stop(struct snag_update *update) { (void)update; }
+char *snag_update_stop(struct snag_update *update) { (void)update; return 0; }
 #else
 #include "base.h"
 #include "fs.h"
@@ -241,6 +241,10 @@ install_update(struct snag_update *update)
     char meta_url[2060], lockname[300], stage[300], backup[300], hash[65];
     int dir = -1, original = -1, lock = -1, output = -1;
     bool staged = false;
+    const char *restore = NULL;
+#if defined(_WIN32) || defined(SNAJPAGENT_TEST_RENAME_ASIDE)
+    char canonical[300];
+#endif
     struct snag_buf body;
     json_t *meta = NULL;
     snag_file_info before, current;
@@ -265,6 +269,20 @@ install_update(struct snag_update *update)
     if (!path || !(base = strrchr(path, '/')) || !base[1])
         goto out;
     *base++ = '\0';
+#if defined(_WIN32) || defined(SNAJPAGENT_TEST_RENAME_ASIDE)
+    /* Recovery and installation reserve the same canonical name. */
+    static const char suffix[] = ".update-old.exe";
+    size_t base_len = strlen(base), suffix_len = sizeof(suffix) - 1u;
+    if (base[0] == '.' && base_len > suffix_len + 1u &&
+        strcmp(base + base_len - suffix_len, suffix) == 0) {
+        size_t len = base_len - suffix_len - 1u;
+        if (len >= sizeof(canonical))
+            goto out;
+        memcpy(canonical, base + 1u, len); canonical[len] = '\0';
+        restore = base;
+        base = canonical;
+    }
+#endif
     if (snprintf(lockname, sizeof(lockname), ".%s.update-lock", base) >= (int)sizeof(lockname) ||
         snprintf(stage, sizeof(stage), ".%s.update-new", base) >= (int)sizeof(stage) ||
         snprintf(backup, sizeof(backup), ".%s.update-old.exe", base) >= (int)sizeof(backup))
@@ -287,28 +305,7 @@ install_update(struct snag_update *update)
         lock = snag_open_private_append_at(dir, lockname, false);
     if (lock < 0 || snag_lock_file(lock, false) < 0)
         goto out;
-#if defined(_WIN32) || defined(SNAJPAGENT_TEST_RENAME_ASIDE)
-    /* Running a retained backup after a crash can restore the missing name.
-     * Do not remove or overwrite an existing canonical executable. */
-    static const char suffix[] = ".update-old.exe";
-    size_t base_len = strlen(base), suffix_len = sizeof(suffix) - 1u;
-    if (base[0] == '.' && base_len > suffix_len + 1u &&
-        strcmp(base + base_len - suffix_len, suffix) == 0) {
-        char canonical[300];
-        size_t len = base_len - suffix_len - 1u;
-        if (len >= sizeof(canonical))
-            goto out;
-        memcpy(canonical, base + 1u, len); canonical[len] = '\0';
-        int old = snag_open_read_security_at(dir, base, false);
-        bool valid = old >= 0 && has_identity(old, SNAJPAGENT_VERSION, update);
-        if (old >= 0) close(old);
-        if (valid && snag_lstat_at(dir, canonical, &current) < 0 && errno == ENOENT &&
-            snag_rename_at(dir, base, dir, canonical) == 0)
-            (void)snag_sync_dir(dir);
-        goto out;
-    }
-#endif
-    original = snag_open_read_security_at(dir, base, false);
+    original = snag_open_read_security_at(dir, restore ? restore : base, false);
     if (original < 0 || snag_fstat(original, &before) < 0 || !S_ISREG(before.st_mode) || before.st_size < 0 ||
         (uint64_t)before.st_size > UPDATE_BINARY_MAX ||
         before.st_nlink != 1 || snag_fd_privacy(original, &privacy) < 0 ||
@@ -319,6 +316,12 @@ install_update(struct snag_update *update)
     if (before.st_mode & (S_ISUID | S_ISGID | S_IWGRP | S_IWOTH))
         goto out;
 #endif
+    if (restore) {
+        if (snag_lstat_at(dir, base, &current) < 0 && errno == ENOENT &&
+            snag_rename_at(dir, restore, dir, base) == 0)
+            (void)snag_sync_dir(dir);
+        goto out;
+    }
     /* The owner-controlled directory and lock reserve these staging names. */
     if (snag_lstat_at(dir, stage, &current) == 0) {
         if (!S_ISREG(current.st_mode) || current.st_nlink != 1 ||
@@ -442,13 +445,16 @@ snag_update_take(struct snag_update *update)
     return update->banner[0] ? update->banner : NULL;
 }
 
-void
+char *
 snag_update_stop(struct snag_update *update)
 {
     if (!update)
-        return;
+        return NULL;
     atomic_store(&update->cancel, true);
     (void)pthread_join(update->thread, NULL);
+    const char *pending = snag_update_take(update);
+    char *banner = pending ? strdup(pending) : NULL;
     free(update->program); free(update->url); free(update);
+    return banner;
 }
 #endif
