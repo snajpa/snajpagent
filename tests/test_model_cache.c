@@ -147,39 +147,16 @@ main(void)
         "[{\"base_url\":\"https://api.example.test/v1\","
         "\"models\":[{\"default_effort\":\"high\","
         "\"efforts\":[\"low\",\"high\"],\"id\":\"org/model\","
-        "\"limits\":{\"auto_compact_input_tokens\":null,"
-        "\"context_window_tokens\":1050000,"
-        "\"effective_context_window_percent\":null,"
-        "\"input_context_window_tokens\":null,"
-        "\"max_context_window_tokens\":null,"
+        "\"limits\":{\"context_window_tokens\":1050000,"
         "\"max_input_tokens\":922000,\"max_output_tokens\":128000}},"
-        "{\"default_effort\":null,\"efforts\":[],"
-        "\"id\":\"context-only\",\"limits\":{"
-        "\"auto_compact_input_tokens\":null,"
-        "\"context_window_tokens\":100000,"
-        "\"effective_context_window_percent\":null,"
-        "\"input_context_window_tokens\":null,"
-        "\"max_context_window_tokens\":null,"
-        "\"max_input_tokens\":null,\"max_output_tokens\":null}},"
-        "{\"default_effort\":null,\"efforts\":[],"
-        "\"id\":\"unknown\",\"limits\":{"
-        "\"auto_compact_input_tokens\":null,"
-        "\"context_window_tokens\":null,"
-        "\"effective_context_window_percent\":null,"
-        "\"input_context_window_tokens\":null,"
-        "\"max_context_window_tokens\":null,"
-        "\"max_input_tokens\":null,\"max_output_tokens\":null}}],"
+        "{\"default_effort\":null,\"efforts\":[],\"id\":\"context-only\","
+        "\"limits\":{\"context_window_tokens\":100000}},"
+        "{\"default_effort\":null,\"efforts\":[],\"id\":\"unknown\",\"limits\":{}}],"
         "\"name\":\"paid\",\"protocol\":\"openai\"},"
         "{\"base_url\":\"https://chat.example.test/backend-api/codex\","
-        "\"models\":[{\"default_effort\":\"medium\","
-        "\"efforts\":[\"medium\"],\"id\":\"codex-context-only\","
-        "\"limits\":{\"auto_compact_input_tokens\":null,"
-        "\"context_window_tokens\":272000,"
-        "\"effective_context_window_percent\":null,"
-        "\"input_context_window_tokens\":null,"
-        "\"max_context_window_tokens\":872000,"
-        "\"max_input_tokens\":null,\"max_output_tokens\":null}}],"
-        "\"name\":\"codex\",\"protocol\":\"codex\"}]";
+        "\"models\":[{\"default_effort\":\"medium\",\"efforts\":[\"medium\"],"
+        "\"id\":\"codex-context-only\",\"limits\":{\"context_window_tokens\":272000,"
+        "\"max_context_window_tokens\":872000}}],\"name\":\"codex\",\"protocol\":\"codex\"}]";
     static const char old_cache[] =
         "{\"format\":1,\"providers\":[],\"updated_at_ms\":1}\n";
     char temp[] = "/tmp/snajpagent-model-cache-XXXXXX";
@@ -204,6 +181,19 @@ main(void)
     assert(cache.providers == NULL);
 
     providers = load_json(providers_text);
+    static const char *const limit_keys[] = {
+        "auto_compact_input_tokens", "context_window_tokens", "effective_context_window_percent",
+        "input_context_window_tokens", "max_context_window_tokens", "max_input_tokens", "max_output_tokens"
+    };
+    for (size_t i = 0u; i < json_array_size(providers); ++i) {
+        json_t *models = json_object_get(json_array_get(providers, i), "models");
+        for (size_t j = 0u; j < json_array_size(models); ++j) {
+            json_t *limits = json_object_get(json_array_get(models, j), "limits");
+            for (size_t k = 0u; k < sizeof(limit_keys) / sizeof(limit_keys[0]); ++k)
+                if (!json_object_get(limits, limit_keys[k]))
+                    assert(json_object_set_new(limits, limit_keys[k], json_null()) == 0);
+        }
+    }
     {
         json_t *limits = json_object_get(json_array_get(json_object_get(
             json_array_get(providers, 0), "models"), 2), "limits");
