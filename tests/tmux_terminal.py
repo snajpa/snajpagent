@@ -2020,6 +2020,35 @@ def run_resume_history_case(binary, root):
         assert result.returncode == 2, result.stderr
         assert log.read_bytes() == before
     config.write_text("[provider openai]\n[ui]\nresume_history_turns = 0\n")
+    saved_config = config.read_bytes()
+    commands = [("/history", 1), ("/history 0", 0), ("/history 1", 1),
+                ("/history 2", 2), ("/history 3", 3), ("/history 100", 100),
+                ("/history   002  ", 2), ("/history ", 1)]
+    commands += [("/history " + value, None) for value in
+                 ("-1", "+2", "101", "one", "2.5", "2 3", "#2", "9" * 40)]
+    for index, (command, count) in enumerate(commands):
+        with TmuxTerminal(case / f"cmd{index}", binary, workspace, state, config, 100, 40,
+                args=("--no-listen", "--no-client", "--resume", session)) as terminal:
+            terminal.wait("% ›", join_wrapped=True)
+            terminal.submit(command)
+            screen = terminal.submit_wait("/status", "session:", join_wrapped=True)
+            if count is None:
+                assert "usage: /history [0..100]" in screen, screen
+                selected = []
+            else:
+                assert "usage: /history" not in screen and "unknown slash command" not in screen, screen
+                selected = pairs[-count:] if count else []
+            assert screen.count("── history ──") == bool(selected), (command, screen)
+            fragments = []
+            for user, assistant in pairs:
+                text = f"user: {user}"
+                assert (text in screen) == ((user, assistant) in selected), (command, screen)
+                if (user, assistant) in selected:
+                    fragments.extend((text, "assistant:", assistant))
+            assert_order(screen, fragments)
+            terminal.exit()
+        assert log.read_bytes() == before, "history command changed the session log"
+        assert config.read_bytes() == saved_config, "history command changed configuration"
     with TmuxTerminal(case / "compact", binary, workspace, state, config, 100, 40,
             args=("--no-listen", "--no-client", "--resume", session)) as terminal:
         terminal.wait("% ›", join_wrapped=True)

@@ -816,8 +816,13 @@ Show commands and essential keys.
 Show session, selection, queue, verbosity, capacity, token accounting, requested
 network roles and actual connection state.
 .TP
-.B /history
-Show the most recent turn's input and latest saved assistant reply.
+.BR /history " [N]"
+Show the newest N turns, oldest first, with each turn's input and latest saved
+assistant reply.  N is a decimal integer from 0 through 100; omitted N defaults
+to 1 and zero displays nothing.  A count greater than the available turns shows
+all turns.  This command uses the same turn selection as
+.B resume_history_turns
+without changing the configured resume count or model context.
 .TP
 .BR /model " [list]"
 Read the local provider/model catalog.  No provider request is made.
