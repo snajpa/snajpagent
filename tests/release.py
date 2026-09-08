@@ -5,6 +5,7 @@ import argparse
 import importlib.util
 import json
 import re
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -68,6 +69,43 @@ with tempfile.TemporaryDirectory(prefix="release-", dir=root / "build") as tmp:
             assert not list(channel.glob("*.download"))
         args.version = "0.99.2-0000000"
         rejected(lambda: release.stage(args))
+
+# An annotated tag supplies the canonical native/matrix and staging identity.
+with tempfile.TemporaryDirectory(prefix="release-tag-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    for name in ("Makefile", "config.mk", "META", "COPYING", "LICENSE_SCOPE", "snajpagent.1",
+                 "RELEASE.md", "RELEASE-NOTES.md", "DEPENDENCIES.md"):
+        shutil.copyfile(root / name, tmp / name)
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(tmp), *args], text=True).strip()
+    git("init", "-q", "--initial-branch=master")
+    git("config", "user.name", "Release Test")
+    git("config", "user.email", "release@example.test")
+    git("add", ".")
+    git("commit", "-qm", "release source")
+    git("tag", "-a", "0.99.3", "-m", "approved fixture release")
+    probe = "version-test:;@printf '%s\\n' '$(BUILD_VERSION)'"
+    command = ["make", "-s", "--eval", probe, "version-test"]
+    assert subprocess.check_output(command, cwd=tmp, text=True).strip() == "0.99.3"
+    matrix_plan = subprocess.check_output(["make", "-n", "prod-linux-x86_64",
+        "UPDATE_BASE_URL=https://publisher.test"], cwd=tmp, text=True)
+    assert "--argstr buildVersion '0.99.3'" in matrix_plan
+    # Keep the existing manual override available independently of the tag.
+    assert subprocess.check_output(command + ["BUILD_VERSION=7.8.9"], cwd=tmp, text=True).strip() == "7.8.9"
+    args = argparse.Namespace(version=None, revision="0.99.3", publisher="https://publisher.test",
+        release=None, changelog="https://publisher.test/#log", output=tmp / "stage", matrix=tmp / "matrix")
+    binary = args.matrix / "linux-x86_64/bin/snajpagent"
+    binary.parent.mkdir(parents=True)
+    data = b"\nsnajpagent-update-v1\nsnajpagent\nlinux-x86_64\nhttps://publisher.test\n0.99.3\n"
+    binary.write_bytes(data)
+    (binary.parent / ".debug").mkdir()
+    (binary.parent / ".debug/snajpagent").write_bytes(data)
+    with patch.object(release, "ROOT", tmp), patch.object(release, "targets", return_value=["linux-x86_64"]):
+        release.stage(args)
+    meta = json.loads((args.output / "latest/snajpagent-linux-x86_64.json").read_text())
+    assert meta["version"] == "0.99.3"
+    assert meta["url"].endswith("/0.99.3/snajpagent-0.99.3-linux-x86_64")
+    assert (args.output / "snajpagent-0.99.3-source.tar.gz").exists()
 
 # Inspect the native build plan: publisher opt-in forces dev debug even with DEBUG=0.
 plan = subprocess.run(["make", "-n", "DEBUG=0", "BUILD_VERSION=0.99.2-abcdef0",

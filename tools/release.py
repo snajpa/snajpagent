@@ -61,15 +61,18 @@ def load_channel(directory, expected=None):
 
 
 def stage(args):
-    version = args.version
     revision = subprocess.check_output(["git", "rev-parse", "--verify", args.revision + "^{commit}"],
                                        cwd=ROOT, text=True).strip()
+    version = args.version
+    if version is None:
+        version = subprocess.check_output(
+            ["git", "describe", "--tags", "--exact-match", revision], cwd=ROOT, text=True).strip()
     if not re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9a-f]{7,40})?", version):
         raise ValueError("version must be a stable version or version-commit")
     if "-" in version and not revision.startswith(version.split("-", 1)[1]):
         raise ValueError("development suffix must identify the archived source revision")
     base = https(args.publisher).rstrip("/")
-    release = https(args.release).rstrip("/")
+    release = https(args.release or f"https://github.com/snajpa/snajpagent/releases/download/{version}").rstrip("/")
     log = https(args.changelog)
     channel = "latest-dev" if "-" in version else "latest"
     # Refuse existing output rather than modifying an immutable release stage.
@@ -136,12 +139,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     prepare = commands.add_parser("stage")
-    prepare.add_argument("--version", required=True)
+    prepare.add_argument("--version", help="manual override; normally derived from the exact Git tag")
     prepare.add_argument("--revision", default="HEAD", help="exact source revision used for this matrix")
     prepare.add_argument("--matrix", type=Path, default=ROOT / "build/matrix")
     prepare.add_argument("--output", type=Path, required=True)
     prepare.add_argument("--publisher", default="https://agent.snajpa.net")
-    prepare.add_argument("--release", required=True, help="immutable release-download URL prefix")
+    prepare.add_argument("--release", help="immutable URL prefix; defaults to the tagged GitHub release")
     prepare.add_argument("--changelog", default="https://agent.snajpa.net/downloads.html#changelog")
     prepare.set_defaults(run=stage)
     deploy = commands.add_parser("pages")

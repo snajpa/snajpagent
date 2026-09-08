@@ -2319,6 +2319,8 @@ Plain
 .B make
 builds only for the host, with size optimization and stripping.  ELF production
 packaging needs strip and objcopy; macOS needs strip and dsymutil.
+For a release, create its approved Git tag on the clean source commit first,
+then run make or make prod-matrix without a version override.
 The build version uses the latest reachable Git tag; untagged commits add their
 short revision, and modified checkouts add a -dirty suffix.
 META defines the product name only.  A tagged Git history is required; portable

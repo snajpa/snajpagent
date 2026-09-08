@@ -25,6 +25,24 @@ authority. An explicitly authorized development-snapshot workflow uses the
 existing approved base plus its actual Git suffix; it does not advance the base
 or promote the snapshot to stable. Previously published assets remain immutable.
 
+## Canonical tag-driven release
+
+Create the operator-approved annotated Git tag on the clean release commit,
+then build normally. Both native and production-matrix builds derive their
+version from that tag. For the authorized 0.99.3 release:
+
+```sh
+git tag -a 0.99.3 -m 'snajpagent 0.99.3'
+make -j4 UPDATE_BASE_URL=https://agent.snajpa.net prod-matrix
+python3 tools/release.py stage --revision 0.99.3 --output /path/to/new-stage
+```
+
+Staging derives the version and default immutable GitHub download URL from the
+exact tag and archives that tagged source, even if later website edits exist.
+`BUILD_VERSION` and staging's `--version`/`--release` remain available for manual
+builds and custom publishers; the ordinary release procedure does not need them.
+Changing prose or supplying an override does not create a release tag.
+
 ## Required matrix
 
 `PROD_TARGETS` in `Makefile` defines the implemented production matrix.
@@ -172,14 +190,14 @@ one headline and a few user-facing bullets, 80-column lines, newest first.
 Keep download selection first and detailed development evidence elsewhere.
 The banner links to this page; it does not parse or inject release prose.
 
-Stage a completed matrix with `python3 tools/release.py stage --version VERSION
---revision REVISION --output STAGE --release https://github.com/snajpa/snajpagent/releases/download/VERSION`.
-This copies standalone executables and symbols and writes the channel descriptors.
-`REVISION` must be the exact clean source commit used to build the entire matrix;
-its source, manual and notices are archived even if publishing edits follow.
-Development version suffixes must identify that commit. Each staged release
-includes the target matrix at its source revision; older channels retain their
-original targets when a newer release adds a platform.
+Stage a completed tagged matrix with `python3 tools/release.py stage
+--revision TAG --output STAGE`. This copies standalone executables and symbols,
+writes the channel descriptors, and archives source/manual/notices from that
+exact tag. Staging defaults to the exact tag at HEAD when `--revision` is absent.
+For an explicitly versioned custom build, use `--version VERSION --revision
+REVISION --release HTTPS_PREFIX`; development suffixes must identify that commit.
+Each staged release includes the matrix at its source revision; older channels
+retain their original targets when a newer release adds a platform.
 Add the corresponding dependency sources, notices, and checksums to the stage;
 publish those immutable files, then copy the descriptors to `www/latest/` or
 `www/latest-dev/`. Update the downloads page and run the manual Pages workflow.

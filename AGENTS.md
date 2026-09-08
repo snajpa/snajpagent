@@ -33,7 +33,9 @@ release. The complete-matrix policy applies after that decision. Keep the
 approved base for authorized Git-suffixed development builds; fixture versions,
 agent plans and push tokens never authorize a new base or stable promotion.
 Ask before a version-changing step when the operator's decision is absent.
-See `RELEASE.md` for the release boundary.
+The canonical release workflow creates the approved Git tag first, then lets
+the build system derive its version. Manual overrides remain available but are
+not required for an ordinary release. See `RELEASE.md` for the release boundary.
 
 ## Regression tests
 

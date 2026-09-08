@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+## 0.99.3 — 2026-09-08
+
+- Publish the sixteen-target matrix, adding OpenBSD 7.9, 5.9 and 3.5 and
+  NetBSD 10.1 and 5.2.3; extend the legacy FreeBSD build to 5.1.
+- Derive normal builds and release staging from the approved Git tag, retaining
+  manual overrides for custom builds.
+- Consolidate terminal, process, provider and turn ownership paths and cover
+  old-BSD filesystem, threading and terminal edge cases.
 - Add experimental NetBSD 5.2.3 and 10.1 amd64 source-build targets with static
   application libraries and native filesystem, process and terminal support.
   The 10.1 target uses PIE and full RELRO with its separate native pthread ABI.
