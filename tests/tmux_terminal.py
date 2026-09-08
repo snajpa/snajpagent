@@ -2512,18 +2512,14 @@ def run_argument_snapshot_cases(binary, root, provider, environment):
                 body = "".join(provider.event(event["type"], event)
                                for event in events)
             payload = body.encode()
-            handler.send_response(200)
-            handler.send_header("Content-Type", "text/event-stream")
-            handler.send_header("Content-Length", str(len(payload)))
-            handler.end_headers()
-            handler.wfile.write(payload)
+            provider.reply(handler, payload)
             handler.close_connection = True
 
         provider.runtime_handler = respond
         try:
             result = subprocess.run(
                 [str(binary), "--config", str(config), "--dotdir", str(state),
-                 "-e", "--", "yo"], cwd=case, env=environment,
+                 "-e", "--", "yo"], cwd=case, env={**os.environ, **environment},
                 capture_output=True, text=True, timeout=25)
             _, events = read_events(state)
             starts = event_list(events, "tool_started")
@@ -3485,11 +3481,7 @@ def run_goal_recovery_cases(binary, root, provider, environment):
             else:
                 body = provider.response_body(sequence, "goal recovery finished")
             body = body.encode()
-            handler.send_response(200)
-            handler.send_header("Content-Type", "text/event-stream")
-            handler.send_header("Content-Length", str(len(body)))
-            handler.end_headers()
-            handler.wfile.write(body)
+            provider.reply(handler, body)
             handler.wfile.flush()
 
         provider.runtime_handler = respond
@@ -3561,11 +3553,8 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
 
         def send(handler, body, status=200):
             encoded = body.encode()
-            handler.send_response(status)
-            handler.send_header("Content-Type", "text/event-stream" if status == 200 else "application/json")
-            handler.send_header("Content-Length", str(len(encoded)))
-            handler.end_headers()
-            handler.wfile.write(encoded)
+            provider.reply(handler, encoded,
+                "text/event-stream" if status == 200 else "application/json", status=status)
 
         def respond(handler, request, sequence):
             # Common Responses gateways lift text-only developer/system messages
@@ -3746,11 +3735,7 @@ def run_automatic_turn_retry_cases(binary, root, provider, environment):
                 terminal.submit("/goal pause")
                 terminal.wait("Goal paused at the current turn boundary")
                 body = provider.response_body(sequence, "paused seed").encode()
-                handler.send_response(200)
-                handler.send_header("Content-Type", "text/event-stream")
-                handler.send_header("Content-Length", str(len(body)))
-                handler.end_headers()
-                handler.wfile.write(body)
+                provider.reply(handler, body)
                 handler.wfile.flush()
                 return
             requests.append(request)
@@ -3788,11 +3773,7 @@ def run_automatic_turn_retry_cases(binary, root, provider, environment):
             else:
                 body = provider.response_body(sequence, "automatic retry finished")
             body = body.encode()
-            handler.send_response(200)
-            handler.send_header("Content-Type", "text/event-stream")
-            handler.send_header("Content-Length", str(len(body)))
-            handler.end_headers()
-            handler.wfile.write(body)
+            provider.reply(handler, body)
             handler.wfile.flush()
         provider.runtime_handler = respond
         try:
@@ -4659,11 +4640,7 @@ def run_tool_yield_cases(binary, root, provider, environment):
             else:
                 body = provider.response_body(sequence, "tool yield complete " + mode)
             payload = body.encode()
-            handler.send_response(200)
-            handler.send_header("Content-Type", "text/event-stream")
-            handler.send_header("Content-Length", str(len(payload)))
-            handler.end_headers()
-            handler.wfile.write(payload)
+            provider.reply(handler, payload)
             handler.close_connection = True
 
         provider.runtime_handler = respond
@@ -4814,11 +4791,7 @@ def run_post_exit_drain_cases(binary, root, provider, environment):
                     assert "live-complete" in result["model_text"], result
                 body = provider.response_body(sequence, "post-exit drain complete " + mode)
             payload = body.encode()
-            handler.send_response(200)
-            handler.send_header("Content-Type", "text/event-stream")
-            handler.send_header("Content-Length", str(len(payload)))
-            handler.end_headers()
-            handler.wfile.write(payload)
+            provider.reply(handler, payload)
             handler.close_connection = True
 
         provider.runtime_handler = respond
