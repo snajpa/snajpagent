@@ -137,6 +137,15 @@ let
       runHook postInstall
     '';
   });
+  regex = import ./windows-regex.nix {
+    inherit pkgs unistring;
+    cross = {
+      inherit compiler tools cflags ldflags;
+      cxxCompiler = compilerCxx;
+      target = "aarch64-linux-android${api}";
+      sdk = "${tools}/../sysroot";
+    };
+  };
   networkLibraries = [ tls zlib brotli zstd cares nghttp2 iconv unistring idn2 ];
   curl = cmakeLibrary sourcePkgs.curlMinimal [
     "-DBUILD_STATIC_LIBS=ON" "-DBUILD_CURL_EXE=OFF" "-DCURL_BUILD_EVERYTHING=OFF"
@@ -157,7 +166,7 @@ in {
       src = source;
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
-      buildInputs = [ jansson curl ] ++ networkLibraries;
+      buildInputs = [ jansson curl regex ] ++ networkLibraries;
       enableParallelBuilding = true;
       dontStrip = true;
       preBuild = ''
@@ -175,11 +184,11 @@ in {
           'TARGET_OS=Linux' 'CC=${compiler}'
           'STRIP=${tools}/llvm-strip' 'OBJCOPY=${tools}/llvm-objcopy'
           'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
-          'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -I${unistring}/include -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
+          'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -I${regex}/include -I${unistring}/include -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'
           'CFLAGS=-std=c11 ${if debug then "-Og -g -fno-omit-frame-pointer" else cflags + " -flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           'LDFLAGS=-pie ${ldflags} ${lib.optionalString (!debug) "-flto -Wl,--gc-sections"}'
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
-          "LDLIBS=$(pkg-config --static --libs jansson) -L${unistring}/lib -lunistring"
+          "LDLIBS=$(pkg-config --static --libs jansson) -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
           "CURL_LIBS=$(pkg-config --static --libs libcurl | sed 's/-l-pthread/-pthread/g')"
         )
