@@ -315,7 +315,8 @@ send_all(struct snag_irc *irc, bool model, enum snag_irc_event_kind kind,
                                NULL, error, error_size);
 }
 
-static void
+/* Keep large scenario frames separate from main on small legacy stacks. */
+static void __attribute__((noinline))
 test_listener_collision(void)
 {
     static const char *const hosts[] = {"127.0.0.1", "localhost"};
@@ -345,7 +346,7 @@ test_listener_collision(void)
     }
 }
 
-static void
+static void __attribute__((noinline))
 test_runtime_roles(void)
 {
     struct snag_config config, upstream_config;
@@ -520,7 +521,7 @@ test_runtime_roles(void)
     snag_config_free(&upstream_config);
 }
 
-static void
+static void __attribute__((noinline))
 test_validation(void)
 {
     struct snag_config config;
@@ -596,7 +597,7 @@ test_validation(void)
     }
 }
 
-static void
+static void __attribute__((noinline))
 test_cli_network_roles(void)
 {
     struct snag_config config;
@@ -641,7 +642,7 @@ test_cli_network_roles(void)
     snag_config_free(&config);
 }
 
-static void
+static void __attribute__((noinline))
 test_server(void)
 {
     struct snag_config config;
@@ -862,7 +863,7 @@ wait_pair_event(struct snag_irc *server, struct snag_irc *client,
     assert(capture->events[kind] >= count);
 }
 
-static void
+static void __attribute__((noinline))
 test_client_reconnect(void)
 {
     struct snag_config server_config;
@@ -1027,7 +1028,7 @@ test_client_reconnect(void)
     snag_config_free(&server_config);
 }
 
-static void
+static void __attribute__((noinline))
 test_default_nick_sequence(void)
 {
     struct snag_config server_config;
@@ -1084,7 +1085,7 @@ test_default_nick_sequence(void)
     snag_config_free(&server_config);
 }
 
-static void
+static void __attribute__((noinline))
 test_client_nick_collision(bool explicit_zero)
 {
     struct snag_config server_config;
@@ -1197,7 +1198,7 @@ out:
     snag_config_free(&server_config);
 }
 
-static void
+static void __attribute__((noinline))
 test_client_events(void)
 {
     struct snag_config config;
@@ -1385,7 +1386,7 @@ test_client_events(void)
     snag_config_free(&config);
 }
 
-static void
+static void __attribute__((noinline))
 test_independent_owners(void)
 {
     struct snag_config config;
@@ -1438,7 +1439,7 @@ test_independent_owners(void)
     snag_config_free(&config);
 }
 
-static void
+static void __attribute__((noinline))
 test_callback_failure(void)
 {
     struct snag_config config;
