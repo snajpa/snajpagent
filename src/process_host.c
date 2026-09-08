@@ -1482,7 +1482,7 @@ done:
 #define SNAJPAGENT_HAVE_PROC_CHILD 1
 #include <pty.h>
 #include <sys/ioctl.h>
-#elif defined(__APPLE__) || defined(__OpenBSD__)
+#elif defined(__APPLE__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #define SNAJPAGENT_HAVE_PTY 1
 #include <sys/ioctl.h>
 #include <util.h>
@@ -1505,7 +1505,7 @@ done:
 #include <sys/sysctl.h>
 #include <sys/user.h>
 #endif
-#if defined(__OpenBSD__) && !defined(WNOWAIT)
+#if (defined(__OpenBSD__) || defined(__NetBSD__)) && !defined(WNOWAIT)
 #include <sys/param.h>
 #include <sys/sysctl.h>
 #include <sys/proc.h>
@@ -1787,7 +1787,7 @@ proc_child_exited(struct snag_child *child)
 int
 snag_child_exited(struct snag_child *child)
 {
-#if defined(__OpenBSD__) && !defined(WNOWAIT)
+#if (defined(__OpenBSD__) || defined(__NetBSD__)) && !defined(WNOWAIT)
 #ifdef KERN_PROC2
     struct kinfo_proc2 info = {0};
     int mib[] = {CTL_KERN, KERN_PROC2, KERN_PROC_PID, child->pid, sizeof(info), 1};
