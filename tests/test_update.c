@@ -37,14 +37,18 @@ main(int argc, char **argv)
     if (update) {
         int timeout = atoi(argv[2]);
         assert(snag_wakeup_wait(wake[0], timeout) >= 0);
-        const char *banner = snag_update_take(update);
+        const char *banner = getenv("SNAJPAGENT_TEST_STOP_BANNER") ? NULL : snag_update_take(update);
         if (banner) {
             fputs(banner, stderr);
             assert(snag_update_take(update) == NULL);
         }
     }
     start = snag_monotonic_ms();
-    snag_update_stop(update);
+    char *banner = snag_update_stop(update);
+    if (banner) {
+        fputs(banner, stderr);
+        free(banner);
+    }
     assert(snag_monotonic_ms() - start < 2000u);
     puts("old process still running " SNAJPAGENT_VERSION);
     snag_wakeup_close(wake);

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 """Focused real-executable updater tests; private loopback server only."""
+import fcntl
 import hashlib
 import http.server
 import json
@@ -111,6 +112,11 @@ with tempfile.TemporaryDirectory(prefix="update-", dir=os.environ["TMPDIR"]) as 
                         ("publisher", new.read_bytes().replace(b"https://publisher.test", b"https://wrongpubr.test"))]:
         exe = reset(label, data=data); unchanged(exe, run(exe))
     print("PASS: integrity, size, publisher/target, version and HTTPS failures leave executable intact")
+    exe = reset("stop-banner")
+    result = subprocess.run([exe, url, "10000"], capture_output=True, text=True,
+                            env=dict(os.environ, SNAJPAGENT_TEST_STOP_BANNER="1"), timeout=15)
+    assert result.returncode == 0 and result.stderr.count("updated ===") == 1
+    assert exe.read_bytes() == new.read_bytes()
     exe = reset("cancel"); server.delay = 1
     unchanged(exe, run(exe, "30"))
     time.sleep(1.1)
@@ -143,6 +149,10 @@ with tempfile.TemporaryDirectory(prefix="update-", dir=os.environ["TMPDIR"]) as 
     assert result.returncode == 79 and not exe.exists()
     backup = exe.parent / ".snajpagent.update-old.exe"
     assert backup.read_bytes() == aside.read_bytes()
+    with (exe.parent / ".snajpagent.update-lock").open("a") as lock:
+        fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = run(backup)
+        assert not result.stderr and not exe.exists() and backup.exists()
     result = run(backup)
     assert not result.stderr and exe.read_bytes() == aside.read_bytes()
     result = run(exe)

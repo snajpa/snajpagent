@@ -614,7 +614,11 @@ presentation_main(void *opaque)
                 break;
         }
     }
-    snag_update_stop(display.update);
+    char *banner = snag_update_stop(display.update);
+    if (banner) {
+        (void)snag_render_update(&display.render, banner);
+        free(banner);
+    }
     snag_render_free(&display.render);
     if (display.local) {
         free(display.local->text);

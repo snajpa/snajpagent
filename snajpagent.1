@@ -1205,8 +1205,9 @@ unchanged; the banner uses stderr.  The running version remains unchanged until
 restart, including the version shown by the current process.
 .PP
 The executable and its directory must be writable and owned by the running
-user; shared-writable, privileged, symlinked final files and hardlinked files
-are rejected.  Prefer a user-owned standalone install.  Do not enable updates
+user; shared-writable, privileged and hardlinked files are rejected.
+The updater resolves the running executable, including a launch through a
+symlink; a symlink substituted at the resolved install path is rejected.  Prefer a user-owned standalone install.  Do not enable updates
 for package-managed installations.  The updater never elevates privileges.
 Failed checks/downloads leave the old executable in place and ordinary work
 continues; there is one attempt per launch.  The bundled resolver is asynchronous;
@@ -1217,9 +1218,10 @@ provider API credentials are never sent.
 A private sibling .EXECUTABLE.update-lock coordinates updater instances.  A
 partial .EXECUTABLE.update-new is discarded under that lock on the next attempt.
 Unix installs use same-directory rename.  Windows keeps the old executable as
-.EXECUTABLE.update-old.exe when the mapped file cannot be replaced directly.
-If interrupted between the renames, run that retained executable to restore
-the missing original name, or rename it back while the agent is stopped.
+\&.EXECUTABLE.update-old.exe when the mapped file cannot be replaced directly.
+If interrupted between the renames, run that retained executable with
+auto_update enabled to restore the missing original name, or rename it back
+while the agent is stopped.  Recovery uses the same lock as installation.
 Do not delete it while another instance is using it.  There is no session-format
 rollback promise: keeping an older executable does not undo newer session data.
 .SS "provider NAME"
