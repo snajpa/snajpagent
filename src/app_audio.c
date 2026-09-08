@@ -266,6 +266,7 @@ snag_app_audio_command(struct app_state *app, const char *line, bool *handled)
         /* This acknowledged UI message is applied before starting the device. */
         if (snag_ui_audio(&app->ui, "[MIC ON; Enter finishes; Esc cancels] ", true) != 0)
             return finish(app, "Dictation requires a raw interactive terminal with a visible prompt.", true);
+        if(snag_session_persist(&app->store,&app->session,error,sizeof(error))<0)return finish(app,error,true);
         if (checkpoint(app, 0u)) return finish(app, "Dictation cancelled before capture.", false);
     }
     if (snag_audio_open(dictate, play, play ? 2u : 1u, cfg->capture_device, cfg->playback_device,

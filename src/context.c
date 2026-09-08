@@ -82,6 +82,7 @@ static int
 append_user_content(struct context_builder *builder, const char *role,
                     const char *text, const json_t *content)
 {
+    if(json_is_null(content))content=NULL;
     json_t *parts = snag_media_message_content(builder->session->dir_fd, text, content, NULL, 0u);
     if (!parts) return -1;
     return json_array_append_new(builder->request_input,

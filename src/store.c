@@ -1135,7 +1135,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
         if (adding) {
             const char *turn_id = snag_json_string(data, "while_turn_id");
-            if (!turn_id || strcmp(turn_id, session->active_turn ? session->active_turn_id : "") ||
+            if ((voice ? (session->active_turn ? (!turn_id || strcmp(turn_id,session->active_turn_id)) :
+                    !json_is_null(json_object_get(data,"while_turn_id"))) :
+                (!turn_id || strcmp(turn_id,session->active_turn?session->active_turn_id:""))) ||
                 pending_user_id_exists(session, queue_id) ||
                 session->pending_queue_count >= SNAG_MAX_PENDING_TURNS)
                 goto invalid;

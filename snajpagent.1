@@ -2645,6 +2645,8 @@ revives a lost process handle. Interactive and one-shot resume share this path.
 New sessions remain in memory until accepted work or durable state needs a log,
 such as a prompt, queued turn, goal or retained network event.  Pre-work inspection,
 configuration editing and model-cache discovery alone preserve lazy creation.
+Preparing an attachment or starting dictation/realtime voice also saves the
+session for durable asset and voice ownership.
 Exiting before then creates no saved session, needs no deletion, and prints no
 resume hint. Startup activity and selection changes are retained if a prompt
 is later submitted. Existing resumed sessions remain saved.

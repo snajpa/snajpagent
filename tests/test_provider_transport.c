@@ -380,7 +380,7 @@ audio_server_child(int listen_fd, enum model_fixture mode)
             if (i + 13u <= req.body_len && !memcmp(req.body + i, "audio-fixture", 13u)) model = true;
         }
         if (!found || !model) server_fail("multipart WAV/model missing");
-        send_status(fd, 200u, "{\"text\":\"fixture transcript\",\"usage\":{\"type\":\"duration\",\"seconds\":0.01}}");
+        send_response(fd,200u,"application/json", "{\"text\":\"fixture transcript\",\"usage\":{\"type\":\"duration\",\"seconds\":0.01}}");
     } else {
         json_t *body = json_loadb(req.body, req.body_len, JSON_REJECT_DUPLICATES, NULL);
         const char *model = snag_json_string(body, "model");
@@ -408,7 +408,7 @@ audio_server_child(int listen_fd, enum model_fixture mode)
                     memcmp(decoded.data, audio_expected, audio_expected_len)) server_fail("audio chat lost WAV data");
                 snag_buf_free(&decoded);
             }
-            send_status(fd, mode == MODEL_AUDIO_FAILURE ? 503u : 200u,
+            send_response(fd,mode == MODEL_AUDIO_FAILURE ? 503u : 200u,"application/json",
                 mode == MODEL_AUDIO_FAILURE ? "{\"error\":\"private audio diagnostic\"}" :
                 "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"fixture sound answer\"}}],"
                 "\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4,\"total_tokens\":14}}");
@@ -1168,24 +1168,10 @@ test_count_modes(void)
         assert(snprintf(temp, sizeof(temp), "%s/snajpagent-count-mode-XXXXXX",
             getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp") > 0);
         assert(mkdtemp(temp));
-        start_server(&server, cases[i].fixture, false);
-        assert(snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u/v1",
-                        (unsigned int)server.port) > 0);
-        snag_config_init(&config);
-        assert(snprintf(config.providers[0].base_url,
-                        sizeof(config.providers[0].base_url), "%s",
-                        cases[i].images ? "https://api.openai.com" :
-                        cases[i].openrouter ? "https://openrouter.ai/api/v1" : endpoint) > 0);
-        assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
-        assert(snprintf(config.providers[0].openrouter_referer,
-                        sizeof(config.providers[0].openrouter_referer), "%s",
-                        "https://github.com/snajpa/snajpagent") > 0);
-        assert(snprintf(config.providers[0].openrouter_title,
-                        sizeof(config.providers[0].openrouter_title), "%s",
-                        "snajpagent") > 0);
-        config.providers[0].connect_timeout_ms = 1000u;
-        config.providers[0].idle_timeout_ms = 1000u;
-        config.providers[0].request_timeout_ms = 3000u;
+        start_server(&server,cases[i].fixture,false,"/v1");
+        (void)transport_connection(&config,&credential,cases[i].images?"https://api.openai.com":
+            cases[i].openrouter?"https://openrouter.ai/api/v1":server.endpoint);
+        assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE",server.endpoint,1)==0);
         config.providers[0].exact_token_count = cases[i].mode;
         memset(&app, 0, sizeof(app));
         snag_store_init(&app.store);
@@ -1210,7 +1196,8 @@ test_count_modes(void)
         assert(app.turn_capacity.count_capability == cases[i].capability);
         if (cases[i].images && rc == SNAG_APP_COUNT_SKIPPED)
             assert(tokens == expected && !strcmp(method, "media_upper_bound"));
-        else assert(tokens == 99u && strcmp(method, "qualified_upper_bound") == 0);
+        else if(cases[i].fixture==MODEL_COUNT_OK)assert(tokens==42u && !strcmp(method,"exact"));
+        else assert(tokens==99u);
         assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
         snag_ui_free(&app.ui);
         snag_model_cache_free(&app.model_cache);
@@ -1348,19 +1335,19 @@ test_media_count_fallback(void)
     char error[256] = {0};
     assert(snag_media_token_bound(request, app.turn_provider, &expected, error, sizeof(error)) == 0);
     config.providers[0].exact_token_count = SNAG_TOKEN_COUNT_OFF;
-    assert(snag_app_provider_count(&app, request, &credential, 100u, &tokens, &method, error, sizeof(error)) == SNAG_APP_COUNT_SKIPPED);
+    assert(snag_app_provider_count(&app, request, &credential, &tokens, &method, error, sizeof(error)) == SNAG_APP_COUNT_SKIPPED);
     assert(tokens == expected && !strcmp(method, "media_upper_bound"));
     config.providers[0].exact_token_count = SNAG_TOKEN_COUNT_AUTO;
     app.turn_capacity.count_capability = SNAG_COUNT_UNSUPPORTED;
-    assert(snag_app_provider_count(&app, request, &credential, 100u, &tokens, &method, error, sizeof(error)) == SNAG_APP_COUNT_SKIPPED);
+    assert(snag_app_provider_count(&app, request, &credential, &tokens, &method, error, sizeof(error)) == SNAG_APP_COUNT_SKIPPED);
     /* Compressed payload length changes neither vision budget nor textual count. */
     assert(json_object_set_new(part, "image_url", json_string("data:image/png;base64,YWJjYWJjYWJjYWJj")) == 0);
-    assert(snag_app_provider_count(&app, request, &credential, 100u, &tokens, &method, error, sizeof(error)) == SNAG_APP_COUNT_SKIPPED && tokens == expected);
+    assert(snag_app_provider_count(&app, request, &credential, &tokens, &method, error, sizeof(error)) == SNAG_APP_COUNT_SKIPPED && tokens == expected);
     assert(json_object_set_new(part, "detail", json_string("original")) == 0);
-    assert(snag_app_provider_count(&app, request, &credential, 100u, &tokens, &method, error, sizeof(error)) < 0);
+    assert(snag_app_provider_count(&app, request, &credential, &tokens, &method, error, sizeof(error)) < 0);
     assert(json_object_set_new(part, "detail", json_string("high")) == 0);
     assert(json_object_set_new(request, "model", json_string("unknown")) == 0);
-    assert(snag_app_provider_count(&app, request, &credential, 100u, &tokens, &method, error, sizeof(error)) < 0);
+    assert(snag_app_provider_count(&app, request, &credential, &tokens, &method, error, sizeof(error)) < 0);
     json_decref(part); json_decref(request);
     snag_ui_free(&app.ui); snag_config_free(&config);
 }
@@ -1794,7 +1781,7 @@ test_audio_transport(void)
     for (int mode = MODEL_AUDIO_LISTEN; mode <= MODEL_AUDIO_FAILURE; ++mode) {
         enum snag_audio_operation op = mode == MODEL_AUDIO_TRANSCRIBE ? SNAG_AUDIO_TRANSCRIBE :
             mode == MODEL_AUDIO_SPEAK ? SNAG_AUDIO_SPEAK : SNAG_AUDIO_LISTEN;
-        start_server(&server, (enum model_fixture)mode, false);
+        start_server(&server, (enum model_fixture)mode, false, "");
         snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u/v1", server.port);
         assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
         snag_buf_reset(&out);
@@ -1826,7 +1813,7 @@ test_audio_transport(void)
     assert(json_object_set_new(request, "question", json_string("What \"sounds\"?\n\\details")) == 0);
     for (size_t n = 20001u; n <= 20003u; ++n) {
         large.len = n; audio_expected = large.data; audio_expected_len = n;
-        start_server(&server, MODEL_AUDIO_LISTEN, false);
+        start_server(&server, MODEL_AUDIO_LISTEN, false, "");
         snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u/v1", server.port);
         assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
         snag_buf_reset(&out);
@@ -1894,19 +1881,22 @@ test_audio_transport(void)
         assert(snag_secret_source_parse(&config.providers[0].api_key, "\"transport-secret\"", NULL, error, sizeof(error)) == 0);
         const char *names[] = {"listen_audio", "transcribe_audio", "speak_text"};
         /* The real graph and context surface must accept every declared tool. */
-        struct app_state app = {.config = &config, .session = session,
-            .turn_model = "audio-fixture", .turn_effort = "medium",
-            .turn_provider = &config.providers[0]};
-        json_t *started = snag_app_turn_started_data(&app, "Inspect fixture sound",
-            "01010101010101010101010101010101", NULL, false, false, NULL);
+        json_t *started=json_pack("{s:{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b},"
+            "s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:I,s:s}",
+            "config","capability_version",SNAJPAGENT_CAPABILITY_VERSION,"effort","medium",
+            "max_output_tokens","model","audio-fixture","provider","default","profile_id",SNAJPAGENT_PROFILE_ID,
+            "prompt_schema",1,"replay_schema",1,"tool_schema",1,"max_parallel_commands",4,"parallel_tool_calls",1,
+            "input_kind","direct","read_only",0,"instructions",json_array(),"queue_id","queue_seq",
+            "text","Inspect fixture sound","turn_id","01010101010101010101010101010101","turn_number",(json_int_t)1,
+            "workspace",session.workspace);
         assert(started && snag_session_commit(&session, "turn_started", started,
             NULL, error, sizeof(error)) == 0);
         struct snag_context_projection projection;
-        snag_context_projection_init(&projection);
+        memset(&projection,0,sizeof(projection));
         json_t *steering = json_array();
         assert(snag_context_build(&session, "audio-fixture", "medium", 1u, steering, 2048u, true,
             &config, NULL, &projection, error, sizeof(error)) == 0);
-        json_t *tools = json_object_get(projection.create_request, "tools");
+        json_t *tools = json_object_get(projection.create_request.value, "tools");
         for (size_t i = 0; i < 3u; ++i) {
             bool declared = false;
             for (size_t j = 0; j < json_array_size(tools); ++j) {
@@ -1917,7 +1907,7 @@ test_audio_transport(void)
         }
         snag_context_projection_free(&projection); json_decref(steering);
         for (int mode = MODEL_AUDIO_LISTEN; mode <= MODEL_AUDIO_SPEAK; ++mode) {
-            start_server(&server, (enum model_fixture)mode, false);
+            start_server(&server, (enum model_fixture)mode, false, "");
             snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u/v1", server.port);
             assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
             struct snag_response_item call = {.name = (char *)names[mode - MODEL_AUDIO_LISTEN]};
@@ -1925,7 +1915,7 @@ test_audio_transport(void)
                 json_pack("{s:s,s:i,s:i}", "path", file, "start_s", 0, "end_s", 1);
             if (mode == MODEL_AUDIO_LISTEN) assert(json_object_set_new(call.arguments, "question", json_string("What sounds?")) == 0);
             struct snag_response_graph graph;
-            snag_response_graph_init(&graph);
+            memset(&graph,0,sizeof(graph));
             assert(snag_response_graph_add_call(&graph, "audio-item", "audio-call", call.name,
                 json_incref(call.arguments)) == 0);
             snag_response_graph_free(&graph);
@@ -1954,7 +1944,7 @@ test_audio_transport(void)
         call.arguments = json_pack("{s:s,s:i,s:i,s:i}", "path", video, "start_s", 0, "end_s", 1, "frames", 2);
         struct video_audio_fixture fixture = {.session = &session, .config = &config,
             .root_fd = store.root_fd, .original = video};
-        start_server(&server, MODEL_AUDIO_TRANSCRIBE, false);
+        start_server(&server, MODEL_AUDIO_TRANSCRIBE, false, "");
         snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u/v1", server.port);
         assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
         json_t *result = NULL;
@@ -2026,7 +2016,7 @@ ws_server(unsigned int mode,int listen_fd)
         !header_contains(request.headers,"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ=="))
         server_fail("WebSocket handshake URL/nonce mismatch");
     if(mode==4u) {
-        send_status(fd,401u,"{\"error\":\"private denied body\"}");close(fd);_Exit(0);
+        send_response(fd,401u,"application/json","{\"error\":\"private denied body\"}");close(fd);_Exit(0);
     }
     if(mode==5u) {while(read(fd,&mode,1u)>0){}close(fd);_Exit(0);}
     const char *upgrade="HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"

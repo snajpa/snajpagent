@@ -2954,6 +2954,8 @@ test_wide_division(void)
     assert(dividend / divisor == UINT64_C(0xabcdef0123456794));
     assert(dividend % divisor == UINT64_C(0x0fedbba9876543bc));
 #endif
+}
+
 struct encoder_output {
     unsigned char bytes[8192];
     size_t len, calls, largest;

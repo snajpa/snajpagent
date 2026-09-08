@@ -305,7 +305,7 @@ test_audio_usage(struct snag_store *store,const char *workspace)
         unsigned int found=0;
         assert(snag_session_each_event(&session,check_audio_usage,&found,error,sizeof(error))==0 && found==1u);
         assert(session.next_seq==3u && !session.turn_count && !session.active_turn);
-        assert(!session.usage_anchor_valid && !session.context_meter_valid && !session.pending_queue_count);
+        assert(!session.usage_anchor.valid && !session.context_meter.valid && !session.pending_queue_count);
         snag_session_close(&session);snag_session_init(&session);
         if(!replay)assert(snag_session_open(store,&session,id,error,sizeof(error))==0);
     }

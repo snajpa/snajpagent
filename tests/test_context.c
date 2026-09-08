@@ -927,7 +927,7 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
             assert(web && json_object_size(web) == 1u);
             assert(!item_by_field(ts, "type", openrouter ? "web_search" : "openrouter:web_search"));
             if (pass == 0u) {
-                assert(json_array_size(ts) == 9u);
+                assert(json_array_size(ts) == 7u);
                 assert(item_by_field(ts, "name", "list_files") && item_by_field(ts, "name", "read_file") &&
                        item_by_field(ts, "name", "grep"));
                 (void)assert_optional_tool_contract(item_by_field(ts, "name", "list_files"));
@@ -1005,7 +1005,6 @@ test_provider_model_projection(struct snag_store *store, const char *temp)
     snag_session_close(&session);
     snag_config_free(&config);
     json_decref(empty);
-    free(temp);
 }
 
 static void
@@ -1314,7 +1313,7 @@ test_image_tool_replay(void)
     struct snag_buf png, expected;
     json_t *empty = json_array(), *result = NULL;
     assert(temp && mkdtemp(temp));
-    snag_store_init(&store); snag_session_init(&session); snag_context_projection_init(&projection);
+    snag_store_init(&store); snag_session_init(&session); memset(&projection,0,sizeof(projection));
     assert(snag_store_open(&store, temp, error, sizeof(error)) == 0);
     assert(snag_session_create(&store, &session, temp, "default", SNAJPAGENT_MODEL,
                                "medium", error, sizeof(error)) == 0);
@@ -1392,11 +1391,11 @@ test_image_tool_replay(void)
     for (unsigned int replay = 0; replay < 2u; ++replay) {
         assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, empty, 0u, false,
             NULL, NULL, &projection, error, sizeof(error)) == 0);
-        assert(snag_media_request_has_images(projection.create_request));
-        assert(snag_media_request_check(projection.create_request, error, sizeof(error)) == 0);
-        json_t *input = json_object_get(projection.create_request, "input");
-        assert(input == json_object_get(projection.count_request, "input"));
-        json_t *out = tool_by_type(input, "function_call_output");
+        assert(snag_media_request_has_images(projection.create_request.value));
+        assert(snag_media_request_check(projection.create_request.value, error, sizeof(error)) == 0);
+        json_t *input = json_object_get(projection.create_request.value, "input");
+        assert(input == json_object_get(projection.count_request.value, "input"));
+        json_t *out = item_by_field(input,"type", "function_call_output");
         assert(out && !strcmp(snag_json_string(out, "call_id"), call_id));
         json_t *content = json_object_get(out, "output");
         assert(json_is_array(content) && json_array_size(content) == image_index+2u);
@@ -1405,11 +1404,11 @@ test_image_tool_replay(void)
         assert(!strcmp(snag_json_string(json_array_get(content, image_index), "image_url"), (char *)expected.data));
         struct snag_provider_config provider;
         snag_config_provider_init(&provider, "default");
-        json_t *budget_request = json_copy(projection.count_request);
+        json_t *budget_request = json_copy(projection.count_request.value);
         assert(json_object_set_new(budget_request, "model", json_string("gpt-5.5")) == 0);
         uint64_t budget = 0, larger = 0;
         assert(snag_media_token_bound(budget_request, &provider, &budget, error, sizeof(error)) == 0);
-        assert(budget > 3001u && budget < projection.model_input_bytes + 10000u);
+        assert(budget > 3001u && budget < projection.model_input.bytes + 10000u);
         assert(!strcmp(snag_json_string(json_array_get(content, image_index), "image_url"), (char *)expected.data));
         assert(json_object_set_new(budget_request, "model", json_string("gpt-4o-mini")) == 0);
         assert(snag_media_token_bound(budget_request, &provider, &larger, error, sizeof(error)) == 0);
@@ -1424,9 +1423,9 @@ test_image_tool_replay(void)
         assert(snag_media_token_bound(budget_request, &provider, &larger, error, sizeof(error)) == 0 && larger == budget);
         json_decref(budget_request);
         if (!replay) {
-            json_t *many = json_deep_copy(projection.create_request);
+            json_t *many = json_deep_copy(projection.create_request.value);
             json_t *all = json_object_get(many, "input");
-            json_t *image_result = tool_by_type(all, "function_call_output");
+            json_t *image_result = item_by_field(all,"type", "function_call_output");
             for (unsigned int extra = 0; extra < 7u; ++extra)
                 assert(json_array_append(all, image_result) == 0);
             assert(snag_media_request_check(many, error, sizeof(error)) == 0);
@@ -1434,8 +1433,8 @@ test_image_tool_replay(void)
             assert(snag_media_request_check(many, error, sizeof(error)) < 0);
             json_decref(many);
         }
-        if (replay) assert(!strcmp(expected_hash, projection.request_sha256));
-        else memcpy(expected_hash, projection.request_sha256, sizeof(expected_hash));
+        if (replay) assert(!strcmp(expected_hash, projection.create_request.sha256));
+        else memcpy(expected_hash, projection.create_request.sha256, sizeof(expected_hash));
         snag_context_projection_free(&projection);
         if (!replay) {
             /* Auxiliary usage is durable but must not change the coding request
@@ -1465,7 +1464,7 @@ test_image_tool_replay(void)
         assert(json_equal(session.pending_steering[0].content, attached));
         assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, snapshot, 0u, false,
             NULL, NULL, &projection, error, sizeof(error)) == 0);
-        json_t *inputs = json_object_get(projection.create_request, "input");
+        json_t *inputs = json_object_get(projection.create_request.value, "input");
         bool found = false;
         for (size_t i = 0; i < json_array_size(inputs); ++i) {
             json_t *message = json_array_get(inputs, i);
@@ -1502,7 +1501,7 @@ test_image_tool_replay(void)
     assert(!session.pending_queue_count && !session.pending_steering_count);
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u, false,
         NULL, NULL, &projection, error, sizeof(error)) == 0);
-    assert(snag_media_request_has_images(projection.create_request));
+    assert(snag_media_request_has_images(projection.create_request.value));
     snag_context_projection_free(&projection);
     json_decref(attached);
     int media_fd = snag_open_read_at(session.dir_fd, "media", true);
@@ -2552,7 +2551,7 @@ main(int argc, char **argv)
     assert_string(projection.count_request.value, "model", SNAJPAGENT_MODEL);
     {
         json_t *tools = json_object_get(projection.create_request.value, "tools");
-        assert(json_array_size(tools) == 11u);
+        assert(json_array_size(tools) == 8u);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
         assert(item_by_field(tools, "name", "create_goal") != NULL);
         assert(item_by_field(tools, "name", "update_goal") == NULL);
@@ -2648,7 +2647,7 @@ main(int argc, char **argv)
         json_t *gate;
         const char *gate_text;
         assert(json_is_array(tools));
-        assert(json_array_size(tools) == 11);
+        assert(json_array_size(tools) == 8u);
         assert(item_by_field(tools, "name", "create_goal") == NULL);
         assert(item_by_field(tools, "name", "update_goal") != NULL);
         assert(item_by_field(tools, "name", "exec_command") != NULL);
@@ -2690,7 +2689,7 @@ main(int argc, char **argv)
                                  error, sizeof(error)) == 0);
         tools = json_object_get(projection.create_request.value, "tools");
         input = json_object_get(projection.create_request.value, "input");
-        assert(json_array_size(tools) == 14u);
+        assert(json_array_size(tools) == 11u);
         assert(item_by_field(tools, "name", "irc_send"));
         assert(item_by_field(tools, "name", "irc_state"));
         assert(item_by_field(tools, "name", "irc_topic"));
