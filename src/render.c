@@ -501,7 +501,7 @@ snag_render_attach_term(struct snag_render *render, struct snag_term *term)
 int
 snag_render_orientation(struct snag_render *render,
                        const char *workspace, const char *id,
-                       uint64_t turns, size_t queued, bool resumed)
+                       uint64_t turns, size_t queued, bool resumed, bool queue_armed)
 {
     int rc;
 
@@ -511,7 +511,7 @@ snag_render_orientation(struct snag_render *render,
             SNAJPAGENT_IDENTITY " · resumed · %s · session id %.8s "
             "· %llu turns · %zu queued%s\n",
             workspace, id, (unsigned long long)turns, queued,
-            queued ? " paused" : "");
+            queued ? (queue_armed ? " armed" : " paused") : "");
     } else {
         rc = snag_buf_printf(&line, SNAJPAGENT_IDENTITY
                             " · %s · session id %.8s\n",

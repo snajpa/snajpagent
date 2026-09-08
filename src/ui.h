@@ -54,7 +54,7 @@ struct snag_ui_command {
         struct snag_ui_prompt prompt;
         struct { uint32_t typing_pause_ms, tool_spinner_off_delay_ms; } timing;
         struct { int fd; enum snag_presentation kind; } public;
-        struct { uint64_t turns; size_t queued; bool resumed; } orientation;
+        struct { uint64_t turns; size_t queued; bool resumed, queue_armed; } orientation;
         struct { const struct snag_history_turn *turn; uint64_t shown, completed, total; } replay;
         const struct snag_irc_event *irc;
         struct { int fd; struct snag_render_source source;

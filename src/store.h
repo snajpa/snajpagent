@@ -172,6 +172,7 @@ struct snag_session {
     bool append_rollback_pending;
     int64_t append_rollback_end;
     unsigned int pending_controls, started_controls;
+    bool queue_armed;
     bool active_turn;
     bool last_turn_failed;
     bool retry_read_only;

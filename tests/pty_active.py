@@ -1367,19 +1367,45 @@ def test_multiline_and_paste():
     assert [item["data"]["text"] for item in turns] == ["line one\nline two", "ping"]
 
 
-def test_resume_pauses_fifo():
+def test_durable_queue_scheduling():
+    # Armed future work continues after the original turn, including a crash
+    # after /next acknowledgement. Idle additions stay paused until /next.
+    for arm in (False, True):
+        with Child([], DEFAULT_IDLE_PROMPT) as child:
+            end = child.send_wait(b"/queue ping\r", b"queued (/next or /q c)")
+            child.wait_idle_prompt(start=end)
+            session_id = child.session_id()
+            if arm:
+                child.send_wait(b"queue_slow\r", b"working slowly", start=len(child.buf))
+                child.send_wait(b"/next\r", b"queued work armed", start=len(child.buf))
+            child.kill()
+        with Child(["--resume", session_id], ready=None) as resumed:
+            if arm:
+                end = resumed.wait(b"pong")
+            else:
+                resumed.wait(b"queued future turns are paused")
+                resumed.drain(.2)
+                assert b"pong" not in resumed.buf
+                end = resumed.send_wait(b"/next\r", b"pong", start=len(resumed.buf))
+            resumed.exit_cleanly(end)
+        log = events(session_id)
+        turns = [e["data"] for e in log if e["type"] == "turn_started"]
+        assert len(turns) == (2 if arm else 1), turns
+        assert turns[-1]["input_kind"] == "queued" and turns[-1]["text"] == "ping"
+        with Child(["--resume", session_id], PROMPT.rstrip()) as resumed:
+            resumed.exit_now()
+        assert len([e for e in events(session_id) if e["type"] == "turn_started"]) == len(turns)
+
+
+def test_resume_preserves_armed_fifo():
     child = Child([], PROMPT.rstrip())
     child.send_wait(b"slow\r", b"working slowly")
     child.send_wait(b"/queue ping\r", b"queued (/next or /q c) " + PROMPT + b"ping")
     session_id = child.session_id()
     child.kill()
 
-    resumed = Child(["--resume", session_id], b"1 queued paused")
-    resumed.wait(b"queued future turns are paused; use /next")
-    resumed.wait(b"/medium   ?% (1) \xe2\x80\xba ")
-    resumed.drain(0.3)
-    assert b"pong" not in resumed.buf
-    answer_end = resumed.send_wait(b"/next\r", b"pong")
+    resumed = Child(["--resume", session_id], b"1 queued armed")
+    answer_end = resumed.wait(b"pong")
     resumed.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=answer_end)
     resumed.exit_cleanly(answer_end)
 
@@ -1658,14 +1684,7 @@ def test_resume_preserves_inactive_and_queued_goal_states():
     original = events(session_id)
     with Child.from_command(command) as resumed:
         restored = resumed.wait(b": active")
-        paused_queue = resumed.wait(b"queued future turns are paused", start=restored)
-        resumed.wait_idle_prompt(start=paused_queue)
-        resumed.drain(0.1)
-        current = events(session_id)
-        assert len([e for e in current if e["type"] == "turn_started"]) == 1
-        assert [e for e in current if e["type"].startswith("goal_")] == [
-            e for e in original if e["type"].startswith("goal_")]
-        answer = resumed.send_wait(b"/next\r", b"pong", start=paused_queue)
+        answer = resumed.wait(b"pong", start=restored)
         done = resumed.wait(b"goal done", start=answer)
         resumed.exit_cleanly(done)
     current = events(session_id)
@@ -4044,11 +4063,11 @@ def test_ctrl_d_exit():
                         assert one(log, "goal_completed")["data"]["goal_id"] == one(log, "goal_started")["data"]["goal_id"]
                         assert not [e for e in log if e["type"] in ("goal_paused", "goal_resumed")]
                         continue
-                    resumed.wait_idle_prompt()
-                    resumed.drain(0.1)
-                    resumed.exit_now()
+                    answer = resumed.wait(b"pong")
+                    resumed.exit_cleanly(answer)
                     log = events(command_arguments(command)[-1])
-                    assert len([e for e in log if e["type"] == "turn_started"]) == 1
+                    turns = [e["data"] for e in log if e["type"] == "turn_started"]
+                    assert len(turns) == 2 and turns[1]["input_kind"] == "queued"
             assert b"engine-block-end" not in child.buf
 
 
@@ -4343,7 +4362,8 @@ if __name__ == "__main__":
     test_interrupt()
     test_prompt_history_and_reverse_search()
     test_multiline_and_paste()
-    test_resume_pauses_fifo()
+    test_durable_queue_scheduling()
+    test_resume_preserves_armed_fifo()
     test_goal_quoted_reserved_wording()
     test_goal_automatic_continuation()
     test_model_created_goal_continuation()

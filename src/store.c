@@ -732,6 +732,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         memcpy(session->goal_id, goal_id, sizeof(session->goal_id));
         session->goal_status = SNAG_GOAL_ACTIVE;
         session->goal_locked = false;
+        if (session->pending_queue_count) session->queue_armed = true;
         session->goal_revision = 1u;
         session->goal_turn_count = 0u;
     } else if (strncmp(type, "goal_", 5u) == 0) {
@@ -800,6 +801,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             session->goal_blocker = NULL;
         }
         session->goal_status = status;
+        if (!strcmp(action, "resumed") && session->pending_queue_count)
+            session->queue_armed = true;
     } else if (strcmp(type, "compaction_started") == 0) {
         static const char methods[] =
             "exact unknown anchored_upper_bound statistical_upper_estimate qualified_upper_bound";
@@ -994,6 +997,11 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
         if (reminder)
             session->irc_reply_reminded = true;
+    } else if (strcmp(type, "future_queue_state") == 0) {
+        json_t *armed = json_object_get(data, "armed");
+        if (!snag_json_exact_keys(data, "armed") || !json_is_boolean(armed) ||
+            (json_is_true(armed) && !session->pending_queue_count)) goto invalid;
+        session->queue_armed = json_is_true(armed);
     } else if (snag_string_in(type, "future_turn_queued future_turn_edited")) {
         bool adding = strcmp(type, "future_turn_queued") == 0;
         bool read_only = json_is_true(json_object_get(data, "read_only"));
@@ -1002,12 +1010,17 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         struct snag_queued_turn *queued = NULL;
         size_t old_len = 0u, len;
 
+        bool has_arm = adding && json_object_get(data, "armed");
         const char *keys = adding ?
-            (json_object_get(data, "received_at_ms") ? "queue_id read_only text while_turn_id received_at_ms" :
-                                                     "queue_id read_only text while_turn_id") :
+            (has_arm ? (json_object_get(data, "received_at_ms") ?
+                "armed queue_id read_only text while_turn_id received_at_ms" :
+                "armed queue_id read_only text while_turn_id") :
+             (json_object_get(data, "received_at_ms") ? "queue_id read_only text while_turn_id received_at_ms" :
+                                                     "queue_id read_only text while_turn_id")) :
             (json_object_get(data, "received_at_ms") ? "queue_id read_only text received_at_ms" :
                                                      "queue_id read_only text");
         if (!snag_json_exact_keys(data, keys) ||
+            (has_arm && !json_is_boolean(json_object_get(data, "armed"))) ||
             !json_is_boolean(json_object_get(data, "read_only")) ||
             !queue_id || !snag_hex_is_lower(queue_id, SNAG_ID_HEX_LEN) ||
             !text || !*text || (len = strlen(text)) > SNAG_MAX_QUEUED_TEXT)
@@ -1040,6 +1053,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
         if (adding) {
             ++session->pending_queue_count;
+            if (has_arm) session->queue_armed = json_is_true(json_object_get(data, "armed"));
             memcpy(queued->queue_id, queue_id, sizeof(queued->queue_id));
             queued->seq = seq;
         }
@@ -1208,6 +1222,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
     } else if (strcmp(type, "turn_cancel_requested") == 0) {
         if (!current_turn || !snag_json_exact_keys(data, "turn_id")) goto invalid;
         session->cancel_requested = true;
+        session->queue_armed = false;
     } else if (strcmp(type, "turn_recovery") == 0) {
         const char *message = snag_json_string(data, "message");
         if (!snag_json_exact_keys(data, "class message turn_id") || !current_turn ||
@@ -1772,6 +1787,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         } else {
             if (session->response_open || (session->response_complete && !all_pending_finished(session)))
                 goto invalid;
+            session->queue_armed = false;
             if (!strcmp(type, "turn_interrupted")) {
                 if (!snag_json_exact_keys(data, "origin reason turn_id") ||
                     !snag_string_in(snag_json_string(data, "origin"), "user recovery output") ||
@@ -1794,6 +1810,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         return snag_fail(error, error_size, ENOTSUP,
                   "event type %s is not implemented by this checkpoint", type);
     }
+    if (!session->pending_queue_count) session->queue_armed = false;
     return 0;
 invalid:
     return snag_fail(error, error_size, EINVAL, "invalid %s transition at sequence %llu", type,

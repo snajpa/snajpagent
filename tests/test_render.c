@@ -792,7 +792,7 @@ capture_orientation(bool resumed, char *out, size_t out_size)
 
     snag_render_init(&render, 0u);
     assert(snag_render_orientation(&render, "/work/tree",
-        "0123456789abcdef0123456789abcdef", 3u, 2u, resumed) == 0);
+        "0123456789abcdef0123456789abcdef", 3u, 2u, resumed, false) == 0);
     return capture_close(&capture, out, out_size, 0u);
 }
 

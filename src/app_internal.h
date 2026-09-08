@@ -83,7 +83,6 @@ struct app_state {
     bool tool_waiting, yield_requested;
     uint64_t input_generation;
     bool interrupt_requested;
-    bool queue_armed;
     bool goal_armed;
     bool recovery_wait;
     bool turn_policy_stopped;

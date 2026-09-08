@@ -167,11 +167,12 @@ removes the newest item;
 .B /queue clear
 removes all waiting items.  Current work continues.
 .PP
-After interruption, failure or session resume, the queue can be paused.
-Use
+Queue arming survives exit and resume.  Explicit cancellation, a terminal
+failure, a new direct prompt or an open queue editor pauses it.  Idle queue
+additions start paused.  Use
 .B /next
-while idle to restart it.  This starts the oldest item and allows the rest
-to drain.  Queued prompts take precedence over automatic goal continuation.  The acknowledgement
+to arm it: at idle the oldest item starts immediately; during active work it
+starts after the current full turn.  The remaining entries drain in order.  Queued prompts take precedence over automatic goal continuation.  The acknowledgement
 .B "queued (/next or /q c) ›"
 marks a submitted follow-up, not its execution.
 .B /next
@@ -246,10 +247,12 @@ Exit is not goal pause.  No work runs after exit, but a saved active goal
 continues when resumed.  Use
 .B /goal pause
 first if you want it to remain paused.  Other goal states remain unchanged.
-Waiting prompts still need
+Armed waiting prompts continue after recovered active work.  Paused prompts
+need
 .B /next
 and cannot be bypassed by automatic goal work.  Resume restores recorded
-context, not commands that ended when the old process exited.
+context and accounts for lost command owners; old OS processes and handles
+are not revived.
 .SS Read this reference
 Use
 .B man snajpagent
@@ -663,8 +666,8 @@ of inactivity.  Bracketed paste inserts pasted newlines without submitting.
 Direct prompts accept up to 1 MiB of valid UTF-8; steering and queued turns
 accept up to 256 KiB.  The queue holds up to 128 pending turns within 16 MiB;
 up to 32 steering items may be pending in a turn.  Interactive EOF interrupts
-active work and exits, preserving the saved goal state.  Queued turns wait
-for explicit continuation on resume.  The session remains resumable.
+active work and exits, preserving the saved goal and queue arming state.
+The session remains resumable.
 .SS Views and prompt
 Startup without network roles opens rollout; startup with roles opens chat. Empty Tab,
 .BR /chat ,
@@ -994,7 +997,10 @@ Show the complete goal grammar.
 List future FIFO turns.
 .TP
 .BI /queue " text"
-Queue text during an active turn.  Tab is the direct equivalent for a draft.
+Queue a future full turn.  During active work it is armed to follow the current
+turn; idle additions remain paused until
+.BR /next .
+Tab during active work is the direct equivalent for a draft.
 .TP
 .BR /queue " clear|pop, " /q " c|p"
 Remove all queued turns or the newest one.
@@ -1009,7 +1015,8 @@ Reopen queued item
 in the composer.
 .TP
 .B /next
-Run the oldest queued turn after resume or another paused state.  Idle only.
+Durably arm the queue.  Start the oldest entry at idle, or after the current
+full turn when work is active.  Arming survives exit and restart.
 .SS Network
 All network commands are discoverable and usable at idle and during provider
 streaming, silence, retries, token counting and running tools.  They are local
@@ -2028,9 +2035,10 @@ Resume automatically displays the saved goal and wording,
 including its status, revision, lock and blocker, even with history disabled.
 Paused and blocked goal wording remains in ordinary model context after resume
 and compaction; it need not be re-entered.  Inactive goals do not restart work.
-Queued turns are also paused; use
+Queued turns retain their saved arming state.  Armed queues continue after
+recovered active work; use
 .B /next
-to restart FIFO execution.  Interrupted active turns are recovered from their
+to restart a paused queue.  Interrupted active turns are recovered from their
 durable prefix.
 .PP
 Model requests preserve the distinction between intermediate assistant updates
@@ -2177,7 +2185,9 @@ window.  The percentage is rounded up against the effective input budget,
 which can be smaller than the configured total after safety/output reserves.
 .TP
 .B Tab did not queue my text.
-Queueing requires an active turn; while idle Tab inserts spaces.  An empty
+Tab queues during an active turn; while idle it inserts spaces.  Use
+.B /queue TEXT
+for an idle, initially paused addition.  An empty
 draft switches views.  A leading /command word or a chat @nickname at the
 cursor invokes completion instead, even when the cursor is at the word's end.
 A unique match adds a space.  Continue writing, then press Tab at the end of
@@ -2189,12 +2199,12 @@ explicitly queues a future prompt.  An open queue editor updates the selected
 item rather than appending a new one.
 .TP
 .B There are queued prompts but nothing is running.
-Retained queues are deliberately paused after session resume.  Interruptions
-pause them; active-goal errors keep recovery scheduled.  Inspect
+Idle additions, explicit turn cancellation, terminal failure, a new direct
+prompt and an open queue editor can pause the queue.  Inspect
 .B /queue
 and use
 .B /next
-while idle.  An open queue editor prevents automatic draining.  A paused queue
+to arm it at idle or during active work.  Arming persists across resume.  An open queue editor prevents automatic draining.  A paused queue
 cannot be skipped by automatic goal continuation.
 .TP
 .B A goal continued when I resumed.

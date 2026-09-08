@@ -142,7 +142,7 @@ enum snag_render_view snag_render_view(const struct snag_render *render);
 int snag_render_set_view(struct snag_render *render, enum snag_render_view view);
 int snag_render_orientation(struct snag_render *render,
                            const char *workspace, const char *id,
-                           uint64_t turns, size_t queued, bool resumed);
+                           uint64_t turns, size_t queued, bool resumed, bool queue_armed);
 int snag_render_history(struct snag_render *render,
                        const struct snag_history_turn *turn, uint64_t shown,
                        uint64_t completed, uint64_t total);

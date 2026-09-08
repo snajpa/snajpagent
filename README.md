@@ -90,8 +90,8 @@ snajpagent --resume --last
 
 **An active goal continues on resume.** Pause it
 before exiting if you want it to stay paused. Paused, blocked and finished goals
-retain their states. Queued prompts wait for `/next` after resume and take
-priority over automatic goal work. Resume restores saved context. Command
+retain their states. Armed queues continue after recovered work; paused queues
+need `/next` and take priority over automatic goal work. Resume restores saved context. Command
 processes that ended with the previous program stay stopped.
 
 ### Keep useful findings in files

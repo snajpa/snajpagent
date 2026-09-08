@@ -377,6 +377,19 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
 #define commit_event snag_app_commit_event
 
 static int
+queue_arm(struct app_state *app, bool armed)
+{
+    char error[256] = {0};
+    armed = armed && app->session.pending_queue_count != 0u;
+    if (app->session.queue_armed != armed && commit_event(app, "future_queue_state",
+            json_pack("{s:b}", "armed", armed), error, sizeof(error)) < 0) {
+        (void)app_error(app, error);
+        return -1;
+    }
+    return 0;
+}
+
+static int
 request_control(struct app_state *app, unsigned int control, const char *name)
 {
     char error[256] = {0};
@@ -666,8 +679,8 @@ begin_queue_edit(struct app_state *app, size_t number, bool active,
     queued = &app->session.pending_queue[number - 1u];
     memcpy(app->queue_edit_id, queued->queue_id, sizeof(app->queue_edit_id));
     app->queue_edit_number = number;
-    app->queue_edit_was_armed = app->queue_armed;
-    app->queue_armed = false;
+    app->queue_edit_was_armed = app->session.queue_armed;
+    if (queue_arm(app, false) < 0) return -1;
     struct snag_buf draft = {.max = SNAG_MAX_QUEUED_TEXT + 8u};
     draft_rc = snag_buf_printf(&draft, "%s%s", queued->read_only ? "/ro " :
                               queued->text[0] == '/' ? "/" : "", queued->text);
@@ -679,7 +692,7 @@ begin_queue_edit(struct app_state *app, size_t number, bool active,
     else draft_rc = -1;
     snag_buf_free(&draft);
     if (draft_rc < 0) {
-        app->queue_armed = app->queue_edit_was_armed;
+        if (queue_arm(app, app->queue_edit_was_armed) < 0) return -1;
         app->queue_edit_id[0] = '\0';
         app->queue_edit_number = 0u;
         app->queue_edit_was_armed = false;
@@ -740,8 +753,7 @@ clear:
     app->queue_edit_number = 0u;
     app->queue_edit_was_armed = false;
     if (restore_armed && app->session.active_turn &&
-        app->session.pending_queue_count != 0u)
-        app->queue_armed = true;
+        queue_arm(app, true) < 0) return -1;
     if (set_input_prompt(app, active) < 0)
         return -1;
     return rc;
@@ -771,15 +783,13 @@ queue_future_turn(struct app_state *app, const char *text, bool arm,
     if (snag_random_id(queue_id) < 0)
         return snag_errorf(error, error_size, "cryptographic queue id generation failed");
     if (commit_event(app, "future_turn_queued",
-                     json_pack("{s:b,s:s,s:s,s:s}", "read_only", read_only,
-                         "queue_id", queue_id, "text", queued_text,
+                     json_pack("{s:b,s:b,s:s,s:s,s:s}", "armed", arm || app->session.queue_armed,
+                         "read_only", read_only, "queue_id", queue_id, "text", queued_text,
                          "while_turn_id", app->session.active_turn_id),
                      error, error_size) < 0)
         return -1;
     if (snag_ui_submitted(&app->ui, "queued (/next or /q c) › ", text, false) < 0)
         return snag_errorf(error, error_size, "queued turn acknowledgement could not be rendered");
-    if (arm)
-        app->queue_armed = true;
     return 0;
 }
 static int
@@ -808,8 +818,6 @@ remove_queued_turns(struct app_state *app, size_t index, bool all,
                      ids ? json_pack("{s:o,s:s}", "queue_ids", ids, "reason", "user") : NULL,
                      error, error_size) < 0)
         return -1;
-    if (app->session.pending_queue_count == 0u)
-        app->queue_armed = false;
     {
         char message[96];
         (void)snprintf(message, sizeof(message), "%zu future turn%s cancelled",
@@ -992,7 +1000,7 @@ render_status(struct app_state *app)
         app->session.workspace,
         (unsigned long long)app->session.turn_count,
         app->session.pending_queue_count,
-        app->session.pending_queue_count && !app->queue_armed ? " paused" : "",
+        app->session.pending_queue_count && !app->session.queue_armed ? " paused" : "",
         snag_ui_verbosity(&app->ui), snag_capacity_source_name(capacity.source)) < 0 ||
         append_capacity_value(&text, "hard-input",
                               capacity.hard_input_known,
@@ -2084,7 +2092,7 @@ handle_common_command(struct app_state *app, const char *line, bool active,
             !strcmp(line, "/archive") ? SNAG_CONTROL_ARCHIVE : SNAG_CONTROL_DELETE, line);
     if (active && !strcmp(line, "/next")) {
         if (!app->session.pending_queue_count) return app_error(app, "future-turn queue is empty");
-        app->queue_armed = true;
+        if (queue_arm(app, true) < 0) return -1;
         return app_textf(app, SNAG_UI_HOST, "queued work armed for the next full turn");
     }
     if (active && !strcmp(line, "/retry")) {
@@ -2165,7 +2173,7 @@ static int
 cancel_queue_edit(struct app_state *app, bool active)
 {
     if (app->queue_edit_id[0]) {
-        app->queue_armed = app->queue_edit_was_armed;
+        if (queue_arm(app, app->queue_edit_was_armed) < 0) return -1;
         app->queue_edit_id[0] = '\0';
         app->queue_edit_number = 0u;
         app->queue_edit_was_armed = false;
@@ -4001,17 +4009,15 @@ pick_session(struct app_state *app, const char *workspace,
 static int
 run_queued_chain(struct app_state *app)
 {
-    while (app->queue_armed && app->session.pending_queue_count != 0u) {
+    while (!app->input_closed && app->session.queue_armed && app->session.pending_queue_count != 0u) {
         const struct snag_queued_turn *queued = &app->session.pending_queue[0];
         int turn_rc = run_tracked_turn(app, queued->text, queued, false,
                                        queued->read_only);
         if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY) {
-            app->queue_armed = false;
+            if (!app->input_closed && queue_arm(app, false) < 0) return 3;
             return turn_rc;
         }
     }
-    if (app->session.pending_queue_count == 0u)
-        app->queue_armed = false;
     return 0;
 }
 
@@ -4022,7 +4028,6 @@ run_ready_chains(struct app_state *app)
         int turn_rc;
 
         if (app->input_closed) {
-            app->queue_armed = false;
             app->goal_armed = false;
             return 0;
         }
@@ -4038,7 +4043,7 @@ run_ready_chains(struct app_state *app)
             continue;
         }
         if (app->irc_urgent.len ||
-             ((!app->queue_armed || app->session.pending_queue_count == 0u) &&
+             ((!app->session.queue_armed || app->session.pending_queue_count == 0u) &&
               app->goal_armed && app->irc_background.len)) {
             bool local_operator = false;
             char *prompt = snag_app_irc_take_pending(app, &local_operator,
@@ -4051,7 +4056,7 @@ run_ready_chains(struct app_state *app)
                 continue;
             }
         }
-        if (app->queue_armed && !app->queue_edit_id[0] &&
+        if (app->session.queue_armed && !app->queue_edit_id[0] &&
             app->session.pending_queue_count != 0u) {
             turn_rc = run_queued_chain(app);
             if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY)
@@ -4110,7 +4115,7 @@ submit_idle(struct app_state *app, const char *prompt,
         if (app->session.pending_queue_count == 0u) {
             (void)app_error(app, "future-turn queue is empty");
         } else {
-            app->queue_armed = true;
+            if (queue_arm(app, true) < 0) return 3;
             rc = run_ready_chains(app);
         }
     } else if (retry && !app->session.last_turn_failed && !app->session.active_turn) {
@@ -4134,15 +4139,15 @@ submit_idle(struct app_state *app, const char *prompt,
         if (input_view == SNAG_RENDER_CHAT &&
             snag_ui_submitted(&app->ui, app->ui.label, query, true) < 0)
             return 6;
-        app->queue_armed = false;
+        if (queue_arm(app, false) < 0) return 3;
         rc = run_tracked_turn(app, query, NULL, false, read_only);
         if (rc == 3 || rc == 6)
             return rc;
         if ((rc == 0 || rc == SNAG_APP_INPUT_READY) &&
-            (app->queue_armed || app->goal_armed))
+            (app->session.queue_armed || app->goal_armed))
             rc = run_ready_chains(app);
-        else if (rc != 0)
-            app->queue_armed = false;
+        else if (rc != 0 && !app->input_closed && queue_arm(app, false) < 0)
+            return 3;
     }
     return rc == 3 || rc == 6 ? rc : 0;
 }
@@ -4159,7 +4164,7 @@ interactive_loop(struct app_state *app, const char *initial)
         return 6;
     if (apply_controls(app) < 0) return 3;
     if (app->input_closed) return 0;
-    if (!initial && (app->goal_armed || app->session.active_turn)) {
+    if (!initial && (app->session.queue_armed || app->goal_armed || app->session.active_turn)) {
         rc = run_ready_chains(app);
         if (rc == 3 || rc == 6)
             return rc;
@@ -4180,12 +4185,12 @@ interactive_loop(struct app_state *app, const char *initial)
             bool local_operator = false;
             owned = snag_app_irc_take_pending(app, &local_operator, false);
             if (owned) {
-                app->queue_armed = false;
+                if (queue_arm(app, false) < 0) { rc = 3; break; }
                 rc = run_tracked_turn(app, owned, NULL, false, false);
                 if (rc == 3 || rc == 6)
                     break;
                 if ((rc == 0 || rc == SNAG_APP_INPUT_READY) &&
-                    (app->queue_armed || app->goal_armed)) {
+                    (app->session.queue_armed || app->goal_armed)) {
                     rc = run_ready_chains(app);
                     if (rc == 3 || rc == 6)
                         break;
@@ -4497,7 +4502,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         bool read_only;
         const char *query = snag_prompt_parse(cli->prompt, &read_only);
         rc = run_tracked_turn(&app, query, NULL, false, read_only);
-        if ((rc == 0 || rc == SNAG_APP_INPUT_READY) && (app.queue_armed || app.goal_armed))
+        if ((rc == 0 || rc == SNAG_APP_INPUT_READY) && (app.session.queue_armed || app.goal_armed))
             rc = run_ready_chains(&app);
         goto out;
     }
@@ -4513,7 +4518,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
          snag_ui_history(&app.ui, &app.session, config.resume_history_turns) < 0) ||
         (cli->resume && app.session.goal_status != SNAG_GOAL_NONE &&
          snag_app_goal_command(&app, "/goal", false) < 0) ||
-        (cli->resume && app.session.pending_queue_count != 0u &&
+        (cli->resume && app.session.pending_queue_count != 0u && !app.session.queue_armed &&
          app_warning(&app,
              "queued future turns are paused; use /next to continue FIFO") < 0)) {
         rc = 6;

@@ -336,7 +336,7 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         return snag_render_orientation(render, command->text, command->label,
                     command->data.orientation.turns,
                     command->data.orientation.queued,
-                    command->data.orientation.resumed);
+                    command->data.orientation.resumed, command->data.orientation.queue_armed);
     case SNAG_UI_HISTORY:
         return snag_render_history(render, command->data.replay.turn,
             command->data.replay.shown, command->data.replay.completed, command->data.replay.total);
@@ -1015,7 +1015,8 @@ snag_ui_orientation(struct snag_ui *ui, const struct snag_session *session,
     struct ui_message message = {.command = {
         .kind = SNAG_UI_ORIENTATION,
         .data.orientation = {.turns = session->turn_count,
-            .queued = session->pending_queue_count, .resumed = resumed}
+            .queued = session->pending_queue_count, .resumed = resumed,
+            .queue_armed = session->queue_armed}
     }};
     message.command.label = session->id;
     return send_message(ui, &message, session->workspace);
