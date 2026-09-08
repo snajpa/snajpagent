@@ -29,29 +29,39 @@ char *snag_office_runtime(const char *program,const char *root)
     snag_path_slashes(dir);
     char *last=strrchr(dir,'/');
     if(!last) {free(dir);return NULL;}
-    if(last==dir)last[1]=0;else *last=0;
+    size_t root_len=snag_path_root_len(dir);
+    if((size_t)(last-dir)<root_len)dir[root_len]=0;else *last=0;
     char *path=snag_path_join(dir,root);free(dir);return path;
+}
+
+char *snag_office_file_url(const char *path)
+{
+    if(!path || !*path)return NULL;
+    bool drive=((path[0]>='A' && path[0]<='Z') || (path[0]>='a' && path[0]<='z')) &&
+        path[1]==':' && (path[2]=='/' || path[2]=='\\');
+    bool unc=(path[0]=='/' && path[1]=='/') || (path[0]=='\\' && path[1]=='\\');
+    if(!drive && !unc && path[0]!='/')return NULL;
+    struct snag_buf out;
+    snag_buf_init(&out, 3u * SNAG_PATH_MAX_BYTES + 16u);
+    if (snag_buf_append(&out, "file://", 7u) < 0) goto failed;
+    if(drive && snag_buf_putc(&out,'/')<0)goto failed;
+    if(unc)path+=2;
+    for (const unsigned char *p = (const unsigned char *)path; *p; ++p) {
+        unsigned char c=*p;
+        if((drive || unc) && c=='\\')c='/';
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+            strchr("/-_.~:", c)) {
+            if (snag_buf_putc(&out, c) < 0) goto failed;
+        } else if (snag_buf_printf(&out, "%%%02X", c) < 0) goto failed;
+    }
+    if (snag_buf_terminate(&out) == 0) return (char *)out.data;
+failed: snag_buf_free(&out); return NULL;
 }
 
 #if SNAJPAGENT_OFFICE
 #define LOK_USE_UNSTABLE_API
 #include <LibreOfficeKit/LibreOfficeKit.h>
 extern LibreOfficeKit *libreofficekit_hook_2(const char *, const char *);
-
-static char *file_url(const char *path)
-{
-    struct snag_buf out;
-    snag_buf_init(&out, 3u * SNAG_PATH_MAX_BYTES + 16u);
-    if (snag_buf_append(&out, "file://", 7u) < 0) goto failed;
-    for (const unsigned char *p = (const unsigned char *)path; *p; ++p) {
-        if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9') ||
-            strchr("/-_.~:", *p)) {
-            if (snag_buf_putc(&out, *p) < 0) goto failed;
-        } else if (snag_buf_printf(&out, "%%%02X", *p) < 0) goto failed;
-    }
-    if (snag_buf_terminate(&out) == 0) return (char *)out.data;
-failed: snag_buf_free(&out); return NULL;
-}
 
 static bool office_type(const char *mime)
 {
@@ -171,8 +181,8 @@ snag_office_worker(int argc, char **argv)
     if (!dir || snag_office_worker_limits(dir,error,sizeof(error))<0) goto done;
     char *profile = snag_path_join(dir,"profile");
     char *output = snag_path_join(dir,"pages.pdf");
-    source_url = file_url(argv[2]); profile_url = profile ? file_url(profile) : NULL;
-    output_url = output ? file_url(output) : NULL;
+    source_url = snag_office_file_url(argv[2]); profile_url = profile ? snag_office_file_url(profile) : NULL;
+    output_url = output ? snag_office_file_url(output) : NULL;
     free(profile); free(output);
     if (!source_url || !profile_url || !output_url) goto done;
     int confinement = snag_office_confine(dir,runtime,argv[2],error,sizeof(error));

@@ -3824,6 +3824,8 @@ Build a custom executable without linked Office import. The default
 WITH_OFFICE=1 requires WITH_PDF=1. OFFICE_ROOT selects the LibreOffice runtime directory;
 an absolute path selects a native installation, while a relative path is resolved
 from the actual executable directory, independent of the working directory.
+Drive and UNC roots are retained on Windows; document/profile file URLs encode
+spaces, non-ASCII names and URI punctuation.
 For a relative bundle, supply explicit OFFICE_CFLAGS and OFFICE_LIBS for the
 build-time headers/libraries; there is no runtime PATH search or download.
 OFFICE_CFLAGS and OFFICE_LIBS supply LibreOfficeKit, libarchive and libxml2

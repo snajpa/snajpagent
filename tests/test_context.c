@@ -2158,6 +2158,15 @@ main(int argc, char **argv)
     snag_office_program(argv[0]);
     (void)snag_office_worker(argc,argv);
     test_office_limits();
+#ifdef _WIN32
+    char *office_root=snag_office_runtime("C:\\bundle\\bin\\snajpagent.exe","../lib/libreoffice");
+    assert(office_root && !strcmp(office_root,"C:/bundle/bin/../lib/libreoffice"));free(office_root);
+    office_root=snag_office_runtime("C:\\snajpagent.exe","lib/libreoffice");
+    assert(office_root && !strcmp(office_root,"C:/lib/libreoffice"));free(office_root);
+    office_root=snag_office_runtime("\\\\server\\share\\snajpagent.exe","lib/libreoffice");
+    assert(office_root && !strcmp(office_root,"//server/share/lib/libreoffice"));free(office_root);
+    assert(!snag_office_runtime("C:relative.exe","lib/libreoffice"));
+#else
     char *office_root=snag_office_runtime("/bundle/bin/snajpagent","../lib/libreoffice");
     assert(office_root && !strcmp(office_root,"/bundle/bin/../lib/libreoffice"));free(office_root);
     office_root=snag_office_runtime("/snajpagent","lib/libreoffice");
@@ -2165,6 +2174,16 @@ main(int argc, char **argv)
     office_root=snag_office_runtime(NULL,"/native/libreoffice");
     assert(office_root && !strcmp(office_root,"/native/libreoffice"));free(office_root);
     assert(!snag_office_runtime("relative-program","relative-root") && !snag_office_runtime("/program",""));
+#endif
+    const char *url_paths[]={"/doc name/#100%?.odt","C:\\doc name\\h\xc3\xa9llo.odt",
+        "\\\\server\\share\\doc name.odt","/back\\slash.odt"};
+    const char *url_values[]={"file:///doc%20name/%23100%25%3F.odt","file:///C:/doc%20name/h%C3%A9llo.odt",
+        "file://server/share/doc%20name.odt","file:///back%5Cslash.odt"};
+    for(size_t i=0;i<4u;++i) {
+        char *url=snag_office_file_url(url_paths[i]);
+        assert(url && !strcmp(url,url_values[i]));free(url);
+    }
+    assert(!snag_office_file_url(NULL) && !snag_office_file_url("") && !snag_office_file_url("relative.odt"));
     char *temp = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
                                 "snajpagent-context-XXXXXX");
     char state[4096];
