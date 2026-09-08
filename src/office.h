@@ -7,6 +7,9 @@
 struct snag_session;
 /* Called at native startup, before parsing user CLI or starting any threads. */
 void snag_office_program(const char *);
+/* Absolute build-time root, or relative to the actual executable. Caller owns
+ * the result; no PATH/environment lookup. */
+char *snag_office_runtime(const char *program,const char *root);
 int snag_office_worker(int, char **);
 int snag_office_export(struct snag_session *, const char *, const char *, unsigned int, unsigned int,
                        const struct snag_sheet_range *, int (*)(void *, unsigned int), void *, snag_wake_fd,

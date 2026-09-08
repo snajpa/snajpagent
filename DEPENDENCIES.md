@@ -9,6 +9,11 @@ and libxml2 2.15.1. The current runtime is LibreOffice 25.2.6.2 from the pinned
 nixpkgs source already used by `nix/portable.nix`; it is a native dependency,
 not an installed executable invoked from PATH. `OFFICE_ROOT` selects its
 `lib/libreoffice` directory including runtime components/configuration/fonts.
+Absolute roots retain native-install behavior. Relative roots resolve from the
+actual executable directory (for example `../lib/libreoffice` beside `bin/`),
+independently of the conversion working directory. Such builds supply explicit
+`OFFICE_CFLAGS` and `OFFICE_LIBS`; a relative root alone does not package the
+runtime or make its dynamic dependencies relocatable.
 The distribution recipes still need reconciliation with the all-linked
 portable matrix. `WITH_OFFICE=0` supplies explicit unsupported-operation stubs.
 

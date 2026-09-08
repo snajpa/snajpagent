@@ -68,6 +68,8 @@ ifeq ($(WITH_OFFICE),1)
 ifneq ($(WITH_PDF),1)
 $(error WITH_OFFICE=1 requires WITH_PDF=1; disable both for a lean build)
 endif
+# Relative roots are resolved from the executable, not the conversion cwd.
+# Supply OFFICE_CFLAGS/OFFICE_LIBS explicitly when compiling a relative bundle.
 OFFICE_ROOT ?= /usr/lib/libreoffice
 OFFICE_CFLAGS ?= $(shell pkg-config --cflags libarchive libxml-2.0 libpng) -I$(OFFICE_ROOT)/../../include
 OFFICE_LIBS ?= $(shell pkg-config --libs libarchive libxml-2.0 libpng) -L$(OFFICE_ROOT)/program -Wl,-rpath,$(OFFICE_ROOT)/program -lsofficeapp

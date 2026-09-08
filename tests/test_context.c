@@ -2132,6 +2132,13 @@ main(int argc, char **argv)
 {
     snag_office_program(argv[0]);
     (void)snag_office_worker(argc,argv);
+    char *office_root=snag_office_runtime("/bundle/bin/snajpagent","../lib/libreoffice");
+    assert(office_root && !strcmp(office_root,"/bundle/bin/../lib/libreoffice"));free(office_root);
+    office_root=snag_office_runtime("/snajpagent","lib/libreoffice");
+    assert(office_root && !strcmp(office_root,"/lib/libreoffice"));free(office_root);
+    office_root=snag_office_runtime(NULL,"/native/libreoffice");
+    assert(office_root && !strcmp(office_root,"/native/libreoffice"));free(office_root);
+    assert(!snag_office_runtime("relative-program","relative-root") && !snag_office_runtime("/program",""));
     char *temp = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
                                 "snajpagent-context-XXXXXX");
     char state[4096];

@@ -20,6 +20,19 @@ void snag_office_program(const char *program)
     free(path);
 }
 
+char *snag_office_runtime(const char *program,const char *root)
+{
+    if(!root || !*root)return NULL;
+    if(snag_path_root_len(root))return snag_strdup_checked(root,SNAG_PATH_MAX_BYTES);
+    if(!program || !snag_path_root_len(program))return NULL;
+    char *dir=snag_strdup_checked(program,SNAG_PATH_MAX_BYTES);if(!dir)return NULL;
+    snag_path_slashes(dir);
+    char *last=strrchr(dir,'/');
+    if(!last) {free(dir);return NULL;}
+    if(last==dir)last[1]=0;else *last=0;
+    char *path=snag_path_join(dir,root);free(dir);return path;
+}
+
 #if SNAJPAGENT_OFFICE
 #define LOK_USE_UNSTABLE_API
 #include <LibreOfficeKit/LibreOfficeKit.h>
@@ -133,6 +146,7 @@ snag_office_worker(int argc, char **argv)
     int rc = 1;
     char error[256] = "Invalid internal Office request", *dir = NULL;
     char *source_url = NULL, *output_url = NULL, *profile_url = NULL;
+    char *runtime=NULL,*program_dir=NULL;
     struct snag_sheet_range range={0},*selection=NULL;
     if ((argc != 6 && argc != 11) || argv[2][0] != '/' || !office_type(argv[3])) goto done;
     char *tail; unsigned long first = strtoul(argv[4],&tail,10);
@@ -151,6 +165,9 @@ snag_office_worker(int argc, char **argv)
         selection=&range;
     }
     dir = snag_realpath(".");
+    runtime=snag_office_runtime(executable,SNAJPAGENT_OFFICE_ROOT);
+    program_dir=runtime?snag_path_join(runtime,"program"):NULL;
+    if(!program_dir)goto done;
     if (!dir || snag_office_worker_limits(dir,error,sizeof(error))<0) goto done;
     char *profile = snag_path_join(dir,"profile");
     char *output = snag_path_join(dir,"pages.pdf");
@@ -158,7 +175,7 @@ snag_office_worker(int argc, char **argv)
     output_url = output ? file_url(output) : NULL;
     free(profile); free(output);
     if (!source_url || !profile_url || !output_url) goto done;
-    int confinement = snag_office_confine(dir,SNAJPAGENT_OFFICE_ROOT,argv[2],error,sizeof(error));
+    int confinement = snag_office_confine(dir,runtime,argv[2],error,sizeof(error));
     if (confinement < 0) goto done;
     if (confinement > 0) (void)fprintf(stderr,"%s\n",error);
     if (snag_office_package(argv[2],error,sizeof(error)) < 0) goto done;
@@ -168,7 +185,7 @@ snag_office_worker(int argc, char **argv)
     int channel = dup(STDOUT_FILENO), null = open("/dev/null",O_WRONLY);
     if (channel < 0 || null < 0 || dup2(null,STDOUT_FILENO) < 0) goto done;
     close(null);
-    LibreOfficeKit *office = libreofficekit_hook_2(SNAJPAGENT_OFFICE_ROOT "/program",profile_url);
+    LibreOfficeKit *office = libreofficekit_hook_2(program_dir,profile_url);
     if (!office) { strcpy(error,"Linked Office initialization failed"); goto done; }
     LibreOfficeKitDocument *doc = office->pClass->documentLoadWithOptions(office,source_url,
         "Language=en-US,Timezone=UTC,Batch=true,MacroSecurityLevel=3,EnableMacrosExecution=false");
@@ -247,7 +264,7 @@ snag_office_worker(int argc, char **argv)
      * destructors (the upstream runtime may retain cross-thread globals). */
 done:
     if (rc) (void)fprintf(stderr,"%s\n",error);
-    free(dir); free(source_url); free(output_url); free(profile_url);
+    free(dir); free(source_url); free(output_url); free(profile_url);free(runtime);free(program_dir);
     _Exit(rc);
 }
 #else
