@@ -2022,7 +2022,7 @@ def run_resume_history_case(binary, root):
                 if (user, assistant) in selected:
                     fragments.extend((text, "assistant:", assistant))
             assert_order(screen, fragments)
-            assert "Working." not in screen, screen
+            assert ("Working." in screen) == bool(selected), screen
             terminal.exit()
         assert log.read_bytes() == before, "display changed durable session history"
     for invalid in (-1, "+2", "one", "2.5", "2 3"):
@@ -2081,12 +2081,12 @@ def run_resume_history_case(binary, root):
     with TmuxTerminal(case / "interrupted", binary, workspace, state, config, 100, 40,
             args=("--no-listen", "--no-client", "--resume", session)) as terminal:
         screen = terminal.wait("% ›", join_wrapped=True)
-        assert screen.count("user:") == len(pairs), screen
-        assert "user: crash" not in screen, screen
-        assert "history: 5 shown · 5 completed · 6 total" in screen, screen
-        assert screen.count("assistant:") == len(pairs), screen
-        assert_order(screen, ["user: ping", "pong", "user: multi_item", "Done.",
-                              "history: 5 shown · 5 completed · 6 total"])
+        assert screen.count("user:") == len(pairs) + 1, screen
+        assert "user: crash" in screen and "unfinished turn" in screen, screen
+        assert "history: 6 shown · 5 completed · 6 total" in screen, screen
+        assert_order(screen, ["user: ping", "pong", "user: multi_item", "Working.", "Done.",
+                              "user: crash", "history: 6 shown · 5 completed · 6 total"])
+        wait_event_count(state, "turn_completed", 6)
         terminal.exit()
     config.write_text("[provider openai]\n[ui]\nresume_history_turns = 0\n")
     with TmuxTerminal(case / "active", binary, workspace, state, config, 100, 40,
@@ -2095,15 +2095,15 @@ def run_resume_history_case(binary, root):
         terminal.submit("slow_utf8")
         wait_event_count(state, "turn_started", 7)
         terminal.submit("/history 2")
-        screen = terminal.wait("history: 2 shown · 5 completed · 7 total", join_wrapped=True)
-        assert_order(screen, ["user: refuse", "I can’t do that.", "user: multi_item", "Done.",
-                              "history: 2 shown · 5 completed · 7 total"])
-        assert "user: slow_utf8" not in screen and "user: crash" not in screen, screen
+        screen = terminal.wait("history: 2 shown · 6 completed · 7 total", join_wrapped=True)
+        assert_order(screen, ["user: crash", "user: slow_utf8",
+                              "history: 2 shown · 6 completed · 7 total"])
+        assert "unfinished turn" in screen, screen
         terminal.wait("slow complete")
-        wait_event_count(state, "turn_completed", 6)
+        wait_event_count(state, "turn_completed", 7)
         assert len(event_list(read_events(state)[1], "turn_started")) == 7
         terminal.submit("/history")
-        screen = terminal.wait("history: 1 shown · 6 completed · 7 total", join_wrapped=True)
+        screen = terminal.wait("history: 1 shown · 7 completed · 7 total", join_wrapped=True)
         assert "user: slow_utf8" in screen, screen
         terminal.exit()
     config.write_text("[provider openai]\n[ui]\nresume_history_turns = 100\n")
@@ -2141,14 +2141,14 @@ def run_resume_history_case(binary, root):
             f"resume_history_turns = {setting}\n" if setting is not None else ""))
         with TmuxTerminal(case / f"long{setting}", binary, workspace, state, config, 100, 40,
                 args=("--no-listen", "--no-client", "--resume", session)) as terminal:
-            screen = terminal.wait(f"history: {count} shown · 102 completed · 103 total",
+            screen = terminal.wait(f"history: {count} shown · 103 completed · 103 total",
                                    timeout=20, join_wrapped=True)
             assert screen.count("user:") == count, screen
             terminal.submit("/history 999999999999999999999999999999")
-            screen = terminal.wait("history: 102 shown · 102 completed · 103 total",
+            screen = terminal.wait("history: 103 shown · 103 completed · 103 total",
                                    timeout=20, join_wrapped=True)
-            assert screen.count("user:") == count + 102, screen
-            assert "user: crash" not in screen, screen
+            assert screen.count("user:") == count + 103, screen
+            assert "user: crash" in screen, screen
             terminal.exit()
         assert log.read_bytes() == before
     print("resume_history_count: ok")

@@ -3815,12 +3815,15 @@ def test_chat_mention_completion_and_steering():
             wait_turn_completed(child, session_id, prompt)
             wait_turn_completed(child, session_id, "hello @remoteop , tail")
             log = events(session_id)
-            steering = [event for event in log if event["type"] == "steering_added"
-                        and event["data"]["turn_id"] == turn_id]
-            assert len(steering) == 1, steering
-            assert "@agent terminate it" in steering[0]["data"]["text"]
-            assert "ordinary operator chatter" not in steering[0]["data"]["text"]
-            assert "hello @remoteop" not in steering[0]["data"]["text"]
+            admissions = [event for event in log if event["type"] == "irc_admitted"
+                          and event["data"].get("steering", {}).get("turn_id") == turn_id]
+            assert len(admissions) == 1, admissions
+            sequences = admissions[0]["data"]["sequences"]
+            received = [event["data"]["text"] for event in log
+                        if event["type"] == "irc_event" and event["seq"] in sequences]
+            assert any("@agent terminate it" in text for text in received), received
+            assert all("ordinary operator chatter" not in text and "hello @remoteop" not in text
+                       for text in received), received
             assert not [event for event in log if event["type"] == "queue_added"]
         child.send(b"\x04")
         child.finish()
