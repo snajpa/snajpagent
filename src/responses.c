@@ -195,6 +195,7 @@ account_bytes(struct snag_responses_stream *stream, size_t extra)
 static void
 wire_item_free(struct snag_wire_item *item)
 {
+    json_decref(item->reasoning);
     free(item->id);
     free(item->phase);
     free(item->name);
@@ -550,7 +551,29 @@ item_snapshot(struct snag_responses_stream *stream, size_t output_index,
         return message_snapshot(stream, output_index, snapshot, complete);
     if (strcmp(type, "function_call") == 0)
         return function_snapshot(stream, output_index, snapshot, complete);
-    return inert_snapshot(stream, output_index);
+    if (inert_snapshot(stream, output_index) < 0)
+        return -1;
+    struct snag_wire_item *item = &stream->items[output_index];
+    if (strcmp(type, "reasoning") != 0)
+        return item->reasoning_seen ? stream_fail(stream, EPROTO,
+            "reasoning item changed type") : 0;
+    item->reasoning_seen = true;
+    if (!complete) return 0;
+    if (!snag_reasoning_item_valid(snapshot))
+        return stream_fail(stream, EPROTO, "invalid reasoning continuation item");
+    /* Private continuation has no delivered prefix. The terminal snapshot is
+     * canonical, including metadata absent from output_item.done. */
+    size_t bytes, previous = 0u;
+    if (item->reasoning && snag_json_digest_bounded(item->reasoning,
+            SNAG_MAX_RESPONSE_GRAPH, NULL, &previous) < 0)
+        return -1;
+    stream->aggregate_bytes -= previous;
+    if (snag_json_digest_bounded(snapshot, SNAG_MAX_RESPONSE_GRAPH, NULL, &bytes) < 0 ||
+        account_bytes(stream, bytes) < 0)
+        return -1;
+    json_decref(item->reasoning);
+    item->reasoning = json_deep_copy(snapshot);
+    return item->reasoning ? 0 : stream_fail(stream, ENOMEM, "cannot retain reasoning");
 }
 
 static int
@@ -1051,6 +1074,19 @@ snag_responses_stream_finish(struct snag_responses_stream *stream,
     }
     for (size_t i = 0; i < stream->item_count; ++i) {
         struct snag_wire_item *item = &stream->items[i];
+        if (item->reasoning_seen) {
+            if (!item->reasoning) {
+                rc = stream_fail(stream, EPROTO, "reasoning item has no completion snapshot");
+                goto staged_out;
+            }
+            if (!staged.continuation) staged.continuation = json_array();
+            if (!staged.continuation || json_array_append_new(staged.continuation,
+                json_pack("{s:I,s:O}", "before", (json_int_t)staged.count,
+                          "item", item->reasoning)) < 0) {
+                rc = stream_fail(stream, ENOMEM, "cannot retain reasoning continuation");
+                goto staged_out;
+            }
+        }
         if (item->kind == SNAG_WIRE_ITEM_MESSAGE) {
             rc = build_message(stream, &staged, item);
         } else if (item->kind == SNAG_WIRE_ITEM_FUNCTION_CALL) {

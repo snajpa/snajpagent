@@ -52,6 +52,8 @@ struct snag_wire_part {
 
 struct snag_wire_item {
     enum snag_wire_item_kind kind;
+    bool reasoning_seen;
+    json_t *reasoning;
     char *id;
     char *phase;
     char *name;

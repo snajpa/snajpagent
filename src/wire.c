@@ -113,6 +113,10 @@ key_redaction(const char *key, size_t len)
 static json_t *
 redact_value(json_t *value, const struct snag_wire_secrets *secrets)
 {
+    const char *type = snag_json_string(value, "type");
+    if (type && (snag_string_in(type, "reasoning reasoning_text summary_text") ||
+                 strncmp(type, "response.reasoning_", 19u) == 0))
+        return json_string("<redacted:reasoning>");
     if (json_is_string(value)) {
         json_t *redacted = NULL;
         struct snag_buf text = {.max = SNAG_WIRE_BODY_MAX};

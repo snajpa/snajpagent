@@ -92,6 +92,8 @@ struct snag_response_usage {
 struct snag_response_graph {
     char *provider_response_id;
     json_t *items;
+    /* Ordered provider reasoning, separate from actionable/public items. */
+    json_t *continuation;
     size_t count;
     size_t encoded_bytes;
     struct snag_response_usage usage;
@@ -113,6 +115,8 @@ struct snag_graph_decision {
 };
 
 void snag_response_graph_free(struct snag_response_graph *graph);
+bool snag_reasoning_item_valid(const json_t *item);
+bool snag_response_continuation_valid(const json_t *items, size_t semantic_count);
 /* Borrowed view; strings/arguments live until the owning graph is changed. */
 struct snag_response_item snag_response_graph_item(const struct snag_response_graph *graph,
                                                    size_t index);

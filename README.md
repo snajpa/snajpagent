@@ -428,7 +428,8 @@ providers with an OpenAI-compatible Responses API.
   known to work reliably with snajpagent.
 - **DeepSeek:** an open-model option. V4 Pro supports direct Responses streaming
   with thinking, for example `-m deepseek/deepseek-v4-pro/high` after configuring
-  a provider named `deepseek`.
+  a provider named `deepseek`. Reasoning continuity is preserved across tool calls
+  and resume; provider-private state stays with its originating model/account.
 - **Anthropic:** not supported. The project's assessment is that alignment
   problems make its models unsuitable for long-horizon autonomous work without
   oversight.

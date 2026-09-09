@@ -90,22 +90,36 @@ control pending; turn completion and resume revisit it. Provider errors retain
 old context and keep the interactive session available for retry. Journal-write
 failures keep the control pending and stop further admission.
 
-The stream decoder strictly interprets only response creation, output
-structure, public text/refusals, function arguments, and terminal success or
-failure. Other bounded `response.*` records are discarded after envelope
-validation. Unsupported provider output occupies an inert decoder-local index
-and never becomes durable response data or a local action; only exact completed
-registered function calls enter the tool graph. Content-part events on an
-already registered inert item are discarded when their part type is neither
-public text nor refusal; their envelope and indexes remain bounded. This
-includes providers that stream reasoning through content-part events. Public
-text, refusals and function arguments retain exact semantic-item validation.
-A known successful terminal
-snapshot remains required, while malformed envelopes and unknown
+The stream decoder validates response creation, output structure, public
+text/refusals, function arguments, reasoning completion and terminal success
+or failure. Completed reasoning items remain bounded provider continuation
+beside the semantic graph, ordered by the number of preceding semantic items.
+The terminal snapshot is canonical; an item-completion snapshot is sufficient
+when the terminal output array is empty. Reasoning never becomes public text,
+a tool call, or a productive response by itself. Other unsupported output
+occupies an inert decoder-local index; bounded unused `response.*` events and
+non-public content-part events on inert items are discarded after validation.
+Public text, refusals and function arguments retain exact semantic-item checks.
+A known successful terminal snapshot remains required, while malformed envelopes and unknown
 non-Responses event types fail closed. A response with no actionable item is
 nonproductive. An explicit empty or oversized assistant message instead
 creates one terse, size-specific developer correction for the next model
 cycle; the normal operator UI does not present that correction as an error.
+
+`response_completed` journals optional continuation records and a digest of
+provider name, endpoint, upstream model, auth kind and credential identity.
+The binding is frozen with the request. Same-scope replay inserts exact
+reasoning objects and retains provider message/tool-call IDs and paired results.
+API-key changes isolate continuation; OAuth token refresh remains compatible
+when the account ID is unchanged. Scope mismatches omit private provider state
+while ordinary conversation and local tool/result pairing remain usable.
+Legacy events have no continuation to recover. Compatible compaction requests
+include reasoning in the selected complete history groups; normal compaction
+then replaces that prefix. Bound compact output stays with its scope; a mismatch
+rebuilds ordinary history instead of forwarding opaque compact state. Legacy
+unbound compact records retain their existing behavior. The private 0600 journal retains plaintext reasoning
+when supplied by the provider. Display/history and redacted protocol traces
+omit reasoning payloads, while token usage remains available.
 
 Structured non-2xx and SSE failures retain their bounded provider code/type,
 message, and integral capacity details. The shared provider request loop retries

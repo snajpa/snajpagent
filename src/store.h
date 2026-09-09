@@ -148,6 +148,7 @@ struct snag_session {
     /* Private immutable string owners; text fields above and in pending inputs borrow. */
     json_t *strings;
     json_t *compact_output;
+    char compact_scope[SNAG_SHA256_HEX_LEN + 1u];
     json_t *pending_input; /* Accepted direct input awaiting turn preparation. */
     json_t *active_instructions; /* Original path metadata for same-turn recovery. */
     json_t *response_public; /* Reconstructed public prefix of the current response. */

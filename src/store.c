@@ -898,10 +898,17 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         uint64_t in_tokens;
         uint64_t out_tokens;
 
+        const char *scope = snag_json_string(data, "continuation_scope");
+        if (json_object_get(data, "continuation_scope") &&
+            (!scope || !snag_hex_is_lower(scope, SNAG_SHA256_HEX_LEN))) goto invalid;
         if (!snag_json_exact_keys(data,
             "compact_id count_method input_tokens_bound output output_count_method "
-            "output_count_request_sha256 output_sha256 output_tokens_bound source_sha256") ||
-            session->active_compact_id[0] == '\0' ||
+            "output_count_request_sha256 output_sha256 output_tokens_bound source_sha256") &&
+            !snag_json_exact_keys(data,
+            "compact_id count_method input_tokens_bound output output_count_method "
+            "output_count_request_sha256 output_sha256 output_tokens_bound source_sha256 continuation_scope"))
+            goto invalid;
+        if (session->active_compact_id[0] == '\0' ||
             !compact_id || strcmp(compact_id, session->active_compact_id) != 0 ||
             !snag_string_in(method, methods) ||
             !snag_string_in(output_method, methods) ||
@@ -922,6 +929,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             return -1;
         memcpy(session->compact_id, compact_id, sizeof(session->compact_id));
         session->compact_seq = session->active_compact_source_seq;
+        session->compact_scope[0] = '\0';
+        if (scope) memcpy(session->compact_scope, scope, sizeof(session->compact_scope));
         clear_compaction_state(session);
     } else if (snag_string_in(type, "control_requested control_started control_finished")) {
         uint64_t control;
@@ -1648,9 +1657,20 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             .provider_response_id = (char *)provider_response_id,
             .items = items, .count = json_array_size(items)
         };
+        const json_t *continuation = json_object_get(data, "continuation");
+        const char *scope = snag_json_string(data, "continuation_scope");
+        if ((json_object_get(data, "continuation_scope") &&
+             (!scope || !snag_hex_is_lower(scope, SNAG_SHA256_HEX_LEN))) ||
+            (continuation && !json_is_null(continuation) &&
+             (!scope || !snag_response_continuation_valid(continuation, graph.count))))
+            goto invalid;
         if (!snag_json_exact_keys(data,
             "cycle items provider_response_id response_id status turn_id "
-            "usage") || !current_response(session, data) ||
+            "usage") && !snag_json_exact_keys(data,
+            "cycle items provider_response_id response_id status turn_id "
+            "usage continuation continuation_scope"))
+            goto invalid;
+        if (!current_response(session, data) ||
             !status || strcmp(status, "completed") != 0 ||
             !json_is_array(items) ||
             snag_response_usage_from_json(json_object_get(data, "usage"),

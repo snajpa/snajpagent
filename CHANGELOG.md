@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Preserve provider reasoning continuation in the private session journal and
+  replay it in order with matching tool calls/results, including after resume.
+  Bind replay to provider, endpoint, model and credential identity; retain
+  plaintext and opaque encrypted state without displaying or executing it.
+  Compaction includes compatible reasoning before replacing the selected history.
+
 - Accept DeepSeek thinking streams whose reasoning items emit content-part
   events. Discard their non-public parts while retaining message identity,
   tool-call, index, size and terminal-event validation for every provider.

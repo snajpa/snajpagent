@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "context.h"
+#include "credential.h"
 #include "irc.h"
 #include "base.h"
 #include "json.h"
@@ -13,6 +14,9 @@
 
 struct context_builder {
     const struct snag_session *session;
+    const char *continuation_scope;
+    uint64_t compact_seq;
+    json_t *call_ids;
     const struct snag_instruction_set *instructions;
     const json_t *steering;
     json_t *tools;
@@ -88,12 +92,23 @@ canonical_string(const json_t *value, size_t max)
 
 static int
 append_tool_call(struct context_builder *builder,
-                 const struct snag_response_item *call)
+                 const struct snag_response_item *call, bool scoped)
 {
     char *args = canonical_string(call->arguments, SNAG_MAX_TOOL_ARGUMENTS);
     json_t *request = json_pack("{s:s,s:s,s:s,s:s}",
-        "type", "function_call", "call_id", call->call_id,
+        "type", "function_call", "call_id", scoped ? call->provider_call_id : call->call_id,
         "name", call->name, "arguments", args);
+    if (scoped) {
+        if (!builder->call_ids) builder->call_ids = json_object();
+        if (!builder->call_ids || !request ||
+            snag_json_set_new(request, "id", json_string(call->provider_item_id)) < 0 ||
+            json_object_set_new(builder->call_ids, call->call_id,
+                                json_string(call->provider_call_id)) < 0) {
+            free(args);
+            json_decref(request);
+            return -1;
+        }
+    }
     int rc = json_array_append_new(builder->request_input, request);
 
     free(args);
@@ -154,6 +169,8 @@ static int
 append_tool_result(struct context_builder *builder, const char *call_id,
                    const json_t *result)
 {
+    const char *provider_call_id = snag_json_string(builder->call_ids, call_id);
+    if (provider_call_id) call_id = provider_call_id;
     const char *model_text = snag_json_string(result, "model_text");
     const char *output_text = model_text;
     json_t *limit_value = json_object_get(result, "max_output_tokens");
@@ -524,15 +541,32 @@ done:
 }
 
 static int
-append_response_items(struct context_builder *builder, const json_t *items)
+append_response_items(struct context_builder *builder, const json_t *items, const json_t *data)
 {
+    const char *scope = snag_json_string(data, "continuation_scope");
+    bool scoped = builder->continuation_scope && scope &&
+        strcmp(builder->continuation_scope, scope) == 0 &&
+        json_array_size(json_object_get(data, "continuation")) != 0u;
+    const json_t *continuation = scoped ?
+        json_object_get(data, "continuation") : NULL;
+    size_t cursor = 0u;
     struct snag_response_graph graph = {
         .items = (json_t *)items, .count = json_array_size(items)
     }; /* Borrowed validated journal items. */
     struct snag_buf notice = {.max = 4096u};
     int rc = -1;
 
-    for (size_t i = 0; i < graph.count; ++i) {
+    for (size_t i = 0; i <= graph.count; ++i) {
+        while (cursor < json_array_size(continuation)) {
+            const json_t *record = json_array_get(continuation, cursor);
+            if ((size_t)json_integer_value(json_object_get(record, "before")) != i)
+                break;
+            if (json_array_append(builder->request_input,
+                                  json_object_get(record, "item")) < 0)
+                goto out;
+            ++cursor;
+        }
+        if (i == graph.count) break;
         struct snag_response_item view = snag_response_graph_item(&graph, i);
         const struct snag_response_item *item = &view;
         const char *text = item->text;
@@ -540,7 +574,7 @@ append_response_items(struct context_builder *builder, const json_t *items)
             strcmp(builder->active_turn_id, builder->target_turn_id) != 0;
 
         snag_buf_reset(&notice);
-        if (text && historical && strlen(text) > 64u * 1024u) {
+        if (text && historical && !scoped && strlen(text) > 64u * 1024u) {
             char digest[SNAG_SHA256_HEX_LEN + 1u];
             snag_sha256_hex(text, strlen(text), digest);
             if (snag_buf_printf(&notice,
@@ -551,11 +585,21 @@ append_response_items(struct context_builder *builder, const json_t *items)
                 goto out;
             text = (const char *)notice.data;
         }
-        if ((item->kind == SNAG_ITEM_ASSISTANT || item->kind == SNAG_ITEM_REFUSAL ?
+        if (scoped && (item->kind == SNAG_ITEM_ASSISTANT || item->kind == SNAG_ITEM_REFUSAL)) {
+            json_t *part = item->kind == SNAG_ITEM_REFUSAL ?
+                json_pack("{s:s,s:s}", "type", "refusal", "refusal", text) :
+                json_pack("{s:s,s:s}", "type", "output_text", "text", text);
+            if (json_array_append_new(builder->request_input,
+                json_pack("{s:s,s:s,s:s,s:s,s:[o],s:s}", "type", "message",
+                          "id", item->provider_item_id, "role", "assistant",
+                          "status", "completed", "content", part,
+                          "phase", snag_item_phase_name(item->phase))) < 0)
+                goto out;
+        } else if ((item->kind == SNAG_ITEM_ASSISTANT || item->kind == SNAG_ITEM_REFUSAL ?
              json_array_append_new(builder->request_input,
                  json_pack("{s:s,s:s,s:s}", "role", "assistant", "content", text,
                            "phase", snag_item_phase_name(item->phase))) :
-             append_tool_call(builder, item)) < 0)
+             append_tool_call(builder, item, scoped)) < 0)
             goto out;
     }
     rc = 0;
@@ -652,7 +696,7 @@ append_interrupted_prefix(struct context_builder *builder, const json_t *data,
     json_t *partial = json_object_get(data, "partial_public");
 
     if (!json_is_array(partial) ||
-        append_response_items(builder, partial) < 0) {
+        append_response_items(builder, partial, NULL) < 0) {
         return snag_fail(error, error_size, EINVAL,
                   "invalid interrupted public response context");
     }
@@ -701,7 +745,7 @@ context_event(void *opaque, const struct snag_session *state,
 {
     struct context_builder *builder = opaque;
     const char *text = snag_json_string(data, "text");
-    bool summarized = seq <= builder->session->compact_seq;
+    bool summarized = seq <= builder->compact_seq;
     bool current = !strcmp(state->active_turn_id, builder->target_turn_id);
 
     /* Borrow already-validated facts, never interpret turn transitions twice. */
@@ -718,13 +762,13 @@ context_event(void *opaque, const struct snag_session *state,
     }
     if (!strcmp(type, "input_admitted")) return admit_context_input(builder, data);
     if (!strcmp(type, "turn_recovery")) {
-        if (builder->session && seq <= builder->session->compact_seq) return 0;
+        if (builder->session && seq <= builder->compact_seq) return 0;
         const char *class_name = snag_json_string(data, "class");
         return class_name ? append_host_failed(builder, class_name) : -1;
     }
     if (!strcmp(type, "response_failed")) {
         json_t *partial = json_object_get(data, "partial_public");
-        if (builder->session && seq <= builder->session->compact_seq) return 0;
+        if (builder->session && seq <= builder->compact_seq) return 0;
         if (json_array_size(partial)) builder->recovery_count = 0u;
         return append_interrupted_prefix(builder, data, error, error_size);
     }
@@ -806,7 +850,7 @@ context_event(void *opaque, const struct snag_session *state,
     if (!strcmp(type, "response_interrupted"))
         return append_interrupted_prefix(builder, data, error, error_size);
     if (!strcmp(type, "response_completed"))
-        return append_response_items(builder, json_object_get(data, "items"));
+        return append_response_items(builder, json_object_get(data, "items"), data);
     if (!strcmp(type, "tool_finished"))
         return append_tool_result(builder, snag_json_string(data, "call_id"),
                                    json_object_get(data, "result"));
@@ -1011,6 +1055,25 @@ fail:
 }
 
 int
+snag_context_continuation_scope(const struct snag_provider_config *provider,
+                               const char *model,
+                               const struct snag_credential *credential,
+                               char digest[SNAG_SHA256_HEX_LEN + 1u])
+{
+    char identity[SNAG_SHA256_HEX_LEN + 1u];
+    if (!provider || !model || !credential)
+        return snag_errno(EINVAL);
+    /* API keys identify accounts; OAuth access tokens rotate within an account. */
+    const char *secret = credential->account_id[0] ? credential->account_id : credential->value;
+    snag_sha256_hex(secret, strlen(secret), identity);
+    json_t *binding = json_pack("[s,s,s,i,s]", provider->name, provider->base_url,
+        snag_config_model_upstream(provider, model), (int)provider->auth, identity);
+    int rc = binding ? snag_json_digest_bounded(binding, 8192u, digest, NULL) : -1;
+    json_decref(binding);
+    return rc;
+}
+
+int
 snag_context_codex_request(json_t *request)
 {
     (void)json_object_del(request, "truncation");
@@ -1069,7 +1132,7 @@ compact_event(void *opaque, const struct snag_session *state,
 
     if (builder->compact_stopped)
         return 0;
-    if (seq <= builder->session->compact_seq)
+    if (seq <= builder->compact_seq)
         return context_event(opaque, state, seq, type, data, error, error_size);
     builder->compact_source_seq = seq;
     if (builder->compact_stop_before_active && !strcmp(type, "turn_started") &&
@@ -1148,6 +1211,7 @@ snag_context_compact_request_build(struct snag_session *session,
                       bool active_prefix,
                       uint64_t source_budget,
                       bool allow_oversized_first,
+                      const char *continuation_scope,
                       struct snag_context_projection *projection,
                       char *error, size_t error_size)
 {
@@ -1159,6 +1223,10 @@ snag_context_compact_request_build(struct snag_session *session,
     snag_context_projection_free(projection);
     memset(&builder, 0, sizeof(builder));
     builder.session = session;
+    builder.continuation_scope = continuation_scope;
+    builder.compact_seq = session && (!session->compact_scope[0] ||
+        (continuation_scope && !strcmp(session->compact_scope, continuation_scope))) ?
+        session->compact_seq : 0u;
     builder.request_input = json_array();
     builder.deferred_steering = json_array();
     builder.input_timing = json_array();
@@ -1180,7 +1248,7 @@ snag_context_compact_request_build(struct snag_session *session,
                   "compaction requires an idle session");
         goto out;
     }
-    if (session->compact_id[0] &&
+    if (builder.compact_seq &&
         install_compact_output(&builder, session->compact_output,
                                error, error_size) < 0)
         goto out;
@@ -1208,7 +1276,7 @@ snag_context_compact_request_build(struct snag_session *session,
         goto out;
     }
     if (builder.compact_new_items == 0u ||
-        (active_prefix && builder.compact_source_seq <= session->compact_seq)) {
+        (active_prefix && builder.compact_source_seq <= builder.compact_seq)) {
         rc = 1;
         goto out;
     }
@@ -1228,10 +1296,13 @@ snag_context_compact_request_build(struct snag_session *session,
     projection->count_request = projection->create_request;
     json_incref(projection->count_request.value);
     projection->source_seq = builder.compact_source_seq;
+    if (continuation_scope && !snag_strcpy(projection->continuation_scope,
+            sizeof(projection->continuation_scope), continuation_scope)) goto out;
     rc = 0;
 out:
     if (rc != 0)
         snag_context_projection_free(projection);
+    json_decref(builder.call_ids);
     json_decref(builder.tools);
     json_decref(builder.request_input);
     json_decref(builder.deferred_steering);
@@ -1269,6 +1340,7 @@ snag_context_build(struct snag_session *session, const char *model,
                   const json_t *steering,
                   uint64_t max_output_tokens, bool max_output_known,
                   const struct snag_config *config,
+                  const char *continuation_scope,
                   const struct snag_instruction_set *instructions,
                   struct snag_context_projection *projection,
                   char *error, size_t error_size)
@@ -1290,6 +1362,10 @@ snag_context_build(struct snag_session *session, const char *model,
     memset(&builder, 0, sizeof(builder));
     builder.session = session;
     builder.instructions = instructions;
+    builder.continuation_scope = continuation_scope;
+    builder.compact_seq = session && (!session->compact_scope[0] ||
+        (continuation_scope && !strcmp(session->compact_scope, continuation_scope))) ?
+        session->compact_seq : 0u;
     builder.networked = config && session && !session->active_read_only &&
         (config->irc.listen_explicit || config->irc.client_count != 0u);
     if (session && session->active_turn_id[0])
@@ -1340,7 +1416,7 @@ snag_context_build(struct snag_session *session, const char *model,
         goto out;
     }
     builder.base_request_count = json_array_size(builder.request_input);
-    if (session->compact_id[0] &&
+    if (builder.compact_seq &&
         install_compact_output(&builder, session->compact_output,
                                error, error_size) < 0)
         goto out;
@@ -1404,6 +1480,8 @@ snag_context_build(struct snag_session *session, const char *model,
     if ((max_output_known &&
          snag_json_set_new(projection->create_request.value, "max_output_tokens",
              json_integer((json_int_t)max_output_tokens)) < 0) ||
+        snag_json_set_new(projection->create_request.value, "include",
+                         json_pack("[s]", "reasoning.encrypted_content")) < 0 ||
         (provider && provider->auth == SNAG_AUTH_CHATGPT &&
          snag_context_codex_request(projection->create_request.value) < 0))
         goto projection_error;
@@ -1439,6 +1517,7 @@ out:
     snag_buf_free(&network_harness);
     if (rc < 0)
         snag_context_projection_free(projection);
+    json_decref(builder.call_ids);
     json_decref(builder.tools);
     json_decref(builder.request_input);
     json_decref(builder.deferred_steering);

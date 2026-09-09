@@ -13,12 +13,18 @@
 #define SNAG_CONTEXT_MAX_COMPACT_ITEMS 128u
 
 int snag_context_codex_request(json_t *request);
+struct snag_credential;
+int snag_context_continuation_scope(const struct snag_provider_config *provider,
+                                   const char *model,
+                                   const struct snag_credential *credential,
+                                   char digest[SNAG_SHA256_HEX_LEN + 1u]);
 /* Bind the ordinary local model once when constructing a provider wire request. */
 int snag_context_provider_model(const struct snag_provider_config *provider,
                                 const char *model, json_t *request);
 
 struct snag_context_projection {
     struct snag_json_document model_input, create_request, count_request;
+    char continuation_scope[SNAG_SHA256_HEX_LEN + 1u];
     size_t request_input_bytes;
     size_t request_input_count;
     size_t request_controller_count;
@@ -35,6 +41,7 @@ int snag_context_build(struct snag_session *session, const char *model,
                       uint64_t max_output_tokens,
                       bool max_output_known,
                       const struct snag_config *config,
+                      const char *continuation_scope,
                       const struct snag_instruction_set *instructions,
                       struct snag_context_projection *projection,
                       char *error, size_t error_size);
@@ -43,6 +50,7 @@ int snag_context_compact_request_build(struct snag_session *session,
                                       bool active_prefix,
                                       uint64_t source_budget,
                                       bool allow_oversized_first,
+                                      const char *continuation_scope,
                                       struct snag_context_projection *projection,
                                       char *error, size_t error_size);
 int snag_context_compact_output_count_request_build(const json_t *output,

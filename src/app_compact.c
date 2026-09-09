@@ -251,12 +251,16 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
     use_exact = snag_app_exact_count_enabled(
         app->turn_provider->exact_token_count,
         app->turn_capacity.count_capability);
+    char continuation_scope[SNAG_SHA256_HEX_LEN + 1u];
+    if (snag_context_continuation_scope(app->turn_provider, model,
+            credential ? credential : &owned_credential, continuation_scope) < 0)
+        goto out;
     source_budget = SNAG_CONTEXT_MAX_COMPACT - 4096u;
     for (unsigned int selection = 0u; selection < 8u; ++selection) {
         build_rc = snag_context_compact_request_build(&app->session, model, effort,
                                             active_prefix,
                                             source_budget,
-                                            true,
+                                            true, continuation_scope,
                                             &projection, error, error_size);
         if (build_rc == 1) {
             if (selection != 0u) {
@@ -408,14 +412,15 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         goto out;
     }
     if (commit_rendered(app, "compaction_completed",
-            json_pack("{s:s,s:s,s:I,s:O,s:s,s:s,s:s,s:I,s:s}",
+            json_pack("{s:s,s:s,s:I,s:O,s:s,s:s,s:s,s:I,s:s,s:s}",
                 "compact_id", compact_id, "count_method", count_method,
                 "input_tokens_bound", (json_int_t)input_tokens_bound, "output", output.value,
                 "output_count_method", output_count_method,
                 "output_count_request_sha256", output_count.sha256,
                 "output_sha256", output.sha256,
                 "output_tokens_bound", (json_int_t)output_tokens_bound,
-                "source_sha256", projection.model_input.sha256),
+                "source_sha256", projection.model_input.sha256,
+                "continuation_scope", continuation_scope),
             error, error_size) < 0)
         goto out;
     if (app->networked &&

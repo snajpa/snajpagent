@@ -3589,11 +3589,13 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             goto out;
         }
         if (commit_event(app, "response_completed",
-                         json_pack("{s:I,s:o,s:s,s:s,s:s,s:s,s:o}",
+                         json_pack("{s:I,s:o,s:s,s:s,s:s,s:s,s:o,s:O,s:s}",
                          "cycle", (json_int_t)cycle, "items", snag_response_graph_json(&graph),
                          "provider_response_id", graph.provider_response_id,
                          "response_id", response_id, "status", "completed",
-                         "turn_id", turn_id, "usage", snag_response_usage_json(&graph.usage)),
+                         "turn_id", turn_id, "usage", snag_response_usage_json(&graph.usage),
+                         "continuation", graph.continuation ? graph.continuation : json_null(),
+                         "continuation_scope", projection.continuation_scope),
                          error, sizeof(error)) < 0) {
             goto fail;
         }

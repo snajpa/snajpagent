@@ -522,13 +522,20 @@ snag_app_request_build(struct app_state *app, const json_t *steering,
     app->request_networked = snag_irc_enabled(app->config) &&
                              !app->session.active_read_only;
     snag_irc_capture_route(app->irc, &app->irc_request_route);
+    char continuation_scope[SNAG_SHA256_HEX_LEN + 1u];
+    if (snag_context_continuation_scope(app->turn_provider, app->turn_model,
+                                       credential, continuation_scope) < 0)
+        return snag_errorf(error, error_size, "cannot bind provider continuation");
     rc = snag_context_build(&app->session, app->turn_model, app->turn_effort,
         cycle, steering, app->turn_capacity.max_output_tokens,
         app->turn_capacity.max_output_tokens, app->config,
+        continuation_scope,
         &app->turn_instructions, projection, error, error_size);
 
     if (rc < 0)
         return -1;
+    memcpy(projection->continuation_scope, continuation_scope,
+           sizeof(projection->continuation_scope));
     *count_method = "unknown";
     rc = 0;
     if (snag_ui_enabled(&app->ui, SNAG_PRESENT_PROTOCOL)) {

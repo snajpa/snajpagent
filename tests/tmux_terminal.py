@@ -3278,6 +3278,90 @@ def run_listener_collision_case(binary, root, provider, environment):
         for terminal in reversed(terminals):
             terminal.close()
 
+def run_reasoning_continuity_cases(binary, root, provider, environment):
+    """Inspect real outgoing requests, durable replay and endpoint isolation."""
+    for mode in ("plaintext", "encrypted"):
+        case = root / f"reasoning-{mode}"
+        case.mkdir(parents=True, exist_ok=True)
+        state, config = case / "state", case / "config.ini"
+        write_irc_config(config, provider.port, "host-model")
+        text = config.read_text()
+        config.write_text(text.replace("[agent]\n", "[agent]\nmax_turn_retries = 0\n", 1))
+        reasoning = {"type": "reasoning", "id": "rs_continuation", "summary": []}
+        if mode == "plaintext":
+            reasoning["content"] = [{"type": "reasoning_text", "text": "private-state-731"}]
+        else:
+            reasoning["encrypted_content"] = "opaque-state-731"
+        received = []
+        expecting = [True]
+
+        def respond(handler, request, sequence):
+            received.append(request)
+            items = request.get("input", [])
+            reasoning_items = [item for item in items if item.get("type") == "reasoning"]
+            outputs = [item for item in items if item.get("type") == "function_call_output"]
+            if outputs:
+                if expecting[0]:
+                    assert reasoning_items == [reasoning], "reasoning missing from next request"
+                    assert "reasoning.encrypted_content" in request["include"]
+                    pos = items.index(reasoning)
+                    assert items[pos + 1]["type"] == "function_call"
+                    assert items[pos + 1]["call_id"] == "call_continuation"
+                    assert items[pos + 1]["id"].startswith("fc_irc_ui_")
+                    assert items[pos + 2]["type"] == "function_call_output"
+                    assert items[pos + 2]["call_id"] == "call_continuation"
+                else:
+                    assert not reasoning_items, items
+                provider.reply(handler, provider.response_body(sequence, "continuation verified").encode())
+                return
+            args = {"command": "printf continuity-ok", "workdir": str(case),
+                    "pty": False, "stdin": None, "timeout_ms": 1000,
+                    "max_output_tokens": 1000, "yield_ms": 1000}
+            wire = provider.function_body(sequence, "call_continuation", "exec_command", args)
+            events = [json.loads(record.split("data: ", 1)[1])
+                      for record in wire.strip().split("\n\n")]
+            for event in events[1:-1]:
+                if "output_index" in event:
+                    event["output_index"] += 1
+            added = {"type": "response.output_item.added", "output_index": 0,
+                     "item": {"id": reasoning["id"], "type": "reasoning", "summary": []}}
+            done = {"type": "response.output_item.done", "output_index": 0, "item": reasoning}
+            events = [events[0], added, done, *events[1:]]
+            wire = "".join(provider.event(event["type"], event) for event in events)
+            provider.reply(handler, wire.encode())
+
+        provider.runtime_handler = respond
+        env = {**os.environ, **environment}
+        command = [str(binary), "-vvvvv", "--config", str(config), "--dotdir", str(state)]
+        try:
+            result = subprocess.run([*command, "-e", "--", "check continuity"],
+                                    cwd=case, env=env, capture_output=True, text=True, timeout=25)
+            assert result.returncode == 0, (mode, result.stdout, result.stderr, provider.failure)
+            assert len(received) == 2 and "continuation verified" in result.stdout
+            assert "private-state-731" not in result.stdout + result.stderr
+            assert "opaque-state-731" not in result.stdout + result.stderr
+            path, events = read_events(state)
+            assert not event_list(events, "response_failed")
+            first = event_list(events, "response_completed")[0]["data"]
+            assert first["continuation"] == [{"before": 0, "item": reasoning}]
+            session = path.parent.name
+            with config.open("a") as file:
+                file.write(f"[provider other]\nbase_url = http://127.0.0.1:{provider.port}/v1\n"
+                           "api_key = ${SNAJPAGENT_IRC_UI_KEY}\nexact_token_count = false\n"
+                           "native_compaction = false\nauto_compact_input_tokens = 0\n")
+            for switch in (False, True):
+                expecting[0] = not switch
+                switch_args = ["--provider", "other"] if switch else []
+                result = subprocess.run([*command, *switch_args, "-e", "--resume", session, "--", "continue"],
+                    cwd=case, env=env, capture_output=True, text=True, timeout=25)
+                assert result.returncode == 0, (mode, switch, result.stdout, result.stderr, provider.failure)
+            assert len(received) == 4
+            assert not provider.failure, provider.failure
+            print(f"reasoning continuity {mode}: requests, tool results, resume, provider isolation ok", flush=True)
+        finally:
+            provider.runtime_handler = None
+
+
 def run_argument_snapshot_cases(binary, root, provider, environment):
     """Exercise snapshot-only tool streams and reject real conflicts before execution."""
     for mode in ("done", "item", "terminal", "empty-delta", "streamed",
@@ -6730,6 +6814,7 @@ def run_irc_case(binary, root):
         run_destination_case(binary, root, provider, environment)
         run_listener_collision_case(binary, root, provider, environment)
         run_argument_snapshot_cases(binary, root, provider, environment)
+        run_reasoning_continuity_cases(binary, root, provider, environment)
         run_multi_tool_cases(binary, root, provider, environment)
         run_output_cap_cases(binary, root, provider, environment)
         run_ctrl_d_cases(binary, root, provider, environment)

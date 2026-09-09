@@ -805,6 +805,12 @@ test_reasoning_content_parts(void)
                                 &parsed) == 0);
             assert(parsed.text.len == 2u && memcmp(parsed.text.data, "ok", 2u) == 0);
             assert(parsed.graph.count == 2u);
+            assert(snag_response_continuation_valid(parsed.graph.continuation, parsed.graph.count));
+            assert(json_array_size(parsed.graph.continuation) == 1u);
+            json_t *record = json_array_get(parsed.graph.continuation, 0);
+            assert(json_integer_value(json_object_get(record, "before")) == 0);
+            assert(strcmp(snag_json_string(json_array_get(json_object_get(
+                json_object_get(record, "item"), "content"), 0), "text"), "hidden") == 0);
             assert(snag_response_graph_item(&parsed.graph, 0u).kind == SNAG_ITEM_ASSISTANT);
             assert(snag_response_graph_item(&parsed.graph, 1u).kind == SNAG_ITEM_TOOL_CALL);
             assert(strcmp(snag_response_graph_item(&parsed.graph, 1u).name, "exec_command") == 0);
@@ -853,11 +859,83 @@ test_reasoning_part_cannot_complete_response(void)
     parsed_free(&parsed);
 }
 
+static void
+test_reasoning_terminal_and_validation(void)
+{
+    static const char ordered[] =
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":["
+        "{\"type\":\"message\",\"id\":\"m\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"progress\"}]},"
+        "{\"type\":\"reasoning\",\"id\":\"rs_a\",\"summary\":[],\"encrypted_content\":\"first\"},"
+        "{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"{}\",\"status\":\"completed\"},"
+        "{\"type\":\"reasoning\",\"id\":\"rs_b\",\"summary\":[],\"encrypted_content\":\"second\"}]}}\n\n";
+    struct parsed_stream ordered_result = parsed_new(1024u);
+    assert(parse_stream(ordered, 7u, &ordered_result) == 0);
+    assert(ordered_result.graph.count == 2u);
+    assert(json_array_size(ordered_result.graph.continuation) == 2u);
+    for (size_t i = 0u; i < 2u; ++i)
+        assert(json_integer_value(json_object_get(json_array_get(
+            ordered_result.graph.continuation, i), "before")) == (json_int_t)i + 1);
+    parsed_free(&ordered_result);
+    static const char *snapshots[] = {
+        "{\"type\":\"reasoning\",\"id\":\"rs\",\"summary\":[],\"encrypted_content\":\"opaque-final\"}",
+        "{\"type\":\"reasoning\",\"id\":\"rs\",\"content\":[{\"type\":\"reasoning_text\",\"text\":\"retained\"}],\"summary\":null,\"encrypted_content\":null,\"status\":null}",
+        "{\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"private summary\"}]}"
+    };
+    for (size_t i = 0u; i < sizeof(snapshots) / sizeof(snapshots[0]); ++i) {
+        struct snag_buf wire = {.max = 8192u};
+        struct parsed_stream parsed = parsed_new(1024u);
+        assert(snag_buf_printf(&wire,
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+            "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"summary\":[]}}\n\n"
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[%s]}}\n\n",
+            snapshots[i]) == 0);
+        assert(parse_stream((char *)wire.data, 1u, &parsed) == 0);
+        assert(parsed.calls == 0u && parsed.graph.count == 0u);
+        assert(json_array_size(parsed.graph.continuation) == 1u);
+        assert(snag_response_continuation_valid(parsed.graph.continuation, 0u));
+        struct snag_graph_decision decision;
+        assert(snag_response_graph_classify(&parsed.graph, &decision, parsed.error, sizeof(parsed.error)) == 0);
+        assert(decision.outcome == SNAG_GRAPH_NONPRODUCTIVE);
+        json_t *item = json_object_get(json_array_get(parsed.graph.continuation, 0), "item");
+        assert(i != 0u || strcmp(snag_json_string(item, "encrypted_content"), "opaque-final") == 0);
+        parsed_free(&parsed);
+        snag_buf_free(&wire);
+    }
+    json_t *item = json_pack("{s:s,s:[]}", "type", "reasoning", "summary");
+    assert(json_object_set_new(item, "signature", json_string("opaque-provider-extension")) == 0);
+    assert(json_object_set_new(item, "name", json_string("exec_command")) == 0);
+    assert(snag_reasoning_item_valid(item));
+    json_t *records = json_pack("[{s:i,s:O}]", "before", 0, "item", item);
+    assert(snag_response_continuation_valid(records, 0u));
+    assert(json_object_set_new(json_array_get(records, 0), "before", json_integer(1)) == 0);
+    assert(!snag_response_continuation_valid(records, 0u));
+    assert(json_object_set_new(item, "content", json_pack("[{s:s,s:s}]",
+        "type", "output_text", "text", "must not become public")) == 0);
+    assert(!snag_reasoning_item_valid(item));
+    assert(json_object_set_new(item, "content", json_string("not-an-array")) == 0);
+    assert(!snag_reasoning_item_valid(item));
+    assert(json_object_del(item, "content") == 0);
+    assert(json_object_set_new(item, "encrypted_content", json_integer(42)) == 0);
+    assert(!snag_reasoning_item_valid(item));
+    assert(json_object_del(item, "encrypted_content") == 0);
+    char *huge = malloc(SNAG_MAX_RESPONSE_GRAPH + 2u);
+    assert(huge);
+    memset(huge, 'x', SNAG_MAX_RESPONSE_GRAPH + 1u);
+    huge[SNAG_MAX_RESPONSE_GRAPH + 1u] = '\0';
+    assert(json_object_set_new(item, "encrypted_content", json_string(huge)) == 0);
+    assert(!snag_reasoning_item_valid(item));
+    free(huge);
+    json_decref(records);
+    json_decref(item);
+}
+
 int
 main(void)
 {
     test_deltas_survive_empty_terminal_output();
     test_reasoning_content_parts();
+    test_reasoning_terminal_and_validation();
     test_reasoning_part_cannot_complete_response();
     test_terminal_snapshot_can_supply_unseen_items();
     test_failed_snapshot_preserves_only_consistent_text();

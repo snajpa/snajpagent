@@ -9,7 +9,9 @@ Implemented:
 - Named providers and local model settings, shared secret sources, Responses
   streaming, model discovery, token accounting and native/fallback compaction.
 - Reasoning content-part streams, including direct DeepSeek V4 Pro thinking.
-  Non-public parts stay decoder-local; public output and calls remain validated.
+  Completed plaintext/encrypted reasoning is durable provider-bound continuation,
+  replayed with original tool-call pairing across cycles and resume, and included
+  in compatible compaction input. It is excluded from public/history rendering.
 - Private durable sessions, replay, steering, queues, goals and read-only turns.
 - Independent tool-call batches, multiple managed command handles, bounded
   redacted output journals, native read/search and strict patch installation.

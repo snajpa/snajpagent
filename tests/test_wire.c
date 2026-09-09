@@ -122,10 +122,27 @@ test_headers(void)
     snag_buf_free(&out);
 }
 
+static void
+test_reasoning_redaction(void)
+{
+    const char *body = "{\"input\":[{\"type\":\"reasoning\",\"content\":[{\"type\":\"reasoning_text\",\"text\":\"private-value\"}],\"encrypted_content\":\"opaque-value\"}],\"usage\":{\"reasoning_tokens\":12}}";
+    struct snag_wire_secrets secrets = {0};
+    struct snag_buf out = {.max = 4096u};
+    char error[128] = {0};
+    assert(snag_wire_json_redact((const unsigned char *)body, strlen(body),
+        &secrets, &out, error, sizeof(error)) == 0);
+    assert(snag_buf_terminate(&out) == 0);
+    assert(!strstr((char *)out.data, "private-value"));
+    assert(!strstr((char *)out.data, "opaque-value"));
+    assert(strstr((char *)out.data, "reasoning_tokens"));
+    snag_buf_free(&out);
+}
+
 int
 main(void)
 {
     test_json();
+    test_reasoning_redaction();
     test_max_secret_count();
     test_invalid_json();
     test_secret_object_key_fails_closed();

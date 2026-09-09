@@ -192,8 +192,63 @@ void
 snag_response_graph_free(struct snag_response_graph *graph)
 {
     json_decref(graph->items);
+    json_decref(graph->continuation);
     free(graph->provider_response_id);
     *graph = (struct snag_response_graph){0};
+}
+
+bool
+snag_reasoning_item_valid(const json_t *item)
+{
+    const char *type = snag_json_string(item, "type");
+    const char *status = snag_json_string(item, "status");
+    if (!type || strcmp(type, "reasoning") != 0 ||
+        (json_object_get(item, "id") &&
+         !snag_text_valid(snag_json_string(item, "id"), 1u, SNAG_MAX_PROVIDER_ID)) ||
+        (json_object_get(item, "status") && !json_is_null(json_object_get(item, "status")) &&
+         (!status || strcmp(status, "completed") != 0)) ||
+        (json_object_get(item, "encrypted_content") && !json_is_null(json_object_get(item, "encrypted_content")) &&
+         !snag_text_valid(snag_json_string(item, "encrypted_content"), 0u, SNAG_MAX_RESPONSE_GRAPH)))
+        return false;
+    /* Preserve bounded provider extensions as opaque continuation, never as
+     * graph actions. Only the fields consumed by this protocol need decoding. */
+    const char *fields[] = {"content", "summary"};
+    const char *types[] = {"reasoning_text", "summary_text"};
+    for (size_t f = 0; f < 2u; ++f) {
+        const json_t *parts = json_object_get(item, fields[f]);
+        if (!parts || json_is_null(parts)) continue;
+        if (!json_is_array(parts) || json_array_size(parts) > SNAG_MAX_RESPONSE_ITEMS)
+            return false;
+        for (size_t i = 0; i < json_array_size(parts); ++i) {
+            const json_t *part = json_array_get(parts, i);
+            const char *kind = snag_json_string(part, "type");
+            if (!json_is_object(part) || !kind ||
+                strcmp(kind, types[f]) != 0 ||
+                !snag_text_valid(snag_json_string(part, "text"), 0u, SNAG_MAX_RESPONSE_GRAPH))
+                return false;
+        }
+    }
+    return snag_json_digest_bounded(item, SNAG_MAX_RESPONSE_GRAPH, NULL, NULL) == 0;
+}
+
+bool
+snag_response_continuation_valid(const json_t *items, size_t semantic_count)
+{
+    size_t previous = 0u;
+    if (!json_is_array(items) || json_array_size(items) > SNAG_MAX_RESPONSE_ITEMS ||
+        snag_json_digest_bounded(items, SNAG_MAX_RESPONSE_GRAPH, NULL, NULL) < 0)
+        return false;
+    for (size_t i = 0; i < json_array_size(items); ++i) {
+        const json_t *record = json_array_get(items, i);
+        json_t *index = json_object_get(record, "before");
+        if (!snag_json_exact_keys(record, "before item") || !json_is_integer(index) ||
+            json_integer_value(index) < 0 || (uint64_t)json_integer_value(index) > semantic_count ||
+            (uint64_t)json_integer_value(index) < previous ||
+            !snag_reasoning_item_valid(json_object_get(record, "item")))
+            return false;
+        previous = (size_t)json_integer_value(index);
+    }
+    return true;
 }
 
 int
