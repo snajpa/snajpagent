@@ -146,7 +146,11 @@ or expose the text to the current model cycle. Ctrl-C is composer-first in
 both idle and active states: it leaves the displayed draft in scrollback,
 appends literal `^C` and a newline, discards the draft/search state, and opens a
 clean prompt. A nonempty active draft does not interrupt the turn; an empty
-active composer requests safe turn interruption. Five consecutive Ctrl-C
+active composer requests safe turn interruption. The outer tracked-turn owner
+settles goal pause and retained-turn cleanup before showing idle. Every committed
+goal-status change refreshes the existing spinner state before its notification
+can repaint the prompt; no second goal state is maintained. Blank Enter after
+interruption remains local and cannot resume the paused goal. Five consecutive Ctrl-C
 presses within two seconds request exit through normal durable cleanup. Other
 input or expiry resets the sequence. Empty Ctrl-D and terminal EOF use the same
 priority exit control, interrupting active work and preserving the session;

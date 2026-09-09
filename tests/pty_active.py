@@ -1695,6 +1695,43 @@ def test_goal_model_rewrite_and_lock():
     assert one(log, "goal_completed")["data"]["actor"] == "model"
 
 
+def test_goal_interrupt_prompt_state():
+    # Final captures can hide a stale flag by overwriting it later. Check every
+    # emitted idle prompt after Ctrl-C, including before the paused notice.
+    config = write_config("goal-interrupt-prompt.ini",
+        "[provider openai]\n[ui]\n"
+        "prompt = {goal_spinner}{chat:C>}{rollout-idle:I>}{rollout-active:A>}\n")
+    for term in ("xterm", "dumb"):
+        with Child(["--config", str(config)], ready=b"I>", term=term) as child:
+            child.send_wait(b"/goal slow goal\r", b"working on goal")
+            if term != "dumb":
+                # The raw composer owns draft bytes. In TERM=dumb the kernel
+                # retains unsubmitted input, and Ctrl-C arrives as SIGINT.
+                child.send_wait(b"keep working", b"keep working")
+                cleared = child.send_wait(b"\x03", b"^C\r\n")
+                child.drain(0.05)
+                assert "⚑A>".encode() in child.buf[cleared:]
+                assert not any(e["type"] == "goal_paused" for e in events(child.session_id()))
+            start = len(child.buf)
+            child.send(b"\x03")
+            paused = child.wait(b"Goal paused at the current turn boundary", start=start)
+            child.drain(0.15)
+            output = bytes(child.buf[start:])
+            assert "⚑I>".encode() not in output, output
+            assert "⚑".encode() not in child.buf[paused:], bytes(child.buf[paused:])
+            blank = len(child.buf)
+            child.send(b"\r" * 4)
+            child.drain(0.15)
+            assert child.buf[blank:].count(b"\n") >= 4
+            assert "⚑".encode() not in child.buf[blank:]
+            child.exit_now()
+        log = events(child.session_id())
+        assert len([e for e in log if e["type"] == "turn_started"]) == 1
+        assert len([e for e in log if e["type"] == "goal_paused"]) == 1
+        assert not any(e["type"] in ("input_received", "goal_resumed") for e in log)
+        assert not any(e["data"].get("text") == "Continue." for e in log)
+
+
 def test_goal_pause_resume_and_queue_priority():
     child = Child([], PROMPT.rstrip())
     child.send_wait(b"/goal slow goal\r", b"working on goal")
@@ -4725,6 +4762,7 @@ if __name__ == "__main__":
     test_model_created_goal_continuation()
     test_goal_configured_wording_limit()
     test_goal_model_rewrite_and_lock()
+    test_goal_interrupt_prompt_state()
     test_goal_pause_resume_and_queue_priority()
     test_goal_clear_controls_continuation()
     test_goal_control_whitespace()

@@ -2142,6 +2142,117 @@ def wait_for_terminal_event(dotdir, terminal_types, timeout):
     )
 
 
+def run_goal_interrupt_prompt_case(binary, root, chat=False, burst=False, width=80):
+    case = root / f"goal-interrupt-{chat}-{burst}-{width}"
+    prompt = "{goal_spinner}{chat:C>}{rollout-idle:I>}{rollout-active:A>}"
+    with TmuxTerminal.fixture(binary, case, width, 30, prompt=prompt,
+            args=("--no-listen", "--no-client")) as terminal:
+        terminal.wait("I>")
+        terminal.submit("/goal slow goal")
+        terminal.wait("working on goal")
+        if chat:
+            terminal.submit("/chat")
+            terminal.wait("chat is offline")
+        terminal.send_key("C-c")
+        if burst:
+            terminal.run("send-keys", "-t", terminal.target, *(["Enter"] * 8))
+        wait_event_count(terminal.dotdir, "goal_paused", 1)
+        marker = "C>" if chat else "I>"
+        if not chat:
+            wait_normalized(terminal, "Goal paused at the current turn boundary", timeout=5)
+        terminal.wait(marker)
+        time.sleep(0.1)
+        screen = terminal.capture()
+        (case / "interrupted.txt").write_text(screen)
+        tail = screen.split("snajpagent: turn interrupted")[-1]
+        if not chat:
+            tail = tail.split("current turn boundary")[-1]
+        assert "⚑" not in tail and "⚐" not in tail, screen
+        assert all(row.strip() == marker for row in tail.splitlines() if row.strip()), screen
+        prompt_count = screen.count(marker)
+        before = read_events(terminal.dotdir)[1]
+        terminal.run("send-keys", "-t", terminal.target, "Enter", "Enter", "Enter")
+        terminal.wait_until(lambda text: text.count(marker) >= prompt_count + 3,
+                            "blank prompts after goal pause")
+        time.sleep(0.1)
+        log = read_events(terminal.dotdir)[1]
+        assert len(event_list(log, "turn_started")) == 1
+        assert len(event_list(log, "input_received")) == len(event_list(before, "input_received"))
+        assert not event_list(log, "goal_resumed")
+        assert all(e["data"].get("text") != "Continue." for e in log)
+        terminal.exit()
+    print("goal interrupt prompt", chat, burst, width, "PASS", flush=True)
+
+
+def run_goal_interrupt_http_case(binary, root, chat=False):
+    case = root / f"goal-interrupt-http-{chat}"
+    case.mkdir(parents=True)
+    provider = FakeResponses()
+    config, state = case / "config.ini", case / "state"
+    write_irc_config(config, provider.port, "host-model")
+    with config.open("a") as out:
+        out.write('prompt = {goal_spinner}{chat:C>}{rollout-idle:I>}{rollout-active:A>}\n'
+                  'prompt_spinner_goal = "\\0⚑"\n')
+    requests, release = [], threading.Event()
+    ready = threading.Event()
+    def respond(handler, request, sequence):
+        requests.append(request)
+        body = provider.response_body(sequence, "goal waiting final answer").encode()
+        at = body.index(b"event: response.output_text.done")
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/event-stream")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.end_headers()
+        handler.wfile.write(body[:at]); handler.wfile.flush()
+        ready.set(); release.wait(12)
+        try: handler.wfile.write(body[at:])
+        except (BrokenPipeError, ConnectionResetError): pass
+        handler.close_connection = True
+    provider.runtime_handler = respond
+    env = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
+    try:
+        with TmuxTerminal(case / "term", binary, case, state, config, 28, 32,
+                args=("--no-listen", "--no-client"), environment=env) as terminal:
+            terminal.wait("I>")
+            terminal.submit("/goal inspect local file")
+            assert ready.wait(3)
+            terminal.wait("goal waiting")
+            if chat:
+                terminal.submit("/chat"); terminal.wait("chat is offline")
+            terminal.send_key("C-c")
+            log = wait_event_count(state, "goal_paused", 1)
+            assert len(event_list(log, "turn_interrupted")) == 1
+            marker = "C>" if chat else "I>"
+            terminal.wait_until(lambda text: text.rstrip().endswith(marker) and
+                                "⚑" not in text.rstrip().splitlines()[-1], "paused prompt")
+            terminal.run("send-keys", "-t", terminal.target, *(["Enter"] * 8))
+            terminal.wait_until(lambda text: text.count(marker) >= 9, "paused blank prompts")
+            assert len(requests) == 1
+            sid = read_events(state)[0].parent.name
+            terminal.exit()
+        with TmuxTerminal(case / "resume", binary, case, state, config, 28, 32,
+                args=("--no-listen", "--no-client", "--resume", sid), environment=env) as terminal:
+            terminal.wait("I>")
+            terminal.run("send-keys", "-t", terminal.target, "Enter", "Enter")
+            terminal.wait_until(lambda text: text.count("I>") >= 3, "resumed paused prompts")
+            assert len(requests) == 1
+            ready.clear()
+            terminal.submit("/goal resume")
+            assert ready.wait(3)
+            terminal.wait("⚑A>")
+            terminal.send_key("C-c")
+            wait_event_count(state, "goal_paused", 2)
+            terminal.exit()
+        log = read_events(state)[1]
+        assert len(requests) == len(event_list(log, "turn_started")) == 2
+        assert len(event_list(log, "goal_resumed")) == 1
+        assert not event_list(log, "input_received")
+        assert not any(e["data"].get("text") == "Continue." for e in log)
+    finally:
+        release.set(); provider.close()
+    print("goal interruption HTTP/resume", chat, "PASS", flush=True)
+
+
 def run_help_case(binary, root, active=False, chat=False, width=80):
     case = root / f"help-{active}-{chat}-{width}"
     with TmuxTerminal.fixture(binary, case, width, 35,
@@ -2586,6 +2697,9 @@ def run_resume_history_case(binary, root):
 def run_fixture(binary, workspace, root):
     del workspace
     root.mkdir(mode=0o700, parents=True)
+    for chat in (False, True):
+        for burst in (False, True):
+            run_goal_interrupt_prompt_case(binary, root, chat, burst)
     for width in (20, 28, 40, 80, 120):
         run_help_case(binary, root, width=width)
     for active, chat in ((True, False), (False, True), (True, True)):
@@ -6502,6 +6616,8 @@ def run_irc_case(binary, root):
         for active, chat, width, verbosity in ((False, False, 100, 0), (False, True, 28, 2),
                                              (True, False, 28, 0), (True, True, 100, 2)):
             run_history_length_case(binary, root, active, chat, width, verbosity)
+        for chat in (False, True):
+            run_goal_interrupt_http_case(binary, root, chat)
         run_blank_enter_stream_case(binary, root)
         run_blank_enter_stream_case(binary, root, help_commands=True)
         run_nested_command_cases(binary, root)

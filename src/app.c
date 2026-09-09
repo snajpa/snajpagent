@@ -356,11 +356,14 @@ consume_staged_settings(struct app_state *app)
     app->staged_effort = NULL;
     app->staged_provider = NULL;
 }
+static unsigned int prompt_spinner_states(const struct app_state *app, bool active);
+
 int
 snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
                      char *error, size_t error_size)
 {
     uint64_t seq;
+    enum snag_goal_status previous_goal_status = app->session.goal_status;
     if (app->ui.input_received_ms &&
         snag_string_in(type, "steering_added future_turn_queued future_turn_edited") &&
         snag_json_set_new(data, "received_at_ms",
@@ -378,6 +381,12 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
     if (snag_session_commit(&app->session, type, data, &seq,
                            error, error_size) < 0)
         return -1;
+    /* Present committed goal state before any notice can redraw the composer. */
+    if (previous_goal_status != app->session.goal_status && app->ui.opened &&
+        snag_ui_send(&app->ui, (struct snag_ui_command){
+            .kind = SNAG_UI_SPINNERS,
+            .data.value = prompt_spinner_states(app, app->ui.active)}) < 0)
+        return snag_errorf(error, error_size, "goal prompt state could not be displayed");
     if (snag_string_in(type, "steering_added future_turn_queued future_turn_edited"))
         ++app->input_generation;
     /* Chunk durability must not insert debug notices inside the public text. */
@@ -512,8 +521,6 @@ format_context_meter(struct app_state *app, bool active,
     }
     return 0;
 }
-
-static unsigned int prompt_spinner_states(const struct app_state *app, bool active);
 
 static void
 prompt_hostname(char *hostname, size_t size)
@@ -3810,9 +3817,6 @@ out:
     snag_app_response_cycle_release(app, &graph, &steering,
                                        &projection,
                                        &request_body);
-    if (!app->execute && result != 6 &&
-        set_input_prompt(app, false) < 0)
-        result = 6;
     snag_credential_clear(&credential);
     snag_instructions_free(&app->turn_instructions);
     return result;
@@ -4022,6 +4026,9 @@ run_tracked_turn(struct app_state *app, const char *prompt,
     app->ui.input_received_ms = 0u;
     app->irc_turn_replies.count = 0u;
     free(retained);
+    /* Goal pause and retained-turn cleanup must precede the next idle prompt. */
+    if (!app->execute && rc != 6 && set_input_prompt(app, false) < 0)
+        rc = 6;
     return rc;
 }
 

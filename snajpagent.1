@@ -661,7 +661,10 @@ Insert a newline without submitting.
 Leave the visible draft in scrollback, append literal
 .BR ^C ,
 start a new line, and open a clean prompt.  With an empty active composer, also
-interrupt the turn.  Five consecutive presses within two seconds exit;
+interrupt the turn and pause automatic goal continuation. The next idle prompt
+reflects the settled goal state; its active goal flag is cleared before the pause
+notice redraws it. Empty Enter afterwards stays local and leaves the goal paused.
+Five consecutive presses within two seconds exit;
 other input resets the sequence.  Ctrl-D on an empty draft or
 .B /exit
 while idle also exits.
@@ -1100,6 +1103,10 @@ interruptible backoff, without an attempt limit.  Policy stops and provider
 refusals pause automatic continuation and require clarification.  Turn-only
 cancellation also pauses automatic continuation.  Quitting preserves unfinished
 work and its goal for resume.  Session resume preserves saved stops.
+Goal status changes update the prompt indicator before their notices are shown,
+including pauses, completion and blocking. Clearing a draft in the interactive
+composer leaves its active goal running; Ctrl-C on an empty composer interrupts
+the turn and pauses that goal.
 Goal controls accept whitespace around the command word.  Extra wording after a
 control is rejected; use quotes or
 .B /goal set

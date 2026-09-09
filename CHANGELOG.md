@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Clear stale goal indicators on interruption: settle goal pause before the idle
+  prompt and refresh committed goal state before notices redraw it. Keep blank
+  Enter local after Ctrl-C and preserve explicit goal resume and draft cancellation.
+
 - Make `/help` a consistent concise syntax reference for every command, including
   goal verbs, queue actions, model selectors, aliases and defaults. Share goal
   usage with `/goal help`, separate syntax from descriptions, and wrap fitting

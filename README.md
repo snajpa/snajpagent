@@ -110,7 +110,9 @@ interrupt a running turn. `/goal resume` continues a paused or blocked goal;
 its history. Errors keep an active goal retrying with paced,
 interruptible waits, preserving completed work and live command handles.
 
-Ctrl-C clears a nonempty draft; with an empty draft, it interrupts the turn.
+Ctrl-C clears a nonempty draft; with an empty draft, it interrupts the turn and
+pauses automatic goal continuation. The next idle prompt clears the active goal
+flag. Empty Enter leaves the goal paused; use `/goal resume` to restart it.
 Ctrl-D on an empty draft exits. No work continues after the program exits.
 The conversation, tool results, queue and goal are saved as a **session**.
 After accepted work or other retained session state, normal exit prints its
