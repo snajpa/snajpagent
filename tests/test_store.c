@@ -226,10 +226,12 @@ test_failed_append_retry(struct snag_store *store, const char *workspace)
         NULL, error, sizeof(error)) < 0);
     assert(setrlimit(RLIMIT_FSIZE, &saved) == 0 && signal(SIGXFSZ, old) != SIG_ERR);
     assert(session.log_end == end && !strcmp(session.default_effort, "default"));
+    assert(session.write_failures == 1u);
     assert(lseek(session.log_fd, 0, SEEK_END) == end);
     assert(snag_session_commit(&session, "effort_changed",
         change_data("old_effort", "default", "new_effort", "high"),
         NULL, error, sizeof(error)) == 0);
+    assert(session.write_failures == 1u);
     snag_session_close(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     assert(!strcmp(session.default_effort, "high"));
@@ -325,6 +327,7 @@ main(void)
         struct snag_session before = session;
         assert(snag_session_commit(&session, "workspace_changed",
             json_incref(change), &written, error, sizeof(error)) < 0);
+        ++before.write_failures; /* Only the process-local error diagnostic advances. */
         assert(memcmp(&session, &before, sizeof(session)) == 0);
         assert(written == UINT64_MAX);
         assert(strcmp(session.workspace, workspace2) == 0);
@@ -634,6 +637,7 @@ main(void)
         struct snag_session failed = session;
         assert(snag_session_commit(&session, "future_turn_edited",
             edited_data(first_id, "not adopted"), NULL, error, sizeof(error)) < 0);
+        ++failed.write_failures;
         assert(memcmp(&session, &failed, sizeof(session)) == 0);
         assert(!strcmp(first_text, "first"));
         assert(close(session.log_fd) == 0);

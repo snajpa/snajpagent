@@ -945,6 +945,30 @@ def test_read_only_multiline_compaction_and_chat():
                for x in log if x["type"] == "tool_finished")
 
 
+def test_queue_edit_resume_at_acknowledgement():
+    with Child([], DEFAULT_IDLE_PROMPT) as child:
+        child.send_wait(b"queue_slow\r", b"working slowly")
+        child.send_wait(b"/queue repeat\r", b"queued (/next or /q c)")
+        child.send_wait(b"/queue 1 edit\r", b"repeat", start=len(child.buf))
+        child.send_wait(b"\x15ping\r", b"ping", start=len(child.buf))
+        sid = child.session_id()
+        deadline = time.monotonic() + 3
+        while not any(e["type"] == "future_turn_edited" for e in events(sid)):
+            assert time.monotonic() < deadline
+            child.read_once(.02)
+        child.kill()
+    path = STATE_ROOT / sid / "events.jsonl"
+    lines = path.read_bytes().splitlines(keepends=True)
+    edit = next(e for e in map(json.loads, lines) if e["type"] == "future_turn_edited")
+    assert edit["data"]["armed"] is True
+    path.write_bytes(b"".join(lines[:edit["seq"]]))
+    with Child(["--resume", sid], ready=None) as child:
+        end = child.wait(b"pong")
+        child.exit_cleanly(end)
+    turns = [e["data"] for e in events(sid) if e["type"] == "turn_started"]
+    assert len(turns) == 2 and turns[-1]["text"] == "ping", turns
+
+
 def test_read_only_queue_replay_and_edit():
     child = Child([], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"queue_slow\r", b"working slowly")
@@ -4521,6 +4545,7 @@ if __name__ == "__main__":
     test_queue_prompt_counts()
     test_read_only_queries()
     test_read_only_multiline_compaction_and_chat()
+    test_queue_edit_resume_at_acknowledgement()
     test_read_only_queue_replay_and_edit()
     test_managed_command_steering_and_tab_queue()
     test_steering_during_pre_response_compaction()

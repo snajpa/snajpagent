@@ -173,6 +173,7 @@ struct snag_session {
     size_t pending_call_count;
     size_t pending_steering_count;
     size_t pending_queue_count;
+    uint64_t write_failures; /* Process-local, includes every event writer. */
     bool append_rollback_pending;
     int64_t append_rollback_end;
     unsigned int pending_controls, started_controls;

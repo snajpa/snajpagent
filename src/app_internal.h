@@ -81,7 +81,7 @@ struct app_state {
     bool steering_requested;
     bool control_requested, applying_controls;
     bool tool_waiting, yield_requested;
-    uint64_t input_generation, persistence_failures;
+    uint64_t input_generation;
     bool interrupt_requested;
     bool goal_armed;
     bool recovery_wait;

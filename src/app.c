@@ -357,16 +357,14 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
     }
     if (snag_string_in(type, "goal_started control_requested future_turn_queued input_received irc_admitted") &&
         snag_session_persist(&app->store, &app->session, error, error_size) < 0) {
-        ++app->persistence_failures;
+        ++app->session.write_failures;
         json_decref(data);
         return -1;
     }
     int64_t offset = app->session.log_end;
     if (snag_session_commit(&app->session, type, data, &seq,
-                           error, error_size) < 0) {
-        ++app->persistence_failures;
+                           error, error_size) < 0)
         return -1;
-    }
     if (snag_string_in(type, "steering_added future_turn_queued future_turn_edited"))
         ++app->input_generation;
     /* Chunk durability must not insert debug notices inside the public text. */
@@ -745,10 +743,9 @@ finish_queue_edit(struct app_state *app, const char *text, bool active,
             return -1;
         return 1;
     }
-    if ((strcmp(queued->text, text) != 0 || queued->read_only != read_only) &&
-        commit_event(app, "future_turn_edited",
-                     json_pack("{s:b,s:s,s:s}", "read_only", read_only,
-                               "queue_id", queued->queue_id, "text", text),
+    if (commit_event(app, "future_turn_edited",
+                     json_pack("{s:b,s:b,s:s,s:s}", "armed", restore_armed && app->session.active_turn,
+                               "read_only", read_only, "queue_id", queued->queue_id, "text", text),
                      error, error_size) < 0) {
         if (set_input_prompt(app, active) == 0)
             (void)snag_ui_send(&app->ui, (struct snag_ui_command){
@@ -762,8 +759,6 @@ clear:
     app->queue_edit_id[0] = '\0';
     app->queue_edit_number = 0u;
     app->queue_edit_was_armed = false;
-    if (restore_armed && app->session.active_turn &&
-        queue_arm(app, true) < 0) return -1;
     if (set_input_prompt(app, active) < 0)
         return -1;
     return rc;
@@ -2067,7 +2062,7 @@ apply_controls(struct app_state *app)
             }
         if (!bit) { result = -1; break; }
         pending &= ~bit;
-        uint64_t failures = app->persistence_failures;
+        uint64_t failures = app->session.write_failures;
         char error[256] = {0};
         bool started = (app->session.started_controls & bit) != 0u;
         if (!started && commit_event(app, "control_started",
@@ -2094,7 +2089,7 @@ apply_controls(struct app_state *app)
             app->input_closed = true;
             break; /* Deleted journal can no longer record a completion. */
         }
-        if (app->persistence_failures != failures || app->session.append_rollback_pending) {
+        if (app->session.write_failures != failures || app->session.append_rollback_pending) {
             result = -1; break; /* Preserve intent when its effects could not be recorded. */
         }
         if (commit_event(app, "control_finished", json_pack("{s:i}", "control", (int)bit),

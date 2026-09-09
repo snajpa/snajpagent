@@ -1027,15 +1027,17 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         struct snag_queued_turn *queued = NULL;
         size_t old_len = 0u, len;
 
-        bool has_arm = adding && json_object_get(data, "armed");
+        bool has_arm = json_object_get(data, "armed") != NULL;
         const char *keys = adding ?
             (has_arm ? (json_object_get(data, "received_at_ms") ?
                 "armed queue_id read_only text while_turn_id received_at_ms" :
                 "armed queue_id read_only text while_turn_id") :
              (json_object_get(data, "received_at_ms") ? "queue_id read_only text while_turn_id received_at_ms" :
                                                      "queue_id read_only text while_turn_id")) :
-            (json_object_get(data, "received_at_ms") ? "queue_id read_only text received_at_ms" :
-                                                     "queue_id read_only text");
+            (has_arm ? (json_object_get(data, "received_at_ms") ?
+                "armed queue_id read_only text received_at_ms" : "armed queue_id read_only text") :
+             (json_object_get(data, "received_at_ms") ? "queue_id read_only text received_at_ms" :
+                                                     "queue_id read_only text"));
         if (!snag_json_exact_keys(data, keys) ||
             (has_arm && !json_is_boolean(json_object_get(data, "armed"))) ||
             !json_is_boolean(json_object_get(data, "read_only")) ||
@@ -1053,7 +1055,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             for (size_t i = 0; i < session->pending_queue_count && !queued; ++i)
                 if (strcmp(session->pending_queue[i].queue_id, queue_id) == 0)
                     queued = &session->pending_queue[i];
-            if (!queued || (!strcmp(queued->text, text) && queued->read_only == read_only))
+            if (!queued || (!has_arm && !strcmp(queued->text, text) && queued->read_only == read_only))
                 goto invalid;
             old_len = strlen(queued->text);
         }
@@ -1070,10 +1072,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
         if (adding) {
             ++session->pending_queue_count;
-            if (has_arm) session->queue_armed = json_is_true(json_object_get(data, "armed"));
             memcpy(queued->queue_id, queue_id, sizeof(queued->queue_id));
             queued->seq = seq;
         }
+        if (has_arm) session->queue_armed = json_is_true(json_object_get(data, "armed"));
         queued->read_only = read_only;
         session->pending_queue_bytes = session->pending_queue_bytes - old_len + len;
     } else if (strcmp(type, "future_turn_cancelled") == 0) {
@@ -2106,6 +2108,7 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
 {
     struct snag_session staged = {0};
     int rc = -1;
+    bool append_attempted = false;
 
     if (session->append_rollback_pending) {
         int64_t end = snag_seek(session->log_fd, 0, SEEK_END);
@@ -2113,12 +2116,14 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
             snag_truncate(session->log_fd, session->log_end) < 0) {
             snag_errorf(error, error_size, "failed journal append still requires rollback");
             json_decref(data);
+            ++session->write_failures;
             return -1;
         }
         session->append_rollback_end = session->log_end;
         if (snag_sync_file(session->log_fd) < 0) {
             snag_errorf(error, error_size, "journal rollback could not be persisted");
             json_decref(data);
+            ++session->write_failures;
             return -1;
         }
         session->append_rollback_pending = false;
@@ -2130,11 +2135,13 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
                           error, error_size)) == 0) {
         /* Append updates the staged metadata too. No live state is adopted
          * until durable append succeeds; descriptors and dir_path are borrowed. */
+        append_attempted = true;
         rc = snag_session_append(&staged, type, data, written_seq,
                                  error, error_size);
     }
     json_decref(data);
     if (rc < 0) {
+        if (append_attempted) ++session->write_failures;
         if (staged.append_rollback_pending) {
             session->append_rollback_pending = true;
             session->append_rollback_end = staged.append_rollback_end;
