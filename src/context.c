@@ -762,7 +762,8 @@ context_event(void *opaque, const struct snag_session *state,
         }
         builder->deferred_irc_seq = (uint64_t)json_integer_value(json_object_get(
             json_array_get(builder->deferred_irc, 0u), "seq"));
-        return 0;
+        const json_t *steering = json_object_get(data, "steering");
+        return steering ? context_event(opaque, state, seq, "steering_added", steering, error, error_size) : 0;
     }
     if (!strcmp(type, "turn_started")) {
         if (summarized && builder->compact_stop_before_active && current)

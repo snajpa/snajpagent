@@ -236,6 +236,33 @@ test_failed_append_retry(struct snag_store *store, const char *workspace)
     snag_session_close(&session);
 }
 
+static void
+test_closure_reserve(struct snag_store *store, const char *workspace)
+{
+    struct snag_session session;
+    char error[256];
+    snag_session_init(&session);
+    assert(snag_session_create(store, &session, workspace, "default", "test", "default",
+                               error, sizeof(error)) == 0);
+    uint64_t seq = session.next_seq;
+    int64_t end = session.log_end;
+    /* Exercise admission at the event boundary without writing a million
+     * records. Restore the real cursor before re-opening this private fixture. */
+    session.next_seq = UINT64_C(1000000) - 256u + 1u;
+    assert(snag_session_commit(&session, "effort_changed",
+        change_data("old_effort", "default", "new_effort", "high"),
+        NULL, error, sizeof(error)) < 0 && errno == ENOSPC);
+    assert(session.log_end == end && !strcmp(session.default_effort, "default"));
+    assert(snag_session_commit(&session, "session_archived", json_pack("{s:s}", "origin", "user"),
+                               NULL, error, sizeof(error)) == 0);
+    assert(session.archived && session.log_end > end);
+    assert(ftruncate(session.log_fd, end) == 0 && fsync(session.log_fd) == 0);
+    session.next_seq = seq;
+    session.log_end = end;
+    session.archived = false;
+    snag_session_close(&session);
+}
+
 int
 main(void)
 {
@@ -267,6 +294,7 @@ main(void)
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
     test_pending_session(&store, workspace);
     test_failed_append_retry(&store, workspace);
+    test_closure_reserve(&store, workspace);
     assert(snag_session_create(&store, &session, workspace,
                               "default", "gpt-5.5-2026-04-23", "default",
                               error, sizeof(error)) == 0);

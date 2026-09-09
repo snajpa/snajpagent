@@ -3659,7 +3659,7 @@ def run_clarification_episode_cases(binary, root, provider, environment):
 
 
 def run_policy_stop_cases(binary, root, provider, environment):
-    for mode in ("goal", "running", "goal-running", "content-filter", "refusal"):
+    for mode in ("goal", "running", "goal-running", "content-filter", "refusal", "resume-running"):
         case = root / ("policy-stop-" + mode)
         case.mkdir(parents=True)
         config, state = case / "config.ini", case / "state"
@@ -3723,6 +3723,24 @@ def run_policy_stop_cases(binary, root, provider, environment):
             assert len(event_list(events, "goal_paused")) == int(goal), mode
             assert len(event_list(events, "response_output_correction")) == (
                 0 if mode in ("content-filter", "refusal") else 5), mode
+            if mode == "resume-running":
+                log_path, _ = read_events(state)
+                sid = log_path.parent.name
+                terminal.exit()
+                terminal.close()
+                terminal = TmuxTerminal(case / "resumed", binary, case, state, config, 140, 28,
+                    args=("--resume", sid), environment=environment)
+                terminal.wait("recovered provider policy stop")
+                time.sleep(.3)
+                assert len(requests) == before, (before, len(requests))
+                _, recovered = read_events(state)
+                assert len(event_list(recovered, "tool_started")) == 1
+                assert any(e["data"]["result"]["status"] == "succeeded" or
+                           e["data"]["result"]["status"] == "outcome_unknown"
+                           for e in event_list(recovered, "process_closed"))
+                terminal.exit()
+                print("policy stop resume-running PASS", flush=True)
+                continue
             if running:
                 assert (case / "survived").read_text() == "survived", mode
                 assert (case / "once").read_text() == "x", mode
@@ -5260,6 +5278,7 @@ def run_tool_yield_cases(binary, root, provider, environment):
             assert not event_list(log, "turn_failed"), log[-6:]
             assert not event_list(log, "steering_received")
             assert len(event_list(log, "turn_started")) == 1
+            assert len(event_list(log, "turn_yield_requested")) == int(operator)
             handles = [e["data"]["result"]["handle"] for e in event_list(log, "tool_finished")
                        if e["data"]["result"]["status"] == "running"]
             assert len(set(handles)) == 1, handles

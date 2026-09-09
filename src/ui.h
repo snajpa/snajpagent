@@ -93,6 +93,7 @@ int snag_ui_validate_prompt(struct snag_ui *ui, const char *label,
                     const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                     uint32_t per_second);
 int snag_ui_simple_prompt(struct snag_ui *ui, bool active);
+bool snag_ui_leaving(const struct snag_ui *ui);
 int snag_ui_poll(struct snag_ui *ui, int timeout_ms,
                   bool active, enum snag_term_action *action, char **text);
 int snag_ui_submitted(struct snag_ui *ui, const char *label, const char *text,

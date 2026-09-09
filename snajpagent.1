@@ -253,6 +253,18 @@ need
 and cannot be bypassed by automatic goal work.  Resume restores recorded
 context and accounts for lost command owners; old OS processes and handles
 are not revived.
+.PP
+Direct input is recorded before preparation, credential acquisition or model
+requests.  A preparation failure retains the pending text, read-only mode and
+selected provider/model/effort.  Resolve the reported dependency and use
+.B /retry
+or resume the session to continue.  Ctrl-C cancels pending input.  A later
+prompt is queued behind retained input rather than replacing it.
+.PP
+Same-turn recovery retains the original working-document paths.  The files
+remain external dependencies: their contents are read when needed, and moved
+or missing files require inspection.  New full turns discover their own entry
+points.  Session records contain paths rather than automatic file snapshots.
 .SS Read this reference
 Use
 .B man snajpagent
@@ -814,6 +826,20 @@ also accept multiline message text.  Prefix text with
 .B //
 to submit a literal leading
 .BR / .
+Commands are accepted during active work according to their effect boundary.
+Model and effort selections affect the next full turn.  Configuration, cache
+refresh, compaction, retry, archive and delete run at safe request boundaries;
+their accepted intents survive restart and retain admission order.  Repeated
+requests for the same pending control coalesce.  Delete still requires explicit
+confirmation.  Presentation, steering and tool yield act on current work.
+.PP
+Public response text is saved incrementally before display.  Recovery continues
+the original turn from saved inputs, public output and tool results.  Started
+calls without durable results are reported as outcome unknown; unstarted calls
+are reported as not run.  Saved process output remains available, while old
+process handles cannot be reused.  Terminal drafts and submissions awaiting
+engine acknowledgement are not yet durable work; the submitted-text or control
+acknowledgement follows event-log acceptance.
 .SS Session and model
 .TP
 .BR /help , " /?"
@@ -824,8 +850,8 @@ Show session, selection, queue, verbosity, capacity, token accounting, requested
 network roles and actual connection state.
 .TP
 .BR /history " [N]"
-Show the last N completed turns, oldest first.  Default: 1.  Available during
-active work.  N is a nonnegative decimal count; large counts show all completed
+Show the last N turns, oldest first, including unfinished, failed and interrupted work.  Default: 1.  Available during
+active work.  N is a nonnegative decimal count; large counts show all
 turns.  Zero shows only the counts.  Every replay ends with shown, completed and
 total session turns.  Uses the same replay as
 .B resume_history_turns
@@ -843,7 +869,8 @@ uses
 other providers use
 .BR /v1/models .
 There is no automatic catalog refresh or protocol fallback.  Failure leaves
-the previous cache intact.  Idle only.  See
+the previous cache intact.  During active work the refresh starts at the next
+safe request boundary.  See
 .BR "Model selection and context" .
 .TP
 .BR /model " " number ", " /model " #" number
@@ -862,7 +889,9 @@ or
 writes the selection to the active configuration.  Typed model IDs need not
 exist in the cache.  Use a numbered row for an ID containing
 .BR / .
-Selection is idle only.  The final save suffix also works with numbered rows.
+Selection is accepted during active work and changes the next full turn.
+The active turn retains its model/provider/effort.  The final save suffix also
+works with numbered rows.
 .TP
 .B /config
 Open the active configuration with
@@ -873,10 +902,19 @@ since the last successful file load override current process state.  An unrelate
 edit preserves runtime additions/removals; editing the client list replaces that
 list.  Startup networking flags are not reapplied over deliberately edited fields.
 Only affected owners restart.  Failed restoration reports actual remaining roles.
-Reload preserves the process's current verbosity and view.  Idle only.
+Reload preserves the process's current verbosity and view.  During active work
+it starts at a safe request boundary.  The editor owns terminal input while
+managed processes and IRC continue to be serviced.  If the program dies during
+editing, resume reloads the saved file without launching the editor again.
+Presentation and changed network roles apply on reload; provider connection,
+authentication, capacity and tool defaults apply to later requests or tool
+invocations.  Already launched processes retain their own settings.  Current
+turn model/effort, working-document paths, read-only restrictions, parallel-call
+contract and automatic retry budget remain bound to that turn.  Update checking
+is a startup action; update settings apply on the next program launch.
 .TP
 .BR /effort " [" level "]"
-Show or set reasoning effort.  Setting is idle only.
+Show or set next-full-turn reasoning effort, including during active work.
 .TP
 .BR /verbose " [0..6]"
 Show or set this process's current verbosity immediately, even during active
@@ -886,17 +924,18 @@ model input.  The printed resume
 command carries this current level, not the original startup flag count.
 .TP
 .B /archive
-Archive the idle session and exit.  Exact resume can unarchive it.
+Archive the session and exit, settling active work at a safe request boundary.  Exact resume can unarchive it.
 .TP
 .B /compact
-Compact idle model context.  The full local event log is retained.
+Compact model context at idle or at a safe active-turn request boundary.  The full local event log is retained.
 .TP
 .B /delete
-Confirm with the displayed session prefix, then permanently remove the idle
+Confirm with the displayed session prefix, then permanently remove the
 session through private trash staging.  Shared prompt history is not erased.
 .TP
 .B /exit
-Preserve the session and exit.  Idle only.
+Preserve the session and exit.  Active work remains available for same-turn
+continuation on resume.  Ctrl-C instead records deliberate cancellation.
 .SS Yielding tool waits
 .TP
 .B /yield
@@ -920,8 +959,8 @@ web search is also available when supported by the selected provider/model;
 search queries are sent to that provider.  Normal capabilities return on the
 next ordinary
 turn.  In networked mode the query opens rollout view and sends no IRC reply.
-During active work, Enter rejects this mode switch and preserves the draft;
-press Tab or use
+During active work, Enter and Tab queue the read-only query as a future full
+turn.  You can also use
 .B /queue /ro query
 to run it after the current turn.  Ordinary steering inside a read-only turn
 cannot lift its restrictions.  Empty queries are rejected;
@@ -933,7 +972,10 @@ After a turn fails, continue it from retained conversation and tool results.
 The original prompt is not duplicated and completed tools are not replayed.
 Read-only mode is preserved; current next-turn model settings apply.
 Available in both views and after session resume, until another turn starts.
-Active turns cannot be retried. Queued work and paused goals stay paused.
+For an unfinished active turn, request continuation at the next safe boundary.
+Pending input that failed preparation can also be retried.  Explicitly cancelled
+turns stay cancelled; retained completed or uncertain tool calls are never
+blindly executed again.  Paused queues and goals remain paused.
 Ordinary turns retry failures automatically up to
 .B max_turn_retries
 additional times (default five), then display the manual retry hint.
@@ -1101,7 +1143,8 @@ summary text in its stored message format. Direct ChatGPT/Codex also falls back
 once to Responses summarization when its native endpoint is unavailable;
 other native failures remain errors.  Manual
 .B /compact
-is idle only.  Compaction changes model context and preserves the append-only
+is accepted during active work and applies at a safe request boundary.
+Compaction changes model context and preserves the append-only
 local log.
 .PP
 If compaction leaves only instructions, outgoing requests include a labelled
@@ -1431,12 +1474,12 @@ Render supported terminal Markdown.  Default:
 .BR true .
 .TP
 .B resume_history_turns
-Completed turns to show on a non-networked resume.  Default: 1.  Accepts any
-nonnegative decimal count; large counts show all completed turns.  Zero shows
-only the counts.  Replay ends with shown, completed and total session turns.
-Active, failed and interrupted turns are excluded from replay.  Completed
-refusals and goal turns are included.  History before compaction remains
-available.  Network chat uses room history.
+Turns to show on resume.  Default: 1.  Accepts any nonnegative decimal count;
+large counts show all turns.  Zero shows only the counts.  Replay ends with
+shown, completed and total session turns.  Unfinished, failed and interrupted
+turns include their saved public output.  Completed refusals and goal turns
+are included.  History before compaction remains available.  Network chat
+also restores its room history.
 .TP
 .B typing_pause_ms
 Output pause after an input edit, 0 through 5000.  Default: 500.

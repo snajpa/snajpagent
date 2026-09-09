@@ -185,6 +185,8 @@ free_session_state(struct snag_session *session)
 {
     json_decref(session->strings);
     json_decref(session->compact_output);
+    json_decref(session->pending_input);
+    json_decref(session->active_instructions);
     json_decref(session->response_public);
 }
 
@@ -260,7 +262,7 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
         "tool_finished process_closed turn_completed turn_completed_silent turn_failed "
         "turn_interrupted turn_cancel_requested turn_recovery compaction_interrupted "
         "compaction_completed control_finished goal_paused goal_cancelled session_archived "
-        "session_delete_requested");
+        "session_delete_requested input_cancelled");
     uint64_t event_limit = closing ? SNAG_EVENT_LIMIT : SNAG_EVENT_LIMIT - SNAG_EVENT_RESERVE;
     int64_t byte_limit = closing ? SNAG_LOG_HARD_LIMIT : SNAG_LOG_HARD_LIMIT - SNAG_LOG_RESERVE;
     if (!data || seq > event_limit || session->log_end > byte_limit) {
@@ -426,7 +428,11 @@ clear_turn_state(struct snag_session *session)
     session->active_queued = false;
     session->active_goal = false;
     session->cancel_requested = false;
+    session->policy_stopped = false;
+    session->turn_retry_attempts = 0u;
     session->active_prompt = NULL;
+    json_decref(session->active_instructions);
+    session->active_instructions = NULL;
     if (session->strings) json_object_del(session->strings, "active_prompt");
     session->active_turn_id[0] = '\0';
     session->active_turn_model[0] = '\0';
@@ -657,7 +663,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
     } else if (strcmp(type, "irc_admitted") == 0) {
         const json_t *items = json_object_get(data, "sequences");
         uint64_t previous = 0u;
-        if (!snag_json_exact_keys(data, "sequences") || !json_is_array(items) || !json_array_size(items))
+        const json_t *input = json_object_get(data, "input");
+        const json_t *steering = json_object_get(data, "steering");
+        if (!snag_json_exact_keys(data, input ? "input sequences" : steering ? "sequences steering" : "sequences") ||
+            !json_is_array(items) || !json_array_size(items))
             goto invalid;
         for (size_t i = 0u; i < json_array_size(items); ++i) {
             json_t *item = json_array_get(items, i);
@@ -666,6 +675,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 goto invalid;
             previous = (uint64_t)json_integer_value(item);
         }
+        if (input && apply_event(session, "input_received", input, seq, error, error_size) < 0) return -1;
+        if (steering && apply_event(session, "steering_added", steering, seq, error, error_size) < 0) return -1;
     } else if (strcmp(type, "irc_snapshot") == 0) {
         const char *reason = snag_json_string(data, "reason");
         const char *text = snag_json_string(data, "text");
@@ -917,7 +928,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             snag_json_integer_u64(data, "control", &control) < 0 ||
             !control || control > SNAG_CONTROL_RETRY || (control & (control - 1u)))
             goto invalid;
+        unsigned int index = 0u;
+        while ((UINT64_C(1) << index) != control) ++index;
         if (!strcmp(type, "control_requested")) {
+            if (!(session->pending_controls & control)) session->control_seq[index] = seq;
             session->pending_controls |= (unsigned int)control;
         } else {
             if (!(session->pending_controls & control)) goto invalid;
@@ -927,6 +941,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             } else {
                 session->pending_controls &= ~(unsigned int)control;
                 session->started_controls &= ~(unsigned int)control;
+                session->control_seq[index] = 0u;
             }
         }
     } else if (strcmp(type, "model_selection_changed") == 0) {
@@ -991,6 +1006,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
         if (add_pending_steering(session, steering_id, text, len, seq) < 0)
             return -1;
+        if (!reminder) session->policy_stopped = false;
         if (json_object_get(data, "received_at_ms") &&
             snag_json_integer_u64(data, "received_at_ms",
                 &session->pending_steering[session->pending_steering_count - 1u].received_ms) < 0)
@@ -1090,6 +1106,25 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         memset(&session->pending_queue[out], 0,
                (session->pending_queue_count - out) * sizeof(session->pending_queue[0]));
         session->pending_queue_count = out;
+    } else if (strcmp(type, "input_received") == 0) {
+        if (session->active_turn || session->pending_input ||
+            !snag_json_exact_keys(data, "effort instructions model provider read_only received_at_ms text") ||
+            !snag_text_valid(snag_json_string(data, "text"), 1u, SNAG_MAX_DIRECT_PROMPT) ||
+            !snag_text_valid(snag_json_string(data, "model"), 1u, SNAG_MODEL_MAX_BYTES - 1u) ||
+            !snag_text_valid(snag_json_string(data, "effort"), 1u, SNAG_EFFORT_MAX_BYTES - 1u) ||
+            !snag_text_valid(snag_json_string(data, "provider"), 1u, SNAG_CONFIG_PROVIDER_NAME_MAX) ||
+            !json_is_boolean(json_object_get(data, "read_only")) ||
+            snag_json_integer_u64(data, "received_at_ms", &n) < 0 ||
+            snag_instructions_metadata_valid(json_object_get(data, "instructions"), error, error_size) < 0)
+            goto invalid;
+        session->pending_input = json_deep_copy(data);
+        if (!session->pending_input) return -1;
+    } else if (strcmp(type, "input_cancelled") == 0) {
+        if (!session->pending_input || session->active_turn ||
+            !snag_json_exact_keys(data, "")) goto invalid;
+        json_decref(session->pending_input);
+        session->pending_input = NULL;
+        session->queue_armed = false;
     } else if (strcmp(type, "turn_started") == 0) {
         const char *turn_id;
         const char *text;
@@ -1135,6 +1170,15 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         goal = strcmp(kind, "goal") == 0;
         if (!queued && !goal && strcmp(kind, "direct") != 0)
             goto invalid;
+        if (session->pending_input) {
+            const json_t *pending = session->pending_input;
+            if (queued || goal || strcmp(text, snag_json_string(pending, "text")) ||
+                strcmp(model, snag_json_string(pending, "model")) ||
+                strcmp(provider, snag_json_string(pending, "provider")) ||
+                strcmp(effort, snag_json_string(pending, "effort")) ||
+                json_is_true(json_object_get(data, "read_only")) !=
+                    json_is_true(json_object_get(pending, "read_only"))) goto invalid;
+        }
         if (goal) {
             if (session->goal_status != SNAG_GOAL_ACTIVE ||
                 json_is_true(json_object_get(data, "read_only")) ||
@@ -1173,6 +1217,12 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (json_object_get(data, "received_at_ms") &&
             snag_json_integer_u64(data, "received_at_ms", &session->input_received_ms) < 0)
             goto invalid;
+        uint64_t retry_limit = 5u;
+        if (json_object_get(config, "max_turn_retries") &&
+            (snag_json_integer_u64(config, "max_turn_retries", &retry_limit) < 0 || retry_limit > UINT32_MAX))
+            goto invalid;
+        session->turn_retry_limit = (uint32_t)retry_limit;
+        session->turn_retry_attempts = 0u;
         session->active_turn = true;
         session->last_turn_failed = false;
         session->max_parallel_commands = (uint32_t)max_parallel;
@@ -1196,6 +1246,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             return -1;
         if (queued && consume_oldest_queue(session) < 0)
             goto invalid;
+        json_decref(session->pending_input);
+        session->pending_input = NULL;
+        session->active_instructions = json_deep_copy(json_object_get(data, "instructions"));
+        if (!session->active_instructions) return -1;
     } else if (strcmp(type, "input_admitted") == 0) {
         json_t *ids = json_object_get(data, "steering_ids");
         uint64_t when;
@@ -1219,13 +1273,19 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             }
             if (!found) goto invalid;
         }
+    } else if (strcmp(type, "turn_yield_requested") == 0) {
+        if (!current_turn || !session->pending_call_count ||
+            !snag_json_exact_keys(data, "turn_id")) goto invalid;
     } else if (strcmp(type, "turn_cancel_requested") == 0) {
         if (!current_turn || !snag_json_exact_keys(data, "turn_id")) goto invalid;
         session->cancel_requested = true;
         session->queue_armed = false;
     } else if (strcmp(type, "turn_recovery") == 0) {
         const char *message = snag_json_string(data, "message");
-        if (!snag_json_exact_keys(data, "class message turn_id") || !current_turn ||
+        bool retry = json_object_get(data, "retry_attempts") != NULL;
+        if (!snag_json_exact_keys(data, retry ? "class message turn_id retry_attempts" : "class message turn_id") || !current_turn ||
+            (retry && (snag_json_integer_u64(data, "retry_attempts", &session->turn_retry_attempts) < 0 ||
+                       session->turn_retry_attempts > (uint64_t)UINT32_MAX + 1u)) ||
             !snag_json_string(data, "class") || !message || strlen(message) > 8192u ||
             session->response_open || !all_pending_finished(session))
             goto invalid;
@@ -1475,7 +1535,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         json_t *copy = session->response_public ? json_copy(session->response_public) : json_array();
         if (!copy) return -1;
         if (index == count) {
-            if (offset || json_array_append(copy, item) < 0) {
+            json_t *owned = json_deep_copy(item);
+            if (offset || !owned || json_array_append_new(copy, owned) < 0) {
+                if (offset) json_decref(owned);
                 json_decref(copy);
                 goto invalid;
             }
@@ -1500,6 +1562,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             snag_buf_free(&joined);
             json_decref(replacement);
             if (rc < 0) { json_decref(copy); goto invalid; }
+        }
+        if (snag_partial_public_validate(copy, error, error_size) < 0) {
+            json_decref(copy); goto invalid;
         }
         json_decref(session->response_public);
         session->response_public = copy;
@@ -1531,9 +1596,14 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *message = snag_json_string(data, "message");
         json_t *partial = json_object_get(data, "partial_public");
         uint64_t retry_count;
-        if (!snag_json_exact_keys(data,
-            "class cycle message partial_public response_id retry_count "
-            "turn_id") || !current_response(session, data) ||
+        bool has_policy = json_object_get(data, "policy_stopped") != NULL;
+        bool has_retry = json_object_get(data, "turn_retry_attempts") != NULL;
+        if (!snag_json_exact_keys(data, has_retry ?
+            "class cycle message partial_public response_id retry_count turn_id policy_stopped turn_retry_attempts" : has_policy ?
+            "class cycle message partial_public response_id retry_count turn_id policy_stopped" :
+            "class cycle message partial_public response_id retry_count turn_id") ||
+            (has_policy && !json_is_boolean(json_object_get(data, "policy_stopped"))) ||
+            !current_response(session, data) ||
             !snag_string_in(class_name, classes) ||
             !message || strlen(message) > 8192u ||
             snag_partial_public_validate(partial, error, error_size) < 0 ||
@@ -1543,6 +1613,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->response_open = false;
         session->response_complete = false;
         session->response_terminal = SNAG_RESPONSE_TERMINAL_FAILED;
+        if (has_retry && (snag_json_integer_u64(data, "turn_retry_attempts", &session->turn_retry_attempts) < 0 ||
+                          session->turn_retry_attempts > (uint64_t)UINT32_MAX + 1u)) goto invalid;
+        if (has_policy) session->policy_stopped = json_is_true(json_object_get(data, "policy_stopped"));
     } else if (strcmp(type, "response_completed") == 0) {
         if (session->response_irc_seq > session->irc_consumed_seq)
             session->irc_consumed_seq = session->response_irc_seq;
@@ -1579,6 +1652,11 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->response_complete = true;
         session->response_terminal = SNAG_RESPONSE_TERMINAL_NONE;
         session->response_outcome = decision.outcome;
+        if (decision.outcome == SNAG_GRAPH_CALLS || decision.outcome == SNAG_GRAPH_FINAL)
+            session->turn_retry_attempts = 0u;
+        else if (decision.outcome != SNAG_GRAPH_REFUSAL && session->turn_retry_attempts <= UINT32_MAX)
+            ++session->turn_retry_attempts;
+        if (decision.outcome == SNAG_GRAPH_REFUSAL) session->policy_stopped = true;
         session->pending_call_count = 0;
         session->final_item_id[0] = '\0';
         session->final_response_id[0] = '\0';
@@ -2010,6 +2088,8 @@ clone_session_state(const struct snag_session *source,
     *staged = *source;
     staged->strings = source->strings ? json_copy(source->strings) : NULL;
     staged->compact_output = json_incref(source->compact_output);
+    staged->pending_input = json_incref(source->pending_input);
+    staged->active_instructions = json_incref(source->active_instructions);
     staged->response_public = json_incref(source->response_public);
     return source->strings && !staged->strings ? -1 : 0;
 }

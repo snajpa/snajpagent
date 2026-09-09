@@ -278,7 +278,7 @@ grep -q "^'$bin' --dotdir '$dotdir' --no-listen --no-client --resume '[0-9a-f]\\
 [ -d "$dotdir/trash" ]
 id=$(find "$dotdir/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
 [ ${#id} -eq 32 ]
-[ "$(wc -l < "$dotdir/sessions/$id/events.jsonl")" -eq 7 ]
+[ "$(grep -vc '"type":"response_output"' "$dotdir/sessions/$id/events.jsonl")" -eq 7 ]
 [ "$(grep -c '"type":"input_admitted"' "$dotdir/sessions/$id/events.jsonl")" -eq 1 ]
 
 # The writer owns the exact two-line header and framing; the builder owns only
@@ -341,7 +341,7 @@ out=$($bin -e --resume "$id" -- ping 2>"$root/err")
 [ "$out" = pong ]
 strip_resume "$root/err"
 only_resume "$root/err"
-[ "$(wc -l < "$dotdir/sessions/$id/events.jsonl")" -eq 13 ]
+[ "$(grep -vc '"type":"response_output"' "$dotdir/sessions/$id/events.jsonl")" -eq 13 ]
 [ "$(grep -c '"type":"input_admitted"' "$dotdir/sessions/$id/events.jsonl")" -eq 2 ]
 $bin -l >"$root/list" 2>"$root/err"
 grep -q "^$(printf %.8s "$id").*2" "$root/list"

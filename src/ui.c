@@ -889,6 +889,12 @@ snag_ui_simple_prompt(struct snag_ui *ui, bool active)
 
 static int history_snapshot(struct snag_ui *ui, bool refresh);
 
+bool
+snag_ui_leaving(const struct snag_ui *ui)
+{
+    return ui && ui->runtime && atomic_load(&ui->runtime->exit_requested);
+}
+
 int
 snag_ui_poll(struct snag_ui *ui, int timeout_ms,
             bool active, enum snag_term_action *action, char **text)
@@ -907,7 +913,12 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms,
             errno = fatal;
             return -1;
         }
-        if (atomic_exchange(&runtime->exit_requested, false)) {
+        if (atomic_load(&runtime->exit_requested)) {
+            /* Stop reading immediately, but let the engine retain submissions
+             * already received before delivering the exit control. */
+            item = queue_pop(&runtime->actions);
+            if (item) break;
+            atomic_store(&runtime->exit_requested, false);
             *action = SNAG_TERM_EXIT;
             return 1;
         }
@@ -1104,6 +1115,8 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
         return turn->user ? 0 : -1;
     }
     if (!turn->user) return 0;
+    if (!strcmp(type, "irc_admitted") && json_object_get(data, "steering"))
+        return history_append(&turn->user, snag_json_string(json_object_get(data, "steering"), "text"), "\nsteering: ");
     if (!strcmp(type, "steering_added"))
         return history_append(&turn->user, snag_json_string(data, "text"), "\nsteering: ");
     if (!strcmp(type, "response_started")) {
@@ -1139,6 +1152,8 @@ snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count
         rc = snag_session_each_event(session, history_event, &history, NULL, 0u);
         if (rc == 0) rc = history_finish(&history);
     }
+    if (rc == 0 && count && session->pending_input)
+        rc = snag_ui_submitted(ui, "pending input › ", snag_json_string(session->pending_input, "text"), false);
     if (rc == 0) rc = history_display(&history, NULL);
     free(history.turn.user);
     free(history.turn.assistant);

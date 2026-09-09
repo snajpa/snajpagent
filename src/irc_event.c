@@ -20,12 +20,17 @@ snag_irc_kind_name(enum snag_irc_event_kind kind)
 json_t *
 snag_irc_event_data(const struct snag_irc_event *event)
 {
-    return json_pack("{s:s,s:b,s:s,s:b,s:s,s:b,s:s,s:s,s:I,s:s,s:I,s:b}",
+    json_t *data = json_pack("{s:s,s:b,s:s,s:b,s:s,s:b,s:s,s:s,s:I,s:s,s:I,s:b}",
         "endpoint", event->endpoint, "historical", event->historical,
         "kind", snag_irc_kind_name(event->kind), "local", event->local,
         "nick", event->nick, "op", event->op, "room", event->room,
         "text", event->text, "timestamp_ms", (json_int_t)event->timestamp_ms,
         "stream", event->stream, "sequence", (json_int_t)event->sequence, "input", event->input);
+    if (event->classified && (snag_json_set_new(data, "urgent", json_boolean(event->urgent)) < 0 ||
+                             snag_json_set_new(data, "reply", json_boolean(event->reply)) < 0)) {
+        json_decref(data); return NULL;
+    }
+    return data;
 }
 
 static bool
@@ -48,7 +53,14 @@ snag_irc_event_read(const json_t *data, struct snag_irc_event *event)
     const char *kind = snag_json_string(data, "kind");
 
     memset(event, 0, sizeof(*event));
-    if (!snag_json_exact_keys(data, "endpoint historical kind local nick op room text timestamp_ms stream sequence input") || !kind ||
+    event->classified = json_object_get(data, "urgent") != NULL;
+    event->urgent = json_is_true(json_object_get(data, "urgent"));
+    event->reply = json_is_true(json_object_get(data, "reply"));
+    if (!snag_json_exact_keys(data, event->classified ?
+            "endpoint historical kind local nick op room text timestamp_ms stream sequence input urgent reply" :
+            "endpoint historical kind local nick op room text timestamp_ms stream sequence input") || !kind ||
+        (event->classified && (!json_is_boolean(json_object_get(data, "urgent")) ||
+                               !json_is_boolean(json_object_get(data, "reply")))) ||
         !event_field(data, "endpoint", event->endpoint, sizeof(event->endpoint)) ||
         !event->endpoint[0] ||
         !event_field(data, "room", event->room, sizeof(event->room)) ||

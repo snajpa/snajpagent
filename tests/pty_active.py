@@ -1367,6 +1367,136 @@ def test_multiline_and_paste():
     assert [item["data"]["text"] for item in turns] == ["line one\nline two", "ping"]
 
 
+def test_network_input_recovery_boundaries():
+    for cut_type in ("irc_event", "irc_admitted"):
+        port = free_port()
+        args = ["--listen", f"127.0.0.1:{port}", "--no-client",
+                "-n", "recoveryagent", "-o", "recoveryop", "-r", "lab"]
+        with Child(args, chat_prompt("recoveryop")) as child:
+            peer = IRCClient(port, "peer")
+            try:
+                peer.message("recoveryagent: network_zero")
+                child.send_wait(b"/rollout\r", b"network zero local only")
+                sid = child.session_id()
+                child.exit_cleanly(0)
+            finally:
+                peer.close()
+        path = STATE_ROOT / sid / "events.jsonl"
+        lines = path.read_bytes().splitlines(keepends=True)
+        log = [json.loads(line) for line in lines]
+        received = next(e for e in log if e["type"] == "irc_event" and
+                        "recoveryagent: network_zero" in e["data"]["text"])
+        admitted = next(e for e in log if e["type"] == "irc_admitted" and
+                        received["seq"] in e["data"]["sequences"])
+        assert admitted["data"]["input"]["text"] and received["data"]["urgent"]
+        cut = received if cut_type == "irc_event" else admitted
+        path.write_bytes(b"".join(lines[:cut["seq"]]))
+        with Child([*args, "--resume", sid], ready=None) as resumed:
+            resumed.wait(chat_prompt("recoveryop"))
+            resumed.send(b"/rollout\r")
+            end = resumed.wait(b"network zero local only")
+            resumed.exit_cleanly(end)
+        log = events(sid)
+        matches = [e for e in log if e["type"] == "irc_admitted" and
+                   received["seq"] in e["data"]["sequences"]]
+        assert len(matches) == 1, matches
+        assert len([e for e in log if e["type"] == "turn_started"]) == 1
+        assert len([e for e in log if e["type"] == "turn_completed"]) == 1
+
+
+def test_deferred_controls_in_admission_order():
+    root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
+    marker = root / "deferred-editor-started"
+    editor = root / "deferred-editor"
+    editor.write_text("#!/bin/sh\nprintf x >> '" + str(marker) + "'\n", encoding="utf-8")
+    editor.chmod(0o700)
+    with Child([], PROMPT.rstrip(), env=dict(os.environ, EDITOR=str(editor))) as child:
+        child.send_wait(b"engine_blocked\r", b"engine-block-start")
+        child.send(b"/model cache\r/config\r\x04")
+        child.wait(RESUME_HEADER, timeout=5)
+        child.finish()
+        sid = child.session_id()
+    assert not marker.exists()
+    log = events(sid)
+    requested = [e["data"]["control"] for e in log if e["type"] == "control_requested"]
+    assert requested == [2, 1], requested
+    with Child(["--resume", sid], ready=None, env=dict(os.environ, EDITOR=str(editor))) as child:
+        child.wait(b"configuration unchanged")
+        child.wait_idle_prompt()
+        child.exit_now()
+    log = events(sid)
+    assert [e["data"]["control"] for e in log if e["type"] == "control_started"] == requested
+    assert [e["data"]["control"] for e in log if e["type"] == "control_finished"] == requested
+    assert marker.read_text() == "x"
+
+
+def test_exit_preserves_pending_submission():
+    with Child([], DEFAULT_IDLE_PROMPT) as child:
+        child.send_wait(b"engine_blocked\r", b"engine-block-start")
+        # The UI receives both while the engine is in the bounded stall.
+        child.send(b"/queue ping\r\x04")
+        child.wait(RESUME_HEADER, timeout=5)
+        child.finish()
+        session_id = child.session_id()
+    log = events(session_id)
+    assert one(log, "future_turn_queued")["data"]["text"] == "ping", log
+    assert len([e for e in log if e["type"] == "turn_started"]) == 1
+    with Child(["--resume", session_id], ready=None) as resumed:
+        answer = resumed.wait(b"pong")
+        resumed.exit_cleanly(answer)
+    turns = [e["data"] for e in events(session_id) if e["type"] == "turn_started"]
+    assert len(turns) == 2 and turns[1]["text"] == "ping"
+
+
+def test_input_survives_preparation_failure():
+    # Failure before turn_started must leave the submitted intent recoverable.
+    agents = Path(WORKSPACE) / "AGENTS.md"
+    assert not agents.exists()
+    agents.mkdir()
+    try:
+        with Child([], DEFAULT_IDLE_PROMPT) as child:
+            child.send_wait(b"/ro ping\r", b"must be a non-symlink regular file")
+            session_id = child.session_id()
+            log = events(session_id)
+            accepted = [e for e in log if e["type"] == "input_received"]
+            assert len(accepted) == 1, log
+            assert accepted[0]["data"]["text"] == "ping"
+            assert accepted[0]["data"]["read_only"] is True
+            assert not any(e["type"] == "turn_started" for e in log)
+            child.kill()
+    finally:
+        agents.rmdir()
+    with Child(["--resume", session_id], ready=None) as resumed:
+        answer = resumed.wait(b"pong")
+        resumed.exit_cleanly(answer)
+    turns = [e["data"] for e in events(session_id) if e["type"] == "turn_started"]
+    assert len(turns) == 1 and turns[0]["text"] == "ping" and turns[0]["read_only"]
+    with Child(["--resume", session_id], PROMPT.rstrip()) as resumed:
+        resumed.exit_now()
+    assert len([e for e in events(session_id) if e["type"] == "turn_started"]) == 1
+
+def test_resume_keeps_original_instruction_paths():
+    root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
+    work = root / "instruction-recovery"
+    work.mkdir()
+    entry = work / "AGENTS.md"
+    entry.write_text("Original entry point.\n", encoding="utf-8")
+    with Child(["-C", str(work)], PROMPT.rstrip()) as child:
+        child.send_wait(b"queue_slow\r", b"working slowly")
+        sid = child.session_id()
+        child.kill()
+    # The recorded pointer remains context, while new work rediscovers its own
+    # paths. No file contents or private reasoning are saved automatically.
+    entry.rename(work / "moved-notes.md")
+    with Child(["--resume", sid], ready=None) as child:
+        end = child.wait(b"fixture answer")
+        child.exit_cleanly(end)
+    turns = [e for e in events(sid) if e["type"] == "turn_started"]
+    assert len(turns) == 1 and str(entry) in turns[0]["data"]["instructions"]
+    assert one(events(sid), "turn_completed")
+
+
+
 def test_durable_queue_scheduling():
     # Armed future work continues after the original turn, including a crash
     # after /next acknowledgement. Idle additions stay paused until /next.
@@ -1839,7 +1969,7 @@ def test_runtime_verbosity_resume():
 
 
 def test_command_name_completion():
-    child = Child([], PROMPT.rstrip())
+    child = Child([], PROMPT.rstrip(), env=dict(os.environ, EDITOR="true"))
 
     start = len(child.buf)
     end = child.send_wait(b"/he\t", b"lp", start=start)
@@ -1970,12 +2100,42 @@ def test_unfinished_public_resume():
         assert sum(e["type"] == "response_started" for e in events(session_id)) == count
 
 
+def test_retry_budget_survives_response_boundary():
+    config = write_config("resume-budget.ini", "[agent]\nmax_turn_retries=1\n[provider openai]\n")
+    for failure_number in (0, 1):
+        before = session_ids()
+        result = subprocess.run([BINARY, "--dotdir", DOTDIR, "--config", str(config),
+                                 "-e", "--", "empty"], cwd=WORKSPACE,
+                                capture_output=True, timeout=10)
+        assert result.returncode == 4, result.stderr
+        sid = new_session(before)
+        path = STATE_ROOT / sid / "events.jsonl"
+        lines = path.read_bytes().splitlines(keepends=True)
+        log = [json.loads(line) for line in lines]
+        failures = [e for e in log if e["type"] == "response_completed"]
+        assert len(failures) == 2, log
+        assert one(log, "turn_recovery")["data"]["retry_attempts"] == 1
+        path.write_bytes(b"".join(lines[:failures[failure_number]["seq"]]))
+        with Child(["--config", str(config), "--resume", sid], ready=None) as child:
+            child.wait(b"turn failed; try /retry")
+            child.wait_idle_prompt()
+            child.exit_now()
+        log = events(sid)
+        assert len([e for e in log if e["type"] == "response_completed"]) == 2, log
+        assert len([e for e in log if e["type"] == "turn_started"]) == 1, log
+        assert one(log, "turn_failed")
+
+
 def test_explicit_cancel_is_not_resumed():
     with Child([], PROMPT.rstrip()) as child:
         child.send_wait(b"queue_slow\r", b"working slowly")
         session_id = child.session_id()
         end = child.send_wait(b"\x03", b"turn interrupted", start=len(child.buf))
         child.exit_cleanly(end)
+    path = STATE_ROOT / session_id / "events.jsonl"
+    lines = path.read_bytes().splitlines(keepends=True)
+    cancellation = next(e for e in map(json.loads, lines) if e["type"] == "turn_cancel_requested")
+    path.write_bytes(b"".join(lines[:cancellation["seq"]]))
     with Child(["--resume", session_id], PROMPT.rstrip()) as child:
         child.wait(b"interrupted turn")
         child.wait(b"working slowly")
@@ -2119,7 +2279,7 @@ def test_uncached_typed_model_selection():
     # Even an explicitly located Codex cache is not snajpagent state.
     env["CODEX_HOME"] = str(custom_codex_home)
     child = Child([], PROMPT.rstrip(), env=env)
-    end = child.send_wait(b"/model\r", b"model cache is empty; use /model cache while idle")
+    end = child.send_wait(b"/model\r", b"model cache is empty; use /model cache")
     child.wait(PROMPT.rstrip(), start=end)
     assert not cache_path.exists()
 
@@ -2140,7 +2300,7 @@ def test_uncached_typed_model_selection():
     # The conventional ~/.codex cache is ignored as well.
     env.pop("CODEX_HOME", None)
     child = Child([], PROMPT.rstrip(), env=env)
-    end = child.send_wait(b"/model list\r", b"model cache is empty; use /model cache while idle")
+    end = child.send_wait(b"/model list\r", b"model cache is empty; use /model cache")
     child.wait(PROMPT.rstrip(), start=end)
     assert not cache_path.exists()
     child.exit_now(expect_resume=False)
@@ -3938,18 +4098,19 @@ def test_network_chat_and_managed_mention():
     count_turn = next(
         event for event in turns if "network_count_wait" in event["data"]["text"]
     )
-    count_steering = next(
-        event for event in log
-        if event["type"] == "steering_added" and
-        event["data"]["turn_id"] == count_turn["data"]["turn_id"]
-    )
+    count_admission = next(event for event in log
+        if event["type"] == "irc_admitted" and
+        event["data"].get("steering", {}).get("turn_id") == count_turn["data"]["turn_id"])
+    count_steering = count_admission["data"]["steering"]
+    assert count_admission["data"]["sequences"]
+
     count_start = next(
         event for event in log
         if event["type"] == "response_started" and
         event["data"]["turn_id"] == count_turn["data"]["turn_id"]
     )
     assert count_start["data"]["steering_ids"] == [
-        count_steering["data"]["steering_id"]
+        count_steering["steering_id"]
     ]
     reminder_turn = next(
         event for event in turns if "network_reminder" in event["data"]["text"]
@@ -3986,9 +4147,14 @@ def test_network_chat_and_managed_mention():
         event for event in turns if "network_managed" in event["data"]["text"]
     )
     turn_id = managed_turn["data"]["turn_id"]
-    steering = turn_events(log, "steering_added", turn_id)
-    assert len(steering) == 1
-    assert "network managed mention" in steering[0]["data"]["text"]
+    admitted = [e for e in log if e["type"] == "irc_admitted" and
+                e["data"].get("steering", {}).get("turn_id") == turn_id]
+    assert len(admitted) == 1 and admitted[0]["data"]["sequences"]
+    source = next(e for e in log if e["type"] == "irc_event" and
+                  e["seq"] in admitted[0]["data"]["sequences"] and
+                  "network managed mention" in e["data"]["text"])
+    assert source["data"]["urgent"]
+    assert source["data"]["stream"] in admitted[0]["data"]["steering"]["text"]
     completed = turn_events(log, "response_completed", turn_id)
     assert [event["data"]["cycle"] for event in completed] == [1, 2, 3, 4]
     cycle2_call = completed[1]["data"]["items"][0]["call_id"]
@@ -4362,6 +4528,11 @@ if __name__ == "__main__":
     test_interrupt()
     test_prompt_history_and_reverse_search()
     test_multiline_and_paste()
+    test_network_input_recovery_boundaries()
+    test_deferred_controls_in_admission_order()
+    test_exit_preserves_pending_submission()
+    test_input_survives_preparation_failure()
+    test_resume_keeps_original_instruction_paths()
     test_durable_queue_scheduling()
     test_resume_preserves_armed_fifo()
     test_goal_quoted_reserved_wording()
@@ -4376,6 +4547,7 @@ if __name__ == "__main__":
     test_resume_preserves_inactive_and_queued_goal_states()
     test_queue_mutation_commands()
     test_unfinished_public_resume()
+    test_retry_budget_survives_response_boundary()
     test_explicit_cancel_is_not_resumed()
     test_recovery_at_durable_tool_boundaries()
     test_idle_compaction_crash_recovery()

@@ -522,7 +522,7 @@ snag_file_executable(const char *path)
 }
 
 int
-snag_editor_run(const char *path, bool *success)
+snag_editor_run(const char *path, bool *success, void (*service)(void *), void *opaque)
 {
     wchar_t *file = wide_path(path);
     DWORD editor_len = GetEnvironmentVariableW(L"EDITOR", NULL, 0);
@@ -576,8 +576,12 @@ snag_editor_run(const char *path, bool *success)
     }
     (void)CloseHandle(child.hThread);
     DWORD status;
-    if (WaitForSingleObject(child.hProcess, INFINITE) != WAIT_OBJECT_0 ||
-        !GetExitCodeProcess(child.hProcess, &status))
+    DWORD waited;
+    do {
+        waited = WaitForSingleObject(child.hProcess, service ? 25u : INFINITE);
+        if (waited == WAIT_TIMEOUT && service) service(opaque);
+    } while (waited == WAIT_TIMEOUT);
+    if (waited != WAIT_OBJECT_0 || !GetExitCodeProcess(child.hProcess, &status))
         path_error(GetLastError());
     else {
         *success = status == 0;
@@ -2272,7 +2276,7 @@ snag_file_executable(const char *path)
 }
 
 int
-snag_editor_run(const char *path, bool *success)
+snag_editor_run(const char *path, bool *success, void (*service)(void *), void *opaque)
 {
     const char *editor = getenv("EDITOR");
     *success = false;
@@ -2290,8 +2294,12 @@ snag_editor_run(const char *path, bool *success)
     if (child < 0)
         return -1;
     do {
-        got = waitpid(child, &status, 0);
-    } while (got < 0 && errno == EINTR);
+        got = waitpid(child, &status, service ? WNOHANG : 0);
+        if (!got && service) {
+            service(opaque);
+            (void)snag_sleep_ms(25u);
+        }
+    } while (!got || (got < 0 && errno == EINTR));
     if (got != child)
         return -1;
     *success = WIFEXITED(status) && WEXITSTATUS(status) == 0;

@@ -142,6 +142,8 @@ struct snag_session {
     /* Private immutable string owners; text fields above and in pending inputs borrow. */
     json_t *strings;
     json_t *compact_output;
+    json_t *pending_input; /* Accepted direct input awaiting turn preparation. */
+    json_t *active_instructions; /* Original path metadata for same-turn recovery. */
     json_t *response_public; /* Reconstructed public prefix of the current response. */
     size_t response_public_bytes;
     int dir_fd;
@@ -162,6 +164,8 @@ struct snag_session {
     size_t pending_steering_bytes;
     size_t pending_queue_bytes;
     unsigned int active_cycle;
+    uint64_t turn_retry_attempts;
+    uint32_t turn_retry_limit;
     enum snag_graph_outcome response_outcome;
     struct snag_pending_call pending_calls[SNAG_MAX_CALLS_PER_RESPONSE];
     struct snag_pending_steering pending_steering[SNAG_MAX_STEERING_PER_TURN];
@@ -172,6 +176,7 @@ struct snag_session {
     bool append_rollback_pending;
     int64_t append_rollback_end;
     unsigned int pending_controls, started_controls;
+    uint64_t control_seq[6];
     bool queue_armed;
     bool active_turn;
     bool last_turn_failed;
@@ -180,6 +185,7 @@ struct snag_session {
     bool active_queued;
     bool active_goal;
     bool cancel_requested;
+    bool policy_stopped;
     bool archived;
     bool delete_requested;
     bool response_open;

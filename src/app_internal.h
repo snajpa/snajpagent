@@ -81,7 +81,7 @@ struct app_state {
     bool steering_requested;
     bool control_requested, applying_controls;
     bool tool_waiting, yield_requested;
-    uint64_t input_generation;
+    uint64_t input_generation, persistence_failures;
     bool interrupt_requested;
     bool goal_armed;
     bool recovery_wait;
@@ -206,6 +206,8 @@ int snag_app_lifecycle_command(struct app_state *app, const char *line,
 int snag_app_parse_queue_argument(const char *argument,
                                  enum queue_command_kind *kind,
                                  size_t *number);
+
+json_t *snag_app_input_received_data(struct app_state *, const char *, bool);
 
 int snag_app_active_input_pump(void *opaque, unsigned int timeout_ms);
 int snag_app_provider_input_pump(void *opaque, unsigned int timeout_ms);

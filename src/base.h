@@ -81,7 +81,7 @@ int snag_isatty(int fd);
 char *snag_default_shell(void);
 char *snag_program_path(const char *program);
 int snag_file_executable(const char *path);
-int snag_editor_run(const char *path, bool *success);
+int snag_editor_run(const char *path, bool *success, void (*service)(void *), void *opaque);
 int snag_hostname(char *out, size_t size);
 /* Owned UTF-8 copies; absent environment variables return NULL/ENOENT. */
 char *snag_environment(const char *name);
