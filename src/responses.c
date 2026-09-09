@@ -369,19 +369,17 @@ reconcile_part(struct snag_responses_stream *stream, size_t output_index,
         return stream_fail(stream, EOVERFLOW,
                            SNAG_OVERSIZED_OUTPUT_CORRECTION);
     }
-    if (!delta && part->value_seen) {
-        if (!text_equal(&part->text, text, len))
-            return stream_fail(stream, EPROTO,
-                               "public delta and snapshot disagree");
-    } else {
-        if (account_bytes(stream, len) < 0 ||
-            snag_buf_append(&part->text, text, len) < 0)
-            return stream_fail(stream, EOVERFLOW,
-                               "public response item exceeds its limit");
-        part->value_seen = true;
-        if (emit_text(stream, output_index, item, kind, text, len) < 0)
-            return -1;
-    }
+    size_t offset = !delta && part->value_seen ? part->text.len : 0u;
+    if (!delta && part->value_seen &&
+        (part->complete ? !text_equal(&part->text, text, len) :
+         len < offset || (offset && memcmp(part->text.data, text, offset))))
+        return stream_fail(stream, EPROTO, "public delta and snapshot disagree");
+    if (account_bytes(stream, len - offset) < 0 ||
+        snag_buf_append(&part->text, text + offset, len - offset) < 0)
+        return stream_fail(stream, EOVERFLOW, "public response item exceeds its limit");
+    part->value_seen = true;
+    if (emit_text(stream, output_index, item, kind, text + offset, len - offset) < 0)
+        return -1;
     if (complete)
         part->complete = true;
     return 0;
@@ -723,7 +721,7 @@ handle_provider_failure(struct snag_responses_stream *stream,
     json_t *response = json_object_get(root, "response");
     json_t *error = json_object_get(root, "error");
     const char *message = NULL;
-    struct snag_provider_failure failure;
+    const struct snag_provider_failure *failure = &stream->provider_failure;
 
     if (json_is_object(response)) {
         json_t *nested = json_object_get(response, "error");
@@ -734,14 +732,28 @@ handle_provider_failure(struct snag_responses_stream *stream,
         message = snag_json_string(error, "message");
     if (!message && strcmp(type, "error") == 0)
         message = snag_json_string(root, "message");
-    if (snag_provider_failure_from_json(root, &failure) < 0)
-        return stream_fail(stream, EPROTO,
-                           "invalid structured provider failure");
-    stream->provider_failure = failure;
-    const char *kind = failure.code[0] ? failure.code : failure.type;
+    const char *kind = failure->code[0] ? failure->code : failure->type;
     return stream_fail(stream, EIO, "%s%s%s%s%s%s", type,
                        kind[0] ? " [" : "", kind, kind[0] ? "]" : "",
                        message ? ": " : "", message ? message : "");
+}
+
+static bool
+clarification_item_safe(const json_t *item)
+{
+    const char *kind = snag_json_string(item, "type");
+    json_t *content = json_object_get(item, "content");
+
+    if (kind && !strcmp(kind, "reasoning"))
+        return true;
+    if (!kind || strcmp(kind, "message") ||
+        !snag_string_in(snag_json_string(item, "role"), "assistant") ||
+        !json_is_array(content))
+        return false;
+    for (size_t i = 0; i < json_array_size(content); ++i)
+        if (!snag_string_in(snag_json_string(json_array_get(content, i), "type"), "output_text"))
+            return false;
+    return true;
 }
 
 static int
@@ -749,31 +761,55 @@ dispatch_event(struct snag_responses_stream *stream, const char *type,
                const json_t *root)
 {
     json_t *output = json_object_get(json_object_get(root, "response"), "output");
+    if (snag_string_in(type, "response.failed response.incomplete error")) {
+        struct snag_provider_failure failure;
+        if (snag_provider_failure_from_json(root, &failure) < 0)
+            return stream_fail(stream, EPROTO, "invalid structured provider failure");
+        stream->provider_failure = failure;
+    }
     if (output && (!json_is_array(output) || json_array_size(output))) {
         stream->retry_unsafe = true;
         if (!json_is_array(output))
-            stream->clarification_unsafe = true;
+            (void)snprintf(stream->clarification_skipped, sizeof(stream->clarification_skipped),
+                           "response_output_snapshot");
         for (size_t i = 0; i < json_array_size(output); ++i) {
-            const char *kind = snag_json_string(json_array_get(output, i), "type");
-            if (!kind || strcmp(kind, "reasoning"))
-                stream->clarification_unsafe = true;
+            const json_t *item = json_array_get(output, i);
+            const char *kind = snag_json_string(item, "type");
+            if (kind && !strcmp(kind, "reasoning")) continue;
+            if (snag_string_in(type, "response.failed response.incomplete error") &&
+                stream->created && clarification_item_safe(item)) {
+                /* Preserve and validate the failed response's public snapshot
+                 * through the same identity/content reducer as streamed text. */
+                if (message_snapshot(stream, i, item,
+                        snag_string_in(snag_json_string(item, "status"), "completed")) < 0) {
+                    (void)snprintf(stream->clarification_skipped, sizeof(stream->clarification_skipped),
+                                   "invalid_response_output_snapshot");
+                    return -1;
+                }
+            } else if (!stream->clarification_skipped[0]) {
+                (void)snprintf(stream->clarification_skipped, sizeof(stream->clarification_skipped),
+                               "response_output_snapshot");
+            }
         }
     }
     if (strcmp(type, "keepalive") == 0)
         return 0;
     if (strcmp(type, "response.created") == 0)
         return handle_response_created(stream, root);
-    /* Only lifecycle notices prove no output or hosted-tool activity. */
+    /* Text can be retained for clarification, but cannot be transport-replayed. */
     if (!snag_string_in(type, "response.queued response.in_progress response.failed response.incomplete error")) {
-        const char *kind = snag_json_string(json_object_get(root, "item"), "type");
-        bool reasoning = (snag_string_in(type, "response.output_item.added response.output_item.done") &&
-                           kind && !strcmp(kind, "reasoning")) ||
+        bool safe = (snag_string_in(type, "response.output_item.added response.output_item.done") &&
+                     clarification_item_safe(json_object_get(root, "item"))) ||
+            (snag_string_in(type, "response.content_part.added response.content_part.done") &&
+             snag_string_in(snag_json_string(json_object_get(root, "part"), "type"), "output_text")) ||
+            snag_string_in(type, "response.output_text.delta response.output_text.done") ||
             snag_string_in(type, "response.reasoning_summary_part.added response.reasoning_summary_part.done "
                 "response.reasoning_summary_text.delta response.reasoning_summary_text.done "
                 "response.reasoning_text.delta response.reasoning_text.done");
         stream->retry_unsafe = true;
-        if (!reasoning)
-            stream->clarification_unsafe = true;
+        if (!safe && !stream->clarification_skipped[0])
+            (void)snprintf(stream->clarification_skipped, sizeof(stream->clarification_skipped),
+                           "stream:%s", type);
     }
     if (strcmp(type, "response.output_item.added") == 0)
         return handle_output_item(stream, root, false);

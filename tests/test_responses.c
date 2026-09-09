@@ -146,6 +146,49 @@ test_terminal_snapshot_can_supply_unseen_items(void)
 }
 
 static void
+test_failed_snapshot_preserves_only_consistent_text(void)
+{
+    static const struct {
+        const char *id, *status, *text;
+        bool eligible;
+    } cases[] = {
+        {"m", "in_progress", "hello world", true},
+        {"m", "completed", "hello world", true},
+        {"m", "in_progress", "hello", true},
+        {"m", "in_progress", "other", false},
+        {"m", "in_progress", "hel", false},
+        {"other", "in_progress", "hello world", false}
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        struct parsed_stream emitted = parsed_new(1024u);
+        struct snag_responses_stream responses;
+        struct snag_sse_parser sse;
+        struct snag_buf wire = {.max = 8192u};
+        char error[256] = {0};
+        assert(snag_buf_printf(&wire,
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"m\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[]}}\n\n"
+            "data: {\"type\":\"response.content_part.added\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n"
+            "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"m\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello\"}\n\n"
+            "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"cyber_policy\",\"message\":\"policy rejected\"},\"output\":[{\"id\":\"%s\",\"type\":\"message\",\"status\":\"%s\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[{\"type\":\"output_text\",\"text\":\"%s\"}]}]}}\n\n",
+            cases[i].id, cases[i].status, cases[i].text) == 0);
+        snag_responses_stream_init(&responses, capture_emit, &emitted);
+        snag_sse_init(&sse, snag_responses_sse_record, &responses);
+        assert(snag_sse_feed(&sse, wire.data, wire.len, error, sizeof(error)) < 0);
+        assert(responses.failed && !responses.terminal && responses.retry_unsafe);
+        assert(snag_provider_failure_is_policy(&responses.provider_failure));
+        assert((responses.clarification_skipped[0] == '\0') == cases[i].eligible);
+        const char *expected = cases[i].eligible ? cases[i].text : "hello";
+        assert(emitted.text.len == strlen(expected));
+        assert(!memcmp(emitted.text.data, expected, emitted.text.len));
+        snag_sse_free(&sse);
+        snag_responses_stream_free(&responses);
+        snag_buf_free(&wire);
+        parsed_free(&emitted);
+    }
+}
+
+static void
 test_empty_public_items_get_specific_correction(void)
 {
     static const char streamed[] =
@@ -727,6 +770,7 @@ main(void)
 {
     test_deltas_survive_empty_terminal_output();
     test_terminal_snapshot_can_supply_unseen_items();
+    test_failed_snapshot_preserves_only_consistent_text();
     test_empty_public_items_get_specific_correction();
     test_oversized_public_items_get_specific_correction();
     test_structured_keepalives_do_not_end_response();

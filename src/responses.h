@@ -17,6 +17,7 @@ struct snag_provider_failure {
     uint64_t context_limit_tokens;
     uint64_t requested_input_tokens;
     enum snag_output_correction output_correction;
+    char clarification_skipped[128];
     bool new_input;
     uint32_t retry_after_ms;
 };
@@ -77,7 +78,7 @@ struct snag_responses_stream {
     bool terminal;
     bool failed;
     bool retry_unsafe;
-    bool clarification_unsafe;
+    char clarification_skipped[128];
     enum snag_output_correction output_correction;
     struct snag_provider_failure provider_failure;
     char error[256];

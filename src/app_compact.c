@@ -152,14 +152,14 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
     if (rc != 0 && snag_provider_failure_is_capacity(&failure))
         rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
     if (rc != 0 && !failure.new_input && snag_provider_failure_is_policy(&failure))
-        app->turn_policy_stopped = true;
+        app->turn_policy_stopped = SNAG_POLICY_STOP_PROVIDER;
     if (rc != 0)
         goto out;
     rc = -1;
     if (snag_response_graph_classify(&graph, &decision, error, error_size) < 0)
         goto out;
     if (decision.outcome == SNAG_GRAPH_REFUSAL)
-        app->turn_policy_stopped = true;
+        app->turn_policy_stopped = SNAG_POLICY_STOP_REFUSAL;
     struct snag_response_item final = snag_response_graph_item(&graph, decision.final_index);
     if (decision.outcome != SNAG_GRAPH_FINAL ||
         decision.final_index >= graph.count || !final.text) {

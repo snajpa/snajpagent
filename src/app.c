@@ -2561,7 +2561,7 @@ fail_response(struct app_state *app, struct turn_retry *retry, const char *turn_
               const char *response_id, unsigned int cycle,
               const char *class_name, const char *message, json_t *partial,
               unsigned int retry_count, const char *cause,
-              char *error, size_t error_size)
+              const struct snag_provider_failure *provider_failure, char *error, size_t error_size)
 {
     if (!partial)
         partial = json_array();
@@ -2573,6 +2573,12 @@ fail_response(struct app_state *app, struct turn_retry *retry, const char *turn_
     if (data && (snag_json_set_new(data, "policy_stopped", json_boolean(app->turn_policy_stopped)) < 0 ||
                  snag_json_set_new(data, "turn_retry_attempts", json_integer((json_int_t)(retry->attempts + 1u))) < 0 ||
                  snag_json_set_new(data, "new_input", json_boolean(retry->new_input)) < 0)) {
+        json_decref(data); data = NULL;
+    }
+    if (data && provider_failure && snag_provider_failure_is_policy(provider_failure) &&
+        snag_json_set_new(data, "policy", json_pack("{s:s,s:s,s:s}",
+            "code", provider_failure->code, "type", provider_failure->type,
+            "clarification_skipped", provider_failure->clarification_skipped)) < 0) {
         json_decref(data); data = NULL;
     }
     if (!data)
@@ -2639,7 +2645,8 @@ recover_session(struct app_state *app, char *error, size_t error_size)
             error, error_size) < 0)
         return -1;
     if (session->policy_stopped) {
-        if (snag_app_goal_pause(app, "refusal", error, error_size) < 0) return -1;
+        if (snag_app_goal_pause(app, session->policy_stopped == SNAG_POLICY_STOP_REFUSAL ?
+                "refusal" : "provider_policy", error, error_size) < 0) return -1;
         return app_warning(app, "recovered provider policy stop; clarify the task before continuing");
     }
     return app_warning(app, "recovered unfinished turn; continuing from durable context and tool results");
@@ -2963,7 +2970,7 @@ turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
     app->recovery_wait = false;
     if (app->interrupt_requested || app->input_closed) return 2;
     if (policy && app->steering_requested) {
-        app->turn_policy_stopped = false;
+        app->turn_policy_stopped = SNAG_POLICY_STOP_NONE;
         app->steering_requested = false;
         return 0;
     }
@@ -3273,7 +3280,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 "request diagnostics could not be rendered";
             if (!partial || fail_response(app, retry, turn_id, response_id, cycle,
                                           "output", failure, partial, 0u,
-                                          "output_failure", error,
+                                          "output_failure", NULL, error,
                                           sizeof(error)) < 0) {
                 report_message = error[0] ? error :
                                 "diagnostic output failure could not be persisted";
@@ -3376,6 +3383,11 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 continue;
             }
         }
+        if (snag_provider_failure_is_policy(&provider_failure) &&
+            !provider_failure.clarification_skipped[0])
+            (void)snag_strcpy(provider_failure.clarification_skipped,
+                             sizeof(provider_failure.clarification_skipped),
+                             app->stream_failed ? "output_failure" : "clarification_limit");
         cyber_clarifications = 0u;
         if (provider_rc < 0 || app->stream_failed) {
             bool capacity_failure = provider_rc < 0 &&
@@ -3467,7 +3479,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             /* Fresh queued/chat input keeps its existing failed-request handoff. */
             retry->new_input = !app->stream_failed && provider_failure.new_input;
             if (!provider_failure.new_input && snag_provider_failure_is_policy(&provider_failure))
-                app->turn_policy_stopped = true;
+                app->turn_policy_stopped = SNAG_POLICY_STOP_PROVIDER;
             if (!app->stream_failed && provider_failure.new_input &&
                 app->session.goal_status != SNAG_GOAL_ACTIVE)
                 retry->limit = retry->attempts;
@@ -3477,7 +3489,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                               (app->stream_errno == EPROTO ?
                                "protocol_failure" : "output_failure") :
                               "provider_failure",
-                              error, sizeof(error)) < 0) {
+                              &provider_failure, error, sizeof(error)) < 0) {
                 goto fail;
             }
             (void)app_error(app, failure);
@@ -3505,7 +3517,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             }
             if (fail_response(app, retry, turn_id, response_id, cycle, "protocol",
                               failure, partial, provider_retry_count,
-                              "protocol_failure", error, sizeof(error)) < 0) {
+                              "protocol_failure", NULL, error, sizeof(error)) < 0) {
                 goto fail;
             }
             (void)app_error(app, failure);
@@ -3573,7 +3585,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             continue;
         }
         if (decision.outcome == SNAG_GRAPH_REFUSAL)
-            app->turn_policy_stopped = true;
+            app->turn_policy_stopped = SNAG_POLICY_STOP_REFUSAL;
         if (app->session.process_count && decision.outcome != SNAG_GRAPH_CALLS) {
             const char *message = "Unsettled commands remain; collect their terminal results before a final answer.";
             if (fail_turn(app, retry, turn_id, "protocol_failure", "protocol", message,
@@ -3782,7 +3794,8 @@ run_tracked_turn(struct app_state *app, const char *prompt,
     struct snag_queued_turn queued_copy;
     int rc;
     if (!retained) return 3;
-    app->turn_policy_stopped = app->session.active_turn && app->session.policy_stopped;
+    app->turn_policy_stopped = app->session.active_turn ?
+        app->session.policy_stopped : SNAG_POLICY_STOP_NONE;
     if (app->turn_policy_stopped) {
         free(retained);
         (void)app_warning(app, "Provider policy rejection; clarify the task to continue.");
@@ -3825,7 +3838,9 @@ run_tracked_turn(struct app_state *app, const char *prompt,
         if (app->turn_policy_stopped) {
             retry.attempts = 0u;
             char error[256] = {0};
-            if (snag_app_goal_pause(app, "refusal", error, sizeof(error)) < 0) {
+            const char *reason = app->turn_policy_stopped == SNAG_POLICY_STOP_REFUSAL ?
+                                 "refusal" : "provider_policy";
+            if (snag_app_goal_pause(app, reason, error, sizeof(error)) < 0) {
                 (void)app_error(app, error);
                 rc = 3;
                 break;

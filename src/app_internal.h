@@ -85,7 +85,7 @@ struct app_state {
     bool interrupt_requested;
     bool goal_armed;
     bool recovery_wait;
-    bool turn_policy_stopped;
+    enum snag_policy_stop turn_policy_stopped;
     uint64_t input_received_ms;
     unsigned int recovery_delay_ms;
     uint64_t recovery_notice_ms, recovery_status_ms;

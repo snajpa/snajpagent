@@ -2366,26 +2366,30 @@ malformed or ambiguous partial records are not automatically replayed.
 .PP
 Policy, access, quota and unknown structured failures skip the short transport
 retry loop. Access, quota and unknown failures retain paced turn recovery.
-For a pre-output
+For an eligible
 .B cyber_policy
 rejection, the model receives a durable clarification instruction immediately,
 with up to five attempts per consecutive clarification sequence. The count
 resets when the response continues normally or clarification stops, including
-when its limit is exhausted. Reasoning-only stream events
-do not delay clarification.  The original task remains intact: the instruction asks
+when its limit is exhausted. Reasoning events and ordinary assistant text,
+including incomplete messages, permit clarification. Delivered text is retained
+in the session event log and the next model request. The goal remains active during these
+attempts. The original task remains intact: the instruction asks
 for accurate restatement of ambiguous phrasing with purpose, actions, targets
 and authorization unchanged, and operator clarification where needed.  New input
-or observed public output, refusal, tool or unknown activity prevents another
+or observed refusal, tool or unknown activity prevents another
 automatic clarification. After five clarification attempts, a further rejection
 stops automatic retries and pauses an active goal. Other policy rejections also
-stop automatic retries. Existing running commands are retained while the
+stop automatic retries. A policy pause is recorded as a provider rejection;
+an explicit model refusal has a separate pause reason and notice.
+Existing running commands are retained while the
 interactive session waits for operator clarification; they are not replayed.
 There is no provider switch or concealed task scope.
 .PP
 Rollout shows one concise "provider clarification N/5" notice at every verbosity
 level.  Existing levels 4, 5 and 6 add event, redacted protocol and wire details.
-Error codes, not message wording, determine eligibility.  A failed stream never
-becomes a successful response merely because the connection closed.
+Structured error codes or types, not message wording, determine eligibility.  Policy failures record the structured code/type and the reason clarification stopped, including the first unsafe stream event or the exhausted clarification limit.
+A failed stream never becomes a successful response merely because the connection closed.
 .SH "Building and installing"
 .SS Binary releases
 Release availability and platform compatibility are listed at

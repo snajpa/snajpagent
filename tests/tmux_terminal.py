@@ -3559,7 +3559,7 @@ def run_provider_clarification_cases(binary, root, provider, environment):
                     assert time.monotonic() < deadline, "new input was not retained"
                     time.sleep(0.02)
                 release.set()
-            terminal.wait("fixture scope rejection" if mode in ("partial", "exhausted") else
+            terminal.wait("fixture scope rejection" if mode == "exhausted" else
                           "provider clarification 1/5")
             wait_irc_idle([terminal])
             if mode == "queue":
@@ -3567,10 +3567,10 @@ def run_provider_clarification_cases(binary, root, provider, environment):
                 wait_irc_idle([terminal])
             _, events = read_events(terminal.dotdir)
             corrections = event_list(events, "response_output_correction")
-            count = 0 if mode == "partial" else 1 if mode in ("steer", "chat", "queue") else 5
+            count = 1 if mode in ("steer", "chat", "queue") else 5
             assert len(corrections) == count, (mode, len(corrections))
             relevant = requests[1:] if mode == "prior" else requests
-            if mode in ("success", "exhausted", "prior", "reasoning"):
+            if mode in ("success", "exhausted", "prior", "reasoning", "partial"):
                 assert len(relevant) == 6, (mode, len(relevant))
                 for attempt, request in enumerate(relevant):
                     assert any(item.get("role") == "user" and item.get("content") == original
@@ -3581,10 +3581,6 @@ def run_provider_clarification_cases(binary, root, provider, environment):
                     assert len(notes) == min(attempt, 5), (mode, attempt, notes)
                     assert all("preserving its purpose, actions, targets, and authorization" in note and
                                "Do not conceal security-relevant details" in note for note in notes)
-            elif mode == "partial":
-                assert len(relevant) == 1
-                assert not event_list(events, "turn_recovery")
-                assert len(event_list(events, "turn_failed")) == 1
             else:
                 assert len(relevant) == 3, (mode, len(relevant))
                 assert fresh in json.dumps(relevant[-1]), "new input did not reach model"
@@ -3677,6 +3673,169 @@ def run_clarification_episode_cases(binary, root, provider, environment):
             provider.runtime_handler = None
 
 
+def run_policy_partial_goal_cases(binary, root, provider, environment):
+    """A failed text stream gets five logged clarifications before goal pause."""
+    for mode in ("resume", "partial", "exhausted", "scaffold", "type", "snapshot", "snapshot-empty", "snapshot-prefix", "snapshot-repeat", "refusal", "tool", "unknown"):
+        case = root / ("policy-partial-" + mode)
+        case.mkdir(parents=True)
+        config, state = case / "config.ini", case / "state"
+        write_irc_config(config, provider.port, "host-model")
+        original = "Inspect the local fixture file without changing it."
+        attempts = []
+        unsafe = mode in ("refusal", "tool", "unknown")
+        paused = unsafe or mode == "exhausted"
+        resumed = False
+
+        def respond(handler, request, sequence):
+            names = {i.get("name") for i in request["input"] if i.get("type") == "function_call"}
+            if "create_goal" not in names and mode != "resume":
+                body = provider.function_body(sequence, "goal", "create_goal", {"objective": original})
+            elif "update_goal" in names:
+                body = provider.response_body(sequence, "policy recovery finished")
+            elif mode == "resume" and not resumed:
+                body = provider.response_body(sequence, "policy resume checkpoint")
+            else:
+                attempts.append(request)
+                attempt = len(attempts)
+                _, events = read_events(state)
+                assert len(event_list(events, "goal_paused")) == int(mode == "resume"), "goal paused during clarification"
+                if attempt == 6 and not paused:
+                    body = provider.function_body(sequence, "finish", "update_goal",
+                        {"action": "complete", "text": None})
+                else:
+                    text = f"Inspecting local fixture, attempt {attempt}."
+                    body = provider.response_body(sequence, text).replace('"final_answer"', '"commentary"')
+                    boundary = "event: response.output_text.done"
+                    if mode in ("scaffold", "snapshot", "snapshot-empty"):
+                        boundary = "event: response.output_text.delta"
+                    body = body[:body.index(boundary)]
+                    if mode == "snapshot-prefix":
+                        # The final failed snapshot can extend an already emitted prefix.
+                        body = body.replace(json.dumps(text), json.dumps(text[:12]))
+                    if mode == "refusal":
+                        body += provider.event("response.output_item.added", {"output_index": 1,
+                            "item": {"type": "message", "id": "refusal", "role": "assistant",
+                                     "phase": "final_answer", "status": "in_progress", "content": []}})
+                        body += provider.event("response.content_part.added", {"output_index": 1,
+                            "content_index": 0, "item_id": "refusal",
+                            "part": {"type": "refusal", "refusal": ""}})
+                        body += provider.event("response.refusal.delta", {"output_index": 1,
+                            "content_index": 0, "item_id": "refusal",
+                            "delta": "The requested action is not permitted."})
+                    elif mode == "tool":
+                        body += provider.event("response.output_item.added", {"output_index": 1,
+                            "item": {"type": "function_call", "id": "pending", "call_id": "pending",
+                                     "name": "read_file", "arguments": "", "status": "in_progress"}})
+                    elif mode == "unknown":
+                        body += provider.event("response.unknown_activity", {})
+                    response = {"error": {
+                        "type" if mode == "type" else "code": "cyber_policy",
+                        "message": "This content was flagged for possible cybersecurity risk."}}
+                    if mode.startswith("snapshot"):
+                        response["output"] = [{"type": "message", "id": f"msg_{sequence}",
+                            "role": "assistant", "phase": "commentary", "status": "in_progress",
+                            "content": [] if mode == "snapshot-empty" else [{"type": "output_text", "text": text}]}]
+                        # Match the actual streamed identity rather than inventing one.
+                        for line in body.splitlines():
+                            if line.startswith("data: "):
+                                event = json.loads(line[6:])
+                                if event.get("type") == "response.output_item.added":
+                                    response["output"][0]["id"] = event["item"]["id"]
+                    body += provider.event("response.failed", {"response": response})
+            encoded = body.encode()
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.send_header("Content-Length", str(len(encoded)))
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            handler.wfile.write(encoded)
+            handler.close_connection = True
+
+        provider.runtime_handler = respond
+        terminal = TmuxTerminal(case / "term", binary, case, state, config, 140, 28,
+                                environment=environment)
+        try:
+            terminal.wait("host-model/medium")
+            if mode == "resume":
+                # Explicit goal resume starts a new request with the original
+                # saved context; it must get the same clarification allowance.
+                terminal.submit("/goal " + original)
+                terminal.wait("Goal set")
+                terminal.submit("/goal pause")
+                wait_event_count(state, "goal_paused", 1)
+                log_path, _ = read_events(state)
+                terminal.exit()
+                terminal.close()
+                terminal = TmuxTerminal(case / "resume", binary, case, state, config, 140, 28,
+                    args=("--resume", log_path.parent.name), environment=environment)
+                terminal.wait("host-model/medium")
+                resumed = True
+                terminal.submit("/goal resume")
+            else:
+                terminal.submit(original)
+            terminal.wait("Goal paused after provider policy rejection" if paused else "policy recovery finished")
+            _, events = read_events(state)
+            corrections = event_list(events, "response_output_correction")
+            assert len(corrections) == (0 if unsafe else 5), (mode, len(corrections))
+            assert len(attempts) == (1 if unsafe else 6), (mode, len(attempts))
+            assert len(event_list(events, "goal_paused")) == int(paused) + int(mode == "resume"), mode
+            if paused:
+                assert event_list(events, "goal_paused")[0]["data"]["reason"] == "provider_policy"
+                policy = event_list(events, "response_failed")[-1]["data"]["policy"]
+                assert policy["code"] == "cyber_policy"
+                assert policy["clarification_skipped"] == {
+                    "exhausted": "clarification_limit", "refusal": "stream:response.content_part.added",
+                    "tool": "stream:response.output_item.added", "unknown": "stream:response.unknown_activity",
+                }[mode], policy
+            assert not event_list(events, "turn_recovery"), mode
+            assert len(event_list(events, "tool_started")) == (1 if paused or mode == "resume" else 2), mode
+            screen = terminal.capture(join_wrapped=True)
+            for attempt, correction in enumerate(corrections, 1):
+                assert screen.count(f"provider clarification {attempt}/5 after cyber_policy") == 1, screen
+                if paused:
+                    assert correction["seq"] < event_list(events, "goal_paused")[0]["seq"]
+                partial = correction["data"]["partial_public"]
+                assert len(partial) == (0 if mode in ("scaffold", "snapshot-empty") else 1), partial
+                if partial:
+                    assert partial[0]["text"] == f"Inspecting local fixture, attempt {attempt}."
+                    assert partial[0]["phase"] == "commentary"
+            assert "provider clarification 6/5" not in screen
+            for attempt, request in enumerate(attempts):
+                assert original in json.dumps(request["input"]), mode
+                notes = [i["content"] for i in request["input"] if i.get("role") == "developer" and
+                         i.get("content", "").startswith("The provider rejected the preceding")]
+                assert len(notes) == attempt, (mode, attempt, notes)
+                assert all("Do not conceal security-relevant details or bypass restrictions" in n for n in notes)
+                if mode not in ("scaffold", "snapshot-empty"):
+                    for previous in range(1, attempt + 1):
+                        assert sum(i.get("role") == "assistant" and i.get("content") ==
+                                   f"Inspecting local fixture, attempt {previous}." for i in request["input"]) == 1
+            terminal.exit()
+            if mode == "exhausted":
+                # Crash after failure admission but before goal_paused. Replay
+                # must preserve provider-policy attribution and stay parked.
+                terminal.close()
+                path, saved = read_events(state)
+                cut = event_list(saved, "response_failed")[-1]["seq"]
+                lines = path.read_bytes().splitlines(keepends=True)
+                path.write_bytes(b"".join(lines[:cut]))
+                before = len(attempts)
+                terminal = TmuxTerminal(case / "cut", binary, case, state, config, 140, 28,
+                    args=("--resume", path.parent.name), environment=environment)
+                terminal.wait("recovered provider policy stop")
+                _, recovered = read_events(state)
+                assert event_list(recovered, "goal_paused")[-1]["data"]["reason"] == "provider_policy"
+                assert len(attempts) == before
+                terminal.exit()
+            replay = subprocess.run([binary, "--dotdir", str(state), "-l"], capture_output=True,
+                                    text=True, env={**os.environ, **environment})
+            assert replay.returncode == 0, replay.stderr
+            print("policy partial goal", mode, "PASS", flush=True)
+        finally:
+            terminal.close()
+            provider.runtime_handler = None
+
+
 def run_policy_stop_cases(binary, root, provider, environment):
     for mode in ("goal", "running", "goal-running", "content-filter", "refusal", "resume-running"):
         case = root / ("policy-stop-" + mode)
@@ -3733,13 +3892,17 @@ def run_policy_stop_cases(binary, root, provider, environment):
             terminal.wait("host-model/medium")
             terminal.submit("Inspect the local fixture file.")
             terminal.wait("Running commands retained" if running else
-                          "Goal paused after model refusal" if goal else "turn failed; try /retry")
+                          "Goal paused after model refusal" if mode == "refusal" else
+                          "Goal paused after provider policy rejection" if goal else "turn failed; try /retry")
             before = len(requests)
             time.sleep(1.2)
             assert len(requests) == before, (mode, before, len(requests))
             assert len(failures) == (1 if mode in ("content-filter", "refusal") else 6), mode
             _, events = read_events(state)
             assert len(event_list(events, "goal_paused")) == int(goal), mode
+            if goal:
+                assert event_list(events, "goal_paused")[0]["data"]["reason"] == (
+                    "refusal" if mode == "refusal" else "provider_policy")
             assert len(event_list(events, "response_output_correction")) == (
                 0 if mode in ("content-filter", "refusal") else 5), mode
             if mode == "resume-running":
@@ -5557,6 +5720,7 @@ def run_irc_case(binary, root):
         run_manual_retry_cases(binary, root, provider, environment)
         run_provider_retry_input_cases(binary, root, provider, environment)
         run_provider_clarification_cases(binary, root, provider, environment)
+        run_policy_partial_goal_cases(binary, root, provider, environment)
         run_clarification_episode_cases(binary, root, provider, environment)
         run_policy_stop_cases(binary, root, provider, environment)
         run_runtime_networking_cases(binary, root, provider, environment)

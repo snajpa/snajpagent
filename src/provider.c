@@ -1552,10 +1552,20 @@ out:
         else
             *failure = ctx.provider_failure;
         failure->output_correction = ctx.stream.output_correction;
-        if (rc < 0 && strcmp(failure->code, "cyber_policy") == 0 &&
-            !ctx.stream.clarification_unsafe && !ctx.stream.terminal &&
-            !ctx.body_failed && !process_controls(&ctx, 0u) && !ctx.new_input)
-            failure->output_correction = SNAG_OUTPUT_CORRECTION_CYBER_POLICY;
+        if (rc < 0 && snag_provider_failure_is_policy(failure)) {
+            const char *skipped = NULL;
+            if (strcmp(failure->code, "cyber_policy") && strcmp(failure->type, "cyber_policy"))
+                skipped = "policy_type";
+            else if (ctx.stream.clarification_skipped[0]) skipped = ctx.stream.clarification_skipped;
+            else if (ctx.stream.terminal) skipped = "terminal_response";
+            else if (ctx.body_failed) skipped = "body_failure";
+            else if (process_controls(&ctx, 0u)) skipped = "control";
+            else if (ctx.new_input) skipped = "new_input";
+            if (skipped)
+                (void)snag_strcpy(failure->clarification_skipped,
+                                 sizeof(failure->clarification_skipped), skipped);
+            else failure->output_correction = SNAG_OUTPUT_CORRECTION_CYBER_POLICY;
+        }
         failure->new_input = ctx.new_input;
         failure->retry_after_ms = ctx.retry_after_present ? ctx.retry_after_ms : 0u;
         redact_diagnostic(&ctx.secrets, failure->message, sizeof(failure->message));

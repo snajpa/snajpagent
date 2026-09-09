@@ -3290,6 +3290,8 @@ snag_render_durable(struct snag_render *render, int fd, struct snag_render_sourc
             const char *reason = json_string_value(json_object_get(data, "reason"));
             notice = reason && strcmp(reason, "refusal") == 0 ?
                 "Goal paused after model refusal" :
+                reason && strcmp(reason, "provider_policy") == 0 ?
+                "Goal paused after provider policy rejection" :
                 reason && strcmp(reason, "turn_stopped") == 0 ?
                 "Goal paused after the turn stopped" : "Goal paused at the current turn boundary";
         } else {

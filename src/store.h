@@ -25,6 +25,12 @@
 #define SNAG_MAX_GOAL_BLOCKER (64u * 1024u)
 #define SNAG_GOAL_CONTINUATION_TEXT "Continue the active goal from its durable state."
 
+enum snag_policy_stop {
+    SNAG_POLICY_STOP_NONE,
+    SNAG_POLICY_STOP_PROVIDER,
+    SNAG_POLICY_STOP_REFUSAL
+};
+
 enum snag_goal_status {
     SNAG_GOAL_NONE,
     SNAG_GOAL_ACTIVE,
@@ -186,7 +192,7 @@ struct snag_session {
     bool active_queued;
     bool active_goal;
     bool cancel_requested;
-    bool policy_stopped;
+    enum snag_policy_stop policy_stopped;
     bool response_handoff;
     bool archived;
     bool delete_requested;
