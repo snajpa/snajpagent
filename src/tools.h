@@ -24,7 +24,7 @@ typedef int (*snag_tool_read_fn)(void *, const char *, unsigned int,
                                uint64_t, uint64_t, struct snag_buf *);
 void snag_tools_journal(snag_tool_output_fn write, snag_tool_read_fn read, void *opaque);
 /* Validates without effects. 1 means rejected with a factual not-run result. */
-int snag_tools_prepare(const struct snag_response_item *, const struct snag_config *,
+int snag_tools_prepare(const struct snag_response_item *, const struct snag_config *, uint32_t max_parallel,
                        char handle[SNAG_ID_HEX_LEN + 1u], uint32_t *yield_ms,
                        json_t **rejected);
 int snag_tools_start(const struct snag_response_item *, const struct snag_config *,

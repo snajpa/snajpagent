@@ -911,7 +911,7 @@ command_args(const struct snag_response_item *call, const struct snag_config *co
 }
 
 int
-snag_tools_prepare(const struct snag_response_item *call, const struct snag_config *config,
+snag_tools_prepare(const struct snag_response_item *call, const struct snag_config *config, uint32_t max_parallel,
                     char handle[SNAG_ID_HEX_LEN + 1u], uint32_t *yield_ms,
                     json_t **rejected)
 {
@@ -927,7 +927,7 @@ snag_tools_prepare(const struct snag_response_item *call, const struct snag_conf
         proc = find_process(args.handle);
         for (size_t i = 0u; i < SNAG_MAX_PROCESSES; ++i)
             used += processes[i] != NULL;
-        if (args.exec && used >= config->max_parallel_commands)
+        if (args.exec && used >= max_parallel)
             reason = "process_limit";
         else if (args.exec && proc)
             reason = "process_busy";
@@ -1079,7 +1079,7 @@ snag_tools_run(const struct snag_response_item *call,
         snag_secret_set_free(&secrets);
         return rc;
     }
-    rc = snag_tools_prepare(call, config, handle, &yield_ms, result);
+    rc = snag_tools_prepare(call, config, config->max_parallel_commands, handle, &yield_ms, result);
     if (rc != 0)
         return rc < 0 ? -1 : 0;
     if (snag_tools_start(call, config, credential, result, error, error_size) < 0)

@@ -2758,7 +2758,7 @@ execute_calls(struct app_state *app, const char *turn_id,
                     return -1;
             } else if (calls[i].process) {
                 uint32_t yield_ms = 0u;
-                int rc = snag_tools_prepare(call, app->config, calls[i].handle, &yield_ms, &result);
+                int rc = snag_tools_prepare(call, app->config, app->session.max_parallel_commands, calls[i].handle, &yield_ms, &result);
                 if (rc < 0)
                     return -1;
                 if (yield_ms && began + yield_ms < deadline)

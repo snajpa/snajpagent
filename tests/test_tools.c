@@ -741,7 +741,9 @@ test_process_capacity_and_ready_collection(void)
         json_t *result = NULL;
         make_call(&graph, "printf slot", cwd, -1, NULL);
         struct snag_response_item call = snag_response_graph_item(&graph, 0u);
-        assert(snag_tools_prepare(&call, &config, handles[i], &yield, &result) == 0);
+        /* Reloaded defaults do not replace the admitted turn's slot limit. */
+        config.max_parallel_commands = 1u;
+        assert(snag_tools_prepare(&call, &config, SNAG_MAX_PROCESSES, handles[i], &yield, &result) == 0);
         assert(snag_tools_start(&call, &config, &credential, &result, error, sizeof(error)) == 0);
         assert(!result);
         snag_response_graph_free(&graph);
@@ -760,7 +762,7 @@ test_process_capacity_and_ready_collection(void)
     json_t *result = NULL;
     make_call(&graph, "printf forbidden", cwd, 1000, NULL);
     struct snag_response_item call = snag_response_graph_item(&graph, 0u);
-    assert(snag_tools_prepare(&call, &config, unused, &yield, &result) == 1);
+    assert(snag_tools_prepare(&call, &config, config.max_parallel_commands, unused, &yield, &result) == 1);
     assert(!strcmp(snag_json_string(result, "reason"), "process_limit"));
     json_decref(result);
     snag_response_graph_free(&graph);
@@ -839,7 +841,7 @@ test_journal_failure_closes_owned_commands(void)
         json_t *result = NULL;
         make_call(&graph, "printf pending; sleep 5", cwd, 5000, NULL);
         struct snag_response_item call = snag_response_graph_item(&graph, 0u);
-        assert(snag_tools_prepare(&call, &config, handle, &yield, &result) == 0);
+        assert(snag_tools_prepare(&call, &config, config.max_parallel_commands, handle, &yield, &result) == 0);
         assert(snag_tools_start(&call, &config, &credential, &result, error, sizeof(error)) == 0);
         snag_response_graph_free(&graph);
     }

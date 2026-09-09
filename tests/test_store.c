@@ -559,25 +559,38 @@ main(void)
         snag_session_close(&session);
     }
 
-    snag_session_init(&session);
-    assert(snag_session_create(&store, &session, workspace,
-                              "default", "gpt-5.5-2026-04-23", "default",
-                              error, sizeof(error)) == 0);
-    memcpy(id, session.id, sizeof(id));
-    memcpy(id_prefix, session.id, 8u);
-    id_prefix[8] = '\0';
-    assert(snprintf(trash_name, sizeof(trash_name), "%s.%032x",
-                    session.id, 1u) == (int)(sizeof(trash_name) - 1u));
-    commit_event(&session, "session_delete_requested", checked_json(json_pack("{s:s,s:s}",
-        "confirmed_id_prefix", id_prefix, "trash_name", trash_name)));
-    assert(renameat(store.sessions_fd, id, store.trash_fd, trash_name) == 0);
-    snag_session_close(&session);
-    snag_session_init(&session);
-    assert(snag_session_open(&store, &session, id_prefix,
-                            error, sizeof(error)) == 1);
-    assert(openat(store.trash_fd, trash_name, O_RDONLY | O_DIRECTORY) < 0);
-    assert(errno == ENOENT);
-    snag_session_close(&session);
+    for (unsigned int cut = 0u; cut < 4u; ++cut) {
+        snag_session_init(&session);
+        assert(snag_session_create(&store, &session, workspace,
+                                  "default", "gpt-5.5-2026-04-23", "default",
+                                  error, sizeof(error)) == 0);
+        memcpy(id, session.id, sizeof(id));
+        memcpy(id_prefix, session.id, 8u);
+        id_prefix[8] = '\0';
+        assert(snprintf(trash_name, sizeof(trash_name), "%s.%032x",
+                        session.id, 1u) == (int)(sizeof(trash_name) - 1u));
+        commit_event(&session, "session_delete_requested", checked_json(json_pack("{s:s,s:s}",
+            "confirmed_id_prefix", id_prefix, "trash_name", trash_name)));
+        assert(renameat(store.sessions_fd, id, store.trash_fd, trash_name) == 0);
+        if (cut) assert(unlinkat(session.dir_fd, "events.jsonl", 0) == 0);
+        if (cut > 1u) assert(unlinkat(session.dir_fd, "lock", 0) == 0);
+        if (cut == 3u) {
+            int extra = openat(session.dir_fd, "unexpected", O_CREAT | O_WRONLY, 0600);
+            assert(extra >= 0 && close(extra) == 0);
+            struct snag_session probe;
+            snag_session_init(&probe);
+            assert(snag_session_open(&store, &probe, id_prefix, error, sizeof(error)) < 0);
+            snag_session_close(&probe);
+            assert(unlinkat(session.dir_fd, "unexpected", 0) == 0);
+        }
+        snag_session_close(&session);
+        snag_session_init(&session);
+        assert(snag_session_open(&store, &session, id_prefix,
+                                error, sizeof(error)) == 1);
+        assert(openat(store.trash_fd, trash_name, O_RDONLY | O_DIRECTORY) < 0);
+        assert(errno == ENOENT);
+        snag_session_close(&session);
+    }
 
     {
         static const char turn_id[] = "11111111111111111111111111111111";

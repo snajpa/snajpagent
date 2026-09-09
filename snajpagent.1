@@ -932,7 +932,9 @@ Compact model context at idle or at a safe active-turn request boundary.  The fu
 .TP
 .B /delete
 Confirm with the displayed session prefix, then permanently remove the
-session through private trash staging.  Shared prompt history is not erased.
+session through private trash staging.  Reopening an interrupted deletion
+finishes cleanup, including after the event log has been removed; unexpected
+trash content is preserved and reported.  Shared prompt history is not erased.
 .TP
 .B /exit
 Preserve the session and exit.  Active work remains available for same-turn

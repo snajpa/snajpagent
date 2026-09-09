@@ -69,16 +69,15 @@ static int
 remove_deleted_session(struct snag_store *store, struct snag_session *session,
                         char *error, size_t error_size)
 {
-    if (close_fd_slot(&session->log_fd) < 0 ||
-        close_fd_slot(&session->lock_fd) < 0)
+    if (close_fd_slot(&session->log_fd) < 0)
         return snag_errorf(error, error_size, "cannot close deleted-session files: %s",
                   strerror(errno));
-    if (unlink_expected_file(session->dir_fd, "events.jsonl", false,
-                             error, error_size) < 0 ||
-        unlink_expected_file(session->dir_fd, "meta.json", true,
-                             error, error_size) < 0 ||
-        unlink_expected_file(session->dir_fd, "lock", false,
-                             error, error_size) < 0)
+    /* Keep the durable delete intent until other content is gone. The private
+     * trash name remains the deletion marker after the final log unlink. */
+    if (unlink_expected_file(session->dir_fd, "meta.json", true, error, error_size) < 0 ||
+        unlink_expected_file(session->dir_fd, "events.jsonl", true, error, error_size) < 0 ||
+        snag_sync_dir(session->dir_fd) < 0 || close_fd_slot(&session->lock_fd) < 0 ||
+        unlink_expected_file(session->dir_fd, "lock", true, error, error_size) < 0)
         return -1;
     if (close_fd_slot(&session->dir_fd) < 0)
         return snag_errorf(error, error_size, "cannot close deleted-session directory: %s",
@@ -109,6 +108,34 @@ snag_session_complete_delete(struct snag_store *store, struct snag_session *sess
     return remove_deleted_session(store, session, error, error_size);
 }
 
+/* A crash may leave only the reserved trash directory and lock/metadata after
+ * events.jsonl was removed. Never recursively remove unexpected content. */
+static int
+verify_delete_remnants(int dir_fd, char *error, size_t error_size)
+{
+    int fd = snag_open_read_security_at(dir_fd, ".", true);
+    if (fd < 0) return -1;
+    struct snag_directory *dir = snag_directory_open(fd);
+    if (!dir) { (void)close(fd); return -1; }
+    const char *name;
+    int rc = 0;
+    while ((name = snag_directory_next(dir)) != NULL) {
+        if (!strcmp(name, ".") || !strcmp(name, "..")) continue;
+        if (strcmp(name, "lock") && strcmp(name, "meta.json")) {
+            rc = snag_fail(error, error_size, EINVAL, "unexpected content in deleted-session trash");
+            break;
+        }
+        int file = snag_open_read_security_at(dir_fd, name, false);
+        if (file < 0) { rc = -1; break; }
+        rc = snag_store_verify_private_fd(file, false, "deleted-session remnant", error, error_size);
+        (void)close(file);
+        if (rc < 0) break;
+    }
+    if (!rc && errno) rc = -1;
+    if (snag_directory_close(dir) < 0) rc = -1;
+    return rc;
+}
+
 int
 snag_store_complete_trash_delete(struct snag_store *store, const char *trash_name,
                                 char *error, size_t error_size)
@@ -130,11 +157,17 @@ snag_store_complete_trash_delete(struct snag_store *store, const char *trash_nam
     memcpy(session.id, id, sizeof(session.id));
     session.dir_fd = dir_fd;
     if (snag_store_verify_private_fd(session.dir_fd, true,
-                                    "deleted-session directory", error,
-                                    error_size) < 0 ||
-        snag_store_open_session_files(&session, false, error, error_size) < 0 ||
-        snag_store_scan_log(&session, SNAG_TAIL_REJECT,
-                           error, error_size) < 0)
+                                    "deleted-session directory", error, error_size) < 0)
+        goto out;
+    if (snag_store_open_session_files(&session, false, error, error_size) < 0) {
+        if (errno != ENOENT || session.lock_fd < 0 ||
+            verify_delete_remnants(session.dir_fd, error, error_size) < 0) goto out;
+        (void)snag_strcpy(session.trash_name, sizeof(session.trash_name), trash_name);
+        if (error_size) error[0] = '\0';
+        rc = remove_deleted_session(store, &session, error, error_size);
+        goto out;
+    }
+    if (snag_store_scan_log(&session, SNAG_TAIL_REJECT, error, error_size) < 0)
         goto out;
     if (!session.delete_requested || strcmp(session.trash_name, trash_name) != 0) {
         (void)snag_fail(error, error_size, EINVAL, "deleted-session trash intent mismatch");
