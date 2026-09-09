@@ -228,14 +228,26 @@ active work. Readable local files remain accessible and session history is recor
 
 ## Install and choose a provider
 
-snajpagent is written in C so the agent itself can run on more of the systems
-where development happens, including unfamiliar ones.
+[Choose an executable](https://agent.snajpa.net/downloads.html) for your OS,
+architecture and listed ABI. Rename it to `snajpagent` (`snajpagent.exe` on
+Windows). Compare its SHA-256 with the download row or `SHA256SUMS` **before
+running it**. For an archive, verify the archive before extraction; its hash
+belongs to the archive, not the executable inside. Keep the program in a
+user-owned directory. Debug builds and production symbols are separate.
 
-[Download an executable](https://agent.snajpa.net/downloads.html) for your platform
-and verify `SHA256SUMS`. Runnable debug builds appear below their release in each operating-system panel.
+### Install on Linux
 
-On macOS, rename the downloaded executable to `snajpagent`, check its SHA-256
-against the download row, and make it executable:
+Choose the matching CPU/kernel variant, including modern or legacy i686:
+
+```sh
+sha256sum ./snajpagent
+chmod +x ./snajpagent
+./snajpagent
+```
+
+### Install on macOS
+
+Choose Apple Silicon, Intel or universal for macOS 11 or later:
 
 ```sh
 shasum -a 256 ./snajpagent
@@ -243,16 +255,65 @@ chmod +x ./snajpagent
 ./snajpagent
 ```
 
-If macOS blocks the file and you trust it, remove quarantine from that file only:
+These experimental downloads are not Developer ID signed or notarized. If macOS
+blocks a verified file that you trust, use `xattr -d com.apple.quarantine ./snajpagent`
+and launch again. Keep system-wide protections enabled.
+
+### Install on Windows
+
+Choose experimental x64 or ARM64. In PowerShell:
+
+```powershell
+Get-FileHash .\snajpagent.exe -Algorithm SHA256
+.\snajpagent.exe
+```
+
+In Command Prompt, use `certutil -hashfile .\snajpagent.exe SHA256` where
+available, then `.\snajpagent.exe`. Keep the `.exe` extension. Add its folder to
+your user PATH, or invoke the full path after changing to your project directory.
+PowerShell uses `& "C:\path\snajpagent.exe"` for a quoted executable path.
+
+### Install on FreeBSD
+
+FreeBSD 5.1/5.5 needs the legacy amd64 variant:
 
 ```sh
-xattr -d com.apple.quarantine ./snajpagent
+sha256 -q ./snajpagent
+chmod +x ./snajpagent
 ./snajpagent
 ```
 
-For a debug archive, compare `shasum -a 256 FILE.tar.gz` with the archive's
-download row, then extract it with `tar -xzf FILE.tar.gz`. Make the extracted
-executable runnable and launch it as above. Keep system-wide macOS protections enabled.
+### Install on OpenBSD
+
+Choose amd64 for OpenBSD 7.9, 5.9 or 3.5. Use `sha256` where available:
+
+```sh
+sha256 -q ./snajpagent
+chmod +x ./snajpagent
+./snajpagent
+```
+
+### Install on NetBSD
+
+Choose amd64 for 10.1 or the separate 2.0/5.2.3 legacy pthread ABI.
+On 5.2.3 and 10.1:
+
+```sh
+cksum -a SHA256 ./snajpagent
+chmod +x ./snajpagent
+./snajpagent
+```
+
+NetBSD 2.0 lacks SHA-256 in base `cksum`. If a legacy system lacks a SHA-256
+utility, verify on a trusted newer machine and transfer over a trusted channel.
+
+### Installation paths, updates and source builds
+
+On Linux, macOS and the BSDs, place the verified executable in `$HOME/.local/bin`
+and add that directory to PATH in your shell startup file. Start it from your
+project directory. The [manual](https://agent.snajpa.net/manual.html#Getting_started)
+has complete user-local installation, ABI requirements and startup troubleshooting.
+Android remains experimental source work without a production download target.
 
 Official stable binaries check and install updates in the background on launch.
 The current process keeps running; one banner links to the release log and asks
@@ -261,17 +322,20 @@ Development binaries are debug builds and default to updates off; set the option
 to `true` to follow `latest-dev`. Ordinary source builds remain updater-free.
 The manual covers publisher URLs, permissions and recovery.
 
-The normal build needs C11/POSIX with pthreads, GNU make, libcurl, and Jansson:
+The normal POSIX build needs C11 with pthreads, GNU make, pkg-config, and
+libcurl/Jansson development files. On the BSDs, install GNU make and use `gmake`
+in place of `make` throughout. On Linux and macOS:
 
 ```sh
 git clone https://github.com/snajpa/snajpagent.git
 cd snajpagent
 make
-sudo make install
+make PREFIX="$HOME/.local" install
 ```
 
-The binary and manual install under `/usr/local`. Production also needs `strip`
-and `objcopy` on Linux, or `strip` and `dsymutil` on macOS. `make DEBUG=1` builds
+This installs the binary and manual under `$HOME/.local`; the default prefix
+is `/usr/local`, which usually requires administrator privileges. Production needs
+`strip` and `objcopy` on ELF systems, or `strip` and `dsymutil` on macOS. `make DEBUG=1` builds
 for debugging; `make help` lists build options. See [dependency notes](DEPENDENCIES.md)
 for platform scope.
 
@@ -305,7 +369,7 @@ Authenticate and choose a [supported model](#supported-providers). `snajpagent l
 reports local credential sources without contacting a provider. The manual
 explains login methods and logout.
 
-For manual configuration, create a private directory:
+For manual configuration on POSIX systems, create a private directory:
 
 ```sh
 install -d -m 700 "$HOME/.snajpagent"
@@ -327,6 +391,14 @@ Export `OPENAI_API_KEY` in your shell before launch. Provider names are local
 labels. `/config` opens the active file in `$EDITOR` and reloads valid changes.
 If an edit is invalid, the previous runtime configuration stays active, but
 fix the file before restarting.
+
+On Windows, setup uses `HOME/.snajpagent`, falling back to
+`USERPROFILE/.snajpagent`; `--dotdir DIR` overrides it. The same `config.ini`
+works there. For credentials, PowerShell uses
+`$env:OPENAI_API_KEY = 'your-key'`; Command Prompt uses
+`set "OPENAI_API_KEY=your-key"`. Masked-key entry during setup avoids shell
+history. The agent's default Windows tool shell is `cmd.exe`, independently of
+its launching shell. POSIX examples need a POSIX shell or adaptation.
 
 ## Use it in scripts
 

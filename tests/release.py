@@ -6,7 +6,6 @@ from html.parser import HTMLParser
 import importlib.util
 import json
 import os
-import os
 import re
 import shutil
 from pathlib import Path
@@ -62,6 +61,26 @@ with tempfile.TemporaryDirectory(prefix="release-", dir=root / "build") as tmp:
     for target in matrix.group(1).split():
         assert target in manual, "missing manual build entry: " + target
     print("PASS: manual covers every implemented production build target")
+    # Build-target mentions alone do not provide a usable first-run workflow.
+    getting_started = manual.split('.SH "Getting started"', 1)[1].split('.SH ', 1)[0]
+    downloads = (root / "www/downloads.html").read_text()
+    for family in sorted({target.split("-")[1] for target in matrix.group(1).split()}):
+        label = re.search(r'id="' + family + r'">\s*<summary>([^<]+)</summary>',
+                          downloads).group(1)
+        heading = '.SS "Install on ' + label + '"'
+        assert heading in getting_started, "missing first-run instructions: " + label
+        setup = getting_started.split(heading, 1)[1].split('.SS ', 1)[0]
+        assert ".nf\n" in setup and "snajpagent" in setup, "missing example: " + label
+        assert "Install on " + label in (root / "README.md").read_text(), label
+    windows_setup = getting_started.split('.SS "Install on Windows"', 1)[1].split('.SS ', 1)[0]
+    assert "Get\\-FileHash" in windows_setup and "certutil" in windows_setup
+    assert "USERPROFILE" in windows_setup and "PowerShell" in windows_setup
+    assert "cksum \\-a SHA256" in getting_started, "NetBSD legacy checksum command"
+    netbsd_setup = downloads.split('<h3>Install on NetBSD</h3>', 1)[1].split('</details>', 1)[0]
+    assert "cksum -a SHA256" in netbsd_setup and "2.0" in netbsd_setup
+    assert "lacks SHA-256" in netbsd_setup
+    assert r".\snajpagent.exe</code></pre>" in downloads
+    print("PASS: first-run manual and README cover every released platform family")
     # Source-size reporting must never reject large files or emit budget warnings.
     size_tree = tmp / "source-size"
     size_tree.mkdir()

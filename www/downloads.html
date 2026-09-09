@@ -226,6 +226,7 @@
         <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/DEBUG-SHA256SUMS">DEBUG-SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.1">Release notes, symbols and source</a></p>
         </section>
       <h3>Install on Linux</h3>
+      <p><a href="manual.html#Install_on_Linux">Full installation and first-run instructions</a>.</p>
       <p>Rename the chosen executable to <code>snajpagent</code> and compare its
         hash with the row above. For an archive, check the archive before
         extracting it; the displayed hash belongs to the downloaded file.</p>
@@ -400,6 +401,7 @@ chmod +x ./snajpagent
         <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/DEBUG-SHA256SUMS">DEBUG-SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.1">Release notes, symbols and source</a></p>
         </section>
       <h3>Install on macOS</h3>
+      <p><a href="manual.html#Install_on_macOS">Full installation and first-run instructions</a>.</p>
       <p>Rename the chosen executable to <code>snajpagent</code> and compare its
         hash with the row above. For an archive, check the archive before
         extracting it; the displayed hash belongs to the downloaded file.</p>
@@ -549,10 +551,16 @@ chmod +x ./snajpagent
         <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.1/DEBUG-SHA256SUMS">DEBUG-SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.1">Release notes, symbols and source</a></p>
         </section>
       <h3>Install on Windows</h3>
-      <p>Check the selected file in PowerShell before running it:</p>
-      <pre><code>Get-FileHash .\snajpagent-*.exe -Algorithm SHA256</code></pre>
-      <p>Compare the hash with the row above. Rename the chosen executable to
-        <code>snajpagent.exe</code> and run it in your project directory.</p>
+      <p><a href="manual.html#Install_on_Windows">Full installation and first-run instructions</a>.</p>
+      <p>Rename the selected executable to <code>snajpagent.exe</code>.
+        In PowerShell, compare its hash with the selected row before launching:</p>
+      <pre><code>Get-FileHash .\snajpagent.exe -Algorithm SHA256
+.\snajpagent.exe</code></pre>
+      <p>In Command Prompt, use <code>certutil -hashfile .\snajpagent.exe SHA256</code>
+        where available, then <code>.\snajpagent.exe</code>. Keep the .exe extension.
+        Add its folder to your user PATH, or invoke its full path after changing
+        to your project directory. PowerShell uses <code>&amp; "C:\path\snajpagent.exe"</code>
+        for a quoted path.</p>
       <p>Stable 0.99.2 and later install updates in the background. Set
         <code>auto_update = false</code> in <code>[agent]</code> to opt out.
         Development snapshots default off; set it to <code>true</code> to follow
@@ -649,12 +657,15 @@ chmod +x ./snajpagent
         <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.2-9d98036">Release notes, symbols and source</a></p>
         </section>
       <h3>Install on FreeBSD</h3>
+      <p><a href="manual.html#Install_on_FreeBSD">Full installation and first-run instructions</a>.</p>
       <p>Rename the chosen executable to <code>snajpagent</code> and compare its
         hash with the row above. For an archive, check the archive before
         extracting it; the displayed hash belongs to the downloaded file.</p>
       <pre><code>sha256 -q ./snajpagent
 chmod +x ./snajpagent
 ./snajpagent</code></pre>
+      <p>If an older installation lacks sha256, verify on a trusted newer
+        machine and transfer over a trusted channel before executing.</p>
       <p>Keep the executable in a user-owned directory. Choose the listed OS/ABI
         for each binary; legacy variants use their own system-library ABI.</p>
       <p>Stable 0.99.2 and later install updates in the background. Set
@@ -719,12 +730,16 @@ chmod +x ./snajpagent
         <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.3">Release notes, symbols and source</a></p>
         </section>
       <h3>Install on OpenBSD</h3>
+      <p><a href="manual.html#Install_on_OpenBSD">Full installation and first-run instructions</a>.</p>
       <p>Rename the chosen executable to <code>snajpagent</code> and compare its
         hash with the row above. For an archive, check the archive before
         extracting it; the displayed hash belongs to the downloaded file.</p>
       <pre><code>sha256 -q ./snajpagent
 chmod +x ./snajpagent
 ./snajpagent</code></pre>
+      <p>On older installations without sha256, verify on a trusted newer
+        system before transferring over a trusted channel, then grant execute
+        permission and launch.</p>
       <p>Keep the executable in a user-owned directory. Choose the listed OS/ABI
         for each binary; legacy variants use their own system-library ABI.</p>
       <p>Stable 0.99.2 and later install updates in the background. Set
@@ -779,12 +794,16 @@ chmod +x ./snajpagent
         <p class="release-links"><a href="https://github.com/snajpa/snajpagent/releases/download/0.99.3/SHA256SUMS">SHA256SUMS</a> · <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.3">Release notes, symbols and source</a></p>
         </section>
       <h3>Install on NetBSD</h3>
+      <p><a href="manual.html#Install_on_NetBSD">Full installation and first-run instructions</a>.</p>
       <p>Rename the chosen executable to <code>snajpagent</code> and compare its
         hash with the row above. For an archive, check the archive before
         extracting it; the displayed hash belongs to the downloaded file.</p>
-      <pre><code>sha256 ./snajpagent
+      <pre><code>cksum -a SHA256 ./snajpagent
 chmod +x ./snajpagent
 ./snajpagent</code></pre>
+      <p>This command works on NetBSD 5.2.3 and 10.1. NetBSD 2.0's base cksum
+        lacks SHA-256; verify on a trusted newer machine before transferring the
+        file over a trusted channel, then grant execute permission and launch.</p>
       <p>Keep the executable in a user-owned directory. Choose the listed OS/ABI
         for each binary; legacy variants use their own system-library ABI.</p>
       <p>Stable 0.99.2 and later install updates in the background. Set

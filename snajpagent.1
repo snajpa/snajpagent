@@ -59,24 +59,159 @@ command to launch the new code; a rebuild alone does not replace a live process.
 The latest stable download remains 0.99.4.  Later source commits repair active
 command admission, compaction, submitted-prompt rendering and history totals.
 These source fixes do not replace the immutable 0.99.4 release assets.
-.SS "Downloaded macOS executables"
-The macOS downloads are not Developer ID signed or notarized. A quarantined
-browser download can be blocked at first launch with
-.BR "Killed: 9" .
-After renaming the executable to
+.SS Choose a download
+The downloads page at
+.I https://agent.snajpa.net/downloads.html
+has Linux, macOS, Windows, FreeBSD, OpenBSD and NetBSD panels. Choose the
+architecture and OS/ABI shown in the row, including its experimental status.
+The standalone-build reference below explains each target's requirements.
+.PP
+Download to a user-owned directory. Rename the selected executable to
 .B snajpagent
-and granting execute permission, compare its SHA-256 with the release's
-published checksums. Only if you trust that file, remove its quarantine
-attribute and launch it:
+(or
+.B snajpagent.exe
+on Windows). In the examples below, first compare the displayed SHA-256 with
+that file's download row or the release's SHA256SUMS. Run the remaining commands
+only after it matches and you trust the source. If a legacy system lacks a
+SHA-256 utility, verify on a trusted newer machine and transfer over a trusted
+channel; MD5, SHA-1 and plain CRC checksums are not substitutes.
+.PP
+For an archive, hash the archive before extracting it; its published checksum
+is not the checksum of the executable inside. Runnable debug archives contain
+an executable; separate production symbol archives only diagnose the matching
+production download. No compiler, Nix installation or debug symbols are needed
+to run an official executable.
+.SS "Install on Linux"
+Choose x86-64, AArch64, i686, ARMv6/ARMv7 hard-float, RV64GC/LP64D,
+POWER8 little-endian or 32-bit big-endian PowerPC to match your system.
+The legacy i686 download is separate from modern i686. Application libraries
+and TLS roots are included in these self-contained executables.
 .PP
 .nf
-shasum -a 256 ./snajpagent
-xattr -d com.apple.quarantine ./snajpagent
+sha256sum ./snajpagent
+chmod +x ./snajpagent
+\&./snajpagent
+.fi
+.PP
+Legacy i686 requires procfs and secure OS entropy; PTY commands also require
+devpts. Choose the download's documented kernel/CPU baseline, not just a
+matching word size. Android has experimental source support, but no production
+download target; these Linux downloads are not an Android installation recipe.
+.SS "Install on macOS"
+Choose Apple Silicon, Intel, or the universal executable containing both
+architectures; the downloads target macOS 11 or later. These experimental
+executables are not Developer ID signed or notarized.
+.PP
+.nf
+shasum \-a 256 ./snajpagent
+chmod +x ./snajpagent
+\&./snajpagent
+.fi
+.PP
+A quarantined browser download can be blocked at first launch with
+.BR "Killed: 9" .
+After checking the checksum and only if you trust the file, remove quarantine
+from that executable and launch again:
+.PP
+.nf
+xattr \-d com.apple.quarantine ./snajpagent
 \&./snajpagent
 .fi
 .PP
 This is a per-file security exception. Keep system-wide macOS protections
 enabled; execute permission alone does not clear quarantine.
+.SS "Install on Windows"
+Choose the experimental native x64 or ARM64 .exe. Application libraries and
+TLS roots are included; ARM64 also needs the operating system's UCRT.
+The standalone-build reference records the limited Windows qualification.
+In PowerShell, from the directory containing the renamed file:
+.PP
+.nf
+Get\-FileHash .\esnajpagent.exe \-Algorithm SHA256
+\&.\esnajpagent.exe
+.fi
+.PP
+In Command Prompt, where certutil is available:
+.PP
+.nf
+certutil \-hashfile .\esnajpagent.exe SHA256
+\&.\esnajpagent.exe
+.fi
+.PP
+Keep the .exe extension. PowerShell requires the explicit .\e prefix for an
+executable in the current directory. To work elsewhere, add its user-owned
+folder to your user PATH or invoke its full path. PowerShell uses the call
+operator for a quoted path, for example:
+.PP
+.nf
+cd C:\ework\emyproject
+& "C:\eUsers\eAlice\eTools\esnajpagent.exe"
+.fi
+.PP
+Commands in this manual otherwise use POSIX shell syntax. The Windows tool
+shell defaults to cmd.exe, even when the agent is launched from PowerShell;
+configure tools.shell explicitly to choose another shell. State defaults to
+HOME/.snajpagent when HOME is set, otherwise USERPROFILE/.snajpagent.
+Use \-\-dotdir DIR to choose another private location.
+.SS "Install on FreeBSD"
+Choose the amd64 download for the listed OS/ABI. The FreeBSD 5.1/5.5 legacy
+executable requires libc.so.5 and libc_r.so.5; the other variant targets the
+libc.so.7/libthr.so.3 ABI. Application libraries and TLS roots are included;
+the OS loader and matching base libraries must be present.
+.PP
+.nf
+sha256 \-q ./snajpagent
+chmod +x ./snajpagent
+\&./snajpagent
+.fi
+.PP
+If an older installation lacks sha256, use the trusted-machine verification
+procedure above. Renaming or copying a newer executable cannot change its ABI.
+.SS "Install on OpenBSD"
+Choose the separate amd64 download for OpenBSD 7.9, 5.9 or 3.5. Their native
+loader/libc/thread ABIs differ; use the exact listed variant. Application
+libraries and TLS roots are included. Use sha256 where available; on older
+installations without it, verify on a trusted newer system before transferring
+the executable, then grant execute permission and launch.
+.PP
+.nf
+sha256 \-q ./snajpagent
+chmod +x ./snajpagent
+\&./snajpagent
+.fi
+.SS "Install on NetBSD"
+Choose the amd64 download for NetBSD 10.1 (libpthread.so.1) or the legacy
+2.0/5.2.3 variant (libpthread.so.0); both use libc.so.12. The OS loader and
+matching base libraries are required. Application libraries and TLS roots
+are included. On NetBSD 5.2.3 and 10.1:
+.PP
+.nf
+cksum \-a SHA256 ./snajpagent
+chmod +x ./snajpagent
+\&./snajpagent
+.fi
+.PP
+NetBSD 2.0's base cksum lacks SHA-256. Verify on a trusted newer system before
+transferring the file to 2.0, then grant execute permission and launch it.
+.SS Put the executable on PATH
+On Linux, macOS and the BSDs, after verification, a user-local installation
+avoids administrator privileges. Run this from the download directory in a
+POSIX shell (start sh first if you normally use csh or tcsh):
+.PP
+.nf
+mkdir \-p "$HOME/.local/bin"
+cp ./snajpagent "$HOME/.local/bin/snajpagent"
+chmod 755 "$HOME/.local/bin/snajpagent"
+export PATH="$HOME/.local/bin:$PATH"
+cd /path/to/your/project
+snajpagent
+.fi
+.PP
+Keep the PATH assignment in your shell's startup configuration to use it in
+future terminals. The Windows instructions above explain user PATH and full
+paths. Choose the project directory before launching; it becomes the workspace.
+Use the source-build instructions below for other build environments; an
+unlisted OS or ABI is not a qualified binary target.
 .SS Provider setup
 On a fresh interactive launch without configuration or existing environment
 credentials, choose ChatGPT/Codex, OpenRouter, OpenAI, or a custom provider.
@@ -86,9 +221,7 @@ Setup creates a minimal private configuration and separate credential store,
 then continues into the ordinary session.  Cancellation leaves prior settings
 and credentials intact.
 .PP
-For manual configuration:
-.PP
-Create a private state directory:
+For manual configuration on POSIX systems, create a private state directory:
 .PP
 .nf
 install -d -m 700 "$HOME/.snajpagent"
@@ -122,6 +255,28 @@ To ask the model to continue, type your request and press Enter.
 Type
 .B /help
 for command syntax and keys; square brackets mark optional arguments.
+.PP
+On Windows, first-run setup creates the directory itself. For manual setup,
+create the private dotdir under HOME or USERPROFILE as described above and
+save the same config.ini contents there as plain UTF-8 text. Keep credentials accessible only to your account.
+Set a credential for the current shell before launching. In PowerShell:
+.PP
+.nf
+$env:OPENAI_API_KEY = 'your-key'
+& "C:\eUsers\eAlice\eTools\esnajpagent.exe"
+.fi
+.PP
+In Command Prompt:
+.PP
+.nf
+set "OPENAI_API_KEY=your-key"
+C:\eUsers\eAlice\eTools\esnajpagent.exe
+.fi
+.PP
+These shell assignments last for that shell and its child processes.
+Interactive masked-key entry or device login avoids putting a secret in shell
+history. The provider configuration syntax is the same on all platforms;
+POSIX export/chmod/install commands are not Windows commands.
 .SS Start a task
 After installation and provider setup, start snajpagent in the project directory
 you want to change.  This directory is the workspace.  The model is the AI
@@ -2236,6 +2391,10 @@ and model-input handling are unchanged.
 SIGKILL, power loss, and fatal process corruption cannot guarantee cleanup or a
 printed resume command.  Already synced events remain available.
 .SS Files
+The paths below use POSIX home-directory notation. On native Windows, HOME
+takes precedence; when it is unset or empty, substitute USERPROFILE.
+The \-\-dotdir option replaces the .snajpagent root on every platform.
+.PP
 .TP
 .I $HOME/.snajpagent/config.ini
 Default configuration.
@@ -2305,6 +2464,11 @@ keep proposals distinct from approval, and preserve local scope on each host.
 No notes layout, recursive Markdown scan, or memory service is required.
 .SS Environment
 .TP
+.BR HOME , " USERPROFILE"
+HOME supplies the default home directory. Native Windows falls back to
+USERPROFILE when HOME is unset or empty. Use \-\-dotdir DIR when neither
+provides a suitable private state location.
+.TP
 .B HOME
 Builds the default dotdir and fallback global-instruction path.
 Native Windows uses USERPROFILE when HOME is absent or empty.
@@ -2353,6 +2517,20 @@ of 1 through 16384 ASCII bytes without whitespace or controls.
 Names an additional value hidden from tool children and redacted from output.
 .SH "Troubleshooting"
 .SS Common problems
+.TP
+.B The downloaded program will not start.
+Match both CPU architecture and OS/ABI to its download row. On Unix, check
+execute permission and filesystem execution policy; an existing ELF file may
+still report "not found" when its required loader is missing. BSD legacy and
+current binaries use distinct base-library ABIs. On Windows, keep .exe and use
+\&.\esnajpagent.exe or a full path; do not run Unix shell commands in cmd.exe.
+For macOS quarantine, follow Install on macOS after verifying and trusting the
+file. Keep system-wide security protections enabled.
+.TP
+.B The checksum command is missing on a legacy system.
+Use a SHA-256-capable trusted machine to verify the download, then transfer it
+over a trusted channel. NetBSD 2.0 predates base-system SHA-256 support; a CRC
+from plain cksum is not the published SHA-256 digest.
 .TP
 .B A documented fix is missing in an open session.
 Check the startup identity and the output of snajpagent \-V for the executable
@@ -2571,11 +2749,17 @@ Production symbol archives remain available for diagnosing their matching
 production executables.
 
 .SS Source builds
-Build from a Git checkout using GNU make, a C11/POSIX compiler with pthreads,
-libcurl and Jansson development files.  These instructions describe the
-normal POSIX build.  Experimental native Windows x86-64 and ARM64 packages are also
-available; see the standalone target below and DEPENDENCIES.md for its
-current qualification scope.
+Use GNU make for this Makefile. On the BSDs, install GNU make
+and use gmake for every make invocation in this manual; the base BSD make does
+not parse this Makefile. Install a compiler, pkg-config, libcurl and Jansson
+development files through your platform's package tools. For non-default
+library prefixes, set the Makefile's JANSSON_CFLAGS/JANSSON_LIBS and
+CURL_CFLAGS/CURL_LIBS as needed. The pinned standalone recipes
+below provide the separate native Windows build route.
+.PP
+Build from a Git checkout with a C11/POSIX compiler and pthreads. These
+instructions describe the native POSIX build; DEPENDENCIES.md records each
+platform's requirements and qualification scope.
 Plain
 .B make
 builds only for the host, with size optimization and stripping.  ELF production
@@ -2626,6 +2810,19 @@ on ELF or
 .I snajpagent.dSYM
 on macOS.  They are not installed or needed to run the program.  Keep them
 for diagnosing that exact binary; a later debug rebuild is not a substitute.
+.PP
+A user-local source installation, without sudo:
+.PP
+.nf
+make
+make PREFIX="$HOME/.local" install
+export PATH="$HOME/.local/bin:$PATH"
+man "$HOME/.local/share/man/man1/snajpagent.1"
+.fi
+.PP
+Use gmake on the BSDs. The downloaded release also includes snajpagent.1;
+read it with man ./snajpagent.1 on a system with a man reader, or use the web
+manual. Windows users can read the web manual without installing Unix tools.
 .SS Standalone builds
 Native POSIX defaults select 64-bit file offsets, including on 32-bit libc
 builds.  Preserve _FILE_OFFSET_BITS=64 when replacing CPPFLAGS; it does not

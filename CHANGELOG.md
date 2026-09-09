@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Complete first-run manual and README instructions for Linux, macOS, Windows,
+  FreeBSD, OpenBSD and NetBSD: verification, installation paths, native shells,
+  provider setup, ABI selection and troubleshooting. Correct legacy NetBSD
+  checksum guidance and link each download family to its manual instructions.
+
 - Keep model/provider/effort selections from the next full turn onward until
   changed, across later turns and resume. Remove one-turn CLI override state;
   `/model` and `-m` share durable session preferences, while `save` writes config.
