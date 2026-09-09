@@ -2745,7 +2745,8 @@ def run_multi_tool_cases(binary, root, provider, environment):
                     terminal.send_key("C-d")
                     terminal.wait_dead(timeout=1.5)
                     _, events = read_events(terminal.dotdir)
-                    assert len(event_list(events, "turn_interrupted")) == 1
+                    assert not event_list(events, "turn_interrupted")
+                    assert event_list(events, "turn_recovery")
                     assert not (workspace / "must-not-run").exists()
                     print("tmux_terminal multi-tool cancel: ok", flush=True)
                     continue
@@ -2841,7 +2842,8 @@ def run_ctrl_d_cases(binary, root, provider, environment):
             screen = terminal.capture(join_wrapped=True)
             assert "You can resume this session" in screen, screen
             _, events = read_events(terminal.dotdir)
-            assert len(event_list(events, "turn_interrupted")) == 1
+            assert not event_list(events, "turn_interrupted")
+            assert event_list(events, "turn_recovery")
             assert not event_list(events, "turn_completed")
             assert len(event_list(events, "response_started")) == (
                 2 if mode == "managed" else 1)
@@ -2955,7 +2957,8 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 assert prefix.rstrip() in second, "IRC mention truncated the provider's answer"
                 assert "irc_send" not in {tool.get("name") for tool in requests[1]["tools"]}
                 _, log = read_events(terminal.dotdir)
-                admitted = [event["data"]["text"] for event in event_list(log, "steering_added")]
+                admitted = [event["data"]["steering"]["text"] for event in event_list(log, "irc_admitted")
+                            if "steering" in event["data"]]
                 # ID references coalesce even the large burst in one steering
                 # record; full payloads remain unique in the request above.
                 assert len(admitted) == 1
@@ -3438,6 +3441,22 @@ def run_provider_retry_input_cases(binary, root, provider, environment):
                     assert not event_list(events, "response_interrupted")
                     assert not event_list(events, "response_failed")
             terminal.exit()
+            if mode == "queue":
+                log_path, events = read_events(terminal.dotdir)
+                failed = next(e for e in event_list(events, "response_failed") if e["data"].get("new_input"))
+                lines = log_path.read_bytes().splitlines(keepends=True)
+                terminal.close()
+                log_path.write_bytes(b"".join(lines[:failed["seq"]]))
+                terminal = TmuxTerminal(case / "resume", binary, workspace, case / "state", config,
+                    140, 28, args=("--no-listen", "--no-client", "--resume", log_path.parent.name),
+                    environment=environment)
+                terminal.wait("retry input complete")
+                wait_irc_idle([terminal])
+                _, recovered = read_events(terminal.dotdir)
+                queued_turns = [e for e in event_list(recovered, "turn_started")
+                                if e["data"]["input_kind"] == "queued" and e["data"]["text"] == marker]
+                assert len(queued_turns) == 1, recovered
+                terminal.exit()
             print(f"tmux_terminal provider retry input {mode}: ok", flush=True)
         finally:
             release.set()
@@ -4354,9 +4373,10 @@ def run_manual_retry_cases(binary, root, provider, environment):
         def respond(handler, request, sequence):
             requests.append(request)
             attempt = len(requests)
-            if attempt == 1:
-                arrived.set()
-                assert release.wait(10.0), "active retry command was not handled"
+            if attempt in (1, 2):
+                if attempt == 1:
+                    arrived.set()
+                    assert release.wait(10.0), "active retry command was not handled"
                 if mode == "read-only-resume":
                     body = provider.function_body(sequence, "retry-read", "read_file", {
                         "path": "input.txt", "start_line": 1, "end_line": 1})
@@ -4365,7 +4385,7 @@ def run_manual_retry_cases(binary, root, provider, environment):
                         "command": "cat input.txt", "workdir": str(workspace),
                         "stdin": None, "pty": False, "timeout_ms": None,
                         "yield_ms": 1000, "max_output_tokens": None})
-            elif attempt in (2, 3):
+            elif attempt in (3, 4):
                 body = provider.event("response.failed", {"type": "response.failed",
                     "response": {"error": {"code": "fixture_failure",
                         "message": f"manual retry failure {attempt}"}}})
@@ -4384,14 +4404,14 @@ def run_manual_retry_cases(binary, root, provider, environment):
             assert not requests
             terminal.submit(("/ro " if mode == "read-only-resume" else "") + original)
             assert arrived.wait(5.0)
-            terminal.submit_wait("/retry", "that command is unavailable while a turn is active")
             if mode == "queue":
                 terminal.submit_wait("/queue still paused", "queued (/next or /q c) › still paused")
+            terminal.submit_wait("/retry", "/retry accepted; applying at the next safe request boundary")
             release.set()
-            terminal.wait("manual retry failure 2")
+            terminal.wait("manual retry failure 3")
             terminal.wait("turn failed; try /retry to continue")
             wait_irc_idle([terminal])
-            assert len(requests) == 2
+            assert len(requests) == 3
             if mode == "read-only-resume":
                 log_path, _ = read_events(terminal.dotdir)
                 terminal.exit()
@@ -4401,7 +4421,7 @@ def run_manual_retry_cases(binary, root, provider, environment):
                 terminal.wait("host-model/medium   ?% ›")
             if mode == "chat":
                 terminal.submit_wait("/chat", "chat is offline")
-            terminal.submit_wait("/retry", "manual retry failure 3")
+            terminal.submit_wait("/retry", "manual retry failure 4")
             wait_irc_idle([terminal])
             terminal.submit("/retry")
             if mode == "chat":
@@ -4410,11 +4430,13 @@ def run_manual_retry_cases(binary, root, provider, environment):
             wait_irc_idle([terminal])
             _, events = read_events(terminal.dotdir)
             turns = event_list(events, "turn_started")
-            assert len(turns) == 3 and len(requests) == 4
+            assert len(turns) == 3 and len(requests) == 5
             assert len(event_list(events, "turn_failed")) == 2
+            assert any(e["data"]["reason"] == "control" for e in event_list(events, "response_interrupted"))
+            assert [e["data"]["control"] for e in event_list(events, "control_finished")] == [32]
             assert len(event_list(events, "tool_started")) == 1, "retry replayed completed tool"
             assert all(e["data"]["read_only"] == (mode == "read-only-resume") for e in turns)
-            for request in requests[2:]:
+            for request in requests[3:]:
                 assert sum(item.get("role") == "user" and item.get("content") == original
                            for item in request["input"]) == 1, "retry duplicated the original prompt"
                 assert "retained tool result" in json.dumps(request), "retry lost tool context"
@@ -4426,7 +4448,7 @@ def run_manual_retry_cases(binary, root, provider, environment):
                 assert all(e["data"]["input_kind"] == "direct" for e in turns)
             terminal.submit("/retry")
             wait_irc_idle([terminal])
-            assert len(requests) == 4, "retry after success started stale work"
+            assert len(requests) == 5, "retry after success started stale work"
             terminal.exit()
             replay = subprocess.run([binary, "--dotdir", str(terminal.dotdir), "-l"],
                                     capture_output=True, text=True, env={**os.environ, **environment})

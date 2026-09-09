@@ -61,8 +61,8 @@ rollout and chat.** Nickname completion in chat is explained below.
 
 ### Keep working, or leave and come back
 
-Failed turns retry automatically three times. Set `[agent] max_turn_retries`
-to change the limit (`0` disables it). Active goals keep retrying without a limit.
+Failed turns retry automatically five times. Set `[agent] max_turn_retries`
+to change the limit (`0` disables it). Active goals retry ordinary errors without a limit; policy stops and refusals pause them.
 
 A normal final answer ends the turn. Set a goal when you want work to continue
 beyond it:
@@ -91,8 +91,9 @@ snajpagent --resume --last
 **An active goal continues on resume.** Pause it
 before exiting if you want it to stay paused. Paused, blocked and finished goals
 retain their states. Armed queues continue after recovered work; paused queues
-need `/next` and take priority over automatic goal work. Resume restores saved context. Command
-processes that ended with the previous program stay stopped.
+need `/next` and take priority over automatic goal work. Resume shows retained public
+history and continues unfinished turns from saved input and tool results. Commands
+with uncertain outcomes are reported honestly rather than restarted automatically.
 
 ### Keep useful findings in files
 
@@ -171,14 +172,14 @@ at the edges; Ctrl-P/Ctrl-N go straight through history. Ctrl-R searches it.
 exceptions.
 
 `/model` lists the locally cached catalog; `/model cache` explicitly refreshes
-it. Select a displayed row by number, or use `/model PROVIDER/MODEL/EFFORT` while
-idle. Add `save` to persist a selection.
+it. Select a displayed row by number, or use `/model PROVIDER/MODEL/EFFORT`.
+Selections made during work apply to the next full turn. Add `save` to persist a selection.
 
 The prompt's context percentage shows the last measured request input against
 the resolved input budget, rounded up. It uses provider-reported input counts. A fresh
 session starts at `0%`; after a turn, unknown or incomparable measurements show
 `?%`. `/status` explains the accounting. Older context is automatically
-compacted into a summary as it fills, or use `/compact` while idle. The original
+compacted into a summary as it fills, or request `/compact` during work or at idle. The original
 transcript stays on disk, but a summary does not preserve every detail—keep
 important requirements in project documents.
 

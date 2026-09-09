@@ -186,6 +186,7 @@ struct snag_session {
     bool active_goal;
     bool cancel_requested;
     bool policy_stopped;
+    bool response_handoff;
     bool archived;
     bool delete_requested;
     bool response_open;

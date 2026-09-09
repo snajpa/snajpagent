@@ -64,7 +64,7 @@ struct turn_retry {
     uint64_t attempts;
     uint32_t limit;
     enum snag_goal_status goal_status;
-    bool pending;
+    bool pending, new_input;
 };
 
 static bool
@@ -2576,7 +2576,8 @@ fail_response(struct app_state *app, struct turn_retry *retry, const char *turn_
         "retry_count", (json_int_t)retry_count, "turn_id", turn_id);
     json_decref(partial);
     if (data && (snag_json_set_new(data, "policy_stopped", json_boolean(app->turn_policy_stopped)) < 0 ||
-                 snag_json_set_new(data, "turn_retry_attempts", json_integer((json_int_t)(retry->attempts + 1u))) < 0)) {
+                 snag_json_set_new(data, "turn_retry_attempts", json_integer((json_int_t)(retry->attempts + 1u))) < 0 ||
+                 snag_json_set_new(data, "new_input", json_boolean(retry->new_input)) < 0)) {
         json_decref(data); data = NULL;
     }
     if (!data)
@@ -2611,11 +2612,12 @@ recover_session(struct app_state *app, char *error, size_t error_size)
             return -1;
         return app_warning(app, "recovered deliberate turn cancellation");
     }
-    if (!session->policy_stopped && session->goal_status != SNAG_GOAL_ACTIVE &&
-        session->turn_retry_attempts > session->turn_retry_limit) {
+    if (session->response_handoff || (!session->policy_stopped && session->goal_status != SNAG_GOAL_ACTIVE &&
+        session->turn_retry_attempts > session->turn_retry_limit)) {
         if (terminalize_pending(app, turn_id, "recovery_unstarted", error, error_size) < 0 ||
             snag_app_close_active_processes(app, turn_id, "internal_failure", false, error, error_size) < 0 ||
             commit_event(app, "turn_failed", snag_app_turn_failed_data(turn_id, "provider",
+                session->response_handoff ? "Failed request handed off to accepted new input." :
                 "Automatic retry budget exhausted before shutdown; use /retry to continue."), error, error_size) < 0)
             return -1;
         return 0;
@@ -3468,6 +3470,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 goto fail;
             }
             /* Fresh queued/chat input keeps its existing failed-request handoff. */
+            retry->new_input = !app->stream_failed && provider_failure.new_input;
             if (!provider_failure.new_input && snag_provider_failure_is_policy(&provider_failure))
                 app->turn_policy_stopped = true;
             if (!app->stream_failed && provider_failure.new_input &&

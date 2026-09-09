@@ -403,6 +403,7 @@ clear_response_state(struct snag_session *session)
     session->response_public_bytes = 0u;
     session->response_open = false;
     session->response_complete = false;
+    session->response_handoff = false;
     session->response_terminal = SNAG_RESPONSE_TERMINAL_NONE;
     session->active_response_id[0] = '\0';
     memset(&session->active_accounting, 0, sizeof(session->active_accounting));
@@ -1598,11 +1599,14 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         uint64_t retry_count;
         bool has_policy = json_object_get(data, "policy_stopped") != NULL;
         bool has_retry = json_object_get(data, "turn_retry_attempts") != NULL;
-        if (!snag_json_exact_keys(data, has_retry ?
+        bool has_handoff = json_object_get(data, "new_input") != NULL;
+        if (!snag_json_exact_keys(data, has_handoff ?
+            "class cycle message partial_public response_id retry_count turn_id policy_stopped turn_retry_attempts new_input" : has_retry ?
             "class cycle message partial_public response_id retry_count turn_id policy_stopped turn_retry_attempts" : has_policy ?
             "class cycle message partial_public response_id retry_count turn_id policy_stopped" :
             "class cycle message partial_public response_id retry_count turn_id") ||
             (has_policy && !json_is_boolean(json_object_get(data, "policy_stopped"))) ||
+            (has_handoff && !json_is_boolean(json_object_get(data, "new_input"))) ||
             !current_response(session, data) ||
             !snag_string_in(class_name, classes) ||
             !message || strlen(message) > 8192u ||
@@ -1613,6 +1617,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->response_open = false;
         session->response_complete = false;
         session->response_terminal = SNAG_RESPONSE_TERMINAL_FAILED;
+        session->response_handoff = json_is_true(json_object_get(data, "new_input"));
         if (has_retry && (snag_json_integer_u64(data, "turn_retry_attempts", &session->turn_retry_attempts) < 0 ||
                           session->turn_retry_attempts > (uint64_t)UINT32_MAX + 1u)) goto invalid;
         if (has_policy) session->policy_stopped = json_is_true(json_object_get(data, "policy_stopped"));
@@ -1865,7 +1870,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         } else {
             if (session->response_open || (session->response_complete && !all_pending_finished(session)))
                 goto invalid;
-            session->queue_armed = false;
+            if (!session->response_handoff || !strcmp(type, "turn_interrupted"))
+                session->queue_armed = false;
             if (!strcmp(type, "turn_interrupted")) {
                 if (!snag_json_exact_keys(data, "origin reason turn_id") ||
                     !snag_string_in(snag_json_string(data, "origin"), "user recovery output") ||

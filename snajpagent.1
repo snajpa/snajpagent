@@ -233,7 +233,8 @@ shows its state and any blocker.
 pauses automatic continuation at a turn boundary;
 .B /goal resume
 starts it again.  Pausing does not kill a command already running.
-Errors and provider refusals retain the goal and recover automatically.
+Ordinary errors retain the goal and recover automatically.  Policy stops and
+provider refusals pause automatic goal continuation.
 Explicit turn interruption pauses automatic goal work.
 .SS Leave and resume a session
 A session saves the workspace, conversation, tool results, model selection,
@@ -979,9 +980,11 @@ blindly executed again.  Paused queues and goals remain paused.
 Ordinary turns retry failures automatically up to
 .B max_turn_retries
 additional times (default five), then display the manual retry hint.
-A successful actionable response or a manual retry starts a fresh retry budget.
-Active goals recover without an attempt limit. Automatic recovery retains the turn, completed tool results and
-live command handles.
+Automatic retry counts and their original limit survive restart.  A successful
+actionable response or manual retry after terminal failure starts a fresh budget.
+Active goals recover ordinary failures without an attempt limit.  Same-process
+recovery retains live command handles; after restart their outcomes are settled
+without reusing old handles.  Policy stops survive restart and require clarification.
 .SS Input timestamps
 New prompts and steers carry separate host-generated timing metadata in model
 context.  The original user text and its authority remain unchanged.
@@ -998,10 +1001,11 @@ replay time.  Terminal prompt and IRC display formats are unchanged.
 .SS Goals
 An active goal continues across ordinary turns until complete, paused,
 cancelled, or blocked.  Queued operator turns run before the next automatic
-goal turn.  Errors and provider refusals retain the active goal and schedule
-recovery with interruptible backoff, without an attempt limit.  Turn-only
-interruption pauses automatic continuation.  Quitting the foreground process interrupts its turn but does
-not pause its goal.  Session resume preserves the saved goal state unchanged.
+goal turn.  Ordinary errors retain the active goal and schedule recovery with
+interruptible backoff, without an attempt limit.  Policy stops and provider
+refusals pause automatic continuation and require clarification.  Turn-only
+cancellation also pauses automatic continuation.  Quitting preserves unfinished
+work and its goal for resume.  Session resume preserves saved stops.
 .TP
 .BR /goal , " /goal status"
 Show the durable goal.  Queued prompts run before automatic goal continuation,
