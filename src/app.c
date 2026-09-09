@@ -515,12 +515,12 @@ prompt_hostname(char *hostname, size_t size)
 }
 
 static int
-set_input_prompt(struct app_state *app, bool active)
+render_prompt(struct app_state *app, bool active, const char *submitted)
 {
-    const struct snag_provider_config *provider = active ? app->turn_provider :
+    const struct snag_provider_config *provider = active || submitted ? app->turn_provider :
                                                         next_provider(app);
-    const char *model = active ? app->turn_model : next_model(app);
-    const char *effort = active ? app->turn_effort :
+    const char *model = active || submitted ? app->turn_model : next_model(app);
+    const char *effort = active || submitted ? app->turn_effort :
                                   resolve_effort(next_effort(app));
     char hostname[256u], meter[32u], label[SNAG_TERM_LABEL_BYTES];
     char queue[32u] = "";
@@ -531,11 +531,11 @@ set_input_prompt(struct app_state *app, bool active)
         app->config->prompt_spinner_tool
     };
     unsigned int states = prompt_spinner_states(app, active);
-    unsigned int selected = app->ui.view == SNAG_RENDER_CHAT ?
+    unsigned int selected = submitted ? 1u : app->ui.view == SNAG_RENDER_CHAT ?
                             0u : active ? 2u : 1u;
 
     if (!provider || !model || !effort ||
-        format_context_meter(app, active, meter) < 0)
+        format_context_meter(app, active || submitted, meter) < 0)
         return -1;
     prompt_hostname(hostname, sizeof(hostname));
     values[0] = provider->name;
@@ -549,7 +549,7 @@ set_input_prompt(struct app_state *app, bool active)
                 selected == 1u ? "rollout-idle" : "rollout-active";
     (void)snprintf(queue, sizeof(queue), "%zu", app->session.pending_queue_count);
     values[SNAG_PROMPT_QUEUE] = queue;
-    if (app->queue_edit_id[0]) {
+    if (!submitted && app->queue_edit_id[0]) {
         struct snag_buf out = {.max = SNAG_TERM_LABEL_BYTES};
         for (unsigned int i = 0u; i < SNAG_TERM_SPINNER_SLOTS; ++i)
             if (snag_buf_putc(&out, SNAG_TERM_SPINNER_MARKER_BASE + i) < 0)
@@ -568,7 +568,13 @@ fail:
         return -1;
     }
     return snag_ui_composer(&app->ui, active, app->config->prompt, values,
-        selected, spinners, app->config->prompt_spinner_per_second, states);
+        selected, spinners, app->config->prompt_spinner_per_second, states, submitted);
+}
+
+static int
+set_input_prompt(struct app_state *app, bool active)
+{
+    return render_prompt(app, active, NULL);
 }
 
 static int
@@ -2251,6 +2257,11 @@ handle_input_command(struct app_state *app, const char *line, bool active,
 {
     bool single_line = strchr(line, '\n') == NULL;
     char error[256] = {0};
+    bool read_only;
+    (void)snag_prompt_parse(line, &read_only);
+    if (single_line && !read_only && line[0] == '/' && line[1] != '/' &&
+        snag_ui_submitted(&app->ui, app->ui.label, line, true) < 0)
+        return -1;
     int rc = handle_destination_command(app, line, handled);
 
     if (rc < 0 || *handled)
@@ -3116,6 +3127,10 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                          "workspace", app->session.workspace),
                      error, sizeof(error)) < 0) {
         goto fail;
+    }
+    if (!continuing && queued && !app->execute && render_prompt(app, false, prompt) < 0) {
+        report_message = "queued prompt could not be rendered";
+        goto output_fail;
     }
     if (!continuing) consume_staged_settings(app);
     /* prepare_turn_settings owns the identity, including after the reducer
@@ -4259,10 +4274,6 @@ submit_idle(struct app_state *app, const char *prompt,
     }
     if (!*prompt && input_view == SNAG_RENDER_CHAT)
         return 0;
-    if (input_view == SNAG_RENDER_ROLLOUT && single_line && !read_only &&
-        prompt[0] == '/' && prompt[1] != '/' &&
-        snag_ui_submitted(&app->ui, app->ui.label, prompt, true) < 0)
-        return 6;
     rc = handle_input_command(app, prompt, app->session.active_turn, &handled, prompt_ready);
     if (rc < 0)
         return 3;

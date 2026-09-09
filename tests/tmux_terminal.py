@@ -1238,6 +1238,157 @@ def wait_event_count(dotdir, kind, count, timeout=5.0):
     )
 
 
+def run_command_transcript_case(binary, root, active=False, chat=False, width=120):
+    case = root / f"command-transcript-{active}-{chat}-{width}"
+    prompt = "{chat:C›}{rollout-idle:I›}{rollout-active:A»}"
+    with TmuxTerminal.fixture(binary, case, width, 35, prompt=prompt) as terminal:
+        terminal.wait("I›")
+        if active:
+            terminal.submit("queue_slow")
+            terminal.wait("working slowly")
+        if chat:
+            terminal.submit("/chat")
+            terminal.wait("C›")
+        label = "C›" if chat else "A»" if active else "I›"
+        for command, output in (("/commands", "unknown slash command"),
+                                ("/status", "session:"),
+                                ("/help", "commands and keys"),
+                                ("/verbose 2", "verbosity: 2")):
+            terminal.submit(command)
+            screen = terminal.wait(output, join_wrapped=True)
+            line = f"{label} {command}"
+            assert screen.count(line) == 1, (line, screen)
+            assert_order(screen, [line, output])
+        if active:
+            terminal.send_key("C-c")
+            wait_event_count(terminal.dotdir, "turn_interrupted", 1)
+        terminal.exit()
+    print("command transcript", active, chat, "ok", flush=True)
+
+
+def run_queue_transcript_case(binary, root, active=False, resume=False):
+    case = root / f"queue-transcript-{active}-{resume}"
+    prompt = "@{hour:02}:{minute:02}:{second:02} {model}/{effort}{chat: C›}{rollout-idle: ›}{rollout-active: »}"
+    with TmuxTerminal.fixture(binary, case, 160, 35, prompt=prompt) as terminal:
+        terminal.wait(" ›")
+        if active:
+            terminal.submit("queue_slow")
+            terminal.wait("working slowly")
+        terminal.submit("/q queued-visible-one")
+        terminal.wait("queued (/next or /q c) › queued-visible-one")
+        terminal.submit("/q queued-visible-two")
+        terminal.wait("queued (/next or /q c) › queued-visible-two")
+        if active:
+            terminal.send_key("C-c")
+            wait_event_count(terminal.dotdir, "turn_interrupted", 1)
+        time.sleep(1.1)  # Queue receipt and dispatch must be observably distinct.
+        terminal.submit("/model gpt-5.6-luna/high")
+        terminal.wait("gpt-5.6-luna / high")
+        if resume:
+            sid = next((terminal.dotdir / "sessions").iterdir()).name
+            terminal.exit()
+            binary, workspace, state, config = terminal.binary, terminal.workspace, terminal.dotdir, case / "config.ini"
+            terminal.close()
+            terminal = TmuxTerminal(case / "resumed", binary, workspace, state, config, 160, 35,
+                                    args=("--resume", sid))
+            terminal.wait(" ›")
+        try:
+            before = time.time()
+            terminal.submit("/next")
+            log = wait_event_count(terminal.dotdir, "turn_completed", 2)
+            terminal.wait("fixture answer")
+            screen = terminal.capture(join_wrapped=True)
+            for text in ("queued-visible-one", "queued-visible-two"):
+                pattern = rf"(?m)^@(\d{{2}}:\d{{2}}:\d{{2}}) gpt-5\.6-luna/high › {text}$"
+                matches = list(re.finditer(pattern, screen))
+                assert len(matches) == 1, (text, screen)
+                assert screen.find("fixture answer", matches[0].end()) > matches[0].end(), screen
+                stamp = matches[0][1]
+                allowed = {time.strftime("%H:%M:%S", time.localtime(before + i)) for i in range(-1, 8)}
+                assert stamp in allowed, (stamp, before, screen)
+            turns = [e for e in log if e["type"] == "turn_started" and e["data"]["input_kind"] == "queued"]
+            assert len(turns) == 2
+            for turn in turns:
+                assert turn["data"]["received_at_ms"] < int(before * 1000), turn
+            assert_order(screen, ["› queued-visible-one", "fixture answer", "› queued-visible-two", "fixture answer"])
+            terminal.exit()
+        finally:
+            if resume:
+                (case / "resumed-screen.txt").write_text(terminal.capture(), encoding="utf-8")
+                terminal.close()
+    print("queue transcript", active, resume, "ok", flush=True)
+
+
+def run_queue_dispatch_retry_case(binary, root):
+    case = root / "queue-dispatch-retry"
+    case.mkdir(parents=True)
+    provider = FakeResponses()
+    state, config = case / "state", case / "config.ini"
+    write_irc_config(config, provider.port, "host-model")
+    with config.open("a") as out:
+        out.write("prompt = @{hour:02}:{minute:02}:{second:02} {model}/{effort}{chat: C›}{rollout-idle: ›}{rollout-active: »}\n")
+    first, second, release_first, release_second = (threading.Event() for _ in range(4))
+    attempts = 0
+    terminal = None
+
+    def respond(handler, request, sequence):
+        nonlocal attempts
+        latest = provider.latest_user(request)
+        if latest == "hold first":
+            first.set()
+            assert release_first.wait(8)
+            body = provider.response_body(sequence, "first response done")
+        else:
+            assert latest == "queued retry prompt", latest
+            attempts += 1
+            if attempts == 1:
+                second.set()
+                assert release_second.wait(8)
+                body = provider.event("response.failed", {"response": {
+                    "error": {"code": "upstream_unavailable", "message": "retry this request"}}})
+            else:
+                body = provider.response_body(sequence, "queued response done")
+        provider.reply(handler, body.encode(), close_header=True)
+
+    provider.runtime_handler = respond
+    try:
+        terminal = TmuxTerminal(case / "term", binary, case, state, config, 160, 35,
+                                environment={"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"})
+        terminal.wait(" ›")
+        terminal.submit("hold first")
+        assert first.wait(5)
+        terminal.send_text("queued retry prompt")
+        terminal.send_key("Tab")
+        terminal.wait("queued (/next or /q c) › queued retry prompt")
+        terminal.send_text("unfinished-draft")
+        screen = terminal.wait("unfinished-draft")
+        draft = re.findall(r"(?m)^@(\d{2}:\d{2}:\d{2}) host-model/medium » unfinished-draft$", screen)
+        assert draft, screen
+        time.sleep(1.1)
+        release_first.set()
+        assert second.wait(5), terminal.capture()
+        screen = terminal.capture(join_wrapped=True)
+        dispatched = re.findall(r"(?m)^@(\d{2}:\d{2}:\d{2}) host-model/medium › queued retry prompt$", screen)
+        assert len(dispatched) == 1 and dispatched[0] != draft[-1], screen
+        assert f"@{draft[-1]} host-model/medium » unfinished-draft" in screen, screen
+        release_second.set()
+        terminal.wait("queued response done")
+        log = wait_event_count(state, "turn_completed", 2)
+        screen = terminal.capture(join_wrapped=True)
+        assert len(re.findall(r"(?m)^@.* › queued retry prompt$", screen)) == 1, screen
+        assert attempts == 2 and event_list(log, "turn_recovery"), (attempts, log)
+        terminal.send_key("C-c")  # Clear, rather than submit, the retained draft.
+        terminal.exit()
+        print("queue automatic dispatch/retry/draft ok", flush=True)
+    finally:
+        release_first.set()
+        release_second.set()
+        if terminal is not None:
+            (case / "screen.txt").write_text(terminal.capture(), encoding="utf-8")
+            terminal.close()
+        provider.close()
+
+
 def run_queue_case(binary, root):
     case = root / "queue"
     with TmuxTerminal.fixture(
@@ -2174,6 +2325,12 @@ def run_fixture(binary, workspace, root):
     run_markdown_case(binary, root)
     run_narrow_markdown_table_case(binary, root)
     run_render_case(binary, root)
+    for active in (False, True):
+        for chat in (False, True):
+            run_command_transcript_case(binary, root, active, chat)
+        run_queue_transcript_case(binary, root, active)
+    run_command_transcript_case(binary, root, active=True, width=38)
+    run_queue_transcript_case(binary, root, resume=True)
     run_queue_case(binary, root)
     run_tool_spinner_delay_case(binary, root)
     run_tool_case(binary, root)
@@ -5871,6 +6028,7 @@ def run_irc_case(binary, root):
         run_token_accounting_cases(binary, root / "token-accounting")
         run_assistant_phase_case(binary, root)
         run_goal_recovery_cases(binary, root, provider, environment)
+        run_queue_dispatch_retry_case(binary, root)
         run_manual_compaction_cases(binary, root)
         run_compaction_text_cases(binary, root)
         run_compacted_goal_cases(binary, root)

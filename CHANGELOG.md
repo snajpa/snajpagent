@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Preserve submitted slash-command prompt lines above output in both views, at
+  idle and during active work. Render queued prompts as ordinary submissions
+  at dispatch, with fresh timestamps and effective model settings, retaining
+  live drafts and original input provenance.
+
 - Run manual compaction independently of previous turn cancellation. Show its
   progress and outcome, queue idle input, and keep the session open after
   provider errors. Preserve deferred requests until a safe context boundary

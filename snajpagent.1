@@ -174,7 +174,11 @@ additions start paused.  Use
 to arm it: at idle the oldest item starts immediately; during active work it
 starts after the current full turn.  The remaining entries drain in order.  Queued prompts take precedence over automatic goal continuation.  The acknowledgement
 .B "queued (/next or /q c) ›"
-marks a submitted follow-up, not its execution.
+marks a submitted follow-up.  At execution, the prompt appears again in the
+transcript with the normal rollout prompt, current local timestamp and effective
+model settings.  The timestamp reflects dispatch; stored input provenance keeps
+the original receipt time.  Retries within that turn do not repeat its prompt.
+An unfinished draft retains its text and original prompt timestamp.
 .B /next
 continues a paused queue;
 .B /q c
@@ -718,6 +722,10 @@ The default chat prompt is
 .IR "   HH:MM:SS " OPERATOR_NICK@MACHINE_HOSTNAME " : "
 when idle.  Its first two spaces reserve the indicator slots; one literal
 space separates them from the clock in every activity state.
+Submitted command lines remain in scrollback with their output below them.
+This applies in both views, during active work and at idle, including invalid
+commands.  Each line retains the prompt label visible at submission.
+.PP
 The timestamp is local time captured once per composer.  Editing, view changes,
 and status redraws retain it; submission or Ctrl-C cancellation ends that capture.
 The goal flag is independent of the activity slot.  Tool calls take priority

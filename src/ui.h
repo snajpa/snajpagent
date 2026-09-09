@@ -85,10 +85,11 @@ int snag_ui_external(struct snag_ui *ui, bool begin,
 int snag_ui_prompt(struct snag_ui *ui, bool active, const char *label,
                     const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                     uint32_t per_second, unsigned int states);
+/* Non-NULL submitted renders a fresh immutable label without replacing the editor. */
 int snag_ui_composer(struct snag_ui *ui, bool active, const char *format,
                     const char *const values[SNAG_PROMPT_HOUR], unsigned int mode,
                     const char *const spinners[SNAG_TERM_SPINNER_COUNT],
-                    uint32_t per_second, unsigned int states);
+                    uint32_t per_second, unsigned int states, const char *submitted);
 int snag_ui_validate_prompt(struct snag_ui *ui, const char *label,
                     const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                     uint32_t per_second);

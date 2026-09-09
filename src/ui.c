@@ -192,16 +192,16 @@ message_free(struct ui_message *message)
 }
 
 static int
-apply_prompt(struct snag_ui_display *display)
+configure_prompt(struct snag_ui_display *display, const struct snag_ui_prompt *prompt,
+                 struct snag_term *term)
 {
-    struct snag_ui_prompt *prompt = &display->prompt;
     const char *frames[SNAG_TERM_SPINNER_COUNT];
     const char *values[SNAG_PROMPT_FIELD_COUNT];
-    const struct snag_prompt_clock *clock = &display->term.prompt_clock;
+    const struct snag_prompt_clock *clock = &term->prompt_clock;
     char hour[12], minute[12], second[12], label[SNAG_TERM_LABEL_BYTES];
     const char *text = prompt->source;
 
-    snag_term_capture_prompt_clock(&display->term, time(NULL));
+    snag_term_capture_prompt_clock(term, time(NULL));
     if (prompt->values[0]) {
         (void)snprintf(hour, sizeof(hour), clock->valid ? "%u" : "--", clock->hour);
         (void)snprintf(minute, sizeof(minute), clock->valid ? "%u" : "--", clock->minute);
@@ -226,8 +226,14 @@ apply_prompt(struct snag_ui_display *display)
     }
     for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i)
         frames[i] = prompt->frames[i];
-    return snag_term_set_prompt_template(&display->term, prompt->active, text,
+    return snag_term_set_prompt_template(term, prompt->active, text,
                                         frames, prompt->rate, prompt->states);
+}
+
+static int
+apply_prompt(struct snag_ui_display *display)
+{
+    return configure_prompt(display, &display->prompt, &display->term);
 }
 
 static int
@@ -288,6 +294,17 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
             snag_term_external_begin(term, error, error_size) :
             snag_term_external_end(term, error, error_size);
     case SNAG_UI_PROMPT: {
+        if (command->label) {
+            /* Dispatch gets a fresh label without replacing a live draft/clock. */
+            struct snag_term submitted;
+            snag_term_init(&submitted);
+            submitted.defer_redraw = true;
+            int rc = configure_prompt(display, &command->data.prompt, &submitted);
+            if (rc == 0)
+                rc = snag_render_submitted(render, submitted.label, command->label);
+            snag_term_close(&submitted);
+            return rc;
+        }
         term->defer_redraw = true;
         if (snag_render_before_prompt(render) < 0)
             return -1;
@@ -826,10 +843,11 @@ static int
 send_prompt(struct snag_ui *ui, enum snag_ui_operation kind, bool active, const char *label,
               const char *const spinners[SNAG_TERM_SPINNER_COUNT],
               uint32_t per_second, unsigned int states,
-              const char *const values[SNAG_PROMPT_HOUR], unsigned int mode)
+              const char *const values[SNAG_PROMPT_HOUR], unsigned int mode,
+              const char *submitted)
 {
     struct ui_message message = {.command = {
-        .kind = kind,
+        .kind = kind, .label = submitted,
         .data.prompt = {.active = active, .rate = per_second, .states = states,
                         .mode = mode}
     }};
@@ -859,17 +877,17 @@ snag_ui_prompt(struct snag_ui *ui, bool active, const char *label,
               const char *const spinners[SNAG_TERM_SPINNER_COUNT],
               uint32_t per_second, unsigned int states)
 {
-    return send_prompt(ui, SNAG_UI_PROMPT, active, label, spinners, per_second, states, NULL, 0u);
+    return send_prompt(ui, SNAG_UI_PROMPT, active, label, spinners, per_second, states, NULL, 0u, NULL);
 }
 
 int
 snag_ui_composer(struct snag_ui *ui, bool active, const char *format,
                  const char *const values[SNAG_PROMPT_HOUR], unsigned int mode,
                  const char *const spinners[SNAG_TERM_SPINNER_COUNT],
-                 uint32_t per_second, unsigned int states)
+                 uint32_t per_second, unsigned int states, const char *submitted)
 {
     return send_prompt(ui, SNAG_UI_PROMPT, active, format, spinners, per_second,
-                        states, values, mode);
+                        states, values, mode, submitted);
 }
 
 int
@@ -877,7 +895,7 @@ snag_ui_validate_prompt(struct snag_ui *ui, const char *label,
                        const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                        uint32_t per_second)
 {
-    return send_prompt(ui, SNAG_UI_VALIDATE, false, label, spinners, per_second, 0u, NULL, 0u);
+    return send_prompt(ui, SNAG_UI_VALIDATE, false, label, spinners, per_second, 0u, NULL, 0u, NULL);
 }
 
 int
