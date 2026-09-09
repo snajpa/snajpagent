@@ -1,0 +1,9 @@
+{
+  "name": "snajpagent",
+  "target": "linux-ppc32",
+  "version": "0.99.4",
+  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.4/snajpagent-0.99.4-linux-ppc32",
+  "sha256": "ac09c1ce25b47aacabe2272eec9eeca1d69c45e21d5af63b0fa7f2b9bd06cca5",
+  "size": 4591056,
+  "changelog": "https://agent.snajpa.net/downloads.html#changelog"
+}

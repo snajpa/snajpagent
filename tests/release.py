@@ -532,7 +532,7 @@ for link in downloads:
         position = nodes.index(link)
         assert any(n["tag"] == "h4" and "Debug" in n["text"] and release_section in n["parents"]
                    for n in nodes[:position])
-assert counts == {"0.99.3": 16, "0.99.2": 11, "0.99.2-9d98036": 11, "0.99.1": 16}
+assert counts == {"0.99.4": 20, "0.99.3": 16, "0.99.2": 11, "0.99.2-9d98036": 11, "0.99.1": 16}
 for node in nodes:
     if "coming-soon" in node["attrs"].get("class", "").split():
         assert node["tag"] == "p" and "(coming soon)" in node["text"]
