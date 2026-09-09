@@ -372,7 +372,7 @@ and completed turns, and every replay ends with shown/completed/total counts.
 Unfinished, failed and interrupted work is included; a total can exceed completed
 turns.  Automatic resume uses the same replay and defaults to one turn.
 .PP
-Conversation replay is separate from the shared prompt-entry history used by
+Conversation replay is separate from the session's prompt-entry history used by
 Up, Ctrl-P and Ctrl-R.  Compaction reduces model context, not the full local
 conversation log available to /history.
 .SS Complete names with Tab
@@ -837,8 +837,8 @@ work and exit without waiting for the model or command to finish.
 Move within the displayed rows of a wrapped or multiline draft, preserving the
 preferred terminal column, including in recalled prompts.  At the first or last
 row, move to the start or end of the text.  Up at the start selects one older
-prompt; Down at the end selects one newer prompt.  History is shared and
-persistent; returning to its newest boundary restores the unsent draft.
+prompt; Down at the end selects one newer prompt. History is persistent and
+local to the session; returning to its newest boundary restores the unsent draft.
 .TP
 .BR Ctrl-P , " Ctrl-N"
 Move directly through prompt history, including from inside a multiline draft.
@@ -2411,11 +2411,24 @@ token capacities, counting capabilities and observed context ceilings.  Refresh 
 .BR /model\ cache .
 .TP
 .I $HOME/.snajpagent/prompt_history
-Shared plaintext interactive prompt history.  It stores the newest 100 decoded
-entries within 4 MiB as private mode 0600, one escaped physical line per
-submission.  Another
+Global plaintext prompt-history archive. New interactive sessions take one
+snapshot at startup. On orderly exit, only lines entered by that process are
+merged under the file lock, preserving their order and deliberate repeats.
+Seeded or resumed entries are not merged again. Concurrent sessions never import
+those updates into Up/Down or Ctrl-R. Another
 .B --dotdir
-selects another history file.
+selects another global archive. Each history retains the newest 100 decoded
+entries within 4 MiB as private mode 0600, one escaped physical line per submission.
+.TP
+.I $HOME/.snajpagent/sessions/SESSION/prompt_history
+The session's own interactive history, restored on resume without importing new
+global entries. It is created when the session is first persisted and updated
+on each accepted interactive submission. A session from an older build without
+this file is seeded once from global history. Empty sessions keep their history
+in memory until exit; no session directory is created solely for editing.
+Abrupt termination can skip the global merge; already saved local history remains
+available on resume. Deleting a session removes this local file, while global
+entries already merged remain until they age out or are removed manually.
 .TP
 .I $HOME/.snajpagent/sessions/SESSION/events.jsonl
 Append-only durable session log.

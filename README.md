@@ -203,6 +203,9 @@ sandbox.
 `/help` lists commands and editing keys; `/status` shows the current state.
 Ctrl-J inserts a newline. Up/Down move through draft rows, then prompt history
 at the edges; Ctrl-P/Ctrl-N go straight through history. Ctrl-R searches it.
+Each session keeps its own history, seeded once from global history. Orderly
+exit merges newly entered lines into global history for future sessions;
+already-running sessions keep their existing navigation and search history.
 `/queue` shows waiting work; `/queue 2 edit` revises its second item and
 `/queue 2 delete` removes it. The manual covers the queue editor and slash-command
 exceptions.

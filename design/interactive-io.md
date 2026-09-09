@@ -314,15 +314,30 @@ The networked prompt identity and its chat/rollout views are specified in
 
 ## Persistent Prompt History And Reverse Search
 
-All ordinary chat and rollout composers in one dotdir share the plaintext
-`DOTDIR/prompt_history`. Each submitted line is appended under an advisory lock
-as one UTF-8 physical line; backslash, newline, carriage return, tab, and other
-controls use reversible text escapes. The `0600` no-follow regular file retains
-the newest 100 decoded entries within 4 MiB. Torn tails and malformed records
-are skipped or repaired without changing accepted-input semantics. Fresh
-History navigation and Ctrl-R refresh from disk; an active search keeps a stable
-snapshot. Initial noninteractive input, confirmation input, aborted drafts,
-peer/model/tool text, and resumed `last_user` are excluded.
+Chat and rollout composers within a session share its local prompt history.
+Startup seeds an in-memory snapshot from `DOTDIR/prompt_history`; resumed
+sessions restore their own `sessions/ID/prompt_history` instead. A new session
+writes that snapshot when its ordinary durable state is first persisted.
+Subsequent accepted lines update the local file and the bounded pending suffix.
+History navigation and Ctrl-R receive only engine-owned local snapshots; they
+perform no disk imports. The existing stable navigation/search handoff remains.
+
+Orderly process exit reads the current global archive under its advisory lock,
+appends only the pending suffix in order, then applies the same history bounds.
+Imported and previously resumed entries are never merged again; deliberate
+identical submissions remain separate. Concurrent exits serialize their merges
+without overwriting one another's retained entries. There is no timer or new
+configuration. Crash recovery uses the saved local history; a crash can skip the
+global merge. Empty sessions keep history in memory and merge on exit without
+creating a session directory. Session deletion removes its local history file.
+
+Both `0600` no-follow regular files use UTF-8 physical lines with reversible
+escapes for backslash, newline, carriage return, tab and other controls. Each
+snapshot, pending suffix and file retains the newest 100 decoded entries within
+4 MiB. Torn tails and malformed records are repaired on load; failed history
+writes warn once without rejecting accepted input. Initial noninteractive input,
+confirmation input, aborted drafts, peer/model/tool text and resumed `last_user`
+are excluded. Prompt history is independent of provider context and `/history`.
 
 Ctrl-R performs case-sensitive newest-to-oldest substring search and displays
 `(reverse-i-search)`QUERY': MATCH`; a miss uses
@@ -403,7 +418,7 @@ Explicit counts are uncapped within available history; overflowing decimal
 counts saturate safely. Nonempty replay opens with total session turns and
 completed turns; every replay ends with shown/completed/total counts, even for
 empty sessions and `/history 0`. Replay does not change model context or the log.
-This conversation history is distinct from shared prompt-entry history.
+This conversation history is distinct from the session's prompt-entry history.
 
 ## Queue Commands
 
@@ -506,7 +521,8 @@ non-steering behavior as `/queue TEXT`.
   `future_turn_queued`, creates no steering or response interruption, leaves the
   active response or command running, and drains queued turns later in FIFO
   order.
-- PTY coverage asserts persistent cross-mode/cross-process history, Ctrl-R
+- PTY coverage asserts persistent cross-mode history, concurrent-session isolation,
+  exit-only global merging, resume-local restoration, new-session seeding, Ctrl-R
   search controls, exact append-only `^C` cancellation, five-press Ctrl-C
   exit, prompt expansions, exact spinner-cell updates, and no periodic refresh
   for a selected one-frame state. Separate coverage retains explicit turn

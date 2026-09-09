@@ -39,7 +39,9 @@ void
 snag_history_free(struct snag_history *history)
 {
     snag_history_snapshot_free(&history->snapshot);
+    snag_history_snapshot_free(&history->pending);
     free(history->path);
+    free(history->global_path);
     memset(history, 0, sizeof(*history));
 }
 
@@ -62,7 +64,7 @@ snag_history_take_warning(struct snag_history *term)
 }
 
 static int
-history_memory_add(struct snag_history *term, const char *text, bool *dropped)
+history_memory_add(struct snag_history_snapshot *snapshot, const char *text, bool *dropped)
 {
     size_t len = strlen(text);
     char *copy;
@@ -72,19 +74,19 @@ history_memory_add(struct snag_history *term, const char *text, bool *dropped)
     copy = snag_strdup_checked(text, SNAG_HISTORY_BYTES);
     if (!copy)
         return -1;
-    while (term->snapshot.count == SNAG_HISTORY_COUNT ||
-           term->snapshot.bytes > SNAG_HISTORY_BYTES - len) {
-        size_t old = strlen(term->snapshot.items[0]);
+    while (snapshot->count == SNAG_HISTORY_COUNT ||
+           snapshot->bytes > SNAG_HISTORY_BYTES - len) {
+        size_t old = strlen(snapshot->items[0]);
         if (dropped)
             *dropped = true;
-        free(term->snapshot.items[0]);
-        memmove(term->snapshot.items, term->snapshot.items + 1u,
-                (term->snapshot.count - 1u) * sizeof(term->snapshot.items[0]));
-        --term->snapshot.count;
-        term->snapshot.bytes -= old;
+        free(snapshot->items[0]);
+        memmove(snapshot->items, snapshot->items + 1u,
+                (snapshot->count - 1u) * sizeof(snapshot->items[0]));
+        --snapshot->count;
+        snapshot->bytes -= old;
     }
-    term->snapshot.items[term->snapshot.count++] = copy;
-    term->snapshot.bytes += len;
+    snapshot->items[snapshot->count++] = copy;
+    snapshot->bytes += len;
     return 0;
 }
 
@@ -98,9 +100,9 @@ history_lock(int fd)
 }
 
 static int
-history_file_open(struct snag_history *term)
+history_file_open(const char *path)
 {
-    int fd = snag_open_history(term->path);
+    int fd = snag_open_history(path);
 
     if (fd < 0)
         return -1;
@@ -178,26 +180,28 @@ history_encode(struct snag_buf *out, const char *text)
 }
 
 static int
-history_rewrite(struct snag_history *term, int fd)
+history_rewrite(const struct snag_history_snapshot *snapshot, int fd)
 {
     int rc = -1;
 
     struct snag_buf encoded = {.max = HISTORY_FILE_BYTES};
-    if (snag_truncate(fd, 0) < 0 || snag_seek(fd, 0, SEEK_SET) < 0)
-        goto out;
-    for (size_t i = 0u; i < term->snapshot.count; ++i)
-        if (history_encode(&encoded, term->snapshot.items[i]) < 0 ||
-            snag_write_full(fd, encoded.data, encoded.len) < 0 ||
-            snag_write_full(fd, "\n", 1u) < 0)
+    struct snag_buf file = {.max = HISTORY_FILE_BYTES};
+    for (size_t i = 0u; i < snapshot->count; ++i)
+        if (history_encode(&encoded, snapshot->items[i]) < 0 ||
+            snag_buf_append(&file, encoded.data, encoded.len) < 0 ||
+            snag_buf_putc(&file, '\n') < 0)
             goto out;
-    rc = snag_sync_file(fd);
+    if (snag_truncate(fd, 0) == 0 && snag_seek(fd, 0, SEEK_SET) == 0 &&
+        snag_write_full(fd, file.data, file.len) == 0)
+        rc = snag_sync_file(fd);
 out:
     snag_buf_free(&encoded);
+    snag_buf_free(&file);
     return rc;
 }
 
 static int
-history_load_locked(struct snag_history *term, int fd, bool *damaged)
+history_load_locked(struct snag_history_snapshot *snapshot, int fd, bool *damaged)
 {
     snag_file_info st;
     size_t pos = 0u;
@@ -222,7 +226,7 @@ history_load_locked(struct snag_history *term, int fd, bool *damaged)
         if (snag_buf_append(&file, chunk, (size_t)got) < 0)
             goto out;
     }
-    snag_history_snapshot_free(&term->snapshot);
+    snag_history_snapshot_free(snapshot);
     while (pos < file.len) {
         unsigned char *lf = memchr(file.data + pos, '\n', file.len - pos);
         bool dropped = false;
@@ -235,99 +239,126 @@ history_load_locked(struct snag_history *term, int fd, bool *damaged)
         len = (size_t)(lf - file.data - pos);
         if (history_decode(file.data + pos, len, &decoded) < 0) {
             dirty = *damaged = true;
-        } else if (history_memory_add(term, (char *)decoded.data, &dropped) < 0) {
+        } else if (history_memory_add(snapshot, (char *)decoded.data, &dropped) < 0) {
             goto out;
         } else if (dropped) {
             dirty = true;
         }
         pos += len + 1u;
     }
-    rc = dirty ? history_rewrite(term, fd) : 0;
+    rc = dirty ? history_rewrite(snapshot, fd) : 0;
 out:
     snag_buf_free(&decoded);
     snag_buf_free(&file);
     return rc;
 }
 
+static char *
+history_path(const char *directory)
+{
+    if (!snag_path_root_len(directory)) {
+        errno = EINVAL;
+        return NULL;
+    }
+    return snag_path_join(directory, "prompt_history");
+}
+
 int
-snag_history_refresh(struct snag_history *term)
+snag_history_open(struct snag_history *history, const char *dotdir)
 {
     bool damaged = false;
-    int fd, rc, saved;
-
-    if (!term->path)
-        return 0;
-    fd = history_file_open(term);
-    if (fd < 0)
-        goto fail;
-    rc = history_load_locked(term, fd, &damaged);
-    saved = errno;
-    (void)close(fd);
-    errno = saved;
-    if (rc < 0)
-        goto fail;
-    if (damaged)
-        history_note_warning(term);
-    return 0;
-fail:
-    history_note_warning(term);
-    return -1;
-}
-
-int
-snag_history_open(struct snag_history *term, const char *dotdir)
-{
-
-    if (!term || !snag_path_root_len(dotdir))
-        return snag_errno(EINVAL);
-    struct snag_buf path = {.max = SNAG_PATH_MAX_BYTES};
-    if (snag_buf_printf(&path, "%s/prompt_history", dotdir) < 0 ||
-        snag_buf_terminate(&path) < 0) {
-        snag_buf_free(&path);
-        history_note_warning(term);
-        return -1;
-    }
-    free(term->path);
-    term->path = (char *)path.data;
-    path.data = NULL;
-    snag_buf_free(&path);
-    return snag_history_refresh(term);
-}
-
-int
-snag_history_add(struct snag_history *term, const char *text)
-{
-    bool damaged = false, dropped = false, retained = false;
-    int fd, rc = -1, saved;
-    struct snag_buf encoded = {.max = HISTORY_FILE_BYTES};
-
-    if (!term || !text || !*text)
-        return 0;
-    if (!term->path)
-        return history_memory_add(term, text, NULL);
-    fd = history_file_open(term);
-    if (fd < 0 || history_load_locked(term, fd, &damaged) < 0)
-        goto out;
-    if (history_encode(&encoded, text) < 0 ||
-        snag_write_full(fd, encoded.data, encoded.len) < 0 ||
-        snag_write_full(fd, "\n", 1u) < 0 ||
-        history_memory_add(term, text, &dropped) < 0)
-        goto out;
-    retained = true;
-    rc = dropped ? history_rewrite(term, fd) : snag_sync_file(fd);
-out:
-    saved = errno;
-    snag_buf_free(&encoded);
-    if (fd >= 0)
+    int rc = -1;
+    if (!history) return snag_errno(EINVAL);
+    history->global_path = history_path(dotdir);
+    int fd = history->global_path ? history_file_open(history->global_path) : -1;
+    if (fd >= 0) {
+        rc = history_load_locked(&history->snapshot, fd, &damaged);
         (void)close(fd);
-    errno = saved;
-    if (rc == 0) {
-        if (damaged)
-            history_note_warning(term);
-        return 0;
     }
-    history_note_warning(term);
-    if (!retained)
-        (void)history_memory_add(term, text, NULL);
-    return -1;
+    if (rc < 0 || damaged) history_note_warning(history);
+    return rc;
+}
+
+int
+snag_history_bind(struct snag_history *history, const char *session_dir)
+{
+    snag_file_info st;
+    bool damaged = false;
+    int rc = -1;
+    if (!history || !history->global_path || !session_dir || history->path)
+        return 0;
+    char *path = history_path(session_dir);
+    if (!path) goto out;
+    bool existed = snag_lstat(path, &st) == 0;
+    if (!existed && errno != ENOENT) goto out;
+    int fd = history_file_open(path);
+    if (fd < 0) goto out;
+    if (existed) {
+        struct snag_history_snapshot saved = {0};
+        rc = history_load_locked(&saved, fd, &damaged);
+        for (size_t i = 0u; rc == 0 && i < history->pending.count; ++i)
+            rc = history_memory_add(&saved, history->pending.items[i], NULL);
+        if (rc == 0 && history->pending.count) rc = history_rewrite(&saved, fd);
+        if (rc == 0) {
+            snag_history_snapshot_free(&history->snapshot);
+            history->snapshot = saved;
+        } else snag_history_snapshot_free(&saved);
+    } else rc = history_rewrite(&history->snapshot, fd);
+    (void)close(fd);
+    if (rc == 0) {
+        history->path = path;
+        path = NULL;
+    }
+out:
+    free(path);
+    if (rc < 0 || damaged) history_note_warning(history);
+    return rc;
+}
+
+int
+snag_history_merge(struct snag_history *history)
+{
+    struct snag_history_snapshot global = {0};
+    bool damaged = false;
+    int rc = -1;
+    if (!history || !history->global_path || !history->pending.count) return 0;
+    int fd = history_file_open(history->global_path);
+    if (fd < 0) goto out;
+    if (history_load_locked(&global, fd, &damaged) < 0) goto close_file;
+    for (size_t i = 0u; i < history->pending.count; ++i)
+        if (history_memory_add(&global, history->pending.items[i], NULL) < 0)
+            goto close_file;
+    rc = history_rewrite(&global, fd);
+    if (rc == 0) snag_history_snapshot_free(&history->pending);
+close_file:
+    (void)close(fd);
+out:
+    snag_history_snapshot_free(&global);
+    if (rc < 0 || damaged) history_note_warning(history);
+    return rc;
+}
+
+int
+snag_history_add(struct snag_history *history, const char *text)
+{
+    bool dropped = false;
+    int rc = -1;
+    struct snag_buf encoded = {.max = HISTORY_FILE_BYTES};
+    if (!history || !text || !*text) return 0;
+    if (history_memory_add(&history->snapshot, text, &dropped) < 0 ||
+        history_memory_add(&history->pending, text, NULL) < 0) goto out;
+    if (!history->path) return 0;
+    int fd = history_file_open(history->path);
+    if (fd < 0) goto out;
+    if (dropped || history->rewrite) rc = history_rewrite(&history->snapshot, fd);
+    else if (snag_seek(fd, 0, SEEK_END) >= 0 && history_encode(&encoded, text) == 0 &&
+             snag_write_full(fd, encoded.data, encoded.len) == 0 &&
+             snag_write_full(fd, "\n", 1u) == 0)
+        rc = snag_sync_file(fd);
+    (void)close(fd);
+out:
+    snag_buf_free(&encoded);
+    history->rewrite = rc < 0;
+    if (rc < 0) history_note_warning(history);
+    return rc;
 }

@@ -15,7 +15,10 @@ struct snag_history_snapshot {
 
 struct snag_history {
     struct snag_history_snapshot snapshot;
+    struct snag_history_snapshot pending;
     char *path;
+    char *global_path;
+    bool rewrite;
     bool warning;
     bool warned;
 };
@@ -25,7 +28,8 @@ void snag_history_snapshot_free(struct snag_history_snapshot *snapshot);
 int snag_history_snapshot_copy(struct snag_history_snapshot *out,
                               const struct snag_history_snapshot *source);
 int snag_history_open(struct snag_history *history, const char *dotdir);
-int snag_history_refresh(struct snag_history *history);
+int snag_history_bind(struct snag_history *history, const char *session_dir);
+int snag_history_merge(struct snag_history *history);
 int snag_history_add(struct snag_history *history, const char *text);
 bool snag_history_take_warning(struct snag_history *history);
 

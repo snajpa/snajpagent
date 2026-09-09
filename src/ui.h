@@ -104,7 +104,7 @@ int snag_ui_public(struct snag_ui *ui, const char *text, size_t len,
 int snag_ui_orientation(struct snag_ui *ui, const struct snag_session *session,
                          bool resumed);
 int snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count);
-int snag_ui_history_open(struct snag_ui *ui, const char *dotdir);
+int snag_ui_history_open(struct snag_ui *ui, const char *dotdir, const char *session_dir);
 int snag_ui_history_add(struct snag_ui *ui, const char *text);
 bool snag_ui_history_warning(struct snag_ui *ui);
 snag_wake_fd snag_ui_wake_fd(const struct snag_ui *ui);

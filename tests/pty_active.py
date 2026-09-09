@@ -1299,11 +1299,94 @@ def test_ctrl_c_cancels_partial_editor_states():
         child.send_wait(b"clean-after-cancel\r", b"fixture answer", start=paste_end)
 
 
+def test_session_prompt_history_isolation():
+    marker_a = b"history-isolation-first-831"
+    marker_b = b"history-isolation-second-831"
+    first = Child([], DEFAULT_IDLE_PROMPT)
+    second = Child([], DEFAULT_IDLE_PROMPT)
+    try:
+        before = session_ids()
+        second.send_wait_idle(marker_b + b"\r", b"fixture answer", start=len(second.buf))
+        second_id = new_session(before)
+        before = session_ids()
+        first.send_wait_idle(marker_a + b"\r", b"fixture answer", start=len(first.buf))
+        first_id = new_session(before)
+        start = len(second.buf)
+        second.send(b"\x1b[A")
+        second.drain(0.4)  # Includes the engine/editor history snapshot handoff.
+        assert marker_b in second.buf[start:], bytes(second.buf[start:])
+        assert marker_a not in second.buf[start:], bytes(second.buf[start:])
+        second.send_wait(b"\x03", b"^C\r\n", start=len(second.buf))
+        start = len(second.buf)
+        second.send(b"\x12" + marker_a)
+        second.drain(0.4)
+        assert b"failed reverse-i-search" in second.buf[start:], bytes(second.buf[start:])
+        assert b"': " + marker_a not in second.buf[start:], bytes(second.buf[start:])
+        second.send(b"\x07")
+        first.exit_now()
+        global_history = Path(DOTDIR, "prompt_history").read_text()
+        assert marker_a.decode() in global_history and marker_b.decode() not in global_history
+        start = len(second.buf)
+        second.send(b"\x1b[A")
+        second.drain(0.4)
+        assert marker_a not in second.buf[start:], bytes(second.buf[start:])
+        second.send_wait(b"\x03", b"^C\r\n", start=len(second.buf))
+        second.exit_now()
+    finally:
+        first.kill()
+        second.kill()
+    for sid, own, other in ((first_id, marker_a, marker_b), (second_id, marker_b, marker_a)):
+        path = Path(DOTDIR, "sessions", sid, "prompt_history")
+        text = path.read_text()
+        assert own.decode() in text and other.decode() not in text
+        assert path.stat().st_mode & 0o777 == 0o600
+        with Child(["--resume", sid], ready=DEFAULT_ACCOUNTED_IDLE_PROMPT) as resumed:
+            start = len(resumed.buf)
+            resumed.send(b"\x12" + other)
+            resumed.drain(0.4)
+            assert b"failed reverse-i-search" in resumed.buf[start:]
+            assert b"': " + other not in resumed.buf[start:]
+            resumed.send(b"\x07")
+            resumed.exit_now()
+    with Child([], DEFAULT_IDLE_PROMPT) as fresh:
+        start = len(fresh.buf)
+        fresh.send(b"\x12" + marker_b)
+        fresh.wait(b"': " + marker_b, start=start)
+        fresh.send(b"\x07")
+        fresh.exit_now(expect_resume=False)
+    records = Path(DOTDIR, "prompt_history").read_text().splitlines()
+    assert records.count(marker_a.decode()) == 1
+    assert records.count(marker_b.decode()) == 1
+
+
+def test_session_prompt_history_exit_and_crash():
+    for abrupt in (False, True):
+        marker = f"history-local-{'crash' if abrupt else 'signal'}-945".encode()
+        with Child([], DEFAULT_IDLE_PROMPT) as child:
+            before = session_ids()
+            child.send_wait_idle(marker + b"\r", b"fixture answer", start=len(child.buf))
+            sid = new_session(before)
+            local = Path(DOTDIR, "sessions", sid, "prompt_history")
+            assert marker.decode() in local.read_text()
+            if abrupt:
+                child.kill()
+            else:
+                os.kill(child.pid, signal.SIGTERM)
+                child.finish(expected=128 + signal.SIGTERM)
+        merged = marker.decode() in Path(DOTDIR, "prompt_history").read_text()
+        assert merged == (not abrupt), (abrupt, merged)
+        with Child(["--resume", sid], ready=DEFAULT_ACCOUNTED_IDLE_PROMPT) as resumed:
+            start = len(resumed.buf)
+            resumed.send(b"\x12" + marker)
+            resumed.wait(b"': " + marker, start=start)
+            resumed.send(b"\x07")
+            resumed.exit_now()
+        # Resume does not replay an old local file into the global archive.
+        assert (marker.decode() in Path(DOTDIR, "prompt_history").read_text()) == merged
+
+
 def test_prompt_history_and_reverse_search():
     history = Path(DOTDIR) / "prompt_history"
-    before_second = session_ids()
-    second = Child([], DEFAULT_IDLE_PROMPT)
-    assert session_ids() == before_second
     first = Child([], DEFAULT_IDLE_PROMPT)
     for entry in (
         b"history-repeat-old",
@@ -1315,6 +1398,8 @@ def test_prompt_history_and_reverse_search():
     first.exit_cleanly(answer)
 
     before_second = session_ids()
+    second = Child([], DEFAULT_IDLE_PROMPT)
+    assert session_ids() == before_second
     second.send(b"draft-restore")
     # The terminal may reuse the existing trailing blank instead of emitting it.
     second.send_wait(b"\x12", b"(failed reverse-i-search)`draft-restore':")
@@ -4788,6 +4873,8 @@ if __name__ == "__main__":
     test_ctrl_c_cancels_partial_editor_states()
     test_interrupt()
     test_prompt_history_and_reverse_search()
+    test_session_prompt_history_isolation()
+    test_session_prompt_history_exit_and_crash()
     test_multiline_and_paste()
     test_network_input_recovery_boundaries()
     test_deferred_controls_in_admission_order()

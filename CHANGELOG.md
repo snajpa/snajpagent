@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Keep prompt-entry history local to each session. Seed new sessions once from
+  global history, restore their own history on resume, and merge only newly
+  entered lines into global history on orderly exit. Concurrent sessions keep
+  stable Up/Down and Ctrl-R history; deliberate repeated submissions remain.
+
 - Preserve provider reasoning continuation in the private session journal and
   replay it in order with matching tool calls/results, including after resume.
   Bind replay to provider, endpoint, model and credential identity; retain

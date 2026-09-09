@@ -990,7 +990,6 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms,
     if (item->steering)
         atomic_fetch_sub(&runtime->steering_pending, 1u);
     if (item->history_refresh) {
-        (void)snag_history_refresh(&ui->history);
         if (history_snapshot(ui, true) < 0)
             item->error = errno;
     }
@@ -1194,9 +1193,10 @@ history_snapshot(struct snag_ui *ui, bool refresh)
 }
 
 int
-snag_ui_history_open(struct snag_ui *ui, const char *dotdir)
+snag_ui_history_open(struct snag_ui *ui, const char *dotdir, const char *session_dir)
 {
     int rc = snag_history_open(&ui->history, dotdir);
+    if (snag_history_bind(&ui->history, session_dir) < 0) rc = -1;
     return history_snapshot(ui, false) < 0 ? -1 : rc;
 }
 

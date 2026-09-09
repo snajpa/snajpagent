@@ -387,8 +387,9 @@ prompt and local chat use the accepted operator nick on the first configured
 server, or the hosted nick when serving a room. Nick changes refresh the prompt
 without losing the draft; configured nicks remain registration preferences.
 The hostname comes from the local machine, not the IRC endpoint, room, or
-remote server. Both views use the one shared dotdir prompt history and Ctrl-R
-search.
+remote server. Both views use the session's local prompt history and Ctrl-R
+search. Global history seeds new sessions and receives newly entered lines on
+orderly exit; another live session's prompts never appear during navigation.
 
 Text entered in chat view is sent as a room message from the local operator
 identity and also admitted once as local operator input to the model; echoes

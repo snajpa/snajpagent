@@ -200,6 +200,9 @@ test_pending_session(struct snag_store *store, const char *workspace)
     count = 0u;
     assert(snag_session_each_event(&session, count_event, &count,
                                    error, sizeof(error)) == 0 && count == 2u);
+    int history = openat(session.dir_fd, "prompt_history", O_CREAT | O_WRONLY, 0600);
+    assert(history >= 0 && write(history, "session-only\n", 13u) == 13);
+    assert(close(history) == 0);
     id[8] = '\0';
     assert(snag_session_delete(store, &session, id, NULL, error, sizeof(error)) == 0);
     snag_session_close(&session);

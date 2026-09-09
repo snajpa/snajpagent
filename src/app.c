@@ -106,6 +106,16 @@ remember_input(struct app_state *app, const char *text)
     history_warning(app);
 }
 static int
+persist_session(struct app_state *app, char *error, size_t error_size)
+{
+    int rc = snag_session_persist(&app->store, &app->session, error, error_size);
+    if (rc == 0 && app->ui.opened) {
+        (void)snag_history_bind(&app->ui.history, app->session.dir_path);
+        history_warning(app);
+    }
+    return rc;
+}
+static int
 app_textf(struct app_state *app, enum snag_ui_operation operation, const char *fmt, ...)
 {
     va_list ap;
@@ -363,7 +373,7 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
         return -1;
     }
     if (snag_string_in(type, "goal_started control_requested future_turn_queued input_received irc_admitted") &&
-        snag_session_persist(&app->store, &app->session, error, error_size) < 0) {
+        persist_session(app, error, error_size) < 0) {
         ++app->session.write_failures;
         json_decref(data);
         return -1;
@@ -2009,7 +2019,7 @@ send_operator_routed(struct app_state *app, const char *line, const char *text,
     rc = snag_irc_send_route(app->irc, &app->ui.input_route, false, kind,
                               text, &report, error, sizeof(error));
     if ((rc == 0 || rc == 2) &&
-        snag_session_persist(&app->store, &app->session, error, sizeof(error)) < 0) {
+        persist_session(app, error, sizeof(error)) < 0) {
         snag_buf_reset(&report);
         rc = -1;
     }
@@ -3091,7 +3101,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             "prompt must be nonempty valid UTF-8 within 1 MiB");
         return 2;
     }
-    if (snag_session_persist(&app->store, &app->session, error, sizeof(error)) < 0) {
+    if (persist_session(app, error, sizeof(error)) < 0) {
         (void)app_error(app, error);
         return 3;
     }
@@ -4732,7 +4742,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     if (snag_ui_open(&app.ui, error, sizeof(error)) < 0) {
         goto fail;
     }
-    (void)snag_ui_history_open(&app.ui, dotdir);
+    (void)snag_ui_history_open(&app.ui, dotdir, app.session.dir_path);
     history_warning(&app);
     if (snag_ui_orientation(&app.ui, &app.session, cli->resume) < 0 ||
         (app.networked && snag_irc_replay_hosted_history(
@@ -4758,6 +4768,8 @@ report:
     (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, invalid_message);
 out:
     (void)capture_shutdown_signal(&app);
+    (void)snag_history_merge(&app.ui.history);
+    history_warning(&app);
     (void)snag_ui_text(&app.ui, SNAG_UI_CLOSE, NULL);
     snag_irc_close(app.irc);
     write_resume_command(&app, program, dotdir);

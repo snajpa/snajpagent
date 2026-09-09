@@ -13,6 +13,9 @@ Implemented:
   replayed with original tool-call pairing across cycles and resume, and included
   in compatible compaction input. It is excluded from public/history rendering.
 - Private durable sessions, replay, steering, queues, goals and read-only turns.
+- Session-local prompt-entry history, restored on resume and seeded once from a
+  global archive. Orderly exit merges only newly entered lines; active sessions
+  keep stable Up/Down and Ctrl-R history.
 - Independent tool-call batches, multiple managed command handles, bounded
   redacted output journals, native read/search and strict patch installation.
 - UTF-8 editing, resize/suspend recovery, Markdown, local verbosity and explicit

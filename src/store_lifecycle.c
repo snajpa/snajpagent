@@ -74,7 +74,8 @@ remove_deleted_session(struct snag_store *store, struct snag_session *session,
                   strerror(errno));
     /* Keep the durable delete intent until other content is gone. The private
      * trash name remains the deletion marker after the final log unlink. */
-    if (unlink_expected_file(session->dir_fd, "meta.json", true, error, error_size) < 0 ||
+    if (unlink_expected_file(session->dir_fd, "prompt_history", true, error, error_size) < 0 ||
+        unlink_expected_file(session->dir_fd, "meta.json", true, error, error_size) < 0 ||
         unlink_expected_file(session->dir_fd, "events.jsonl", true, error, error_size) < 0 ||
         snag_sync_dir(session->dir_fd) < 0 || close_fd_slot(&session->lock_fd) < 0 ||
         unlink_expected_file(session->dir_fd, "lock", true, error, error_size) < 0)
