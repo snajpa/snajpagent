@@ -928,7 +928,9 @@ command carries this current level, not the original startup flag count.
 Archive the session and exit, settling active work at a safe request boundary.  Exact resume can unarchive it.  Resume recognizes an already-recorded archive even if the program stopped before acknowledging the command.
 .TP
 .B /compact
-Compact model context at idle or at a safe active-turn request boundary.  The full local event log is retained.
+Compact model context at idle or at a safe active-turn request boundary.
+The request survives session resume and waits when no complete context boundary
+is available.  The full local event log is retained.
 .TP
 .B /delete
 Confirm with the displayed session prefix, then permanently remove the
@@ -1158,9 +1160,20 @@ summary text in its stored message format. Direct ChatGPT/Codex also falls back
 once to Responses summarization when its native endpoint is unavailable;
 other native failures remain errors.  Manual
 .B /compact
-is accepted during active work and applies at a safe request boundary.
-Compaction changes model context and preserves the append-only
-local log.
+is accepted at idle and during active work.  It reports when compaction starts,
+waits for a complete context boundary, finishes, or is interrupted.  An idle
+request with no new context reports that it was skipped.  Whitespace after the
+command is accepted; additional arguments are rejected.
+.PP
+During compaction, Ctrl-C with an empty draft interrupts the operation; a
+nonempty draft is cleared first.  Cancelling a turn does not cancel a later
+manual compaction.  Text entered during idle compaction is saved as a future
+turn and runs afterwards; during active-turn compaction it remains steering.
+Interrupted or failed compaction retains the previous context.  Provider errors
+leave the interactive session open; use
+.B /compact
+to retry.  Accepted requests survive a process restart.  Compaction changes
+model context and preserves the append-only local log.
 .PP
 If compaction leaves only instructions, outgoing requests include a labelled
 host continuation so gateways can keep a nonempty conversation input.  It adds

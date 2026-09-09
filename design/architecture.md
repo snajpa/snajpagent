@@ -82,6 +82,14 @@ it retains the labeled byte upper bound. Prefix selection is scaled in bytes
 after accounting for the complete provider envelope in tokens. A genuinely
 indivisible group that cannot fit reports its event boundary and byte budget.
 
+Manual compaction uses the existing durable control queue at idle and during
+active work. Its input pump runs with an active composer: empty-draft Ctrl-C
+cancels compaction, while ordinary idle input becomes queued work. A new idle
+operation clears prior turn cancellation. A missing safe prefix leaves the
+control pending; turn completion and resume revisit it. Provider errors retain
+old context and keep the interactive session available for retry. Journal-write
+failures keep the control pending and stop further admission.
+
 The stream decoder strictly interprets only response creation, output
 structure, public text/refusals, function arguments, and terminal success or
 failure. Other bounded `response.*` records are discarded after envelope

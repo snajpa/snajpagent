@@ -264,8 +264,9 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                          "no complete history prefix fits the hard context budget");
                 goto out;
             }
-            if (!active_prefix && strcmp(reason, "manual") == 0 &&
-                snag_ui_text(&app->ui, SNAG_UI_HOST,
+            if (strcmp(reason, "manual") == 0 &&
+                snag_ui_text(&app->ui, SNAG_UI_HOST, active_prefix ?
+                    "compaction waiting for a complete context boundary" :
                     "compaction skipped; no new context since the previous compact output") < 0)
                 goto out;
             rc = 0;
@@ -425,10 +426,10 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         *compacted = true;
     rc = 0;
 out:
-    if ((rc == 1 || rc == 2) && started) {
+    if ((rc == 1 || rc == 2 || rc == SNAG_PROVIDER_NEW_INPUT) && started) {
         if (commit_rendered(app, "compaction_interrupted",
                 compaction_interrupted_data(compact_id,
-                    rc == 1 ? "steering" : "user"),
+                    rc == 1 ? "steering" : rc == 2 ? "user" : "error"),
                 error, error_size) < 0)
             rc = -1;
         else
@@ -469,14 +470,29 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
 int
 snag_app_compact_requested(struct app_state *app, char *error, size_t error_size)
 {
-    return run_compaction(app, "manual", app->session.active_turn, NULL, NULL, error, error_size);
-}
+    bool active = app->session.active_turn, compacted = false;
+    enum snag_policy_stop policy = app->turn_policy_stopped;
+    int rc;
 
-int
-snag_app_compact_idle_command(struct app_state *app, const char *reason,
-                             char *error, size_t error_size)
-{
-    return run_compaction(app, reason, false, NULL, NULL, error, error_size);
+    /* A new idle operation must not inherit cancellation of the previous turn. */
+    if (!active && !app->input_closed) {
+        app->interrupt_requested = false;
+        app->steering_requested = false;
+    }
+    if (snag_ui_text(&app->ui, SNAG_UI_HOST,
+            "Compacting context; Ctrl-C interrupts") < 0)
+        return -1;
+    rc = run_compaction(app, "manual", active, NULL, &compacted, error, error_size);
+    app->turn_policy_stopped = policy;
+    if (rc < 0 && snag_ui_text(&app->ui, SNAG_UI_WARNING,
+            "compaction failed; previous context retained; /compact retries") < 0)
+        return -1;
+    if (rc > 0 && snag_ui_text(&app->ui, SNAG_UI_WARNING,
+            "compaction interrupted; previous context retained") < 0)
+        return -1;
+    if (rc == 0 && active && !compacted)
+        return SNAG_APP_COMPACT_DEFERRED;
+    return rc;
 }
 
 int
@@ -494,7 +510,7 @@ snag_app_compact_after_turn(struct app_state *app, uint64_t input_tokens_bound,
     if (!snag_app_measured_input(app, &input_tokens_bound) ||
         !threshold || input_tokens_bound < threshold)
         return 0;
-    return snag_app_compact_idle_command(app, "proactive", error, error_size);
+    return run_compaction(app, "proactive", false, NULL, NULL, error, error_size);
 }
 
 int

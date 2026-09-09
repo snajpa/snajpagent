@@ -2079,12 +2079,16 @@ apply_controls(struct app_state *app)
         } else if (bit == SNAG_CONTROL_CACHE) {
             rc = change_model(app, "cache", false);
         } else if (bit == SNAG_CONTROL_COMPACT) {
+            if (!app->execute && set_input_prompt(app, true) < 0) { result = -1; break; }
             rc = snag_app_compact_requested(app, error, sizeof(error));
+            if (!app->execute && set_input_prompt(app, app->session.active_turn) < 0) {
+                result = -1; break;
+            }
         } else if (bit != SNAG_CONTROL_RETRY) {
             rc = snag_app_lifecycle_command(app,
                 bit == SNAG_CONTROL_ARCHIVE ? "/archive" : "/delete", &handled, &exit_now);
         }
-        if (error[0] && app_error(app, error) < 0) rc = -1;
+        if (error[0] && app_error(app, error) < 0) { result = -1; break; }
         if (bit == SNAG_CONTROL_DELETE && exit_now && app->session.delete_requested) {
             app->input_closed = true;
             break; /* Deleted journal can no longer record a completion. */
@@ -2092,12 +2096,18 @@ apply_controls(struct app_state *app)
         if (app->session.write_failures != failures || app->session.append_rollback_pending) {
             result = -1; break; /* Preserve intent when its effects could not be recorded. */
         }
+        if (rc == SNAG_APP_COMPACT_DEFERRED) continue;
         if (commit_event(app, "control_finished", json_pack("{s:i}", "control", (int)bit),
                          error, sizeof(error)) < 0) { result = -1; break; }
         if (exit_now) { app->input_closed = true; break; }
-        if (rc < 0) { result = -1; break; }
+        if (bit == SNAG_CONTROL_COMPACT && rc == 2) {
+            if (!app->session.active_turn && queue_arm(app, false) < 0) result = -1;
+            break;
+        }
+        if (rc < 0 && bit != SNAG_CONTROL_COMPACT) { result = -1; break; }
     }
     app->applying_controls = false;
+    if (!app->session.active_turn && !app->input_closed) app->interrupt_requested = false;
     return result;
 }
 
@@ -2118,9 +2128,18 @@ handle_common_command(struct app_state *app, const char *line, bool active,
     }
     if (strcmp(line, "/help") == 0 || strcmp(line, "/?") == 0)
         return render_help(app);
-    if (active && snag_string_in(line, "/compact /archive /delete"))
-        return request_control(app, !strcmp(line, "/compact") ? SNAG_CONTROL_COMPACT :
-            !strcmp(line, "/archive") ? SNAG_CONTROL_ARCHIVE : SNAG_CONTROL_DELETE, line);
+    if (strncmp(line, "/compact", 8u) == 0 &&
+        (!line[8] || isspace((unsigned char)line[8]))) {
+        const char *rest = line + 8u;
+        while (isspace((unsigned char)*rest)) ++rest;
+        if (*rest) return app_error(app, "usage: /compact");
+        if (app->session.pending_log)
+            return app_textf(app, SNAG_UI_HOST, "nothing to compact before the first prompt");
+        return request_control(app, SNAG_CONTROL_COMPACT, "/compact");
+    }
+    if (active && snag_string_in(line, "/archive /delete"))
+        return request_control(app, !strcmp(line, "/archive") ?
+            SNAG_CONTROL_ARCHIVE : SNAG_CONTROL_DELETE, line);
     if (active && !strcmp(line, "/next")) {
         if (!app->session.pending_queue_count) return app_error(app, "future-turn queue is empty");
         if (queue_arm(app, true) < 0) return -1;
@@ -2401,9 +2420,9 @@ again:;
                         rc = snag_ui_send(&app->ui, (struct snag_ui_command){
                             .kind = SNAG_UI_DRAFT, .text = line});
                 } else rc = set_input_prompt(app, true);
-            } else if (app->recovery_wait && !app->session.active_turn) {
+            } else if (!app->session.active_turn) {
                 rc = queue_future_turn(app, text, true, error, sizeof(error));
-                if (rc == 0) app->steering_requested = true;
+                if (rc == 0 && app->recovery_wait) app->steering_requested = true;
             } else if (snag_random_id(steering_id) < 0) {
                 rc = -1;
             } else {
@@ -3136,6 +3155,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         bool reconfigured = (app->session.pending_controls & SNAG_CONTROL_CONFIG) != 0u;
         if (apply_controls(app) < 0) goto fail;
         if (app->input_closed) { result = 0; goto out; }
+        if (app->interrupt_requested) goto user_interrupted;
         if (reconfigured) {
             if (prepare_turn_settings(app, error, sizeof(error)) < 0) goto fail;
             provider_capacity_source_sha256(app->turn_provider, app->turn_model, provider_source_hash);
@@ -4286,7 +4306,7 @@ submit_idle(struct app_state *app, const char *prompt,
         if (rc == 3 || rc == 6)
             return rc;
         if ((rc == 0 || rc == SNAG_APP_INPUT_READY) &&
-            (app->session.queue_armed || app->goal_armed))
+            (app->session.queue_armed || app->goal_armed || app->session.pending_controls))
             rc = run_ready_chains(app);
         else if (rc != 0 && !app->input_closed && queue_arm(app, false) < 0)
             return 3;

@@ -9,6 +9,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -100,6 +101,7 @@ class FakeResponses:
         self.tool_workspace = None
         self.runtime_handler = None
         self.runtime_count_handler = None
+        self.runtime_compact_handler = None
         owner = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -216,7 +218,8 @@ class FakeResponses:
     def handle(self, handler):
         try:
             counting = handler.path == "/v1/responses/input_tokens"
-            if handler.path != "/v1/responses" and not counting:
+            compacting = handler.path == "/v1/responses/compact"
+            if handler.path != "/v1/responses" and not (counting or compacting):
                 raise AssertionError(f"unexpected fake endpoint {handler.path!r}")
             if handler.headers.get("Authorization") != "Bearer irc-ui-secret":
                 raise AssertionError("fake endpoint received the wrong credential")
@@ -227,6 +230,10 @@ class FakeResponses:
             if counting:
                 assert self.runtime_count_handler is not None
                 self.runtime_count_handler(handler, request)
+                return
+            if compacting:
+                assert self.runtime_compact_handler is not None
+                self.runtime_compact_handler(handler, request)
                 return
             model = request.get("model")
             latest = self.latest_user(request)
@@ -4134,6 +4141,160 @@ def run_goal_recovery_cases(binary, root, provider, environment):
             provider.runtime_handler = None
 
 
+def run_manual_compaction_cases(binary, root, modes=("after-cancel", "native-cancel", "count-cancel", "progress", "input", "input-failure", "failure", "active", "steer", "cancel-active", "no-prefix", "no-prefix-resume")):
+    """Exercise manual controls through real HTTP polling, not immediate fixture summaries."""
+    for mode in modes:
+        case = root / ("manual-compact-" + mode)
+        case.mkdir(parents=True)
+        provider = FakeResponses()
+        state, config = case / "state", case / "config.ini"
+        write_irc_config(config, provider.port, "host-model")
+        if mode == "native-cancel":
+            config.write_text(config.read_text().replace("native_compaction = false", "native_compaction = true"))
+        if mode == "count-cancel":
+            config.write_text(config.read_text().replace("exact_token_count = false", "exact_token_count = true"))
+        counts = []
+        def count(handler, request):
+            counts.append(request)
+            provider.reply(handler, b'{"object":"response.input_tokens","input_tokens":42}', "application/json")
+        def compact(handler, request):
+            summaries.append(request)
+            provider.reply(handler, json.dumps({"object": "response.compaction", "output": [{"type": "compaction",
+                "encrypted_content": "opaque-compact-summary"}]}).encode(), "application/json")
+        provider.runtime_count_handler = count
+        provider.runtime_compact_handler = compact
+        started, release = threading.Event(), threading.Event()
+        held, finish_turn = threading.Event(), threading.Event()
+        summaries = []
+        terminal = None
+
+        def respond(handler, request, sequence):
+            if request.get("tool_choice") == "none":
+                summaries.append(request)
+                started.set()
+                if mode in ("progress", "input", "input-failure", "steer", "cancel-active") and len(summaries) == 1:
+                    release.wait(8)
+                if mode in ("failure", "input-failure") and len(summaries) == 1:
+                    provider.reply(handler, b'{"error":{"message":"summary unavailable"}}',
+                                   "application/json", status=400)
+                    return
+                body = provider.response_body(sequence, "retained compact summary")
+            elif provider.latest_user(request) == "hold this turn" and (not held.is_set() or
+                    (mode == "no-prefix-resume" and not finish_turn.is_set())):
+                held.set()
+                finish_turn.wait(8)
+                body = provider.response_body(sequence, "held turn done")
+            else:
+                body = provider.response_body(sequence, "ordinary turn done")
+            try:
+                provider.reply(handler, body.encode(), close_header=True)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # The client deliberately interrupted this request.
+
+        provider.runtime_handler = respond
+        environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
+        try:
+            terminal = TmuxTerminal(case / "term", binary, case, state, config, 140, 28,
+                                    environment=environment)
+            terminal.wait("host-model/medium")
+            if mode not in ("no-prefix", "no-prefix-resume"):
+                terminal.submit("seed context")
+                wait_event_count(state, "turn_completed", 1)
+            if mode in ("after-cancel", "native-cancel", "count-cancel", "active", "steer", "cancel-active", "no-prefix", "no-prefix-resume"):
+                terminal.submit("hold this turn")
+                assert held.wait(5), terminal.capture()
+            if mode in ("after-cancel", "native-cancel", "count-cancel"):
+                terminal.send_key("C-c")
+                wait_event_count(state, "turn_interrupted", 1)
+                finish_turn.set()
+            terminal.submit("/compact   ")
+            if mode in ("no-prefix", "no-prefix-resume"):
+                # First response has no complete group yet; preserve the request
+                # until the resumed response reaches a compactable boundary.
+                if mode == "no-prefix-resume":
+                    terminal.wait("compaction waiting for a complete context boundary")
+                    _, log = read_events(state)
+                    assert not event_list(log, "control_finished")
+                    sid = next((state / "sessions").iterdir()).name
+                    pid = int(terminal.run("display-message", "-p", "-t", terminal.target, "#{pane_pid}"))
+                    os.kill(pid, signal.SIGKILL)
+                    terminal.wait_dead()
+                    terminal.close()
+                    finish_turn.set()
+                    terminal = TmuxTerminal(case / "resumed", binary, case, state, config, 140, 28,
+                                            args=("--resume", sid), environment=environment)
+                else:
+                    finish_turn.set()
+            if mode in ("progress", "input", "input-failure", "steer", "cancel-active"):
+                assert started.wait(5), terminal.capture()
+                if mode == "progress":
+                    terminal.wait("Compacting context", timeout=1)
+                if mode == "progress":
+                    terminal.send_key("C-c")
+                    wait_event_count(state, "compaction_interrupted", 1)
+                    terminal.wait("compaction interrupted", timeout=2)
+                    assert not event_list(read_events(state)[1], "compaction_completed")
+                    release.set()
+                    terminal.submit("/compact")
+                elif mode in ("steer", "cancel-active"):
+                    if mode == "steer":
+                        terminal.submit("change direction")
+                        wait_event_count(state, "steering_added", 1)
+                    else:
+                        terminal.send_key("C-c")
+                        wait_event_count(state, "turn_interrupted", 1)
+                    wait_event_count(state, "compaction_interrupted", 1)
+                    release.set()
+                    finish_turn.set()
+                    if mode == "steer":
+                        wait_event_count(state, "turn_completed", 2)
+                    terminal.submit("/compact")
+                else:
+                    terminal.submit("typed during compaction")
+                    queued = wait_event_count(state, "future_turn_queued", 1)
+                    assert event_list(queued, "future_turn_queued")[-1]["data"]["text"] == "typed during compaction"
+                    release.set()
+            if mode == "input-failure":
+                log = wait_event_count(state, "turn_completed", 2)
+                assert event_list(log, "turn_started")[-1]["data"]["text"] == "typed during compaction"
+                assert not event_list(log, "compaction_completed")
+                wait_event_count(state, "compaction_interrupted", 1)
+                terminal.submit("/compact")
+            if mode == "failure":
+                wait_event_count(state, "compaction_interrupted", 1)
+                terminal.wait("summary unavailable")
+                assert not terminal.dead(), terminal.capture()
+                terminal.submit("/compact")
+            log = wait_event_count(state, "compaction_completed", 1, timeout=6)
+            terminal.wait("Compacted")
+            if mode in ("active", "no-prefix", "no-prefix-resume"):
+                finish_turn.set()
+                wait_event_count(state, "turn_completed", 1 if mode in ("no-prefix", "no-prefix-resume") else 2)
+            if mode == "input":
+                log = wait_event_count(state, "turn_completed", 2)
+                assert event_list(log, "turn_started")[-1]["data"]["text"] == "typed during compaction"
+                assert not event_list(log, "steering_added")
+            if mode in ("after-cancel", "native-cancel", "count-cancel", "active", "steer", "cancel-active", "no-prefix", "no-prefix-resume"):
+                assert summaries, (mode, log)
+            if mode == "count-cancel":
+                assert counts
+            if mode == "progress":
+                terminal.submit("/compact")
+                terminal.wait("compaction skipped; no new context")
+            terminal.exit()
+            _, log = read_events(state)
+            assert len(event_list(log, "compaction_completed")) == 1, (mode, log)
+            assert len(event_list(log, "control_requested")) == len(event_list(log, "control_finished")), mode
+            print("manual compaction", mode, "ok", flush=True)
+        finally:
+            release.set()
+            finish_turn.set()
+            if terminal is not None:
+                (case / "screen.txt").write_text(terminal.capture(), encoding="utf-8")
+                terminal.close()
+            provider.close()
+
+
 def run_compaction_text_cases(binary, root):
     """Compaction owns its JSON envelope; model text cannot choose message roles."""
     summaries = {
@@ -4188,7 +4349,10 @@ def run_compaction_text_cases(binary, root):
             terminal.wait("host-model/medium")
             terminal.submit("/compact")
             if mode in ("refusal", "policy", "incomplete"):
-                terminal.wait_dead()
+                wait_event_count(state, "compaction_interrupted", 1)
+                terminal.wait("compaction failed")
+                assert not terminal.dead(), terminal.capture()
+                terminal.exit()
             else:
                 terminal.wait("Compacted", timeout=8)
             _, events = read_events(state)
@@ -4306,12 +4470,8 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
                             time.sleep(0.01)
                         assert len(summaries) == expected, terminal.capture()
                         terminal.wait("TransferEncodingError")
-                        terminal.wait_dead()
-                        terminal.close()
-                        terminal = TmuxTerminal(case / f"f{attempt}", binary, workspace,
-                                                state, config, 140, 28,
-                                                args=("--resume", sid), environment=environment)
-                        terminal.wait("host-model/medium")
+                        wait_event_count(state, "compaction_interrupted", attempt + 1)
+                        assert not terminal.dead(), terminal.capture()
                 terminal.submit_wait("/compact", "Compacted", timeout=10)
                 terminal.exit()
                 terminal.close()
@@ -5711,6 +5871,7 @@ def run_irc_case(binary, root):
         run_token_accounting_cases(binary, root / "token-accounting")
         run_assistant_phase_case(binary, root)
         run_goal_recovery_cases(binary, root, provider, environment)
+        run_manual_compaction_cases(binary, root)
         run_compaction_text_cases(binary, root)
         run_compacted_goal_cases(binary, root)
         run_automatic_turn_retry_cases(binary, root, provider, environment)

@@ -2,6 +2,13 @@
 
 # Changelog
 
+## Unreleased
+
+- Run manual compaction independently of previous turn cancellation. Show its
+  progress and outcome, queue idle input, and keep the session open after
+  provider errors. Preserve deferred requests until a safe context boundary
+  and across session resume.
+
 ## 0.99.4 — September 9, 2026
 
 - Make `/goal clear` cancel the current goal and stop automatic continuation,

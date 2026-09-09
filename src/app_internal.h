@@ -111,7 +111,8 @@ enum {
     /* Provider pump results already use 1 and 2. */
     SNAG_APP_COUNT_SKIPPED = 3,
     /* Failed request yielded to new input; do not pause armed future turns. */
-    SNAG_APP_INPUT_READY = 7
+    SNAG_APP_INPUT_READY = 7,
+    SNAG_APP_COMPACT_DEFERRED = 8
 };
 
 int snag_app_sync_destinations(struct app_state *app);
@@ -180,8 +181,6 @@ json_t *snag_app_turn_failed_data(const char *turn_id,
                                  const char *class_name,
                                  const char *message);
 int snag_app_compact_requested(struct app_state *app, char *error, size_t error_size);
-int snag_app_compact_idle_command(struct app_state *app, const char *reason,
-                                 char *error, size_t error_size);
 int snag_app_compact_after_turn(struct app_state *app, uint64_t input_tokens_bound,
                                const char *count_method,
                                char *error, size_t error_size);

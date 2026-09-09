@@ -2324,8 +2324,9 @@ def test_idle_compaction_crash_recovery():
     lines = path.read_bytes().splitlines(keepends=True)
     end = next(i for i, line in enumerate(lines) if json.loads(line)["type"] == "compaction_started") + 1
     path.write_bytes(b"".join(lines[:end]))
-    with Child(["--config", str(config), "--resume", session_id], PROMPT.rstrip()) as child:
-        end = child.send_wait(b"/compact\r", COMPACTED, start=len(child.buf))
+    with Child(["--config", str(config), "--resume", session_id]) as child:
+        # The accepted idle control survives a crash during the provider request.
+        end = child.wait(COMPACTED)
         child.exit_cleanly(end)
     log = events(session_id)
     one(log, "compaction_interrupted")
