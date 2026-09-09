@@ -584,8 +584,13 @@ snag_render_history(struct snag_render *render, const struct snag_history_turn *
     if (pause_rollout(render) < 0)
         return -1;
     if (turn) {
-        if (shown == 1u && render_banner(render, "── history ──\n") < 0)
-            return -1;
+        if (shown == 1u) {
+            char header[128];
+            (void)snprintf(header, sizeof(header),
+                "── history: %llu total turns · %llu completed ──\n",
+                (unsigned long long)total, (unsigned long long)completed);
+            if (render_banner(render, header) < 0) return -1;
+        }
         if (turn->status && strcmp(turn->status, "completed")) {
             char state[96];
             (void)snprintf(state, sizeof(state), "── %s turn ──\n", turn->status);

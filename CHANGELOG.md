@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Show total session turns and completed turns before history replay, retaining
+  the shown/completed/total footer for every replay, including empty history.
+
 - Admit commands throughout active work, provider waits, queue editing and delete
   confirmation. Drain nested controls at safe boundaries and during parked
   recovery; preserve queued text captured before a turn starts. Keep cache

@@ -2142,6 +2142,73 @@ def wait_for_terminal_event(dotdir, terminal_types, timeout):
     )
 
 
+def run_history_length_case(binary, root, active=False, chat=False, width=100, verbosity=0):
+    """History length is visible before and after replay in every presentation."""
+    case = root / f"history-length-{active}-{chat}-{width}-{verbosity}"
+    case.mkdir(parents=True)
+    provider = FakeResponses()
+    workspace, config = irc_workspace(case / "work", provider.port, "host-model")
+    config.write_text(config.read_text() + "resume_history_turns = 0\n")
+    state = case / "state"
+    held, release = threading.Event(), threading.Event()
+    terminal = None
+    def respond(handler, request, sequence):
+        if provider.latest_user(request) == "hold history check":
+            held.set()
+            release.wait(8)
+        body = provider.response_body(sequence, "history answer retained")
+        try: provider.reply(handler, body.encode(), close_header=True)
+        except (BrokenPipeError, ConnectionResetError): pass
+    provider.runtime_handler = respond
+    env = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
+    try:
+        terminal = TmuxTerminal(case / "terminal", binary, workspace, state, config, width, 32,
+            args=("--no-listen", "--no-client") + ("-v",) * verbosity, environment=env)
+        terminal.wait("host-model/medium", join_wrapped=True)
+        terminal.submit("/history")
+        terminal.wait("history: 0 shown · 0 completed · 0 total", join_wrapped=True)
+        assert not list((state / "sessions").glob("*/events.jsonl")), "empty history created a session"
+        terminal.submit("seed history check")
+        wait_event_count(state, "turn_completed", 1)
+        log, events = read_events(state)
+        sid = log.parent.name
+        if active:
+            terminal.submit("hold history check")
+            assert held.wait(5)
+        if chat:
+            terminal.submit("/chat")
+            terminal.wait("chat is offline", join_wrapped=True)
+        total = 2 if active else 1
+        terminal.submit("/history 0")
+        terminal.wait(f"history: 0 shown · 1 completed · {total} total", join_wrapped=True)
+        terminal.submit("/history")
+        header = f"history: {total} total turns · 1 completed"
+        footer = f"history: 1 shown · 1 completed · {total} total"
+        screen = terminal.wait(footer, join_wrapped=True)
+        assert_order(screen, [header, "user: " + ("hold history check" if active else "seed history check"), footer])
+        if active:
+            assert not release.is_set()
+            assert len(event_list(read_events(state)[1], "turn_completed")) == 1
+        terminal.exit()
+        terminal.close()
+        terminal = None
+        release.set()
+        # Counts on automatic resume use the same renderer as /history.
+        config.write_text(config.read_text().replace("resume_history_turns = 0", "resume_history_turns = 1"))
+        terminal = TmuxTerminal(case / "resume", binary, workspace, state, config, width, 32,
+            args=("--no-listen", "--no-client") + ("-v",) * verbosity + ("--resume", sid), environment=env)
+        terminal.wait(header, join_wrapped=True)
+        terminal.wait(footer, join_wrapped=True)
+        terminal.exit()
+        print("history length", active, chat, width, verbosity, "PASS", flush=True)
+    finally:
+        release.set()
+        if terminal is not None:
+            (case / "screen.txt").write_text(terminal.capture(join_wrapped=True))
+            terminal.close()
+        provider.close()
+
+
 def run_resume_history_case(binary, root):
     case = root / "history-count"
     case.mkdir(mode=0o700, parents=True)
@@ -2171,7 +2238,7 @@ def run_resume_history_case(binary, root):
                 args=("--no-listen", "--no-client", "--resume", session)) as terminal:
             screen = terminal.wait("% ›", join_wrapped=True)
             selected = pairs[-count:] if count else []
-            assert screen.count("── history ──") == bool(selected), (count, screen)
+            assert screen.count("── history: 5 total turns · 5 completed ──") == bool(selected), (count, screen)
             assert f"history: {len(selected)} shown · 5 completed · 5 total" in screen, screen
             fragments = []
             for user, assistant in pairs:
@@ -2209,7 +2276,7 @@ def run_resume_history_case(binary, root):
             else:
                 assert "usage: /history" not in screen and "unknown slash command" not in screen, screen
                 selected = pairs[-count:] if count else []
-            assert screen.count("── history ──") == bool(selected), (command, screen)
+            assert screen.count("── history: 5 total turns · 5 completed ──") == bool(selected), (command, screen)
             fragments = []
             for user, assistant in pairs:
                 text = f"user: {user}"
@@ -6210,6 +6277,9 @@ def run_irc_case(binary, root):
         run_assistant_phase_case(binary, root)
         run_goal_recovery_cases(binary, root, provider, environment)
         run_queue_dispatch_retry_case(binary, root)
+        for active, chat, width, verbosity in ((False, False, 100, 0), (False, True, 28, 2),
+                                             (True, False, 28, 0), (True, True, 100, 2)):
+            run_history_length_case(binary, root, active, chat, width, verbosity)
         run_nested_command_cases(binary, root)
         run_manual_compaction_cases(binary, root)
         run_compaction_text_cases(binary, root)

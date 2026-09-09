@@ -872,8 +872,9 @@ network roles and actual connection state.
 .BR /history " [N]"
 Show the last N turns, oldest first, including unfinished, failed and interrupted work.  Default: 1.  Available during
 active work.  N is a nonnegative decimal count; large counts show all
-turns.  Zero shows only the counts.  Every replay ends with shown, completed and
-total session turns.  Uses the same replay as
+turns.  Zero shows only the counts.  Nonempty replay begins with total session
+turns and completed turns, then ends with shown, completed and total counts.
+Empty replay also displays the counts.  Uses the same replay as
 .B resume_history_turns
 without changing configuration or model context.
 .TP
