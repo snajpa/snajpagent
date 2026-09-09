@@ -1454,6 +1454,30 @@ def test_deferred_controls_in_admission_order():
     assert marker.read_text() == "x"
 
 
+def test_archive_control_completion_recovery():
+    for cut_type in ("session_archived", "control_finished"):
+        with Child([], PROMPT.rstrip()) as child:
+            child.send_wait(b"engine_blocked\r", b"engine-block-start")
+            child.send(b"/archive\r")
+            child.wait(b"session archived")
+            child.finish()
+            sid = child.session_id()
+        path = STATE_ROOT / sid / "events.jsonl"
+        lines = path.read_bytes().splitlines(keepends=True)
+        log = [json.loads(line) for line in lines]
+        cut = one(log, cut_type)
+        assert one(log, "control_requested")["data"]["control"] == 8
+        # Inactive private session, cut at the actual writer's durable boundary.
+        path.write_bytes(b"".join(lines[:cut["seq"]]))
+        with Child(["--resume", sid]) as child:
+            child.wait_idle_prompt()
+            child.exit_now()
+        log = events(sid)
+        one(log, "session_archived")
+        one(log, "session_unarchived")
+        one(log, "control_finished")
+
+
 def test_exit_preserves_pending_submission():
     with Child([], DEFAULT_IDLE_PROMPT) as child:
         child.send_wait(b"engine_blocked\r", b"engine-block-start")
@@ -4558,6 +4582,7 @@ if __name__ == "__main__":
     test_multiline_and_paste()
     test_network_input_recovery_boundaries()
     test_deferred_controls_in_admission_order()
+    test_archive_control_completion_recovery()
     test_exit_preserves_pending_submission()
     test_input_survives_preparation_failure()
     test_resume_keeps_original_instruction_paths()

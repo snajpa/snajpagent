@@ -4584,6 +4584,12 @@ snag_app_run(const struct snag_cli *cli, const char *program)
             invalid_message = "configured prompt cannot be rendered with the current selection";
             goto invalid;
         }
+        /* The archive effect may be durable before its control completion.
+         * Settle that intent before explicit resume unarchives the session. */
+        if (app.session.archived && (app.session.started_controls & SNAG_CONTROL_ARCHIVE) &&
+            commit_event(&app, "control_finished", json_pack("{s:i}", "control", SNAG_CONTROL_ARCHIVE),
+                         error, sizeof(error)) < 0)
+            goto fail;
         if (app.session.archived && snag_session_unarchive(&app.session, NULL, error, sizeof(error)) < 0) {
             (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error); rc = 3; goto out;
         }

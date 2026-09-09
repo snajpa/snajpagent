@@ -925,7 +925,7 @@ model input.  The printed resume
 command carries this current level, not the original startup flag count.
 .TP
 .B /archive
-Archive the session and exit, settling active work at a safe request boundary.  Exact resume can unarchive it.
+Archive the session and exit, settling active work at a safe request boundary.  Exact resume can unarchive it.  Resume recognizes an already-recorded archive even if the program stopped before acknowledging the command.
 .TP
 .B /compact
 Compact model context at idle or at a safe active-turn request boundary.  The full local event log is retained.
@@ -2245,7 +2245,7 @@ name or move past the word; it is not silently queued.
 Use Enter for slash controls and room messages.  During active work,
 .B /queue TEXT
 explicitly queues a future prompt.  An open queue editor updates the selected
-item rather than appending a new one.
+item rather than appending a new one.  The saved entry survives restart; unsent editor changes do not.  If the queue was explicitly armed while editing, resume can run the saved entry.
 .TP
 .B There are queued prompts but nothing is running.
 Idle additions, explicit turn cancellation, terminal failure, a new direct

@@ -59,6 +59,11 @@ static int
 admit_irc_input(struct app_state *app, struct snag_buf *refs, size_t used,
                 const char *kind, json_t *intent, char *error, size_t error_size)
 {
+    if (!intent) {
+        snag_errorf(error, error_size, "cannot construct network input intent");
+        app->input_closed = true;
+        return -1;
+    }
     struct irc_input_ref *items = (struct irc_input_ref *)refs->data;
     size_t count = 0u, total = refs->len / sizeof(*items);
     json_t *sequences = json_array();
@@ -70,12 +75,12 @@ admit_irc_input(struct app_state *app, struct snag_buf *refs, size_t used,
         ++count;
     }
     json_t *data = count ? json_pack("{s:O}", "sequences", sequences) : NULL;
-    if (count && intent && snag_json_set_new(data,
+    if (count && snag_json_set_new(data,
             !strcmp(kind, "input_received") ? "input" : "steering", json_incref(intent)) < 0) {
         json_decref(data); data = NULL;
     }
     int rc = count ? snag_app_commit_event(app, "irc_admitted", data, error, error_size) :
-        intent ? snag_app_commit_event(app, kind, json_incref(intent), error, error_size) : 0;
+        snag_app_commit_event(app, kind, json_incref(intent), error, error_size);
     json_decref(sequences);
     json_decref(intent);
     if (rc < 0) { app->input_closed = true; return -1; }

@@ -1469,9 +1469,38 @@ test_provider_auth(void)
     snag_credential_clear(&credential);
 }
 
+static void
+test_irc_failed_intent_retains_pending(void)
+{
+    struct snag_config config = {0};
+    struct app_state app = {0};
+    char error[256] = {0};
+    snag_session_init(&app.session);
+    assert(snag_ui_init(&app.ui) == 0);
+    app.config = &config;
+    app.irc_urgent.max = 128u;
+    assert(snag_buf_append(&app.irc_urgent, "retained", sizeof("retained")) == 0);
+    /* No provider means input construction fails before event admission. */
+    assert(!snag_app_irc_take_pending(&app, NULL, false));
+    assert(app.irc_urgent.len == sizeof("retained"));
+    assert(app.input_closed);
+    app.input_closed = false;
+    app.session.active_turn = true;
+    /* Invalid UTF-8 exercises failed steering JSON construction without an
+     * allocator hook. Neither input nor steering may consume its projection. */
+    app.irc_urgent.data[0] = 0xff;
+    assert(snag_app_irc_flush_urgent(&app, error, sizeof(error)) < 0);
+    assert(app.irc_urgent.len == sizeof("retained"));
+    assert(app.input_closed);
+    snag_buf_free(&app.irc_urgent);
+    snag_ui_free(&app.ui);
+    snag_session_close(&app.session);
+}
+
 int
 main(void)
 {
+    test_irc_failed_intent_retains_pending();
     test_provider_auth();
     test_ui_output_order_and_failure();
     test_read_only_dispatch();

@@ -3757,6 +3757,12 @@ def run_policy_stop_cases(binary, root, provider, environment):
                 assert any(e["data"]["result"]["status"] == "succeeded" or
                            e["data"]["result"]["status"] == "outcome_unknown"
                            for e in event_list(recovered, "process_closed"))
+                # Safe-boundary controls still run while provider work stays parked.
+                terminal.submit("/model cache")
+                wait_event_count(state, "control_finished", 1)
+                _, controlled = read_events(state)
+                assert event_list(controlled, "control_finished")[-1]["data"]["control"] == 2
+                assert len(requests) == before
                 # This retained turn is parked at the idle composer. Ctrl-C
                 # must cancel it durably instead of merely redrawing the prompt.
                 terminal.send_key("C-c")
