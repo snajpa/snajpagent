@@ -56,6 +56,19 @@ alternatives, with the difference stated precisely. Person-like example handles
 may identify message recipients; they must serve the command being taught.
 Attribution must be accurate and confined to its required purpose.
 
+## Keep documentation current
+
+Each feature or behavior change updates the complete manual and all affected
+examples, tutorials, troubleshooting, README/website, design and status text in
+the same change. Verify defaults, limits, command timing, failure/recovery and
+platform claims against current source and evidence. Add an Unreleased changelog
+entry while preserving historical release facts. Current-source documentation
+must distinguish features absent from the downloadable stable release.
+
+Render the manual and check affected examples/links before shipment. Use existing
+project tools; a source push does not publish the website. AGENTS.md and the local
+AI documentation-maintenance policy describe the development obligation.
+
 ## Review
 
 Read each surface in order. Ask what the reader gains from each paragraph;

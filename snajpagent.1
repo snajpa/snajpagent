@@ -47,6 +47,18 @@ IRC connections.  Agents and channel operators share the room; the runtime
 owns joining, history, and reconnection.  Startup flags and runtime slash
 commands control this native networking without changing session identity.
 .SH "Getting started"
+.SS Documentation and build identity
+This manual describes the source revision it accompanies.  The web manual
+tracks current source; each downloadable release includes a matching manual.
+Run
+.B snajpagent \-V
+to identify the executable on disk.  A running session retains the code with
+which it started.  After an update, exit normally and use its printed resume
+command to launch the new code; a rebuild alone does not replace a live process.
+.PP
+The latest stable download remains 0.99.4.  Later source commits repair active
+command admission, compaction, submitted-prompt rendering and history totals.
+These source fixes do not replace the immutable 0.99.4 release assets.
 .SS "Downloaded macOS executables"
 The macOS downloads are not Developer ID signed or notarized. A quarantined
 browser download can be blocked at first launch with
@@ -184,6 +196,30 @@ continues a paused queue;
 .B /q c
 clears waiting prompts without stopping current work.
 See Provider failures for the new-input/retry handoff case.
+.SS Commands while work is active
+Enter slash commands in either view while a turn runs.  A setting that affects
+only the next turn can still be changed now.  Inspection and display changes
+act immediately; deferred commands acknowledge the boundary they await and
+retain accepted intent for resume.  Commands entered while another control is
+running remain commands.  Empty-draft Ctrl-C interrupts an active operation.
+.PP
+Queue editing keeps command input separate from replacement text.  Enter on
+/status inspects the session, and /exit preserves it; use // for a literal
+leading slash in replacement text.  Delete confirmation also accepts commands,
+but only the displayed session prefix authorizes deletion.  Ctrl-C cancels the
+confirmation; opening the queue editor cancels deletion and opens that editor.
+The external configuration editor takes exclusive terminal input until it exits.
+.SS Read history and its length
+.B /history
+replays one retained turn by default.  Use /history 10 for the last ten turns,
+or /history 0 for counts alone.  Nonempty replay starts with total session turns
+and completed turns, and every replay ends with shown/completed/total counts.
+Unfinished, failed and interrupted work is included; a total can exceed completed
+turns.  Automatic resume uses the same replay and defaults to one turn.
+.PP
+Conversation replay is separate from the shared prompt-entry history used by
+Up, Ctrl-P and Ctrl-R.  Compaction reduces model context, not the full local
+conversation log available to /history.
 .SS Complete names with Tab
 Command completion starts with a slash at the beginning of the draft.
 Type
@@ -999,7 +1035,8 @@ is literal text.  One-shot argument and stdin prompts also support this prefix.
 .B /retry
 After a turn fails, continue it from retained conversation and tool results.
 The original prompt is not duplicated and completed tools are not replayed.
-Read-only mode is preserved; current next-turn model settings apply.
+Read-only mode is preserved.  Continuation of an unfinished turn keeps its
+frozen provider/model/effort; a new retry turn uses current next-turn settings.
 Available in both views and after session resume, until another turn starts.
 For an unfinished active turn, request continuation at the next safe boundary.
 Pending input that failed preparation can also be retried.  Explicitly cancelled
@@ -1025,7 +1062,9 @@ replay.  Queue delays can make first admission later than receipt; an edit uses
 its accepted revision's receipt time.  Metadata is explicitly labelled as host
 text, and does not claim provider acceptance or model processing.
 Older missing timing data remains unavailable rather than being inferred from
-replay time.  Terminal prompt and IRC display formats are unchanged.
+replay time.  A submitted editor line retains its original local prompt clock;
+queued dispatch renders a new normal prompt with the dispatch-time local clock.
+UTC provenance and the displayed clock describe different events.
 .SS Goals
 An active goal continues across ordinary turns until complete, paused,
 cancelled, or blocked.  Queued operator turns run before the next automatic
@@ -1616,8 +1655,7 @@ Templates must be printable valid UTF-8, at most 1024 bytes.  All three cases
 are required and nonempty; text and fields outside them are shared.
 A case may omit fields.  Each spinner may occur at most once in each mode
 after combining shared fields with its selected case.  The default appearance
-is described under
-.BR DISPLAY .
+is described under Terminal, Views and prompt.
 .TP
 .BR prompt_spinner_goal , " prompt_spinner_provider" , " prompt_spinner_tool"
 Quoted inactive-item plus active-frame strings.  The first safe one-column
@@ -1704,7 +1742,9 @@ Default: 0.  Reaching the deadline does not kill the command.
 Maximum positive model deadline, 1 through 4294967295.  Default: 86400000.
 .TP
 .B max_output_tokens
-Command-result context ceiling, 1 through 4000000000.  Default: 6000.
+Command-result model-context ceiling in retained UTF-8 bytes, 1 through
+4000000000.  Default: 6000.  The legacy key name is not a token-count unit;
+provider/model output limits with the same name are separately token-based.
 A tool call selects a smaller positive bound or
 .B null
 for this ceiling.  Larger requests are capped at this value.
@@ -1961,7 +2001,11 @@ or null for the configured default.  The built-in default has no deadline.
 A deadline yields control without terminating the child.
 .PP
 .B max_output_tokens
-is a positive model-context bound or null for the configured ceiling.
+is a positive retained UTF-8 byte bound for result text sent to model context,
+or null for the configured ceiling (default 6000).  Despite its legacy name,
+it does not count tokens.  Larger requests are capped.  Complete redacted
+process output remains in the session log; the bounded excerpt identifies
+truncation and its source.
 Returned status distinguishes running, successful/failed exit, and termination
 by signal.  A running result means the invocation returned, not that the
 command completed.  Keep its handle and use
@@ -2095,7 +2139,9 @@ proof that every remote participant received it.  Runtime joining, history and
 reconnection are not model-managed tools.
 .SH "Sessions and files"
 .SS Session durability
-New sessions remain in memory until the first prompt or goal is submitted.
+New sessions remain in memory until accepted work or durable state needs a log,
+such as a prompt, queued turn, goal or retained network event.  Pre-work inspection,
+configuration editing and model-cache discovery alone preserve lazy creation.
 Exiting before then creates no saved session, needs no deletion, and prints no
 resume hint. Startup activity and selection changes are retained if a prompt
 is later submitted. Existing resumed sessions remain saved.
@@ -2264,6 +2310,27 @@ of 1 through 16384 ASCII bytes without whitespace or controls.
 Names an additional value hidden from tool children and redacted from output.
 .SH "Troubleshooting"
 .SS Common problems
+.TP
+.B A documented fix is missing in an open session.
+Check the startup identity and the output of snajpagent \-V for the executable
+being launched.  Replacing a file on disk leaves already-running processes on
+their old code.  Exit normally and use the printed resume command.  Stable
+release downloads and the current-source manual can describe different revisions;
+use the manual shipped with a release when checking that exact release.
+.TP
+.B /history appears to contain only one exchange.
+The default replay count is one, independently of total history length.  Read
+the total and completed counts in the opening header and footer; /history 0
+shows counts alone and /history N requests more turns.  An old binary may lack
+the current count display.  The Up/Ctrl-R prompt-entry history is a separate list.
+.TP
+.B A command is acknowledged but has not taken effect.
+Read its boundary acknowledgement.  Model/effort changes affect a full turn;
+configuration editing, catalog discovery, compaction and lifecycle controls may
+wait for the current response/tool boundary or confirmation to finish.  Deferred
+intent in an established session survives resume.  /exit leaves unapplied controls
+pending rather than opening an editor during shutdown.  An active turn alone
+is not a reason to reject a valid command.
 .TP
 .B The prompt shows ?% for context.
 Usage and capacity are different facts.  A comparable request bound exists,
@@ -2571,6 +2638,45 @@ Maintain the system's entropy source rather than weakening TLS randomness.
 The x86-64 and legacy i686 targets share the old-kernel clock fallback
 described below.  Musl's translated clock error is checked with a raw syscall;
 emulation requires the kernel to report ENOSYS.
+.TP
+.B make prod-linux-armv6
+Build the shared ARMv6KZ/VFPv2 hard-float static PIE using the pinned muslpi
+recipe.  It covers Raspberry Pi 1/Zero-class ARMv6 and ARMv7 systems with a
+hard-float environment; other ABIs need a separate build and qualification.
+Libraries, TLS and trust roots are embedded.  Output is
+.IR build/matrix/linux-armv6/bin/snajpagent .
+Existing QEMU checks cover Alpine 3.22.5 ARM1176 and Cortex-A7 guests; physical
+boards and other kernels need separate qualification.  Emulator device-tree and
+clock adjustments in those checks are not physical-board performance evidence.
+The configured shell and external commands still belong to the target system.
+.TP
+.B make prod-linux-riscv64
+Build an RV64GC/LP64D static PIE with the pinned musl recipe, application
+libraries, TLS and trust roots included.  Output is
+.IR build/matrix/linux-riscv64/bin/snajpagent .
+Existing QEMU RV64 checks cover Alpine 3.22.5/Linux 6.12.94, including native
+inspection, commands, PTY, resume and TLS.  Earlier kernels and physical-board
+performance remain unqualified.
+.TP
+.B make prod-linux-ppc64le
+Build the little-endian POWER8 ELFv2 static PIE with the pinned musl toolchain.
+Application libraries, TLS and trust roots are included.  Output is
+.IR build/matrix/linux-ppc64le/bin/snajpagent .
+Existing QEMU POWER8 checks cover Alpine 3.22.5/Linux 6.12.94.  Big-endian,
+pre-POWER8 and earlier-kernel systems require separate qualification.
+.TP
+.B make prod-linux-ppc32
+Build a 32-bit big-endian PowerPC hard-float static PIE, with static compiler
+atomics and embedded application libraries, TLS and trust roots.  Output is
+.IR build/matrix/linux-ppc32/bin/snajpagent .
+Existing QEMU PowerPC 750 checks cover Debian 8.11/Linux 3.16.0-6-powerpc.
+Soft-float systems and earlier kernels remain unqualified.  The target must
+provide secure OS entropy; old Linux /dev/random can block if depleted.
+.PP
+These four targets need no ELF interpreter or shared application libraries.
+Matching symbols are kept beside each matrix executable.  See DEPENDENCIES.md
+and QUALIFICATION.md for the scope of earlier tests; a documentation refresh
+or a new compilation does not establish additional runtime coverage.
 .TP
 .B make prod-linux-i686-legacy
 Build a separate static non-PIE i686 executable using uClibc-ng/LinuxThreads

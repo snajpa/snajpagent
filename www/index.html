@@ -21,6 +21,10 @@
     </nav>
   </header>
   <main>
+    <p>The guide and <a href="manual.html">web manual</a> describe current source.
+      Each <a href="downloads.html">release download</a> includes its matching
+      manual. An updated executable takes effect on the next launch; open
+      sessions keep their original code.</p>
     <section id="rollout" aria-labelledby="rollout-heading">
       <h2 id="rollout-heading">Work on a project</h2>
       <p>Start <code>snajpagent</code> in your project directory and ask for a change.
@@ -37,9 +41,17 @@
       <p>You can type while work continues. Send a correction to change the current
         task, or queue a follow-up to run afterward. Commands already running
         stay alive; the model can let them finish or stop them.</p>
+      <p>Enter commands while work runs. Inspection acts immediately; controls
+        that need a safe boundary acknowledge when they will apply.
+        <code>/history</code> shows the last turn and total history length;
+        <code>/history N</code> requests more. <code>/ro QUERY</code> queues a
+        read-only query during work. <code>/compact</code> reduces model context
+        while preserving the full local log and reporting its progress.</p>
       <p>Set a goal when you want work to continue beyond the next reply. Exit to
         stop the program and resume the saved session later. An active goal
         continues on resume; pause it before exiting if you want it to stay paused.
+        <code>/goal resume</code> continues it; <code>/goal clear</code> stops
+        automatic goal continuation and retains its history.
         Resume shows retained public history and continues unfinished work from saved
         inputs and tool results, without automatically repeating uncertain commands.</p>
       <p>For longer work, have the model keep findings, decisions and corrections

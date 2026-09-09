@@ -13,6 +13,16 @@ Implemented:
   redacted output journals, native read/search and strict patch installation.
 - UTF-8 editing, resize/suspend recovery, Markdown, local verbosity and explicit
   IRC destinations. Config edits reload without restarting the session.
+- Shared active/idle command admission, durable deferred controls, responsive
+  catalog/compaction waits, command handling in queue edit/delete confirmation,
+  and retained submitted-command transcript lines.
+- History totals before/after replay; default one retained turn, including
+  unfinished work. Queued prompts render once at dispatch with effective settings
+  and a fresh display clock while original input provenance remains fixed.
+
+This describes current source. Downloadable releases and their manuals reflect
+their tagged revisions; source fixes do not replace immutable release assets.
+Existing sessions keep the code loaded at startup until normal exit/resume.
 
 Known boundaries:
 - Managed child processes cannot be reattached after an agent crash; replay

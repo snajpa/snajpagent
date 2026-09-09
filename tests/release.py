@@ -30,6 +30,38 @@ def rejected(function):
 
 with tempfile.TemporaryDirectory(prefix="release-", dir=root / "build") as tmp:
     tmp = Path(tmp)
+    # The documented tag recipe requires an operator-supplied version and must
+    # not recreate a published literal tag when copied without preparation.
+    policy = (root / "RELEASE.md").read_text()
+    recipe = next(block for block in re.findall(r"```sh\n(.*?)```", policy, re.S)
+                  if "git tag -a" in block)
+    commands = tmp / "example-bin"
+    commands.mkdir()
+    marker = tmp / "tag-attempted"
+    git_stub = commands / "git"
+    git_stub.write_text("#!/bin/sh\nprintf tag > '" + str(marker) + "'\n")
+    git_stub.chmod(0o700)
+    environment = dict(os.environ, PATH=str(commands) + os.pathsep + os.environ["PATH"])
+    environment.pop("APPROVED_VERSION", None)
+    attempted = subprocess.run(["sh", "-eu", "-c", recipe], cwd=tmp,
+                               env=environment, capture_output=True, text=True)
+    assert attempted.returncode != 0 and not marker.exists(), attempted
+    assert "operator-approved" in attempted.stderr, attempted.stderr
+    print("PASS: documented release recipe requires an explicit approved version")
+    if shutil.which("groff"):
+        guidance = (root / "AGENTS.md").read_text()
+        render_command = re.search(r"`(groff [^`]*snajpagent\.1)`", guidance).group(1)
+        rendered = subprocess.run(render_command.split(), cwd=root, check=True,
+                                  capture_output=True, text=True)
+        assert "›" in rendered.stdout and "»" in rendered.stdout, "manual lost UTF-8 prompt glyphs"
+        assert not rendered.stderr, rendered.stderr
+        print("PASS: documented manual rendering preserves UTF-8 prompt glyphs")
+    # Implemented standalone targets need a matching user-manual build entry.
+    matrix = re.search(r"^PROD_TARGETS = (.+)$", (root / "Makefile").read_text(), re.M)
+    manual = (root / "snajpagent.1").read_text()
+    for target in matrix.group(1).split():
+        assert target in manual, "missing manual build entry: " + target
+    print("PASS: manual covers every implemented production build target")
     # Source-size reporting must never reject large files or emit budget warnings.
     size_tree = tmp / "source-size"
     size_tree.mkdir()

@@ -20,9 +20,9 @@ The linked/runtime dependencies for a normal provider-capable build are:
 
 | Dependency | Source in this tarball | How it is used |
 |---|---|---|
-| POSIX/libc/platform APIs and pthreads | system | terminal, files, processes, signals, memory allocation, and the engine/presentation thread pair (`-pthread`) |
+| POSIX/libc/platform APIs and pthreads | system | terminal, files, processes, signals, memory allocation, and joined engine/presentation, IRC and updater owners (`-pthread`) |
 | system Jansson | not vendored | strict JSON parsing, construction, and canonical event/request encoding |
-| system libcurl | not vendored | bounded OpenAI Responses create/count/compact HTTPS transport |
+| system libcurl | not vendored | bounded Responses create/count/compact/catalog, authentication and updater HTTPS transport |
 | libcurl backend closure | not vendored | TLS, resolver, compression, HTTP, and other backends selected by the system libcurl build |
 | tmux | not vendored; test-only | optional rendered-screen regression in `make check`; required by `make tmuxcheck` and `make terminallivecheck` |
 
@@ -493,10 +493,10 @@ allocator, object implementation, or upstream Jansson source, and it does not us
 the name `src/jansson.h` so it cannot silently shadow a system development
 header.
 
-`src/http.h` is the shared libcurl include boundary. Provider transport and the
-optional binary-update worker own separate curl handles and share only process
-initialization and certificate-root setup.
-All other code reaches HTTP transport through the provider interface.
+`src/http.h` is the shared libcurl include boundary. Provider transport, bounded
+login/token exchanges in `src/auth_http.c`, and the optional binary-update worker
+own separate curl handles and share process initialization and certificate-root
+setup. Other code uses those owners rather than creating an HTTP client.
 
 A system-library release build still must archive the concrete executable dependency closure for each shipped platform:
 the selected Jansson library, libcurl library, and libcurl's enabled TLS,

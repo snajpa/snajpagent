@@ -4,6 +4,10 @@
 
 Goal controls, durable session recovery and additional Linux builds.
 
+These notes describe the immutable 0.99.4 tag and its companion downloads.
+Later source changes are listed under Unreleased in CHANGELOG.md; current
+source documentation and a rebuilt executable may include those later fixes.
+
 ## Changes
 
 - `/goal clear` cancels the current goal and stops automatic continuation.

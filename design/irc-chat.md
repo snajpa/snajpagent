@@ -78,6 +78,13 @@ snajpagent -s localhost:7667 -c upstream.example -n relay-worker
 
 ## Runtime Commands
 
+Network commands share the same admission path as other commands during active
+work, provider silence and tool waits. Presentation and topology changes use
+their existing owners; a current provider request retains its advertised network
+capabilities and route snapshots. Queue editing and delete confirmation still
+accept commands. Local slash-command submissions remain visible above their
+output in both views, independently of the dotdir prompt-entry history.
+
 `-s` and `-c` initialize capabilities, not permanent process identities. All
 interactive sessions offer these commands during idle or active model/tool work:
 

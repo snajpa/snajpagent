@@ -67,16 +67,16 @@ and terminal state, and joins the presentation thread; no thread is detached.
 - Public model text is soft-wrapped at word boundaries to the current terminal
   width. Explicit model newlines remain explicit, and a single word wider than
   the terminal may hard-wrap. Trailing punctuation stays with the preceding
-  text; hyphens, dashes, periods, commas, and similar closing punctuation make
-  the next character a wrap opportunity rather than beginning a wrapped line.
+  text. Whitespace-delimited words stay together, including hyphens, apostrophes
+  and attached punctuation; an overlong word can hard-wrap.
   Generated Markdown prose soft-wrap continuation rows begin with two spaces,
   aligned below the paragraph text after `• `. A separator space that would
   otherwise be the first character printed after that wrap is omitted.
-- Every complete UTF-8 provider delta becomes visible before its delivery
-  callback returns. Word-wrap lookahead must not retain the newest word until
-  another delta or response completion. If a provider divides one word across
-  deltas, its already-visible prefix cannot be moved; the continuation remains
-  contiguous and may use the terminal's hard wrap if it reaches the margin.
+- The renderer retains an unfinished fitting word across provider/style chunks
+  until whitespace or item completion establishes its boundary. Complete words
+  then wrap together. Overlong words and combining sequences flush at bounded
+  width/byte limits. Receipt, durable public text and terminal painting are
+  distinct; the presentation buffer never changes stored text.
 - Wrapping is a terminal presentation detail. Stored response text, partial
   response events, redirected output, and provider protocol data remain byte
   exact and do not gain presentation newlines. Markdown-enabled and literal
@@ -237,8 +237,8 @@ The context meter follows the rollout model identity and precedes the optional
 queue count. `N` is the rounded-up percentage of the
 latest durable token-domain input bound against the resolved hard input budget
 for the same provider source, model, effort, and compaction lineage. A fresh
-session or accounting from a different provider source, selection, or lineage
-renders `?%`, as does compatible accounting with an unknown hard budget.
+session displays `0%`. Accounting from a different provider source, selection,
+or lineage renders `?%`, as does accounting with an unknown hard budget.
 Serialized byte counts are never substituted as measured tokens. The idle
 identity is the effective next-turn selection. The active identity is the
 model and effort frozen for that turn, even if a command stages different
@@ -338,13 +338,47 @@ tool waits. They neither steer nor cancel work. Adding/removing one stable IRC
 owner preserves the others; removed owners stop producing and drain accepted
 records before being freed. Session-pending input survives final disconnection.
 
+## Command admission and transcript
+
+The engine's shared command dispatcher accepts commands in both views during
+provider, count, catalog, compaction and managed-tool waits. Presentation and
+inspection run immediately; model/effort preferences affect the next full turn.
+Configuration, catalog refresh, compaction, retry and lifecycle controls retain
+accepted intent and run at their safe owner boundary. Commands captured under
+an idle prompt are not blocked behind an active turn: ordinary rollout text from
+that prompt enters the durable future queue while following commands proceed.
+
+The existing control owner drains newly admitted kinds after the current
+operation returns. Repeated requests for the same pending kind coalesce with an
+explicit acknowledgement. A no-safe-prefix compaction stays pending without a
+busy loop. Parked policy recovery still applies safe controls without releasing
+the policy stop. Shutdown leaves unapplied controls pending. Delete requires its
+explicit prefix even when other commands are entered at confirmation; opening a
+queue editor cancels deletion. External `$EDITOR` has exclusive terminal input.
+
+Every accepted slash-command line remains visible above its output in chat and
+rollout, idle and active. The shared submission boundary owns that echo, not
+individual handlers; UI-local commands keep their exact-once path. An editable
+draft and the durable prompt-entry history are separate from immutable scrollback.
+A queued prompt renders as an ordinary submission once at dispatch, with a fresh
+local clock and its frozen effective model/effort. Queue receipt provenance and
+any live draft's clock remain unchanged, including across same-turn retry.
+
+`/history` and automatic resume use the same event iterator and renderer. The
+default is one retained turn, including unfinished/failed/interrupted work.
+Explicit counts are uncapped within available history; overflowing decimal
+counts saturate safely. Nonempty replay opens with total session turns and
+completed turns; every replay ends with shown/completed/total counts, even for
+empty sessions and `/history 0`. Replay does not change model context or the log.
+This conversation history is distinct from shared prompt-entry history.
+
 ## Queue Commands
 
 `/ro QUERY` is a per-prompt read-only query, not a persistent setting. It works
 at idle and through `-e`; in chat view it explicitly opens local rollout view.
-Active Enter on `/ro` (including multiline input) preserves the draft and
-directs the user to Tab or `/queue /ro QUERY`. It never steers, interrupts, or
-changes the active tools. Ordinary steering inside an existing read-only turn
+Active Enter or Tab on `/ro` (including multiline input) accepts a durable
+future read-only turn. It never changes the active turn's tool permissions;
+`/queue /ro QUERY` uses the same future-turn representation. Ordinary steering inside an existing read-only turn
 keeps that turn read-only. `//ro ...` is literal ordinary input. Empty `/ro`
 queries are rejected before turn creation. Incoming IRC text is not parsed as
 a local slash command.
@@ -389,8 +423,10 @@ removes the most recently queued item, making it the quick undo for an
 accidental Tab queue.
 
 `edit` opens the selected text in the normal composer with an `edit N › `
-label. Enter saves it in place; during an active turn, Tab also saves it. The
-entry keeps its durable ID, sequence, and FIFO position. Beginning an edit
+label. Enter on replacement text saves it in place; during an active turn,
+Tab also saves it. Slash commands still run, preserving the original item;
+`//` enters a literal slash and `/ro` replaces the item's read-only text/mode.
+The entry keeps its durable ID, sequence, and FIFO position. Beginning an edit
 temporarily pauses automatic queue draining so the unedited entry cannot start;
 saving restores the prior armed state when the current turn is still active.
 
@@ -463,10 +499,9 @@ scenario covers:
   sequences, overwritten text, duplicate fragments, or missing fragments; and
 - API-like paced decoding through small fragments delivered roughly every
   40--100 ms, including a word divided across deltas and a final fragment with
-  no trailing whitespace; each complete fragment must be visible at callback
-  cadence, the divided word must remain contiguous, and the final fragment
-  must remain visible during a subsequent provider pause without any textual
-  activity row appearing; and
+  no trailing whitespace; complete words become visible at their boundaries,
+  the divided word remains together when it fits, and item completion flushes
+  the final word without a textual activity row; and
 - enabled and disabled `AGENTS.md` discovery as recorded in the durable
   `turn_started` event.
 
@@ -476,17 +511,9 @@ or snajpagent process. Deterministic tmux coverage is a normal local test target
 live provider coverage remains explicit because it consumes credentials and
 provider capacity.
 
-The live real-work qualification uses the configured default `codex-lb`
-profile and the exact prompt:
-
-```text
-great... now please gather the complete state of livepatch status for vpsadminos kernel 6.12.95
-```
-
-Only one live qualification instance may run at a time. It runs from `/root`
-in a narrow tmux, admits the applicable `/root/AGENTS.md`, waits through all
-local tool work and response cycles, and exits normally. Acceptance compares
-the normalized logical text sequence in the final rendered pane/history with
-the byte-exact `response_completed` data, checks the
-`turn_started.data.instructions` advertised-path metadata, and rejects
-dropped, duplicated, reordered, overwritten, or visibly escaped text.
+Live-provider qualification is an explicit, separately authorized operation.
+Use an isolated workspace and non-destructive representative task, with the
+chosen provider/model recorded in its evidence. Compare normalized rendered
+text with durable public response data, verify advertised instruction paths,
+and close only test-owned processes. Existing host-specific live-run records
+are historical evidence, not reusable task authority or a mandatory prompt.

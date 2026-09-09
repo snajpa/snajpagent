@@ -224,6 +224,29 @@ with the turn. No JS runtime, worker pool, per-tool thread or detached service.
 Cleanup fans out to all owned groups under one grace window. Exited leaders
 remain unreaped until output collection so a reused PID cannot be signaled.
 
+## Active commands and input ownership
+
+Command admission is independent of turn activity. The shared engine dispatcher
+handles both views and queue-edit/delete-confirmation states. Controls that cannot
+safely mutate an in-flight request retain durable intent and acknowledge their
+boundary. The same pending control coalesces; newly admitted different controls
+are considered after the current operation. Deferred compaction waits for a safe
+prefix without spinning. Policy recovery can run controls while model work stays
+parked. Shutdown leaves remaining intent for resume rather than launching it.
+
+UI polling drains actions in receipt order and returns the submission-time view
+and activity state. Text entered at idle just before work starts remains future
+input, rather than steering the new turn. Commands behind it stay responsive.
+Slash-command transcript echo is shared. A queued turn renders its ordinary
+submitted prompt at actual dispatch with a fresh local clock while preserving
+original receipt provenance and an existing draft's text/clock.
+
+History is an event-log projection, not model context or the prompt-entry list.
+Command and automatic resume replay share selection, streaming and rendering,
+including unfinished/failed/interrupted turns. Default one, counts-only zero,
+and large counts use the same path. Total/completed counts precede nonempty
+output; shown/completed/total counts end every successful replay.
+
 ## Storage
 
 Session data is append-only at the event level. Records are synced so a later
@@ -251,7 +274,10 @@ endpoints or erase runtime additions, and original CLI networking flags do not
 override deliberate file edits. Changes target affected owners only. Failure
 attempts to restore previous roles; failed restoration reports actual remaining
 roles instead of claiming unchanged state. Durable session provider/model/effort preferences remain session state,
-so configuration defaults do not overwrite an existing session.
+so configuration defaults do not overwrite an existing session. Active turn
+provider/model/effort and retry policy remain frozen; consumer-specific settings
+apply at the next safe request/tool boundary or full turn. Reconfiguration never
+retroactively repeats an admitted tool call or silently restarts its process.
 
 Loading and model/provider saves use the same semantic configuration validator,
 including auth endpoints and cross-field model limits. Saves validate private
@@ -402,7 +428,9 @@ Tool stdout and stderr are redacted and retained as bounded `process_output`
 chunks in the existing session journal, without a capture cutoff. Results
 reference contiguous per-stream ranges; successive polls return only newly
 collected output. RAM staging is bounded and I/O service rotates among jobs.
-The app owns journal writes, and the UI owns all display. `exec_command` and `write_stdin` require the
+The app owns journal writes, and the UI owns all display. `exec_command` and
+`write_stdin` use the legacy `max_output_tokens` name for a retained UTF-8 byte
+ceiling on result text, not a token count. They require the
 model to select a positive `max_output_tokens` or explicitly use `null` for
 the configured `[tool] max_output_tokens` ceiling (6000 by default). Larger
 requests are clamped to that ceiling; smaller requests are honored. Both tool
@@ -410,8 +438,8 @@ schemas advertise the ceiling, and one shared runtime selector enforces it. The
 resolved value is recorded in the durable result so replay is independent of
 later configuration. Model-context projection preserves a valid-UTF-8 head
 and tail plus digest/provenance when the selected conservative
-one-token-per-UTF-8-byte bound permits; it does not call bytes an exact token
-count. The former `default_max_output_tokens` configuration key is removed.
+retained UTF-8 byte budget permits. Provider token accounting is a separate
+request-budget concern and does not change this byte unit. The former `default_max_output_tokens` configuration key is removed.
 `[tool] max_output_bytes` is presentation-only: it limits the number of
 output bytes shown for each tool call. At level 3 and above, `0`
 (the default) shows the complete retained result; level 2 also applies its
@@ -450,7 +478,9 @@ lifecycle milestones use a dedicated bold-green role.
 The public-item renderer incrementally recognizes a bounded Markdown subset
 across provider and UTF-8 delta boundaries. It shares the existing wrapping,
 composer, and terminal-safety path; syntax-only prefixes may remain pending,
-but complete semantic text is painted before a delivery callback returns.
+and an unfinished fitting word waits for whitespace or item completion. Long
+words flush at bounded width/byte limits. Complete words and validated blocks
+are painted without changing their durable source text.
 Buffered assistant history and non-operator IRC model messages use the same
 presentation, with fenced-code state isolated by endpoint and sender. Operator
 messages and other IRC events remain literal. Markdown and color can be disabled

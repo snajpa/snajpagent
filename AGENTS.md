@@ -57,6 +57,15 @@ Python. Use the existing test framework.
 
 ## User documentation
 
+Every feature and user-visible behavior change includes its documentation in the
+same change. Review the complete affected workflow: manual reference, tutorial,
+troubleshooting, README/website, design/status, examples and Unreleased changelog.
+Documentation is part of implementation and shipment, not deferred cleanup.
+The durable local policy is
+`~/ai/docs/projects/snajpagent/reference/documentation-maintenance.md`; it adds no
+new harness or release-version authority. When that AI workspace is unavailable,
+the requirements in this file and EDITORIAL.md still apply.
+
 Follow [EDITORIAL.md](EDITORIAL.md) for project prose. It prohibits negation-led
 reframing, personal narratives, source-detail overfitting and defensive filler.
 Select information for the reader's action on that surface; preserve necessary
@@ -80,7 +89,7 @@ in sync when introductory workflows change; teach rollout before native
 networking. Their prose budgets are 2,700 and 1,200 words respectively, excluding
 code, not targets. They are unrelated to runtime context limits.
 
-Render the affected manual text with `groff -Tutf8 -man snajpagent.1` and check
+Render the affected manual text with `groff -Kutf8 -Tutf8 -man snajpagent.1` and check
 its examples and links before shipping documentation changes. The existing Pages
 workflow formats that same file with mandoc as `manual.html`; do not hand-edit
 or check in a second generated manual. Keep the source outline task-oriented,

@@ -25,16 +25,33 @@ authority. An explicitly authorized development-snapshot workflow uses the
 existing approved base plus its actual Git suffix; it does not advance the base
 or promote the snapshot to stable. Previously published assets remain immutable.
 
+## Documentation shipment
+
+Every feature and behavior change updates its manual, affected guides/design/
+status/examples and Unreleased changelog before source shipment. Render the
+manual, verify changed examples and links, and review the whole affected workflow
+under AGENTS.md and EDITORIAL.md. Source-only or documentation shipment may use
+the approved base plus Git suffix; it is not a newly versioned stable release.
+
+When web publication is authorized, dispatch the existing manual Pages workflow
+from the exact shipped commit and verify the live manual and pages. It generates
+`manual.html` from `snajpagent.1`; keep only that one manual source. A documentation
+refresh preserves existing downloadable assets, hashes, channel descriptors and
+release history. The online manual tracks current source, while each release's
+companion manual describes its exact immutable executable.
+
 ## Canonical tag-driven release
 
 Create the operator-approved annotated Git tag on the clean release commit,
 then build normally. Both native and production-matrix builds derive their
-version from that tag. For the authorized 0.99.3 release:
+version from that tag. After the operator supplies a new approved version,
+set `APPROVED_VERSION` to that exact value; do not reuse an already published tag:
 
 ```sh
-git tag -a 0.99.3 -m 'snajpagent 0.99.3'
+: "${APPROVED_VERSION:?set the operator-approved new release version}"
+git tag -a "$APPROVED_VERSION" -m "snajpagent $APPROVED_VERSION"
 make -j4 UPDATE_BASE_URL=https://agent.snajpa.net prod-matrix
-python3 tools/release.py stage --revision 0.99.3 --output /path/to/new-stage
+python3 tools/release.py stage --revision "$APPROVED_VERSION" --output /path/to/new-stage
 ```
 
 Staging derives the version and default immutable GitHub download URL from the

@@ -51,6 +51,21 @@ use that selected provider. Every configured provider credential environment
 variable is removed from tool subprocess environments and treated as a
 secret.
 
+## Admission and refresh boundaries
+
+`/model`, `/model list` and selection run during active work. Listing reads local
+state; selection changes the next full turn and preserves the active turn's
+provider/model/effort. `/model cache` is accepted immediately, then refreshes at a
+safe request boundary. Once a session exists its control intent is durable and
+survives resume. Pre-work discovery alone preserves lazy session creation.
+
+Discovery owns an active composer: Ctrl-C interrupts an empty-draft operation,
+ordinary idle text becomes future input and other commands remain usable.
+Nested control requests retain their order and run after discovery unwinds.
+Failure/cancellation retains the previous cache. Exit leaves unapplied controls
+pending instead of opening an editor after shutdown. No TTL or background model
+catalog refresh is introduced.
+
 ## Persistent Discovery
 
 `/model cache` discovers models from every configured provider, records all of

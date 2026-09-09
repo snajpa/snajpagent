@@ -1,9 +1,11 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Provider authentication and setup
 
-`provider.c` remains the only libcurl include/transport boundary. The auth
-module implements the device/refresh protocol through that bounded interface;
-it does not introduce a second network library or bypass the dependency rules.
+Provider requests, authentication and the updater use libcurl through the shared
+`http.h`/`http.c` initialization and trust boundary. `provider.c` owns Responses,
+count, compaction and catalog transfers; `auth_http.c` owns bounded device/token
+exchanges; the updater owns its independent background transfer. These owners
+share the dependency and certificate policy rather than a second network library.
 
 Authentication belongs to a named provider, independently of model selection.
 `auth=api_key` reads the explicit `api_key` source, or a private stored key when

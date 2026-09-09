@@ -93,6 +93,21 @@ External evidence still required for stronger platform claims includes actual
 macOS execution and broader Windows desktop/legacy coverage. These disclosed
 gaps do not prevent shipping explicitly experimental builds under RELEASE.md.
 
+## Documentation and current-source coverage
+
+The current manual and design contracts are checked against source behavior;
+that review does not add runtime qualification to any platform or provider.
+September 9 source follow-ups have focused local HTTP/PTY/tmux and component
+coverage for active command admission, manual compaction, transcript/queue
+rendering and history totals. Those commits postdate the immutable 0.99.4
+release. Keep exact source/build identity with test evidence and use each
+release's companion manual when inspecting that release.
+
+A feature or behavior fix updates its affected documentation in the same change
+under AGENTS.md and EDITORIAL.md. Retain prior platform evidence with its original
+scope; neither compilation nor documentation publication establishes a new live
+provider or operating-system pass.
+
 ## Evidence bundle layout
 
 `make evidencebundle` writes `$(EVIDENCE_DIR)` (default

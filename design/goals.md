@@ -180,6 +180,19 @@ their saved state is context, not an instruction to resume. No goal is recreated
 and the user need not repeat its wording. Read-only/queued goal-controller
 suppression and the lifecycle tool restrictions above remain unchanged.
 
+## Controls during active work
+
+All local goal commands remain enterable while the model or tools are active.
+Goal state changes are durable immediately; pause/clear affect continuation and
+allow the current turn to finish. An empty-composer Ctrl-C explicitly interrupts
+that turn. Clear/cancel retain history and do not erase queued ordinary work.
+Controls retain their ordinary meaning in queue editing and delete confirmation;
+command text is never interpreted as deletion consent.
+
+Source revision matters: a rebuilt executable affects new launches. An existing
+process keeps its mapped code until normal exit/resume. A published tag describes
+its own immutable code and manual, not all later source fixes.
+
 ## Recovery and input provenance
 
 `turn_recovery` closes a failed response attempt without closing its turn or

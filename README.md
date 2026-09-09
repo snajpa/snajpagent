@@ -9,6 +9,10 @@ A coding agent for your terminal, with a built-in IRC server and client.
 [Install](#install-and-choose-a-provider) ·
 [User manual](https://agent.snajpa.net/manual.html)
 
+This guide and the web manual describe current source. Downloaded releases ship
+with their own matching manual. Check `snajpagent -V` when behavior differs;
+rebuilding or updating an executable affects new launches, not an open session.
+
 ## 1. Work on a project
 
 After [installing and choosing a provider](#install-and-choose-a-provider),
@@ -53,16 +57,43 @@ Tab completes command names before it queues. Start a line with `/sta` and press
 Tab to get `/status `; press Enter to run it. Completion applies while the cursor
 is in or at the end of that first `/command`. After that token, Tab follows
 the nickname-completion or idle/active behavior described below. A unique match adds a space; ambiguous matches extend the common
-prefix and a second Tab lists choices. No match leaves the draft unchanged,
-not queued. Completion never sends or queues text.
+prefix and a second Tab lists choices. No match leaves the draft unchanged. Completion never sends or queues text.
+At actual queue dispatch, the prompt appears with its dispatch-time clock and
+effective model settings. Its durable provenance keeps the original receipt time;
+same-turn retries do not print a duplicate submission.
 
 Outside completion, Tab inserts spaces while idle. **Empty Tab switches between
 rollout and chat.** Nickname completion in chat is explained below.
 
+### Commands, history and context
+
+Every command can be entered while a turn is active. Inspection and presentation
+commands act immediately; commands such as `/config`, `/model cache`, `/compact`,
+`/archive` and `/delete` acknowledge a safe boundary when they must wait. Accepted
+controls in an established session survive resume. Model and effort selections
+apply to the next full turn. The external `$EDITOR` owns terminal input while it
+is open, and deletion always requires explicit confirmation.
+
+Submitted slash commands remain in scrollback above their output. `/history`
+shows the last turn, including unfinished work; `/history 10` shows the last ten.
+The opening header gives total session turns and completed turns, and the footer
+reports shown, completed and total counts. `/history 0` shows only counts.
+These are conversation turns, separate from the Up/Ctrl-R prompt-entry history.
+
+Use `/ro QUERY` for a read-only query. During work it queues a separate read-only
+turn; it does not change the current turn's permissions. `/yield` returns an
+active tool wait to the model while leaving the process and its handle alive.
+
+`/compact` reduces model context while retaining the full local log. It reports
+progress, completion, waiting or interruption. Empty-draft Ctrl-C interrupts it;
+text entered during idle compaction becomes future queued work. A provider error
+keeps the previous context and session available so `/compact` can be retried.
+
 ### Keep working, or leave and come back
 
 Failed turns retry automatically five times. Set `[agent] max_turn_retries`
-to change the limit (`0` disables it). Active goals retry ordinary errors without a limit; policy stops and refusals pause them.
+to change the limit (`0` disables ordinary automatic retries). A successful
+actionable response resets the consecutive-failure budget. Active goals retry ordinary errors without a limit; policy stops and refusals pause them.
 
 A normal final answer ends the turn. Set a goal when you want work to continue
 beyond it:
@@ -73,14 +104,16 @@ beyond it:
 
 Goals continue until complete, paused, cancelled, or blocked. Queued prompts
 come first. `/goal pause` pauses continuation at a turn boundary; it does not
-interrupt a running turn. Errors keep an active goal retrying with paced,
+interrupt a running turn. `/goal resume` continues a paused or blocked goal;
+`/goal clear` cancels the goal and stops automatic continuation while retaining
+its history. Errors keep an active goal retrying with paced,
 interruptible waits, preserving completed work and live command handles.
 
 Ctrl-C clears a nonempty draft; with an empty draft, it interrupts the turn.
 Ctrl-D on an empty draft exits. No work continues after the program exits.
 The conversation, tool results, queue and goal are saved as a **session**.
-After the first prompt or goal, normal exit prints its resume command. Exiting
-a fresh session before submitting anything creates no saved session. You can also list sessions or reopen the
+After accepted work or other retained session state, normal exit prints its
+resume command. Exiting an unused session creates no saved session. You can also list sessions or reopen the
 latest one for this project directory:
 
 ```sh

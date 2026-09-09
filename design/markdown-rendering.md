@@ -38,9 +38,10 @@ Repeated source blank lines at prose boundaries cannot multiply the gap; interna
 code whitespace is preserved. A generated
 soft wrap of prose continues with two spaces, aligned with the first paragraph
 character after `• `, including margin wraps in words split across provider
-deltas. Already-visible word prefixes are not delayed or moved backwards;
-continued fragments fill the row, then resume at the same indentation. Apostrophes
-are not special break markers. When that wrap would otherwise print a separator space as
+deltas. An unfinished fitting word is buffered across provider/style chunks
+until whitespace or item completion, so its punctuation stays attached.
+Overlong words hard-wrap through bounded output. Apostrophes are not special
+break markers. When that wrap would otherwise print a separator space as
 the first character on the new row, that one space is omitted. Explicit
 non-blank source line breaks within one paragraph remain unbulleted. Headings,
 list items, block quotes, and fenced code keep their own structural markers
@@ -105,9 +106,10 @@ greedily and never executes embedded content.
 
 Parser state lives in the existing public-item render state. Constructs may be
 divided at arbitrary provider and UTF-8 delta boundaries. Semantic text from
-every complete delta is painted before its delivery callback returns; only an
-incomplete UTF-8 sequence, a syntax-only delimiter/prefix, or a potential table
-may remain pending. A validated table is buffered through its last consecutive
+an unfinished fitting word, incomplete UTF-8 sequence, syntax-only delimiter
+or potential table may remain pending. Complete words are painted together;
+item completion flushes the final word. Width and byte bounds flush overlong
+words independently of provider chunk size. A validated table is buffered through its last consecutive
 row because final column widths determine whether grid or narrow rendering is
 safe. Candidate text is replayed through the ordinary Markdown path if the
 required delimiter row does not validate.
@@ -125,7 +127,7 @@ is applied after the timestamp and sender prefix, without synthesizing a prose
 bullet. Operator chat, topics,
 membership notices, and protocol diagnostics remain literal. Fenced-code state
 may continue across consecutive IRC lines from the same agent; unrelated
-senders cannot inherit it. Resumed non-networked assistant history uses the
+senders cannot inherit it. Replayed assistant history in either view uses the
 same static model-text presentation. Because IRC messages are independently
 framed lines, table recognition does not join separate IRC messages into one
 table.
@@ -147,5 +149,7 @@ table.
   aligned and narrow tables, exact submitted/model and every-block-type/prompt
   boundaries, the disabled setting, width safety, and absence of raw escape
   leakage.
-- Full optimized and sanitizer suites must pass without a new production
-  translation unit or dependency. `make sizecheck` reports counts only.
+- Focused renderer and terminal regressions validate the changed behavior.
+  Integration follows AGENTS.md's post-rebase build policy; broader sanitizer
+  and full-suite results are recorded only when actually run. `make sizecheck`
+  reports counts only.

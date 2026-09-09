@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Reconcile the manual, tutorials, design and status documentation with current
+  command admission, recovery, history, queued dispatch and tool byte limits.
+  Require complete affected documentation in every feature or behavior change;
+  distinguish the current-source manual from immutable release downloads.
+
 - Show total session turns and completed turns before history replay, retaining
   the shown/completed/total footer for every replay, including empty history.
 
