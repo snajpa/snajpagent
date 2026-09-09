@@ -186,6 +186,7 @@ bool snag_term_consume_echoed_submission(struct snag_term *term,
                                         const char *label);
 int snag_term_write_safe(int fd, const char *text, size_t len);
 int snag_term_append_safe(struct snag_buf *out, const char *text, size_t len);
+int snag_term_append_wrapped(struct snag_buf *, const char *, size_t, unsigned int);
 int snag_term_write(int fd, const void *text, size_t len);
 
 #endif

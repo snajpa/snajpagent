@@ -95,15 +95,15 @@ append_safe(struct snag_buf *out, const unsigned char *text, size_t len,
 
         if (glyph.width < 0)
             return -1;
-        /* A displayed wrap never changes the draft or its byte offsets. */
-        if (prompt && columns >= 20u && !word_space(text[i]) &&
+        /* Composer and banner wrapping share sanitized display-cell geometry. */
+        if (columns >= 20u && !word_space(text[i]) &&
             (i == 0u || word_space(text[i - 1u]))) {
             size_t end = i;
             while (end < len && !word_space(text[end]))
                 ++end;
             size_t word = snag_term_text_width((const char *)text + i, end - i);
             if (word <= columns && col && word > columns - col) {
-                if (snag_buf_append(out, "\r\n", 2u) < 0)
+                if (snag_buf_append(out, prompt ? "\r\n" : "\n", prompt ? 2u : 1u) < 0)
                     return -1;
                 col = 0u;
             }
@@ -121,8 +121,9 @@ append_safe(struct snag_buf *out, const unsigned char *text, size_t len,
                 col = indent;
                 if (columns >= 20u)
                     col %= columns;
-            } else if (snag_buf_putc(out, '\n') < 0) {
-                return -1;
+            } else {
+                if (snag_buf_putc(out, '\n') < 0) return -1;
+                col = 0u;
             }
         } else if (cp == '\t') {
             size_t spaces = 4u - (col % 4u);
@@ -227,6 +228,14 @@ int
 snag_term_append_safe(struct snag_buf *out, const char *text, size_t len)
 {
     return append_safe(out, (const unsigned char *)text, len, false, 0u, 0u,
+                       len + 1u, NULL, false);
+}
+
+int
+snag_term_append_wrapped(struct snag_buf *out, const char *text, size_t len,
+                         unsigned int columns)
+{
+    return append_safe(out, (const unsigned char *)text, len, false, 0u, columns,
                        len + 1u, NULL, false);
 }
 

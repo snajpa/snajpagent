@@ -2142,6 +2142,29 @@ def wait_for_terminal_event(dotdir, terminal_types, timeout):
     )
 
 
+def run_banner_layout_case(binary, root, width=28):
+    """Banner words and count labels stay intact at narrow widths."""
+    case = root / ("banner-layout-" + str(width))
+    case.mkdir(parents=True)
+    config = case / "config.ini"
+    config.write_text("[provider openai]\n[ui]\nresume_history_turns = 1\n")
+    state = case / "state"
+    with TmuxTerminal(case / "terminal", binary, case, state, config, width, 32,
+            args=("--no-listen", "--no-client")) as terminal:
+        terminal.wait("% ›", join_wrapped=True)
+        terminal.submit("ping")
+        wait_event_count(state, "turn_completed", 1)
+        terminal.submit("/history")
+        wait_normalized(terminal, "history: 1 shown · 1 completed · 1 total", timeout=10)
+        screen = terminal.capture()
+        (case / "screen.txt").write_text(screen)
+        # Every count label fits on its own; terminal hard-wrap must not tear it.
+        assert screen.count("completed") == 2, screen
+        assert "compl\neted" not in screen and "comp\nleted" not in screen, screen
+        terminal.exit()
+    print("banner layout", width, "PASS", flush=True)
+
+
 def run_history_length_case(binary, root, active=False, chat=False, width=100, verbosity=0):
     """History length is visible before and after replay in every presentation."""
     case = root / f"history-length-{active}-{chat}-{width}-{verbosity}"
@@ -2166,7 +2189,7 @@ def run_history_length_case(binary, root, active=False, chat=False, width=100, v
             args=("--no-listen", "--no-client") + ("-v",) * verbosity, environment=env)
         terminal.wait("host-model/medium", join_wrapped=True)
         terminal.submit("/history")
-        terminal.wait("history: 0 shown · 0 completed · 0 total", join_wrapped=True)
+        wait_normalized(terminal, "history: 0 shown · 0 completed · 0 total", timeout=10)
         assert not list((state / "sessions").glob("*/events.jsonl")), "empty history created a session"
         terminal.submit("seed history check")
         wait_event_count(state, "turn_completed", 1)
@@ -2180,11 +2203,11 @@ def run_history_length_case(binary, root, active=False, chat=False, width=100, v
             terminal.wait("chat is offline", join_wrapped=True)
         total = 2 if active else 1
         terminal.submit("/history 0")
-        terminal.wait(f"history: 0 shown · 1 completed · {total} total", join_wrapped=True)
+        wait_normalized(terminal, f"history: 0 shown · 1 completed · {total} total", timeout=10)
         terminal.submit("/history")
         header = f"history: {total} total turns · 1 completed"
         footer = f"history: 1 shown · 1 completed · {total} total"
-        screen = terminal.wait(footer, join_wrapped=True)
+        screen = normalize_space(wait_normalized(terminal, footer, timeout=10)[0])
         assert_order(screen, [header, "user: " + ("hold history check" if active else "seed history check"), footer])
         if active:
             assert not release.is_set()
@@ -2197,8 +2220,8 @@ def run_history_length_case(binary, root, active=False, chat=False, width=100, v
         config.write_text(config.read_text().replace("resume_history_turns = 0", "resume_history_turns = 1"))
         terminal = TmuxTerminal(case / "resume", binary, workspace, state, config, width, 32,
             args=("--no-listen", "--no-client") + ("-v",) * verbosity + ("--resume", sid), environment=env)
-        terminal.wait(header, join_wrapped=True)
-        terminal.wait(footer, join_wrapped=True)
+        wait_normalized(terminal, header, timeout=10)
+        wait_normalized(terminal, footer, timeout=10)
         terminal.exit()
         print("history length", active, chat, width, verbosity, "PASS", flush=True)
     finally:
@@ -2382,6 +2405,8 @@ def run_resume_history_case(binary, root):
 def run_fixture(binary, workspace, root):
     del workspace
     root.mkdir(mode=0o700, parents=True)
+    for width in (20, 28, 40, 80, 120):
+        run_banner_layout_case(binary, root, width)
     run_resume_history_case(binary, root)
     run_status_case(binary, root)
     run_paced_decode_case(binary, root)

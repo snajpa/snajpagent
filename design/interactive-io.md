@@ -170,6 +170,13 @@ of view or Markdown mode. Consecutive submissions can be adjacent. Compaction
 and goal changes share a bullet class: one row around a group, none inside it.
 Pause reasons come from the durable event, not a duplicate host warning.
 
+Startup/resume orientation, history headings/counts and the installed-update
+notice share terminal-safe word layout with the composer. The banner adapter
+uses display-cell widths, preserves complete words when they fit, and leaves
+oversized paths/URLs to hard-wrap. It does not reuse or reset the active model's
+Markdown state. Existing role boundaries preserve the draft, spacing and update
+heading color. Redirected banner text remains byte-for-byte unchanged.
+
 The composer word-wraps fitting whitespace-delimited words while retaining every
 draft byte. Overlong words hard-wrap; explicit newlines keep their existing
 indentation. Drafts taller than the screen show a cursor-following slice of the

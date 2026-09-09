@@ -1022,10 +1022,34 @@ test_bounded_wrap_word(void)
 }
 
 static void
+test_banner_word_layout(void)
+{
+    struct snag_buf out = {.max = 4096u};
+    const char *text = "first line\n1234567890123456789 completed";
+    assert(snag_term_append_wrapped(&out, text, strlen(text), 28u) == 0);
+    assert(snag_buf_terminate(&out) == 0);
+    assert(!strcmp((char *)out.data, "first line\n1234567890123456789 \ncompleted"));
+    snag_buf_reset(&out);
+    text = "界界界界界界界界界界 completed";
+    assert(snag_term_append_wrapped(&out, text, strlen(text), 28u) == 0);
+    assert(snag_buf_terminate(&out) == 0);
+    assert(strstr((char *)out.data, " \ncompleted"));
+    snag_buf_reset(&out);
+    text = "1234567890123456789 \033safe";
+    assert(snag_term_append_wrapped(&out, text, strlen(text), 28u) == 0);
+    assert(snag_buf_terminate(&out) == 0);
+    assert(strstr((char *)out.data, "\x1b") == NULL);
+    assert(strstr((char *)out.data, "\\x1Bsafe"));
+    snag_buf_free(&out);
+}
+
+static void
 test_update_banner(void)
 {
     const char *const sources[] = {"streamed", "```c\nint", "**bold", "# heading"};
     const char *banner = "=== snajpagent updated ===\nInstalled test. Restart when convenient.\nChangelog: https://example.test/#changelog\n";
+    const unsigned int widths[] = {20u, 28u, 40u, 80u, 120u};
+    for (size_t w = 0; w < sizeof(widths) / sizeof(widths[0]); ++w)
     for (size_t i = 0; i < sizeof(sources) / sizeof(sources[0]); ++i) {
         struct snag_render render;
         struct snag_term term;
@@ -1033,7 +1057,7 @@ test_update_banner(void)
         char output[4096];
         struct output_capture capture = capture_open(false, true);
         snag_term_init(&term);
-        term.columns = 120u;
+        term.columns = widths[w];
         assert(snag_term_restore_draft(&term, "keep my draft") == 0);
         size_t cursor = term.cursor;
         snag_render_init(&render, 0u);
@@ -1054,9 +1078,28 @@ test_update_banner(void)
         snag_render_free(&render);
         snag_term_close(&term);
         assert(capture_close(&capture, output, sizeof(output), 0u) > 0u);
-        assert(strstr(output, "\n\n=== snajpagent updated ===\n"));
+        assert(strstr(output, "\n\n=== snajpagent"));
+        assert(strstr(output, "updated"));
+        assert(strstr(output, "convenient."));
         assert(strstr(output, "#changelog\n\n"));
+        if (widths[w] >= 40u) assert(strstr(output, "=== snajpagent updated ===\n"));
     }
+    /* Narrow terminal geometry must not change redirected notice bytes. */
+    struct snag_render render;
+    struct snag_term term;
+    char output[4096];
+    struct output_capture capture = capture_open(false, true);
+    snag_term_init(&term);
+    term.columns = 20u;
+    snag_render_init(&render, 0u);
+    render.stderr_terminal = false;
+    snag_render_attach_term(&render, &term);
+    assert(snag_render_update(&render, banner) == 0);
+    assert(capture_close(&capture, output, sizeof(output), 0u) == strlen(banner));
+    assert(!strcmp(output, banner));
+    snag_render_free(&render);
+    snag_term_close(&term);
+
 }
 
 static void
@@ -2318,6 +2361,7 @@ main(void)
     test_destination_editor();
     test_markdown_streaming();
     test_markdown_fences();
+    test_banner_word_layout();
     test_update_banner();
     test_markdown_tables();
     test_tool_previews();

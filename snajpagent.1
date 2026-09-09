@@ -771,6 +771,12 @@ over model/provider work in the same activity column; idle reserves one space.
 Unused context digits also remain spaces.  Interruption retains the current provider/tool indicator until the
 turn closes; there is no separate interruption glyph.  The template and spinners are configurable under
 .BR [ui] .
+.PP
+Startup/resume headers, history headings and counts, and installed-update notices
+wrap at word boundaries using terminal display-cell widths.  A word, path or URL
+wider than the terminal can still hard-wrap; information is retained rather than
+truncated.  Banner output preserves an existing draft and does not change saved
+conversation text.  Redirected diagnostics keep their original bytes.
 .SS Verbosity
 Verbosity controls local rollout and diagnostics, not chat-message visibility
 or which view is selected.  All participants see the same room messages and
@@ -2186,7 +2192,7 @@ Model requests preserve the distinction between intermediate assistant updates
 and final answers across tool calls, goal continuation, resumed sessions and
 compaction input.
 .PP
-History replay ends with a mode-style "history replayed" banner.  Replayed
+History replay ends with shown, completed and total turn counts.  Replayed
 chat timestamps have no per-message "history" label; stored historical flags
 and model-input handling are unchanged.
 .PP

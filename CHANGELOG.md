@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Wrap startup, resume, history and installed-update banners at word boundaries
+  on narrow terminals, preserving counts, paths, notices and the live draft.
+  Redirected banner output retains its original bytes.
+
 - Reconcile the manual, tutorials, design and status documentation with current
   command admission, recovery, history, queued dispatch and tool byte limits.
   Require complete affected documentation in every feature or behavior change;

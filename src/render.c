@@ -498,6 +498,28 @@ snag_render_attach_term(struct snag_render *render, struct snag_term *term)
     snag_term_set_color(term, render->color_stderr);
 }
 
+/* Banner input is bounded by its existing owner. Wrap only terminal output;
+ * redirected diagnostics retain their exact bytes. No model-stream state is used. */
+static int
+write_banner(struct snag_render *render, unsigned int boundary, const char *color,
+             const char *text, size_t len, size_t colored_len)
+{
+    if (!render->stderr_terminal)
+        return write_role_block(render, boundary, STDERR_FILENO, color, text, len,
+                                colored_len, false, true);
+    struct snag_buf out = {.max = len <= (SIZE_MAX - 64u) / 16u ? len * 16u + 64u : SIZE_MAX};
+    unsigned int columns = snag_term_columns(render->term);
+    int rc = snag_term_append_wrapped(&out, text, colored_len, columns);
+    size_t colored = out.len;
+    if (rc == 0)
+        rc = snag_term_append_wrapped(&out, text + colored_len, len - colored_len, columns);
+    if (rc == 0)
+        rc = write_role_block(render, boundary, STDERR_FILENO, color,
+                              (char *)out.data, out.len, colored, false, true);
+    snag_buf_free(&out);
+    return rc;
+}
+
 int
 snag_render_orientation(struct snag_render *render,
                        const char *workspace, const char *id,
@@ -518,9 +540,8 @@ snag_render_orientation(struct snag_render *render,
                             workspace, id);
     }
     if (rc == 0)
-        rc = write_role_block(render, BOUNDARY_CONTENT, STDERR_FILENO, COLOR_AGENT,
-                              (char *)line.data, line.len, line.len,
-                              render->stderr_terminal, true);
+        rc = write_banner(render, BOUNDARY_CONTENT, COLOR_AGENT,
+                          (char *)line.data, line.len, line.len);
     snag_buf_free(&line);
     return rc;
 }
@@ -528,8 +549,8 @@ snag_render_orientation(struct snag_render *render,
 static int
 render_banner(struct snag_render *render, const char *text)
 {
-    return write_role_block(render, BOUNDARY_CONTENT, STDERR_FILENO, COLOR_HOST, text,
-                            strlen(text), strlen(text), render->stderr_terminal, true);
+    return write_banner(render, BOUNDARY_CONTENT, COLOR_HOST, text,
+                        strlen(text), strlen(text));
 }
 
 static int
@@ -2591,9 +2612,8 @@ snag_render_update(struct snag_render *render, const char *text)
     size_t len = strlen(text);
     if (close_public_output(render) < 0)
         return -1;
-    int rc = write_role_block(render, BOUNDARY_UPDATE, STDERR_FILENO, COLOR_UPDATE,
-                              text, len, first_line_len(text, len),
-                              render->stderr_terminal, true);
+    int rc = write_banner(render, BOUNDARY_UPDATE, COLOR_UPDATE,
+                          text, len, first_line_len(text, len));
     if (render->stderr_terminal && render->public_item_open)
         render->public_column = 0u;
     return rc;
