@@ -8,6 +8,8 @@ local rollout and native IRC chat. One-shot mode runs tasks from scripts.
 Implemented:
 - Named providers and local model settings, shared secret sources, Responses
   streaming, model discovery, token accounting and native/fallback compaction.
+- Reasoning content-part streams, including direct DeepSeek V4 Pro thinking.
+  Non-public parts stay decoder-local; public output and calls remain validated.
 - Private durable sessions, replay, steering, queues, goals and read-only turns.
 - Independent tool-call batches, multiple managed command handles, bounded
   redacted output journals, native read/search and strict patch installation.

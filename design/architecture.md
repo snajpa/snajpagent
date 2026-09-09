@@ -95,7 +95,12 @@ structure, public text/refusals, function arguments, and terminal success or
 failure. Other bounded `response.*` records are discarded after envelope
 validation. Unsupported provider output occupies an inert decoder-local index
 and never becomes durable response data or a local action; only exact completed
-registered function calls enter the tool graph. A known successful terminal
+registered function calls enter the tool graph. Content-part events on an
+already registered inert item are discarded when their part type is neither
+public text nor refusal; their envelope and indexes remain bounded. This
+includes providers that stream reasoning through content-part events. Public
+text, refusals and function arguments retain exact semantic-item validation.
+A known successful terminal
 snapshot remains required, while malformed envelopes and unknown
 non-Responses event types fail closed. A response with no actionable item is
 nonproductive. An explicit empty or oversized assistant message instead

@@ -765,10 +765,100 @@ test_provider_context_formats(void)
     snag_responses_stream_free(&stream);
 }
 
+static void
+test_reasoning_content_parts(void)
+{
+    static const char created[] =
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"rs\",\"summary\":[]}}\n\n";
+    static const char finish[] =
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"rs\",\"content\":[{\"type\":\"reasoning_text\",\"text\":\"hidden\"}]}}\n\n"
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":1,\"item\":{\"type\":\"message\",\"id\":\"m\",\"role\":\"assistant\",\"status\":\"in_progress\",\"content\":[]}}\n\n"
+        "data: {\"type\":\"response.content_part.added\",\"output_index\":1,\"item_id\":\"m\",\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n"
+        "data: {\"type\":\"response.output_text.delta\",\"output_index\":1,\"item_id\":\"m\",\"content_index\":0,\"delta\":\"ok\"}\n\n"
+        "data: {\"type\":\"response.content_part.done\",\"output_index\":1,\"item_id\":\"m\",\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"ok\"}}\n\n"
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"type\":\"message\",\"id\":\"m\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}}\n\n"
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":2,\"item\":{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"{}\",\"status\":\"completed\"}}\n\n"
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[]}}\n\n";
+    /* DeepSeek content parts, vLLM reasoning deltas, and llama.cpp summary
+     * events all stay private; public messages and calls keep their indexes. */
+    static const char *variants[] = {
+        "data: {\"type\":\"response.content_part.added\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"part\":{\"type\":\"reasoning_text\",\"text\":\"\"}}\n\n"
+        "data: {\"type\":\"response.reasoning_text.delta\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"delta\":\"hidden\"}\n\n"
+        "data: {\"type\":\"response.content_part.done\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"part\":{\"type\":\"reasoning_text\",\"text\":\"hidden\"}}\n\n",
+        "data: {\"type\":\"response.reasoning_part.added\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"part\":{\"type\":\"reasoning_text\",\"text\":\"\"}}\n\n"
+        "data: {\"type\":\"response.reasoning_text.delta\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"delta\":\"hidden\"}\n\n"
+        "data: {\"type\":\"response.reasoning_text.done\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"text\":\"hidden\"}\n\n"
+        "data: {\"type\":\"response.reasoning_part.done\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"part\":{\"type\":\"reasoning_text\",\"text\":\"hidden\"}}\n\n",
+        "data: {\"type\":\"response.reasoning_summary_part.added\",\"item_id\":\"rs\",\"part\":{\"type\":\"summary_text\",\"text\":\"\"}}\n\n"
+        "data: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs\",\"delta\":\"hidden\"}\n\n"
+        "data: {\"type\":\"response.reasoning_summary_text.done\",\"item_id\":\"rs\",\"text\":\"hidden\"}\n\n"
+        "data: {\"type\":\"response.reasoning_summary_part.done\",\"item_id\":\"rs\",\"part\":{\"type\":\"summary_text\",\"text\":\"hidden\"}}\n\n",
+        "data: {\"type\":\"response.content_part.done\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"future_content\",\"name\":\"exec_command\",\"arguments\":\"bad\"}}\n\n",
+    };
+    for (size_t v = 0; v < sizeof(variants) / sizeof(variants[0]); ++v) {
+        struct snag_buf wire = {.max = 32768u};
+        assert(snag_buf_printf(&wire, "%s%s%s", created, variants[v], finish) == 0);
+        for (size_t chunk = 0; chunk < 3u; ++chunk) {
+            struct parsed_stream parsed = parsed_new(1024u);
+            assert(parse_stream((char *)wire.data, chunk == 2u ? 19u : chunk,
+                                &parsed) == 0);
+            assert(parsed.text.len == 2u && memcmp(parsed.text.data, "ok", 2u) == 0);
+            assert(parsed.graph.count == 2u);
+            assert(snag_response_graph_item(&parsed.graph, 0u).kind == SNAG_ITEM_ASSISTANT);
+            assert(snag_response_graph_item(&parsed.graph, 1u).kind == SNAG_ITEM_TOOL_CALL);
+            assert(strcmp(snag_response_graph_item(&parsed.graph, 1u).name, "exec_command") == 0);
+            assert(parsed.last_index == 1u);
+            assert(strcmp(parsed.last_provider_id, "m") == 0);
+            parsed_free(&parsed);
+        }
+        snag_buf_free(&wire);
+    }
+
+    /* An ignored item cannot swallow public semantics or invent an index. */
+    static const char *invalid[] = {
+        "{\"type\":\"response.content_part.added\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"bad\"}}",
+        "{\"type\":\"response.content_part.done\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"part\":{\"type\":\"refusal\",\"refusal\":\"bad\"}}",
+        "{\"type\":\"response.output_text.delta\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"delta\":\"bad\"}",
+        "{\"type\":\"response.refusal.done\",\"output_index\":0,\"item_id\":\"rs\",\"content_index\":0,\"refusal\":\"bad\"}",
+        "{\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"item_id\":\"rs\",\"delta\":\"{}\"}",
+        "{\"type\":\"response.content_part.added\",\"output_index\":1,\"item_id\":\"rs\",\"content_index\":0,\"part\":{\"type\":\"reasoning_text\"}}",
+        "{\"type\":\"response.content_part.added\",\"output_index\":-1,\"content_index\":0,\"part\":{\"type\":\"reasoning_text\"}}",
+        "{\"type\":\"response.content_part.added\",\"output_index\":0,\"content_index\":96,\"part\":{\"type\":\"reasoning_text\"}}",
+        "{\"type\":\"response.content_part.added\",\"output_index\":0,\"content_index\":0,\"part\":{}}",
+        "{\"type\":\"response.content_part.done\",\"output_index\":0,\"content_index\":0,\"part\":null}",
+        "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"{}\",\"status\":\"completed\"}}",
+    };
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        struct snag_buf wire = {.max = 32768u};
+        struct parsed_stream parsed = parsed_new(1024u);
+        assert(snag_buf_printf(&wire, "%sdata: %s\n\n%s", created, invalid[i], finish) == 0);
+        assert(parse_stream((char *)wire.data, 1u, &parsed) < 0);
+        assert(parsed.calls == 0u && parsed.graph.count == 0u);
+        parsed_free(&parsed);
+        snag_buf_free(&wire);
+    }
+}
+
+static void
+test_reasoning_part_cannot_complete_response(void)
+{
+    static const char wire[] =
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"rs\"}}\n\n"
+        "data: {\"type\":\"response.content_part.done\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"reasoning_text\",\"text\":\"hidden\"}}\n\n";
+    struct parsed_stream parsed = parsed_new(1024u);
+    assert(parse_stream(wire, 7u, &parsed) < 0);
+    assert(parsed.calls == 0u && parsed.graph.count == 0u);
+    parsed_free(&parsed);
+}
+
 int
 main(void)
 {
     test_deltas_survive_empty_terminal_output();
+    test_reasoning_content_parts();
+    test_reasoning_part_cannot_complete_response();
     test_terminal_snapshot_can_supply_unseen_items();
     test_failed_snapshot_preserves_only_consistent_text();
     test_empty_public_items_get_specific_correction();

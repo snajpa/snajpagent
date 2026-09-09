@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Accept DeepSeek thinking streams whose reasoning items emit content-part
+  events. Discard their non-public parts while retaining message identity,
+  tool-call, index, size and terminal-event validation for every provider.
+
 - Complete first-run manual and README instructions for Linux, macOS, Windows,
   FreeBSD, OpenBSD and NetBSD: verification, installation paths, native shells,
   provider setup, ABI selection and troubleshooting. Correct legacy NetBSD

@@ -2656,6 +2656,15 @@ A live session cannot be resumed concurrently.  Do not delete its lock to start
 a second owner.  Pre-1.0 internal formats can change; preserve older logs and
 use a compatible binary to inspect them rather than rewriting or deleting
 unknown data.  Archive/deletion of a session does not erase shared prompt history.
+.SS "Provider reasoning streams"
+Reasoning text and other non-public provider output are ignored by the public
+response decoder, including reasoning delivered through content-part events.
+DeepSeek V4 Pro can use its native Responses endpoint with thinking enabled;
+select a configured provider with, for example,
+.BR "-m deepseek/deepseek-v4-pro/high" .
+Public text, refusals and tool arguments still require consistent item identities,
+bounded indexes and a valid terminal response. Protocol errors in these fields
+remain failures; ignored reasoning cannot complete a response or execute a tool.
 .SS Provider failures
 Ordinary failures that otherwise offer
 .B /retry

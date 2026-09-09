@@ -615,6 +615,15 @@ handle_content_part(struct snag_responses_stream *stream, const json_t *root,
         json_index(stream, root, "content_index", SNAG_MAX_RESPONSE_PARTS,
                    &content_index) < 0)
         return -1;
+    /* Reasoning and other ignored items may also emit content-part events.
+     * Discard only non-public parts of an already registered inert item;
+     * text/refusal events still require the exact message identity below. */
+    if (kind == SNAG_WIRE_PART_NONE && output_index < stream->item_count &&
+        stream->items[output_index].kind == SNAG_WIRE_ITEM_INERT) {
+        const char *type = snag_json_string(json_object_get(root, "part"), "type");
+        if (type && !snag_string_in(type, "output_text refusal"))
+            return 0;
+    }
     item = find_item(stream, output_index, item_id, SNAG_WIRE_ITEM_MESSAGE);
     if (!item)
         return -1;

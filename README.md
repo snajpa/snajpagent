@@ -426,7 +426,9 @@ providers with an OpenAI-compatible Responses API.
 
 - **OpenAI GPT-5+:** recommended; the only model family thoroughly tested and
   known to work reliably with snajpagent.
-- **DeepSeek:** an open-model option known to work well.
+- **DeepSeek:** an open-model option. V4 Pro supports direct Responses streaming
+  with thinking, for example `-m deepseek/deepseek-v4-pro/high` after configuring
+  a provider named `deepseek`.
 - **Anthropic:** not supported. The project's assessment is that alignment
   problems make its models unsuitable for long-horizon autonomous work without
   oversight.
