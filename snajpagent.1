@@ -116,9 +116,9 @@ cd /path/to/project
 snajpagent
 .fi
 .PP
-Enter submits a turn.  An empty idle rollout prompt submits
-.B Continue.
-using the retained conversation. Empty input during a turn or in chat is ignored.
+Enter submits your text.  An empty or whitespace-only prompt leaves its line
+visible and opens a fresh prompt, like a shell, in both rollout and chat.
+To ask the model to continue, type your request and press Enter.
 Type
 .B /help
 for commands and keys.
@@ -609,8 +609,12 @@ and hard-wrapping words wider than the terminal.  Wrapping preserves the submitt
 text.  Long drafts scroll within the editor to keep the cursor visible.
 .TP
 .B Enter
-Submit while idle.  In rollout during model generation, interrupt the response
-and steer from its delivered prefix.  A running command is handed back alive;
+An empty or whitespace-only draft leaves its prompt line in the transcript and
+opens a fresh prompt.  This is local: it starts no model request, sends no chat,
+adds no history or queued turn, and leaves active work and goals unchanged.
+Queue editing and confirmation prompts retain their own blank-answer behavior.
+For nonempty text, submit while idle.  In rollout during model generation,
+interrupt the response and steer from its delivered prefix.  A running command is handed back alive;
 it is not killed.  In chat, send to the selected room.  A model-nick mention
 steers at the next safe response/tool boundary without truncating generation.
 .TP

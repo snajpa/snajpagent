@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Make empty and whitespace-only Enter shell-like in idle and active rollout and
+  chat: retain the prompt line and open a fresh prompt locally. Remove automatic
+  `Continue.` requests; preserve model work, chat, goals, queues and history.
+
 - Wrap startup, resume, history and installed-update banners at word boundaries
   on narrow terminals, preserving counts, paths, notices and the live draft.
   Redirected banner output retains its original bytes.

@@ -10,8 +10,14 @@ from pty_active import Child, DEFAULT_IDLE_PROMPT, DOTDIR
 child = Child(["-vvvv"])
 buf = child.buf
 child.wait_text(DEFAULT_IDLE_PROMPT, timeout=5.0)
-child.send(b"\r")
-child.wait_text(b"fixture answer", timeout=5.0)
+blank_start = len(buf)
+before_logs = set(Path(DOTDIR, "sessions").glob("*/events.jsonl"))
+child.send(b"\r" * 3)
+child.drain(0.4)
+assert set(Path(DOTDIR, "sessions").glob("*/events.jsonl")) == before_logs
+assert bytes(buf[blank_start:]).count(b"\n") >= 3, bytes(buf[blank_start:])
+child.send(b"ping\r")
+child.wait_text(b"pong", timeout=5.0)
 # A prompt redraw can occur while a response is still active.  The durable
 # terminal event is the unambiguous point at which /exit is an idle command.
 child.wait_text(b"turn_completed synced", timeout=5.0)
@@ -51,10 +57,10 @@ child.pid = None
 os.close(child.fd)
 if os.waitstatus_to_exitcode(status) != 0:
     raise SystemExit(f"explicit exit status {status}: {bytes(buf)!r}")
-# Empty Enter must admit a direct continuation and preserve ordinary turn history.
+# Only explicit text starts work; blank Enter never manufactures model input.
 logs = list(Path(DOTDIR, "sessions").glob("*/events.jsonl"))
-assert any(json.loads(line).get("type") == "turn_started" and
-           json.loads(line)["data"]["text"] == "Continue."
+assert not any(json.loads(line).get("type") == "turn_started" and
+               json.loads(line)["data"]["text"] == "Continue."
            for path in logs for line in path.read_text().splitlines())
 if os.environ.get("TERM") == "dumb" and b"\x1b" in buf:
     raise SystemExit(f"TERM=dumb received ANSI: {bytes(buf)!r}")

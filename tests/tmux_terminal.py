@@ -2142,6 +2142,116 @@ def wait_for_terminal_event(dotdir, terminal_types, timeout):
     )
 
 
+def run_blank_enter_case(binary, root, active=False, chat=False, width=100):
+    """Blank Enter advances scrollback locally, even during engine work."""
+    case = root / f"blank-enter-{active}-{chat}-{width}"
+    case.mkdir(parents=True)
+    config = case / "config.ini"
+    config.write_text("[provider openai]\n[ui]\n"
+        "prompt = {hour:02}:{minute:02}:{second:02} {chat:chat>}{rollout-idle:idle>}{rollout-active:busy>}\n")
+    state = case / "state"
+    with TmuxTerminal(case / "term", binary, case, state, config, width, 32,
+            args=("--no-listen", "--no-client")) as terminal:
+        terminal.wait("idle>")
+        if active:
+            terminal.submit("slow")
+            terminal.wait("working slowly")
+        if chat:
+            terminal.submit("/chat")
+            terminal.wait("chat is offline")
+        marker = "chat>" if chat else "busy>" if active else "idle>"
+        before = terminal.capture().count(marker)
+        before_log = maybe_events(state)[1]
+        history = state / "prompt_history"
+        before_history = history.read_bytes() if history.exists() else b""
+        for index in range(3):
+            terminal.send_key("Enter")
+            terminal.wait_until(lambda text: text.count(marker) >= before + index + 1,
+                                "fresh blank prompt", timeout=2)
+        terminal.send_text("   ")
+        terminal.send_key("Enter")
+        terminal.wait_until(lambda text: text.count(marker) >= before + 4,
+                            "fresh whitespace prompt", timeout=2)
+        screen = terminal.capture()
+        (case / "screen.txt").write_text(screen)
+        log = maybe_events(state)[1]
+        for kind in ("turn_started", "input_received", "steering_added", "future_turn_queued", "turn_cancel_requested"):
+            assert len(event_list(log, kind)) == len(event_list(before_log, kind)), (kind, log)
+        if not active: assert not list((state / "sessions").glob("*/events.jsonl"))
+        assert (history.read_bytes() if history.exists() else b"") == before_history
+        terminal.run("send-keys", "-t", terminal.target, *(["Enter"] * 40))
+        terminal.wait_until(lambda text: text.count(marker) == before + 44,
+                            "every repeated Enter retained", timeout=2)
+        assert (history.read_bytes() if history.exists() else b"") == before_history
+        log = maybe_events(state)[1]
+        assert len(event_list(log, "input_received")) == len(event_list(before_log, "input_received"))
+        terminal.exit()
+    print("blank Enter", active, chat, width, "PASS", flush=True)
+
+
+def run_blank_enter_stream_case(binary, root):
+    """Local prompts interpose between real HTTP chunks without a new request."""
+    case = root / "blank-http"
+    case.mkdir(parents=True)
+    provider = FakeResponses()
+    config, state = case / "config.ini", case / "state"
+    write_irc_config(config, provider.port, "host-model")
+    with config.open("a") as out:
+        out.write("prompt = {hour:02}:{minute:02}:{second:02} {chat:chat>}{rollout-idle:idle>}{rollout-active:busy>}\n")
+    ready, release = threading.Event(), threading.Event()
+    requests = []
+    def respond(handler, request, sequence):
+        requests.append(request)
+        body = provider.response_body(sequence, "stream-before stream-after").encode()
+        # Split one text delta into two, keeping the real HTTP request open.
+        event = provider.event("response.output_text.delta", {
+            "item_id": f"msg_irc_ui_{sequence}", "output_index": 0,
+            "content_index": 0, "delta": "stream-before "}).encode()
+        original = next(line for line in body.split(b"\n\n")
+                        if b"response.output_text.delta" in line) + b"\n\n"
+        prefix, suffix = body.split(original, 1)
+        after = event.replace(b"stream-before ", b"stream-after")
+        body = prefix + event + after + suffix
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/event-stream")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.end_headers()
+        handler.wfile.write(prefix + event); handler.wfile.flush()
+        ready.set(); assert release.wait(4)
+        handler.wfile.write(after + suffix)
+        handler.close_connection = True
+    provider.runtime_handler = respond
+    try:
+        with TmuxTerminal(case / "term", binary, case, state, config, 40, 32,
+                args=("--no-listen", "--no-client"),
+                environment={"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}) as terminal:
+            terminal.wait("idle>")
+            terminal.run("send-keys", "-t", terminal.target, "Enter", "Enter")
+            terminal.wait_until(lambda text: text.count("idle>") == 3, "idle blank lines")
+            assert not requests and not list((state / "sessions").glob("*/events.jsonl"))
+            terminal.submit("stream-check")
+            assert ready.wait(3)
+            terminal.wait("stream-before")
+            before = terminal.capture().count("busy>")
+            history = (state / "prompt_history").read_bytes()
+            terminal.run("send-keys", "-t", terminal.target, "Enter", "Enter", "Enter")
+            terminal.wait_until(lambda text: text.count("busy>") == before + 3, "active blank lines")
+            assert len(requests) == 1
+            assert (state / "prompt_history").read_bytes() == history
+            release.set()
+            wait_event_count(state, "turn_completed", 1)
+            terminal.wait("stream-after")
+            screen = terminal.capture()
+            assert screen.count("stream-before") == screen.count("stream-after") == 1, screen
+            terminal.exit()
+            log = read_events(state)[1]
+            assert len(requests) == len(event_list(log, "turn_started")) == 1
+            assert not event_list(log, "turn_interrupted")
+    finally:
+        release.set(); provider.close()
+    print("blank Enter HTTP stream PASS", flush=True)
+
+
 def run_banner_layout_case(binary, root, width=28):
     """Banner words and count labels stay intact at narrow widths."""
     case = root / ("banner-layout-" + str(width))
@@ -2405,6 +2515,9 @@ def run_resume_history_case(binary, root):
 def run_fixture(binary, workspace, root):
     del workspace
     root.mkdir(mode=0o700, parents=True)
+    for active in (False, True):
+        for chat in (False, True):
+            run_blank_enter_case(binary, root, active, chat, 28 if chat else 100)
     for width in (20, 28, 40, 80, 120):
         run_banner_layout_case(binary, root, width)
     run_resume_history_case(binary, root)
@@ -4505,6 +4618,9 @@ def run_nested_command_cases(binary, root, modes=("nested", "nested-resume", "po
                 terminal.submit("/q 1 edit")
                 terminal.wait("edit 1")
                 terminal.send_key("C-u")
+                terminal.send_key("Enter")
+                terminal.wait("queued text must be nonempty", timeout=2)
+                assert not event_list(read_events(state)[1], "future_turn_edited")
                 terminal.submit("/status")
                 terminal.wait("session:", timeout=2)
                 assert not event_list(read_events(state)[1], "future_turn_edited")
@@ -4534,6 +4650,12 @@ def run_nested_command_cases(binary, root, modes=("nested", "nested-resume", "po
                     terminal.wait_dead()
                     assert not event_list(read_events(state)[1], "session_delete_requested")
                 elif mode == "delete-confirm":
+                    terminal.send_key("Enter")
+                    terminal.wait("delete confirmation did not match")
+                    assert not event_list(read_events(state)[1], "session_delete_requested")
+                    terminal.submit("/delete")
+                    terminal.wait_until(lambda text: text.count("delete is irreversible") == 2,
+                                        "new delete confirmation")
                     sid = read_events(state)[0].parent.name
                     terminal.submit(sid[:8])
                     terminal.wait_dead()
@@ -6305,6 +6427,7 @@ def run_irc_case(binary, root):
         for active, chat, width, verbosity in ((False, False, 100, 0), (False, True, 28, 2),
                                              (True, False, 28, 0), (True, True, 100, 2)):
             run_history_length_case(binary, root, active, chat, width, verbosity)
+        run_blank_enter_stream_case(binary, root)
         run_nested_command_cases(binary, root)
         run_manual_compaction_cases(binary, root)
         run_compaction_text_cases(binary, root)

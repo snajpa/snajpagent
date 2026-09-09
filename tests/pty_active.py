@@ -558,6 +558,15 @@ def test_prompt_clock_lifetime():
         replacement = latest_clock()
         assert replacement != original, bytes(child.buf[start:])
         child.drain(1.1)
+        # Blank submission retains the frozen label and captures a fresh clock.
+        start = len(child.buf)
+        child.send(b"\r")
+        child.wait("   0% › ".encode(), start=start)
+        child.drain(0.1)
+        clocks = re.findall(pattern, child.buf[start:])
+        assert len(clocks) >= 2 and clocks[0] == replacement and clocks[-1] != replacement, clocks
+        replacement = clocks[-1]
+        child.drain(1.1)
         start = len(child.buf)
         active_end = child.send_wait(b"terminal_status\r", "   ?%P» ".encode(), start=start)
         active_clock = latest_clock()
@@ -4484,6 +4493,31 @@ def test_ctrl_c_sequence_reset():
         assert session_ids() == before
 
 
+def test_blank_enter_during_engine_stall():
+    # Fill the engine FIFO with ordinary controls. Local blank Enter must still
+    # paint immediately, without steering, history writes or fabricated work.
+    for term in ("xterm", "dumb"):
+        with Child([], ready=DEFAULT_IDLE_PROMPT, term=term) as child:
+            child.send_wait(b"engine_blocked\r", b"engine-block-start")
+            child.send_wait(b"/status\r" * 32, b"input backlog is full", timeout=1.0)
+            child.drain(0.05)
+            start = len(child.buf)
+            child.send(b"\r" * 40)
+            deadline = time.monotonic() + 0.8
+            while child.buf[start:].count(b"\n") < 40:
+                remaining = deadline - time.monotonic()
+                assert remaining > 0, bytes(child.buf[start:])
+                child.read_once(remaining)
+            assert b"\a" not in child.buf[start:]
+            assert b"engine-block-end" not in child.buf
+            end = child.wait(b"engine-block-end", start=start)
+            child.exit_cleanly(end)
+        log = events(new_session(child.sessions_before))
+        assert [e["data"]["text"] for e in log if e["type"] == "turn_started"] == ["engine_blocked"]
+        assert not [e for e in log if e["type"] in
+                    ("turn_interrupted", "steering_added", "future_turn_queued")]
+
+
 def test_full_input_queue_keeps_exit_live():
     for gesture in (b"\x03" * 5, b"\x15\x04"):
         with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
@@ -4550,7 +4584,7 @@ def test_editor_during_blocked_engine(key=b"\r"):
             tsan = "libtsan" in Path(f"/proc/{child.pid}/maps").read_text()
             assert len(list(tasks.iterdir())) == 2 + int(tsan)
         child.drain(0.4)
-        child.wait(b"engine-block-start \r\r\n\r\r\n")
+        child.wait(b"engine-block-start\r\r\n\r\r\n")
         assert len(set(re.findall("[◴◷◶◵]", child.buf[after:].decode()))) > 1
         after = child.send_wait(b"/verbose 2" + key, b"verbosity: 2 (previews)", start=after, timeout=0.25)
         after = child.send_wait(b"/verbose 7" + key, b"/verbose expects one integer from 0 through 6",
@@ -4633,6 +4667,7 @@ if __name__ == "__main__":
     test_active_verbosity()
     test_five_ctrl_c_exit()
     test_ctrl_c_sequence_reset()
+    test_blank_enter_during_engine_stall()
     test_full_input_queue_keeps_exit_live()
     test_history_lock_keeps_editing_live()
     test_incremental_prompt_edit_and_utf8_cursor_column()

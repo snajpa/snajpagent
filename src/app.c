@@ -4298,7 +4298,6 @@ submit_idle(struct app_state *app, const char *prompt,
     bool single_line = strchr(prompt, '\n') == NULL;
     bool read_only, handled = false, exit_now = false;
     const char *query = snag_prompt_parse(prompt, &read_only);
-    if (!*prompt) query = "Continue.";
     bool retry = single_line && strcmp(prompt, "/retry") == 0;
     int rc = 0;
 
@@ -4310,7 +4309,7 @@ submit_idle(struct app_state *app, const char *prompt,
         *prompt_ready = true;
         return rc < 0 ? 3 : 0;
     }
-    if (!*prompt && input_view == SNAG_RENDER_CHAT)
+    if (snag_text_blank(prompt))
         return 0;
     rc = snag_app_input_command(app, prompt, app->session.active_turn, &handled, prompt_ready);
     if (rc < 0)

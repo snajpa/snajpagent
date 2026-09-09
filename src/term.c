@@ -2047,15 +2047,17 @@ complete_action(struct snag_term *term, enum snag_term_action action,
     bool verbosity = snag_verbosity_command((const char *)term->draft.data,
                                            term->draft.len);
 
+    if (term->utf8_pending_len || (!term->draft.len && action != SNAG_TERM_SUBMIT))
+        return 0;
+    if (snag_buf_terminate(&term->draft) < 0)
+        return -1;
     if (action == SNAG_TERM_QUEUE && verbosity)
         action = SNAG_TERM_SUBMIT;
     bool local = action == SNAG_TERM_SUBMIT &&
-                 (destination == SNAG_IRC_TARGET_SELECT || verbosity);
+                 (destination == SNAG_IRC_TARGET_SELECT || verbosity ||
+                  (term->blank_local && snag_text_blank((char *)term->draft.data)));
     if (local ? term->local_backlog : term->input_backlog)
         return snag_term_write(STDERR_FILENO, "\a", 1u);
-    if (term->utf8_pending_len ||
-        (!term->draft.len && (term->active || action != SNAG_TERM_SUBMIT)))
-        return 0;
     if (term->capable) {
         if (snag_term_hide(term) < 0)
             return -1;
@@ -2065,8 +2067,6 @@ complete_action(struct snag_term *term, enum snag_term_action action,
     }
     if (!snag_utf8_valid(term->draft.data, term->draft.len, true))
         return snag_errno(EILSEQ);
-    if (snag_buf_terminate(&term->draft) < 0)
-        return -1;
     copy = snag_strdup_checked((char *)term->draft.data, SNAG_MAX_DIRECT_PROMPT);
     if (!copy)
         return -1;

@@ -233,6 +233,7 @@ configure_prompt(struct snag_ui_display *display, const struct snag_ui_prompt *p
 static int
 apply_prompt(struct snag_ui_display *display)
 {
+    display->term.blank_local = display->prompt.values[0] != NULL;
     return configure_prompt(display, &display->prompt, &display->term);
 }
 
@@ -440,7 +441,10 @@ read_input(struct snag_ui_display *display, int timeout_ms)
         size_t body;
         enum snag_irc_target_command command = snag_irc_target_parse(
             item->text, strlen(item->text), &id, &body);
-        if (command == SNAG_IRC_TARGET_SELECT) {
+        if (term->blank_local && snag_text_blank(item->text)) {
+            display->feedback[0] = '\0';
+            item->local = true;
+        } else if (command == SNAG_IRC_TARGET_SELECT) {
             if (snag_term_select_destination(term, id) == 0)
                 (void)snprintf(display->feedback, sizeof(display->feedback),
                                "destination: %u", id);
@@ -510,12 +514,16 @@ local_feedback(struct snag_ui_display *display)
     if (!display->local_acknowledged) {
         display->painting_feedback = true;
         rc = snag_render_submitted(&display->render, item->snapshot.label, item->text);
-        if (rc == 0)
+        if (rc == 0 && display->feedback[0])
             rc = snag_render_host(&display->render, display->feedback);
         display->painting_feedback = false;
         display->local_acknowledged = true;
     }
-    if (queue_push(&display->runtime->actions, item))
+    if (snag_text_blank(item->text)) {
+        free(item->text);
+        free(item);
+        display->local = NULL;
+    } else if (queue_push(&display->runtime->actions, item))
         display->local = NULL;
     return rc;
 }

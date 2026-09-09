@@ -22,6 +22,16 @@ Output backpressures the engine. Full input admission retains the draft and
 reports the backlog without blocking editing; urgent interrupt/exit/failure
 flags bypass ordinary backlog. Actions retain their originating prompt state.
 
+Empty and whitespace-only Enter in the ordinary composer are local submitted
+lines, in either view and during active work. The presentation owner retains the
+old label in the transcript, resets the draft clock and shows a fresh prompt.
+This reuses the local-feedback slot and submitted-line renderer; blank lines
+never enter the engine action queue, input history, provider, IRC or goal state.
+The formatted composer marks this policy on the terminal; simple confirmation
+and queue-edit prompts continue delivering blank answers to their existing
+owners. Ctrl-J remains newline insertion, and nonempty Enter keeps its normal
+submission/steering/chat behavior. Continuing work requires explicit text.
+
 Optional networking adds one IRC server owner and one client owner per outgoing
 endpoint (its agent/operator sockets stay together). Each runs the same existing
 protocol code on private state. Bounded owned events, traces and room/identity

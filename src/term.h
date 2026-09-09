@@ -141,6 +141,7 @@ struct snag_term {
     bool history_refresh_requested;
     bool input_backlog;
     bool local_backlog;
+    bool blank_local; /* Normal composer; modal prompts own blank answers. */
 };
 
 void snag_term_init(struct snag_term *term);
