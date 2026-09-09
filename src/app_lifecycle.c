@@ -2,6 +2,7 @@
 #include "app_internal.h"
 #include "tools.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -205,8 +206,8 @@ static const char goal_help[] =
     "/goal set TEXT                explicitly start or reword\n"
     "/goal pause|resume            control continuation\n"
     "/goal lock|unlock             control model rewording\n"
-    "/goal complete|cancel         end the goal\n"
-    "reserved first words: status help set pause resume lock unlock complete cancel";
+    "/goal complete|cancel|clear   end the goal\n"
+    "reserved first words: status help set pause resume lock unlock complete cancel clear";
 
 static int
 goal_error(struct app_state *app, const char *message)
@@ -318,17 +319,17 @@ copy_goal_argument(const char *argument, uint32_t limit,
     return copy;
 }
 
-static bool
+static const char *
 reserved_word(const char *word, size_t len)
 {
     static const char *const words[] = {
         "status", "help", "set", "pause", "resume", "lock", "unlock",
-        "complete", "cancel"
+        "complete", "cancel", "clear"
     };
     for (size_t i = 0u; i < sizeof(words) / sizeof(words[0]); ++i)
-        if (strlen(words[i]) == len && memcmp(word, words[i], len) == 0)
-            return true;
-    return false;
+        if (span_equals(word, len, words[i]))
+            return words[i];
+    return NULL;
 }
 
 static int
@@ -462,41 +463,39 @@ goal_simple_command(struct app_state *app, const char *command)
 int
 snag_app_goal_command(struct app_state *app, const char *line, bool active)
 {
-    const char *argument;
-    const char *word_end;
+    const char *argument = line + 5u;
+    const char *word_end, *rest, *command;
     size_t word_len;
 
     (void)active;
-    if (strcmp(line, "/goal") == 0 || strcmp(line, "/goal status") == 0)
-        return render_goal(app);
-    if (strcmp(line, "/goal help") == 0)
-        return snag_ui_text(&app->ui, SNAG_UI_HOST, goal_help);
-    if (strncmp(line, "/goal ", 6u) != 0)
-        return goal_error(app, "invalid /goal command; use /goal help");
-    argument = line + 6u;
-    while (*argument == ' ' || *argument == '\t' || *argument == '\r')
+    while (isspace((unsigned char)*argument))
         ++argument;
+    if (!*argument)
+        return render_goal(app);
     if (*argument == '"')
         return set_goal_prompt(app, argument);
     word_end = argument;
-    while (*word_end && *word_end != ' ' && *word_end != '\t' &&
-           *word_end != '\r')
+    while (*word_end && !isspace((unsigned char)*word_end))
         ++word_end;
     word_len = (size_t)(word_end - argument);
-    if (word_len == 3u && memcmp(argument, "set", 3u) == 0) {
+    if (span_equals(argument, word_len, "set")) {
         if (!*word_end)
             return goal_error(app, "/goal set requires wording");
         return set_goal_prompt(app, word_end);
     }
-    if (reserved_word(argument, word_len)) {
-        if (*word_end)
+    command = reserved_word(argument, word_len);
+    if (command) {
+        rest = word_end;
+        while (isspace((unsigned char)*rest))
+            ++rest;
+        if (*rest)
             return goal_error(app,
                 "reserved /goal command has extra text; use /goal set or quotes");
-        if (word_len == 6u && memcmp(argument, "status", 6u) == 0)
+        if (strcmp(command, "status") == 0)
             return render_goal(app);
-        if (word_len == 4u && memcmp(argument, "help", 4u) == 0)
+        if (strcmp(command, "help") == 0)
             return snag_ui_text(&app->ui, SNAG_UI_HOST, goal_help);
-        return goal_simple_command(app, argument);
+        return goal_simple_command(app, command);
     }
     return set_goal_prompt(app, argument);
 }

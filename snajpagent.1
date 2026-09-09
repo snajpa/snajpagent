@@ -1008,6 +1008,10 @@ interruptible backoff, without an attempt limit.  Policy stops and provider
 refusals pause automatic continuation and require clarification.  Turn-only
 cancellation also pauses automatic continuation.  Quitting preserves unfinished
 work and its goal for resume.  Session resume preserves saved stops.
+Goal controls accept whitespace around the command word.  Extra wording after a
+control is rejected; use quotes or
+.B /goal set
+to start goal text with a command word.
 .TP
 .BR /goal , " /goal status"
 Show the durable goal.  Queued prompts run before automatic goal continuation,
@@ -1034,8 +1038,13 @@ Resume a paused or blocked goal.
 Deny or permit model-authored wording changes.  Operator rewording remains
 available.
 .TP
-.BR /goal " complete|cancel"
-End the current goal from the operator side.
+.B /goal complete
+Mark the current goal successfully completed.
+.TP
+.BR /goal " clear|cancel"
+Cancel the current goal and stop automatic continuation.  An in-progress turn
+finishes normally; use Ctrl-C to interrupt it.  The cancelled goal remains
+visible in status and history.  A new goal can be started afterwards.
 .TP
 .B /goal help
 Show the complete goal grammar.

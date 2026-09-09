@@ -1719,6 +1719,88 @@ def test_goal_pause_resume_and_queue_priority():
     ]
 
 
+def test_goal_clear_controls_continuation():
+    for state in ("active", "paused", "blocked"):
+        with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
+            if state == "blocked":
+                end = child.send_wait_idle(b"/goal blocked goal\r", b"goal done")
+            else:
+                end = child.send_wait(b"/goal slow goal\r", b"working on goal")
+                if state == "paused":
+                    end = child.send_wait(b"/goal pause\r", b"Goal paused at the current turn boundary", start=end)
+                    end = child.wait_idle_prompt(start=end)
+            end = child.send_wait(b"/goal clear\r", GOAL_CLEARED, start=end)
+            end = child.wait_idle_prompt(start=end)
+            end = child.send_wait_idle(b"/goal status\r", b": cancelled", start=end)
+            session_id = child.session_id()
+            log = events(session_id)
+            cancelled = one(log, "goal_cancelled")
+            assert cancelled["data"]["goal_id"] == one(log, "goal_started")["data"]["goal_id"]
+            assert not [e for e in log if e["type"] == "goal_reworded"]
+            assert len([e for e in log if e["type"] == "turn_started"]) == 1
+            end = child.send_wait_idle(b"/goal resume\r", b"only a paused or blocked goal", start=end)
+            child.exit_now()
+        before = len(events(session_id))
+        with Child(["--resume", session_id], ready=DEFAULT_ACCOUNTED_IDLE_PROMPT) as child:
+            end = child.send_wait_idle(b"/goal\r", b": cancelled")
+            child.drain(0.15)
+            assert not [e for e in events(session_id)[before:] if e["type"] == "turn_started"]
+            end = child.send_wait_idle(b"/goal automatic goal\r", b"goal done", start=end)
+            child.exit_now()
+        assert len([e for e in events(session_id) if e["type"] == "goal_started"]) == 2
+
+
+def test_goal_control_whitespace():
+    with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
+        end = child.send_wait(b"/goal slow goal\r", b"working on goal")
+        # Paste keeps tabs literal rather than invoking editor completion.
+        end = child.send_wait(b"\x1b[200~/goal\t pause \t\x1b[201~\r",
+                              b"Goal paused at the current turn boundary", start=end)
+        end = child.wait_idle_prompt(start=end)
+        end = child.send_wait_idle(b"/goal   status   \r", b": paused", start=end)
+        end = child.send_wait_idle(b"/goal    \r", b": paused", start=end)
+        end = child.send_wait_idle(b"/goal help   \r", b"reserved first words:", start=end)
+        end = child.send_wait_idle(b"/goal clear extra\r", b"reserved /goal command has extra text", start=end)
+        end = child.send_wait_idle(b"/goal pause extra\r", b"reserved /goal command has extra text", start=end)
+        end = child.send_wait_idle(b"/goal resume extra\r", b"reserved /goal command has extra text", start=end)
+        end = child.send_wait_idle(b"/goal lock   \r", b"Goal wording locked", start=end)
+        end = child.send_wait_idle(b"/goal unlock   \r", b"Goal wording unlocked", start=end)
+        end = child.send_wait_idle(b"\x1b[200~/goal\tresume\t \x1b[201~\r", b"goal done", start=end)
+        child.exit_now()
+    log = events(child.session_id())
+    one(log, "goal_paused")
+    one(log, "goal_resumed")
+    assert [e["data"]["input_kind"] for e in log if e["type"] == "turn_started"] == ["goal", "goal"]
+    assert not [e for e in log if e["type"] == "goal_reworded"]
+
+
+    with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
+        end = child.send_wait_idle(b"/goal blocked goal\r", b"goal done")
+        end = child.send_wait_idle(b"/goal set tiny\r", GOAL_UPDATED, start=end)
+        end = child.send_wait_idle(b"/goal resume   \r", b"goal done", start=end)
+        child.exit_now()
+    log = events(child.session_id())
+    one(log, "goal_blocked")
+    one(log, "goal_resumed")
+    one(log, "goal_completed")
+
+
+def test_goal_clear_without_goal_and_reserved_wording():
+    with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
+        end = child.send_wait_idle(b"/goal clear\r", b"no unfinished goal can be cancelled")
+        assert session_ids() == child.sessions_before
+        end = child.send_wait_idle(b"/goal blocked goal\r", b"goal done", start=end)
+        end = child.send_wait_idle(b'/goal "clear the build directory"\r', GOAL_UPDATED, start=end)
+        end = child.send_wait_idle(b"/goal set clear the cache\r", GOAL_UPDATED, start=end)
+        end = child.send_wait_idle(b"/goal clear   \r", GOAL_CLEARED, start=end)
+        end = child.send_wait_idle(b"/goal clear\r", b"no unfinished goal can be cancelled", start=end)
+        child.exit_now()
+    log = events(child.session_id())
+    assert [e["data"]["prompt"] for e in log if e["type"] == "goal_reworded"] == [
+        "clear the build directory", "clear the cache"]
+    one(log, "goal_cancelled")
+
+
 def test_goal_user_terminal_commands_and_unlock():
     child = Child([], PROMPT.rstrip())
     set_end = child.send_wait(b"/goal slow goal\r", GOAL_SET)
@@ -4594,6 +4676,9 @@ if __name__ == "__main__":
     test_goal_configured_wording_limit()
     test_goal_model_rewrite_and_lock()
     test_goal_pause_resume_and_queue_priority()
+    test_goal_clear_controls_continuation()
+    test_goal_control_whitespace()
+    test_goal_clear_without_goal_and_reserved_wording()
     test_goal_user_terminal_commands_and_unlock()
     test_goal_refusal_failure_block_and_restart_state()
     test_saved_goal_restored_without_lookup()

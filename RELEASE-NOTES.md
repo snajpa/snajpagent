@@ -1,21 +1,19 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 
-# snajpagent 0.99.3 — September 8, 2026
+# snajpagent 0.99.4 — September 9, 2026
 
-Broader BSD support and a tag-driven release workflow.
+Goal controls, durable session recovery and additional Linux builds.
 
 ## Changes
 
-- Sixteen standalone executables now cover Linux, macOS, Windows, FreeBSD,
-  OpenBSD and NetBSD. New BSD variants retain their native OS library ABI.
-- FreeBSD legacy extends to 5.1 with the libc.so.5/libc_r.so.5 ABI.
-  OpenBSD has 7.9, 5.9 and early 3.5 variants. NetBSD has 10.1 and 5.2.3
-  variants; the 10.1 executable uses PIE and full RELRO.
-- The approved annotated Git tag drives the ordinary native build, full matrix
-  and release staging. Manual build/version/URL overrides remain available.
-- Current-master reductions consolidate terminal, process, provider and turn
-  ownership paths. BSD fixes cover positional offsets, old thread runtimes,
-  dependency link flags and terminal behavior.
+- `/goal clear` cancels the current goal and stops automatic continuation.
+  Pause, resume and clear accept whitespace around their command words.
+  An in-progress turn finishes normally; Ctrl-C interrupts it immediately.
+- Session recovery preserves admitted input and active-turn controls. Provider
+  policy clarification retains running commands and partial response evidence.
+- Twenty standalone executables cover Linux, macOS, Windows, FreeBSD, OpenBSD
+  and NetBSD. Linux adds ARMv6, RISC-V 64-bit, PowerPC 64-bit little-endian and
+  PowerPC 32-bit big-endian builds.
 
 ## Downloads and updates
 
@@ -32,7 +30,8 @@ release leaves the existing development channel unchanged.
 
 ## Platform requirements and scope
 
-- Linux: x86-64, AArch64 and i686; the separate legacy i686 build supports
+- Linux: x86-64, AArch64, ARMv6, RISC-V 64-bit, PowerPC 64-bit little-endian,
+  PowerPC 32-bit big-endian and i686; the separate legacy i686 build supports
   Linux 2.4.27, with procfs, secure OS entropy and devpts for PTY commands.
 - macOS: experimental Intel, Apple Silicon and universal builds, macOS 11+.
   ARM64 is ad-hoc signed; Intel is unsigned. Developer ID signing and
@@ -41,10 +40,10 @@ release leaves the existing development channel unchanged.
 - FreeBSD: standard libc.so.7 ABI, including 8.4 and 14.4; the separate legacy
   libc.so.5/libc_r.so.5 build supports 5.1 and 5.5.
 - OpenBSD: experimental amd64 builds for 7.9, 5.9 and early 3.5, separately.
-- NetBSD: experimental amd64 builds for 10.1 and legacy 5.2.3, separately.
+- NetBSD: experimental amd64 builds for 10.1 and legacy 2.0/5.2.3, separately.
 
 `DEPENDENCIES.md` and `QUALIFICATION.md` describe the actual earlier runtime
 checks and OS limits. Compilation does not establish new runtime qualification.
 The Windows updater's two-rename fallback has interruption/recovery semantics
 specified in the manual; actual Windows/macOS updater execution remains
-unqualified. Exact 0.99.3 build and validation scope accompanies the assets.
+unqualified. Exact 0.99.4 build and validation scope accompanies the assets.

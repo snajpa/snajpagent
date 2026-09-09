@@ -2180,7 +2180,8 @@ handle_common_command(struct app_state *app, const char *line, bool active,
         return change_effort(app, NULL, active);
     if (strncmp(line, "/effort ", 8u) == 0)
         return change_effort(app, line + 8u, active);
-    if (strcmp(line, "/goal") == 0 || strncmp(line, "/goal ", 6u) == 0)
+    if (strncmp(line, "/goal", 5u) == 0 &&
+        (!line[5] || isspace((unsigned char)line[5])))
         return snag_app_goal_command(app, line, active);
     if (snag_string_in(line, "/names /topic")) {
         int rc;

@@ -2,7 +2,13 @@
 
 # Changelog
 
-## Unreleased
+## 0.99.4 — September 9, 2026
+
+- Make `/goal clear` cancel the current goal and stop automatic continuation,
+  retaining its durable history. Accept whitespace around goal controls,
+  including pause and resume, while preserving explicit/quoted wording.
+- Preserve active-turn controls and admitted input across interruption and
+  session resume. Provider-policy clarification retains running commands.
 
 - Remove all source/test line-count limits and per-file review thresholds.
   `make sizecheck` remains an informational report without budget warnings

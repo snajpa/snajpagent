@@ -34,7 +34,7 @@ present. `/goal help` prints the grammar and the reserved first words.
 active, paused, or blocked, it changes that goal's wording without changing
 its status or lock. The unquoted form is available when the first word is not
 one of `status`, `help`, `set`, `pause`, `resume`, `lock`, `unlock`, `complete`,
-or `cancel`. `/goal set TEXT` is the unambiguous spelling when the wording
+`cancel`, or `clear`. `/goal set TEXT` is the unambiguous spelling when the wording
 starts with a reserved word.
 
 An entire goal may instead be enclosed in one pair of double quotes. The outer
@@ -50,7 +50,10 @@ the next turn immediately. `/goal lock` prevents the model from changing the
 wording; `/goal unlock` restores that ability. Locking never prevents the user
 from changing wording and never prevents the model from completing or blocking
 the goal. `/goal complete` is the user's explicit successful terminal state.
-`/goal cancel` is the user's terminal stop without a completion claim.
+`/goal clear` (also `/goal cancel`) is the user's terminal stop without a
+completion claim. It leaves the current turn running and prevents subsequent
+automatic goal turns. Controls accept whitespace around the command word; real
+extra text is rejected.
 
 A completed or cancelled goal remains visible through `/goal`. Supplying new
 wording after either terminal state creates a new goal with a new identifier,
