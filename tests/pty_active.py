@@ -3147,6 +3147,41 @@ def test_known_context_meter():
     child.exit_cleanly(answered)
 
 
+def test_model_selection_stays():
+    config = write_config("model-stays.ini",
+        "[provider first]\n[provider second]\n[agent]\n"
+        "provider = first\nmodel = original\nreasoning_effort = medium\n")
+    original_config = config.read_bytes()
+    with Child(["--config", str(config)], ready=b"original/medium") as child:
+        end = child.send_wait_idle(b"ping\r", b"pong")
+        child.exit_cleanly(end)
+    sid = child.session_id()
+    # Exit before the first turn: selection must already belong to the session,
+    # not an unconsumed override encoded in a printed command.
+    with Child(["--config", str(config), "-m", "second/changed/high", "--resume", sid],
+               ready=b"second/changed/high") as child:
+        child.exit_now()
+    selections = [e["data"] for e in events(sid) if e["type"] == "model_selection_changed"]
+    assert selections and selections[-1]["new_model"] == "changed", selections
+    with Child(["--config", str(config), "--resume", sid], ready=b"second/changed/high") as child:
+        end = len(child.buf)
+        for _ in range(2):
+            end = child.send_wait_idle(b"ping\r", b"pong", start=end)
+        end = child.send_wait_idle(b"/model first/final/low\r", b"model for next turn:", start=end)
+        for _ in range(2):
+            end = child.send_wait_idle(b"ping\r", b"pong", start=end)
+        child.exit_cleanly(end)
+    with Child(["--config", str(config), "--resume", sid], ready=b"first/final/low") as child:
+        end = child.send_wait_idle(b"ping\r", b"pong")
+        child.exit_cleanly(end)
+    turns = [e["data"]["config"] for e in events(sid) if e["type"] == "turn_started"]
+    assert [(t["provider"], t["model"], t["effort"]) for t in turns] == [
+        ("first", "original", "medium"), ("second", "changed", "high"),
+        ("second", "changed", "high"), ("first", "final", "low"),
+        ("first", "final", "low"), ("first", "final", "low")]
+    assert config.read_bytes() == original_config
+
+
 def test_config_and_cli_model_passthrough():
     config = write_config("model-passthrough.ini",
         "[provider openai]\n[agent]\nmodel = openai/gpt-5.6\nreasoning_effort = default\n"
@@ -3171,7 +3206,7 @@ def test_config_and_cli_model_passthrough():
     ], b" openai/future/custom-effort   ?% \xe2\x80\xba ")
     start = len(resumed.buf)
     end = resumed.send_wait(b"/status\r",
-        b"model: future (staged once)", start=start
+        b"model: future", start=start
     )
     resumed.wait(PROMPT.rstrip(), start=end)
     for _ in range(2):  # Repeating /effort is a durable no-op, not a model reset.
@@ -3180,9 +3215,8 @@ def test_config_and_cli_model_passthrough():
     resumed.send_wait(b"ping\r", "»".encode(),
                  start=end)
     answer_end = resumed.wait(b"pong", start=end)
-    idle_end = resumed.wait(
-        b" openai/openai/gpt-5.6/quantum   ?% \xe2\x80\xba ", start=answer_end
-    )
+    # Same selection stays painted: only the active/idle marker needs repaint.
+    idle_end = resumed.wait_idle_prompt(start=answer_end)
     resumed.send(b"/exit\r")
     assert resumed.reap() == 0, idle_end
 
@@ -3190,9 +3224,11 @@ def test_config_and_cli_model_passthrough():
                      if event["type"] == "turn_started"]
     assert resumed_turns[-1]["data"]["config"]["model"] == "future"
     assert resumed_turns[-1]["data"]["config"]["effort"] == "quantum"
-    selection = one(events(session_id), "model_selection_changed")["data"]
-    assert selection["old_model"] == selection["new_model"] == "openai/gpt-5.6"
-    assert selection["old_effort"] == "default" and selection["new_effort"] == "quantum"
+    selections = [e["data"] for e in events(session_id) if e["type"] == "model_selection_changed"]
+    assert len(selections) == 2
+    assert [(e["old_model"], e["new_model"], e["old_effort"], e["new_effort"]) for e in selections] == [
+        ("openai/gpt-5.6", "future", "default", "custom-effort"),
+        ("future", "future", "custom-effort", "quantum")]
 
 
 def test_empty_session_lifecycle():
@@ -3291,7 +3327,7 @@ def test_empty_network_session():
 
 def test_exit_resume_matrix():
     for action in (b"/exit\r", b"\x04", "cancel", signal.SIGHUP, signal.SIGTERM,
-                   "active", b"/archive\r", b"/delete\r", "staged"):
+                   "active", b"/archive\r", b"/delete\r", "selection"):
         before = session_ids()
         ready = DEFAULT_IDLE_PROMPT if action == "cancel" else PROMPT.rstrip()
         with Child(["--no-color"], ready) as child:
@@ -3317,7 +3353,7 @@ def test_exit_resume_matrix():
                 child.send_wait(action, b"type the displayed 8-character id prefix to confirm")
                 child.send(session_id[:8].encode() + b"\r")
             elif action != "active":
-                child.send(b"/exit\r" if action == "staged" else action)
+                child.send(b"/exit\r" if action == "selection" else action)
             command = child.finish(expected=128 + action if isinstance(action, int) else 0,
                                    expect_resume=action != b"/delete\r")
             if action == b"/delete\r":
@@ -3335,14 +3371,18 @@ def test_exit_resume_matrix():
                 assert not [event for event in log if event["type"] == "turn_completed"]
                 assert b"slow complete" not in child.buf
 
-    staged = Child([
+    selected = Child([
         "--no-color", "-m", "openai/future", "--effort", "xhigh",
         "--resume", session_id,
     ], PROMPT.rstrip())
-    staged_command = staged.exit_now()
-    staged_arguments = command_arguments(staged_command)
-    assert staged_arguments[staged_arguments.index("-m") + 1] == "openai/future"
-    assert staged_arguments[staged_arguments.index("--effort") + 1] == "xhigh"
+    selected_command = selected.exit_now()
+    selected_arguments = command_arguments(selected_command)
+    assert "-m" not in selected_arguments and "--effort" not in selected_arguments
+    selection = [e["data"] for e in events(session_id) if e["type"] == "model_selection_changed"][-1]
+    assert (selection["new_provider"], selection["new_model"], selection["new_effort"]) == ("openai", "future", "xhigh")
+    with Child.from_command(selected_command) as restored:
+        restored.wait(b"openai/future/xhigh")
+        restored.exit_now()
 
     occupied = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     occupied.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -4791,6 +4831,7 @@ if __name__ == "__main__":
     test_model_configuration_save()
     test_config_editor_reload()
     test_known_context_meter()
+    test_model_selection_stays()
     test_config_and_cli_model_passthrough()
     test_exit_resume_matrix()
     test_runtime_network_commands()

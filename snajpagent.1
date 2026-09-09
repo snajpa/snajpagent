@@ -473,7 +473,7 @@ when automatic discovery is disabled.  They do not grant unrelated write
 permission or synchronize documents between hosts.
 .TP
 .BI \-m " [provider/]model[/effort]"
-Select the model for the next turn, on start or resume.  With an omitted
+Select the model from the next full turn onward, on start or resume. With an omitted
 provider, use the first provider defined in the configuration (or an explicit
 .BR \-\-provider ).
 With two components, a configured first component means
@@ -486,9 +486,13 @@ local cache, then its cached default, then the configured reasoning effort.
 explicitly overrides the selector's effort.  Typed model IDs need not be cached.
 Each component must be nonempty; for upstream IDs containing slashes, define a
 provider-local model name in the configuration.
-The selection is the initial default for a new session. On resume it lasts one
-turn unless combined with an explicit provider selection or selected again in
-the session.
+The provider/model/effort selection becomes the session preference until changed.
+It survives later turns and session resume, including when you exit before running
+the next turn. An already active turn or admitted pending input retains its saved
+selection through recovery; new turns use the selected preference. This option
+does not write the configuration file; use
+.B /model SELECTOR save
+to make a selection the configured startup default.
 .TP
 .B \-\-update-model-cache
 Refresh every configured provider's model catalog.  The refresh runs before
@@ -500,8 +504,9 @@ refreshing.  Uses the same authenticated endpoints as
 .BR "/model cache" .
 .TP
 .BI \-\-effort " level"
-Override reasoning effort.  On resume this is a one-turn override unless
-combined with an explicit provider selection.
+Set the session's reasoning effort from the next full turn onward, until changed.
+It survives later turns and session resume; an active turn or admitted pending
+input retains its saved effort through recovery. It does not write configuration.
 .TP
 .BI \-\-dotdir " directory"
 Use an absolute private application directory instead of
@@ -889,7 +894,8 @@ to submit a literal leading
 Every command may be submitted during active work.  Admission and effect timing
 are separate: commands act immediately or acknowledge the boundary they await.
 This includes provider waits, queue editing and delete confirmation.
-Model and effort selections affect the next full turn.  Configuration, cache
+Model and effort selections take effect from the next full turn onward and remain
+until changed, including across session resume. Configuration, cache
 refresh, compaction, retry, archive and delete run at safe request boundaries;
 their accepted intents in an established session survive restart and retain
 admission order.  Configuration editing and cache discovery before the first
@@ -964,7 +970,8 @@ or
 writes the selection to the active configuration.  Typed model IDs need not
 exist in the cache.  Use a numbered row for an ID containing
 .BR / .
-Selection is accepted during active work and changes the next full turn.
+Selection is accepted during active work and changes the next full turn and all
+later turns until changed. It persists across session resume without a save suffix.
 The active turn retains its model/provider/effort.  The final save suffix also
 works with numbered rows. A bare model name uses the highest recognized effort
 in its cached effort list (or the first unrecognized effort if none are ranked),
@@ -995,7 +1002,8 @@ contract and automatic retry budget remain bound to that turn.  Update checking
 is a startup action; update settings apply on the next program launch.
 .TP
 .BR /effort " [" level "]"
-Show or set next-full-turn reasoning effort, including during active work.
+Show or set reasoning effort from the next full turn onward, including during
+active work. The session retains it until changed, across later turns and resume.
 Values are provider-defined; the host accepts structurally valid names rather
 than enforcing a fixed list. The value
 .B default
@@ -2188,7 +2196,8 @@ selection, and admitted IRC state.
 .PP
 Normal exit prints a two-line resume hint for every resumable session.  It
 includes the exact session, dotdir, explicit configuration, presentation
-overrides, unused one-turn preferences, and effective IRC topology.  It never
+overrides and effective IRC topology. Model/provider/effort preferences are
+restored from the session rather than repeated as launch overrides. It never
 includes prompts or credential values.  The command includes the effective
 listener and outgoing list, or explicit
 .B --no-listen

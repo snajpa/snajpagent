@@ -54,7 +54,8 @@ secret.
 ## Admission and refresh boundaries
 
 `/model`, `/model list` and selection run during active work. Listing reads local
-state; selection changes the next full turn and preserves the active turn's
+state; selection changes the session preference from the next full turn onward,
+remaining until changed and across resume, while preserving the active turn's
 provider/model/effort. `/model cache` is accepted immediately, then refreshes at a
 safe request boundary. Once a session exists its control intent is durable and
 survives resume. Pre-work discovery alone preserves lazy session creation.
@@ -193,17 +194,22 @@ MODEL / EFFORT
 PROVIDER / MODEL / EFFORT
 ```
 
-- `MODEL` uses the first configured provider. If that model has advertised
+- `MODEL` uses the current session provider. If that model has advertised
   reasoning variants in the cache, snajpagent chooses the highest recognized
   thinking level; if none can be ranked, it chooses the provider's first
   advertised variant. If the typed model is not cached or has no advertised
-  variants, the configured/default reasoning effort is retained.
-- `MODEL / EFFORT` uses the first configured provider and the named thinking
+  variants, its cached default or the current session effort is retained.
+- `MODEL / EFFORT` uses the current session provider and the named thinking
   level.
 - `PROVIDER / MODEL / EFFORT` uses the named configured provider and thinking
   level.
 
-The three forms change the durable next-turn provider/model/effort preference.
+The three forms change the durable session provider/model/effort preference from
+the next full turn onward. `/model`, CLI `-m` and `--effort` all retain their
+selection across later turns and resume until changed. Resume records explicit
+CLI selections through the existing `model_selection_changed` event, even if
+no new turn starts. Active-turn and already admitted input identities stay frozen.
+There is no consumed one-turn override; `save` separately changes configuration.
 Provider names must resolve because snajpagent needs routing and credentials;
 model names are deliberately not checked against the cache. The provider API,
 not snajpagent, decides whether a user-supplied model or effort is usable.

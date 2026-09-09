@@ -111,7 +111,7 @@ grep -q "^usage: $SNAJPAGENT_TEST_NAME " "$root/help"
 
 # Short help stays short; long help invokes man directly and falls back on failure.
 grep -Fq -- '-m [PROVIDER/]MODEL[/EFFORT]' "$root/help"
-grep -Fq -- 'model for next turn (start or resume)' "$root/help"
+grep -Fq -- 'model from next turn onward (start or resume)' "$root/help"
 grep -Fq -- '--update-model-cache' "$root/help"
 ! grep -q -- '-M ' "$root/help"
 mkdir "$root/man-bin"
@@ -703,7 +703,7 @@ for signal_case in 'INT 130' 'HUP 129' 'TERM 143'; do
     [ "$(resume_count "$root/signal-$signal_name.err")" -eq 1 ]
 done
 
-# Selector defaults, cache-before-selection ordering, and one-turn resume scope.
+# Selector defaults, cache-before-selection ordering, and persistent resume selection.
 python3 - "$bin" "$root" <<'PYSELECTOR'
 import json, os, subprocess, sys
 from pathlib import Path
@@ -746,7 +746,7 @@ for spec, provider, model, effort in [
     turn, = [t for t in turns() if t["turn_id"] not in before]
     assert tuple(turn["config"][k] for k in ("provider", "model", "effort")) == (provider, model, effort), turn
 
-# Explicit effort remains an override; resume falls back to the saved selection.
+# Explicit effort wins over selector defaults; all later resumes keep the selection.
 seed = root / "selector-resume"
 seed.mkdir(mode=0o700)
 (seed / "config.ini").write_text((state / "config.ini").read_text())
@@ -756,7 +756,7 @@ session, = (state / "sessions").iterdir()
 run("--update-model-cache", "-m", "local", "--effort", "high", "-e", "--resume", session.name, "--", "ping")
 run("-e", "--resume", session.name, "--", "ping")
 assert [tuple(t["config"][k] for k in ("provider", "model", "effort")) for t in turns()] == [
-    ("second", "configured", "medium"), ("first", "local", "high"), ("second", "configured", "medium")]
+    ("second", "configured", "medium"), ("first", "local", "high"), ("first", "local", "high")]
 old_cache = (state / "models.json").read_bytes()
 before = len(turns())
 failure = dict(os.environ, SNAJPAGENT_FIXTURE_MODEL_FAILURE="second")
@@ -771,7 +771,7 @@ assert len(turns()) == before
 print("CLI selectors and refresh ordering: ok")
 PYSELECTOR
 
-# Resume command-line settings are consumed by one admitted turn only.
+# Resume command-line settings persist from the next turn onward.
 override_state="$root/override-state"
 mkdir -m 700 "$override_state"
 $bin --dotdir "$override_state" -e -- ping >/dev/null 2>"$root/override.err"
@@ -784,9 +784,8 @@ import sys
 events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
 turns = [event["data"]["config"] for event in events
          if event["type"] == "turn_started"]
-assert [turn["effort"] for turn in turns] == ["medium", "low", "medium"]
-assert not any(event["type"] in ("effort_changed", "model_selection_changed")
-               for event in events)
+assert [turn["effort"] for turn in turns] == ["medium", "low", "low"]
+assert len([event for event in events if event["type"] == "model_selection_changed"]) == 1
 PY
 
 # Automatic compaction is threshold-gated and durable.

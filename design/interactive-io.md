@@ -373,7 +373,9 @@ records before being freed. Session-pending input survives final disconnection.
 
 The engine's shared command dispatcher accepts commands in both views during
 provider, count, catalog, compaction and managed-tool waits. Presentation and
-inspection run immediately; model/effort preferences affect the next full turn.
+inspection run immediately; model/effort preferences affect the next full turn
+and remain until changed, including across resume. CLI `-m` and `--effort` use
+the same durable session preference; active turns retain their frozen settings.
 Configuration, catalog refresh, compaction, retry and lifecycle controls retain
 accepted intent and run at their safe owner boundary. Commands captured under
 an idle prompt are not blocked behind an active turn: ordinary rollout text from

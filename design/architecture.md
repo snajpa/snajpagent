@@ -299,8 +299,9 @@ bold-green lifecycle role as `• Compacted`, and the ANSI reset precedes the
 header newline so the command line begins directly with uncolored command
 bytes. The command
 reuses the resolved dotdir and explicit config source, exact session ID,
-explicit presentation settings, unconsumed one-turn preferences, and effective
-IRC settings. Thus process-local IRC launch configuration does not enter the
+explicit presentation settings and effective
+IRC settings. Session model/provider/effort preferences are restored from the
+journal, including CLI selections accepted before any new turn. Thus process-local IRC launch configuration does not enter the
 event log but the operator can immediately recreate a client, server, or
 combined process. It explicitly carries `--no-listen`/`--no-client` for absent
 roles, preventing config defaults from resurrecting removed endpoints. Normal

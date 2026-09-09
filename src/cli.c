@@ -428,7 +428,7 @@ snag_cli_usage(int fd)
         "      --no-markdown            show model Markdown literally\n"
         "  -C DIR                       workspace (or resume relocation)\n"
         "  -d DIR                       additional working docs with AGENTS.md; repeatable\n"
-        "  -m [PROVIDER/]MODEL[/EFFORT]  model for next turn (start or resume)\n"
+        "  -m [PROVIDER/]MODEL[/EFFORT]  model from next turn onward (start or resume)\n"
         "  -v                           exact detail level: repeat 1 through 6 times\n"
         "                               1 tools; 2 previews; 3 full tools;\n"
         "                               4 debug; 5 protocol; 6 wire (default 0)\n"

@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Keep model/provider/effort selections from the next full turn onward until
+  changed, across later turns and resume. Remove one-turn CLI override state;
+  `/model` and `-m` share durable session preferences, while `save` writes config.
+  Preserve startup cache refresh before selection without painting an unopened prompt.
+
 - Clear stale goal indicators on interruption: settle goal pause before the idle
   prompt and refresh committed goal state before notices redraw it. Keep blank
   Enter local after Ctrl-C and preserve explicit goal resume and draft cancellation.

@@ -209,7 +209,9 @@ exceptions.
 
 `/model` lists the locally cached catalog; `/model cache` explicitly refreshes
 it. Select a displayed row by number, or use `/model PROVIDER/MODEL/EFFORT`.
-Selections made during work apply to the next full turn. Add `save` to persist a selection.
+Both `/model` and `-m` select from the next full turn onward, until changed,
+including across session resume. Add `save` to write the selection to the
+configuration file for new sessions.
 
 The prompt's context percentage shows the last measured request input against
 the resolved input budget, rounded up. It uses provider-reported input counts. A fresh

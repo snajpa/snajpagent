@@ -2142,6 +2142,94 @@ def wait_for_terminal_event(dotdir, terminal_types, timeout):
     )
 
 
+def run_persistent_model_recovery_case(binary, root):
+    """Frozen recovered work, queued/new turns, and later resumes use one preference."""
+    case = root / "model-keep"
+    case.mkdir(parents=True)
+    provider = FakeResponses()
+    provider.AGENTS = {**provider.AGENTS, **{name: "testbot" for name in
+        ("initial-model", "next-model", "recovered-model", "final-model")}}
+    config, state = case / "config.ini", case / "state"
+    write_irc_config(config, provider.port, "initial-model")
+    with config.open("a") as out:
+        out.write("prompt = {model}/{effort}{chat:C>}{rollout-idle:I>}{rollout-active:A>}\n")
+    original_config = config.read_bytes()
+    requests, ready, release = [], threading.Event(), threading.Event()
+    def respond(handler, request, sequence):
+        requests.append(request)
+        body = provider.response_body(sequence, "model response").encode()
+        if len(requests) == 1:
+            at = body.index(b"event: response.output_text.done")
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.send_header("Content-Length", str(len(body)))
+            handler.end_headers()
+            handler.wfile.write(body[:at]); handler.wfile.flush()
+            ready.set(); release.wait(12)
+            try: handler.wfile.write(body[at:])
+            except (BrokenPipeError, ConnectionResetError): pass
+        else:
+            provider.reply(handler, body)
+        handler.close_connection = True
+    provider.runtime_handler = respond
+    env = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
+    try:
+        with TmuxTerminal(case / "first", binary, case, state, config, 100, 32,
+                args=("--no-listen", "--no-client"), environment=env) as terminal:
+            terminal.wait("initial-model/mediumI>")
+            terminal.submit("start original")
+            assert ready.wait(3)
+            terminal.submit("/model next-model/low")
+            terminal.wait("until changed")
+            for text in ("queued one", "queued two"):
+                terminal.submit("/q " + text)
+                terminal.wait("queued (/next or /q c) › " + text)
+            sid = read_events(state)[0].parent.name
+            assert len(requests) == 1 and requests[0]["model"] == "initial-model"
+            pid = int(terminal.run("display-message", "-p", "-t", terminal.target, "#{pane_pid}"))
+            os.kill(pid, signal.SIGKILL)  # Exact child launched by this test.
+            terminal.wait_dead(); release.set()
+        with TmuxTerminal(case / "resume", binary, case, state, config, 100, 32,
+                args=("--no-listen", "--no-client", "-m", "recovered-model/high", "--resume", sid),
+                environment=env) as terminal:
+            log = wait_event_count(state, "turn_completed", 3)
+            terminal.wait("recovered-model/highI>")
+            assert [r["model"] for r in requests] == [
+                "initial-model", "initial-model", "recovered-model", "recovered-model"]
+            turns = event_list(log, "turn_started")
+            assert [t["data"]["config"]["model"] for t in turns] == [
+                "initial-model", "recovered-model", "recovered-model"]
+            assert turns[0]["data"]["config"]["effort"] == "medium"
+            terminal.submit("/effort low")
+            terminal.wait("effort for next turn: low")
+            for count in (4, 5):
+                terminal.submit("new explicit")
+                wait_event_count(state, "turn_completed", count)
+            terminal.submit("/model final-model/medium")
+            terminal.wait("final-model / medium")
+            for count in (6, 7):
+                terminal.submit("after model change")
+                wait_event_count(state, "turn_completed", count)
+            terminal.exit()
+        with TmuxTerminal(case / "again", binary, case, state, config, 100, 32,
+                args=("--no-listen", "--no-client", "--resume", sid), environment=env) as terminal:
+            terminal.wait("final-model/mediumI>")
+            terminal.submit("after restart")
+            log = wait_event_count(state, "turn_completed", 8)
+            terminal.exit()
+        assert [r["model"] for r in requests] == ["initial-model"] * 2 + ["recovered-model"] * 4 + ["final-model"] * 3
+        turns = [t["data"]["config"] for t in event_list(log, "turn_started")]
+        assert [(t["model"], t["effort"]) for t in turns] == [
+            ("initial-model", "medium"), ("recovered-model", "high"),
+            ("recovered-model", "high"), ("recovered-model", "low"),
+            ("recovered-model", "low"), ("final-model", "medium"),
+            ("final-model", "medium"), ("final-model", "medium")]
+        assert config.read_bytes() == original_config
+    finally:
+        release.set(); provider.close()
+    print("persistent model HTTP recovery/queue/resume PASS", flush=True)
+
+
 def run_goal_interrupt_prompt_case(binary, root, chat=False, burst=False, width=80):
     case = root / f"goal-interrupt-{chat}-{burst}-{width}"
     prompt = "{goal_spinner}{chat:C>}{rollout-idle:I>}{rollout-active:A>}"
@@ -6616,6 +6704,7 @@ def run_irc_case(binary, root):
         for active, chat, width, verbosity in ((False, False, 100, 0), (False, True, 28, 2),
                                              (True, False, 28, 0), (True, True, 100, 2)):
             run_history_length_case(binary, root, active, chat, width, verbosity)
+        run_persistent_model_recovery_case(binary, root)
         for chat in (False, True):
             run_goal_interrupt_http_case(binary, root, chat)
         run_blank_enter_stream_case(binary, root)
