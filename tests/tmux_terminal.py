@@ -3757,6 +3757,12 @@ def run_policy_stop_cases(binary, root, provider, environment):
                 assert any(e["data"]["result"]["status"] == "succeeded" or
                            e["data"]["result"]["status"] == "outcome_unknown"
                            for e in event_list(recovered, "process_closed"))
+                # This retained turn is parked at the idle composer. Ctrl-C
+                # must cancel it durably instead of merely redrawing the prompt.
+                terminal.send_key("C-c")
+                wait_event_count(state, "turn_cancel_requested", 1)
+                wait_event_count(state, "turn_interrupted", 1)
+                assert len(requests) == before
                 terminal.exit()
                 print("policy stop resume-running PASS", flush=True)
                 continue

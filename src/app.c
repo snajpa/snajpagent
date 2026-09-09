@@ -4227,7 +4227,7 @@ submit_idle(struct app_state *app, const char *prompt,
         prompt[0] == '/' && prompt[1] != '/' &&
         snag_ui_submitted(&app->ui, app->ui.label, prompt, true) < 0)
         return 6;
-    rc = handle_input_command(app, prompt, false, &handled, prompt_ready);
+    rc = handle_input_command(app, prompt, app->session.active_turn, &handled, prompt_ready);
     if (rc < 0)
         return 3;
     if (!handled && single_line && prompt[0] == '/' && prompt[1] != '/') {
@@ -4323,6 +4323,11 @@ interactive_loop(struct app_state *app, const char *initial)
                 }
                 continue;
             }
+            /* A recovered policy/goal stop can retain a turn without a running
+             * provider. Keep empty-draft Ctrl-C distinct from draft clearing. */
+            if (app->ui.active != app->session.active_turn &&
+                set_input_prompt(app, app->session.active_turn) < 0)
+                goto ui_failed;
             int poll_rc = snag_ui_poll(&app->ui,
                 app->networked || app->irc_background.len ? 25 : -1,
                 false, &action, &owned);
@@ -4359,6 +4364,17 @@ interactive_loop(struct app_state *app, const char *initial)
             }
             if (action == SNAG_TERM_CANCEL || action == SNAG_TERM_INTERRUPT) {
                 char error[256] = {0};
+                if (action == SNAG_TERM_INTERRUPT && app->session.active_turn && !app->queue_edit_id[0]) {
+                    char turn_id[SNAG_ID_HEX_LEN + 1u];
+                    memcpy(turn_id, app->session.active_turn_id, sizeof(turn_id));
+                    if (commit_event(app, "turn_cancel_requested", json_pack("{s:s}", "turn_id", turn_id),
+                            error, sizeof(error)) < 0 ||
+                        terminalize_pending(app, turn_id, "turn_cancelled", error, sizeof(error)) < 0 ||
+                        interrupt_turn(app, turn_id, "user_interrupt", true, "user", "cancelled",
+                            error, sizeof(error)) < 0 ||
+                        snag_app_goal_pause(app, "user", error, sizeof(error)) < 0)
+                        goto ui_failed;
+                }
                 if (!app->session.active_turn && app->session.pending_input &&
                     commit_event(app, "input_cancelled", json_object(), error, sizeof(error)) < 0)
                     goto ui_failed;
