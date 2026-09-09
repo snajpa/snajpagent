@@ -1044,6 +1044,55 @@ test_banner_word_layout(void)
 }
 
 static void
+test_help_layout(void)
+{
+    const char *help = "/goal pause|resume — automatic continuation\n";
+    const char *sources[] = {"streamed", "```c\nint", "**bold", "# heading"};
+    const unsigned int widths[] = {20u, 28u, 40u, 80u, 120u};
+    for (size_t w = 0u; w < sizeof(widths) / sizeof(widths[0]); ++w)
+    for (size_t i = 0u; i < sizeof(sources) / sizeof(sources[0]); ++i) {
+        struct snag_render render;
+        struct snag_term term;
+        struct snag_buf delivered = {.max = 1024u};
+        char output[4096];
+        struct output_capture capture = capture_open(false, true);
+        snag_term_init(&term);
+        term.columns = widths[w];
+        assert(snag_term_restore_draft(&term, "keep draft") == 0);
+        snag_render_init(&render, 0u);
+        render.stderr_terminal = true;
+        snag_render_set_color(&render, SNAG_COLOR_NEVER);
+        snag_render_attach_term(&render, &term);
+        assert(snag_render_public_begin(&render, STDERR_FILENO, NULL) == 0);
+        assert(snag_render_public(&render, sources[i], strlen(sources[i]), &delivered) == 0);
+        assert(snag_render_help(&render, help) == 0);
+        assert(term.cursor == strlen("keep draft") && term.draft.len == term.cursor);
+        assert(!memcmp(term.draft.data, "keep draft", term.cursor));
+        assert(snag_render_public(&render, " suffix", 7u, &delivered) == 0);
+        assert(snag_render_public_end(&render) == 0);
+        assert(snag_buf_terminate(&delivered) == 0);
+        assert(delivered.len == strlen(sources[i]) + 7u);
+        assert(!memcmp(delivered.data, sources[i], strlen(sources[i])));
+        assert(!strcmp((char *)delivered.data + strlen(sources[i]), " suffix"));
+        assert(capture_close(&capture, output, sizeof(output), 0u) > 0u);
+        assert(count_text(output, "continuation") == 1u);
+        assert(count_text(output, "/goal") == 1u);
+        snag_buf_free(&delivered);
+        snag_render_free(&render);
+        snag_term_close(&term);
+    }
+    struct snag_render render;
+    char output[256];
+    struct output_capture capture = capture_open(false, true);
+    snag_render_init(&render, 0u);
+    render.stderr_terminal = false;
+    assert(snag_render_help(&render, help) == 0);
+    assert(capture_close(&capture, output, sizeof(output), 0u) == strlen(help));
+    assert(!strcmp(output, help));
+    snag_render_free(&render);
+}
+
+static void
 test_update_banner(void)
 {
     const char *const sources[] = {"streamed", "```c\nint", "**bold", "# heading"};
@@ -2362,6 +2411,7 @@ main(void)
     test_markdown_streaming();
     test_markdown_fences();
     test_banner_word_layout();
+    test_help_layout();
     test_update_banner();
     test_markdown_tables();
     test_tool_previews();

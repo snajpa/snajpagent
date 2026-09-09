@@ -29,7 +29,8 @@ Empty Enter leaves a prompt line and opens a fresh prompt, like a shell.
 
 Read its replies and scroll back normally. Tool details are hidden by default;
 `/verbose 1` shows compact activity and `/verbose 2` adds input/result previews.
-Type these commands and press Enter, even while the model works.
+Type these commands and press Enter, even while the model works. `/help` lists
+command syntax and keys; brackets mark optional arguments.
 
 [![A local session reports fixing whitespace handling and passing four checks](www/screenshots/ordinary.png)](www/screenshots/ordinary.png)
 

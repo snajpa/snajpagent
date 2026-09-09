@@ -143,33 +143,46 @@ graph_outcome_name(enum snag_graph_outcome outcome)
     return "unknown";
 }
 static const struct snag_term_command commands[] = {
-    {"/help", "commands and keys"},
-    {"/?", "commands and keys (alias for /help)"},
+    {"/help", "commands and keys (alias /?)"},
+    {"/?", "same as /help"},
     {"/status", "session and next-turn settings"},
-    {"/history [N]", "retained turns, including unfinished work (default 1)"},
-    {"/model [list|cache|#|SELECTOR [save|s]]", "list, refresh, or select a model"},
-    {"/config", "edit and reload the active configuration"},
-    {"/effort [LEVEL]", "show or set next-turn effort"},
-    {"/goal [COMMAND|TEXT]", "show, start, or control a persistent goal"},
-    {"/ro QUERY", "one read-only query; during active work queue a future turn"},
-    {"/verbose [0..6]", "show or set this process's verbosity"},
-    {"/queue [TEXT|ACTION]", "list/add/edit/delete/clear/pop queued turns (/q alias)"},
-    {"/next", "run the oldest paused turn"},
-    {"/retry", "continue the last failed turn from retained context"},
-    {"/yield", "return an active tool wait to the model; keep processes owned"},
-    {"/archive", "archive session at a safe boundary and exit"},
+    {"/history [N]", "show N retained turns; default 1, 0 counts only"},
+    {"/model [list|cache]", "list cached models; cache refreshes all providers"},
+    {"/model [#]N [save|s]", "select numbered model/effort row (N starts at 1)"},
+    {"/model MODEL[/EFFORT] [save|s]", "select on the next-turn provider"},
+    {"/model PROVIDER/MODEL/EFFORT [save|s]", "select explicit provider/model/effort"},
+    {"/config", "edit/reload configuration at a safe boundary"},
+    {"/effort [LEVEL]", "show/set provider-defined effort (default means medium)"},
+    {"/goal [status|help]", "show current goal or this usage"},
+    {"/goal [set] TEXT", "start/reword goal; set accepts reserved first words"},
+    {"/goal \"TEXT\"", "start/reword with quoted wording"},
+    {"/goal pause|resume", "stop/restart automatic continuation"},
+    {"/goal lock|unlock", "prevent/allow model rewording"},
+    {"/goal complete|cancel|clear", "end goal; clear=cancel; current turn finishes"},
+    {"/ro QUERY", "one read-only turn; queued during active work"},
+    {"/verbose [0..6]", "show/set verbosity for this process"},
+    {"/queue [TEXT]", "list/add future turns (alias /q)"},
+    {"/queue clear|c", "remove all queued turns"},
+    {"/queue pop|p", "remove newest queued turn"},
+    {"/queue N delete|d", "remove queued turn N (N starts at 1)"},
+    {"/queue N edit|e", "edit queued turn N in the composer"},
+    {"/queue Nd|Ne", "short forms of N delete / N edit"},
+    {"/next", "run oldest paused turn; arm queue if active"},
+    {"/retry", "retry failed turn; if active, restart at a safe boundary"},
+    {"/yield", "return tool wait to model; keep running processes"},
+    {"/archive", "archive at a safe boundary and exit"},
     {"/compact", "compact context at a safe request boundary"},
-    {"/delete", "delete at a safe boundary after confirmation"},
-    {"/exit", "preserve session and exit"},
+    {"/delete", "delete after confirmation at a safe boundary"},
+    {"/exit", "stop work, preserve session and exit"},
     {"/chat", "show IRC room activity"},
     {"/rollout", "show local model activity"},
-    {"/topic [TEXT]", "show or change the IRC room topic"},
-    {"/names", "show numbered IRC destinations, selection, room members, and modes"},
-    {"/server [start [ENDPOINT]|stop]", "show, start, or stop hosting only"},
-    {"/connect [ENDPOINT]", "add an outgoing connection (default localhost:6667)"},
-    {"/disconnect [ENDPOINT]", "remove one or all outgoing connections; preserve hosting"},
-    {"/N [TEXT]", "select destination N, or send there once without selecting"},
-    {"/all TEXT", "broadcast once to all current destinations"}
+    {"/topic [TEXT]", "show/set selected room topic"},
+    {"/names", "numbered destinations, members and modes"},
+    {"/server [start [ENDPOINT]|stop]", "show/start/stop hosting; default localhost:6667"},
+    {"/connect [ENDPOINT]", "add outgoing connection; default localhost:6667"},
+    {"/disconnect [ENDPOINT]", "remove one/all outgoing connections; keep hosting"},
+    {"/N [TEXT]", "select destination N, or send there once"},
+    {"/all TEXT", "send once to all destinations"}
 };
 
 static size_t
@@ -1112,32 +1125,45 @@ out:
     snag_buf_free(&text);
     return rc;
 }
-static int
-render_help(struct app_state *app)
+int
+snag_app_help(struct app_state *app, const char *command)
 {
+    static const char legend[] =
+        "Syntax: [optional], A|B alternatives, UPPERCASE values.\n";
+    static const char settings[] =
+        "\nModel/effort: next full turn; save (s) also writes config.\n"
+        "Omitted model effort: highest cached effort/default, then current effort.\n"
+        "ENDPOINT: host[:port] or [IPv6][:port]; IPv6 brackets literal; port 6667.\n"
+        "Queue: idle adds paused; active adds armed; N is the displayed position.\n"
+        "Queue TEXT may begin /ro for read-only work; //TEXT escapes a leading slash.\n";
     static const char keys[] =
-        "Chat Enter sends to selected destination (mention to steer) · "
-        "Rollout Enter private submit/add to active turn · "
-        "Empty Tab switch view · Tab complete/indent/queue (chat: @nick) · "
-        "Ctrl-C cancel/interrupt · Ctrl-D exit · Ctrl-J newline";
+        "\nKeys: blank Enter new prompt; Enter submit/steer (chat: send).\n"
+        "Empty Tab switch view; Tab complete/indent/queue (chat: @nick).\n"
+        "Ctrl-C cancel draft or interrupt; empty Ctrl-D exit, otherwise delete.\n"
+        "Ctrl-J newline; Up/Down history; Ctrl-R search; Ctrl-L redraw.\n"
+        "\nVerbosity: 0 conversation; 1 tool rows; 2 previews; 3 retained tools;\n"
+        "4 debug; 5 redacted protocol; 6 wire. Traces appear in rollout.\n"
+        "Full reference: man snajpagent (snajpagent --help).\n";
+    struct snag_buf text = {.max = 64u * 1024u};
+    size_t prefix = command ? strlen(command) : 0u;
     int rc = -1;
 
-    struct snag_buf text = {.max = 64u * 1024u};
-    for (size_t i = 0u; i < command_count(); ++i)
-        if (snag_buf_printf(&text, "%-28s%s\n", commands[i].syntax,
-                           commands[i].description) < 0)
-            goto out;
-    static const char levels[] =
-        "\n\nVerbosity (-v count = /verbose N):\n"
-        "0 conversation · 1 compact tool rows, no output\n"
-        "2 previews: 1024 argument / 512 output characters\n"
-        "3 full retained tools · 4 debug · 5 redacted protocol · 6 wire\n"
-        "Chat is unchanged. Debug traces are live in /rollout only.";
-    if (snag_buf_append(&text, keys, strlen(keys)) < 0 ||
-        snag_buf_append(&text, levels, sizeof(levels) - 1u) < 0 ||
-        snag_buf_terminate(&text) < 0)
+    if (snag_buf_append(&text, legend, sizeof(legend) - 1u) < 0)
         goto out;
-    rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
+    for (size_t i = 0u; i < command_count(); ++i) {
+        if (command && (strncmp(commands[i].syntax, command, prefix) ||
+                        (commands[i].syntax[prefix] && commands[i].syntax[prefix] != ' ')))
+            continue;
+        if (snag_buf_printf(&text, "%s — %s\n", commands[i].syntax,
+                            commands[i].description) < 0)
+            goto out;
+    }
+    if (!command && (snag_buf_append(&text, settings, sizeof(settings) - 1u) < 0 ||
+                     snag_buf_append(&text, keys, sizeof(keys) - 1u) < 0))
+        goto out;
+    if (snag_buf_terminate(&text) < 0)
+        goto out;
+    rc = snag_ui_text(&app->ui, SNAG_UI_HELP, (const char *)text.data);
 out:
     snag_buf_free(&text);
     return rc;
@@ -2153,7 +2179,7 @@ handle_common_command(struct app_state *app, const char *line, bool active,
         *handled = true;
     }
     if (strcmp(line, "/help") == 0 || strcmp(line, "/?") == 0)
-        return render_help(app);
+        return snag_app_help(app, NULL);
     if (strncmp(line, "/compact", 8u) == 0 &&
         (!line[8] || isspace((unsigned char)line[8]))) {
         const char *rest = line + 8u;

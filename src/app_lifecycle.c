@@ -214,17 +214,6 @@ snag_app_lifecycle_command(struct app_state *app, const char *line,
     return 0;
 }
 
-static const char goal_help[] =
-    "/goal                         show current goal\n"
-    "/goal status                  show current goal\n"
-    "/goal TEXT                    start or reword a goal\n"
-    "/goal \"TEXT\"                  quote a reserved first word\n"
-    "/goal set TEXT                explicitly start or reword\n"
-    "/goal pause|resume            control continuation\n"
-    "/goal lock|unlock             control model rewording\n"
-    "/goal complete|cancel|clear   end the goal\n"
-    "reserved first words: status help set pause resume lock unlock complete cancel clear";
-
 static int
 goal_error(struct app_state *app, const char *message)
 {
@@ -510,7 +499,7 @@ snag_app_goal_command(struct app_state *app, const char *line, bool active)
         if (strcmp(command, "status") == 0)
             return render_goal(app);
         if (strcmp(command, "help") == 0)
-            return snag_ui_text(&app->ui, SNAG_UI_HOST, goal_help);
+            return snag_app_help(app, "/goal");
         return goal_simple_command(app, command);
     }
     return set_goal_prompt(app, argument);

@@ -121,7 +121,7 @@ visible and opens a fresh prompt, like a shell, in both rollout and chat.
 To ask the model to continue, type your request and press Enter.
 Type
 .B /help
-for commands and keys.
+for command syntax and keys; square brackets mark optional arguments.
 .SS Start a task
 After installation and provider setup, start snajpagent in the project directory
 you want to change.  This directory is the workspace.  The model is the AI
@@ -909,7 +909,12 @@ acknowledgement follows event-log acceptance.
 .SS Session and model
 .TP
 .BR /help , " /?"
-Show commands and essential keys.
+Show concise syntax, aliases, defaults and essential keys for all commands.
+Square brackets mark optional parts, a vertical bar separates alternatives,
+and uppercase words are values to supply. Required goal and queue subcommands
+are listed explicitly. Long help lines wrap at word boundaries.
+.B /goal help
+shows the same goal forms separately.
 .TP
 .B /status
 Show session, selection, queue, verbosity, capacity, token accounting, requested
@@ -958,7 +963,13 @@ exist in the cache.  Use a numbered row for an ID containing
 .BR / .
 Selection is accepted during active work and changes the next full turn.
 The active turn retains its model/provider/effort.  The final save suffix also
-works with numbered rows.
+works with numbered rows. A bare model name uses the highest recognized effort
+in its cached effort list (or the first unrecognized effort if none are ranked),
+then the cached default, then the current next-turn effort. This interactive
+selection differs from the startup
+.B \-m
+option, which uses the first cached effort. Two components mean model/effort;
+include all three components to name a provider explicitly.
 .TP
 .B /config
 Open the active configuration with
@@ -982,6 +993,12 @@ is a startup action; update settings apply on the next program launch.
 .TP
 .BR /effort " [" level "]"
 Show or set next-full-turn reasoning effort, including during active work.
+Values are provider-defined; the host accepts structurally valid names rather
+than enforcing a fixed list. The value
+.B default
+resolves to
+.B medium
+when used for a turn.
 .TP
 .BR /verbose " [0..6]"
 Show or set this process's current verbosity immediately, even during active

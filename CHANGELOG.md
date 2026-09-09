@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Make `/help` a consistent concise syntax reference for every command, including
+  goal verbs, queue actions, model selectors, aliases and defaults. Share goal
+  usage with `/goal help`, separate syntax from descriptions, and wrap fitting
+  words without disturbing the live composer or model output.
+
 - Make empty and whitespace-only Enter shell-like in idle and active rollout and
   chat: retain the prompt line and open a fresh prompt locally. Remove automatic
   `Continue.` requests; preserve model work, chat, goals, queues and history.

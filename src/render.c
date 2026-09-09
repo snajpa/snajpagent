@@ -2620,6 +2620,13 @@ snag_render_update(struct snag_render *render, const char *text)
 }
 
 int
+snag_render_help(struct snag_render *render, const char *text)
+{
+    size_t len = strlen(text);
+    return write_banner(render, BOUNDARY_CONTENT, COLOR_HOST, text, len, len);
+}
+
+int
 snag_render_host(struct snag_render *render, const char *text)
 {
     size_t len = strlen(text);

@@ -1768,7 +1768,7 @@ def test_goal_control_whitespace():
         end = child.wait_idle_prompt(start=end)
         end = child.send_wait_idle(b"/goal   status   \r", b": paused", start=end)
         end = child.send_wait_idle(b"/goal    \r", b": paused", start=end)
-        end = child.send_wait_idle(b"/goal help   \r", b"reserved first words:", start=end)
+        end = child.send_wait_idle(b"/goal help   \r", b"clear=cancel", start=end)
         end = child.send_wait_idle(b"/goal clear extra\r", b"reserved /goal command has extra text", start=end)
         end = child.send_wait_idle(b"/goal pause extra\r", b"reserved /goal command has extra text", start=end)
         end = child.send_wait_idle(b"/goal resume extra\r", b"reserved /goal command has extra text", start=end)
@@ -2107,6 +2107,20 @@ def test_runtime_verbosity_resume():
             resumed.exit_now()
 
 
+def test_help_plain_terminal():
+    with Child([], ready=DEFAULT_IDLE_PROMPT, term="dumb") as child:
+        for command in (b"/help\r", b"/?\r", b"/goal help\r"):
+            start = len(child.buf)
+            child.send(command)
+            child.wait(b"clear=cancel", start=start)
+            child.drain(0.1)
+            text = bytes(child.buf[start:])
+            assert b"[optional]" in text and b"/goal [set] TEXT" in text
+            assert b"\x1b" not in text
+        child.exit_now(expect_resume=False)
+        assert session_ids() == child.sessions_before
+
+
 def test_command_name_completion():
     child = Child([], PROMPT.rstrip(), env=dict(os.environ, EDITOR="true"))
 
@@ -2116,7 +2130,7 @@ def test_command_name_completion():
     child.wait(b"Empty Tab switch view", start=help_end)
     child.wait(b"Tab complete/indent/queue", start=help_end)
     child.drain()
-    assert b"Chat Enter sends to selected destination (mention to steer)" in child.buf[end:]
+    assert b"Enter submit/steer (chat: send)" in child.buf[end:]
     child.wait(PROMPT.rstrip(), start=help_end)
 
     start = len(child.buf)
@@ -4728,6 +4742,7 @@ if __name__ == "__main__":
     test_active_next_turn_settings()
     test_preferences_and_verbosity()
     test_runtime_verbosity_resume()
+    test_help_plain_terminal()
     test_command_name_completion()
     test_uncached_typed_model_selection()
     test_provider_login_and_first_run()

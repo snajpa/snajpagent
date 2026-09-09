@@ -247,6 +247,7 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     switch (command->kind) {
     case SNAG_UI_LEVEL: return set_level(display, command->data.value);
     case SNAG_UI_HOST: return snag_render_host(render, command->text);
+    case SNAG_UI_HELP: return snag_render_help(render, command->text);
     case SNAG_UI_RUNTIME: return snag_render_runtime(render, command->text);
     case SNAG_UI_ERROR: return snag_render_error_ctx(render, command->text);
     case SNAG_UI_WARNING: return snag_render_warning_ctx(render, command->text);

@@ -32,6 +32,16 @@ and queue-edit prompts continue delivering blank answers to their existing
 owners. Ctrl-J remains newline insertion, and nonempty Enter keeps its normal
 submission/steering/chat behavior. Continuing work requires explicit text.
 
+The command/completion table lists each accepted syntax form with a short
+explanation. `/help` shows that table with a required/optional notation legend;
+`/goal help` selects its goal rows from the same owner. Completion deduplicates
+repeated command tokens and retains aliases. Help uses the existing terminal
+word layout through a presentation operation, preserving the active draft,
+streaming Markdown state and redirected bytes. Other host/status output keeps
+its existing formatting. Interactive model syntax documents its own parser:
+two components mean model/effort, three name a provider; omitted effort uses
+highest cached/default/current effort, unlike the CLI's first-effort choice.
+
 Optional networking adds one IRC server owner and one client owner per outgoing
 endpoint (its agent/operator sockets stay together). Each runs the same existing
 protocol code on private state. Bounded owned events, traces and room/identity

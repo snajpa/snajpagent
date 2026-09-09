@@ -2142,6 +2142,62 @@ def wait_for_terminal_event(dotdir, terminal_types, timeout):
     )
 
 
+def run_help_case(binary, root, active=False, chat=False, width=80):
+    case = root / f"help-{active}-{chat}-{width}"
+    with TmuxTerminal.fixture(binary, case, width, 35,
+            args=("--no-listen", "--no-client")) as terminal:
+        terminal.wait(" ›")
+        if active:
+            terminal.submit("queue_slow")
+            terminal.wait("working slowly")
+        if chat:
+            terminal.submit("/chat")
+            terminal.wait("chat is offline")
+        terminal.submit("/help")
+        wait_normalized(terminal, "Full reference: man snajpagent", timeout=5.0)
+        screen = terminal.capture()
+        text = normalize_space(terminal.capture(join_wrapped=True))
+        for syntax in ("/goal [status|help]", "/goal [set] TEXT", '/goal "TEXT"',
+                "/goal pause|resume", "/goal lock|unlock", "/goal complete|cancel|clear",
+                "/queue N delete|d", "/queue N edit|e", "/queue Nd|Ne",
+                "/model [#]N [save|s]", "/model MODEL[/EFFORT] [save|s]",
+                "/model PROVIDER/MODEL/EFFORT [save|s]", "[optional]", "UPPERCASE"):
+            assert syntax in text, (syntax, screen)
+        for syntax in ("/help", "/?", "/status", "/history [N]", "/config", "/effort [LEVEL]",
+                "/ro QUERY", "/verbose [0..6]", "/queue [TEXT]", "/queue clear|c", "/queue pop|p",
+                "/next", "/retry", "/yield", "/archive", "/compact", "/delete", "/exit",
+                "/chat", "/rollout", "/topic [TEXT]", "/names", "/server [start [ENDPOINT]|stop]",
+                "/connect [ENDPOINT]", "/disconnect [ENDPOINT]", "/N [TEXT]", "/all TEXT"):
+            assert syntax + " — " in text, (syntax, screen)
+        assert "alias /q" in text and "save (s)" in text
+        assert "[COMMAND|TEXT]" not in text and "[TEXT|ACTION]" not in text
+        assert "blank Enter" in text and "empty Ctrl-D" in text
+        assert "host[:port]" in text and "[IPv6][:port]" in text
+        # Help must preserve fitting words on physical rows, not terminal hard wrap.
+        for word in ("continuation", "configuration", "confirmation", "destination"):
+            if word in text: assert word in screen, (word, screen)
+        (case / "help.txt").write_text(screen)
+        overview = text[text.index("Syntax:"):].split("Full reference:")[0]
+        terminal.send_key("C-l")
+        terminal.run("clear-history", "-t", terminal.target)
+        terminal.submit("/?")
+        wait_normalized(terminal, "Full reference: man snajpagent", timeout=5.0)
+        alias = terminal.capture(join_wrapped=True)
+        assert normalize_space(alias[alias.index("Syntax:"):]).split("Full reference:")[0] == overview
+        terminal.send_key("C-l")
+        terminal.run("clear-history", "-t", terminal.target)
+        terminal.submit("/goal help")
+        terminal.wait("clear=cancel")
+        goal = normalize_space(terminal.capture(join_wrapped=True))
+        assert '/goal "TEXT"' in goal and "/goal pause|resume" in goal
+        assert "/model PROVIDER" not in goal
+        terminal.exit()
+        _, log = maybe_events(terminal.dotdir)
+        assert len(event_list(log, "turn_started")) == int(active), log
+        assert not event_list(log, "goal_started"), log
+    print("help", active, chat, width, "PASS", flush=True)
+
+
 def run_blank_enter_case(binary, root, active=False, chat=False, width=100):
     """Blank Enter advances scrollback locally, even during engine work."""
     case = root / f"blank-enter-{active}-{chat}-{width}"
@@ -2189,9 +2245,9 @@ def run_blank_enter_case(binary, root, active=False, chat=False, width=100):
     print("blank Enter", active, chat, width, "PASS", flush=True)
 
 
-def run_blank_enter_stream_case(binary, root):
+def run_blank_enter_stream_case(binary, root, help_commands=False):
     """Local prompts interpose between real HTTP chunks without a new request."""
-    case = root / "blank-http"
+    case = root / ("help-http" if help_commands else "blank-http")
     case.mkdir(parents=True)
     provider = FakeResponses()
     config, state = case / "config.ini", case / "state"
@@ -2238,18 +2294,33 @@ def run_blank_enter_stream_case(binary, root):
             terminal.wait_until(lambda text: text.count("busy>") == before + 3, "active blank lines")
             assert len(requests) == 1
             assert (state / "prompt_history").read_bytes() == history
+            if help_commands:
+                for command, end in (("/help", "Full reference:"), ("/?", "Full reference:"),
+                                     ("/goal help", "clear=cancel")):
+                    terminal.send_key("C-l")
+                    terminal.run("clear-history", "-t", terminal.target)
+                    terminal.submit(command)
+                    wait_normalized(terminal, end, timeout=2)
+                terminal.send_text("retained-help-draft")
+                terminal.wait("retained-help-draft")
+                assert len(requests) == 1
             release.set()
             wait_event_count(state, "turn_completed", 1)
             terminal.wait("stream-after")
             screen = terminal.capture()
-            assert screen.count("stream-before") == screen.count("stream-after") == 1, screen
+            assert screen.count("stream-after") == 1, screen
+            if help_commands:
+                assert "retained-help-draft" in screen, screen
+                terminal.send_key("C-u")
+            else:
+                assert screen.count("stream-before") == 1, screen
             terminal.exit()
             log = read_events(state)[1]
             assert len(requests) == len(event_list(log, "turn_started")) == 1
             assert not event_list(log, "turn_interrupted")
     finally:
         release.set(); provider.close()
-    print("blank Enter HTTP stream PASS", flush=True)
+    print("help" if help_commands else "blank Enter", "HTTP stream PASS", flush=True)
 
 
 def run_banner_layout_case(binary, root, width=28):
@@ -2515,6 +2586,10 @@ def run_resume_history_case(binary, root):
 def run_fixture(binary, workspace, root):
     del workspace
     root.mkdir(mode=0o700, parents=True)
+    for width in (20, 28, 40, 80, 120):
+        run_help_case(binary, root, width=width)
+    for active, chat in ((True, False), (False, True), (True, True)):
+        run_help_case(binary, root, active, chat)
     for active in (False, True):
         for chat in (False, True):
             run_blank_enter_case(binary, root, active, chat, 28 if chat else 100)
@@ -6428,6 +6503,7 @@ def run_irc_case(binary, root):
                                              (True, False, 28, 0), (True, True, 100, 2)):
             run_history_length_case(binary, root, active, chat, width, verbosity)
         run_blank_enter_stream_case(binary, root)
+        run_blank_enter_stream_case(binary, root, help_commands=True)
         run_nested_command_cases(binary, root)
         run_manual_compaction_cases(binary, root)
         run_compaction_text_cases(binary, root)
