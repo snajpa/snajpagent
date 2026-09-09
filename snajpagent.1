@@ -610,7 +610,9 @@ Queueing remains local even in chat.  Use Enter to send to the room or run a
 slash command.  Commands are not generally queueable: /ro QUERY is a read-only
 future turn and /verbose applies immediately.  In the queue editor, a queue
 action saves the replacement instead of adding a new item; completion still
-applies and empty text is rejected.
+applies and empty text is rejected.  Enter on a slash command runs that command
+and retains the original queue item.  Use // for a literal leading slash or
+/ro QUERY to replace the item with a read-only query.
 .TP
 .B Ctrl-J
 Insert a newline without submitting.
@@ -835,12 +837,21 @@ also accept multiline message text.  Prefix text with
 .B //
 to submit a literal leading
 .BR / .
-Commands are accepted during active work according to their effect boundary.
+Every command may be submitted during active work.  Admission and effect timing
+are separate: commands act immediately or acknowledge the boundary they await.
+This includes provider waits, queue editing and delete confirmation.
 Model and effort selections affect the next full turn.  Configuration, cache
 refresh, compaction, retry, archive and delete run at safe request boundaries;
-their accepted intents survive restart and retain admission order.  Repeated
+their accepted intents in an established session survive restart and retain
+admission order.  Configuration editing and cache discovery before the first
+work item preserve lazy session creation.  Repeated
 requests for the same pending control coalesce.  Delete still requires explicit
-confirmation.  Presentation, steering and tool yield act on current work.
+confirmation.  Controls accepted while another control runs are considered at
+that boundary once its operation returns.  A policy-stopped turn remains parked
+while commands run; provider continuation still requires task clarification.
+Presentation, steering and tool yield act on current work.  Text received at an
+idle rollout prompt just before work starts retains its future-turn meaning;
+following commands remain responsive.
 .PP
 Public response text is saved incrementally before display.  Recovery continues
 the original turn from saved inputs, public output and tool results.  Started
@@ -945,6 +956,10 @@ Confirm with the displayed session prefix, then permanently remove the
 session through private trash staging.  Reopening an interrupted deletion
 finishes cleanup, including after the event log has been removed; unexpected
 trash content is preserved and reported.  Shared prompt history is not erased.
+Commands at the confirmation prompt remain commands rather than confirmation
+text.  Ctrl-C cancels deletion; pending controls can then run.  Opening the queue
+editor cancels deletion and retains the queued item.  /exit preserves the session
+and leaves it available to resume.
 .TP
 .B /exit
 Preserve the session and exit.  Active work remains available for same-turn

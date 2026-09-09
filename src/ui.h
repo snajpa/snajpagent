@@ -12,7 +12,7 @@ struct snag_ui {
     enum snag_render_view view;
     bool opened;
     bool prompt_wanted;
-    bool active;
+    bool active, input_active;
     uint64_t turn_generation;
     uint64_t input_received_ms;
     char label[SNAG_TERM_LABEL_BYTES];
@@ -96,7 +96,7 @@ int snag_ui_validate_prompt(struct snag_ui *ui, const char *label,
 int snag_ui_simple_prompt(struct snag_ui *ui, bool active);
 bool snag_ui_leaving(const struct snag_ui *ui);
 int snag_ui_poll(struct snag_ui *ui, int timeout_ms,
-                  bool active, enum snag_term_action *action, char **text);
+                 enum snag_term_action *action, char **text);
 int snag_ui_submitted(struct snag_ui *ui, const char *label, const char *text,
                        bool input);
 int snag_ui_public(struct snag_ui *ui, const char *text, size_t len,

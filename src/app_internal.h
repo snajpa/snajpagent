@@ -115,6 +115,7 @@ enum {
     SNAG_APP_COMPACT_DEFERRED = 8
 };
 
+int snag_app_input_command(struct app_state *, const char *, bool, bool *, bool *);
 int snag_app_sync_destinations(struct app_state *app);
 int snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
                          char *error, size_t error_size);

@@ -103,7 +103,33 @@ confirm_delete(struct app_state *app, char prefix[9], char *error,
     do {
         if (snag_tools_service(0, snag_ui_wake_fd(&app->ui), error, error_size) < 0)
             return -1;
-        rc = snag_ui_poll(&app->ui, 25, false, &action, &line);
+        rc = snag_ui_poll(&app->ui, 25, &action, &line);
+        /* UI-local commands already ran and intentionally carry no text. */
+        if (rc > 0 && action == SNAG_TERM_SUBMIT && !line) rc = 0;
+        if (rc > 0 && action == SNAG_TERM_SUBMIT && line && line[0] == '/' && line[1] != '/') {
+            bool handled = false, prompt_ready = false;
+            (void)snag_ui_history_add(&app->ui, line);
+            rc = snag_app_input_command(app, line, true, &handled, &prompt_ready);
+            free(line);
+            line = NULL;
+            if (rc < 0) return -1;
+            if (app->input_closed) {
+                if (error_size) error[0] = '\0';
+                return 1;
+            }
+            if (app->queue_edit_id[0]) {
+                if (error_size) snprintf(error, error_size, "delete cancelled; queue editor opened");
+                return 1;
+            }
+            if (!handled && snag_ui_text(&app->ui, SNAG_UI_ERROR, "unknown slash command") < 0)
+                return -1;
+            if (app->session.pending_controls & ~SNAG_CONTROL_DELETE &&
+                snag_ui_text(&app->ui, SNAG_UI_HOST,
+                    "pending controls apply after delete confirmation; Ctrl-C cancels deletion") < 0)
+                return -1;
+            if (snag_ui_simple_prompt(&app->ui, false) < 0) return -1;
+            rc = 0;
+        }
     } while (rc == 0);
     if (rc < 0) {
         free(line);

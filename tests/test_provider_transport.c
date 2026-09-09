@@ -1258,7 +1258,7 @@ test_ui_output_order_and_failure(void)
         assert(snag_ui_public(&ui, "stopped", 7u, &delivered) == 0);
         assert(delivered.len == 0u);
         assert(snag_ui_text(&ui, SNAG_UI_ROLLOUT_END, NULL) == 0);
-        assert(snag_ui_poll(&ui, 0, false, &action, &line) == 1);
+        assert(snag_ui_poll(&ui, 0, &action, &line) == 1);
         assert(action == SNAG_TERM_EXIT);
         snag_buf_free(&delivered);
     }
@@ -1267,7 +1267,7 @@ test_ui_output_order_and_failure(void)
         .kind = SNAG_UI_RAW, .data.value = (unsigned int)(-1), .text = "x", .len = 1u}) < 0 && errno == EBADF);
     assert(snag_ui_send(&ui, (struct snag_ui_command){
         .kind = SNAG_UI_RAW, .data.value = (unsigned int)(pipefd[1]), .text = "x", .len = 1u}) < 0);
-    assert(snag_ui_poll(&ui, 0, false, &action, &line) < 0);
+    assert(snag_ui_poll(&ui, 0, &action, &line) < 0);
     snag_ui_free(&ui);
 }
 

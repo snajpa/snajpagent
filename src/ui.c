@@ -915,7 +915,7 @@ snag_ui_leaving(const struct snag_ui *ui)
 
 int
 snag_ui_poll(struct snag_ui *ui, int timeout_ms,
-            bool active, enum snag_term_action *action, char **text)
+            enum snag_term_action *action, char **text)
 {
     struct snag_ui_runtime *runtime = ui->runtime;
     struct ui_action *item;
@@ -949,15 +949,7 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms,
             *action = SNAG_TERM_CANCEL;
             return 1;
         }
-        size_t tail = atomic_load_explicit(&runtime->actions.tail, memory_order_relaxed);
-        item = tail == atomic_load_explicit(&runtime->actions.head, memory_order_acquire) ?
-            NULL : runtime->actions.items[tail % UI_QUEUE_CAPACITY];
-        /* Defer idle submissions, not view/edit controls or the wait deadline. */
-        if (item && active && !item->snapshot.active &&
-            (item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE))
-            item = NULL;
-        else
-            item = queue_pop(&runtime->actions);
+        item = queue_pop(&runtime->actions);
         if (item) {
             snag_wakeup_send(runtime->commands[1]);
             break;
@@ -974,6 +966,7 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms,
     }
     ui->input_received_ms = item->received_ms;
     ui->input_view = item->snapshot.view;
+    ui->input_active = item->snapshot.active;
     ui->input_route = item->route;
     ui->selection = item->snapshot.selection;
     memcpy(ui->submitted_label, item->snapshot.label,

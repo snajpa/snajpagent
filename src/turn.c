@@ -25,6 +25,16 @@ snag_prompt_parse(const char *text, bool *read_only)
 }
 
 bool
+snag_prompt_command(const char *text)
+{
+    bool read_only;
+    if (!text || text[0] != '/' || text[1] == '/' || strchr(text, '\n'))
+        return false;
+    (void)snag_prompt_parse(text, &read_only);
+    return !read_only;
+}
+
+bool
 snag_read_only_tool(const char *name)
 {
     return snag_string_in(name, "list_files read_file grep");

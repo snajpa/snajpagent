@@ -11,6 +11,7 @@
 #define SNAG_MAX_RESPONSE_ITEMS 96u
 /* Parse only local prompt syntax; never apply this to model or IRC messages. */
 const char *snag_prompt_parse(const char *text, bool *read_only);
+bool snag_prompt_command(const char *text);
 bool snag_read_only_tool(const char *name);
 #define SNAG_MAX_CALLS_PER_RESPONSE 32u
 #define SNAG_MAX_PROCESSES 32u

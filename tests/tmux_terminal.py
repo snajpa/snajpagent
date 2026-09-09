@@ -4298,6 +4298,187 @@ def run_goal_recovery_cases(binary, root, provider, environment):
             provider.runtime_handler = None
 
 
+def run_nested_command_cases(binary, root, modes=("nested", "nested-resume", "policy", "delete", "delete-confirm", "editor", "idle-editor", "idle-race", "backlog", "cache", "cache-cancel", "cache-exit", "lazy-cache", "delete-edit")):
+    """Accepted commands reach their owners during waits, edits and confirmation."""
+    for mode in modes:
+        case = root / ("active-commands-" + mode)
+        case.mkdir(parents=True)
+        provider = FakeResponses()
+        state, config = case / "state", case / "config.ini"
+        write_irc_config(config, provider.port, "host-model")
+        ready, release = threading.Event(), threading.Event()
+        seen = []
+        terminal = None
+        def respond(handler, request, sequence):
+            seen.append(request)
+            if mode.startswith("nested") and request.get("tool_choice") == "none":
+                ready.set()
+                release.wait(8)
+            if mode == "policy":
+                if not any(i.get("name") == "exec_command" for i in request["input"]):
+                    body = provider.function_body(sequence, "keep", "exec_command", {
+                        "command": "sleep 8", "workdir": str(case), "yield_ms": 1,
+                        "timeout_ms": None, "max_output_tokens": 100, "stdin": None, "pty": False})
+                else:
+                    body = provider.event("response.failed", {"response": {
+                        "error": {"code": "content_filter", "message": "scope clarification needed"}}})
+            elif provider.latest_user(request) == "hold" and len(seen) == 1:
+                ready.set()
+                release.wait(8)
+                body = provider.response_body(sequence, "held answer")
+            else:
+                body = provider.response_body(sequence, "fixture completed")
+            try: provider.reply(handler, body.encode(), close_header=True)
+            except (BrokenPipeError, ConnectionResetError): pass
+        provider.runtime_handler = respond
+        if "cache" in mode:
+            def cache(handler):
+                ready.set()
+                release.wait(8)
+                try:
+                    provider.reply(handler, b'{"data":[{"id":"host-model"}]}', "application/json")
+                except (BrokenPipeError, ConnectionResetError): pass
+            provider.handle_catalog = cache
+        try:
+            terminal = TmuxTerminal(case / "term", binary, case, state, config, 140, 32,
+                environment={"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret", "EDITOR": "true"})
+            terminal.wait("host-model/medium")
+            if "cache" in mode:
+                if mode != "lazy-cache":
+                    terminal.submit("seed")
+                    wait_event_count(state, "turn_completed", 1)
+                terminal.submit("/model cache")
+                assert ready.wait(5)
+                terminal.submit("/config")
+                terminal.wait("/config accepted")
+                if mode == "cache-exit":
+                    terminal.submit("/exit")
+                    terminal.wait_dead()
+                    log = read_events(state)[1]
+                    assert not any(e["data"]["control"] == 1 for e in event_list(log, "control_started"))
+                    print("active command", mode, "PASS", flush=True)
+                    continue
+                if mode == "cache-cancel":
+                    terminal.send_key("C-c")
+                else:
+                    terminal.submit("/status")
+                    terminal.wait("session:")
+                release.set()
+                expected = [1] if mode == "lazy-cache" else [2, 1]
+                log = wait_event_count(state, "control_finished", len(expected))
+                assert [e["data"]["control"] for e in event_list(log, "control_finished")] == expected
+                terminal.wait("configuration unchanged")
+                terminal.exit()
+            elif mode.startswith("nested"):
+                terminal.submit("seed")
+                wait_event_count(state, "turn_completed", 1)
+                terminal.submit("/compact")
+                assert ready.wait(5)
+                terminal.submit("/model cache")
+                terminal.wait("/model cache accepted")
+                terminal.submit("/model cache")
+                terminal.wait("/model cache already pending")
+                terminal.submit("/config")
+                terminal.wait("/config accepted")
+                if mode == "nested-resume":
+                    log_path, _ = read_events(state)
+                    sid = log_path.parent.name
+                    terminal.run("send-keys", "-t", terminal.target, "C-d")
+                    terminal.wait_dead()
+                    terminal.close()
+                    terminal = TmuxTerminal(case / "resumed", binary, case, state, config, 140, 32,
+                        args=("--resume", sid), environment={"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret", "EDITOR": "true"})
+                release.set()
+                events = wait_event_count(state, "control_finished", 3)
+                assert [e["data"]["control"] for e in event_list(events, "control_finished")] == [4, 2, 1]
+                assert len(seen) == 2
+                terminal.exit()
+            elif mode == "policy":
+                terminal.submit("inspect local file")
+                terminal.wait("clarify the task to continue")
+                before = len(seen)
+                terminal.submit("/model cache")
+                wait_event_count(state, "control_finished", 1, timeout=2)
+                assert len(seen) == before
+                terminal.submit("/archive")
+                terminal.wait_dead()
+                events = read_events(state)[1]
+                assert event_list(events, "session_archived")
+            elif mode in ("editor", "idle-editor"):
+                if mode == "editor":
+                    terminal.submit("hold")
+                    assert ready.wait(5)
+                terminal.submit("/q keep queued text")
+                terminal.wait("queued (/next or /q c)")
+                terminal.submit("/q 1 edit")
+                terminal.wait("edit 1")
+                terminal.send_key("C-u")
+                terminal.submit("/status")
+                terminal.wait("session:", timeout=2)
+                assert not event_list(read_events(state)[1], "future_turn_edited")
+                terminal.send_key("C-u")
+                terminal.submit("/exit")
+                terminal.wait_dead()
+                assert not event_list(read_events(state)[1], "future_turn_edited")
+            elif mode.startswith("delete"):
+                terminal.submit("hold")
+                assert ready.wait(5)
+                terminal.submit("/delete")
+                terminal.wait("delete is irreversible")
+                terminal.submit("/verbose 2")
+                terminal.wait("verbosity: 2")
+                terminal.submit("/status")
+                terminal.wait("session:", timeout=2)
+                assert not terminal.dead()
+                assert "delete confirmation did not match" not in terminal.capture()
+                if mode == "delete-edit":
+                    terminal.submit("/q preserved item")
+                    terminal.wait("queued (/next or /q c)")
+                    terminal.submit("/q 1 edit")
+                    terminal.wait("delete cancelled; queue editor opened")
+                    terminal.wait("edit 1")
+                    terminal.send_key("C-u")
+                    terminal.submit("/exit")
+                    terminal.wait_dead()
+                    assert not event_list(read_events(state)[1], "session_delete_requested")
+                elif mode == "delete-confirm":
+                    sid = read_events(state)[0].parent.name
+                    terminal.submit(sid[:8])
+                    terminal.wait_dead()
+                    assert not (state / "sessions" / sid).exists()
+                else:
+                    terminal.submit("/ro inspect later")
+                    wait_event_count(state, "future_turn_queued", 1)
+                    terminal.submit("/config")
+                    terminal.wait("pending controls apply after delete confirmation")
+                    terminal.submit("/exit")
+                    terminal.wait_dead()
+                    log = read_events(state)[1]
+                    assert not event_list(log, "session_delete_requested")
+                    assert not any(e["data"]["control"] == 1 for e in event_list(log, "control_started"))
+            else:
+                # One tty write captures both lines under the idle prompt.
+                keys = ["hold", "Enter"]
+                if mode == "backlog": keys += ["keep future input", "Enter"]
+                terminal.run("send-keys", "-t", terminal.target, *keys, "/status", "Enter")
+                assert ready.wait(5)
+                terminal.wait("session:", timeout=1)
+                log = read_events(state)[1]
+                assert not event_list(log, "turn_completed")
+                if mode == "backlog":
+                    assert len(event_list(log, "future_turn_queued")) == 1
+                    assert not event_list(log, "steering_added")
+                terminal.submit("/exit")
+                terminal.wait_dead()
+            print("active command", mode, "PASS", flush=True)
+        finally:
+            release.set()
+            if terminal is not None:
+                (case / "screen.txt").write_text(terminal.capture(), encoding="utf-8")
+                terminal.close()
+            provider.close()
+
+
 def run_manual_compaction_cases(binary, root, modes=("after-cancel", "native-cancel", "count-cancel", "progress", "input", "input-failure", "failure", "active", "steer", "cancel-active", "no-prefix", "no-prefix-resume")):
     """Exercise manual controls through real HTTP polling, not immediate fixture summaries."""
     for mode in modes:
@@ -6029,6 +6210,7 @@ def run_irc_case(binary, root):
         run_assistant_phase_case(binary, root)
         run_goal_recovery_cases(binary, root, provider, environment)
         run_queue_dispatch_retry_case(binary, root)
+        run_nested_command_cases(binary, root)
         run_manual_compaction_cases(binary, root)
         run_compaction_text_cases(binary, root)
         run_compacted_goal_cases(binary, root)

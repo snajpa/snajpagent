@@ -159,7 +159,7 @@ static const struct snag_term_command commands[] = {
     {"/yield", "return an active tool wait to the model; keep processes owned"},
     {"/archive", "archive session at a safe boundary and exit"},
     {"/compact", "compact context at a safe request boundary"},
-    {"/delete", "delete idle session after confirmation"},
+    {"/delete", "delete at a safe boundary after confirmation"},
     {"/exit", "preserve session and exit"},
     {"/chat", "show IRC room activity"},
     {"/rollout", "show local model activity"},
@@ -401,8 +401,9 @@ static int
 request_control(struct app_state *app, unsigned int control, const char *name)
 {
     char error[256] = {0};
-    if (!(app->session.pending_controls & control) &&
-        commit_event(app, "control_requested", json_pack("{s:i}", "control", (int)control),
+    if (app->session.pending_controls & control)
+        return app_textf(app, SNAG_UI_HOST, "%s already pending or applying", name);
+    if (commit_event(app, "control_requested", json_pack("{s:i}", "control", (int)control),
                      error, sizeof(error)) < 0)
         return app_error(app, error), -1;
     if (!app->applying_controls) app->control_requested = true;
@@ -1152,18 +1153,30 @@ static int
 refresh_model_cache(struct app_state *app, char *error, size_t error_size)
 {
     json_t *providers = json_array();
+    bool applying = app->applying_controls;
     int rc = -1;
 
     if (!providers)
         return snag_errno(ENOMEM);
+    app->applying_controls = true;
+    if (!app->session.active_turn && !app->input_closed) {
+        app->interrupt_requested = false;
+        app->steering_requested = false;
+    }
+    if (!app->execute && set_input_prompt(app, true) < 0) goto out;
     for (size_t i = 0; i < app->config->provider_count; ++i) {
         const struct snag_provider_config *provider = &app->config->providers[i];
         json_t *models = NULL;
         json_t *entry = NULL;
         char detail[256] = {0};
 
-        if (snag_app_provider_models(app, provider, &models,
-                                    detail, sizeof(detail)) < 0) {
+        int model_rc = snag_app_provider_models(app, provider, &models,
+                                               detail, sizeof(detail));
+        if (model_rc != 0) {
+            if (model_rc > 0) {
+                snag_errorf(error, error_size, "model discovery interrupted; previous cache retained");
+                goto out;
+            }
             snag_errorf(error, error_size, "cannot refresh provider %s: %s",
                       provider->name, detail[0] ? detail : strerror(errno));
             goto out;
@@ -1182,6 +1195,8 @@ refresh_model_cache(struct app_state *app, char *error, size_t error_size)
     rc = 0;
 out:
     json_decref(providers);
+    app->applying_controls = applying;
+    if (!app->execute && set_input_prompt(app, app->session.active_turn) < 0) return -1;
     return rc;
 }
 static int
@@ -1546,7 +1561,7 @@ change_model(struct app_state *app, const char *value, bool active)
         return rc;
     }
     if (strcmp(selector, "cache") == 0) {
-        if (active)
+        if (active || (!app->applying_controls && !app->session.pending_log))
             rc = request_control(app, SNAG_CONTROL_CACHE, "/model cache");
         else if (load_model_cache(app, true, error, sizeof(error)) < 0)
             rc = app_error(app, error);
@@ -1810,7 +1825,7 @@ change_config(struct app_state *app, bool active)
     bool editor_success = false;
     int rc;
 
-    if (active)
+    if (active || (!app->applying_controls && !app->session.pending_log))
         return request_control(app, SNAG_CONTROL_CONFIG, "/config");
     if (snapshot_config(app->config_path, &before,
                         error, sizeof(error)) < 0)
@@ -2054,12 +2069,18 @@ apply_controls(struct app_state *app)
 {
     if (app->applying_controls || app->session.response_open || app->session.pending_call_count)
         return 0;
-    unsigned int pending = app->session.pending_controls;
-    if (!pending) { app->control_requested = false; return 0; }
+    unsigned int deferred = 0u;
+    if (!app->session.pending_controls) { app->control_requested = false; return 0; }
     app->applying_controls = true;
     app->control_requested = false;
+    if (!app->session.active_turn && !app->input_closed) {
+        app->interrupt_requested = false;
+        app->steering_requested = false;
+    }
     int result = 0;
-    while (pending) {
+    while (app->session.pending_controls & ~deferred) {
+        if (app->input_closed || snag_ui_leaving(&app->ui)) break;
+        unsigned int pending = app->session.pending_controls & ~deferred;
         unsigned int bit = 0u;
         uint64_t first = UINT64_MAX;
         for (unsigned int i = 0u; i < 6u; ++i)
@@ -2067,7 +2088,6 @@ apply_controls(struct app_state *app)
                 first = app->session.control_seq[i]; bit = 1u << i;
             }
         if (!bit) { result = -1; break; }
-        pending &= ~bit;
         uint64_t failures = app->session.write_failures;
         char error[256] = {0};
         bool started = (app->session.started_controls & bit) != 0u;
@@ -2102,7 +2122,7 @@ apply_controls(struct app_state *app)
         if (app->session.write_failures != failures || app->session.append_rollback_pending) {
             result = -1; break; /* Preserve intent when its effects could not be recorded. */
         }
-        if (rc == SNAG_APP_COMPACT_DEFERRED) continue;
+        if (rc == SNAG_APP_COMPACT_DEFERRED) { deferred |= bit; continue; }
         if (commit_event(app, "control_finished", json_pack("{s:i}", "control", (int)bit),
                          error, sizeof(error)) < 0) { result = -1; break; }
         if (exit_now) { app->input_closed = true; break; }
@@ -2251,15 +2271,22 @@ input_view_toggle(struct app_state *app)
     return toggle_view(app);
 }
 
-static int
-handle_input_command(struct app_state *app, const char *line, bool active,
+int
+snag_app_input_command(struct app_state *app, const char *line, bool active,
                      bool *handled, bool *prompt_ready)
 {
     bool single_line = strchr(line, '\n') == NULL;
     char error[256] = {0};
     bool read_only;
     (void)snag_prompt_parse(line, &read_only);
-    if (single_line && !read_only && line[0] == '/' && line[1] != '/' &&
+    if (active && read_only) {
+        *handled = true;
+        *prompt_ready = false;
+        int rc = queue_future_turn(app, line, true, error, sizeof(error));
+        if (rc && error[0]) (void)app_error(app, error);
+        return rc;
+    }
+    if (snag_prompt_command(line) &&
         snag_ui_submitted(&app->ui, app->ui.label, line, true) < 0)
         return -1;
     int rc = handle_destination_command(app, line, handled);
@@ -2267,7 +2294,7 @@ handle_input_command(struct app_state *app, const char *line, bool active,
     if (rc < 0 || *handled)
         return rc;
     if (single_line && line[0] == '/' && line[1] != '/') {
-        rc = handle_common_command(app, line, active || snag_ui_leaving(&app->ui), handled, prompt_ready);
+        rc = handle_common_command(app, line, active || app->applying_controls || snag_ui_leaving(&app->ui), handled, prompt_ready);
         if (rc < 0 || *handled)
             return rc;
     }
@@ -2320,7 +2347,7 @@ again:;
     }
     if (app->execute || app->input_closed)
         return 0;
-    rc = snag_ui_poll(&app->ui, (int)timeout_ms, !app->recovery_wait, &action, &line);
+    rc = snag_ui_poll(&app->ui, (int)timeout_ms, &action, &line);
     history_warning(app);
     if (rc < 0) {
         int input_errno = errno;
@@ -2375,11 +2402,13 @@ again:;
         return 0;
     remember_input(app, line);
     error[0] = '\0';
-    if (app->queue_edit_id[0]) {
+    if (app->queue_edit_id[0] && !snag_prompt_command(line)) {
         rc = finish_queue_edit(app, line, true, error, sizeof(error));
         if (rc != 0 && error[0])
             (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
-    } else if (action == SNAG_TERM_QUEUE) {
+    } else if (action == SNAG_TERM_QUEUE ||
+               (!app->ui.input_active && app->session.active_turn &&
+                app->ui.input_view == SNAG_RENDER_ROLLOUT && !snag_prompt_command(line))) {
         rc = queue_future_turn(app, line, true, error, sizeof(error));
         if (rc != 0) {
             (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
@@ -2392,16 +2421,7 @@ again:;
         bool single_line = strchr(line, '\n') == NULL;
         bool handled = false;
         bool prompt_ready = false;
-        bool read_only;
-
-        (void)snag_prompt_parse(line, &read_only);
-        if (read_only) {
-            rc = queue_future_turn(app, line, true, error, sizeof(error));
-            if (rc != 0) (void)app_error(app, error);
-            if (rc >= 0) rc = set_input_prompt(app, true);
-            goto active_done;
-        }
-        rc = handle_input_command(app, line, true, &handled, &prompt_ready);
+        rc = snag_app_input_command(app, line, true, &handled, &prompt_ready);
         if (rc < 0)
             goto active_done;
         if (handled) {
@@ -2991,6 +3011,15 @@ turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
             (goal && app->session.goal_status == SNAG_GOAL_PAUSED))) {
         int rc = snag_app_active_input_pump(app, 25u);
         if (rc == 2) break;
+        if (app->control_requested &&
+            !app->session.response_open && !app->session.pending_call_count) {
+            if (apply_controls(app) < 0) {
+                app->recovery_wait = false;
+                return -1;
+            }
+            if (app->input_closed || app->interrupt_requested) break;
+            if (!app->steering_requested) continue;
+        }
         if (rc == 1) {
             if (policy || !goal || app->session.goal_status != SNAG_GOAL_PAUSED) break;
             app->steering_requested = false;
@@ -3860,7 +3889,11 @@ run_tracked_turn(struct app_state *app, const char *prompt,
             if (!current) { rc = SNAG_APP_INPUT_READY; break; }
             if (strcmp(current->text, retained)) {
                 char *updated = snag_strdup_checked(current->text, SNAG_MAX_QUEUED_TEXT);
-                if (!updated) { if (turn_recovery_wait(app, &retry)) { rc = 1; break; } continue; }
+                if (!updated) {
+                    int wait_rc = turn_recovery_wait(app, &retry);
+                    if (wait_rc) { rc = wait_rc < 0 ? 3 : 1; break; }
+                    continue;
+                }
                 free(retained);
                 retained = updated;
             }
@@ -3883,8 +3916,9 @@ run_tracked_turn(struct app_state *app, const char *prompt,
             }
         }
         if (app->turn_policy_stopped && app->session.process_count && !app->execute) {
-            if (turn_recovery_wait(app, &retry) == 0 && !app->turn_policy_stopped)
-                continue;
+            int wait_rc = turn_recovery_wait(app, &retry);
+            if (wait_rc < 0) { rc = 3; break; }
+            if (wait_rc == 0 && !app->turn_policy_stopped) continue;
         }
         bool goal = app->session.goal_status == SNAG_GOAL_ACTIVE;
         if (app->turn_policy_stopped || (!goal && !retry.pending) || app->input_closed ||
@@ -3893,6 +3927,7 @@ run_tracked_turn(struct app_state *app, const char *prompt,
             break;
         if (!goal) ++retry.attempts;
         int wait_rc = turn_recovery_wait(app, &retry);
+        if (wait_rc < 0) { rc = 3; break; }
         if (wait_rc) {
             if (app->session.active_turn) {
                 char error[256] = {0};
@@ -3931,9 +3966,12 @@ run_tracked_turn(struct app_state *app, const char *prompt,
                             "recovering failed turn state"), error, sizeof(error));
                 if (!repair) break;
                 (void)app_error(app, error);
-                if (!goal || turn_recovery_wait(app, &retry)) break;
+                if (!goal) break;
+                int wait_rc = turn_recovery_wait(app, &retry);
+                if (wait_rc < 0) { rc = 3; break; }
+                if (wait_rc) break;
             }
-            if (!goal && repair) { rc = 3; break; }
+            if (repair && (!goal || rc == 3)) { rc = 3; break; }
             if (app->interrupt_requested || app->input_closed ||
                 (goal && app->session.goal_status != SNAG_GOAL_ACTIVE)) { rc = 1; break; }
         }
@@ -4161,7 +4199,7 @@ pick_session(struct app_state *app, const char *workspace,
         snag_ui_prompt(&app->ui, false, "session › ", frames, 1u, 0u) < 0)
         return -1;
     do {
-        rc = snag_ui_poll(&app->ui, -1, false, &action, &prefix);
+        rc = snag_ui_poll(&app->ui, -1, &action, &prefix);
     } while (rc == 0);
     if (rc < 0 ||
         action != SNAG_TERM_SUBMIT || !prefix) {
@@ -4264,7 +4302,7 @@ submit_idle(struct app_state *app, const char *prompt,
     bool retry = single_line && strcmp(prompt, "/retry") == 0;
     int rc = 0;
 
-    if (app->queue_edit_id[0]) {
+    if (app->queue_edit_id[0] && !snag_prompt_command(prompt)) {
         char error[256] = {0};
         rc = finish_queue_edit(app, prompt, false, error, sizeof(error));
         if (rc != 0 && error[0])
@@ -4274,7 +4312,7 @@ submit_idle(struct app_state *app, const char *prompt,
     }
     if (!*prompt && input_view == SNAG_RENDER_CHAT)
         return 0;
-    rc = handle_input_command(app, prompt, app->session.active_turn, &handled, prompt_ready);
+    rc = snag_app_input_command(app, prompt, app->session.active_turn, &handled, prompt_ready);
     if (rc < 0)
         return 3;
     if (!handled && single_line && prompt[0] == '/' && prompt[1] != '/') {
@@ -4377,7 +4415,7 @@ interactive_loop(struct app_state *app, const char *initial)
                 goto ui_failed;
             int poll_rc = snag_ui_poll(&app->ui,
                 app->networked || app->irc_background.len ? 25 : -1,
-                false, &action, &owned);
+                &action, &owned);
             if (owned) app->input_received_ms = app->ui.input_received_ms;
             history_warning(app);
             if (poll_rc < 0) {

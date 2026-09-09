@@ -54,6 +54,15 @@ test_native_read_results(void)
     assert(!*snag_prompt_parse("/ro  \t", &read_only) && read_only);
     assert(strcmp(snag_prompt_parse("//ro inspect", &read_only), "/ro inspect") == 0 && !read_only);
     assert(strcmp(snag_prompt_parse("/root", &read_only), "/root") == 0 && !read_only);
+    assert(snag_prompt_command("/status"));
+    assert(snag_prompt_command("/root"));
+    assert(snag_prompt_command("/not-a-command"));
+    assert(!snag_prompt_command("/ro inspect"));
+    assert(!snag_prompt_command("//status"));
+    assert(!snag_prompt_command("/status\nmore text"));
+    assert(!snag_prompt_command("ordinary text"));
+    assert(!snag_prompt_command(""));
+    assert(!snag_prompt_command(NULL));
     char id[SNAG_ID_HEX_LEN + 1u];
 #ifdef _WIN32
     const char *scratch = getenv("TMP");

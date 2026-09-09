@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Admit commands throughout active work, provider waits, queue editing and delete
+  confirmation. Drain nested controls at safe boundaries and during parked
+  recovery; preserve queued text captured before a turn starts. Keep cache
+  discovery interruptible and preserve deferred control intent across resume.
+
 - Preserve submitted slash-command prompt lines above output in both views, at
   idle and during active work. Render queued prompts as ordinary submissions
   at dispatch, with fresh timestamps and effective model settings, retaining

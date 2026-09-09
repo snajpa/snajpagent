@@ -1776,7 +1776,7 @@ def test_goal_control_whitespace():
 
     with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
         end = child.send_wait_idle(b"/goal blocked goal\r", b"goal done")
-        end = child.send_wait_idle(b"/goal set tiny\r", GOAL_UPDATED, start=end)
+        end = child.send_wait_idle(b"/goal set resumed goal\r", GOAL_UPDATED, start=end)
         end = child.send_wait_idle(b"/goal resume   \r", b"goal done", start=end)
         child.exit_now()
     log = events(child.session_id())
