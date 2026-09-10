@@ -33,6 +33,31 @@ controlling-terminal, immediate-run, yielded-run, and `write_stdin` paths.
 The tmux layer complements those raw-PTY checks by interpreting cursor movement,
 erase, wrap, and resize sequences as a real terminal does.
 
+## Download-page kernel baselines
+
+The download page's Linux baselines are conservative libc/architecture floors,
+not experimentally established oldest-working kernels for every executable.
+Linux 6.12 was a test environment, not a minimum requirement.
+
+| Target | Conservative baseline | Basis |
+|---|---|---|
+| x86-64, i686, ARMv6/ARMv7, PowerPC32 | 2.6.39 | musl's fully POSIX-conformant kernel floor |
+| AArch64 | 3.7 | upstream ARM64 architecture ABI |
+| PowerPC64 little-endian | 3.13 | upstream little-endian/ELFv2 ABI |
+| RISC-V64 | 4.15 | stable upstream RISC-V userspace ABI |
+| i686 legacy | 2.4.27 | oldest qualified LinuxThreads build kernel; not a libc-wide guarantee |
+
+Sources: [musl platforms](https://wiki.musl-libc.org/supported-platforms),
+[Linux 3.7 ARM64](https://github.com/torvalds/linux/blob/v3.7/arch/arm64/Kconfig),
+[Linux 3.13 PowerPC](https://github.com/torvalds/linux/blob/v3.13/arch/powerpc/platforms/Kconfig.cputype),
+and the [RISC-V port developer's ABI announcement](https://www.sifive.com/blog/all-aboard-part-8-the-risc-v-linux-port-is-upstream).
+
+Earlier x86-64 builds also run on Debian Sarge's Linux 2.6.8 and CentOS 3.9's
+backported 2.4.21-50.EL kernel. The latter depends on that vendor's threading
+support and does not establish arbitrary upstream Linux 2.4 compatibility.
+Those results and their exact scope remain in the manual and records below.
+No new oldest-kernel runtime qualification was performed for 0.99.5.
+
 ## Release qualification
 
 [RELEASE.md](RELEASE.md) defines publication requirements: every implemented

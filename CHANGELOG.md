@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Show only the latest stable downloads per architecture/ABI, with older
+  releases on GitHub. Clarify kernel baselines and required OS/library ABIs;
+  collapse checksums and remove historical tables, tiers and repeated setup.
+
 ## 0.99.5 — September 10, 2026
 
 - Traverse prompt history locally first, then globally, using bounded-memory

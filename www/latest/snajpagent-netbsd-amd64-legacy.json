@@ -1,9 +1,9 @@
 {
   "name": "snajpagent",
   "target": "netbsd-amd64-legacy",
-  "version": "0.99.4",
-  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.4/snajpagent-0.99.4-netbsd-amd64-legacy",
-  "sha256": "c4c3ebdd48c868f27d78dd768e5c9cc8a1681846295e08d3c33c7da07afa7749",
-  "size": 4101912,
+  "version": "0.99.5",
+  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.5/snajpagent-0.99.5-netbsd-amd64-legacy",
+  "sha256": "a48a696e385aa41c8b07138f4ec53acb9e4b7a27a93b5f519078f9c1d52aa81c",
+  "size": 4112312,
   "changelog": "https://agent.snajpa.net/downloads.html#changelog"
 }

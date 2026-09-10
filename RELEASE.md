@@ -154,18 +154,22 @@ usable without JavaScript. Link it from the home page, README, and manual.
 Keep source-build commands and additional source-only platform guidance in the
 README and build documentation, off the downloads page. Downloadable source
 archives and their license companions remain appropriate release downloads.
-Group the overview by the three portability tiers and OS families. Published
-families use closed details/summary panels; planned families are plain
-“(coming soon)” rows. Omit ESP32. Keep OS version/range and ABI information inside
-explicit release tables, together with architecture, download size and full
-SHA-256. Put runnable debug files below their corresponding release and setup
-instructions inside the family panel; use no separate top-level debug section.
-Add new OS families according to published assets and the roadmap, not a fixed
-six-family list. Symbol archives remain linked from the release page.
-Runnable debug builds must contain an executable, identify the actual build
-profile/source and retain their platform qualifications. Do not relabel a
-symbol-only file as a debug build. Additions to a published release use distinct
-names and checksums; do not replace existing executable bytes or tags.
+List only the latest stable executable for every implemented architecture/ABI
+variant. Link older releases and development/debug downloads to GitHub instead
+of repeating their tables. Published OS families use closed details/summary
+panels; omit roadmap tiers, planned platforms and repeated setup prose.
+Each row gives the architecture, clearly labelled minimum OS or required ABI,
+size and full SHA-256 (a closed checksum disclosure is acceptable). Link each
+family to the manual's installation instructions. Preserve the macOS quarantine
+command for verified downloads. Source, symbols and licensing companions remain
+available from the release page.
+
+A tested OS version is not a minimum. Linux kernel baselines must distinguish
+libc/architecture requirements from actual qualification; exact oldest-working
+kernels must not be inferred from a recent test host. BSD rows identify the
+required library ABI; a release-specific ABI is not an open-ended OS minimum.
+Keep detailed qualification evidence in QUALIFICATION.md and dependency records.
+Never replace previously published executable bytes or move their tags.
 
 
 For each operator-approved new version:

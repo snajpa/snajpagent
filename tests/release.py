@@ -76,10 +76,8 @@ with tempfile.TemporaryDirectory(prefix="release-", dir=root / "build") as tmp:
     assert "Get\\-FileHash" in windows_setup and "certutil" in windows_setup
     assert "USERPROFILE" in windows_setup and "PowerShell" in windows_setup
     assert "cksum \\-a SHA256" in getting_started, "NetBSD legacy checksum command"
-    netbsd_setup = downloads.split('<h3>Install on NetBSD</h3>', 1)[1].split('</details>', 1)[0]
-    assert "cksum -a SHA256" in netbsd_setup and "2.0" in netbsd_setup
-    assert "lacks SHA-256" in netbsd_setup
-    assert r".\snajpagent.exe</code></pre>" in downloads
+    for family in ("Linux", "macOS", "Windows", "FreeBSD", "OpenBSD", "NetBSD"):
+        assert f'href="manual.html#Install_on_{family}"' in downloads
     print("PASS: first-run manual and README cover every released platform family")
     # Source-size reporting must never reject large files or emit budget warnings.
     size_tree = tmp / "source-size"
@@ -519,7 +517,7 @@ with tempfile.TemporaryDirectory(prefix="release-fetch-", dir=root / "build") as
 print("PASS: production bootstrap fallbacks preserve the hash and fail closed")
 
 # Download-page behavior is native HTML: families disclose release tables,
-# including runnable debug files, checksums and installation instructions.
+# listing only current stable executables, requirements and installation links.
 class Downloads(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -548,52 +546,54 @@ nodes = page.nodes
 ids = [n["attrs"]["id"] for n in nodes if "id" in n["attrs"]]
 assert len(ids) == len(set(ids)), "duplicate download-page anchor"
 assert not any(n["tag"] == "script" for n in nodes)
-families = [n for n in nodes if n["tag"] == "details"]
-assert {n["attrs"]["id"] for n in families} == {"linux", "macos", "windows", "freebsd", "openbsd", "netbsd"}
+families = [n for n in nodes if "os-family" in n["attrs"].get("class", "").split()]
+assert {n["attrs"]["id"] for n in families} == {target.split("-")[0] for target in release.targets()}
 for family in families:
-    assert "open" not in family["attrs"]
+    assert family["tag"] == "details" and "open" not in family["attrs"]
     summaries = [n for n in nodes if n["tag"] == "summary" and n["parents"][-1] is family]
     assert len(summaries) == 1
     assert summaries[0]["text"].strip().lower() == family["attrs"]["id"]
     assert not any(n["tag"] == "a" and summaries[0] in n["parents"] for n in nodes)
     assert "Install on " in family["text"]
-    tier = next(n for n in reversed(family["parents"]) if n["tag"] == "section")
-    expected = "tier-1" if family["attrs"]["id"] in ("linux", "macos", "windows") else "tier-2"
-    assert tier["attrs"]["aria-labelledby"] == expected
+    assert sum(n["tag"] == "table" and family in n["parents"] for n in nodes) == 1
 
+channel = {meta["target"]: meta for _, meta in release.load_channel(root / "www/latest")}
+versions = {meta["version"] for meta in channel.values()}
+assert len(versions) == 1 and "-" not in next(iter(versions))
 downloads = [n for n in nodes if n["tag"] == "a" and "download" in n["attrs"].get("class", "").split()]
-assert downloads
-counts = {}
+assert len(downloads) == len(channel)
+seen = set()
 for link in downloads:
-    href = link["attrs"]["href"]
-    assert href.startswith("https://github.com/snajpa/snajpagent/releases/download/")
-    version, filename = href.split("/download/", 1)[1].split("/", 1)
-    counts[version] = counts.get(version, 0) + 1
-    assert not any(word in filename for word in ("symbols", "source", "dependencies"))
-    family = next(n for n in reversed(link["parents"]) if n["tag"] == "details")
-    release_section = next(n for n in reversed(link["parents"]) if n["tag"] == "section")
-    assert family in release_section["parents"]
-    assert version in release_section["text"]
     row = next(n for n in reversed(link["parents"]) if n["tag"] == "tr")
+    target = row["attrs"]["data-target"]
+    assert target not in seen and target in channel
+    seen.add(target)
+    meta = channel[target]
+    assert link["attrs"]["href"] == meta["url"]
+    assert not any(word in meta["url"].split("/")[-1] for word in ("symbols", "source", "debug"))
+    family = next(n for n in reversed(link["parents"]) if "os-family" in n["attrs"].get("class", "").split())
+    assert target.startswith(family["attrs"]["id"] + "-")
     cells = [n for n in nodes if n["tag"] == "td" and n["parents"][-1] is row]
     assert len(cells) == 3 and all(n["text"].strip() for n in cells)
+    assert any(word in cells[1]["text"] for word in ("+", "later", "ABI", "–")), cells[1]["text"]
     hashes = [n for n in nodes if "sha256" in n["attrs"].get("class", "").split() and row in n["parents"]]
-    assert len(hashes) == 1 and re.fullmatch(r"[0-9a-f]{64}", hashes[0]["text"].strip())
-    if "debug" in filename or "-" in version:
-        position = nodes.index(link)
-        assert any(n["tag"] == "h4" and "Debug" in n["text"] and release_section in n["parents"]
-                   for n in nodes[:position])
-assert counts == {"0.99.4": 20, "0.99.3": 16, "0.99.2": 11, "0.99.2-9d98036": 11, "0.99.1": 16}
-for node in nodes:
-    if "coming-soon" in node["attrs"].get("class", "").split():
-        assert node["tag"] == "p" and "(coming soon)" in node["text"]
-        assert not any(n["tag"] in ("a", "details") and node in n["parents"] for n in nodes)
-assert "esp32" not in (root / "www/downloads.html").read_text().lower()
+    assert len(hashes) == 1 and hashes[0]["text"].strip() == meta["sha256"]
+    assert any(n["tag"] == "details" and "open" not in n["attrs"] for n in hashes[0]["parents"])
+    size = next(n for n in nodes if "file-size" in n["attrs"].get("class", "").split() and row in n["parents"])
+    assert size["attrs"]["title"] == f'{meta["size"]:,} bytes'
+assert seen == set(channel)
+html = (root / "www/downloads.html").read_text()
+assert 'href="https://github.com/snajpa/snajpagent/releases">Older releases</a>' in html
+assert "coming-soon" not in html and "Tier 1" not in html and "latest-dev" not in html
+assert "6.12" not in html
+linux = next(n for n in families if n["attrs"]["id"] == "linux")
+assert "Kernel baseline" in linux["text"] and "older kernels may work" in linux["text"]
+for version in ("2.6.39+", "3.7+", "3.13+", "4.15+", "2.4.27+"):
+    assert version in linux["text"]
 mac = next(n for n in families if n["attrs"]["id"] == "macos")
 assert "xattr -d com.apple.quarantine ./snajpagent" in mac["text"]
-assert "shasum -a 256 FILE.tar.gz" in mac["text"]
 assert "xattr -r" not in mac["text"] and "spctl --master-disable" not in mac["text"]
 for node in nodes:
     for target in node["attrs"].get("aria-labelledby", "").split():
         assert target in ids
-print("PASS: collapsed OS-family downloads, release/debug rows, checksums and setup")
+print("PASS: latest-stable-only downloads match all channel assets, requirements, hashes and sizes")

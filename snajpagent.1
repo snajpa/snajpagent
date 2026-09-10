@@ -2901,8 +2901,11 @@ Build a static-PIE Linux executable with embedded CA data.  Copy
 to the destination; Nix and third-party runtime libraries are not required
 there.  Optional matching symbols are in the adjacent
 .I .debug/
-directory.  These target Linux with x86-64, ARMv8-A or i686 baselines;
-older-kernel compatibility requires separate qualification.
+directory. These target x86-64, ARMv8-A or i686 CPUs. The download page uses
+conservative libc/architecture kernel baselines: 2.6.39 for x86-64, i686,
+ARMv6 and PowerPC32; 3.7 for ARM64; 3.13 for PowerPC64 little-endian;
+and 4.15 for RISC-V64. These are not experimentally established oldest-working
+kernels. Older kernels can work, as below.
 The x86-64 executable has also been exercised on Debian Sarge's
 Linux 2.6.8-12-amd64-generic, including read-only tools, parallel commands,
 PTY, session resume and TLS trust/hostname checks.
