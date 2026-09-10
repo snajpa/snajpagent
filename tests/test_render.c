@@ -88,13 +88,79 @@ count_text(const char *haystack, const char *needle)
     return count;
 }
 
-static bool
-term_history_has(const struct snag_history *term, const char *text)
+static size_t
+history_records(const struct snag_history *history, const char *text, bool local_only)
 {
-    for (size_t i = 0u; i < term->snapshot.count; ++i)
-        if (strcmp(term->snapshot.items[i], text) == 0)
-            return true;
-    return false;
+    struct snag_history_snapshot snapshot = history->snapshot;
+    struct snag_history_reader reader = {.fd = {-1, -1}};
+    if (local_only) snapshot.global_path = NULL;
+    snag_history_reader_open(&reader, &snapshot);
+    struct snag_history_cursor start = snag_history_end(&snapshot), end;
+    const char *entry;
+    size_t count = 0u;
+    int rc;
+    while ((rc = snag_history_read(&reader, &snapshot, false, start, &start, &end, &entry)) > 0)
+        if (!text || strcmp(entry, text) == 0) ++count;
+    assert(rc == 0);
+    snag_history_reader_close(&reader);
+    return count;
+}
+
+static bool
+term_history_has(const struct snag_history *history, const char *text)
+{
+    return history_records(history, text, false) != 0u;
+}
+
+static void
+test_history_reader_boundaries(void)
+{
+    char build[4096], temp[4096], path[4096];
+    assert(mkdir("build", 0700) == 0 || errno == EEXIST);
+    assert(realpath("build", build));
+    assert(snprintf(temp, sizeof(temp), "%s/history-reader-XXXXXX", build) > 0 && mkdtemp(temp));
+    assert(snprintf(path, sizeof(path), "%s/prompt_history", temp) > 0);
+    FILE *file = fopen(path, "w");
+    assert(file);
+    fputs("oldest\n", file);
+    for (size_t i = 0u; i < 150000u; ++i) fputc('x', file);
+    fputs("\nnewest\n", file);
+    assert(fclose(file) == 0 && chmod(path, 0600) == 0);
+    struct snag_history history = {0};
+    assert(snag_history_open(&history, temp) == 0 && history.snapshot.count == 0u);
+    struct snag_history_reader reader = {.fd = {-1, -1}};
+    snag_history_reader_open(&reader, &history.snapshot);
+    struct snag_history_cursor start = snag_history_end(&history.snapshot), end;
+    const char *text;
+    const size_t lengths[] = {6u, 150000u, 6u};
+    for (size_t i = 0u; i < 3u; ++i) {
+        int rc;
+        do {
+            reader.budget = 127u;
+            rc = snag_history_read(&reader, &history.snapshot, false, start, &start, &end, &text);
+        } while (rc == 2);
+        assert(rc == 1 && strlen(text) == lengths[i]);
+        if (i != 1u) assert(strcmp(text, i == 0u ? "newest" : "oldest") == 0);
+    }
+    assert(snag_history_read(&reader, &history.snapshot, false, start, &start, &end, &text) == 0);
+    /* Reader boundaries stay fixed through a peer append. */
+    struct snag_history peer = {0};
+    assert(snag_history_open(&peer, temp) == 0 && snag_history_add(&peer, "peer") == 0);
+    assert(snag_history_merge(&peer) == 0);
+    snag_history_free(&peer);
+    for (size_t i = 1u; i < 3u; ++i) {
+        int rc;
+        do {
+            reader.budget = 127u;
+            rc = snag_history_read(&reader, &history.snapshot, true, end, &start, &end, &text);
+        } while (rc == 2);
+        assert(rc == 1 && strlen(text) == lengths[2u - i]);
+    }
+    assert(snag_history_read(&reader, &history.snapshot, true, end, &start, &end, &text) == 0);
+    snag_history_reader_close(&reader);
+    assert(term_history_has(&history, "peer"));
+    snag_history_free(&history);
+    assert(unlink(path) == 0 && rmdir(temp) == 0);
 }
 
 static void
@@ -116,7 +182,8 @@ test_session_prompt_history(void)
     snag_history_free(&seed);
     assert(snag_history_open(&first, temp) == 0);
     assert(snag_history_open(&second, temp) == 0);
-    assert(first.snapshot.count == 1u && second.snapshot.count == 1u);
+    assert(first.snapshot.count == 0u && second.snapshot.count == 0u);
+    assert(term_history_has(&first, "seed"));
     assert(snag_history_add(&first, "first-before-bind") == 0);
     assert(snag_history_bind(&first, first_dir) == 0);
     assert(snag_history_bind(&second, second_dir) == 0);
@@ -125,15 +192,15 @@ test_session_prompt_history(void)
     assert(snag_history_add(&second, "second") == 0);
     assert(snag_history_merge(&first) == 0);
     assert(snag_history_merge(&first) == 0); /* Retry without new entries is inert. */
-    assert(!term_history_has(&second, "first-before-bind"));
+    assert(history_records(&second, "first-before-bind", true) == 0u);
     assert(snag_history_merge(&second) == 0);
-    assert(!term_history_has(&first, "second"));
+    assert(history_records(&first, "second", true) == 0u);
     assert(snag_history_open(&next, temp) == 0);
-    assert(next.snapshot.count == 5u); /* Seed once, deliberate repeats preserved. */
-    assert(strcmp(next.snapshot.items[1], "first-before-bind") == 0);
-    assert(strcmp(next.snapshot.items[2], "same") == 0);
-    assert(strcmp(next.snapshot.items[3], "same") == 0);
-    assert(strcmp(next.snapshot.items[4], "second") == 0);
+    assert(next.snapshot.count == 0u); /* No global copy. Intentional repeats remain. */
+    assert(history_records(&next, NULL, false) == 5u);
+    assert(history_records(&next, "same", false) == 2u);
+    assert(term_history_has(&next, "first-before-bind"));
+    assert(term_history_has(&next, "second"));
     assert(snag_history_merge(&next) == 0);
     snag_history_free(&next);
     /* A failed merge keeps its pending suffix for retry; no seed re-import. */
@@ -142,10 +209,10 @@ test_session_prompt_history(void)
     char backup[4096];
     assert(snprintf(backup, sizeof(backup), "%s/saved-global", temp) > 0);
     assert(rename(path, backup) == 0 && mkdir(path, 0700) == 0);
-    assert(snag_history_merge(&first) < 0 && first.pending.count == 1u);
+    assert(snag_history_merge(&first) < 0 && first.merged < first.snapshot.local_end);
     assert(snag_history_take_warning(&first));
     assert(rmdir(path) == 0 && rename(backup, path) == 0);
-    assert(snag_history_merge(&first) == 0 && first.pending.count == 0u);
+    assert(snag_history_merge(&first) == 0 && first.merged == first.snapshot.local_end);
     assert(snag_history_merge(&first) == 0);
     assert(snag_history_add(&first, "saved-before-crash") == 0);
     snag_history_free(&first); /* No orderly global merge. */
@@ -153,16 +220,19 @@ test_session_prompt_history(void)
     assert(!term_history_has(&first, "saved-before-crash"));
     assert(snag_history_bind(&first, first_dir) == 0);
     assert(term_history_has(&first, "saved-before-crash"));
-    assert(!term_history_has(&first, "second"));
-    assert(first.pending.count == 0u);
+    assert(history_records(&first, "second", true) == 0u);
+    assert(first.merged == first.snapshot.local_end);
     assert(snag_history_merge(&first) == 0);
     assert(snprintf(path, sizeof(path), "%s/prompt_history", first_dir) > 0);
     assert(stat(path, &st) == 0 && (st.st_mode & 0777u) == 0600u);
-    assert(unlink(path) == 0 && mkdir(path, 0700) == 0);
+    int writer = dup(first.local_fd), readonly = open(path, O_RDONLY);
+    assert(writer >= 0 && readonly >= 0 && dup2(readonly, first.local_fd) >= 0);
+    close(readonly);
     assert(snag_history_add(&first, "write-failed") < 0);
     assert(term_history_has(&first, "write-failed"));
     assert(snag_history_take_warning(&first));
-    assert(rmdir(path) == 0);
+    assert(dup2(writer, first.local_fd) >= 0);
+    close(writer);
     assert(snag_history_add(&first, "write-recovered") == 0);
     snag_history_free(&first);
     assert(snag_history_open(&first, temp) == 0);
@@ -215,12 +285,16 @@ test_prompt_history(void)
     assert(close(fd) == 0 && chmod(path, 0644) == 0);
     memset(&term, 0, sizeof(term));
     assert(snag_history_open(&term, temp) == 0);
-    assert(snag_history_take_warning(&term));
-    assert(!snag_history_take_warning(&term));
-    assert(term.snapshot.count == 3u);
-    assert(strcmp(term.snapshot.items[0], sample) == 0);
-    assert(strcmp(term.snapshot.items[1], "duplicate") == 0);
-    assert(strcmp(term.snapshot.items[2], "duplicate") == 0);
+    struct snag_history_reader reader = {.fd = {-1, -1}};
+    snag_history_reader_open(&reader, &term.snapshot);
+    struct snag_history_cursor cursor = snag_history_end(&term.snapshot), end;
+    const char *entry_text;
+    assert(snag_history_read(&reader, &term.snapshot, false, cursor, &cursor, &end, &entry_text) == 1);
+    assert(reader.warning && strcmp(entry_text, "duplicate") == 0);
+    snag_history_reader_close(&reader);
+    assert(term.snapshot.count == 0u && history_records(&term, NULL, false) == 3u);
+    assert(term_history_has(&term, sample));
+    assert(history_records(&term, "duplicate", false) == 2u);
     assert(stat(path, &st) == 0 && (st.st_mode & 0777u) == 0600u);
     assert(snag_history_merge(&term) == 0);
     snag_history_free(&term);
@@ -251,21 +325,29 @@ test_prompt_history(void)
     }
     memset(&term, 0, sizeof(term));
     assert(snag_history_open(&term, temp) == 0);
-    assert(term.snapshot.count == 20u);
+    assert(term.snapshot.count == 0u && history_records(&term, NULL, false) == 20u);
     for (unsigned int process = 0u; process < 2u; ++process)
         for (unsigned int i = 0u; i < 10u; ++i) {
             (void)snprintf(entry, sizeof(entry), "child-%u-%u", process, i);
             assert(term_history_has(&term, entry));
         }
-    for (unsigned int i = 0u; i < 105u; ++i) {
-        (void)snprintf(entry, sizeof(entry), "bounded-%03u", i);
+    assert(snprintf(subdir, sizeof(subdir), "%s/long-session", temp) > 0);
+    assert(mkdir(subdir, 0700) == 0 && snag_history_bind(&term, subdir) == 0);
+    for (unsigned int i = 0u; i < 205u; ++i) {
+        (void)snprintf(entry, sizeof(entry), "unbounded-%03u", i);
         assert(snag_history_add(&term, entry) == 0);
     }
-    assert(term.snapshot.count == SNAG_HISTORY_COUNT);
-    assert(strcmp(term.snapshot.items[0], "bounded-005") == 0);
-    assert(strcmp(term.snapshot.items[99], "bounded-104") == 0);
+    assert(term.snapshot.count == 0u);
+    assert(history_records(&term, NULL, true) == 205u);
+    assert(term_history_has(&term, "unbounded-000"));
     assert(snag_history_merge(&term) == 0);
     snag_history_free(&term);
+    assert(snag_history_open(&term, temp) == 0);
+    assert(history_records(&term, NULL, false) == 225u);
+    snag_history_free(&term);
+    char local[4096];
+    assert(snprintf(local, sizeof(local), "%s/prompt_history", subdir) > 0);
+    assert(unlink(local) == 0 && rmdir(subdir) == 0);
     assert(unlink(path) == 0);
 
     assert(snprintf(subdir, sizeof(subdir), "%s/symlink", temp) > 0);
@@ -313,7 +395,8 @@ test_prompt_history(void)
                                  SNAG_HISTORY_COUNT + 1u)) == 0);
     assert(close(fd) == 0);
     memset(&term, 0, sizeof(term));
-    assert(snag_history_open(&term, subdir) < 0);
+    assert(snag_history_open(&term, subdir) == 0);
+    assert(term.snapshot.count == 0u);
     assert(snag_history_merge(&term) == 0);
     snag_history_free(&term);
     assert(unlink(path) == 0 && rmdir(subdir) == 0);
@@ -2493,6 +2576,7 @@ main(void)
     test_history_turns();
     test_prompt_history();
     test_session_prompt_history();
+    test_history_reader_boundaries();
     test_prompt_clock();
     test_prompt_spinners();
     test_retained_prompt();

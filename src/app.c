@@ -4768,9 +4768,10 @@ report:
     (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, invalid_message);
 out:
     (void)capture_shutdown_signal(&app);
+    /* A POSIX process lock is released by closing any descriptor on its inode. */
+    (void)snag_ui_text(&app.ui, SNAG_UI_CLOSE, NULL);
     (void)snag_history_merge(&app.ui.history);
     history_warning(&app);
-    (void)snag_ui_text(&app.ui, SNAG_UI_CLOSE, NULL);
     snag_irc_close(app.irc);
     write_resume_command(&app, program, dotdir);
     if (signal_handlers_installed)

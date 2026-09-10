@@ -42,7 +42,7 @@ struct ui_action {
     enum snag_term_action action;
     char *text;
     int error;
-    bool history_refresh, steering, local;
+    bool history_refresh, history_warning, steering, local;
     struct ui_snapshot snapshot;
     struct snag_irc_route route;
 };
@@ -416,6 +416,8 @@ read_input(struct snag_ui_display *display, int timeout_ms)
         return -1;
     rc = snag_term_poll(term, timeout_ms, runtime->commands[0],
                        &item->action, &item->text);
+    item->history_warning = term->history_reader.warning;
+    term->history_reader.warning = false;
     if (item->text) item->received_ms = snag_time_ms();
     take_snapshot(display, &item->snapshot);
     if (item->text)
@@ -476,7 +478,7 @@ read_input(struct snag_ui_display *display, int timeout_ms)
     } else if (item->action == SNAG_TERM_CANCEL && term->input_backlog) {
         atomic_store(&runtime->cancel, true);
     } else if (item->action != SNAG_TERM_NONE || item->local ||
-               item->history_refresh || item->error) {
+               item->history_refresh || item->history_warning || item->error) {
         if (item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE) {
             term->prompt_wanted = true;
             if (item->action == SNAG_TERM_SUBMIT && item->snapshot.active &&
@@ -989,6 +991,9 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms,
     *text = item->text;
     if (item->steering)
         atomic_fetch_sub(&runtime->steering_pending, 1u);
+    if (item->history_warning && !ui->history.warned) {
+        ui->history.warning = ui->history.warned = true;
+    }
     if (item->history_refresh) {
         if (history_snapshot(ui, true) < 0)
             item->error = errno;

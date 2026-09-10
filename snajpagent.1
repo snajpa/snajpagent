@@ -837,8 +837,9 @@ work and exit without waiting for the model or command to finish.
 Move within the displayed rows of a wrapped or multiline draft, preserving the
 preferred terminal column, including in recalled prompts.  At the first or last
 row, move to the start or end of the text.  Up at the start selects one older
-prompt; Down at the end selects one newer prompt. History is persistent and
-local to the session; returning to its newest boundary restores the unsent draft.
+prompt; Down at the end selects one newer prompt. History visits the session's
+entries newest first, then the global archive newest first. Returning to the
+newest local boundary restores the unsent draft.
 .TP
 .BR Ctrl-P , " Ctrl-N"
 Move directly through prompt history, including from inside a multiline draft.
@@ -850,8 +851,12 @@ and Meta-b/Meta-f sequences are accepted, including Escape-prefixed and
 application-cursor arrows; the terminal must transmit them.
 .TP
 .B Ctrl-R
-Start case-sensitive incremental reverse search over prompt history.  Press it
-again for the next older match; search does not wrap.
+Start case-sensitive incremental reverse search over local session history,
+then the global archive. Press it again for the next match in that order;
+search does not wrap. Searches scan files in bounded chunks so editing and
+cancellation remain responsive even with a large archive. A navigation or search
+keeps fixed file boundaries; starting another one can see entries merged by
+programs that exited meanwhile.
 .TP
 .B Ctrl-G
 Abort reverse search and restore the exact original draft and cursor.  Escape
@@ -2411,24 +2416,43 @@ token capacities, counting capabilities and observed context ceilings.  Refresh 
 .BR /model\ cache .
 .TP
 .I $HOME/.snajpagent/prompt_history
-Global plaintext prompt-history archive. New interactive sessions take one
-snapshot at startup. On orderly exit, only lines entered by that process are
-merged under the file lock, preserving their order and deliberate repeats.
-Seeded or resumed entries are not merged again. Concurrent sessions never import
-those updates into Up/Down or Ctrl-R. Another
+Global plaintext prompt-history archive. On orderly exit (including handled
+SIGTERM or SIGHUP), only submissions accepted by this process are appended under
+the writer lock. Their order and deliberate repeats are preserved. Resuming and
+exiting without new submissions does not merge saved entries again. Submitting
+.B /exit
+is itself a new history entry; empty Ctrl-D adds nothing.
+Running programs do not publish their submissions immediately. Entries from
+exited programs become available to later navigation and searches in other
+running programs, after each program's own local entries. Another
 .B --dotdir
-selects another global archive. Each history retains the newest 100 decoded
-entries within 4 MiB as private mode 0600, one escaped physical line per submission.
+selects another global archive.
+.PP
+Files are private mode 0600, one escaped physical line per submission. Navigation
+and search read the files on demand rather than copying the archive into memory.
+Neither file is automatically pruned. Malformed or overlong records are skipped;
+a torn final record is removed before appending. History failures warn without
+rejecting accepted input. Before a session is persisted, or when its history
+cannot be written, only the newest 100 unsaved entries within 4 MiB are retained
+in memory. Normal persisted submissions are not subject to this fallback limit.
 .TP
 .I $HOME/.snajpagent/sessions/SESSION/prompt_history
-The session's own interactive history, restored on resume without importing new
-global entries. It is created when the session is first persisted and updated
-on each accepted interactive submission. A session from an older build without
-this file is seeded once from global history. Empty sessions keep their history
-in memory until exit; no session directory is created solely for editing.
+The session's own interactive history, restored on resume and searched before
+global history. It is created when the session is first persisted and appended
+on accepted interactive submissions. The global archive is not copied into it.
+An older session without this file starts with empty local history and still
+has access to global history. Existing local files remain readable, including
+entries copied by older builds; those entries are not merged again on resume.
+Empty sessions keep unsaved history in memory until exit; editing alone does not
+create a session directory.
+.PP
 Abrupt termination can skip the global merge; already saved local history remains
-available on resume. Deleting a session removes this local file, while global
-entries already merged remain until they age out or are removed manually.
+available on resume. Previous unmerged entries are not retroactively published.
+Deleting a session removes its local file, while global entries remain until
+removed manually. A session's entries can occur again when navigation reaches
+the global archive; intentional submissions are not deduplicated by text.
+Do not run older builds against these files: versions that bounded global history
+can truncate the archive. Back up history before manually editing or removing it.
 .TP
 .I $HOME/.snajpagent/sessions/SESSION/events.jsonl
 Append-only durable session log.

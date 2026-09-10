@@ -4,10 +4,13 @@
 
 ## Unreleased
 
-- Keep prompt-entry history local to each session. Seed new sessions once from
-  global history, restore their own history on resume, and merge only newly
-  entered lines into global history on orderly exit. Concurrent sessions keep
-  stable Up/Down and Ctrl-R history; deliberate repeated submissions remain.
+## 0.99.5 — September 10, 2026
+
+- Traverse prompt history locally first, then globally, using bounded-memory
+  disk-backed navigation and Ctrl-R. Keep submissions private to the running
+  process until exit, then append only new entries under the global writer lock.
+  Repeated resume/exit does not republish saved entries; global and local archives
+  are not pruned or copied wholesale, and long searches remain cancellable.
 
 - Preserve provider reasoning continuation in the private session journal and
   replay it in order with matching tool calls/results, including after resume.
@@ -16,8 +19,8 @@
   Compaction includes compatible reasoning before replacing the selected history.
 
 - Accept DeepSeek thinking streams whose reasoning items emit content-part
-  events. Discard their non-public parts while retaining message identity,
-  tool-call, index, size and terminal-event validation for every provider.
+  events. Keep these parts out of public output while retaining reasoning
+  continuity, message identity, tool-call, index, size and terminal validation.
 
 - Complete first-run manual and README instructions for Linux, macOS, Windows,
   FreeBSD, OpenBSD and NetBSD: verification, installation paths, native shells,

@@ -1299,6 +1299,137 @@ def test_ctrl_c_cancels_partial_editor_states():
         child.send_wait(b"clean-after-cancel\r", b"fixture answer", start=paste_end)
 
 
+def test_history_local_first_archive():
+    history = Path(DOTDIR, "prompt_history")
+    history.parent.mkdir(parents=True, exist_ok=True)
+    saved = history.read_bytes() if history.exists() else b""
+    archive = (b"archive-oldest-995\n" +
+               b"".join(f"archive-entry-{i:05d}\n".encode() for i in range(1200)) +
+               b"archive-match-995-global\n")
+    history.write_bytes(archive)
+    try:
+        with Child([], DEFAULT_IDLE_PROMPT, cols=160) as local, Child([], DEFAULT_IDLE_PROMPT, cols=160) as peer:
+            before = session_ids()
+            local.send_wait_idle(b"archive-match-995-local\r", b"fixture answer", start=len(local.buf))
+            sid = new_session(before)
+            peer.send_wait_idle(b"archive-peer-995\r", b"fixture answer", start=len(peer.buf))
+            assert history.read_bytes() == archive, "live submissions changed the global archive"
+            local_file = Path(DOTDIR, "sessions", sid, "prompt_history")
+            assert b"archive-oldest" not in local_file.read_bytes(), "global archive copied into local history"
+            start = len(local.buf)
+            local.send_wait(b"\x12archive-match-995", b"': archive-match-995-local", start=start)
+            local.send_wait(b"\x12", b"global", start=len(local.buf))
+            local.send(b"\x07")
+            start = len(local.buf)
+            local.send_wait(b"\x1b[A", b"archive-match-995-local", start=start)
+            # Up/Down first cross draft rows; Ctrl-A puts this single-line recall at its start.
+            local.send_wait(b"\x01\x1b[A", b"global", start=len(local.buf))
+            local.send_wait(b"\x1b[B", b"local", start=len(local.buf))
+            local.send_wait(b"\x10", b"global", start=len(local.buf))
+            start = len(local.buf)
+            local.send(b"\x10" * 105 + b"\x0e\r")
+            local.wait(b"fixture answer", start=start)
+            local.wait_idle_prompt(start=start)
+            submitted = [e for e in events(sid) if e["type"] == "turn_started"]
+            assert submitted[-1]["data"]["text"] == "archive-entry-01096"
+
+            local.send_wait(b"\x12archive-oldest-995", b"': archive-oldest-995", start=len(local.buf))
+            local.send(b"\x07")
+            local.send_wait(b"\x12archive-peer-995", b"failed reverse-i-search", start=len(local.buf))
+            local.send(b"\x07")
+            peer.exit_now()
+            local.send_wait(b"\x12archive-peer-995", b"': archive-peer-995", start=len(local.buf))
+            local.send(b"\x07")
+            local.exit_now()
+        assert history.read_bytes().startswith(archive)
+    finally:
+        history.write_bytes(saved)
+
+
+def test_history_repeated_resume_exit():
+    history = Path(DOTDIR, "prompt_history")
+    marker = b"history-resume-once-995"
+    initial = history.read_bytes().splitlines().count(marker) if history.exists() else 0
+    with Child([], DEFAULT_IDLE_PROMPT) as child:
+        before = session_ids()
+        child.send_wait_idle(marker + b"\r", b"fixture answer", start=len(child.buf))
+        sid = new_session(before)
+        child.send(b"\x04")
+        child.finish()
+    original = history.read_bytes()
+    for _ in range(4):
+        with Child(["--resume", sid], DEFAULT_ACCOUNTED_IDLE_PROMPT) as child:
+            child.send_wait(b"\x1b[A", marker, start=len(child.buf))
+            child.send_wait(b"\x03", b"^C\r\n", start=len(child.buf))
+            child.send(b"\x04")
+            child.finish()
+        assert history.read_bytes() == original, "resume/exit remerged existing history"
+    with Child(["--resume", sid], DEFAULT_ACCOUNTED_IDLE_PROMPT) as child:
+        child.send_wait_idle(marker + b"\r", b"fixture answer", start=len(child.buf))
+        child.exit_now()
+    assert history.read_bytes().splitlines().count(marker) == initial + 2, "intentional repeat lost or duplicated"
+    original = history.read_bytes()
+    for _ in range(3):
+        with Child(["--resume", sid], DEFAULT_ACCOUNTED_IDLE_PROMPT) as child:
+            child.exit_now()
+        assert history.read_bytes() == original + b"/exit\n", "/exit remerged older submissions"
+        original = history.read_bytes()
+
+
+def test_history_large_archive():
+    history = Path(DOTDIR, "prompt_history")
+    history.parent.mkdir(parents=True, exist_ok=True)
+    saved = history.read_bytes() if history.exists() else b""
+    try:
+        with history.open("wb") as file:
+            file.write(b"history-large-oldest-995\n")
+            block = (b"old archive filler " + b"x" * 1000 + b"\n") * 1000
+            for _ in range(24):
+                file.write(block)
+            file.write(b"history-large-newest-995\n")
+        size = history.stat().st_size
+        digest = hashlib.sha256(history.read_bytes()).digest()
+        with Child([], DEFAULT_IDLE_PROMPT) as child:
+            child.send_wait(b"\x1b[A", b"history-large-newest-995", start=len(child.buf))
+            child.send_wait(b"\x03", b"^C\r\n", start=len(child.buf))
+            start = len(child.buf)
+            child.send(b"\x12history-large-oldest-995")
+            # The renderer may change only 'new' to 'old' in the matched draft.
+            child.wait_pattern(re.compile(rb"\r\x1b\[\d+C(?:old|history-large-oldest-995)"), start=start)
+            child.send_wait(b"\x1b", b"history-large-oldest-995", start=len(child.buf))
+            child.send_wait(b"\x03", b"^C\r\n", start=len(child.buf))
+            child.send(b"\x04")
+            child.finish(expect_resume=False)
+        assert history.stat().st_size == size
+        assert hashlib.sha256(history.read_bytes()).digest() == digest
+    finally:
+        history.write_bytes(saved)
+
+
+def test_history_sparse_archive_cancellation():
+    history = Path(DOTDIR, "prompt_history")
+    saved = history.read_bytes() if history.exists() else b""
+    try:
+        with history.open("wb") as file:
+            file.write(b"sparse-oldest-995\n")
+            file.seek(2**31 + 8192)
+            file.write(b"\nsparse-newest-995\n")
+        size = history.stat().st_size
+        with Child([], DEFAULT_IDLE_PROMPT) as child:
+            # No scan of the multi-gigabyte malformed record at startup.
+            child.send_wait(b"\x1b[A", b"sparse-newest-995", start=len(child.buf))
+            child.send_wait(b"\x03", b"^C\r\n", start=len(child.buf))
+            child.send_wait(b"\x12never-present-995", b"5': ", start=len(child.buf))
+            start = len(child.buf)
+            child.send_wait(b"\x07draft-still-live-995", b"draft-still-live-995", start=start, timeout=0.5)
+            child.send_wait(b"\x03", b"^C\r\n", start=len(child.buf))
+            child.send(b"\x04")
+            child.finish(expect_resume=False)
+        assert history.stat().st_size == size
+    finally:
+        history.write_bytes(saved)
+
+
 def test_session_prompt_history_isolation():
     marker_a = b"history-isolation-first-831"
     marker_b = b"history-isolation-second-831"
@@ -1343,9 +1474,7 @@ def test_session_prompt_history_isolation():
         with Child(["--resume", sid], ready=DEFAULT_ACCOUNTED_IDLE_PROMPT) as resumed:
             start = len(resumed.buf)
             resumed.send(b"\x12" + other)
-            resumed.drain(0.4)
-            assert b"failed reverse-i-search" in resumed.buf[start:]
-            assert b"': " + other not in resumed.buf[start:]
+            resumed.wait(b"': " + other, start=start)
             resumed.send(b"\x07")
             resumed.exit_now()
     with Child([], DEFAULT_IDLE_PROMPT) as fresh:
@@ -4873,6 +5002,10 @@ if __name__ == "__main__":
     test_ctrl_c_cancels_partial_editor_states()
     test_interrupt()
     test_prompt_history_and_reverse_search()
+    test_history_local_first_archive()
+    test_history_repeated_resume_exit()
+    test_history_large_archive()
+    test_history_sparse_archive_cancellation()
     test_session_prompt_history_isolation()
     test_session_prompt_history_exit_and_crash()
     test_multiline_and_paste()

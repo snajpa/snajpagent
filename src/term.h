@@ -78,7 +78,11 @@ struct snag_term {
     size_t output_columns;
     size_t output_cell_width;
     char output_cell_style[64u];
-    struct snag_history_snapshot history;
+    struct snag_history_snapshot history, history_next;
+    struct snag_history_reader history_reader;
+    struct snag_history_cursor history_start, history_end, history_scan;
+    unsigned int history_pending; /* 1: Up, 2: Down, 3: search. */
+    bool history_next_ready;
     char *history_draft;
     char *search_original;
     struct snag_irc_destinations *destinations;
@@ -88,7 +92,7 @@ struct snag_term {
     size_t command_count;
     size_t history_pos;
     size_t search_original_cursor;
-    size_t search_pos;
+    bool search_found;
     size_t rendered_rows;
     size_t rendered_cursor_row;
     size_t rendered_cursor_col;

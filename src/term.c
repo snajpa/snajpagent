@@ -254,8 +254,9 @@ snag_term_init(struct snag_term *term)
     term->columns = 80u;
     term->rows = 24u;
     term->history_pos = SIZE_MAX;
+    term->history_reader.fd[0] = term->history_reader.fd[1] = -1;
     term->preferred_column = SIZE_MAX;
-    term->search_pos = SIZE_MAX;
+    term->search_found = false;
 }
 
 void
@@ -1481,6 +1482,14 @@ history_reset_navigation(struct snag_term *term)
     free(term->history_draft);
     term->history_draft = NULL;
     term->history_pos = SIZE_MAX;
+    term->history_pending = 0u;
+    snag_history_reader_close(&term->history_reader);
+    if (term->history_next_ready) {
+        snag_history_snapshot_free(&term->history);
+        term->history = term->history_next;
+        memset(&term->history_next, 0, sizeof(term->history_next));
+        term->history_next_ready = false;
+    }
 }
 
 static int
@@ -1522,47 +1531,52 @@ snag_term_consume_echoed_submission(struct snag_term *term, const char *label)
 static int
 history_up(struct snag_term *term)
 {
-    if (term->history_pos == SIZE_MAX)
-        term->history_refresh_requested = true;
-    if (!term->history.count)
-        return 0;
     if (term->history_pos == SIZE_MAX) {
-        if (snag_buf_terminate(&term->draft) < 0)
-            return -1;
-        term->history_draft = snag_strdup_checked((char *)term->draft.data,
-                                                 SNAG_MAX_DIRECT_PROMPT);
-        if (!term->history_draft)
-            return -1;
-        term->history_pos = term->history.count;
+        term->history_refresh_requested = true;
+        if (snag_buf_terminate(&term->draft) < 0) return -1;
+        term->history_draft = snag_strdup_checked((char *)term->draft.data, SNAG_MAX_DIRECT_PROMPT);
+        if (!term->history_draft) return -1;
+        snag_history_reader_open(&term->history_reader, &term->history);
+        term->history_start = snag_history_end(&term->history);
+        term->history_pos = 0u;
     }
-    if (term->history_pos)
-        --term->history_pos;
-    return replace_draft(term, term->history.items[term->history_pos]);
+    const char *text;
+    term->history_pending = 1u;
+    term->history_reader.budget = 65536u;
+    int rc = snag_history_read(&term->history_reader, &term->history, false,
+                               term->history_start, &term->history_start,
+                               &term->history_end, &text);
+    if (rc == 2) return 0;
+    term->history_pending = 0u;
+    if (rc < 0) term->history_reader.warning = true;
+    if (rc <= 0) return 0;
+    ++term->history_pos;
+    return replace_draft(term, text);
 }
 
 static int
 history_down(struct snag_term *term)
 {
-    char *draft;
-
-    if (term->history_pos == SIZE_MAX) {
-        term->history_refresh_requested = true;
-        return 0;
+    if (term->history_pos == SIZE_MAX) return 0;
+    const char *text;
+    term->history_pending = 2u;
+    term->history_reader.budget = 65536u;
+    int rc = term->history_pos ? snag_history_read(&term->history_reader, &term->history, true,
+                               term->history_end, &term->history_start,
+                               &term->history_end, &text) : 0;
+    if (rc == 2) return 0;
+    term->history_pending = 0u;
+    if (rc < 0) { term->history_reader.warning = true; return 0; }
+    if (rc > 0) {
+        if (term->history_pos) --term->history_pos;
+        return replace_draft(term, text);
     }
-    if (term->history_pos + 1u < term->history.count) {
-        ++term->history_pos;
-        return replace_draft(term, term->history.items[term->history_pos]);
-    }
-    draft = term->history_draft;
+    char *draft = term->history_draft;
     term->history_draft = NULL;
-    term->history_pos = SIZE_MAX;
-    if (!draft)
-        return replace_draft(term, "");
-    {
-        int rc = replace_draft(term, draft);
-        free(draft);
-        return rc;
-    }
+    history_reset_navigation(term);
+    rc = replace_draft(term, draft ? draft : "");
+    free(draft);
+    return rc;
 }
 
 static int
@@ -1583,21 +1597,30 @@ search_label_update(struct snag_term *term)
 }
 
 static int
-search_find(struct snag_term *term, size_t before)
+search_find(struct snag_term *term, struct snag_history_cursor before)
 {
-    if (snag_buf_terminate(&term->search_query) < 0)
-        return -1;
-    while (before) {
-        size_t i = --before;
-        if (strstr(term->history.items[i], (char *)term->search_query.data)) {
-            term->search_pos = i;
+    if (snag_buf_terminate(&term->search_query) < 0) return -1;
+    struct snag_history_cursor start, end;
+    const char *text;
+    int rc;
+    term->history_pending = 3u;
+    term->history_reader.budget = 65536u;
+    while ((rc = snag_history_read(&term->history_reader, &term->history, false,
+                                   before, &start, &end, &text)) == 1) {
+        before = start;
+        if (strstr(text, (char *)term->search_query.data)) {
+            term->history_start = start;
+            term->history_end = end;
+            term->search_found = true;
             term->search_failed = false;
-            if (search_label_update(term) < 0)
-                return -1;
-            return replace_draft(term, term->history.items[i]);
+            term->history_pending = 0u;
+            if (search_label_update(term) < 0) return -1;
+            return replace_draft(term, text);
         }
     }
-    term->search_pos = 0u;
+    if (rc == 2) { term->history_scan = before; return 0; }
+    term->history_pending = 0u;
+    if (rc < 0) term->history_reader.warning = true;
     term->search_failed = true;
     return search_label_update(term) < 0 ? -1 : redraw(term);
 }
@@ -1605,62 +1628,57 @@ search_find(struct snag_term *term, size_t before)
 static int
 search_begin(struct snag_term *term)
 {
+    if (term->history_pending) return 0;
     if (term->searching)
-        return search_find(term, term->search_pos);
+        return search_find(term, term->search_found ? term->history_start : snag_history_end(&term->history));
     term->history_refresh_requested = true;
-    if (snag_buf_terminate(&term->draft) < 0)
-        return -1;
-    term->search_original = snag_strdup_checked((char *)term->draft.data,
-                                               SNAG_MAX_DIRECT_PROMPT);
-    if (!term->search_original)
-        return -1;
+    if (snag_buf_terminate(&term->draft) < 0) return -1;
+    term->search_original = snag_strdup_checked((char *)term->draft.data, SNAG_MAX_DIRECT_PROMPT);
+    if (!term->search_original) return -1;
     term->search_original_cursor = term->cursor;
+    history_reset_navigation(term);
+    snag_history_reader_open(&term->history_reader, &term->history);
     snag_buf_reset(&term->search_query);
-    if (snag_buf_append(&term->search_query, term->draft.data,
-                       term->draft.len) < 0) {
+    if (snag_buf_append(&term->search_query, term->draft.data, term->draft.len) < 0) {
         free(term->search_original);
         term->search_original = NULL;
         return -1;
     }
     term->searching = true;
-    term->search_failed = false;
-    term->search_pos = term->history.count;
-    return search_find(term, term->history.count);
+    term->search_failed = term->search_found = false;
+    return search_find(term, snag_history_end(&term->history));
 }
 
 int
 snag_term_history_set(struct snag_term *term,
                      struct snag_history_snapshot *snapshot, bool refresh)
 {
-    size_t distance = term->history_pos == SIZE_MAX ? 0u :
-                      term->history.count - term->history_pos;
-    size_t matched = SIZE_MAX;
-    if (!refresh && (term->searching || distance)) {
-        snag_history_snapshot_free(snapshot);
+    bool active = term->searching || term->history_pos != SIZE_MAX;
+    if (!refresh && active) {
+        snag_history_snapshot_free(&term->history_next);
+        term->history_next = *snapshot;
+        memset(snapshot, 0, sizeof(*snapshot));
+        term->history_next_ready = true;
         return 0;
     }
-    if (refresh && term->searching && !term->search_failed &&
-        term->search_pos < term->history.count) {
-        const char *selected = term->history.items[term->search_pos];
-        for (size_t i = snapshot->count; i > 0u; --i)
-            if (strcmp(selected, snapshot->items[i - 1u]) == 0) {
-                matched = i - 1u;
-                break;
-            }
-    }
+    snag_history_snapshot_free(&term->history_next);
+    term->history_next_ready = false;
     snag_history_snapshot_free(&term->history);
     term->history = *snapshot;
     memset(snapshot, 0, sizeof(*snapshot));
-    if (refresh && term->searching && matched != SIZE_MAX) {
-        term->search_pos = matched;
-        return 0;
-    }
-    if (refresh && term->searching)
-        return search_find(term, term->history.count);
-    if (refresh && distance && term->history.count) {
-        term->history_pos = distance > term->history.count ? 0u :
-                            term->history.count - distance;
-        return replace_draft(term, term->history.items[term->history_pos]);
+    if (refresh && active) {
+        snag_history_reader_open(&term->history_reader, &term->history);
+        if (term->searching) {
+            if (term->search_found && term->history_start.source != 0u) {
+                if (term->history_pending == 3u) return search_find(term, term->history_end);
+                return 0;
+            }
+            return search_find(term, snag_history_end(&term->history));
+        }
+        size_t distance = term->history_pos;
+        term->history_pos = 0u;
+        term->history_start = snag_history_end(&term->history);
+        while (distance--) if (history_up(term) < 0) return -1;
     }
     return 0;
 }
@@ -1677,7 +1695,7 @@ search_accept(struct snag_term *term, bool abort)
     term->searching = false;
     term->search_original = NULL;
     term->search_failed = false;
-    term->search_pos = SIZE_MAX;
+    term->search_found = false;
     snag_buf_reset(&term->search_query);
     snag_buf_reset(&term->search_label);
     history_reset_navigation(term);
@@ -1697,13 +1715,16 @@ search_accept(struct snag_term *term, bool abort)
 static int
 search_insert(struct snag_term *term, const unsigned char *data, size_t len)
 {
-    size_t before = term->search_failed ? 0u : term->search_pos + 1u;
+    struct snag_history_cursor before = term->search_found ? term->history_end : snag_history_end(&term->history);
 
     if (len > SNAG_MAX_DIRECT_PROMPT - term->search_query.len)
         return snag_errno(EOVERFLOW);
     if (snag_buf_append(&term->search_query, data, len) < 0)
         return -1;
     mark_input_activity(term);
+    term->history_reader.scanning = false;
+    term->search_failed = false;
+    if (search_label_update(term) < 0 || redraw(term) < 0) return -1;
     return search_find(term, before);
 }
 
@@ -1714,7 +1735,10 @@ search_backspace(struct snag_term *term)
         term->search_query.len = previous_cp(term->search_query.data,
                                              term->search_query.len);
     mark_input_activity(term);
-    return search_find(term, term->history.count);
+    term->history_reader.scanning = false;
+    term->search_failed = false;
+    if (search_label_update(term) < 0 || redraw(term) < 0) return -1;
+    return search_find(term, snag_history_end(&term->history));
 }
 
 static size_t
@@ -2236,6 +2260,8 @@ apply_key(struct snag_term *term, int key)
 {
     if (term->searching && search_accept(term, false) < 0)
         return -1;
+    term->history_pending = 0u;
+    term->history_reader.scanning = false;
     size_t preferred = term->preferred_column;
     mark_input_activity(term);
     switch (key) {
@@ -2361,7 +2387,7 @@ cancel_line(struct snag_term *term, enum snag_term_action *action)
     term->search_original = NULL;
     term->searching = false;
     term->search_failed = false;
-    term->search_pos = SIZE_MAX;
+    term->search_found = false;
     snag_buf_reset(&term->search_query);
     snag_buf_reset(&term->search_label);
     snag_buf_reset(&term->draft);
@@ -2471,8 +2497,12 @@ feed_byte(struct snag_term *term, unsigned char byte,
     case 0x17u:
         return delete_range(term, word_left(term), term->cursor);
     case 0x10u:
+        if (term->history_pending == 1u) return 0;
+        term->history_reader.scanning = false;
         return history_up(term);
     case 0x0eu:
+        if (term->history_pending == 2u) return 0;
+        term->history_reader.scanning = false;
         return history_down(term);
     case 0x1au:
         return suspend_terminal(term);
@@ -2565,7 +2595,7 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
         if (term->searching && term->escape_len == 1u &&
             (timeout_ms < 0 || timeout_ms > 30))
             timeout_ms = 30;
-        timeout_ms = spinner_timeout(term, timeout_ms);
+        timeout_ms = term->history_pending ? 0 : spinner_timeout(term, timeout_ms);
         rc = snag_term_input_wait(&term->host, wake_fd, timeout_ms);
         if (sigint_pending) {
             (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
@@ -2584,6 +2614,11 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
         if (rc == 0 && animated_spinners(term) &&
             update_spinners(term, spinner_step(term, snag_monotonic_ms())) < 0)
             return -1;
+        if (rc == 0 && term->history_pending && !term->input_only) {
+            if (term->history_pending == 1u) return history_up(term);
+            if (term->history_pending == 2u) return history_down(term);
+            return search_find(term, term->history_scan);
+        }
         if (rc <= 0)
             return rc;
         if (!(rc & SNAG_TERM_WAIT_INPUT)) {
@@ -2661,4 +2696,5 @@ snag_term_close(struct snag_term *term)
             close(term->output_fd[i]);
     memset(term, 0, sizeof(*term));
     term->output_fd[0] = term->output_fd[1] = -1;
+    term->history_reader.fd[0] = term->history_reader.fd[1] = -1;
 }

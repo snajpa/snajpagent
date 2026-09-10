@@ -1,23 +1,41 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 
-# snajpagent 0.99.4 — September 9, 2026
+# snajpagent 0.99.5 — September 10, 2026
 
-Goal controls, durable session recovery and additional Linux builds.
+Local-first prompt history, provider reasoning continuity and terminal controls.
 
-These notes describe the immutable 0.99.4 tag and its companion downloads.
-Later source changes are listed under Unreleased in CHANGELOG.md; current
-source documentation and a rebuilt executable may include those later fixes.
+These notes describe the immutable 0.99.5 tag and its companion downloads.
+Later source changes are listed under Unreleased in CHANGELOG.md.
 
 ## Changes
 
-- `/goal clear` cancels the current goal and stops automatic continuation.
-  Pause, resume and clear accept whitespace around their command words.
-  An in-progress turn finishes normally; Ctrl-C interrupts it immediately.
-- Session recovery preserves admitted input and active-turn controls. Provider
-  policy clarification retains running commands and partial response evidence.
-- Twenty standalone executables cover Linux, macOS, Windows, FreeBSD, OpenBSD
-  and NetBSD. Linux adds ARMv6, RISC-V 64-bit, PowerPC 64-bit little-endian and
-  PowerPC 32-bit big-endian builds.
+- Up/Down, Ctrl-P/Ctrl-N and Ctrl-R visit session history first, then the global
+  archive. Submissions remain private to a running process until orderly exit.
+  Only newly entered lines are appended globally; repeated resume/exit does not
+  republish saved entries. Files are neither copied wholesale nor pruned, and
+  large-file searches remain cancellable.
+- Provider reasoning is retained privately and replayed with matching tool calls
+  and results, including after resume and during compaction. Replay is scoped
+  to provider, endpoint, model and credential identity. DeepSeek thinking streams
+  accept non-public reasoning parts without displaying or executing them.
+- Model/provider/effort selections persist across turns and resume. Goal
+  interruption settles state before showing the idle prompt; empty Enter stays
+  local. Command help, queued-prompt rendering, history counts, active controls
+  and manual compaction have been corrected.
+- Installation and first-run instructions cover all six platform families.
+  Twenty standalone production executables retain the existing target matrix.
+
+## Upgrading sessions and history
+
+Back up prompt history before manually editing it. Do not run older builds
+against the new unbounded history files: older versions can prune the archive.
+Saved local entries from an earlier process are not republished on resume,
+including entries whose original process crashed before its global merge.
+An explicit `/exit` submission adds its own history entry; empty Ctrl-D does not.
+
+Reasoning continuation is stored in the private session journal, not the public
+transcript. Sessions written with the extended completion records must not be
+downgraded to executables predating reasoning-continuation support.
 
 ## Downloads and updates
 
@@ -50,4 +68,4 @@ release leaves the existing development channel unchanged.
 checks and OS limits. Compilation does not establish new runtime qualification.
 The Windows updater's two-rename fallback has interruption/recovery semantics
 specified in the manual; actual Windows/macOS updater execution remains
-unqualified. Exact 0.99.4 build and validation scope accompanies the assets.
+unqualified. Exact 0.99.5 build and validation scope accompanies the assets.
