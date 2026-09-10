@@ -776,7 +776,9 @@ clarification_item_safe(const json_t *item)
     const char *kind = snag_json_string(item, "type");
     json_t *content = json_object_get(item, "content");
 
-    if (kind && !strcmp(kind, "reasoning"))
+    /* Local functions are admitted only from a successful response. Failed
+     * function proposals have no local effects and are never replayed. */
+    if (snag_string_in(kind, "reasoning function_call"))
         return true;
     if (!kind || strcmp(kind, "message") ||
         !snag_string_in(snag_json_string(item, "role"), "assistant") ||
@@ -810,10 +812,13 @@ dispatch_event(struct snag_responses_stream *stream, const char *type,
             if (kind && !strcmp(kind, "reasoning")) continue;
             if (snag_string_in(type, "response.failed response.incomplete error") &&
                 stream->created && clarification_item_safe(item)) {
-                /* Preserve and validate the failed response's public snapshot
-                 * through the same identity/content reducer as streamed text. */
-                if (message_snapshot(stream, i, item,
-                        snag_string_in(snag_json_string(item, "status"), "completed")) < 0) {
+                /* Validate snapshots through their existing identity reducer.
+                 * Only public text survives a failed response. */
+                bool complete = snag_string_in(snag_json_string(item, "status"), "completed");
+                int rc = !strcmp(kind, "function_call") ?
+                    function_snapshot(stream, i, item, complete) :
+                    message_snapshot(stream, i, item, complete);
+                if (rc < 0) {
                     (void)snprintf(stream->clarification_skipped, sizeof(stream->clarification_skipped),
                                    "invalid_response_output_snapshot");
                     return -1;
@@ -828,20 +833,24 @@ dispatch_event(struct snag_responses_stream *stream, const char *type,
         return 0;
     if (strcmp(type, "response.created") == 0)
         return handle_response_created(stream, root);
-    /* Text can be retained for clarification, but cannot be transport-replayed. */
+    /* Public text is retained; unexecuted local calls are discarded. Neither
+     * permits exact transport replay. Hosted/unknown tools stay unsafe. */
     if (!snag_string_in(type, "response.queued response.in_progress response.failed response.incomplete error")) {
         bool safe = (snag_string_in(type, "response.output_item.added response.output_item.done") &&
                      clarification_item_safe(json_object_get(root, "item"))) ||
             (snag_string_in(type, "response.content_part.added response.content_part.done") &&
              snag_string_in(snag_json_string(json_object_get(root, "part"), "type"), "output_text")) ||
             snag_string_in(type, "response.output_text.delta response.output_text.done") ||
+            snag_string_in(type, "response.function_call_arguments.delta response.function_call_arguments.done") ||
             snag_string_in(type, "response.reasoning_summary_part.added response.reasoning_summary_part.done "
                 "response.reasoning_summary_text.delta response.reasoning_summary_text.done "
                 "response.reasoning_text.delta response.reasoning_text.done");
         stream->retry_unsafe = true;
-        if (!safe && !stream->clarification_skipped[0])
+        if (!safe && !stream->clarification_skipped[0]) {
+            const char *kind = snag_json_string(json_object_get(root, "item"), "type");
             (void)snprintf(stream->clarification_skipped, sizeof(stream->clarification_skipped),
-                           "stream:%s", type);
+                           "stream:%s%s%.48s", type, kind ? ":" : "", kind ? kind : "");
+        }
     }
     if (strcmp(type, "response.output_item.added") == 0)
         return handle_output_item(stream, root, false);

@@ -930,9 +930,50 @@ test_reasoning_terminal_and_validation(void)
     json_decref(item);
 }
 
+static void
+test_failed_function_clarification_boundaries(void)
+{
+    const char *snapshots[] = {
+        "{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"{}\",\"status\":\"completed\"}",
+        "{\"type\":\"function_call\",\"id\":\"other\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"{}\",\"status\":\"completed\"}",
+        "{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"other\",\"name\":\"exec_command\",\"arguments\":\"{}\",\"status\":\"completed\"}",
+        "{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"changed\",\"status\":\"completed\"}",
+        "{\"type\":\"function_call\"}",
+        "{\"type\":\"web_search_call\",\"id\":\"hosted\",\"status\":\"in_progress\"}"
+    };
+    for (size_t i = 0u; i < sizeof(snapshots) / sizeof(snapshots[0]); ++i) {
+        struct parsed_stream emitted = parsed_new(1024u);
+        struct snag_responses_stream responses;
+        struct snag_sse_parser sse;
+        struct snag_buf wire = {.max = 8192u};
+        struct snag_response_graph graph = {0};
+        char error[256] = {0};
+        assert(snag_buf_printf(&wire,
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"\",\"status\":\"in_progress\"}}\n\n"
+            "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"item_id\":\"f\",\"delta\":\"{}\"}\n\n"
+            "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"cyber_policy\"},\"output\":[%s]}}\n\n",
+            snapshots[i]) == 0);
+        snag_responses_stream_init(&responses, capture_emit, &emitted);
+        snag_sse_init(&sse, snag_responses_sse_record, &responses);
+        assert(snag_sse_feed(&sse, wire.data, wire.len, error, sizeof(error)) < 0);
+        assert(responses.failed && !responses.terminal && responses.retry_unsafe);
+        assert(snag_provider_failure_is_policy(&responses.provider_failure));
+        assert((responses.clarification_skipped[0] == '\0') == (i == 0u));
+        assert(snag_responses_stream_finish(&responses, &graph, error, sizeof(error)) < 0);
+        assert(!graph.count && !emitted.calls);
+        snag_response_graph_free(&graph);
+        snag_sse_free(&sse);
+        snag_responses_stream_free(&responses);
+        snag_buf_free(&wire);
+        parsed_free(&emitted);
+    }
+}
+
 int
 main(void)
 {
+    test_failed_function_clarification_boundaries();
     test_deltas_survive_empty_terminal_output();
     test_reasoning_content_parts();
     test_reasoning_terminal_and_validation();

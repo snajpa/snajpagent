@@ -4403,17 +4403,18 @@ def run_clarification_episode_cases(binary, root, provider, environment):
             provider.runtime_handler = None
 
 
-def run_policy_partial_goal_cases(binary, root, provider, environment):
+def run_policy_partial_goal_cases(binary, root, provider, environment,
+                                  modes=("resume", "partial", "exhausted", "scaffold", "type", "snapshot", "snapshot-empty", "snapshot-prefix", "snapshot-repeat", "refusal", "tool", "tool-args", "tool-done", "tool-snapshot", "tool-exhausted", "hosted", "unknown")):
     """A failed text stream gets five logged clarifications before goal pause."""
-    for mode in ("resume", "partial", "exhausted", "scaffold", "type", "snapshot", "snapshot-empty", "snapshot-prefix", "snapshot-repeat", "refusal", "tool", "unknown"):
+    for mode in modes:
         case = root / ("policy-partial-" + mode)
         case.mkdir(parents=True)
         config, state = case / "config.ini", case / "state"
         write_irc_config(config, provider.port, "host-model")
         original = "Inspect the local fixture file without changing it."
         attempts = []
-        unsafe = mode in ("refusal", "tool", "unknown")
-        paused = unsafe or mode == "exhausted"
+        unsafe = mode in ("refusal", "hosted", "unknown")
+        paused = unsafe or mode in ("exhausted", "tool-exhausted")
         resumed = False
 
         def respond(handler, request, sequence):
@@ -4452,16 +4453,32 @@ def run_policy_partial_goal_cases(binary, root, provider, environment):
                         body += provider.event("response.refusal.delta", {"output_index": 1,
                             "content_index": 0, "item_id": "refusal",
                             "delta": "The requested action is not permitted."})
-                    elif mode == "tool":
+                    elif mode.startswith("tool"):
+                        args = json.dumps({"command": "printf unsafe > must-not-run",
+                            "workdir": str(case), "yield_ms": 1, "timeout_ms": None,
+                            "max_output_tokens": 1000, "pty": False, "stdin": None})
+                        pending = {"type": "function_call", "id": "pending", "call_id": "pending",
+                            "name": "exec_command", "arguments": "", "status": "in_progress"}
                         body += provider.event("response.output_item.added", {"output_index": 1,
-                            "item": {"type": "function_call", "id": "pending", "call_id": "pending",
-                                     "name": "read_file", "arguments": "", "status": "in_progress"}})
+                            "item": pending})
+                        if mode in ("tool-args", "tool-done", "tool-snapshot"):
+                            body += provider.event("response.function_call_arguments.delta", {
+                                "output_index": 1, "item_id": "pending", "delta": args})
+                        if mode in ("tool-done", "tool-snapshot"):
+                            body += provider.event("response.function_call_arguments.done", {
+                                "output_index": 1, "item_id": "pending", "arguments": args})
+                            pending = dict(pending, arguments=args, status="completed")
+                            body += provider.event("response.output_item.done", {
+                                "output_index": 1, "item": pending})
+                    elif mode == "hosted":
+                        body += provider.event("response.output_item.added", {"output_index": 1,
+                            "item": {"type": "web_search_call", "id": "hosted", "status": "in_progress"}})
                     elif mode == "unknown":
                         body += provider.event("response.unknown_activity", {})
                     response = {"error": {
                         "type" if mode == "type" else "code": "cyber_policy",
                         "message": "This content was flagged for possible cybersecurity risk."}}
-                    if mode.startswith("snapshot"):
+                    if mode.startswith("snapshot") or mode == "tool-snapshot":
                         response["output"] = [{"type": "message", "id": f"msg_{sequence}",
                             "role": "assistant", "phase": "commentary", "status": "in_progress",
                             "content": [] if mode == "snapshot-empty" else [{"type": "output_text", "text": text}]}]
@@ -4471,6 +4488,9 @@ def run_policy_partial_goal_cases(binary, root, provider, environment):
                                 event = json.loads(line[6:])
                                 if event.get("type") == "response.output_item.added":
                                     response["output"][0]["id"] = event["item"]["id"]
+                                    break
+                        if mode == "tool-snapshot":
+                            response["output"].append(pending)
                     body += provider.event("response.failed", {"response": response})
             encoded = body.encode()
             handler.send_response(200)
@@ -4508,14 +4528,21 @@ def run_policy_partial_goal_cases(binary, root, provider, environment):
             corrections = event_list(events, "response_output_correction")
             assert len(corrections) == (0 if unsafe else 5), (mode, len(corrections))
             assert len(attempts) == (1 if unsafe else 6), (mode, len(attempts))
+            assert not (case / "must-not-run").exists(), mode
+            assert all(e["data"].get("call_id") != "pending"
+                       for e in event_list(events, "tool_started")), mode
+            assert all(not any(i.get("type") == "function_call" and i.get("call_id") == "pending"
+                       for i in request["input"]) for request in attempts), mode
             assert len(event_list(events, "goal_paused")) == int(paused) + int(mode == "resume"), mode
             if paused:
                 assert event_list(events, "goal_paused")[0]["data"]["reason"] == "provider_policy"
                 policy = event_list(events, "response_failed")[-1]["data"]["policy"]
                 assert policy["code"] == "cyber_policy"
                 assert policy["clarification_skipped"] == {
-                    "exhausted": "clarification_limit", "refusal": "stream:response.content_part.added",
-                    "tool": "stream:response.output_item.added", "unknown": "stream:response.unknown_activity",
+                    "exhausted": "clarification_limit", "tool-exhausted": "clarification_limit",
+                    "refusal": "stream:response.content_part.added",
+                    "hosted": "stream:response.output_item.added:web_search_call",
+                    "unknown": "stream:response.unknown_activity",
                 }[mode], policy
             assert not event_list(events, "turn_recovery"), mode
             assert len(event_list(events, "tool_started")) == (1 if paused or mode == "resume" else 2), mode
@@ -4566,19 +4593,28 @@ def run_policy_partial_goal_cases(binary, root, provider, environment):
             provider.runtime_handler = None
 
 
-def run_policy_stop_cases(binary, root, provider, environment):
-    for mode in ("goal", "running", "goal-running", "content-filter", "refusal", "resume-running"):
+def run_policy_stop_cases(binary, root, provider, environment,
+                         modes=("goal", "running", "goal-running", "content-filter", "refusal", "resume-running", "resume-goal-running")):
+    for mode in modes:
         case = root / ("policy-stop-" + mode)
         case.mkdir(parents=True)
         config, state = case / "config.ini", case / "state"
         write_irc_config(config, provider.port, "host-model")
+        with config.open("a") as out:
+            out.write('prompt = {activity_spinner}{chat:C>}{rollout-idle:host-model/medium I>}{rollout-active:host-model/medium A>}\n'
+                      'prompt_spinner_provider = "\\0P"\nprompt_spinner_tool = "\\0T"\n'
+                      'prompt_tool_spinner_off_delay_ms = 0\n')
         requests, failures = [], []
-        goal = mode in ("goal", "goal-running", "refusal")
+        goal = mode in ("goal", "goal-running", "refusal", "resume-goal-running")
         running = "running" in mode
         marker = "Clarification: inspect only the local fixture file."
+        arrived, release = threading.Event(), threading.Event()
 
         def respond(handler, request, sequence):
             requests.append(request)
+            if len(requests) == 1:
+                arrived.set()
+                assert release.wait(10), "provider activity observation timed out"
             calls = [i for i in request["input"] if i.get("type") == "function_call"]
             names = {i.get("name") for i in calls}
             if goal and "create_goal" not in names:
@@ -4621,6 +4657,10 @@ def run_policy_stop_cases(binary, root, provider, environment):
         try:
             terminal.wait("host-model/medium")
             terminal.submit("Inspect the local fixture file.")
+            assert arrived.wait(10), "provider request did not start"
+            terminal.wait_until(lambda screen: screen.rstrip().splitlines()[-1] == "Phost-model/medium A>",
+                                "provider activity while request is in flight")
+            release.set()
             terminal.wait("Running commands retained" if running else
                           "Goal paused after model refusal" if mode == "refusal" else
                           "Goal paused after provider policy rejection" if goal else "turn failed; try /retry")
@@ -4628,6 +4668,8 @@ def run_policy_stop_cases(binary, root, provider, environment):
             time.sleep(1.2)
             assert len(requests) == before, (mode, before, len(requests))
             assert len(failures) == (1 if mode in ("content-filter", "refusal") else 6), mode
+            terminal.wait_until(lambda screen: screen.rstrip().splitlines()[-1] in ("host-model/medium I>", "host-model/medium A>"),
+                                "parked prompt without provider/tool activity")
             _, events = read_events(state)
             assert len(event_list(events, "goal_paused")) == int(goal), mode
             if goal:
@@ -4635,7 +4677,7 @@ def run_policy_stop_cases(binary, root, provider, environment):
                     "refusal" if mode == "refusal" else "provider_policy")
             assert len(event_list(events, "response_output_correction")) == (
                 0 if mode in ("content-filter", "refusal") else 5), mode
-            if mode == "resume-running":
+            if mode.startswith("resume-"):
                 log_path, _ = read_events(state)
                 sid = log_path.parent.name
                 terminal.exit()
@@ -4643,10 +4685,12 @@ def run_policy_stop_cases(binary, root, provider, environment):
                 terminal = TmuxTerminal(case / "resumed", binary, case, state, config, 140, 28,
                     args=("--resume", sid), environment=environment)
                 terminal.wait("recovered provider policy stop")
+                terminal.wait_until(lambda screen: screen.rstrip().splitlines()[-1] == "host-model/medium A>",
+                                    "retained turn without provider activity")
                 time.sleep(.3)
                 assert len(requests) == before, (before, len(requests))
                 _, recovered = read_events(state)
-                assert len(event_list(recovered, "tool_started")) == 1
+                assert len(event_list(recovered, "tool_started")) == 1 + int(goal)
                 assert any(e["data"]["result"]["status"] == "succeeded" or
                            e["data"]["result"]["status"] == "outcome_unknown"
                            for e in event_list(recovered, "process_closed"))
@@ -4656,6 +4700,15 @@ def run_policy_stop_cases(binary, root, provider, environment):
                 _, controlled = read_events(state)
                 assert event_list(controlled, "control_finished")[-1]["data"]["control"] == 2
                 assert len(requests) == before
+                terminal.wait_until(lambda screen: screen.rstrip().splitlines()[-1] == "host-model/medium A>",
+                                    "idle provider after parked control")
+                terminal.send_text("draft to clear")
+                terminal.wait("draft to clear")
+                terminal.send_key("C-c")
+                terminal.wait_until(lambda screen: screen.rstrip().splitlines()[-1] == "host-model/medium A>",
+                                    "draft cleared without cancelling retained turn")
+                _, controlled = read_events(state)
+                assert not event_list(controlled, "turn_cancel_requested")
                 # This retained turn is parked at the idle composer. Ctrl-C
                 # must cancel it durably instead of merely redrawing the prompt.
                 terminal.send_key("C-c")
@@ -4663,7 +4716,7 @@ def run_policy_stop_cases(binary, root, provider, environment):
                 wait_event_count(state, "turn_interrupted", 1)
                 assert len(requests) == before
                 terminal.exit()
-                print("policy stop resume-running PASS", flush=True)
+                print("policy stop", mode, "PASS", flush=True)
                 continue
             if running:
                 assert (case / "survived").read_text() == "survived", mode
@@ -4671,7 +4724,8 @@ def run_policy_stop_cases(binary, root, provider, environment):
                 assert not event_list(events, "process_closed"), mode
                 terminal.submit(marker)
                 terminal.wait("retained command collected")
-                wait_irc_idle([terminal])
+                terminal.wait_until(lambda screen: screen.rstrip().splitlines()[-1] == "host-model/medium I>",
+                                    "completed retained command")
                 assert (case / "once").read_text() == "x", mode
                 _, events = read_events(state)
                 assert len(event_list(events, "tool_started")) == 2 + int(goal), mode
@@ -4679,6 +4733,7 @@ def run_policy_stop_cases(binary, root, provider, environment):
             terminal.exit()
             print("policy stop", mode, "PASS", flush=True)
         finally:
+            release.set()
             terminal.close()
             provider.runtime_handler = None
 

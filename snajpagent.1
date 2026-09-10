@@ -940,8 +940,13 @@ The timestamp is local time captured once per composer.  Editing, view changes,
 and status redraws retain it; submission or Ctrl-C cancellation ends that capture.
 The goal flag is independent of the activity slot.  Tool calls take priority
 over model/provider work in the same activity column; idle reserves one space.
-Unused context digits also remain spaces.  Interruption retains the current provider/tool indicator until the
-turn closes; there is no separate interruption glyph.  The template and spinners are configurable under
+The provider indicator runs during response, token-count, compaction and model-list
+operations, including their transport waits. A retained turn or retry delay alone
+does not animate it. The active marker still identifies an unfinished, cancellable
+turn, including one parked after a policy stop. Empty-draft Ctrl-C cancels that
+turn; Ctrl-C with a draft clears the draft first.
+Unused context digits also remain spaces. Indicators stop when their work unwinds;
+there is no separate interruption glyph. The template and spinners are configurable under
 .BR [ui] .
 .PP
 Startup/resume headers, history headings and counts, and installed-update notices
@@ -1874,7 +1879,8 @@ two or more animate.  Adjacent active frames must differ.  A blank active
 frame still occupies one column.  Omit a placeholder to remove it in one mode.
 Literal spaces are never trimmed, and numeric padding never restores an absent
 spinner.  The activity slot uses the tool sequence during a tool call,
-otherwise the provider sequence (its inactive item when idle).  A selected
+otherwise the provider sequence during provider operations and its inactive
+item while no provider operation is running, including a parked turn. A selected
 sequence with no active frames uses its inactive item.  Defaults:
 .PP
 .nf
@@ -2373,8 +2379,10 @@ percent signs, exclamation marks, quotes and other argument characters without
 changing the caller's environment.  On POSIX, use a POSIX-compatible shell.
 .PP
 Resume preserves the saved goal state: active goals continue, while paused,
-blocked, completed and cancelled goals keep their recorded states.  No goal
-pause or resume transition is added merely by reopening the session.
+blocked, completed and cancelled goals keep their recorded states. A retained
+provider-policy stop pauses an active goal and waits for operator clarification;
+reopening or resuming the goal alone does not clear that stop. Other sessions
+gain no goal pause or resume transition merely from reopening.
 Resume automatically displays the saved goal and wording,
 including its status, revision, lock and blocker, even with history disabled.
 Paused and blocked goal wording remains in ordinary model context after resume
@@ -2768,12 +2776,15 @@ rejection, the model receives a durable clarification instruction immediately,
 with up to five attempts per consecutive clarification sequence. The count
 resets when the response continues normally or clarification stops, including
 when its limit is exhausted. Reasoning events and ordinary assistant text,
-including incomplete messages, permit clarification. Delivered text is retained
+including incomplete messages, permit clarification. Local function-call proposals
+also permit it: functions are admitted only after a successful response. Calls
+from a failed response are discarded, including complete arguments, and neither
+execute nor enter the next request. Delivered text is retained
 in the session event log and the next model request. The goal remains active during these
 attempts. The original task remains intact: the instruction asks
 for accurate restatement of ambiguous phrasing with purpose, actions, targets
 and authorization unchanged, and operator clarification where needed.  New input
-or observed refusal, tool or unknown activity prevents another
+or observed refusal, provider-executed tool or unknown activity prevents another
 automatic clarification. After five clarification attempts, a further rejection
 stops automatic retries and pauses an active goal. Other policy rejections also
 stop automatic retries. A policy pause is recorded as a provider rejection;
@@ -2784,7 +2795,10 @@ There is no provider switch or concealed task scope.
 .PP
 Rollout shows one concise "provider clarification N/5" notice at every verbosity
 level.  Existing levels 4, 5 and 6 add event, redacted protocol and wire details.
-Structured error codes or types, not message wording, determine eligibility.  Policy failures record the structured code/type and the reason clarification stopped, including the first unsafe stream event or the exhausted clarification limit.
+Structured error codes or types, not message wording, determine eligibility.
+Policy failures record the structured code/type and the reason clarification
+stopped, including the first unsafe stream event and its output-item type,
+or the exhausted clarification limit.
 A failed stream never becomes a successful response merely because the connection closed.
 .SH "Building and installing"
 .SS Binary releases

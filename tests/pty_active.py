@@ -574,7 +574,9 @@ def test_prompt_clock_lifetime():
         second = child.send_wait(b"preserved-draft", b"status-second-fragment", start=active_end)
         child.wait(b"preserved-draft", start=second)
         # Only the spinner/marker changes; clock and draft stay painted.
-        settled = child.wait(" ›".encode(), start=second)
+        # The provider can stop before the marker changes; the preceding
+        # blank is already painted and need not be emitted a second time.
+        settled = child.wait("›".encode(), start=second)
         assert set(re.findall(pattern, child.buf[active_end:])) == {active_clock}
         child.send_wait(b"\x03", b"^C\r\n", start=settled)
         child.drain()

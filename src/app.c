@@ -357,7 +357,7 @@ prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
         return -1;
     return 0;
 }
-static unsigned int prompt_spinner_states(const struct app_state *app, bool active);
+static unsigned int prompt_spinner_states(const struct app_state *app);
 
 int
 snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
@@ -386,7 +386,7 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
     if (previous_goal_status != app->session.goal_status && app->ui.opened &&
         snag_ui_send(&app->ui, (struct snag_ui_command){
             .kind = SNAG_UI_SPINNERS,
-            .data.value = prompt_spinner_states(app, app->ui.active)}) < 0)
+            .data.value = prompt_spinner_states(app)}) < 0)
         return snag_errorf(error, error_size, "goal prompt state could not be displayed");
     if (snag_string_in(type, "steering_added future_turn_queued future_turn_edited"))
         ++app->input_generation;
@@ -550,7 +550,7 @@ render_prompt(struct app_state *app, bool active, const char *submitted)
         app->config->prompt_spinner_provider,
         app->config->prompt_spinner_tool
     };
-    unsigned int states = prompt_spinner_states(app, active);
+    unsigned int states = prompt_spinner_states(app);
     unsigned int selected = submitted ? 1u : app->ui.view == SNAG_RENDER_CHAT ?
                             0u : active ? 2u : 1u;
 
@@ -655,14 +655,26 @@ validate_prompt_candidate(struct app_state *app,
 }
 
 static unsigned int
-prompt_spinner_states(const struct app_state *app, bool active)
+prompt_spinner_states(const struct app_state *app)
 {
     bool tool = app->tool_active || snag_tools_busy();
     return (app->session.goal_status == SNAG_GOAL_ACTIVE ?
             1u << SNAG_TERM_SPINNER_GOAL : 0u) |
-           (active && !tool ?
+           (app->provider_active && !tool ?
             1u << SNAG_TERM_SPINNER_PROVIDER : 0u) |
            (tool ? 1u << SNAG_TERM_SPINNER_TOOL : 0u);
+}
+
+int
+snag_app_provider_activity(struct app_state *app, bool active)
+{
+    int saved_errno = errno;
+    app->provider_active = active;
+    int rc = app->ui.opened ? snag_ui_send(&app->ui, (struct snag_ui_command){
+        .kind = SNAG_UI_SPINNERS,
+        .data.value = prompt_spinner_states(app)}) : 0;
+    if (rc == 0) errno = saved_errno;
+    return rc;
 }
 
 static int
@@ -1188,8 +1200,13 @@ refresh_model_cache(struct app_state *app, char *error, size_t error_size)
         json_t *entry = NULL;
         char detail[256] = {0};
 
+        if (snag_app_provider_activity(app, true) < 0) goto out;
         int model_rc = snag_app_provider_models(app, provider, &models,
                                                detail, sizeof(detail));
+        if (snag_app_provider_activity(app, false) < 0) {
+            json_decref(models);
+            goto out;
+        }
         if (model_rc != 0) {
             if (model_rc > 0) {
                 snag_errorf(error, error_size, "model discovery interrupted; previous cache retained");
@@ -2343,7 +2360,7 @@ again:;
         snag_tools_process_state(&app->session.processes[i]);
     if (busy != snag_tools_busy() &&
         snag_ui_send(&app->ui, (struct snag_ui_command){
-            .kind = SNAG_UI_SPINNERS, .data.value = prompt_spinner_states(app, app->ui.active)}) < 0)
+            .kind = SNAG_UI_SPINNERS, .data.value = prompt_spinner_states(app)}) < 0)
         return -1;
     if (app->networked) {
         error[0] = '\0';
@@ -2874,7 +2891,7 @@ execute_calls(struct app_state *app, const char *turn_id,
             }
             app->tool_active = true;
             if (snag_ui_send(&app->ui, (struct snag_ui_command){
-                .kind = SNAG_UI_SPINNERS, .data.value = prompt_spinner_states(app, true)}) < 0)
+                .kind = SNAG_UI_SPINNERS, .data.value = prompt_spinner_states(app)}) < 0)
                 return -1;
             int rc = calls[i].process ?
                 snag_tools_start(call, app->config, credential, &result, error, error_size) :
@@ -2901,7 +2918,7 @@ complete:
                 goto handoff;
             }
             if (refresh && snag_ui_send(&app->ui, (struct snag_ui_command){
-                .kind = SNAG_UI_SPINNERS, .data.value = prompt_spinner_states(app, true)}) < 0)
+                .kind = SNAG_UI_SPINNERS, .data.value = prompt_spinner_states(app)}) < 0)
                 return -1;
         }
         first_wave = false;
@@ -3240,9 +3257,11 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 error, sizeof(error));
             goto out;
         }
+        if (snag_app_provider_activity(app, true) < 0) goto fail;
         provider_rc = snag_app_provider_count(app, projection.count_request.value, &credential,
             &projection.input_tokens_bound, &count_method,
             error, sizeof(error));
+        if (snag_app_provider_activity(app, false) < 0) goto fail;
         if (provider_rc == 1 && (app->steering_requested || app->control_requested))
             goto steered_before_response;
         if (provider_rc == 2 && app->interrupt_requested)
@@ -3367,10 +3386,12 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         snag_app_reset_stream(app);
         response_begin_ms = snag_time_ms();
         error[0] = '\0';
+        if (snag_app_provider_activity(app, true) < 0) goto fail;
         provider_rc = snag_app_provider_run(app, prompt, steering, cycle,
                                    projection.create_request.value, &credential, &graph,
                                    &provider_failure,
                                    error, sizeof(error), &provider_retry_count);
+        if (snag_app_provider_activity(app, false) < 0) goto fail;
         if (provider_rc < 0 && provider_failure.retry_after_ms > app->recovery_delay_ms)
             app->recovery_delay_ms = provider_failure.retry_after_ms;
         if (provider_rc == 0) {

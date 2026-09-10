@@ -319,9 +319,11 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         count_method = "unknown";
         stage_rc = SNAG_APP_COUNT_SKIPPED;
         if (use_exact) {
+            if (snag_app_provider_activity(app, true) < 0) goto out;
             stage_rc = snag_app_provider_count(app, projection.count_request.value, credential,
                 &input_tokens_bound, &count_method,
                 error, error_size);
+            if (snag_app_provider_activity(app, false) < 0) goto out;
             if (stage_rc != 0 && stage_rc != SNAG_APP_COUNT_SKIPPED &&
                 stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW) {
                 rc = stage_rc;
@@ -351,11 +353,13 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                         "source_sha256", projection.model_input.sha256), error, error_size) < 0)
                 goto out;
             started = true;
+            if (snag_app_provider_activity(app, true) < 0) goto out;
             stage_rc = native ?
                 snag_app_provider_compact(app, projection.create_request.value, credential,
                     &output, error, error_size) :
                 run_responses_compaction(app, projection.create_request.value, credential,
                     &output, error, error_size);
+            if (snag_app_provider_activity(app, false) < 0) goto out;
             if (stage_rc == 0) {
                 generated = true;
                 break;
@@ -395,8 +399,10 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         output_count.bytes == 0u)
         goto out;
     if (use_exact) {
+        if (snag_app_provider_activity(app, true) < 0) goto out;
         stage_rc = snag_app_provider_count(app, output_count.value, credential,
             &output_tokens_bound, &output_count_method, error, error_size);
+        if (snag_app_provider_activity(app, false) < 0) goto out;
         if (stage_rc != 0 && stage_rc != SNAG_APP_COUNT_SKIPPED &&
             stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW) {
             rc = stage_rc;

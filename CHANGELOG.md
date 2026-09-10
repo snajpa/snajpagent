@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- Drive provider activity from actual response/count/compaction/model-list
+  operations. Parked policy-stopped turns keep saved work and empty-draft
+  Ctrl-C cancellation without displaying a busy provider.
+- Allow the five scope-preserving cyber-policy clarification attempts after
+  unexecuted local function proposals. Discard failed-response calls; retain
+  prior completed effects, public text and explicit refusal/hosted-tool stops.
+  Record the output-item type when stream activity prevents clarification.
+
 - Show only the latest stable downloads per architecture/ABI, with older
   releases on GitHub. Clarify kernel baselines and required OS/library ABIs;
   collapse checksums and remove historical tables, tiers and repeated setup.

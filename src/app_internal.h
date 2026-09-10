@@ -82,6 +82,7 @@ struct app_state {
     bool interrupt_requested;
     bool goal_armed;
     bool recovery_wait;
+    bool provider_active;
     enum snag_policy_stop turn_policy_stopped;
     uint64_t input_received_ms;
     unsigned int recovery_delay_ms;
@@ -209,6 +210,7 @@ json_t *snag_app_input_received_data(struct app_state *, const char *, bool);
 
 int snag_app_active_input_pump(void *opaque, unsigned int timeout_ms);
 int snag_app_provider_input_pump(void *opaque, unsigned int timeout_ms);
+int snag_app_provider_activity(struct app_state *app, bool active);
 int snag_app_irc_event(void *opaque, const struct snag_irc_event *event);
 int snag_app_irc_trace(void *opaque, unsigned int level, char direction,
                       const char *endpoint, const char *text, size_t len);

@@ -873,7 +873,7 @@ test_create_retries(void)
         {partial, transient, 200, 1, 0, false, "[server_error]", "once"},
         {partial, "", 200, 1, 0, true, "provider transport failed", "once"},
         {created, "data: {\"type\":\"response.failed\",\"response\":{\"output\":[{\"type\":\"function_call\"}],\"error\":{\"code\":\"server_error\"}}}\n\n",
-            200, 1, 0, false, "[server_error]", ""},
+            200, 1, 0, false, "invalid function call snapshot", ""},
         {"data: {\"type\":\"response.web_search_call.in_progress\"}\n\n",
             transient, 200, 1, 0, false, "[server_error]", ""},
         {"data: {\"type\":\"response.future_activity\"}\n\n",
