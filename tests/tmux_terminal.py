@@ -3328,6 +3328,7 @@ def run_resume_network_pairing_case(binary, root, provider, environment):
     state = case / "state"
     endpoint = f"127.0.0.1:{free_loopback_port()}"
     requests = []
+    listener = connection = None
 
     def respond(handler, request, sequence):
         requests.append(request)
@@ -3376,13 +3377,20 @@ def run_resume_network_pairing_case(binary, root, provider, environment):
         with config.open("a") as file:
             file.write(f"[irc]\nlisten = 127.0.0.1:{free_loopback_port()}\n"
                        f"client = 127.0.0.1:{free_loopback_port()}\n")
-        for hosted in (True, False):
+        for mode in ("hosted", "client", "offline"):
+            hosted = mode == "hosted"
+            networked = mode != "offline"
             endpoint = f"127.0.0.1:{free_loopback_port()}"
-            roles = ("--listen", endpoint) if hosted else ("--no-listen",)
+            roles = ("--listen", endpoint, "--no-client") if hosted else ("--no-listen", "--no-client")
+            if mode == "client":
+                listener = socket.create_server(("127.0.0.1", 0))
+                listener.settimeout(5)
+                endpoint = f"127.0.0.1:{listener.getsockname()[1]}"
+                roles = ("--no-listen", "--client", endpoint)
             completed = len(event_list(read_events(state)[1], "turn_completed"))
-            with TmuxTerminal(case / ("hosted" if hosted else "offline"), binary,
+            with TmuxTerminal(case / mode, binary,
                     workspace, state, config, 120, 24,
-                    args=(*roles, "--no-client", "-n", "resumebot", "-o", "resumeop",
+                    args=(*roles, "-n", "resumebot", "-o", "resumeop",
                           "-r", "resumed", "--resume", sid), environment=environment) as terminal:
                 if hosted:
                     terminal.wait(f"resumeop@{MACHINE_HOSTNAME} :")
@@ -3390,26 +3398,44 @@ def run_resume_network_pairing_case(binary, root, provider, environment):
                         pass
                     terminal.submit("resumebot: continue after resume")
                 else:
+                    if mode == "client":
+                        connection, _ = listener.accept()
+                        terminal.submit("/rollout")
                     terminal.wait("host-model/medium")
                     terminal.submit("continue after resume")
                 wait_event_count(state, "turn_completed", completed + 1)
                 terminal.wait("network pairing verified")
                 latest = requests[-1]
                 tools = {tool.get("name") for tool in latest["tools"]}
-                assert ("irc_send" in tools) == hosted, tools
+                assert ("irc_send" in tools) == networked, tools
+                snapshots = [item["content"] for item in latest["input"]
+                             if "[IRC room snapshot;" in item.get("content", "")]
                 if hosted:
-                    snapshots = [item["content"] for item in latest["input"]
-                                 if "[IRC room snapshot;" in item.get("content", "")]
                     assert f"hosted: {endpoint}" in snapshots[-1], snapshots[-1]
                     assert "model nick: resumebot" in snapshots[-1], snapshots[-1]
                     assert "operator nick: resumeop" in snapshots[-1], snapshots[-1]
                     assert "room: #resumed" in snapshots[-1], snapshots[-1]
                     assert snapshots[-1].count("destination[") == 1, snapshots[-1]
+                else:
+                    assert "hosted: no\n" in snapshots[-1], snapshots[-1]
+                    if mode == "client":
+                        assert f"destination[1]: {endpoint}" in snapshots[-1], snapshots[-1]
+                        assert snapshots[-1].count("destination[") == 1, snapshots[-1]
+                    else:
+                        assert "no active endpoints" in snapshots[-1], snapshots[-1]
                 terminal.exit()
+            if connection:
+                connection.close(); connection = None
+            if listener:
+                listener.close(); listener = None
         assert (workspace / "marker").read_text() == "once"
         assert not provider.failure, provider.failure
         print("resume network pairing: live tools, replay, role/nick/room overrides ok", flush=True)
     finally:
+        if connection:
+            connection.close()
+        if listener:
+            listener.close()
         provider.runtime_handler = None
 
 

@@ -4343,7 +4343,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     if (!cli->execute) {
         if (snag_irc_open(&app.irc, &config, app.session.workspace,
                          snag_app_irc_event, snag_app_irc_trace, &app, error, sizeof(error)) < 0 ||
-            snag_app_irc_restore(&app, error, sizeof(error)) < 0 || (config.irc.listen_explicit &&
+            snag_app_irc_restore(&app, error, sizeof(error)) < 0 || ((cli->resume || config.irc.listen_explicit) &&
              snag_app_irc_snapshot(&app, "join", error, sizeof(error)) < 0)) {
             (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error[0] ? error : "IRC startup failed");
             rc = 3;

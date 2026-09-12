@@ -461,6 +461,8 @@ snajpagent --listen=localhost:6667 --no-client \e
 .PP
 Listen, client, nick and room overrides apply before resumed work starts;
 the live network state is shown locally and supplied to the model.
+A fresh snapshot on interactive resume also records offline and client-only
+state, replacing the previous process's topology as the latest network context.
 A requested listener that cannot bind reports a startup error.
 .PP
 Direct input is recorded before preparation, credential acquisition or model
