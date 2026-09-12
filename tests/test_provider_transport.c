@@ -1923,7 +1923,16 @@ test_audio_transport(void)
             bool declared = false;
             for (size_t j = 0; j < json_array_size(tools); ++j) {
                 const char *name = snag_json_string(json_array_get(tools, j), "name");
-                if (name && !strcmp(name, names[i])) declared = true;
+                if (name && !strcmp(name, names[i])) {
+                    declared = true;
+                    json_t *properties = json_object_get(json_object_get(json_array_get(tools, j),
+                        "parameters"), "properties");
+                    for (void *it = json_object_iter(properties); it;
+                         it = json_object_iter_next(properties, it)) {
+                        const char *description = snag_json_string(json_object_iter_value(it), "description");
+                        assert(description && *description);
+                    }
+                }
             }
             assert(declared);
         }

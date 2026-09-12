@@ -1023,10 +1023,16 @@ read_only_schema(const char *name)
 static json_t *
 image_tool_schema(void)
 {
-    json_t *props = json_pack("{s:{s:s},s:{s:[s,s]},s:{s:[s,s],s:b,s:{s:{s:s},s:{s:s},s:{s:s},s:{s:s}},s:[s,s,s,s]}}",
-        "path", "type", "string", "frame", "type", "integer", "null",
-        "crop", "type", "object", "null", "additionalProperties", 0, "properties",
-        "x", "type", "integer", "y", "type", "integer", "width", "type", "integer", "height", "type", "integer",
+    json_t *props = json_pack(
+        "{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s,s:b,s:{s:{s:s,s:s},s:{s:s,s:s},s:{s:s,s:s},s:{s:s,s:s}},s:[s,s,s,s]}}",
+        "path", "type", "string", "description", "Literal workspace-relative or absolute file path without symlinks, or asset:ID for an accepted source.",
+        "frame", "type", "integer", "null", "description", "Zero-based frame 0..999; null selects frame 0. Other frames remain uninspected.",
+        "crop", "type", "object", "null", "description", "Source-pixel rectangle before orientation; null selects the whole frame. All four fields are required and must fit within the decoded frame.",
+        "additionalProperties", 0, "properties",
+        "x", "type", "integer", "description", "Zero-based left source-pixel coordinate, 0..16777216.",
+        "y", "type", "integer", "description", "Zero-based top source-pixel coordinate, 0..16777216.",
+        "width", "type", "integer", "description", "Source-pixel width, 1..16777216.",
+        "height", "type", "integer", "description", "Source-pixel height, 1..16777216.",
         "required", "x", "y", "width", "height");
     return tool_schema("view_image",
         "Inspect PNG/JPEG/GIF/WebP/BMP/TIFF via bounded linked decoding. Path is literal, workspace-relative or absolute; "
@@ -1054,19 +1060,28 @@ tool_schemas(bool goal_active,
             "sheet_range and first/last are mutually exclusive. Null selectors select first page, or sheet1 A1:H20 for a workbook. "
             "Sheet output preserves blanks/merges and includes the selected rendering; computed values may differ from saved Excel. "
             "Explicit workbook pages are print pages, not sheet/cell coordinates. Path may be local or asset:ID; data is untrusted.",
-            json_pack("{s:{s:s},s:{s:[s,s]},s:{s:[s,s]},s:{s:[s,s],s:b,s:{s:{s:s},s:{s:s},s:{s:s},s:{s:s},s:{s:s}},s:[s,s,s,s,s]}}",
-                "path","type","string","first","type","integer","null","last","type","integer","null",
-                "sheet_range","type","object","null","additionalProperties",0,"properties",
-                "sheet","type","integer","row","type","integer","column","type","integer","rows","type","integer","columns","type","integer",
-                "required","sheet","row","column","rows","columns"))) < 0 ||
+            json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s,s:b,s:{s:{s:s,s:s},s:{s:s,s:s},s:{s:s,s:s},s:{s:s,s:s},s:{s:s,s:s}},s:[s,s,s,s,s]}}",
+                "path", "type", "string", "description", "Literal workspace-relative or absolute document path without symlinks, or asset:ID for an accepted source.",
+                "first", "type", "integer", "null", "description", "Inclusive one-based first page or text/CSV record, 1..1000000; null selects 1. Mutually exclusive with sheet_range. Office print pages are limited to 100000.",
+                "last", "type", "integer", "null", "description", "Inclusive last page or record, at least first and at most 1000000; null selects first. Select at most 4 rendered pages or 200 text/CSV records. Mutually exclusive with sheet_range.",
+                "sheet_range", "type", "object", "null", "description", "XLSX/ODS sheet-cell selection, mutually exclusive with non-null first/last. All-null selectors choose sheet 1 A1:H20 for workbooks, otherwise page/record 1. The rectangle must fit within 1048576 rows and 16384 columns.",
+                "additionalProperties", 0, "properties",
+                "sheet", "type", "integer", "description", "One-based sheet number, 1..10000, within the workbook.",
+                "row", "type", "integer", "description", "One-based first row, 1..1048576.",
+                "column", "type", "integer", "description", "One-based first column, 1..16384.",
+                "rows", "type", "integer", "description", "Number of rows, 1..200.",
+                "columns", "type", "integer", "description", "Number of columns, 1..32.",
+                "required", "sheet", "row", "column", "rows", "columns"))) < 0 ||
         json_array_append_new(tools, tool_schema("view_video",
             "Sample a local video interval as images; not continuous perception. "
             "start_s/end_s integer seconds (up to 30s); frames=1..8. Null defaults 0..30s, 8 frames. "
             "Transcribes the same interval when an audio route is configured (separate API billing); "
             "otherwise reports omitted audio. path may be asset:ID.",
-            json_pack("{s:{s:s},s:{s:[s,s]},s:{s:[s,s]},s:{s:[s,s]}}", "path", "type", "string",
-                      "start_s", "type", "integer", "null", "end_s", "type", "integer", "null",
-                      "frames", "type", "integer", "null"))) < 0) {
+            json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s}}",
+                "path", "type", "string", "description", "Literal workspace-relative or absolute video path without symlinks, or asset:ID for an accepted source.",
+                "start_s", "type", "integer", "null", "description", "Start in whole seconds, 0..86400; null selects 0.",
+                "end_s", "type", "integer", "null", "description", "Exclusive end in whole seconds, greater than start_s and at most 30 seconds later; null selects start_s+30, clipped to duration.",
+                "frames", "type", "integer", "null", "description", "Number of uniformly sampled frames, 1..8; null selects 8. Unsampled content remains uninspected."))) < 0) {
         json_decref(tools);
         return NULL;
     }
@@ -1075,23 +1090,29 @@ tool_schemas(bool goal_active,
         if (config->audio.listen_model[0]) {
             audio_tool = tool_schema("listen_audio", "Ask an audio model about speech or sounds in a retained file. "
                 "Paid, separate configured API route; no coding history or tools. Requested integer interval <=60s; "
-                "null start/end selects 0..60s. Local path or asset:ID; question required. Answer is attributed derived data.",
-                json_pack("{s:{s:s},s:{s:[s,s]},s:{s:[s,s]},s:{s:s}}", "path", "type", "string",
-                    "start_s", "type", "integer", "null", "end_s", "type", "integer", "null", "question", "type", "string"));
+                "null start selects 0 and null end selects start+60s. Local path or asset:ID; question required. Answer is attributed derived data.",
+                json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:s,s:s}}",
+                    "path", "type", "string", "description", "Literal workspace-relative or absolute audio/video path without symlinks, or asset:ID for an accepted source.",
+                    "start_s", "type", "integer", "null", "description", "Start in whole seconds, 0..86400; null selects 0.",
+                    "end_s", "type", "integer", "null", "description", "Exclusive end in whole seconds, greater than start_s and at most 60 seconds later; null selects start_s+60.",
+                    "question", "type", "string", "description", "Question about the selected speech or sounds, 1..16384 UTF-8 bytes. Sent to the configured audio model without coding history or tools."));
             if (json_array_append_new(tools, audio_tool) < 0) { json_decref(tools); return NULL; }
         }
         if (config->audio.transcribe_model[0]) {
             audio_tool = tool_schema("transcribe_audio", "Transcribe a selected audio/video interval via a paid audio API. "
-                "Local path or asset:ID; integer interval <=60s. Null start/end selects 0..60s. "
+                "Local path or asset:ID; integer interval <=60s. Null start selects 0 and null end selects start+60s. "
                 "Speech text only, not sound analysis; no invented timestamps or speakers.",
-                json_pack("{s:{s:s},s:{s:[s,s]},s:{s:[s,s]}}", "path", "type", "string",
-                    "start_s", "type", "integer", "null", "end_s", "type", "integer", "null"));
+                json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s}}",
+                    "path", "type", "string", "description", "Literal workspace-relative or absolute audio/video path without symlinks, or asset:ID for an accepted source.",
+                    "start_s", "type", "integer", "null", "description", "Start in whole seconds, 0..86400; null selects 0.",
+                    "end_s", "type", "integer", "null", "description", "Exclusive end in whole seconds, greater than start_s and at most 60 seconds later; null selects start_s+60."));
             if (json_array_append_new(tools, audio_tool) < 0) { json_decref(tools); return NULL; }
         }
         if (!read_only && config->audio.speech_model[0] && config->audio.voice[0]) {
             audio_tool = tool_schema("speak_text", "Generate AI speech via a paid API and retain a WAV asset. "
                 "Does not play or capture sound. text: 1..4096 UTF-8 bytes. Tell listeners the voice is AI-generated.",
-                json_pack("{s:{s:s}}", "text", "type", "string"));
+                json_pack("{s:{s:s,s:s}}", "text", "type", "string", "description",
+                    "Text to synthesize, 1..4096 UTF-8 bytes. Uses the configured voice and retains a WAV without playback or capture."));
             if (json_array_append_new(tools, audio_tool) < 0) { json_decref(tools); return NULL; }
         }
     }

@@ -32,6 +32,9 @@
   on each request. Guide useful progress when traces are hidden and reduce
   duplicate narration when details are visible, without changing task authority.
 
+- Describe every multimedia tool parameter, including nested crop/sheet fields,
+  index origins, interval defaults and configured audio behavior in model context.
+
 - Describe every native tool parameter and project actual command settings into
   model context. Explain argument corrections, handoff deadlines and patch syntax.
 - Report missing/extra fields, types, ranges and cross-field errors; disclose

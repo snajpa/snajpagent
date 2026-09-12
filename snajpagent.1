@@ -2445,6 +2445,10 @@ with an explicit developer-level host continuation, separate from operator input
 and approval. Saved reasoning stays in its compatible order before this boundary;
 history with non-thinking replies also remains resumable. Summary requests use
 the same separation. User requests and tool results retain their provenance.
+Media parameter descriptions include crop and sheet coordinates, index origins,
+interval defaults and configured audio behavior. Coding requests also identify
+the actual workspace, configured shell, wait/deadline defaults, parallel-command
+maximum, output ceiling and goal text limits.
 .PP
 The canonical command fields are command, yield_ms and max_output_bytes.
 The legacy spellings cmd, yield_time_ms and max_output_tokens respectively

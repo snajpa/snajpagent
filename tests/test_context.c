@@ -727,7 +727,13 @@ assert_optional_tool_contract(json_t *tool)
         {"irc_topic", "topic"},
         {"list_files", "path"},
         {"read_file", "path"},
-        {"grep", "path pattern"}
+        {"grep", "path pattern"},
+        {"view_image", "path frame crop"},
+        {"read_document", "path first last sheet_range"},
+        {"view_video", "path start_s end_s frames"},
+        {"listen_audio", "path start_s end_s question"},
+        {"transcribe_audio", "path start_s end_s"},
+        {"speak_text", "text"}
     };
     json_t *schema;
     json_t *params;
@@ -766,7 +772,13 @@ assert_optional_tool_contract(json_t *tool)
         schema = json_object_iter_value(iter);
         assert(schema);
         assert(snag_json_string(schema, "description") && *snag_json_string(schema, "description"));
-
+        json_t *nested = json_object_get(schema, "properties");
+        for (void *child = json_object_iter(nested); child;
+             child = json_object_iter_next(nested, child)) {
+            const json_t *property = json_object_iter_value(child);
+            assert(snag_json_string(property, "description") && *snag_json_string(property, "description"));
+            assert(array_has_string(json_object_get(schema, "required"), json_object_iter_key(child)));
+        }
     }
     return properties;
 }
@@ -869,6 +881,11 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
 
     struct snag_context_projection projection = {0};
     snag_config_init(&config);
+    strcpy(config.audio.provider, "default");
+    strcpy(config.audio.listen_model, "fixture-listen");
+    strcpy(config.audio.transcribe_model, "fixture-transcribe");
+    strcpy(config.audio.speech_model, "fixture-speech");
+    strcpy(config.audio.voice, "fixture-voice");
     config.irc.listen_explicit = true;
     snag_config_provider_init(&config.providers[1], "selected");
     config.provider_count = 2u;
@@ -931,8 +948,16 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
 
             assert(web && json_object_size(web) == 1u);
             assert(!item_by_field(ts, "type", openrouter ? "web_search" : "openrouter:web_search"));
+            assert(item_by_field(ts, "name", "listen_audio"));
+            assert(item_by_field(ts, "name", "transcribe_audio"));
+            assert((item_by_field(ts, "name", "speak_text") != NULL) == (pass != 0u));
+            for (size_t j = 0; j < json_array_size(ts); ++j) {
+                json_t *tool = json_array_get(ts, j);
+                if (!strcmp(snag_json_string(tool, "type"), "function"))
+                    (void)assert_strict_tool_contract(tool);
+            }
             if (pass == 0u) {
-                assert(json_array_size(ts) == 7u);
+                assert(json_array_size(ts) == 9u);
                 assert(item_by_field(ts, "name", "list_files") && item_by_field(ts, "name", "read_file") &&
                        item_by_field(ts, "name", "grep"));
                 (void)assert_optional_tool_contract(item_by_field(ts, "name", "list_files"));
