@@ -1175,6 +1175,7 @@ markdown_paragraph(struct snag_render *render, bool prose)
     if (flush_wrap_pending(render) < 0)
         return -1;
     md->prose = prose;
+    md->line_continuation = false;
     if (!render->markdown_prose_bullets || render->markdown_measuring)
         return 0;
     return markdown_gap(render);
@@ -2035,6 +2036,11 @@ markdown_prefix_literal(struct snag_render *render)
             markdown_text(render, "• ", strlen("• ")) < 0)
             return -1;
     }
+    if (md->line_continuation && md->prose &&
+        render->markdown_prose_bullets &&
+        markdown_text(render, "  ", 2u) < 0)
+        return -1;
+    md->line_continuation = false;
     return markdown_inline(render, (const unsigned char *)md->prefix, len);
 }
 
@@ -2271,6 +2277,8 @@ markdown_newline(struct snag_render *render)
         return -1;
     if (markdown_text(render, "\n", 1u) < 0)
         return -1;
+    md->line_continuation = render->markdown_prose_bullets && md->prose &&
+                            !md->fence && !md->heading && !md->quote;
     md->heading = false;
     md->quote = false;
     md->line_start = true;

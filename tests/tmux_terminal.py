@@ -807,10 +807,11 @@ def run_status_case(binary, root):
             raise AssertionError(f"prompt redraw erased streamed text:\n{middle}")
         if "working…" in middle:
             raise AssertionError(f"removed activity row reappeared:\n{middle}")
-        final = terminal.wait("status-second-\n  fragment", timeout=3.0,
+        # A word that fits a row wraps as a unit, so the streamed paragraph
+        # continues on an indented line instead of breaking inside the word.
+        final = terminal.wait("\n  status-second-fragment", timeout=3.0,
                               join_wrapped=True)
-        assert_order(final, ["status-first-fragment", "status-second-",
-                             "fragment"])
+        assert_order(final, ["status-first-fragment", "status-second-fragment"])
         _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
         completed = event_list(events, "response_completed")
         expected = "status-first-fragment status-second-fragment"
@@ -1014,7 +1015,7 @@ def run_markdown_case(binary, root):
                     "│ int value = 1;",
                     "└─",
                     "• First prose line",
-                    "continued prose",
+                    "  continued prose",
                     "┌───────┬───────┬───────┐",
                     "│ Item  │ State │ Count │",
                     "│ alpha │ ready │     7 │",
@@ -1023,7 +1024,7 @@ def run_markdown_case(binary, root):
                     "│ final quoted boundary",
                 ])
                 raw = terminal.capture()
-                if ("• First prose line\ncontinued prose\n\n┌" not in raw or
+                if ("• First prose line\n  continued prose\n\n┌" not in raw or
                         "┘\n\n• second paragraph" not in raw):
                     raise AssertionError(
                         f"prose bullets or paragraph spacing are wrong:\n{raw}"
@@ -1095,19 +1096,21 @@ def run_render_case(binary, root):
         case / "terminal", binary, workspace, dotdir, config, 32, 18
     ), case / "screen.txt") as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
-        terminal.submit_wait("terminal_render", "alpha beta gamma delta-")
+        terminal.submit_wait("terminal_render", "delta-extraordinary")
         terminal.send_text("draft")
         first = wait_wrapped_fragment(
             terminal, f"{DEFAULT_ACTIVE_PROMPT} draft"
         )
         assert_wrapped_order(first, [
-            "alpha beta gamma delta-", "extraordinary",
+            "alpha beta gamma", "delta-extraordinary",
             f"{DEFAULT_ACTIVE_PROMPT} draft",
         ])
         if re.search(r"(?m)^• alpha beta gamma", first) is None:
             raise AssertionError(f"model prose did not begin with a bullet:\n{first}")
-        if "• alpha beta gamma delta-\n  extraordinary" not in first:
-            raise AssertionError(f"hyphen wrapped on its left side:\n{first}")
+        if "• alpha beta gamma\n  delta-extraordinary" not in first:
+            raise AssertionError(
+                f"a word that fits a row did not wrap as a unit:\n{first}"
+            )
 
         time.sleep(0.1)
         pause_started = time.monotonic()

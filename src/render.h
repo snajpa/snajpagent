@@ -70,6 +70,7 @@ struct snag_markdown_state {
     bool previous_word;
     bool delimiter_previous_word;
     bool prose;
+    bool line_continuation;
     bool table_line;
     bool table_pending;
     bool table_active;

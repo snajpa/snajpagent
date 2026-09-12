@@ -1077,8 +1077,9 @@ newlines.  Explicit newlines and leading whitespace remain part of the draft.
 Any prompt after non-prompt content has one empty row above it.  Consecutive
 submitted prompts may be adjacent.
 .PP
-Generated prose wraps align below the paragraph text.  Code-block whitespace
-and the provider's original text are unchanged.  The live prompt is displayed
+Prose continuation lines, whether the renderer generated the wrap or the
+provider supplied the line break, align two spaces below the paragraph text.
+Code-block whitespace and the provider's original text are unchanged.  The live prompt is displayed
 immediately on cursor-capable terminals, without waiting for a quiet period.
 Before new output it is erased
 and then redrawn with the unsent draft intact; work-in-progress prompts are not

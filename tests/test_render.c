@@ -1420,7 +1420,7 @@ test_paragraph_spacing(void)
 {
     static const struct { const char *source, *expected; } cases[] = {
         { "one\n\n\n\nsecond", "\n• one\n\n• second\n\n" },
-        { "one\ncontinued", "\n• one\ncontinued\n\n" },
+        { "one\ncontinued", "\n• one\n  continued\n\n" },
         { "# heading\none\n# next", "heading\n\n• one\n\nnext" },
         { "- first\n- second\none\n- next",
           "• first\n• second\n\n• one\n\n• next" },
@@ -2007,7 +2007,8 @@ test_markdown_tables(void)
 
     assert(capture_markdown(malformed, true, true, SNAG_COLOR_NEVER, 120u,
                             output, sizeof(output), NULL) > 0u);
-    assert(strcmp(output, "\n• | Name | State |\n| -- | nope |\nafter\n\n") == 0);
+    assert(strcmp(output,
+                  "\n• | Name | State |\n  | -- | nope |\n  after\n\n") == 0);
     assert(capture_markdown(code_pipe, true, true, SNAG_COLOR_NEVER, 120u,
                             output, sizeof(output), NULL) > 0u);
     assert(strcmp(output, code_pipe_rendered) == 0);
@@ -2755,7 +2756,7 @@ main(void)
         "│ old new\n"
         "┌─ c\n│ int main(void) { return 0; }\n└─\n"
         "┌─\n│ tilde fence\n└─\n"
-        "\n• First prose line\ncontinued prose\n\n• second paragraph\n\n";
+        "\n• First prose line\n  continued prose\n\n• second paragraph\n\n";
     char output[4096];
     struct snag_render render;
 

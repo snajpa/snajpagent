@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Align every prose continuation line, including provider source line breaks,
+  two spaces under the paragraph text instead of at column zero.
 - Filter model tool calls with ordered `[rule NAME]` configuration chains.
   Rules match immutable envelope facts and tool arguments (JSON-pointer regex
   and integer thresholds) and pass, reject, jump to a reusable chain, or log a
