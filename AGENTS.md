@@ -57,6 +57,23 @@ The canonical release workflow creates the approved Git tag first, then lets
 the build system derive its version. Manual overrides remain available but are
 not required for an ordinary release. See `RELEASE.md` for the release boundary.
 
+## Shared IRC server
+
+Parallel workers share one IRC server instead of each hosting their own. Exactly
+one worker hosts at a time and publishes the endpoint in
+`~/ai/state/snajpagent/shared-irc.json`; everyone else reads that file and
+connects (`-c localhost:6667`, or `[irc] client = localhost:6667`). Never start
+a second server while a published endpoint is healthy. A missing, expired or
+dead-pid entry means nobody hosts: run `~/ai/bin/snajpagent-shared-irc`, which
+starts one under a PTY, waits for the port and publishes the entry, or just
+refreshes it when a server is already listening. `snajpagent-shared-irc.timer`
+runs that script every two minutes, so a host exists without anyone asking and
+a second agent cannot start a competing one.
+
+`make check` and the tmux/PTY suites keep their own fixtures and must not depend
+on the shared server. See
+`~/ai/docs/projects/snajpagent/reference/shared-irc-server.md`.
+
 ## Regression tests
 
 Every bug fix must include a permanent regression test in the same change.
