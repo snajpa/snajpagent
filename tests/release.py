@@ -1614,3 +1614,49 @@ with tempfile.TemporaryDirectory(prefix="openbsd35-headers-", dir=root / "build"
                           "_Static_assert(ENABLED == " + str(expected) + ", \"stack-size feature\");\n")
         subprocess.run(command, check=True)
 print("PASS: old OpenBSD audio preserves wide-file fallback and empty/numeric pthread features")
+
+# Missing old-OS inttypes macros must match the compiler's actual integer ABI.
+formats_patch = (root / "nix/ffmpeg-openbsd35-inttypes.patch").read_text()
+formats_added = "\n".join(line[1:] for line in formats_patch.splitlines()
+                         if line.startswith("+") and not line.startswith("+++"))
+assert 'lib.optional early ./ffmpeg-openbsd35-inttypes.patch' in (root / "nix/openbsd.nix").read_text()
+if shutil.which("clang"):
+    with tempfile.TemporaryDirectory(prefix="bsd-inttypes-", dir=root / "build") as tmp:
+        tmp = Path(tmp)
+        source = tmp / "format.c"
+        body = r"""
+#include <assert.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#define __OpenBSD__ 1
+""" + formats_added + r"""
+int main(void) {
+    char text[128];
+    uint32_t u32 = 0; int32_t i32 = 0; uint64_t u64 = 0; int64_t i64 = 0;
+    assert(sscanf("4294967295 -2147483648", "%" SCNu32 " %" SCNd32, &u32, &i32) == 2);
+    assert(u32 == UINT32_MAX && i32 == INT32_MIN);
+    assert(sscanf("18446744073709551615 -9223372036854775808", "%" SCNu64 " %" SCNd64, &u64, &i64) == 2);
+    assert(u64 == UINT64_MAX && i64 == INT64_MIN);
+    assert(snprintf(text, sizeof(text), "%" PRIu64 " %" PRId64, u64, i64) > 0);
+    assert(!strcmp(text, "18446744073709551615 -9223372036854775808"));
+    assert(sscanf("fedcba9876543210", "%" SCNx64, &u64) == 1);
+    assert(u64 == UINT64_C(0xfedcba9876543210));
+    assert(snprintf(text, sizeof(text), "%" PRIx64, u64) == 16 && !strcmp(text, "fedcba9876543210"));
+    assert(snprintf(text, sizeof(text), "%" PRIX64, u64) == 16 && !strcmp(text, "FEDCBA9876543210"));
+    assert(snprintf(text, sizeof(text), "%" PRIdPTR, (intptr_t)-42) == 3 && !strcmp(text, "-42"));
+    return 0;
+}
+"""
+        source.write_text(body)
+        subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
+                        "-o", str(tmp / "format")], check=True)
+        subprocess.run([str(tmp / "format")], check=True)
+        # Available system formats must never be replaced by the fallback.
+        source.write_text("#include <inttypes.h>\n" + body)
+        subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
+                        "-o", str(tmp / "format")], check=True)
+        subprocess.run([str(tmp / "format")], check=True)
+    print("PASS: missing BSD integer formats preserve limits, pointer widths and system definitions")
+else:
+    print("SKIP: Clang unavailable for old BSD integer-format ABI regression")

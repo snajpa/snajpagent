@@ -248,7 +248,9 @@ let
   av = pkgs.stdenvNoCC.mkDerivation {
     pname = "ffmpeg-headless-openbsd-${osVersion}";
     inherit (sourcePkgs.ffmpeg_8) version src;
-    patches = sourcePkgs.ffmpeg_8.patches ++ lib.optional legacy ./ffmpeg-bsd-thread-headers.patch;
+    patches = sourcePkgs.ffmpeg_8.patches
+      ++ lib.optional legacy ./ffmpeg-bsd-thread-headers.patch
+      ++ lib.optional early ./ffmpeg-openbsd35-inttypes.patch;
     nativeBuildInputs = [ pkgs.pkg-config pkgs.perl pkgs.nasm llvm.llvm ];
     buildInputs = [ zlib ];
     strictDeps = true;

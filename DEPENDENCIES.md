@@ -532,6 +532,9 @@ when the OS lacks `wchar.h`/`wcsrtombs`, and accepts empty pthread stack-size
 feature macros. Application file decoding remains in FFmpeg; miniaudio's engine
 and file decoders are disabled. This header compatibility does not complete the
 early target's media dependencies or qualify devices.
+The early FFmpeg header also supplies missing C99 integer-format macros using
+Clang's target-ABI definitions, keeping 64-bit and pointer widths distinct.
+Existing system definitions and printf/scanf implementations remain unchanged.
 
 OpenBSD 7.9 qualification covers base/IRC/SSE tests, internal read-only
 inspection and denied writes, parallel commands, PTY execution, durable resume,

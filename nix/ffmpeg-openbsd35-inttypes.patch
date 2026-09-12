@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Use the target compiler's integer formats when old OpenBSD headers omit them.
+--- a/libavutil/common.h
++++ b/libavutil/common.h
+@@ -38,6 +38,35 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++
++/* Early OpenBSD inttypes.h defines types but omits C99 format macros. */
++#if defined(__OpenBSD__) && defined(__clang__) && !defined(PRId64)
++#define PRId8 __INT8_FMTd__
++#define PRIi8 __INT8_FMTi__
++#define PRIu8 __UINT8_FMTu__
++#define PRIx8 __UINT8_FMTx__
++#define PRId16 __INT16_FMTd__
++#define PRIi16 __INT16_FMTi__
++#define PRIu16 __UINT16_FMTu__
++#define PRIx16 __UINT16_FMTx__
++#define PRIX16 __UINT16_FMTX__
++#define PRId32 __INT32_FMTd__
++#define PRIi32 __INT32_FMTi__
++#define PRIu32 __UINT32_FMTu__
++#define PRIx32 __UINT32_FMTx__
++#define PRIX32 __UINT32_FMTX__
++#define PRId64 __INT64_FMTd__
++#define PRIi64 __INT64_FMTi__
++#define PRIu64 __UINT64_FMTu__
++#define PRIx64 __UINT64_FMTx__
++#define PRIX64 __UINT64_FMTX__
++#define PRIdPTR __INTPTR_FMTd__
++#define SCNd32 __INT32_FMTd__
++#define SCNd64 __INT64_FMTd__
++#define SCNu32 __UINT32_FMTu__
++#define SCNu64 __UINT64_FMTu__
++#define SCNx64 __UINT64_FMTx__
++#endif
+ 
+ #include "attributes.h"
+ #include "error.h"
