@@ -129,6 +129,16 @@ ALSA plugins cannot be loaded by the static binary. ALSA's LGPL-2.1-or-later and
 the PulseAudio client's LGPL-2.1-or-later terms, plus the static libsndfile
 dependency closure, belong in the release's source/relinking materials.
 
+The macOS media recipe builds static FFmpeg file-codec libraries for the selected
+SDK and deployment target, with zlib and pthreads. It uses a native compiler for
+build-time generators and the target compiler for installed libraries. Network,
+CLI programs, optional hardware frameworks and dependency autodetection are
+disabled. Intermediate NASM objects retain their local symbols: llvm-strip -x
+can corrupt their local-constant relocation indexes. The existing executable/dSYM
+packaging performs final stripping after linking; SIMD code remains enabled.
+Miniaudio uses the existing CoreAudio/AudioToolbox route. Cross-builds
+alone do not qualify playback/capture; macOS PDF/Office linkage remains in progress.
+
 Windows media builds use static FFmpeg libraries and the existing winpthreads
 runtime. External-library autodetection is disabled so the SDK cannot silently
 enable Media Foundation or GPU backends. The pre-Vista recipe preserves its

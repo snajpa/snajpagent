@@ -24,6 +24,10 @@
 - Show rejected/unexecuted attempts at verbosity 1 in live and history rollout,
   with compact status reasons and higher-detail arguments/output kept private.
 
+- Add the macOS static FFmpeg file-codec dependency profile and audio-device
+  headers. Preserve intermediate assembly relocations through linking; PDF/Office
+  and target-runtime qualification remain in progress.
+
 - Wrap long Markdown table cells within aligned columns instead of immediately
   switching to vertical rows. Preserve styles and record boundaries, and retain
   the left border on every continuation line in the narrow fallback.

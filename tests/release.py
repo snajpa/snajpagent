@@ -1200,3 +1200,29 @@ assert '"-DENABLE_CNG=OFF"' in windows and '"-DENABLE_WIN32_XMLLITE=OFF"' in win
 assert '"-DWINDOWS_VERSION=${if legacy then "WS03" else "WIN7"}"' in windows
 assert 's/^Cflags: /Cflags: -DLIBARCHIVE_STATIC /' in windows
 print("PASS: Windows package readers keep static declarations, baseline threading and fatal RNG errors")
+
+# macOS FFmpeg needs both the native generator compiler and SDK-targeted compiler.
+# Keep the static file-codec profile independent of optional host frameworks.
+macos = (root / "nix/macos.nix").read_text()
+mac_av = macos.split("  av = ", 1)[1].split("  brotli = ", 1)[0]
+for flag in ("--enable-cross-compile", "--target-os=darwin", "--enable-static",
+             "--disable-shared", "--disable-autodetect", "--disable-network",
+             "--disable-programs", "--enable-pthreads", "--enable-zlib"):
+    assert '"' + flag + '"' in mac_av
+assert '"--host-cc=${pkgs.stdenv.cc}/bin/cc"' in mac_av
+assert '"--cc=${compiler} --target=${target} -isysroot ${sdk}"' in mac_av
+assert '"--disable-postproc"' not in mac_av  # Removed in pinned FFmpeg 8.
+assert '"AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale)"' in macos
+assert 'buildInputs = [ jansson curl av ] ++ networkLibraries;' in macos
+assert "'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}'" in macos
+assert 'makeFlags = [ "ASMSTRIPFLAGS=" ];' in mac_av
+# Upstream's assembler rule conditionally invokes STRIP via ASMSTRIPFLAGS.
+# Reproduce that pre-link call and prove the production make override omits it.
+with tempfile.TemporaryDirectory(prefix="macos-asm-strip-", dir=root / "build") as tmp:
+    makefile = Path(tmp) / "Makefile"
+    makefile.write_text("ASMSTRIPFLAGS=-x\nall:\n\t$(if $(ASMSTRIPFLAGS),false,true)\n")
+    baseline = subprocess.run(["make", "-s", "-f", str(makefile)], capture_output=True)
+    assert baseline.returncode != 0
+    subprocess.run(["make", "-s", "-f", str(makefile), "ASMSTRIPFLAGS="], check=True)
+assert '$(STRIP) -S -x "$$stage/$(BIN)"' in (root / "Makefile").read_text()
+print("PASS: macOS media keeps intermediate NASM symbols and final executable stripping")

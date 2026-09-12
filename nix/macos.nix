@@ -146,6 +146,42 @@ let
   zlib = cmakeLibrary sourcePkgs.zlib [
     "-DZLIB_BUILD_SHARED=OFF" "-DZLIB_BUILD_STATIC=ON" "-DZLIB_BUILD_TESTING=OFF"
   ] [];
+  av = pkgs.stdenvNoCC.mkDerivation {
+    pname = "ffmpeg-headless-macos-${arch}";
+    inherit (sourcePkgs.ffmpeg_8) version src patches;
+    nativeBuildInputs = [ pkgs.pkg-config pkgs.perl pkgs.nasm llvm.llvm ];
+    buildInputs = [ zlib ];
+    strictDeps = true;
+    enableParallelBuilding = true;
+    dontStrip = true;
+    # llvm-strip -x corrupts NASM local-constant relocations in intermediate
+    # Mach-O objects. Keep them intact; final executable/dSYM packaging strips.
+    makeFlags = [ "ASMSTRIPFLAGS=" ];
+    configurePlatforms = [];
+    configureFlags = [
+      "--enable-cross-compile" "--target-os=darwin" "--arch=${processor}"
+      "--enable-static" "--disable-shared" "--enable-pic"
+      "--disable-autodetect" "--disable-network" "--disable-programs" "--disable-doc"
+      "--disable-avdevice" "--disable-avfilter"
+      "--enable-avcodec" "--enable-avformat" "--enable-avutil"
+      "--enable-swresample" "--enable-swscale" "--enable-zlib"
+      "--enable-pthreads" "--enable-safe-bitstream-reader" "--enable-pixelutils"
+      "--disable-gpl" "--disable-version3" "--pkg-config-flags=--static"
+    ];
+    preConfigure = ''
+      export PKG_CONFIG_PATH=
+      export PKG_CONFIG_LIBDIR=${zlib}/lib/pkgconfig
+      export MACOSX_DEPLOYMENT_TARGET=${deployment}
+      configureFlagsArray+=(
+        "--host-cc=${pkgs.stdenv.cc}/bin/cc"
+        "--cc=${compiler} --target=${target} -isysroot ${sdk}"
+        "--cxx=${llvm.clang-unwrapped}/bin/clang++ --target=${target} -isysroot ${sdk}"
+        "--ar=${tools}/llvm-ar" "--ranlib=${tools}/llvm-ranlib"
+        "--nm=${tools}/llvm-nm" "--strip=${tools}/llvm-strip"
+        "--extra-cflags=${cflags}" "--extra-ldflags=${ldflags}"
+      )
+    '';
+  };
   brotli = cmakeLibrary sourcePkgs.brotli [ "-DBROTLI_DISABLE_TESTS=ON" ] [];
   zstd = (cmakeLibrary sourcePkgs.zstd [
     "-DZSTD_BUILD_SHARED=OFF" "-DZSTD_BUILD_STATIC=ON"
@@ -221,7 +257,7 @@ let
     "-DCURL_CA_BUNDLE=none" "-DCURL_CA_PATH=none"
   ] networkLibraries;
 in {
-  inherit sdk target compiler tools cflags ldflags jansson tls curl;
+  inherit sdk target compiler tools cflags ldflags jansson tls curl av;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }:
     pkgs.stdenvNoCC.mkDerivation {
@@ -230,7 +266,7 @@ in {
       src = source;
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
-      buildInputs = [ jansson curl ] ++ networkLibraries;
+      buildInputs = [ jansson curl av ] ++ networkLibraries;
       enableParallelBuilding = true;
       dontStrip = true;
       preBuild = ''
@@ -252,6 +288,9 @@ in {
           'LDFLAGS=${ldflags}${lib.optionalString legacyLoader " -Wl,-lto_library,${llvm.llvm.lib}/lib/libLTO.so"} ${lib.optionalString (!debug) "-flto -Wl,-object_path_lto,build/app-lto.o -Wl,-dead_strip -Wl,-dead_strip_dylibs"} -Wl,-pie'
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=$(pkg-config --static --libs jansson)"
+          "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"
+          "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale)"
+          'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}'
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
           "CURL_LIBS=$(pkg-config --static --libs libcurl)${lib.optionalString legacyLoader " ${compilerBuiltins}/lib/libclang_rt.builtins.a"}"
         )
