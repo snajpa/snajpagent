@@ -212,7 +212,7 @@ later navigation or search. Neither archive is copied into memory or pruned.
 exceptions.
 
 `/model` lists the locally cached catalog; `/model cache` explicitly refreshes
-it. Select a displayed row by number, or use `/model PROVIDER/MODEL/EFFORT`.
+every configured provider. Select a displayed row by number, or use `/model PROVIDER/MODEL/EFFORT`.
 Both `/model` and `-m` select from the next full turn onward, until changed,
 including across session resume. Add `save` to write the selection to the
 configuration file for new sessions.

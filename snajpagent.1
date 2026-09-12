@@ -1414,6 +1414,29 @@ model.  An explicit
 .B [model-limit PROVIDER/MODEL]
 overrides advertised capacities.  Missing capacities remain unknown.
 .PP
+The direct DeepSeek catalog currently supplies model IDs without capacity or
+reasoning-effort metadata. Its Flash API model ID is
+.BR deepseek-flash .
+Configure its documented 1,048,576-token total context explicitly; this remains a
+configuration override rather than an advertised cache value. For an existing
+.B deepseek
+provider, add:
+.PP
+.nf
+[model-limit deepseek/deepseek-flash]
+context_window_tokens = 1048576
+.fi
+.PP
+Select it with
+.B snajpagent \-m deepseek/deepseek-flash/high
+or
+.BR "/model deepseek/deepseek-flash/high" .
+The direct API accepts xhigh as an alias for high. Refreshing the catalog visits
+all providers in the loaded configuration, including those other than the selected
+provider. Reload edited configuration with
+.B /config
+or restart before refreshing or selecting a newly configured provider.
+.PP
 Token accounting prefers exact provider preflight when supported, then uses
 completed request usage, source-bound observations, or conservative byte
 bounds.  These methods are not interchangeable exact counts.
@@ -2701,6 +2724,17 @@ A live session cannot be resumed concurrently.  Do not delete its lock to start
 a second owner.  Pre-1.0 internal formats can change; preserve older logs and
 use a compatible binary to inspect them rather than rewriting or deleting
 unknown data.  Archive/deletion of a session does not erase shared prompt history.
+.SS "Provider message phases"
+A streaming assistant message can begin with a provisional
+.B commentary
+or
+.B final_answer
+phase. Its first completed snapshot determines the phase retained for tool
+follow-ups and session resume. Live text keeps its original streaming presentation;
+completion reconciles any remaining text once. A conflicting phase in a later
+completed snapshot is a protocol error, as are inconsistent message identity or
+content. This supports providers such as DeepSeek Flash that finalize pre-tool
+text as commentary after initially announcing a final answer.
 .SS "Provider reasoning streams"
 Completed reasoning items are retained in the private session journal and
 returned to the same provider, endpoint, upstream model and credential identity
@@ -2709,7 +2743,7 @@ summaries and opaque encrypted state remain separate from public messages and
 executable tools; history display and redacted protocol traces omit their payloads.
 The provider's token counts still include reasoning usage.
 .PP
-DeepSeek V4 Pro can use its native Responses endpoint with thinking enabled;
+DeepSeek V4 Pro and V4.1 Flash can use their native Responses endpoint with thinking enabled;
 select a configured provider with, for example,
 .BR "-m deepseek/deepseek-v4-pro/high" .
 Public text, refusals and tool arguments still require consistent item identities,

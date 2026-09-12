@@ -479,8 +479,9 @@ message_snapshot(struct snag_responses_stream *stream, size_t output_index,
            new_item(stream, output_index, SNAG_WIRE_ITEM_MESSAGE, id);
     if (!item)
         return -1;
-    if (phase && copy_once(stream, &item->phase, phase, 32u,
-                           "assistant phase") < 0)
+    /* The first completed snapshot finalizes the provisional streaming phase. */
+    if (phase && (!item->phase || !complete || item->complete) &&
+        copy_once(stream, &item->phase, phase, 32u, "assistant phase") < 0)
         return -1;
     for (size_t i = 0; i < json_array_size(content); ++i)
         if (part_snapshot(stream, output_index, item, i,
@@ -489,8 +490,16 @@ message_snapshot(struct snag_responses_stream *stream, size_t output_index,
     if (complete && item->part_count != json_array_size(content))
         return stream_fail(stream, EPROTO,
                            "message completion snapshot omitted observed content");
-    if (complete)
+    if (complete) {
+        /* Reconcile any final text using the phase already emitted to the UI. */
+        if (phase && item->phase && strcmp(item->phase, phase)) {
+            free(item->phase);
+            item->phase = NULL;
+            if (copy_once(stream, &item->phase, phase, 32u, "assistant phase") < 0)
+                return -1;
+        }
         item->complete = true;
+    }
     return 0;
 }
 

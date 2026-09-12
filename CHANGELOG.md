@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Accept assistant phases finalized at message completion, including DeepSeek
+  Flash's pre-tool commentary. Preserve completed phases through tool follow-ups
+  and resume, reconcile final text once and reject conflicting completed phases.
+- Document Flash's explicit context-limit setup when the direct provider catalog
+  supplies only IDs, and clarify that model-cache refresh visits every provider.
+
 - Drive provider activity from actual response/count/compaction/model-list
   operations. Parked policy-stopped turns keep saved work and empty-draft
   Ctrl-C cancellation without displaying a busy provider.

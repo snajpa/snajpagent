@@ -26,6 +26,12 @@ identity around those same items; it does not translate them into a second
 semantic transcript. Create and count requests share the input and tool
 declarations, differing only in their request envelopes. Normal replay and
 compaction use the same event interpreter; compaction selects complete prefixes.
+The first completed message snapshot finalizes its provisional streaming phase.
+Reconciliation emits any remaining text with the original live phase, then stores
+the completed phase; subsequent completed snapshots must agree. Identity and
+content consistency checks remain strict. This accommodates DeepSeek Flash's
+`final_answer` announcement followed by completed pre-tool `commentary` without
+replaying text or retrying a successful response.
 Assistant messages retain their recorded `commentary` or `final_answer` phase
 through tool follow-ups, goal continuation, interrupted-prefix replay and
 compaction input. User, developer and tool items carry no assistant phase.

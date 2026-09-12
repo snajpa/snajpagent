@@ -4761,6 +4761,22 @@ def run_assistant_phase_case(binary, root):
             response_id = f"resp_phase_{sequence}"
             body = provider.event("response.created", {"response": {
                 "id": response_id, "status": "in_progress", "output": []}})
+            # Flash announces a final answer, then finalizes pre-tool text as commentary.
+            message = {"type": "message", "id": f"msg_phase_{sequence}",
+                       "role": "assistant", "status": "in_progress",
+                       "phase": "final_answer", "content": []}
+            body += provider.event("response.output_item.added",
+                                   {"output_index": 0, "item": message})
+            body += provider.event("response.content_part.added", {
+                "output_index": 0, "item_id": message["id"], "content_index": 0,
+                "part": {"type": "output_text", "text": ""}})
+            body += provider.event("response.output_text.delta", {
+                "output_index": 0, "item_id": message["id"], "content_index": 0,
+                "delta": repeated[:-1]})
+            message = {**message, "status": "completed", "phase": "commentary",
+                       "content": [{"type": "output_text", "text": repeated}]}
+            body += provider.event("response.output_item.done",
+                                   {"output_index": 0, "item": message})
             body += provider.event("response.completed", {"response": {
                 "id": response_id, "status": "completed", "output": [
                     {"type": "message", "id": f"msg_phase_{sequence}",

@@ -93,7 +93,11 @@ compaction, and effective-window limits when present. The OpenAI-compatible
 decoder accepts bounded integral snake-case and camel-case aliases at the
 model top level and in `metadata` or `capabilities`; aliases for the same fact
 must agree. A standard Models response that supplies only IDs is valid and
-stores unknown limits.
+stores unknown limits. The direct DeepSeek catalog is one such response:
+`deepseek-flash` has a documented 1,048,576-token context, but its Models endpoint
+omits capacity fields. Supply that value in an explicit model-limit rule; the
+cache continues to represent the endpoint's actual metadata. Configuration and
+catalog sources remain distinct, including after an all-provider refresh.
 
 The cache has one strict versioned pre-release schema. Each provider record
 binds its models to the normalized `base_url` and the `codex` or `openai`

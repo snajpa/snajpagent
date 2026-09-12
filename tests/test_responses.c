@@ -970,9 +970,68 @@ test_failed_function_clarification_boundaries(void)
     }
 }
 
+static void
+test_message_completion_finalizes_phase(void)
+{
+    const char *phases[] = {"final_answer", "commentary"};
+    for (size_t direction = 0; direction < 2u; ++direction)
+        for (size_t terminal_only = 0; terminal_only < 2u; ++terminal_only)
+            for (size_t conflict = 0; conflict < 2u; ++conflict) {
+                struct snag_buf wire = {.max = 8192u};
+                struct parsed_stream emitted = parsed_new(1024u);
+                const char *initial = phases[direction], *final = phases[1u - direction];
+                const char *snapshot =
+                    "{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\","
+                    "\"status\":\"completed\",\"phase\":\"%s\","
+                    "\"content\":[{\"type\":\"output_text\",\"text\":\"Checking.\"}]}";
+                struct snag_buf item = {.max = 1024u};
+                assert(snag_buf_printf(&item, snapshot, final) == 0);
+                assert(snag_buf_printf(&wire,
+                    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+                    "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{"
+                    "\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"%s\","
+                    "\"status\":\"in_progress\",\"content\":[]}}\n\n"
+                    "data: {\"type\":\"response.content_part.added\",\"output_index\":0,\"item_id\":\"m\","
+                    "\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n"
+                    "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"item_id\":\"m\","
+                    "\"content_index\":0,\"delta\":\"Checking\"}\n\n", initial) == 0);
+                if (!terminal_only || conflict)
+                    assert(snag_buf_printf(&wire,
+                        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":%s}\n\n",
+                        item.data) == 0);
+                if (conflict) {
+                    snag_buf_reset(&item);
+                    assert(snag_buf_printf(&item, snapshot, initial) == 0);
+                }
+                assert(snag_buf_printf(&wire,
+                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\","
+                    "\"status\":\"completed\",\"output\":[%s%s]}}\n\n", item.data,
+                    direction ? "" : ",{\"type\":\"function_call\",\"id\":\"fc\",\"call_id\":\"call\","
+                        "\"name\":\"exec_command\",\"arguments\":\"{\\\"command\\\":\\\"printf hi\\\"}\",\"status\":\"completed\"}") == 0);
+                int rc = parse_stream((char *)wire.data, terminal_only ? 1u : 31u, &emitted);
+                if (conflict) {
+                    assert(rc < 0 && emitted.graph.count == 0u);
+                    assert(!strcmp(emitted.error, "conflicting assistant phase"));
+                } else {
+                    if (rc) fprintf(stderr, "phase completion: %s\n", emitted.error);
+                    assert(rc == 0 && emitted.graph.count == (direction ? 1u : 2u));
+                    struct snag_response_item view = snag_response_graph_item(&emitted.graph, 0u);
+                    assert(view.phase == (direction ? SNAG_PHASE_FINAL_ANSWER : SNAG_PHASE_COMMENTARY));
+                    assert(!strcmp(view.text, "Checking."));
+                    /* Completion can add a suffix without changing the live delta phase. */
+                    assert(emitted.text.len == 9u && !memcmp(emitted.text.data, "Checking.", 9u));
+                    assert(emitted.last_phase == (direction ? SNAG_PHASE_COMMENTARY : SNAG_PHASE_FINAL_ANSWER));
+                }
+                snag_buf_free(&item);
+                snag_buf_free(&wire);
+                parsed_free(&emitted);
+            }
+}
+
 int
 main(void)
 {
+    test_message_completion_finalizes_phase();
     test_failed_function_clarification_boundaries();
     test_deltas_survive_empty_terminal_output();
     test_reasoning_content_parts();

@@ -8,7 +8,9 @@ local rollout and native IRC chat. One-shot mode runs tasks from scripts.
 Implemented:
 - Named providers and local model settings, shared secret sources, Responses
   streaming, model discovery, token accounting and native/fallback compaction.
-- Reasoning content-part streams, including direct DeepSeek V4 Pro thinking.
+- Reasoning content-part streams, including direct DeepSeek V4 Pro thinking and
+  V4.1 Flash tool cycles/resume. The first completed message snapshot finalizes
+  its streaming phase; later completed-phase conflicts remain errors.
   Completed plaintext/encrypted reasoning is durable provider-bound continuation,
   replayed with original tool-call pairing across cycles and resume, and included
   in compatible compaction input. It is excluded from public/history rendering.
