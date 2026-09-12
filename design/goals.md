@@ -96,11 +96,11 @@ checkpoint, after which queued user turns run before the first synthetic goal
 turn.
 
 While a goal is active, the provider receives a strict `update_goal` function
-tool with two required arguments:
+tool with required action and action-dependent text:
 
 ```json
 {"action":"rewrite","text":"new wording"}
-{"action":"complete","text":null}
+{"action":"complete"}
 {"action":"block","text":"specific blocking condition"}
 ```
 

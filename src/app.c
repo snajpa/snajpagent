@@ -2843,7 +2843,7 @@ execute_calls(struct app_state *app, const char *turn_id,
                     return -1;
             } else if (calls[i].process) {
                 uint32_t yield_ms = 0u;
-                int rc = snag_tools_prepare(call, app->config, app->session.max_parallel_commands, calls[i].handle, &yield_ms, &result);
+                int rc = snag_tools_prepare(call, app->config, app->session.workspace, app->session.max_parallel_commands, calls[i].handle, &yield_ms, &result);
                 if (rc < 0)
                     return -1;
                 if (yield_ms && began + yield_ms < deadline)
@@ -2894,7 +2894,7 @@ execute_calls(struct app_state *app, const char *turn_id,
                 .kind = SNAG_UI_SPINNERS, .data.value = prompt_spinner_states(app)}) < 0)
                 return -1;
             int rc = calls[i].process ?
-                snag_tools_start(call, app->config, credential, &result, error, error_size) :
+                snag_tools_start(call, app->config, credential, app->session.workspace, &result, error, error_size) :
                 snag_app_tool_run(app, call, credential, &result, error, error_size);
             app->tool_active = false;
             if (rc < 0) {

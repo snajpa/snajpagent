@@ -3401,11 +3401,6 @@ render_tool_record(struct snag_render *render, const struct snag_render_record *
     if (!event || !response)
         goto out;
     data = json_object_get(event, "data");
-    const char *status = snag_json_string(json_object_get(data, "result"), "status");
-    if (!record->tool_start && status && strcmp(status, "not_run") == 0) {
-        rc = 0;
-        goto out;
-    }
     items = json_object_get(json_object_get(response, "data"), "items");
     const char *id = snag_json_string(data, "call_id");
     for (size_t i = 0u; id && i < json_array_size(items); ++i) {

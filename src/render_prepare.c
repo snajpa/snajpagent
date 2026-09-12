@@ -204,6 +204,11 @@ snag_render_prepare_tool_finish(struct snag_render_block *block, const char *nam
     } else if (snag_buf_printf(&row, "%s", status ? status : "unknown") < 0) {
         goto out;
     }
+    /* Reasons are host-owned status codes, not command output or arguments. */
+    const char *reason = snag_json_string(result, "reason");
+    if (status && !strcmp(status, "not_run") && reason &&
+        snag_buf_printf(&row, " · %s", reason) < 0)
+        goto out;
     if (snag_json_integer_u64(result, "duration_ms", &duration) == 0 &&
         (duration < 1000u ?
          snag_buf_printf(&row, " · %llums", (unsigned long long)duration) :

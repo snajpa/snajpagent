@@ -407,10 +407,10 @@ test_command_output_limit_selection(void)
         struct snag_buf *full = &output_journal[output_index(snag_json_string(ref, "handle"))].streams[0];
         assert(full->len == 9u && !memcmp(full->data, "unchanged", 9u));
         assert(json_int_member(json_object_get(result, "stdout"), "original_bytes") == 9);
-        const char *notice = strstr(snag_json_string(result, "model_text"), "Requested max_output_tokens=");
+        const char *notice = strstr(snag_json_string(result, "model_text"), "Requested max_output_bytes=");
         assert((notice != NULL) == (requests[i] > 6789));
         if (notice)
-            assert(strstr(notice, "applied max_output_tokens=6789"));
+            assert(strstr(notice, "applied max_output_bytes=6789"));
         json_decref(result);
     }
 }
@@ -429,10 +429,10 @@ test_managed_output_ceiling(void)
         assert(strcmp(snag_json_string(result, "status"), "running") == 0);
         assert(json_integer_value(json_object_get(result, "max_output_tokens")) ==
                (requests[i] == 42 ? 42 : 6000));
-        const char *notice = strstr(snag_json_string(result, "model_text"), "Requested max_output_tokens=");
+        const char *notice = strstr(snag_json_string(result, "model_text"), "Requested max_output_bytes=");
         assert((notice != NULL) == (requests[i] > 6000));
         if (notice)
-            assert(strstr(notice, "applied max_output_tokens=6000"));
+            assert(strstr(notice, "applied max_output_bytes=6000"));
         json_decref(result);
     }
     json_t *closed = close_command(handle);
@@ -442,7 +442,7 @@ test_managed_output_ceiling(void)
 }
 
 static void
-test_command_output_limit_is_required_and_positive(void)
+test_command_output_limit_is_optional_and_positive(void)
 {
     char cwd[4096];
     struct snag_config config;
@@ -464,7 +464,7 @@ test_command_output_limit_is_required_and_positive(void)
         result = NULL;
         assert(snag_tools_run(&call, &config, &credential, cwd,
                              NULL, NULL, -1, &result, error, sizeof(error)) == 0);
-        assert(!strcmp(snag_json_string(result, "status"), "not_run"));
+        assert(!strcmp(snag_json_string(result, "status"), i ? "not_run" : "succeeded"));
         json_decref(result);
         result = snag_tool_result_terminal(false, "invalid arguments");
         assert(result != NULL);
@@ -751,8 +751,8 @@ test_process_capacity_and_ready_collection(void)
         struct snag_response_item call = snag_response_graph_item(&graph, 0u);
         /* Reloaded defaults do not replace the admitted turn's slot limit. */
         config.max_parallel_commands = 1u;
-        assert(snag_tools_prepare(&call, &config, SNAG_MAX_PROCESSES, handles[i], &yield, &result) == 0);
-        assert(snag_tools_start(&call, &config, &credential, &result, error, sizeof(error)) == 0);
+        assert(snag_tools_prepare(&call, &config, cwd, SNAG_MAX_PROCESSES, handles[i], &yield, &result) == 0);
+        assert(snag_tools_start(&call, &config, &credential, cwd, &result, error, sizeof(error)) == 0);
         assert(!result);
         snag_response_graph_free(&graph);
     }
@@ -770,7 +770,7 @@ test_process_capacity_and_ready_collection(void)
     json_t *result = NULL;
     make_call(&graph, "printf forbidden", cwd, 1000, NULL);
     struct snag_response_item call = snag_response_graph_item(&graph, 0u);
-    assert(snag_tools_prepare(&call, &config, config.max_parallel_commands, unused, &yield, &result) == 1);
+    assert(snag_tools_prepare(&call, &config, cwd, config.max_parallel_commands, unused, &yield, &result) == 1);
     assert(!strcmp(snag_json_string(result, "reason"), "process_limit"));
     json_decref(result);
     snag_response_graph_free(&graph);
@@ -849,8 +849,8 @@ test_journal_failure_closes_owned_commands(void)
         json_t *result = NULL;
         make_call(&graph, "printf pending; sleep 5", cwd, 5000, NULL);
         struct snag_response_item call = snag_response_graph_item(&graph, 0u);
-        assert(snag_tools_prepare(&call, &config, config.max_parallel_commands, handle, &yield, &result) == 0);
-        assert(snag_tools_start(&call, &config, &credential, &result, error, sizeof(error)) == 0);
+        assert(snag_tools_prepare(&call, &config, cwd, config.max_parallel_commands, handle, &yield, &result) == 0);
+        assert(snag_tools_start(&call, &config, &credential, cwd, &result, error, sizeof(error)) == 0);
         snag_response_graph_free(&graph);
     }
     fail_output = true;
@@ -862,6 +862,38 @@ test_journal_failure_closes_owned_commands(void)
     assert(!snag_tools_busy());
     fail_output = false;
     snag_config_free(&config);
+}
+
+static void
+test_minimal_command_contract(void)
+{
+    const char *inputs[] = {
+        "{\"command\":\"printf minimal-contract\"}",
+        "{\"cmd\":\"printf minimal-contract\",\"yield_time_ms\":1000,\"max_output_bytes\":6000}",
+        "{\"max_output_bytes\":null,\"timeout_ms\":null,\"yield_ms\":null,\"stdin\":null,\"pty\":null,\"workdir\":null,\"command\":\"printf minimal-contract\"}"
+    };
+    for (size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
+        json_t *args = json_loadb(inputs[i], strlen(inputs[i]), 0, NULL);
+        json_t *result = run_tool_with_args("exec_command", args);
+        assert(!strcmp(snag_json_string(result, "status"), "succeeded"));
+        assert(strstr(snag_json_string(result, "model_text"), "minimal-contract"));
+        json_decref(result);
+    }
+    /* Omitted stdin stays open. Handle-only polling sends no bytes or EOF. */
+    json_t *started = run_tool_with_args("exec_command", json_pack("{s:s,s:i}",
+        "command", "read line; printf '%s' \"$line\"", "yield_ms", 0));
+    assert(!strcmp(snag_json_string(started, "status"), "running"));
+    const char *handle = snag_json_string(started, "handle");
+    json_t *result = run_tool_with_wait("write_stdin", json_pack("{s:s}", "handle", handle),
+                                      NULL, NULL, 1u);
+    assert(!strcmp(snag_json_string(result, "status"), "running"));
+    json_decref(result);
+    result = run_tool_with_args("write_stdin", json_pack("{s:s,s:s}",
+        "handle", handle, "data", "null\n"));
+    assert(!strcmp(snag_json_string(result, "status"), "succeeded"));
+    assert(strstr(snag_json_string(result, "model_text"), "null"));
+    json_decref(result);
+    json_decref(started);
 }
 
 static void
@@ -885,10 +917,9 @@ test_command_argument_feedback(void)
                         i == 3 ? json_integer(600001) : i == 4 ? json_integer(0) :
                         json_string("invalid");
         assert(json_object_set_new(call.arguments, fields[i], value) == 0);
-        if (i < 2)
-            assert(json_object_del(call.arguments, expected[i]) == 0);
+        /* Supplying canonical and legacy names together is ambiguous, even null. */
         json_t *result = NULL;
-        assert(snag_tools_prepare(&call, &config, 4u, handle, &yield_ms, &result) == 1);
+        assert(snag_tools_prepare(&call, &config, cwd, 4u, handle, &yield_ms, &result) == 1);
         assert(result && snag_tool_result_valid(result) == 0);
         assert(!strcmp(snag_json_string(result, "status"), "not_run"));
         assert(json_is_null(json_object_get(result, "handle")));
@@ -911,12 +942,13 @@ main(void)
     test_child_interrupt_mask();
     (void)signal(SIGPIPE, SIG_IGN);
     snag_tools_journal(retain_output, read_output, NULL);
+    test_minimal_command_contract();
     test_process_capacity_and_ready_collection();
     test_steering_with_blocked_stdin();
     test_journal_failure_closes_owned_commands();
     test_command_output_limit_selection();
     test_managed_output_ceiling();
-    test_command_output_limit_is_required_and_positive();
+    test_command_output_limit_is_optional_and_positive();
     test_stdin_uses_blocking_child_fd();
     test_managed_process_hands_off_on_steering();
     test_wait_limit_and_pending_termination();

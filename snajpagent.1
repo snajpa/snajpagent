@@ -955,6 +955,10 @@ wider than the terminal can still hard-wrap; information is retained rather than
 truncated.  Banner output preserves an existing draft and does not change saved
 conversation text.  Redirected diagnostics keep their original bytes.
 .SS Verbosity
+At level 1, tool rows include rejected and otherwise unexecuted attempts with
+a short status reason. These private rollout rows appear live and in history;
+full arguments and output stay at their existing higher detail levels.
+.PP
 Each model request includes a snapshot of the local verbosity, current
 rollout/chat view and effective tool-detail visibility, derived from the same
 presentation policy as the UI. The snapshot also identifies the terminal
@@ -2135,7 +2139,7 @@ Every
 and
 .B write_stdin
 call selects a positive
-.B max_output_tokens
+.B max_output_bytes
 context bound or
 .B null
 for the configured
@@ -2238,45 +2242,44 @@ Runtime validation and tool results remain authoritative even if a provider
 accepts an invalid declaration.  Pre-1.0 tool and event formats are not a
 stable third-party automation API.
 .SS Argument validation and applied limits
-Each provider request includes the current tool declarations, all required
-fields, their types and ranges, and parameter descriptions. Exact schema names
-apply even when an example in a working document uses another harness's syntax.
-Nullable defaults use JSON null, not the string "null". Coding requests also
-identify the actual workspace, configured shell, wait/deadline defaults,
-parallel-command maximum, output ceiling and goal text limits.
+Every provider receives the same native tool contract: required operands,
+optional controls, types, ranges and parameter descriptions. Object key order
+is irrelevant. Omitted optional controls use their documented defaults;
+nullable fields also accept JSON null. The string "null" remains literal data.
+Trusted harness instructions use system messages for every provider. User
+requests and tool results retain their own roles, including through resume.
 .PP
-Argument errors identify missing or unexpected fields, required types, numeric
-ranges and relevant path or cross-field restrictions. Correct the rejected
-arguments before retrying. A command reported as not_run has no new process or
-handle; repeating its unchanged invalid arguments cannot advance the task.
-Native read/search, patch, goal and IRC argument errors use the same diagnostic
-primitives. Skipped calls also explain process-slot limits, pending or closed
-input, stale/busy handles and control handoffs. Diagnostics avoid echoing string values that may contain secrets.
+The canonical command fields are command, yield_ms and max_output_bytes.
+The legacy spellings cmd, yield_time_ms and max_output_tokens respectively
+remain accepted. Supply one spelling per field: supplying both is rejected,
+even if the values are equal or null. Other unknown fields, including shell,
+are rejected. Original arguments remain unchanged in the journal.
 .PP
-Oversized positive command-output requests up to 4000000000 bytes are accepted
-with an explicit requested/applied limit notice. Invalid types, zero, larger
-values and out-of-range wait/deadline arguments are rejected. A host wait limit
-reports the requested wait and configured maximum while retaining the live
-handle. Wait and handoff deadlines send no termination signal.
+Argument errors identify missing operands, unexpected fields, invalid types,
+ranges and path or cross-field restrictions. A not_run result records an
+unexecuted attempt with no new process or handle. At verbosity 1 and above,
+private rollout shows its tool name, status and short reason in both live and
+history views. Full arguments and output remain governed by their detail levels.
+Skipped calls also explain slot limits, stale/busy handles and control handoffs.
 .PP
-Current argument corrections and applied-limit feedback remain visible in host
-context independently of the bounded output excerpt. This feedback covers the
-latest completed response batch and survives failed/interrupted provider attempts
-for retry or resume; old feedback is not repeatedly injected as current state.
-The ordinary call/result history remains durable and preserves earlier outcomes.
+Each request identifies the workspace, configured shell, wait/deadline defaults,
+parallel-command maximum, output ceiling and goal text limits. Output requests
+above the configured byte ceiling are capped with requested/applied feedback.
+Excessive waits, timeouts and other out-of-range controls are rejected rather
+than capped. Latest-batch corrections and applied-limit feedback remain visible
+to the model even under a tiny command-output budget and after interrupted
+provider requests. Complete redacted output remains in the session journal.
 .SS exec_command
-Run one command using the configured shell and explicit absolute
-.BR workdir .
-.B command
-is UTF-8 text up to 256 KiB.  A normal POSIX build runs the shell with
-.B -c
-and does not implicitly use a login shell.  On experimental native Windows,
-the default system cmd.exe receives its native command syntax; a configured
-POSIX shell receives
-.BR -c .
+Requires command, the source text for the configured shell. Workdir is optional:
+omission or null uses the session workspace; a supplied directory must be an
+existing absolute path. Other controls are optional. For example:
+.PP
+.nf
+{"command":"pwd"}
+.fi
 .PP
 .B stdin
-is null to leave input available for later interaction, or UTF-8 text up to
+is omitted/null to leave input available for later interaction, or UTF-8 text up to
 1 MiB to send and then close input.  An empty string sends immediate EOF.
 .B pty
 is true for a pseudo-terminal; false or null uses ordinary pipes.  PTY output
@@ -2284,17 +2287,19 @@ is a terminal stream rather than separate stdout/stderr, and terminal line
 editing/echo rules may affect interactive input.
 .PP
 .B yield_ms
-is 0 through 600000, or null for the configured default.  It bounds the
+is 0 through 600000, or omitted/null for the configured default.  It bounds the
 foreground wait before returning a handle; it is not a process lifetime.
 .B timeout_ms
 is a positive foreground handoff deadline, bounded by the configured maximum,
-or null for the configured default.  The built-in default has no deadline.
+or omitted/null for the configured default.  The built-in default has no deadline.
 A deadline yields control without terminating the child.
 .PP
-.B max_output_tokens
+.B max_output_bytes
 is a positive retained UTF-8 byte bound for result text sent to model context,
-or null for the configured ceiling (default 6000).  Despite its legacy name,
-it does not count tokens. Larger requests are capped with requested/applied
+or omitted/null for the configured ceiling (default 6000). The legacy input
+spelling max_output_tokens retains these byte semantics. This argument selects
+the model excerpt; the similarly named [tool] max_output_bytes setting controls
+terminal display only. Larger requests are capped with requested/applied
 feedback. Complete redacted
 process output remains in the session log; the bounded excerpt identifies
 truncation and its source.
@@ -2314,6 +2319,15 @@ processes holding passed descriptors are not signalled. Continued output does
 not extend the drain limit. A live command remains governed by its ordinary
 wait and termination controls.
 .SS write_stdin
+Requires a live handle. Omitted data is an empty string: it polls without
+sending bytes or closing input. Supplied data must be a string, not null.
+The eof and terminate flags default to false; optional wait/output controls
+use the same defaults and legacy spellings as exec_command. Minimal polling:
+.PP
+.nf
+{"handle":"<live handle returned by exec_command>"}
+.fi
+.PP
 .B handle
 identifies a currently managed command.
 .B data
@@ -2341,8 +2355,8 @@ The model may perform unrelated work while a command runs, but must settle
 all handles before its final answer or goal completion.  Shutdown cleans up
 managed commands and descendants; saved session history cannot revive them.
 .SS apply_patch
-.B workdir
-must be the exact session workspace.
+The patch is required. Optional workdir defaults to the session workspace
+on omission or null; a supplied path must equal that workspace.
 .B patch
 contains one bounded patch with this structure:
 .PP
@@ -2409,8 +2423,8 @@ requested and no unfinished goal already exists.  Goal creation takes effect
 when the tool succeeds.
 .PP
 .B update_goal
-accepts action and text.  Action rewrite requires new wording; complete
-requires null text; block requires a specific reason.  Only an active goal
+requires action; text depends on the action. Rewrite requires new wording; complete
+accepts omitted or null text; block requires a specific reason.  Only an active goal
 advertises it.  A wording lock rejects model rewording, not completion or
 blocking; the operator retains explicit control through slash commands.
 .SS Model IRC controls

@@ -611,21 +611,6 @@ test_accounting_lineage(struct snag_store *store, const char *workspace)
     json_decref(output);
 }
 
-static int
-array_has_string(json_t *array, const char *value)
-{
-    size_t index;
-    json_t *item;
-
-    if (!json_is_array(array))
-        return 0;
-    for (index = 0u; index < json_array_size(array); ++index) {
-        item = json_array_get(array, index);
-        if (json_is_string(item) && strcmp(json_string_value(item), value) == 0)
-            return 1;
-    }
-    return 0;
-}
 
 static json_t *
 item_by_field(json_t *items, const char *key, const char *value)
@@ -659,22 +644,21 @@ message_matching(json_t *items, const char *needle)
 }
 
 static json_t *
-assert_strict_tool_contract(json_t *tool)
+assert_optional_tool_contract(json_t *tool)
 {
     static const struct { const char *name, *required; } order[] = {
-        {"exec_command", "command workdir stdin pty yield_ms timeout_ms max_output_tokens"},
-        {"write_stdin", "handle data eof terminate yield_ms max_output_tokens"},
-        {"apply_patch", "patch workdir"},
+        {"exec_command", "command"},
+        {"write_stdin", "handle"},
+        {"apply_patch", "patch"},
         {"create_goal", "objective"},
-        {"update_goal", "action text"},
-        {"irc_send", "destination notice text"},
+        {"update_goal", "action"},
+        {"irc_send", "text"},
         {"irc_state", ""},
-        {"irc_topic", "destination topic"},
-        {"list_files", "path recursive offset limit"},
-        {"read_file", "path start_line end_line"},
-        {"grep", "path pattern recursive ignore_case literal offset limit"}
+        {"irc_topic", "topic"},
+        {"list_files", "path"},
+        {"read_file", "path"},
+        {"grep", "path pattern"}
     };
-    const char *key;
     json_t *schema;
     json_t *params;
     json_t *properties;
@@ -682,7 +666,7 @@ assert_strict_tool_contract(json_t *tool)
     void *iter;
 
     assert(json_is_object(tool));
-    assert(json_is_true(json_object_get(tool, "strict")));
+    assert(json_is_false(json_object_get(tool, "strict")));
     assert_string(tool, "type", "function");
     params = json_object_get(tool, "parameters");
     assert(json_is_object(params));
@@ -692,7 +676,7 @@ assert_strict_tool_contract(json_t *tool)
     required = json_object_get(params, "required");
     assert(json_is_object(properties));
     assert(json_is_array(required));
-    assert(json_object_size(properties) == json_array_size(required));
+    assert(json_object_size(properties) >= json_array_size(required));
     for (size_t i = 0; i < sizeof(order) / sizeof(order[0]); ++i) {
         if (strcmp(snag_json_string(tool, "name"), order[i].name))
             continue;
@@ -709,11 +693,10 @@ assert_strict_tool_contract(json_t *tool)
     }
     for (iter = json_object_iter(properties); iter;
          iter = json_object_iter_next(properties, iter)) {
-        key = json_object_iter_key(iter);
         schema = json_object_iter_value(iter);
         assert(schema);
         assert(snag_json_string(schema, "description") && *snag_json_string(schema, "description"));
-        assert(array_has_string(required, key));
+
     }
     return properties;
 }
@@ -750,7 +733,7 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
         if (strcmp(snag_json_string(tool, "type"), "web_search") == 0)
             assert(json_object_size(tool) == 1u);
         else
-            (void)assert_strict_tool_contract(tool);
+            (void)assert_optional_tool_contract(tool);
     }
 
     tool = item_by_field(tools, "name", "exec_command");
@@ -759,17 +742,17 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
         assert(strstr(description, fallback));
         json_t *properties = json_object_get(json_object_get(tool, "parameters"), "properties");
         assert(strstr(snag_json_string(json_object_get(properties, "timeout_ms"), "description"), "default_timeout_ms"));
-        assert(strstr(snag_json_string(json_object_get(properties, "max_output_tokens"), "description"), "not model generation tokens"));
+        assert(strstr(snag_json_string(json_object_get(properties, "max_output_bytes"), "description"), "UTF-8 byte limit"));
         assert_properties(tool, json_pack(
-            "{s:{s:s},s:{s:s},s:{s:[s,s]},s:{s:[s,s]},"
+            "{s:{s:s},s:{s:[s,s]},s:{s:[s,s]},s:{s:[s,s]},"
             "s:{s:[s,s],s:i,s:i},s:{s:[s,s],s:i,s:I},s:{s:[s,s],s:i,s:I}}",
-            "command", "type", "string", "workdir", "type", "string",
+            "command", "type", "string", "workdir", "type", "string", "null",
             "stdin", "type", "string", "null", "pty", "type", "boolean", "null",
             "yield_ms", "type", "integer", "null", "minimum", 0, "maximum", 600000,
             "timeout_ms", "type", "integer", "null", "minimum", 1,
                 "maximum", (json_int_t)max_timeout_ms,
-            "max_output_tokens", "type", "integer", "null", "minimum", 1,
-                "maximum", (json_int_t)max_output_tokens));
+            "max_output_bytes", "type", "integer", "null", "minimum", 1,
+                "maximum", (json_int_t)SNAG_CONFIG_TOKEN_LIMIT_MAX));
     }
 
     tool = item_by_field(tools, "name", "write_stdin");
@@ -780,8 +763,8 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
         "handle", "type", "string", "data", "type", "string",
         "eof", "type", "boolean", "null", "terminate", "type", "boolean", "null",
         "yield_ms", "type", "integer", "null", "minimum", 0, "maximum", 600000,
-        "max_output_tokens", "type", "integer", "null", "minimum", 1,
-            "maximum", (json_int_t)max_output_tokens);
+        "max_output_bytes", "type", "integer", "null", "minimum", 1,
+            "maximum", (json_int_t)SNAG_CONFIG_TOKEN_LIMIT_MAX);
     assert(expected);
     if (active_handle)
         assert(json_object_set_new(json_object_get(expected, "handle"),
@@ -790,8 +773,8 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
 
     tool = item_by_field(tools, "name", "apply_patch");
     if (tool)
-        assert_properties(tool, json_pack("{s:{s:s},s:{s:s}}",
-            "patch", "type", "string", "workdir", "type", "string"));
+        assert_properties(tool, json_pack("{s:{s:s},s:{s:[s,s]}}",
+            "patch", "type", "string", "workdir", "type", "string", "null"));
     tool = item_by_field(tools, "name", "create_goal");
     if (tool) {
         assert(strstr(snag_json_string(tool, "description"), "explicitly request"));
@@ -882,9 +865,9 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
                 assert(json_array_size(ts) == 4u);
                 assert(item_by_field(ts, "name", "list_files") && item_by_field(ts, "name", "read_file") &&
                        item_by_field(ts, "name", "grep"));
-                (void)assert_strict_tool_contract(item_by_field(ts, "name", "list_files"));
-                (void)assert_strict_tool_contract(item_by_field(ts, "name", "read_file"));
-                (void)assert_strict_tool_contract(item_by_field(ts, "name", "grep"));
+                (void)assert_optional_tool_contract(item_by_field(ts, "name", "list_files"));
+                (void)assert_optional_tool_contract(item_by_field(ts, "name", "read_file"));
+                (void)assert_optional_tool_contract(item_by_field(ts, "name", "grep"));
             } else {
                 assert(item_by_field(ts, "name", "exec_command"));
                 assert(item_by_field(ts, "name", "update_goal"));
@@ -1429,13 +1412,13 @@ main(void)
         assert(json_array_size(input) == 5u);
         assert(active.dir_path[0] == '/');
         assert_string(json_array_get(input, 1), "type", "compaction");
-        assert_string(json_array_get(input, 2), "role", "developer");
+        assert_string(json_array_get(input, 2), "role", "system");
         assert(strstr(snag_json_string(json_array_get(input, 2), "content"),
                       active.dir_path) != NULL);
         assert(strstr(snag_json_string(json_array_get(input, 2), "content"),
                       "/events.jsonl") != NULL);
         assert_string(json_array_get(input, 3), "content", "new");
-        assert_string(json_array_get(input, 4), "role", "developer");
+        assert_string(json_array_get(input, 4), "role", "system");
         assert(strstr(snag_json_string(json_array_get(input, 4), "content"),
                       "create_goal") != NULL);
         snag_context_projection_free(&compact);
@@ -1483,12 +1466,12 @@ main(void)
         assert_string(json_array_get(input, 2), "role", "assistant");
         assert_string(json_array_get(input, 2), "content", "visible prefix");
         assert_string(json_array_get(input, 2), "phase", "commentary");
-        assert_string(json_array_get(input, 3), "role", "developer");
+        assert_string(json_array_get(input, 3), "role", "system");
         assert(strstr(snag_json_string(json_array_get(input, 3), "content"),
                       "immediate steer") != NULL);
         assert_string(json_array_get(input, 4), "role", "user");
         assert_string(json_array_get(input, 4), "content", "change direction");
-        assert_string(json_array_get(input, 5), "role", "developer");
+        assert_string(json_array_get(input, 5), "role", "system");
         assert(strstr(snag_json_string(json_array_get(input, 5), "content"),
                       "immediate steer") != NULL);
         assert_string(json_array_get(input, 6), "role", "user");
@@ -1544,7 +1527,7 @@ main(void)
         assert(strstr(snag_json_string(json_array_get(input, 3), "output"),
                       "still running after steer") != NULL);
         assert_string(json_array_get(input, 3), "output", "still running after steer");
-        assert_string(json_array_get(input, 4), "role", "developer");
+        assert_string(json_array_get(input, 4), "role", "system");
         assert(strstr(snag_json_string(json_array_get(input, 4), "content"),
                       "immediate steer") != NULL);
         assert_string(json_array_get(input, 5), "content", "stop or wait");
@@ -1675,7 +1658,7 @@ main(void)
     assert(json_array_size(request_input) == 6);
     assert_string(json_array_get(request_input, 2), "type", "compaction");
     assert(session.dir_path[0] == '/');
-    assert_string(json_array_get(request_input, 3), "role", "developer");
+    assert_string(json_array_get(request_input, 3), "role", "system");
     assert(strstr(snag_json_string(json_array_get(request_input, 3), "content"),
                   session.dir_path) != NULL);
     assert(strstr(snag_json_string(json_array_get(request_input, 3), "content"),
@@ -1697,7 +1680,7 @@ main(void)
     assert(items == json_object_get(projection.count_request.value, "input"));
     assert(json_object_get(projection.create_request.value, "tools") ==
            json_object_get(projection.count_request.value, "tools"));
-    assert_string(json_array_get(items, 3), "role", "developer");
+    assert_string(json_array_get(items, 3), "role", "system");
     assert(strstr(snag_json_string(json_array_get(items, 3), "content"),
                   session.dir_path) != NULL);
     assert_string(json_array_get(items, 4), "content", "again");
@@ -1770,7 +1753,7 @@ main(void)
         assert(strstr(snag_json_string(tool_output, "output"),
                       "command output truncated for model context") != NULL);
         assert(strstr(snag_json_string(tool_output, "output"),
-                      "max_output_tokens=4000") != NULL);
+                      "max_output_bytes=4000") != NULL);
         assert(strstr(snag_json_string(tool_output, "output"),
                       "full-model-tail") != NULL);
         assert(snag_utf8_valid((const unsigned char *)snag_json_string(
@@ -1811,7 +1794,7 @@ main(void)
                                     network_config.max_timeout_ms, 777u);
         assert(strstr(snag_json_string(item_by_field(input, "type",
                    "function_call_output"), "output"),
-               "max_output_tokens=4000") != NULL);
+               "max_output_bytes=4000") != NULL);
         gate_text = snag_json_string(
             json_array_get(input, json_array_size(input) - 1u), "content");
         assert(gate_text != NULL);
@@ -1860,7 +1843,7 @@ main(void)
         assert(item_by_field(tools, "name", "create_goal") == NULL);
         assert(item_by_field(tools, "name", "update_goal") != NULL);
         assert(continuation != NULL);
-        assert_string(continuation, "role", "developer");
+        assert_string(continuation, "role", "system");
         assert_string(continuation, "content", SNAG_GOAL_CONTINUATION_TEXT);
         assert(controller != NULL);
         assert(strstr(snag_json_string(controller, "content"),

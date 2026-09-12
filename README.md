@@ -116,8 +116,9 @@ Ctrl-C clears a nonempty draft; with an empty draft, it interrupts the turn and
 pauses automatic goal continuation. The next idle prompt clears the active goal
 flag. Empty Enter leaves the goal paused; use `/goal resume` to restart it.
 Ctrl-D on an empty draft exits. No work continues after the program exits.
-Tool argument errors identify the correction, and capped output reports requested
-and applied limits. The model receives current tool definitions, runtime settings and local display
+Tools use required operands with optional defaulted controls. Verbosity 1 shows
+rejected attempts as compact outcome rows. Argument errors identify corrections;
+capped output reports requested and applied byte limits. The model receives current tool definitions, runtime settings and local display
 visibility: hidden tools call for meaningful progress updates; fuller traces
 reduce duplicate narration. Decisions and outcomes remain explicit.
 

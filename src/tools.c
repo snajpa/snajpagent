@@ -93,7 +93,8 @@ static bool
 command_output_limit(const json_t *arguments, uint32_t ceiling, uint32_t *out,
                      char *error, size_t size)
 {
-    if (!json_u32_member(arguments, "max_output_tokens", ceiling, 1u,
+    const char *key = snag_json_arg_name(arguments, "max_output_bytes", "max_output_tokens", error, size);
+    if (!key || !json_u32_member(arguments, key, ceiling, 1u,
                          (uint32_t)SNAG_CONFIG_TOKEN_LIMIT_MAX, out, error, size))
         return false;
     if (*out > ceiling)
@@ -187,7 +188,7 @@ static int
 output_limit_notice(struct snag_buf *text, uint64_t requested, uint32_t effective)
 {
     return requested > effective ? snag_buf_printf(text,
-        "Requested max_output_tokens=%llu; applied max_output_tokens=%u (configured maximum, UTF-8 bytes).\n",
+        "Requested max_output_bytes=%llu; applied max_output_bytes=%u (configured maximum, UTF-8 bytes).\n",
         (unsigned long long)requested, effective) : 0;
 }
 
@@ -865,41 +866,49 @@ struct command_args {
 
 static int
 command_args(const struct snag_response_item *call, const struct snag_config *config,
-              struct command_args *args, char *error, size_t size)
+              const char *workspace, struct command_args *args, char *error, size_t size)
 {
     memset(args, 0, sizeof(*args));
     args->exec = !strcmp(call->name, "exec_command");
-    if ((!args->exec && strcmp(call->name, "write_stdin")) ||
-        !snag_json_arg_keys(call->arguments,
-            args->exec ? "command workdir stdin pty yield_ms timeout_ms max_output_tokens" :
-                         "handle data eof terminate yield_ms max_output_tokens", error, size) ||
-        !json_u32_member(call->arguments, "yield_ms", config->default_yield_ms,
+    const char *command = args->exec ?
+        snag_json_arg_name(call->arguments, "command", "cmd", error, size) : "handle";
+    const char *yield = snag_json_arg_name(call->arguments, "yield_ms", "yield_time_ms", error, size);
+    if (!command || !yield || (!args->exec && strcmp(call->name, "write_stdin")) ||
+        !snag_json_arg_keys(call->arguments, command,
+            args->exec ? "command cmd workdir stdin pty yield_ms yield_time_ms timeout_ms max_output_bytes max_output_tokens" :
+                         "data eof terminate yield_ms yield_time_ms max_output_bytes max_output_tokens", error, size) ||
+        !json_u32_member(call->arguments, yield, config->default_yield_ms,
                           0u, SNAG_TOOL_YIELD_MAX_MS, &args->yield, error, size) ||
         !command_output_limit(call->arguments, config->max_output_tokens, &args->limit, error, size))
         return -1;
     if (args->exec) {
         args->handle = call->call_id;
-        if (!snag_json_arg_text(call->arguments, "command", 0u, SNAG_TOOL_COMMAND_MAX,
+        if (!snag_json_arg_text(call->arguments, command, 0u, SNAG_TOOL_COMMAND_MAX,
                                 false, &args->command, error, size) ||
             !snag_json_arg_text(call->arguments, "workdir", 1u, SNAG_PATH_MAX_BYTES,
-                                false, &args->workdir, error, size) ||
+                                true, &args->workdir, error, size) ||
             !snag_json_arg_text(call->arguments, "stdin", 0u, SNAG_TOOL_STDIN_MAX,
                                 true, &args->input, error, size) ||
             !snag_json_arg_bool(call->arguments, "pty", false, &args->pty, error, size) ||
             !json_u32_member(call->arguments, "timeout_ms", config->default_timeout_ms,
                              1u, config->max_timeout_ms, &args->timeout, error, size))
             return -1;
+        if (!args->workdir)
+            args->workdir = workspace;
         args->eof = args->input != NULL;
         if (!absolute_dir_arg_valid(args->workdir))
             return snag_errorf(error, size, "workdir must name an existing absolute directory.");
     } else {
         if (!snag_json_arg_text(call->arguments, "handle", SNAG_ID_HEX_LEN, SNAG_ID_HEX_LEN,
                                 false, &args->handle, error, size) ||
-            !snag_json_arg_text(call->arguments, "data", 0u, SNAG_TOOL_STDIN_MAX,
-                                false, &args->input, error, size) ||
+            (json_object_get(call->arguments, "data") &&
+             !snag_json_arg_text(call->arguments, "data", 0u, SNAG_TOOL_STDIN_MAX,
+                                false, &args->input, error, size)) ||
             !snag_json_arg_bool(call->arguments, "eof", false, &args->eof, error, size) ||
             !snag_json_arg_bool(call->arguments, "terminate", false, &args->terminate, error, size))
             return -1;
+        if (!args->input)
+            args->input = "";
         if (args->terminate && (args->input[0] || args->eof))
             return snag_errorf(error, size, "terminate=true requires data=\"\" and eof=false or null.");
     }
@@ -908,7 +917,7 @@ command_args(const struct snag_response_item *call, const struct snag_config *co
 }
 
 int
-snag_tools_prepare(const struct snag_response_item *call, const struct snag_config *config, uint32_t max_parallel,
+snag_tools_prepare(const struct snag_response_item *call, const struct snag_config *config, const char *workspace, uint32_t max_parallel,
                     char handle[SNAG_ID_HEX_LEN + 1u], uint32_t *yield_ms,
                     json_t **rejected)
 {
@@ -918,7 +927,7 @@ snag_tools_prepare(const struct snag_response_item *call, const struct snag_conf
     size_t used = 0u;
     char diagnostic[768] = {0};
     *rejected = NULL;
-    if (command_args(call, config, &args, diagnostic, sizeof(diagnostic)) < 0) {
+    if (command_args(call, config, workspace, &args, diagnostic, sizeof(diagnostic)) < 0) {
         reason = "invalid_arguments";
     } else {
         *yield_ms = args.yield;
@@ -959,13 +968,13 @@ snag_tools_prepare(const struct snag_response_item *call, const struct snag_conf
 
 int
 snag_tools_start(const struct snag_response_item *call, const struct snag_config *config,
-                  const struct snag_credential *credential, json_t **result,
+                  const struct snag_credential *credential, const char *workspace, json_t **result,
                   char *error, size_t error_size)
 {
     struct command_args args;
     struct managed_process *proc;
     *result = NULL;
-    if (command_args(call, config, &args, error, error_size) < 0)
+    if (command_args(call, config, workspace, &args, error, error_size) < 0)
         return -1;
     if (args.exec) {
         if (start_command(args.handle, args.command, args.workdir, args.input,
@@ -992,7 +1001,8 @@ snag_tools_start(const struct snag_response_item *call, const struct snag_config
                 proc->input_eof = true;
         }
     }
-    const json_t *requested = json_object_get(call->arguments, "max_output_tokens");
+    const char *key = snag_json_arg_name(call->arguments, "max_output_bytes", "max_output_tokens", NULL, 0u);
+    const json_t *requested = key ? json_object_get(call->arguments, key) : NULL;
     proc->requested_output_tokens = json_is_integer(requested) ?
         (uint64_t)json_integer_value(requested) : args.limit;
     proc->wait_started_ms = snag_monotonic_ms();
@@ -1018,7 +1028,8 @@ snag_tools_attach_output_limit(const struct snag_response_item *call,
     if (snag_json_set_new(result, "max_output_tokens", json_integer(max_output_tokens)) < 0)
         return -1;
     uint64_t requested;
-    if (snag_json_integer_u64(call->arguments, "max_output_tokens", &requested) == 0 &&
+    const char *key = snag_json_arg_name(call->arguments, "max_output_bytes", "max_output_tokens", NULL, 0u);
+    if (key && snag_json_integer_u64(call->arguments, key, &requested) == 0 &&
         requested > max_output_tokens && requested <= SNAG_CONFIG_TOKEN_LIMIT_MAX) {
         const char *old = snag_json_string(result, "model_text");
         struct snag_buf text = {.max = SNAG_MAX_EVENT_LINE};
@@ -1098,10 +1109,10 @@ snag_tools_run(const struct snag_response_item *call,
         snag_secret_set_free(&secrets);
         return rc;
     }
-    rc = snag_tools_prepare(call, config, config->max_parallel_commands, handle, &yield_ms, result);
+    rc = snag_tools_prepare(call, config, session_workspace, config->max_parallel_commands, handle, &yield_ms, result);
     if (rc != 0)
         return rc < 0 ? -1 : 0;
-    if (snag_tools_start(call, config, credential, result, error, error_size) < 0)
+    if (snag_tools_start(call, config, credential, session_workspace, result, error, error_size) < 0)
         return -1;
     if (!*result && wait_process(handle, yield_ms, pump, pump_opaque, wake_fd,
                                  result, error, error_size) < 0)

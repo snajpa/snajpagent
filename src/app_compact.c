@@ -90,7 +90,7 @@ responses_compact_create_request(const json_t *compact_request,
         return NULL;
     copy = json_copy(input);
     if (!copy || json_array_append_new(copy,
-            json_pack("{s:s,s:s}", "role", "developer",
+            json_pack("{s:s,s:s}", "role", "system",
                       "content", instruction)) < 0)
         goto out;
     request = json_pack("{s:O,s:s,s:b,s:{s:s},s:b,s:b,s:s,s:[],s:s}",
@@ -138,7 +138,7 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
     (void)credential;
     return snag_context_compact_output_set(output, json_pack("[{s:s,s:s,s:s}]",
         "content", "fixture responses compact summary",
-        "role", "developer", "type", "message"), error, error_size);
+        "role", "user", "type", "message"), error, error_size);
 #else
     struct snag_graph_decision decision;
     struct snag_provider_failure failure = {0};
@@ -168,7 +168,7 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
         goto out;
     }
     rc = snag_context_compact_output_set(output, json_pack("[{s:s,s:s,s:s}]",
-        "type", "message", "role", "developer", "content", final.text),
+        "type", "message", "role", "user", "content", final.text),
         error, error_size);
 out:
     snag_response_graph_free(&graph);

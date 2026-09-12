@@ -538,7 +538,7 @@ snag_app_goal_tool(struct app_state *app,
         const char *objective;
         char message[128];
 
-        if (!snag_json_arg_keys(call->arguments, "objective", error, error_size) ||
+        if (!snag_json_arg_keys(call->arguments, "objective", "", error, error_size) ||
             !snag_json_arg_text(call->arguments, "objective", 1u, prompt_limit,
                                 false, &objective, error, error_size))
             return tool_result(false, error, result);
@@ -557,7 +557,7 @@ snag_app_goal_tool(struct app_state *app,
     }
     if (!call || strcmp(call->name, "update_goal") != 0)
         return tool_result(false, "Expected update_goal with action and text fields.", result);
-    if (!snag_json_arg_keys(call->arguments, "action text", error, error_size) ||
+    if (!snag_json_arg_keys(call->arguments, "action", "text", error, error_size) ||
         !snag_json_arg_text(call->arguments, "action", 1u, 8u, false, &action, error, error_size))
         return tool_result(false, error, result);
     text_value = json_object_get(call->arguments, "text");
@@ -585,7 +585,7 @@ snag_app_goal_tool(struct app_state *app,
     if (strcmp(action, "complete") == 0) {
         if (app->session.process_count)
             return tool_result(false, "settle command handles before completing the goal", result);
-        if (!json_is_null(text_value))
+        if (text_value && !json_is_null(text_value))
             return tool_result(false,
                                "complete requires text to be null", result);
         if (commit_goal_event(app, "goal_completed",

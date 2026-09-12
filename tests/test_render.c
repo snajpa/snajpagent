@@ -2305,6 +2305,8 @@ append_event(FILE *file, const char *text)
 static void
 test_semantic_history(void)
 {
+    for (unsigned int live = 0u; live <= 1u; ++live)
+    for (unsigned int rejected = 0u; rejected <= 1u; ++rejected)
     for (unsigned int level = 0u; level <= 3u; ++level) {
         char path[] = "build/verbosity-log-XXXXXX";
         int log_fd = mkstemp(path);
@@ -2326,15 +2328,18 @@ test_semantic_history(void)
             "\"arguments\":\"%s\"}]}}\n", args) == 0);
         assert(snag_buf_terminate(&response) == 0);
         assert(snag_buf_printf(&finish, "{\"data\":{\"call_id\":\"one\",\"result\":{"
-                              "\"status\":\"failed\",\"model_text\":\"%s\"}}}\n", result) == 0);
+                              "\"status\":\"%s\",\"reason\":\"invalid_arguments\",\"model_text\":\"%s\"}}}\n",
+                              rejected ? "not_run" : "failed", result) == 0);
         assert(snag_buf_terminate(&finish) == 0);
-        snag_render_init(&render, 6u);
+        snag_render_init(&render, live ? level : 6u);
         snag_render_set_color(&render, SNAG_COLOR_NEVER);
-        assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
+        if (!live)
+            assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
         struct snag_render_source source = append_event(file, (char *)response.data);
         assert(snag_render_durable(&render, fileno(file), source, "response_completed", 0u, 0u) == 0);
         source = append_event(file, "{\"data\":{\"call_id\":\"one\",\"resolved_workdir\":\"/work\"}}\n");
-        assert(snag_render_durable(&render, fileno(file), source, "tool_started", 0u, 0u) == 0);
+        if (!rejected)
+            assert(snag_render_durable(&render, fileno(file), source, "tool_started", 0u, 0u) == 0);
         source = append_event(file, (char *)finish.data);
         assert(snag_render_durable(&render, fileno(file), source, "tool_finished", 0u, 0u) == 0);
         assert(snag_render_runtime(&render, "hidden-debug") == 0);
@@ -2343,15 +2348,18 @@ test_semantic_history(void)
         assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
         size_t used = drain_available(capture.fd, output, sizeof(output), 0u);
         assert((strstr(output, "future_tool") != NULL) == (level >= 1u));
+        assert((strstr(output, "invalid_arguments") != NULL) == (rejected && level >= 1u));
+        if (level == 1u && rejected)
+            assert(!strstr(output, "AAAA") && !strstr(output, "RRRR"));
         assert((strstr(output, "RRRR") != NULL) == (level >= 2u));
-        assert((strstr(output, "[arguments truncated]") != NULL) == (level == 2u));
+        assert((strstr(output, "[arguments truncated]") != NULL) == (level == 2u && !rejected));
         assert((strstr(output, "[output truncated]") != NULL) == (level == 2u));
         assert(!strstr(output, "hidden-debug") && !strstr(output, "hidden-protocol"));
         render.verbosity = 6u;
         assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
         assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
         (void)drain_available(capture.fd, output, sizeof(output), used);
-        assert(count_text(output, "future_tool") == (level ? 2u : 0u));
+        assert(count_text(output, "future_tool") == (level ? (rejected ? 1u : 2u) : 0u));
         snag_render_free(&render);
         snag_buf_free(&response);
         snag_buf_free(&finish);

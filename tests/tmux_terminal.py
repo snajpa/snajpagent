@@ -155,7 +155,7 @@ class FakeResponses:
     @staticmethod
     def has_output_correction(request):
         return any(
-            item.get("role") == "developer" and
+            item.get("role") == "system" and
             item.get("content") == EMPTY_OUTPUT_CORRECTION
             for item in request.get("input", [])
         )
@@ -353,17 +353,17 @@ class FakeResponses:
         effective = min(ceiling, selected if selected is not None else ceiling)
         for tool in request["tools"]:
             if tool.get("name") in ("exec_command", "write_stdin"):
-                assert tool["parameters"]["properties"]["max_output_tokens"][
-                    "maximum"] == ceiling
+                assert tool["parameters"]["properties"]["max_output_bytes"][
+                    "maximum"] == 4000000000
         outputs = [item["output"] for item in request["input"]
                    if item.get("type") == "function_call_output"]
         if outputs:
             assert len(outputs) == 1 and len(outputs[0].encode()) <= effective
-            assert f"max_output_tokens={effective}" in outputs[0]
+            assert f"max_output_bytes={effective}" in outputs[0]
             if selected is not None and selected > ceiling:
-                controls = str([i for i in request["input"] if i.get("role") == "developer"])
-                assert f"Requested max_output_tokens={selected}" in controls
-                assert f"applied max_output_tokens={effective}" in controls
+                controls = str([i for i in request["input"] if i.get("role") == "system"])
+                assert f"Requested max_output_bytes={selected}" in controls
+                assert f"applied max_output_bytes={effective}" in controls
             return self.response_body(sequence, "tool cap confirmed")
         return self.function_body(sequence, "call_cap", "exec_command", {
             "command": "printf '%08000d' 0", "workdir": str(self.tool_workspace),
@@ -3626,7 +3626,7 @@ def run_operator_visibility_cases(binary, root):
             config.write_text(config.read_text().replace("[agent]\n", "[agent]\nmax_turn_retries=0\n", 1))
 
             def respond(handler, request, sequence):
-                hints = [i["content"] for i in request["input"] if i.get("role") == "developer"
+                hints = [i["content"] for i in request["input"] if i.get("role") == "system"
                          and isinstance(i.get("content"), str)
                          and i["content"].startswith("Local operator display snapshot:")]
                 assert len(hints) == 1, "current operator visibility missing from model request"
@@ -3660,7 +3660,7 @@ def run_operator_visibility_cases(binary, root):
             seen = []
 
             def respond(handler, request, sequence):
-                hints = [i["content"] for i in request["input"] if i.get("role") == "developer"
+                hints = [i["content"] for i in request["input"] if i.get("role") == "system"
                          and isinstance(i.get("content"), str)
                          and i["content"].startswith("Local operator display snapshot:")]
                 assert len(hints) == 1
@@ -3706,7 +3706,7 @@ def run_operator_visibility_cases(binary, root):
 
             # Resume with new flags: old in-memory verbosity/view is not authority.
             def resumed(handler, request, sequence):
-                hints = [i["content"] for i in request["input"] if i.get("role") == "developer"
+                hints = [i["content"] for i in request["input"] if i.get("role") == "system"
                          and isinstance(i.get("content"), str)
                          and i["content"].startswith("Local operator display snapshot:")]
                 assert len(hints) == 1 and "verbosity=2 " in hints[0] and "view=rollout" in hints[0]
@@ -3728,7 +3728,7 @@ def run_operator_visibility_cases(binary, root):
 
 def run_tool_contract_cases(binary, root, provider, environment):
     """Malformed proposals, correction, clamping and replay through real HTTP."""
-    for mode in ("yield", "command", "extra", "timeout", "zero", "boolean", "tiny", "retry", "patch", "wait", "goal", "read"):
+    for mode in ("yield", "command", "extra", "timeout", "zero", "boolean", "tiny", "retry", "patch", "wait", "goal", "read", "minimal", "aliases"):
         case = root / ("contract-" + mode)
         case.mkdir(parents=True)
         config, state = case / "config.ini", case / "state"
@@ -3751,9 +3751,16 @@ def run_tool_contract_cases(binary, root, provider, environment):
             for tool in tools.values():
                 for prop in tool["parameters"]["properties"].values():
                     assert prop.get("description"), tool["name"]
+            for tool in tools.values():
+                assert tool["strict"] is False
+                if tool["name"] == "exec_command":
+                    assert tool["parameters"]["required"] == ["command"]
+                    assert "max_output_bytes" in tool["parameters"]["properties"]
             inputs = request["input"]
+            assert not any(i.get("role") == "developer" for i in inputs)
+            assert any(i.get("role") == "user" for i in inputs)
             outputs = [i for i in inputs if i.get("type") == "function_call_output"]
-            controls = "\n".join(i["content"] for i in inputs if i.get("role") == "developer"
+            controls = "\n".join(i["content"] for i in inputs if i.get("role") == "system"
                                  and isinstance(i.get("content"), str))
             if mode != "read":
                 assert "default_timeout_ms=" in controls and "workspace=" in controls
@@ -3770,12 +3777,12 @@ def run_tool_contract_cases(binary, root, provider, environment):
                     name, args = "create_goal", {"objective": "Finish this isolated contract test"}
                 else:
                     name = "update_goal"
-                    args = {"status" if step == 1 else "action": "complete", "text": None}
+                    args = {"status" if step == 1 else "action": "complete"}
                     if step == 2:
-                        assert "action" in outputs[-1]["output"] and "Missing argument" in outputs[-1]["output"]
+                        assert "action" in outputs[-1]["output"] and "Missing required" in outputs[-1]["output"]
             elif mode == "read":
                 name = "read_file"
-                args = {"path": str(case / "marker"), "start_line": -1 if step == 0 else 1, "end_line": None}
+                args = {"path": str(case / "marker"), "start_line": -1, "end_line": None} if step == 0 else {"path": str(case / "marker")}
                 if step == 1:
                     assert "start_line=-1" in outputs[-1]["output"] and "1..2147483647" in outputs[-1]["output"]
             elif mode == "wait":
@@ -3795,15 +3802,19 @@ def run_tool_contract_cases(binary, root, provider, environment):
             elif mode == "patch":
                 name = "apply_patch"
                 path = str(case / "marker") if step == 0 else "marker"
-                args = {"workdir": str(case), "patch": "*** Begin Patch\n*** Add File: " + path + "\n+x\n*** End Patch\n"}
+                args = {"patch": "*** Begin Patch\n*** Add File: " + path + "\n+x\n*** End Patch\n"}
                 if step == 1:
                     assert "relative" in outputs[-1]["output"] and not (case / "marker").exists()
+            elif mode in ("minimal", "aliases"):
+                args = {"command": "printf x >> marker"} if mode == "minimal" else {
+                    "cmd": "printf x >> marker", "yield_time_ms": 1000, "max_output_bytes": 9000}
             elif step == 0:
+                args["command"] += " # REJECTED_ARGUMENT_MUST_STAY_PRIVATE"
                 args["max_output_tokens"] = 1
                 if mode in ("yield", "tiny", "retry"):
-                    args["yield_time_ms"] = args.pop("yield_ms")
+                    args["yield_time_ms"] = args["yield_ms"]
                 elif mode == "command":
-                    args["cmd"] = args.pop("command")
+                    args["cmd"] = args["command"]
                 elif mode == "extra":
                     args["junk"] = 1
                 elif mode == "timeout":
@@ -3817,16 +3828,16 @@ def run_tool_contract_cases(binary, root, provider, environment):
                             "extra": "junk", "timeout": "2000", "zero": "max_output_tokens", "boolean": "pty"}[mode]
                 assert expected in controls and "was not run" in controls
                 assert not (case / "marker").exists()
-            final = step == (3 if mode in ("wait", "goal") else 2)
+            final = step == (1 if mode in ("minimal", "aliases") else 3 if mode in ("wait", "goal") else 2)
             if final:
                 if mode != "goal":
                     assert (case / "marker").read_text().strip() == "x"
                 else:
                     _, events = read_events(state)
                     assert len(event_list(events, "goal_completed")) == 1
-                if mode not in ("patch", "goal", "read"):
-                    assert "Requested max_output_tokens=9000" in controls
-                    assert f"applied max_output_tokens={ceiling}" in controls
+                if mode not in ("patch", "goal", "read", "minimal", "aliases"):
+                    assert "Requested max_output_bytes=9000" in controls
+                    assert f"applied max_output_bytes={ceiling}" in controls
                     assert len(outputs[-1]["output"].encode()) <= ceiling
                 body = provider.response_body(sequence, "tool contract confirmed")
             else:
@@ -3838,26 +3849,39 @@ def run_tool_contract_cases(binary, root, provider, environment):
             prompt = "/ro inspect the marker" if mode == "read" else (
                 "Create a persistent test goal and then complete it" if mode == "goal" else "check tool contract")
             run = subprocess.run([str(binary), "--dotdir", str(state), "--config", str(config),
-                                  "-e", "--", prompt], cwd=case, env=environment,
+                                  "-v", "-e", "--", prompt], cwd=case, env=environment,
                                  capture_output=True, text=True, timeout=25)
             if provider.failure:
                 raise provider.failure
+            attempt_stderr = run.stderr
             if mode == "retry":
                 assert run.returncode != 0 and not (case / "marker").exists()
                 recovering[0] = True
                 sid = next((state / "sessions").iterdir()).name
                 run = subprocess.run([str(binary), "--dotdir", str(state), "--config", str(config),
-                                      "-e", "--resume", sid, "--", "continue the tool contract test"],
+                                      "-v", "-e", "--resume", sid, "--", "continue the tool contract test"],
                                      cwd=case, env=environment, capture_output=True, text=True, timeout=25)
                 if provider.failure:
                     raise provider.failure
+            attempt_stderr += run.stderr
             assert run.returncode == 0, (run.returncode, run.stdout, run.stderr)
             assert "tool contract confirmed" in run.stdout
+            assert "REJECTED_ARGUMENT_MUST_STAY_PRIVATE" not in attempt_stderr
+            _, events = read_events(state)
+            finished = event_list(events, "tool_finished")
+            if any(e["data"]["result"]["status"] == "not_run" for e in finished):
+                assert "not_run" in attempt_stderr and "invalid_arguments" in attempt_stderr
+            if mode in ("minimal", "aliases"):
+                assert len(finished) == 1 and finished[0]["data"]["result"]["status"] == "succeeded"
+                proposed = [item for e in event_list(events, "response_completed")
+                            for item in e["data"]["items"] if item["kind"] == "tool_call"]
+                assert set(proposed[0]["arguments"]) == ({"command"} if mode == "minimal" else
+                                                        {"cmd", "yield_time_ms", "max_output_bytes"})
             # Separate-process replay preserves the capped result and host feedback.
             provider.runtime_handler = lambda h, r, seq: provider.reply(h, provider.response_body(seq, "replay confirmed").encode())
             sid = next((state / "sessions").iterdir()).name
             replay = subprocess.run([str(binary), "--dotdir", str(state), "--config", str(config),
-                                     "-e", "--resume", sid, "--", "report completion"], cwd=case, env=environment,
+                                     "-v", "-e", "--resume", sid, "--", "report completion"], cwd=case, env=environment,
                                     capture_output=True, text=True, timeout=15)
             assert replay.returncode == 0, replay.stderr
             if mode != "goal":
@@ -4662,7 +4686,7 @@ def run_provider_clarification_cases(binary, root, provider, environment):
                     assert any(item.get("role") == "user" and item.get("content") == original
                                for item in request["input"]), "original task was rewritten"
                     notes = [item["content"] for item in request["input"]
-                             if item.get("role") == "developer" and
+                             if item.get("role") == "system" and
                              item.get("content", "").startswith("The provider rejected the preceding")]
                     assert len(notes) == min(attempt, 5), (mode, attempt, notes)
                     assert all("preserving its purpose, actions, targets, and authorization" in note and
@@ -4915,7 +4939,7 @@ def run_policy_partial_goal_cases(binary, root, provider, environment,
             assert "provider clarification 6/5" not in screen
             for attempt, request in enumerate(attempts):
                 assert original in json.dumps(request["input"]), mode
-                notes = [i["content"] for i in request["input"] if i.get("role") == "developer" and
+                notes = [i["content"] for i in request["input"] if i.get("role") == "system" and
                          i.get("content", "").startswith("The provider rejected the preceding")]
                 assert len(notes) == attempt, (mode, attempt, notes)
                 assert all("Do not conceal security-relevant details or bypass restrictions" in n for n in notes)
@@ -5203,7 +5227,7 @@ def run_goal_recovery_cases(binary, root, provider, environment):
             requests.append(request)
             attempt = len(requests)
             meta = [i["content"] for i in request["input"]
-                    if i.get("role") == "developer" and
+                    if i.get("role") == "system" and
                     i.get("content", "").startswith("[snajpagent input metadata")]
             metadata.append(meta)
             if attempt == 1:
@@ -5275,7 +5299,7 @@ def run_goal_recovery_cases(binary, root, provider, environment):
             assert metadata[0] and all(m[0] == metadata[0][0] for m in metadata)
             assert "unavailable" not in metadata[0][0]
             for request in requests[3:]:
-                notes = [i for i in request["input"] if i.get("role") == "developer" and
+                notes = [i for i in request["input"] if i.get("role") == "system" and
                          i.get("content", "").startswith("snajpagent recovery")]
                 assert len(notes) <= 1, "recovery spammed model context"
                 assert "retained-result" in json.dumps(request)
@@ -5698,13 +5722,14 @@ def run_compaction_text_cases(binary, root):
             _, events = read_events(state)
             completed = event_list(events, "compaction_completed")
             assert len(requests) == 1, (mode, len(requests))
+            assert requests[0]["input"][-1]["role"] == "system"
             if mode in ("refusal", "policy", "incomplete"):
                 assert not completed, (mode, completed)
                 assert event_list(events, "compaction_interrupted"), mode
             else:
                 assert len(completed) == 1, (mode, completed)
                 assert completed[0]["data"]["output"] == [
-                    {"type": "message", "role": "developer", "content": summary}], completed
+                    {"type": "message", "role": "user", "content": summary}], completed
                 assert "JSON at line" not in terminal.capture()
                 terminal.exit()
             replay = subprocess.run([binary, "--dotdir", str(state), "-l"],
@@ -5766,7 +5791,7 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
                 return
             requests.append(request)
             goal = next((i.get("content", "") for i in request["input"]
-                         if i.get("role") == "developer" and
+                         if i.get("role") == "system" and
                          i.get("content", "").startswith("Persistent goal ")), "")
             if " is active " not in goal:
                 latest = provider.latest_user(request)
@@ -5845,7 +5870,7 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
                     assert "seed-user-café" not in json.dumps(request["input"], ensure_ascii=False)
                     assert not any(i.get("content", "").startswith("[snajpagent input metadata")
                                    for i in request["input"]), "host marker acquired user timing"
-                    assert any(i.get("role") == "developer" and
+                    assert any(i.get("role") == "system" and
                                "retained-summary" in i.get("content", "") for i in request["input"])
             if mode in ("recover", "legacy"):
                 assert len(summaries) >= 5, "did not exercise repeated compaction failures"
@@ -5919,7 +5944,7 @@ def run_automatic_turn_retry_cases(binary, root, provider, environment):
             requests.append(request)
             n = len(requests)
             metadata.append([i["content"] for i in request["input"]
-                if i.get("role") == "developer" and i.get("content", "").startswith("[snajpagent input metadata")])
+                if i.get("role") == "system" and i.get("content", "").startswith("[snajpagent input metadata")])
             if n == 1:
                 if mode == "success":
                     body = provider.function_body(sequence, "read", "read_file", {

@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- Share one provider-independent native tool and trusted-instruction contract:
+  optional controls, command-only execution, handle-only polling and system-role
+  host instructions. Preserve user/tool provenance and original journal arguments.
+- Accept the explicit command/wait legacy spellings and advertise byte-based
+  output limits; reject ambiguous double spellings and invalid supplied values.
+- Show rejected/unexecuted attempts at verbosity 1 in live and history rollout,
+  with compact status reasons and higher-detail arguments/output kept private.
+
 - Wrap long Markdown table cells within aligned columns instead of immediately
   switching to vertical rows. Preserve styles and record boundaries, and retain
   the left border on every continuation line in the narrow fallback.

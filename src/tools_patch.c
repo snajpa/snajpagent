@@ -1005,15 +1005,17 @@ snag_tools_apply_patch(const struct snag_response_item *call,
     *result = NULL;
     struct snag_buf summary = {.max = PATCH_MODEL_MAX};
     if (!call || !session_workspace ||
-        !snag_json_arg_keys(call->arguments, "patch workdir", error, error_size) ||
+        !snag_json_arg_keys(call->arguments, "patch", "workdir", error, error_size) ||
         !snag_json_arg_text(call->arguments, "patch", 0u, PATCH_TEXT_MAX,
                             false, &patch, error, error_size) ||
         !snag_json_arg_text(call->arguments, "workdir", 1u, SNAG_PATH_MAX_BYTES,
-                            false, &workdir, error, error_size)) {
+                            true, &workdir, error, error_size)) {
         if (snag_buf_printf(&summary, "Patch rejected: %s\n", *error ? error : "invalid arguments") < 0)
             goto out;
         goto result;
     }
+    if (!workdir)
+        workdir = session_workspace;
     if (workdir_valid(workdir, strlen(workdir), session_workspace,
                       error, error_size) < 0 ||
         normalize_patch_text(patch, strlen(patch), &normalized,

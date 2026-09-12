@@ -383,10 +383,10 @@ snag_tools_read_only(const struct snag_response_item *call, const char *workspac
     snag_buf_init(&q.output, RO_OUTPUT + 1024u);
     q.problem = failure;
     if (!snag_read_only_tool(call->name) ||
-        !snag_json_arg_keys(args,
-            q.read ? "path start_line end_line" :
-            q.grep ? "path pattern recursive ignore_case literal offset limit" :
-                     "path recursive offset limit", failure, sizeof(failure)) ||
+        !snag_json_arg_keys(args, q.grep ? "path pattern" : "path",
+            q.read ? "start_line end_line" :
+            q.grep ? "recursive ignore_case literal offset limit" :
+                     "recursive offset limit", failure, sizeof(failure)) ||
         !snag_json_arg_text(args, "path", 1u, 4096u, false, &path, failure, sizeof(failure)))
         goto out;
     if (q.read) {

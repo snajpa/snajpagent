@@ -32,7 +32,9 @@ int snag_json_digest_bounded(const json_t *value, size_t max,
 /* Fixed field names separated by single spaces; empty means an empty object. */
 bool snag_json_exact_keys(const json_t *object, const char *keys);
 /* Tool argument diagnostics never echo string values (which may contain secrets). */
-bool snag_json_arg_keys(const json_t *, const char *, char *, size_t);
+bool snag_json_arg_keys(const json_t *, const char *required, const char *optional, char *, size_t);
+/* Explicit legacy spelling; both keys, even equal or null, are ambiguous. */
+const char *snag_json_arg_name(const json_t *, const char *, const char *, char *, size_t);
 bool snag_json_arg_uint(const json_t *, const char *, uint64_t, uint64_t, uint64_t,
                         uint64_t *, char *, size_t);
 bool snag_json_arg_bool(const json_t *, const char *, bool, bool *, char *, size_t);

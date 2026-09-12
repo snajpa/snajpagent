@@ -24,11 +24,11 @@ typedef int (*snag_tool_read_fn)(void *, const char *, unsigned int,
                                uint64_t, uint64_t, struct snag_buf *);
 void snag_tools_journal(snag_tool_output_fn write, snag_tool_read_fn read, void *opaque);
 /* Validates without effects. 1 means rejected with a factual not-run result. */
-int snag_tools_prepare(const struct snag_response_item *, const struct snag_config *, uint32_t max_parallel,
+int snag_tools_prepare(const struct snag_response_item *, const struct snag_config *, const char *workspace, uint32_t max_parallel,
                        char handle[SNAG_ID_HEX_LEN + 1u], uint32_t *yield_ms,
                        json_t **rejected);
 int snag_tools_start(const struct snag_response_item *, const struct snag_config *,
-                     const struct snag_credential *, json_t **result,
+                     const struct snag_credential *, const char *workspace, json_t **result,
                      char *error, size_t error_size);
 int snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t error_size);
 bool snag_tools_ready(const char *handle);

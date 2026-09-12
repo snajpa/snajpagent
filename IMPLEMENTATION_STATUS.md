@@ -2,6 +2,13 @@
 
 # Implementation status
 
+Current source includes the shared native tool contract: required operands and
+optional controls, explicit legacy spellings with ambiguity rejection, truthful
+byte-limit naming, and compact verbosity-1 rejection rows in live/history views.
+Trusted host instructions use one system-role representation for every provider;
+user and tool data retain their provenance. These changes are development-source
+behavior above stable 0.99.5; its downloadable assets remain unchanged.
+
 snajpagent is a pre-1.0 terminal coding agent. One interactive session supports
 local rollout and native IRC chat. One-shot mode runs tasks from scripts.
 

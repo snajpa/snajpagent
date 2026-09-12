@@ -113,10 +113,10 @@ test_tool_argument_diagnostics(void)
     bool b;
     const char *text;
     json_t *args = json_pack("{s:n,s:s}", "count", "payload", "private-value");
-    assert(snag_json_arg_keys(args, "count payload", error, sizeof(error)));
-    assert(!snag_json_arg_keys(args, "count", error, sizeof(error)));
-    assert(strstr(error, "Unexpected argument \"payload\""));
-    assert(!snag_json_arg_keys(args, "count data", error, sizeof(error)));
+    assert(snag_json_arg_keys(args, "count payload", "", error, sizeof(error)));
+    assert(!snag_json_arg_keys(args, "count", "", error, sizeof(error)));
+    assert(strstr(error, "Unexpected argument: \"payload\""));
+    assert(!snag_json_arg_keys(args, "count data", "", error, sizeof(error)));
     assert(strstr(error, "data") && !strstr(error, "private-value"));
     assert(snag_json_arg_uint(args, "count", 5u, 1u, 10u, &n, error, sizeof(error)) && n == 5u);
     assert(json_object_set_new(args, "count", json_integer(11)) == 0);
@@ -135,6 +135,18 @@ test_tool_argument_diagnostics(void)
     assert(json_object_set_new(args, "payload", json_null()) == 0);
     assert(snag_json_arg_text(args, "payload", 0u, 20u, true, &text, error, sizeof(error)) && !text);
     assert(!snag_json_arg_text(args, "payload", 0u, 20u, false, &text, error, sizeof(error)));
+    assert(json_object_del(args, "count") == 0);
+    assert(snag_json_arg_keys(args, "payload", "count", error, sizeof(error)));
+    assert(snag_json_arg_uint(args, "count", 5u, 1u, 10u, &n, error, sizeof(error)) && n == 5u);
+    assert(snag_json_arg_bool(args, "count", true, &b, error, sizeof(error)) && b);
+    assert(snag_json_arg_text(args, "count", 0u, 20u, true, &text, error, sizeof(error)) && !text);
+    assert(json_object_set_new(args, "legacy", json_null()) == 0);
+    assert(!strcmp(snag_json_arg_name(args, "count", "legacy", error, sizeof(error)), "legacy"));
+    assert(json_object_set_new(args, "count", json_null()) == 0);
+    assert(!snag_json_arg_name(args, "count", "legacy", error, sizeof(error)));
+    assert(strstr(error, "Ambiguous") && strstr(error, "count") && strstr(error, "legacy"));
+    assert(!snag_json_arg_keys(args, "missing", "payload count", error, sizeof(error)));
+    assert(strstr(error, "missing") && strstr(error, "legacy") && !strstr(error, "private-value"));
     json_decref(args);
 }
 

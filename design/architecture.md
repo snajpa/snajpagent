@@ -8,15 +8,15 @@ worker or rely on a socket to keep sessions alive. Durable state is written to
 local event logs, and resume reconstructs the active session from those logs.
 The append-only rollout for a session is
 `$DOTDIR/sessions/<session-id>/events.jsonl`. Once a manual or automatic
-compaction succeeds, context projection places a synthetic developer notice
+compaction succeeds, context projection places a synthetic system notice
 with that absolute path immediately after the compact output. The notice is
 rebuilt during replay and does not modify the provider-produced compact output
 or its recorded hash and token count.
 
 ## Model-facing tool contract
 
-Tool declarations include parameter meanings, exact required fields, nullable
-defaults, numeric ranges and state/path restrictions. Current command settings
+Tool declarations include parameter meanings, required operands, optional
+controls and defaults, numeric ranges and state/path restrictions. Current command settings
 are projected from the actual configuration. Shared JSON argument primitives
 produce actionable key/type/range diagnostics for commands, native inspection,
 patches, goals and IRC; string argument values are excluded from diagnostics.
@@ -68,7 +68,7 @@ content consistency checks remain strict. This accommodates DeepSeek Flash's
 replaying text or retrying a successful response.
 Assistant messages retain their recorded `commentary` or `final_answer` phase
 through tool follow-ups, goal continuation, interrupted-prefix replay and
-compaction input. User, developer and tool items carry no assistant phase.
+compaction input. User, system, legacy developer and tool items carry no assistant phase.
 The engine retains that projection through its response cycle, including hashes,
 byte counts and request views, rather than copying it into unrelated locals.
 Mutable session state is staged once per event and adopted only after durable
@@ -143,7 +143,7 @@ Public text, refusals and function arguments retain exact semantic-item checks.
 A known successful terminal snapshot remains required, while malformed envelopes and unknown
 non-Responses event types fail closed. A response with no actionable item is
 nonproductive. An explicit empty or oversized assistant message instead
-creates one terse, size-specific developer correction for the next model
+creates one terse, size-specific system correction for the next model
 cycle; the normal operator UI does not present that correction as an error.
 
 `response_completed` journals optional continuation records and a digest of
@@ -184,7 +184,7 @@ A pre-output `cyber_policy` rejection can receive three model-facing
 clarifications per turn through the existing `response_output_correction`
 transition. Its independent counter is replayed from those exact correction
 records; empty/oversized output retains its separate one-correction bound.
-Original task context is preserved. The fixed developer instruction asks for
+Original task context is preserved. The fixed system instruction asks for
 accurate scope-preserving restatement, never concealed details or bypassing
 restrictions; uncertain scope should be clarified with the operator. New input
 and observed output/activity veto automatic clarification. Rollout progress is
@@ -207,13 +207,24 @@ Fresh goal-controller reminders are omitted throughout a queued turn (even
 after the last item is dequeued) and whenever pending queue entries exist.
 An unarmed queue blocks goal continuation until `/next`, explicit goal
 start/resume, or queue removal. An open queue editor always prevents draining.
-Goal turns carry a distinct `input_kind` and a developer continuation marker,
+Goal turns carry a distinct `input_kind` and a system continuation marker,
 so they do not appear as new user messages. Refusal, failure and a turn-only
 interruption pause the goal. Foreground process exit preserves the goal state.
 Session reopening preserves the recorded state: active goals
 continue, and inactive goals remain inactive without extra goal transitions.
 
-Tool calls are handled one at a time. Before a tool runs, snajpagent records a
+Native tool schemas distinguish required operands from defaulted controls and
+explicitly disable generation-time strictness; local validation remains strict.
+One system-role host instruction representation and one native contract apply to
+all providers. User/tool items keep their provenance, and historical compacted
+items keep their saved roles. Newly generated compaction summaries are user-role
+data rather than new trusted instructions. Required fields, unknown names,
+ambiguous explicit aliases and supplied values are validated before command
+admission. `cmd`, `yield_time_ms` and `max_output_tokens` are the narrow legacy
+input spellings of `command`, `yield_ms` and `max_output_bytes`; original journal
+arguments and legacy result byte-limit fields remain readable and unchanged.
+
+Tool effects use the existing admitted-call lifecycle. Before a tool runs, snajpagent records a
 durable start event. After the tool finishes, snajpagent records the bounded
 result and sends that result into the next provider cycle.
 
@@ -251,7 +262,7 @@ reply.
 
 A steered provider response durably records its byte-exact public prefix. The
 next request projects that prefix as prior assistant output followed by an
-explicit developer boundary and each exact user-role steer in arrival order.
+explicit system boundary and each exact user-role steer in arrival order.
 Public response indexes are strictly increasing but need not be consecutive,
 because non-public provider items occupy indexes too.
 
@@ -489,12 +500,13 @@ chunks in the existing session journal, without a capture cutoff. Results
 reference contiguous per-stream ranges; successive polls return only newly
 collected output. RAM staging is bounded and I/O service rotates among jobs.
 The app owns journal writes, and the UI owns all display. `exec_command` and
-`write_stdin` use the legacy `max_output_tokens` name for a retained UTF-8 byte
-ceiling on result text, not a token count. They require the
-model to select a positive `max_output_tokens` or explicitly use `null` for
+`write_stdin` advertise `max_output_bytes` for a retained UTF-8 byte
+ceiling on result text, not a token count. The
+model may select positive `max_output_bytes`, or omit/use `null` for
 the configured `[tool] max_output_tokens` ceiling (6000 by default). Larger
 requests are clamped to that ceiling; smaller requests are honored. Both tool
-schemas advertise the ceiling, and one shared runtime selector enforces it. The
+schemas advertise the accepted positive range and describe the configured
+ceiling; one shared runtime selector applies it. The
 resolved value is recorded in the durable result so replay is independent of
 later configuration. Model-context projection preserves a valid-UTF-8 head
 and tail plus digest/provenance when the selected conservative

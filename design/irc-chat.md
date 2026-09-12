@@ -445,7 +445,7 @@ workdir, arguments, and captured command-output lines that follow it.
 
 ## Model Input And Steering
 
-When any network role is enabled, the fixed developer harness sent before the
+When any network role is enabled, the fixed system harness sent before the
 conversation explains:
 
 - that this process participates in one or more views of a single IRC room;
@@ -493,7 +493,7 @@ not remind, retry, or force a reaction to that traffic.
 
 A provider response with no actionable item expresses that quiet outcome. An
 explicit empty or oversized assistant message is not silence: snajpagent tells
-the model which condition occurred in one terse developer correction and lets
+the model which condition occurred in one terse system correction and lets
 the next cycle recover. The correction stays out of the normal operator UI and
 appears only in higher-verbosity durable diagnostics.
 
@@ -513,7 +513,7 @@ not changed by this rule.
 For a turn requested by a local operator mention, snajpagent tracks whether a
 successful `irc_send` message was posted to the room. A notice does not count
 as a reply. If the model reaches an otherwise terminal boundary without such a
-reply, the same turn receives one concise developer reminder to use `irc_send`
+reply, the same turn receives one concise system reminder to use `irc_send`
 and gets one final provider cycle. The turn is then considered finished,
 whether the model sends or remains quiet. This reminder is never looped and is
 never applied to peer messages, membership traffic, history snapshots, or
@@ -562,9 +562,9 @@ coding tools:
 - `irc_topic` requests a topic change as the agent identity and succeeds only
   where that identity currently has the required channel mode.
 
-Sends and topic tools require nullable string `destination`: a numbered target
-from maintained state, `all` for an explicit broadcast, or null when the frozen
-request has exactly one destination. Operator UI selection never redirects a
+Sends and topic tools accept optional nullable string `destination`: a numbered target
+from maintained state, `all` for an explicit broadcast, or omission/null when the frozen
+request has exactly one destination. Omitted `notice` defaults to false. Operator UI selection never redirects a
 model reply. Each target produces its own attributed local echo and queue/failure
 result. Queue acceptance is not proof of remote delivery. Local-mention reply
 obligations belong to their originating targets, not an unrelated successful send.
@@ -575,7 +575,7 @@ previews 1,024 argument and 512 output characters, and `-vvv` shows full retaine
 calls/results. Debug detail starts at four flags. `[tool] max_output_bytes` bounds only terminal
 presentation; its default `0` is unlimited, and the complete redacted output
 is always persisted. Command output supplied to the model is separately
-bounded by the calling command tool's `max_output_tokens`. IRC tools never open sockets,
+bounded by the calling command tool's `max_output_bytes`. IRC tools never open sockets,
 join, poll, reconnect, wait for traffic, or expose a manual reconnect action.
 The event loop owns those operations continuously. `irc_send` is the exclusive
 room-speech path and may be used any number of times during a turn. Assistant
