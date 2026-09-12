@@ -664,6 +664,7 @@ for target, expected in (
     ("Linux", ["-ldl", "-lm"]),
     ("FreeBSD", ["-lm"]),
     ("OpenBSD", ["-lm"]),
+    ("NetBSD", ["-lm"]),
 ):
     actual = subprocess.check_output(["make", "-s", "--no-print-directory", "-f", "-",
                                       "TARGET_OS=" + target],
@@ -1370,9 +1371,9 @@ media_source = (root / "src/media.c").read_text()
 unchanged = re.search(r"static bool\nunchanged\(.*?\n}", media_source, re.S).group(0)
 with tempfile.TemporaryDirectory(prefix="media-stat-", dir=root / "build") as tmp:
     tmp = Path(tmp)
-    for platform in ("POSIX", "__APPLE__", "__FreeBSD__", "__OpenBSD__", "_WIN32"):
+    for platform in ("POSIX", "__APPLE__", "__FreeBSD__", "__OpenBSD__", "__NetBSD__", "_WIN32"):
         source = tmp / "stat.c"
-        named = platform in ("__APPLE__", "__FreeBSD__", "__OpenBSD__")
+        named = platform in ("__APPLE__", "__FreeBSD__", "__OpenBSD__", "__NetBSD__")
         mt, ct = ("st_mtimespec", "st_ctimespec") if named else ("st_mtim", "st_ctim")
         source.write_text("#include <assert.h>\n#include <stdbool.h>\n" +
             ("" if platform == "POSIX" else "#define " + platform + " 1\n") +
@@ -2247,3 +2248,21 @@ int main(int argc, char **argv) {
         subprocess.run([str(tmp / "after"), mode], check=True)
     subprocess.run([str(tmp / "after")], check=True)
 print("PASS: sndio capture preserves short/split frames and blocking writes reject partial failure")
+
+# NetBSD shares the static file-codec profile without weakening its native ABI.
+netbsd = (root / "nix/netbsd.nix").read_text()
+netbsd_av = netbsd.split("  av = ", 1)[1].split("  brotli = ", 1)[0]
+for flag in ("--enable-cross-compile", "--target-os=netbsd", "--enable-static",
+             "--disable-shared", "--disable-network", "--disable-programs",
+             "--disable-avdevice", "--disable-avfilter", "--disable-autodetect",
+             "--enable-safe-bitstream-reader", "--enable-pthreads", "--enable-zlib"):
+    assert flag in netbsd_av
+assert '"--host-cc=${pkgs.stdenv.cc}/bin/cc"' in netbsd_av
+assert 'lib.optionals early [ ./ffmpeg-legacy-libm.patch ./ffmpeg-openbsd35-hls.patch ]' in netbsd_av
+assert 'lib.optionalString legacy " -Dstatic_assert=_Static_assert"' in netbsd_av
+assert 'lib.optionalString early " -fno-builtin-pow -fno-builtin-powf"' in netbsd_av
+assert 'buildInputs = [ jansson curl av ]' in netbsd
+assert 'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}' in netbsd
+assert '"AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale' in netbsd
+assert '-Wl,-mllvm,-emulated-tls' in netbsd and '${compilerBuiltins}/lib/libclang_rt.builtins.a' in netbsd
+print("PASS: NetBSD media retains static file codecs, native generators and legacy TLS ABI")

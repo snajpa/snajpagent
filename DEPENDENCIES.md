@@ -633,6 +633,24 @@ The IRC test re-executes after raising its descriptor limit because this
 libpthread sizes its descriptor table before `main`; ordinary agent checks use
 the default soft limit of 128. No product limit is silently raised.
 
+## NetBSD multimedia cross-builds
+
+The NetBSD 10.1 and 2.0 source targets use the same pinned static FFmpeg file-codec
+profile as the other BSD builds, with native build-host generators and target
+zlib/pthread libraries. FFmpeg network protocols, programs, devices, filters and
+autodetected optional libraries are disabled. The early math compatibility keeps
+missing min/max and optimized exponent operations within the existing libm ABI.
+Old system assertions use the compiler keyword; legacy emulated TLS remains
+owned by the existing compiler-rt recipe. The early HLS parser reuses native
+`strtod` and double precision where `strtof` is absent, retaining signed fractional
+time offsets.
+
+The pinned miniaudio low-level adapter compiles against both SDKs. Audio uses the
+native loader API without a separate libdl. Retained snapshots use native BSD
+nanosecond stat fields on both versions. These compile/link checks do not qualify
+physical devices or target execution. Full media application links and PDF/Office
+dependency/runtime closure remain in progress.
+
 ## macOS ARM64 and Intel cross-builds
 
 `make prod-macos-arm64` and `make prod-macos-x86_64` use the same pinned upstream dependency sources via

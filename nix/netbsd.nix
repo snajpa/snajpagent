@@ -191,6 +191,43 @@ let
   zlib = cmakeLibrary sourcePkgs.zlib [
     "-DZLIB_BUILD_SHARED=OFF" "-DZLIB_BUILD_STATIC=ON" "-DZLIB_BUILD_TESTING=OFF"
   ] [];
+  av = pkgs.stdenvNoCC.mkDerivation {
+    pname = "ffmpeg-headless-netbsd-${osVersion}";
+    inherit (sourcePkgs.ffmpeg_8) version src;
+    patches = sourcePkgs.ffmpeg_8.patches
+      ++ lib.optionals early [ ./ffmpeg-legacy-libm.patch ./ffmpeg-openbsd35-hls.patch ];
+    nativeBuildInputs = [ pkgs.pkg-config pkgs.perl pkgs.nasm llvm.llvm ];
+    buildInputs = [ zlib ];
+    strictDeps = true;
+    enableParallelBuilding = true;
+    dontStrip = true;
+    configurePlatforms = [];
+    configureFlags = [
+      "--enable-cross-compile" "--target-os=netbsd" "--arch=x86_64"
+      "--enable-static" "--disable-shared" "--enable-pic"
+      "--disable-autodetect" "--disable-network" "--disable-programs" "--disable-doc"
+      "--disable-avdevice" "--disable-avfilter"
+      "--enable-avcodec" "--enable-avformat" "--enable-avutil"
+      "--enable-swresample" "--enable-swscale" "--enable-zlib"
+      "--enable-pthreads" "--enable-safe-bitstream-reader" "--enable-pixelutils"
+      "--disable-gpl" "--disable-version3" "--pkg-config-flags=--static"
+    ];
+    preConfigure = ''
+      export PKG_CONFIG_PATH=
+      export PKG_CONFIG_LIBDIR=${zlib}/lib/pkgconfig
+      configureFlagsArray+=(
+        "--host-cc=${pkgs.stdenv.cc}/bin/cc"
+        "--cc=${compiler} --target=${target} --sysroot=${sdk}"
+        "--cxx=${cxxCompiler} --target=${target} --sysroot=${sdk}"
+        "--ar=${tools}/llvm-ar" "--ranlib=${tools}/llvm-ranlib"
+        "--nm=${tools}/llvm-nm" "--strip=${tools}/llvm-strip"
+        # Pre-C11 system assert.h lacks the macro; Clang supports the keyword.
+        # Clang otherwise rewrites pow(2, x) to unavailable legacy libm symbols.
+        "--extra-cflags=${cflags}${lib.optionalString legacy " -Dstatic_assert=_Static_assert"}${lib.optionalString early " -fno-builtin-pow -fno-builtin-powf"}"
+        "--extra-ldflags=${ldflags}"
+      )
+    '';
+  };
   brotli = (cmakeLibrary sourcePkgs.brotli [ "-DBROTLI_DISABLE_TESTS=ON" ] []).overrideAttrs (_: {
     postPatch = lib.optionalString early ''
       # This libm has log but not log2; the fallback still requires -lm.
@@ -261,7 +298,7 @@ let
     "-DCURL_CA_BUNDLE=none" "-DCURL_CA_PATH=none"
   ] networkLibraries);
 in {
-  inherit sdk target compiler tools cflags ldflags jansson tls curl regex unistring;
+  inherit sdk target compiler tools cflags ldflags jansson tls curl regex unistring av;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }:
     pkgs.stdenvNoCC.mkDerivation {
@@ -270,7 +307,7 @@ in {
       src = source;
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
-      buildInputs = [ jansson curl ] ++ networkLibraries ++ [ regex ];
+      buildInputs = [ jansson curl av ] ++ networkLibraries ++ [ regex ];
       enableParallelBuilding = true;
       dontStrip = true;
       preBuild = ''
@@ -293,6 +330,9 @@ in {
           'LDFLAGS=${ldflags} ${lib.optionalString legacy "-Wl,-mllvm,-emulated-tls"} ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections,--as-needed,-Bstatic'
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson) -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"
+          "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"
+          "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale | sed -E 's/-l?(-l?)?pthread//g')"
+          'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}'
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
           "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil -Wl,-Bdynamic -lpthread"
         )

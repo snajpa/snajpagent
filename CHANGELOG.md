@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Add NetBSD static media dependencies and native audio-loader linkage. Preserve
+  nanosecond file snapshots and the existing legacy threading/TLS ABI.
+
 - Preserve actual sndio capture frame counts and split-frame bytes. Report short
   blocking playback writes as failures instead of fabricated completion.
 
