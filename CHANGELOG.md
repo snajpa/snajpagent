@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Preserve early OpenBSD archive timestamps without the unavailable lldiv ABI.
+
 - Supply OpenBSD static Office package-reader dependencies. Share libarchive's
   old-system wide-string fallbacks and preserve native overflow errors.
 - Make old FFmpeg integer formats available through its compatibility include

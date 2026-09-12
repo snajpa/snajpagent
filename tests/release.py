@@ -1804,3 +1804,47 @@ openbsd = (root / "nix/openbsd.nix").read_text()
 assert 'buildInputs = [ jansson curl av xml archive ]' in openbsd
 assert 'lib.optional early ./libarchive-wide-fallbacks.patch' in openbsd
 print("PASS: libarchive shared wide-string helpers preserve Unicode, terminators and searches")
+
+# Keep libarchive's signed NTFS conversion identical without a missing lldiv ABI.
+time_patch = archive_patch.split("+++ b/libarchive/archive_time.c", 1)[1]
+time_source = "\n".join(line[1:] for line in time_patch.splitlines()
+                        if line.startswith(("+", " ")))
+convert = re.search(r"void\nntfs_to_unix\(.*?\n}", time_source, re.S).group(0)
+assert "lldiv" not in convert
+with tempfile.TemporaryDirectory(prefix="archive-time-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    source = tmp / "time.c"
+    source.write_text("#include <assert.h>\n#include <stdint.h>\n#include <stdlib.h>\n"
+                      "#define NTFS_TICKS UINT64_C(10000000)\n"
+                      "#define NTFS_EPOC_TICKS (UINT64_C(11644473600) * NTFS_TICKS)\n" +
+                      convert + r"""
+int main(void) {
+    const uint64_t values[] = {0, 1, NTFS_TICKS - 1, NTFS_TICKS,
+        NTFS_EPOC_TICKS - NTFS_TICKS - 1, NTFS_EPOC_TICKS - 1,
+        NTFS_EPOC_TICKS, NTFS_EPOC_TICKS + 1,
+        NTFS_EPOC_TICKS + NTFS_TICKS + 1, INT64_MAX,
+        (uint64_t)INT64_MAX + 1, UINT64_MAX};
+    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+        int64_t secs, expected_secs;
+        uint32_t nsecs, expected_nsecs;
+        uint64_t value = values[i];
+        if (value > INT64_MAX) {
+            value -= NTFS_EPOC_TICKS;
+            expected_secs = value / NTFS_TICKS;
+            expected_nsecs = 100 * (value % NTFS_TICKS);
+        } else {
+            lldiv_t original = lldiv((int64_t)value - (int64_t)NTFS_EPOC_TICKS,
+                                    NTFS_TICKS);
+            expected_secs = original.quot;
+            expected_nsecs = (uint32_t)(original.rem * 100);
+        }
+        ntfs_to_unix(values[i], &secs, &nsecs);
+        assert(secs == expected_secs && nsecs == expected_nsecs);
+    }
+    return 0;
+}
+""")
+    subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
+                    "-o", str(tmp / "time")], check=True)
+    subprocess.run([str(tmp / "time")], check=True)
+print("PASS: libarchive NTFS conversion preserves signed and full-width boundary behavior")

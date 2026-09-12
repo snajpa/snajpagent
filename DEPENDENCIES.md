@@ -551,7 +551,8 @@ LibreOffice runtime packaging is separate and unfinished. On early OpenBSD,
 libarchive's existing wide-string length/copy fallbacks are shared with its ACL
 and path code, with a missing wide-character search fallback in the same owner.
 Missing `EOVERFLOW` maps to native `ERANGE`, preserving range failures; unsigned
-ZIP diagnostics use the existing integer-size-based format fallback. These
+ZIP diagnostics use the existing integer-size-based format fallback. NTFS time
+conversion uses equivalent signed division/remainder where `lldiv` is absent. These
 compatibility adaptations do not qualify Office import or target execution.
 
 OpenBSD 7.9 qualification covers base/IRC/SSE tests, internal read-only

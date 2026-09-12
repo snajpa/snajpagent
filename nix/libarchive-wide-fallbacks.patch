@@ -210,3 +210,52 @@
  #define	ARCHIVE_ERRNO_MISC (-1)
  #endif
  
+--- a/libarchive/archive_time.c
++++ b/libarchive/archive_time.c
+@@ -115,44 +115,42 @@
+ 	if (dt > DOS_MAX_TIME) {
+ 		dt = DOS_MAX_TIME;
+ 	}
+ 	else if (dt < DOS_MIN_TIME) {
+ 		dt = DOS_MIN_TIME;
+ 	}
+ 	return dt;
+ }
+ 
+ /* Convert NTFS time to Unix sec/nsec */
+ void
+ ntfs_to_unix(uint64_t ntfs, int64_t* secs, uint32_t* nsecs)
+ {
+ 	if (ntfs > INT64_MAX) {
+ 		ntfs -= NTFS_EPOC_TICKS;
+ 		*secs = ntfs / NTFS_TICKS;
+ 		*nsecs = 100 * (ntfs % NTFS_TICKS);
+ 	}
+ 	else {
+-		lldiv_t tdiv;
+ 		int64_t value = (int64_t)ntfs - (int64_t)NTFS_EPOC_TICKS;
+ 
+-		tdiv = lldiv(value, NTFS_TICKS);
+-		*secs = tdiv.quot;
+-		*nsecs = (uint32_t)(tdiv.rem * 100);
++		*secs = value / (int64_t)NTFS_TICKS;
++		*nsecs = (uint32_t)((value % (int64_t)NTFS_TICKS) * 100);
+ 	}
+ }
+ 
+ /* Convert Unix sec/nsec to NTFS time */
+ uint64_t
+ unix_to_ntfs(int64_t secs, uint32_t nsecs)
+ {
+ 	uint64_t ntfs;
+ 
+ 	if (secs < -(int64_t)NTFS_EPOC_TIME)
+ 		return 0;
+ 
+ 	ntfs = secs + NTFS_EPOC_TIME;
+ 
+ 	if (ntfs > UINT64_MAX / NTFS_TICKS)
+ 		return UINT64_MAX;
+ 
+ 	ntfs *= NTFS_TICKS;
+ 
