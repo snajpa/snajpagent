@@ -363,11 +363,18 @@ only_resume "$root/utf8.err"
 expect_exit 99 $bin -e -- crash >"$root/crash.out" 2>"$root/crash.err"
 [ ! -s "$root/crash.out" ]
 crash_id=$(grep -rl '"text":"crash"' "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
-$bin -e --resume "$crash_id" -- ping >"$root/crash-recovered.out" 2>"$root/crash-recovered.err"
+$bin -e --resume "$crash_id" </dev/null >"$root/crash-recovered.out" 2>"$root/crash-recovered.err"
 [ "$(cat "$root/crash-recovered.out")" = 'fixture answer' ]
 [ "$(grep -c '"type":"turn_started"' "$dotdir/sessions/$crash_id/events.jsonl")" -eq 1 ]
-grep -q '"text":"ping"' "$dotdir/sessions/$crash_id/events.jsonl"
+[ "$(grep -c '"type":"input_received"' "$dotdir/sessions/$crash_id/events.jsonl")" -eq 1 ]
 grep -q 'recovered unfinished turn' "$root/crash-recovered.err"
+# Empty resume of completed work stays idle; explicit piped input is still admitted.
+$bin -e --resume "$crash_id" </dev/null >"$root/crash-idle.out" 2>"$root/crash-idle.err"
+[ ! -s "$root/crash-idle.out" ]
+[ "$(grep -c '"type":"turn_started"' "$dotdir/sessions/$crash_id/events.jsonl")" -eq 1 ]
+printf ping | $bin -e --resume "$crash_id" >"$root/crash-piped.out" 2>"$root/crash-piped.err"
+[ "$(cat "$root/crash-piped.out")" = 'pong' ]
+[ "$(grep -c '"type":"input_received"' "$dotdir/sessions/$crash_id/events.jsonl")" -eq 2 ]
 
 $bin -e -- provider_fail >"$root/fail.out" 2>"$root/fail.err"
 [ -s "$root/fail.out" ]
@@ -554,7 +561,7 @@ grep -q '"status":"not_run"' "$conflict_log"
 
 expect_exit 98 $bin -e -- tool_crash >"$root/tool-crash.out" 2>"$root/tool-crash.err"
 tool_crash_id=$(grep -rl '"text":"tool_crash"' "$dotdir/sessions" | sed 's|/events.jsonl$||;s|.*/||')
-out=$($bin -e --resume "$tool_crash_id" -- ping 2>"$root/tool-recovery.err")
+out=$($bin -e --resume "$tool_crash_id" </dev/null 2>"$root/tool-recovery.err")
 [ "$out" = 'unexpected continuation' ]
 [ "$(grep -c '"type":"turn_started"' "$dotdir/sessions/$tool_crash_id/events.jsonl")" -eq 1 ]
 [ "$(grep -c '"type":"tool_started"' "$dotdir/sessions/$tool_crash_id/events.jsonl")" -eq 1 ]
@@ -840,7 +847,7 @@ started = [event for event in events if event["type"] == "compaction_started"]
 completed = [event for event in events if event["type"] == "compaction_completed"]
 assert len(started) == 1 and len(completed) == 1
 assert completed[0]["data"]["output"][0]["type"] == "message"
-assert completed[0]["data"]["output"][0]["role"] == "developer"
+assert completed[0]["data"]["output"][0]["role"] == "user"
 assert completed[0]["data"]["output"][0]["content"] == "fixture responses compact summary"
 PY
 

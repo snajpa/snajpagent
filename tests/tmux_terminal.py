@@ -3282,6 +3282,122 @@ def run_listener_collision_case(binary, root, provider, environment):
         for terminal in reversed(terminals):
             terminal.close()
 
+def run_reasoning_boundary_cases(binary, root, provider, environment,
+                                 modes=("followup", "resume", "readonly", "unstarted")):
+    """A thinking endpoint validates missing state in the current request turn.
+
+    Older/non-thinking replies may have no reasoning. Preserve them faithfully,
+    while keeping the host continuation separate from fixed system policy.
+    """
+    message = "The `reasoning_text` in the thinking mode must be passed back to the API."
+    for mode in modes:
+        case = root / ("reasoning-boundary-" + mode)
+        case.mkdir(parents=True)
+        state, config = case / "state", case / "config.ini"
+        write_irc_config(config, provider.port, "host-model")
+        config.write_text(config.read_text().replace("[agent]\n", "[agent]\nmax_turn_retries=0\n", 1))
+        readonly = mode == "readonly"
+        if readonly:
+            (case / "marker").write_text("x")
+        interrupted, rejected = [], []
+        received = []
+        terminal = None
+
+        def respond(handler, request, sequence):
+            received.append(request)
+            items = request["input"]
+            assert items[0]["role"] == "system", "fixed policy lost its authority"
+            outputs = [i for i in items if i.get("type") == "function_call_output"]
+            if not outputs:
+                # A genuine completed non-thinking tool response: no private state
+                # was returned. It must never be invented during continuation.
+                provider.reply(handler, provider.function_body(sequence, "call_boundary", "read_file" if readonly else "exec_command",
+                               {"path": "marker"} if readonly else {"command": "printf x >> marker"}).encode())
+                return
+            if mode != "followup" and not interrupted:
+                interrupted.append(True)
+                provider.reply(handler, b'{"error":{"type":"invalid_request_error","message":"intentional test interruption"}}',
+                               content_type="application/json", status=400)
+                return
+            assert not any(i.get("type") == "reasoning" for i in items), "invented reasoning"
+            # This models the independently reproduced native Responses boundary:
+            # developer/user requests start a new turn; system policy does not.
+            boundary = max((n for n, i in enumerate(items) if i.get("role") in ("user", "developer")), default=-1)
+            if any(i.get("type") == "function_call" for i in items[boundary + 1:]):
+                rejected.append(True)
+                provider.reply(handler, json.dumps({"error": {"code": "invalid_request_error",
+                               "message": message}}).encode(), content_type="application/json", status=400)
+                return
+            assert items[-1]["role"] == "developer", "continuation must follow all current host state"
+            calls = [i for i in items if i.get("type") == "function_call"]
+            assert len(outputs) == len(calls)
+            assert [i["call_id"] for i in outputs] == [i["call_id"] for i in calls]
+            if readonly:
+                assert {t["name"] for t in request["tools"] if t.get("type") == "function"} == {"read_file", "list_files", "grep"}
+            if mode == "unstarted" and len(outputs) == 1:
+                _, events = read_events(state)
+                assert event_list(events, "tool_finished")[0]["data"]["result"]["status"] == "not_run"
+                assert not (case / "marker").exists(), "automatically replayed an unstarted proposal"
+                assert json.loads(calls[0]["arguments"])["command"] == "printf x >> marker"
+                provider.reply(handler, provider.function_body(sequence, "call_boundary_retry", "exec_command",
+                               {"command": "printf x >> marker"}).encode())
+                return
+            provider.reply(handler, provider.response_body(sequence, "thinking boundary confirmed").encode())
+
+        provider.runtime_handler = respond
+        try:
+            command = [str(binary), "--dotdir", str(state), "--config", str(config)]
+            seed = subprocess.run([*command, "-e", "--", "/ro inspect marker" if readonly else "Execute one harmless marker command"],
+                                  cwd=case, env=environment, capture_output=True, text=True, timeout=20)
+            if provider.failure:
+                raise provider.failure
+            assert (case / "marker").read_text() == "x"
+            if mode == "followup":
+                assert seed.returncode == 0, (seed.stderr, rejected)
+                assert "thinking boundary confirmed" in seed.stdout
+            else:
+                assert seed.returncode != 0 and interrupted
+                journal, events = read_events(state)
+                # Construct a private crash/resume fixture at the durable tool
+                # result boundary. The completed command and hash-chain prefix
+                # survive; the later failed request/turn are outside this fixture.
+                # A terminally failed turn otherwise requires an explicit retry.
+                assert journal.is_relative_to(state)
+                stop = event_list(events, "response_completed" if mode == "unstarted" else "tool_finished")[0]["seq"]
+                if mode == "unstarted":
+                    # The fixture represents the instant before any tool start.
+                    (case / "marker").unlink()
+                lines = journal.read_bytes().splitlines(keepends=True)
+                journal.write_bytes(b"".join(line for line in lines if json.loads(line)["seq"] <= stop))
+                sid = journal.parent.name
+                # No new operator text: reproduce opening an unfinished session.
+                if mode == "resume":
+                    terminal = TmuxTerminal(case / "term", binary, case, state, config, 150, 28,
+                                            args=("--resume", sid), environment=environment)
+                    terminal.wait_until(lambda text: "thinking boundary confirmed" in text or "reasoning_text" in text,
+                                        "resumed reasoning boundary", timeout=10)
+                    assert not rejected, message
+                    wait_for_terminal_event(state, {"turn_completed"}, 5)
+                    terminal.exit()
+                else:
+                    resumed = subprocess.run([*command, "-e", "--resume", sid], input="",
+                                             cwd=case, env=environment, capture_output=True, text=True, timeout=20)
+                    assert resumed.returncode == 0, resumed.stderr
+                    assert "thinking boundary confirmed" in resumed.stdout
+            assert not rejected, message
+            _, events = read_events(state)
+            if not readonly:
+                assert len(event_list(events, "tool_started")) == 1, "replayed an executed command"
+            assert (case / "marker").read_text() == "x"
+            assert len(received) == (2 if mode == "followup" else 4 if mode == "unstarted" else 3)
+            assert len(event_list(events, "input_received")) == 1, "invented fresh operator input"
+            print("reasoning request boundary", mode, "PASS", flush=True)
+        finally:
+            if terminal:
+                terminal.close()
+            provider.runtime_handler = None
+
+
 def run_reasoning_continuity_cases(binary, root, provider, environment):
     """Inspect real outgoing requests, durable replay and endpoint isolation."""
     for mode in ("plaintext", "encrypted"):
@@ -3757,7 +3873,8 @@ def run_tool_contract_cases(binary, root, provider, environment):
                     assert tool["parameters"]["required"] == ["command"]
                     assert "max_output_bytes" in tool["parameters"]["properties"]
             inputs = request["input"]
-            assert not any(i.get("role") == "developer" for i in inputs)
+            assert [i for i in inputs if i.get("role") == "developer"] == [inputs[-1]]
+            assert inputs[-1]["content"].startswith("Host continuation:")
             assert any(i.get("role") == "user" for i in inputs)
             outputs = [i for i in inputs if i.get("type") == "function_call_output"]
             controls = "\n".join(i["content"] for i in inputs if i.get("role") == "system"
@@ -5722,7 +5839,7 @@ def run_compaction_text_cases(binary, root):
             _, events = read_events(state)
             completed = event_list(events, "compaction_completed")
             assert len(requests) == 1, (mode, len(requests))
-            assert requests[0]["input"][-1]["role"] == "system"
+            assert requests[0]["input"][-1]["role"] == "developer"
             if mode in ("refusal", "policy", "incomplete"):
                 assert not completed, (mode, completed)
                 assert event_list(events, "compaction_interrupted"), mode
@@ -5865,12 +5982,17 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
                                    not i.get("content", "").startswith(marker)]
                 if original_inputs:
                     assert not markers, "added synthetic input alongside real conversation"
+                assert request["input"][-1]["role"] == "developer"
+                assert request["input"][-1]["content"].startswith("Host continuation:")
                 if mode in ("resume", "manual"):
-                    assert len(markers) == 1 and markers[0]["role"] == "user"
+                    # Summary text is untrusted conversation data, so it already
+                    # supplies input after instruction hoisting; no empty-input
+                    # marker is needed beside it.
+                    assert not markers
                     assert "seed-user-café" not in json.dumps(request["input"], ensure_ascii=False)
                     assert not any(i.get("content", "").startswith("[snajpagent input metadata")
                                    for i in request["input"]), "host marker acquired user timing"
-                    assert any(i.get("role") == "system" and
+                    assert any(i.get("role") == "user" and
                                "retained-summary" in i.get("content", "") for i in request["input"])
             if mode in ("recover", "legacy"):
                 assert len(summaries) >= 5, "did not exercise repeated compaction failures"
@@ -7155,7 +7277,7 @@ def run_post_exit_drain_cases(binary, root, provider, environment):
         print("post-exit drain:", mode, "ok", flush=True)
 
 
-def run_session_process_recovery_case(binary, root):
+def run_session_process_recovery_case(binary, root, emit_output=True):
     # Real local child, real provider transport, no duplicate side effects.
     case = root / "process-recovery"
     provider = FakeResponses()
@@ -7165,19 +7287,28 @@ def run_session_process_recovery_case(binary, root):
     seen = []
     marker = workspace / "effects"
     output = "recovery-output:" + "x" * 20000
+    command = "printf x >> effects; " + ("printf '%s' '" + output + "'; " if emit_output else "") + "sleep 5"
 
     def respond(handler, request, sequence):
         seen.append(request)
         if len(seen) == 1:
             body = provider.function_body(sequence, "recovery-command", "exec_command", {
-                "command": "printf x >> effects; printf '%s' '" + output + "'; sleep 2",
+                "command": command,
                 "workdir": str(workspace), "stdin": None, "pty": False,
-                "timeout_ms": 5000, "yield_ms": 0, "max_output_tokens": 1000,
+                "timeout_ms": 10000, "yield_ms": 5000, "max_output_tokens": 1000,
             })
         else:
             evidence = json.dumps(request, ensure_ascii=False)
-            assert "owner_lost" in evidence and "recovery-output:" in evidence, evidence
-            assert "output_ref" in evidence, evidence
+            calls = [i for i in request["input"] if i.get("type") == "function_call"]
+            results = [i for i in request["input"] if i.get("type") == "function_call_output"]
+            assert len(calls) == len(results) == 1
+            assert json.loads(calls[0]["arguments"])["command"] == command, "lost original command"
+            assert results[0]["call_id"] == calls[0]["call_id"]
+            assert "unknown" in results[0]["output"].lower(), "missing result presented as a known outcome"
+            assert "owner_lost" in evidence, evidence
+            if emit_output:
+                assert "recovery-output:" in evidence and "output_ref" in evidence, evidence
+            assert request["input"][-1]["role"] == "developer"
             body = provider.response_body(sequence, "recovered without repeating effects")
         provider.reply(handler, body.encode(), close_header=True)
         handler.close_connection = True
@@ -7193,7 +7324,7 @@ def run_session_process_recovery_case(binary, root):
             deadline = time.monotonic() + 10
             while True:
                 path, log = maybe_events(state)
-                if any(e["type"] == "process_output" for e in log):
+                if (any(e["type"] == "process_output" for e in log) if emit_output else marker.exists()):
                     break
                 assert child.poll() is None and time.monotonic() < deadline, (log, provider.failure)
                 time.sleep(.01)
@@ -7201,8 +7332,8 @@ def run_session_process_recovery_case(binary, root):
             child.kill()
             child.wait(timeout=5)
         session = path.parent.name
-        result = subprocess.run([*common, "-e", "--resume", session, "--", "continue"],
-            cwd=workspace, env=environment, capture_output=True, text=True, timeout=15)
+        result = subprocess.run([*common, "-e", "--resume", session],
+            cwd=workspace, env=environment, input="", capture_output=True, text=True, timeout=15)
         assert result.returncode == 0, result.stderr
         assert result.stdout == "recovered without repeating effects", result.stdout
         _, log = read_events(state)
@@ -7211,8 +7342,8 @@ def run_session_process_recovery_case(binary, root):
         assert len(event_list(log, "turn_completed")) == 1, log
         recovered = event_list(log, "tool_finished")[0]["data"]["result"]
         assert recovered["status"] == "outcome_unknown", recovered
-        assert recovered["stdout"]["original_bytes"] > 0, recovered
-        assert recovered["output_ref"]["stdout_end"] > 0, recovered
+        assert (recovered["stdout"]["original_bytes"] > 0) == emit_output, recovered
+        assert (recovered["output_ref"]["stdout_end"] > 0) == emit_output, recovered
         assert marker.read_text() == "x"
         assert len(seen) == 2, seen
         print("real process crash recovery: ok", flush=True)
@@ -7229,6 +7360,7 @@ def run_irc_case(binary, root):
     binary = os.path.abspath(binary)
     root.mkdir(mode=0o700, parents=True)
     run_session_process_recovery_case(binary, root)
+    run_session_process_recovery_case(binary, root / "silent", emit_output=False)
     run_punctuation_case(binary, root)
     provider = FakeResponses()
     environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
@@ -7266,6 +7398,7 @@ def run_irc_case(binary, root):
         run_destination_case(binary, root, provider, environment)
         run_listener_collision_case(binary, root, provider, environment)
         run_argument_snapshot_cases(binary, root, provider, environment)
+        run_reasoning_boundary_cases(binary, root, provider, environment)
         run_reasoning_continuity_cases(binary, root, provider, environment)
         run_multi_tool_cases(binary, root, provider, environment)
         run_wrapped_table_cases(binary, root / "wrapped-table")

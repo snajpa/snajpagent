@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 import json
 import os
-import re
 import time
 from pathlib import Path
 from pty_active import Child, DEFAULT_IDLE_PROMPT, DOTDIR
@@ -24,19 +23,13 @@ child.wait_text(b"turn_completed synced", timeout=5.0)
 terminal_end = buf.find(b"turn_completed synced") + len(b"turn_completed synced")
 # The always-visible composer changes active/idle in place. Its leftmost
 # unchanged cells and final space need not be emitted again.
-def idle_at(start):
-    return re.search(rb"(?:^|[\r\n])[^\r\n]*/[^\r\n]* \xe2\x80\xba", buf[start:])
-
-child.wait_pattern(re.compile(rb"(?:^|[\r\n])[^\r\n]*/[^\r\n]* \xe2\x80\xba"),
-                   start=terminal_end, timeout=5.0)
+child.wait_idle_prompt(start=terminal_end, timeout=5.0)
 child.send(b"slow\r")
 child.wait_text(b"working slowly", timeout=5.0)
 child.send(b"\x03")
 child.wait_text(b"turn interrupted", timeout=5.0)
 interrupt_end = buf.find(b"turn interrupted") + len(b"turn interrupted")
-while not idle_at(interrupt_end):
-    if not child.read_once(5.0):
-        raise SystemExit(f"no post-interrupt prompt: {bytes(buf)!r}")
+child.wait_idle_prompt(start=interrupt_end, timeout=5.0)
 child.send(b"/verbose 4\r")
 child.wait_text(b"verbosity: 4", timeout=5.0)
 cancel_start = len(buf)

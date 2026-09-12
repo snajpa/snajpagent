@@ -2076,8 +2076,16 @@ recovered from the client's session until a model response consumes it.
 .SS Automation and integration
 Use
 .B \-e
-for scripts.  It runs the supplied turn and any explicitly requested goal
-continuations before exiting.  A prompt after
+for scripts. It runs the supplied turn and any explicitly requested goal
+continuations before exiting. With --resume and no new prompt, terminal or empty
+stdin continues saved unfinished work directly; completed or explicitly stopped
+work stays stopped. Nonempty piped stdin remains new input. For example:
+.PP
+.nf
+snajpagent -e --resume SESSION_ID </dev/null
+.fi
+.PP
+A prompt after
 .B \-\-
 preserves shell argument boundaries as spaces; a prompt from non-terminal stdin
 preserves internal newlines and removes one final LF or CRLF.
@@ -2246,8 +2254,11 @@ Every provider receives the same native tool contract: required operands,
 optional controls, types, ranges and parameter descriptions. Object key order
 is irrelevant. Omitted optional controls use their documented defaults;
 nullable fields also accept JSON null. The string "null" remains literal data.
-Trusted harness instructions use system messages for every provider. User
-requests and tool results retain their own roles, including through resume.
+Fixed policy uses system messages for every provider. Each model request ends
+with an explicit developer-level host continuation, separate from operator input
+and approval. Saved reasoning stays in its compatible order before this boundary;
+history with non-thinking replies also remains resumable. Summary requests use
+the same separation. User requests and tool results retain their provenance.
 .PP
 The canonical command fields are command, yield_ms and max_output_bytes.
 The legacy spellings cmd, yield_time_ms and max_output_tokens respectively
@@ -2445,6 +2456,14 @@ proof that every remote participant received it.  Runtime joining, history and
 reconnection are not model-managed tools.
 .SH "Sessions and files"
 .SS Session durability
+Resume continues unfinished model/tool turns from their durable state, without
+requiring a fresh prompt. Already completed calls stay completed. The next model
+request includes the original calls and arguments even when their results are
+missing: a started call with no durable completion is outcome_unknown, with any
+captured output; a proven unstarted call is not_run. The model can inspect these
+facts before acting. Recovery never blindly re-executes a journaled command or
+revives a lost process handle. Interactive and one-shot resume share this path.
+.PP
 New sessions remain in memory until accepted work or durable state needs a log,
 such as a prompt, queued turn, goal or retained network event.  Pre-work inspection,
 configuration editing and model-cache discovery alone preserve lazy creation.

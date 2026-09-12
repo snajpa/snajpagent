@@ -4,9 +4,17 @@
 
 ## Unreleased
 
+- Fix thinking-mode HTTP 400 on resumed/non-thinking history by restoring an
+  explicit host continuation boundary after fixed policy and current state.
+  Preserve exact saved reasoning and use the same layout for every provider.
+- Continue saved work with `-e --resume` and no new prompt; preserve nonempty
+  piped input, completed results, original commands with unknown outcomes,
+  queued work, read-only mode and explicit stops. Cover real process/provider
+  interruption and no-result recovery without injecting a new user prompt.
+
 - Share one provider-independent native tool and trusted-instruction contract:
   optional controls, command-only execution, handle-only polling and system-role
-  host instructions. Preserve user/tool provenance and original journal arguments.
+  fixed policy with distinct host continuation. Preserve user/tool provenance and original journal arguments.
 - Accept the explicit command/wait legacy spellings and advertise byte-based
   output limits; reject ambiguous double spellings and invalid supplied values.
 - Show rejected/unexecuted attempts at verbosity 1 in live and history rollout,

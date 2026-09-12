@@ -41,6 +41,10 @@ build_context(struct snag_session *session, unsigned int cycle, const json_t *st
     if (rc != 0)
         fprintf(stderr, "context: %s\n", error);
     assert(rc == 0);
+    json_t *input = json_object_get(projection->create_request.value, "input");
+    json_t *last = json_array_get(input, json_array_size(input) - 1u);
+    assert_string(last, "role", "developer");
+    assert(strstr(snag_json_string(last, "content"), "Host continuation:") != NULL);
 }
 
 static void
@@ -567,7 +571,7 @@ test_parallel_journal_recovery(struct snag_store *store, const char *workspace)
         }
     }
     assert(user == 1u && steering == 1u && session.process_count == 2u);
-    const char *summary = snag_json_string(json_array_get(input, json_array_size(input) - 1u), "content");
+    const char *summary = snag_json_string(json_array_get(input, json_array_size(input) - 2u), "content");
     assert(strstr(summary, a) && strstr(summary, b));
     snag_context_projection_free(&projection);
     snag_instructions_free(&instructions);
@@ -610,7 +614,6 @@ test_accounting_lineage(struct snag_store *store, const char *workspace)
     snag_session_close(&session);
     json_decref(output);
 }
-
 
 static json_t *
 item_by_field(json_t *items, const char *key, const char *value)
@@ -1406,10 +1409,10 @@ main(void)
         assert(active.active_turn);
         assert(strcmp(active.compact_id, active_compact) == 0);
         build_context(&active, 1, active_steering, &no_instructions, &active_projection);
-        assert(active_projection.request_controller_count == 1u);
+        assert(active_projection.request_controller_count == 2u);
         input = json_object_get(active_projection.create_request.value, "input");
         assert(json_is_array(input));
-        assert(json_array_size(input) == 5u);
+        assert(json_array_size(input) == 6u);
         assert(active.dir_path[0] == '/');
         assert_string(json_array_get(input, 1), "type", "compaction");
         assert_string(json_array_get(input, 2), "role", "system");
@@ -1531,7 +1534,7 @@ main(void)
         assert(strstr(snag_json_string(json_array_get(input, 4), "content"),
                       "immediate steer") != NULL);
         assert_string(json_array_get(input, 5), "content", "stop or wait");
-        assert(strstr(snag_json_string(json_array_get(input, json_array_size(input) - 1u), "content"),
+        assert(strstr(snag_json_string(json_array_get(input, json_array_size(input) - 2u), "content"),
                       command_handle) != NULL);
         json_decref(snapshot);
         snag_context_projection_free(&steered_projection);
@@ -1596,7 +1599,7 @@ main(void)
                                  error, sizeof(error)) == 0);
         input = json_object_get(bounded_projection.create_request.value, "input");
         assert(json_is_array(input));
-        assert(json_array_size(input) == 7u);
+        assert(json_array_size(input) == 8u);
         assert_string(json_array_get(input, 1u), "type", "compaction");
         assert_string(json_array_get(input, 1u), "encrypted_content", "test-native-compact");
         assert_string(json_array_get(input, 3u), "content", "second");
@@ -1653,9 +1656,9 @@ main(void)
     items = json_object_get(projection.model_input.value, "items");
     request_input = json_object_get(projection.create_request.value, "input");
     assert(json_is_array(items));
-    assert(json_array_size(items) == 6);
+    assert(json_array_size(items) == 7);
     assert(json_is_array(request_input));
-    assert(json_array_size(request_input) == 6);
+    assert(json_array_size(request_input) == 7);
     assert_string(json_array_get(request_input, 2), "type", "compaction");
     assert(session.dir_path[0] == '/');
     assert_string(json_array_get(request_input, 3), "role", "system");
@@ -1665,7 +1668,7 @@ main(void)
                   "/events.jsonl") != NULL);
     request_input = json_object_get(projection.count_request.value, "input");
     assert(json_is_array(request_input));
-    assert(json_array_size(request_input) == 6);
+    assert(json_array_size(request_input) == 7);
     assert_string(json_array_get(request_input, 2), "type", "compaction");
     assert(strstr(snag_json_string(json_array_get(items, 1), "content"),
                   "context guidance") == NULL);
@@ -1760,7 +1763,7 @@ main(void)
                    tool_output, "output"),
                json_string_length(json_object_get(tool_output, "output")),
                true));
-        gate = json_array_get(input, json_array_size(input) - 1u);
+        gate = json_array_get(input, json_array_size(input) - 2u);
         gate_text = snag_json_string(gate, "content");
         assert(gate_text != NULL);
         assert(strstr(gate_text, "independent work") != NULL);
@@ -1796,7 +1799,7 @@ main(void)
                    "function_call_output"), "output"),
                "max_output_bytes=4000") != NULL);
         gate_text = snag_json_string(
-            json_array_get(input, json_array_size(input) - 1u), "content");
+            json_array_get(input, json_array_size(input) - 2u), "content");
         assert(gate_text != NULL);
         assert(strstr(gate_text, "independent work") != NULL);
         assert(strstr(gate_text, handle) != NULL);

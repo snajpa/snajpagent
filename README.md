@@ -123,6 +123,10 @@ visibility: hidden tools call for meaningful progress updates; fuller traces
 reduce duplicate narration. Decisions and outcomes remain explicit.
 
 The conversation, tool results, queue and goal are saved as a **session**.
+Resume continues in-progress work without a fresh prompt, including from scripts:
+`snajpagent -e --resume SESSION_ID </dev/null`. Started calls without results retain the
+original command and an explicit unknown outcome; they do not trigger blind
+re-execution. Explicit cancellations and paused automatic work remain stopped.
 After accepted work or other retained session state, normal exit prints its
 resume command. Exiting an unused session creates no saved session. You can also list sessions or reopen the
 latest one for this project directory:

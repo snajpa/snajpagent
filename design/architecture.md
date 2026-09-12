@@ -215,14 +215,26 @@ continue, and inactive goals remain inactive without extra goal transitions.
 
 Native tool schemas distinguish required operands from defaulted controls and
 explicitly disable generation-time strictness; local validation remains strict.
-One system-role host instruction representation and one native contract apply to
-all providers. User/tool items keep their provenance, and historical compacted
+One native contract applies to all providers. Fixed policy is system-level;
+a final developer-level host continuation explicitly requests the next response
+after conversation normalization and all current state. This boundary is distinct
+from a new operator message and from fixed policy; it must survive tool follow-up,
+resume, queued/read-only/goal work and summary requests. Preserve compatible
+reasoning unchanged, including when older replies have no reasoning to replay. User/tool items keep their provenance, and historical compacted
 items keep their saved roles. Newly generated compaction summaries are user-role
 data rather than new trusted instructions. Required fields, unknown names,
 ambiguous explicit aliases and supplied values are validated before command
 admission. `cmd`, `yield_time_ms` and `max_output_tokens` are the narrow legacy
 input spellings of `command`, `yield_ms` and `max_output_bytes`; original journal
 arguments and legacy result byte-limit fields remain readable and unchanged.
+
+Interactive and empty-input one-shot resume share `run_ready_chains`; CLI prompt
+validation permits absent resume input rather than manufacturing a new prompt.
+Nonempty piped input is still admitted. Startup retains the existing recovery
+facts: completed results, proven unstarted calls and uncertain started effects.
+Original calls/arguments accompany missing results in model input. A missing
+completion never licenses automatic re-execution. Explicit cancellation, policy
+stops and paused automatic work keep their existing control semantics.
 
 Tool effects use the existing admitted-call lifecycle. Before a tool runs, snajpagent records a
 durable start event. After the tool finishes, snajpagent records the bounded

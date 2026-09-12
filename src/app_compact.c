@@ -90,7 +90,7 @@ responses_compact_create_request(const json_t *compact_request,
         return NULL;
     copy = json_copy(input);
     if (!copy || json_array_append_new(copy,
-            json_pack("{s:s,s:s}", "role", "system",
+            json_pack("{s:s,s:s}", "role", "developer",
                       "content", instruction)) < 0)
         goto out;
     request = json_pack("{s:O,s:s,s:b,s:{s:s},s:b,s:b,s:s,s:[],s:s}",

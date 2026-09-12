@@ -4753,10 +4753,14 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         }
     }
     if (cli->execute) {
-        bool read_only;
-        const char *query = snag_prompt_parse(cli->prompt, &read_only);
-        rc = run_tracked_turn(&app, query, NULL, false, read_only);
-        if ((rc == 0 || rc == SNAG_APP_INPUT_READY) && (app.session.queue_armed || app.goal_armed))
+        rc = 0;
+        if (cli->prompt) {
+            bool read_only;
+            const char *query = snag_prompt_parse(cli->prompt, &read_only);
+            rc = run_tracked_turn(&app, query, NULL, false, read_only);
+        }
+        if ((rc == 0 || rc == SNAG_APP_INPUT_READY) &&
+            (!cli->prompt || app.session.queue_armed || app.goal_armed))
             rc = run_ready_chains(&app);
         goto out;
     }

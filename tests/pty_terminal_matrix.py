@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 import json
-import re
 from pty_active import Child, DEFAULT_IDLE_PROMPT, STATE_ROOT
 
 
@@ -11,8 +10,7 @@ def run_case(term, cols, expect_ansi, expected_text):
         child.send(expected_text.encode() + b"\r")
         answer_end = child.wait_text(b"fixture answer")
         terminal_end = child.wait_text(b"turn_completed synced", start=answer_end)
-        child.wait_pattern(re.compile(rb"(?:^|[\r\n])[^\r\n]*/[^\r\n]* \xe2\x80\xba"),
-                           start=terminal_end)
+        child.wait_idle_prompt(start=terminal_end)
         child.send(b"/exit\r")
         code = child.reap()
         if code != 0:

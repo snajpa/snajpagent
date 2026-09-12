@@ -106,7 +106,7 @@ class Child:
     def wait(self, needle, start=0, timeout=8.0):
         # Active/idle changes repaint only the changed label span. Full cell
         # layout and unchanged margins are covered by the renderer/tmux tests.
-        if needle in (DEFAULT_IDLE_PROMPT, DEFAULT_ACCOUNTED_IDLE_PROMPT):
+        if needle in (DEFAULT_IDLE_PROMPT, DEFAULT_ACCOUNTED_IDLE_PROMPT, PROMPT):
             return self.wait_idle_prompt(start, timeout)
         return self.wait_text(needle, start, timeout)
 
@@ -4583,7 +4583,7 @@ def test_network_chat_and_managed_mention():
     )
     assert failed_send["data"]["result"]["status"] == "failed"
     assert (failed_send["data"]["result"]["model_text"] ==
-            "IRC arguments are invalid; select destination and valid text")
+            "text must be UTF-8 text of 1..2097152 bytes without NUL.")
 
     zero_turn = next(
         event for event in turns if "network_zero" in event["data"]["text"]

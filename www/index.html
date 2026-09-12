@@ -49,6 +49,9 @@
         <code>/history N</code> requests more. <code>/ro QUERY</code> queues a
         read-only query during work. <code>/compact</code> reduces model context
         while preserving the full local log and reporting its progress.</p>
+      <p>Resume continues unfinished work without a new prompt. For scripts, use
+        <code>snajpagent -e --resume SESSION_ID &lt;/dev/null</code>. Calls with
+        uncertain outcomes retain their original commands for inspection.</p>
       <p>Set a goal when you want work to continue beyond the next reply. Exit to
         stop the program and resume the saved session later. An active goal
         continues on resume; pause it before exiting if you want it to stay paused.

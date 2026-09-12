@@ -117,6 +117,8 @@ read_execute_prompt(struct snag_cli *cli, char *error, size_t error_size)
     struct snag_buf prompt = {.max = SNAG_MAX_DIRECT_PROMPT + 2u};
 
     if (snag_isatty(STDIN_FILENO) == 1) {
+        if (cli->resume)
+            return 0;
         return snag_fail(error, error_size, EINVAL,
                   "-e requires a prompt after -- or non-terminal stdin");
     }
@@ -131,6 +133,10 @@ read_execute_prompt(struct snag_cli *cli, char *error, size_t error_size)
         --prompt.len;
         if (prompt.len != 0u && prompt.data[prompt.len - 1u] == '\r')
             --prompt.len;
+    }
+    if (prompt.len == 0u && cli->resume) {
+        snag_buf_free(&prompt);
+        return 0;
     }
     if (prompt.len == 0u || prompt.len > SNAG_MAX_DIRECT_PROMPT ||
         !snag_utf8_valid(prompt.data, prompt.len, true) ||
@@ -393,7 +399,7 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
     if (cli->execute && !cli->prompt &&
         read_execute_prompt(cli, error, error_size) < 0)
         return -1;
-    if (cli->execute && !*cli->prompt)
+    if (cli->execute && cli->prompt && !*cli->prompt)
         return snag_errorf(error, error_size, "-e requires a nonempty prompt");
     cli->prompt_after_dashdash = dashdash;
     return 0;
@@ -434,7 +440,7 @@ snag_cli_usage(int fd)
         "                               4 debug; 5 protocol; 6 wire (default 0)\n"
         "      --resume [ID|--last]      resume a durable session\n"
         "      --all                    include sessions from all workspaces\n"
-        "  -e                           one-shot execution (prompt or stdin)\n"
+        "  -e                           one-shot execution (prompt/stdin, or saved work on resume)\n"
         "  -l                           list sessions\n"
         "  -h                           show short help\n"
         "      --help                   open the manual (short help if unavailable)\n"
