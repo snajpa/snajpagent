@@ -102,11 +102,14 @@
  /* Define to 1 if you have the `wcscpy' function. */
 --- a/libarchive/archive_platform.h
 +++ b/libarchive/archive_platform.h
-@@ -90,6 +90,11 @@
+@@ -90,6 +90,14 @@
   * headers as required.
   */
  
 +#include <errno.h>
++#ifndef ENOTSUP
++#define ENOTSUP EOPNOTSUPP
++#endif
 +#ifndef EOVERFLOW
 +#define EOVERFLOW ERANGE
 +#endif

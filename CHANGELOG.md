@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Preserve native unsupported-operation errors in early OpenBSD archive code.
+
 - Keep native math declarations visible in the early OpenBSD FFmpeg allocator.
 
 - Preserve early OpenBSD archive timestamps without the unavailable lldiv ABI.

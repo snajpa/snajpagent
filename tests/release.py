@@ -1734,20 +1734,21 @@ assert "-I${regex}/include" not in av
 assert "--m4-base=m4 regex errno snprintf vsnprintf" in openbsd
 print("PASS: early FFmpeg reuses the exported Gnulib errno owner in isolation")
 
-# Keep native range errors when old BSD lacks the newer overflow spelling.
+# Keep native errors when old BSD lacks the newer unsupported/overflow spelling.
 archive_patch = (root / "nix/libarchive-wide-fallbacks.patch").read_text()
-block = re.search(r"\+#ifndef EOVERFLOW\n\+#define .*?\n\+#endif", archive_patch).group(0)
-block = "\n".join(line[1:] for line in block.splitlines())
 with tempfile.TemporaryDirectory(prefix="bsd-native-errno-", dir=root / "build") as tmp:
     tmp = Path(tmp)
     source = tmp / "errno.c"
-    for present in (False, True):
-        source.write_text("#define ERANGE 45\n" +
-                          ("#define EOVERFLOW 99\n" if present else "") + block +
-                          "\n_Static_assert(EOVERFLOW == " + str(99 if present else 45) +
-                          ', "native errno preserved");\n')
-        subprocess.run(["cc", "-std=c11", "-Werror", "-fsyntax-only", str(source)], check=True)
-print("PASS: old BSD overflow spelling preserves native and existing error codes")
+    for name, native in (("ENOTSUP", "EOPNOTSUPP"), ("EOVERFLOW", "ERANGE")):
+        block = re.search(r"\+#ifndef " + name + r"\n\+#define .*?\n\+#endif", archive_patch).group(0)
+        block = "\n".join(line[1:] for line in block.splitlines())
+        for present in (False, True):
+            source.write_text("#define " + native + " 45\n" +
+                              ("#define " + name + " 99\n" if present else "") + block +
+                              "\n_Static_assert(" + name + " == " + str(99 if present else 45) +
+                              ', "native errno preserved");\n')
+            subprocess.run(["cc", "-std=c11", "-Werror", "-fsyntax-only", str(source)], check=True)
+print("PASS: old BSD unsupported/overflow spellings preserve native and existing error codes")
 
 # Extend libarchive's existing size-based formats for unsigned ZIP diagnostics.
 platform_patch = archive_patch.rsplit("+++ b/libarchive/archive_platform.h", 1)[1]
