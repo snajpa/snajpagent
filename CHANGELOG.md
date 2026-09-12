@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep NetBSD audio thread creation working when native priority scheduling is
+  unavailable; preserve normal-priority fallback and error handling.
+
 - Add NetBSD static media dependencies and native audio-loader linkage. Preserve
   nanosecond file snapshots and the existing legacy threading/TLS ABI.
 

@@ -645,7 +645,10 @@ owned by the existing compiler-rt recipe. The early HLS parser reuses native
 `strtod` and double precision where `strtof` is absent, retaining signed fractional
 time offsets.
 
-The pinned miniaudio low-level adapter compiles against both SDKs. Audio uses the
+The pinned miniaudio low-level adapter compiles against both SDKs. On NetBSD
+without native POSIX priority scheduling, it leaves audio threads at normal
+priority instead of calling the unavailable scheduler-policy setter. Thread
+creation and its existing stack-size/error handling remain unchanged. Audio uses the
 native loader API without a separate libdl. Retained snapshots use native BSD
 nanosecond stat fields on both versions. These compile/link checks do not qualify
 physical devices or target execution. Full media application links and PDF/Office

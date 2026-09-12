@@ -2054,6 +2054,9 @@ with tempfile.TemporaryDirectory(prefix="openbsd-thread-priority-", dir=root / "
 #include <assert.h>
 #include <stddef.h>
 #include <errno.h>
+#ifdef TEST_NETBSD
+#define __NetBSD__ 1
+#endif
 typedef int ma_result, ma_thread, pthread_t;
 typedef void *(*ma_thread_entry_proc)(void *);
 typedef enum { ma_thread_priority_idle=-5, ma_thread_priority_lowest=-4,
@@ -2077,9 +2080,11 @@ static int pthread_attr_setstacksize(pthread_attr_t *attr, size_t size) {
     assert(attr->initialized); ++stack_calls; requested_stack=size; return 0;
 }
 #ifndef OpenBSD3_5
+#if !defined(TEST_NETBSD) || (defined(_POSIX_PRIORITY_SCHEDULING) && (_POSIX_PRIORITY_SCHEDULING + 0) >= 0)
 static int pthread_attr_setschedpolicy(pthread_attr_t *attr, int policy) {
     assert(attr->initialized && policy == SCHED_FIFO); ++policy_calls; return 0;
 }
+#endif
 static int sched_get_priority_min(int policy) { assert(policy==SCHED_FIFO); ++range_calls; return 1; }
 static int sched_get_priority_max(int policy) { assert(policy==SCHED_FIFO); ++range_calls; return 8; }
 static int pthread_attr_getschedparam(pthread_attr_t *attr, struct sched_param *param) {
@@ -2105,7 +2110,7 @@ int main(void) {
     ma_thread thread;
     assert(ma_thread_create__posix(&thread, ma_thread_priority_realtime, 65536, entry, &thread)==0);
     assert(creates==1 && destroys==1 && with_attr==1 && stack_calls==1 && requested_stack==65536);
-#ifdef OpenBSD3_5
+#if defined(OpenBSD3_5) || (defined(TEST_NETBSD) && (!defined(_POSIX_PRIORITY_SCHEDULING) || (_POSIX_PRIORITY_SCHEDULING + 0) < 0))
     assert(policy_calls==0 && range_calls==0 && param_calls==0 && inherit_calls==0);
 #else
     assert(policy_calls==1 && range_calls==2 && param_calls==1 && inherit_calls==1);
@@ -2122,9 +2127,11 @@ int main(void) {
     return 0;
 }
 """)
-    for old in (False, True):
-        subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror"] +
-                       (["-DOpenBSD3_5=1"] if old else []) +
+    for defines in ([], ["-DOpenBSD3_5=1"], ["-DTEST_NETBSD=1"],
+                    ["-DTEST_NETBSD=1", "-D_POSIX_PRIORITY_SCHEDULING=-1"],
+                    ["-DTEST_NETBSD=1", "-D_POSIX_PRIORITY_SCHEDULING="],
+                    ["-DTEST_NETBSD=1", "-D_POSIX_PRIORITY_SCHEDULING=200112L"]):
+        subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror"] + defines +
                        [str(source), "-o", str(Path(tmp) / "thread")], check=True)
         subprocess.run([str(Path(tmp) / "thread")], check=True)
 print("PASS: early BSD audio threads retain stack, cleanup and errors with normal-priority fallback")
@@ -2262,7 +2269,8 @@ assert 'lib.optionals early [ ./ffmpeg-legacy-libm.patch ./ffmpeg-openbsd35-hls.
 assert 'lib.optionalString legacy " -Dstatic_assert=_Static_assert"' in netbsd_av
 assert 'lib.optionalString early " -fno-builtin-pow -fno-builtin-powf"' in netbsd_av
 assert 'buildInputs = [ jansson curl av ]' in netbsd
-assert 'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}' in netbsd
+assert 'MINIAUDIO_CFLAGS=-isystem ${miniaudio}' in netbsd
+assert 'patch -d "$out" -p1 < ${./miniaudio-openbsd35-headers.patch}' in netbsd
 assert '"AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale' in netbsd
 assert '-Wl,-mllvm,-emulated-tls' in netbsd and '${compilerBuiltins}/lib/libclang_rt.builtins.a' in netbsd
 print("PASS: NetBSD media retains static file codecs, native generators and legacy TLS ABI")

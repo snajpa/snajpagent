@@ -46,7 +46,7 @@
  
          /* We need to set the scheduler policy. Only do this if the OS supports pthread_attr_setschedpolicy() */
 -        #if !defined(MA_BEOS)
-+        #if !defined(MA_BEOS) && !defined(OpenBSD3_5)
++        #if !defined(MA_BEOS) && !defined(OpenBSD3_5) && (!defined(__NetBSD__) || (defined(_POSIX_PRIORITY_SCHEDULING) && (_POSIX_PRIORITY_SCHEDULING + 0) >= 0))
          {
              if (priority == ma_thread_priority_idle) {
              #ifdef SCHED_IDLE

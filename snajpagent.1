@@ -3408,6 +3408,7 @@ FreeBSD uses OSS. With older OSS headers, device enumeration reports only the
 accessible default /dev/dsp node; native format/version metadata is unavailable.
 Capture/playback initialization still negotiates format, channel count and rate.
 NetBSD uses miniaudio's audio(4) backend and the native loader API without libdl.
+On NetBSD without POSIX priority scheduling, audio threads use normal priority.
 Its source recipe supplies static file codecs; target audio qualification and
 PDF/Office runtime closure remain pending.
 OpenBSD uses miniaudio's sndio/audio(4) backends and the system dynamic-loader API.
