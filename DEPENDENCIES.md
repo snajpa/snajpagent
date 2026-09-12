@@ -136,6 +136,8 @@ CLI programs, optional hardware frameworks and dependency autodetection are
 disabled. Intermediate NASM objects retain their local symbols: llvm-strip -x
 can corrupt their local-constant relocation indexes. The existing executable/dSYM
 packaging performs final stripping after linking; SIMD code remains enabled.
+Darwin archives use source-derived member names so C and architecture-specific
+objects with identical basenames remain distinct during dSYM generation.
 Miniaudio uses the existing CoreAudio/AudioToolbox route. Cross-builds
 alone do not qualify playback/capture; macOS PDF/Office linkage remains in progress.
 

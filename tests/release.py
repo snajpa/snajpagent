@@ -1226,3 +1226,36 @@ with tempfile.TemporaryDirectory(prefix="macos-asm-strip-", dir=root / "build") 
     subprocess.run(["make", "-s", "-f", str(makefile), "ASMSTRIPFLAGS="], check=True)
 assert '$(STRIP) -S -x "$$stage/$(BIN)"' in (root / "Makefile").read_text()
 print("PASS: macOS media keeps intermediate NASM symbols and final executable stripping")
+
+# dSYM lookup needs distinct deterministic archive member names for C/SIMD
+# objects with the same basename. Exercise the dependency's actual archive rule.
+archive_patch = (root / "nix/ffmpeg-darwin-archive-names.patch").read_text()
+archive_hunk = archive_patch.split("+++ b/ffbuild/library.mak\n", 1)[1]
+with tempfile.TemporaryDirectory(prefix="darwin-archive-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    objects = ["lib/same.o", "lib/simd/same.o"]
+    for i, name in enumerate(objects):
+        obj = tmp / name
+        obj.parent.mkdir(parents=True, exist_ok=True)
+        source = obj.with_suffix(".c")
+        source.write_text(f"int fixture_{i}(void) {{ return {i + 1}; }}\n")
+        subprocess.run(["cc", "-c", str(source), "-o", str(obj)], check=True)
+    for revised in (False, True):
+        source = "\n".join(line[1:] for line in archive_hunk.splitlines()
+                           if line.startswith((" ", "+" if revised else "-")))
+        rule = source[source.index("$(SUBDIR)$(LIBNAME):"):source.index("\ninstall-headers:")]
+        makefile = tmp / "Makefile"
+        makefile.write_text("SUBDIR=\nLIBNAME=fixture.a\nOBJS=" + " ".join(objects) +
+                            "\nAR=ar\nARFLAGS=rcs\nAR_O=$@\nRANLIB=ranlib\nRM=rm -f\n" + rule + "\n")
+        subprocess.run(["make", "-s", "-B"], cwd=tmp, check=True)
+        names = subprocess.check_output(["ar", "t", "fixture.a"], cwd=tmp, text=True).splitlines()
+        assert len(names) == 2
+        if revised:
+            assert names == [name.replace("/", "_") for name in objects]
+            for name, member in zip(objects, names):
+                assert subprocess.check_output(["ar", "p", "fixture.a", member], cwd=tmp) == (tmp / name).read_bytes()
+            assert not (tmp / "fixture.a.objects").exists()
+        else:
+            assert names == ["same.o", "same.o"], "baseline must reproduce ambiguous dSYM members"
+assert './ffmpeg-darwin-archive-names.patch' in mac_av
+print("PASS: Darwin FFmpeg archive rule preserves bytes with distinct C/SIMD member names")

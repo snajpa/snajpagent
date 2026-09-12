@@ -148,7 +148,8 @@ let
   ] [];
   av = pkgs.stdenvNoCC.mkDerivation {
     pname = "ffmpeg-headless-macos-${arch}";
-    inherit (sourcePkgs.ffmpeg_8) version src patches;
+    inherit (sourcePkgs.ffmpeg_8) version src;
+    patches = sourcePkgs.ffmpeg_8.patches ++ [ ./ffmpeg-darwin-archive-names.patch ];
     nativeBuildInputs = [ pkgs.pkg-config pkgs.perl pkgs.nasm llvm.llvm ];
     buildInputs = [ zlib ];
     strictDeps = true;

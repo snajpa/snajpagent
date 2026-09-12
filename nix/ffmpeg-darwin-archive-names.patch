@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Darwin dSYM archive lookup keys by member name and timestamp. Source and SIMD
+# directories reuse basenames; deterministic archives give them equal timestamps.
+# Keep unique source-derived member names without changing symbols or object code.
+--- a/ffbuild/library.mak
++++ b/ffbuild/library.mak
+@@ -30,24 +30,24 @@
+ # This means that we are in the scenario described above.
+ # In case only static libs are used, the linker will only use
+ # one of these copies; this depends on the duplicated object files
+ # containing exactly the same symbols.
+ OBJS += $(SHLIBOBJS)
+ endif
+ $(SUBDIR)$(LIBNAME): $(OBJS) $(STLIBOBJS)
+ 	$(RM) $@
+-ifeq ($(RESPONSE_FILES),yes)
+-	$(Q)echo $^ > $@.objs
+-	$(AR) $(ARFLAGS) $(AR_O) @$@.objs
+-else
+-	$(AR) $(ARFLAGS) $(AR_O) $^
+-endif
++	$(Q)$(RM) -r $@.objects
++	$(Q)mkdir -p $@.objects
++	$(Q)for object in $^; do \
++	    cp "$$object" "$@.objects/$$(echo "$$object" | tr / _)"; \
++	done
++	$(AR) $(ARFLAGS) $(AR_O) $@.objects/*.o
+ 	$(RANLIB) $@
+-	-$(RM) $@.objs
++	$(Q)$(RM) -r $@.objects
+ 
+ install-headers: install-lib$(NAME)-headers install-lib$(NAME)-pkgconfig
+ 
+ install-libs-$(CONFIG_STATIC): install-lib$(NAME)-static
+ install-libs-$(CONFIG_SHARED): install-lib$(NAME)-shared
+ 
+ define RULES
+ $(TOOLS):     THISLIB = $(FULLNAME:%=$(LD_LIB))
