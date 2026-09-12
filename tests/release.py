@@ -1617,7 +1617,8 @@ print("PASS: old OpenBSD audio preserves wide-file fallback and empty/numeric pt
 
 # Missing old-OS inttypes macros must match the compiler's actual integer ABI.
 formats_patch = (root / "nix/ffmpeg-openbsd35-inttypes.patch").read_text()
-formats_added = "\n".join(line[1:] for line in formats_patch.splitlines()
+assert '+#include "libavutil/common.h"' in formats_patch
+formats_added = "\n".join(line[1:] for line in formats_patch.split("--- a/libavcodec/fits.c", 1)[0].splitlines()
                          if line.startswith("+") and not line.startswith("+++"))
 assert 'lib.optionals early [ ./ffmpeg-openbsd35-inttypes.patch ./ffmpeg-openbsd35-hls.patch ]' in (root / "nix/openbsd.nix").read_text()
 if shutil.which("clang"):
