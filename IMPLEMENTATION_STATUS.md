@@ -15,6 +15,12 @@ snajpagent is a pre-1.0 terminal coding agent. One interactive session supports
 local rollout and native IRC chat. One-shot mode runs tasks from scripts.
 
 Implemented:
+- Ordered `[rule NAME]` model tool-call filtering with JSON-pointer regex and
+  integer-threshold matching, pass/reject/jump/return verdicts and templated
+  match logging. Rejected calls answer a factual not-run result; the engine is
+  stateless and bounded, and configuration load rejects invalid definitions.
+  Only the `out`/tool-call boundary is wired; `replace`/`insert`/`confirm` and
+  the `in`/`event` hosts remain future work. See `design/io-rules.md`.
 - Named providers and local model settings, shared secret sources, Responses
   streaming, model discovery, token accounting and native/fallback compaction.
 - Reasoning content-part streams, including direct DeepSeek V4 Pro thinking and

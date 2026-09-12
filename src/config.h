@@ -110,6 +110,8 @@ struct snag_model_limit_config {
     uint64_t max_output_tokens;
 };
 
+struct snag_rules;
+
 struct snag_config {
     char provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
     char model[SNAG_CONFIG_MODEL_MAX];
@@ -141,6 +143,7 @@ struct snag_config {
     uint32_t max_timeout_ms;
     uint32_t max_output_tokens;
     uint32_t max_output_bytes;
+    struct snag_rules *rules;
     struct snag_secret_source secrets[SNAG_CONFIG_SECRET_MAX];
     size_t secret_count;
     char source_path[SNAG_CONFIG_PATH_MAX + 1u];

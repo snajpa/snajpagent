@@ -2084,6 +2084,79 @@ An expired cursor reports a retention gap and replays the available newer tail.
 New clients receive one bounded initial history.  Interrupted delivery is
 recovered from the client's session until a model response consumes it.
 
+.SS "rule NAME"
+Filter model tool calls before they run.  Each
+.B [rule NAME]
+section declares one rule in an ordered chain.  Rules are validated when the
+configuration loads: unknown keys, invalid regular expressions, duplicate
+names, unreachable jump targets and non-evaluated entry chains fail startup
+instead of becoming silent policy.
+.TP
+.B chain
+The chain this rule belongs to.  The entry chain
+.B out
+inspects model tool calls before dispatch; any other valid name is a jump target.
+.TP
+.B action
+One of
+.BR pass ,
+.BR reject ,
+.BR jump
+or
+.BR return .
+.TP
+.B match
+A JSON object mapping each
+.I /json/pointer
+to a POSIX extended regular expression; every pair must match.
+.TP
+.B at_least
+A JSON object mapping each
+.I /json/pointer
+to an inclusive integer lower bound.  A missing or non-integer value never
+matches.
+.TP
+.B text
+The message shown to the model for
+.BR reject .
+.I %{/pointer}
+substitutes envelope data and
+.I %%
+is a literal percent.
+.TP
+.B target
+The chain entered by
+.BR jump .
+.TP
+.B log
+A template recorded when the rule matches.  Logging never changes the verdict.
+.PP
+The envelope exposes the immutable facts
+.BR boundary ,
+.BR kind ,
+.B surface
+and
+.BR tool ,
+with the tool argument object as
+.B value
+and its canonical JSON as
+.BR text .
+A rejected call answers a factual not-run result; it is never silently dropped.
+Rules are filtering, not containment: matching a command string is not a
+sandbox, so use read-only turns and separate accounts for real isolation.
+.PP
+.nf
+[rule deny-recursive-delete]
+chain  = out
+match  = {"/tool":"^exec_command$","/text":"rm[[:space:]]+-[^[:space:]]*[rf]"}
+action = reject
+text   = "Recursive force-delete is disabled; delete explicit paths."
+.fi
+.PP
+At most 256 rules, 64 chains, 4096 visited rules per evaluation, 63-byte names
+and 64 KiB per text template.  The engine is stateless: no rule fires once,
+rate-limits or counts across evaluations.
+
 .SH "Scripting and tools"
 .SS Automation and integration
 Use

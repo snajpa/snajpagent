@@ -3,6 +3,7 @@
 #include "fs.h"
 #include "base.h"
 #include "snajpagent.h"
+#include "rules.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -24,6 +25,7 @@ enum section {
     SECTION_UI,
     SECTION_IRC,
     SECTION_TOOL,
+    SECTION_RULE,
     SECTION_COUNT
 };
 
@@ -40,6 +42,8 @@ struct parse_state {
         struct snag_provider_model model;
     } models[SNAG_CONFIG_MODEL_ALIAS_MAX];
     size_t model_count;
+    json_t *rules;
+    size_t rule_index;
 };
 
 static int
@@ -134,6 +138,7 @@ snag_config_init(struct snag_config *config)
 void
 snag_config_free(struct snag_config *config)
 {
+    snag_rules_free(config->rules);
     free(config->shell);
     for (size_t i = 0; i < config->provider_count; ++i) {
         snag_secret_source_free(&config->providers[i].api_key);
@@ -561,6 +566,38 @@ invalid:
 }
 
 static int
+set_rule_section(struct parse_state *state, const char *name)
+{
+    json_t *rule;
+
+    if (!snag_config_name_valid(name))
+        goto invalid;
+    for (size_t i = 0u; state->rules && i < json_array_size(state->rules); ++i) {
+        const char *other = snag_json_string(json_array_get(state->rules, i), "name");
+        if (other && strcmp(other, name) == 0)
+            goto invalid;
+    }
+    if (!state->rules) {
+        state->rules = json_array();
+        if (!state->rules)
+            return -1;
+    }
+    if (json_array_size(state->rules) >= SNAG_RULES_MAX)
+        goto invalid;
+    rule = json_object();
+    if (!rule)
+        return -1;
+    if (json_object_set_new(rule, "name", json_string(name)) < 0 ||
+        json_array_append_new(state->rules, rule) < 0)
+        return -1;
+    state->rule_index = json_array_size(state->rules) - 1u;
+    state->section = SECTION_RULE;
+    return 0;
+invalid:
+    return snag_errno(EINVAL);
+}
+
+static int
 set_section(struct parse_state *state, char *name)
 {
     enum section section;
@@ -572,6 +609,8 @@ set_section(struct parse_state *state, char *name)
         return set_model_limit_section(state, trim(name + 12u));
     else if (strncmp(name, "model-alias ", 12u) == 0)
         return set_model_alias_section(state, trim(name + 12u));
+    else if (strncmp(name, "rule ", 5u) == 0)
+        return set_rule_section(state, trim(name + 5u));
     else if (strcmp(name, "ui") == 0)
         section = SECTION_UI;
     else if (strcmp(name, "irc") == 0)
@@ -770,6 +809,42 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
             return 0;
         }
         break;
+    case SECTION_RULE: {
+        json_t *rule = state->rules ? json_array_get(state->rules, state->rule_index) : NULL;
+        json_t *text;
+        if (!rule)
+            goto invalid;
+        if (!strcmp(key, "chain") || !strcmp(key, "action") || !strcmp(key, "text") ||
+            !strcmp(key, "target") || !strcmp(key, "log")) {
+            /* Only the model tool-call boundary is evaluated in this build;
+             * in/event hosts are not wired, so refuse them instead of accepting
+             * rules that could never fire. */
+            if (!strcmp(key, "chain") &&
+                (!strcmp(value, "in") || !strcmp(value, "event")))
+                goto invalid;
+            text = json_string(value);
+            if (!text || json_object_set_new(rule, key, text) < 0)
+                return -1;
+            return 0;
+        }
+        if (!strcmp(key, "confirm")) {
+            bool enabled;
+            if (parse_bool(value, &enabled) < 0)
+                goto invalid;
+            return json_object_set_new(rule, key, json_boolean(enabled)) < 0 ? -1 : 0;
+        }
+        if (!strcmp(key, "match") || !strcmp(key, "at_least")) {
+            char json_error[128];
+            json_t *parsed = snag_json_load_strict((const unsigned char *)value,
+                strlen(value), SNAG_MAX_EVENT_LINE, json_error, sizeof(json_error));
+            if (!parsed || !json_is_object(parsed) || json_object_size(parsed) == 0u) {
+                json_decref(parsed);
+                goto invalid;
+            }
+            return json_object_set_new(rule, key, parsed) < 0 ? -1 : 0;
+        }
+        break;
+    }
     default: break;
     }
 invalid:
@@ -823,6 +898,7 @@ parse_file(struct snag_config *config, char *text, char *error, size_t error_siz
                 snag_errorf(error, error_size,
                           "invalid configuration at line %u; use named [provider NAME], "
                           "api_key with ${ENV}, quoted literal or path, and repeatable tool secret", number);
+                json_decref(state.rules);
                 return -1;
             }
         }
@@ -837,14 +913,37 @@ parse_file(struct snag_config *config, char *text, char *error, size_t error_siz
         for (size_t j = 0; j < config->provider_count; ++j)
             if (strcmp(config->providers[j].name, state.models[i].provider) == 0)
                 provider = &config->providers[j];
-        if (!provider || !state.models[i].model.upstream[0])
+        if (!provider || !state.models[i].model.upstream[0]) {
+            json_decref(state.rules);
             return snag_errorf(error, error_size, "model-alias %s/%s needs a configured provider and one real upstream target",
                        state.models[i].provider, state.models[i].model.name);
+        }
         models = realloc(provider->models, (provider->model_count + 1u) * sizeof(*models));
-        if (!models)
+        if (!models) {
+            json_decref(state.rules);
             return -1;
+        }
         provider->models = models;
         provider->models[provider->model_count++] = state.models[i].model;
+    }
+    {
+        json_t *definition = json_object();
+        if (!definition) {
+            json_decref(state.rules);
+            return -1;
+        }
+        if (state.rules) {
+            if (json_object_set_new(definition, "rules", state.rules) < 0) {
+                json_decref(definition);
+                return -1;
+            }
+            state.rules = NULL;
+        }
+        snag_rules_free(config->rules);
+        config->rules = snag_rules_compile(definition, error, error_size);
+        json_decref(definition);
+        if (!config->rules)
+            return -1;
     }
     return 0;
 }

@@ -72,12 +72,12 @@ LIVE_WORKSPACE ?= $(CURDIR)
 LIVE_RESULT_ROOT ?=
 TMUX_TEST_ROOT ?= $(CURDIR)/build/tmux-test
 PLATFORM_SRC = src/base.c src/platform.c src/term_host.c src/wake.c src/net.c src/process_host.c
-COMMON_SRC = $(PLATFORM_SRC) src/config.c src/secret_source.c src/credential.c src/auth.c src/auth_http.c src/login.c src/secret.c src/instructions.c src/json.c src/wire.c src/context.c src/provider_retry.c src/http.c src/update.c src/provider.c src/model_cache.c src/tools.c src/tools_read.c src/irc.c src/irc_runtime.c src/sse.c src/responses.c src/turn.c src/store.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/history.c src/term.c src/render.c src/render_prepare.c src/cli.c src/ui.c src/app_events.c src/app_stream.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/app.c
+COMMON_SRC = $(PLATFORM_SRC) src/config.c src/secret_source.c src/credential.c src/auth.c src/auth_http.c src/login.c src/secret.c src/instructions.c src/json.c src/rules.c src/wire.c src/context.c src/provider_retry.c src/http.c src/update.c src/provider.c src/model_cache.c src/tools.c src/tools_read.c src/irc.c src/irc_runtime.c src/sse.c src/responses.c src/turn.c src/store.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/history.c src/term.c src/render.c src/render_prepare.c src/cli.c src/ui.c src/app_events.c src/app_stream.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/app.c
 COMMON_OBJ = $(COMMON_SRC:.c=.o)
 HEADERS = src/snajpagent.h src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/credential.h src/auth.h src/login.h src/secret.h src/instructions.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/http.h src/update.h src/provider.h src/model_cache.h src/tools.h src/process_host.h src/tools_patch.h src/irc.h src/irc_internal.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h src/ui.h src/history.h
 DEPFLAGS = -MMD -MP
 FIXTURE_BIN = tests/$(NAME)-fixture
-TEST_BIN = tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store $(FIXTURE_BIN)
+TEST_BIN = tests/test_base tests/test_config tests/test_irc tests/test_instructions tests/test_credential tests/test_sse tests/test_json tests/test_rules tests/test_wire tests/test_responses tests/test_provider_retry tests/test_provider_transport tests/test_context tests/test_model_cache tests/test_render tests/test_turn tests/test_tools tests/test_store $(FIXTURE_BIN)
 BUILD_INPUTS = build/.build-inputs
 
 all: $(BIN)
@@ -152,7 +152,7 @@ $(FIXTURE_BIN): $(COMMON_SRC) src/main.c tests/fixture_provider.c $(HEADERS)
 
 tests/test_base: $(PLATFORM_SRC) tests/test_base.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/process_host.h
 
-tests/test_config: $(PLATFORM_SRC) src/config.c src/secret_source.c tests/test_config.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h
+tests/test_config: $(PLATFORM_SRC) src/config.c src/secret_source.c src/json.c src/rules.c tests/test_config.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/rules.h
 
 tests/test_irc: $(PLATFORM_SRC) src/json.c src/irc_event.c src/config.c src/secret_source.c src/irc.c src/irc_runtime.c tests/test_irc.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/cli.h src/irc.h src/irc_internal.h src/snajpagent.h
 
@@ -163,6 +163,8 @@ tests/test_instructions: $(PLATFORM_SRC) src/json.c src/instructions.c tests/tes
 tests/test_sse: $(PLATFORM_SRC) src/sse.c tests/test_sse.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/sse.h
 
 tests/test_json: $(PLATFORM_SRC) src/json.c tests/test_json.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/json.h
+
+tests/test_rules: $(PLATFORM_SRC) src/json.c src/rules.c tests/test_rules.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/json.h src/rules.h
 
 tests/test_wire: $(PLATFORM_SRC) src/json.c src/wire.c tests/test_wire.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h
 
@@ -191,7 +193,7 @@ tests/test_context tests/test_store tests/test_tools tests/test_turn: tests/chec
 tests/test_base tests/test_sse tests/test_provider_retry:
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc -o $@ $(filter %.c,$^) $(LDLIBS)
 
-tests/test_config tests/test_irc tests/test_credential tests/test_instructions tests/test_json tests/test_wire tests/test_responses tests/test_context tests/test_model_cache tests/test_render tests/test_turn:
+tests/test_config tests/test_irc tests/test_credential tests/test_instructions tests/test_json tests/test_rules tests/test_wire tests/test_responses tests/test_context tests/test_model_cache tests/test_render tests/test_turn:
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ $(filter %.c,$^) $(LDLIBS)
 
@@ -215,6 +217,7 @@ check: $(TEST_BIN)
 	./tests/test_credential
 	./tests/test_sse
 	./tests/test_json
+	./tests/test_rules
 	./tests/test_wire
 	./tests/test_responses
 	./tests/test_provider_retry

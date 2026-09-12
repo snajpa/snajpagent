@@ -2,6 +2,7 @@
 #include "config.h"
 #include "base.h"
 #include "snajpagent.h"
+#include "rules.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -423,6 +424,35 @@ test_openrouter_provider(void)
     }
 }
 
+static void
+test_io_rules(const char *path)
+{
+    struct snag_config config;
+    static const char valid[] =
+        "[provider openai]\n"
+        "api_key = ${OPENAI_API_KEY}\n"
+        "[rule deny-exec]\n"
+        "chain = out\n"
+        "match = {\"/kind\":\"^tool_call$\",\"/tool\":\"^exec_command$\"}\n"
+        "action = reject\n"
+        "text = \"Commands are disabled in this workspace.\"\n";
+    static const char invalid[] =
+        "[provider openai]\n"
+        "api_key = ${OPENAI_API_KEY}\n"
+        "[rule bad-jump]\n"
+        "chain = out\n"
+        "action = jump\n"
+        "target = nowhere\n";
+
+    write_bytes(path, valid, sizeof(valid) - 1u);
+    load_config(&config, path, NULL);
+    assert(config.rules && !snag_rules_empty(config.rules));
+    snag_config_free(&config);
+
+    write_bytes(path, invalid, sizeof(invalid) - 1u);
+    expect_invalid(path);
+}
+
 int
 main(void)
 {
@@ -755,6 +785,7 @@ main(void)
     }
 
     test_numeric_settings(path);
+    test_io_rules(path);
     test_auth_settings(path);
     expect_ui(path, "prompt", "{chat:{rollout-idle:x}}{rollout-idle:y}{rollout-active:z}", false);
     expect_ui(path, "prompt", "{chat:{queued:{goal_spinner}{queued:{goal_spinner}}}}"

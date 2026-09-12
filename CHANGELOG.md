@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- Filter model tool calls with ordered `[rule NAME]` configuration chains.
+  Rules match immutable envelope facts and tool arguments (JSON-pointer regex
+  and integer thresholds) and pass, reject, jump to a reusable chain, or log a
+  templated match. Rejected calls answer a factual not-run result instead of
+  disappearing. The engine is stateless and bounded; configuration load rejects
+  unknown keys, invalid regexes, duplicate names and unreachable jump targets.
+  Filtering is not containment, and only the tool-call boundary is wired yet.
+  See `design/io-rules.md` for syntax and examples.
 - Paint provider citation blocks as one compact terminal reference: distinct
   turns ascending, consecutive turns coalesced into ranges, repeated turns once.
   Unknown, malformed, oversized and unterminated blocks pass through unchanged;

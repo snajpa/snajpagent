@@ -9,6 +9,7 @@
 #include "json.h"
 #include "provider.h"
 #include "render.h"
+#include "rules.h"
 #include "secret.h"
 #include "snajpagent.h"
 #include "store.h"
@@ -2761,6 +2762,108 @@ finish_call(struct app_state *app, const char *turn_id,
     return 0;
 }
 
+/* One model tool call is filtered before any native preparation or dispatch.
+ * Matching is filtering, not containment: dispatch and the tool's own argument
+ * validation still decide what may run. */
+struct call_rule_host {
+    struct app_state *app;
+    char message[512];
+};
+
+static int
+call_rule_effect(void *opaque, const struct snag_rule *rule,
+                 struct snag_rule_frame *frame, char *error, size_t error_size)
+{
+    struct call_rule_host *host = opaque;
+    const char *format = snag_rule_log(rule);
+
+    if (format) {
+        struct snag_buf message;
+        json_t *data;
+        int rc;
+        snag_buf_init(&message, SNAG_RULE_TEXT_MAX);
+        if (snag_rule_render(format, frame->envelope, &message) < 0 ||
+            snag_buf_terminate(&message) < 0) {
+            snag_buf_free(&message);
+            return -1;
+        }
+        data = json_pack("{s:s,s:s,s:s}", "rule", snag_rule_name(rule),
+                         "chain", snag_rule_chain(rule),
+                         "message", (const char *)message.data);
+        snag_buf_free(&message);
+        if (!data)
+            return -1;
+        rc = snag_app_commit_event(host->app, "rule_log", data, error, error_size);
+        if (rc < 0)
+            return -1;
+    }
+    if (snag_rule_verb(rule) == SNAG_RULE_REJECT && snag_rule_text(rule)) {
+        struct snag_buf message;
+        snag_buf_init(&message, sizeof(host->message));
+        if (snag_rule_render(snag_rule_text(rule), frame->envelope, &message) == 0 &&
+            snag_buf_terminate(&message) == 0)
+            (void)snprintf(host->message, sizeof(host->message), "%s",
+                           (const char *)message.data);
+        snag_buf_free(&message);
+    }
+    return 0;
+}
+
+static int
+call_rule_check(struct app_state *app, const struct snag_response_item *call,
+                bool *rejected, char *message, size_t message_size,
+                char *error, size_t error_size)
+{
+    struct call_rule_host host;
+    struct snag_rule_frame frame;
+    struct snag_rule_verdict verdict;
+    struct snag_buf text;
+    json_t *envelope, *arguments;
+    bool owned;
+    char rule_error[256] = "";
+
+    *rejected = false;
+    message[0] = '\0';
+    if (snag_rules_empty(app->config->rules))
+        return 0;
+    owned = call->arguments == NULL;
+    arguments = call->arguments ? call->arguments : json_object();
+    snag_buf_init(&text, SNAG_MAX_TOOL_ARGUMENTS);
+    if (!arguments || snag_json_canonical(arguments, &text) < 0 ||
+        snag_buf_terminate(&text) < 0) {
+        snag_buf_free(&text);
+        if (owned)
+            json_decref(arguments);
+        return snag_errorf(error, error_size, "tool call could not be canonicalized for rules");
+    }
+    envelope = json_pack("{s:s,s:s,s:s,s:s,s:o,s:s}",
+        "boundary", "out", "kind", "tool_call", "surface", "model",
+        "tool", call->name ? call->name : "", "value", arguments,
+        "text", (const char *)text.data);
+    snag_buf_free(&text);
+    if (owned)
+        json_decref(arguments);
+    if (!envelope)
+        return -1;
+    memset(&host, 0, sizeof(host));
+    host.app = app;
+    frame.envelope = envelope;
+    if (snag_rules_eval(app->config->rules, &frame, call_rule_effect, &host,
+                        &verdict, rule_error, sizeof(rule_error)) < 0) {
+        json_decref(envelope);
+        return snag_errorf(error, error_size, "rule evaluation failed: %s",
+                           rule_error[0] ? rule_error : "invalid rules");
+    }
+    json_decref(envelope);
+    if (verdict.rejected) {
+        *rejected = true;
+        (void)snprintf(message, message_size, "%s",
+                       host.message[0] ? host.message :
+                       "Tool call rejected by the configured rules.");
+    }
+    return 0;
+}
+
 static int
 execute_calls(struct app_state *app, const char *turn_id,
               const struct snag_response_graph *graph,
@@ -2771,6 +2874,8 @@ execute_calls(struct app_state *app, const char *turn_id,
         struct snag_response_item call;
         char handle[SNAG_ID_HEX_LEN + 1u];
         bool started, finished, process;
+        bool rule_rejected;
+        char rule_message[512];
     } calls[SNAG_MAX_CALLS_PER_RESPONSE] = {0};
     size_t count = 0u, finished = 0u;
     uint64_t began = snag_monotonic_ms(), deadline = UINT64_MAX;
@@ -2791,6 +2896,11 @@ execute_calls(struct app_state *app, const char *turn_id,
 #endif
         ++count;
     }
+    for (size_t i = 0u; i < count; ++i)
+        if (call_rule_check(app, &calls[i].call, &calls[i].rule_rejected,
+                            calls[i].rule_message, sizeof(calls[i].rule_message),
+                            error, error_size) < 0)
+            return -1;
     while (finished < count) {
         size_t before = finished;
         bool pending = false;
@@ -2800,6 +2910,13 @@ execute_calls(struct app_state *app, const char *turn_id,
             bool refresh = false, cancelled = false;
             if (calls[i].finished)
                 continue;
+            if (calls[i].rule_rejected) {
+                result = snag_tool_result("not_run", "rule_rejected",
+                                          calls[i].rule_message, -1, 0u);
+                if (!result)
+                    return -1;
+                goto complete;
+            }
             control = snag_app_active_input_pump(app, 0u);
             if (control < 0) {
                 snag_errorf(error, error_size, "active input or command processing failed");
