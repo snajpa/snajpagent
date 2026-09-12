@@ -83,6 +83,15 @@ struct snag_irc_markdown_state {
     unsigned int fence_len;
 };
 
+/* A provider citation block (U+E200 … U+E201) held until it can be rewritten
+ * as one compact reference. Buffered bytes never exceed the block limit. */
+#define SNAG_CITE_BLOCK_MAX 1024u
+
+struct snag_cite_state {
+    struct snag_buf pending;
+    bool active;
+};
+
 struct snag_render {
     int (*checkpoint)(void *);
     void *checkpoint_opaque;
@@ -127,6 +136,7 @@ struct snag_render {
     bool wrap_continuation;
     unsigned char utf8_pending[4];
     size_t utf8_pending_len;
+    struct snag_cite_state cite;
     struct snag_markdown_state markdown_state;
     struct snag_irc_markdown_state irc_markdown[SNAG_RENDER_IRC_MARKDOWN_STATES];
 };

@@ -1043,6 +1043,18 @@ left border on every continuation line. Inline styles, header emphasis and
 column alignment remain active across wrapped lines. Redirected and durable text
 retains the model's exact bytes.
 .PP
+Some providers wrap web-search references in private-use citation blocks.  On a
+terminal each recognized block is painted as one compact reference listing its
+distinct integer turns in ascending order, with consecutive turns coalesced
+into ranges, for example
+.BR "[cite: turn 0-2]"
+or
+.BR "[cite: turn 1, 4]" .
+The page index within a turn is omitted and a repeated turn appears once.  The
+rule is independent of Markdown.  Unknown, malformed, oversized or
+unterminated blocks are painted unchanged, and redirected one-shot output,
+provider traffic and durable events keep the original bytes.
+.PP
 Plain-text fences labelled text, txt or plaintext omit the language label.
 Other fence labels remain visible.  Indentation and Markdown-looking content
 inside a fence are displayed literally, including pipe tables.

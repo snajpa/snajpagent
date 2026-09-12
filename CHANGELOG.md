@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Paint provider citation blocks as one compact terminal reference: distinct
+  turns ascending, consecutive turns coalesced into ranges, repeated turns once.
+  Unknown, malformed, oversized and unterminated blocks pass through unchanged;
+  redirected output, durable events and provider traffic keep exact bytes.
 - Fix thinking-mode HTTP 400 on resumed/non-thinking history by restoring an
   explicit host continuation boundary after fixed policy and current state.
   Preserve exact saved reasoning and use the same layout for every provider.

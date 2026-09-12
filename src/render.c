@@ -70,6 +70,7 @@ struct snag_render_record {
     int fd;
     unsigned char utf8_pending[4];
     size_t utf8_pending_len;
+    struct snag_cite_state cite;
     bool terminal_safe;
     bool persistent;
     bool complete;
@@ -325,6 +326,7 @@ free_record(struct snag_render_record *record)
     if (!record)
         return;
     snag_buf_free(&record->text);
+    snag_buf_free(&record->cite.pending);
     free(record->irc);
     free(record->label);
     free(record);
@@ -468,6 +470,7 @@ snag_render_free(struct snag_render *render)
         while (render->view_head[view])
             pop_record(render, (enum snag_render_view)view);
     render->rollout_open = NULL;
+    snag_buf_free(&render->cite.pending);
     if (render->history_fd >= 0)
         (void)close(render->history_fd);
     render->history_fd = -1;
@@ -2378,6 +2381,201 @@ markdown_abort(struct snag_render *render)
     return markdown_clear_style(render);
 }
 
+/* Provider citation blocks: U+E200 opens, U+E201 closes, U+E202 separates.
+ * A recognized block becomes one compact reference; anything unknown,
+ * malformed or oversized passes through byte for byte. */
+#define SNAG_CITE_OPEN "\xee\x88\x80"
+#define SNAG_CITE_CLOSE "\xee\x88\x81"
+#define SNAG_CITE_SEP "\xee\x88\x82"
+#define SNAG_CITE_MAX_TURNS 32u
+
+static void
+cite_prepare(struct snag_cite_state *state)
+{
+    if (!state->pending.max)
+        snag_buf_init(&state->pending, SNAG_CITE_BLOCK_MAX + 8u);
+}
+
+/* Read the separator-delimited turn references; 0 when the shape is unknown. */
+static size_t
+cite_turns(const char *body, size_t len, unsigned long *turns)
+{
+    size_t count = 0u, pos = 0u;
+
+    while (pos < len) {
+        size_t digits = 0u;
+        unsigned long value = 0ul;
+
+        if (len - pos < 3u || memcmp(body + pos, SNAG_CITE_SEP, 3u) ||
+            count == SNAG_CITE_MAX_TURNS ||
+            len - pos - 3u < 4u || memcmp(body + pos + 3u, "turn", 4u))
+            return 0u;
+        pos += 7u;
+        while (pos + digits < len && digits < 9u &&
+               body[pos + digits] >= '0' && body[pos + digits] <= '9') {
+            value = value * 10ul + (unsigned long)(body[pos + digits] - '0');
+            ++digits;
+        }
+        if (!digits)
+            return 0u;
+        pos += digits;
+        if (len - pos >= 4u && !memcmp(body + pos, "view", 4u))
+            pos += 4u;
+        else if (len - pos >= 6u && !memcmp(body + pos, "search", 6u))
+            pos += 6u;
+        else
+            return 0u;
+        digits = 0u;
+        while (pos + digits < len && digits < 9u &&
+               body[pos + digits] >= '0' && body[pos + digits] <= '9')
+            ++digits;
+        if (!digits)
+            return 0u;
+        pos += digits;
+        turns[count++] = value;
+    }
+    return count;
+}
+
+/* 1 rewrote the block, 0 kept it verbatim, -1 failed. */
+static int
+cite_rewrite(const char *block, size_t len, struct snag_buf *out)
+{
+    unsigned long turns[SNAG_CITE_MAX_TURNS], unique[SNAG_CITE_MAX_TURNS];
+    size_t count, total = 0u;
+
+    if (len < 23u || memcmp(block, SNAG_CITE_OPEN, 3u) ||
+        memcmp(block + len - 3u, SNAG_CITE_CLOSE, 3u) ||
+        memcmp(block + 3u, "cite", 4u))
+        return 0;
+    count = cite_turns(block + 7u, len - 10u, turns);
+    if (!count)
+        return 0;
+    for (size_t i = 0u; i < count; ++i) {
+        size_t slot = 0u;
+
+        while (slot < total && unique[slot] != turns[i])
+            ++slot;
+        if (slot < total)
+            continue;
+        if (total == SNAG_CITE_MAX_TURNS)
+            return 0;
+        slot = total;
+        while (slot > 0u && unique[slot - 1u] > turns[i]) {
+            unique[slot] = unique[slot - 1u];
+            --slot;
+        }
+        unique[slot] = turns[i];
+        ++total;
+    }
+    if (snag_buf_append(out, "[cite: turn ", sizeof("[cite: turn ") - 1u) < 0)
+        return -1;
+    for (size_t i = 0u; i < total;) {
+        char part[48];
+        int written;
+        size_t run = i;
+
+        while (run + 1u < total && unique[run + 1u] == unique[run] + 1ul)
+            ++run;
+        written = run > i ?
+            snprintf(part, sizeof(part), "%lu-%lu", unique[i], unique[run]) :
+            snprintf(part, sizeof(part), "%lu", unique[i]);
+        if (written < 0 || (size_t)written >= sizeof(part))
+            return 0;
+        if (i && snag_buf_append(out, ", ", 2u) < 0)
+            return -1;
+        if (snag_buf_append(out, part, (size_t)written) < 0)
+            return -1;
+        i = run + 1u;
+    }
+    return snag_buf_append(out, "]", 1u) < 0 ? -1 : 1;
+}
+
+/* Rewrite complete blocks and hold a trailing partial one for the next feed. */
+static int
+cite_feed(struct snag_cite_state *state, const char *text, size_t len,
+          struct snag_buf *out)
+{
+    size_t pos = 0u;
+
+    while (pos < len) {
+        size_t scan, block_len;
+
+        if (!state->active) {
+            scan = pos;
+            while (scan + 3u <= len && memcmp(text + scan, SNAG_CITE_OPEN, 3u))
+                ++scan;
+            if (scan + 3u > len) {
+                if (snag_buf_append(out, text + pos, len - pos) < 0)
+                    return -1;
+                return 0;
+            }
+            if (scan > pos && snag_buf_append(out, text + pos, scan - pos) < 0)
+                return -1;
+            snag_buf_reset(&state->pending);
+            state->active = true;
+            pos = scan;
+        }
+        scan = pos;
+        while (scan + 3u <= len && memcmp(text + scan, SNAG_CITE_CLOSE, 3u))
+            ++scan;
+        if (scan + 3u > len) {
+            if (state->pending.len + (len - pos) <= SNAG_CITE_BLOCK_MAX) {
+                if (snag_buf_append(&state->pending, text + pos, len - pos) < 0)
+                    return -1;
+            } else {
+                if (snag_buf_append(out, state->pending.data,
+                                    state->pending.len) < 0 ||
+                    snag_buf_append(out, text + pos, len - pos) < 0)
+                    return -1;
+                snag_buf_reset(&state->pending);
+                state->active = false;
+            }
+            return 0;
+        }
+        block_len = scan + 3u - pos;
+        if (state->pending.len + block_len > SNAG_CITE_BLOCK_MAX) {
+            if (snag_buf_append(out, state->pending.data,
+                                state->pending.len) < 0 ||
+                snag_buf_append(out, text + pos, block_len) < 0)
+                return -1;
+            snag_buf_reset(&state->pending);
+            state->active = false;
+        } else {
+            const unsigned char *block = NULL;
+            size_t block_size;
+            int rc;
+
+            if (snag_buf_append(&state->pending, text + pos, block_len) < 0)
+                return -1;
+            block = state->pending.data;
+            block_size = state->pending.len;
+            rc = cite_rewrite((const char *)block, block_size, out);
+            if (rc == 0 && snag_buf_append(out, block, block_size) < 0)
+                rc = -1;
+            snag_buf_reset(&state->pending);
+            state->active = false;
+            if (rc < 0)
+                return -1;
+        }
+        pos = scan + 3u;
+    }
+    return 0;
+}
+
+/* Emit a held partial block verbatim and stop holding it. */
+static int
+cite_flush(struct snag_cite_state *state, struct snag_buf *out)
+{
+    int rc = 0;
+
+    if (state->active)
+        rc = snag_buf_append(out, state->pending.data, state->pending.len);
+    snag_buf_reset(&state->pending);
+    state->active = false;
+    return rc;
+}
+
 /* Retain an incomplete code point; admit only complete, valid UTF-8. */
 static int
 complete_utf8(unsigned char pending[4], size_t *pending_len,
@@ -2405,6 +2603,28 @@ invalid:
 }
 
 static int
+public_emit(struct snag_render *render, const unsigned char *data, size_t len,
+            struct snag_buf *delivered)
+{
+    if (!len)
+        return 0;
+    if (public_terminal(render) && render->boundary == BOUNDARY_PROMPT &&
+        !render->wrap_pending.len && markdown_gap(render) < 0)
+        return -1;
+    if (delivered && snag_buf_reserve(delivered, len) < 0)
+        return -1;
+    if (public_terminal(render) ?
+        (render->markdown_rendering ?
+         markdown_write(render, data, len) < 0 :
+         write_wrapped(render, data, len) < 0) :
+        public_write(render, (const char *)data, len, 0u) < 0)
+        return -1;
+    if (delivered && snag_buf_append(delivered, data, len) < 0)
+        return -1;
+    return 0;
+}
+
+static int
 render_public_chunk(struct snag_render *render, const char *text, size_t len,
                   struct snag_buf *delivered)
 {
@@ -2416,30 +2636,23 @@ render_public_chunk(struct snag_render *render, const char *text, size_t len,
         !snag_size_add(len, sizeof(render->utf8_pending), &complete_max))
         return snag_errno(EOVERFLOW);
     struct snag_buf complete = {.max = complete_max};
+    struct snag_buf filtered = {.max = complete_max};
     if (complete_utf8(render->utf8_pending, &render->utf8_pending_len,
                        text, len, &complete) < 0)
         goto out;
-    if (complete.len) {
-        if (public_terminal(render) && render->boundary == BOUNDARY_PROMPT &&
-            !render->wrap_pending.len && markdown_gap(render) < 0)
-            goto out;
-        if (delivered && snag_buf_reserve(delivered, complete.len) < 0)
-            goto out;
-        if (public_terminal(render) ?
-            (render->markdown_rendering ?
-             markdown_write(render, complete.data, complete.len) < 0 :
-             write_wrapped(render, complete.data, complete.len) < 0) :
-            public_write(render, (const char *)complete.data, complete.len, 0u) < 0)
-            goto out;
-        if (delivered && snag_buf_append(delivered, complete.data, complete.len) < 0)
-            goto out;
-    }
+    cite_prepare(&render->cite);
+    if (complete.len &&
+        (cite_feed(&render->cite, (const char *)complete.data, complete.len,
+                   &filtered) < 0 ||
+         public_emit(render, filtered.data, filtered.len, delivered) < 0))
+        goto out;
     rc = 0;
 out:
     if (rc < 0)
         saved_errno = errno;
     if (close_public_output(render) < 0 && rc == 0)
         rc = -1;
+    snag_buf_free(&filtered);
     snag_buf_free(&complete);
     if (saved_errno)
         errno = saved_errno;
@@ -2484,6 +2697,16 @@ close_public_item(struct snag_render *render, bool discard_incomplete)
         if (invalid)
             return snag_errno(EILSEQ);
         return 0;
+    }
+    if (render->cite.active) {
+        struct snag_buf tail = {.max = SNAG_CITE_BLOCK_MAX + 8u};
+        if (cite_flush(&render->cite, &tail) < 0 ||
+            (!discard_incomplete &&
+             public_emit(render, tail.data, tail.len, NULL) < 0)) {
+            rc = -1;
+            saved_errno = errno;
+        }
+        snag_buf_free(&tail);
     }
     if (render->markdown_rendering &&
         (discard_incomplete ? markdown_abort(render) :
@@ -2639,6 +2862,7 @@ snag_render_rollout(struct snag_render *render, const char *text, size_t len,
 {
     struct snag_render_record *record = render->rollout_open;
     struct snag_buf complete;
+    struct snag_buf filtered;
     size_t complete_max;
     int rc = -1;
 
@@ -2648,25 +2872,32 @@ snag_render_rollout(struct snag_render *render, const char *text, size_t len,
         return -1;
     }
     snag_buf_init(&complete, complete_max);
+    snag_buf_init(&filtered, complete_max);
     if (complete_utf8(record->utf8_pending, &record->utf8_pending_len,
                        text, len, &complete) < 0)
         goto out;
-    if (complete.len) {
-        if (snag_buf_reserve(&record->text, complete.len) < 0 ||
-            (delivered && snag_buf_reserve(delivered, complete.len) < 0) ||
-            snag_buf_append(&record->text, complete.data, complete.len) < 0)
+    cite_prepare(&record->cite);
+    if (complete.len &&
+        cite_feed(&record->cite, (const char *)complete.data, complete.len,
+                  &filtered) < 0)
+        goto out;
+    if (filtered.len) {
+        if (snag_buf_reserve(&record->text, filtered.len) < 0 ||
+            (delivered && snag_buf_reserve(delivered, filtered.len) < 0) ||
+            snag_buf_append(&record->text, filtered.data, filtered.len) < 0)
             goto out;
         if (render->view == SNAG_RENDER_ROLLOUT &&
             rollout_physical_append(render, record,
-                                    (const char *)complete.data,
-                                    complete.len) < 0)
+                                    (const char *)filtered.data,
+                                    filtered.len) < 0)
             goto out;
         if (delivered &&
-            snag_buf_append(delivered, complete.data, complete.len) < 0)
+            snag_buf_append(delivered, filtered.data, filtered.len) < 0)
             goto out;
     }
     rc = 0;
 out:
+    snag_buf_free(&filtered);
     snag_buf_free(&complete);
     return rc;
 }
@@ -2686,6 +2917,23 @@ close_rollout_record(struct snag_render *render, bool abort)
             errno = EILSEQ;
             rc = -1;
         }
+    }
+    if (record->cite.active) {
+        struct snag_buf tail = {.max = SNAG_CITE_BLOCK_MAX + 8u};
+        if (cite_flush(&record->cite, &tail) < 0) {
+            rc = -1;
+        } else if (!abort && tail.len) {
+            if (snag_buf_reserve(&record->text, tail.len) < 0 ||
+                snag_buf_append(&record->text, tail.data, tail.len) < 0) {
+                rc = -1;
+            } else if (render->view == SNAG_RENDER_ROLLOUT &&
+                       rollout_physical_append(render, record,
+                                               (const char *)tail.data,
+                                               tail.len) < 0) {
+                rc = -1;
+            }
+        }
+        snag_buf_free(&tail);
     }
     record->complete = true;
     record->aborted = abort;

@@ -2091,6 +2091,24 @@ def run_lifecycle_case(binary, root):
         terminal.exit()
 
 
+def run_citation_case(binary, root):
+    case = root / "citation"
+    workspace = case / "w"
+    workspace.mkdir(mode=0o700, parents=True)
+    config = case / "config.ini"
+    write_config(config, False)
+    with fixture_terminal(TmuxTerminal(
+            case / "t", binary, workspace, case / "s", config, 100, 20),
+            case / "screen.txt") as terminal:
+        terminal.wait(DEFAULT_IDLE_PROMPT)
+        terminal.submit_wait("citation_markers", "[cite: turn 0, 2]")
+        screen = terminal.capture(join_wrapped=True)
+        for marker in ("\ue200", "\ue201", "\ue202"):
+            assert marker not in screen, screen
+        assert "[cite: turn 0, 2] tail" in screen, screen
+        terminal.exit()
+
+
 def run_bullet_class_case(binary, root):
     case = root / "bullet-class"
     workspace = case / "w"
@@ -2809,6 +2827,7 @@ def run_fixture(binary, workspace, root):
     run_paced_decode_case(binary, root, width=26, unicode=True, resize=25)
     run_paced_decode_case(binary, root, width=26, unicode=True, resize=25, typing=True)
     run_markdown_case(binary, root)
+    run_citation_case(binary, root)
     run_narrow_markdown_table_case(binary, root)
     run_render_case(binary, root)
     for active in (False, True):

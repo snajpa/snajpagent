@@ -227,6 +227,7 @@ check: $(TEST_BIN)
 	./tests/test_store
 	SNAJPAGENT_TEST_NAME='$(NAME)' SNAJPAGENT_TEST_VERSION='$(BUILD_VERSION)' \
 		./tests/test_cli.sh ./$(FIXTURE_BIN)
+	python3 ./tests/test_citations.py ./$(FIXTURE_BIN)
 	@if command -v tmux >/dev/null 2>&1; then \
 		$(MAKE) tmuxcheck; \
 	else \

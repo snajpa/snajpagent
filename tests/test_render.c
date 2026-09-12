@@ -2593,6 +2593,79 @@ test_safe_text_width(void)
     }
 }
 
+/* Feed chunks through the public path with stdout captured, no terminal. */
+static size_t
+capture_citations(const char **chunks, size_t count, char *out, size_t out_size)
+{
+    struct snag_render render;
+    size_t used = 0u;
+
+    struct output_capture capture = capture_open(true, false);
+    assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
+    snag_render_init(&render, 0u);
+    assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
+    for (size_t i = 0u; i < count; ++i) {
+        assert(snag_render_public(&render, chunks[i], strlen(chunks[i]), NULL) == 0);
+        used = drain_available(capture.fd, out, out_size, used);
+    }
+    assert(snag_render_public_end(&render) == 0);
+    used = capture_close(&capture, out, out_size, used);
+    return used;
+}
+
+static void
+test_citation_blocks(void)
+{
+    static const char open[] = "\xee\x88\x80";
+    static const char close[] = "\xee\x88\x81";
+    static const char sep[] = "\xee\x88\x82";
+    char out[2048], text[512];
+    const char *chunks[3];
+
+    assert(strlen(open) == 3u && strlen(close) == 3u && strlen(sep) == 3u);
+
+    /* Sorted, deduplicated turns collapse into one reference. */
+    assert(snprintf(text, sizeof(text), "a%scite%sturn2view0%sturn1view0%s"
+                     "turn0view2%sbuild", open, sep, sep, sep, close) > 0);
+    chunks[0] = text;
+    assert(capture_citations(chunks, 1u, out, sizeof(out)) > 0u);
+    assert(strcmp(out, "a[cite: turn 0-2]build") == 0);
+
+    /* A block split across feeds is held until its terminator arrives. */
+    char mid[64], tail[64];
+    assert(snprintf(mid, sizeof(mid), "%scite%sturn3view1", open, sep) > 0);
+    assert(snprintf(tail, sizeof(tail), "%sturn5view0%sy", sep, close) > 0);
+    chunks[0] = "x";
+    chunks[1] = mid;
+    chunks[2] = tail;
+    assert(capture_citations(chunks, 3u, out, sizeof(out)) > 0u);
+    assert(strcmp(out, "x[cite: turn 3, 5]y") == 0);
+
+    /* Non-consecutive and repeated turns stay one reference each. */
+    assert(snprintf(text, sizeof(text), "%scite%sturn4view0%sturn4view1%s"
+                     "turn0view3%s", open, sep, sep, sep, close) > 0);
+    chunks[0] = text;
+    assert(capture_citations(chunks, 1u, out, sizeof(out)) > 0u);
+    assert(strcmp(out, "[cite: turn 0, 4]") == 0);
+
+    /* Unknown verb, malformed reference and unterminated block pass through. */
+    assert(snprintf(text, sizeof(text), "%snote%sturn0view0%s",
+                    open, sep, close) > 0);
+    chunks[0] = text;
+    assert(capture_citations(chunks, 1u, out, sizeof(out)) > 0u);
+    assert(strcmp(out, chunks[0]) == 0);
+    assert(snprintf(text, sizeof(text), "%scite%sturnXview0%s",
+                    open, sep, close) > 0);
+    chunks[0] = text;
+    assert(capture_citations(chunks, 1u, out, sizeof(out)) > 0u);
+    assert(strcmp(out, chunks[0]) == 0);
+    assert(snprintf(text, sizeof(text), "z%scite%sturn1view0",
+                    open, sep) > 0);
+    chunks[0] = text;
+    assert(capture_citations(chunks, 1u, out, sizeof(out)) > 0u);
+    assert(strcmp(out, chunks[0]) == 0);
+}
+
 int
 main(void)
 {
@@ -2666,6 +2739,7 @@ main(void)
     test_punctuation_word_boundaries();
     test_bounded_wrap_word();
     test_punctuation_wrapping();
+    test_citation_blocks();
 
     snag_buf_init(&delivered, sizeof(markdown));
     assert(capture_markdown(markdown, true, true, SNAG_COLOR_NEVER, 120u,

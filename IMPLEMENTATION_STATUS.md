@@ -24,6 +24,9 @@ Implemented:
   replayed with original tool-call pairing across cycles and resume, and included
   in compatible compaction input. It is excluded from public/history rendering.
 - Private durable sessions, replay, steering, queues, goals and read-only turns.
+- Terminal presentation of provider citation blocks as one compact reference
+  (`[cite: turn 0-2]`); unknown or malformed blocks and all redirected, durable
+  and provider bytes remain exact.
 - Session-local prompt-entry history, restored on resume and seeded once from a
   global archive. Orderly exit merges only newly entered lines; active sessions
   keep stable Up/Down and Ctrl-R history.

@@ -18,6 +18,23 @@ provider traffic, durable events, partial-response recovery, compaction input,
 and IRC frames retain the model's exact UTF-8 bytes. Disabling Markdown restores
 the existing terminal-safe, width-wrapped literal presentation.
 
+## Provider Citation Blocks
+
+Some providers annotate web-search references with a private-use block that
+opens with U+E200, separates entries with U+E202 and closes with U+E201. The
+renderer holds such a block until its terminator arrives, then paints one
+compact reference: the distinct integer turns, ascending, with consecutive
+turns coalesced into ranges (`[cite: turn 0-2]`, `[cite: turn 1, 4]`). The
+per-turn page index is dropped and a repeated turn appears once.
+
+A block that is unknown, malformed, longer than 1024 bytes, or still
+unterminated when its item ends is painted unchanged, so provider bytes are
+never silently dropped. The rewrite is presentation only and applies
+independently of Markdown: redirected one-shot output, provider traffic,
+durable events, partial-response recovery and compaction input keep the exact
+bytes. Buffering is bounded, so a malformed unterminated block cannot grow
+renderer memory.
+
 ## Presentation
 
 The renderer recognizes the compact Markdown vocabulary routinely produced by
