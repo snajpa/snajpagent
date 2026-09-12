@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Add macOS static PDF/font dependencies with SDK-targeted header generation
+  and C++ linkage. Office runtime packaging and target rendering qualification
+  remain in progress.
+
 - Give macOS FFmpeg archive members distinct source-derived names so dependency
   debug information remains attributable during dSYM generation.
 

@@ -183,6 +183,47 @@ let
       )
     '';
   };
+  png = (cmakeLibrary sourcePkgs.libpng [
+    "-DPNG_SHARED=OFF" "-DPNG_STATIC=ON" "-DPNG_TESTS=OFF" "-DPNG_TOOLS=OFF"
+  ] [ zlib ]).overrideAttrs (old: {
+    # libpng's header generator invokes Clang directly, outside CMake's target rule.
+    preConfigure = old.preConfigure + ''
+      cmakeFlagsArray+=("-DCMAKE_C_FLAGS=${cflags} --target=${target}")
+    '';
+  });
+  freetype = cmakeLibrary sourcePkgs.freetype [
+    "-DFT_DISABLE_BZIP2=ON" "-DFT_DISABLE_BROTLI=ON" "-DFT_DISABLE_HARFBUZZ=ON"
+    "-DFT_REQUIRE_ZLIB=ON" "-DFT_REQUIRE_PNG=ON"
+  ] [ zlib png ];
+  expat = cmakeLibrary sourcePkgs.expat [
+    "-DEXPAT_SHARED_LIBS=OFF" "-DEXPAT_BUILD_TOOLS=OFF"
+    "-DEXPAT_BUILD_EXAMPLES=OFF" "-DEXPAT_BUILD_TESTS=OFF" "-DEXPAT_BUILD_DOCS=OFF"
+  ] [];
+  fontconfig = (autotoolsLibrary sourcePkgs.fontconfig [
+    "--disable-docs" "--disable-docbook" "--disable-cache-build" "--disable-nls"
+    "--sysconfdir=/etc" "--with-cache-dir=/var/cache/fontconfig"
+  ] [ expat freetype png zlib ]).overrideAttrs (old: {
+    nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.gperf pkgs.python3 ];
+    installFlags = [ "sysconfdir=$(out)/etc" "RUN_FC_CACHE_TEST=false" "fc_cachedir=$(TMPDIR)/fontconfig-cache" ];
+  });
+  jpeg = (cmakeLibrary sourcePkgs.libjpeg [
+    "-DENABLE_SHARED=OFF" "-DENABLE_STATIC=ON" "-DWITH_TURBOJPEG=OFF"
+  ] []).overrideAttrs (old: {
+    nativeBuildInputs = old.nativeBuildInputs ++ lib.optional (arch != "arm64") pkgs.nasm;
+    cmakeFlags = old.cmakeFlags ++ [ "-DCMAKE_INSTALL_NAME_TOOL=${tools}/llvm-install-name-tool" ];
+  });
+  openjpeg = cmakeLibrary sourcePkgs.openjpeg [ "-DBUILD_CODEC=OFF" ] [];
+  pdf = (cmakeLibrary sourcePkgs.poppler [
+    "-DENABLE_UNSTABLE_API_ABI_HEADERS=ON" "-DFONT_CONFIGURATION=fontconfig"
+    "-DENABLE_UTILS=OFF" "-DENABLE_CPP=OFF" "-DENABLE_GLIB=OFF"
+    "-DENABLE_GOBJECT_INTROSPECTION=OFF" "-DENABLE_QT5=OFF" "-DENABLE_QT6=OFF"
+    "-DBUILD_QT5_TESTS=OFF" "-DBUILD_QT6_TESTS=OFF" "-DBUILD_CPP_TESTS=OFF"
+    "-DBUILD_MANUAL_TESTS=OFF" "-DENABLE_LCMS=OFF" "-DENABLE_LIBCURL=OFF"
+    "-DENABLE_LIBTIFF=OFF" "-DENABLE_NSS3=OFF" "-DENABLE_GPGME=OFF"
+  ] [ zlib png freetype expat fontconfig jpeg openjpeg pkgs.boost ]).overrideAttrs (old: {
+    cmakeBuildType = "Release";
+    patches = old.patches ++ [ ./poppler-static-fonts.patch ];
+  });
   brotli = cmakeLibrary sourcePkgs.brotli [ "-DBROTLI_DISABLE_TESTS=ON" ] [];
   zstd = (cmakeLibrary sourcePkgs.zstd [
     "-DZSTD_BUILD_SHARED=OFF" "-DZSTD_BUILD_STATIC=ON"
@@ -258,7 +299,7 @@ let
     "-DCURL_CA_BUNDLE=none" "-DCURL_CA_PATH=none"
   ] networkLibraries;
 in {
-  inherit sdk target compiler tools cflags ldflags jansson tls curl av;
+  inherit sdk target compiler tools cflags ldflags jansson tls curl av pdf;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }:
     pkgs.stdenvNoCC.mkDerivation {
@@ -267,7 +308,7 @@ in {
       src = source;
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
-      buildInputs = [ jansson curl av ] ++ networkLibraries;
+      buildInputs = [ jansson curl av pdf png freetype expat fontconfig jpeg openjpeg ] ++ networkLibraries;
       enableParallelBuilding = true;
       dontStrip = true;
       preBuild = ''
@@ -281,6 +322,7 @@ in {
         ${pkgs.lib.optionalString (updateBase != "") "'UPDATE_BASE_URL=${updateBase}' 'UPDATE_TARGET=${updateTarget}'"}
           'TARGET_OS=Darwin'
           'CC=${compiler} --target=${target} -isysroot ${sdk}'
+          'CXX=${llvm.clang-unwrapped}/bin/clang++ --target=${target} -isysroot ${sdk}'
           'STRIP=${if legacyLoader then builtins.dirOf linker + "/x86_64-apple-darwin-strip" else tools + "/llvm-strip"}'
           'DSYMUTIL=${tools}/dsymutil'
           'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
@@ -291,6 +333,8 @@ in {
           "LDLIBS=$(pkg-config --static --libs jansson)"
           "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"
           "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale)"
+          "PDF_CFLAGS=$(pkg-config --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')"
+          "PDF_LIBS=$(pkg-config --static --libs poppler libpng) -lc++"
           'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}'
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
           "CURL_LIBS=$(pkg-config --static --libs libcurl)${lib.optionalString legacyLoader " ${compilerBuiltins}/lib/libclang_rt.builtins.a"}"

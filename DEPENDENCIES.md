@@ -139,7 +139,15 @@ packaging performs final stripping after linking; SIMD code remains enabled.
 Darwin archives use source-derived member names so C and architecture-specific
 objects with identical basenames remain distinct during dSYM generation.
 Miniaudio uses the existing CoreAudio/AudioToolbox route. Cross-builds
-alone do not qualify playback/capture; macOS PDF/Office linkage remains in progress.
+alone do not qualify playback/capture.
+
+macOS PDF recipes link Poppler, FreeType, Fontconfig, Expat, libpng, libjpeg-turbo
+and OpenJPEG statically, using the SDK's libc++ runtime. Fontconfig retains its
+Darwin system/user font-directory fallback and `/etc/fonts` configuration;
+rendering still requires usable embedded or host fonts. The libpng generated
+header uses the explicit target triple; JPEG assembly selects the native build
+NASM and LLVM install-name tool. The existing static font metadata fix retains
+transitive link dependencies. macOS Office runtime packaging remains unfinished.
 
 Windows media builds use static FFmpeg libraries and the existing winpthreads
 runtime. External-library autodetection is disabled so the SDK cannot silently

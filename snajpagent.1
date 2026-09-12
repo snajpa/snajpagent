@@ -3366,8 +3366,10 @@ normalization is excluded; native PNG/JPEG forwarding remains available. Speech
 generation and text tools remain available. Official desktop releases use
 WITH_AV=1. AV_CFLAGS and AV_LIBS override pkg-config flags for cross-builds.
 The macOS cross-build supplies static file-codec libraries and miniaudio headers
-for the selected SDK/deployment target. PDF/Office dependency closure remains
-in development; dependency cross-links do not establish target playback/capture.
+for the selected SDK/deployment target. PDF builds use static Poppler/font
+libraries with the SDK C++ runtime and host font lookup. Office runtime packaging
+remains in development; dependency cross-links do not establish target rendering
+or playback/capture.
 .TP
 .B make WITH_PDF=0 WITH_OFFICE=0
 Build a custom lean executable without PDF/Office rendering or their C++ runtimes.

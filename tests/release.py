@@ -1213,7 +1213,7 @@ assert '"--host-cc=${pkgs.stdenv.cc}/bin/cc"' in mac_av
 assert '"--cc=${compiler} --target=${target} -isysroot ${sdk}"' in mac_av
 assert '"--disable-postproc"' not in mac_av  # Removed in pinned FFmpeg 8.
 assert '"AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale)"' in macos
-assert 'buildInputs = [ jansson curl av ] ++ networkLibraries;' in macos
+assert 'buildInputs = [ jansson curl av pdf png freetype expat fontconfig jpeg openjpeg ] ++ networkLibraries;' in macos
 assert "'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}'" in macos
 assert 'makeFlags = [ "ASMSTRIPFLAGS=" ];' in mac_av
 # Upstream's assembler rule conditionally invokes STRIP via ASMSTRIPFLAGS.
@@ -1259,3 +1259,15 @@ with tempfile.TemporaryDirectory(prefix="darwin-archive-", dir=root / "build") a
             assert names == ["same.o", "same.o"], "baseline must reproduce ambiguous dSYM members"
 assert './ffmpeg-darwin-archive-names.patch' in mac_av
 print("PASS: Darwin FFmpeg archive rule preserves bytes with distinct C/SIMD member names")
+
+# libpng's custom preprocessing command bypasses CMAKE_C_COMPILER_TARGET.
+mac_png = macos.split("  png = ", 1)[1].split("  freetype = ", 1)[0]
+assert 'cmakeFlagsArray+=("-DCMAKE_C_FLAGS=${cflags} --target=${target}")' in mac_png
+mac_jpeg = macos.split("  jpeg = ", 1)[1].split("  openjpeg = ", 1)[0]
+assert 'pkgs.nasm' in mac_jpeg and 'CMAKE_INSTALL_NAME_TOOL=${tools}/llvm-install-name-tool' in mac_jpeg
+mac_pdf = macos.split("  pdf = ", 1)[1].split("  brotli = ", 1)[0]
+assert 'cmakeBuildType = "Release";' in mac_pdf and './poppler-static-fonts.patch' in mac_pdf
+assert '"-DFONT_CONFIGURATION=fontconfig"' in mac_pdf
+assert '"PDF_LIBS=$(pkg-config --static --libs poppler libpng) -lc++"' in macos
+assert "'CXX=${llvm.clang-unwrapped}/bin/clang++ --target=${target} -isysroot ${sdk}'" in macos
+print("PASS: macOS PDF targets generated headers, NASM tools and static font/C++ dependencies")
