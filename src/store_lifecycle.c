@@ -82,9 +82,8 @@ int
 snag_session_complete_delete(struct snag_store *store, struct snag_session *session,
                             char *error, size_t error_size)
 {
-    if (!store || !session || !session->delete_requested || !session->trash_name[0] || session->dir_fd < 0) {
+    if (!store || !session || !session->delete_requested || !session->trash_name[0] || session->dir_fd < 0)
         return snag_fail(error, error_size, EINVAL, "no completed delete intent is open");
-    }
     if (snag_rename_at(store->sessions_fd, session->id, store->trash_fd, session->trash_name) < 0)
         return snag_errorf(error, error_size, "cannot move session to trash: %s", strerror(errno));
     if (snag_sync_dir(store->sessions_fd) < 0 || snag_sync_dir(store->trash_fd) < 0)

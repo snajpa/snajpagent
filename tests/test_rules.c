@@ -177,7 +177,10 @@ test_invalid_definitions_rejected(void)
         "{\"name\":\"x\",\"chain\":\"out\",\"action\":\"pass\"}]",
         "[{\"name\":\"x\",\"chain\":\"out\",\"action\":\"pass\",\"bogus\":1}]",
         "[{\"name\":\"x\",\"chain\":\"out\",\"action\":\"pass\",\"match\":{\"bad\":\"a\"}}]",
-        "[{\"name\":\"x\",\"chain\":\"out\",\"action\":\"jump\"}]" };
+        "[{\"name\":\"x\",\"chain\":\"out\",\"action\":\"jump\"}]",
+        "[{\"name\":\"x\",\"chain\":\"out\",\"action\":\"reject\",\"value\":{\"a\":1}}]",
+        "[{\"name\":\"x\",\"chain\":\"out\",\"action\":\"insert\",\"to\":\"nowhere\",\"text\":\"x\"}]"
+    };
 
     for (size_t i = 0u; i < sizeof(bad) / sizeof(bad[0]); ++i) {
         json_t *def = definition(bad[i]);

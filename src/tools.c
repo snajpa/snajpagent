@@ -300,6 +300,12 @@ filtered_environment(const struct snag_config *config)
     return env;
 }
 
+char **
+snag_tools_environment(const struct snag_config *config)
+{
+    return filtered_environment(config);
+}
+
 static void
 write_stdin_chunk(struct managed_process *proc, const char *data, size_t len, size_t *written,
                   bool *open_flag)

@@ -606,7 +606,8 @@ assert_optional_tool_contract(json_t *tool)
         {"exec_command", "command"}, {"write_stdin", "handle"},
         {"apply_patch", "patch"}, {"create_goal", "objective"},
         {"update_goal", "action"}, {"irc_send", "text"}, {"irc_state", ""}, {"irc_topic", "topic"},
-        {"list_files", "path"}, {"read_file", "path"}, {"grep", "path pattern"}
+        {"list_files", "path"}, {"read_file", "path"}, {"grep", "path pattern"},
+        {"write_file", "path content"}, {"edit_file", "path old new"}
     };
     json_t *schema;
     json_t *params;
@@ -806,6 +807,11 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
             } else {
                 assert(item_by_field(ts, "name", "exec_command"));
                 assert(item_by_field(ts, "name", "update_goal"));
+                assert(item_by_field(ts, "name", "list_files") && item_by_field(ts, "name", "read_file") &&
+                       item_by_field(ts, "name", "grep"));
+                assert(item_by_field(ts, "name", "write_file") && item_by_field(ts, "name", "edit_file"));
+                (void)assert_optional_tool_contract(item_by_field(ts, "name", "write_file"));
+                (void)assert_optional_tool_contract(item_by_field(ts, "name", "edit_file"));
             }
         }
         struct snag_buf serialized = {.max = SNAG_CONTEXT_MAX_REQUEST};
@@ -1509,7 +1515,7 @@ main(void)
     assert_string(projection.count_request.value, "model", SNAJPAGENT_MODEL);
     {
         json_t *tools = json_object_get(projection.create_request.value, "tools");
-        assert(json_array_size(tools) == 5u);
+        assert(json_array_size(tools) == 10u);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
         assert(item_by_field(tools, "name", "create_goal") != NULL);
         assert(item_by_field(tools, "name", "update_goal") == NULL);
@@ -1592,7 +1598,7 @@ main(void)
         json_t *gate;
         const char *gate_text;
         assert(json_is_array(tools));
-        assert(json_array_size(tools) == 5);
+        assert(json_array_size(tools) == 10);
         assert(item_by_field(tools, "name", "create_goal") == NULL);
         assert(item_by_field(tools, "name", "update_goal") != NULL);
         assert(item_by_field(tools, "name", "exec_command") != NULL);
@@ -1628,7 +1634,7 @@ main(void)
                                  &instructions, NULL, &projection, error, sizeof(error)) == 0);
         tools = json_object_get(projection.create_request.value, "tools");
         input = json_object_get(projection.create_request.value, "input");
-        assert(json_array_size(tools) == 8u);
+        assert(json_array_size(tools) == 13u);
         assert(item_by_field(tools, "name", "irc_send"));
         assert(item_by_field(tools, "name", "irc_state"));
         assert(item_by_field(tools, "name", "irc_topic"));
@@ -1674,7 +1680,7 @@ main(void)
             json_object_get(projection.create_request.value, "input"), "type", "function_call_output");
         const char *historical_text;
 
-        assert(json_array_size(tools) == 5u);
+        assert(json_array_size(tools) == 10u);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
         assert(item_by_field(tools, "name", "create_goal") == NULL);
         assert(item_by_field(tools, "name", "update_goal") != NULL);
@@ -1717,7 +1723,7 @@ main(void)
         tools = json_object_get(projection.create_request.value, "tools");
         semantic = json_object_get(projection.model_input.value, "items");
         harness = message_matching(semantic, "IRC chat mode is active.");
-        assert(json_array_size(tools) == 8u);
+        assert(json_array_size(tools) == 13u);
         assert_context_tool_schemas(tools, NULL, 7654321u, 6000u);
         assert(item_by_field(tools, "name", "irc_send") != NULL);
         assert(item_by_field(tools, "name", "irc_state") != NULL);
@@ -1751,7 +1757,7 @@ main(void)
         json_t *tools = json_object_get(projection.create_request.value, "tools");
         json_t *semantic = json_object_get(projection.model_input.value, "items");
 
-        assert(json_array_size(tools) == 4u);
+        assert(json_array_size(tools) == 9u);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
         assert(item_by_field(tools, "name", "create_goal") == NULL);
         assert(item_by_field(tools, "name", "update_goal") == NULL);

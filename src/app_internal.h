@@ -112,6 +112,9 @@ enum {
     SNAG_APP_INPUT_READY = 7, SNAG_APP_COMPACT_DEFERRED = 8 };
 
 int snag_app_input_command(struct app_state *, const char *, bool, bool *, bool *);
+/* Fresh local consent for a rule-requested action. 0 confirmed, 1 not
+ * confirmed (or not presentable), -1 on error. */
+int snag_app_consent(struct app_state *app, const char *reason, char *error, size_t error_size);
 int snag_app_sync_destinations(struct app_state *app);
 int snag_app_commit_event(struct app_state *app, const char *type, json_t *data,
                          char *error, size_t error_size);

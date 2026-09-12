@@ -21,6 +21,8 @@ typedef int (*snag_tool_pump_fn)(void *opaque, unsigned int timeout_ms);
 typedef int (*snag_tool_output_fn)(void *, const char *, unsigned int, uint64_t, const void *, size_t);
 typedef int (*snag_tool_read_fn)(void *, const char *, unsigned int, uint64_t, uint64_t, struct snag_buf *);
 void snag_tools_journal(snag_tool_output_fn write, snag_tool_read_fn read, void *opaque);
+/* Filtered host environment for a spawned helper or managed command. */
+char **snag_tools_environment(const struct snag_config *config);
 /* Validates without effects. 1 means rejected with a factual not-run result. */
 int snag_tools_prepare(const struct snag_response_item *, const struct snag_config *, const char *workspace, uint32_t max_parallel,
                        char handle[SNAG_ID_HEX_LEN + 1u], uint32_t *yield_ms, json_t **rejected);

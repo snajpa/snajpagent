@@ -24,7 +24,10 @@ struct snag_rule {
     char *text;
     char *target;
     char *log;
-    bool confirm;
+    json_t *value;
+    char *to;
+    char *command;
+    unsigned int timeout_ms;
     struct snag_rule_predicate *predicates;
     size_t predicate_count;
     struct snag_rule_threshold *thresholds;
@@ -184,6 +187,9 @@ rule_free(struct snag_rule *rule)
     free(rule->text);
     free(rule->target);
     free(rule->log);
+    json_decref(rule->value);
+    free(rule->to);
+    free(rule->command);
     memset(rule, 0, sizeof(*rule));
 }
 
@@ -191,7 +197,8 @@ static enum snag_rule_verb
 verb_parse(const char *name)
 {
     static const char *const names[] = {
-        "pass", "reject", "jump", "return" };
+        "pass", "accept", "reject", "jump", "return", "insert", "command", "confirm"
+    };
     for (size_t i = 0u; i < SNAG_RULE_VERB_COUNT; ++i)
         if (!strcmp(name, names[i])) return (enum snag_rule_verb)i;
     return SNAG_RULE_VERB_COUNT;
@@ -207,9 +214,12 @@ compile_rule(struct snag_rules *rules, json_t *definition, size_t index, char *e
     const char *text = snag_json_string(definition, "text");
     const char *target = snag_json_string(definition, "target");
     const char *log = snag_json_string(definition, "log");
+    const char *to = snag_json_string(definition, "to");
+    const char *command = snag_json_string(definition, "command");
+    const json_t *timeout = json_object_get(definition, "timeout_ms");
     const json_t *match = json_object_get(definition, "match");
     const json_t *at_least = json_object_get(definition, "at_least");
-    const json_t *confirm = json_object_get(definition, "confirm");
+    const json_t *value = json_object_get(definition, "value");
 
     if (!json_is_object(definition) || !name_valid(name) || !name_valid(chain) || !action || !*action)
         return invalid(error, size, "invalid rule identity");
@@ -218,7 +228,10 @@ compile_rule(struct snag_rules *rules, json_t *definition, size_t index, char *e
              it = json_object_iter_next(definition, it)) {
             const char *key = json_object_iter_key(it);
             static const char *const allowed[] = {
-                "name", "chain", "match", "at_least", "action", "text", "target", "confirm", "log" };
+                "name", "chain", "match", "at_least", "action",
+                "text", "target", "log", "value", "to",
+                "command", "timeout_ms"
+            };
             bool known = false;
             for (size_t i = 0u; i < sizeof(allowed) / sizeof(allowed[0]); ++i)
                 if (!strcmp(key, allowed[i])) known = true;
@@ -230,7 +243,6 @@ compile_rule(struct snag_rules *rules, json_t *definition, size_t index, char *e
     if (!json_is_object(match) && !json_is_null(match) && match)
         return invalid(error, size, "match must be an object");
     if (at_least && !json_is_object(at_least)) return invalid(error, size, "at_least must be an object");
-    if (confirm && !json_is_boolean(confirm)) return invalid(error, size, "confirm must be a boolean");
     if (text && (!json_is_string(json_object_get(definition, "text")) || strlen(text) > SNAG_RULE_TEXT_MAX))
         return invalid(error, size, "text must be a bounded string");
 
@@ -240,10 +252,33 @@ compile_rule(struct snag_rules *rules, json_t *definition, size_t index, char *e
     rule->chain_id = chain_index(rules, chain);
     (void)snprintf(rule->chain, sizeof(rule->chain), "%s", chain);
     rule->verb = verb_parse(action);
+    if (rule->verb == SNAG_RULE_VERB_COUNT &&
+        snag_string_in(action, "compact transform"))
+        return invalid(error, size, "rule action is defined by the design but not implemented in this build");
     if (rule->verb == SNAG_RULE_VERB_COUNT) return invalid(error, size, "unknown rule action");
     if (rule->verb == SNAG_RULE_JUMP && !name_valid(target))
         return invalid(error, size, "jump needs a target chain");
-    if (rule->verb != SNAG_RULE_JUMP && target) return invalid(error, size, "target applies only to jump");
+    if (rule->verb != SNAG_RULE_JUMP && target)
+        return invalid(error, size, "target applies only to jump");
+    if (rule->verb == SNAG_RULE_INSERT) {
+        if (!text || !to || (strcmp(to, "program") && strcmp(to, "model") && strcmp(to, "irc")))
+            return invalid(error, size, "insert needs to=program|model|irc and text");
+    } else if (to) {
+        return invalid(error, size, "to applies only to insert");
+    }
+    if (rule->verb == SNAG_RULE_COMMAND) {
+        if (!command || !*command || strlen(command) > 4096u)
+            return invalid(error, size, "command needs a bounded helper path");
+        if (timeout && (!json_is_integer(timeout) || json_integer_value(timeout) < 1 ||
+                        json_integer_value(timeout) > 60000))
+            return invalid(error, size, "timeout_ms must be 1..60000");
+    } else if (command || timeout) {
+        return invalid(error, size, "command and timeout_ms apply only to command");
+    }
+    /* pass with value is the single transform/override operation. */
+    if (value && rule->verb != SNAG_RULE_PASS)
+        return invalid(error, size, "value applies only to pass");
+    if (value) rule->value = json_incref((json_t *)value);
     if (text) {
         rule->text = snag_strdup_checked(text, SNAG_RULE_TEXT_MAX + 1u);
         if (!rule->text) return -1;
@@ -257,7 +292,17 @@ compile_rule(struct snag_rules *rules, json_t *definition, size_t index, char *e
         rule->target = snag_strdup_checked(target, SNAG_RULE_NAME_MAX + 1u);
         if (!rule->target) return -1;
     }
-    rule->confirm = confirm && json_is_true(confirm);
+    if (rule->verb == SNAG_RULE_INSERT) {
+        rule->to = snag_strdup_checked(to, SNAG_RULE_NAME_MAX + 1u);
+        if (!rule->to)
+            return -1;
+    }
+    if (rule->verb == SNAG_RULE_COMMAND) {
+        rule->command = snag_strdup_checked(command, 4097u);
+        rule->timeout_ms = timeout ? (unsigned int)json_integer_value(timeout) : 10000u;
+        if (!rule->command)
+            return -1;
+    }
 
     if (json_is_object(match) && json_object_size(match) > 0u) {
         rule->predicates = calloc(json_object_size(match), sizeof(*rule->predicates));
@@ -388,7 +433,10 @@ enum snag_rule_verb snag_rule_verb(const struct snag_rule *rule) { return rule->
 const char *snag_rule_text(const struct snag_rule *rule) { return rule->text; }
 const char *snag_rule_target(const struct snag_rule *rule) { return rule->target; }
 const char *snag_rule_log(const struct snag_rule *rule) { return rule->log; }
-bool snag_rule_confirm(const struct snag_rule *rule) { return rule->confirm; }
+const json_t *snag_rule_value(const struct snag_rule *rule) { return rule->value; }
+const char *snag_rule_to(const struct snag_rule *rule) { return rule->to; }
+const char *snag_rule_command(const struct snag_rule *rule) { return rule->command; }
+unsigned int snag_rule_timeout_ms(const struct snag_rule *rule) { return rule->timeout_ms; }
 
 static int
 rule_matches(const struct snag_rule *rule, const json_t *envelope)
@@ -460,12 +508,15 @@ snag_rules_eval(const struct snag_rules *rules, struct snag_rule_frame *frame,
         if (matched < 0) return invalid(error, size, "rule matching failed");
         if (!matched) continue;
         ++verdict->matches;
-        bool needs_host = rule->log || rule->confirm;
-        if (!effect && needs_host) return invalid(error, size, "rule effect needs a host handler");
+        bool needs_host = rule->log || rule->value || rule->verb == SNAG_RULE_INSERT ||
+            rule->verb == SNAG_RULE_COMMAND || rule->verb == SNAG_RULE_CONFIRM;
+        if (!effect && needs_host)
+            return invalid(error, size, "rule effect needs a host handler");
         int rc = effect ? effect(opaque, rule, frame, error, size) : 0;
         if (rc < 0) return -1;
         if (rc > 0) verdict->rejected = true;
         if (rule->verb == SNAG_RULE_REJECT) verdict->rejected = true;
+        if (rule->verb == SNAG_RULE_ACCEPT) return 0;
         if (rule->verb == SNAG_RULE_JUMP) {
             size_t target = chain_index(rules, rule->target);
             if (target == rules->chain_count || depth + 1u >= SNAG_CHAINS_MAX)

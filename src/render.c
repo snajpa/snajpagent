@@ -3234,9 +3234,8 @@ snag_render_resume_hint(const struct snag_render *render, const char *command, s
     int rc = -1;
 
     if (!render || !command || !command_len) return snag_errno(EINVAL);
-    if (!snag_size_add(max, sizeof(header) + 2u, &max) || !snag_size_add(max, strlen(note), &max)) {
+    if (!snag_size_add(max, sizeof(header) + 2u, &max) || !snag_size_add(max, strlen(note), &max))
         return snag_errno(EOVERFLOW);
-    }
     colored = render->color_stderr;
     if (colored && (!snag_size_add(max, sizeof(COLOR_LIFECYCLE) - 1u, &max) ||
          !snag_size_add(max, sizeof(COLOR_RESET) - 1u, &max))) return snag_errno(EOVERFLOW);

@@ -234,7 +234,7 @@ static bool
 tool_name_valid(const char *name)
 {
     return snag_read_only_tool(name) || snag_string_in(name,
-        "exec_command write_stdin apply_patch create_goal update_goal irc_send irc_state " "irc_topic");
+        "exec_command write_stdin apply_patch write_file edit_file create_goal update_goal irc_send irc_state " "irc_topic");
 }
 
 static bool
@@ -374,9 +374,8 @@ snag_response_graph_classify(const struct snag_response_graph *graph, struct sna
     size_t bad_index = 0;
 
     memset(decision, 0, sizeof(*decision));
-    if (!provider_id_valid(graph->provider_response_id) || graph->count > SNAG_MAX_RESPONSE_ITEMS) {
+    if (!provider_id_valid(graph->provider_response_id) || graph->count > SNAG_MAX_RESPONSE_ITEMS)
         return snag_fail(error, error_size, EINVAL, "response graph has no valid response id");
-    }
     if (identifiers_valid(graph, error, error_size) < 0) return -1;
     for (size_t i = 0; i < graph->count; ++i) {
         struct snag_response_item view = snag_response_graph_item(graph, i);
@@ -522,6 +521,8 @@ snag_tool_result_not_run(const char *reason)
         help = "Correct field names, types and ranges using the current tool schema. Supply required fields; nullable defaults use JSON null. Do not repeat unchanged invalid arguments.";
     else if (!strcmp(reason, "read_only"))
         help = "This turn permits only its declared read-only tools; use list_files, read_file or grep for local inspection.";
+    else if (!strcmp(reason, "rule_rejected"))
+        help = "A configured rule denied this call. Follow the stated policy or choose an allowed action.";
     else if (!strcmp(reason, "recovery_unstarted"))
         help = "The previous agent process ended before this proposal started. Inspect current state before deciding whether to repeat the work.";
     else if (snag_string_in(reason, "batch_yield operator_yield superseded_by_steering turn_cancelled"))
@@ -574,7 +575,7 @@ reason_is_not_run(const char *reason)
         "protocol_conflict read_only process_limit batch_yield operator_yield process_busy stdin_busy "
         "stdin_closed invalid_arguments managed_process_conflict "
         "managed_process_handle_mismatch recovery_unstarted superseded_by_steering "
-        "turn_cancelled process_interaction_required");
+        "turn_cancelled process_interaction_required rule_rejected");
 }
 
 int

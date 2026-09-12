@@ -1631,6 +1631,27 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             clear_pending_steering(session);
         }
         clear_turn_state(session);
+    } else if (strcmp(type, "rule_log") == 0) {
+        /* Observational only: a matched filter rule recorded a line. It never
+         * changes session state, but replay must accept it or a session that
+         * used a log rule could not be resumed. */
+        if (!snag_json_exact_keys(data, "chain message rule")) goto invalid;
+    } else if (strcmp(type, "rule_transform") == 0) {
+        /* A rule replaced the mutable payload before dispatch. The original
+         * proposal stays in response_completed; this typed projection links the
+         * original action digest to the effective one so replay recomputes the
+         * same pending-call digest that tool_started will validate. */
+        const char *call_id = snag_json_string(data, "call_id");
+        const char *original = snag_json_string(data, "original_sha256");
+        const char *effective = snag_json_string(data, "effective_sha256");
+        struct snag_pending_call *call;
+        if (!snag_json_exact_keys(data, "call_id effective_sha256 original_sha256 rule") ||
+            !call_id || !snag_json_string(data, "rule") || !original || !effective ||
+            !snag_hex_is_lower(original, SNAG_SHA256_HEX_LEN) ||
+            !snag_hex_is_lower(effective, SNAG_SHA256_HEX_LEN) ||
+            !(call = find_pending_call(session, call_id)) || call->started || call->finished ||
+            strcmp(call->action_sha256, original) != 0) goto invalid;
+        memcpy(call->action_sha256, effective, SNAG_SHA256_HEX_LEN + 1u);
     } else {
         return snag_fail(error, error_size, ENOTSUP,
                   "event type %s is not implemented by this checkpoint", type);

@@ -24,6 +24,7 @@
 /tests/test_store
 /tests/test_tools
 /tests/test_turn
+/tests/test_write
 /tests/test_wire
 /tests/update-old
 /tests/update-new

@@ -10,6 +10,7 @@
 #include "provider.h"
 #include "render.h"
 #include "rules.h"
+#include "rules_command.h"
 #include "secret.h"
 #include "snajpagent.h"
 #include "store.h"
@@ -2315,11 +2316,26 @@ recover_session(struct app_state *app, char *error, size_t error_size)
 static int
 finish_call(struct app_state *app, const char *turn_id,
              const struct snag_response_item *call, const char *handle,
-             json_t *result, char *error, size_t error_size)
+             json_t *result, const char *insert, char *error, size_t error_size)
 {
     if (!result || snag_tools_attach_output_limit(call, app->config, result) < 0) {
         json_decref(result);
         return -1;
+    }
+    /* Policy insertions are trusted host projections delivered with the call's
+     * own outcome, so they are journaled and replayed with it. */
+    if (insert && *insert) {
+        const char *old = snag_json_string(result, "model_text");
+        struct snag_buf text;
+        snag_buf_init(&text, SNAG_RULE_TEXT_MAX + 8192u);
+        if (snag_buf_printf(&text, "%s\n[policy] %s", old ? old : "", insert) < 0 ||
+            snag_buf_terminate(&text) < 0 ||
+            snag_json_set_new(result, "model_text", json_string((const char *)text.data)) < 0) {
+            snag_buf_free(&text);
+            json_decref(result);
+            return -1;
+        }
+        snag_buf_free(&text);
     }
     struct snag_process_state *process = snag_session_process(&app->session, handle);
     json_t *ref = json_object_get(result, "output_ref");
@@ -2349,7 +2365,36 @@ finish_call(struct app_state *app, const char *turn_id,
 struct call_rule_host {
     struct app_state *app;
     char message[512];
+    bool replaced;
+    char rule[SNAG_RULE_NAME_MAX + 1u];
+    char *insertion;
 };
+
+/* Replace an object payload in place: every field the replacement provides is
+ * set, and fields it omits are removed. The object is owned by the caller and is
+ * exactly the object native dispatch will consume. */
+static bool
+apply_replacement(json_t *target, const json_t *replacement)
+{
+    if (!json_is_object(target) || !json_is_object(replacement)) return false;
+    for (;;) {
+        const char *extra = NULL;
+        for (void *it = json_object_iter(target); it; it = json_object_iter_next(target, it))
+            if (!json_object_get(replacement, json_object_iter_key(it))) {
+                extra = json_object_iter_key(it);
+                break;
+            }
+        if (!extra) break;
+        (void)json_object_del(target, extra);
+    }
+    for (void *it = json_object_iter((json_t *)replacement); it;
+         it = json_object_iter_next((json_t *)replacement, it)) {
+        const char *key = json_object_iter_key(it);
+        json_t *value = json_object_iter_value(it);
+        if (snag_json_set_new(target, key, json_incref(value)) < 0) return false;
+    }
+    return true;
+}
 
 static int
 call_rule_effect(void *opaque, const struct snag_rule *rule,
@@ -2382,24 +2427,148 @@ call_rule_effect(void *opaque, const struct snag_rule *rule,
                            (const char *)message.data);
         snag_buf_free(&message);
     }
+    if (snag_rule_verb(rule) == SNAG_RULE_PASS && snag_rule_value(rule)) {
+        json_t *target = json_object_get(frame->envelope, "value");
+        if (!apply_replacement(target, snag_rule_value(rule))) {
+            (void)snprintf(host->message, sizeof(host->message),
+                           "A configured rule produced a payload replacement that does not fit this boundary.");
+            return 1; /* Veto: never dispatch an incompatible replacement. */
+        }
+        host->replaced = true;
+        (void)snprintf(host->rule, sizeof(host->rule), "%s", snag_rule_name(rule));
+    }
+    if (snag_rule_verb(rule) == SNAG_RULE_INSERT) {
+        struct snag_buf message;
+        snag_buf_init(&message, SNAG_RULE_TEXT_MAX + 64u);
+        if (snag_rule_render(snag_rule_text(rule), frame->envelope, &message) < 0 ||
+            snag_buf_terminate(&message) < 0) {
+            snag_buf_free(&message);
+            return -1;
+        }
+        host->insertion = snag_strdup_checked((const char *)message.data, SNAG_RULE_TEXT_MAX + 1u);
+        snag_buf_free(&message);
+        if (!host->insertion)
+            return -1;
+        (void)snprintf(host->rule, sizeof(host->rule), "%s", snag_rule_name(rule));
+    }
+    if (snag_rule_verb(rule) == SNAG_RULE_COMMAND) {
+        struct snag_buf envelope;
+        json_t *reply = NULL;
+        char helper_error[256] = "";
+        int rc;
+
+        snag_buf_init(&envelope, SNAG_RULE_ENVELOPE_MAX + 1u);
+        if (snag_json_canonical(frame->envelope, &envelope) < 0 || snag_buf_terminate(&envelope) < 0) {
+            snag_buf_free(&envelope);
+            (void)snprintf(host->message, sizeof(host->message),
+                           "Rule helper envelope could not be built.");
+            return 1;
+        }
+        rc = snag_rule_command_run(host->app->config, snag_rule_command(rule),
+                                   host->app->session.workspace, snag_rule_timeout_ms(rule),
+                                   (const char *)envelope.data, envelope.len - 1u,
+                                   &reply, helper_error, sizeof(helper_error));
+        snag_buf_free(&envelope);
+        if (rc < 0) {
+            (void)snprintf(host->message, sizeof(host->message), "%s",
+                           helper_error[0] ? helper_error : "Rule helper failed.");
+            return 1; /* A helper that cannot answer denies the pending action. */
+        }
+        if (!reply) return 0; /* Empty successful stdout means pass. */
+        const char *action = snag_json_string(reply, "action");
+        if (!action) {
+            json_decref(reply);
+            (void)snprintf(host->message, sizeof(host->message),
+                           "Rule helper returned an effect without an action.");
+            return 1;
+        }
+        if (!strcmp(action, "pass")) {
+            const json_t *value = json_object_get(reply, "value");
+            if (value) {
+                json_t *target = json_object_get(frame->envelope, "value");
+                if (!apply_replacement(target, value)) {
+                    json_decref(reply);
+                    (void)snprintf(host->message, sizeof(host->message),
+                                   "Rule helper returned a payload replacement that does not fit this boundary.");
+                    return 1;
+                }
+                host->replaced = true;
+                (void)snprintf(host->rule, sizeof(host->rule), "%s", snag_rule_name(rule));
+            }
+        } else if (!strcmp(action, "reject")) {
+            const char *text = snag_json_string(reply, "text");
+            (void)snprintf(host->message, sizeof(host->message), "%s",
+                           text && *text ? text : "Denied by the configured rule helper.");
+            json_decref(reply);
+            return 1;
+        } else if (!strcmp(action, "insert")) {
+            const char *text = snag_json_string(reply, "text");
+            if (text && *text) {
+                char *copy = snag_strdup_checked(text, SNAG_RULE_TEXT_MAX + 1u);
+                if (!copy) {
+                    json_decref(reply);
+                    return -1;
+                }
+                free(host->insertion);
+                host->insertion = copy;
+            }
+        } else {
+            (void)snprintf(host->message, sizeof(host->message),
+                           "Rule helper returned unsupported effect '%s'.", action);
+            json_decref(reply);
+            return 1;
+        }
+        json_decref(reply);
+    }
+    if (snag_rule_verb(rule) == SNAG_RULE_CONFIRM) {
+        struct snag_buf text;
+        char reason[512] = "";
+        char consent_error[256] = "";
+        int consent;
+
+        snag_buf_init(&text, sizeof(reason));
+        if (snag_rule_render(snag_rule_text(rule), frame->envelope, &text) == 0 &&
+            snag_buf_terminate(&text) == 0)
+            (void)snprintf(reason, sizeof(reason), "%s", (const char *)text.data);
+        snag_buf_free(&text);
+        consent = snag_app_consent(host->app, reason, consent_error, sizeof(consent_error));
+        if (consent != 0) {
+            (void)snprintf(host->message, sizeof(host->message), "%s",
+                           consent_error[0] ? consent_error :
+                           "Local confirmation is required and was not given.");
+            return 1; /* Consent is an obligation, not a suggestion. */
+        }
+    }
     return 0;
 }
 
 static int
 call_rule_check(struct app_state *app, const struct snag_response_item *call,
-                bool *rejected, char *message, size_t message_size, char *error, size_t error_size)
+                bool *rejected, char *message, size_t message_size, char **insertion,
+                char *error, size_t error_size)
 {
     struct call_rule_host host;
     struct snag_rule_frame frame;
     struct snag_rule_verdict verdict;
     struct snag_buf text;
     json_t *envelope, *arguments;
+    struct snag_pending_call *pending = NULL;
+    char original[SNAG_SHA256_HEX_LEN + 1u];
     bool owned;
     char rule_error[256] = "";
 
     *rejected = false;
     message[0] = '\0';
+    *insertion = NULL;
+    original[0] = '\0';
     if (snag_rules_empty(app->config->rules)) return 0;
+    if (call->call_id)
+        for (size_t i = 0u; i < app->session.pending_call_count; ++i)
+            if (strcmp(app->session.pending_calls[i].call_id, call->call_id) == 0) {
+                pending = &app->session.pending_calls[i];
+                memcpy(original, pending->action_sha256, sizeof(original));
+                break;
+            }
     owned = call->arguments == NULL;
     arguments = call->arguments ? call->arguments : json_object();
     snag_buf_init(&text, SNAG_MAX_TOOL_ARGUMENTS);
@@ -2408,7 +2577,7 @@ call_rule_check(struct app_state *app, const struct snag_response_item *call,
         if (owned) json_decref(arguments);
         return snag_errorf(error, error_size, "tool call could not be canonicalized for rules");
     }
-    envelope = json_pack("{s:s,s:s,s:s,s:s,s:o,s:s}",
+    envelope = json_pack("{s:s,s:s,s:s,s:s,s:O,s:s}",
         "boundary", "out", "kind", "tool_call", "surface", "model",
         "tool", call->name ? call->name : "", "value", arguments, "text", (const char *)text.data);
     snag_buf_free(&text);
@@ -2429,6 +2598,21 @@ call_rule_check(struct app_state *app, const struct snag_response_item *call,
         (void)snprintf(message, message_size, "%s", host.message[0] ? host.message :
                        "Tool call rejected by the configured rules.");
     }
+    if (host.replaced) {
+        char effective[SNAG_SHA256_HEX_LEN + 1u];
+        json_t *data;
+        if (!pending || snag_tool_action_digest(call, app->session.workspace, effective) < 0)
+            return snag_errorf(error, error_size, "transformed call has no registered action to update");
+        data = json_pack("{s:s,s:s,s:s,s:s}", "call_id", call->call_id, "rule", host.rule,
+                         "original_sha256", original, "effective_sha256", effective);
+        if (!data || snag_app_commit_event(app, "rule_transform", data, error, error_size) < 0)
+            return -1;
+        memcpy(pending->action_sha256, effective, sizeof(effective));
+    }
+    if (host.insertion) {
+        *insertion = host.insertion;
+        host.insertion = NULL;
+    }
     return 0;
 }
 
@@ -2442,6 +2626,7 @@ execute_calls(struct app_state *app, const char *turn_id, const struct snag_resp
         bool started, finished, process;
         bool rule_rejected;
         char rule_message[512];
+        char *insertion;
     } calls[SNAG_MAX_CALLS_PER_RESPONSE] = {0};
     size_t count = 0u, finished = 0u;
     uint64_t began = snag_monotonic_ms(), deadline = UINT64_MAX;
@@ -2463,7 +2648,9 @@ execute_calls(struct app_state *app, const char *turn_id, const struct snag_resp
     }
     for (size_t i = 0u; i < count; ++i)
         if (call_rule_check(app, &calls[i].call, &calls[i].rule_rejected,
-                            calls[i].rule_message, sizeof(calls[i].rule_message), error, error_size) < 0)
+                            calls[i].rule_message, sizeof(calls[i].rule_message),
+                            &calls[i].insertion,
+                            error, error_size) < 0)
             return -1;
     while (finished < count) {
         size_t before = finished;
@@ -2574,7 +2761,9 @@ execute_calls(struct app_state *app, const char *turn_id, const struct snag_resp
 complete:
             if (result) {
                 if (finish_call(app, turn_id, call, calls[i].started ? calls[i].handle : NULL,
-                                result, error, error_size) < 0) return -1;
+                                result, calls[i].insertion, error, error_size) < 0) return -1;
+                free(calls[i].insertion);
+                calls[i].insertion = NULL;
                 calls[i].finished = true;
                 ++finished;
             } else {
@@ -2620,7 +2809,9 @@ handoff:
                                               "superseded_by_steering" : handoff);
         }
         if (finish_call(app, turn_id, &calls[i].call, calls[i].started ? calls[i].handle : NULL,
-                         result, error, error_size) < 0) return -1;
+                         result, calls[i].insertion, error, error_size) < 0) return -1;
+        free(calls[i].insertion);
+        calls[i].insertion = NULL;
     }
     if (!strcmp(handoff, "turn_cancelled")) {
         app->interrupt_requested = true;

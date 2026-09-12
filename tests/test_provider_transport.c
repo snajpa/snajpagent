@@ -1051,7 +1051,8 @@ test_read_only_dispatch(void)
 {
     static const char *const denied[] = {
         "exec_command", "write_stdin", "apply_patch", "create_goal",
-        "update_goal", "irc_send", "irc_topic", "irc_state", "unknown", "web_search", "openrouter:web_search"
+        "update_goal", "irc_send", "irc_topic", "irc_state", "unknown", "web_search", "openrouter:web_search",
+        "write_file", "edit_file"
     };
     struct app_state app = {0};
     struct snag_response_item call = {0};
@@ -1070,9 +1071,28 @@ test_read_only_dispatch(void)
         json_decref(result);
     }
     app.session.active_read_only = false;
+    {
+        char root[] = "/tmp/snajpagent-dispatch-XXXXXX";
+        char probe[8192];
+        FILE *out;
+        assert(mkdtemp(root) != NULL);
+        assert(snprintf(probe, sizeof(probe), "%s/probe.txt", root) > 0);
+        out = fopen(probe, "w");
+        assert(out && fputs("hello\n", out) >= 0 && fclose(out) == 0);
+        app.session.workspace = root;
+    }
     call.name = "read_file";
+    json_decref(call.arguments);
+    call.arguments = json_pack("{s:s}", "path", "missing.txt");
     assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
-    assert(strstr(snag_json_string(result, "model_text"), "only in /ro"));
+    assert(snag_tool_result_valid(result) == 0);
+    assert(!strstr(snag_json_string(result, "model_text"), "only in /ro"));
+    json_decref(result);
+    call.name = "write_file";
+    json_decref(call.arguments);
+    call.arguments = json_pack("{s:s,s:s}", "path", "written.txt", "content", "x\n");
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    assert(strcmp(snag_json_string(result, "status"), "succeeded") == 0);
     json_decref(result);
     json_decref(call.arguments);
 }

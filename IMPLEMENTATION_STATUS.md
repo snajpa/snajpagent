@@ -15,12 +15,29 @@ snajpagent is a pre-1.0 terminal coding agent. One interactive session supports
 local rollout and native IRC chat. One-shot mode runs tasks from scripts.
 
 Implemented:
+- Rule effects at the tool-call boundary now cover rejection, allowlists
+  (`accept`), reusable chains (`jump`/`return`), pass-through logging, payload
+  transform/override (`pass` with `value`, journaled as a `rule_transform`
+  projection), policy insertion (`insert` with `to = model`) and trusted helpers
+  (`command`, one strict JSON effect from stdout), plus fresh local consent
+  (`confirm`: a generated challenge typed at the local terminal; non-interactive
+  runs deny). Verified by `tests/test_rules.c` and `tests/rules_e2e.py`.
+- Native exploration tools (list_files, read_file, grep) are declared and
+  runnable in every turn; /ro remains inspection-only. New modification
+  counterparts write_file (atomic whole-file create/replace) and edit_file
+  (targeted exact replacement, unchanged file on mismatch) are workspace-relative
+  and never follow symlinks. Verified by `tests/test_write.c`, the real-binary
+  `tests/tools_e2e.py` suite (`make toolscheck`) and updated context/dispatch
+  unit tests.
 - Ordered `[rule NAME]` model tool-call filtering with JSON-pointer regex and
-  integer-threshold matching, pass/reject/jump/return verdicts and templated
-  match logging. Rejected calls answer a factual not-run result; the engine is
-  stateless and bounded, and configuration load rejects invalid definitions.
-  Only the `out`/tool-call boundary is wired; `replace`/`insert`/`confirm` and
-  the `in`/`event` hosts remain future work. See `design/io-rules.md`.
+  integer-threshold matching, pass/accept/reject/jump/return verdicts and
+  templated match logging. Rejected calls answer a factual `rule_rejected`
+  not-run result, journaled and replayed on resume; the engine is stateless and
+  bounded, and configuration load rejects invalid definitions. Verified by
+  `tests/test_rules.c` and the real-binary `tests/rules_e2e.py` suite
+  (`make rulescheck`). Only the `out`/tool-call boundary is wired;
+  `replace`/`insert`/`confirm` and the `in`/`event` hosts remain future work.
+  See `design/io-rules.md`.
 - Named providers and local model settings, shared secret sources, Responses
   streaming, model discovery, token accounting and native/fallback compaction.
 - Reasoning content-part streams, including direct DeepSeek V4 Pro thinking and
