@@ -18,6 +18,8 @@ Implemented:
 - Session-local prompt-entry history, restored on resume and seeded once from a
   global archive. Orderly exit merges only newly entered lines; active sessions
   keep stable Up/Down and Ctrl-R history.
+- Live verbosity/view snapshots in model context, with progress guidance based
+  on effective tool visibility, including chat suppression and one-shot streams.
 - Parameter descriptions and current runtime settings in provider requests;
   actionable argument diagnostics and explicit requested/applied output limits,
   with latest-batch host feedback preserved across tiny output budgets.

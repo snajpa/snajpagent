@@ -955,6 +955,27 @@ wider than the terminal can still hard-wrap; information is retained rather than
 truncated.  Banner output preserves an existing draft and does not change saved
 conversation text.  Redirected diagnostics keep their original bytes.
 .SS Verbosity
+Each model request includes a snapshot of the local verbosity, current
+rollout/chat view and effective tool-detail visibility, derived from the same
+presentation policy as the UI. The snapshot also identifies the terminal
+output cap and one-shot stdout/stderr routing. It describes available detail,
+not proof that the operator read every row or an untruncated result.
+.PP
+When tools are hidden, the model is guided to provide concise commentary before
+meaningful work and at progress/outcome checkpoints. Brief rows or previews need
+explanations of their significance; fuller traces need less duplicate per-call
+narration. Important decisions, blockers, risks and final outcomes remain part of
+the conversation at every level. This changes progress communication, not task
+scope, diligence, permissions, requested answer length or private reasoning rules.
+.PP
+A new request snapshot reflects live display changes, including changes made
+during a tool wait. Already-built or in-flight requests remain unchanged;
+display changes alone neither interrupt the model nor start a new request.
+Resume uses the newly running process's settings. The current snapshot supersedes
+old display hints in summaries. Chat view hides private rollout regardless of
+verbosity; selecting it never authorizes publishing local details to IRC or
+changing destinations.
+.PP
 Verbosity controls local rollout and diagnostics, not chat-message visibility
 or which view is selected.  All participants see the same room messages and
 retained history at every level, including their own sends.

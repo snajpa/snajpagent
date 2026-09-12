@@ -37,7 +37,7 @@ build_context(struct snag_session *session, unsigned int cycle, const json_t *st
 {
     char error[512] = {0};
     int rc = snag_context_build(session, SNAJPAGENT_MODEL, "medium", cycle, steering,
-                               0u, false, NULL, NULL, instructions, projection, error, sizeof(error));
+                               0u, false, NULL, NULL, instructions, NULL, projection, error, sizeof(error));
     if (rc != 0)
         fprintf(stderr, "context: %s\n", error);
     assert(rc == 0);
@@ -847,8 +847,15 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
         session.active_read_only = pass == 0u;
         session.active_queued = pass == 1u;
         session.pending_queue_count = pass == 2u ? 1u : 0u;
+        const char *visibility = pass % 2u ? "Local operator display snapshot: test-current-view" : NULL;
         assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u,
-            empty, 128000u, true, &config, NULL, NULL, &projection, error, sizeof(error)) == 0);
+            empty, 128000u, true, &config, NULL, NULL, visibility, &projection, error, sizeof(error)) == 0);
+        assert((item_by_field(json_object_get(projection.create_request.value, "input"),
+                             "content", "Local operator display snapshot: test-current-view") != NULL) == (visibility != NULL));
+        assert(json_equal(json_object_get(projection.create_request.value, "input"),
+                          json_object_get(projection.count_request.value, "input")));
+        assert(json_equal(json_object_get(projection.create_request.value, "input"),
+                          json_object_get(projection.model_input.value, "items")));
         if (codex) {
             assert(json_object_get(projection.create_request.value, "truncation") == NULL);
             assert(json_object_get(projection.create_request.value, "max_output_tokens") == NULL);
@@ -896,6 +903,15 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
         }
         snag_buf_free(&serialized);
     }
+    char oversized_visibility[2049];
+    memset(oversized_visibility, 'x', sizeof(oversized_visibility) - 1u);
+    oversized_visibility[sizeof(oversized_visibility) - 1u] = '\0';
+    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u,
+        empty, 128000u, true, &config, NULL, NULL, oversized_visibility, &projection, error, sizeof(error)) < 0);
+    assert(strstr(error, "invalid operator visibility"));
+    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u,
+        empty, 128000u, true, &config, NULL, NULL, "\xff", &projection, error, sizeof(error)) < 0);
+    assert(strstr(error, "invalid operator visibility"));
     session.active_read_only = true;
     commit_event(&session, "turn_interrupted", checked_json(json_pack("{s:s,s:s,s:s}",
         "turn_id", turn, "origin", "user", "reason", "cancelled")));
@@ -929,7 +945,7 @@ test_provider_model_projection(struct snag_store *store, const char *temp)
     assert(json_object_set_new(json_object_get(started, "config"), "provider", json_string("codex-lb")) == 0);
     commit_event(&session, "turn_started", started);
     assert(snag_context_build(&session, "small", "high", 1u, empty, 16000u, true,
-                              &config, NULL, NULL, &projection, error, sizeof(error)) == 0);
+                              &config, NULL, NULL, NULL, &projection, error, sizeof(error)) == 0);
     assert(strcmp(session.default_model, "small") == 0 && strcmp(session.active_turn_model, "small") == 0);
     assert_string(projection.model_input.value, "model", "gpt-6-astra");
     assert_string(projection.create_request.value, "model", "gpt-6-astra");
@@ -1169,7 +1185,7 @@ test_reasoning_continuation(struct snag_store *store, const char *workspace)
                 "75000000000000000000000000000000", 2, "next", workspace, NULL));
         }
         assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2, empty,
-            0, false, &config, scope, NULL, &projection, error, sizeof(error)) == 0);
+            0, false, &config, scope, NULL, NULL, &projection, error, sizeof(error)) == 0);
         json_t *input = json_object_get(projection.create_request.value, "input");
         size_t index = 0u;
         while (index < json_array_size(input) &&
@@ -1196,7 +1212,7 @@ test_reasoning_continuation(struct snag_store *store, const char *workspace)
         assert(snag_context_continuation_scope(&provider, model, &other, different) == 0);
         assert(strcmp(scope, different) != 0);
         assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2, empty,
-            0, false, &config, different, NULL, &projection, error, sizeof(error)) == 0);
+            0, false, &config, different, NULL, NULL, &projection, error, sizeof(error)) == 0);
         json_t *input = json_object_get(projection.create_request.value, "input");
         assert(!item_by_field(input, "type", "reasoning"));
         assert_string(item_by_field(input, "type", "function_call"), "call_id", call);
@@ -1210,11 +1226,11 @@ test_reasoning_continuation(struct snag_store *store, const char *workspace)
     commit_counted_compaction(&session, "76000000000000000000000000000000",
         "hard_budget", SNAJPAGENT_MODEL, &compact, summary);
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2, empty,
-        0, false, &config, scope, NULL, &projection, error, sizeof(error)) == 0);
+        0, false, &config, scope, NULL, NULL, &projection, error, sizeof(error)) == 0);
     assert(!item_by_field(json_object_get(projection.create_request.value, "input"), "type", "reasoning"));
     assert(item_by_field(json_object_get(projection.create_request.value, "input"), "type", "compaction_summary"));
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2, empty,
-        0, false, &config, different, NULL, &projection, error, sizeof(error)) == 0);
+        0, false, &config, different, NULL, NULL, &projection, error, sizeof(error)) == 0);
     assert(!item_by_field(json_object_get(projection.create_request.value, "input"), "type", "compaction_summary"));
     assert(!item_by_field(json_object_get(projection.create_request.value, "input"), "type", "reasoning"));
     assert(item_by_field(json_object_get(projection.create_request.value, "input"), "type", "function_call"));
@@ -1389,7 +1405,7 @@ main(void)
                                   NULL, error, sizeof(error)) < 0);
         assert(snag_context_build(&active, active_model, "medium", 1,
                                  active_steering, 0u, false, NULL, NULL,
-                                 &no_instructions,
+                                 &no_instructions, NULL,
                                  &active_projection, error, sizeof(error)) == 0);
         assert(message_matching(json_object_get(active_projection.model_input.value,
                                             "items"),
@@ -1593,7 +1609,7 @@ main(void)
         assert(bounded_steering != NULL);
         assert(snag_context_build(&bounded, bounded.default_model, "medium", 1,
                                  bounded_steering, 0u, false, NULL, NULL,
-                                 &instructions, &bounded_projection,
+                                 &instructions, NULL, &bounded_projection,
                                  error, sizeof(error)) == 0);
         input = json_object_get(bounded_projection.create_request.value, "input");
         assert(json_is_array(input));
@@ -1626,7 +1642,7 @@ main(void)
     assert(empty_steering);
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
                              empty_steering, 64000u, true, NULL, NULL,
-                             &instructions, &projection,
+                             &instructions, NULL, &projection,
                              error, sizeof(error)) == 0);
     assert(projection.model_input.bytes > 0);
     assert(projection.create_request.bytes > 0);
@@ -1780,7 +1796,7 @@ main(void)
         memcpy(network_config.irc.operator_nick, "alice", 6u);
         assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2,
                                  empty_steering, 0u, false, &network_config, NULL,
-                                 &instructions, &projection,
+                                 &instructions, NULL, &projection,
                                  error, sizeof(error)) == 0);
         tools = json_object_get(projection.create_request.value, "tools");
         input = json_object_get(projection.create_request.value, "input");
@@ -1884,7 +1900,7 @@ main(void)
         memcpy(network_config.irc.operator_nick, "alice", 6u);
         assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1,
                                  empty_steering, 0u, false, &network_config, NULL,
-                                 &instructions, &projection,
+                                 &instructions, NULL, &projection,
                                  error, sizeof(error)) == 0);
         tools = json_object_get(projection.create_request.value, "tools");
         semantic = json_object_get(projection.model_input.value, "items");

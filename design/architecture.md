@@ -32,6 +32,21 @@ failed/interrupted attempts preserve it for retry and resume. Historical
 call/result data remains unchanged. All three context projections
 include the same input. No parameter aliases or automatic retry policy are added.
 
+## Operator presentation context
+
+Request construction reads the UI's atomic verbosity and view and derives visible
+tool rows and detail limits through the renderer's existing presentation policy.
+An optional bounded display hint enters the common context input before hashing
+and count/create/model-input projection. UI state is not a new persisted session
+setting; replay/resume and post-compaction requests use current process settings.
+No hint means unspecified visibility, not a guessed level zero.
+
+The hint makes conversation-only progress self-contained and reduces duplicate
+narration when traces are visible. Important decisions and outcomes remain
+explicit. Chat suppression, truncated/off-screen output and one-shot stream
+routing are stated; visibility grants no task or IRC authority. Display changes
+apply on subsequent request snapshots without changing an in-flight request.
+
 ## Runtime Loop
 
 Each accepted user turn is projected into an OpenAI-compatible Responses API

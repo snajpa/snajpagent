@@ -810,11 +810,17 @@ snag_ui_verbosity(const struct snag_ui *ui)
     return ui && ui->runtime ? atomic_load(&ui->runtime->level) : 0u;
 }
 
+enum snag_render_view
+snag_ui_view(const struct snag_ui *ui)
+{
+    return ui && ui->runtime ? (enum snag_render_view)atomic_load(&ui->runtime->view) : SNAG_RENDER_ROLLOUT;
+}
+
 bool
 snag_ui_enabled(const struct snag_ui *ui, enum snag_presentation kind)
 {
     return ui && ui->runtime && snag_presentation_enabled(kind,
-        snag_ui_verbosity(ui), (enum snag_render_view)atomic_load(&ui->runtime->view));
+        snag_ui_verbosity(ui), snag_ui_view(ui));
 }
 
 int

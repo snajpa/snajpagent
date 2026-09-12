@@ -3515,6 +3515,119 @@ def run_multi_tool_cases(binary, root, provider, environment):
             raise provider.failure
 
 
+def run_operator_visibility_cases(binary, root):
+    root.mkdir(parents=True)
+    provider = FakeResponses()
+    environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret")
+    try:
+        for level in range(7):
+            case = root / str(level)
+            case.mkdir()
+            config = case / "config.ini"
+            write_irc_config(config, provider.port, "host-model")
+            config.write_text(config.read_text().replace("[agent]\n", "[agent]\nmax_turn_retries=0\n", 1))
+
+            def respond(handler, request, sequence):
+                hints = [i["content"] for i in request["input"] if i.get("role") == "developer"
+                         and isinstance(i.get("content"), str)
+                         and i["content"].startswith("Local operator display snapshot:")]
+                assert len(hints) == 1, "current operator visibility missing from model request"
+                hint = hints[0]
+                assert f"verbosity={level} " in hint and "view=rollout" in hint
+                assert "one-shot" in hint and "stderr" in hint
+                assert ("tool rows=visible" in hint) == (level >= 1)
+                assert ("arguments=preview" in hint) == (level == 2)
+                assert ("output=full" in hint) == (level >= 3)
+                assert "permissions" in hint and "decisions" in hint
+                provider.reply(handler, provider.response_body(sequence, "VISIBILITY_OK").encode())
+
+            provider.runtime_handler = respond
+            flags = ["-" + "v" * level] if level else []
+            run = subprocess.run([str(binary), "--config", str(config), "--dotdir", str(case / "state"),
+                                  *flags, "-e", "--", "check visibility"], cwd=case, env=environment,
+                                 capture_output=True, text=True, timeout=15)
+            if provider.failure:
+                raise provider.failure
+            assert run.returncode == 0 and "VISIBILITY_OK" in run.stdout, (run.stdout, run.stderr)
+            print(f"operator visibility one-shot {level}: ok", flush=True)
+        # Change presentation during a live tool wait; the follow-up request
+        # must use the new UI state, not startup flags or the previous snapshot.
+        for mode in ("downgrade", "chat"):
+            case = root / mode
+            case.mkdir()
+            config, state = case / "config.ini", case / "state"
+            write_irc_config(config, provider.port, "host-model")
+            config.write_text(config.read_text().replace("[agent]\n", "[agent]\nmax_turn_retries=0\n", 1))
+            release = case / "release"
+            seen = []
+
+            def respond(handler, request, sequence):
+                hints = [i["content"] for i in request["input"] if i.get("role") == "developer"
+                         and isinstance(i.get("content"), str)
+                         and i["content"].startswith("Local operator display snapshot:")]
+                assert len(hints) == 1
+                hint = hints[0]
+                seen.append(hint)
+                if len(seen) == 1:
+                    assert "verbosity=3 " in hint and "view=rollout" in hint and "output=full" in hint
+                    body = provider.function_body(sequence, "call_visibility_wait", "exec_command", {
+                        "command": "while [ ! -f release ]; do sleep 0.05; done; printf visibility-release",
+                        "workdir": str(case), "stdin": None, "pty": False,
+                        "timeout_ms": None, "yield_ms": 600000, "max_output_tokens": None,
+                    })
+                else:
+                    assert len(seen) == 2
+                    if mode == "chat":
+                        assert "verbosity=3 " in hint and "view=chat" in hint
+                        assert "rollout text=hidden" in hint and "changing destinations" in hint
+                    else:
+                        assert "verbosity=0 " in hint and "view=rollout" in hint
+                    assert "tool rows=hidden" in hint and "output=hidden" in hint
+                    body = provider.response_body(sequence, "VISIBILITY_CHANGED")
+                provider.reply(handler, body.encode())
+
+            provider.runtime_handler = respond
+            with TmuxTerminal(case / "terminal", binary, case, state, config, 120, 24,
+                              args=("-vvv",), environment=environment) as terminal:
+                try:
+                    terminal.wait("host-model/medium")
+                    terminal.submit("check live visibility")
+                    wait_for_terminal_event(state, {"tool_started"}, 8.0)
+                    if mode == "chat":
+                        terminal.submit_wait("/chat", "chat is offline")
+                    else:
+                        terminal.submit_wait("/verbose 0", "verbosity: 0")
+                    release.touch()
+                    wait_for_terminal_event(state, {"turn_completed"}, 8.0)
+                    if provider.failure:
+                        raise provider.failure
+                    assert len(seen) == 2
+                    terminal.exit()
+                finally:
+                    release.touch()
+
+            # Resume with new flags: old in-memory verbosity/view is not authority.
+            def resumed(handler, request, sequence):
+                hints = [i["content"] for i in request["input"] if i.get("role") == "developer"
+                         and isinstance(i.get("content"), str)
+                         and i["content"].startswith("Local operator display snapshot:")]
+                assert len(hints) == 1 and "verbosity=2 " in hints[0] and "view=rollout" in hints[0]
+                assert "arguments=preview" in hints[0] and "one-shot" in hints[0]
+                provider.reply(handler, provider.response_body(sequence, "VISIBILITY_RESUMED").encode())
+
+            provider.runtime_handler = resumed
+            path, _ = read_events(state)
+            run = subprocess.run([str(binary), "--config", str(config), "--dotdir", str(state),
+                                  "-vv", "-e", "--resume", path.parent.name, "--", "check resumed visibility"],
+                                 cwd=case, env=environment, capture_output=True, text=True, timeout=15)
+            if provider.failure:
+                raise provider.failure
+            assert run.returncode == 0 and "VISIBILITY_RESUMED" in run.stdout, (run.stdout, run.stderr)
+            print(f"operator visibility active {mode} and resume: ok", flush=True)
+    finally:
+        provider.close()
+
+
 def run_tool_contract_cases(binary, root, provider, environment):
     """Malformed proposals, correction, clamping and replay through real HTTP."""
     for mode in ("yield", "command", "extra", "timeout", "zero", "boolean", "tiny", "retry", "patch", "wait", "goal", "read"):
@@ -7032,6 +7145,7 @@ def run_irc_case(binary, root):
         run_argument_snapshot_cases(binary, root, provider, environment)
         run_reasoning_continuity_cases(binary, root, provider, environment)
         run_multi_tool_cases(binary, root, provider, environment)
+        run_operator_visibility_cases(binary, root / "operator-visibility")
         run_tool_contract_cases(binary, root, provider, environment)
         run_output_cap_cases(binary, root, provider, environment)
         run_ctrl_d_cases(binary, root, provider, environment)

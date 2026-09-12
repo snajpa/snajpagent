@@ -74,6 +74,7 @@ int snag_ui_init(struct snag_ui *ui);
 int snag_ui_update(struct snag_ui *ui, const char *program, const char *url);
 int snag_ui_set_verbosity(struct snag_ui *ui, unsigned int level);
 unsigned int snag_ui_verbosity(const struct snag_ui *ui);
+enum snag_render_view snag_ui_view(const struct snag_ui *ui);
 bool snag_ui_enabled(const struct snag_ui *ui, enum snag_presentation kind);
 void snag_ui_free(struct snag_ui *ui);
 int snag_ui_text(struct snag_ui *ui, enum snag_ui_operation op, const char *text);

@@ -43,6 +43,7 @@ int snag_context_build(struct snag_session *session, const char *model,
                       const struct snag_config *config,
                       const char *continuation_scope,
                       const struct snag_instruction_set *instructions,
+                      const char *operator_visibility,
                       struct snag_context_projection *projection,
                       char *error, size_t error_size);
 int snag_context_compact_request_build(struct snag_session *session,

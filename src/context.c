@@ -1377,6 +1377,7 @@ snag_context_build(struct snag_session *session, const char *model,
                   const struct snag_config *config,
                   const char *continuation_scope,
                   const struct snag_instruction_set *instructions,
+                  const char *operator_visibility,
                   struct snag_context_projection *projection,
                   char *error, size_t error_size)
 {
@@ -1473,6 +1474,12 @@ snag_context_build(struct snag_session *session, const char *model,
         goto out;
     }
     controller_start = json_array_size(builder.request_input);
+    if (operator_visibility &&
+        (!snag_text_valid(operator_visibility, 1u, 2047u) ||
+         append_message(&builder, "developer", operator_visibility) < 0)) {
+        snag_errorf(error, error_size, "invalid operator visibility context");
+        goto out;
+    }
     if (json_array_size(builder.tool_feedback)) {
         char *feedback = canonical_string(builder.tool_feedback, 256u * 1024u);
         int appended = feedback ? append_developerf(&builder, 256u * 1024u,

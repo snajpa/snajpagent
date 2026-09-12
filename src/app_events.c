@@ -509,6 +509,53 @@ snag_app_steering_snapshot(const struct snag_session *session)
     return array;
 }
 
+static void
+visible_detail(char text[80], enum snag_presentation kind, unsigned int level,
+               enum snag_render_view view)
+{
+    size_t limit = snag_presentation_limit(kind, level);
+    if (!snag_presentation_enabled(kind, level, view))
+        (void)snprintf(text, 80u, "hidden");
+    else if (limit == SIZE_MAX)
+        (void)snprintf(text, 80u, "full (subject to capture/display limits)");
+    else
+        (void)snprintf(text, 80u, "preview (up to %zu characters)", limit);
+}
+
+static int
+operator_visibility(const struct app_state *app, char *text, size_t size)
+{
+    unsigned int level = snag_ui_verbosity(&app->ui);
+    enum snag_render_view view = snag_ui_view(&app->ui);
+    bool rows = snag_presentation_enabled(SNAG_PRESENT_TOOL, level, view);
+    bool full = snag_presentation_limit(SNAG_PRESENT_ARGUMENTS, level) == SIZE_MAX &&
+                snag_presentation_limit(SNAG_PRESENT_OUTPUT, level) == SIZE_MAX;
+    char arguments[80], output[80];
+    visible_detail(arguments, SNAG_PRESENT_ARGUMENTS, level, view);
+    visible_detail(output, SNAG_PRESENT_OUTPUT, level, view);
+    const char *guidance = view == SNAG_RENDER_CHAT ?
+        "Chat view hides private rollout even at high verbosity. Keep useful private progress in rollout; "
+        "a view setting never authorizes sending local details to IRC or changing destinations." :
+        !rows ? "Tool details are hidden: give concise commentary before meaningful work and at progress/outcome checkpoints, "
+                "so the conversation carries the work. Do not narrate every small call or fill waits with generic status." :
+        !full ? "Brief rows/previews can omit important details. Explain the purpose and significance of work and results "
+                     "without repeating visible tool rows." :
+        "Detailed tool traces are available: reduce redundant per-call narration, while retaining useful milestones and explanations.";
+    int n = snprintf(text, size,
+        "Local operator display snapshot: verbosity=%u (%s); view=%s; rollout text=%s; "
+        "tool rows=%s; arguments=%s; output=%s; terminal tool-output cap=%u bytes (0=unlimited). "
+        "%s This is current presentation state, superseding older display snapshots; it is not proof the operator read every detail. "
+        "%s Always communicate important decisions, blockers, risks and final outcomes. "
+        "This affects progress narration, not diligence, permissions, requested answer length or private reasoning disclosure.",
+        level, snag_verbosity_name(level), view == SNAG_RENDER_CHAT ? "chat" : "rollout",
+        snag_presentation_enabled(SNAG_PRESENT_CONVERSATION, level, view) ? "visible" : "hidden",
+        rows ? "visible (brief start/outcome rows)" : "hidden", arguments, output, app->config->max_output_bytes,
+        app->execute ? "In one-shot mode final answers go to stdout; commentary and diagnostics use stderr, which may be redirected." :
+                       "Interactive mode uses the selected local view; off-screen or truncated details may not have been seen.",
+        guidance);
+    return n >= 0 && (size_t)n < size ? 0 : snag_errno(EOVERFLOW);
+}
+
 int
 snag_app_request_build(struct app_state *app, const json_t *steering,
                        unsigned int cycle,
@@ -522,6 +569,9 @@ snag_app_request_build(struct app_state *app, const json_t *steering,
     app->request_networked = snag_irc_enabled(app->config) &&
                              !app->session.active_read_only;
     snag_irc_capture_route(app->irc, &app->irc_request_route);
+    char visibility[2048];
+    if (operator_visibility(app, visibility, sizeof(visibility)) < 0)
+        return snag_errorf(error, error_size, "cannot describe operator visibility");
     char continuation_scope[SNAG_SHA256_HEX_LEN + 1u];
     if (snag_context_continuation_scope(app->turn_provider, app->turn_model,
                                        credential, continuation_scope) < 0)
@@ -530,7 +580,7 @@ snag_app_request_build(struct app_state *app, const json_t *steering,
         cycle, steering, app->turn_capacity.max_output_tokens,
         app->turn_capacity.max_output_tokens, app->config,
         continuation_scope,
-        &app->turn_instructions, projection, error, error_size);
+        &app->turn_instructions, visibility, projection, error, error_size);
 
     if (rc < 0)
         return -1;
