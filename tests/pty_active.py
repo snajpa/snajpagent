@@ -3569,7 +3569,13 @@ def test_empty_session_lifecycle():
                b"selected-before-prompt/high   ?%") as resumed:
         command = resumed.exit_now()
         assert command_arguments(command)[-2:] == ["--resume", sid]
-        assert (STATE_ROOT / sid / "events.jsonl").read_bytes() == saved
+        # Resume records the actual network state without changing history or
+        # inventing a user turn, even when the process is now offline.
+        resumed_log = (STATE_ROOT / sid / "events.jsonl").read_bytes()
+        assert resumed_log.startswith(saved)
+        updates = [json.loads(line) for line in resumed_log[len(saved):].splitlines()]
+        assert updates and all(e["type"] == "irc_snapshot" for e in updates), updates
+        assert all("hosted: no\n" in e["data"]["text"] for e in updates), updates
     print("empty session lifecycle: ok")
 
 

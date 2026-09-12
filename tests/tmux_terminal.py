@@ -140,6 +140,8 @@ class FakeResponses:
         for item in reversed(request.get("input", [])):
             if item.get("role") == "user" and isinstance(item.get("content"), str):
                 content = item["content"]
+                if content.startswith("[IRC room snapshot;"):
+                    continue  # Runtime state, including offline resume, is not a new task.
                 if content.startswith("[IRC endpoint=") and " id=" in content:
                     continue  # Supplemental durable event, not a new scheduler turn.
                 ids = re.findall(r"\[IRC update id=([^ ]+)", content)
