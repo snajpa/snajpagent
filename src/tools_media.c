@@ -66,10 +66,11 @@ snag_tools_image(const struct snag_response_item *call, struct snag_session *ses
     struct snag_image_crop crop, *selection = NULL;
     char message[1024] = "view_image requires path, optional frame 0..999 and crop {x,y,width,height} in source pixels.";
     *result = NULL;
-    if ((!snag_json_exact_keys(call->arguments,"path frame crop") &&
-         !snag_json_exact_keys(call->arguments,"path")) || !path || !*path) goto invalid;
-    if (json_object_get(call->arguments, "frame") && !json_is_null(json_object_get(call->arguments, "frame")) &&
-        (snag_json_integer_u64(call->arguments, "frame", &frame) < 0 || frame > 999u)) goto invalid;
+    if (!snag_json_arg_keys(call->arguments, "path", "frame crop", message, sizeof(message)) ||
+        !snag_json_arg_text(call->arguments, "path", 1u, SNAG_PATH_MAX_BYTES, false,
+                            &path, message, sizeof(message)) ||
+        !snag_json_arg_uint(call->arguments, "frame", 0u, 0u, 999u, &frame,
+                            message, sizeof(message))) goto invalid;
     if (crop_value && !json_is_null(crop_value)) {
         static const char *const coords[] = {"x", "y", "width", "height"};
         uint64_t values[4];

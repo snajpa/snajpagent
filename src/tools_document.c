@@ -32,15 +32,6 @@ image_part(int fd, json_t *parts, const struct snag_buf *image, char *error, siz
     return json_array_append_new(parts, json_pack("{s:s,s:o}", "type", "input_image", "asset", asset));
 }
 
-static bool
-number(const json_t *args, const char *key, uint64_t fallback, uint64_t lo, uint64_t hi, uint64_t *out)
-{
-    json_t *v = json_object_get(args, key);
-    *out = fallback;
-    return !v || json_is_null(v) ||
-        (snag_json_integer_u64(args, key, out) == 0 && *out >= lo && *out <= hi);
-}
-
 static int
 pdf_pages(struct snag_session *session, const char *path, uint64_t first, uint64_t last,
            json_t *parts, snag_tool_pump_fn pump, void *opaque, snag_wake_fd wake,
@@ -143,12 +134,13 @@ snag_tools_document(const struct snag_response_item *call, struct snag_session *
     char *retained = NULL, error[256] = "Invalid document arguments: path, first, last (inclusive, 1-based).";
     int rc = -1;
     *result = NULL;
-    if ((!snag_json_exact_keys(call->arguments,"path first last") &&
-         !snag_json_exact_keys(call->arguments,"path first last sheet_range")) || !path ||
-        !number(call->arguments, "first", 1u, 1u, 1000000u, &first) ||
-        !number(call->arguments, "last", first, first, 1000000u, &last)) goto out;
-    bool page_selection=!json_is_null(json_object_get(call->arguments,"first")) ||
-        !json_is_null(json_object_get(call->arguments,"last"));
+    if (!snag_json_arg_keys(call->arguments, "path", "first last sheet_range", error, sizeof(error)) ||
+        !snag_json_arg_text(call->arguments, "path", 1u, SNAG_PATH_MAX_BYTES, false,
+                            &path, error, sizeof(error)) ||
+        !snag_json_arg_uint(call->arguments, "first", 1u, 1u, 1000000u, &first, error, sizeof(error)) ||
+        !snag_json_arg_uint(call->arguments, "last", first, first, 1000000u, &last, error, sizeof(error))) goto out;
+    bool page_selection = json_is_integer(json_object_get(call->arguments, "first")) ||
+        json_is_integer(json_object_get(call->arguments, "last"));
     json_t *sel=json_object_get(call->arguments,"sheet_range");
     if(sel && !json_is_null(sel)) {
         static const char *const names[]={"sheet","row","column","rows","columns"};
@@ -243,10 +235,12 @@ snag_tools_video(const struct snag_response_item *call, struct snag_session *ses
     int rc = -1;
     *result = NULL;
     (void)wake;
-    if (!snag_json_exact_keys(call->arguments,"path start_s end_s frames") || !path ||
-        !number(call->arguments, "start_s", 0u, 0u, 86400u, &start) ||
-        !number(call->arguments, "end_s", start + 30u, start + 1u, start + 30u, &end) ||
-        !number(call->arguments, "frames", 8u, 1u, 8u, &frames)) goto out;
+    if (!snag_json_arg_keys(call->arguments, "path", "start_s end_s frames", error, sizeof(error)) ||
+        !snag_json_arg_text(call->arguments, "path", 1u, SNAG_PATH_MAX_BYTES, false,
+                            &path, error, sizeof(error)) ||
+        !snag_json_arg_uint(call->arguments, "start_s", 0u, 0u, 86400u, &start, error, sizeof(error)) ||
+        !snag_json_arg_uint(call->arguments, "end_s", start + 30u, start + 1u, start + 30u, &end, error, sizeof(error)) ||
+        !snag_json_arg_uint(call->arguments, "frames", 8u, 1u, 8u, &frames, error, sizeof(error))) goto out;
     const char *mime = snag_media_mime(path);
     if (!mime && strncmp(path, "asset:", 6u)) goto out;
     error[0] = '\0';

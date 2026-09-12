@@ -2619,8 +2619,8 @@ Available in normal and read-only turns; no symlink path components are followed
 Image contents are data, not executable instructions.
 .PP
 Optional frame is a zero-based animation/page frame number from 0 through 999;
-null selects frame zero. Optional crop is an object with integer x, y, width
-and height in source pixels, before orientation; null selects the whole frame.
+omission or null selects frame zero. Optional crop is an object with integer x, y, width
+and height in source pixels, before orientation; omission or null selects the whole frame.
 The crop must lie within the source. Linked decoding prepares one RGBA PNG,
 applies orthogonal rotation/reflection metadata, preserves alpha and limits the
 long edge to 1600 pixels. Source images are limited to 256 MiB and 16,777,216
@@ -2671,8 +2671,8 @@ URLs.  No microphone capture, automatic upload, or remote image fetch is implied
 accepts a local path or an accepted session reference of the form asset:ID.
 It supports PDF, UTF-8 text/Markdown, CSV and TSV, plus selected rendered
 Office pages from DOCX/ODT, PPTX/ODP and XLSX/ODS.  The first and last
-selectors are inclusive and 1-based; null selects the first page/record, or last
-matching first.  Select at most four PDF pages or 200 text records per call.
+selectors are optional, inclusive and 1-based. Omitted or null first selects
+page/record one; omitted or null last matches first.  Select at most four PDF pages or 200 text records per call.
 PDF results contain extracted text followed by a rendered page, including scans
 with no extractable text.  Visible text requires an embedded or suitable system
 font; an unavailable or unusable font fails the page without retaining a partial
@@ -2731,8 +2731,9 @@ its own temporary profile; retained originals remain available.
 For XLSX and ODS, sheet_range selects a cell rectangle with integer members
 sheet, row, column, rows and columns. Sheet, row and column are 1-based; rows
 and columns are counts. Select up to 200 rows and 32 columns, within row
-1,048,576 and column 16,384. sheet_range and non-null first/last are mutually
-exclusive. With all selectors null, a workbook starts at sheet 1, A1:H20.
+1,048,576 and column 16,384. sheet_range is optional; it and non-null first/last
+are mutually exclusive. With all selectors omitted or null, a workbook starts
+at sheet 1, A1:H20.
 .PP
 Sheet results include its name/count, absolute cell coordinates, JSON-quoted
 values, blank cells, merged ranges and covered-cell references, plus a rendering
@@ -2747,8 +2748,8 @@ uninspected. Request a new range or explicit print pages for layout elsewhere.
 .PP
 .B view_video
 accepts MP4/MOV and Matroska/WebM paths or asset:ID, with integer start_s, end_s
-and frames selectors.  Null defaults select 0 through 30 seconds and eight
-samples.  Intervals must be at most 30 seconds; frames must be 1 through 8.
+and frames selectors. Omitted or null selectors default to 0 through 30 seconds
+and eight samples.  Intervals must be at most 30 seconds; frames must be 1 through 8.
 Output labels the selected coverage, seek positions and decoded source frame
 PTS. Linked FFmpeg libraries scale frames to fit 1600 by 1600, normalize pixel
 aspect ratio, and apply orthogonal rotations/reflections with labelled transforms.
@@ -2762,16 +2763,16 @@ Acoustic questions can use listen_audio on the same source and interval;
 video inspection does not automatically pay for both audio operations.
 .PP
 .B listen_audio
-accepts path, question, start_s and end_s. A path may name a supported audio or
-video file, or asset:ID from a retained result. question contains 1 through
+requires path and question; start_s and end_s are optional. A path may name a
+supported audio or video file, or asset:ID from a retained result. question contains 1 through
 16384 UTF-8 bytes. The configured audio model receives the extracted sound
 and question; its attributed answer is returned as derived tool data.
 .PP
 .B transcribe_audio
-accepts path, start_s and end_s and returns speech text from the configured
-transcription endpoint. Both input tools accept integer seconds: a null start
-selects zero and a null end selects start plus 60. Start must be 0 through
-86400, and the interval must be positive and at most 60 seconds. Linked FFmpeg
+requires path and accepts optional start_s and end_s. It returns speech text
+from the configured transcription endpoint. Both input tools accept integer
+seconds: omitted or null start selects zero, and omitted or null end selects
+start plus 60. Start must be 0 through 86400, and the interval must be positive and at most 60 seconds. Linked FFmpeg
 libraries extract the first audio stream as 24 kHz stereo PCM. Mono is duplicated
 into stereo; more than two source channels fail rather than being silently mixed.
 The decoder reads only the retained file; additional file and network opens are

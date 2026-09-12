@@ -65,25 +65,26 @@ audio_run(const struct snag_response_item *call, struct snag_session *session,
     }
     if (op == SNAG_AUDIO_SPEAK) {
         const char *text = snag_json_string(call->arguments, "text");
-        if (!snag_json_exact_keys(call->arguments,"text") || !text || !*text ||
-            strlen(text) > 4096u || !audio->voice[0]) {
-            strcpy(error, "speak_text needs 1..4096 UTF-8 bytes and a configured [audio] voice"); goto out;
+        if (!snag_json_arg_keys(call->arguments, "text", "", error, sizeof(error)) ||
+            !snag_json_arg_text(call->arguments, "text", 1u, 4096u, false,
+                                &text, error, sizeof(error))) goto out;
+        if (!audio->voice[0]) {
+            strcpy(error, "speak_text needs a configured [audio] voice"); goto out;
         }
         request = json_pack("{s:s,s:s,s:s,s:s}", "model", model, "input", text,
             "voice", audio->voice, "response_format", "wav");
     } else {
         const char *path = snag_json_string(call->arguments, "path");
         const char *question = snag_json_string(call->arguments, "question");
-        if (!snag_json_exact_keys(call->arguments,op==SNAG_AUDIO_LISTEN?"path start_s end_s question":"path start_s end_s") || !path ||
-            (op == SNAG_AUDIO_LISTEN && (!question || !*question || strlen(question) > 16384u))) goto out;
-        if (!json_is_null(json_object_get(call->arguments, "start_s")) &&
-            snag_json_integer_u64(call->arguments, "start_s", &start) < 0) goto out;
-        end = start + 60u;
-        if (!json_is_null(json_object_get(call->arguments, "end_s")) &&
-            snag_json_integer_u64(call->arguments, "end_s", &end) < 0) goto out;
-        if (start > 86400u || end <= start || end - start > 60u) {
-            strcpy(error, "Select an integer audio interval up to 60 seconds (start_s 0..86400)"); goto out;
-        }
+        if (!snag_json_arg_keys(call->arguments,
+                op == SNAG_AUDIO_LISTEN ? "path question" : "path", "start_s end_s", error, sizeof(error)) ||
+            !snag_json_arg_text(call->arguments, "path", prepared ? 0u : 1u, SNAG_PATH_MAX_BYTES, false,
+                                &path, error, sizeof(error)) ||
+            (op == SNAG_AUDIO_LISTEN && !snag_json_arg_text(call->arguments, "question", 1u, 16384u,
+                                false, &question, error, sizeof(error))) ||
+            !snag_json_arg_uint(call->arguments, "start_s", 0u, 0u, 86400u, &start, error, sizeof(error)) ||
+            !snag_json_arg_uint(call->arguments, "end_s", start + 60u, start + 1u, start + 60u,
+                                &end, error, sizeof(error))) goto out;
         error[0] = '\0';
         const char *mime = snag_media_mime(path);
         if (!prepared && strncmp(path, "asset:", 6u) && (!mime || (strncmp(mime, "audio/", 6u) && strncmp(mime, "video/", 6u)))) {

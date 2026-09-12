@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Accept omitted media selectors with their documented defaults. Keep crop/sheet
+  exclusivity, ranges and strict local argument validation through shared parsing.
+
 - Document early OpenBSD media/audio and package-reader cross-link scope and
   normal-priority audio threads; target execution and PDF/Office remain pending.
 

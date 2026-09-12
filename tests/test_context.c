@@ -728,11 +728,11 @@ assert_optional_tool_contract(json_t *tool)
         {"list_files", "path"},
         {"read_file", "path"},
         {"grep", "path pattern"},
-        {"view_image", "path frame crop"},
-        {"read_document", "path first last sheet_range"},
-        {"view_video", "path start_s end_s frames"},
-        {"listen_audio", "path start_s end_s question"},
-        {"transcribe_audio", "path start_s end_s"},
+        {"view_image", "path"},
+        {"read_document", "path"},
+        {"view_video", "path"},
+        {"listen_audio", "path question"},
+        {"transcribe_audio", "path"},
         {"speak_text", "text"}
     };
     json_t *schema;
@@ -1417,6 +1417,27 @@ test_image_tool_replay(void)
     assert(!strcmp(snag_json_string(json_object_get(json_array_get(json_object_get(reused, "content"), 0u), "asset"), "sha256"),
         snag_json_string(asset, "sha256")));
     json_decref(reused); json_decref(call.arguments);
+    /* Independent optional controls may be omitted; null keeps the same default. */
+    for (unsigned variant = 0; variant < 3u; ++variant) {
+        call.arguments = json_pack("{s:s}", "path", reference);
+        if (variant == 0) assert(json_object_set_new(call.arguments, "frame", json_integer(0)) == 0);
+        if (variant == 1) assert(json_object_set_new(call.arguments, "crop", json_null()) == 0);
+        if (variant == 2) assert(json_object_set_new(call.arguments, "frame", json_null()) == 0);
+        assert(snag_tools_image(&call, &session, NULL, NULL, &reused) == 0);
+        assert(!strcmp(snag_json_string(reused, "status"), "succeeded"));
+        json_decref(reused); json_decref(call.arguments);
+    }
+    const char *bad_image[] = {
+        "{\"frame\":0}", "{\"path\":null}", "{\"path\":\"x\",\"frame\":\"null\"}",
+        "{\"path\":\"x\",\"frame\":1000}", "{\"path\":\"x\",\"extra\":null}",
+        "{\"path\":\"x\",\"crop\":{\"x\":0,\"y\":0,\"width\":1}}"
+    };
+    for (size_t i = 0; i < sizeof(bad_image) / sizeof(bad_image[0]); ++i) {
+        call.arguments = json_loadb(bad_image[i], strlen(bad_image[i]), 0, NULL);
+        assert(snag_tools_image(&call, &session, NULL, NULL, &reused) == 0);
+        assert(!strcmp(snag_json_string(reused, "status"), "failed"));
+        json_decref(reused); json_decref(call.arguments);
+    }
     call.arguments = json_pack("{s:s}", "path", "asset:00000000000000000000000000000000");
     assert(snag_tools_image(&call, &session, NULL, NULL, &reused) == 0);
     assert(!strcmp(snag_json_string(reused, "status"), "failed"));
@@ -1720,6 +1741,26 @@ test_document_conversion(void)
     assert(strstr(snag_json_string(json_array_get(parts, 1u), "text"), "two\nlines"));
     assert(!strstr(snag_json_string(json_array_get(parts, 1u), "text"), "last,record"));
     json_decref(result); json_decref(call.arguments);
+    const char *bad_document[] = {
+        "{}", "{\"path\":null}", "{\"path\":\"x\",\"first\":\"null\"}",
+        "{\"path\":\"x\",\"first\":0}", "{\"path\":\"x\",\"first\":2,\"last\":1}",
+        "{\"path\":\"x\",\"extra\":null}", "{\"path\":\"x\",\"sheet_range\":{}}"
+    };
+    for (size_t i = 0; i < sizeof(bad_document) / sizeof(bad_document[0]); ++i) {
+        call.arguments = json_loadb(bad_document[i], strlen(bad_document[i]), 0, NULL);
+        assert(snag_tools_document(&call, &session, NULL, NULL, SNAG_WAKE_INVALID, &result) == 0);
+        assert(!strcmp(snag_json_string(result, "status"), "failed"));
+        json_decref(result); json_decref(call.arguments);
+    }
+    for (unsigned variant = 0; variant < 4u; ++variant) {
+        call.arguments = json_pack("{s:s}", "path", csv);
+        if (variant == 1) assert(json_object_set_new(call.arguments, "first", json_integer(2)) == 0);
+        if (variant == 2) assert(json_object_set_new(call.arguments, "last", json_integer(2)) == 0);
+        if (variant == 3) assert(json_object_set_new(call.arguments, "sheet_range", json_null()) == 0);
+        assert(snag_tools_document(&call, &session, NULL, NULL, SNAG_WAKE_INVALID, &result) == 0);
+        assert(!strcmp(snag_json_string(result, "status"), "succeeded"));
+        json_decref(result); json_decref(call.arguments);
+    }
     if (getenv("SNAJPAGENT_TEST_MEDIA")) {
         char *pdf = snag_path_join(root, "page.pdf");
 #if SNAJPAGENT_PDF
@@ -1772,6 +1813,24 @@ test_document_conversion(void)
         assert(strstr(snag_json_string(json_array_get(parts, 4u), "text"), "PTS 1.750000s"));
         assert(snag_tool_result_valid(result) == 0);
         json_decref(result); json_decref(call.arguments);
+        const char *bad_video[] = {
+            "{}", "{\"path\":null}", "{\"path\":\"x\",\"frames\":\"null\"}",
+            "{\"path\":\"x\",\"frames\":0}", "{\"path\":\"x\",\"frames\":9}",
+            "{\"path\":\"x\",\"start_s\":1,\"end_s\":1}", "{\"path\":\"x\",\"extra\":null}"
+        };
+        for (size_t i = 0; i < sizeof(bad_video) / sizeof(bad_video[0]); ++i) {
+            call.arguments = json_loadb(bad_video[i], strlen(bad_video[i]), 0, NULL);
+            assert(snag_tools_video(&call, &session, NULL, NULL, SNAG_WAKE_INVALID, NULL, &result) == 0);
+            assert(!strcmp(snag_json_string(result, "status"), "failed"));
+            json_decref(result); json_decref(call.arguments);
+        }
+        for (unsigned variant = 0; variant < 2u; ++variant) {
+            call.arguments = json_pack("{s:s}", "path", video);
+            if (variant) assert(json_object_set_new(call.arguments, "frames", json_integer(2)) == 0);
+            assert(snag_tools_video(&call, &session, NULL, NULL, SNAG_WAKE_INVALID, NULL, &result) == 0);
+            assert(!strcmp(snag_json_string(result, "status"), "succeeded"));
+            json_decref(result); json_decref(call.arguments);
+        }
         char *rotated = snag_path_join(root, "rotated.mp4");
         const char *rotate_args[] = {"ffmpeg", "-nostdin", "-v", "error", "-display_rotation", "90", "-i", video,
             "-c", "copy", rotated, NULL};
@@ -2022,7 +2081,7 @@ test_office_import(void)
         "<manifest:file-entry manifest:full-path=\"/\" manifest:media-type=\"application/vnd.oasis.opendocument.spreadsheet\"/>"
         "<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/></manifest:manifest>"};
     write_office_zip(sheet_path,names,sheet_bodies,3u);
-    call.arguments=json_pack("{s:s,s:n,s:n,s:{s:i,s:i,s:i,s:i,s:i}}","path",sheet_path,"first","last","sheet_range",
+    call.arguments=json_pack("{s:s,s:{s:i,s:i,s:i,s:i,s:i}}","path",sheet_path,"sheet_range",
         "sheet",2,"row",1,"column",1,"rows",4,"columns",4);
     assert(snag_tools_document(&call,&session,NULL,NULL,SNAG_WAKE_INVALID,&result)==0);
     if(strcmp(snag_json_string(result,"status"),"succeeded"))fprintf(stderr,"Sheet: %s\n",snag_json_string(result,"model_text"));

@@ -1950,6 +1950,34 @@ test_audio_transport(void)
             assert(declared);
         }
         snag_context_projection_free(&projection); json_decref(steering);
+        /* Invalid arguments must fail locally, with no provider fixture running. */
+        const char *bad_audio[] = {
+            "{}", "{\"path\":null}", "{\"path\":\"x\",\"start_s\":\"null\"}",
+            "{\"path\":\"x\",\"start_s\":86401}", "{\"path\":\"x\",\"end_s\":0}",
+            "{\"path\":\"x\",\"end_s\":61}", "{\"path\":\"x\",\"extra\":null}"
+        };
+        for (size_t i = 0; i < sizeof(bad_audio) / sizeof(bad_audio[0]); ++i) {
+            struct snag_response_item invalid = {.name = "transcribe_audio",
+                .arguments = json_loadb(bad_audio[i], strlen(bad_audio[i]), 0, NULL)};
+            json_t *failure = NULL;
+            assert(snag_tools_audio(&invalid, &session, store.root_fd, &config, NULL, NULL,
+                                    SNAG_WAKE_INVALID, &failure) == 0);
+            assert(!strcmp(snag_json_string(failure, "status"), "failed"));
+            json_decref(failure); json_decref(invalid.arguments);
+        }
+        for (unsigned invalid_mode = 0; invalid_mode < 3u; ++invalid_mode) {
+            struct snag_response_item invalid = {.name = invalid_mode ? "speak_text" : "listen_audio"};
+            invalid.arguments = invalid_mode ? json_pack("{s:s}", "text", "x") : json_pack("{s:s}", "path", file);
+            if (invalid_mode == 1u)
+                assert(json_object_set_new(invalid.arguments, "extra", json_null()) == 0);
+            if (invalid_mode == 2u)
+                assert(json_object_set_new(invalid.arguments, "text", json_stringn("x\0y", 3u)) == 0);
+            json_t *failure = NULL;
+            assert(snag_tools_audio(&invalid, &session, store.root_fd, &config, NULL, NULL,
+                                    SNAG_WAKE_INVALID, &failure) == 0);
+            assert(!strcmp(snag_json_string(failure, "status"), "failed"));
+            json_decref(failure); json_decref(invalid.arguments);
+        }
         for (int mode = MODEL_AUDIO_LISTEN; mode <= MODEL_AUDIO_SPEAK; ++mode) {
             start_server(&server, (enum model_fixture)mode, false, "");
             snprintf(endpoint, sizeof(endpoint), "http://127.0.0.1:%u/v1", server.port);
@@ -1957,7 +1985,14 @@ test_audio_transport(void)
             struct snag_response_item call = {.name = (char *)names[mode - MODEL_AUDIO_LISTEN]};
             call.arguments = mode == MODEL_AUDIO_SPEAK ? json_pack("{s:s}", "text", "fixture text") :
                 json_pack("{s:s,s:i,s:i}", "path", file, "start_s", 0, "end_s", 1);
-            if (mode == MODEL_AUDIO_LISTEN) assert(json_object_set_new(call.arguments, "question", json_string("What sounds?")) == 0);
+            if (mode == MODEL_AUDIO_LISTEN) {
+                assert(json_object_set_new(call.arguments, "question", json_string("What sounds?")) == 0);
+                assert(json_object_del(call.arguments, "start_s") == 0);
+            }
+            if (mode == MODEL_AUDIO_TRANSCRIBE) {
+                assert(json_object_del(call.arguments, "start_s") == 0);
+                assert(json_object_del(call.arguments, "end_s") == 0);
+            }
             struct snag_response_graph graph;
             memset(&graph,0,sizeof(graph));
             assert(snag_response_graph_add_call(&graph, "audio-item", "audio-call", call.name,
