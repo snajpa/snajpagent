@@ -2314,3 +2314,23 @@ for flag in ("-DLIBXML2_WITH_PROGRAMS=OFF", "-DLIBXML2_WITH_MODULES=OFF",
     assert flag in netbsd
 assert '] [ iconv ];' in netbsd and '] [ zlib iconv ];' in netbsd
 print("PASS: NetBSD package readers retain static XML/iconv/ZIP dependencies")
+
+# Modern NetBSD PDF uses its native C++ ABI and system font configuration.
+net_pdf = netbsd.split("  pdf = ", 1)[1].split("  xml = ", 1)[0]
+assert '"-DFONT_CONFIGURATION=fontconfig"' in net_pdf
+assert 'cmakeBuildType = "Release";' in net_pdf
+assert './poppler-static-fonts.patch' in net_pdf
+assert '++ lib.optionals (!legacy) [ pdf png freetype expat fontconfig jpeg openjpeg ]' in netbsd
+assert 'av pdf png freetype expat fontconfig jpeg openjpeg miniaudio' in netbsd
+assert "'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'" in netbsd
+assert '-std=c++20 -stdlib=libstdc++' in netbsd
+assert '-Wl,-Bdynamic -lstdc++ -lm -lgcc_s -Wl,-Bstatic' in netbsd
+net_png = netbsd.split("  png = ", 1)[1].split("  freetype = ", 1)[0]
+assert 'cmakeFlagsArray+=("-DCMAKE_C_FLAGS=${cflags} --target=${target} --sysroot=${sdk}")' in net_png
+net_fonts = netbsd.split("  fontconfig = ", 1)[1].split("  jpeg = ", 1)[0]
+assert '"--sysconfdir=/etc"' in net_fonts
+assert '"--with-default-fonts=/usr/X11R7/lib/X11/fonts"' in net_fonts
+assert '"--with-add-fonts=/usr/pkg/share/fonts"' in net_fonts
+# The earlier synthetic pkg-config case exercises this exact shared command.
+assert re.search(r'export FREETYPE_LIBS="(.*?)"', net_fonts).group(1) == font_flags
+print("PASS: NetBSD PDF keeps native C++ linkage, target generators and private font dependencies")

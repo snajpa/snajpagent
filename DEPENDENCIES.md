@@ -665,8 +665,14 @@ or target execution.
 
 Static libarchive/libxml2 with zlib/iconv supply the Office package reader.
 The package-checker cross-links pass against both SDKs using native libc/pthread
-imports. PDF/LibreOffice runtime closure remains in progress; this wiring does
-not select a LibreOffice packaging or loader design.
+imports. The NetBSD 10.1 PDF recipe adds static Poppler, PNG, FreeType,
+Fontconfig/Expat, JPEG and OpenJPEG, using native libstdc++/libm/libgcc_s.
+Fontconfig uses `/etc/fonts` and native X11 font directories. Static FreeType
+metadata retains private PNG math linkage. The AV/PDF/audio application cross-links
+with native libstdc++/libgcc_s/pthread/libc imports and no runtime search path,
+with Office excluded. No target executable was run. Legacy PDF and LibreOffice
+runtime closure remain in progress; no LibreOffice packaging or loader design
+is selected.
 
 ## macOS ARM64 and Intel cross-builds
 

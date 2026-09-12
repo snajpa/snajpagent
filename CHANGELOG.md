@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Supply NetBSD 10.1 static PDF/font dependencies with native C++ runtime and
+  system font configuration; legacy PDF closure remains in progress.
+
 - Add OpenBSD 7.9 static PDF/font dependencies with native SDK C++ linkage.
   Preserve private font-library dependencies; legacy PDF closure remains pending.
 
