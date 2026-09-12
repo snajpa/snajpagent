@@ -574,8 +574,29 @@ snag_tool_result(const char *status, const char *reason,
 json_t *
 snag_tool_result_not_run(const char *reason)
 {
-    char text[192];
-    (void)snprintf(text, sizeof(text), "Tool was not run: %s", reason);
+    const char *help = "Review the declared tool schema and current session state before proposing another call.";
+    if (!strcmp(reason, "process_limit"))
+        help = "All managed process slots are occupied. Collect ready results or finish an existing handle before starting another command.";
+    else if (!strcmp(reason, "process_busy"))
+        help = "This handle already has an invocation in progress. Use at most one write_stdin per handle per response; collect it after the current invocation returns.";
+    else if (!strcmp(reason, "stdin_busy"))
+        help = "Previously accepted input is still pending. Do not resend it; wait with write_stdin data=\"\" or do independent work.";
+    else if (!strcmp(reason, "stdin_closed"))
+        help = "This process's input is already closed and cannot be reopened. Use write_stdin data=\"\" to collect output without sending more input.";
+    else if (!strcmp(reason, "managed_process_handle_mismatch"))
+        help = "No live process matches this handle. Use an exact handle from current unsettled process state; terminal or previous-process handles cannot be reused.";
+    else if (snag_string_in(reason, "managed_process_conflict process_interaction_required"))
+        help = "Inspect the current unsettled commands and use their write_stdin handles; do not restart a command merely to wait for it.";
+    else if (!strcmp(reason, "invalid_arguments"))
+        help = "Correct field names, types and ranges using the current tool schema. Supply required fields; nullable defaults use JSON null. Do not repeat unchanged invalid arguments.";
+    else if (!strcmp(reason, "read_only"))
+        help = "This turn permits only its declared read-only tools; use list_files, read_file or grep for local inspection.";
+    else if (!strcmp(reason, "recovery_unstarted"))
+        help = "The previous agent process ended before this proposal started. Inspect current state before deciding whether to repeat the work.";
+    else if (snag_string_in(reason, "batch_yield operator_yield superseded_by_steering turn_cancelled"))
+        help = "This proposal was skipped. Reassess current operator instructions and retained running handles before further work; started commands remain separate.";
+    char text[768];
+    (void)snprintf(text, sizeof(text), "Tool was not run: %s. %s", reason, help);
     return snag_tool_result("not_run", reason, text, -1, 0u);
 }
 

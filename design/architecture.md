@@ -13,6 +13,25 @@ with that absolute path immediately after the compact output. The notice is
 rebuilt during replay and does not modify the provider-produced compact output
 or its recorded hash and token count.
 
+## Model-facing tool contract
+
+Tool declarations include parameter meanings, exact required fields, nullable
+defaults, numeric ranges and state/path restrictions. Current command settings
+are projected from the actual configuration. Shared JSON argument primitives
+produce actionable key/type/range diagnostics for commands, native inspection,
+patches, goals and IRC; string argument values are excluded from diagnostics.
+Nonexecution results explain slot limits, pending/closed input, stale/busy handles
+and control handoffs. Execution and lifecycle validation remain at their existing owners.
+
+Command-output ceilings retain their existing clamping semantics. Requested and
+applied limits are reported in durable results; the context projection also
+reports its per-result safety ceiling. Latest-batch host argument/limit feedback
+is projected separately from bounded command-output excerpts so a tiny output
+budget cannot hide the correction. A completed response clears current feedback;
+failed/interrupted attempts preserve it for retry and resume. Historical
+call/result data remains unchanged. All three context projections
+include the same input. No parameter aliases or automatic retry policy are added.
+
 ## Runtime Loop
 
 Each accepted user turn is projected into an OpenAI-compatible Responses API

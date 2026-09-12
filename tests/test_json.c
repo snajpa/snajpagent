@@ -105,9 +105,43 @@ test_canonical_remains_durable_only(void)
     assert(!value);
 }
 
+static void
+test_tool_argument_diagnostics(void)
+{
+    char error[512];
+    uint64_t n;
+    bool b;
+    const char *text;
+    json_t *args = json_pack("{s:n,s:s}", "count", "payload", "private-value");
+    assert(snag_json_arg_keys(args, "count payload", error, sizeof(error)));
+    assert(!snag_json_arg_keys(args, "count", error, sizeof(error)));
+    assert(strstr(error, "Unexpected argument \"payload\""));
+    assert(!snag_json_arg_keys(args, "count data", error, sizeof(error)));
+    assert(strstr(error, "data") && !strstr(error, "private-value"));
+    assert(snag_json_arg_uint(args, "count", 5u, 1u, 10u, &n, error, sizeof(error)) && n == 5u);
+    assert(json_object_set_new(args, "count", json_integer(11)) == 0);
+    assert(!snag_json_arg_uint(args, "count", 5u, 1u, 10u, &n, error, sizeof(error)));
+    assert(strstr(error, "count=11") && strstr(error, "1..10"));
+    assert(json_object_set_new(args, "count", json_string("null")) == 0);
+    assert(!snag_json_arg_uint(args, "count", 5u, 1u, 10u, &n, error, sizeof(error)));
+    assert(strstr(error, "integer") && strstr(error, "null"));
+    assert(!snag_json_arg_bool(args, "count", false, &b, error, sizeof(error)));
+    assert(strstr(error, "boolean"));
+    assert(!snag_json_arg_text(args, "payload", 0u, 1u, false, &text, error, sizeof(error)));
+    assert(strstr(error, "payload") && !strstr(error, "private-value"));
+    assert(snag_json_arg_text(args, "payload", 0u, 20u, false, &text, error, sizeof(error)));
+    assert(json_object_set_new(args, "payload", json_stringn("x\0y", 3u)) == 0);
+    assert(!snag_json_arg_text(args, "payload", 0u, 20u, false, &text, error, sizeof(error)));
+    assert(json_object_set_new(args, "payload", json_null()) == 0);
+    assert(snag_json_arg_text(args, "payload", 0u, 20u, true, &text, error, sizeof(error)) && !text);
+    assert(!snag_json_arg_text(args, "payload", 0u, 20u, false, &text, error, sizeof(error)));
+    json_decref(args);
+}
+
 int
 main(void)
 {
+    test_tool_argument_diagnostics();
     json_t *fields = json_pack("{s:i,s:n}", "name", 1, "name_suffix");
     assert(fields && snag_json_exact_keys(fields, "name name_suffix"));
     assert(snag_json_exact_keys(fields, "name_suffix name"));

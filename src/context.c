@@ -21,6 +21,7 @@ struct context_builder {
     const json_t *steering;
     json_t *tools;
     json_t *request_input;
+    json_t *tool_feedback;
     json_t *deferred_steering;
     json_t *input_timing;
     size_t recovery_index;
@@ -179,13 +180,32 @@ append_tool_result(struct context_builder *builder, const char *call_id,
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     int rc = -1;
 
-    if (limit > SNAG_CONTEXT_MAX_REQUEST / (16u * SNAG_MAX_CALLS_PER_RESPONSE))
+    if (limit > SNAG_CONTEXT_MAX_REQUEST / (16u * SNAG_MAX_CALLS_PER_RESPONSE)) {
+        uint32_t selected = limit;
         limit = SNAG_CONTEXT_MAX_REQUEST / (16u * SNAG_MAX_CALLS_PER_RESPONSE);
+        char feedback[192];
+        (void)snprintf(feedback, sizeof(feedback),
+            "Result max_output_tokens=%u reduced to %u UTF-8 bytes by the host context-safety maximum.",
+            selected, limit);
+        if (builder->tool_feedback && json_array_append_new(builder->tool_feedback,
+                json_pack("{s:s,s:s}", "call_id", call_id, "feedback", feedback)) < 0)
+            return -1;
+    }
     struct snag_buf bounded = {.max = (size_t)limit + 1u};
     struct snag_buf notice = {.max = SNAG_PATH_MAX_BYTES + 4096u};
     struct snag_buf full = {.max = SNAG_MAX_EVENT_LINE};
     if (!model_text)
         goto out;
+    const char *status = snag_json_string(result, "status");
+    bool rejected = status && !strcmp(status, "not_run");
+    bool capped = !strncmp(model_text, "Requested max_output_tokens=", 28u);
+    if (builder->tool_feedback && (rejected || capped)) {
+        size_t length = rejected ? strlen(model_text) : strcspn(model_text, "\n");
+        if (length <= 2048u && json_array_append_new(builder->tool_feedback,
+                json_pack("{s:s,s:o}", "call_id", call_id,
+                          "feedback", json_stringn(model_text, length))) < 0)
+            goto out;
+    }
     if (ref) {
         char *encoded = canonical_string(ref, 4096u);
         if (!encoded)
@@ -849,8 +869,11 @@ context_event(void *opaque, const struct snag_session *state,
     }
     if (!strcmp(type, "response_interrupted"))
         return append_interrupted_prefix(builder, data, error, error_size);
-    if (!strcmp(type, "response_completed"))
+    if (!strcmp(type, "response_completed")) {
+        if (builder->tool_feedback)
+            (void)json_array_clear(builder->tool_feedback);
         return append_response_items(builder, json_object_get(data, "items"), data);
+    }
     if (!strcmp(type, "tool_finished"))
         return append_tool_result(builder, snag_json_string(data, "call_id"),
                                    json_object_get(data, "result"));
@@ -895,52 +918,46 @@ static json_t *
 exec_tool_schema(uint32_t max_timeout_ms, uint32_t max_output_tokens)
 {
     char description[512];
-
-    if (snprintf(description, sizeof(description),
-            "Run one POSIX shell command from an explicit absolute workdir. "
-            "Set timeout_ms only when this command needs a deadline; null "
-            "uses the configured command deadline. Managed waits also yield at "
-            "max_wait_ms or operator /yield, retaining the live handle. "
-            "Pick a positive max_output_tokens limit "
-            "for result text sent to model context, or null for the configured "
-            "ceiling (%u). This legacy-named limit caps retained UTF-8 bytes, "
-            "not tokens.", max_output_tokens) < 0)
-        return NULL;
+    (void)snprintf(description, sizeof(description),
+        "Run one command using the configured shell from an existing absolute workdir. "
+        "Returned running handles belong to live commands; collect them with write_stdin. "
+        "Output ceiling (%u) is in UTF-8 bytes; larger positive requests are capped and reported. "
+        "Invalid fields or ranges reject the call before execution.", max_output_tokens);
     return tool_schema("exec_command", description, json_pack(
-        "{s:{s:s},s:{s:s},s:{s:[s,s]},s:{s:[s,s]},"
-         "s:{s:[s,s],s:i,s:i},s:{s:[s,s],s:i,s:I},s:{s:[s,s],s:i,s:I}}",
-        "command", "type", "string", "workdir", "type", "string",
-        "stdin", "type", "string", "null", "pty", "type", "boolean", "null",
+        "{s:{s:s,s:s},s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},"
+         "s:{s:[s,s],s:i,s:i,s:s},s:{s:[s,s],s:i,s:I,s:s},s:{s:[s,s],s:i,s:I,s:s}}",
+        "command", "type", "string", "description", "Source for the configured shell, at most 262144 UTF-8 bytes. Use command, not cmd.",
+        "workdir", "type", "string", "description", "Existing absolute working directory on this host.",
+        "stdin", "type", "string", "null", "description", "Initial input, at most 1048576 UTF-8 bytes. Null keeps input open; a string sends its bytes then closes input (empty string closes immediately).",
+        "pty", "type", "boolean", "null", "description", "True allocates a pseudo-terminal; false/null uses pipes. PTY merges stdout and stderr.",
         "yield_ms", "type", "integer", "null", "minimum", 0, "maximum", 600000,
-        "timeout_ms", "type", "integer", "null",
-            "minimum", 1, "maximum", (json_int_t)max_timeout_ms,
-        "max_output_tokens", "type", "integer", "null",
-            "minimum", 1, "maximum", (json_int_t)max_output_tokens));
+            "description", "Maximum wait for this invocation, in milliseconds; 0 returns promptly, null uses default_yield_ms. Does not kill the command. Use yield_ms, not yield_time_ms. Host max_wait_ms or /yield can return earlier.",
+        "timeout_ms", "type", "integer", "null", "minimum", 1, "maximum", (json_int_t)max_timeout_ms,
+            "description", "One-shot foreground handoff deadline in milliseconds, measured from command start. It returns a running handle without killing the command. Null uses default_timeout_ms (0 in host configuration disables this handoff). Values above the maximum are rejected, not clamped.",
+        "max_output_tokens", "type", "integer", "null", "minimum", 1, "maximum", (json_int_t)max_output_tokens,
+            "description", "Legacy name: limit on model-facing UTF-8 bytes, not model generation tokens. Null uses the output ceiling; smaller positive values reduce the excerpt; larger positive values up to 4000000000 are capped with requested/applied feedback. Complete redacted output stays in the journal."));
 }
 
 static json_t *
 stdin_tool_schema(uint32_t max_output_tokens)
 {
-    char description[512];
-
-    if (snprintf(description, sizeof(description),
-            "Wait for or write bounded UTF-8 data to an existing managed "
-            "process. Set terminate=true only with empty data and "
-            "eof=false/null to request termination. A wait limit or operator /yield "
-            "can return a live handle while termination is pending. "
-            "Pick a positive max_output_tokens limit for new result text sent "
-            "to model context, or null for the configured ceiling (%u). Larger "
-            "requests are capped. This legacy-named limit caps retained UTF-8 bytes, not tokens.",
-            max_output_tokens) < 0)
-        return NULL;
+    char description[384];
+    (void)snprintf(description, sizeof(description),
+        "Collect output, wait, send input, or request termination of an existing managed process. "
+        "At most one call per handle in each response. A running result retains that handle. "
+        "Output ceiling (%u) is in UTF-8 bytes; larger positive requests are capped and reported.",
+        max_output_tokens);
     return tool_schema("write_stdin", description, json_pack(
-        "{s:{s:s},s:{s:s},s:{s:[s,s]},s:{s:[s,s]},"
-         "s:{s:[s,s],s:i,s:i},s:{s:[s,s],s:i,s:I}}",
-        "handle", "type", "string", "data", "type", "string",
-        "eof", "type", "boolean", "null", "terminate", "type", "boolean", "null",
+        "{s:{s:s,s:s},s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},"
+         "s:{s:[s,s],s:i,s:i,s:s},s:{s:[s,s],s:i,s:I,s:s}}",
+        "handle", "type", "string", "description", "Exact 32-character lowercase hex handle from a running result. A terminal result settles it; do not reuse a settled handle.",
+        "data", "type", "string", "description", "Input bytes (at most 1048576 UTF-8 bytes); empty string waits/collects without sending input. This field is required and cannot be null.",
+        "eof", "type", "boolean", "null", "description", "True closes input after pending bytes are written; false/null leaves it open. Closing input is separate from terminating the process.",
+        "terminate", "type", "boolean", "null", "description", "True requests termination and requires data=\"\" and eof=false/null; false/null does not terminate. A returned running handle must still be collected.",
         "yield_ms", "type", "integer", "null", "minimum", 0, "maximum", 600000,
-        "max_output_tokens", "type", "integer", "null",
-            "minimum", 1, "maximum", (json_int_t)max_output_tokens));
+            "description", "Maximum wait for this invocation in milliseconds; 0 returns promptly, null uses default_yield_ms. Host max_wait_ms or /yield can return earlier. Does not reset the initial one-shot timeout_ms handoff deadline.",
+        "max_output_tokens", "type", "integer", "null", "minimum", 1, "maximum", (json_int_t)max_output_tokens,
+            "description", "Legacy name for model-facing UTF-8 bytes. Null uses the configured ceiling; smaller positive requests reduce the excerpt, larger positive requests up to 4000000000 are capped and reported. Does not limit durable capture."));
 }
 
 static json_t *
@@ -951,28 +968,36 @@ read_only_schema(const char *name)
     json_t *props;
 
     if (read)
-        props = json_pack("{s:{s:s},s:{s:[s,s],s:i,s:i},s:{s:[s,s],s:i,s:i}}",
-            "path", "type", "string",
+        props = json_pack("{s:{s:s,s:s},s:{s:[s,s],s:i,s:i,s:s},s:{s:[s,s],s:i,s:i,s:s}}",
+            "path", "type", "string", "description", "Literal UTF-8 path (1..4096 bytes), absolute or relative to workspace. Regular file only; symlinks are rejected.",
             "start_line", "type", "integer", "null", "minimum", 1, "maximum", INT32_MAX,
-            "end_line", "type", "integer", "null", "minimum", 1, "maximum", INT32_MAX);
+                "description", "Inclusive 1-based first line; null starts at line 1.",
+            "end_line", "type", "integer", "null", "minimum", 1, "maximum", INT32_MAX,
+                "description", "Inclusive last line, at least start_line; null reads to end. Narrow the range if output is too large.");
     else if (grep)
-        props = json_pack("{s:{s:s},s:{s:s},s:{s:[s,s]},s:{s:[s,s]},"
-                           "s:{s:[s,s]},s:{s:[s,s],s:i,s:i},s:{s:[s,s],s:i,s:i}}",
-            "path", "type", "string", "pattern", "type", "string",
-            "recursive", "type", "boolean", "null",
-            "ignore_case", "type", "boolean", "null",
-            "literal", "type", "boolean", "null",
+        props = json_pack("{s:{s:s,s:s},s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},"
+                           "s:{s:[s,s],s:s},s:{s:[s,s],s:i,s:i,s:s},s:{s:[s,s],s:i,s:i,s:s}}",
+            "path", "type", "string", "description", "Literal file/directory path (1..4096 UTF-8 bytes), absolute or workspace-relative. Symlinks are rejected.",
+            "pattern", "type", "string", "description", "POSIX extended regular expression (0..4096 UTF-8 bytes), or literal text when literal=true. Not a shell command.",
+            "recursive", "type", "boolean", "null", "description", "Recurse into directories; null defaults to true.",
+            "ignore_case", "type", "boolean", "null", "description", "Case-insensitive matching; false/null uses case-sensitive matching.",
+            "literal", "type", "boolean", "null", "description", "True searches literal text; false/null interprets a POSIX extended regex.",
             "offset", "type", "integer", "null", "minimum", 0, "maximum", 1000000,
-            "limit", "type", "integer", "null", "minimum", 1, "maximum", 1000);
+                "description", "Matches to skip; null means 0. Use returned next_offset to continue.",
+            "limit", "type", "integer", "null", "minimum", 1, "maximum", 1000,
+                "description", "Maximum matches to return; null means 200. Out-of-range values are rejected; incomplete scans are reported.");
     else
-        props = json_pack("{s:{s:s},s:{s:[s,s]},s:{s:[s,s],s:i,s:i},s:{s:[s,s],s:i,s:i}}",
-            "path", "type", "string", "recursive", "type", "boolean", "null",
+        props = json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:i,s:i,s:s},s:{s:[s,s],s:i,s:i,s:s}}",
+            "path", "type", "string", "description", "Literal directory path (1..4096 UTF-8 bytes), absolute or workspace-relative; symlinks are not followed.",
+            "recursive", "type", "boolean", "null", "description", "Recurse into directories; false/null lists only this directory.",
             "offset", "type", "integer", "null", "minimum", 0, "maximum", 1000000,
-            "limit", "type", "integer", "null", "minimum", 1, "maximum", 1000);
+                "description", "Entries to skip; null means 0. Use returned next_offset to continue.",
+            "limit", "type", "integer", "null", "minimum", 1, "maximum", 1000,
+                "description", "Maximum entries to return; null means 200. Out-of-range values are rejected; incomplete scans are reported.");
     return tool_schema(name, read ?
-        "Read a regular UTF-8 file natively, with numbered lines. Null bounds read the whole file; otherwise inclusive 1-based bounds. Oversized output fails: use narrower ranges. Literal relative/workspace or absolute paths, no symlinks." : grep ?
-        "Search UTF-8 regular files natively using POSIX extended regex (literal=true for literal text). Returns path:line:text. Directories recurse by default, no symlink following. Null ignore_case/literal=false, offset=0, limit=200. Incomplete scans are explicit; narrow path or pattern on scan limits." :
-        "List files and directories natively, sorted per directory, including hidden entries and symlinks (never followed). Relative paths use the workspace. Null recursive=false, offset=0, limit=200. Use next_offset for more entries; narrow path on scan limits.",
+        "Read a regular UTF-8 file natively, with numbered lines. Oversized output fails: use narrower ranges." : grep ?
+        "Search UTF-8 regular files natively. Returns path:line:text; narrow path or pattern on scan limits." :
+        "List entries natively, sorted per directory, including hidden entries and symlinks (never followed).",
         props);
 }
 
@@ -1005,9 +1030,15 @@ tool_schemas(bool goal_active,
             stdin_tool_schema(config ? config->max_output_tokens :
                          SNAG_DEFAULT_TOOL_OUTPUT_TOKENS)) < 0 ||
         json_array_append_new(tools, tool_schema("apply_patch",
-            "Apply one unified patch in the session workspace.",
-            json_pack("{s:{s:s},s:{s:s}}",
-                "patch", "type", "string", "workdir", "type", "string"))) < 0 ||
+            "Apply a patch using *** Begin Patch and *** End Patch delimiters. "
+            "Operations are *** Add File: path (every content line starts +), "
+            "*** Delete File: path, or *** Update File: path with @@ hunks "
+            "whose context/removal/addition lines start space/-/+. There is no move/rename operation. "
+            "Paths must be relative to the session workspace, without .. or symlink traversal. "
+            "Example: *** Begin Patch\n*** Add File: example.txt\n+hello\n*** End Patch\n",
+            json_pack("{s:{s:s,s:s},s:{s:s,s:s}}",
+                "patch", "type", "string", "description", "Patch text in the described format, at most 2097152 UTF-8 bytes. Ordinary diff headers (---/+++) are not accepted.",
+                "workdir", "type", "string", "description", "Must equal the exact session workspace shown in runtime context; it cannot select a different directory."))) < 0 ||
         json_array_append_new(tools, json_pack("{s:s}", "type", search_type)) < 0)
         goto fail;
     if (networked &&
@@ -1019,9 +1050,10 @@ tool_schemas(bool goal_active,
             "only when there is exactly one. Sends never follow operator UI selection. "
             "Set notice true only for a non-reply informational notice. "
             "Connection, join, and retry work is owned by the runtime.",
-            json_pack("{s:{s:[s,s]},s:{s:[s,s]},s:{s:s}}",
-                "destination", "type", "string", "null",
-                "notice", "type", "boolean", "null", "text", "type", "string"))) < 0 ||
+            json_pack("{s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:s,s:s}}",
+                "destination", "type", "string", "null", "description", "Number string returned by irc_state; all broadcasts; null selects a sole available destination.",
+                "notice", "type", "boolean", "null", "description", "True sends NOTICE; false/null sends PRIVMSG.",
+                "text", "type", "string", "description", "Nonempty UTF-8 message for the selected recipients; maximum 2097152 bytes."))) < 0 ||
          json_array_append_new(tools, tool_schema("irc_state",
             "Read the already-maintained room, topic, endpoint, membership, and "
             "operator state without polling or changing connections.", json_object())) < 0 ||
@@ -1030,8 +1062,9 @@ tool_schemas(bool goal_active,
             "where that identity currently has channel operator mode. Destination "
             "is a numbered string from irc_state, all for explicit broadcast, "
             "or null only when exactly one destination exists.",
-            json_pack("{s:{s:[s,s]},s:{s:s}}",
-                "destination", "type", "string", "null", "topic", "type", "string"))) < 0))
+            json_pack("{s:{s:[s,s],s:s},s:{s:s,s:s}}",
+                "destination", "type", "string", "null", "description", "Number string from irc_state, all for broadcast, or null for a sole destination.",
+                "topic", "type", "string", "description", "UTF-8 channel topic (at most 2097152 bytes); empty string clears it. Requires channel operator mode."))) < 0))
         goto fail;
     if (goal_create_allowed && json_array_append_new(tools, tool_schema("create_goal",
             "Create a persistent goal only when the user or system/developer "
@@ -1039,14 +1072,16 @@ tool_schemas(bool goal_active,
             "work. Writing or committing goal documentation does not activate "
             "continuation. After success, a normal final answer is a checkpoint "
             "and " SNAJPAGENT_NAME " starts another goal turn.",
-            json_pack("{s:{s:s}}", "objective", "type", "string"))) < 0)
+            json_pack("{s:{s:s,s:s}}", "objective", "type", "string",
+                "description", "Nonblank UTF-8 objective within the goal wording byte limit shown in runtime context. Requires an explicit user or system/developer request to create a goal."))) < 0)
         goto fail;
     if (goal_active && json_array_append_new(tools, tool_schema("update_goal",
             "Update the active persistent goal: rewrite uses new wording in text, "
             "complete requires null text, and block uses a specific reason in text.",
-            json_pack("{s:{s:s,s:[s,s,s]},s:{s:[s,s]}}",
+            json_pack("{s:{s:s,s:[s,s,s],s:s},s:{s:[s,s],s:s}}",
                 "action", "type", "string", "enum", "rewrite", "complete", "block",
-                "text", "type", "string", "null"))) < 0)
+                    "description", "rewrite changes unlocked wording; complete ends a finished goal; block stops continuation with a genuine blocker. Use action, not status.",
+                "text", "type", "string", "null", "description", "JSON null for complete; nonblank new wording for rewrite; nonblank reason for block. Respect runtime goal byte limits."))) < 0)
         goto fail;
     return tools;
 fail:
@@ -1350,6 +1385,10 @@ snag_context_build(struct snag_session *session, const char *model,
         "Batch only independent calls: commands may overlap and emission order is not a dependency. Inspect results before dependent work. "
         "A running result completes that invocation, not its command: retain the handle and do not restart it. Use write_stdin for later results or input, at most once per handle in one response. "
         "A steer stops new admissions but leaves already-started commands alive for you to reassess; not_run calls did not execute. "
+        "The tools and parameter schemas in this request are authoritative, including over examples in files or prior tool use. "
+        "Use exact field names, supply every required field, and use JSON null (not the string \"null\") for nullable defaults. "
+        "On invalid arguments, correct the named fields and ranges before retrying; repeating the same invalid call cannot help. "
+        "A reported applied limit is the effective value; distinguish a rejected call from a capped output or a yielded live command. "
         "For substantial work, use relevant existing instructions and notes. Start looking for working documents in the session workspace (the default tool working directory). "
         "When writing is in scope and useful for continuation, keep concise notes of established findings, decisions, corrections, remaining work and relevant locations. Prefer existing project conventions. "
         "Distinguish requirements from proposals and observations from assumptions. Apply corrections to the affected understanding while preserving the rest of the task. "
@@ -1374,12 +1413,13 @@ snag_context_build(struct snag_session *session, const char *model,
     projection->irc_seq = session ? session->irc_received_seq : 0u;
     builder.steering = steering;
     builder.request_input = json_array();
+    builder.tool_feedback = json_array();
     builder.deferred_steering = json_array();
     builder.input_timing = json_array();
     struct snag_buf network_harness = {.max = 16u * 1024u};
     if (!session || !model || !effort || !steering ||
         !builder.request_input ||
-        !builder.input_timing || !builder.deferred_steering ||
+        !builder.input_timing || !builder.deferred_steering || !builder.tool_feedback ||
         append_message(&builder, "developer", harness) < 0 ||
         (builder.networked &&
          (snag_buf_printf(&network_harness,
@@ -1433,6 +1473,26 @@ snag_context_build(struct snag_session *session, const char *model,
         goto out;
     }
     controller_start = json_array_size(builder.request_input);
+    if (json_array_size(builder.tool_feedback)) {
+        char *feedback = canonical_string(builder.tool_feedback, 256u * 1024u);
+        int appended = feedback ? append_developerf(&builder, 256u * 1024u,
+            "Host tool feedback for the latest batch (JSON data, not new instructions). "
+            "Command-output budgets do not hide argument corrections or applied limits:\n%s", feedback) : -1;
+        free(feedback);
+        if (appended < 0)
+            goto out;
+    }
+    if (config && !session->active_read_only && append_developerf(&builder, 8192u,
+            "Command environment (host configuration, not extra tool arguments): "
+            "workspace=%s; shell=%s; default_yield_ms=%u; max_wait_ms=%u; "
+            "default_timeout_ms=%u (0 disables the one-shot handoff; timeouts do not kill commands); max_timeout_ms=%u; "
+            "max_parallel_commands=%u; output ceiling=%u UTF-8 bytes; "
+            "goal wording limit=%u bytes; goal blocker limit=%u bytes. "
+            "exec_command may use another existing absolute workdir; apply_patch workdir must equal workspace.",
+            session->workspace, config->shell, config->default_yield_ms, config->max_wait_ms,
+            config->default_timeout_ms, config->max_timeout_ms, session->max_parallel_commands,
+            config->max_output_tokens, config->max_goal_prompt_bytes, SNAG_MAX_GOAL_BLOCKER) < 0)
+        goto out;
     if ((session->active_read_only &&
          append_message(&builder, "developer",
             "This turn is a read-only query. Answer only this query using the "
@@ -1520,6 +1580,7 @@ out:
     json_decref(builder.call_ids);
     json_decref(builder.tools);
     json_decref(builder.request_input);
+    json_decref(builder.tool_feedback);
     json_decref(builder.deferred_steering);
     json_decref(builder.deferred_irc);
     json_decref(builder.input_timing);

@@ -293,6 +293,16 @@ main(void)
     snag_response_graph_free(&graph);
     free(large);
 
+    const char *rejections[] = {"process_limit", "process_busy", "stdin_busy", "stdin_closed",
+        "managed_process_handle_mismatch", "managed_process_conflict", "invalid_arguments",
+        "read_only", "recovery_unstarted", "batch_yield", "superseded_by_steering", "turn_cancelled"};
+    for (size_t i = 0u; i < sizeof(rejections) / sizeof(rejections[0]); ++i) {
+        result = snag_tool_result_not_run(rejections[i]);
+        assert(result && snag_tool_result_valid(result) == 0);
+        assert(strlen(snag_json_string(result, "model_text")) > strlen(rejections[i]) + 40u);
+        assert(json_is_null(json_object_get(result, "handle")));
+        json_decref(result);
+    }
     result = snag_tool_result_not_run("protocol_conflict");
     assert(result && snag_tool_result_valid(result) == 0);
     json_decref(result);

@@ -407,6 +407,10 @@ test_command_output_limit_selection(void)
         struct snag_buf *full = &output_journal[output_index(snag_json_string(ref, "handle"))].streams[0];
         assert(full->len == 9u && !memcmp(full->data, "unchanged", 9u));
         assert(json_int_member(json_object_get(result, "stdout"), "original_bytes") == 9);
+        const char *notice = strstr(snag_json_string(result, "model_text"), "Requested max_output_tokens=");
+        assert((notice != NULL) == (requests[i] > 6789));
+        if (notice)
+            assert(strstr(notice, "applied max_output_tokens=6789"));
         json_decref(result);
     }
 }
@@ -425,6 +429,10 @@ test_managed_output_ceiling(void)
         assert(strcmp(snag_json_string(result, "status"), "running") == 0);
         assert(json_integer_value(json_object_get(result, "max_output_tokens")) ==
                (requests[i] == 42 ? 42 : 6000));
+        const char *notice = strstr(snag_json_string(result, "model_text"), "Requested max_output_tokens=");
+        assert((notice != NULL) == (requests[i] > 6000));
+        if (notice)
+            assert(strstr(notice, "applied max_output_tokens=6000"));
         json_decref(result);
     }
     json_t *closed = close_command(handle);
@@ -856,9 +864,48 @@ test_journal_failure_closes_owned_commands(void)
     snag_config_free(&config);
 }
 
+static void
+test_command_argument_feedback(void)
+{
+    char cwd[4096], handle[SNAG_ID_HEX_LEN + 1u];
+    struct snag_config config;
+    struct snag_response_graph graph;
+    uint32_t yield_ms;
+    assert(getcwd(cwd, sizeof(cwd)));
+    snag_config_init(&config);
+    config.max_timeout_ms = 2000u;
+    const char *fields[] = {"yield_time_ms", "cmd", "timeout_ms", "yield_ms",
+                           "max_output_tokens", "pty", "workdir"};
+    const char *expected[] = {"yield_ms", "command", "2000", "600000",
+                             "max_output_tokens", "pty", "workdir"};
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
+        make_call(&graph, "printf never-run", cwd, 1000, NULL);
+        struct snag_response_item call = snag_response_graph_item(&graph, 0u);
+        json_t *value = i < 2 ? json_null() : i == 2 ? json_integer(2001) :
+                        i == 3 ? json_integer(600001) : i == 4 ? json_integer(0) :
+                        json_string("invalid");
+        assert(json_object_set_new(call.arguments, fields[i], value) == 0);
+        if (i < 2)
+            assert(json_object_del(call.arguments, expected[i]) == 0);
+        json_t *result = NULL;
+        assert(snag_tools_prepare(&call, &config, 4u, handle, &yield_ms, &result) == 1);
+        assert(result && snag_tool_result_valid(result) == 0);
+        assert(!strcmp(snag_json_string(result, "status"), "not_run"));
+        assert(json_is_null(json_object_get(result, "handle")));
+        const char *text = snag_json_string(result, "model_text");
+        if (!strstr(text, expected[i]))
+            fprintf(stderr, "missing argument diagnostic for %s: %s\n", fields[i], text);
+        assert(strstr(text, expected[i]));
+        json_decref(result);
+        snag_response_graph_free(&graph);
+    }
+    snag_config_free(&config);
+}
+
 int
 main(void)
 {
+    test_command_argument_feedback();
     test_atomic_sequence();
     test_child_wait_ownership();
     test_child_interrupt_mask();

@@ -132,28 +132,6 @@ out:
 }
 
 static bool
-number_arg(const json_t *args, const char *name, uint64_t fallback,
-            uint64_t min, uint64_t max, uint64_t *value)
-{
-    json_t *v = json_object_get(args, name);
-
-    *value = fallback;
-    if (json_is_null(v))
-        return true;
-    return snag_json_integer_u64(args, name, value) == 0 &&
-           *value >= min && *value <= max;
-}
-
-static bool
-bool_arg(const json_t *args, const char *name, bool fallback, bool *value)
-{
-    json_t *v = json_object_get(args, name);
-
-    *value = json_is_null(v) ? fallback : json_is_true(v);
-    return json_is_null(v) || json_is_boolean(v);
-}
-
-static bool
 literal_match(const char *line, const char *pattern, bool ignore_case)
 {
     if (!ignore_case)
@@ -390,7 +368,7 @@ snag_tools_read_only(const struct snag_response_item *call, const char *workspac
     const json_t *args;
     const char *path;
     uint64_t offset = 0, limit = 200u;
-    char failure[256];
+    char failure[768] = "Invalid native inspection tool.";
     int fd, rc = -1;
 
     if (!call || !call->name || !result || !workspace)
@@ -403,31 +381,33 @@ snag_tools_read_only(const struct snag_response_item *call, const char *workspac
     q.pump = pump;
     q.opaque = opaque;
     snag_buf_init(&q.output, RO_OUTPUT + 1024u);
-    q.problem = "Invalid native inspection arguments.";
-    if (!snag_read_only_tool(call->name) || !workspace || !path || !*path ||
-        strlen(path) > 4096u ||
-        !snag_json_exact_keys(args,
+    q.problem = failure;
+    if (!snag_read_only_tool(call->name) ||
+        !snag_json_arg_keys(args,
             q.read ? "path start_line end_line" :
             q.grep ? "path pattern recursive ignore_case literal offset limit" :
-                     "path recursive offset limit"))
+                     "path recursive offset limit", failure, sizeof(failure)) ||
+        !snag_json_arg_text(args, "path", 1u, 4096u, false, &path, failure, sizeof(failure)))
         goto out;
     if (q.read) {
-        if (!number_arg(args, "start_line", 1u, 1u, INT32_MAX, &q.start) ||
-            !number_arg(args, "end_line", UINT64_MAX, 1u, INT32_MAX, &q.end) ||
-            q.end < q.start)
+        if (!snag_json_arg_uint(args, "start_line", 1u, 1u, INT32_MAX, &q.start, failure, sizeof(failure)) ||
+            !snag_json_arg_uint(args, "end_line", UINT64_MAX, 1u, INT32_MAX, &q.end, failure, sizeof(failure)))
             goto out;
-    } else if (!bool_arg(args, "recursive", q.grep, &q.recursive) ||
-               !number_arg(args, "offset", 0u, 0u, 1000000u, &offset) ||
-               !number_arg(args, "limit", 200u, 1u, 1000u, &limit)) {
+        if (q.end < q.start) {
+            q.problem = "end_line must be at least start_line, or null for the remainder of the file.";
+            goto out;
+        }
+    } else if (!snag_json_arg_bool(args, "recursive", q.grep, &q.recursive, failure, sizeof(failure)) ||
+               !snag_json_arg_uint(args, "offset", 0u, 0u, 1000000u, &offset, failure, sizeof(failure)) ||
+               !snag_json_arg_uint(args, "limit", 200u, 1u, 1000u, &limit, failure, sizeof(failure))) {
         goto out;
     }
     q.offset = (size_t)offset;
     q.limit = (size_t)limit;
     if (q.grep) {
-        q.pattern = snag_json_string(args, "pattern");
-        if (!q.pattern || strlen(q.pattern) > 4096u ||
-            !bool_arg(args, "ignore_case", false, &q.ignore_case) ||
-            !bool_arg(args, "literal", false, &q.literal))
+        if (!snag_json_arg_text(args, "pattern", 0u, 4096u, false, &q.pattern, failure, sizeof(failure)) ||
+            !snag_json_arg_bool(args, "ignore_case", false, &q.ignore_case, failure, sizeof(failure)) ||
+            !snag_json_arg_bool(args, "literal", false, &q.literal, failure, sizeof(failure)))
             goto out;
         if (!q.literal) {
             int regex_rc = regcomp(&q.regex, q.pattern,

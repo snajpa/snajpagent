@@ -1970,7 +1970,9 @@ Zero means no deadline.  Must not exceed
 Default: 0.  Reaching the deadline does not kill the command.
 .TP
 .B max_timeout_ms
-Maximum positive model deadline, 1 through 4294967295.  Default: 86400000.
+Maximum positive model handoff deadline, 1 through 4294967295. Default: 86400000.
+Out-of-range tool arguments are rejected before execution with the allowed range;
+they are not silently reduced.
 .TP
 .B max_output_tokens
 Command-result model-context ceiling in retained UTF-8 bytes, 1 through
@@ -1978,7 +1980,12 @@ Command-result model-context ceiling in retained UTF-8 bytes, 1 through
 provider/model output limits with the same name are separately token-based.
 A tool call selects a smaller positive bound or
 .B null
-for this ceiling.  Larger requests are capped at this value.
+for this ceiling. Larger requests are capped at this value, with requested and
+applied values reported. A separate per-result context-safety ceiling may reduce
+the excerpt further and is also reported. These limits leave durable capture
+unchanged. Host argument corrections and applied-limit feedback are supplied
+separately from the bounded command-output body, including with very small
+output budgets.
 .TP
 .B max_output_bytes
 Maximum result bytes displayed per tool call, 0 through 4294967295.  Zero
@@ -2204,6 +2211,33 @@ where a nullable field should use its default.  Unknown fields are rejected.
 Runtime validation and tool results remain authoritative even if a provider
 accepts an invalid declaration.  Pre-1.0 tool and event formats are not a
 stable third-party automation API.
+.SS Argument validation and applied limits
+Each provider request includes the current tool declarations, all required
+fields, their types and ranges, and parameter descriptions. Exact schema names
+apply even when an example in a working document uses another harness's syntax.
+Nullable defaults use JSON null, not the string "null". Coding requests also
+identify the actual workspace, configured shell, wait/deadline defaults,
+parallel-command maximum, output ceiling and goal text limits.
+.PP
+Argument errors identify missing or unexpected fields, required types, numeric
+ranges and relevant path or cross-field restrictions. Correct the rejected
+arguments before retrying. A command reported as not_run has no new process or
+handle; repeating its unchanged invalid arguments cannot advance the task.
+Native read/search, patch, goal and IRC argument errors use the same diagnostic
+primitives. Skipped calls also explain process-slot limits, pending or closed
+input, stale/busy handles and control handoffs. Diagnostics avoid echoing string values that may contain secrets.
+.PP
+Oversized positive command-output requests up to 4000000000 bytes are accepted
+with an explicit requested/applied limit notice. Invalid types, zero, larger
+values and out-of-range wait/deadline arguments are rejected. A host wait limit
+reports the requested wait and configured maximum while retaining the live
+handle. Wait and handoff deadlines send no termination signal.
+.PP
+Current argument corrections and applied-limit feedback remain visible in host
+context independently of the bounded output excerpt. This feedback covers the
+latest completed response batch and survives failed/interrupted provider attempts
+for retry or resume; old feedback is not repeatedly injected as current state.
+The ordinary call/result history remains durable and preserves earlier outcomes.
 .SS exec_command
 Run one command using the configured shell and explicit absolute
 .BR workdir .
@@ -2234,7 +2268,8 @@ A deadline yields control without terminating the child.
 .B max_output_tokens
 is a positive retained UTF-8 byte bound for result text sent to model context,
 or null for the configured ceiling (default 6000).  Despite its legacy name,
-it does not count tokens.  Larger requests are capped.  Complete redacted
+it does not count tokens. Larger requests are capped with requested/applied
+feedback. Complete redacted
 process output remains in the session log; the bounded excerpt identifies
 truncation and its source.
 Returned status distinguishes running, successful/failed exit, and termination

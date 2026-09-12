@@ -398,9 +398,8 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         int rc;
 
         *result = NULL;
-        if (!snag_json_exact_keys(call->arguments, "")) {
-            *result = snag_tool_result_terminal(false,
-                                                "irc_state arguments are invalid");
+        if (!snag_json_arg_keys(call->arguments, "", error, error_size)) {
+            *result = snag_tool_result_terminal(false, "irc_state takes an empty JSON object: {}.");
             return *result ? 0 : -1;
         }
         struct snag_buf state = {.max = SNAG_MAX_IRC_SNAPSHOT};
@@ -418,19 +417,17 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         (snag_string_in(call->name, "irc_send irc_topic"))) {
         bool topic = strcmp(call->name, "irc_topic") == 0;
         const char *text = snag_json_string(call->arguments, topic ? "topic" : "text");
-        json_t *notice_value = json_object_get(call->arguments, "notice");
         struct snag_irc_route route;
         int rc;
 
         *result = NULL;
-        if (!snag_json_exact_keys(call->arguments,
-                                 topic ? "destination topic" : "destination notice text") ||
-            !text || (!topic && !*text) || strlen(text) > SNAG_MAX_PUBLIC_ITEM ||
-            !snag_utf8_valid((const unsigned char *)text, strlen(text), true) ||
-            (!topic && !json_is_null(notice_value) &&
-             !json_is_true(notice_value) && !json_is_false(notice_value))) {
-            *result = snag_tool_result_terminal(false,
-                "IRC arguments are invalid; select destination and valid text");
+        bool notice = false;
+        if (!snag_json_arg_keys(call->arguments,
+                                 topic ? "destination topic" : "destination notice text", error, error_size) ||
+            !snag_json_arg_text(call->arguments, topic ? "topic" : "text", topic ? 0u : 1u,
+                                SNAG_MAX_PUBLIC_ITEM, false, &text, error, error_size) ||
+            (!topic && !snag_json_arg_bool(call->arguments, "notice", false, &notice, error, error_size))) {
+            *result = snag_tool_result_terminal(false, error);
             return *result ? 0 : -1;
         }
         if (!irc_tool_route(app, json_object_get(call->arguments, "destination"), &route)) {
@@ -441,7 +438,7 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         }
         struct snag_buf report = {.max = 8192u};
         rc = snag_irc_send_route(app->irc, &route, true,
-            topic ? SNAG_IRC_TOPIC : json_is_true(notice_value) ? SNAG_IRC_NOTICE : SNAG_IRC_MESSAGE,
+            topic ? SNAG_IRC_TOPIC : notice ? SNAG_IRC_NOTICE : SNAG_IRC_MESSAGE,
             text, &report, error, error_size);
         if (rc >= 0 && snag_buf_terminate(&report) == 0)
             *result = snag_tool_result_terminal(rc == 0,

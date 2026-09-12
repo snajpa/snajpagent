@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Describe every native tool parameter and project actual command settings into
+  model context. Explain argument corrections, handoff deadlines and patch syntax.
+- Report missing/extra fields, types, ranges and cross-field errors; disclose
+  requested/applied output ceilings and host wait limits. Keep latest-batch host
+  feedback visible independently of command-output budgets, including on resume.
+
 - Accept assistant phases finalized at message completion, including DeepSeek
   Flash's pre-tool commentary. Preserve completed phases through tool follow-ups
   and resume, reconcile final text once and reject conflicting completed phases.

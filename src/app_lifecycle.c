@@ -538,9 +538,10 @@ snag_app_goal_tool(struct app_state *app,
         const char *objective;
         char message[128];
 
-        if (!snag_json_exact_keys(call->arguments, "objective") ||
-            !(objective = snag_json_string(call->arguments, "objective")))
-            return tool_result(false, "create_goal arguments are invalid", result);
+        if (!snag_json_arg_keys(call->arguments, "objective", error, error_size) ||
+            !snag_json_arg_text(call->arguments, "objective", 1u, prompt_limit,
+                                false, &objective, error, error_size))
+            return tool_result(false, error, result);
         if (snag_goal_unfinished(app->session.goal_status))
             return tool_result(false, "an unfinished goal already exists", result);
         if (!goal_text_valid(objective, prompt_limit))
@@ -554,15 +555,18 @@ snag_app_goal_tool(struct app_state *app,
                        app->session.goal_id);
         return tool_result(true, message, result);
     }
-    if (!call || strcmp(call->name, "update_goal") != 0 ||
-        !snag_json_exact_keys(call->arguments, "action text") ||
-        !(action = snag_json_string(call->arguments, "action")))
-        return tool_result(false, "update_goal arguments are invalid", result);
+    if (!call || strcmp(call->name, "update_goal") != 0)
+        return tool_result(false, "Expected update_goal with action and text fields.", result);
+    if (!snag_json_arg_keys(call->arguments, "action text", error, error_size) ||
+        !snag_json_arg_text(call->arguments, "action", 1u, 8u, false, &action, error, error_size))
+        return tool_result(false, error, result);
     text_value = json_object_get(call->arguments, "text");
     if (app->session.goal_status != SNAG_GOAL_ACTIVE)
         return tool_result(false, "there is no active goal to update", result);
     if (strcmp(action, "rewrite") == 0) {
-        text = snag_json_string(call->arguments, "text");
+        if (!snag_json_arg_text(call->arguments, "text", 1u, prompt_limit,
+                                false, &text, error, error_size))
+            return tool_result(false, error, result);
         if (!goal_text_valid(text, prompt_limit))
             return tool_result(false,
                 "new goal wording is blank, invalid, or exceeds the configured limit",
@@ -592,7 +596,9 @@ snag_app_goal_tool(struct app_state *app,
         return tool_result(true, "goal marked complete", result);
     }
     if (strcmp(action, "block") == 0) {
-        text = snag_json_string(call->arguments, "text");
+        if (!snag_json_arg_text(call->arguments, "text", 1u, SNAG_MAX_GOAL_BLOCKER,
+                                false, &text, error, error_size))
+            return tool_result(false, error, result);
         if (!goal_text_valid(text, SNAG_MAX_GOAL_BLOCKER))
             return tool_result(false,
                                "block requires a bounded nonblank reason", result);
@@ -607,5 +613,5 @@ snag_app_goal_tool(struct app_state *app,
         app->goal_armed = false;
         return tool_result(true, "goal marked blocked", result);
     }
-    return tool_result(false, "update_goal action is invalid", result);
+    return tool_result(false, "update_goal action must be rewrite, complete or block; use text=null for complete.", result);
 }

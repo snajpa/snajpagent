@@ -18,6 +18,9 @@ Implemented:
 - Session-local prompt-entry history, restored on resume and seeded once from a
   global archive. Orderly exit merges only newly entered lines; active sessions
   keep stable Up/Down and Ctrl-R history.
+- Parameter descriptions and current runtime settings in provider requests;
+  actionable argument diagnostics and explicit requested/applied output limits,
+  with latest-batch host feedback preserved across tiny output budgets.
 - Independent tool-call batches, multiple managed command handles, bounded
   redacted output journals, native read/search and strict patch installation.
 - UTF-8 editing, resize/suspend recovery, Markdown, local verbosity and explicit

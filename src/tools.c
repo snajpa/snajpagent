@@ -57,7 +57,8 @@ struct managed_process {
     uint64_t deadline_ms;
     uint64_t wait_started_ms;
     uint32_t max_wait_ms;
-    uint32_t max_output_tokens;
+    uint32_t max_output_tokens, requested_yield_ms;
+    uint64_t requested_output_tokens;
     struct snag_secret_set secrets;
     size_t max_secret;
     struct process_output output[2];
@@ -78,41 +79,22 @@ static bool managed_cleanup_registered;
 static int flush_capture(struct managed_process *, unsigned int);
 
 static bool
-json_bool_member(const json_t *object, const char *key, bool default_value,
-                 bool *out)
+json_u32_member(const json_t *object, const char *key, uint32_t fallback,
+                uint32_t min, uint32_t max, uint32_t *out, char *error, size_t size)
 {
-    json_t *value = json_object_get(object, key);
-    if (value && !json_is_null(value) && !json_is_boolean(value))
+    uint64_t value;
+    if (!snag_json_arg_uint(object, key, fallback, min, max, &value, error, size))
         return false;
-    *out = !value || json_is_null(value) ? default_value : json_is_true(value);
+    *out = (uint32_t)value;
     return true;
 }
 
 static bool
-json_u32_member(const json_t *object, const char *key, uint32_t default_value,
-                uint32_t min, uint32_t max, uint32_t *out)
-{
-    json_t *value = json_object_get(object, key);
-    json_int_t n;
-
-    if (!value || json_is_null(value)) {
-        *out = default_value;
-        return true;
-    }
-    if (!json_is_integer(value))
-        return false;
-    n = json_integer_value(value);
-    if (n < 0 || (uint64_t)n < min || (uint64_t)n > max)
-        return false;
-    *out = (uint32_t)n;
-    return true;
-}
-
-static bool
-command_output_limit(const json_t *arguments, uint32_t ceiling, uint32_t *out)
+command_output_limit(const json_t *arguments, uint32_t ceiling, uint32_t *out,
+                     char *error, size_t size)
 {
     if (!json_u32_member(arguments, "max_output_tokens", ceiling, 1u,
-                         (uint32_t)SNAG_CONFIG_TOKEN_LIMIT_MAX, out))
+                         (uint32_t)SNAG_CONFIG_TOKEN_LIMIT_MAX, out, error, size))
         return false;
     if (*out > ceiling)
         *out = ceiling;
@@ -201,6 +183,14 @@ excerpt_json(struct snag_buf *text, const char *label,
         "retained_bytes", (json_int_t)data->len);
 }
 
+static int
+output_limit_notice(struct snag_buf *text, uint64_t requested, uint32_t effective)
+{
+    return requested > effective ? snag_buf_printf(text,
+        "Requested max_output_tokens=%llu; applied max_output_tokens=%u (configured maximum, UTF-8 bytes).\n",
+        (unsigned long long)requested, effective) : 0;
+}
+
 static json_t *
 result_json(const char *status, const char *reason, int64_t exit_code,
             int signal_number, uint64_t duration_ms, const char *handle,
@@ -212,6 +202,9 @@ result_json(const char *status, const char *reason, int64_t exit_code,
     json_t *out = NULL, *stdout_json = NULL, *stderr_json = NULL;
     const char *msg = NULL;
     struct snag_buf text = {.max = SIZE_MAX};
+
+    if (output_limit_notice(&text, proc->requested_output_tokens, proc->max_output_tokens) < 0)
+        goto done;
 
     if (snag_string_in(status, "succeeded failed")) {
         if (snag_buf_printf(&text, "Process exited with code %lld.\n", (long long)exit_code) < 0)
@@ -227,8 +220,8 @@ result_json(const char *status, const char *reason, int64_t exit_code,
 
         if (reason && strcmp(reason, "wait_timeout") == 0) {
             if (snag_buf_printf(&text,
-                "Tool wait limit reached after %llu ms (max_wait_ms=%u). ",
-                (unsigned long long)wait_ms, proc->max_wait_ms) < 0)
+                "Tool wait limit reached after %llu ms (requested yield_ms=%u; host max_wait_ms=%u). ",
+                (unsigned long long)wait_ms, proc->requested_yield_ms, proc->max_wait_ms) < 0)
                 goto done;
             msg = "Control returned to the model; the process remains owned by this session. Evaluate its output and state, then use the same handle to wait, interact, or request termination. Do not restart the command merely because this wait expired.\n";
         } else if (reason && strcmp(reason, "operator_yield") == 0)
@@ -872,42 +865,46 @@ struct command_args {
 
 static int
 command_args(const struct snag_response_item *call, const struct snag_config *config,
-              struct command_args *args)
+              struct command_args *args, char *error, size_t size)
 {
     memset(args, 0, sizeof(*args));
     args->exec = !strcmp(call->name, "exec_command");
     if ((!args->exec && strcmp(call->name, "write_stdin")) ||
-        !snag_json_exact_keys(call->arguments,
-            args->exec ? "command max_output_tokens pty stdin timeout_ms workdir yield_ms" :
-                         "data eof handle terminate yield_ms max_output_tokens") ||
+        !snag_json_arg_keys(call->arguments,
+            args->exec ? "command workdir stdin pty yield_ms timeout_ms max_output_tokens" :
+                         "handle data eof terminate yield_ms max_output_tokens", error, size) ||
         !json_u32_member(call->arguments, "yield_ms", config->default_yield_ms,
-                          0u, SNAG_TOOL_YIELD_MAX_MS, &args->yield) ||
-        !command_output_limit(call->arguments, config->max_output_tokens, &args->limit))
+                          0u, SNAG_TOOL_YIELD_MAX_MS, &args->yield, error, size) ||
+        !command_output_limit(call->arguments, config->max_output_tokens, &args->limit, error, size))
         return -1;
     if (args->exec) {
-        args->command = snag_json_string(call->arguments, "command");
-        args->workdir = snag_json_string(call->arguments, "workdir");
-        json_t *input = json_object_get(call->arguments, "stdin");
-        args->input = json_string_value(input);
         args->handle = call->call_id;
-        args->eof = args->input != NULL;
-        if (!snag_text_valid(args->command, 0u, SNAG_TOOL_COMMAND_MAX) ||
-            !absolute_dir_arg_valid(args->workdir) ||
-            (!json_is_null(input) && !snag_text_valid(args->input, 0u, SNAG_TOOL_STDIN_MAX)) ||
-            !json_bool_member(call->arguments, "pty", false, &args->pty) ||
+        if (!snag_json_arg_text(call->arguments, "command", 0u, SNAG_TOOL_COMMAND_MAX,
+                                false, &args->command, error, size) ||
+            !snag_json_arg_text(call->arguments, "workdir", 1u, SNAG_PATH_MAX_BYTES,
+                                false, &args->workdir, error, size) ||
+            !snag_json_arg_text(call->arguments, "stdin", 0u, SNAG_TOOL_STDIN_MAX,
+                                true, &args->input, error, size) ||
+            !snag_json_arg_bool(call->arguments, "pty", false, &args->pty, error, size) ||
             !json_u32_member(call->arguments, "timeout_ms", config->default_timeout_ms,
-                             1u, config->max_timeout_ms, &args->timeout))
+                             1u, config->max_timeout_ms, &args->timeout, error, size))
             return -1;
+        args->eof = args->input != NULL;
+        if (!absolute_dir_arg_valid(args->workdir))
+            return snag_errorf(error, size, "workdir must name an existing absolute directory.");
     } else {
-        args->handle = snag_json_string(call->arguments, "handle");
-        args->input = snag_json_string(call->arguments, "data");
-        if (!snag_text_valid(args->input, 0u, SNAG_TOOL_STDIN_MAX) ||
-            !json_bool_member(call->arguments, "eof", false, &args->eof) ||
-            !json_bool_member(call->arguments, "terminate", false, &args->terminate) ||
-            (args->terminate && (args->input[0] || args->eof)))
+        if (!snag_json_arg_text(call->arguments, "handle", SNAG_ID_HEX_LEN, SNAG_ID_HEX_LEN,
+                                false, &args->handle, error, size) ||
+            !snag_json_arg_text(call->arguments, "data", 0u, SNAG_TOOL_STDIN_MAX,
+                                false, &args->input, error, size) ||
+            !snag_json_arg_bool(call->arguments, "eof", false, &args->eof, error, size) ||
+            !snag_json_arg_bool(call->arguments, "terminate", false, &args->terminate, error, size))
             return -1;
+        if (args->terminate && (args->input[0] || args->eof))
+            return snag_errorf(error, size, "terminate=true requires data=\"\" and eof=false or null.");
     }
-    return args->handle && snag_hex_is_lower(args->handle, SNAG_ID_HEX_LEN) ? 0 : -1;
+    return args->handle && snag_hex_is_lower(args->handle, SNAG_ID_HEX_LEN) ? 0 :
+        snag_errorf(error, size, "handle must be the 32-character lowercase hex handle returned by exec_command.");
 }
 
 int
@@ -919,8 +916,9 @@ snag_tools_prepare(const struct snag_response_item *call, const struct snag_conf
     const char *reason = NULL;
     struct managed_process *proc;
     size_t used = 0u;
+    char diagnostic[768] = {0};
     *rejected = NULL;
-    if (command_args(call, config, &args) < 0) {
+    if (command_args(call, config, &args, diagnostic, sizeof(diagnostic)) < 0) {
         reason = "invalid_arguments";
     } else {
         *yield_ms = args.yield;
@@ -941,7 +939,15 @@ snag_tools_prepare(const struct snag_response_item *call, const struct snag_conf
             reason = "stdin_closed";
     }
     if (reason) {
-        *rejected = snag_tool_result_not_run(reason);
+        if (*diagnostic) {
+            char text[1024];
+            (void)snprintf(text, sizeof(text),
+                "%s was not run: %s Correct the arguments using the declared schema before retrying.",
+                call->name, diagnostic);
+            *rejected = snag_tool_result("not_run", reason, text, -1, 0u);
+        } else {
+            *rejected = snag_tool_result_not_run(reason);
+        }
         return *rejected && snag_tools_attach_output_limit(call, config, *rejected) == 0 ? 1 : -1;
     }
     if (!journal_write || !journal_read)
@@ -959,7 +965,7 @@ snag_tools_start(const struct snag_response_item *call, const struct snag_config
     struct command_args args;
     struct managed_process *proc;
     *result = NULL;
-    if (command_args(call, config, &args) < 0)
+    if (command_args(call, config, &args, error, error_size) < 0)
         return -1;
     if (args.exec) {
         if (start_command(args.handle, args.command, args.workdir, args.input,
@@ -986,8 +992,12 @@ snag_tools_start(const struct snag_response_item *call, const struct snag_config
                 proc->input_eof = true;
         }
     }
+    const json_t *requested = json_object_get(call->arguments, "max_output_tokens");
+    proc->requested_output_tokens = json_is_integer(requested) ?
+        (uint64_t)json_integer_value(requested) : args.limit;
     proc->wait_started_ms = snag_monotonic_ms();
     proc->max_wait_ms = config->max_wait_ms;
+    proc->requested_yield_ms = args.yield;
     return 0;
 }
 
@@ -1003,11 +1013,20 @@ snag_tools_attach_output_limit(const struct snag_response_item *call,
         (!snag_string_in(call->name, "exec_command write_stdin")))
         return 0;
     if (!command_output_limit(call->arguments, config->max_output_tokens,
-                              &max_output_tokens))
+                              &max_output_tokens, NULL, 0u))
         max_output_tokens = config->max_output_tokens;
-    if (snag_json_set_new(result, "max_output_tokens",
-                   json_integer((json_int_t)max_output_tokens)) < 0) {
+    if (snag_json_set_new(result, "max_output_tokens", json_integer(max_output_tokens)) < 0)
         return -1;
+    uint64_t requested;
+    if (snag_json_integer_u64(call->arguments, "max_output_tokens", &requested) == 0 &&
+        requested > max_output_tokens && requested <= SNAG_CONFIG_TOKEN_LIMIT_MAX) {
+        const char *old = snag_json_string(result, "model_text");
+        struct snag_buf text = {.max = SNAG_MAX_EVENT_LINE};
+        int rc = !old || output_limit_notice(&text, requested, max_output_tokens) < 0 ||
+            snag_buf_append(&text, old, strlen(old)) < 0 || snag_buf_terminate(&text) < 0 ? -1 :
+            snag_json_set_new(result, "model_text", json_string((const char *)text.data));
+        snag_buf_free(&text);
+        return rc;
     }
     return 0;
 }

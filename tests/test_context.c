@@ -712,6 +712,7 @@ assert_strict_tool_contract(json_t *tool)
         key = json_object_iter_key(iter);
         schema = json_object_iter_value(iter);
         assert(schema);
+        assert(snag_json_string(schema, "description") && *snag_json_string(schema, "description"));
         assert(array_has_string(required, key));
     }
     return properties;
@@ -722,7 +723,15 @@ assert_properties(json_t *tool, json_t *expected)
 {
     json_t *properties = json_object_get(json_object_get(tool, "parameters"), "properties");
 
-    assert(expected && json_equal(properties, expected));
+    assert(expected && json_object_size(properties) == json_object_size(expected));
+    for (void *it = json_object_iter(expected); it; it = json_object_iter_next(expected, it)) {
+        const char *key = json_object_iter_key(it);
+        json_t *want = json_object_iter_value(it), *actual = json_object_get(properties, key);
+        assert(actual && json_object_size(actual) == json_object_size(want) + 1u);
+        assert(snag_json_string(actual, "description") && *snag_json_string(actual, "description"));
+        for (void *field = json_object_iter(want); field; field = json_object_iter_next(want, field))
+            assert(json_equal(json_object_get(actual, json_object_iter_key(field)), json_object_iter_value(field)));
+    }
     json_decref(expected);
 }
 
@@ -747,9 +756,10 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle,
     tool = item_by_field(tools, "name", "exec_command");
     if (tool) {
         const char *description = snag_json_string(tool, "description");
-        assert(strstr(description, "uses the configured command deadline"));
         assert(strstr(description, fallback));
-        assert(strstr(description, "not tokens"));
+        json_t *properties = json_object_get(json_object_get(tool, "parameters"), "properties");
+        assert(strstr(snag_json_string(json_object_get(properties, "timeout_ms"), "description"), "default_timeout_ms"));
+        assert(strstr(snag_json_string(json_object_get(properties, "max_output_tokens"), "description"), "not model generation tokens"));
         assert_properties(tool, json_pack(
             "{s:{s:s},s:{s:s},s:{s:[s,s]},s:{s:[s,s]},"
             "s:{s:[s,s],s:i,s:i},s:{s:[s,s],s:i,s:I},s:{s:[s,s],s:i,s:I}}",

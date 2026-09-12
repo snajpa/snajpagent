@@ -360,6 +360,10 @@ class FakeResponses:
         if outputs:
             assert len(outputs) == 1 and len(outputs[0].encode()) <= effective
             assert f"max_output_tokens={effective}" in outputs[0]
+            if selected is not None and selected > ceiling:
+                controls = str([i for i in request["input"] if i.get("role") == "developer"])
+                assert f"Requested max_output_tokens={selected}" in controls
+                assert f"applied max_output_tokens={effective}" in controls
             return self.response_body(sequence, "tool cap confirmed")
         return self.function_body(sequence, "call_cap", "exec_command", {
             "command": "printf '%08000d' 0", "workdir": str(self.tool_workspace),
@@ -3509,6 +3513,147 @@ def run_multi_tool_cases(binary, root, provider, environment):
             print(f"tmux_terminal multi-tool {mode}: ok", flush=True)
         if provider.failure:
             raise provider.failure
+
+
+def run_tool_contract_cases(binary, root, provider, environment):
+    """Malformed proposals, correction, clamping and replay through real HTTP."""
+    for mode in ("yield", "command", "extra", "timeout", "zero", "boolean", "tiny", "retry", "patch", "wait", "goal", "read"):
+        case = root / ("contract-" + mode)
+        case.mkdir(parents=True)
+        config, state = case / "config.ini", case / "state"
+        write_irc_config(config, provider.port, "host-model")
+        ceiling = 1 if mode == "tiny" else 1200
+        with config.open("a") as out:
+            out.write(f"[tool]\nmax_timeout_ms = 2000\nmax_output_tokens = {ceiling}\n")
+        if mode == "read":
+            (case / "marker").write_text("x\n")
+        if mode == "retry":
+            config.write_text(config.read_text().replace("[agent]\n", "[agent]\nmax_turn_retries = 0\n", 1))
+        recovering = [False]
+        calls, received = [], []
+        correct = {"command": "printf x >> marker", "workdir": str(case), "stdin": None,
+                   "pty": False, "yield_ms": 1000, "timeout_ms": 1500, "max_output_tokens": 9000}
+
+        def respond(handler, request, sequence):
+            received.append(request)
+            tools = {t["name"]: t for t in request["tools"] if t.get("type") == "function"}
+            for tool in tools.values():
+                for prop in tool["parameters"]["properties"].values():
+                    assert prop.get("description"), tool["name"]
+            inputs = request["input"]
+            outputs = [i for i in inputs if i.get("type") == "function_call_output"]
+            controls = "\n".join(i["content"] for i in inputs if i.get("role") == "developer"
+                                 and isinstance(i.get("content"), str))
+            if mode != "read":
+                assert "default_timeout_ms=" in controls and "workspace=" in controls
+            else:
+                assert set(tools) == {"read_file", "list_files", "grep"}
+            step = len(outputs)
+            if mode == "retry" and step == 1 and not recovering[0]:
+                provider.reply(handler, b'{"error":{"message":"intentional interruption","type":"invalid_request_error"}}',
+                               content_type="application/json", status=400)
+                return
+            args, name = dict(correct), "exec_command"
+            if mode == "goal":
+                if step == 0:
+                    name, args = "create_goal", {"objective": "Finish this isolated contract test"}
+                else:
+                    name = "update_goal"
+                    args = {"status" if step == 1 else "action": "complete", "text": None}
+                    if step == 2:
+                        assert "action" in outputs[-1]["output"] and "Missing argument" in outputs[-1]["output"]
+            elif mode == "read":
+                name = "read_file"
+                args = {"path": str(case / "marker"), "start_line": -1 if step == 0 else 1, "end_line": None}
+                if step == 1:
+                    assert "start_line=-1" in outputs[-1]["output"] and "1..2147483647" in outputs[-1]["output"]
+            elif mode == "wait":
+                if step == 0:
+                    args.update(command="read line; printf x >> marker", yield_ms=0, max_output_tokens=None)
+                elif step < 3:
+                    if step == 1:
+                        _, events = read_events(state)
+                        result = event_list(events, "tool_finished")[-1]["data"]["result"]
+                        calls.append(result["handle"])
+                    name = "write_stdin"
+                    args = {"handle": calls[0], "data": None if step == 1 else "go\n", "eof": True,
+                            "terminate": False, "yield_ms": 1000, "max_output_tokens": 9000}
+                    if step == 2:
+                        assert "data must be UTF-8" in controls
+                        assert not (case / "marker").exists()
+            elif mode == "patch":
+                name = "apply_patch"
+                path = str(case / "marker") if step == 0 else "marker"
+                args = {"workdir": str(case), "patch": "*** Begin Patch\n*** Add File: " + path + "\n+x\n*** End Patch\n"}
+                if step == 1:
+                    assert "relative" in outputs[-1]["output"] and not (case / "marker").exists()
+            elif step == 0:
+                args["max_output_tokens"] = 1
+                if mode in ("yield", "tiny", "retry"):
+                    args["yield_time_ms"] = args.pop("yield_ms")
+                elif mode == "command":
+                    args["cmd"] = args.pop("command")
+                elif mode == "extra":
+                    args["junk"] = 1
+                elif mode == "timeout":
+                    args["timeout_ms"] = 2001
+                elif mode == "zero":
+                    args["max_output_tokens"] = 0
+                elif mode == "boolean":
+                    args["pty"] = "false"
+            elif step == 1:
+                expected = {"yield": "yield_ms", "tiny": "yield_ms", "retry": "yield_ms", "command": "command",
+                            "extra": "junk", "timeout": "2000", "zero": "max_output_tokens", "boolean": "pty"}[mode]
+                assert expected in controls and "was not run" in controls
+                assert not (case / "marker").exists()
+            final = step == (3 if mode in ("wait", "goal") else 2)
+            if final:
+                if mode != "goal":
+                    assert (case / "marker").read_text().strip() == "x"
+                else:
+                    _, events = read_events(state)
+                    assert len(event_list(events, "goal_completed")) == 1
+                if mode not in ("patch", "goal", "read"):
+                    assert "Requested max_output_tokens=9000" in controls
+                    assert f"applied max_output_tokens={ceiling}" in controls
+                    assert len(outputs[-1]["output"].encode()) <= ceiling
+                body = provider.response_body(sequence, "tool contract confirmed")
+            else:
+                body = provider.function_body(sequence, f"call_contract_{step}", name, args)
+            provider.reply(handler, body.encode())
+
+        provider.runtime_handler = respond
+        try:
+            prompt = "/ro inspect the marker" if mode == "read" else (
+                "Create a persistent test goal and then complete it" if mode == "goal" else "check tool contract")
+            run = subprocess.run([str(binary), "--dotdir", str(state), "--config", str(config),
+                                  "-e", "--", prompt], cwd=case, env=environment,
+                                 capture_output=True, text=True, timeout=25)
+            if provider.failure:
+                raise provider.failure
+            if mode == "retry":
+                assert run.returncode != 0 and not (case / "marker").exists()
+                recovering[0] = True
+                sid = next((state / "sessions").iterdir()).name
+                run = subprocess.run([str(binary), "--dotdir", str(state), "--config", str(config),
+                                      "-e", "--resume", sid, "--", "continue the tool contract test"],
+                                     cwd=case, env=environment, capture_output=True, text=True, timeout=25)
+                if provider.failure:
+                    raise provider.failure
+            assert run.returncode == 0, (run.returncode, run.stdout, run.stderr)
+            assert "tool contract confirmed" in run.stdout
+            # Separate-process replay preserves the capped result and host feedback.
+            provider.runtime_handler = lambda h, r, seq: provider.reply(h, provider.response_body(seq, "replay confirmed").encode())
+            sid = next((state / "sessions").iterdir()).name
+            replay = subprocess.run([str(binary), "--dotdir", str(state), "--config", str(config),
+                                     "-e", "--resume", sid, "--", "report completion"], cwd=case, env=environment,
+                                    capture_output=True, text=True, timeout=15)
+            assert replay.returncode == 0, replay.stderr
+            if mode != "goal":
+                assert (case / "marker").read_text().strip() == "x"
+        finally:
+            provider.runtime_handler = None
+        print(f"tmux_terminal tool contract {mode}: ok", flush=True)
 
 
 def run_output_cap_cases(binary, root, provider, environment):
@@ -6887,6 +7032,7 @@ def run_irc_case(binary, root):
         run_argument_snapshot_cases(binary, root, provider, environment)
         run_reasoning_continuity_cases(binary, root, provider, environment)
         run_multi_tool_cases(binary, root, provider, environment)
+        run_tool_contract_cases(binary, root, provider, environment)
         run_output_cap_cases(binary, root, provider, environment)
         run_ctrl_d_cases(binary, root, provider, environment)
         run_model_catalog_case(binary, root, provider, environment)

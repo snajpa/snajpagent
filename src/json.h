@@ -31,6 +31,14 @@ int snag_json_digest_bounded(const json_t *value, size_t max,
                             size_t *bytes);
 /* Fixed field names separated by single spaces; empty means an empty object. */
 bool snag_json_exact_keys(const json_t *object, const char *keys);
+/* Tool argument diagnostics never echo string values (which may contain secrets). */
+bool snag_json_arg_keys(const json_t *, const char *, char *, size_t);
+bool snag_json_arg_uint(const json_t *, const char *, uint64_t, uint64_t, uint64_t,
+                        uint64_t *, char *, size_t);
+bool snag_json_arg_bool(const json_t *, const char *, bool, bool *, char *, size_t);
+bool snag_json_arg_text(const json_t *, const char *, size_t, size_t, bool,
+                        const char **, char *, size_t);
+
 const char *snag_json_string(const json_t *object, const char *key);
 /* Borrow nonempty, bounded UTF-8 without embedded NUL bytes. */
 const char *snag_json_bounded_string(const json_t *value, size_t max);

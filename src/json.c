@@ -349,6 +349,96 @@ snag_json_exact_keys(const json_t *object, const char *keys)
     return json_object_size(object) == count;
 }
 
+bool
+snag_json_arg_keys(const json_t *object, const char *keys, char *error, size_t size)
+{
+    if (snag_json_exact_keys(object, keys))
+        return true;
+    const char *missing = keys;
+    while (*missing) {
+        size_t len = strcspn(missing, " ");
+        if (!json_object_getn(object, missing, len)) {
+            snag_errorf(error, size,
+                "Missing argument %.*s. Expected exactly these fields: %s. Use JSON null for defaults.",
+                (int)len, missing, keys);
+            return false;
+        }
+        missing += len + (missing[len] == ' ');
+    }
+    if (!*keys) {
+        snag_errorf(error, size, "This tool takes an empty JSON object: {}.");
+        return false;
+    }
+    for (void *it = json_object_iter((json_t *)object); it;
+         it = json_object_iter_next((json_t *)object, it)) {
+        const char *key = json_object_iter_key(it);
+        if (!snag_string_in(key, keys) && strlen(key) <= 96u) {
+            struct snag_buf quoted = {.max = 1024u};
+            json_t *field = json_string(key);
+            bool encoded = field && snag_json_canonical(field, &quoted) == 0 &&
+                           snag_buf_terminate(&quoted) == 0;
+            snag_errorf(error, size, "Unexpected argument %s. Expected exactly these fields: %s.",
+                encoded ? (const char *)quoted.data : "field", keys);
+            json_decref(field);
+            snag_buf_free(&quoted);
+            return false;
+        }
+    }
+    snag_errorf(error, size, "Unexpected argument fields. Expected exactly these fields: %s.", keys);
+    return false;
+}
+
+bool
+snag_json_arg_uint(const json_t *args, const char *key, uint64_t fallback,
+                   uint64_t min, uint64_t max, uint64_t *out, char *error, size_t size)
+{
+    const json_t *value = json_object_get(args, key);
+    if (json_is_null(value)) {
+        *out = fallback;
+        return true;
+    }
+    if (json_is_integer(value)) {
+        json_int_t n = json_integer_value(value);
+        if (n >= 0 && (uint64_t)n >= min && (uint64_t)n <= max) {
+            *out = (uint64_t)n;
+            return true;
+        }
+        snag_errorf(error, size, "%s=%lld is outside the allowed range %llu..%llu; use JSON null for the default.",
+            key, (long long)n, (unsigned long long)min, (unsigned long long)max);
+    } else {
+        snag_errorf(error, size, "%s must be an integer in %llu..%llu or JSON null (not a string).",
+            key, (unsigned long long)min, (unsigned long long)max);
+    }
+    return false;
+}
+
+bool
+snag_json_arg_bool(const json_t *args, const char *key, bool fallback,
+                   bool *out, char *error, size_t size)
+{
+    const json_t *value = json_object_get(args, key);
+    if (json_is_null(value) || json_is_boolean(value)) {
+        *out = json_is_null(value) ? fallback : json_is_true(value);
+        return true;
+    }
+    snag_errorf(error, size, "%s must be a JSON boolean or null (not a string).", key);
+    return false;
+}
+
+bool
+snag_json_arg_text(const json_t *args, const char *key, size_t min, size_t max,
+                   bool nullable, const char **out, char *error, size_t size)
+{
+    const json_t *value = json_object_get(args, key);
+    *out = json_string_value(value);
+    if ((nullable && json_is_null(value)) ||
+        (snag_text_valid(*out, min, max) && strlen(*out) == json_string_length(value)))
+        return true;
+    snag_errorf(error, size, "%s must be UTF-8 text of %zu..%zu bytes without NUL%s.",
+        key, min, max, nullable ? ", or JSON null" : "");
+    return false;
+}
+
 const char *
 snag_json_string(const json_t *object, const char *key)
 {

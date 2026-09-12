@@ -128,7 +128,7 @@ path_valid(const char *path, char *error, size_t error_size)
 
     if (!len || len > PATCH_PATH_MAX || path[0] == '/' ||
         !snag_utf8_valid((const unsigned char *)path, len, true)) {
-        return snag_fail(error, error_size, EINVAL, "patch path is not a bounded relative UTF-8 path");
+        return snag_fail(error, error_size, EINVAL, "patch paths must be bounded relative UTF-8 paths inside workdir (no absolute paths or .. components)");
     }
     if (len >= 2u && ((path[0] >= 'A' && path[0] <= 'Z') ||
                       (path[0] >= 'a' && path[0] <= 'z')) &&
@@ -968,23 +968,6 @@ append_summary(struct snag_buf *out, const struct patch_set *set)
     return append_patch_preview(out, set);
 }
 
-static bool
-json_bounded_string(const json_t *object, const char *key, size_t max,
-                    const char **out, size_t *len)
-{
-    json_t *value = json_object_get(object, key);
-    const char *s;
-
-    if (!json_is_string(value))
-        return false;
-    s = json_string_value(value);
-    *len = json_string_length(value);
-    if (!s || *len > max || strlen(s) != *len)
-        return false;
-    *out = s;
-    return true;
-}
-
 static int
 workdir_valid(const char *workdir, size_t len, const char *session_workspace,
               char *error, size_t error_size)
@@ -1008,8 +991,6 @@ snag_tools_apply_patch(const struct snag_response_item *call,
 {
     const char *patch;
     const char *workdir;
-    size_t patch_len;
-    size_t workdir_len;
     char *normalized = NULL;
     struct line_vec lines = {0};
     struct patch_set set = {0};
@@ -1024,18 +1005,18 @@ snag_tools_apply_patch(const struct snag_response_item *call,
     *result = NULL;
     struct snag_buf summary = {.max = PATCH_MODEL_MAX};
     if (!call || !session_workspace ||
-        !json_bounded_string(call->arguments, "patch", PATCH_TEXT_MAX,
-                             &patch, &patch_len) ||
-        !json_bounded_string(call->arguments, "workdir", SNAG_PATH_MAX_BYTES,
-                             &workdir, &workdir_len)) {
-        snag_errorf(error, error_size, "invalid apply_patch arguments");
-        if (snag_buf_printf(&summary, "Patch rejected: invalid apply_patch arguments.\n") < 0)
+        !snag_json_arg_keys(call->arguments, "patch workdir", error, error_size) ||
+        !snag_json_arg_text(call->arguments, "patch", 0u, PATCH_TEXT_MAX,
+                            false, &patch, error, error_size) ||
+        !snag_json_arg_text(call->arguments, "workdir", 1u, SNAG_PATH_MAX_BYTES,
+                            false, &workdir, error, error_size)) {
+        if (snag_buf_printf(&summary, "Patch rejected: %s\n", *error ? error : "invalid arguments") < 0)
             goto out;
         goto result;
     }
-    if (workdir_valid(workdir, workdir_len, session_workspace,
+    if (workdir_valid(workdir, strlen(workdir), session_workspace,
                       error, error_size) < 0 ||
-        normalize_patch_text(patch, patch_len, &normalized,
+        normalize_patch_text(patch, strlen(patch), &normalized,
                              error, error_size) < 0 ||
         split_lines(normalized, strlen(normalized), &lines) < 0 ||
         parse_patch_lines(lines.v, lines.n, &set, error, error_size) < 0) {
