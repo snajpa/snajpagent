@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Support OpenBSD 5.9 direct audio block sizes and pause/start/stop controls.
+  Preserve both audio backends; physical audio remains unqualified.
+
 - Cover multimedia context projection with current operator-visibility hints.
 
 - Add OpenBSD static media dependency wiring and native audio-loader linkage.

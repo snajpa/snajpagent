@@ -1506,3 +1506,83 @@ with tempfile.TemporaryDirectory(prefix="bsd-thread-headers-", dir=root / "build
     source.write_text(flags + "\n".join(after))
     subprocess.run(command, check=True)
 print("PASS: FFmpeg BSD extension headers receive standard pthread declarations first")
+
+# Intermediate OpenBSD audio(4) uses pause instead of AUDIO_FLUSH.
+audio4_patch = (root / "nix/miniaudio-openbsd-audio4.patch").read_text()
+audio4_after = "\n".join(line[1:] for line in audio4_patch.splitlines()
+                         if line.startswith((" ", "+")) and not line.startswith("+++"))
+audio4_functions = "\n".join(re.search(r"static ma_result " + name + r"\(.*?\n}",
+                                      audio4_after, re.S).group(0) for name in (
+    "ma_device_pause_fd__audio4", "ma_device_start__audio4",
+    "ma_device_stop_fd__audio4", "ma_device_stop__audio4"))
+assert 'fdInfo.play.pause = fdInfo.record.pause = 1;' in audio4_after
+assert 'fdInfo.record.block_size = internalPeriodSizeInBytes;' in audio4_after
+assert 'fdInfo.play.block_size = internalPeriodSizeInBytes;' in audio4_after
+assert 'deviceType == ma_device_type_capture ? fdInfo.record.block_size : fdInfo.play.block_size' in audio4_after
+assert '!defined(MA_AUDIO4_USE_NEW_API) && !defined(MA_AUDIO4_USE_PAUSE_API)' in audio4_after
+with tempfile.TemporaryDirectory(prefix="audio4-pause-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    source = tmp / "pause.c"
+    source.write_text(r"""
+#include <assert.h>
+#include <errno.h>
+#include <string.h>
+typedef int ma_result;
+typedef struct { int type; struct { int fdCapture, fdPlayback; } audio4; } ma_device;
+struct audio_info { struct { unsigned char pause; } play, record; };
+#define MA_AUDIO4_USE_PAUSE_API 1
+#define MA_SUCCESS 0
+#define MA_INVALID_ARGS -1
+#define MA_LOG_LEVEL_ERROR 0
+#define MA_ASSERT assert
+#define ma_device_type_capture 1
+#define ma_device_type_playback 2
+#define ma_device_type_duplex 3
+#define AUDIO_SETINFO 22
+#define AUDIO_INITINFO(p) memset(p, 255, sizeof(*(p)))
+static int calls, fail_call, descriptors[8], states[8];
+static int ioctl(int fd, int request, const struct audio_info *info) {
+    assert(request == AUDIO_SETINFO && calls < 8);
+    assert(fd == 10 || fd == 11);
+    assert(info->play.pause == info->record.pause && info->play.pause <= 1);
+    descriptors[calls] = fd; states[calls] = info->play.pause; ++calls;
+    if (calls == fail_call) { errno = EIO; return -1; }
+    return 0;
+}
+static int ma_device_get_log(ma_device *device) { assert(device); return 0; }
+static void ma_log_post(int log, int level, const char *text) { (void)log; (void)level; (void)text; }
+static ma_result ma_result_from_errno(int error) { return -error; }
+static void reset(int fail) { calls = 0; fail_call = fail; }
+""" + audio4_functions + r"""
+int main(void) {
+    ma_device device = {ma_device_type_duplex, {10, 11}};
+    reset(0);
+    assert(ma_device_start__audio4(&device) == MA_SUCCESS && calls == 2);
+    assert(descriptors[0] == 10 && descriptors[1] == 11 && states[0] == 0 && states[1] == 0);
+    reset(0);
+    assert(ma_device_stop__audio4(&device) == MA_SUCCESS && calls == 2);
+    assert(states[0] == 1 && states[1] == 1);
+    reset(1);
+    assert(ma_device_start__audio4(&device) == -EIO && calls == 1);
+    reset(2);
+    assert(ma_device_start__audio4(&device) == -EIO && calls == 3);
+    assert(descriptors[2] == 10 && states[2] == 1); /* roll back capture */
+    reset(1);
+    assert(ma_device_stop_fd__audio4(&device, 10) == -EIO && calls == 1);
+    reset(0); device.audio4.fdPlayback = -1;
+    assert(ma_device_start__audio4(&device) == MA_INVALID_ARGS && calls == 0);
+    assert(ma_device_stop_fd__audio4(&device, -1) == MA_INVALID_ARGS && calls == 0);
+    for (int type = ma_device_type_capture; type <= ma_device_type_playback; ++type) {
+        device.type = type; device.audio4.fdPlayback = 11; reset(0);
+        assert(ma_device_start__audio4(&device) == MA_SUCCESS && calls == 1);
+        assert(descriptors[0] == (type == ma_device_type_capture ? 10 : 11));
+        assert(states[0] == 0); reset(0);
+        assert(ma_device_stop__audio4(&device) == MA_SUCCESS && calls == 1 && states[0] == 1);
+    }
+    return 0;
+}
+""")
+    subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
+                    "-o", str(tmp / "pause")], check=True)
+    subprocess.run([str(tmp / "pause")], check=True)
+print("PASS: OpenBSD audio(4) pause/start/stop preserves failures, duplex rollback and no drain")

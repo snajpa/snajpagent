@@ -1,0 +1,277 @@
+# SPDX-License-Identifier: MIT-0
+# Preserve intermediate OpenBSD audio(4) block sizes and explicit pause/start/stop.
+--- a/miniaudio.h
++++ b/miniaudio.h
+@@ -37524,36 +37524,39 @@
+ ******************************************************************************/
+ #ifdef MA_HAS_AUDIO4
+ #include <fcntl.h>
+ #include <poll.h>
+ #include <errno.h>
+ #include <sys/stat.h>
+ #include <sys/types.h>
+ #include <sys/ioctl.h>
+ #include <sys/audioio.h>
+ 
+ #ifdef __NetBSD__
+ #include <sys/param.h>
+ #endif
+ 
+ #if defined(__OpenBSD__)
+     #include <sys/param.h>
+     #if defined(OpenBSD) && OpenBSD >= 201709
+         #define MA_AUDIO4_USE_NEW_API
++    #elif !defined(AUDIO_FLUSH)
++        /* Intermediate OpenBSD API: per-direction blocks and pause control. */
++        #define MA_AUDIO4_USE_PAUSE_API
+     #endif
+ #endif
+ 
+ static void ma_construct_device_id__audio4(char* id, size_t idSize, const char* base, int deviceIndex)
+ {
+     size_t baseLen;
+ 
+     MA_ASSERT(id != NULL);
+     MA_ASSERT(idSize > 0);
+     MA_ASSERT(deviceIndex >= 0);
+ 
+     baseLen = strlen(base);
+     MA_ASSERT(idSize > baseLen);
+ 
+     ma_strcpy_s(id, idSize, base);
+     ma_itoa_s(deviceIndex, id+baseLen, idSize-baseLen, 10);
+ }
+ 
+@@ -38043,36 +38046,41 @@
+ #if defined(__NetBSD__) && (__NetBSD_Version__ >= 900000000)
+                 fdInfoResult = ioctl(fdctl, AUDIO_GETFORMAT, &fdInfo);
+ #else
+                 fdInfoResult = ioctl(fdctl, AUDIO_GETINFO, &fdInfo);
+ #endif
+                 close(fdctl);
+             }
+         }
+ 
+         if (fdInfoResult == -1) {
+             /* We still don't have the default device info so just retrieve it from the main audio device. */
+             if (ioctl(fd, AUDIO_GETINFO, &fdInfo) < 0) {
+                 close(fd);
+                 ma_log_post(ma_device_get_log(pDevice), MA_LOG_LEVEL_ERROR, "[audio4] AUDIO_GETINFO failed.");
+                 return ma_result_from_errno(errno);
+             }
+         }
+ 
++        /* Keep the intermediate OpenBSD device paused until explicit start. */
++        #if defined(MA_AUDIO4_USE_PAUSE_API)
++        fdInfo.play.pause = fdInfo.record.pause = 1;
++        #endif
++
+         /* We get the driver to do as much of the data conversion as possible. */
+         if (deviceType == ma_device_type_capture) {
+             fdInfo.mode = AUMODE_RECORD;
+             ma_encoding_from_format__audio4(ma_best_format_from_fd__audio4(fd, pDescriptor->format), &fdInfo.record.encoding, &fdInfo.record.precision);
+ 
+             if (pDescriptor->channels != 0) {
+                 fdInfo.record.channels = ma_clamp(pDescriptor->channels, 1, 12);    /* From the documentation: `channels` ranges from 1 to 12. */
+             }
+ 
+             if (pDescriptor->sampleRate != 0) {
+                 fdInfo.record.sample_rate = ma_clamp(pDescriptor->sampleRate, 1000, 192000);    /* From the documentation: `frequency` ranges from 1000Hz to 192000Hz. (They mean `sample_rate` instead of `frequency`.) */
+             }
+         } else {
+             fdInfo.mode = AUMODE_PLAY;
+             ma_encoding_from_format__audio4(ma_best_format_from_fd__audio4(fd, pDescriptor->format), &fdInfo.play.encoding, &fdInfo.play.precision);
+ 
+             if (pDescriptor->channels != 0) {
+                 fdInfo.play.channels = ma_clamp(pDescriptor->channels, 1, 12);    /* From the documentation: `channels` ranges from 1 to 12. */
+@@ -38116,45 +38124,57 @@
+             ma_uint32 internalPeriodSizeInBytes;
+ 
+             internalPeriodSizeInFrames = ma_calculate_buffer_size_in_frames_from_descriptor(pDescriptor, internalSampleRate, pConfig->performanceProfile);
+ 
+             internalPeriodSizeInBytes = internalPeriodSizeInFrames * ma_get_bytes_per_frame(internalFormat, internalChannels);
+             if (internalPeriodSizeInBytes < 16) {
+                 internalPeriodSizeInBytes = 16;
+             }
+ 
+             internalPeriods = pDescriptor->periodCount;
+             if (internalPeriods < 2) {
+                 internalPeriods = 2;
+             }
+ 
+             /* What miniaudio calls a period, audio4 calls a block. */
+             AUDIO_INITINFO(&fdInfo);
+             fdInfo.hiwat     = internalPeriods;
+             fdInfo.lowat     = internalPeriods-1;
++            #if defined(MA_AUDIO4_USE_PAUSE_API)
++            if (deviceType == ma_device_type_capture)
++                fdInfo.record.block_size = internalPeriodSizeInBytes;
++            else
++                fdInfo.play.block_size = internalPeriodSizeInBytes;
++            #else
+             fdInfo.blocksize = internalPeriodSizeInBytes;
++            #endif
+             if (ioctl(fd, AUDIO_SETINFO, &fdInfo) < 0) {
+                 close(fd);
+                 ma_log_post(ma_device_get_log(pDevice), MA_LOG_LEVEL_ERROR, "[audio4] Failed to set internal buffer size. AUDIO_SETINFO failed.");
+                 return ma_result_from_errno(errno);
+             }
+ 
+             internalPeriods            = fdInfo.hiwat;
+-            internalPeriodSizeInFrames = fdInfo.blocksize / ma_get_bytes_per_frame(internalFormat, internalChannels);
++            #if defined(MA_AUDIO4_USE_PAUSE_API)
++            internalPeriodSizeInBytes = deviceType == ma_device_type_capture ? fdInfo.record.block_size : fdInfo.play.block_size;
++            #else
++            internalPeriodSizeInBytes = fdInfo.blocksize;
++            #endif
++            internalPeriodSizeInFrames = internalPeriodSizeInBytes / ma_get_bytes_per_frame(internalFormat, internalChannels);
+         }
+     }
+     #else
+     {
+         struct audio_swpar fdPar;
+ 
+         /* We need to retrieve the format of the device so we can know the channel count and sample rate. Then we can calculate the buffer size. */
+         if (ioctl(fd, AUDIO_GETPAR, &fdPar) < 0) {
+             close(fd);
+             ma_log_post(ma_device_get_log(pDevice), MA_LOG_LEVEL_ERROR, "[audio4] Failed to retrieve initial device parameters.");
+             return ma_result_from_errno(errno);
+         }
+ 
+         internalFormat     = ma_format_from_swpar__audio4(&fdPar);
+         internalChannels   = (deviceType == ma_device_type_capture) ? fdPar.rchan : fdPar.pchan;
+         internalSampleRate = fdPar.rate;
+ 
+         if (internalFormat == ma_format_unknown) {
+@@ -38254,94 +38274,129 @@
+         if (result != MA_SUCCESS) {
+             return result;
+         }
+     }
+ 
+     if (pConfig->deviceType == ma_device_type_playback || pConfig->deviceType == ma_device_type_duplex) {
+         ma_result result = ma_device_init_fd__audio4(pDevice, pConfig, pDescriptorPlayback, ma_device_type_playback);
+         if (result != MA_SUCCESS) {
+             if (pConfig->deviceType == ma_device_type_duplex) {
+                 close(pDevice->audio4.fdCapture);
+             }
+             return result;
+         }
+     }
+ 
+     return MA_SUCCESS;
+ }
+ 
++#if defined(MA_AUDIO4_USE_PAUSE_API)
++static ma_result ma_device_pause_fd__audio4(ma_device* pDevice, int fd, int pause)
++{
++    struct audio_info info;
++    if (fd == -1) {
++        return MA_INVALID_ARGS;
++    }
++    AUDIO_INITINFO(&info);
++    info.play.pause = info.record.pause = (unsigned char)pause;
++    if (ioctl(fd, AUDIO_SETINFO, &info) < 0) {
++        ma_log_post(ma_device_get_log(pDevice), MA_LOG_LEVEL_ERROR, "[audio4] Failed to change device pause state.");
++        return ma_result_from_errno(errno);
++    }
++    return MA_SUCCESS;
++}
++#endif
++
+ static ma_result ma_device_start__audio4(ma_device* pDevice)
+ {
+     MA_ASSERT(pDevice != NULL);
+ 
+     if (pDevice->type == ma_device_type_capture || pDevice->type == ma_device_type_duplex) {
+         if (pDevice->audio4.fdCapture == -1) {
+             return MA_INVALID_ARGS;
+         }
+     }
+ 
+     if (pDevice->type == ma_device_type_playback || pDevice->type == ma_device_type_duplex) {
+         if (pDevice->audio4.fdPlayback == -1) {
+             return MA_INVALID_ARGS;
+         }
+     }
+ 
++    #if defined(MA_AUDIO4_USE_PAUSE_API)
++    if (pDevice->type == ma_device_type_capture || pDevice->type == ma_device_type_duplex) {
++        ma_result result = ma_device_pause_fd__audio4(pDevice, pDevice->audio4.fdCapture, 0);
++        if (result != MA_SUCCESS) return result;
++    }
++    if (pDevice->type == ma_device_type_playback || pDevice->type == ma_device_type_duplex) {
++        ma_result result = ma_device_pause_fd__audio4(pDevice, pDevice->audio4.fdPlayback, 0);
++        if (result != MA_SUCCESS) {
++            if (pDevice->type == ma_device_type_duplex)
++                (void)ma_device_pause_fd__audio4(pDevice, pDevice->audio4.fdCapture, 1);
++            return result;
++        }
++    }
++    #endif
++
+     return MA_SUCCESS;
+ }
+ 
+ static ma_result ma_device_stop_fd__audio4(ma_device* pDevice, int fd)
+ {
+     if (fd == -1) {
+         return MA_INVALID_ARGS;
+     }
+ 
+-#if !defined(MA_AUDIO4_USE_NEW_API)
++#if defined(MA_AUDIO4_USE_PAUSE_API)
++    /* The native kernel stops DMA and clears buffered data when paused. */
++    return ma_device_pause_fd__audio4(pDevice, fd, 1);
++#elif !defined(MA_AUDIO4_USE_NEW_API)
+     if (ioctl(fd, AUDIO_FLUSH, 0) < 0) {
+         ma_log_post(ma_device_get_log(pDevice), MA_LOG_LEVEL_ERROR, "[audio4] Failed to stop device. AUDIO_FLUSH failed.");
+         return ma_result_from_errno(errno);
+     }
+ #else
+     if (ioctl(fd, AUDIO_STOP, 0) < 0) {
+         ma_log_post(ma_device_get_log(pDevice), MA_LOG_LEVEL_ERROR, "[audio4] Failed to stop device. AUDIO_STOP failed.");
+         return ma_result_from_errno(errno);
+     }
+ #endif
+ 
+     return MA_SUCCESS;
+ }
+ 
+ static ma_result ma_device_stop__audio4(ma_device* pDevice)
+ {
+     MA_ASSERT(pDevice != NULL);
+ 
+     if (pDevice->type == ma_device_type_capture || pDevice->type == ma_device_type_duplex) {
+         ma_result result;
+ 
+         result = ma_device_stop_fd__audio4(pDevice, pDevice->audio4.fdCapture);
+         if (result != MA_SUCCESS) {
+             return result;
+         }
+     }
+ 
+     if (pDevice->type == ma_device_type_playback || pDevice->type == ma_device_type_duplex) {
+         ma_result result;
+ 
+         /* Drain the device first. If this fails we'll just need to flush without draining. Unfortunately draining isn't available on newer version of OpenBSD. */
+-    #if !defined(MA_AUDIO4_USE_NEW_API)
++    #if !defined(MA_AUDIO4_USE_NEW_API) && !defined(MA_AUDIO4_USE_PAUSE_API)
+         ioctl(pDevice->audio4.fdPlayback, AUDIO_DRAIN, 0);
+     #endif
+ 
+         /* Here is where the device is stopped immediately. */
+         result = ma_device_stop_fd__audio4(pDevice, pDevice->audio4.fdPlayback);
+         if (result != MA_SUCCESS) {
+             return result;
+         }
+     }
+ 
+     return MA_SUCCESS;
+ }
+ 
+ static ma_result ma_device_write__audio4(ma_device* pDevice, const void* pPCMFrames, ma_uint32 frameCount, ma_uint32* pFramesWritten)
+ {
+     int result;
+ 
+     if (pFramesWritten != NULL) {

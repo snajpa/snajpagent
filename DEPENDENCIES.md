@@ -518,8 +518,13 @@ the system dynamic-loader API without libdl. OpenBSD 7.9 media/audio application
 cross-linking has been checked with PDF/Office disabled; it establishes no
 physical-device or target-runtime qualification. Legacy FFmpeg maps missing
 `static_assert` macros to the compiler keyword and includes standard pthread
-declarations before old `pthread_np.h`. Legacy device API compatibility and
-BSD PDF/Office dependency closure remain unfinished.
+declarations before old `pthread_np.h`. OpenBSD 5.9's intermediate audio(4)
+API uses per-direction block sizes and pause controls. Device initialization
+stays paused, explicit start unpauses, and stop clears buffered data through
+native pause semantics without a blocking drain. A failed duplex playback start
+repauses capture. Both sndio and direct audio remain available. OpenBSD 3.5
+compatibility and BSD PDF/Office dependency closure remain unfinished; cross-links
+and mocked lifecycle checks do not qualify physical audio.
 
 OpenBSD 7.9 qualification covers base/IRC/SSE tests, internal read-only
 inspection and denied writes, parallel commands, PTY execution, durable resume,

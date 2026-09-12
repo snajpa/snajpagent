@@ -238,6 +238,12 @@ let
   zlib = cmakeLibrary sourcePkgs.zlib [
     "-DZLIB_BUILD_SHARED=OFF" "-DZLIB_BUILD_STATIC=ON" "-DZLIB_BUILD_TESTING=OFF"
   ] [];
+  miniaudio = pkgs.runCommand "miniaudio-openbsd-audio4" { nativeBuildInputs = [ pkgs.patch ]; } ''
+    mkdir -p "$out"
+    cp ${pkgs.miniaudio.src}/miniaudio.h "$out/"
+    chmod u+w "$out/miniaudio.h"
+    patch -d "$out" -p1 < ${./miniaudio-openbsd-audio4.patch}
+  '';
   av = pkgs.stdenvNoCC.mkDerivation {
     pname = "ffmpeg-headless-openbsd-${osVersion}";
     inherit (sourcePkgs.ffmpeg_8) version src;
@@ -405,7 +411,7 @@ let
     '';
   });
 in {
-  inherit sdk target compiler tools cflags ldflags jansson tls curl av regex unistring;
+  inherit sdk target compiler tools cflags ldflags jansson tls curl av miniaudio regex unistring;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }:
     pkgs.stdenvNoCC.mkDerivation {
@@ -438,7 +444,7 @@ in {
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson) -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"
           "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"
           "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale | sed -E 's/-l?(-l?)?pthread//g')"
-          'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}'
+          'MINIAUDIO_CFLAGS=-isystem ${miniaudio}'
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
           "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil -Wl,-Bdynamic ${if legacy then "-l:libpthread.so.${threadVersion}" else "-lpthread"}"
         )
