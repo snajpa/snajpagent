@@ -2870,46 +2870,52 @@ snag_lstat(const char *path, snag_file_info *out)
     return lstat(path, out);
 }
 
+/* Try the modern *at(2) call, then fall back to the legacy path on ENOSYS. */
+#ifdef SNAG_LEGACY_MAC_AT
+#define SNAG_AT_DIRECT(fn, args) \
+    do { if ((fn) != NULL) return (fn) args; } while (0)
+#elif defined(SNAG_LEGACY_BSD_AT)
+#define SNAG_AT_DIRECT(fn, args) do { } while (0)
+#elif defined(__linux__)
+#define SNAG_AT_DIRECT(fn, args) \
+    do { int rc_ = (fn) args; if (rc_ >= 0 || errno != ENOSYS) return rc_; } while (0)
+#else
+#define SNAG_AT_DIRECT(fn, args) do { return (fn) args; } while (0)
+#endif
+
+#if defined(__linux__) || defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
+#define SNAG_AT_LEGACY(expr) \
+    do { \
+        char resolved_[PATH_MAX]; \
+        const char *legacy_ = legacy_at_path(dirfd, path, resolved_); \
+        return legacy_ ? (expr) : -1; \
+    } while (0)
+#define SNAG_AT_LEGACY2(expr) \
+    do { \
+        char source_[PATH_MAX], destination_[PATH_MAX]; \
+        const char *old_ = legacy_at_path(from_dir, from, source_); \
+        const char *next_ = old_ ? legacy_at_path(to_dir, to, destination_) : NULL; \
+        return next_ ? (expr) : -1; \
+    } while (0)
+#else
+#define SNAG_AT_LEGACY(expr) do { } while (0)
+#define SNAG_AT_LEGACY2(expr) do { } while (0)
+#endif
+
 int
 snag_lstat_at(int dirfd, const char *path, snag_file_info *out)
 {
     dirfd = *path == '/' ? AT_FDCWD : dirfd;
-#ifdef SNAG_LEGACY_MAC_AT
-    if (fstatat != NULL)
-        return fstatat(dirfd, path, out, AT_SYMLINK_NOFOLLOW);
-#elif !defined(SNAG_LEGACY_BSD_AT)
-    int rc = fstatat(dirfd, path, out, AT_SYMLINK_NOFOLLOW);
-#ifdef __linux__
-    if (rc >= 0 || errno != ENOSYS)
-#endif
-        return rc;
-#endif
-#if defined(__linux__) || defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
-    char resolved[PATH_MAX];
-    const char *legacy = legacy_at_path(dirfd, path, resolved);
-    return legacy ? lstat(legacy, out) : -1;
-#endif
+    SNAG_AT_DIRECT(fstatat, (dirfd, path, out, AT_SYMLINK_NOFOLLOW));
+    SNAG_AT_LEGACY(lstat(legacy_, out));
 }
 
 int
 snag_unlink_at(int dirfd, const char *path, bool directory)
 {
     dirfd = *path == '/' ? AT_FDCWD : dirfd;
-#ifdef SNAG_LEGACY_MAC_AT
-    if (unlinkat != NULL)
-        return unlinkat(dirfd, path, directory ? AT_REMOVEDIR : 0);
-#elif !defined(SNAG_LEGACY_BSD_AT)
-    int rc = unlinkat(dirfd, path, directory ? AT_REMOVEDIR : 0);
-#ifdef __linux__
-    if (rc >= 0 || errno != ENOSYS)
-#endif
-        return rc;
-#endif
-#if defined(__linux__) || defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
-    char resolved[PATH_MAX];
-    const char *legacy = legacy_at_path(dirfd, path, resolved);
-    return legacy ? (directory ? rmdir(legacy) : unlink(legacy)) : -1;
-#endif
+    SNAG_AT_DIRECT(unlinkat, (dirfd, path, directory ? AT_REMOVEDIR : 0));
+    SNAG_AT_LEGACY(directory ? rmdir(legacy_) : unlink(legacy_));
 }
 
 int
@@ -2917,22 +2923,8 @@ snag_rename_at(int from_dir, const char *from, int to_dir, const char *to)
 {
     from_dir = *from == '/' ? AT_FDCWD : from_dir;
     to_dir = *to == '/' ? AT_FDCWD : to_dir;
-#ifdef SNAG_LEGACY_MAC_AT
-    if (renameat != NULL)
-        return renameat(from_dir, from, to_dir, to);
-#elif !defined(SNAG_LEGACY_BSD_AT)
-    int rc = renameat(from_dir, from, to_dir, to);
-#ifdef __linux__
-    if (rc >= 0 || errno != ENOSYS)
-#endif
-        return rc;
-#endif
-#if defined(__linux__) || defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
-    char source[PATH_MAX], destination[PATH_MAX];
-    const char *old = legacy_at_path(from_dir, from, source);
-    const char *next = old ? legacy_at_path(to_dir, to, destination) : NULL;
-    return next ? rename(old, next) : -1;
-#endif
+    SNAG_AT_DIRECT(renameat, (from_dir, from, to_dir, to));
+    SNAG_AT_LEGACY2(rename(old_, next_));
 }
 
 int
@@ -2940,22 +2932,8 @@ snag_link_at(int from_dir, const char *from, int to_dir, const char *to)
 {
     from_dir = *from == '/' ? AT_FDCWD : from_dir;
     to_dir = *to == '/' ? AT_FDCWD : to_dir;
-#ifdef SNAG_LEGACY_MAC_AT
-    if (linkat != NULL)
-        return linkat(from_dir, from, to_dir, to, 0);
-#elif !defined(SNAG_LEGACY_BSD_AT)
-    int rc = linkat(from_dir, from, to_dir, to, 0);
-#ifdef __linux__
-    if (rc >= 0 || errno != ENOSYS)
-#endif
-        return rc;
-#endif
-#if defined(__linux__) || defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
-    char source[PATH_MAX], destination[PATH_MAX];
-    const char *old = legacy_at_path(from_dir, from, source);
-    const char *next = old ? legacy_at_path(to_dir, to, destination) : NULL;
-    return next ? link(old, next) : -1;
-#endif
+    SNAG_AT_DIRECT(linkat, (from_dir, from, to_dir, to, 0));
+    SNAG_AT_LEGACY2(link(old_, next_));
 }
 
 int
@@ -2974,21 +2952,8 @@ int
 snag_mkdir_private_at(int dirfd, const char *path)
 {
     dirfd = *path == '/' ? AT_FDCWD : dirfd;
-#ifdef SNAG_LEGACY_MAC_AT
-    if (mkdirat != NULL)
-        return mkdirat(dirfd, path, 0700);
-#elif !defined(SNAG_LEGACY_BSD_AT)
-    int rc = mkdirat(dirfd, path, 0700);
-#ifdef __linux__
-    if (rc >= 0 || errno != ENOSYS)
-#endif
-        return rc;
-#endif
-#if defined(__linux__) || defined(SNAG_LEGACY_MAC_AT) || defined(SNAG_LEGACY_BSD_AT)
-    char resolved[PATH_MAX];
-    const char *legacy = legacy_at_path(dirfd, path, resolved);
-    return legacy ? mkdir(legacy, 0700) : -1;
-#endif
+    SNAG_AT_DIRECT(mkdirat, (dirfd, path, 0700));
+    SNAG_AT_LEGACY(mkdir(legacy_, 0700));
 }
 
 static int
