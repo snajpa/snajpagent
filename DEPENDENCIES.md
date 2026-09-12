@@ -650,9 +650,15 @@ without native POSIX priority scheduling, it leaves audio threads at normal
 priority instead of calling the unavailable scheduler-policy setter. Thread
 creation and its existing stack-size/error handling remain unchanged. Audio uses the
 native loader API without a separate libdl. Retained snapshots use native BSD
-nanosecond stat fields on both versions. These compile/link checks do not qualify
-physical devices or target execution. Full media application links and PDF/Office
-dependency/runtime closure remain in progress.
+nanosecond stat fields on both versions. Media/audio application cross-links pass
+for both SDKs with native libc/pthread imports and no runtime search path;
+those builds exclude PDF and Office import. They do not qualify physical devices
+or target execution.
+
+Static libarchive/libxml2 with zlib/iconv supply the Office package reader.
+The package-checker cross-links pass against both SDKs using native libc/pthread
+imports. PDF/LibreOffice runtime closure remains in progress; this wiring does
+not select a LibreOffice packaging or loader design.
 
 ## macOS ARM64 and Intel cross-builds
 

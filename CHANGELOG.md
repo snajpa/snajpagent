@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Supply NetBSD static ZIP/XML Office package-reader dependencies; PDF and
+  LibreOffice runtime closure remain in progress.
+
 - Keep NetBSD audio thread creation working when native priority scheduling is
   unavailable; preserve normal-priority fallback and error handling.
 

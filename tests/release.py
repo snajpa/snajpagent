@@ -2268,9 +2268,19 @@ assert '"--host-cc=${pkgs.stdenv.cc}/bin/cc"' in netbsd_av
 assert 'lib.optionals early [ ./ffmpeg-legacy-libm.patch ./ffmpeg-openbsd35-hls.patch ]' in netbsd_av
 assert 'lib.optionalString legacy " -Dstatic_assert=_Static_assert"' in netbsd_av
 assert 'lib.optionalString early " -fno-builtin-pow -fno-builtin-powf"' in netbsd_av
-assert 'buildInputs = [ jansson curl av ]' in netbsd
+assert 'buildInputs = [ jansson curl av xml archive ]' in netbsd
 assert 'MINIAUDIO_CFLAGS=-isystem ${miniaudio}' in netbsd
 assert 'patch -d "$out" -p1 < ${./miniaudio-openbsd35-headers.patch}' in netbsd
 assert '"AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale' in netbsd
 assert '-Wl,-mllvm,-emulated-tls' in netbsd and '${compilerBuiltins}/lib/libclang_rt.builtins.a' in netbsd
 print("PASS: NetBSD media retains static file codecs, native generators and legacy TLS ABI")
+
+# NetBSD Office package checking uses the same static ZIP/XML dependency owners.
+assert 'xml = cmakeLibrary sourcePkgs.libxml2' in netbsd
+assert 'archive = cmakeLibrary sourcePkgs.libarchive' in netbsd
+for flag in ("-DLIBXML2_WITH_PROGRAMS=OFF", "-DLIBXML2_WITH_MODULES=OFF",
+             "-DENABLE_TAR=OFF", "-DENABLE_CPIO=OFF", "-DENABLE_UNZIP=OFF",
+             "-DENABLE_ZLIB=ON", "-DENABLE_ICONV=ON"):
+    assert flag in netbsd
+assert '] [ iconv ];' in netbsd and '] [ zlib iconv ];' in netbsd
+print("PASS: NetBSD package readers retain static XML/iconv/ZIP dependencies")
