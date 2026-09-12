@@ -37,6 +37,10 @@
 - Report missing/extra fields, types, ranges and cross-field errors; disclose
   requested/applied output ceilings and host wait limits. Keep latest-batch host
   feedback visible independently of command-output budgets, including on resume.
+- Add Windows static Office ZIP/XML dependencies. Preserve legacy threading and
+  fail-closed XML hash seeding without newer Windows initialization/RNG imports;
+  LibreOffice runtime packaging remains in development.
+
 - Retain accepted attachments with pending direct input through preparation
   failure and resume; preserve durable queue state for voice handoffs and local
   blank-Enter behavior alongside interactive attachment submission.

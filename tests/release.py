@@ -1074,3 +1074,129 @@ int main() {
     subprocess.run([str(tmp / "ascii")], check=True, timeout=30)
 print("PASS: Poppler ASCII metadata, hex and base64 match original behavior")
 assert 'pkgs.lib.optional legacy ./poppler-ascii-metadata.patch' in windows
+
+# Exercise the dependency's actual RNG body with mocked Win32 APIs. Failures
+# stay fatal, including a false API result with a zero last-error value.
+xml_patch = (root / "nix/libxml2-legacy-windows.patch").read_text()
+xml_dict_patch = xml_patch.split("+++ b/dict.c\n", 1)[1].split("--- a/CMakeLists.txt", 1)[0]
+xml_dict = "\n".join(line[1:] for line in xml_dict_patch.splitlines()
+                     if line.startswith((" ", "+")))
+xml_random = re.search(r"void\nxmlInitRandom\(void\) \{.*?\n}", xml_dict, re.S).group(0)
+with tempfile.TemporaryDirectory(prefix="xml-windows-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    source = tmp / "random.c"
+    source.write_text(r"""
+#include <assert.h>
+#include <setjmp.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <string.h>
+typedef unsigned long DWORD;
+typedef unsigned long HCRYPTPROV;
+typedef int BOOL;
+typedef int NTSTATUS;
+#define PROV_RSA_FULL 1
+#define CRYPT_VERIFYCONTEXT 0xf0000000u
+#define CRYPT_SILENT 0x40u
+#define BCRYPT_USE_SYSTEM_PREFERRED_RNG 2
+#define BCRYPT_SUCCESS(status) ((status) == 0)
+static unsigned acquires, generates, releases, bcrypts, mutexes;
+static unsigned globalRngState[2];
+static int xmlRngMutex, fail;
+static DWORD last_error, reported_error;
+static jmp_buf aborted;
+static void xmlInitMutex(int *mutex) { assert(mutex == &xmlRngMutex); ++mutexes; }
+static DWORD GetLastError(void) { return last_error; }
+static _Noreturn void xmlAbort(const char *format, ...) {
+    va_list ap; va_start(ap, format); reported_error = va_arg(ap, DWORD); va_end(ap);
+    longjmp(aborted, 1);
+}
+#if _WIN32_WINNT < 0x0600
+static BOOL CryptAcquireContextA(HCRYPTPROV *provider, const char *container,
+                                const char *name, DWORD type, DWORD flags) {
+    ++acquires;
+    assert(!container && !name && type == PROV_RSA_FULL);
+    assert(flags == (CRYPT_VERIFYCONTEXT | CRYPT_SILENT));
+    if (fail == 1) { last_error = 71; return 0; }
+    *provider = 123; return 1;
+}
+static BOOL CryptGenRandom(HCRYPTPROV provider, DWORD length, unsigned char *bytes) {
+    ++generates;
+    assert(provider == 123 && length == sizeof(globalRngState));
+    if (fail >= 2) { last_error = fail == 2 ? 72 : 0; return 0; }
+    memset(bytes, 0x5a, length); return 1;
+}
+static BOOL CryptReleaseContext(HCRYPTPROV provider, DWORD flags) {
+    ++releases; assert(provider == 123 && flags == 0);
+    last_error = 99; return 1;
+}
+#else
+static NTSTATUS BCryptGenRandom(void *algorithm, unsigned char *bytes,
+                               DWORD length, DWORD flags) {
+    ++bcrypts;
+    assert(!algorithm && length == sizeof(globalRngState));
+    assert(flags == BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    if (fail) { last_error = 73; return -1; }
+    memset(bytes, 0x5a, length); return 0;
+}
+#endif
+""" + xml_random + r"""
+int main(void) {
+    for (fail = 0; fail < 4; ++fail) {
+        acquires = generates = releases = bcrypts = mutexes = 0;
+        reported_error = 999; memset(globalRngState, 0, sizeof(globalRngState));
+        if (!setjmp(aborted)) { xmlInitRandom(); assert(!fail); }
+        else assert(fail && reported_error != 999);
+        assert(mutexes == 1);
+#if _WIN32_WINNT < 0x0600
+        assert(acquires == 1 && bcrypts == 0);
+        assert(generates == (fail != 1) && releases == (fail != 1));
+        if (fail) assert(reported_error == (fail == 1 ? 71u : fail == 2 ? 72u : 0u));
+#else
+        assert(bcrypts == 1 && !acquires && !generates && !releases);
+        if (fail) assert(reported_error == 73);
+#endif
+        for (size_t i = 0; i < sizeof(globalRngState); ++i)
+            assert(((unsigned char *)globalRngState)[i] == (fail ? 0 : 0x5a));
+    }
+    return 0;
+}
+""")
+    for baseline in ("0x0500", "0x0502", "0x0600", "0x0a00"):
+        binary = tmp / ("random-" + baseline)
+        subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-D_WIN32",
+                        "-D_WIN32_WINNT=" + baseline, str(source), "-o", str(binary)], check=True)
+        subprocess.run([str(binary)], check=True)
+
+    # The patch keeps libxml2's existing pthread once/mutex/TLS path for old
+    # Windows; it leaves native Windows threading selected at newer baselines.
+    header_patch = xml_patch.split("+++ b/include/private/threads.h\n", 1)[1].split("--- a/dict.c", 1)[0]
+    header = "\n".join(line[1:] for line in header_patch.splitlines()
+                       if line.startswith((" ", "+"))) + "\n#endif\n"
+    (tmp / "libxml").mkdir()
+    for name in ("libxml/threads.h", "pthread.h", "windows.h"):
+        (tmp / name).write_text("")
+    source.write_text(header + r"""
+#if _WIN32_WINNT < 0x0600
+#ifndef HAVE_POSIX_THREADS
+#error legacy Windows must retain thread-safe initialization and TLS
+#endif
+#else
+#ifndef HAVE_WIN32_THREADS
+#error modern Windows must retain native threading
+#endif
+#endif
+_Static_assert(_WIN32_WINNT == EXPECTED_WINVER, "do not raise or lower selected baseline");
+int main(void) { return 0; }
+""")
+    for baseline in ("0x0500", "0x0502", "0x0600", "0x0a00"):
+        subprocess.run(["cc", "-std=c11", "-Werror", "-D_WIN32", "-DLIBXML_THREAD_ENABLED",
+                        "-D_WIN32_WINNT=" + baseline, "-DEXPECTED_WINVER=" + baseline,
+                        "-I" + str(tmp), str(source), "-o", str(tmp / "threads")], check=True)
+assert 'pkgs.lib.optional legacy ./libxml2-legacy-windows.patch' in windows
+assert 'target_link_libraries(LibXml2 PRIVATE advapi32 pthread)' in xml_patch
+assert 'target_link_libraries(LibXml2 PRIVATE bcrypt)' in xml_patch
+assert '"-DENABLE_CNG=OFF"' in windows and '"-DENABLE_WIN32_XMLLITE=OFF"' in windows
+assert '"-DWINDOWS_VERSION=${if legacy then "WS03" else "WIN7"}"' in windows
+assert 's/^Cflags: /Cflags: -DLIBARCHIVE_STATIC /' in windows
+print("PASS: Windows package readers keep static declarations, baseline threading and fatal RNG errors")

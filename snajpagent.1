@@ -3385,7 +3385,9 @@ Linux applies syscall and available filesystem confinement. Other POSIX targets
 report unavailable OS confinement and retain package checks and worker limits.
 Windows applies job CPU/memory limits and an elapsed timer; OS
 filesystem/network/exec confinement is reported unavailable.
-Portable Office packaging remains in development.
+Windows recipes include static ZIP/XML package-reader dependencies. The
+LibreOffice runtime and its components are still required; portable Office
+packaging remains in development.
 .TP
 .B make WITH_AUDIO_DEVICE=0
 Build a custom executable without capture, playback or audio-device enumeration.

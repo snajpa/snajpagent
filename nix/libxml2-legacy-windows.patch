@@ -1,0 +1,292 @@
+# SPDX-License-Identifier: MIT AND ISC
+# dict.c retains ISC terms, Copyright (C) 2003-2012 Daniel Veillard.
+# Legacy Windows uses existing winpthreads and silent ephemeral CryptoAPI.
+# Modern Windows keeps native initialization and BCrypt; RNG errors remain fatal.
+--- a/include/private/threads.h
++++ b/include/private/threads.h
+@@ -1,20 +1,19 @@
+ #ifndef XML_THREADS_H_PRIVATE__
+ #define XML_THREADS_H_PRIVATE__
+ 
+ #include <libxml/threads.h>
+ 
+ #ifdef LIBXML_THREAD_ENABLED
+-  #ifdef _WIN32
++  #if defined(_WIN32) && (!defined(_WIN32_WINNT) || _WIN32_WINNT >= 0x0600)
+     #define WIN32_LEAN_AND_MEAN
+-    #ifdef _WIN32_WINNT
+-      #undef _WIN32_WINNT
++    #ifndef _WIN32_WINNT
++      #define _WIN32_WINNT 0x0600
+     #endif
+-    #define _WIN32_WINNT 0x0600
+     #include <windows.h>
+     #define HAVE_WIN32_THREADS
+   #else
+     #include <pthread.h>
+     #define HAVE_POSIX_THREADS
+   #endif
+ #endif
+ 
+--- a/dict.c
++++ b/dict.c
+@@ -814,201 +814,223 @@
+ xmlDictLookup(xmlDict *dict, const xmlChar *name, int len) {
+     const xmlDictEntry *entry;
+ 
+     entry = xmlDictLookupInternal(dict, NULL, name, len, 1);
+     if (entry == NULL)
+         return(NULL);
+     return(entry->name);
+ }
+ 
+ /**
+  * Lookup a dictionary entry and add the string to the dictionary if
+  * it wasn't found.
+  *
+  * @param dict  dictionary
+  * @param name  string key
+  * @param len  length of the key, if -1 it is recomputed
+  * @returns the dictionary entry.
+  */
+ xmlHashedString
+ xmlDictLookupHashed(xmlDict *dict, const xmlChar *name, int len) {
+     const xmlDictEntry *entry;
+     xmlHashedString ret;
+ 
+     entry = xmlDictLookupInternal(dict, NULL, name, len, 1);
+ 
+     if (entry == NULL) {
+         ret.name = NULL;
+         ret.hashValue = 0;
+     } else {
+         ret = *entry;
+     }
+ 
+     return(ret);
+ }
+ 
+ /**
+  * Check if a string exists in the dictionary.
+  *
+  * @param dict  the dictionary
+  * @param name  the name of the userdata
+  * @param len  the length of the name, if -1 it is recomputed
+  * @returns the internal copy of the name or NULL if not found.
+  */
+ const xmlChar *
+ xmlDictExists(xmlDict *dict, const xmlChar *name, int len) {
+     const xmlDictEntry *entry;
+ 
+     entry = xmlDictLookupInternal(dict, NULL, name, len, 0);
+     if (entry == NULL)
+         return(NULL);
+     return(entry->name);
+ }
+ 
+ /**
+  * Lookup the QName `prefix:name` and add it to the dictionary if
+  * it wasn't found.
+  *
+  * @param dict  the dictionary
+  * @param prefix  the prefix
+  * @param name  the name
+  * @returns the interned copy of the string or NULL if a memory allocation
+  * failed.
+  */
+ const xmlChar *
+ xmlDictQLookup(xmlDict *dict, const xmlChar *prefix, const xmlChar *name) {
+     const xmlDictEntry *entry;
+ 
+     entry = xmlDictLookupInternal(dict, prefix, name, -1, 1);
+     if (entry == NULL)
+         return(NULL);
+     return(entry->name);
+ }
+ 
+ /*
+  * Pseudo-random generator
+  */
+ 
+ #ifdef _WIN32
+   #define WIN32_LEAN_AND_MEAN
+   #include <windows.h>
+-  #include <bcrypt.h>
++  #if _WIN32_WINNT < 0x0600
++    #include <wincrypt.h>
++  #else
++    #include <bcrypt.h>
++  #endif
+ #else
+   #if HAVE_DECL_GETENTROPY
+     /* POSIX 2024 */
+     #include <unistd.h>
+     /* Older platforms */
+     #include <sys/random.h>
+   #endif
+   #include <time.h>
+ #endif
+ 
+ static xmlMutex xmlRngMutex;
+ 
+ static unsigned globalRngState[2];
+ 
+ /*
+  *
+  * Initialize the PRNG.
+  */
+ ATTRIBUTE_NO_SANITIZE_INTEGER
+ void
+ xmlInitRandom(void) {
+     xmlInitMutex(&xmlRngMutex);
+ 
+     {
+ #ifdef _WIN32
++#if _WIN32_WINNT < 0x0600
++        HCRYPTPROV provider;
++        DWORD error;
++        BOOL ok;
++
++        if (!CryptAcquireContextA(&provider, NULL, NULL, PROV_RSA_FULL,
++                                  CRYPT_VERIFYCONTEXT | CRYPT_SILENT))
++            xmlAbort("libxml2: CryptAcquireContext failed with error code %lu\n",
++                     GetLastError());
++        ok = CryptGenRandom(provider, sizeof(globalRngState),
++                            (unsigned char *) globalRngState);
++        error = ok ? 0 : GetLastError();
++        CryptReleaseContext(provider, 0);
++        if (!ok)
++            xmlAbort("libxml2: CryptGenRandom failed with error code %lu\n",
++                     error);
++#else
+         NTSTATUS status;
+ 
+         /*
+          * You can find many (recent as of 2025) discussions how
+          * to get a pseudo-random seed on Windows in projects like
+          * Golang, Rust, Chromium and Firefox.
+          *
+          * TODO: Support ProcessPrng available since Windows 10.
+          */
+         status = BCryptGenRandom(NULL, (unsigned char *) globalRngState,
+                                  sizeof(globalRngState),
+                                  BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+         if (!BCRYPT_SUCCESS(status))
+             xmlAbort("libxml2: BCryptGenRandom failed with error code %lu\n",
+                      GetLastError());
++#endif
+ #else
+         int var;
+ 
+ #if HAVE_DECL_GETENTROPY
+         while (1) {
+             if (getentropy(globalRngState, sizeof(globalRngState)) == 0)
+                 return;
+ 
+             /*
+              * This most likely means that libxml2 was compiled on
+              * a system supporting certain system calls and is running
+              * on a system that doesn't support these calls, as can
+              * be the case on Linux.
+              */
+             if (errno == ENOSYS)
+                 break;
+ 
+             /*
+              * We really don't want to fallback to the unsafe PRNG
+              * for possibly accidental reasons, so we abort on any
+              * unknown error.
+              */
+             if (errno != EINTR)
+                 xmlAbort("libxml2: getentropy failed with error code %d\n",
+                          errno);
+         }
+ #endif
+ 
+         /*
+          * TODO: Fallback to /dev/urandom for older POSIX systems.
+          */
+         globalRngState[0] =
+                 (unsigned) time(NULL) ^
+                 HASH_ROL((unsigned) ((size_t) &xmlInitRandom & 0xFFFFFFFF), 8);
+         globalRngState[1] =
+                 HASH_ROL((unsigned) ((size_t) &xmlRngMutex & 0xFFFFFFFF), 16) ^
+                 HASH_ROL((unsigned) ((size_t) &var & 0xFFFFFFFF), 24);
+ #endif
+     }
+ }
+ 
+ /*
+  *
+  * Clean up PRNG globals.
+  */
+ void
+ xmlCleanupRandom(void) {
+     xmlCleanupMutex(&xmlRngMutex);
+ }
+ 
+ ATTRIBUTE_NO_SANITIZE_INTEGER
+ static unsigned
+ xoroshiro64ss(unsigned *s) {
+     unsigned s0 = s[0];
+     unsigned s1 = s[1];
+     unsigned result = HASH_ROL(s0 * 0x9E3779BB, 5) * 5;
+ 
+     s1 ^= s0;
+     s[0] = HASH_ROL(s0, 26) ^ s1 ^ (s1 << 9);
+     s[1] = HASH_ROL(s1, 13);
+ 
+     return(result & 0xFFFFFFFF);
+ }
+ 
+ /*
+  *
+  * Generate a pseudo-random value using the global PRNG.
+  *
+  * @returns a random value.
+  */
+ unsigned
+ xmlGlobalRandom(void) {
+     unsigned ret;
+ 
+     xmlMutexLock(&xmlRngMutex);
+     ret = xoroshiro64ss(globalRngState);
+     xmlMutexUnlock(&xmlRngMutex);
+ 
+     return(ret);
+ }
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -333,18 +333,30 @@
+ endif()
+ 
+ if(UNIX)
+     target_link_libraries(LibXml2 PRIVATE m)
+     set(LIBM "-lm")
+ endif()
+ 
+ if(WIN32)
+-    target_link_libraries(LibXml2 PRIVATE bcrypt)
+-    set(CRYPTO_LIBS "-lbcrypt")
++    check_c_source_compiles("
++        #include <windows.h>
++        #if _WIN32_WINNT >= 0x0600
++        #error modern Windows
++        #endif
++        int main(void) { return 0; }
++    " LIBXML2_LEGACY_WINDOWS)
++    if(LIBXML2_LEGACY_WINDOWS)
++        target_link_libraries(LibXml2 PRIVATE advapi32 pthread)
++        set(CRYPTO_LIBS "-ladvapi32 -lpthread")
++    else()
++        target_link_libraries(LibXml2 PRIVATE bcrypt)
++        set(CRYPTO_LIBS "-lbcrypt")
++    endif()
+ endif()
+ 
+ if(LIBXML2_WITH_ICONV)
+     target_link_libraries(LibXml2 PRIVATE Iconv::Iconv)
+     if(NOT Iconv_IS_BUILT_IN)
+         set(ICONV_LIBS "-liconv")
+     endif()
+ endif()

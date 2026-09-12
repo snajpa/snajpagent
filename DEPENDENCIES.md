@@ -152,6 +152,18 @@ regressions preserve matching, warning and encoding behavior. The x64
 media/PDF cross-link has no newer MSVCRT locale imports; this import check
 does not establish runtime qualification on XP x64 or Server 2003.
 
+Windows Office package checks use static libarchive and libxml2 alongside the
+existing zlib and iconv libraries. The archive profile supplies ZIP/Deflate and
+character conversion; it omits command-line programs, encrypted-archive crypto
+backends and optional format libraries. The checker continues rejecting encrypted
+packages and active/external content. XML reader and thread support stay enabled.
+For legacy Windows, libxml2 uses the existing winpthreads initialization/TLS path
+and silent ephemeral CryptoAPI for hash seeds; RNG failure remains fatal. Modern
+Windows retains native threading and BCrypt. The dependency adaptation uses
+libxml2's MIT and dict.c ISC terms. These libraries do not supply a LibreOffice
+runtime or change its linked, same-executable worker model; portable Office
+runtime closure remains unfinished.
+
 Custom lean builds may set `WITH_AV=0`, `WITH_OFFICE=0`, or
 `WITH_AUDIO_DEVICE=0`; `WITH_PDF=0` also requires `WITH_OFFICE=0` because Office
 page validation/rendering uses Poppler. Official desktop releases require all

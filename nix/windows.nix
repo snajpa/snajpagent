@@ -196,6 +196,30 @@ let
     '';
   });
   iconv = autotoolsLibrary windows.libiconvReal [] [];
+  xml = (cmakeLibrary windows.libxml2 [
+    "-DLIBXML2_WITH_PROGRAMS=OFF" "-DLIBXML2_WITH_TESTS=OFF"
+    "-DLIBXML2_WITH_PYTHON=OFF" "-DLIBXML2_WITH_MODULES=OFF"
+    "-DLIBXML2_WITH_ICONV=ON"
+  ] [ iconv ]).overrideAttrs (old: {
+    patches = old.patches ++ pkgs.lib.optional legacy ./libxml2-legacy-windows.patch;
+  });
+  archive = (cmakeLibrary windows.libarchive [
+    "-DENABLE_TAR=OFF" "-DENABLE_CPIO=OFF" "-DENABLE_CAT=OFF"
+    "-DENABLE_UNZIP=OFF" "-DENABLE_TEST=OFF" "-DENABLE_INSTALL=ON"
+    "-DENABLE_OPENSSL=OFF" "-DENABLE_MBEDTLS=OFF" "-DENABLE_NETTLE=OFF"
+    "-DENABLE_CNG=OFF" "-DENABLE_LIBB2=OFF" "-DENABLE_LZ4=OFF"
+    "-DENABLE_LZO=OFF" "-DENABLE_LZMA=OFF" "-DENABLE_ZSTD=OFF"
+    "-DENABLE_BZip2=OFF" "-DENABLE_LIBXML2=OFF" "-DENABLE_EXPAT=OFF"
+    "-DENABLE_WIN32_XMLLITE=OFF" "-DENABLE_PCREPOSIX=OFF"
+    "-DENABLE_PCRE2POSIX=OFF" "-DENABLE_ZLIB=ON" "-DENABLE_ICONV=ON"
+    "-DWINDOWS_VERSION=${if legacy then "WS03" else "WIN7"}"
+    "-DZLIB_LIBRARY=${zlib}/lib/libzs.a"
+  ] [ zlib iconv ]).overrideAttrs (_: {
+    postInstall = ''
+      # This profile installs only a static archive, including for plain --cflags.
+      sed -i 's/^Cflags: /Cflags: -DLIBARCHIVE_STATIC /' "$out/lib/pkgconfig/libarchive.pc"
+    '';
+  });
   unistring = autotoolsLibrary windows.libunistring
     [ "--with-libiconv-prefix=${iconv}" ] [ iconv ];
   idn2 = autotoolsLibrary windows.libidn2 [
@@ -224,7 +248,7 @@ let
   pty = if legacy && windows.stdenv.cc.isClang then
     import ./windows-pty.nix { inherit pkgs windows threads winver; } else null;
 in {
-  inherit windows threads jansson tls curl av png freetype jpeg openjpeg pdf networkLibraries regex pty;
+  inherit windows threads jansson tls curl av png freetype jpeg openjpeg pdf archive xml networkLibraries regex pty;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }: windows.stdenv.mkDerivation {
     pname = "${packageName}-windows-${arch}";
@@ -232,7 +256,7 @@ in {
     src = source;
     outputs = [ "out" "debug" ];
     nativeBuildInputs = [ windows.buildPackages.pkg-config ];
-    buildInputs = [ threads jansson curl regex av png pdf freetype jpeg openjpeg ] ++ networkLibraries
+    buildInputs = [ threads jansson curl regex av png pdf freetype jpeg openjpeg archive xml ] ++ networkLibraries
       ++ pkgs.lib.optionals (pty != null) [ pty.collector pty.cxx pty.unwind ];
     enableParallelBuilding = true;
     dontStrip = true;
