@@ -147,7 +147,12 @@ Darwin system/user font-directory fallback and `/etc/fonts` configuration;
 rendering still requires usable embedded or host fonts. The libpng generated
 header uses the explicit target triple; JPEG assembly selects the native build
 NASM and LLVM install-name tool. The existing static font metadata fix retains
-transitive link dependencies. macOS Office runtime packaging remains unfinished.
+transitive link dependencies.
+
+macOS Office package checks also link static libarchive/libxml2 with zlib/iconv;
+ZIP/Deflate and XML reader/thread support remain enabled, with optional archive
+crypto backends and command-line tools omitted. These libraries leave the linked
+LibreOffice runtime and its components as separate unfinished packaging work.
 
 Windows media builds use static FFmpeg libraries and the existing winpthreads
 runtime. External-library autodetection is disabled so the SDK cannot silently

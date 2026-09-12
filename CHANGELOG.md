@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Supply macOS static ZIP/XML dependencies for Office package checks; linked
+  LibreOffice runtime packaging remains separate and unfinished.
+
 - Add macOS static PDF/font dependencies with SDK-targeted header generation
   and C++ linkage. Office runtime packaging and target rendering qualification
   remain in progress.
