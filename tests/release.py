@@ -1751,7 +1751,7 @@ with tempfile.TemporaryDirectory(prefix="bsd-native-errno-", dir=root / "build")
 print("PASS: old BSD unsupported/overflow spellings preserve native and existing error codes")
 
 # Extend libarchive's existing size-based formats for unsigned ZIP diagnostics.
-platform_patch = archive_patch.rsplit("+++ b/libarchive/archive_platform.h", 1)[1]
+platform_patch = archive_patch.split("+++ b/libarchive/archive_platform.h")[2]
 platform = "\n".join(line[1:] for line in platform_patch.splitlines()
                      if line.startswith(("+", " ")))
 formats = re.search(r"/\* Some platforms lack.*?#endif // !HAVE_INTTYPES_H[^\n]*",
@@ -1866,3 +1866,69 @@ with tempfile.TemporaryDirectory(prefix="bsd-math-visibility-", dir=root / "buil
         subprocess.run(["cc", "-E", "-P", *defines, str(source)],
                        stdout=subprocess.DEVNULL, check=True)
 print("PASS: early BSD allocator retains native math declarations and other platform features")
+
+# Zero classification in timestamp formatting needs neither fpclassify nor FP_ZERO.
+math_patch = (root / "nix/ffmpeg-legacy-libm.patch").read_text()
+assert '-        double log = (fpclassify(val) == FP_ZERO' in math_patch
+assert '+        double log = (val == 0.0' in math_patch
+with tempfile.TemporaryDirectory(prefix="bsd-zero-", dir=root / "build") as tmp:
+    source = Path(tmp) / "zero.c"
+    source.write_text(r"""
+#include <assert.h>
+#include <math.h>
+int main(void) {
+    const double values[] = {0.0, -0.0, 1.0, -1.0, 0x1p-1074, -0x1p-1074,
+                             INFINITY, -INFINITY, NAN};
+    for (unsigned i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+        double val = values[i];
+        assert((val == 0.0) == (fpclassify(val) == FP_ZERO));
+    }
+    return 0;
+}
+""")
+    subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
+                    "-o", str(Path(tmp) / "zero")], check=True)
+    subprocess.run([str(Path(tmp) / "zero")], check=True)
+print("PASS: FFmpeg timestamp zero check preserves signed zeros, subnormals and nonfinite values")
+
+# Missing maximum-width parsing reuses native strtoll only with an equal-width ABI.
+archive_added = "\n".join(line[1:] for line in archive_patch.splitlines()
+                          if line.startswith("+") and not line.startswith("+++"))
+parse_fallback = re.search(r"#ifndef HAVE_STRTOIMAX\n.*?\n#endif", archive_added, re.S).group(0)
+assert 'check_symbol_exists(strtoimax "inttypes.h" HAVE_STRTOIMAX)' in archive_patch
+assert '#cmakedefine HAVE_STRTOIMAX 1' in archive_patch
+with tempfile.TemporaryDirectory(prefix="archive-strtoimax-", dir=root / "build") as tmp:
+    source = Path(tmp) / "parse.c"
+    source.write_text(r"""
+#include <assert.h>
+#include <errno.h>
+#include <inttypes.h>
+#include <stddef.h>
+static intmax_t original(const char *text, char **end, int base) {
+    return strtoimax(text, end, base);
+}
+""" + parse_fallback + r"""
+int main(void) {
+    const char *values[] = {"", "x", "0", "-1", "+42", " 42", "42x",
+        "9223372036854775807", "-9223372036854775808",
+        "9223372036854775808", "-9223372036854775809", "0x7f"};
+    for (unsigned i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+        for (int base = 0; base <= 10; base += 10) {
+            char *a, *b;
+            errno = 0;
+            intmax_t expected = original(values[i], &a, base);
+            int expected_errno = errno;
+            errno = 0;
+            intmax_t actual = strtoimax(values[i], &b, base);
+            assert(actual == expected && errno == expected_errno && a == b);
+        }
+    }
+    return 0;
+}
+""")
+    for present in (False, True):
+        subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror"] +
+                       (["-DHAVE_STRTOIMAX=1"] if present else []) +
+                       [str(source), "-o", str(Path(tmp) / "parse")], check=True)
+        subprocess.run([str(Path(tmp) / "parse")], check=True)
+print("PASS: native maximum-width integer parsing preserves values, endpoints and range errors")

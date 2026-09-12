@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Reuse native integer parsing and zero comparisons in old BSD media dependencies.
+
 - Reconcile multimedia schemas and retained-input context with the common tool
   contract and system-role host instructions.
 

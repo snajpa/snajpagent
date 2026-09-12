@@ -262,3 +262,40 @@
  
  	ntfs *= NTFS_TICKS;
  
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1545,6 +1545,7 @@
+ CHECK_FUNCTION_EXISTS_GLIBC(strchr HAVE_STRCHR)
+ CHECK_FUNCTION_EXISTS_GLIBC(strdup HAVE_STRDUP)
+ CHECK_FUNCTION_EXISTS_GLIBC(strerror HAVE_STRERROR)
++check_symbol_exists(strtoimax "inttypes.h" HAVE_STRTOIMAX)
+ CHECK_FUNCTION_EXISTS_GLIBC(strncpy_s HAVE_STRNCPY_S)
+ CHECK_FUNCTION_EXISTS_GLIBC(strnlen HAVE_STRNLEN)
+ CHECK_FUNCTION_EXISTS_GLIBC(strrchr HAVE_STRRCHR)
+--- a/build/cmake/config.h.in
++++ b/build/cmake/config.h.in
+@@ -1049,6 +1049,9 @@
+ /* Define to 1 if you have the `strerror_r' function. */
+ #cmakedefine HAVE_STRERROR_R 1
+ 
++/* Define to 1 if strtoimax is available. */
++#cmakedefine HAVE_STRTOIMAX 1
++
+ /* Define to 1 if you have the `strftime' function. */
+ #cmakedefine HAVE_STRFTIME 1
+ 
+--- a/libarchive/archive_platform.h
++++ b/libarchive/archive_platform.h
+@@ -98,6 +98,12 @@
+ #include <stdint.h>
+ #endif
+ 
++#ifndef HAVE_STRTOIMAX
++#include <stdlib.h>
++_Static_assert(sizeof(intmax_t) == sizeof(long long), "strtoll must cover intmax_t");
++#define strtoimax strtoll
++#endif
++
+ /* Borland warns about its own constants!  */
+ #if defined(__BORLANDC__)
+ # if HAVE_DECL_UINT64_MAX

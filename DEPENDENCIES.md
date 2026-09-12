@@ -543,6 +543,7 @@ preserve signed zero without requiring a `signbit` macro. Early OpenBSD also
 keeps `pow`/`powf` calls from becoming unavailable `exp2` imports.
 Missing `isnormal` uses the compiler classification builtin, including subnormals.
 The allocator retains native BSD math declarations hidden by `_XOPEN_SOURCE`.
+Timestamp formatting compares zero directly where `fpclassify` is unavailable.
 FFmpeg reuses the application's exported Gnulib `errno.h` through a dependency-local
 include directory, supplying missing `EILSEQ` and `ENOTSUP` without importing
 unrelated Gnulib wrappers or changing native error definitions.
@@ -554,7 +555,8 @@ and path code, with a missing wide-character search fallback in the same owner.
 Missing `ENOTSUP` maps to native `EOPNOTSUPP`, and `EOVERFLOW` to native `ERANGE`,
 preserving unsupported/range failures; unsigned
 ZIP diagnostics use the existing integer-size-based format fallback. NTFS time
-conversion uses equivalent signed division/remainder where `lldiv` is absent. These
+conversion uses equivalent signed division/remainder where `lldiv` is absent.
+Missing `strtoimax` uses native `strtoll` after a compile-time width check. These
 compatibility adaptations do not qualify Office import or target execution.
 
 OpenBSD 7.9 qualification covers base/IRC/SSE tests, internal read-only
