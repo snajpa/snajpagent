@@ -2315,11 +2315,26 @@ recover_session(struct app_state *app, char *error, size_t error_size)
 static int
 finish_call(struct app_state *app, const char *turn_id,
              const struct snag_response_item *call, const char *handle,
-             json_t *result, char *error, size_t error_size)
+             json_t *result, const char *insert, char *error, size_t error_size)
 {
     if (!result || snag_tools_attach_output_limit(call, app->config, result) < 0) {
         json_decref(result);
         return -1;
+    }
+    /* Policy insertions are trusted host projections delivered with the call's
+     * own outcome, so they are journaled and replayed with it. */
+    if (insert && *insert) {
+        const char *old = snag_json_string(result, "model_text");
+        struct snag_buf text;
+        snag_buf_init(&text, SNAG_RULE_TEXT_MAX + 8192u);
+        if (snag_buf_printf(&text, "%s\n[policy] %s", old ? old : "", insert) < 0 ||
+            snag_buf_terminate(&text) < 0 ||
+            snag_json_set_new(result, "model_text", json_string((const char *)text.data)) < 0) {
+            snag_buf_free(&text);
+            json_decref(result);
+            return -1;
+        }
+        snag_buf_free(&text);
     }
     struct snag_process_state *process = snag_session_process(&app->session, handle);
     json_t *ref = json_object_get(result, "output_ref");
@@ -2351,6 +2366,7 @@ struct call_rule_host {
     char message[512];
     bool replaced;
     char rule[SNAG_RULE_NAME_MAX + 1u];
+    char *insertion;
 };
 
 /* Replace an object payload in place: every field the replacement provides is
@@ -2420,12 +2436,27 @@ call_rule_effect(void *opaque, const struct snag_rule *rule,
         host->replaced = true;
         (void)snprintf(host->rule, sizeof(host->rule), "%s", snag_rule_name(rule));
     }
+    if (snag_rule_verb(rule) == SNAG_RULE_INSERT) {
+        struct snag_buf message;
+        snag_buf_init(&message, SNAG_RULE_TEXT_MAX + 64u);
+        if (snag_rule_render(snag_rule_text(rule), frame->envelope, &message) < 0 ||
+            snag_buf_terminate(&message) < 0) {
+            snag_buf_free(&message);
+            return -1;
+        }
+        host->insertion = snag_strdup_checked((const char *)message.data, SNAG_RULE_TEXT_MAX + 1u);
+        snag_buf_free(&message);
+        if (!host->insertion)
+            return -1;
+        (void)snprintf(host->rule, sizeof(host->rule), "%s", snag_rule_name(rule));
+    }
     return 0;
 }
 
 static int
 call_rule_check(struct app_state *app, const struct snag_response_item *call,
-                bool *rejected, char *message, size_t message_size, char *error, size_t error_size)
+                bool *rejected, char *message, size_t message_size, char **insertion,
+                char *error, size_t error_size)
 {
     struct call_rule_host host;
     struct snag_rule_frame frame;
@@ -2439,6 +2470,7 @@ call_rule_check(struct app_state *app, const struct snag_response_item *call,
 
     *rejected = false;
     message[0] = '\0';
+    *insertion = NULL;
     original[0] = '\0';
     if (snag_rules_empty(app->config->rules)) return 0;
     if (call->call_id)
@@ -2488,6 +2520,10 @@ call_rule_check(struct app_state *app, const struct snag_response_item *call,
             return -1;
         memcpy(pending->action_sha256, effective, sizeof(effective));
     }
+    if (host.insertion) {
+        *insertion = host.insertion;
+        host.insertion = NULL;
+    }
     return 0;
 }
 
@@ -2501,6 +2537,7 @@ execute_calls(struct app_state *app, const char *turn_id, const struct snag_resp
         bool started, finished, process;
         bool rule_rejected;
         char rule_message[512];
+        char *insertion;
     } calls[SNAG_MAX_CALLS_PER_RESPONSE] = {0};
     size_t count = 0u, finished = 0u;
     uint64_t began = snag_monotonic_ms(), deadline = UINT64_MAX;
@@ -2522,7 +2559,9 @@ execute_calls(struct app_state *app, const char *turn_id, const struct snag_resp
     }
     for (size_t i = 0u; i < count; ++i)
         if (call_rule_check(app, &calls[i].call, &calls[i].rule_rejected,
-                            calls[i].rule_message, sizeof(calls[i].rule_message), error, error_size) < 0)
+                            calls[i].rule_message, sizeof(calls[i].rule_message),
+                            &calls[i].insertion,
+                            error, error_size) < 0)
             return -1;
     while (finished < count) {
         size_t before = finished;
@@ -2633,7 +2672,9 @@ execute_calls(struct app_state *app, const char *turn_id, const struct snag_resp
 complete:
             if (result) {
                 if (finish_call(app, turn_id, call, calls[i].started ? calls[i].handle : NULL,
-                                result, error, error_size) < 0) return -1;
+                                result, calls[i].insertion, error, error_size) < 0) return -1;
+                free(calls[i].insertion);
+                calls[i].insertion = NULL;
                 calls[i].finished = true;
                 ++finished;
             } else {
@@ -2679,7 +2720,9 @@ handoff:
                                               "superseded_by_steering" : handoff);
         }
         if (finish_call(app, turn_id, &calls[i].call, calls[i].started ? calls[i].handle : NULL,
-                         result, error, error_size) < 0) return -1;
+                         result, calls[i].insertion, error, error_size) < 0) return -1;
+        free(calls[i].insertion);
+        calls[i].insertion = NULL;
     }
     if (!strcmp(handoff, "turn_cancelled")) {
         app->interrupt_requested = true;

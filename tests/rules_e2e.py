@@ -101,6 +101,14 @@ TRANSFORM_RULES = (
     "action = pass\n"
     'value = {"command":"printf y >> marker"}\n'
 )
+INSERT_RULES = (
+    "[rule warn]\n"
+    "chain = out\n"
+    'match = {"/tool":"^exec_command$"}\n'
+    "action = insert\n"
+    "to = model\n"
+    'text = "Policy: prefer read_file before running commands."\n'
+)
 RETURN_RULES = (
     "[rule stop-exec]\n"
     "chain = out\n"
@@ -405,6 +413,21 @@ def case_transform_override(binary, provider, root):
     print("rules e2e transform: ok", flush=True)
 
 
+def case_insert_policy(binary, provider, root):
+    case = RulesCase(binary, provider, root, "insert", INSERT_RULES)
+    case.respond = responder(
+        provider, [("exec_command", {"command": "printf x >> marker"})],
+        "insert case finished")
+    result = case.finish(["-e", "--", "insert a policy note"])
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    res = single_result(case)
+    assert res["status"] == "succeeded", res
+    assert "[policy]" in res["model_text"], res
+    assert "prefer read_file" in res["model_text"], res
+    assert case.path("marker").read_text() == "x"
+    print("rules e2e insert: ok", flush=True)
+
+
 def case_multi_call_mixed(binary, provider, root):
     case = RulesCase(binary, provider, root, "multi-call", ARG_RULES)
     case.path("victim").write_text("keep me\n")
@@ -513,6 +536,7 @@ CASES = (
     case_threshold_under,
     case_return_stops,
     case_transform_override,
+    case_insert_policy,
     case_multi_call_mixed,
     case_durability_resume,
     case_no_rules_baseline,

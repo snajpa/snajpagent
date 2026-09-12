@@ -681,11 +681,18 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         json_t *text;
         if (!rule) goto invalid;
         if (!strcmp(key, "chain") || !strcmp(key, "action") || !strcmp(key, "text") ||
-            !strcmp(key, "target") || !strcmp(key, "log")) {
+            !strcmp(key, "target") || !strcmp(key, "log") || !strcmp(key, "to")) {
             /* Only the model tool-call boundary is evaluated in this build;
              * in/event hosts are not wired, so refuse them instead of accepting
              * rules that could never fire. */
-            if (!strcmp(key, "chain") && (!strcmp(value, "in") || !strcmp(value, "event"))) goto invalid;
+            if (!strcmp(key, "chain") &&
+                (!strcmp(value, "in") || !strcmp(value, "event")))
+                goto invalid;
+            /* Only insert-to-model is wired; program and IRC hosts do not exist
+             * at this boundary yet. */
+            if (!strcmp(key, "to") &&
+                (!strcmp(value, "program") || !strcmp(value, "irc")))
+                goto invalid;
             /* Rule messages may be JSON-quoted strings so escapes and newlines
              * survive; chain/action/target stay plain identifiers. */
             if ((!strcmp(key, "text") || !strcmp(key, "log")) && value[0] == '"') {

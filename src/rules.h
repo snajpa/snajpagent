@@ -21,8 +21,14 @@
 #define SNAG_RULE_ENVELOPE_MAX (4u * 1024u * 1024u)
 
 enum snag_rule_verb {
-    SNAG_RULE_PASS, SNAG_RULE_ACCEPT, SNAG_RULE_REJECT, SNAG_RULE_JUMP, SNAG_RULE_RETURN,
-    SNAG_RULE_VERB_COUNT };
+    SNAG_RULE_PASS,
+    SNAG_RULE_ACCEPT,
+    SNAG_RULE_REJECT,
+    SNAG_RULE_JUMP,
+    SNAG_RULE_RETURN,
+    SNAG_RULE_INSERT,
+    SNAG_RULE_VERB_COUNT
+};
 
 struct snag_rules;
 struct snag_rule;
@@ -58,6 +64,7 @@ const char *snag_rule_text(const struct snag_rule *rule);
 const char *snag_rule_target(const struct snag_rule *rule);
 const char *snag_rule_log(const struct snag_rule *rule);
 const json_t *snag_rule_value(const struct snag_rule *rule);
+const char *snag_rule_to(const struct snag_rule *rule);
 bool snag_rule_confirm(const struct snag_rule *rule);
 
 int snag_rules_eval(const struct snag_rules *rules, struct snag_rule_frame *frame,
