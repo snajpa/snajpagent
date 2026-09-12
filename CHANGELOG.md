@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Keep early OpenBSD audio thread creation without unavailable scheduler ranges.
+
 - Preserve immediate Office worker termination with legacy libc exit interfaces.
 
 - Preserve nonfinite media-value rejection with early OpenBSD math headers.

@@ -25,7 +25,46 @@
      {
          /*
          Use fopen() on anything other than Windows. Requires a conversion. This is annoying because fopen() is locale specific. The only real way I can
-@@ -17574,7 +17579,7 @@
+--- a/miniaudio.h
++++ b/miniaudio.h
+@@ -17540,125 +17540,130 @@
+ static ma_result ma_thread_create__posix(ma_thread* pThread, ma_thread_priority priority, size_t stackSize, ma_thread_entry_proc entryProc, void* pData)
+ {
+     int result;
+     pthread_attr_t* pAttr = NULL;
+ 
+ #if !defined(MA_EMSCRIPTEN) && !defined(MA_3DS) && !defined(MA_SWITCH)
+     /* Try setting the thread priority. It's not critical if anything fails here. */
+     pthread_attr_t attr;
+     if (pthread_attr_init(&attr) == 0) {
++        #if !defined(OpenBSD3_5)
+         int scheduler = -1;
++        #endif
+ 
+         /* We successfully initialized our attributes object so we can assign the pointer so it's passed into pthread_create(). */
+         pAttr = &attr;
+ 
+         /* We need to set the scheduler policy. Only do this if the OS supports pthread_attr_setschedpolicy() */
+-        #if !defined(MA_BEOS)
++        #if !defined(MA_BEOS) && !defined(OpenBSD3_5)
+         {
+             if (priority == ma_thread_priority_idle) {
+             #ifdef SCHED_IDLE
+                 if (pthread_attr_setschedpolicy(&attr, SCHED_IDLE) == 0) {
+                     scheduler = SCHED_IDLE;
+                 }
+             #endif
+             } else if (priority == ma_thread_priority_realtime) {
+             #ifdef SCHED_FIFO
+                 if (pthread_attr_setschedpolicy(&attr, SCHED_FIFO) == 0) {
+                     scheduler = SCHED_FIFO;
+                 }
+             #endif
+             #ifdef MA_LINUX
+             } else {
+                 scheduler = sched_getscheduler(0);
+             #endif
+             }
          }
          #endif
  
@@ -34,3 +73,90 @@
          {
              if (stackSize > 0) {
                  pthread_attr_setstacksize(&attr, stackSize);
+             }
+         }
+         #else
+         {
+             (void)stackSize;  /* Suppress unused parameter warning. */
+         }
+         #endif
+         
+ 
++        /* Early OpenBSD declares but does not export the priority-range APIs. */
++        #if !defined(OpenBSD3_5)
+         if (scheduler != -1) {
+             int priorityMin = sched_get_priority_min(scheduler);
+             int priorityMax = sched_get_priority_max(scheduler);
+             int priorityStep = (priorityMax - priorityMin) / 7;  /* 7 = number of priorities supported by miniaudio. */
+ 
+             struct sched_param sched;
+             if (pthread_attr_getschedparam(&attr, &sched) == 0) {
+                 if (priority == ma_thread_priority_idle) {
+                     sched.sched_priority = priorityMin;
+                 } else if (priority == ma_thread_priority_realtime) {
+                     #if defined(MA_PTHREAD_REALTIME_THREAD_PRIORITY)
+                     {
+                         sched.sched_priority = MA_PTHREAD_REALTIME_THREAD_PRIORITY;
+                     }
+                     #else
+                     {
+                         sched.sched_priority = priorityMax;
+                     }
+                     #endif
+                 } else {
+                     sched.sched_priority += ((int)priority + 5) * priorityStep;  /* +5 because the lowest priority is -5. */
+                 }
+ 
+                 if (sched.sched_priority < priorityMin) {
+                     sched.sched_priority = priorityMin;
+                 }
+                 if (sched.sched_priority > priorityMax) {
+                     sched.sched_priority = priorityMax;
+                 }
+ 
+                 /* I'm not treating a failure of setting the priority as a critical error so not aborting on failure here. */
+                 if (pthread_attr_setschedparam(&attr, &sched) == 0) {
+                     #if !defined(MA_ANDROID) || (defined(__ANDROID_API__) && __ANDROID_API__ >= 28)
+                     {
+                         pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
+                     }
+                     #endif
+                 }
+             }
+         }
++        #endif
+     }
+ #else
+     /* It's the emscripten build. We'll have a few unused parameters. */
+     (void)priority;
+     (void)stackSize;
+ #endif
+ 
+     result = pthread_create((pthread_t*)pThread, pAttr, entryProc, pData);
+ 
+     /* The thread attributes object is no longer required. */
+     if (pAttr != NULL) {
+         pthread_attr_destroy(pAttr);
+     }
+ 
+     if (result != 0) {
+         /*
+         There have been reports that attempting to create a realtime thread can sometimes fail. In this case,
+         fall back to a normal priority thread.
+ 
+         I'm including a compile-time option here to disable this functionality for those who have a hard
+         requirement on realtime threads and would rather an explicit failure.
+         */
+         #ifndef MA_NO_PTHREAD_REALTIME_PRIORITY_FALLBACK
+         {
+             if(result == EPERM && priority == ma_thread_priority_realtime) {
+                 return ma_thread_create__posix(pThread, ma_thread_priority_normal, stackSize, entryProc, pData);
+             }
+         }
+         #endif
+ 
+         return ma_result_from_errno(result);
+     }
+ 
+     return MA_SUCCESS;
+ }

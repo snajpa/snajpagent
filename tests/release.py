@@ -2040,3 +2040,90 @@ int main(int argc, char **argv) {
     assert result.returncode == 1 and not result.stdout
     assert result.stderr == "This custom build excludes Office import\n"
 print("PASS: Office worker immediate exit preserves failure code and skips buffered/global cleanup")
+
+# Keep old BSD thread creation/stack attributes without unavailable scheduler ranges.
+thread_patch = (root / "nix/miniaudio-openbsd35-headers.patch").read_text()
+thread_source = "\n".join(line[1:] for line in thread_patch.splitlines()
+                         if line.startswith(("+", " ")) and not line.startswith("+++"))
+thread_function = re.search(r"static ma_result ma_thread_create__posix\(.*?\n}",
+                            thread_source, re.S).group(0)
+with tempfile.TemporaryDirectory(prefix="openbsd-thread-priority-", dir=root / "build") as tmp:
+    source = Path(tmp) / "thread.c"
+    source.write_text(r"""
+#include <assert.h>
+#include <stddef.h>
+#include <errno.h>
+typedef int ma_result, ma_thread, pthread_t;
+typedef void *(*ma_thread_entry_proc)(void *);
+typedef enum { ma_thread_priority_idle=-5, ma_thread_priority_lowest=-4,
+               ma_thread_priority_normal=0, ma_thread_priority_realtime=2 } ma_thread_priority;
+typedef struct { int initialized; } pthread_attr_t;
+struct sched_param { int sched_priority; };
+#define MA_SUCCESS 0
+#define SCHED_FIFO 1
+#define PTHREAD_EXPLICIT_SCHED 1
+#define _POSIX_THREAD_ATTR_STACKSIZE
+static int attr_error, create_error, creates, destroys, with_attr, stack_calls;
+static int policy_calls, range_calls, param_calls, inherit_calls;
+static size_t requested_stack;
+static int pthread_attr_init(pthread_attr_t *attr) {
+    attr->initialized = !attr_error; return attr_error;
+}
+static int pthread_attr_destroy(pthread_attr_t *attr) {
+    assert(attr->initialized); ++destroys; return 0;
+}
+static int pthread_attr_setstacksize(pthread_attr_t *attr, size_t size) {
+    assert(attr->initialized); ++stack_calls; requested_stack=size; return 0;
+}
+#ifndef OpenBSD3_5
+static int pthread_attr_setschedpolicy(pthread_attr_t *attr, int policy) {
+    assert(attr->initialized && policy == SCHED_FIFO); ++policy_calls; return 0;
+}
+static int sched_get_priority_min(int policy) { assert(policy==SCHED_FIFO); ++range_calls; return 1; }
+static int sched_get_priority_max(int policy) { assert(policy==SCHED_FIFO); ++range_calls; return 8; }
+static int pthread_attr_getschedparam(pthread_attr_t *attr, struct sched_param *param) {
+    assert(attr->initialized); param->sched_priority=4; return 0;
+}
+static int pthread_attr_setschedparam(pthread_attr_t *attr, const struct sched_param *param) {
+    assert(attr->initialized && param->sched_priority==8); ++param_calls; return 0;
+}
+static int pthread_attr_setinheritsched(pthread_attr_t *attr, int value) {
+    assert(attr->initialized && value==PTHREAD_EXPLICIT_SCHED); ++inherit_calls; return 0;
+}
+#endif
+static int pthread_create(pthread_t *thread, pthread_attr_t *attr,
+                          ma_thread_entry_proc entry, void *data) {
+    assert(thread && entry && data == thread); ++creates;
+    if (attr) { assert(attr->initialized); ++with_attr; }
+    int error=create_error; create_error=0; return error;
+}
+static int ma_result_from_errno(int error) { return -error; }
+static void *entry(void *data) { return data; }
+""" + thread_function + r"""
+int main(void) {
+    ma_thread thread;
+    assert(ma_thread_create__posix(&thread, ma_thread_priority_realtime, 65536, entry, &thread)==0);
+    assert(creates==1 && destroys==1 && with_attr==1 && stack_calls==1 && requested_stack==65536);
+#ifdef OpenBSD3_5
+    assert(policy_calls==0 && range_calls==0 && param_calls==0 && inherit_calls==0);
+#else
+    assert(policy_calls==1 && range_calls==2 && param_calls==1 && inherit_calls==1);
+#endif
+    attr_error=EINVAL;
+    assert(ma_thread_create__posix(&thread, ma_thread_priority_normal, 0, entry, &thread)==0);
+    assert(creates==2 && destroys==1 && with_attr==1);
+    attr_error=0; create_error=EAGAIN;
+    assert(ma_thread_create__posix(&thread, ma_thread_priority_normal, 0, entry, &thread)==-EAGAIN);
+    assert(creates==3 && destroys==2);
+    create_error=EPERM;
+    assert(ma_thread_create__posix(&thread, ma_thread_priority_realtime, 0, entry, &thread)==0);
+    assert(creates==5 && destroys==4);
+    return 0;
+}
+""")
+    for old in (False, True):
+        subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror"] +
+                       (["-DOpenBSD3_5=1"] if old else []) +
+                       [str(source), "-o", str(Path(tmp) / "thread")], check=True)
+        subprocess.run([str(Path(tmp) / "thread")], check=True)
+print("PASS: early BSD audio threads retain stack, cleanup and errors with normal-priority fallback")

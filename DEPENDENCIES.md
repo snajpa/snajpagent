@@ -529,9 +529,11 @@ Retained-file snapshots use the BSD nanosecond stat fields, including the
 OpenBSD 3.5 layout, to detect source changes during media preparation.
 The OpenBSD 3.5 device dependency uses its existing unsupported wide-file path
 when the OS lacks `wchar.h`/`wcsrtombs`, and accepts empty pthread stack-size
-feature macros. Application file decoding remains in FFmpeg; miniaudio's engine
-and file decoders are disabled. This header compatibility does not complete the
-early target's complete application or qualify devices. The media adapter uses
+feature macros. It keeps normal-priority pthread creation on 3.5, whose libraries
+lack the declared scheduler priority-range functions; stack-size attributes and
+thread errors remain intact. Application file decoding remains in FFmpeg;
+miniaudio's engine and file decoders are disabled. Full application portability
+and device qualification remain separate. The media adapter uses
 the compiler finite-value check when the native math header lacks `isfinite`,
 preserving rejection of NaN and infinite dimensions, durations and positions.
 Disposable Office workers use `_exit` to preserve immediate termination without
