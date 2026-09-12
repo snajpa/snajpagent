@@ -15,6 +15,22 @@ Preserve the existing passing evidence and report its actual scope honestly.
 Fix known product failures and build failures; do not conceal them behind an
 earlier pass. Publication still requires the operator's shipment authority.
 
+## Staging
+
+Integration happens on the `staging` branch, which tracks `master`. Authorized
+work lands there first: rebase it onto current `staging`, compile the combined
+tree, and run the fixture-based suite (`make check`, which drives the local fake
+provider; live-provider checks are not part of the gate). A green `staging`
+tree advances `master` by fast-forward, and release tags are cut from `master`
+only after that. Version changes and publication remain with the operator.
+
+The gate exists because `master` is the release line: tags, production-matrix
+binaries and the updater channel all descend from its commits, so unvalidated
+work must not reach it. A change that cannot pass the suite stays on its own
+branch rather than blocking `master`. Two distinct things are called staging —
+this integration branch, and the release staging directory that
+`tools/release.py stage` writes; `RELEASE.md` covers the second.
+
 Source and test line counts have no limits or per-file review thresholds.
 `make sizecheck` reports counts only. Keep designs simple through ordinary
 code review; reintroducing numeric limits requires an explicit operator request.

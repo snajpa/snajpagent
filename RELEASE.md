@@ -58,6 +58,20 @@ Staging derives the version and default immutable GitHub download URL from the
 exact tag and archives that tagged source, even if later website edits exist.
 `BUILD_VERSION` and staging's `--version`/`--release` remain available for manual
 builds and custom publishers; the ordinary release procedure does not need them.
+
+## Staging
+
+Two different things share this name. The integration branch `staging` is the
+development gate described in `AGENTS.md`: authorized work is rebased onto it,
+the combined tree is compiled, the fixture-based `make check` suite runs, and
+only then does `staging` fast-forward `master`. The release staging directory
+produced by `tools/release.py stage` is the publication step below: it holds the
+tag-derived binaries, hashes and channel descriptors that become the release.
+
+Release staging consumes the exact approved tag, so its contents describe an
+immutable commit; the integration branch keeps moving. Do not publish from
+`staging`, and do not treat a staged directory as permission to advance a
+version — that decision stays with the operator.
 Changing prose or supplying an override does not create a release tag.
 
 ## Required matrix
