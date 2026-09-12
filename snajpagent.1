@@ -3410,7 +3410,9 @@ OpenBSD uses miniaudio's sndio/audio(4) backends and the system dynamic-loader A
 The source recipe supplies static media codecs. The intermediate OpenBSD 5.9
 direct-audio API remains paused through initialization, starts explicitly and
 stops by pausing and clearing queued device data without a blocking drain.
-OpenBSD 3.5 audio compatibility remains in development.
+OpenBSD 3.5 uses normal-priority audio threads because its native libraries lack
+the declared scheduler priority-range functions. Stack-size handling remains
+available. Physical audio and target-runtime qualification remain pending.
 Portable Linux builds link PulseAudio and ALSA clients. A PulseAudio-compatible
 server must already be running; the agent does not start one.
 ALSA uses the host's /usr/share/alsa configuration; ALSA_CONFIG_DIR can select

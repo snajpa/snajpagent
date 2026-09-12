@@ -566,6 +566,12 @@ Missing `strtoimax` uses native `strtoll` after a compile-time width check. ZIP
 filename flags use existing libcharset detection when native `CODESET` is absent. These
 compatibility adaptations do not qualify Office import or target execution.
 
+OpenBSD 3.5 media/audio application cross-linking and static ZIP/XML package
+checks pass with native libc/pthread imports and no runtime search path. The
+application check excludes PDF and Office import; their complete runtime closure
+and physical audio qualification remain unfinished. No target executable was
+run for these media/package checks.
+
 OpenBSD 7.9 qualification covers base/IRC/SSE tests, internal read-only
 inspection and denied writes, parallel commands, PTY execution, durable resume,
 and TLS trust and hostname checks with local fixtures. The IRC capacity test

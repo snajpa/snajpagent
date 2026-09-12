@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Document early OpenBSD media/audio and package-reader cross-link scope and
+  normal-priority audio threads; target execution and PDF/Office remain pending.
+
 - Keep early OpenBSD audio thread creation without unavailable scheduler ranges.
 
 - Preserve immediate Office worker termination with legacy libc exit interfaces.
