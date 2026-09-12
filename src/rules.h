@@ -21,12 +21,7 @@
 #define SNAG_RULE_ENVELOPE_MAX (4u * 1024u * 1024u)
 
 enum snag_rule_verb {
-    SNAG_RULE_PASS,
-    SNAG_RULE_REJECT,
-    SNAG_RULE_JUMP,
-    SNAG_RULE_RETURN,
-    SNAG_RULE_VERB_COUNT
-};
+    SNAG_RULE_PASS, SNAG_RULE_REJECT, SNAG_RULE_JUMP, SNAG_RULE_RETURN, SNAG_RULE_VERB_COUNT };
 
 struct snag_rules;
 struct snag_rule;
@@ -46,8 +41,7 @@ struct snag_rule_verdict {
  * replace effects. Called in chain order for every matched rule. Return 0 to
  * continue, 1 to veto the operation (sticky reject), -1 for a host failure.
  * A veto does not stop traversal, so later observational rules still run. */
-typedef int (*snag_rule_effect_fn)(void *opaque, const struct snag_rule *rule,
-                                   struct snag_rule_frame *frame,
+typedef int (*snag_rule_effect_fn)(void *opaque, const struct snag_rule *rule, struct snag_rule_frame *frame,
                                    char *error, size_t size);
 
 struct snag_rules *snag_rules_compile(const json_t *definition, char *error, size_t size);
@@ -69,7 +63,6 @@ int snag_rules_eval(const struct snag_rules *rules, struct snag_rule_frame *fram
                     struct snag_rule_verdict *verdict, char *error, size_t size);
 
 /* Render %{/json/pointer} against the envelope; %% is a literal percent. */
-int snag_rule_render(const char *format, const json_t *envelope,
-                     struct snag_buf *out);
+int snag_rule_render(const char *format, const json_t *envelope, struct snag_buf *out);
 
 #endif

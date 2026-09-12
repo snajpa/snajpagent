@@ -27,8 +27,7 @@ snag_history_snapshot_free(struct snag_history_snapshot *snapshot)
 }
 
 int
-snag_history_snapshot_copy(struct snag_history_snapshot *out,
-                          const struct snag_history_snapshot *source)
+snag_history_snapshot_copy(struct snag_history_snapshot *out, const struct snag_history_snapshot *source)
 {
     memset(out, 0, sizeof(*out));
     for (size_t i = 0u; i < source->count; ++i) {
@@ -63,8 +62,7 @@ snag_history_free(struct snag_history *history)
 static void
 history_note_warning(struct snag_history *term)
 {
-    if (!term->warned)
-        term->warning = true;
+    if (!term->warned) term->warning = true;
     term->warned = true;
 }
 
@@ -73,8 +71,7 @@ snag_history_take_warning(struct snag_history *term)
 {
     bool pending = term && term->warning;
 
-    if (term)
-        term->warning = false;
+    if (term) term->warning = false;
     return pending;
 }
 
@@ -84,19 +81,14 @@ history_memory_add(struct snag_history_snapshot *snapshot, const char *text, boo
     size_t len = strlen(text);
     char *copy;
 
-    if (!len || len > SNAG_HISTORY_BYTES)
-        return 0;
+    if (!len || len > SNAG_HISTORY_BYTES) return 0;
     copy = snag_strdup_checked(text, SNAG_HISTORY_BYTES);
-    if (!copy)
-        return -1;
-    while (snapshot->count == SNAG_HISTORY_COUNT ||
-           snapshot->bytes > SNAG_HISTORY_BYTES - len) {
+    if (!copy) return -1;
+    while (snapshot->count == SNAG_HISTORY_COUNT || snapshot->bytes > SNAG_HISTORY_BYTES - len) {
         size_t old = strlen(snapshot->items[0]);
-        if (dropped)
-            *dropped = true;
+        if (dropped) *dropped = true;
         free(snapshot->items[0]);
-        memmove(snapshot->items, snapshot->items + 1u,
-                (snapshot->count - 1u) * sizeof(snapshot->items[0]));
+        memmove(snapshot->items, snapshot->items + 1u, (snapshot->count - 1u) * sizeof(snapshot->items[0]));
         --snapshot->count;
         snapshot->bytes -= old;
     }
@@ -109,8 +101,7 @@ static int
 history_lock(int fd)
 {
     while (snag_lock_file(fd, true) < 0)
-        if (errno != EINTR)
-            return -1;
+        if (errno != EINTR) return -1;
     return 0;
 }
 
@@ -119,8 +110,7 @@ history_file_open(const char *path)
 {
     int fd = snag_open_history(path);
 
-    if (fd < 0)
-        return -1;
+    if (fd < 0) return -1;
     if (history_lock(fd) < 0) {
         int saved = errno;
         (void)close(fd);
@@ -140,12 +130,10 @@ history_decode(const unsigned char *line, size_t len, struct snag_buf *out)
         unsigned char c = line[i];
 
         if (c != '\\') {
-            if (c < 0x20u || c == 0x7fu || snag_buf_putc(out, c) < 0)
-                return -1;
+            if (c < 0x20u || c == 0x7fu || snag_buf_putc(out, c) < 0) return -1;
             continue;
         }
-        if (++i >= len)
-            return -1;
+        if (++i >= len) return -1;
         c = line[i];
         if (c == '\\') c = '\\';
         else if (c == 'n') c = '\n';
@@ -154,18 +142,14 @@ history_decode(const unsigned char *line, size_t len, struct snag_buf *out)
         else if (c == 'x' && i + 2u < len) {
             const char *hi = strchr(hex, line[++i]);
             const char *lo = strchr(hex, line[++i]);
-            if (!hi || !*hi || !lo || !*lo)
-                return -1;
+            if (!hi || !*hi || !lo || !*lo) return -1;
             c = (unsigned char)(((hi - hex) << 4) | (lo - hex));
         } else {
             return -1;
         }
-        if (!c || snag_buf_putc(out, c) < 0)
-            return -1;
+        if (!c || snag_buf_putc(out, c) < 0) return -1;
     }
-    if (!out->len || !snag_utf8_valid(out->data, out->len, true) ||
-        snag_buf_terminate(out) < 0)
-        return -1;
+    if (!out->len || !snag_utf8_valid(out->data, out->len, true) || snag_buf_terminate(out) < 0) return -1;
     return 0;
 }
 
@@ -181,12 +165,10 @@ history_encode(struct snag_buf *out, const char *text)
         const char *escape = c == '\\' ? "\\\\" : c == '\n' ? "\\n" :
                              c == '\r' ? "\\r" : c == '\t' ? "\\t" : NULL;
         if (escape) {
-            if (snag_buf_append(out, escape, 2u) < 0)
-                return -1;
+            if (snag_buf_append(out, escape, 2u) < 0) return -1;
         } else if (c < 0x20u || c == 0x7fu) {
             unsigned char encoded[4] = {'\\', 'x', hex[c >> 4], hex[c & 15u]};
-            if (snag_buf_append(out, encoded, sizeof(encoded)) < 0)
-                return -1;
+            if (snag_buf_append(out, encoded, sizeof(encoded)) < 0) return -1;
         } else if (snag_buf_putc(out, c) < 0) {
             return -1;
         }
@@ -207,8 +189,7 @@ snag_history_reader_close(struct snag_history_reader *reader)
 }
 
 void
-snag_history_reader_open(struct snag_history_reader *reader,
-                         const struct snag_history_snapshot *snapshot)
+snag_history_reader_open(struct snag_history_reader *reader, const struct snag_history_snapshot *snapshot)
 {
     const char *paths[] = {snapshot->local_path, snapshot->global_path};
     snag_history_reader_close(reader);
@@ -228,8 +209,7 @@ snag_history_reader_open(struct snag_history_reader *reader,
             continue;
         }
         reader->fd[i] = fd;
-        reader->size[i] = i == 0u && snapshot->local_end < st.st_size ?
-                          snapshot->local_end : st.st_size;
+        reader->size[i] = i == 0u && snapshot->local_end < st.st_size ? snapshot->local_end : st.st_size;
     }
 }
 
@@ -240,8 +220,7 @@ snag_history_end(const struct snag_history_snapshot *snapshot)
 }
 
 static int
-history_byte(struct snag_history_reader *reader, unsigned int source, int64_t offset,
-             unsigned char *byte)
+history_byte(struct snag_history_reader *reader, unsigned int source, int64_t offset, unsigned char *byte)
 {
     if (reader->cache_source != source || offset < reader->cache_start ||
         offset - reader->cache_start >= (int64_t)reader->cache_len) {
@@ -257,8 +236,7 @@ history_byte(struct snag_history_reader *reader, unsigned int source, int64_t of
         if (got <= 0) return snag_errno(EIO);
         reader->cache_len = (size_t)got;
     }
-    if (offset - reader->cache_start >= (int64_t)reader->cache_len)
-        return snag_errno(EIO);
+    if (offset - reader->cache_start >= (int64_t)reader->cache_len) return snag_errno(EIO);
     *byte = reader->cache[(size_t)(offset - reader->cache_start)];
     return 0;
 }
@@ -275,8 +253,7 @@ snag_history_read(struct snag_history_reader *reader,
     }
     for (;;) {
         if (from.source == 0u) {
-            if ((!newer && from.offset > 0) ||
-                (newer && from.offset < (int64_t)snapshot->count)) {
+            if ((!newer && from.offset > 0) || (newer && from.offset < (int64_t)snapshot->count)) {
                 int64_t i = newer ? from.offset : from.offset - 1;
                 *start = (struct snag_history_cursor){0u, i};
                 *end = (struct snag_history_cursor){0u, i + 1};
@@ -370,8 +347,7 @@ history_complete_end(int fd)
         while (got < 0 && errno == EINTR);
         if (got != (ssize_t)n) return -1;
         for (size_t i = n; i; --i)
-            if (block[i - 1u] == '\n')
-                return pos - (int64_t)n + (int64_t)i;
+            if (block[i - 1u] == '\n') return pos - (int64_t)n + (int64_t)i;
         pos -= (int64_t)n;
     }
     return 0;
@@ -385,8 +361,7 @@ history_append(int fd, const struct snag_history_snapshot *snapshot, int64_t *en
     int rc = -1;
     if (original < 0 || snag_truncate(fd, original) < 0) return -1;
     for (size_t i = 0u; i < snapshot->count; ++i)
-        if (history_encode(&encoded, snapshot->items[i]) < 0 ||
-            snag_buf_putc(&encoded, '\n') < 0 ||
+        if (history_encode(&encoded, snapshot->items[i]) < 0 || snag_buf_putc(&encoded, '\n') < 0 ||
             snag_write_full(fd, encoded.data, encoded.len) < 0) goto out;
     if (snag_sync_file(fd) < 0 || (*end = snag_seek(fd, 0, SEEK_END)) < 0) goto out;
     rc = 0;

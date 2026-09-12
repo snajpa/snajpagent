@@ -11,11 +11,7 @@
 #define SNAG_CLI_IRC_CLIENT_MAX 16u
 
 enum snag_cli_auth_command {
-    SNAG_CLI_AUTH_NONE,
-    SNAG_CLI_LOGIN,
-    SNAG_CLI_LOGIN_STATUS,
-    SNAG_CLI_LOGOUT
-};
+    SNAG_CLI_AUTH_NONE, SNAG_CLI_LOGIN, SNAG_CLI_LOGIN_STATUS, SNAG_CLI_LOGOUT };
 
 struct snag_cli {
     enum snag_cli_auth_command auth_command;
@@ -55,12 +51,10 @@ struct snag_cli {
 };
 
 void snag_cli_init(struct snag_cli *cli);
-enum snag_color_mode snag_cli_color(const struct snag_cli *cli,
-                                    enum snag_color_mode fallback);
+enum snag_color_mode snag_cli_color(const struct snag_cli *cli, enum snag_color_mode fallback);
 bool snag_cli_markdown(const struct snag_cli *cli, bool fallback);
 void snag_cli_free(struct snag_cli *cli);
-int snag_cli_parse(struct snag_cli *cli, int argc, char **argv,
-                  char *error, size_t error_size);
+int snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t error_size);
 void snag_cli_usage(int fd);
 void snag_cli_help(bool manual);
 

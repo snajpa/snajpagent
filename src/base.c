@@ -14,18 +14,14 @@ int
 snag_parse_count(const char *text, uint64_t *count)
 {
     uint64_t value = 0u;
-    while (isspace((unsigned char)*text))
-        ++text;
-    if (*text < '0' || *text > '9')
-        return snag_errno(EINVAL);
+    while (isspace((unsigned char)*text)) ++text;
+    if (*text < '0' || *text > '9') return snag_errno(EINVAL);
     while (*text >= '0' && *text <= '9') {
         unsigned int digit = (unsigned int)(*text++ - '0');
         value = value > (UINT64_MAX - digit) / 10u ? UINT64_MAX : value * 10u + digit;
     }
-    while (isspace((unsigned char)*text))
-        ++text;
-    if (*text)
-        return snag_errno(EINVAL);
+    while (isspace((unsigned char)*text)) ++text;
+    if (*text) return snag_errno(EINVAL);
     *count = value;
     return 0;
 }
@@ -40,8 +36,7 @@ snag_verbosity_command(const char *text, size_t len)
 unsigned char
 snag_irc_fold(unsigned char c)
 {
-    if (c >= 'A' && c <= 'Z')
-        return (unsigned char)(c + ('a' - 'A'));
+    if (c >= 'A' && c <= 'Z') return (unsigned char)(c + ('a' - 'A'));
     if (c == '[') return '{';
     if (c == ']') return '}';
     if (c == '\\') return '|';
@@ -54,8 +49,7 @@ snag_irc_nick_char(unsigned char c)
 {
     return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
            (c >= '0' && c <= '9') || c == '[' || c == ']' || c == '\\' ||
-           c == '`' || c == '_' || c == '^' || c == '{' || c == '}' ||
-           c == '|' || c == '-';
+           c == '`' || c == '_' || c == '^' || c == '{' || c == '}' || c == '|' || c == '-';
 }
 
 bool
@@ -63,21 +57,16 @@ snag_irc_nick_mentioned(const char *text, const char *nick)
 {
     size_t nick_len = strlen(nick);
 
-    if (!nick_len)
-        return false;
+    if (!nick_len) return false;
     for (size_t i = 0; text[i]; ++i) {
         size_t j;
 
         if (i != 0u && ((unsigned char)text[i - 1u] >= 0x80u ||
-                        snag_irc_nick_char((unsigned char)text[i - 1u])))
-            continue;
+                        snag_irc_nick_char((unsigned char)text[i - 1u]))) continue;
         for (j = 0u; j < nick_len && text[i + j]; ++j)
-            if (snag_irc_fold((unsigned char)text[i + j]) !=
-                snag_irc_fold((unsigned char)nick[j]))
-                break;
+            if (snag_irc_fold((unsigned char)text[i + j]) != snag_irc_fold((unsigned char)nick[j])) break;
         if (j == nick_len && (unsigned char)text[i + nick_len] < 0x80u &&
-            !snag_irc_nick_char((unsigned char)text[i + nick_len]))
-            return true;
+            !snag_irc_nick_char((unsigned char)text[i + nick_len])) return true;
     }
     return false;
 }
@@ -90,29 +79,24 @@ snag_irc_target_parse(const char *text, size_t len, uint32_t *id, size_t *body)
 
     *id = 0u;
     *body = 0u;
-    if (!text || len < 2u || text[0] != '/')
-        return SNAG_IRC_TARGET_NONE;
+    if (!text || len < 2u || text[0] != '/') return SNAG_IRC_TARGET_NONE;
     all = len >= 4u && memcmp(text, "/all", 4u) == 0 &&
           (len == 4u || text[4] == ' ' || text[4] == '\t' || text[4] == '\n');
     if (all) {
         i = 4u;
     } else {
-        if (text[i] < '0' || text[i] > '9')
-            return SNAG_IRC_TARGET_NONE;
+        if (text[i] < '0' || text[i] > '9') return SNAG_IRC_TARGET_NONE;
         while (i < len && text[i] >= '0' && text[i] <= '9') {
             unsigned int digit = (unsigned int)(text[i++] - '0');
-            if (*id > (UINT32_MAX - digit) / 10u)
-                return SNAG_IRC_TARGET_INVALID;
+            if (*id > (UINT32_MAX - digit) / 10u) return SNAG_IRC_TARGET_INVALID;
             *id = *id * 10u + digit;
         }
         if (!*id || (i < len && text[i] != ' ' && text[i] != '\t' && text[i] != '\n'))
             return SNAG_IRC_TARGET_INVALID;
     }
-    while (i < len && (text[i] == ' ' || text[i] == '\t' || text[i] == '\n'))
-        ++i;
+    while (i < len && (text[i] == ' ' || text[i] == '\t' || text[i] == '\n')) ++i;
     *body = i;
-    if (all)
-        return i < len ? SNAG_IRC_TARGET_ALL : SNAG_IRC_TARGET_INVALID;
+    if (all) return i < len ? SNAG_IRC_TARGET_ALL : SNAG_IRC_TARGET_INVALID;
     return i < len ? SNAG_IRC_TARGET_SEND : SNAG_IRC_TARGET_SELECT;
 }
 
@@ -123,16 +107,14 @@ snag_path_join(const char *left, const char *right)
     size_t need;
     char *path;
 
-    if (!snag_size_add(a, b, &need) ||
-        !snag_size_add(need, 2u, &need) || need > SNAG_PATH_MAX_BYTES + 1u) {
+    if (!snag_size_add(a, b, &need) || !snag_size_add(need, 2u, &need) || need > SNAG_PATH_MAX_BYTES + 1u) {
         errno = EOVERFLOW;
         return NULL;
     }
     path = malloc(need);
     if (path) {
         memcpy(path, left, a);
-        if (a != 1u || left[0] != '/')
-            path[a++] = '/';
+        if (a != 1u || left[0] != '/') path[a++] = '/';
         memcpy(path + a, right, b + 1u);
     }
     return path;
@@ -143,8 +125,7 @@ snag_errorf(char *error, size_t size, const char *fmt, ...)
 {
     va_list ap;
 
-    if (!size)
-        return -1;
+    if (!size) return -1;
     va_start(ap, fmt);
     (void)vsnprintf(error, size, fmt, ap);
     va_end(ap);
@@ -157,8 +138,7 @@ snag_fail(char *error, size_t size, int code, const char *fmt, ...)
     va_list ap;
 
     va_start(ap, fmt);
-    if (size)
-        (void)vsnprintf(error, size, fmt, ap);
+    if (size) (void)vsnprintf(error, size, fmt, ap);
     va_end(ap);
     errno = code;
     return -1;
@@ -167,12 +147,9 @@ snag_fail(char *error, size_t size, int code, const char *fmt, ...)
 size_t
 snag_utf8_size(unsigned char first)
 {
-    if (first < 0x80u)
-        return 1u;
-    if (first >= 0xc2u && first <= 0xdfu)
-        return 2u;
-    if (first >= 0xe0u && first <= 0xefu)
-        return 3u;
+    if (first < 0x80u) return 1u;
+    if (first >= 0xc2u && first <= 0xdfu) return 2u;
+    if (first >= 0xe0u && first <= 0xefu) return 3u;
     return first >= 0xf0u && first <= 0xf4u ? 4u : 0u;
 }
 
@@ -190,8 +167,7 @@ snag_key_ref_compare(const void *left, const void *right)
 bool
 snag_size_add(size_t a, size_t b, size_t *out)
 {
-    if (b > SIZE_MAX - a)
-        return false;
+    if (b > SIZE_MAX - a) return false;
     *out = a + b;
     return true;
 }
@@ -209,12 +185,9 @@ snag_buf_read(struct snag_buf *buf, int fd)
     unsigned char bytes[8192];
     for (;;) {
         ssize_t got = read(fd, bytes, sizeof(bytes));
-        if (got < 0 && errno == EINTR)
-            continue;
-        if (got <= 0)
-            return got < 0 ? -1 : 0;
-        if (snag_buf_append(buf, bytes, (size_t)got) < 0)
-            return -2;
+        if (got < 0 && errno == EINTR) continue;
+        if (got <= 0) return got < 0 ? -1 : 0;
+        if (snag_buf_append(buf, bytes, (size_t)got) < 0) return -2;
     }
 }
 
@@ -238,10 +211,8 @@ snag_buf_reserve(struct snag_buf *buf, size_t extra)
     size_t cap;
     unsigned char *next;
 
-    if (!snag_size_add(buf->len, extra, &need) || need > buf->max)
-        return snag_errno(EOVERFLOW);
-    if (need <= buf->cap)
-        return 0;
+    if (!snag_size_add(buf->len, extra, &need) || need > buf->max) return snag_errno(EOVERFLOW);
+    if (need <= buf->cap) return 0;
     cap = buf->cap ? buf->cap : 256u;
     while (cap < need) {
         if (cap > buf->max / 2u) {
@@ -250,11 +221,9 @@ snag_buf_reserve(struct snag_buf *buf, size_t extra)
         }
         cap *= 2u;
     }
-    if (cap < need)
-        return snag_errno(EOVERFLOW);
+    if (cap < need) return snag_errno(EOVERFLOW);
     next = realloc(buf->data, cap);
-    if (!next)
-        return -1;
+    if (!next) return -1;
     buf->data = next;
     buf->cap = cap;
     return 0;
@@ -263,11 +232,9 @@ snag_buf_reserve(struct snag_buf *buf, size_t extra)
 int
 snag_buf_append(struct snag_buf *buf, const void *data, size_t len)
 {
-    if ((len && !data) || snag_buf_reserve(buf, len) < 0)
-        return -1;
+    if ((len && !data) || snag_buf_reserve(buf, len) < 0) return -1;
     if (len) {
-        if (!buf->data)
-            return snag_errno(EFAULT);
+        if (!buf->data) return snag_errno(EFAULT);
         memcpy(buf->data + buf->len, data, len);
     }
     buf->len += len;
@@ -289,12 +256,9 @@ snag_buf_vprintf(struct snag_buf *buf, const char *fmt, va_list ap)
     va_copy(copy, ap);
     n = vsnprintf(NULL, 0, fmt, copy);
     va_end(copy);
-    if (n < 0 || (size_t)n > buf->max - buf->len)
-        return snag_errno(EOVERFLOW);
-    if (snag_buf_reserve(buf, (size_t)n + 1u) < 0)
-        return -1;
-    if (vsnprintf((char *)buf->data + buf->len, (size_t)n + 1u, fmt, ap) != n)
-        return snag_errno(EIO);
+    if (n < 0 || (size_t)n > buf->max - buf->len) return snag_errno(EOVERFLOW);
+    if (snag_buf_reserve(buf, (size_t)n + 1u) < 0) return -1;
+    if (vsnprintf((char *)buf->data + buf->len, (size_t)n + 1u, fmt, ap) != n) return snag_errno(EIO);
     buf->len += (size_t)n;
     return 0;
 }
@@ -319,14 +283,11 @@ legacy_vfprintf(FILE *stream, const char *format, va_list args)
     va_copy(copy, args);
     int n = vsnprintf(NULL, 0, format, copy);
     va_end(copy);
-    if (n < 0)
-        return -1;
+    if (n < 0) return -1;
     char *text = malloc((size_t)n + 1u);
-    if (!text)
-        return -1;
+    if (!text) return -1;
     int result = vsnprintf(text, (size_t)n + 1u, format, args);
-    if (result != n || fwrite(text, 1u, (size_t)n, stream) != (size_t)n)
-        result = -1;
+    if (result != n || fwrite(text, 1u, (size_t)n, stream) != (size_t)n) result = -1;
     free(text);
     return result;
 }
@@ -355,8 +316,7 @@ snag_legacy_printf(const char *format, ...)
 int
 snag_buf_terminate(struct snag_buf *buf)
 {
-    if (snag_buf_reserve(buf, 1u) < 0)
-        return -1;
+    if (snag_buf_reserve(buf, 1u) < 0) return -1;
     buf->data[buf->len] = '\0';
     return 0;
 }
@@ -365,15 +325,12 @@ bool
 snag_string_in(const char *value, const char *choices)
 {
     size_t len = value ? strlen(value) : 0u;
-    if (!len)
-        return false;
+    if (!len) return false;
     while (*choices) {
         size_t word = strcspn(choices, " ");
-        if (word == len && !memcmp(value, choices, len))
-            return true;
+        if (word == len && !memcmp(value, choices, len)) return true;
         choices += word;
-        if (*choices)
-            ++choices;
+        if (*choices) ++choices;
     }
     return false;
 }
@@ -382,8 +339,7 @@ bool
 snag_text_blank(const char *text)
 {
     for (const unsigned char *p = (const unsigned char *)text; *p; ++p)
-        if (*p != ' ' && *p != '\t' && *p != '\r' && *p != '\n')
-            return false;
+        if (*p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') return false;
     return true;
 }
 
@@ -394,19 +350,14 @@ snag_utf8_decode(const unsigned char *text, size_t len, uint32_t *out)
     size_t size = len ? snag_utf8_size(text[0]) : 0u;
     uint32_t cp;
 
-    if (!size || size > len)
-        return 0u;
-    cp = text[0] & (size == 1u ? 0x7fu : size == 2u ? 0x1fu :
-                   size == 3u ? 0x0fu : 0x07u);
+    if (!size || size > len) return 0u;
+    cp = text[0] & (size == 1u ? 0x7fu : size == 2u ? 0x1fu : size == 3u ? 0x0fu : 0x07u);
     for (size_t i = 1u; i < size; ++i) {
-        if ((text[i] & 0xc0u) != 0x80u)
-            return 0u;
+        if ((text[i] & 0xc0u) != 0x80u) return 0u;
         cp = (cp << 6) | (text[i] & 0x3fu);
     }
     if ((size == 2u && cp < 0x80u) || (size == 3u && cp < 0x800u) ||
-        (size == 4u && cp < 0x10000u) || cp > 0x10ffffu ||
-        (cp >= 0xd800u && cp <= 0xdfffu))
-        return 0u;
+        (size == 4u && cp < 0x10000u) || cp > 0x10ffffu || (cp >= 0xd800u && cp <= 0xdfffu)) return 0u;
     *out = cp;
     return size;
 }
@@ -414,16 +365,12 @@ snag_utf8_decode(const unsigned char *text, size_t len, uint32_t *out)
 bool
 snag_text_valid(const char *text, size_t min, size_t max)
 {
-    if (!text)
-        return false;
+    if (!text) return false;
     size_t len = 0u;
-    if (max == SIZE_MAX)
-        len = strlen(text);
+    if (max == SIZE_MAX) len = strlen(text);
     else
-        while (len <= max && text[len])
-            ++len;
-    return len >= min && len <= max &&
-           snag_utf8_valid((const unsigned char *)text, len, true);
+        while (len <= max && text[len]) ++len;
+    return len >= min && len <= max && snag_utf8_valid((const unsigned char *)text, len, true);
 }
 
 bool
@@ -432,8 +379,7 @@ snag_utf8_valid(const unsigned char *s, size_t len, bool reject_nul)
     for (size_t i = 0u; i < len;) {
         uint32_t cp;
         size_t size = snag_utf8_decode(s + i, len - i, &cp);
-        if (!size || (reject_nul && cp == 0u))
-            return false;
+        if (!size || (reject_nul && cp == 0u)) return false;
         i += size;
     }
     return true;
@@ -455,8 +401,7 @@ snag_random_id(char out[SNAG_ID_HEX_LEN + 1u])
 {
     unsigned char raw[16];
 
-    if (snag_random_bytes(raw, sizeof(raw)) < 0)
-        return -1;
+    if (snag_random_bytes(raw, sizeof(raw)) < 0) return -1;
     hex_encode(raw, sizeof(raw), out);
     return 0;
 }
@@ -466,8 +411,7 @@ snag_strcpy(char *dst, size_t size, const char *src)
 {
     size_t len;
 
-    if (!src || (len = strlen(src)) >= size)
-        return false;
+    if (!src || (len = strlen(src)) >= size) return false;
     memcpy(dst, src, len + 1u);
     return true;
 }
@@ -483,8 +427,7 @@ snag_strdup_checked(const char *s, size_t max)
         return NULL;
     }
     copy = malloc(len + 1u);
-    if (!copy)
-        return NULL;
+    if (!copy) return NULL;
     memcpy(copy, s, len + 1u);
     return copy;
 }
@@ -496,8 +439,7 @@ snag_join_words(char *const *words, size_t count, size_t max)
     for (size_t i = 0; i < count; ++i) {
         size_t len = strlen(words[i]);
         if (!snag_utf8_valid((const unsigned char *)words[i], len, true) ||
-            (i && snag_buf_putc(&buf, ' ') < 0) ||
-            snag_buf_append(&buf, words[i], len) < 0) {
+            (i && snag_buf_putc(&buf, ' ') < 0) || snag_buf_append(&buf, words[i], len) < 0) {
             snag_buf_free(&buf);
             errno = EINVAL;
             return NULL;
@@ -520,8 +462,7 @@ static const uint32_t sha256_k[64] = {
     0x27b70a85u,0x2e1b2138u,0x4d2c6dfcu,0x53380d13u,0x650a7354u,0x766a0abbu,0x81c2c92eu,0x92722c85u,
     0xa2bfe8a1u,0xa81a664bu,0xc24b8b70u,0xc76c51a3u,0xd192e819u,0xd6990624u,0xf40e3585u,0x106aa070u,
     0x19a4c116u,0x1e376c08u,0x2748774cu,0x34b0bcb5u,0x391c0cb3u,0x4ed8aa4au,0x5b9cca4fu,0x682e6ff3u,
-    0x748f82eeu,0x78a5636fu,0x84c87814u,0x8cc70208u,0x90befffau,0xa4506cebu,0xbef9a3f7u,0xc67178f2u
-};
+    0x748f82eeu,0x78a5636fu,0x84c87814u,0x8cc70208u,0x90befffau,0xa4506cebu,0xbef9a3f7u,0xc67178f2u };
 
 static void
 sha256_block(struct snag_sha256 *ctx, const unsigned char block[64])
@@ -529,10 +470,8 @@ sha256_block(struct snag_sha256 *ctx, const unsigned char block[64])
     uint32_t w[64];
     uint32_t a, b, c, d, e, f, g, h;
 
-    for (size_t i = 0; i < 16; ++i)
-        w[i] = ((uint32_t)block[i * 4u] << 24) |
-               ((uint32_t)block[i * 4u + 1u] << 16) |
-               ((uint32_t)block[i * 4u + 2u] << 8) |
+    for (size_t i = 0; i < 16; ++i) w[i] = ((uint32_t)block[i * 4u] << 24) |
+               ((uint32_t)block[i * 4u + 1u] << 16) | ((uint32_t)block[i * 4u + 2u] << 8) |
                (uint32_t)block[i * 4u + 3u];
     for (size_t i = 16; i < 64; ++i) {
         uint32_t s0 = ROR32(w[i - 15], 7) ^ ROR32(w[i - 15], 18) ^ (w[i - 15] >> 3);
@@ -558,9 +497,7 @@ void
 snag_sha256_init(struct snag_sha256 *ctx)
 {
     static const uint32_t init[8] = {
-        0x6a09e667u,0xbb67ae85u,0x3c6ef372u,0xa54ff53au,
-        0x510e527fu,0x9b05688cu,0x1f83d9abu,0x5be0cd19u
-    };
+        0x6a09e667u,0xbb67ae85u,0x3c6ef372u,0xa54ff53au, 0x510e527fu,0x9b05688cu,0x1f83d9abu,0x5be0cd19u };
     memcpy(ctx->state, init, sizeof(init));
     ctx->bit_count = 0;
     ctx->block_len = 0;
@@ -573,8 +510,7 @@ snag_sha256_update(struct snag_sha256 *ctx, const void *data, size_t len)
 
     while (len) {
         size_t take = 64u - ctx->block_len;
-        if (take > len)
-            take = len;
+        if (take > len) take = len;
         memcpy(ctx->block + ctx->block_len, p, take);
         ctx->block_len += take;
         p += take;
@@ -598,8 +534,7 @@ snag_sha256_final(struct snag_sha256 *ctx, unsigned char out[32])
         ctx->block_len = 0;
     }
     memset(ctx->block + ctx->block_len, 0, 56u - ctx->block_len);
-    for (size_t i = 0; i < 8u; ++i)
-        ctx->block[63u - i] = (unsigned char)(bits >> (i * 8u));
+    for (size_t i = 0; i < 8u; ++i) ctx->block[63u - i] = (unsigned char)(bits >> (i * 8u));
     sha256_block(ctx, ctx->block);
     for (size_t i = 0; i < 8u; ++i) {
         out[i * 4u] = (unsigned char)(ctx->state[i] >> 24);
@@ -626,43 +561,34 @@ bool
 snag_hex_is_lower(const char *s, size_t len)
 {
     for (size_t i = 0; i < len; ++i)
-        if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f')))
-            return false;
+        if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f'))) return false;
     return s[len] == '\0';
 }
 
-static const char b64[] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 int
 snag_base64_append(struct snag_buf *out, const unsigned char *data, size_t len)
 {
     size_t i = 0;
     while (i + 3u <= len) {
-        unsigned int v = ((unsigned int)data[i] << 16) |
-                         ((unsigned int)data[i + 1u] << 8) |
+        unsigned int v = ((unsigned int)data[i] << 16) | ((unsigned int)data[i + 1u] << 8) |
                          (unsigned int)data[i + 2u];
         unsigned char enc[4] = {
-            (unsigned char)b64[(v >> 18) & 63u],
-            (unsigned char)b64[(v >> 12) & 63u],
-            (unsigned char)b64[(v >> 6) & 63u],
-            (unsigned char)b64[v & 63u]
-        };
-        if (snag_buf_append(out, enc, sizeof(enc)) < 0)
-            return -1;
+            (unsigned char)b64[(v >> 18) & 63u], (unsigned char)b64[(v >> 12) & 63u],
+            (unsigned char)b64[(v >> 6) & 63u], (unsigned char)b64[v & 63u] };
+        if (snag_buf_append(out, enc, sizeof(enc)) < 0) return -1;
         i += 3u;
     }
     if (i < len) {
         unsigned int v = (unsigned int)data[i] << 16;
         unsigned char enc[4];
-        if (i + 1u < len)
-            v |= (unsigned int)data[i + 1u] << 8;
+        if (i + 1u < len) v |= (unsigned int)data[i + 1u] << 8;
         enc[0] = (unsigned char)b64[(v >> 18) & 63u];
         enc[1] = (unsigned char)b64[(v >> 12) & 63u];
         enc[2] = (i + 1u < len) ? (unsigned char)b64[(v >> 6) & 63u] : '=';
         enc[3] = '=';
-        if (snag_buf_append(out, enc, sizeof(enc)) < 0)
-            return -1;
+        if (snag_buf_append(out, enc, sizeof(enc)) < 0) return -1;
     }
     return 0;
 }
@@ -671,28 +597,23 @@ int
 snag_base64_decode(struct snag_buf *out, const char *text)
 {
     size_t len = strlen(text);
-    if (len % 4u)
-        return -1;
+    if (len % 4u) return -1;
     for (size_t i = 0u; i < len; i += 4u) {
         unsigned int v = 0u, pad = 0u;
         for (size_t j = 0u; j < 4u; ++j) {
             const char *p = strchr(b64, text[i + j]);
             if (text[i + j] == '=') {
-                if (j < 2u || i + 4u != len)
-                    return -1;
+                if (j < 2u || i + 4u != len) return -1;
                 ++pad;
                 v <<= 6;
             } else {
-                if (!p || pad)
-                    return -1;
+                if (!p || pad) return -1;
                 v = (v << 6) | (unsigned int)(p - b64);
             }
         }
-        if ((pad == 1u && (v & 0xffu)) || (pad == 2u && (v & 0xffffu)))
-            return -1;
+        if ((pad == 1u && (v & 0xffu)) || (pad == 2u && (v & 0xffffu))) return -1;
         for (unsigned int j = 0u; j < 3u - pad; ++j)
-            if (snag_buf_putc(out, (unsigned char)(v >> (16u - 8u * j))) < 0)
-                return -1;
+            if (snag_buf_putc(out, (unsigned char)(v >> (16u - 8u * j))) < 0) return -1;
     }
     return 0;
 }

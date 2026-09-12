@@ -24,8 +24,7 @@ stream_fail(struct snag_responses_stream *stream, int code, const char *fmt, ...
 bool
 snag_provider_failure_is_capacity(const struct snag_provider_failure *failure)
 {
-    return failure && strcmp(failure->code,
-                             "context_length_exceeded") == 0;
+    return failure && strcmp(failure->code, "context_length_exceeded") == 0;
 }
 
 bool
@@ -36,50 +35,37 @@ snag_provider_failure_is_policy(const struct snag_provider_failure *failure)
 }
 
 int
-snag_provider_failure_from_json(const json_t *root,
-                               struct snag_provider_failure *failure)
+snag_provider_failure_from_json(const json_t *root, struct snag_provider_failure *failure)
 {
     static const char *const limit_keys[] = {
-        "context_limit", "context_length", "max_context_length",
-        "max_context_tokens", "n_ctx"
-    };
+        "context_limit", "context_length", "max_context_length", "max_context_tokens", "n_ctx" };
     static const char *const requested_keys[] = {
-        "input_tokens", "requested_tokens", "requested_input_tokens", "n_prompt_tokens"
-    };
+        "input_tokens", "requested_tokens", "requested_input_tokens", "n_prompt_tokens" };
     json_t *object;
     json_t *response;
     const char *code;
     const char *message;
     const char *typed;
 
-    if (!failure)
-        return -1;
+    if (!failure) return -1;
     memset(failure, 0, sizeof(*failure));
-    if (!json_is_object(root))
-        return 0;
+    if (!json_is_object(root)) return 0;
     object = json_object_get(root, "error");
     response = json_object_get(root, "response");
     if (json_is_object(response)) {
         json_t *nested = json_object_get(response, "error");
-        if (json_is_object(nested))
-            object = nested;
+        if (json_is_object(nested)) object = nested;
         else if (!json_is_object(object)) {
             nested = json_object_get(response, "incomplete_details");
-            if (json_is_object(nested))
-                object = nested;
+            if (json_is_object(nested)) object = nested;
         }
     }
     typed = snag_json_string(json_is_object(response) ? response : root, "error_type");
-    if (!typed)
-        typed = snag_json_string(json_object_get(object, "metadata"), "error_type");
-    if (!json_is_object(object) && typed)
-        object = json_is_object(response) ? response : (json_t *)root;
-    if (!json_is_object(object) &&
-        (json_object_get(root, "code") || json_object_get(root, "reason") ||
-         json_object_get(root, "type")))
-        object = (json_t *)root;
-    if (!json_is_object(object))
-        return object && !json_is_null(object) ? -1 : 0;
+    if (!typed) typed = snag_json_string(json_object_get(object, "metadata"), "error_type");
+    if (!json_is_object(object) && typed) object = json_is_object(response) ? response : (json_t *)root;
+    if (!json_is_object(object) && (json_object_get(root, "code") || json_object_get(root, "reason") ||
+         json_object_get(root, "type"))) object = (json_t *)root;
+    if (!json_is_object(object)) return object && !json_is_null(object) ? -1 : 0;
     {
         const char *keys[] = {"code", "reason", "type"};
         for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
@@ -90,39 +76,32 @@ snag_provider_failure_from_json(const json_t *root,
             if (value && !json_is_null(value) &&
                 (!json_is_string(value) || json_string_length(value) >= 64u ||
                  !snag_utf8_valid((const unsigned char *)json_string_value(value),
-                                 json_string_length(value), true)))
-                return -1;
+                                 json_string_length(value), true))) return -1;
         }
     }
     code = snag_json_string(object, "code");
-    if (!code)
-        code = snag_json_string(object, "reason");
+    if (!code) code = snag_json_string(object, "reason");
     message = snag_json_string(object, "message");
-    if (code)
-        memcpy(failure->code, code, strlen(code) + 1u);
+    if (code) memcpy(failure->code, code, strlen(code) + 1u);
     /* A top-level SSE type is the event name, not the error category. */
     if (snag_json_string(object, "type") &&
         (object != root || !strcmp(snag_json_string(object, "type"), "exceed_context_size_error") ||
          !strcmp(snag_json_string(object, "type"), "invalid_request_error")))
-        snprintf(failure->type, sizeof(failure->type), "%s",
-                 snag_json_string(object, "type"));
+        snprintf(failure->type, sizeof(failure->type), "%s", snag_json_string(object, "type"));
     if (snag_text_valid(message, 0u, sizeof(failure->message) - 1u))
         memcpy(failure->message, message, strlen(message) + 1u);
     for (size_t i = 0; i < sizeof(limit_keys) / sizeof(limit_keys[0]); ++i)
         if (snag_json_merge_limit(object, limit_keys[i], SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                          &failure->context_limit_tokens) < 0)
-            return -1;
+                          &failure->context_limit_tokens) < 0) return -1;
     for (size_t i = 0; i < sizeof(requested_keys) / sizeof(requested_keys[0]); ++i)
         if (snag_json_merge_limit(object, requested_keys[i], SNAG_CONFIG_TOKEN_LIMIT_MAX,
-                          &failure->requested_input_tokens) < 0)
-            return -1;
+                          &failure->requested_input_tokens) < 0) return -1;
     if ((typed && !strcmp(typed, "context_length_exceeded")) ||
         !strcmp(failure->type, "exceed_context_size_error"))
         snprintf(failure->code, sizeof(failure->code), "context_length_exceeded");
     /* vLLM Responses has a specific validation error, not a context code.
      * Match the complete grammar and param; never classify arbitrary HTTP 400. */
-    if (!strcmp(failure->type, "invalid_request_error") && message &&
-        snag_json_string(object, "param") &&
+    if (!strcmp(failure->type, "invalid_request_error") && message && snag_json_string(object, "param") &&
         !strcmp(snag_json_string(object, "param"), "input")) {
         unsigned long long prompt = 0u, limit = 0u;
         int end = 0;
@@ -149,17 +128,13 @@ copy_once(struct snag_responses_stream *stream, char **target,
 {
     char *copy;
 
-    if (!snag_text_valid(value, 1u, max))
-        return stream_fail(stream, EPROTO, "invalid %s", label);
+    if (!snag_text_valid(value, 1u, max)) return stream_fail(stream, EPROTO, "invalid %s", label);
     if (*target) {
-        if (strcmp(*target, value) != 0)
-            return stream_fail(stream, EPROTO, "conflicting %s", label);
+        if (strcmp(*target, value) != 0) return stream_fail(stream, EPROTO, "conflicting %s", label);
         return 0;
     }
     copy = snag_strdup_checked(value, max);
-    if (!copy)
-        return stream_fail(stream, errno ? errno : ENOMEM,
-                           "cannot retain %s", label);
+    if (!copy) return stream_fail(stream, errno ? errno : ENOMEM, "cannot retain %s", label);
     *target = copy;
     return 0;
 }
@@ -171,13 +146,11 @@ json_index(struct snag_responses_stream *stream, const json_t *object,
     json_t *value;
     json_int_t integer;
 
-    if (!out)
-        return stream_fail(stream, EINVAL, "missing index destination");
+    if (!out) return stream_fail(stream, EINVAL, "missing index destination");
     *out = 0u;
     value = json_object_get(object, key);
     if (!json_is_integer(value) || (integer = json_integer_value(value)) < 0 ||
-        (uint64_t)integer >= (uint64_t)limit)
-        return stream_fail(stream, EPROTO, "invalid %s", key);
+        (uint64_t)integer >= (uint64_t)limit) return stream_fail(stream, EPROTO, "invalid %s", key);
     *out = (size_t)integer;
     return 0;
 }
@@ -185,8 +158,7 @@ json_index(struct snag_responses_stream *stream, const json_t *object,
 static int
 account_bytes(struct snag_responses_stream *stream, size_t extra)
 {
-    if (extra > SNAG_MAX_RESPONSE_GRAPH - stream->aggregate_bytes)
-        return stream_fail(stream, EOVERFLOW,
+    if (extra > SNAG_MAX_RESPONSE_GRAPH - stream->aggregate_bytes) return stream_fail(stream, EOVERFLOW,
                            "response observations exceed 8 MiB");
     stream->aggregate_bytes += extra;
     return 0;
@@ -205,8 +177,7 @@ wire_item_free(struct snag_wire_item *item)
 }
 
 void
-snag_responses_stream_init(struct snag_responses_stream *stream,
-                          snag_responses_emit_fn emit, void *opaque)
+snag_responses_stream_init(struct snag_responses_stream *stream, snag_responses_emit_fn emit, void *opaque)
 {
     memset(stream, 0, sizeof(*stream));
     stream->emit = emit;
@@ -216,10 +187,8 @@ snag_responses_stream_init(struct snag_responses_stream *stream,
 void
 snag_responses_stream_free(struct snag_responses_stream *stream)
 {
-    for (size_t i = 0; i < stream->item_count; ++i)
-        wire_item_free(&stream->items[i]);
-    for (size_t i = 0; i < stream->part_count; ++i)
-        snag_buf_free(&stream->parts[i].text);
+    for (size_t i = 0; i < stream->item_count; ++i) wire_item_free(&stream->items[i]);
+    for (size_t i = 0; i < stream->part_count; ++i) snag_buf_free(&stream->parts[i].text);
     free(stream->response_id);
     memset(stream, 0, sizeof(*stream));
 }
@@ -236,18 +205,15 @@ new_item(struct snag_responses_stream *stream, size_t output_index,
 {
     struct snag_wire_item *item;
 
-    if (output_index != stream->item_count ||
-        output_index >= SNAG_MAX_RESPONSE_ITEMS) {
-        (void)stream_fail(stream, EPROTO,
-                          "response output indexes are not contiguous");
+    if (output_index != stream->item_count || output_index >= SNAG_MAX_RESPONSE_ITEMS) {
+        (void)stream_fail(stream, EPROTO, "response output indexes are not contiguous");
         return NULL;
     }
     item = &stream->items[stream->item_count];
     memset(item, 0, sizeof(*item));
     snag_buf_init(&item->arguments, SNAG_MAX_TOOL_ARGUMENTS);
     item->kind = kind;
-    if (id && copy_once(stream, &item->id, id, SNAG_MAX_PROVIDER_ID,
-                        "provider item id") < 0) {
+    if (id && copy_once(stream, &item->id, id, SNAG_MAX_PROVIDER_ID, "provider item id") < 0) {
         wire_item_free(item);
         return NULL;
     }
@@ -261,11 +227,9 @@ find_item(struct snag_responses_stream *stream, size_t output_index,
 {
     struct snag_wire_item *item;
 
-    if (output_index >= stream->item_count ||
-        (item = &stream->items[output_index])->kind != kind ||
+    if (output_index >= stream->item_count || (item = &stream->items[output_index])->kind != kind ||
         !id || !item->id || strcmp(item->id, id) != 0) {
-        (void)stream_fail(stream, EPROTO,
-                          "response item identity or order conflict");
+        (void)stream_fail(stream, EPROTO, "response item identity or order conflict");
         return NULL;
     }
     return item;
@@ -277,26 +241,21 @@ part_at(struct snag_responses_stream *stream, struct snag_wire_item *item,
 {
     struct snag_wire_part **part = &item->parts;
 
-    if (content_index > item->part_count ||
-        content_index >= SNAG_MAX_RESPONSE_PARTS) {
-        (void)stream_fail(stream, EPROTO,
-                          "message content indexes are not contiguous");
+    if (content_index > item->part_count || content_index >= SNAG_MAX_RESPONSE_PARTS) {
+        (void)stream_fail(stream, EPROTO, "message content indexes are not contiguous");
         return NULL;
     }
-    for (size_t i = 0; i < content_index; ++i)
-        part = &(*part)->next;
+    for (size_t i = 0; i < content_index; ++i) part = &(*part)->next;
     if (content_index == item->part_count) {
         if (!create || stream->part_count >= SNAG_MAX_RESPONSE_PARTS) {
-            (void)stream_fail(stream, EPROTO,
-                              "message content part was not announced");
+            (void)stream_fail(stream, EPROTO, "message content part was not announced");
             return NULL;
         }
         *part = &stream->parts[stream->part_count++];
         **part = (struct snag_wire_part){.kind = kind, .text = {.max = SNAG_MAX_PUBLIC_ITEM}};
         ++item->part_count;
     } else if ((*part)->kind != kind) {
-        (void)stream_fail(stream, EPROTO,
-                          "message content kind changed");
+        (void)stream_fail(stream, EPROTO, "message content kind changed");
         return NULL;
     }
     return *part;
@@ -305,97 +264,77 @@ part_at(struct snag_responses_stream *stream, struct snag_wire_item *item,
 static enum snag_item_phase
 phase_value(const char *phase)
 {
-    if (phase && strcmp(phase, "commentary") == 0)
-        return SNAG_PHASE_COMMENTARY;
-    if (phase && strcmp(phase, "final_answer") == 0)
-        return SNAG_PHASE_FINAL_ANSWER;
+    if (phase && strcmp(phase, "commentary") == 0) return SNAG_PHASE_COMMENTARY;
+    if (phase && strcmp(phase, "final_answer") == 0) return SNAG_PHASE_FINAL_ANSWER;
     return SNAG_PHASE_NONE;
 }
 
 static enum snag_item_kind
 public_kind(enum snag_wire_part_kind kind)
 {
-    return kind == SNAG_WIRE_PART_REFUSAL ? SNAG_ITEM_REFUSAL :
-                                           SNAG_ITEM_ASSISTANT;
+    return kind == SNAG_WIRE_PART_REFUSAL ? SNAG_ITEM_REFUSAL : SNAG_ITEM_ASSISTANT;
 }
 
 static int
 emit_text(struct snag_responses_stream *stream, size_t output_index,
-          struct snag_wire_item *item, enum snag_wire_part_kind kind,
-          const char *text, size_t len)
+          struct snag_wire_item *item, enum snag_wire_part_kind kind, const char *text, size_t len)
 {
-    enum snag_item_phase phase = item->phase ? phase_value(item->phase) :
-                                SNAG_PHASE_COMMENTARY;
+    enum snag_item_phase phase = item->phase ? phase_value(item->phase) : SNAG_PHASE_COMMENTARY;
 
-    if (!len || !stream->emit)
-        return 0;
-    if (phase == SNAG_PHASE_NONE)
-        return stream_fail(stream, EPROTO,
+    if (!len || !stream->emit) return 0;
+    if (phase == SNAG_PHASE_NONE) return stream_fail(stream, EPROTO,
                            "assistant message has no qualified phase");
     if (kind == SNAG_WIRE_PART_REFUSAL) {
-        if (item->phase && phase != SNAG_PHASE_FINAL_ANSWER)
-            return stream_fail(stream, EPROTO,
+        if (item->phase && phase != SNAG_PHASE_FINAL_ANSWER) return stream_fail(stream, EPROTO,
                                "refusal has no final-answer phase");
         phase = SNAG_PHASE_FINAL_ANSWER;
     }
-    if (stream->emit(stream->opaque, output_index, public_kind(kind), phase,
-                     item->id, text, len) != 0)
-        return stream_fail(stream, errno ? errno : EIO,
-                           "public output consumer failed");
+    if (stream->emit(stream->opaque, output_index, public_kind(kind), phase, item->id, text, len) != 0)
+        return stream_fail(stream, errno ? errno : EIO, "public output consumer failed");
     return 0;
 }
 
 static int
 reconcile_part(struct snag_responses_stream *stream, size_t output_index,
                struct snag_wire_item *item, size_t content_index,
-               enum snag_wire_part_kind kind, const char *text,
-               bool delta, bool complete)
+               enum snag_wire_part_kind kind, const char *text, bool delta, bool complete)
 {
     struct snag_wire_part *part;
     size_t len;
 
-    if (!text && !delta)
-        return stream_fail(stream, EPROTO, "public snapshot has no text");
+    if (!text && !delta) return stream_fail(stream, EPROTO, "public snapshot has no text");
     len = text ? strlen(text) : 0u;
     if (!text || !snag_utf8_valid((const unsigned char *)text, len, true))
         return stream_fail(stream, EPROTO, delta ?
                            "invalid public output delta" : "invalid public snapshot text");
     part = part_at(stream, item, content_index, kind, !delta);
-    if (!part)
-        return -1;
-    if (delta && part->complete)
-        return stream_fail(stream, EPROTO, "public delta follows completion");
+    if (!part) return -1;
+    if (delta && part->complete) return stream_fail(stream, EPROTO, "public delta follows completion");
     if (len > SNAG_MAX_PUBLIC_ITEM - (delta ? part->text.len : 0u)) {
         stream->output_correction = SNAG_OUTPUT_CORRECTION_OVERSIZED;
-        return stream_fail(stream, EOVERFLOW,
-                           SNAG_OVERSIZED_OUTPUT_CORRECTION);
+        return stream_fail(stream, EOVERFLOW, SNAG_OVERSIZED_OUTPUT_CORRECTION);
     }
     size_t offset = !delta && part->value_seen ? part->text.len : 0u;
-    if (!delta && part->value_seen &&
-        (part->complete ? !text_equal(&part->text, text, len) :
+    if (!delta && part->value_seen && (part->complete ? !text_equal(&part->text, text, len) :
          len < offset || (offset && memcmp(part->text.data, text, offset))))
         return stream_fail(stream, EPROTO, "public delta and snapshot disagree");
     if (account_bytes(stream, len - offset) < 0 ||
         snag_buf_append(&part->text, text + offset, len - offset) < 0)
         return stream_fail(stream, EOVERFLOW, "public response item exceeds its limit");
     part->value_seen = true;
-    if (emit_text(stream, output_index, item, kind, text + offset, len - offset) < 0)
-        return -1;
-    if (complete)
-        part->complete = true;
+    if (emit_text(stream, output_index, item, kind, text + offset, len - offset) < 0) return -1;
+    if (complete) part->complete = true;
     return 0;
 }
 
 static int
 part_snapshot(struct snag_responses_stream *stream, size_t output_index,
-              struct snag_wire_item *item, size_t content_index,
-              const json_t *part, bool complete)
+              struct snag_wire_item *item, size_t content_index, const json_t *part, bool complete)
 {
     const char *type = snag_json_string(part, "type");
     const char *text;
 
-    if (!json_is_object(part) || !type)
-        return stream_fail(stream, EPROTO, "invalid message content part");
+    if (!json_is_object(part) || !type) return stream_fail(stream, EPROTO, "invalid message content part");
     if (strcmp(type, "output_text") == 0) {
         text = snag_json_string(part, "text");
         return reconcile_part(stream, output_index, item, content_index,
@@ -407,48 +346,37 @@ part_snapshot(struct snag_responses_stream *stream, size_t output_index,
                               SNAG_WIRE_PART_REFUSAL, text, false, complete);
     }
     {
-        struct snag_wire_part *wire_part = part_at(stream, item, content_index,
-                                                  SNAG_WIRE_PART_INERT, true);
+        struct snag_wire_part *wire_part = part_at(stream, item, content_index, SNAG_WIRE_PART_INERT, true);
 
-        if (!wire_part)
-            return -1;
-        if (complete)
-            wire_part->complete = true;
+        if (!wire_part) return -1;
+        if (complete) wire_part->complete = true;
         return 0;
     }
 }
 
 static int
-reconcile_arguments(struct snag_responses_stream *stream,
-                    struct snag_wire_item *item, const char *arguments,
+reconcile_arguments(struct snag_responses_stream *stream, struct snag_wire_item *item, const char *arguments,
                     bool delta, bool complete)
 {
     size_t len;
 
-    if (!arguments)
-        return stream_fail(stream, EPROTO, delta ?
-                           "function argument delta is not text" :
-                           "function call snapshot has no arguments");
+    if (!arguments) return stream_fail(stream, EPROTO, delta ?
+                           "function argument delta is not text" : "function call snapshot has no arguments");
     len = strlen(arguments);
     if ((delta ? item->arguments_complete : len > SNAG_MAX_TOOL_ARGUMENTS) ||
         !snag_utf8_valid((const unsigned char *)arguments, len, true))
-        return stream_fail(stream, EPROTO, delta ?
-                           "invalid function argument delta order" :
+        return stream_fail(stream, EPROTO, delta ? "invalid function argument delta order" :
                            "invalid function call arguments snapshot");
     /* Empty in-progress snapshots and deltas carry no argument bytes. */
     if (!delta && (item->arguments.len || item->arguments_complete)) {
-        if (!text_equal(&item->arguments, arguments, len))
-            return stream_fail(stream, EPROTO,
+        if (!text_equal(&item->arguments, arguments, len)) return stream_fail(stream, EPROTO,
                                "function argument delta and snapshot disagree");
     } else {
-        if (account_bytes(stream, len) < 0 ||
-            snag_buf_append(&item->arguments, arguments, len) < 0)
-            return stream_fail(stream, EOVERFLOW,
-                               "function arguments exceed their limit");
+        if (account_bytes(stream, len) < 0 || snag_buf_append(&item->arguments, arguments, len) < 0)
+            return stream_fail(stream, EOVERFLOW, "function arguments exceed their limit");
         item->arguments_seen = true;
     }
-    if (complete)
-        item->arguments_complete = true;
+    if (complete) item->arguments_complete = true;
     return 0;
 }
 
@@ -463,40 +391,30 @@ message_snapshot(struct snag_responses_stream *stream, size_t output_index,
     json_t *content = json_object_get(snapshot, "content");
     struct snag_wire_item *item;
 
-    const char *invalid = !id ? "id" :
-        !role || strcmp(role, "assistant") ? "role" :
-        phase && phase_value(phase) == SNAG_PHASE_NONE ? "phase" :
-        !json_is_array(content) ? "content" :
+    const char *invalid = !id ? "id" : !role || strcmp(role, "assistant") ? "role" :
+        phase && phase_value(phase) == SNAG_PHASE_NONE ? "phase" : !json_is_array(content) ? "content" :
         !status || strcmp(status, complete ? "completed" : "in_progress") ? "status" : NULL;
     if (invalid) {
         char diagnostic[96];
-        (void)snprintf(diagnostic, sizeof(diagnostic),
-                       "invalid assistant message snapshot: %s", invalid);
+        (void)snprintf(diagnostic, sizeof(diagnostic), "invalid assistant message snapshot: %s", invalid);
         return stream_fail(stream, EPROTO, diagnostic);
     }
-    item = output_index < stream->item_count ?
-           find_item(stream, output_index, id, SNAG_WIRE_ITEM_MESSAGE) :
+    item = output_index < stream->item_count ? find_item(stream, output_index, id, SNAG_WIRE_ITEM_MESSAGE) :
            new_item(stream, output_index, SNAG_WIRE_ITEM_MESSAGE, id);
-    if (!item)
-        return -1;
+    if (!item) return -1;
     /* The first completed snapshot finalizes the provisional streaming phase. */
     if (phase && (!item->phase || !complete || item->complete) &&
-        copy_once(stream, &item->phase, phase, 32u, "assistant phase") < 0)
-        return -1;
+        copy_once(stream, &item->phase, phase, 32u, "assistant phase") < 0) return -1;
     for (size_t i = 0; i < json_array_size(content); ++i)
-        if (part_snapshot(stream, output_index, item, i,
-                          json_array_get(content, i), complete) < 0)
-            return -1;
-    if (complete && item->part_count != json_array_size(content))
-        return stream_fail(stream, EPROTO,
+        if (part_snapshot(stream, output_index, item, i, json_array_get(content, i), complete) < 0) return -1;
+    if (complete && item->part_count != json_array_size(content)) return stream_fail(stream, EPROTO,
                            "message completion snapshot omitted observed content");
     if (complete) {
         /* Reconcile any final text using the phase already emitted to the UI. */
         if (phase && item->phase && strcmp(item->phase, phase)) {
             free(item->phase);
             item->phase = NULL;
-            if (copy_once(stream, &item->phase, phase, 32u, "assistant phase") < 0)
-                return -1;
+            if (copy_once(stream, &item->phase, phase, 32u, "assistant phase") < 0) return -1;
         }
         item->complete = true;
     }
@@ -514,22 +432,17 @@ function_snapshot(struct snag_responses_stream *stream, size_t output_index,
     const char *status = snag_json_string(snapshot, "status");
     struct snag_wire_item *item;
 
-    if (!id || !call_id || !name || !arguments || !status ||
-        (complete ? strcmp(status, "completed") != 0 :
+    if (!id || !call_id || !name || !arguments || !status || (complete ? strcmp(status, "completed") != 0 :
                     (!snag_string_in(status, "in_progress completed"))))
         return stream_fail(stream, EPROTO, "invalid function call snapshot");
     item = output_index < stream->item_count ?
            find_item(stream, output_index, id, SNAG_WIRE_ITEM_FUNCTION_CALL) :
            new_item(stream, output_index, SNAG_WIRE_ITEM_FUNCTION_CALL, id);
-    if (!item ||
-        copy_once(stream, &item->call_id, call_id, SNAG_MAX_PROVIDER_ID,
-                  "provider call id") < 0 ||
-        copy_once(stream, &item->name, name, 64u, "function name") < 0 ||
-        reconcile_arguments(stream, item, arguments, false,
-                            complete || strcmp(status, "completed") == 0) < 0)
+    if (!item || copy_once(stream, &item->call_id, call_id, SNAG_MAX_PROVIDER_ID,
+                  "provider call id") < 0 || copy_once(stream, &item->name, name, 64u, "function name") < 0 ||
+        reconcile_arguments(stream, item, arguments, false, complete || strcmp(status, "completed") == 0) < 0)
         return -1;
-    if (complete || strcmp(status, "completed") == 0)
-        item->complete = true;
+    if (complete || strcmp(status, "completed") == 0) item->complete = true;
     return 0;
 }
 
@@ -540,8 +453,7 @@ inert_snapshot(struct snag_responses_stream *stream, size_t output_index)
 
     if (output_index < stream->item_count) {
         item = &stream->items[output_index];
-        if (item->kind != SNAG_WIRE_ITEM_INERT)
-            return stream_fail(stream, EPROTO,
+        if (item->kind != SNAG_WIRE_ITEM_INERT) return stream_fail(stream, EPROTO,
                                "response item kind or order conflict");
         return 0;
     }
@@ -556,15 +468,12 @@ item_snapshot(struct snag_responses_stream *stream, size_t output_index,
 
     if (!json_is_object(snapshot) || !type)
         return stream_fail(stream, EPROTO, "invalid response output item");
-    if (strcmp(type, "message") == 0)
-        return message_snapshot(stream, output_index, snapshot, complete);
+    if (strcmp(type, "message") == 0) return message_snapshot(stream, output_index, snapshot, complete);
     if (strcmp(type, "function_call") == 0)
         return function_snapshot(stream, output_index, snapshot, complete);
-    if (inert_snapshot(stream, output_index) < 0)
-        return -1;
+    if (inert_snapshot(stream, output_index) < 0) return -1;
     struct snag_wire_item *item = &stream->items[output_index];
-    if (strcmp(type, "reasoning") != 0)
-        return item->reasoning_seen ? stream_fail(stream, EPROTO,
+    if (strcmp(type, "reasoning") != 0) return item->reasoning_seen ? stream_fail(stream, EPROTO,
             "reasoning item changed type") : 0;
     item->reasoning_seen = true;
     if (!complete) return 0;
@@ -574,30 +483,24 @@ item_snapshot(struct snag_responses_stream *stream, size_t output_index,
      * canonical, including metadata absent from output_item.done. */
     size_t bytes, previous = 0u;
     if (item->reasoning && snag_json_digest_bounded(item->reasoning,
-            SNAG_MAX_RESPONSE_GRAPH, NULL, &previous) < 0)
-        return -1;
+            SNAG_MAX_RESPONSE_GRAPH, NULL, &previous) < 0) return -1;
     stream->aggregate_bytes -= previous;
     if (snag_json_digest_bounded(snapshot, SNAG_MAX_RESPONSE_GRAPH, NULL, &bytes) < 0 ||
-        account_bytes(stream, bytes) < 0)
-        return -1;
+        account_bytes(stream, bytes) < 0) return -1;
     json_decref(item->reasoning);
     item->reasoning = json_deep_copy(snapshot);
     return item->reasoning ? 0 : stream_fail(stream, ENOMEM, "cannot retain reasoning");
 }
 
 static int
-response_identity(struct snag_responses_stream *stream, const json_t *response,
-                  const char *required_status)
+response_identity(struct snag_responses_stream *stream, const json_t *response, const char *required_status)
 {
     const char *id = snag_json_string(response, "id");
     const char *status = snag_json_string(response, "status");
 
-    if (!json_is_object(response) || !id || !status ||
-        strcmp(status, required_status) != 0)
-        return stream_fail(stream, EPROTO,
-                           "invalid response %s snapshot", required_status);
-    if (copy_once(stream, &stream->response_id, id, SNAG_MAX_PROVIDER_ID,
-                  "provider response id") < 0)
+    if (!json_is_object(response) || !id || !status || strcmp(status, required_status) != 0)
+        return stream_fail(stream, EPROTO, "invalid response %s snapshot", required_status);
+    if (copy_once(stream, &stream->response_id, id, SNAG_MAX_PROVIDER_ID, "provider response id") < 0)
         return -1;
     return 0;
 }
@@ -609,27 +512,22 @@ handle_response_created(struct snag_responses_stream *stream, const json_t *root
     json_t *output;
 
     if (stream->created || response_identity(stream, response, "in_progress") < 0)
-        return stream_fail(stream, EPROTO,
-                           "duplicate or invalid response.created event");
+        return stream_fail(stream, EPROTO, "duplicate or invalid response.created event");
     output = json_object_get(response, "output");
     if (output && (!json_is_array(output) || json_array_size(output) != 0u))
-        return stream_fail(stream, EPROTO,
-                           "response.created contains nonempty output");
+        return stream_fail(stream, EPROTO, "response.created contains nonempty output");
     stream->created = true;
     return 0;
 }
 
 static int
-handle_output_item(struct snag_responses_stream *stream, const json_t *root,
-                   bool complete)
+handle_output_item(struct snag_responses_stream *stream, const json_t *root, bool complete)
 {
     size_t output_index;
     json_t *item = json_object_get(root, "item");
 
-    if (!stream->created || json_index(stream, root, "output_index",
-                                       SNAG_MAX_RESPONSE_ITEMS,
-                                       &output_index) < 0)
-        return -1;
+    if (!stream->created || json_index(stream, root, "output_index", SNAG_MAX_RESPONSE_ITEMS,
+                                       &output_index) < 0) return -1;
     return item_snapshot(stream, output_index, item, complete);
 }
 
@@ -642,54 +540,41 @@ handle_content_part(struct snag_responses_stream *stream, const json_t *root,
     size_t content_index;
     struct snag_wire_item *item;
 
-    if (json_index(stream, root, "output_index", SNAG_MAX_RESPONSE_ITEMS,
-                   &output_index) < 0 ||
-        json_index(stream, root, "content_index", SNAG_MAX_RESPONSE_PARTS,
-                   &content_index) < 0)
-        return -1;
+    if (json_index(stream, root, "output_index", SNAG_MAX_RESPONSE_ITEMS, &output_index) < 0 ||
+        json_index(stream, root, "content_index", SNAG_MAX_RESPONSE_PARTS, &content_index) < 0) return -1;
     /* Reasoning and other ignored items may also emit content-part events.
      * Discard only non-public parts of an already registered inert item;
      * text/refusal events still require the exact message identity below. */
     if (kind == SNAG_WIRE_PART_NONE && output_index < stream->item_count &&
         stream->items[output_index].kind == SNAG_WIRE_ITEM_INERT) {
         const char *type = snag_json_string(json_object_get(root, "part"), "type");
-        if (type && !snag_string_in(type, "output_text refusal"))
-            return 0;
+        if (type && !snag_string_in(type, "output_text refusal")) return 0;
     }
     item = find_item(stream, output_index, item_id, SNAG_WIRE_ITEM_MESSAGE);
-    if (!item)
-        return -1;
-    if (kind == SNAG_WIRE_PART_NONE)
-        return part_snapshot(stream, output_index, item, content_index,
+    if (!item) return -1;
+    if (kind == SNAG_WIRE_PART_NONE) return part_snapshot(stream, output_index, item, content_index,
                              json_object_get(root, "part"), complete);
     const char *text = snag_json_string(root, !complete ? "delta" :
         kind == SNAG_WIRE_PART_REFUSAL ? "refusal" : "text");
-    return reconcile_part(stream, output_index, item, content_index, kind,
-                          text, !complete, complete);
+    return reconcile_part(stream, output_index, item, content_index, kind, text, !complete, complete);
 }
 
 static int
-handle_arguments(struct snag_responses_stream *stream, const json_t *root,
-                 bool complete)
+handle_arguments(struct snag_responses_stream *stream, const json_t *root, bool complete)
 {
     const char *item_id = snag_json_string(root, "item_id");
     const char *arguments = snag_json_string(root, complete ? "arguments" : "delta");
     size_t output_index;
     struct snag_wire_item *item;
 
-    if (json_index(stream, root, "output_index", SNAG_MAX_RESPONSE_ITEMS,
-                   &output_index) < 0)
-        return -1;
-    item = find_item(stream, output_index, item_id,
-                     SNAG_WIRE_ITEM_FUNCTION_CALL);
-    if (!item)
-        return -1;
+    if (json_index(stream, root, "output_index", SNAG_MAX_RESPONSE_ITEMS, &output_index) < 0) return -1;
+    item = find_item(stream, output_index, item_id, SNAG_WIRE_ITEM_FUNCTION_CALL);
+    if (!item) return -1;
     return reconcile_arguments(stream, item, arguments, !complete, complete);
 }
 
 static int
-parse_provider_usage(struct snag_responses_stream *stream,
-                     const json_t *response)
+parse_provider_usage(struct snag_responses_stream *stream, const json_t *response)
 {
     json_t *value = json_object_get(response, "usage");
     json_t *details;
@@ -700,64 +585,49 @@ parse_provider_usage(struct snag_responses_stream *stream,
         stream->usage = usage;
         return 0;
     }
-    if (!json_is_object(value) ||
-        snag_json_optional_u64(value, "input_tokens", &usage.input_tokens,
+    if (!json_is_object(value) || snag_json_optional_u64(value, "input_tokens", &usage.input_tokens,
                               &usage.input_known) < 0 ||
-        snag_json_optional_u64(value, "output_tokens", &usage.output_tokens,
-                              &usage.output_known) < 0 ||
-        snag_json_optional_u64(value, "total_tokens", &usage.total_tokens,
-                              &usage.total_known) < 0)
+        snag_json_optional_u64(value, "output_tokens", &usage.output_tokens, &usage.output_known) < 0 ||
+        snag_json_optional_u64(value, "total_tokens", &usage.total_tokens, &usage.total_known) < 0)
         return stream_fail(stream, EPROTO, "invalid response usage");
     details = json_object_get(value, "output_tokens_details");
     if (details && !json_is_null(details)) {
-        if (!json_is_object(details) ||
-            snag_json_optional_u64(details, "reasoning_tokens",
-                                  &usage.reasoning_tokens,
-                                  &usage.reasoning_known) < 0)
-            return stream_fail(stream, EPROTO,
-                               "invalid response reasoning usage");
+        if (!json_is_object(details) || snag_json_optional_u64(details, "reasoning_tokens",
+                                  &usage.reasoning_tokens, &usage.reasoning_known) < 0)
+            return stream_fail(stream, EPROTO, "invalid response reasoning usage");
     }
-    if (snag_response_usage_valid(&usage) < 0)
-        return stream_fail(stream, EPROTO,
+    if (snag_response_usage_valid(&usage) < 0) return stream_fail(stream, EPROTO,
                            "inconsistent response usage");
     stream->usage = usage;
     return 0;
 }
 
 static int
-handle_response_completed(struct snag_responses_stream *stream,
-                          const json_t *root)
+handle_response_completed(struct snag_responses_stream *stream, const json_t *root)
 {
     json_t *response = json_object_get(root, "response");
     json_t *output;
 
-    if (!stream->created || stream->terminal ||
-        response_identity(stream, response, "completed") < 0)
+    if (!stream->created || stream->terminal || response_identity(stream, response, "completed") < 0)
         return -1;
     if (snag_provider_failure_from_json(root, &stream->provider_failure) < 0)
         return stream_fail(stream, EPROTO, "invalid response error details");
     if (snag_provider_failure_is_capacity(&stream->provider_failure))
         return stream_fail(stream, EOVERFLOW, "provider context length exceeded");
-    if (parse_provider_usage(stream, response) < 0)
-        return -1;
+    if (parse_provider_usage(stream, response) < 0) return -1;
     output = json_object_get(response, "output");
     if (output) {
-        if (!json_is_array(output) ||
-            json_array_size(output) > SNAG_MAX_RESPONSE_ITEMS)
-            return stream_fail(stream, EPROTO,
-                               "invalid terminal response output");
+        if (!json_is_array(output) || json_array_size(output) > SNAG_MAX_RESPONSE_ITEMS)
+            return stream_fail(stream, EPROTO, "invalid terminal response output");
         for (size_t i = 0; i < json_array_size(output); ++i)
-            if (item_snapshot(stream, i, json_array_get(output, i),
-                              true) < 0)
-                return -1;
+            if (item_snapshot(stream, i, json_array_get(output, i), true) < 0) return -1;
     }
     stream->terminal = true;
     return 0;
 }
 
 static int
-handle_provider_failure(struct snag_responses_stream *stream,
-                        const json_t *root, const char *type)
+handle_provider_failure(struct snag_responses_stream *stream, const json_t *root, const char *type)
 {
     json_t *response = json_object_get(root, "response");
     json_t *error = json_object_get(root, "error");
@@ -766,16 +636,12 @@ handle_provider_failure(struct snag_responses_stream *stream,
 
     if (json_is_object(response)) {
         json_t *nested = json_object_get(response, "error");
-        if (json_is_object(nested))
-            message = snag_json_string(nested, "message");
+        if (json_is_object(nested)) message = snag_json_string(nested, "message");
     }
-    if (!message && json_is_object(error))
-        message = snag_json_string(error, "message");
-    if (!message && strcmp(type, "error") == 0)
-        message = snag_json_string(root, "message");
+    if (!message && json_is_object(error)) message = snag_json_string(error, "message");
+    if (!message && strcmp(type, "error") == 0) message = snag_json_string(root, "message");
     const char *kind = failure->code[0] ? failure->code : failure->type;
-    return stream_fail(stream, EIO, "%s%s%s%s%s%s", type,
-                       kind[0] ? " [" : "", kind, kind[0] ? "]" : "",
+    return stream_fail(stream, EIO, "%s%s%s%s%s%s", type, kind[0] ? " [" : "", kind, kind[0] ? "]" : "",
                        message ? ": " : "", message ? message : "");
 }
 
@@ -787,12 +653,9 @@ clarification_item_safe(const json_t *item)
 
     /* Local functions are admitted only from a successful response. Failed
      * function proposals have no local effects and are never replayed. */
-    if (snag_string_in(kind, "reasoning function_call"))
-        return true;
-    if (!kind || strcmp(kind, "message") ||
-        !snag_string_in(snag_json_string(item, "role"), "assistant") ||
-        !json_is_array(content))
-        return false;
+    if (snag_string_in(kind, "reasoning function_call")) return true;
+    if (!kind || strcmp(kind, "message") || !snag_string_in(snag_json_string(item, "role"), "assistant") ||
+        !json_is_array(content)) return false;
     for (size_t i = 0; i < json_array_size(content); ++i)
         if (!snag_string_in(snag_json_string(json_array_get(content, i), "type"), "output_text"))
             return false;
@@ -800,8 +663,7 @@ clarification_item_safe(const json_t *item)
 }
 
 static int
-dispatch_event(struct snag_responses_stream *stream, const char *type,
-               const json_t *root)
+dispatch_event(struct snag_responses_stream *stream, const char *type, const json_t *root)
 {
     json_t *output = json_object_get(json_object_get(root, "response"), "output");
     if (snag_string_in(type, "response.failed response.incomplete error")) {
@@ -824,8 +686,7 @@ dispatch_event(struct snag_responses_stream *stream, const char *type,
                 /* Validate snapshots through their existing identity reducer.
                  * Only public text survives a failed response. */
                 bool complete = snag_string_in(snag_json_string(item, "status"), "completed");
-                int rc = !strcmp(kind, "function_call") ?
-                    function_snapshot(stream, i, item, complete) :
+                int rc = !strcmp(kind, "function_call") ? function_snapshot(stream, i, item, complete) :
                     message_snapshot(stream, i, item, complete);
                 if (rc < 0) {
                     (void)snprintf(stream->clarification_skipped, sizeof(stream->clarification_skipped),
@@ -838,10 +699,8 @@ dispatch_event(struct snag_responses_stream *stream, const char *type,
             }
         }
     }
-    if (strcmp(type, "keepalive") == 0)
-        return 0;
-    if (strcmp(type, "response.created") == 0)
-        return handle_response_created(stream, root);
+    if (strcmp(type, "keepalive") == 0) return 0;
+    if (strcmp(type, "response.created") == 0) return handle_response_created(stream, root);
     /* Public text is retained; unexecuted local calls are discarded. Neither
      * permits exact transport replay. Hosted/unknown tools stay unsafe. */
     if (!snag_string_in(type, "response.queued response.in_progress response.failed response.incomplete error")) {
@@ -861,10 +720,8 @@ dispatch_event(struct snag_responses_stream *stream, const char *type,
                            "stream:%s%s%.48s", type, kind ? ":" : "", kind ? kind : "");
         }
     }
-    if (strcmp(type, "response.output_item.added") == 0)
-        return handle_output_item(stream, root, false);
-    if (strcmp(type, "response.output_item.done") == 0)
-        return handle_output_item(stream, root, true);
+    if (strcmp(type, "response.output_item.added") == 0) return handle_output_item(stream, root, false);
+    if (strcmp(type, "response.output_item.done") == 0) return handle_output_item(stream, root, true);
     if (strcmp(type, "response.content_part.added") == 0)
         return handle_content_part(stream, root, SNAG_WIRE_PART_NONE, false);
     if (strcmp(type, "response.content_part.done") == 0)
@@ -881,14 +738,11 @@ dispatch_event(struct snag_responses_stream *stream, const char *type,
         return handle_arguments(stream, root, false);
     if (strcmp(type, "response.function_call_arguments.done") == 0)
         return handle_arguments(stream, root, true);
-    if (strcmp(type, "response.completed") == 0)
-        return handle_response_completed(stream, root);
+    if (strcmp(type, "response.completed") == 0) return handle_response_completed(stream, root);
     if (snag_string_in(type, "response.failed response.incomplete error"))
         return handle_provider_failure(stream, root, type);
-    if (strncmp(type, "response.", sizeof("response.") - 1u) == 0)
-        return 0;
-    return stream_fail(stream, ENOTSUP,
-                       "unknown Responses stream event: %s", type);
+    if (strncmp(type, "response.", sizeof("response.") - 1u) == 0) return 0;
+    return stream_fail(stream, ENOTSUP, "unknown Responses stream event: %s", type);
 }
 
 int
@@ -900,35 +754,24 @@ snag_responses_sse_record(void *opaque, const struct snag_sse_record *record)
     char json_error[192] = {0};
     int rc;
 
-    if (stream->failed)
-        return snag_errno(EPROTO);
-    if (record->kind == SNAG_SSE_COMMENT)
-        return 0;
+    if (stream->failed) return snag_errno(EPROTO);
+    if (record->kind == SNAG_SSE_COMMENT) return 0;
     /* OpenRouter appends an SSE sentinel after the Responses terminal event. */
     if (stream->terminal && !record->event_len && record->data_len == 6u &&
-        memcmp(record->data, "[DONE]", 6u) == 0)
-        return 0;
-    if (stream->terminal)
-        return stream_fail(stream, EPROTO,
-                           "Responses event follows terminal completion");
-    root = snag_json_load_strict(record->data, record->data_len,
-                                SNAG_MAX_SSE_EVENT,
+        memcmp(record->data, "[DONE]", 6u) == 0) return 0;
+    if (stream->terminal) return stream_fail(stream, EPROTO, "Responses event follows terminal completion");
+    root = snag_json_load_strict(record->data, record->data_len, SNAG_MAX_SSE_EVENT,
                                 json_error, sizeof(json_error));
-    if (!root)
-        return stream_fail(stream, EPROTO, "invalid Responses JSON: %s",
-                           json_error);
+    if (!root) return stream_fail(stream, EPROTO, "invalid Responses JSON: %s", json_error);
     type = snag_json_string(root, "type");
     if (!json_is_object(root) || !type) {
         json_decref(root);
-        return stream_fail(stream, EPROTO,
-                           "Responses event has no type");
+        return stream_fail(stream, EPROTO, "Responses event has no type");
     }
-    if (record->event_len &&
-        (strlen(type) != record->event_len ||
+    if (record->event_len && (strlen(type) != record->event_len ||
          memcmp(type, record->event, record->event_len) != 0)) {
         json_decref(root);
-        return stream_fail(stream, EPROTO,
-                           "SSE event name and JSON type disagree");
+        return stream_fail(stream, EPROTO, "SSE event name and JSON type disagree");
     }
     rc = dispatch_event(stream, type, root);
     json_decref(root);
@@ -938,17 +781,14 @@ snag_responses_sse_record(void *opaque, const struct snag_sse_record *record)
 static bool
 message_observations_complete(const struct snag_wire_item *item)
 {
-    if (!item->part_count)
-        return false;
+    if (!item->part_count) return false;
     for (const struct snag_wire_part *part = item->parts; part; part = part->next)
-        if (!part->complete)
-            return false;
+        if (!part->complete) return false;
     return true;
 }
 
 static int
-build_message(struct snag_responses_stream *stream,
-              struct snag_response_graph *graph,
+build_message(struct snag_responses_stream *stream, struct snag_response_graph *graph,
               const struct snag_wire_item *item)
 {
     enum snag_wire_part_kind kind = SNAG_WIRE_PART_NONE;
@@ -967,28 +807,24 @@ build_message(struct snag_responses_stream *stream,
             code = EPROTO;
             goto fail;
         }
-        if (part->kind == SNAG_WIRE_PART_INERT)
-            continue;
+        if (part->kind == SNAG_WIRE_PART_INERT) continue;
         kind = part->kind;
         if (part->text.len > SNAG_MAX_PUBLIC_ITEM - text.len) {
             stream->output_correction = SNAG_OUTPUT_CORRECTION_OVERSIZED;
             rc = 1;
             goto out;
         }
-        if (snag_buf_append(&text, part->text.data, part->text.len) < 0)
-            goto allocation;
+        if (snag_buf_append(&text, part->text.data, part->text.len) < 0) goto allocation;
         ++public_parts;
     }
-    if (kind == SNAG_WIRE_PART_NONE && item->part_count)
-        goto out;
+    if (kind == SNAG_WIRE_PART_NONE && item->part_count) goto out;
     if (!text.len) {
         stream->output_correction = SNAG_OUTPUT_CORRECTION_EMPTY;
         rc = 1;
         goto out;
     }
     failure = "cannot terminate assistant message";
-    if (snag_buf_terminate(&text) < 0)
-        goto allocation;
+    if (snag_buf_terminate(&text) < 0) goto allocation;
     if (kind == SNAG_WIRE_PART_REFUSAL) {
         if (public_parts != 1u || (item->phase && phase != SNAG_PHASE_FINAL_ANSWER)) {
             failure = "refusal has an invalid phase or content shape";
@@ -997,47 +833,35 @@ build_message(struct snag_responses_stream *stream,
         }
         phase = SNAG_PHASE_FINAL_ANSWER;
     }
-    if (snag_response_graph_add_public(graph, public_kind(kind), phase,
-                                      item->id, (char *)text.data) < 0) {
+    if (snag_response_graph_add_public(graph, public_kind(kind), phase, item->id, (char *)text.data) < 0) {
         failure = "cannot build canonical assistant item";
         code = errno ? errno : EPROTO;
         goto fail;
     }
     goto out;
-allocation:
-    code = errno ? errno : ENOMEM;
-fail:
-    rc = stream_fail(stream, code, "%s", failure);
-out:
-    snag_buf_free(&text);
+allocation: code = errno ? errno : ENOMEM;
+fail: rc = stream_fail(stream, code, "%s", failure);
+out: snag_buf_free(&text);
     return rc;
 }
 
 static int
-build_call(struct snag_responses_stream *stream,
-           struct snag_response_graph *graph,
+build_call(struct snag_responses_stream *stream, struct snag_response_graph *graph,
            const struct snag_wire_item *item)
 {
     json_t *arguments;
     char json_error[192] = {0};
 
-    if (!item->arguments_complete || !item->arguments_seen ||
-        !item->name || !item->call_id)
-        return stream_fail(stream, EPROTO,
-                           "function call did not complete coherently");
-    arguments = snag_json_load_strict(item->arguments.data, item->arguments.len,
-                                     SNAG_MAX_TOOL_ARGUMENTS,
+    if (!item->arguments_complete || !item->arguments_seen || !item->name || !item->call_id)
+        return stream_fail(stream, EPROTO, "function call did not complete coherently");
+    arguments = snag_json_load_strict(item->arguments.data, item->arguments.len, SNAG_MAX_TOOL_ARGUMENTS,
                                      json_error, sizeof(json_error));
     if (!arguments || !json_is_object(arguments)) {
         json_decref(arguments);
-        return stream_fail(stream, EPROTO,
-                           "function arguments are not one strict object: %s",
-                           json_error);
+        return stream_fail(stream, EPROTO, "function arguments are not one strict object: %s", json_error);
     }
-    if (snag_response_graph_add_call(graph, item->id, item->call_id,
-                                    item->name, arguments) < 0)
-        return stream_fail(stream, errno ? errno : EPROTO,
-                           "function call is outside the registered schema");
+    if (snag_response_graph_add_call(graph, item->id, item->call_id, item->name, arguments) < 0)
+        return stream_fail(stream, errno ? errno : EPROTO, "function call is outside the registered schema");
     return 0;
 }
 
@@ -1051,43 +875,33 @@ normalize_implicit_message_terminal(struct snag_response_graph *graph)
     for (size_t i = 0; i < graph->count; ++i) {
         struct snag_response_item view = snag_response_graph_item(graph, i);
         const struct snag_response_item *item = &view;
-        if (item->kind == SNAG_ITEM_TOOL_CALL)
-            has_call = true;
-        if ((item->kind == SNAG_ITEM_ASSISTANT &&
-             item->phase == SNAG_PHASE_FINAL_ANSWER) ||
-            item->kind == SNAG_ITEM_REFUSAL)
-            has_terminal_public = true;
-        if (item->kind == SNAG_ITEM_ASSISTANT)
-            last_assistant = i;
+        if (item->kind == SNAG_ITEM_TOOL_CALL) has_call = true;
+        if ((item->kind == SNAG_ITEM_ASSISTANT && item->phase == SNAG_PHASE_FINAL_ANSWER) ||
+            item->kind == SNAG_ITEM_REFUSAL) has_terminal_public = true;
+        if (item->kind == SNAG_ITEM_ASSISTANT) last_assistant = i;
     }
     if (!has_call && !has_terminal_public && last_assistant < graph->count) {
         if (json_object_set_new(json_array_get(graph->items, last_assistant),
-                                "phase", json_string("final_answer")) < 0)
-            return -1;
+                                "phase", json_string("final_answer")) < 0) return -1;
         graph->encoded_bytes += strlen("final_answer") - strlen("commentary");
     }
     return 0;
 }
 
 int
-snag_responses_stream_finish(struct snag_responses_stream *stream,
-                            struct snag_response_graph *graph,
+snag_responses_stream_finish(struct snag_responses_stream *stream, struct snag_response_graph *graph,
                             char *error, size_t error_size)
 {
     int rc = -1;
 
-    if (stream->failed || !stream->created || !stream->terminal ||
-        !stream->response_id) {
-        if (!stream->failed)
-            (void)stream_fail(stream, EPROTO,
-                              "Responses stream ended before completion");
+    if (stream->failed || !stream->created || !stream->terminal || !stream->response_id) {
+        if (!stream->failed) (void)stream_fail(stream, EPROTO, "Responses stream ended before completion");
         goto out;
     }
     struct snag_response_graph staged = {0};
     staged.usage = stream->usage;
     if (snag_response_graph_set_provider_id(&staged, stream->response_id) < 0) {
-        (void)stream_fail(stream, errno ? errno : EPROTO,
-                          "invalid provider response id");
+        (void)stream_fail(stream, errno ? errno : EPROTO, "invalid provider response id");
         goto staged_out;
     }
     for (size_t i = 0; i < stream->item_count; ++i) {
@@ -1099,8 +913,7 @@ snag_responses_stream_finish(struct snag_responses_stream *stream,
             }
             if (!staged.continuation) staged.continuation = json_array();
             if (!staged.continuation || json_array_append_new(staged.continuation,
-                json_pack("{s:I,s:O}", "before", (json_int_t)staged.count,
-                          "item", item->reasoning)) < 0) {
+                json_pack("{s:I,s:O}", "before", (json_int_t)staged.count, "item", item->reasoning)) < 0) {
                 rc = stream_fail(stream, ENOMEM, "cannot retain reasoning continuation");
                 goto staged_out;
             }
@@ -1110,13 +923,11 @@ snag_responses_stream_finish(struct snag_responses_stream *stream,
         } else if (item->kind == SNAG_WIRE_ITEM_FUNCTION_CALL) {
             rc = build_call(stream, &staged, item);
         } else if (item->kind != SNAG_WIRE_ITEM_INERT) {
-            rc = stream_fail(stream, EPROTO,
-                             "response output item has no recognized kind");
+            rc = stream_fail(stream, EPROTO, "response output item has no recognized kind");
         } else {
             continue;
         }
-        if (rc != 0)
-            goto staged_out;
+        if (rc != 0) goto staged_out;
     }
     if (normalize_implicit_message_terminal(&staged) < 0) {
         rc = stream_fail(stream, ENOMEM, "cannot retain implicit terminal phase");
@@ -1126,16 +937,12 @@ snag_responses_stream_finish(struct snag_responses_stream *stream,
     *graph = staged;
     rc = 0;
     goto out;
-staged_out:
-    snag_response_graph_free(&staged);
+staged_out: snag_response_graph_free(&staged);
 out:
-    if (rc > 0 && error_size)
-        (void)snprintf(error, error_size, "%s",
-            stream->output_correction == SNAG_OUTPUT_CORRECTION_EMPTY ?
-                SNAG_EMPTY_OUTPUT_CORRECTION :
+    if (rc > 0 && error_size) (void)snprintf(error, error_size, "%s",
+            stream->output_correction == SNAG_OUTPUT_CORRECTION_EMPTY ? SNAG_EMPTY_OUTPUT_CORRECTION :
                 SNAG_OVERSIZED_OUTPUT_CORRECTION);
-    else if (rc < 0 && error_size)
-        (void)snprintf(error, error_size, "%s",
+    else if (rc < 0 && error_size) (void)snprintf(error, error_size, "%s",
                        snag_responses_stream_error(stream));
     return rc;
 }

@@ -78,8 +78,7 @@ struct snag_ui_display {
 static int
 set_level(struct snag_ui_display *display, unsigned int level)
 {
-    if (!snag_verbosity_name(level))
-        return snag_errno(EINVAL);
+    if (!snag_verbosity_name(level)) return snag_errno(EINVAL);
     display->render.verbosity = level;
     atomic_store(&display->runtime->level, level);
     return 0;
@@ -89,12 +88,10 @@ static void
 verbosity_command(struct snag_ui_display *display, const char *text)
 {
     const char *value = text + 8u;
-    while (isspace((unsigned char)*value))
-        ++value;
+    while (isspace((unsigned char)*value)) ++value;
     if (*value) {
         const char *end = value + 1u;
-        while (isspace((unsigned char)*end))
-            ++end;
+        while (isspace((unsigned char)*end)) ++end;
         if (*value < '0' || *value > '6' || *end) {
             (void)snprintf(display->feedback, sizeof(display->feedback),
                            "/verbose expects one integer from 0 through 6");
@@ -103,8 +100,7 @@ verbosity_command(struct snag_ui_display *display, const char *text)
         (void)set_level(display, (unsigned int)(*value - '0'));
     }
     (void)snprintf(display->feedback, sizeof(display->feedback),
-        "verbosity: %u (%s)%s", display->render.verbosity,
-        snag_verbosity_name(display->render.verbosity),
+        "verbosity: %u (%s)%s", display->render.verbosity, snag_verbosity_name(display->render.verbosity),
         display->render.view == SNAG_RENDER_CHAT ? " · work detail is in /rollout" : "");
 }
 
@@ -120,17 +116,14 @@ static bool
 queue_full(struct ui_queue *queue)
 {
     return atomic_load_explicit(&queue->head, memory_order_relaxed) -
-           atomic_load_explicit(&queue->tail, memory_order_acquire) ==
-           UI_QUEUE_CAPACITY;
+           atomic_load_explicit(&queue->tail, memory_order_acquire) == UI_QUEUE_CAPACITY;
 }
 
 static bool
 queue_push(struct ui_queue *queue, void *item)
 {
     size_t head = atomic_load_explicit(&queue->head, memory_order_relaxed);
-    if (head - atomic_load_explicit(&queue->tail, memory_order_acquire) ==
-        UI_QUEUE_CAPACITY)
-        return false;
+    if (head - atomic_load_explicit(&queue->tail, memory_order_acquire) == UI_QUEUE_CAPACITY) return false;
     queue->items[head % UI_QUEUE_CAPACITY] = item;
     atomic_store_explicit(&queue->head, head + 1u, memory_order_release);
     snag_wakeup_send(queue->wake[1]);
@@ -142,8 +135,7 @@ queue_pop(struct ui_queue *queue)
 {
     size_t tail = atomic_load_explicit(&queue->tail, memory_order_relaxed);
     void *item;
-    if (tail == atomic_load_explicit(&queue->head, memory_order_acquire))
-        return NULL;
+    if (tail == atomic_load_explicit(&queue->head, memory_order_acquire)) return NULL;
     item = queue->items[tail % UI_QUEUE_CAPACITY];
     atomic_store_explicit(&queue->tail, tail + 1u, memory_order_release);
     return item;
@@ -177,8 +169,7 @@ static void
 prompt_free(struct snag_ui_prompt *prompt)
 {
     free(prompt->source);
-    for (size_t i = 0u; i < SNAG_PROMPT_HOUR; ++i)
-        free(prompt->values[i]);
+    for (size_t i = 0u; i < SNAG_PROMPT_HOUR; ++i) free(prompt->values[i]);
     memset(prompt, 0, sizeof(*prompt));
 }
 
@@ -192,8 +183,7 @@ message_free(struct ui_message *message)
 }
 
 static int
-configure_prompt(struct snag_ui_display *display, const struct snag_ui_prompt *prompt,
-                 struct snag_term *term)
+configure_prompt(struct snag_ui_display *display, const struct snag_ui_prompt *prompt, struct snag_term *term)
 {
     const char *frames[SNAG_TERM_SPINNER_COUNT];
     const char *values[SNAG_PROMPT_FIELD_COUNT];
@@ -206,28 +196,22 @@ configure_prompt(struct snag_ui_display *display, const struct snag_ui_prompt *p
         (void)snprintf(hour, sizeof(hour), clock->valid ? "%u" : "--", clock->hour);
         (void)snprintf(minute, sizeof(minute), clock->valid ? "%u" : "--", clock->minute);
         (void)snprintf(second, sizeof(second), clock->valid ? "%u" : "--", clock->second);
-        for (size_t i = 0u; i < SNAG_PROMPT_HOUR; ++i)
-            values[i] = prompt->values[i];
+        for (size_t i = 0u; i < SNAG_PROMPT_HOUR; ++i) values[i] = prompt->values[i];
         if (prompt->mode == 0u && display->term.destinations)
             for (size_t i = 0u; i < display->term.destinations->count; ++i) {
-                const struct snag_irc_destination *destination =
-                    &display->term.destinations->items[i];
-                if (destination->target.id == display->term.destination.id &&
-                    destination->operator[0])
+                const struct snag_irc_destination *destination = &display->term.destinations->items[i];
+                if (destination->target.id == display->term.destination.id && destination->operator[0])
                     values[SNAG_PROMPT_OPERATOR] = destination->operator;
             }
         values[SNAG_PROMPT_HOUR] = hour;
         values[SNAG_PROMPT_MINUTE] = minute;
         values[SNAG_PROMPT_SECOND] = second;
         if (snag_config_prompt_expand(text, prompt->mode, values,
-                SNAG_TERM_SPINNER_MARKER_BASE, label, sizeof(label)) < 0)
-            return -1;
+                SNAG_TERM_SPINNER_MARKER_BASE, label, sizeof(label)) < 0) return -1;
         text = label;
     }
-    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i)
-        frames[i] = prompt->frames[i];
-    return snag_term_set_prompt_template(term, prompt->active, text,
-                                        frames, prompt->rate, prompt->states);
+    for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i) frames[i] = prompt->frames[i];
+    return snag_term_set_prompt_template(term, prompt->active, text, frames, prompt->rate, prompt->states);
 }
 
 static int
@@ -253,47 +237,36 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     case SNAG_UI_WARNING: return snag_render_warning_ctx(render, command->text);
     case SNAG_UI_ROLLOUT_END: return snag_render_rollout_end(render);
     case SNAG_UI_ROLLOUT_ABORT: return snag_render_rollout_abort(render);
-    case SNAG_UI_CLOSE:
-        snag_render_attach_term(render, NULL);
+    case SNAG_UI_CLOSE: snag_render_attach_term(render, NULL);
         snag_term_close(term);
         return 0;
     case SNAG_UI_COLOR: {
         bool previous = render->color_stderr;
         snag_render_set_color(render, (enum snag_color_mode)command->data.value);
-        return previous != render->color_stderr && display->prompt.source ?
-            apply_prompt(display) : 0;
+        return previous != render->color_stderr && display->prompt.source ? apply_prompt(display) : 0;
     }
-    case SNAG_UI_MARKDOWN:
-        snag_render_set_markdown(render, command->data.value != 0u);
+    case SNAG_UI_MARKDOWN: snag_render_set_markdown(render, command->data.value != 0u);
         return 0;
     case SNAG_UI_DESTINATIONS:
-        if (snag_term_set_destinations(term, command->data.destinations) < 0)
-            return -1;
+        if (snag_term_set_destinations(term, command->data.destinations) < 0) return -1;
         return display->prompt.source ? apply_prompt(display) : 0;
     case SNAG_UI_SELECT:
-        if (snag_term_select_destination(term, command->data.value) < 0)
-            return -1;
+        if (snag_term_select_destination(term, command->data.value) < 0) return -1;
         return display->prompt.source ? apply_prompt(display) : 0;
-    case SNAG_UI_ROUTE:
-        snag_term_destination_route(term, command->text, command->data.route);
+    case SNAG_UI_ROUTE: snag_term_destination_route(term, command->text, command->data.route);
         return 0;
-    case SNAG_UI_COMMANDS:
-        snag_term_set_commands(term, command->data.commands.items,
+    case SNAG_UI_COMMANDS: snag_term_set_commands(term, command->data.commands.items,
                              command->data.commands.count);
         return 0;
-    case SNAG_UI_PAUSE:
-        snag_term_set_typing_pause(term, command->data.timing.typing_pause_ms);
+    case SNAG_UI_PAUSE: snag_term_set_typing_pause(term, command->data.timing.typing_pause_ms);
         term->tool_spinner_off_delay_ms = command->data.timing.tool_spinner_off_delay_ms;
         return 0;
     case SNAG_UI_OPEN:
-        if (snag_term_open(term, error, error_size) < 0)
-            return -1;
+        if (snag_term_open(term, error, error_size) < 0) return -1;
         snag_render_attach_term(render, term);
         return 0;
-    case SNAG_UI_EXTERNAL:
-        display->suspended = command->data.value != 0u;
-        return command->data.value ?
-            snag_term_external_begin(term, error, error_size) :
+    case SNAG_UI_EXTERNAL: display->suspended = command->data.value != 0u;
+        return command->data.value ? snag_term_external_begin(term, error, error_size) :
             snag_term_external_end(term, error, error_size);
     case SNAG_UI_PROMPT: {
         if (command->label) {
@@ -302,17 +275,14 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
             snag_term_init(&submitted);
             submitted.defer_redraw = true;
             int rc = configure_prompt(display, &command->data.prompt, &submitted);
-            if (rc == 0)
-                rc = snag_render_submitted(render, submitted.label, command->label);
+            if (rc == 0) rc = snag_render_submitted(render, submitted.label, command->label);
             snag_term_close(&submitted);
             return rc;
         }
         term->defer_redraw = true;
-        if (snag_render_before_prompt(render) < 0)
-            return -1;
+        if (snag_render_before_prompt(render) < 0) return -1;
         term->defer_redraw = false;
-        if (command->data.prompt.active && !term->active)
-            ++display->turn_generation;
+        if (command->data.prompt.active && !term->active) ++display->turn_generation;
         prompt_free(&display->prompt);
         display->prompt = command->data.prompt;
         memset(&command->data.prompt, 0, sizeof(command->data.prompt));
@@ -322,64 +292,46 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         const char *frames[SNAG_TERM_SPINNER_COUNT];
         struct snag_term probe;
         int rc;
-        for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i)
-            frames[i] = command->data.prompt.frames[i];
+        for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i) frames[i] = command->data.prompt.frames[i];
         snag_term_init(&probe);
-        rc = snag_term_set_prompt_template(&probe, false, command->text,
-                    frames, command->data.prompt.rate,
+        rc = snag_term_set_prompt_template(&probe, false, command->text, frames, command->data.prompt.rate,
                     (1u << SNAG_TERM_SPINNER_COUNT) - 1u);
         snag_term_close(&probe);
         return rc;
     }
-    case SNAG_UI_SPINNERS:
-        display->prompt.states = command->data.value;
+    case SNAG_UI_SPINNERS: display->prompt.states = command->data.value;
         return snag_term_set_spinner_states(term, command->data.value);
     case SNAG_UI_DRAFT: return snag_term_restore_draft(term, command->text);
-    case SNAG_UI_VIEW:
-        term->defer_redraw = true;
+    case SNAG_UI_VIEW: term->defer_redraw = true;
         term->chat = command->data.value == SNAG_RENDER_CHAT;
         if (!term->opened) {
             render->view = (enum snag_render_view)command->data.value;
             return 0;
         }
-        return snag_render_set_view(render,
-                                  (enum snag_render_view)command->data.value);
-    case SNAG_UI_SUBMITTED:
-        return command->data.value ?
+        return snag_render_set_view(render, (enum snag_render_view)command->data.value);
+    case SNAG_UI_SUBMITTED: return command->data.value ?
             snag_render_input_submitted(render, command->label, command->text) :
             snag_render_submitted(render, command->label, command->text);
-    case SNAG_UI_PUBLIC_BEGIN:
-        return snag_render_rollout_begin(render, command->data.public.fd,
+    case SNAG_UI_PUBLIC_BEGIN: return snag_render_rollout_begin(render, command->data.public.fd,
                                         command->label, command->data.public.kind);
-    case SNAG_UI_ORIENTATION:
-        return snag_render_orientation(render, command->text, command->label,
-                    command->data.orientation.turns,
-                    command->data.orientation.queued,
+    case SNAG_UI_ORIENTATION: return snag_render_orientation(render, command->text, command->label,
+                    command->data.orientation.turns, command->data.orientation.queued,
                     command->data.orientation.resumed, command->data.orientation.queue_armed);
-    case SNAG_UI_HISTORY:
-        return snag_render_history(render, command->data.replay.turn,
+    case SNAG_UI_HISTORY: return snag_render_history(render, command->data.replay.turn,
             command->data.replay.shown, command->data.replay.completed, command->data.replay.total);
     case SNAG_UI_IRC: return snag_render_irc_event(render, command->data.irc);
-    case SNAG_UI_DURABLE:
-        return snag_render_durable(render, command->data.durable.fd,
+    case SNAG_UI_DURABLE: return snag_render_durable(render, command->data.durable.fd,
             command->data.durable.source, command->text,
             command->data.durable.timeout_ms, command->data.durable.max_output_bytes);
-    case SNAG_UI_EVENT:
-        return snag_render_event(render, command->data.seq, command->text);
-    case SNAG_UI_RESUME:
-        return snag_render_resume_hint(render, command->text, command->len);
-    case SNAG_UI_PROTOCOL:
-        return snag_render_protocol(render, command->label, command->text,
-                                   command->len);
-    case SNAG_UI_TRANSPORT:
-        return snag_render_transport(render, (char)command->data.value,
+    case SNAG_UI_EVENT: return snag_render_event(render, command->data.seq, command->text);
+    case SNAG_UI_RESUME: return snag_render_resume_hint(render, command->text, command->len);
+    case SNAG_UI_PROTOCOL: return snag_render_protocol(render, command->label, command->text, command->len);
+    case SNAG_UI_TRANSPORT: return snag_render_transport(render, (char)command->data.value,
                                     command->text, command->len);
-    case SNAG_UI_HISTORY_SNAPSHOT:
-        return snag_term_history_set(term, &command->data.history.entries,
+    case SNAG_UI_HISTORY_SNAPSHOT: return snag_term_history_set(term, &command->data.history.entries,
                                     command->data.history.refresh);
     case SNAG_UI_UPDATE:
-        if (!display->update)
-            display->update = snag_update_start(command->label, command->text,
+        if (!display->update) display->update = snag_update_start(command->label, command->text,
                                                 display->runtime->commands[1]);
         return 0;
     case SNAG_UI_STOP: return 0;
@@ -396,45 +348,36 @@ read_input(struct snag_ui_display *display, int timeout_ms)
     struct ui_action *item;
     int rc;
 
-    if (!term->opened || display->suspended ||
-        display->input_closed) {
+    if (!term->opened || display->suspended || display->input_closed) {
         rc = snag_wakeup_wait(runtime->commands[0], timeout_ms);
         return rc < 0 && errno != EINTR ? -1 : 0;
     }
     term->input_backlog = queue_full(&runtime->actions);
     term->local_backlog = display->local != NULL;
-    if (!term->input_backlog)
-        display->backlog_warned = false;
+    if (!term->input_backlog) display->backlog_warned = false;
     else if (!display->backlog_warned && !term->input_only) {
         display->backlog_warned = true;
         if (snag_render_warning_ctx(&display->render,
-                "input backlog is full; draft retained, retry Enter shortly") < 0)
-            return -1;
+                "input backlog is full; draft retained, retry Enter shortly") < 0) return -1;
     }
     item = calloc(1u, sizeof(*item));
-    if (!item)
-        return -1;
-    rc = snag_term_poll(term, timeout_ms, runtime->commands[0],
-                       &item->action, &item->text);
+    if (!item) return -1;
+    rc = snag_term_poll(term, timeout_ms, runtime->commands[0], &item->action, &item->text);
     item->history_warning = term->history_reader.warning;
     term->history_reader.warning = false;
     if (item->text) item->received_ms = snag_time_ms();
     take_snapshot(display, &item->snapshot);
-    if (item->text)
-        snag_term_destination_route(term, item->text, &item->route);
+    if (item->text) snag_term_destination_route(term, item->text, &item->route);
     if (item->action == SNAG_TERM_CANCEL || item->action == SNAG_TERM_INTERRUPT ||
         item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE) {
         bool deferred = term->defer_redraw;
-        term->defer_redraw = deferred || item->action == SNAG_TERM_SUBMIT ||
-                             item->action == SNAG_TERM_QUEUE;
-        if (!term->input_only && display->prompt.source && apply_prompt(display) < 0)
-            goto fail;
+        term->defer_redraw = deferred || item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE;
+        if (!term->input_only && display->prompt.source && apply_prompt(display) < 0) goto fail;
         term->defer_redraw = deferred;
     }
     atomic_store(&runtime->pause_until,
         term->typing_active ? term->last_input_ms + term->typing_pause_ms : 0u);
-    if (rc < 0 && errno != EINTR)
-        item->error = errno;
+    if (rc < 0 && errno != EINTR) item->error = errno;
     if (term->history_refresh_requested && !term->input_backlog) {
         term->history_refresh_requested = false;
         item->history_refresh = true;
@@ -449,13 +392,10 @@ read_input(struct snag_ui_display *display, int timeout_ms)
             item->local = true;
         } else if (command == SNAG_IRC_TARGET_SELECT) {
             if (snag_term_select_destination(term, id) == 0)
-                (void)snprintf(display->feedback, sizeof(display->feedback),
-                               "destination: %u", id);
-            else
-                (void)snprintf(display->feedback, sizeof(display->feedback),
+                (void)snprintf(display->feedback, sizeof(display->feedback), "destination: %u", id);
+            else (void)snprintf(display->feedback, sizeof(display->feedback),
                                "destination %u is unavailable; use /names", id);
-            if (!term->input_only && display->prompt.source && apply_prompt(display) < 0)
-                goto fail;
+            if (!term->input_only && display->prompt.source && apply_prompt(display) < 0) goto fail;
             take_snapshot(display, &item->snapshot);
             item->local = true;
         } else if (snag_verbosity_command(item->text, strlen(item->text))) {
@@ -488,20 +428,17 @@ read_input(struct snag_ui_display *display, int timeout_ms)
                 atomic_fetch_add(&runtime->steering_pending, 1u);
             }
         }
-        if (queue_push(&runtime->actions, item))
-            return 0;
+        if (queue_push(&runtime->actions, item)) return 0;
         atomic_store(&runtime->fatal, item->error ? item->error : EOVERFLOW);
     }
     {
         bool notify = item->action != SNAG_TERM_NONE || item->error;
         free(item->text);
         free(item);
-        if (notify)
-            snag_wakeup_send(runtime->actions.wake[1]);
+        if (notify) snag_wakeup_send(runtime->actions.wake[1]);
     }
     return 0;
-fail:
-    free(item->text);
+fail: free(item->text);
     free(item);
     return -1;
 }
@@ -512,13 +449,11 @@ local_feedback(struct snag_ui_display *display)
     struct ui_action *item = display->local;
     int rc = 0;
 
-    if (!item || display->painting_feedback)
-        return 0;
+    if (!item || display->painting_feedback) return 0;
     if (!display->local_acknowledged) {
         display->painting_feedback = true;
         rc = snag_render_submitted(&display->render, item->snapshot.label, item->text);
-        if (rc == 0 && display->feedback[0])
-            rc = snag_render_host(&display->render, display->feedback);
+        if (rc == 0 && display->feedback[0]) rc = snag_render_host(&display->render, display->feedback);
         display->painting_feedback = false;
         display->local_acknowledged = true;
     }
@@ -526,8 +461,7 @@ local_feedback(struct snag_ui_display *display)
         free(item->text);
         free(item);
         display->local = NULL;
-    } else if (queue_push(&display->runtime->actions, item))
-        display->local = NULL;
+    } else if (queue_push(&display->runtime->actions, item)) display->local = NULL;
     return rc;
 }
 
@@ -543,16 +477,14 @@ render_input_checkpoint(void *opaque)
     struct snag_ui_display *display = opaque;
     int rc = read_input(display, 0);
     display->render.suppress_optional = atomic_load(&display->runtime->exit_requested) ||
-        atomic_load(&display->runtime->interrupt) ||
-        atomic_load(&display->runtime->steering_pending);
+        atomic_load(&display->runtime->interrupt) || atomic_load(&display->runtime->steering_pending);
     return rc < 0 ? -1 : local_feedback(display);
 }
 
 static bool
 public_stopped(struct snag_ui_runtime *runtime)
 {
-    return atomic_load(&runtime->exit_requested) ||
-           atomic_load(&runtime->interrupt) ||
+    return atomic_load(&runtime->exit_requested) || atomic_load(&runtime->interrupt) ||
            atomic_load(&runtime->steering_pending);
 }
 
@@ -564,33 +496,26 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
     bool raw = message->command.kind == SNAG_UI_RAW;
 
     display->render.suppress_optional = public_stopped(runtime);
-    if (!raw && message->command.kind != SNAG_UI_PUBLIC)
-        return apply_message(display, &message->command,
+    if (!raw && message->command.kind != SNAG_UI_PUBLIC) return apply_message(display, &message->command,
                              message->error, sizeof(message->error));
     while (offset < message->command.len) {
         size_t amount = message->command.len - offset;
-        if (amount > 1024u)
-            amount = 1024u;
+        if (amount > 1024u) amount = 1024u;
         if (raw && amount < message->command.len - offset) {
             size_t boundary = amount;
             while (boundary && ((unsigned char)message->command.text[offset + boundary] & 0xc0u) == 0x80u)
                 --boundary;
-            if (boundary)
-                amount = boundary;
+            if (boundary) amount = boundary;
         }
-        if (render_input_checkpoint(display) < 0)
-            return -1;
+        if (render_input_checkpoint(display) < 0) return -1;
         while (!raw && !public_stopped(runtime) &&
                snag_term_typing_pause_remaining(&display->term, snag_monotonic_ms()))
-            if (read_input(display, 16) < 0)
-                return -1;
-        if (!raw && public_stopped(runtime))
-            return 0;
+            if (read_input(display, 16) < 0) return -1;
+        if (!raw && public_stopped(runtime)) return 0;
         if (raw ? snag_term_write((int)message->command.data.value,
                                  message->command.text + offset, amount) < 0 :
             snag_render_rollout(&display->render, message->command.text + offset, amount,
-                                &message->delivered) < 0)
-            return -1;
+                                &message->delivered) < 0) return -1;
         offset += amount;
     }
     return 0;
@@ -614,17 +539,14 @@ presentation_main(void *opaque)
         snag_wakeup_drain(runtime->commands[0]);
         message = atomic_exchange_explicit(&runtime->request, NULL, memory_order_acquire);
         const char *banner = display.suspended ? NULL : snag_update_take(display.update);
-        if (banner)
-            (void)snag_render_update(&display.render, banner);
+        if (banner) (void)snag_render_update(&display.render, banner);
         if (read_input(&display, message || banner ? 0 : -1) < 0) {
             atomic_store(&runtime->fatal, errno ? errno : EIO);
             display.input_closed = true;
             snag_wakeup_send(runtime->actions.wake[1]);
         }
-        if (local_feedback(&display) < 0)
-            atomic_store(&runtime->fatal, errno ? errno : EIO);
-        if (!message)
-            continue;
+        if (local_feedback(&display) < 0) atomic_store(&runtime->fatal, errno ? errno : EIO);
+        if (!message) continue;
         snag_buf_init(&message->delivered, message->command.len + 4u);
         message->result = apply_display(&display, message);
         message->saved_errno = errno;
@@ -638,8 +560,7 @@ presentation_main(void *opaque)
             bool stop = message->command.kind == SNAG_UI_STOP;
             atomic_store_explicit(&message->done, true, memory_order_release);
             snag_wakeup_send(runtime->actions.wake[1]);
-            if (stop)
-                break;
+            if (stop) break;
         }
     }
     char *banner = snag_update_stop(display.update);
@@ -673,23 +594,17 @@ request(struct snag_ui *ui, struct ui_message *message, struct snag_buf *deliver
     snag_wakeup_send(runtime->commands[1]);
     for (;;) {
         snag_wakeup_drain(runtime->actions.wake[0]);
-        if (atomic_load_explicit(&message->done, memory_order_acquire))
-            break;
+        if (atomic_load_explicit(&message->done, memory_order_acquire)) break;
         (void)snag_wakeup_wait(runtime->actions.wake[0], -1);
     }
     rc = message->result;
     adopt_snapshot(ui, &message->snapshot);
-    if (error && error_size)
-        (void)snprintf(error, error_size, "%s", message->error);
-    if (delivered && message->delivered.len &&
-        snag_buf_append(delivered, message->delivered.data,
-                       message->delivered.len) < 0)
-        rc = -1;
+    if (error && error_size) (void)snprintf(error, error_size, "%s", message->error);
+    if (delivered && message->delivered.len && snag_buf_append(delivered, message->delivered.data,
+                       message->delivered.len) < 0) rc = -1;
     snag_buf_free(&message->delivered);
-    if (rc < 0 && message->saved_errno)
-        errno = message->saved_errno;
-out:
-    saved = errno;
+    if (rc < 0 && message->saved_errno) errno = message->saved_errno;
+out: saved = errno;
     message_free(message);
     errno = saved;
     return rc;
@@ -710,8 +625,7 @@ snag_ui_send(struct snag_ui *ui, struct snag_ui_command command)
     switch (command.kind) {
     case SNAG_UI_DRAFT: case SNAG_UI_EVENT: case SNAG_UI_DURABLE:
         return send_message(ui, &message, command.text);
-    default:
-        return request(ui, &message, NULL, NULL, 0u);
+    default: return request(ui, &message, NULL, NULL, 0u);
     }
 }
 
@@ -722,8 +636,7 @@ snag_ui_init(struct snag_ui *ui)
     int rc;
     memset(ui, 0, sizeof(*ui));
     runtime = calloc(1u, sizeof(*runtime));
-    if (!runtime)
-        return -1;
+    if (!runtime) return -1;
     atomic_init(&runtime->fatal, 0);
     runtime->engine = pthread_self();
     atomic_init(&runtime->interrupt, 0u);
@@ -734,13 +647,9 @@ snag_ui_init(struct snag_ui *ui)
     atomic_init(&runtime->level, 0u);
     atomic_init(&runtime->view, SNAG_RENDER_ROLLOUT);
     atomic_init(&runtime->request, NULL);
-    if (snag_wakeup_create(runtime->commands) < 0)
-        goto fail;
-    if (queue_open(&runtime->actions) < 0)
-        goto commands;
-    if (snag_term_signals_block(&runtime->saved_mask) < 0) {
-        goto actions;
-    }
+    if (snag_wakeup_create(runtime->commands) < 0) goto fail;
+    if (queue_open(&runtime->actions) < 0) goto commands;
+    if (snag_term_signals_block(&runtime->saved_mask) < 0) goto actions;
     rc = pthread_create(&runtime->thread, NULL, presentation_main, runtime);
     if (rc != 0) {
         (void)snag_term_signals_restore(&runtime->saved_mask);
@@ -750,12 +659,9 @@ snag_ui_init(struct snag_ui *ui)
     ui->runtime = runtime;
     ui->view = SNAG_RENDER_ROLLOUT;
     return 0;
-actions:
-    snag_wakeup_close(runtime->actions.wake);
-commands:
-    snag_wakeup_close(runtime->commands);
-fail:
-    free(runtime);
+actions: snag_wakeup_close(runtime->actions.wake);
+commands: snag_wakeup_close(runtime->commands);
+fail: free(runtime);
     return -1;
 }
 
@@ -765,8 +671,7 @@ snag_ui_free(struct snag_ui *ui)
     struct snag_ui_runtime *runtime = ui->runtime;
     struct ui_message message = {.command = {.kind = SNAG_UI_STOP}};
     struct ui_action *action;
-    if (!runtime)
-        return;
+    if (!runtime) return;
     (void)send_message(ui, &message, NULL);
     (void)pthread_join(runtime->thread, NULL);
     while ((action = queue_pop(&runtime->actions))) {
@@ -799,8 +704,7 @@ int
 snag_ui_set_verbosity(struct snag_ui *ui, unsigned int level)
 {
     struct ui_message message = {.command = {.kind = SNAG_UI_LEVEL, .data.value = level}};
-    if (!snag_verbosity_name(level))
-        return snag_errno(EINVAL);
+    if (!snag_verbosity_name(level)) return snag_errno(EINVAL);
     return send_message(ui, &message, NULL);
 }
 
@@ -819,8 +723,7 @@ snag_ui_view(const struct snag_ui *ui)
 bool
 snag_ui_enabled(const struct snag_ui *ui, enum snag_presentation kind)
 {
-    return ui && ui->runtime && snag_presentation_enabled(kind,
-        snag_ui_verbosity(ui), snag_ui_view(ui));
+    return ui && ui->runtime && snag_presentation_enabled(kind, snag_ui_verbosity(ui), snag_ui_view(ui));
 }
 
 int
@@ -835,8 +738,7 @@ snag_ui_pause_remaining(struct snag_ui *ui)
 {
     uint64_t until = atomic_load(&ui->runtime->pause_until);
     uint64_t now = snag_monotonic_ms();
-    if (public_stopped(ui->runtime))
-        return 0u;
+    if (public_stopped(ui->runtime)) return 0u;
     return until > now ? (uint32_t)(until - now) : 0u;
 }
 
@@ -844,8 +746,7 @@ int
 snag_ui_open(struct snag_ui *ui, char *error, size_t error_size)
 {
     struct ui_message message = {.command = {.kind = SNAG_UI_OPEN}};
-    if (ui->opened)
-        return 0;
+    if (ui->opened) return 0;
     return request(ui, &message, NULL, error, error_size);
 }
 
@@ -858,21 +759,17 @@ snag_ui_external(struct snag_ui *ui, bool begin, char *error, size_t error_size)
 
 static int
 send_prompt(struct snag_ui *ui, enum snag_ui_operation kind, bool active, const char *label,
-              const char *const spinners[SNAG_TERM_SPINNER_COUNT],
-              uint32_t per_second, unsigned int states,
-              const char *const values[SNAG_PROMPT_HOUR], unsigned int mode,
-              const char *submitted)
+              const char *const spinners[SNAG_TERM_SPINNER_COUNT], uint32_t per_second, unsigned int states,
+              const char *const values[SNAG_PROMPT_HOUR], unsigned int mode, const char *submitted)
 {
     struct ui_message message = {.command = {
         .kind = kind, .label = submitted,
-        .data.prompt = {.active = active, .rate = per_second, .states = states,
-                        .mode = mode}
+        .data.prompt = {.active = active, .rate = per_second, .states = states, .mode = mode}
     }};
     for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i) {
         if (strlen(spinners[i]) >= sizeof(message.command.data.prompt.frames[i]))
             return snag_errno(EOVERFLOW);
-        memcpy(message.command.data.prompt.frames[i], spinners[i],
-               strlen(spinners[i]) + 1u);
+        memcpy(message.command.data.prompt.frames[i], spinners[i], strlen(spinners[i]) + 1u);
     }
     for (size_t i = 0u; values && i < SNAG_PROMPT_HOUR; ++i) {
         message.command.data.prompt.values[i] = snag_strdup_checked(values[i], SNAG_TERM_LABEL_BYTES);
@@ -891,8 +788,7 @@ send_prompt(struct snag_ui *ui, enum snag_ui_operation kind, bool active, const 
 
 int
 snag_ui_prompt(struct snag_ui *ui, bool active, const char *label,
-              const char *const spinners[SNAG_TERM_SPINNER_COUNT],
-              uint32_t per_second, unsigned int states)
+              const char *const spinners[SNAG_TERM_SPINNER_COUNT], uint32_t per_second, unsigned int states)
 {
     return send_prompt(ui, SNAG_UI_PROMPT, active, label, spinners, per_second, states, NULL, 0u, NULL);
 }
@@ -909,8 +805,7 @@ snag_ui_composer(struct snag_ui *ui, bool active, const char *format,
 
 int
 snag_ui_validate_prompt(struct snag_ui *ui, const char *label,
-                       const char *const spinners[SNAG_TERM_SPINNER_COUNT],
-                       uint32_t per_second)
+                       const char *const spinners[SNAG_TERM_SPINNER_COUNT], uint32_t per_second)
 {
     return send_prompt(ui, SNAG_UI_VALIDATE, false, label, spinners, per_second, 0u, NULL, 0u, NULL);
 }
@@ -931,8 +826,7 @@ snag_ui_leaving(const struct snag_ui *ui)
 }
 
 int
-snag_ui_poll(struct snag_ui *ui, int timeout_ms,
-            enum snag_term_action *action, char **text)
+snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, char **text)
 {
     struct snag_ui_runtime *runtime = ui->runtime;
     struct ui_action *item;
@@ -972,12 +866,10 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms,
             break;
         }
         uint64_t now = snag_monotonic_ms();
-        if (timeout_ms >= 0 && now >= deadline)
-            return 0;
+        if (timeout_ms >= 0 && now >= deadline) return 0;
         int remaining = timeout_ms < 0 ? -1 : (int)(deadline - now);
         if (snag_wakeup_wait(runtime->actions.wake[0], remaining) < 0) {
-            if (errno == EINTR)
-                return 0;
+            if (errno == EINTR) return 0;
             return -1;
         }
     }
@@ -986,8 +878,7 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms,
     ui->input_active = item->snapshot.active;
     ui->input_route = item->route;
     ui->selection = item->snapshot.selection;
-    memcpy(ui->submitted_label, item->snapshot.label,
-           sizeof(ui->submitted_label));
+    memcpy(ui->submitted_label, item->snapshot.label, sizeof(ui->submitted_label));
     if (item->local) {
         (void)snag_ui_history_add(ui, item->text);
         free(item->text);
@@ -995,14 +886,10 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms,
     }
     *action = item->action;
     *text = item->text;
-    if (item->steering)
-        atomic_fetch_sub(&runtime->steering_pending, 1u);
-    if (item->history_warning && !ui->history.warned) {
-        ui->history.warning = ui->history.warned = true;
-    }
+    if (item->steering) atomic_fetch_sub(&runtime->steering_pending, 1u);
+    if (item->history_warning && !ui->history.warned) ui->history.warning = ui->history.warned = true;
     if (item->history_refresh) {
-        if (history_snapshot(ui, true) < 0)
-            item->error = errno;
+        if (history_snapshot(ui, true) < 0) item->error = errno;
     }
     {
         int error = item->error;
@@ -1034,15 +921,13 @@ int
 snag_ui_submitted(struct snag_ui *ui, const char *label, const char *text, bool input)
 {
     struct ui_message message = {.command = {.kind = SNAG_UI_SUBMITTED, .data.value = input}};
-    if (label == ui->label && ui->submitted_label[0])
-        label = ui->submitted_label;
+    if (label == ui->label && ui->submitted_label[0]) label = ui->submitted_label;
     message.command.label = label;
     return send_message(ui, &message, text);
 }
 
 int
-snag_ui_public(struct snag_ui *ui, const char *text, size_t len,
-              struct snag_buf *delivered)
+snag_ui_public(struct snag_ui *ui, const char *text, size_t len, struct snag_buf *delivered)
 {
     struct ui_message message = {.command = {
         .kind = SNAG_UI_PUBLIC, .text = text, .len = len}};
@@ -1050,14 +935,11 @@ snag_ui_public(struct snag_ui *ui, const char *text, size_t len,
 }
 
 int
-snag_ui_orientation(struct snag_ui *ui, const struct snag_session *session,
-                   bool resumed)
+snag_ui_orientation(struct snag_ui *ui, const struct snag_session *session, bool resumed)
 {
     struct ui_message message = {.command = {
-        .kind = SNAG_UI_ORIENTATION,
-        .data.orientation = {.turns = session->turn_count,
-            .queued = session->pending_queue_count, .resumed = resumed,
-            .queue_armed = session->queue_armed}
+        .kind = SNAG_UI_ORIENTATION, .data.orientation = {.turns = session->turn_count,
+            .queued = session->pending_queue_count, .resumed = resumed, .queue_armed = session->queue_armed}
     }};
     message.command.label = session->id;
     return send_message(ui, &message, session->workspace);
@@ -1084,8 +966,7 @@ history_append(char **target, const char *text, const char *separator)
     size_t old = *target ? strlen(*target) : 0u;
     size_t sep = old ? strlen(separator) : 0u, len = strlen(text);
     size_t size;
-    if (!snag_size_add(old, sep, &size) || !snag_size_add(size, len + 1u, &size))
-        return -1;
+    if (!snag_size_add(old, sep, &size) || !snag_size_add(size, len + 1u, &size)) return -1;
     char *joined = realloc(*target, size);
     if (!joined) return -1;
     memcpy(joined + old, separator, sep);
@@ -1101,8 +982,7 @@ history_items(struct history_replay *history, const json_t *items)
         const json_t *item = json_array_get(items, i);
         const char *kind = snag_json_string(item, "kind");
         if (snag_string_in(kind, "assistant refusal") &&
-            history_append(&history->turn.assistant, snag_json_string(item, "text"), "\n\n") < 0)
-            return -1;
+            history_append(&history->turn.assistant, snag_json_string(item, "text"), "\n\n") < 0) return -1;
     }
     return 0;
 }
@@ -1113,8 +993,7 @@ history_finish(struct history_replay *history)
     if (!history->turn.user) return 0;
     if (history->response.len) {
         if (snag_buf_terminate(&history->response) < 0 ||
-            history_append(&history->turn.assistant, (char *)history->response.data, "\n\n") < 0)
-            return -1;
+            history_append(&history->turn.assistant, (char *)history->response.data, "\n\n") < 0) return -1;
         snag_buf_reset(&history->response);
     }
     ++history->shown;
@@ -1195,10 +1074,8 @@ static int
 history_snapshot(struct snag_ui *ui, bool refresh)
 {
     struct ui_message message = {.command = {
-        .kind = SNAG_UI_HISTORY_SNAPSHOT, .data.history.refresh = refresh
-    }};
-    if (snag_history_snapshot_copy(&message.command.data.history.entries,
-                                 &ui->history.snapshot) < 0)
+        .kind = SNAG_UI_HISTORY_SNAPSHOT, .data.history.refresh = refresh }};
+    if (snag_history_snapshot_copy(&message.command.data.history.entries, &ui->history.snapshot) < 0)
         return -1;
     return send_message(ui, &message, NULL);
 }

@@ -47,21 +47,17 @@ snag_auth_kind_name(enum snag_auth_kind kind)
 static bool
 token_copy(char *out, size_t size, const char *value, bool empty)
 {
-    if (!value || (!empty && !*value) || strlen(value) >= size)
-        return false;
+    if (!value || (!empty && !*value) || strlen(value) >= size) return false;
     for (const unsigned char *p = (const unsigned char *)value; *p; ++p)
-        if (*p < 0x21u || *p > 0x7eu)
-            return false;
+        if (*p < 0x21u || *p > 0x7eu) return false;
     return snag_strcpy(out, size, value);
 }
 
 int
-snag_auth_key(struct snag_auth_tokens *tokens, const char *key,
-              char *error, size_t error_size)
+snag_auth_key(struct snag_auth_tokens *tokens, const char *key, char *error, size_t error_size)
 {
     snag_auth_clear(tokens);
-    if (!token_copy(tokens->credential.value,
-                    sizeof(tokens->credential.value), key, false)) {
+    if (!token_copy(tokens->credential.value, sizeof(tokens->credential.value), key, false)) {
         return snag_fail(error, error_size, EINVAL, "API key must contain 1..16384 non-whitespace ASCII bytes");
     }
     tokens->credential.len = strlen(key);
@@ -74,10 +70,8 @@ private_fd(int fd, bool directory)
     snag_file_info st;
     struct snag_file_privacy privacy;
     if (snag_fstat(fd, &st) < 0 || snag_fd_privacy(fd, &privacy) < 0 ||
-        !privacy.effective_owner || !privacy.private_access ||
-        (directory ? !S_ISDIR(st.st_mode) :
-                     (!S_ISREG(st.st_mode) || st.st_nlink != 1u)))
-        return snag_errno(EACCES);
+        !privacy.effective_owner || !privacy.private_access || (directory ? !S_ISDIR(st.st_mode) :
+                     (!S_ISREG(st.st_mode) || st.st_nlink != 1u))) return snag_errno(EACCES);
     return 0;
 }
 
@@ -85,22 +79,18 @@ static bool
 provider_valid(const struct snag_provider_config *provider)
 {
     if (!provider || !snag_config_name_valid(provider->name) ||
-        (provider->auth != SNAG_AUTH_API_KEY && provider->auth != SNAG_AUTH_CHATGPT))
-        return false;
-    return provider->auth != SNAG_AUTH_CHATGPT ||
-           strcmp(provider->base_url, SNAG_CHATGPT_BASE) == 0;
+        (provider->auth != SNAG_AUTH_API_KEY && provider->auth != SNAG_AUTH_CHATGPT)) return false;
+    return provider->auth != SNAG_AUTH_CHATGPT || strcmp(provider->base_url, SNAG_CHATGPT_BASE) == 0;
 }
 
 static int
 auth_dir(int root_fd, bool create)
 {
     int fd;
-    if (private_fd(root_fd, true) < 0)
-        return -1;
+    if (private_fd(root_fd, true) < 0) return -1;
     if (create) {
         if (snag_mkdir_private_at(root_fd, "auth") == 0) {
-            if (snag_sync_dir(root_fd) < 0)
-                return -1;
+            if (snag_sync_dir(root_fd) < 0) return -1;
         } else if (errno != EEXIST) {
             return -1;
         }
@@ -122,13 +112,10 @@ lock_provider(int dir, const char *name, snag_auth_pump_fn pump, void *opaque)
 
     (void)snprintf(path, sizeof(path), "%s.lock", name);
     fd = snag_create_private_at(dir, path, false);
-    if (fd < 0)
-        return -1;
-    if (private_fd(fd, false) < 0)
-        goto fail;
+    if (fd < 0) return -1;
+    if (private_fd(fd, false) < 0) goto fail;
     while (snag_lock_file(fd, false) < 0) {
-        if (errno != EACCES && errno != EAGAIN && errno != EINTR)
-            goto fail;
+        if (errno != EACCES && errno != EAGAIN && errno != EINTR) goto fail;
         if (snag_monotonic_ms() >= deadline) {
             errno = ETIMEDOUT;
             goto fail;
@@ -139,14 +126,12 @@ lock_provider(int dir, const char *name, snag_auth_pump_fn pump, void *opaque)
         }
     }
     return fd;
-fail:
-    (void)close(fd);
+fail: (void)close(fd);
     return -1;
 }
 
 static int
-read_tokens(int dir, const struct snag_provider_config *provider,
-             struct snag_auth_tokens *tokens)
+read_tokens(int dir, const struct snag_provider_config *provider, struct snag_auth_tokens *tokens)
 {
     char path[SNAG_CONFIG_PROVIDER_NAME_MAX + 8u], error[128];
     json_t *value = NULL;
@@ -157,42 +142,31 @@ read_tokens(int dir, const struct snag_provider_config *provider,
     snag_auth_clear(tokens);
     (void)snprintf(path, sizeof(path), "%s.json", provider->name);
     fd = snag_open_read_security_at(dir, path, false);
-    if (fd < 0)
-        return errno == ENOENT ? 1 : -1;
+    if (fd < 0) return errno == ENOENT ? 1 : -1;
     struct snag_buf text = {.max = AUTH_FILE_MAX};
     if (private_fd(fd, false) < 0 || snag_fstat(fd, &st) < 0 ||
-        st.st_size < 1 || (uint64_t)st.st_size > AUTH_FILE_MAX)
-        goto out;
-    if (snag_buf_read(&text, fd) < 0)
-        goto out;
-    value = snag_json_load_strict(text.data, text.len, AUTH_FILE_MAX,
-                                error, sizeof(error));
+        st.st_size < 1 || (uint64_t)st.st_size > AUTH_FILE_MAX) goto out;
+    if (snag_buf_read(&text, fd) < 0) goto out;
+    value = snag_json_load_strict(text.data, text.len, AUTH_FILE_MAX, error, sizeof(error));
     kind = snag_json_string(value, "kind");
     base = snag_json_string(value, "base_url");
-    if (!snag_json_exact_keys(value,
-        "kind base_url access_token refresh_token account_id expires_at_ms") ||
+    if (!snag_json_exact_keys(value, "kind base_url access_token refresh_token account_id expires_at_ms") ||
         !kind || !base || strcmp(kind, snag_auth_kind_name(provider->auth)) ||
         strcmp(base, provider->base_url) ||
         !token_copy(tokens->credential.value, sizeof(tokens->credential.value),
                      snag_json_string(value, "access_token"), false) ||
         !token_copy(tokens->refresh_token, sizeof(tokens->refresh_token),
-                     snag_json_string(value, "refresh_token"),
-                     provider->auth != SNAG_AUTH_CHATGPT) ||
-        !token_copy(tokens->credential.account_id,
-                     sizeof(tokens->credential.account_id),
-                     snag_json_string(value, "account_id"),
-                     provider->auth != SNAG_AUTH_CHATGPT) ||
+                     snag_json_string(value, "refresh_token"), provider->auth != SNAG_AUTH_CHATGPT) ||
+        !token_copy(tokens->credential.account_id, sizeof(tokens->credential.account_id),
+                     snag_json_string(value, "account_id"), provider->auth != SNAG_AUTH_CHATGPT) ||
         snag_json_integer_u64(value, "expires_at_ms", &tokens->expires_at_ms) < 0 ||
         (provider->auth == SNAG_AUTH_CHATGPT && !tokens->expires_at_ms) ||
         (provider->auth == SNAG_AUTH_API_KEY && (tokens->expires_at_ms ||
-            tokens->refresh_token[0] || tokens->credential.account_id[0])))
-        goto out;
+            tokens->refresh_token[0] || tokens->credential.account_id[0]))) goto out;
     tokens->credential.len = strlen(tokens->credential.value);
     rc = 0;
-out:
-    snag_auth_json_free(value);
-    if (text.data)
-        memset(text.data, 0, text.len);
+out: snag_auth_json_free(value);
+    if (text.data) memset(text.data, 0, text.len);
     snag_buf_free(&text);
     (void)close(fd);
     if (rc < 0) {
@@ -203,8 +177,7 @@ out:
 }
 
 static int
-write_tokens(int dir, const struct snag_provider_config *provider,
-              const struct snag_auth_tokens *tokens)
+write_tokens(int dir, const struct snag_provider_config *provider, const struct snag_auth_tokens *tokens)
 {
     char path[SNAG_CONFIG_PROVIDER_NAME_MAX + 8u];
     char temp[SNAG_ID_HEX_LEN + 8u], id[SNAG_ID_HEX_LEN + 1u];
@@ -213,33 +186,26 @@ write_tokens(int dir, const struct snag_provider_config *provider,
 
     temp[0] = '\0';
     struct snag_buf text = {.max = AUTH_FILE_MAX};
-    if (!value ||
-        snag_json_set_new(value, "kind", json_string(snag_auth_kind_name(provider->auth))) < 0 ||
+    if (!value || snag_json_set_new(value, "kind", json_string(snag_auth_kind_name(provider->auth))) < 0 ||
         snag_json_set_new(value, "base_url", json_string(provider->base_url)) < 0 ||
         snag_json_set_new(value, "access_token", json_string(tokens->credential.value)) < 0 ||
         snag_json_set_new(value, "refresh_token", json_string(tokens->refresh_token)) < 0 ||
         snag_json_set_new(value, "account_id", json_string(tokens->credential.account_id)) < 0 ||
         snag_json_set_new(value, "expires_at_ms", json_integer((json_int_t)tokens->expires_at_ms)) < 0 ||
-        snag_json_canonical(value, &text) < 0 || snag_random_id(id) < 0)
-        goto out;
+        snag_json_canonical(value, &text) < 0 || snag_random_id(id) < 0) goto out;
     (void)snprintf(path, sizeof(path), "%s.json", provider->name);
     (void)snprintf(temp, sizeof(temp), "%s.tmp", id);
     fd = snag_create_private_at(dir, temp, true);
     if (fd < 0 || snag_write_full(fd, text.data, text.len) < 0 || snag_fsync(fd) < 0 ||
-        snag_rename_at(dir, temp, dir, path) < 0)
-        goto out;
+        snag_rename_at(dir, temp, dir, path) < 0) goto out;
     temp[0] = '\0';
-    if (snag_fsync(dir) < 0)
-        goto out;
+    if (snag_fsync(dir) < 0) goto out;
     rc = 0;
 out:
-    if (fd >= 0)
-        (void)close(fd);
-    if (temp[0])
-        (void)snag_unlink_at(dir, temp, false);
+    if (fd >= 0) (void)close(fd);
+    if (temp[0]) (void)snag_unlink_at(dir, temp, false);
     snag_auth_json_free(value);
-    if (text.data)
-        memset(text.data, 0, text.len);
+    if (text.data) memset(text.data, 0, text.len);
     snag_buf_free(&text);
     return rc;
 }
@@ -259,55 +225,43 @@ snag_auth_load(int root_fd, const struct snag_provider_config *provider,
         rc = read_tokens(dir, provider, tokens);
         (void)close(dir);
     }
-    if (rc != 0)
-        snag_errorf(error, error_size, rc == 1 ?
+    if (rc != 0) snag_errorf(error, error_size, rc == 1 ?
             "provider %s is not logged in; use snajpagent login %s" :
             "provider %s credentials are unsafe, invalid, or bound to another endpoint; use snajpagent login %s",
             provider->name, provider->name);
-    if (rc == 0)
-        tokens->credential.root_fd = root_fd;
+    if (rc == 0) tokens->credential.root_fd = root_fd;
     return rc;
 }
 
 int
 snag_auth_save(int root_fd, const struct snag_provider_config *provider,
-              const struct snag_auth_tokens *tokens,
-              struct snag_auth_tokens *previous,
+              const struct snag_auth_tokens *tokens, struct snag_auth_tokens *previous,
               snag_auth_pump_fn pump, void *opaque, char *error, size_t error_size)
 {
     struct snag_auth_tokens local_previous;
     int dir = -1, lock = -1, rc = -1;
-    if (!provider_valid(provider) || !tokens->credential.len)
-        goto out;
+    if (!provider_valid(provider) || !tokens->credential.len) goto out;
     dir = auth_dir(root_fd, true);
-    if (dir < 0 || (lock = lock_provider(dir, provider->name, pump, opaque)) < 0)
-        goto out;
-    if (read_tokens(dir, provider, previous ? previous : &local_previous) < 0)
-        goto out;
+    if (dir < 0 || (lock = lock_provider(dir, provider->name, pump, opaque)) < 0) goto out;
+    if (read_tokens(dir, provider, previous ? previous : &local_previous) < 0) goto out;
     rc = write_tokens(dir, provider, tokens);
-out:
-    snag_auth_clear(&local_previous);
-    if (lock >= 0)
-        (void)close(lock);
-    if (dir >= 0)
-        (void)close(dir);
-    if (rc < 0)
-        snag_errorf(error, error_size, "cannot save provider credentials safely");
+out: snag_auth_clear(&local_previous);
+    if (lock >= 0) (void)close(lock);
+    if (dir >= 0) (void)close(dir);
+    if (rc < 0) snag_errorf(error, error_size, "cannot save provider credentials safely");
     return rc;
 }
 
 int
 snag_auth_restore(int root_fd, const struct snag_provider_config *provider,
-                 const struct snag_auth_tokens *expected,
-                 const struct snag_auth_tokens *previous,
+                 const struct snag_auth_tokens *expected, const struct snag_auth_tokens *previous,
                  char *error, size_t error_size)
 {
     struct snag_auth_tokens current;
     char path[SNAG_CONFIG_PROVIDER_NAME_MAX + 8u];
     int dir = auth_dir(root_fd, false), lock = -1, rc = -1;
     if (dir < 0 || (lock = lock_provider(dir, provider->name, NULL, NULL)) < 0 ||
-        read_tokens(dir, provider, &current) != 0)
-        goto out;
+        read_tokens(dir, provider, &current) != 0) goto out;
     if (strcmp(current.credential.value, expected->credential.value) ||
         strcmp(current.refresh_token, expected->refresh_token) ||
         current.expires_at_ms != expected->expires_at_ms) {
@@ -318,15 +272,11 @@ snag_auth_restore(int root_fd, const struct snag_provider_config *provider,
         rc = write_tokens(dir, provider, previous);
     } else {
         (void)snprintf(path, sizeof(path), "%s.json", provider->name);
-        if (snag_unlink_at(dir, path, false) == 0)
-            rc = snag_fsync(dir);
+        if (snag_unlink_at(dir, path, false) == 0) rc = snag_fsync(dir);
     }
-out:
-    snag_auth_clear(&current);
-    if (lock >= 0)
-        (void)close(lock);
-    if (dir >= 0)
-        (void)close(dir);
+out: snag_auth_clear(&current);
+    if (lock >= 0) (void)close(lock);
+    if (dir >= 0) (void)close(dir);
     if (rc < 0 && !error[0])
         snag_errorf(error, error_size, "credential rollback failed; login state is retained for recovery");
     return rc;
@@ -339,29 +289,21 @@ snag_auth_logout(int root_fd, const struct snag_provider_config *provider,
     char path[SNAG_CONFIG_PROVIDER_NAME_MAX + 8u];
     struct snag_auth_tokens tokens;
     int dir = -1, lock = -1, rc = -1;
-    if (!provider_valid(provider))
-        goto out;
+    if (!provider_valid(provider)) goto out;
     dir = auth_dir(root_fd, false);
     if (dir < 0) {
-        if (errno == ENOENT)
-            rc = 0;
+        if (errno == ENOENT) rc = 0;
         goto out;
     }
     lock = lock_provider(dir, provider->name, pump, opaque);
-    if (lock < 0 || read_tokens(dir, provider, &tokens) < 0)
-        goto out;
+    if (lock < 0 || read_tokens(dir, provider, &tokens) < 0) goto out;
     (void)snprintf(path, sizeof(path), "%s.json", provider->name);
-    if (snag_unlink_at(dir, path, false) < 0 && errno != ENOENT)
-        goto out;
+    if (snag_unlink_at(dir, path, false) < 0 && errno != ENOENT) goto out;
     rc = snag_fsync(dir);
-out:
-    snag_auth_clear(&tokens);
-    if (lock >= 0)
-        (void)close(lock);
-    if (dir >= 0)
-        (void)close(dir);
-    if (rc < 0)
-        snag_errorf(error, error_size, "cannot remove provider credentials safely");
+out: snag_auth_clear(&tokens);
+    if (lock >= 0) (void)close(lock);
+    if (dir >= 0) (void)close(dir);
+    if (rc < 0) snag_errorf(error, error_size, "cannot remove provider credentials safely");
     return rc;
 }
 
@@ -375,8 +317,7 @@ snag_auth_read(int root_fd, const struct snag_provider_config *provider,
     snag_credential_clear(out);
     if (provider->api_key.kind != SNAG_SECRET_NONE) {
         rc = snag_credential_resolve(out, &provider->api_key, error, error_size);
-        if (rc == 0)
-            out->root_fd = root_fd;
+        if (rc == 0) out->root_fd = root_fd;
         return rc;
     }
     rc = snag_auth_load(root_fd, provider, &tokens, error, error_size);
@@ -384,30 +325,23 @@ snag_auth_read(int root_fd, const struct snag_provider_config *provider,
         rc = -1;
         goto done;
     }
-    if (provider->auth == SNAG_AUTH_CHATGPT &&
-        (force || tokens.expires_at_ms <= snag_time_ms() + 60000u)) {
+    if (provider->auth == SNAG_AUTH_CHATGPT && (force || tokens.expires_at_ms <= snag_time_ms() + 60000u)) {
         rc = -1;
         dir = auth_dir(root_fd, false);
         if (dir < 0 || (lock = lock_provider(dir, provider->name, pump, opaque)) < 0 ||
-            read_tokens(dir, provider, &tokens) != 0)
-            goto done;
+            read_tokens(dir, provider, &tokens) != 0) goto done;
         if ((force && stale && strcmp(stale, tokens.credential.value) == 0) ||
             tokens.expires_at_ms <= snag_time_ms() + 60000u) {
             if (snag_auth_refresh(&tokens, pump, opaque, error, error_size) < 0 ||
-                write_tokens(dir, provider, &tokens) < 0)
-                goto done;
+                write_tokens(dir, provider, &tokens) < 0) goto done;
         }
         rc = 0;
     }
     *out = tokens.credential;
     out->root_fd = root_fd;
-done:
-    snag_auth_clear(&tokens);
-    if (lock >= 0)
-        (void)close(lock);
-    if (dir >= 0)
-        (void)close(dir);
-    if (rc < 0 && !error[0])
-        snag_errorf(error, error_size, "cannot acquire or refresh provider credentials");
+done: snag_auth_clear(&tokens);
+    if (lock >= 0) (void)close(lock);
+    if (dir >= 0) (void)close(dir);
+    if (rc < 0 && !error[0]) snag_errorf(error, error_size, "cannot acquire or refresh provider credentials");
     return rc;
 }

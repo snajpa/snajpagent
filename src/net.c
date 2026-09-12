@@ -22,8 +22,7 @@ address_api(HMODULE module)
 {
     FARPROC lookup = module ? GetProcAddress(module, "getaddrinfo") : NULL;
     FARPROC release = module ? GetProcAddress(module, "freeaddrinfo") : NULL;
-    if (!lookup || !release)
-        return false;
+    if (!lookup || !release) return false;
     memcpy(&address_lookup, &lookup, sizeof(address_lookup));
     memcpy(&address_free, &release, sizeof(address_free));
     return true;
@@ -32,25 +31,20 @@ address_api(HMODULE module)
 static void
 address_initialize(void)
 {
-    if (address_api(GetModuleHandleW(L"ws2_32.dll")))
-        return;
+    if (address_api(GetModuleHandleW(L"ws2_32.dll"))) return;
     wchar_t path[32768];
     DWORD length = GetSystemDirectoryW(path, 32756u);
-    if (!length || length >= 32756u)
-        return;
+    if (!length || length >= 32756u) return;
     memcpy(path + length, L"\\wship6.dll", 12u * sizeof(wchar_t));
     HMODULE module = LoadLibraryW(path);
     /* A selected optional system implementation stays loaded with its results. */
-    if (module && !address_api(module))
-        (void)FreeLibrary(module);
+    if (module && !address_api(module)) (void)FreeLibrary(module);
 }
 
 static int
-lookup_addresses(const char *host, const char *service,
-                 const struct addrinfo *hints, struct addrinfo **out)
+lookup_addresses(const char *host, const char *service, const struct addrinfo *hints, struct addrinfo **out)
 {
-    if (pthread_once(&address_once, address_initialize) != 0)
-        return EAI_FAIL;
+    if (pthread_once(&address_once, address_initialize) != 0) return EAI_FAIL;
     return address_lookup(host, service, hints, out);
 }
 #else
@@ -61,8 +55,7 @@ void
 snag_socket_addresses_free(struct addrinfo *addresses)
 {
 #if defined(_WIN32) && _WIN32_WINNT < 0x0501
-    if (pthread_once(&address_once, address_initialize) != 0)
-        abort();
+    if (pthread_once(&address_once, address_initialize) != 0) abort();
     address_free(addresses);
 #else
     freeaddrinfo(addresses);
@@ -135,8 +128,7 @@ snag_socket_noinherit(snag_socket fd)
         WSASetLastError(WSAENOTSOCK);
         return -1;
     }
-    if ((flags & HANDLE_FLAG_INHERIT) &&
-        !SetHandleInformation((HANDLE)fd, HANDLE_FLAG_INHERIT, 0)) {
+    if ((flags & HANDLE_FLAG_INHERIT) && !SetHandleInformation((HANDLE)fd, HANDLE_FLAG_INHERIT, 0)) {
         WSASetLastError(WSAEACCES);
         return -1;
     }
@@ -162,8 +154,7 @@ static int
 nonblocking(snag_socket fd)
 {
     unsigned long yes = 1;
-    if (snag_socket_noinherit(fd) < 0)
-        return snag_socket_error(WSAGetLastError());
+    if (snag_socket_noinherit(fd) < 0) return snag_socket_error(WSAGetLastError());
     return ioctlsocket(fd, FIONBIO, &yes) < 0 ? snag_socket_error(WSAGetLastError()) : 0;
 }
 
@@ -215,8 +206,7 @@ nonblocking(snag_socket fd)
 {
     int flags = fcntl(fd, F_GETFL);
 
-    return flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0 ||
-           snag_fd_cloexec(fd) < 0 ? -1 : 0;
+    return flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0 || snag_fd_cloexec(fd) < 0 ? -1 : 0;
 }
 
 int
@@ -291,8 +281,7 @@ snag_socket_nodelay(snag_socket fd)
 int
 snag_socket_bind(snag_socket fd, const struct sockaddr *address, size_t size)
 {
-    if (size > INT_MAX)
-        return snag_errno(EINVAL);
+    if (size > INT_MAX) return snag_errno(EINVAL);
     return bind(fd, address, (int)size) < 0 ? failed() : 0;
 }
 
@@ -305,13 +294,10 @@ snag_socket_listen(snag_socket fd, int backlog)
 int
 snag_socket_connect(snag_socket fd, const struct sockaddr *address, size_t size)
 {
-    if (size > INT_MAX)
-        return snag_errno(EINVAL);
-    if (connect(fd, address, (int)size) == 0)
-        return 0;
+    if (size > INT_MAX) return snag_errno(EINVAL);
+    if (connect(fd, address, (int)size) == 0) return 0;
 #ifdef _WIN32
-    if (WSAGetLastError() == WSAEWOULDBLOCK)
-        return snag_errno(EINPROGRESS);
+    if (WSAGetLastError() == WSAEWOULDBLOCK) return snag_errno(EINPROGRESS);
 #endif
     return failed();
 }
@@ -334,8 +320,7 @@ snag_socket_connected(snag_socket fd)
 ssize_t
 snag_socket_send(snag_socket fd, const void *data, size_t size)
 {
-    if (size > INT_MAX)
-        return snag_errno(EINVAL);
+    if (size > INT_MAX) return snag_errno(EINVAL);
     ssize_t n = send(fd, data, (int)size, 0);
     return n < 0 ? failed() : n;
 }
@@ -343,8 +328,7 @@ snag_socket_send(snag_socket fd, const void *data, size_t size)
 ssize_t
 snag_socket_recv(snag_socket fd, void *data, size_t size)
 {
-    if (size > INT_MAX)
-        return snag_errno(EINVAL);
+    if (size > INT_MAX) return snag_errno(EINVAL);
     ssize_t n = recv(fd, data, (int)size, 0);
     return n < 0 ? failed() : n;
 }
@@ -357,39 +341,29 @@ snag_socket_poll(snag_socket_event *events, size_t count, int timeout_ms)
     struct timeval timeout;
     size_t live = 0;
 
-    if (count > FD_SETSIZE || timeout_ms < -1)
-        return snag_errno(EINVAL);
+    if (count > FD_SETSIZE || timeout_ms < -1) return snag_errno(EINVAL);
     FD_ZERO(&reads);
     FD_ZERO(&writes);
     FD_ZERO(&errors);
     for (size_t i = 0; i < count; ++i) {
         events[i].revents = 0;
-        if (events[i].fd == SNAG_SOCKET_INVALID)
-            continue;
-        if (events[i].events & SNAG_NET_READ)
-            FD_SET(events[i].fd, &reads);
-        if (events[i].events & SNAG_NET_WRITE)
-            FD_SET(events[i].fd, &writes);
+        if (events[i].fd == SNAG_SOCKET_INVALID) continue;
+        if (events[i].events & SNAG_NET_READ) FD_SET(events[i].fd, &reads);
+        if (events[i].events & SNAG_NET_WRITE) FD_SET(events[i].fd, &writes);
         FD_SET(events[i].fd, &errors);
         ++live;
     }
-    if (!live)
-        return snag_wakeup_wait(SNAG_WAKE_INVALID, timeout_ms);
+    if (!live) return snag_wakeup_wait(SNAG_WAKE_INVALID, timeout_ms);
     timeout.tv_sec = timeout_ms / 1000;
     timeout.tv_usec = timeout_ms % 1000 * 1000;
     int rc = select(0, &reads, &writes, &errors, timeout_ms < 0 ? NULL : &timeout);
-    if (rc <= 0)
-        return rc < 0 ? failed() : 0;
+    if (rc <= 0) return rc < 0 ? failed() : 0;
     rc = 0;
     for (size_t i = 0; i < count; ++i) {
-        if (events[i].fd == SNAG_SOCKET_INVALID)
-            continue;
-        if (FD_ISSET(events[i].fd, &reads))
-            events[i].revents |= SNAG_NET_READ;
-        if (FD_ISSET(events[i].fd, &writes))
-            events[i].revents |= SNAG_NET_WRITE;
-        if (FD_ISSET(events[i].fd, &errors))
-            events[i].revents |= SNAG_NET_ERROR;
+        if (events[i].fd == SNAG_SOCKET_INVALID) continue;
+        if (FD_ISSET(events[i].fd, &reads)) events[i].revents |= SNAG_NET_READ;
+        if (FD_ISSET(events[i].fd, &writes)) events[i].revents |= SNAG_NET_WRITE;
+        if (FD_ISSET(events[i].fd, &errors)) events[i].revents |= SNAG_NET_ERROR;
         rc += events[i].revents != 0;
     }
     return rc;

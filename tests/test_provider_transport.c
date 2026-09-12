@@ -49,33 +49,13 @@ struct emitted_text {
 };
 
 enum model_fixture {
-    MODEL_OPENAI,
-    MODEL_CODEX_MALFORMED,
-    MODEL_CODEX_LOOKALIKE,
-    MODEL_CODEX_FAILURE,
-    MODEL_LIMIT_CONFLICT,
-    MODEL_CREATE_HTTP_FAILURE,
-    MODEL_CREATE_SSE_FAILURE,
-    MODEL_OPENROUTER_SEARCH,
-    MODEL_CREATE_RETRY,
-    MODEL_COUNT_404,
-    MODEL_COUNT_405,
-    MODEL_COUNT_501,
-    MODEL_COUNT_401,
-    MODEL_COUNT_403,
-    MODEL_COUNT_OK,
-    MODEL_COUNT_MODEL_404,
-    MODEL_COUNT_OVERFLOW,
-    MODEL_COMPACT_404,
-    MODEL_COMPACT_403,
-    MODEL_AUTH_DEVICE,
-    MODEL_AUTH_CANCEL,
-    MODEL_AUTH_EXPIRED,
-    MODEL_AUTH_REFRESH,
-    MODEL_AUTH_REFRESH_FAILURE,
-    MODEL_AUTH_401,
-    MODEL_AUTH_401_TWICE
-};
+    MODEL_OPENAI, MODEL_CODEX_MALFORMED, MODEL_CODEX_LOOKALIKE, MODEL_CODEX_FAILURE,
+    MODEL_LIMIT_CONFLICT, MODEL_CREATE_HTTP_FAILURE, MODEL_CREATE_SSE_FAILURE, MODEL_OPENROUTER_SEARCH,
+    MODEL_CREATE_RETRY, MODEL_COUNT_404, MODEL_COUNT_405, MODEL_COUNT_501,
+    MODEL_COUNT_401, MODEL_COUNT_403, MODEL_COUNT_OK, MODEL_COUNT_MODEL_404,
+    MODEL_COUNT_OVERFLOW, MODEL_COMPACT_404, MODEL_COMPACT_403, MODEL_AUTH_DEVICE,
+    MODEL_AUTH_CANCEL, MODEL_AUTH_EXPIRED, MODEL_AUTH_REFRESH, MODEL_AUTH_REFRESH_FAILURE,
+    MODEL_AUTH_401, MODEL_AUTH_401_TWICE };
 
 static bool authentication_fixture;
 
@@ -96,12 +76,10 @@ write_all_or_die(int fd, const char *data, size_t len)
     while (len) {
         ssize_t n = write(fd, data, len);
         if (n < 0) {
-            if (errno == EINTR)
-                continue;
+            if (errno == EINTR) continue;
             _exit(90);
         }
-        if (n == 0)
-            _exit(91);
+        if (n == 0) _exit(91);
         data += (size_t)n;
         len -= (size_t)n;
     }
@@ -127,16 +105,12 @@ content_length(const char *headers)
     const char *p = strstr(headers, "Content-Length:");
     long value = 0;
 
-    if (!p)
-        p = strstr(headers, "content-length:");
-    if (!p)
-        return -1;
+    if (!p) p = strstr(headers, "content-length:");
+    if (!p) return -1;
     p = strchr(p, ':');
-    if (!p)
-        return -1;
+    if (!p) return -1;
     ++p;
-    while (*p == ' ' || *p == '\t')
-        ++p;
+    while (*p == ' ' || *p == '\t') ++p;
     while (*p >= '0' && *p <= '9') {
         value = value * 10 + (long)(*p - '0');
         ++p;
@@ -148,12 +122,10 @@ static size_t
 find_header_end(const char *buffer, size_t len)
 {
     for (size_t i = 0; i + 3u < len; ++i)
-        if (buffer[i] == '\r' && buffer[i + 1u] == '\n' &&
-            buffer[i + 2u] == '\r' && buffer[i + 3u] == '\n')
+        if (buffer[i] == '\r' && buffer[i + 1u] == '\n' && buffer[i + 2u] == '\r' && buffer[i + 3u] == '\n')
             return i + 4u;
     for (size_t i = 0; i + 1u < len; ++i)
-        if (buffer[i] == '\n' && buffer[i + 1u] == '\n')
-            return i + 2u;
+        if (buffer[i] == '\n' && buffer[i + 1u] == '\n') return i + 2u;
     return 0u;
 }
 
@@ -169,59 +141,44 @@ read_request(int fd, struct http_request *request)
     memset(request, 0, sizeof(*request));
     while (!header_end) {
         ssize_t n;
-        if (used == sizeof(buffer))
-            server_fail("request headers exceeded test bound");
+        if (used == sizeof(buffer)) server_fail("request headers exceeded test bound");
         n = read(fd, buffer + used, sizeof(buffer) - used);
         if (n < 0) {
-            if (errno == EINTR)
-                continue;
+            if (errno == EINTR) continue;
             server_fail("request read failed");
         }
-        if (n == 0)
-            server_fail("request closed before headers");
+        if (n == 0) server_fail("request closed before headers");
         used += (size_t)n;
         header_end = find_header_end(buffer, used);
     }
-    if (header_end >= sizeof(request->headers))
-        server_fail("retained headers exceeded test bound");
+    if (header_end >= sizeof(request->headers)) server_fail("retained headers exceeded test bound");
     memcpy(request->headers, buffer, header_end);
     request->headers[header_end] = '\0';
-    matched = sscanf(request->headers, "%7s %127s HTTP/1",
-                     request->method, request->path);
-    if (matched != 2)
-        server_fail("unexpected request line");
+    matched = sscanf(request->headers, "%7s %127s HTTP/1", request->method, request->path);
+    if (matched != 2) server_fail("unexpected request line");
     if (!authentication_fixture &&
         !header_contains(request->headers, "Authorization: Bearer transport-secret"))
         server_fail("authorization header missing or unredacted differently");
     if (!authentication_fixture && !header_contains(request->headers,
                          "HTTP-Referer: https://github.com/snajpa/snajpagent"))
         server_fail("OpenRouter referer header missing");
-    if (!authentication_fixture && !header_contains(request->headers,
-                         "X-OpenRouter-Title: snajpagent"))
+    if (!authentication_fixture && !header_contains(request->headers, "X-OpenRouter-Title: snajpagent"))
         server_fail("OpenRouter title header missing");
-    if (!header_contains(request->headers,
-                         "User-Agent: " SNAJPAGENT_NAME "/"
-                         SNAJPAGENT_VERSION))
-        server_fail("product user agent missing or stale");
+    if (!header_contains(request->headers, "User-Agent: " SNAJPAGENT_NAME "/"
+                         SNAJPAGENT_VERSION)) server_fail("product user agent missing or stale");
     cl = content_length(request->headers);
-    if (strcmp(request->method, "GET") == 0 && cl < 0)
-        cl = 0;
-    if (cl < 0 || cl > (long)(sizeof(request->body) - 1u))
-        server_fail("invalid content length");
+    if (strcmp(request->method, "GET") == 0 && cl < 0) cl = 0;
+    if (cl < 0 || cl > (long)(sizeof(request->body) - 1u)) server_fail("invalid content length");
     request->body_len = (size_t)cl;
-    if (used - header_end > request->body_len)
-        server_fail("request body overflowed expected length");
+    if (used - header_end > request->body_len) server_fail("request body overflowed expected length");
     memcpy(request->body, buffer + header_end, used - header_end);
     while (used - header_end < request->body_len) {
-        ssize_t n = read(fd, request->body + (used - header_end),
-                         request->body_len - (used - header_end));
+        ssize_t n = read(fd, request->body + (used - header_end), request->body_len - (used - header_end));
         if (n < 0) {
-            if (errno == EINTR)
-                continue;
+            if (errno == EINTR) continue;
             server_fail("body read failed");
         }
-        if (n == 0)
-            server_fail("request closed before body");
+        if (n == 0) server_fail("request closed before body");
         used += (size_t)n;
     }
     request->body[request->body_len] = '\0';
@@ -232,39 +189,29 @@ send_response(int fd, unsigned int status, const char *content_type, const char 
 {
     char header[256];
     size_t len = strlen(body);
-    int n = snprintf(header, sizeof(header),
-                     "HTTP/1.1 %u Test\r\n"
-                     "Content-Type: %s\r\n"
-                     "Content-Length: %llu\r\n"
-                     "Connection: close\r\n\r\n",
-                     status, content_type, (unsigned long long)len);
-    if (n <= 0 || (size_t)n >= sizeof(header))
-        server_fail("response header build failed");
+    int n = snprintf(header, sizeof(header), "HTTP/1.1 %u Test\r\n"
+                     "Content-Type: %s\r\n" "Content-Length: %llu\r\n"
+                     "Connection: close\r\n\r\n", status, content_type, (unsigned long long)len);
+    if (n <= 0 || (size_t)n >= sizeof(header)) server_fail("response header build failed");
     write_all_or_die(fd, header, (size_t)n);
     write_all_or_die(fd, body, len);
 }
 
 static void
-serve_one(int listen_fd, unsigned int status, const char *method, const char *path,
-          const char *marker,
+serve_one(int listen_fd, unsigned int status, const char *method, const char *path, const char *marker,
           const char *content_type, const char *body)
 {
     struct http_request request;
     int fd;
 
     fd = accept(listen_fd, NULL, NULL);
-    if (fd < 0)
-        server_fail("accept failed");
+    if (fd < 0) server_fail("accept failed");
     read_request(fd, &request);
-    if (strcmp(request.method, method) != 0)
-        server_fail("unexpected provider HTTP method");
-    if (strcmp(request.path, path) != 0)
-        server_fail("unexpected provider endpoint path");
-    if (marker && !strstr(request.body, marker))
-        server_fail("request body marker missing");
+    if (strcmp(request.method, method) != 0) server_fail("unexpected provider HTTP method");
+    if (strcmp(request.path, path) != 0) server_fail("unexpected provider endpoint path");
+    if (marker && !strstr(request.body, marker)) server_fail("request body marker missing");
     send_response(fd, status, content_type, body);
-    if (close(fd) < 0)
-        server_fail("close accepted socket failed");
+    if (close(fd) < 0) server_fail("close accepted socket failed");
 }
 
 static void
@@ -284,14 +231,12 @@ auth_server_child(int listen_fd, enum model_fixture fixture)
         const char *body = tokens;
         unsigned int status = 200u;
         int fd = accept(listen_fd, NULL, NULL);
-        if (fd < 0)
-            server_fail("auth accept failed");
+        if (fd < 0) server_fail("auth accept failed");
         read_request(fd, &request);
         if (fixture <= MODEL_AUTH_EXPIRED) {
             const char *path = i == 0u ? "/api/accounts/deviceauth/usercode" :
                 i == 3u ? "/oauth/token" : "/api/accounts/deviceauth/token";
-            if (strcmp(request.path, path))
-                server_fail("incorrect device flow path");
+            if (strcmp(request.path, path)) server_fail("incorrect device flow path");
             if (i == 0u) {
                 if (!strstr(request.body, "app_EMoamEEZ73f0CkXaXp7hrann"))
                     server_fail("missing device client identifier");
@@ -319,8 +264,7 @@ auth_server_child(int listen_fd, enum model_fixture fixture)
         } else {
             if (strcmp(request.path, "/oauth/token") ||
                 !strstr(request.body, "\"grant_type\":\"refresh_token\"") ||
-                !strstr(request.body, "old-refresh"))
-                server_fail("wrong refresh request");
+                !strstr(request.body, "old-refresh")) server_fail("wrong refresh request");
             if (fixture == MODEL_AUTH_REFRESH_FAILURE) {
                 status = 401u;
                 body = "{\"error\":\"private-refresh-server-detail\"}";
@@ -335,13 +279,11 @@ auth_server_child(int listen_fd, enum model_fixture fixture)
 static void
 server_child(int listen_fd, enum model_fixture models, bool transport)
 {
-    if (models >= MODEL_AUTH_DEVICE)
-        auth_server_child(listen_fd, models);
+    if (models >= MODEL_AUTH_DEVICE) auth_server_child(listen_fd, models);
     if (models == MODEL_COMPACT_404 || models == MODEL_COMPACT_403) {
         struct http_request request;
         int fd = accept(listen_fd, NULL, NULL);
-        if (fd < 0)
-            server_fail("compact accept failed");
+        if (fd < 0) server_fail("compact accept failed");
         read_request(fd, &request);
         if (strcmp(request.method, "POST") ||
             (strcmp(request.path, "/responses/compact") && strcmp(request.path, "/v1/responses/compact")))
@@ -350,8 +292,7 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         (void)close(fd);
         _exit(0);
     }
-    static const char create_sse[] =
-        "event: response.created\n"
+    static const char create_sse[] = "event: response.created\n"
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_transport\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
         "event: response.output_item.added\n"
         "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"rs_transport\",\"type\":\"reasoning\",\"content\":[],\"summary\":[]}}\n\n"
@@ -371,8 +312,7 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_transport\",\"status\":\"completed\",\"usage\":{\"input_tokens\":7,\"output_tokens\":2,\"total_tokens\":9},\"output\":[]}}\n\n";
 
     if (models == MODEL_OPENROUTER_SEARCH) {
-        serve_one(listen_fd, 200u, "POST", "/v1/responses", "openrouter:web_search",
-                  "text/event-stream",
+        serve_one(listen_fd, 200u, "POST", "/v1/responses", "openrouter:web_search", "text/event-stream",
                   "event: response.created\n"
                   "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_search\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
                   "event: response.output_item.added\n"
@@ -397,28 +337,22 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         alarm(15u);
         for (unsigned int i = 0; i < attempts; ++i) {
             int fd = accept(listen_fd, NULL, NULL);
-            if (fd < 0)
-                server_fail("retry accept failed");
+            if (fd < 0) server_fail("retry accept failed");
             read_request(fd, &request);
             if (strcmp(request.method, "POST") || strcmp(request.path, "/v1/responses"))
                 server_fail("unexpected retry request");
-            if (i == 0)
-                memcpy(first, request.body, request.body_len + 1u);
-            else if (strcmp(first, request.body))
-                server_fail("retry changed request bytes");
+            if (i == 0) memcpy(first, request.body, request.body_len + 1u);
+            else if (strcmp(first, request.body)) server_fail("retry changed request bytes");
             if (i == retry_case->failures) {
                 send_response(fd, 200u, "text/event-stream", create_sse);
             } else {
-                int n = snprintf(body, sizeof(body), "%s%s", retry_case->prefix,
-                                 retry_case->body);
-                if (n < 0 || (size_t)n >= sizeof(body))
-                    server_fail("retry fixture overflow");
+                int n = snprintf(body, sizeof(body), "%s%s", retry_case->prefix, retry_case->body);
+                if (n < 0 || (size_t)n >= sizeof(body)) server_fail("retry fixture overflow");
                 if (retry_case->truncated) {
                     char header[256];
                     int h = snprintf(header, sizeof(header),
                         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
-                        "Content-Length: %u\r\nConnection: close\r\n\r\n",
-                        (unsigned int)n + 100u);
+                        "Content-Length: %u\r\nConnection: close\r\n\r\n", (unsigned int)n + 100u);
                     assert(h > 0 && (size_t)h < sizeof(header));
                     write_all_or_die(fd, header, (size_t)h);
                     write_all_or_die(fd, body, (size_t)n);
@@ -428,28 +362,22 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
                     send_response(fd, retry_case->status, "application/json", body);
                 }
             }
-            if (close(fd) < 0)
-                server_fail("close retry socket failed");
+            if (close(fd) < 0) server_fail("close retry socket failed");
         }
         _exit(0);
     }
     if (models >= MODEL_COUNT_404) {
-        unsigned int status = models == MODEL_COUNT_404 ? 404u :
-                              models == MODEL_COUNT_405 ? 405u :
-                              models == MODEL_COUNT_401 ? 401u :
-                              models == MODEL_COUNT_403 ? 403u :
-                              models == MODEL_COUNT_OK ? 200u :
-                              models == MODEL_COUNT_MODEL_404 ? 404u :
+        unsigned int status = models == MODEL_COUNT_404 ? 404u : models == MODEL_COUNT_405 ? 405u :
+                              models == MODEL_COUNT_401 ? 401u : models == MODEL_COUNT_403 ? 403u :
+                              models == MODEL_COUNT_OK ? 200u : models == MODEL_COUNT_MODEL_404 ? 404u :
                               models == MODEL_COUNT_OVERFLOW ? 400u : 501u;
         const char *body = models == MODEL_COUNT_OK ?
-            "{\"object\":\"response.input_tokens\",\"input_tokens\":42}" :
-            models == MODEL_COUNT_MODEL_404 ?
+            "{\"object\":\"response.input_tokens\",\"input_tokens\":42}" : models == MODEL_COUNT_MODEL_404 ?
             "{\"error\":{\"code\":\"model_not_found\",\"message\":\"no such model\"}}" :
             models == MODEL_COUNT_OVERFLOW ?
             "{\"error\":{\"code\":400,\"type\":\"exceed_context_size_error\",\"n_ctx\":10,\"n_prompt_tokens\":12}}" :
             "{\"error\":{\"message\":\"not available\"}}";
-        serve_one(listen_fd, status, "POST", "/v1/responses/input_tokens", NULL,
-                  "application/json", body);
+        serve_one(listen_fd, status, "POST", "/v1/responses/input_tokens", NULL, "application/json", body);
         _exit(0);
     }
     static const struct {
@@ -459,14 +387,11 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
     } replies[] = {
         {MODEL_CREATE_HTTP_FAILURE, 400u, "POST", "/v1/responses", "application/json",
          "{\"error\":{\"code\":\"context_length_exceeded\","
-         "\"message\":\"too large\",\"max_context_tokens\":272000,"
-         "\"requested_input_tokens\":300000}}"},
+         "\"message\":\"too large\",\"max_context_tokens\":272000," "\"requested_input_tokens\":300000}}"},
         {MODEL_CREATE_SSE_FAILURE, 200u, "POST", "/v1/responses", "text/event-stream",
-         "event: response.failed\n"
-         "data: {\"type\":\"response.failed\",\"response\":{"
+         "event: response.failed\n" "data: {\"type\":\"response.failed\",\"response\":{"
          "\"error\":{\"code\":\"context_length_exceeded\","
-         "\"message\":\"stream too large transport-secret\","
-         "\"context_length\":872000}}}\n\n"},
+         "\"message\":\"stream too large transport-secret\"," "\"context_length\":872000}}}\n\n"},
         {MODEL_CODEX_FAILURE, 400u, "GET", "/backend-api/codex/models?client_version=0.146.0", "application/json",
          "{\"error\":{\"message\":\"catalog rejected\"}}"},
         {MODEL_CODEX_MALFORMED, 200u, "GET", "/backend-api/codex/models?client_version=0.146.0", "application/json",
@@ -474,8 +399,7 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         {MODEL_CODEX_LOOKALIKE, 200u, "GET", "/backend-api/codexish/v1/models", "application/json",
          "{\"data\":[{\"id\":\"lookalike-openai\"}]}"},
         {MODEL_LIMIT_CONFLICT, 200u, "GET", "/v1/models", "application/json",
-         "{\"data\":[{\"id\":\"conflict\",\"context_length\":100,"
-         "\"metadata\":{\"contextWindow\":101}}]}"},
+         "{\"data\":[{\"id\":\"conflict\",\"context_length\":100," "\"metadata\":{\"contextWindow\":101}}]}"},
         {MODEL_OPENAI, 200u, "GET", "/v1/models", "application/json",
          "{\"object\":\"list\",\"data\":[{\"id\":\"gpt-standard\","
          "\"contextLength\":100000,\"metadata\":{\"context_window\":100000,"
@@ -486,27 +410,21 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
     };
     size_t reply = sizeof(replies) / sizeof(replies[0]) - 1u;
     for (size_t i = 0; i < sizeof(replies) / sizeof(replies[0]); ++i)
-        if (replies[i].fixture == models)
-            reply = i;
+        if (replies[i].fixture == models) reply = i;
     serve_one(listen_fd, replies[reply].status, replies[reply].method,
               replies[reply].path, NULL, replies[reply].content_type, replies[reply].body);
     if (!transport || models == MODEL_CREATE_HTTP_FAILURE ||
-        models == MODEL_CREATE_SSE_FAILURE || models == MODEL_CODEX_FAILURE)
-        _exit(0);
-    serve_one(listen_fd, 200u, "POST", "/v1/responses/input_tokens", "transport-count",
-              "application/json",
+        models == MODEL_CREATE_SSE_FAILURE || models == MODEL_CODEX_FAILURE) _exit(0);
+    serve_one(listen_fd, 200u, "POST", "/v1/responses/input_tokens", "transport-count", "application/json",
               "{\"object\":\"response.input_tokens\",\"input_tokens\":7}");
-    serve_one(listen_fd, 200u, "POST", "/v1/responses", "transport-create",
-              "text/event-stream", create_sse);
-    serve_one(listen_fd, 200u, "POST", "/v1/responses/compact", "transport-compact",
-              "application/json",
+    serve_one(listen_fd, 200u, "POST", "/v1/responses", "transport-create", "text/event-stream", create_sse);
+    serve_one(listen_fd, 200u, "POST", "/v1/responses/compact", "transport-compact", "application/json",
               "{\"object\":\"response.compaction\",\"output\":[{\"type\":\"compaction\",\"encrypted_content\":\"transport-compact-output\"}]}");
     _exit(0);
 }
 
 static void
-start_server(struct local_server *server, enum model_fixture models,
-             bool transport, const char *suffix)
+start_server(struct local_server *server, enum model_fixture models, bool transport, const char *suffix)
 {
     struct sockaddr_in addr;
     socklen_t len = sizeof(addr);
@@ -515,8 +433,7 @@ start_server(struct local_server *server, enum model_fixture models,
     memset(server, 0, sizeof(*server));
     server->fd = socket(AF_INET, SOCK_STREAM, 0);
     assert(server->fd >= 0);
-    assert(setsockopt(server->fd, SOL_SOCKET, SO_REUSEADDR,
-                      &one, sizeof(one)) == 0);
+    assert(setsockopt(server->fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) == 0);
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -530,8 +447,7 @@ start_server(struct local_server *server, enum model_fixture models,
     assert(written > 0 && (size_t)written < sizeof(server->endpoint));
     server->pid = fork();
     assert(server->pid >= 0);
-    if (server->pid == 0)
-        server_child(server->fd, models, transport);
+    if (server->pid == 0) server_child(server->fd, models, transport);
     if (models == MODEL_CREATE_RETRY) {
         assert(close(server->fd) == 0);
         server->fd = -1;
@@ -543,8 +459,7 @@ stop_server(struct local_server *server)
 {
     int status;
 
-    if (server->fd >= 0)
-        assert(close(server->fd) == 0);
+    if (server->fd >= 0) assert(close(server->fd) == 0);
     assert(waitpid(server->pid, &status, 0) == server->pid);
     assert(WIFEXITED(status));
     assert(WEXITSTATUS(status) == 0);
@@ -559,8 +474,7 @@ request_with_marker(const char *marker)
 
 static int
 emit_capture(void *opaque, size_t item_index, enum snag_item_kind kind,
-             enum snag_item_phase phase, const char *provider_item_id,
-             const char *text, size_t len)
+             enum snag_item_phase phase, const char *provider_item_id, const char *text, size_t len)
 {
     struct emitted_text *emitted = opaque;
 
@@ -589,18 +503,15 @@ transport_settings(struct snag_provider_config *provider, struct snag_credential
     provider->request_timeout_ms = 3000u;
     assert(snag_strcpy(provider->openrouter_referer, sizeof(provider->openrouter_referer),
                        "https://github.com/snajpa/snajpagent"));
-    assert(snag_strcpy(provider->openrouter_title, sizeof(provider->openrouter_title),
-                       "snajpagent"));
+    assert(snag_strcpy(provider->openrouter_title, sizeof(provider->openrouter_title), "snajpagent"));
     credential_set(credential, "transport-secret");
 }
 
 static struct snag_provider_connection
-transport_connection(struct snag_config *config, struct snag_credential *credential,
-                     const char *base_url)
+transport_connection(struct snag_config *config, struct snag_credential *credential, const char *base_url)
 {
     snag_config_init(config);
-    assert(snag_strcpy(config->providers[0].base_url,
-                       sizeof(config->providers[0].base_url), base_url));
+    assert(snag_strcpy(config->providers[0].base_url, sizeof(config->providers[0].base_url), base_url));
     transport_settings(&config->providers[0], credential);
     return (struct snag_provider_connection){config, &config->providers[0], credential, NULL, NULL, NULL};
 }
@@ -621,51 +532,37 @@ test_local_provider_transport(void)
 
     start_server(&server, MODEL_OPENAI, true, "");
     struct snag_provider_connection connection = {
-        &config, &config.providers[1], &credential, NULL,
-        NULL, NULL};
+        &config, &config.providers[1], &credential, NULL, NULL, NULL};
     snag_config_init(&config);
     snag_config_provider_init(&config.providers[1], "second");
     config.provider_count = 2u;
-    assert(snprintf(config.providers[1].name,
-                    sizeof(config.providers[1].name), "transport") > 0);
-    assert(snprintf(config.providers[1].base_url,
-                    sizeof(config.providers[1].base_url),
+    assert(snprintf(config.providers[1].name, sizeof(config.providers[1].name), "transport") > 0);
+    assert(snprintf(config.providers[1].base_url, sizeof(config.providers[1].base_url),
                     "%s/v1/", server.endpoint) > 0);
     transport_settings(&config.providers[1], &credential);
 
-    assert(snag_provider_models_list(connection,
-        &models, error, sizeof(error)) == 0);
+    assert(snag_provider_models_list(connection, &models, error, sizeof(error)) == 0);
     assert(json_array_size(models) == 2u);
-    assert(strcmp(snag_json_string(json_array_get(models, 0), "id"),
-                  "gpt-standard") == 0);
+    assert(strcmp(snag_json_string(json_array_get(models, 0), "id"), "gpt-standard") == 0);
     assert(strcmp(json_string_value(json_array_get(json_object_get(
-                      json_array_get(models, 0), "efforts"), 1)),
-                  "high") == 0);
-    assert(strcmp(snag_json_string(json_array_get(models, 0),
-                                  "default_effort"), "medium") == 0);
+                      json_array_get(models, 0), "efforts"), 1)), "high") == 0);
+    assert(strcmp(snag_json_string(json_array_get(models, 0), "default_effort"), "medium") == 0);
     {
         json_t *limits = json_object_get(json_array_get(models, 0), "limits");
         assert(limits);
-        assert(json_integer_value(json_object_get(
-                   limits, "context_window_tokens")) == 100000);
-        assert(json_integer_value(json_object_get(
-                   limits, "input_context_window_tokens")) == 90000);
-        assert(json_integer_value(json_object_get(
-                   limits, "max_output_tokens")) == 10000);
-        assert(json_integer_value(json_object_get(
-                   limits, "effective_context_window_percent")) == 80);
+        assert(json_integer_value(json_object_get( limits, "context_window_tokens")) == 100000);
+        assert(json_integer_value(json_object_get( limits, "input_context_window_tokens")) == 90000);
+        assert(json_integer_value(json_object_get( limits, "max_output_tokens")) == 10000);
+        assert(json_integer_value(json_object_get( limits, "effective_context_window_percent")) == 80);
         assert(json_is_null(json_object_get(limits, "max_input_tokens")));
     }
     {
         json_t *limits = json_object_get(json_array_get(models, 1), "limits");
         assert(limits);
-        assert(json_is_null(json_object_get(
-                   limits, "context_window_tokens")));
+        assert(json_is_null(json_object_get( limits, "context_window_tokens")));
         assert(json_is_null(json_object_get(limits, "max_output_tokens")));
     }
-    assert(strcmp(snag_model_cache_best_effort(json_array_get(models, 1),
-                                              "fallback"),
-                  "quantum") == 0);
+    assert(strcmp(snag_model_cache_best_effort(json_array_get(models, 1), "fallback"), "quantum") == 0);
     json_decref(models);
     models = NULL;
 
@@ -687,8 +584,7 @@ test_local_provider_transport(void)
     assert(strcmp(snag_response_graph_item(&graph, 0).text, "local transport") == 0);
     assert(emitted.calls == 1u);
     assert(emitted.text.len == strlen("local transport"));
-    assert(memcmp(emitted.text.data, "local transport",
-                  strlen("local transport")) == 0);
+    assert(memcmp(emitted.text.data, "local transport", strlen("local transport")) == 0);
     assert(retries == 0u);
     snag_buf_free(&emitted.text);
     snag_response_graph_free(&graph);
@@ -716,13 +612,10 @@ test_codex_path_selection(void)
         const char *path, *provider, *base_override, *id, *diagnostic;
         size_t count;
     } cases[] = {
-        {MODEL_CODEX_LOOKALIKE, "/backend-api/codexish", "codex", NULL,
-         "lookalike-openai", NULL, 1u},
+        {MODEL_CODEX_LOOKALIKE, "/backend-api/codexish", "codex", NULL, "lookalike-openai", NULL, 1u},
         {MODEL_OPENAI, "", "codex", "http://backend-api/codex", NULL, NULL, 2u},
-        {MODEL_CODEX_MALFORMED, "/backend-api/codex", "codex", NULL,
-         NULL, "invalid model entry", 0u},
-        {MODEL_CODEX_FAILURE, "/backend-api/codex", "neutral", NULL,
-         NULL, "catalog rejected", 0u},
+        {MODEL_CODEX_MALFORMED, "/backend-api/codex", "codex", NULL, NULL, "invalid model entry", 0u},
+        {MODEL_CODEX_FAILURE, "/backend-api/codex", "neutral", NULL, NULL, "catalog rejected", 0u},
         {MODEL_LIMIT_CONFLICT, "", "neutral", NULL, NULL, "invalid model entry", 0u}
     };
     struct local_server server;
@@ -737,24 +630,20 @@ test_codex_path_selection(void)
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         json_t *models = NULL;
         start_server(&server, cases[i].fixture, false, cases[i].path);
-        assert(snag_strcpy(config.providers[0].name,
-                           sizeof(config.providers[0].name), cases[i].provider));
+        assert(snag_strcpy(config.providers[0].name, sizeof(config.providers[0].name), cases[i].provider));
         assert(snag_strcpy(config.providers[0].base_url, sizeof(config.providers[0].base_url),
                            cases[i].base_override ? cases[i].base_override : server.endpoint));
-        if (cases[i].base_override)
-            assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
+        if (cases[i].base_override) assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
         int rc = snag_provider_models_list(connection, &models, error, sizeof(error));
         if (cases[i].diagnostic) {
             assert(rc < 0 && models == NULL);
             assert(strstr(error, cases[i].diagnostic));
         } else {
             assert(rc == 0 && json_array_size(models) == cases[i].count);
-            if (cases[i].id)
-                assert(!strcmp(snag_json_string(json_array_get(models, 0), "id"), cases[i].id));
+            if (cases[i].id) assert(!strcmp(snag_json_string(json_array_get(models, 0), "id"), cases[i].id));
         }
         json_decref(models);
-        if (cases[i].base_override)
-            assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
+        if (cases[i].base_override) assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
         stop_server(&server);
     }
     snag_config_free(&config);
@@ -764,8 +653,7 @@ static void
 test_structured_create_failures(void)
 {
     const enum model_fixture fixtures[] = {
-        MODEL_CREATE_HTTP_FAILURE, MODEL_CREATE_SSE_FAILURE
-    };
+        MODEL_CREATE_HTTP_FAILURE, MODEL_CREATE_SSE_FAILURE };
 
     for (size_t i = 0; i < sizeof(fixtures) / sizeof(fixtures[0]); ++i) {
         struct local_server server;
@@ -785,8 +673,7 @@ test_structured_create_failures(void)
         assert(snag_provider_failure_is_capacity(&failure));
         assert(!strstr(error, "transport-secret"));
         assert(!strstr(failure.message, "transport-secret"));
-        assert(failure.context_limit_tokens ==
-               (fixtures[i] == MODEL_CREATE_HTTP_FAILURE ?
+        assert(failure.context_limit_tokens == (fixtures[i] == MODEL_CREATE_HTTP_FAILURE ?
                     272000u : 872000u));
         if (fixtures[i] == MODEL_CREATE_HTTP_FAILURE) {
             assert(failure.requested_input_tokens == 300000u);
@@ -820,9 +707,7 @@ cancel_retry(void *opaque, uint32_t wait_ms)
 static void
 test_create_retries(void)
 {
-    static const char created[] =
-        ": heartbeat\n\n"
-        "id: discarded-event\n"
+    static const char created[] = ": heartbeat\n\n" "id: discarded-event\n"
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"discarded\",\"status\":\"in_progress\",\"output\":[]}}\n\n";
     static const char transient[] =
         "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_error\","
@@ -853,16 +738,11 @@ test_create_retries(void)
             429, 1, 1, false, NULL, "local transport"},
         {"", "{\"error\":{\"code\":\"credit_balance_exhausted\",\"type\":\"insufficient_quota\"}}",
             429, 1, 0, false, "credit_balance_exhausted", ""},
-        {"", "{\"error\":{\"type\":\"insufficient_quota\"}}",
-            429, 1, 0, false, "insufficient_quota", ""},
-        {"", "{\"error\":{\"code\":\"cyber_policy\"}}",
-            500, 1, 0, false, "cyber_policy", ""},
-        {"", "{\"error\":{\"code\":\"unknown\",\"type\":\"server_error\"}}",
-            503, 1, 0, false, "unknown", ""},
-        {"", "{\"error\":{\"code\":23,\"type\":\"server_error\"}}",
-            500, 1, 0, false, "HTTP 500", ""},
-        {"", "{\"error\":{\"code\":\"server_error\"}}",
-            503, 3, 2, false, "retried 2 times", ""},
+        {"", "{\"error\":{\"type\":\"insufficient_quota\"}}", 429, 1, 0, false, "insufficient_quota", ""},
+        {"", "{\"error\":{\"code\":\"cyber_policy\"}}", 500, 1, 0, false, "cyber_policy", ""},
+        {"", "{\"error\":{\"code\":\"unknown\",\"type\":\"server_error\"}}", 503, 1, 0, false, "unknown", ""},
+        {"", "{\"error\":{\"code\":23,\"type\":\"server_error\"}}", 500, 1, 0, false, "HTTP 500", ""},
+        {"", "{\"error\":{\"code\":\"server_error\"}}", 503, 3, 2, false, "retried 2 times", ""},
         {"", "temporarily unavailable", 503, 1, 1, false, NULL, "local transport"},
         {"", "", 200, 1, 1, true, NULL, "local transport"},
         {created, "", 200, 1, 1, true, NULL, "local transport"},
@@ -944,8 +824,7 @@ test_create_retries(void)
             assert(graph.count == 1u && strcmp(graph.provider_response_id, "resp_transport") == 0);
         }
         assert(emitted.text.len == strlen(retry_case->emitted));
-        if (emitted.text.len)
-            assert(memcmp(emitted.text.data, retry_case->emitted, emitted.text.len) == 0);
+        if (emitted.text.len) assert(memcmp(emitted.text.data, retry_case->emitted, emitted.text.len) == 0);
         snag_response_graph_free(&graph);
         snag_buf_free(&emitted.text);
         snag_credential_clear(&credential);
@@ -964,8 +843,7 @@ test_policy_clarification_after_reasoning(void)
         "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"reasoning\",\"id\":\"r\",\"summary\":[]}}\n\n"
         "data: {\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"item_id\":\"r\",\"summary_index\":0,\"delta\":\"Reviewing the task\"}\n\n",
         "data: {\"type\":\"response.failed\",\"response\":{\"output\":[{\"type\":\"reasoning\",\"id\":\"r\",\"summary\":[]}],\"error\":{\"code\":\"cyber_policy\"}}}\n\n",
-        200, 1, 0, false, "[cyber_policy]", ""
-    };
+        200, 1, 0, false, "[cyber_policy]", "" };
     struct local_server server;
     struct snag_config config;
     struct snag_credential credential;
@@ -1003,8 +881,7 @@ static void
 test_count_capability_statuses(void)
 {
     const enum model_fixture fixtures[] = {
-        MODEL_COUNT_404, MODEL_COUNT_405, MODEL_COUNT_501
-    };
+        MODEL_COUNT_404, MODEL_COUNT_405, MODEL_COUNT_501 };
     for (size_t i = 0; i < sizeof(fixtures) / sizeof(fixtures[0]); ++i) {
         struct local_server server;
         struct snag_config config;
@@ -1036,12 +913,10 @@ test_count_modes(void)
         enum snag_count_capability capability;
         bool openrouter;
     } cases[] = {
-        {MODEL_COUNT_405, SNAG_TOKEN_COUNT_AUTO,
-         SNAG_APP_COUNT_SKIPPED, SNAG_COUNT_UNSUPPORTED, false},
+        {MODEL_COUNT_405, SNAG_TOKEN_COUNT_AUTO, SNAG_APP_COUNT_SKIPPED, SNAG_COUNT_UNSUPPORTED, false},
         {MODEL_COUNT_405, SNAG_TOKEN_COUNT_STRICT, -1, SNAG_COUNT_UNSUPPORTED, false},
         {MODEL_COUNT_404, SNAG_TOKEN_COUNT_AUTO, SNAG_APP_COUNT_SKIPPED, SNAG_COUNT_UNSUPPORTED, false},
-        {MODEL_COUNT_404, SNAG_TOKEN_COUNT_AUTO,
-         SNAG_APP_COUNT_SKIPPED, SNAG_COUNT_UNSUPPORTED, true},
+        {MODEL_COUNT_404, SNAG_TOKEN_COUNT_AUTO, SNAG_APP_COUNT_SKIPPED, SNAG_COUNT_UNSUPPORTED, true},
         {MODEL_COUNT_404, SNAG_TOKEN_COUNT_STRICT, -1, SNAG_COUNT_UNSUPPORTED, true},
         {MODEL_COUNT_401, SNAG_TOKEN_COUNT_AUTO, -1, SNAG_COUNT_UNKNOWN, true},
         {MODEL_COUNT_403, SNAG_TOKEN_COUNT_AUTO, -1, SNAG_COUNT_UNKNOWN, true},
@@ -1051,14 +926,10 @@ test_count_modes(void)
         {MODEL_COUNT_OK, SNAG_TOKEN_COUNT_STRICT, 0, SNAG_COUNT_SUPPORTED, false}
     };
 
-    assert(!snag_app_exact_count_enabled(SNAG_TOKEN_COUNT_OFF,
-                                        SNAG_COUNT_UNKNOWN));
-    assert(!snag_app_exact_count_enabled(SNAG_TOKEN_COUNT_AUTO,
-                                        SNAG_COUNT_UNSUPPORTED));
-    assert(snag_app_exact_count_enabled(SNAG_TOKEN_COUNT_AUTO,
-                                       SNAG_COUNT_SUPPORTED));
-    assert(snag_app_exact_count_enabled(SNAG_TOKEN_COUNT_STRICT,
-                                       SNAG_COUNT_UNSUPPORTED));
+    assert(!snag_app_exact_count_enabled(SNAG_TOKEN_COUNT_OFF, SNAG_COUNT_UNKNOWN));
+    assert(!snag_app_exact_count_enabled(SNAG_TOKEN_COUNT_AUTO, SNAG_COUNT_UNSUPPORTED));
+    assert(snag_app_exact_count_enabled(SNAG_TOKEN_COUNT_AUTO, SNAG_COUNT_SUPPORTED));
+    assert(snag_app_exact_count_enabled(SNAG_TOKEN_COUNT_STRICT, SNAG_COUNT_UNSUPPORTED));
 
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         struct local_server server;
@@ -1066,8 +937,7 @@ test_count_modes(void)
         struct snag_credential credential;
         struct app_state app;
         json_t *request = request_with_marker("count-mode");
-        const char *method = cases[i].mode == SNAG_TOKEN_COUNT_STRICT ?
-            "anchored_upper_bound" : "unknown";
+        const char *method = cases[i].mode == SNAG_TOKEN_COUNT_STRICT ? "anchored_upper_bound" : "unknown";
         uint64_t tokens = 99u;
         char error[256] = {0};
         char temp[] = "/tmp/snajpagent-count-mode-XXXXXX";
@@ -1087,19 +957,15 @@ test_count_modes(void)
         app.config = &config;
         app.turn_provider = &config.providers[0];
         app.turn_model = "gpt-transport-test";
-        rc = snag_app_provider_count(&app, request, &credential,
-                                    &tokens, &method, error, sizeof(error));
+        rc = snag_app_provider_count(&app, request, &credential, &tokens, &method, error, sizeof(error));
         assert((cases[i].result < 0 && rc < 0) || rc == cases[i].result);
         assert(app.turn_capacity.count_capability == cases[i].capability);
-        if (cases[i].fixture == MODEL_COUNT_OK)
-            assert(tokens == 42u && !strcmp(method, "exact"));
-        else
-            assert(tokens == 99u);
+        if (cases[i].fixture == MODEL_COUNT_OK) assert(tokens == 42u && !strcmp(method, "exact"));
+        else assert(tokens == 99u);
         assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
         snag_ui_free(&app.ui);
         snag_model_cache_free(&app.model_cache);
-        if (unlinkat(app.store.root_fd, "models.lock", 0) < 0)
-            assert(errno == ENOENT);
+        if (unlinkat(app.store.root_fd, "models.lock", 0) < 0) assert(errno == ENOENT);
         snag_store_close(&app.store);
         {
             char path[512];
@@ -1118,8 +984,7 @@ test_count_modes(void)
 static void
 test_openrouter_search_transport(void)
 {
-    static const char search_tools[] =
-        "[{\"type\":\"openrouter:web_search\"},{\"type\":\"function\","
+    static const char search_tools[] = "[{\"type\":\"openrouter:web_search\"},{\"type\":\"function\","
         "\"name\":\"read_file\",\"parameters\":{\"type\":\"object\",\"properties\":{"
         "\"path\":{\"type\":\"string\"},\"start_line\":{\"type\":\"integer\"},"
         "\"end_line\":{\"type\":\"integer\"}}}}]";
@@ -1186,8 +1051,7 @@ test_read_only_dispatch(void)
 {
     static const char *const denied[] = {
         "exec_command", "write_stdin", "apply_patch", "create_goal",
-        "update_goal", "irc_send", "irc_topic", "irc_state", "unknown",
-        "web_search", "openrouter:web_search"
+        "update_goal", "irc_send", "irc_topic", "irc_state", "unknown", "web_search", "openrouter:web_search"
     };
     struct app_state app = {0};
     struct snag_response_item call = {0};
@@ -1200,8 +1064,7 @@ test_read_only_dispatch(void)
     for (size_t i = 0; i < sizeof(denied) / sizeof(denied[0]); ++i) {
         call.name = (char *)denied[i];
         /* No config, IRC, credential or process: no handler may be reached. */
-        assert(snag_app_tool_run(&app, &call, NULL, &result,
-                                error, sizeof(error)) == 0);
+        assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
         assert(snag_tool_result_valid(result) == 0);
         assert(strstr(snag_json_string(result, "model_text"), "read-only"));
         json_decref(result);
@@ -1233,8 +1096,7 @@ test_ui_output_order_and_failure(void)
         while (received < 128u * sizeof(text)) {
             ssize_t got = read(pipefd[0], text, sizeof(text));
             assert(got > 0);
-            for (ssize_t i = 0; i < got; ++i)
-                assert(text[i] == (received + (size_t)i) / sizeof(text));
+            for (ssize_t i = 0; i < got; ++i) assert(text[i] == (received + (size_t)i) / sizeof(text));
             received += (size_t)got;
         }
         (void)close(pipefd[0]);
@@ -1420,14 +1282,10 @@ test_provider_auth(void)
             assert(snag_auth_read(store.root_fd, &config.providers[0], false, NULL,
                 &credential, NULL, NULL, error, sizeof(error)) == 0);
             int rc = snag_provider_models_list((struct snag_provider_connection){
-                &config, &config.providers[0], &credential, NULL,
-                NULL, NULL},
-                &models, error, sizeof(error));
-            if (rc < 0 && mode == MODEL_AUTH_401)
-                (void)fprintf(stderr, "auth fixture failed: %s\n", error);
+                &config, &config.providers[0], &credential, NULL, NULL, NULL}, &models, error, sizeof(error));
+            if (rc < 0 && mode == MODEL_AUTH_401) (void)fprintf(stderr, "auth fixture failed: %s\n", error);
             assert((rc == 0) == (mode == MODEL_AUTH_401));
-            if (rc == 0)
-                assert(json_array_size(models) == 1u);
+            if (rc == 0) assert(json_array_size(models) == 1u);
             json_decref(models);
             assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
         }
@@ -1446,8 +1304,7 @@ test_provider_auth(void)
         start_server(&server, pass == 2u ? MODEL_COMPACT_403 : MODEL_COMPACT_404, false, "");
         assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
         int rc = snag_provider_responses_compact((struct snag_provider_connection){
-            &config, &config.providers[0], &credential, NULL,
-            NULL, NULL},
+            &config, &config.providers[0], &credential, NULL, NULL, NULL},
             request, &output, error, sizeof(error), NULL);
         assert(rc == (pass < 2u ? SNAG_PROVIDER_UNSUPPORTED : -1));
         assert(output.value == NULL);

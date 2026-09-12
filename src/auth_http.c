@@ -50,8 +50,7 @@ post_json(const char *path, json_t *request, json_t **response, long *status,
     if (snag_json_canonical(request, &body) == 0)
         rc = auth_post(path, "application/json", body.data, body.len,
                        response, status, pump, opaque, error, error_size);
-    if (body.data)
-        memset(body.data, 0, body.len);
+    if (body.data) memset(body.data, 0, body.len);
     snag_buf_free(&body);
     return rc;
 }
@@ -59,41 +58,34 @@ post_json(const char *path, json_t *request, json_t **response, long *status,
 static json_t *
 token_claims(const char *token)
 {
-    static const char alphabet[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     const char *p = token ? strchr(token, '.') : NULL;
     unsigned int value = 0u, bits = 0u;
     char error[128];
     json_t *claims = NULL;
 
-    if (!p)
-        return NULL;
+    if (!p) return NULL;
     struct snag_buf decoded = {.max = AUTH_BODY_MAX};
     for (++p; *p && *p != '.'; ++p) {
         const char *digit = strchr(alphabet, *p);
-        if (!digit)
-            goto out;
+        if (!digit) goto out;
         value = (value << 6) | (unsigned int)(digit - alphabet);
         bits += 6u;
         if (bits >= 8u) {
             bits -= 8u;
-            if (snag_buf_putc(&decoded, (unsigned char)(value >> bits)) < 0)
-                goto out;
+            if (snag_buf_putc(&decoded, (unsigned char)(value >> bits)) < 0) goto out;
         }
     }
-    if (*p == '.')
-        claims = snag_json_load_strict(decoded.data, decoded.len, AUTH_BODY_MAX,
+    if (*p == '.') claims = snag_json_load_strict(decoded.data, decoded.len, AUTH_BODY_MAX,
                                       error, sizeof(error));
 out:
-    if (decoded.data)
-        memset(decoded.data, 0, decoded.len);
+    if (decoded.data) memset(decoded.data, 0, decoded.len);
     snag_buf_free(&decoded);
     return claims;
 }
 
 int
-snag_auth_token_response(json_t *response, struct snag_auth_tokens *tokens,
-                        char *error, size_t error_size)
+snag_auth_token_response(json_t *response, struct snag_auth_tokens *tokens, char *error, size_t error_size)
 {
     struct snag_auth_tokens next;
     json_t *access = NULL, *identity = NULL;
@@ -103,16 +95,11 @@ snag_auth_token_response(json_t *response, struct snag_auth_tokens *tokens,
     int rc = -1;
 
     snag_auth_clear(&next);
-    if (snag_auth_key(&next, snag_json_string(response, "access_token"),
-                     error, error_size) < 0)
-        goto out;
-    if (!*refresh)
-        refresh = tokens->refresh_token;
-    if (!*refresh || !snag_strcpy(next.refresh_token, sizeof(next.refresh_token), refresh))
-        goto out;
+    if (snag_auth_key(&next, snag_json_string(response, "access_token"), error, error_size) < 0) goto out;
+    if (!*refresh) refresh = tokens->refresh_token;
+    if (!*refresh || !snag_strcpy(next.refresh_token, sizeof(next.refresh_token), refresh)) goto out;
     for (const unsigned char *p = (const unsigned char *)refresh; *p; ++p)
-        if (*p < 0x21u || *p > 0x7eu)
-            goto out;
+        if (*p < 0x21u || *p > 0x7eu) goto out;
     access = token_claims(next.credential.value);
     identity = token_claims(snag_json_string(response, "id_token"));
     account = auth_string(json_object_get(identity, "https://api.openai.com/auth"),
@@ -120,33 +107,25 @@ snag_auth_token_response(json_t *response, struct snag_auth_tokens *tokens,
     if (!*account)
         account = auth_string(json_object_get(access, "https://api.openai.com/auth"),
                                   "chatgpt_account_id");
-    if (!*account)
-        account = tokens->credential.account_id;
-    if (!*account || !snag_strcpy(next.credential.account_id,
-                                sizeof(next.credential.account_id), account))
+    if (!*account) account = tokens->credential.account_id;
+    if (!*account || !snag_strcpy(next.credential.account_id, sizeof(next.credential.account_id), account))
         goto out;
     for (const unsigned char *p = (const unsigned char *)account; *p; ++p)
-        if (*p < 0x21u || *p > 0x7eu)
-            goto out;
-    if (tokens->credential.account_id[0] &&
-        strcmp(tokens->credential.account_id, account) != 0) {
+        if (*p < 0x21u || *p > 0x7eu) goto out;
+    if (tokens->credential.account_id[0] && strcmp(tokens->credential.account_id, account) != 0) {
         snag_errorf(error, error_size, "refreshed account changed; log in again");
         goto out;
     }
-    if (snag_json_integer_u64(access, "exp", &expires) == 0 &&
-        expires > 0u && expires <= INT64_MAX / 1000u)
+    if (snag_json_integer_u64(access, "exp", &expires) == 0 && expires > 0u && expires <= INT64_MAX / 1000u)
         next.expires_at_ms = expires * 1000u;
     else if (snag_json_integer_u64(response, "expires_in", &lifetime) == 0 &&
              lifetime > 0u && lifetime <= 365u * 86400u)
         next.expires_at_ms = snag_time_ms() + lifetime * 1000u;
-    else
-        goto out;
-    if (next.expires_at_ms <= snag_time_ms())
-        goto out;
+    else goto out;
+    if (next.expires_at_ms <= snag_time_ms()) goto out;
     *tokens = next;
     rc = 0;
-out:
-    snag_auth_clear(&next);
+out: snag_auth_clear(&next);
     json_decref(access);
     json_decref(identity);
     if (rc < 0 && !error[0])
@@ -161,23 +140,18 @@ snag_auth_refresh(struct snag_auth_tokens *tokens, snag_auth_pump_fn pump,
     json_t *request = json_object(), *response = NULL;
     long status = 0;
     int rc = -1;
-    if (!request ||
-        snag_json_set_new(request, "grant_type", json_string("refresh_token")) < 0 ||
+    if (!request || snag_json_set_new(request, "grant_type", json_string("refresh_token")) < 0 ||
         snag_json_set_new(request, "client_id", json_string(AUTH_CLIENT)) < 0 ||
         snag_json_set_new(request, "refresh_token", json_string(tokens->refresh_token)) < 0 ||
-        post_json("/oauth/token", request, &response, &status,
-                   pump, opaque, error, error_size) < 0)
-        goto out;
+        post_json("/oauth/token", request, &response, &status, pump, opaque, error, error_size) < 0) goto out;
     if (status < 200 || status >= 300) {
-        snag_errorf(error, error_size,
-            status == 400 || status == 401 || status == 403 ?
+        snag_errorf(error, error_size, status == 400 || status == 401 || status == 403 ?
             "Codex login expired or revoked; run snajpagent login again" :
             "Codex token refresh temporarily failed; try again");
         goto out;
     }
     rc = snag_auth_token_response(response, tokens, error, error_size);
-out:
-    snag_auth_json_free(request);
+out: snag_auth_json_free(request);
     snag_auth_json_free(response);
     return rc;
 }
@@ -185,14 +159,12 @@ out:
 static int
 snag_auth_form_field(struct snag_buf *body, const char *name, const char *value)
 {
-    if (snag_buf_printf(body, "&%s=", name) < 0)
-        return -1;
+    if (snag_buf_printf(body, "&%s=", name) < 0) return -1;
     for (const unsigned char *p = (const unsigned char *)value; *p; ++p) {
         if ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
             (*p >= '0' && *p <= '9') || *p == '-' || *p == '.' ||
             *p == '_' || *p == '~') {
-            if (snag_buf_putc(body, *p) < 0)
-                return -1;
+            if (snag_buf_putc(body, *p) < 0) return -1;
         } else if (snag_buf_printf(body, "%%%02X", (unsigned int)*p) < 0) {
             return -1;
         }
@@ -215,13 +187,11 @@ snag_auth_device(struct snag_auth_tokens *tokens, snag_auth_pump_fn pump,
     request = json_object();
     if (!request || snag_json_set_new(request, "client_id", json_string(AUTH_CLIENT)) < 0 ||
         post_json("/api/accounts/deviceauth/usercode", request, &response,
-                   &status, pump, opaque, error, error_size) < 0)
-        goto out;
+                   &status, pump, opaque, error, error_size) < 0) goto out;
     if (!json_object_get(response, "user_code") && json_is_string(json_object_get(response, "usercode")) &&
         snag_json_set_new(response, "user_code", json_string(auth_string(response, "usercode"))) < 0)
         goto out;
-    if (status != 200 || !*auth_string(response, "device_auth_id") ||
-        !*auth_string(response, "user_code")) {
+    if (status != 200 || !*auth_string(response, "device_auth_id") || !*auth_string(response, "user_code")) {
         snag_errorf(error, error_size, "device login unavailable; enable device-code login in ChatGPT security/workspace settings (HTTP %ld)", status);
         goto out;
     }
@@ -231,17 +201,14 @@ snag_auth_device(struct snag_auth_tokens *tokens, snag_auth_pump_fn pump,
         unsigned long n = strtoul(s, &end, 10);
         interval = *s && !*end ? (uint64_t)n : 5u;
     }
-    if (!interval || interval > 60u)
-        interval = 5u;
+    if (!interval || interval > 60u) interval = 5u;
     /* Print only the bounded user code, never an arbitrary server message. */
     {
         const char *user_code = snag_json_string(response, "user_code");
-        if (strlen(user_code) > 64u)
-            goto out;
+        if (strlen(user_code) > 64u) goto out;
         for (const unsigned char *p = (const unsigned char *)user_code; *p; ++p)
             if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
-                  (*p >= '0' && *p <= '9') || *p == '-'))
-                goto out;
+                  (*p >= '0' && *p <= '9') || *p == '-')) goto out;
         (void)fprintf(stderr, "Open %s/codex/device\nEnter code: %s\nWaiting for login (up to 15 minutes; Ctrl-C cancels)...\n",
                        auth_issuer(), user_code);
     }
@@ -256,10 +223,8 @@ snag_auth_device(struct snag_auth_tokens *tokens, snag_auth_pump_fn pump,
     deadline = snag_monotonic_ms() + 15u * 60u * 1000u;
     for (;;) {
         if (post_json("/api/accounts/deviceauth/token", request, &code,
-                       &status, pump, opaque, error, error_size) < 0)
-            goto out;
-        if (status == 200)
-            break;
+                       &status, pump, opaque, error, error_size) < 0) goto out;
+        if (status == 200) break;
         if (status != 403 && status != 404) {
             snag_errorf(error, error_size, status == 410 ?
                 "device login expired; start login again (HTTP %ld)" :
@@ -286,21 +251,17 @@ snag_auth_device(struct snag_auth_tokens *tokens, snag_auth_pump_fn pump,
         snag_auth_form_field(&body, "code_verifier", auth_string(code, "code_verifier")) < 0 ||
         snag_auth_form_field(&body, "redirect_uri", callback) < 0 ||
         auth_post("/oauth/token", "application/x-www-form-urlencoded", body.data,
-                   body.len, &response, &status, pump, opaque, error, error_size) < 0)
-        goto out;
+                   body.len, &response, &status, pump, opaque, error, error_size) < 0) goto out;
     if (status != 200) {
         snag_errorf(error, error_size, "device login token exchange failed (HTTP %ld)", status);
         goto out;
     }
     rc = snag_auth_token_response(response, tokens, error, error_size);
-out:
-    snag_auth_json_free(request);
+out: snag_auth_json_free(request);
     snag_auth_json_free(response);
     snag_auth_json_free(code);
-    if (body.data)
-        memset(body.data, 0, body.len);
+    if (body.data) memset(body.data, 0, body.len);
     snag_buf_free(&body);
-    if (rc < 0 && !error[0])
-        snag_errorf(error, error_size, "invalid device login response");
+    if (rc < 0 && !error[0]) snag_errorf(error, error_size, "invalid device login response");
     return rc;
 }

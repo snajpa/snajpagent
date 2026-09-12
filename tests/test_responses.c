@@ -36,8 +36,7 @@ parsed_free(struct parsed_stream *parsed)
 
 static int
 capture_emit(void *opaque, size_t output_index, enum snag_item_kind kind,
-             enum snag_item_phase phase, const char *provider_item_id,
-             const char *text, size_t len)
+             enum snag_item_phase phase, const char *provider_item_id, const char *text, size_t len)
 {
     struct parsed_stream *emitted = opaque;
 
@@ -45,10 +44,8 @@ capture_emit(void *opaque, size_t output_index, enum snag_item_kind kind,
     emitted->last_index = output_index;
     emitted->last_kind = kind;
     emitted->last_phase = phase;
-    if (provider_item_id)
-        (void)snprintf(emitted->last_provider_id,
-                       sizeof(emitted->last_provider_id), "%s",
-                       provider_item_id);
+    if (provider_item_id) (void)snprintf(emitted->last_provider_id,
+                       sizeof(emitted->last_provider_id), "%s", provider_item_id);
     return snag_buf_append(&emitted->text, text, len);
 }
 
@@ -69,13 +66,9 @@ parse_stream(const char *wire, size_t chunk, struct parsed_stream *emitted)
         rc = snag_sse_feed(&sse, wire + offset, take, error, error_size);
         offset += take;
     }
-    if (rc == 0)
-        rc = snag_sse_finish(&sse, error, error_size);
-    if (rc == 0)
-        rc = snag_responses_stream_finish(&responses, &emitted->graph,
-                                          error, error_size);
-    else if (responses.failed)
-        (void)snprintf(error, error_size, "%s",
+    if (rc == 0) rc = snag_sse_finish(&sse, error, error_size);
+    if (rc == 0) rc = snag_responses_stream_finish(&responses, &emitted->graph, error, error_size);
+    else if (responses.failed) (void)snprintf(error, error_size, "%s",
                        snag_responses_stream_error(&responses));
     snag_sse_free(&sse);
     snag_responses_stream_free(&responses);
@@ -85,8 +78,7 @@ parse_stream(const char *wire, size_t chunk, struct parsed_stream *emitted)
 static void
 test_deltas_survive_empty_terminal_output(void)
 {
-    static const char wire[] =
-        "event: response.created\n"
+    static const char wire[] = "event: response.created\n"
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_ping\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
         "event: response.output_item.added\n"
         "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_ping\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
@@ -152,12 +144,9 @@ test_failed_snapshot_preserves_only_consistent_text(void)
         const char *id, *status, *text;
         bool eligible;
     } cases[] = {
-        {"m", "in_progress", "hello world", true},
-        {"m", "completed", "hello world", true},
-        {"m", "in_progress", "hello", true},
-        {"m", "in_progress", "other", false},
-        {"m", "in_progress", "hel", false},
-        {"other", "in_progress", "hello world", false}
+        {"m", "in_progress", "hello world", true}, {"m", "completed", "hello world", true},
+        {"m", "in_progress", "hello", true}, {"m", "in_progress", "other", false},
+        {"m", "in_progress", "hel", false}, {"other", "in_progress", "hello world", false}
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         struct parsed_stream emitted = parsed_new(1024u);
@@ -226,8 +215,7 @@ static void
 test_oversized_public_items_get_specific_correction(void)
 {
     static const char *const event_types[] = {
-        "response.output_text.delta", "response.refusal.delta"
-    };
+        "response.output_text.delta", "response.refusal.delta" };
     static const char *const delta_keys[] = {"delta", "delta"};
     static const char *const part_types[] = {"output_text", "refusal"};
     const size_t delta_len = 700u * 1024u;
@@ -244,10 +232,8 @@ test_oversized_public_items_get_specific_correction(void)
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_large\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
             "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_large\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
             "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_large\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"%s\",\"%s\":\"\"}}\n\n",
-            part_types[kind],
-            kind == 0u ? "text" : "refusal") == 0);
-        for (size_t i = 0; i < 3u; ++i)
-            assert(snag_buf_printf(&wire,
+            part_types[kind], kind == 0u ? "text" : "refusal") == 0);
+        for (size_t i = 0; i < 3u; ++i) assert(snag_buf_printf(&wire,
                 "data: {\"type\":\"%s\",\"item_id\":\"msg_large\",\"output_index\":0,\"content_index\":0,\"%s\":\"%s\"}\n\n",
                 event_types[kind], delta_keys[kind], delta) == 0);
         assert(snag_buf_terminate(&wire) == 0);
@@ -265,13 +251,10 @@ test_oversized_public_items_get_specific_correction(void)
 static void
 test_structured_keepalives_do_not_end_response(void)
 {
-    static const char wire[] =
-        "event: keepalive\n"
-        "data: {\"type\":\"keepalive\"}\n\n"
-        "event: response.created\n"
+    static const char wire[] = "event: keepalive\n"
+        "data: {\"type\":\"keepalive\"}\n\n" "event: response.created\n"
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_keepalive\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
-        "event: keepalive\n"
-        "data: {\"type\":\"keepalive\",\"time_ms\":123}\n\n"
+        "event: keepalive\n" "data: {\"type\":\"keepalive\",\"time_ms\":123}\n\n"
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_keepalive\",\"status\":\"completed\",\"output\":[]}}\n\n";
     struct parsed_stream emitted = parsed_new(1024u);
@@ -291,8 +274,7 @@ test_public_stream(size_t which)
         size_t chunk, index;
         enum snag_item_phase emitted_phase;
     } cases[] = {
-        {"unused_response_events_are_ignored",
-         "event: response.created\n"
+        {"unused_response_events_are_ignored", "event: response.created\n"
          "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_citation\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
          "event: response.output_item.added\n"
          "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_citation\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
@@ -302,8 +284,7 @@ test_public_stream(size_t which)
          "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"delta\":\"Source.\"}\n\n"
          "event: response.output_text.annotation.added\n"
          "data: {\"type\":\"response.output_text.annotation.added\",\"item_id\":\"msg_citation\",\"output_index\":0,\"content_index\":0,\"annotation_index\":0,\"annotation\":{\"type\":\"url_citation\",\"start_index\":0,\"end_index\":7,\"title\":\"Example\",\"url\":\"https://example.com/\"},\"sequence_number\":5}\n\n"
-         "event: response.in_progress\n"
-         "data: {\"type\":\"response.in_progress\",\"payload\":false}\n\n"
+         "event: response.in_progress\n" "data: {\"type\":\"response.in_progress\",\"payload\":false}\n\n"
          "event: response.image_generation_call.partial_image\n"
          "data: {\"type\":\"response.image_generation_call.partial_image\",\"payload\":null}\n\n"
          "event: response.future.progress\n"
@@ -320,8 +301,7 @@ test_public_stream(size_t which)
         {"terminal_snapshot_ignores_unused_text_metadata",
          "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_file\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
          "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_file\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_file\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"See file.\",\"annotations\":{\"unused\":true},\"logprobs\":\"unused\"}]}]}}\n\n",
-         "msg_file", "See file.", 13u, 0u, SNAG_PHASE_FINAL_ANSWER},
-        {"phase-absent text",
+         "msg_file", "See file.", 13u, 0u, SNAG_PHASE_FINAL_ANSWER}, {"phase-absent text",
          "event: response.created\n"
          "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_pong\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
          "event: response.output_item.added\n"
@@ -336,8 +316,7 @@ test_public_stream(size_t which)
          "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_pong\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"pong\",\"annotations\":[]}]}}\n\n"
          "event: response.completed\n"
          "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_pong\",\"status\":\"completed\",\"output\":[]}}\n\n",
-         "msg_pong", "pong", 9u, 0u, SNAG_PHASE_COMMENTARY},
-        {"empty_reasoning_item_is_internal_only",
+         "msg_pong", "pong", 9u, 0u, SNAG_PHASE_COMMENTARY}, {"empty_reasoning_item_is_internal_only",
          "event: response.created\n"
          "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_reasoning\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
          "event: response.output_item.added\n"
@@ -356,8 +335,7 @@ test_public_stream(size_t which)
          "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_after_reasoning\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\",\"annotations\":[]}]}}\n\n"
          "event: response.completed\n"
          "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_reasoning\",\"status\":\"completed\",\"output\":[]}}\n\n",
-         "msg_after_reasoning", "ok", 19u, 1u, SNAG_PHASE_FINAL_ANSWER},
-        {"web_search_item_is_internal_only",
+         "msg_after_reasoning", "ok", 19u, 1u, SNAG_PHASE_FINAL_ANSWER}, {"web_search_item_is_internal_only",
          "event: response.created\n"
          "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_web\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
          "event: response.output_item.added\n"
@@ -382,8 +360,7 @@ test_public_stream(size_t which)
          "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_after_web\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\",\"annotations\":[]}]}}\n\n"
          "event: response.completed\n"
          "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_web\",\"status\":\"completed\",\"output\":[]}}\n\n",
-         "msg_after_web", "done", 23u, 1u, SNAG_PHASE_FINAL_ANSWER},
-        {"future_items_and_content_are_inert",
+         "msg_after_web", "done", 23u, 1u, SNAG_PHASE_FINAL_ANSWER}, {"future_items_and_content_are_inert",
          "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_inert\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
          "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"future_action\",\"name\":\"exec_command\",\"arguments\":\"{\\\"command\\\":\\\"false\\\"}\"}}\n\n"
          "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"future_result\",\"output\":\"unused\"}}\n\n"
@@ -395,8 +372,7 @@ test_public_stream(size_t which)
          "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_inert\",\"output_index\":1,\"content_index\":1,\"text\":\"visible\"}\n\n"
          "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"msg_inert\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"future_content_result\"},{\"type\":\"output_text\",\"text\":\"visible\"}]}}\n\n"
          "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_inert\",\"status\":\"completed\",\"output\":[]}}\n\n",
-         "msg_inert", "visible", 17u, 1u, SNAG_PHASE_FINAL_ANSWER},
-    };
+         "msg_inert", "visible", 17u, 1u, SNAG_PHASE_FINAL_ANSWER}, };
     struct parsed_stream emitted = parsed_new(1024u);
 
     assert(which < sizeof(cases) / sizeof(cases[0]));
@@ -441,8 +417,7 @@ test_unused_annotation_shapes_are_ignored(void)
 
         struct snag_buf wire = {.max = 8192u};
         assert(snag_buf_append(&wire, prefix, strlen(prefix)) == 0);
-        assert(snag_buf_append(&wire, bad_suffixes[i],
-                              strlen(bad_suffixes[i])) == 0);
+        assert(snag_buf_append(&wire, bad_suffixes[i], strlen(bad_suffixes[i])) == 0);
         assert(snag_buf_append(&wire, finish, strlen(finish)) == 0);
         assert(snag_buf_terminate(&wire) == 0);
         assert(parse_stream((char *)wire.data, 7u, &emitted) == 0);
@@ -541,9 +516,7 @@ static void
 test_invalid_call_after_public_item(void)
 {
     static const char *const calls[] = {
-        "\"name\":\"unknown\",\"arguments\":\"{}\"",
-        "\"name\":\"exec_command\",\"arguments\":\"[]\""
-    };
+        "\"name\":\"unknown\",\"arguments\":\"{}\"", "\"name\":\"exec_command\",\"arguments\":\"[]\"" };
 
     for (size_t i = 0; i < sizeof(calls) / sizeof(calls[0]); ++i) {
         struct parsed_stream emitted = parsed_new(1024u);
@@ -607,25 +580,21 @@ test_interleaved_content_bound(void)
         struct parsed_stream emitted = parsed_new(128u);
         assert(snag_buf_printf(&wire,
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n") == 0);
-        for (unsigned int item = 0; item < 2u; ++item)
-            assert(snag_buf_printf(&wire,
+        for (unsigned int item = 0; item < 2u; ++item) assert(snag_buf_printf(&wire,
                 "data: {\"type\":\"response.output_item.added\",\"output_index\":%u,"
                 "\"item\":{\"id\":\"m%u\",\"type\":\"message\",\"role\":\"assistant\","
                 "\"phase\":\"%s\",\"status\":\"in_progress\",\"content\":[]}}\n\n", item, item,
                 item ? "final_answer" : "commentary") == 0);
-        for (unsigned int i = 0; i < count; ++i)
-            assert(snag_buf_printf(&wire,
+        for (unsigned int i = 0; i < count; ++i) assert(snag_buf_printf(&wire,
                 "data: {\"type\":\"response.content_part.done\",\"output_index\":%u,"
                 "\"item_id\":\"m%u\",\"content_index\":%u,"
                 "\"part\":{\"type\":\"output_text\",\"text\":\"%c\"}}\n\n",
                 i % 2u, i % 2u, i / 2u, i % 2u ? 'b' : 'a') == 0);
-        assert(snag_buf_printf(&wire,
-            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\","
+        assert(snag_buf_printf(&wire, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\","
             "\"status\":\"completed\",\"output\":[]}}\n\n") == 0);
         int rc = parse_stream((char *)wire.data, 7u, &emitted);
         assert(emitted.calls == 96u && emitted.text.len == 96u);
-        for (size_t i = 0; i < emitted.text.len; ++i)
-            assert(emitted.text.data[i] == (i % 2u ? 'b' : 'a'));
+        for (size_t i = 0; i < emitted.text.len; ++i) assert(emitted.text.data[i] == (i % 2u ? 'b' : 'a'));
         if (count == 96u) {
             assert(rc == 0 && emitted.graph.count == 2u);
             for (size_t item = 0; item < 2u; ++item) {
@@ -644,8 +613,7 @@ test_interleaved_content_bound(void)
 static void
 test_structured_capacity_failure(void)
 {
-    static const char payload[] =
-        "{\"type\":\"response.failed\",\"response\":{\"error\":{"
+    static const char payload[] = "{\"type\":\"response.failed\",\"response\":{\"error\":{"
         "\"code\":\"context_length_exceeded\",\"message\":\"too large\","
         "\"context_length\":272000,\"requested_tokens\":300000}}}";
     struct snag_responses_stream stream;
@@ -665,8 +633,7 @@ test_structured_capacity_failure(void)
     assert(strcmp(stream.provider_failure.message, "too large") == 0);
     assert(stream.provider_failure.context_limit_tokens == 272000u);
     assert(stream.provider_failure.requested_input_tokens == 300000u);
-    assert(snag_capacity_safety_ceiling(
-        stream.provider_failure.context_limit_tokens,
+    assert(snag_capacity_safety_ceiling( stream.provider_failure.context_limit_tokens,
         stream.provider_failure.requested_input_tokens, 128000u) == 144000u);
     assert(snag_capacity_safety_ceiling(0u, 0u, 0u) == 0u);
     assert(snag_capacity_safety_ceiling(0u, 1u, 0u) == 0u);
@@ -677,12 +644,10 @@ test_structured_capacity_failure(void)
     snag_responses_stream_free(&stream);
 
     {
-        static const char ordinary[] =
-            "{\"error\":{\"code\":\"rate_limit_exceeded\","
+        static const char ordinary[] = "{\"error\":{\"code\":\"rate_limit_exceeded\","
             "\"message\":\"later\"}}";
         char json_error[128] = {0};
-        root = snag_json_load_strict((const unsigned char *)ordinary,
-                                    strlen(ordinary), sizeof(ordinary),
+        root = snag_json_load_strict((const unsigned char *)ordinary, strlen(ordinary), sizeof(ordinary),
                                     json_error, sizeof(json_error));
     }
     assert(root);
@@ -692,12 +657,10 @@ test_structured_capacity_failure(void)
     json_decref(root);
 
     {
-        static const char top_level[] =
-            "{\"type\":\"error\",\"code\":\"context_length_exceeded\","
+        static const char top_level[] = "{\"type\":\"error\",\"code\":\"context_length_exceeded\","
             "\"message\":\"top-level failure\",\"max_context_tokens\":42}";
         char json_error[128] = {0};
-        root = snag_json_load_strict((const unsigned char *)top_level,
-                                    strlen(top_level), sizeof(top_level),
+        root = snag_json_load_strict((const unsigned char *)top_level, strlen(top_level), sizeof(top_level),
                                     json_error, sizeof(json_error));
     }
     assert(root);
@@ -737,8 +700,7 @@ test_provider_context_formats(void)
         {"{\"error\":{\"code\":400,\"message\":\"context error\"}}", false, 0, 0},
         {"{\"error\":{\"code\":\"invalid_prompt\"},\"error_type\":\"max_tokens_exceeded\"}", false, 0, 0},
         {"{\"error\":{\"code\":\"invalid_prompt\"},\"error_type\":\"authentication_error\"}", false, 0, 0},
-        {"{\"error\":{\"code\":\"invalid_prompt\"}}", false, 0, 0},
-    };
+        {"{\"error\":{\"code\":\"invalid_prompt\"}}", false, 0, 0}, };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         struct snag_provider_failure failure;
         json_t *root = json_loadb(cases[i].json, strlen(cases[i].json), 0, NULL);
@@ -801,8 +763,7 @@ test_reasoning_content_parts(void)
         assert(snag_buf_printf(&wire, "%s%s%s", created, variants[v], finish) == 0);
         for (size_t chunk = 0; chunk < 3u; ++chunk) {
             struct parsed_stream parsed = parsed_new(1024u);
-            assert(parse_stream((char *)wire.data, chunk == 2u ? 19u : chunk,
-                                &parsed) == 0);
+            assert(parse_stream((char *)wire.data, chunk == 2u ? 19u : chunk, &parsed) == 0);
             assert(parsed.text.len == 2u && memcmp(parsed.text.data, "ok", 2u) == 0);
             assert(parsed.graph.count == 2u);
             assert(snag_response_continuation_valid(parsed.graph.continuation, parsed.graph.count));
@@ -873,15 +834,13 @@ test_reasoning_terminal_and_validation(void)
     assert(parse_stream(ordered, 7u, &ordered_result) == 0);
     assert(ordered_result.graph.count == 2u);
     assert(json_array_size(ordered_result.graph.continuation) == 2u);
-    for (size_t i = 0u; i < 2u; ++i)
-        assert(json_integer_value(json_object_get(json_array_get(
+    for (size_t i = 0u; i < 2u; ++i) assert(json_integer_value(json_object_get(json_array_get(
             ordered_result.graph.continuation, i), "before")) == (json_int_t)i + 1);
     parsed_free(&ordered_result);
     static const char *snapshots[] = {
         "{\"type\":\"reasoning\",\"id\":\"rs\",\"summary\":[],\"encrypted_content\":\"opaque-final\"}",
         "{\"type\":\"reasoning\",\"id\":\"rs\",\"content\":[{\"type\":\"reasoning_text\",\"text\":\"retained\"}],\"summary\":null,\"encrypted_content\":null,\"status\":null}",
-        "{\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"private summary\"}]}"
-    };
+        "{\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"private summary\"}]}" };
     for (size_t i = 0u; i < sizeof(snapshots) / sizeof(snapshots[0]); ++i) {
         struct snag_buf wire = {.max = 8192u};
         struct parsed_stream parsed = parsed_new(1024u);
@@ -939,8 +898,7 @@ test_failed_function_clarification_boundaries(void)
         "{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"other\",\"name\":\"exec_command\",\"arguments\":\"{}\",\"status\":\"completed\"}",
         "{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"changed\",\"status\":\"completed\"}",
         "{\"type\":\"function_call\"}",
-        "{\"type\":\"web_search_call\",\"id\":\"hosted\",\"status\":\"in_progress\"}"
-    };
+        "{\"type\":\"web_search_call\",\"id\":\"hosted\",\"status\":\"in_progress\"}" };
     for (size_t i = 0u; i < sizeof(snapshots) / sizeof(snapshots[0]); ++i) {
         struct parsed_stream emitted = parsed_new(1024u);
         struct snag_responses_stream responses;
@@ -980,8 +938,7 @@ test_message_completion_finalizes_phase(void)
                 struct snag_buf wire = {.max = 8192u};
                 struct parsed_stream emitted = parsed_new(1024u);
                 const char *initial = phases[direction], *final = phases[1u - direction];
-                const char *snapshot =
-                    "{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\","
+                const char *snapshot = "{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\","
                     "\"status\":\"completed\",\"phase\":\"%s\","
                     "\"content\":[{\"type\":\"output_text\",\"text\":\"Checking.\"}]}";
                 struct snag_buf item = {.max = 1024u};
@@ -995,8 +952,7 @@ test_message_completion_finalizes_phase(void)
                     "\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n"
                     "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"item_id\":\"m\","
                     "\"content_index\":0,\"delta\":\"Checking\"}\n\n", initial) == 0);
-                if (!terminal_only || conflict)
-                    assert(snag_buf_printf(&wire,
+                if (!terminal_only || conflict) assert(snag_buf_printf(&wire,
                         "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":%s}\n\n",
                         item.data) == 0);
                 if (conflict) {

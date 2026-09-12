@@ -52,8 +52,7 @@ int snag_child_spawn_legacy_pty(struct snag_child *child, const char *shell, con
 #endif
 /* Private same-executable entry point; -1 means ordinary application startup. */
 int snag_output_broker_main(int argc, wchar_t **argv);
-int snag_output_broker_write(struct snag_output_broker **owner, int fd,
-                              const void *bytes, size_t len,
+int snag_output_broker_write(struct snag_output_broker **owner, int fd, const void *bytes, size_t len,
                               int (*checkpoint)(void *), void *opaque);
 /* Inheritable standard console slot, avoiding cross-process console duplication. */
 /* Keep the source standard handles open until this owner is closed. */

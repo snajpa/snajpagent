@@ -22,25 +22,15 @@ struct snag_provider_failure {
     uint32_t retry_after_ms;
 };
 
-typedef int (*snag_responses_emit_fn)(void *opaque, size_t output_index,
-                                     enum snag_item_kind kind,
-                                     enum snag_item_phase phase,
-                                     const char *provider_item_id,
+typedef int (*snag_responses_emit_fn)(void *opaque, size_t output_index, enum snag_item_kind kind,
+                                     enum snag_item_phase phase, const char *provider_item_id,
                                      const char *text, size_t len);
 
 enum snag_wire_item_kind {
-    SNAG_WIRE_ITEM_NONE,
-    SNAG_WIRE_ITEM_MESSAGE,
-    SNAG_WIRE_ITEM_FUNCTION_CALL,
-    SNAG_WIRE_ITEM_INERT
-};
+    SNAG_WIRE_ITEM_NONE, SNAG_WIRE_ITEM_MESSAGE, SNAG_WIRE_ITEM_FUNCTION_CALL, SNAG_WIRE_ITEM_INERT };
 
 enum snag_wire_part_kind {
-    SNAG_WIRE_PART_NONE,
-    SNAG_WIRE_PART_TEXT,
-    SNAG_WIRE_PART_REFUSAL,
-    SNAG_WIRE_PART_INERT
-};
+    SNAG_WIRE_PART_NONE, SNAG_WIRE_PART_TEXT, SNAG_WIRE_PART_REFUSAL, SNAG_WIRE_PART_INERT };
 
 struct snag_wire_part {
     struct snag_wire_part *next;
@@ -89,16 +79,12 @@ struct snag_responses_stream {
 void snag_responses_stream_init(struct snag_responses_stream *stream,
                                snag_responses_emit_fn emit, void *opaque);
 void snag_responses_stream_free(struct snag_responses_stream *stream);
-int snag_responses_sse_record(void *opaque,
-                             const struct snag_sse_record *record);
-int snag_responses_stream_finish(struct snag_responses_stream *stream,
-                                struct snag_response_graph *graph,
+int snag_responses_sse_record(void *opaque, const struct snag_sse_record *record);
+int snag_responses_stream_finish(struct snag_responses_stream *stream, struct snag_response_graph *graph,
                                 char *error, size_t error_size);
 const char *snag_responses_stream_error(const struct snag_responses_stream *stream);
-bool snag_provider_failure_is_capacity(
-    const struct snag_provider_failure *failure);
+bool snag_provider_failure_is_capacity( const struct snag_provider_failure *failure);
 bool snag_provider_failure_is_policy(const struct snag_provider_failure *failure);
-int snag_provider_failure_from_json(const json_t *root,
-                                   struct snag_provider_failure *failure);
+int snag_provider_failure_from_json(const json_t *root, struct snag_provider_failure *failure);
 
 #endif

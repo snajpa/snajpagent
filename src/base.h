@@ -109,10 +109,8 @@ bool snag_irc_nick_char(unsigned char c);
 bool snag_irc_nick_mentioned(const char *text, const char *nick);
 enum snag_irc_target_command {
     SNAG_IRC_TARGET_INVALID = -1, SNAG_IRC_TARGET_NONE,
-    SNAG_IRC_TARGET_SELECT, SNAG_IRC_TARGET_SEND, SNAG_IRC_TARGET_ALL
-};
-enum snag_irc_target_command snag_irc_target_parse(const char *text, size_t len,
-                                                uint32_t *id, size_t *body);
+    SNAG_IRC_TARGET_SELECT, SNAG_IRC_TARGET_SEND, SNAG_IRC_TARGET_ALL };
+enum snag_irc_target_command snag_irc_target_parse(const char *text, size_t len, uint32_t *id, size_t *body);
 int snag_random_id(char out[SNAG_ID_HEX_LEN + 1u]);
 int snag_random_bytes(unsigned char *out, size_t len);
 uint64_t snag_time_ms(void);
@@ -153,8 +151,7 @@ struct snag_sha256 {
 void snag_sha256_init(struct snag_sha256 *ctx);
 void snag_sha256_update(struct snag_sha256 *ctx, const void *data, size_t len);
 void snag_sha256_final(struct snag_sha256 *ctx, unsigned char out[32]);
-void snag_sha256_hex(const void *data, size_t len,
-                    char out[SNAG_SHA256_HEX_LEN + 1u]);
+void snag_sha256_hex(const void *data, size_t len, char out[SNAG_SHA256_HEX_LEN + 1u]);
 bool snag_hex_is_lower(const char *s, size_t len);
 int snag_base64_append(struct snag_buf *out, const unsigned char *data, size_t len);
 int snag_base64_decode(struct snag_buf *out, const char *text);

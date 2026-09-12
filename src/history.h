@@ -47,8 +47,7 @@ struct snag_history {
 
 void snag_history_free(struct snag_history *history);
 void snag_history_snapshot_free(struct snag_history_snapshot *snapshot);
-int snag_history_snapshot_copy(struct snag_history_snapshot *out,
-                              const struct snag_history_snapshot *source);
+int snag_history_snapshot_copy(struct snag_history_snapshot *out, const struct snag_history_snapshot *source);
 int snag_history_open(struct snag_history *history, const char *dotdir);
 int snag_history_bind(struct snag_history *history, const char *session_dir);
 int snag_history_merge(struct snag_history *history);

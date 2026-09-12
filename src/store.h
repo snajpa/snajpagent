@@ -26,35 +26,19 @@
 #define SNAG_GOAL_CONTINUATION_TEXT "Continue the active goal from its durable state."
 
 enum snag_policy_stop {
-    SNAG_POLICY_STOP_NONE,
-    SNAG_POLICY_STOP_PROVIDER,
-    SNAG_POLICY_STOP_REFUSAL
-};
+    SNAG_POLICY_STOP_NONE, SNAG_POLICY_STOP_PROVIDER, SNAG_POLICY_STOP_REFUSAL };
 
 enum snag_goal_status {
-    SNAG_GOAL_NONE,
-    SNAG_GOAL_ACTIVE,
-    SNAG_GOAL_PAUSED,
-    SNAG_GOAL_BLOCKED,
-    SNAG_GOAL_COMPLETED,
-    SNAG_GOAL_CANCELLED
-};
+    SNAG_GOAL_NONE, SNAG_GOAL_ACTIVE, SNAG_GOAL_PAUSED, SNAG_GOAL_BLOCKED,
+    SNAG_GOAL_COMPLETED, SNAG_GOAL_CANCELLED };
 
 enum snag_response_terminal {
-    SNAG_RESPONSE_TERMINAL_NONE,
-    SNAG_RESPONSE_TERMINAL_STEERED,
-    SNAG_RESPONSE_TERMINAL_INTERRUPTED,
-    SNAG_RESPONSE_TERMINAL_FAILED
-};
+    SNAG_RESPONSE_TERMINAL_NONE, SNAG_RESPONSE_TERMINAL_STEERED,
+    SNAG_RESPONSE_TERMINAL_INTERRUPTED, SNAG_RESPONSE_TERMINAL_FAILED };
 
 enum snag_session_control {
-    SNAG_CONTROL_CONFIG = 1u,
-    SNAG_CONTROL_CACHE = 2u,
-    SNAG_CONTROL_COMPACT = 4u,
-    SNAG_CONTROL_ARCHIVE = 8u,
-    SNAG_CONTROL_DELETE = 16u,
-    SNAG_CONTROL_RETRY = 32u
-};
+    SNAG_CONTROL_CONFIG = 1u, SNAG_CONTROL_CACHE = 2u, SNAG_CONTROL_COMPACT = 4u, SNAG_CONTROL_ARCHIVE = 8u,
+    SNAG_CONTROL_DELETE = 16u, SNAG_CONTROL_RETRY = 32u };
 
 struct snag_pending_call {
     char call_id[SNAG_ID_HEX_LEN + 1u];
@@ -212,59 +196,48 @@ bool snag_goal_unfinished(enum snag_goal_status status);
 
 void snag_store_init(struct snag_store *store);
 void snag_store_close(struct snag_store *store);
-int snag_store_open(struct snag_store *store, const char *dotdir,
-                   char *error, size_t error_size);
+int snag_store_open(struct snag_store *store, const char *dotdir, char *error, size_t error_size);
 
 void snag_session_init(struct snag_session *session);
 void snag_session_close(struct snag_session *session);
 /* Resolve a workspace path and require an existing UTF-8 directory. label
  * names the workspace in diagnostics; NULL uses the bare "workspace" wording. */
-char *snag_workspace_resolve(const char *workspace, const char *label,
-                             char *error, size_t error_size);
+char *snag_workspace_resolve(const char *workspace, const char *label, char *error, size_t error_size);
 int snag_session_prepare(struct snag_session *session, const char *workspace,
                          const char *provider, const char *model, const char *effort,
                          char *error, size_t error_size);
 int snag_session_persist(struct snag_store *store, struct snag_session *session,
                          char *error, size_t error_size);
 int snag_session_create(struct snag_store *store, struct snag_session *session,
-                       const char *workspace, const char *provider,
-                       const char *model,
+                       const char *workspace, const char *provider, const char *model,
                        const char *effort, char *error, size_t error_size);
 int snag_session_open(struct snag_store *store, struct snag_session *session,
                      const char *prefix, char *error, size_t error_size);
 int snag_session_open_last(struct snag_store *store, struct snag_session *session,
-                          const char *workspace, bool all,
-                          char *error, size_t error_size);
+                          const char *workspace, bool all, char *error, size_t error_size);
 typedef int (*snag_store_emit_fn)(void *, const char *, size_t);
 int snag_store_list(struct snag_store *store, const char *workspace, bool all,
                     bool include_archived, snag_store_emit_fn emit, void *opaque,
                     char *error, size_t error_size);
-int snag_session_archive(struct snag_session *session, uint64_t *written_seq,
-                        char *error, size_t error_size);
+int snag_session_archive(struct snag_session *session, uint64_t *written_seq, char *error, size_t error_size);
 int snag_session_unarchive(struct snag_session *session, uint64_t *written_seq,
                           char *error, size_t error_size);
 int snag_session_delete(struct snag_store *store, struct snag_session *session,
-                       const char *confirmed_prefix, uint64_t *written_seq,
-                       char *error, size_t error_size);
-int snag_session_complete_delete(struct snag_store *store,
-                                struct snag_session *session,
+                       const char *confirmed_prefix, uint64_t *written_seq, char *error, size_t error_size);
+int snag_session_complete_delete(struct snag_store *store, struct snag_session *session,
                                 char *error, size_t error_size);
 
 /* Full replay supplies validated post-event state; cursor scans supply NULL. */
-typedef int (*snag_session_event_fn)(void *opaque, const struct snag_session *state,
-                                   uint64_t seq,
-                                    const char *type, const json_t *data,
-                                    char *error, size_t error_size);
-int snag_session_each_event(struct snag_session *session,
-                           snag_session_event_fn fn, void *opaque,
+typedef int (*snag_session_event_fn)(void *opaque, const struct snag_session *state, uint64_t seq,
+                                    const char *type, const json_t *data, char *error, size_t error_size);
+int snag_session_each_event(struct snag_session *session, snag_session_event_fn fn, void *opaque,
                            char *error, size_t error_size);
 struct snag_process_state *snag_session_process(struct snag_session *, const char *handle);
 int snag_process_output_decode(const json_t *data, struct snag_buf *bytes);
 int snag_session_each_event_since(struct snag_session *, const struct snag_process_state *,
                                   snag_session_event_fn, void *, char *, size_t);
 
-int snag_session_commit(struct snag_session *session, const char *type,
-                       json_t *data, uint64_t *written_seq,
+int snag_session_commit(struct snag_session *session, const char *type, json_t *data, uint64_t *written_seq,
                        char *error, size_t error_size);
 
 #endif

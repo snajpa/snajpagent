@@ -60,13 +60,10 @@ ctx_error(struct provider_ctx *ctx, const char *message)
 }
 
 static const char *
-stream_or_sse_error(struct provider_ctx *ctx, const char *sse_error,
-                    const char *fallback)
+stream_or_sse_error(struct provider_ctx *ctx, const char *sse_error, const char *fallback)
 {
-    if (ctx->stream.failed)
-        return snag_responses_stream_error(&ctx->stream);
-    if (sse_error && sse_error[0])
-        return sse_error;
+    if (ctx->stream.failed) return snag_responses_stream_error(&ctx->stream);
+    if (sse_error && sse_error[0]) return sse_error;
     return fallback;
 }
 
@@ -74,17 +71,14 @@ static bool
 ascii_printable(const unsigned char *data, size_t len)
 {
     for (size_t i = 0; i < len; ++i)
-        if (data[i] < 0x20u || data[i] > 0x7eu)
-            return false;
+        if (data[i] < 0x20u || data[i] > 0x7eu) return false;
     return true;
 }
 
 static void
-strip_crlf(const char *input, size_t len, const unsigned char **out,
-           size_t *out_len)
+strip_crlf(const char *input, size_t len, const unsigned char **out, size_t *out_len)
 {
-    while (len && (input[len - 1u] == '\r' || input[len - 1u] == '\n'))
-        --len;
+    while (len && (input[len - 1u] == '\r' || input[len - 1u] == '\n')) --len;
     *out = (const unsigned char *)input;
     *out_len = len;
 }
@@ -99,69 +93,55 @@ append_host_header(struct snag_buf *out, const char *base_url)
         host = base_url + 8u;
     else if (strncmp(base_url, "http://", 7u) == 0)
         host = base_url + 7u;
-    else {
-        return snag_errno(EINVAL);
-    }
+    else return snag_errno(EINVAL);
     end = strchr(host, '/');
-    if (!end)
-        end = host + strlen(host);
-    if (end == host)
-        return -1;
-    return snag_buf_append(out, "host: ", 6u) == 0 &&
-           snag_buf_append(out, host, (size_t)(end - host)) == 0 &&
+    if (!end) end = host + strlen(host);
+    if (end == host) return -1;
+    return snag_buf_append(out, "host: ", 6u) == 0 && snag_buf_append(out, host, (size_t)(end - host)) == 0 &&
            snag_buf_terminate(out) == 0 ? 0 : -1;
 }
 
 static int
-render_request_headers(struct provider_ctx *ctx, const char *request_line,
-                       const char *accept, bool has_body)
+render_request_headers(struct provider_ctx *ctx, const char *request_line, const char *accept, bool has_body)
 {
     int rc = -1;
 
-    if (!snag_ui_enabled(ctx->render, SNAG_PRESENT_WIRE))
-        return 0;
+    if (!snag_ui_enabled(ctx->render, SNAG_PRESENT_WIRE)) return 0;
     struct snag_buf redacted = {.max = SNAG_WIRE_HEADER_MAX};
     struct snag_buf line = {.max = SNAG_WIRE_HEADER_MAX};
     struct snag_buf host = {.max = SNAG_CONFIG_URL_MAX + 8u};
     struct snag_buf accept_line = {.max = SNAG_WIRE_HEADER_MAX};
     if (append_host_header(&host, ctx->provider->base_url) < 0 ||
-        snag_buf_printf(&accept_line, "accept: %s", accept) < 0)
-        goto out;
+        snag_buf_printf(&accept_line, "accept: %s", accept) < 0) goto out;
     /* Keep the established diagnostic order and authorization placeholder.
      * Configured values and authorization use the existing header redactor. */
     const struct { const char *text, *value; bool redact; } headers[] = {
         {request_line, NULL, false}, {(char *)host.data, NULL, false},
         {(char *)accept_line.data, NULL, false},
         {has_body ? "content-type: application/json" : NULL, NULL, false},
-        {"authorization: Bearer x", NULL, true},
-        {"HTTP-Referer", ctx->provider->openrouter_referer, true},
+        {"authorization: Bearer x", NULL, true}, {"HTTP-Referer", ctx->provider->openrouter_referer, true},
         {"X-OpenRouter-Title", ctx->provider->openrouter_title, true}
     };
     for (size_t i = 0u; i < sizeof(headers) / sizeof(headers[0]); ++i) {
         const char *text = headers[i].text;
-        if (!text || (headers[i].value && !headers[i].value[0]))
-            continue;
+        if (!text || (headers[i].value && !headers[i].value[0])) continue;
         if (headers[i].value) {
             snag_buf_reset(&line);
-            if (snag_buf_printf(&line, "%s: %s", text, headers[i].value) < 0)
-                goto out;
+            if (snag_buf_printf(&line, "%s: %s", text, headers[i].value) < 0) goto out;
             text = (char *)line.data;
         }
         size_t len = strlen(text);
         if (headers[i].redact) {
-            if (snag_wire_header_redact((const unsigned char *)text, len,
-                                       &ctx->secrets.wire, &redacted) < 0)
+            if (snag_wire_header_redact((const unsigned char *)text, len, &ctx->secrets.wire, &redacted) < 0)
                 goto out;
             text = (char *)redacted.data;
             len = redacted.len;
         }
         if (snag_ui_send(ctx->render, (struct snag_ui_command){
-            .kind = SNAG_UI_TRANSPORT, .data.value = '>', .text = text, .len = len}) < 0)
-            goto out;
+            .kind = SNAG_UI_TRANSPORT, .data.value = '>', .text = text, .len = len}) < 0) goto out;
     }
     rc = 0;
-out:
-    snag_buf_free(&accept_line);
+out: snag_buf_free(&accept_line);
     snag_buf_free(&redacted);
     snag_buf_free(&line);
     snag_buf_free(&host);
@@ -174,11 +154,9 @@ count_write_cb(char *ptr, size_t size, size_t nmemb, void *opaque)
     struct provider_ctx *ctx = opaque;
     size_t len;
 
-    if (size && nmemb > SIZE_MAX / size)
-        return 0;
+    if (size && nmemb > SIZE_MAX / size) return 0;
     len = size * nmemb;
-    if (len == 0u)
-        return 0u;
+    if (len == 0u) return 0u;
     if (snag_buf_append(&ctx->error_body, ptr, len) < 0) {
         ctx->body_failed = true;
         ctx_error(ctx, ctx->http_status >= 200 && ctx->http_status < 300 ?
@@ -199,36 +177,29 @@ header_cb(char *buffer, size_t size, size_t nmemb, void *opaque)
     struct snag_buf redacted;
     bool status_line;
 
-    if (size && nmemb > SIZE_MAX / size)
-        return 0;
+    if (size && nmemb > SIZE_MAX / size) return 0;
     strip_crlf(buffer, len, &line, &clean_len);
-    if (clean_len == 0u)
-        return len;
+    if (clean_len == 0u) return len;
     status_line = clean_len >= 5u && memcmp(line, "HTTP/", 5u) == 0;
-    if (status_line && curl_easy_getinfo(ctx->curl, CURLINFO_RESPONSE_CODE,
-                                        &ctx->http_status) != CURLE_OK)
+    if (status_line && curl_easy_getinfo(ctx->curl, CURLINFO_RESPONSE_CODE, &ctx->http_status) != CURLE_OK)
         return 0;
-    if (clean_len > 12u && strncasecmp((const char *)line,
-                                       "retry-after:", 12u) == 0) {
+    if (clean_len > 12u && strncasecmp((const char *)line, "retry-after:", 12u) == 0) {
         uint32_t delay_ms;
-        if (snag_provider_retry_after_parse(line + 12u, clean_len - 12u,
-                                           &delay_ms) == 0) {
+        if (snag_provider_retry_after_parse(line + 12u, clean_len - 12u, &delay_ms) == 0) {
             ctx->retry_after_present = true;
             ctx->retry_after_ms = delay_ms;
         }
     }
     if (snag_ui_enabled(ctx->render, SNAG_PRESENT_WIRE)) {
         if (status_line) {
-            if (!ascii_printable(line, clean_len) ||
-                snag_ui_send(ctx->render, (struct snag_ui_command){
+            if (!ascii_printable(line, clean_len) || snag_ui_send(ctx->render, (struct snag_ui_command){
                     .kind = SNAG_UI_TRANSPORT, .data.value = '<', .text = (const char *)line, .len = clean_len}) < 0) {
                 ctx_error(ctx, "HTTP status diagnostics could not be rendered");
                 return 0;
             }
         } else {
             snag_buf_init(&redacted, SNAG_WIRE_HEADER_MAX);
-            if (snag_wire_header_redact(line, clean_len, &ctx->secrets.wire,
-                                       &redacted) < 0 ||
+            if (snag_wire_header_redact(line, clean_len, &ctx->secrets.wire, &redacted) < 0 ||
                 snag_ui_send(ctx->render, (struct snag_ui_command){
                     .kind = SNAG_UI_TRANSPORT, .data.value = '<', .text = (const char *)redacted.data, .len = redacted.len}) < 0) {
                 snag_buf_free(&redacted);
@@ -248,21 +219,17 @@ write_cb(char *ptr, size_t size, size_t nmemb, void *opaque)
     size_t len;
     char error[256] = {0};
 
-    if (size && nmemb > SIZE_MAX / size)
-        return 0;
+    if (size && nmemb > SIZE_MAX / size) return 0;
     len = size * nmemb;
-    if (len == 0u)
-        return 0u;
+    if (len == 0u) return 0u;
     if (ctx->http_status >= 200 && ctx->http_status < 300) {
         ctx->semantic_body_seen = true;
         if (snag_sse_feed(&ctx->sse, ptr, len, error, sizeof(error)) < 0) {
-            (void)snprintf(ctx->error, sizeof(ctx->error), "%s",
-                           stream_or_sse_error(ctx, error,
+            (void)snprintf(ctx->error, sizeof(ctx->error), "%s", stream_or_sse_error(ctx, error,
                                                "invalid provider SSE stream"));
             return 0;
         }
-    } else
-        return count_write_cb(ptr, size, nmemb, opaque);
+    } else return count_write_cb(ptr, size, nmemb, opaque);
     return len;
 }
 
@@ -273,11 +240,9 @@ process_controls(void *opaque, unsigned int timeout_ms)
     int rc;
 
     (void)timeout_ms;
-    if (!ctx->pump)
-        return 0;
+    if (!ctx->pump) return 0;
     rc = ctx->pump(ctx->pump_opaque, 0u);
-    if (rc == SNAG_PROVIDER_NEW_INPUT)
-        ctx->new_input = true;
+    if (rc == SNAG_PROVIDER_NEW_INPUT) ctx->new_input = true;
     if (rc < 0) {
         ctx->cancel_code = 3;
         ctx_error(ctx, "active input could not be processed");
@@ -291,21 +256,17 @@ process_controls(void *opaque, unsigned int timeout_ms)
 }
 
 static CURLcode
-perform_request(CURL *curl, snag_provider_pump_fn pump, void *opaque,
-                snag_wake_fd wake_fd, int poll_ms)
+perform_request(CURL *curl, snag_provider_pump_fn pump, void *opaque, snag_wake_fd wake_fd, int poll_ms)
 {
     CURLM *multi = curl_multi_init();
     CURLcode result = CURLE_FAILED_INIT;
     int running = 0;
 
-    if (!multi)
-        return CURLE_OUT_OF_MEMORY;
-    if (curl_multi_add_handle(multi, curl) != CURLM_OK)
-        goto out;
+    if (!multi) return CURLE_OUT_OF_MEMORY;
+    if (curl_multi_add_handle(multi, curl) != CURLM_OK) goto out;
     for (;;) {
         struct curl_waitfd wake = {
-            .fd = wake_fd, .events = CURL_WAIT_POLLIN
-        };
+            .fd = wake_fd, .events = CURL_WAIT_POLLIN };
         CURLMsg *message;
         int remaining;
 
@@ -313,8 +274,7 @@ perform_request(CURL *curl, snag_provider_pump_fn pump, void *opaque,
             result = CURLE_ABORTED_BY_CALLBACK;
             break;
         }
-        if (curl_multi_perform(multi, &running) != CURLM_OK)
-            break;
+        if (curl_multi_perform(multi, &running) != CURLM_OK) break;
         if (!running) {
             while ((message = curl_multi_info_read(multi, &remaining)))
                 if (message->msg == CURLMSG_DONE && message->easy_handle == curl)
@@ -322,52 +282,40 @@ perform_request(CURL *curl, snag_provider_pump_fn pump, void *opaque,
             break;
         }
         if (curl_multi_poll(multi, wake.fd == CURL_SOCKET_BAD ? NULL : &wake,
-                            wake.fd == CURL_SOCKET_BAD ? 0u : 1u, poll_ms, NULL) != CURLM_OK)
-            break;
+                            wake.fd == CURL_SOCKET_BAD ? 0u : 1u, poll_ms, NULL) != CURLM_OK) break;
     }
     (void)curl_multi_remove_handle(multi, curl);
-out:
-    (void)curl_multi_cleanup(multi);
+out: (void)curl_multi_cleanup(multi);
     return result;
 }
 
 static int
-provider_endpoint_url(const struct snag_provider_config *provider,
-                      const char *path,
-                      char *buffer, size_t buffer_size, const char **url,
-                      char *error, size_t error_size)
+provider_endpoint_url(const struct snag_provider_config *provider, const char *path,
+                      char *buffer, size_t buffer_size, const char **url, char *error, size_t error_size)
 {
     const char *base;
     const char *append_path;
     size_t base_len;
     int written;
 
-    if (!provider || !path || !url || !buffer || !buffer_size) {
+    if (!provider || !path || !url || !buffer || !buffer_size)
         return snag_fail(error, error_size, EINVAL, "invalid provider endpoint");
-    }
     base = provider->base_url;
 #if defined(SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS) || defined(SNAJPAGENT_TEST_FIXTURE)
     {
         const char *override = getenv("SNAJPAGENT_TEST_OPENAI_BASE");
-        if (override && *override)
-            base = override;
+        if (override && *override) base = override;
     }
 #endif
     append_path = path;
-    if (provider->auth == SNAG_AUTH_CHATGPT && strncmp(path, "/v1/", 4u) == 0)
-        append_path = path + 3u;
+    if (provider->auth == SNAG_AUTH_CHATGPT && strncmp(path, "/v1/", 4u) == 0) append_path = path + 3u;
     base_len = strlen(base);
-    while (base_len && base[base_len - 1u] == '/')
-        --base_len;
-    if (base_len >= 3u &&
-        memcmp(base + base_len - 3u, "/v1", 3u) == 0 &&
-        strncmp(path, "/v1/", 4u) == 0)
-        append_path = path + 3u;
-    written = snprintf(buffer, buffer_size, "%.*s%s", (int)base_len,
-                       base, append_path);
-    if (written <= 0 || (size_t)written >= buffer_size) {
+    while (base_len && base[base_len - 1u] == '/') --base_len;
+    if (base_len >= 3u && memcmp(base + base_len - 3u, "/v1", 3u) == 0 &&
+        strncmp(path, "/v1/", 4u) == 0) append_path = path + 3u;
+    written = snprintf(buffer, buffer_size, "%.*s%s", (int)base_len, base, append_path);
+    if (written <= 0 || (size_t)written >= buffer_size)
         return snag_fail(error, error_size, ENAMETOOLONG, "provider endpoint is too long");
-    }
     *url = buffer;
     return 0;
 }
@@ -376,8 +324,7 @@ static size_t
 receive_body(char *data, size_t size, size_t count, void *opaque)
 {
     struct snag_buf *buf = opaque;
-    if (size && count > SIZE_MAX / size)
-        return 0;
+    if (size && count > SIZE_MAX / size) return 0;
     size *= count;
     return snag_buf_append(buf, data, size) == 0 ? size : 0;
 }
@@ -395,14 +342,12 @@ snag_provider_auth_post(const char *issuer, const char *path, const char *type, 
     *response = NULL;
     *status = 0;
     struct snag_buf output = {.max = (96u * 1024u)};
-    if (snprintf(url, sizeof(url), "%s%s", issuer, path) >= (int)sizeof(url) ||
-        snag_http_init() != CURLE_OK)
+    if (snprintf(url, sizeof(url), "%s%s", issuer, path) >= (int)sizeof(url) || snag_http_init() != CURLE_OK)
         goto out;
     curl = curl_easy_init();
     (void)snprintf(header, sizeof(header), "Content-Type: %s", type);
     headers = curl_slist_append(NULL, header);
-    if (!curl || !headers ||
-        snag_http_trust(curl) != CURLE_OK ||
+    if (!curl || !headers || snag_http_trust(curl) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_URL, url) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK ||
         curl_easy_setopt(curl, CURLOPT_POST, 1L) != CURLE_OK ||
@@ -421,9 +366,7 @@ snag_provider_auth_post(const char *issuer, const char *path, const char *type, 
         (void)snag_fail(error, error_size, ECANCELED, "login or token refresh cancelled");
         goto out;
     }
-    if (code != CURLE_OK ||
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status) != CURLE_OK)
-        goto out;
+    if (code != CURLE_OK || curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, status) != CURLE_OK) goto out;
     if (*status >= 200 && *status < 300) {
         *response = snag_json_load_strict(output.data, output.len, (96u * 1024u),
                                         parse_error, sizeof(parse_error));
@@ -434,11 +377,9 @@ snag_provider_auth_post(const char *issuer, const char *path, const char *type, 
     }
     rc = 0;
 out:
-    if (curl)
-        curl_easy_cleanup(curl);
+    if (curl) curl_easy_cleanup(curl);
     curl_slist_free_all(headers);
-    if (output.data)
-        memset(output.data, 0, output.len);
+    if (output.data) memset(output.data, 0, output.len);
     snag_buf_free(&output);
     if (rc < 0) {
         snag_auth_json_free(*response);
@@ -453,67 +394,53 @@ static int
 append_header(struct curl_slist **headers, const char *text)
 {
     struct curl_slist *next = curl_slist_append(*headers, text);
-    if (!next)
-        return -1;
+    if (!next) return -1;
     *headers = next;
     return 0;
 }
 
 static int
-append_authorization(struct curl_slist **headers,
-                     const struct snag_credential *credential)
+append_authorization(struct curl_slist **headers, const struct snag_credential *credential)
 {
     int rc;
 
     struct snag_buf line = {.max = SNAG_CREDENTIAL_MAX + 32u};
     rc = snag_buf_append(&line, "Authorization: Bearer ", 22u);
-    if (rc == 0)
-        rc = snag_buf_append(&line, credential->value, credential->len);
-    if (rc == 0)
-        rc = snag_buf_terminate(&line);
-    if (rc == 0)
-        rc = append_header(headers, (const char *)line.data);
+    if (rc == 0) rc = snag_buf_append(&line, credential->value, credential->len);
+    if (rc == 0) rc = snag_buf_terminate(&line);
+    if (rc == 0) rc = append_header(headers, (const char *)line.data);
     snag_buf_free(&line);
     return rc;
 }
 
 static int
-append_named_header(struct curl_slist **headers, const char *name,
-                    const char *value)
+append_named_header(struct curl_slist **headers, const char *name, const char *value)
 {
     int rc;
 
-    if (!value[0])
-        return 0;
+    if (!value[0]) return 0;
     struct snag_buf line = {.max = SNAG_WIRE_HEADER_MAX};
     rc = snag_buf_printf(&line, "%s: %s", name, value);
-    if (rc == 0)
-        rc = append_header(headers, (const char *)line.data);
+    if (rc == 0) rc = append_header(headers, (const char *)line.data);
     snag_buf_free(&line);
     return rc;
 }
 
 static int
-append_provider_headers(struct curl_slist **headers,
-                        const struct snag_provider_config *provider,
+append_provider_headers(struct curl_slist **headers, const struct snag_provider_config *provider,
                         const struct snag_credential *credential)
 {
     return append_authorization(headers, credential) == 0 &&
-           append_named_header(headers, "ChatGPT-Account-Id",
-                               credential->account_id) == 0 &&
-           append_named_header(headers, "HTTP-Referer",
-                               provider->openrouter_referer) == 0 &&
-           append_named_header(headers, "X-OpenRouter-Title",
-                               provider->openrouter_title) == 0 ?
-           0 : -1;
+           append_named_header(headers, "ChatGPT-Account-Id", credential->account_id) == 0 &&
+           append_named_header(headers, "HTTP-Referer", provider->openrouter_referer) == 0 &&
+           append_named_header(headers, "X-OpenRouter-Title", provider->openrouter_title) == 0 ? 0 : -1;
 }
 
 static unsigned int
 low_speed_seconds(uint32_t idle_timeout_ms)
 {
     uint32_t seconds = idle_timeout_ms / 1000u;
-    if (idle_timeout_ms % 1000u)
-        ++seconds;
+    if (idle_timeout_ms % 1000u) ++seconds;
     return seconds ? seconds : 1u;
 }
 
@@ -551,10 +478,8 @@ curl_code_retryable(CURLcode code)
     case CURLE_RECV_ERROR:
     case CURLE_GOT_NOTHING:
     case CURLE_PARTIAL_FILE:
-    case CURLE_SSL_CONNECT_ERROR:
-        return true;
-    default:
-        return false;
+    case CURLE_SSL_CONNECT_ERROR: return true;
+    default: return false;
     }
 }
 
@@ -566,16 +491,12 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
         ctx->retry_after_present, ctx->retry_after_ms);
     uint64_t deadline = snag_monotonic_ms() + delay_ms;
 
-    if (process_controls(ctx, 0u))
-        return ctx->cancel_code == 3 ? -1 : ctx->cancel_code;
-    if (ctx->new_input)
-        return SNAG_PROVIDER_NEW_INPUT;
+    if (process_controls(ctx, 0u)) return ctx->cancel_code == 3 ? -1 : ctx->cancel_code;
+    if (ctx->new_input) return SNAG_PROVIDER_NEW_INPUT;
     if (ctx->render) {
         char line[160];
-        (void)snprintf(line, sizeof(line),
-                       "provider retry %u/%u after %s in %llums",
-                       retries_done + 1u, SNAG_PROVIDER_MAX_RETRIES,
-                       reason, (unsigned long long)delay_ms);
+        (void)snprintf(line, sizeof(line), "provider retry %u/%u after %s in %llums",
+                       retries_done + 1u, SNAG_PROVIDER_MAX_RETRIES, reason, (unsigned long long)delay_ms);
         if (snag_ui_text(ctx->render, SNAG_UI_WARNING, line) < 0) {
             return snag_fail(error, error_size, EIO, "provider retry diagnostics could not be rendered");
         }
@@ -584,12 +505,9 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
         uint64_t now = snag_monotonic_ms();
         uint64_t remaining = now < deadline ? deadline - now : 0u;
         uint32_t slice = remaining > 25u ? 25u : (uint32_t)remaining;
-        if (process_controls(ctx, 0u))
-            return ctx->cancel_code == 3 ? -1 : ctx->cancel_code;
-        if (ctx->new_input)
-            return SNAG_PROVIDER_NEW_INPUT;
-        if (!remaining)
-            break;
+        if (process_controls(ctx, 0u)) return ctx->cancel_code == 3 ? -1 : ctx->cancel_code;
+        if (ctx->new_input) return SNAG_PROVIDER_NEW_INPUT;
+        if (!remaining) break;
         if (snag_wakeup_wait(snag_ui_wake_fd(ctx->render), (int)slice) < 0 && errno != EINTR)
             return snag_errorf(error, error_size, "provider retry wait failed");
     }
@@ -599,8 +517,7 @@ retry_wait(struct provider_ctx *ctx, unsigned int retries_done,
 static bool
 retryable_attempt(struct provider_ctx *ctx, CURLcode code)
 {
-    if (ctx->body_failed || code == CURLE_ABORTED_BY_CALLBACK)
-        return false;
+    if (ctx->body_failed || code == CURLE_ABORTED_BY_CALLBACK) return false;
     if (ctx->http_status >= 300 || ctx->http_status < 200) {
         if (ctx->error_body.len) {
             json_t *root = snag_json_load_strict(ctx->error_body.data,
@@ -613,73 +530,58 @@ retryable_attempt(struct provider_ctx *ctx, CURLcode code)
             }
         }
         if (ctx->http_status && !snag_provider_failure_retryable(ctx->http_status,
-                ctx->provider_failure.code, ctx->provider_failure.type))
-            return false;
+                ctx->provider_failure.code, ctx->provider_failure.type)) return false;
         return code == CURLE_OK ? ctx->http_status != 0 : curl_code_retryable(code);
     }
     if (ctx->sse.record) {
-        if (ctx->stream.retry_unsafe || ctx->stream.terminal)
-            return false;
-        if (ctx->stream.failed)
-            return snag_provider_failure_retryable(0,
+        if (ctx->stream.retry_unsafe || ctx->stream.terminal) return false;
+        if (ctx->stream.failed) return snag_provider_failure_retryable(0,
                 ctx->stream.provider_failure.code, ctx->stream.provider_failure.type);
         /* A partial record may hide output/activity we have not decoded yet. */
         if (ctx->sse.failed || ctx->sse.pending_cr || ctx->sse.line.len ||
-            ctx->sse.data_seen || ctx->sse.event.len)
-            return false;
+            ctx->sse.data_seen || ctx->sse.event.len) return false;
         return curl_code_retryable(code);
     }
     return !ctx->semantic_body_seen && curl_code_retryable(code);
 }
 
 static int
-retry_reason(struct provider_ctx *ctx, CURLcode code,
-             char *reason, size_t reason_size)
+retry_reason(struct provider_ctx *ctx, CURLcode code, char *reason, size_t reason_size)
 {
     if (ctx->stream.failed) {
         const struct snag_provider_failure *failure = &ctx->stream.provider_failure;
         return snprintf(reason, reason_size, "%s",
                         failure->code[0] ? failure->code : failure->type) > 0 ? 0 : -1;
     }
-    if (code == CURLE_OK)
-        return snprintf(reason, reason_size, "HTTP %ld", ctx->http_status) > 0 ?
-               0 : -1;
-    return snprintf(reason, reason_size, "%s", curl_easy_strerror(code)) > 0 ?
-           0 : -1;
+    if (code == CURLE_OK) return snprintf(reason, reason_size, "HTTP %ld", ctx->http_status) > 0 ? 0 : -1;
+    return snprintf(reason, reason_size, "%s", curl_easy_strerror(code)) > 0 ? 0 : -1;
 }
 
 static CURLcode
-perform_with_retry(CURL *curl, struct provider_ctx *ctx,
-                   char *error, size_t error_size,
+perform_with_retry(CURL *curl, struct provider_ctx *ctx, char *error, size_t error_size,
                    unsigned int *retry_count)
 {
     CURLcode code = CURLE_OK;
     unsigned int retries = 0u;
 
-    if (retry_count)
-        *retry_count = 0u;
+    if (retry_count) *retry_count = 0u;
     for (;;) {
         long request_size = 0;
         begin_attempt(ctx);
         code = perform_request(curl, process_controls, ctx, snag_ui_wake_fd(ctx->render), 25);
-        if (code == CURLE_OK && ctx->sse.record &&
-            ctx->http_status >= 200 && ctx->http_status < 300) {
-            if (snag_sse_finish(&ctx->sse, ctx->error, sizeof(ctx->error)) < 0)
-                code = CURLE_WRITE_ERROR;
+        if (code == CURLE_OK && ctx->sse.record && ctx->http_status >= 200 && ctx->http_status < 300) {
+            if (snag_sse_finish(&ctx->sse, ctx->error, sizeof(ctx->error)) < 0) code = CURLE_WRITE_ERROR;
             else if (!ctx->stream.terminal) {
                 ctx_error(ctx, "provider stream ended before response.completed");
                 code = CURLE_PARTIAL_FILE;
             }
         }
-        if (curl_easy_getinfo(curl, CURLINFO_REQUEST_SIZE,
-                              &request_size) == CURLE_OK && request_size > 0)
+        if (curl_easy_getinfo(curl, CURLINFO_REQUEST_SIZE, &request_size) == CURLE_OK && request_size > 0)
             ctx->request_may_have_been_sent = true;
-        if (code == CURLE_ABORTED_BY_CALLBACK &&
-            (ctx->cancel_code == 1 || ctx->cancel_code == 2)) {
+        if (code == CURLE_ABORTED_BY_CALLBACK && (ctx->cancel_code == 1 || ctx->cancel_code == 2)) {
             break;
         }
-        if (!retryable_attempt(ctx, code) || retries >= SNAG_PROVIDER_MAX_RETRIES)
-            break;
+        if (!retryable_attempt(ctx, code) || retries >= SNAG_PROVIDER_MAX_RETRIES) break;
         {
             char reason[96];
             int wait_rc;
@@ -687,8 +589,7 @@ perform_with_retry(CURL *curl, struct provider_ctx *ctx,
                 snprintf(reason, sizeof(reason), "retryable provider failure");
             wait_rc = retry_wait(ctx, retries, reason, error, error_size);
             if (wait_rc == SNAG_PROVIDER_NEW_INPUT) {
-                if (ctx->render)
-                    (void)snag_ui_text(ctx->render, SNAG_UI_WARNING,
+                if (ctx->render) (void)snag_ui_text(ctx->render, SNAG_UI_WARNING,
                                       "provider retry stopped: new input arrived");
                 break;
             }
@@ -702,27 +603,21 @@ perform_with_retry(CURL *curl, struct provider_ctx *ctx,
             }
         }
         ++retries;
-        if (retry_count)
-            *retry_count = retries;
+        if (retry_count) *retry_count = retries;
     }
     return code;
 }
 
 static void
-append_retry_suffix(char *error, size_t error_size,
-                    unsigned int retry_count, bool request_may_have_been_sent)
+append_retry_suffix(char *error, size_t error_size, unsigned int retry_count, bool request_may_have_been_sent)
 {
     size_t len;
 
-    if (!error || !error_size || retry_count == 0u)
-        return;
+    if (!error || !error_size || retry_count == 0u) return;
     len = strlen(error);
-    if (len >= error_size - 1u)
-        return;
-    (void)snprintf(error + len, error_size - len,
-                   "; retried %u time%s%s",
-                   retry_count, retry_count == 1u ? "" : "s",
-                   request_may_have_been_sent ?
+    if (len >= error_size - 1u) return;
+    (void)snprintf(error + len, error_size - len, "; retried %u time%s%s",
+                   retry_count, retry_count == 1u ? "" : "s", request_may_have_been_sent ?
                    "; request may have been sent during an earlier attempt" : "");
 }
 
@@ -737,21 +632,15 @@ classify_non2xx(struct provider_ctx *ctx, char *error, size_t error_size)
                   "provider error body could not be retained");
     }
     struct snag_buf redacted = {.max = SNAG_WIRE_BODY_MAX};
-    rc = snag_wire_json_redact(ctx->error_body.data, ctx->error_body.len,
-                              &ctx->secrets.wire, &redacted,
+    rc = snag_wire_json_redact(ctx->error_body.data, ctx->error_body.len, &ctx->secrets.wire, &redacted,
                               json_error, sizeof(json_error));
     if (rc == 0 && snag_ui_enabled(ctx->render, SNAG_PRESENT_PROTOCOL))
         (void)snag_ui_send(ctx->render, (struct snag_ui_command){
             .kind = SNAG_UI_PROTOCOL, .label = "response.error.body", .text = (const char *)redacted.data, .len = redacted.len});
     if (ctx->error_body.len) {
-        if (rc == 0)
-            (void)snprintf(error, error_size,
-                           "provider HTTP %ld: %.*s", ctx->http_status,
-                           (int)(redacted.len > 160u ? 160u : redacted.len),
-                           (const char *)redacted.data);
-        else
-            (void)snprintf(error, error_size,
-                           "provider HTTP %ld with non-JSON error body (%s)",
+        if (rc == 0) (void)snprintf(error, error_size, "provider HTTP %ld: %.*s", ctx->http_status,
+                           (int)(redacted.len > 160u ? 160u : redacted.len), (const char *)redacted.data);
+        else (void)snprintf(error, error_size, "provider HTTP %ld with non-JSON error body (%s)",
                            ctx->http_status, json_error[0] ? json_error : "unreadable");
     } else {
         (void)snprintf(error, error_size, "provider HTTP %ld", ctx->http_status);
@@ -761,8 +650,7 @@ classify_non2xx(struct provider_ctx *ctx, char *error, size_t error_size)
 }
 
 static int
-parse_count_body(struct provider_ctx *ctx, uint64_t *input_tokens,
-                 char *error, size_t error_size)
+parse_count_body(struct provider_ctx *ctx, uint64_t *input_tokens, char *error, size_t error_size)
 {
     char json_error[128] = {0};
     json_t *root;
@@ -773,11 +661,9 @@ parse_count_body(struct provider_ctx *ctx, uint64_t *input_tokens,
         return snag_fail(error, error_size, EOVERFLOW, ctx->error[0] ? ctx->error :
                   "input-token count body could not be retained");
     }
-    root = snag_json_load_strict(ctx->error_body.data, ctx->error_body.len,
-                                SNAG_WIRE_BODY_MAX, json_error,
+    root = snag_json_load_strict(ctx->error_body.data, ctx->error_body.len, SNAG_WIRE_BODY_MAX, json_error,
                                 sizeof(json_error));
-    if (!root)
-        return snag_fail(error, error_size, EPROTO,
+    if (!root) return snag_fail(error, error_size, EPROTO,
             "invalid input-token count response: %s", json_error);
     object = snag_json_string(root, "object");
     if (!snag_json_exact_keys(root, "input_tokens object") ||
@@ -787,8 +673,7 @@ parse_count_body(struct provider_ctx *ctx, uint64_t *input_tokens,
         goto out;
     }
     rc = 0;
-out:
-    json_decref(root);
+out: json_decref(root);
     return rc;
 }
 
@@ -807,24 +692,18 @@ parse_compact_body(struct provider_ctx *ctx, struct snag_json_document *output,
                   "compact response body could not be retained");
     }
     root = snag_json_load_strict(ctx->error_body.data, ctx->error_body.len,
-                                SNAG_CONTEXT_MAX_COMPACT, json_error,
-                                sizeof(json_error));
-    if (!root)
-        return snag_fail(error, error_size, EPROTO, "invalid compact response: %s", json_error);
+                                SNAG_CONTEXT_MAX_COMPACT, json_error, sizeof(json_error));
+    if (!root) return snag_fail(error, error_size, EPROTO, "invalid compact response: %s", json_error);
     object = snag_json_string(root, "object");
     body_output = json_object_get(root, "output");
     if (!object || strcmp(object, "response.compaction") != 0 ||
-        snag_context_compact_output_set(output, json_incref(body_output),
-                                        error, error_size) < 0) {
-        if (error && !error[0])
-            snag_errorf(error, error_size,
-                      "compact response has an invalid shape");
+        snag_context_compact_output_set(output, json_incref(body_output), error, error_size) < 0) {
+        if (error && !error[0]) snag_errorf(error, error_size, "compact response has an invalid shape");
         errno = EPROTO;
         goto out;
     }
     rc = 0;
-out:
-    json_decref(root);
+out: json_decref(root);
     return rc;
 }
 
@@ -842,8 +721,7 @@ struct codex_model_ref {
 
 enum limit_field {
     LIMIT_CONTEXT, LIMIT_MAX_CONTEXT, LIMIT_INPUT_CONTEXT, LIMIT_MAX_INPUT,
-    LIMIT_MAX_OUTPUT, LIMIT_AUTO_COMPACT, LIMIT_EFFECTIVE, LIMIT_COUNT
-};
+    LIMIT_MAX_OUTPUT, LIMIT_AUTO_COMPACT, LIMIT_EFFECTIVE, LIMIT_COUNT };
 
 struct limit_key {
     enum limit_field field;
@@ -852,15 +730,12 @@ struct limit_key {
 
 static int
 collect_limits(const json_t *const *objects, size_t object_count,
-               const struct limit_key *keys, size_t key_count,
-               uint64_t limits[LIMIT_COUNT])
+               const struct limit_key *keys, size_t key_count, uint64_t limits[LIMIT_COUNT])
 {
     for (size_t i = 0; i < object_count; ++i)
         for (size_t j = 0; j < key_count; ++j)
-            if (snag_json_merge_limit(objects[i], keys[j].key,
-                    keys[j].field == LIMIT_EFFECTIVE ? 100u :
-                    SNAG_CONFIG_TOKEN_LIMIT_MAX, &limits[keys[j].field]) < 0)
-                return -1;
+            if (snag_json_merge_limit(objects[i], keys[j].key, keys[j].field == LIMIT_EFFECTIVE ? 100u :
+                    SNAG_CONFIG_TOKEN_LIMIT_MAX, &limits[keys[j].field]) < 0) return -1;
     return 0;
 }
 
@@ -870,40 +745,29 @@ build_model_limits(const json_t *source, bool codex, json_t **out)
     static const struct limit_key generic[] = {
         {LIMIT_CONTEXT, "context_window_tokens"},
         {LIMIT_CONTEXT, "contextWindowTokens"}, {LIMIT_CONTEXT, "context_window"},
-        {LIMIT_CONTEXT, "contextWindow"}, {LIMIT_CONTEXT, "context_length"},
-        {LIMIT_CONTEXT, "contextLength"},
-        {LIMIT_MAX_CONTEXT, "max_context_window_tokens"},
-        {LIMIT_MAX_CONTEXT, "maxContextWindowTokens"},
-        {LIMIT_MAX_CONTEXT, "max_context_window"},
-        {LIMIT_MAX_CONTEXT, "maxContextWindow"},
+        {LIMIT_CONTEXT, "contextWindow"}, {LIMIT_CONTEXT, "context_length"}, {LIMIT_CONTEXT, "contextLength"},
+        {LIMIT_MAX_CONTEXT, "max_context_window_tokens"}, {LIMIT_MAX_CONTEXT, "maxContextWindowTokens"},
+        {LIMIT_MAX_CONTEXT, "max_context_window"}, {LIMIT_MAX_CONTEXT, "maxContextWindow"},
         {LIMIT_INPUT_CONTEXT, "input_context_window_tokens"},
-        {LIMIT_INPUT_CONTEXT, "inputContextWindowTokens"},
-        {LIMIT_INPUT_CONTEXT, "input_context_window"},
+        {LIMIT_INPUT_CONTEXT, "inputContextWindowTokens"}, {LIMIT_INPUT_CONTEXT, "input_context_window"},
         {LIMIT_INPUT_CONTEXT, "inputContextWindow"},
         {LIMIT_MAX_INPUT, "max_input_tokens"}, {LIMIT_MAX_INPUT, "maxInputTokens"},
-        {LIMIT_MAX_OUTPUT, "max_output_tokens"},
-        {LIMIT_MAX_OUTPUT, "maxOutputTokens"},
-        {LIMIT_AUTO_COMPACT, "auto_compact_input_tokens"},
-        {LIMIT_AUTO_COMPACT, "autoCompactInputTokens"},
-        {LIMIT_AUTO_COMPACT, "auto_compact_token_limit"},
-        {LIMIT_AUTO_COMPACT, "autoCompactTokenLimit"},
+        {LIMIT_MAX_OUTPUT, "max_output_tokens"}, {LIMIT_MAX_OUTPUT, "maxOutputTokens"},
+        {LIMIT_AUTO_COMPACT, "auto_compact_input_tokens"}, {LIMIT_AUTO_COMPACT, "autoCompactInputTokens"},
+        {LIMIT_AUTO_COMPACT, "auto_compact_token_limit"}, {LIMIT_AUTO_COMPACT, "autoCompactTokenLimit"},
         {LIMIT_EFFECTIVE, "effective_context_window_percent"},
         {LIMIT_EFFECTIVE, "effectiveContextWindowPercent"}
     };
     static const struct limit_key native[] = {
-        {LIMIT_CONTEXT, "context_window"},
-        {LIMIT_MAX_CONTEXT, "max_context_window"},
-        {LIMIT_INPUT_CONTEXT, "input_context_window"},
-        {LIMIT_MAX_INPUT, "max_input_tokens"},
-        {LIMIT_MAX_OUTPUT, "max_output_tokens"},
-        {LIMIT_AUTO_COMPACT, "auto_compact_token_limit"},
+        {LIMIT_CONTEXT, "context_window"}, {LIMIT_MAX_CONTEXT, "max_context_window"},
+        {LIMIT_INPUT_CONTEXT, "input_context_window"}, {LIMIT_MAX_INPUT, "max_input_tokens"},
+        {LIMIT_MAX_OUTPUT, "max_output_tokens"}, {LIMIT_AUTO_COMPACT, "auto_compact_token_limit"},
         {LIMIT_EFFECTIVE, "effective_context_window_percent"}
     };
     static const char *const output_keys[LIMIT_COUNT] = {
         "context_window_tokens", "max_context_window_tokens",
         "input_context_window_tokens", "max_input_tokens", "max_output_tokens",
-        "auto_compact_input_tokens", "effective_context_window_percent"
-    };
+        "auto_compact_input_tokens", "effective_context_window_percent" };
     const json_t *objects[3] = {source, NULL, NULL};
     size_t object_count = 1u;
     uint64_t limit[LIMIT_COUNT] = {0};
@@ -913,61 +777,46 @@ build_model_limits(const json_t *source, bool codex, json_t **out)
         static const char *const nested[] = {"metadata", "capabilities"};
         for (size_t i = 0; i < sizeof(nested) / sizeof(nested[0]); ++i) {
             json_t *value = json_object_get(source, nested[i]);
-            if (!value || json_is_null(value))
-                continue;
-            if (!json_is_object(value))
-                goto invalid;
+            if (!value || json_is_null(value)) continue;
+            if (!json_is_object(value)) goto invalid;
             objects[object_count++] = value;
         }
     }
     if (collect_limits(objects, object_count, codex ? native : generic,
-            codex ? sizeof(native) / sizeof(native[0]) :
-                    sizeof(generic) / sizeof(generic[0]), limit) < 0)
+            codex ? sizeof(native) / sizeof(native[0]) : sizeof(generic) / sizeof(generic[0]), limit) < 0)
         goto invalid;
     limits = json_object();
-    if (!limits)
-        goto fail;
+    if (!limits) goto fail;
     for (size_t i = 0u; i < LIMIT_COUNT; ++i)
         if (snag_json_set_new(limits, output_keys[i],
-                limit[i] ? json_integer((json_int_t)limit[i]) : json_null()) < 0)
-            goto fail;
-    if (!snag_model_limits_valid(limits))
-        goto invalid;
+                limit[i] ? json_integer((json_int_t)limit[i]) : json_null()) < 0) goto fail;
+    if (!snag_model_limits_valid(limits)) goto invalid;
     *out = limits;
     return 0;
-invalid:
-    errno = EPROTO;
-fail:
-    json_decref(limits);
+invalid: errno = EPROTO;
+fail: json_decref(limits);
     return -1;
 }
 
 static int
 append_efforts(json_t *out, const json_t *source, bool codex)
 {
-    if (!source)
-        return 0;
-    if (!json_is_array(source) ||
-        json_array_size(source) > SNAG_PROVIDER_EFFORTS_MAX)
-        return -1;
+    if (!source) return 0;
+    if (!json_is_array(source) || json_array_size(source) > SNAG_PROVIDER_EFFORTS_MAX) return -1;
     for (size_t i = 0; i < json_array_size(source); ++i) {
         json_t *value = json_array_get(source, i);
         const char *effort = NULL;
         bool duplicate = false;
 
-        if (json_is_object(value))
-            value = json_object_get(value, "effort");
-        else if (codex)
-            return -1;
-        if (!(effort = snag_json_bounded_string(value, SNAG_CONFIG_EFFORT_MAX - 1u)))
-            return -1;
+        if (json_is_object(value)) value = json_object_get(value, "effort");
+        else if (codex) return -1;
+        if (!(effort = snag_json_bounded_string(value, SNAG_CONFIG_EFFORT_MAX - 1u))) return -1;
         for (size_t j = 0; j < json_array_size(out); ++j)
             if (strcmp(json_string_value(json_array_get(out, j)), effort) == 0) {
                 duplicate = true;
                 break;
             }
-        if (!duplicate && json_array_append_new(out, json_string(effort)) < 0)
-            return -1;
+        if (!duplicate && json_array_append_new(out, json_string(effort)) < 0) return -1;
     }
     return 0;
 }
@@ -985,55 +834,42 @@ append_model(json_t *out, const json_t *source, bool codex)
 
     if (!json_is_object(source) ||
         !(id = snag_json_bounded_string(json_object_get(source, codex ? "slug" : "id"),
-                                        SNAG_CONFIG_MODEL_MAX - 1u)))
-        return -1;
+                                        SNAG_CONFIG_MODEL_MAX - 1u))) return -1;
     for (size_t i = 0; i < json_array_size(out); ++i) {
         const char *existing = snag_json_string(json_array_get(out, i), "id");
-        if (existing && strcmp(existing, id) == 0)
-            return 0;
+        if (existing && strcmp(existing, id) == 0) return 0;
     }
     metadata = json_object_get(source, "metadata");
-    if (!json_is_object(metadata))
-        metadata = NULL;
+    if (!json_is_object(metadata)) metadata = NULL;
     effort_source = json_object_get(source, "supported_reasoning_levels");
-    if (!effort_source && metadata)
-        effort_source = json_object_get(metadata, "supported_reasoning_levels");
-    if (json_is_null(effort_source))
-        effort_source = NULL;
+    if (!effort_source && metadata) effort_source = json_object_get(metadata, "supported_reasoning_levels");
+    if (json_is_null(effort_source)) effort_source = NULL;
     {
         json_t *value = json_object_get(source, "default_reasoning_level");
-        if (!value && metadata)
-            value = json_object_get(metadata, "default_reasoning_level");
+        if (!value && metadata) value = json_object_get(metadata, "default_reasoning_level");
         if (value && !json_is_null(value) &&
-            !(default_effort = snag_json_bounded_string(value, SNAG_CONFIG_EFFORT_MAX - 1u)))
-            return -1;
+            !(default_effort = snag_json_bounded_string(value, SNAG_CONFIG_EFFORT_MAX - 1u))) return -1;
     }
-    if (codex && default_effort && !effort_source)
-        return -1;
+    if (codex && default_effort && !effort_source) return -1;
     efforts = json_array();
-    if (!efforts ||
-        append_efforts(efforts, effort_source, codex) < 0 ||
-        build_model_limits(source, codex, &limits) < 0)
-        goto fail;
+    if (!efforts || append_efforts(efforts, effort_source, codex) < 0 ||
+        build_model_limits(source, codex, &limits) < 0) goto fail;
     if (codex && default_effort) {
         bool supported = false;
 
         for (size_t i = 0; i < json_array_size(efforts); ++i)
-            if (strcmp(json_string_value(json_array_get(efforts, i)),
-                       default_effort) == 0) {
+            if (strcmp(json_string_value(json_array_get(efforts, i)), default_effort) == 0) {
                 supported = true;
                 break;
             }
-        if (!supported)
-            goto fail;
+        if (!supported) goto fail;
     }
     entry = json_pack("{s:s?,s:O,s:s,s:O}", "default_effort", default_effort,
                       "efforts", efforts, "id", id, "limits", limits);
     json_decref(limits);
     json_decref(efforts);
     return json_array_append_new(out, entry);
-fail:
-    json_decref(limits);
+fail: json_decref(limits);
     json_decref(efforts);
     return snag_errno(EPROTO);
 }
@@ -1044,10 +880,8 @@ codex_model_ref_compare(const void *left, const void *right)
     const struct codex_model_ref *a = left;
     const struct codex_model_ref *b = right;
 
-    if (a->priority < b->priority)
-        return -1;
-    if (a->priority > b->priority)
-        return 1;
+    if (a->priority < b->priority) return -1;
+    if (a->priority > b->priority) return 1;
     return a->order < b->order ? -1 : a->order > b->order;
 }
 
@@ -1063,22 +897,16 @@ decode_models(const unsigned char *data, size_t len, bool codex,
     size_t ref_count = 0u;
     int rc = -1;
 
-    if (models)
-        *models = NULL;
-    if (!data || !len || !models) {
-        return snag_fail(error, error_size, EINVAL, "invalid model catalog source");
-    }
-    root = snag_json_load_strict(data, len,
-                                SNAG_WIRE_BODY_MAX, json_error,
-                                sizeof(json_error));
+    if (models) *models = NULL;
+    if (!data || !len || !models) return snag_fail(error, error_size, EINVAL, "invalid model catalog source");
+    root = snag_json_load_strict(data, len, SNAG_WIRE_BODY_MAX, json_error, sizeof(json_error));
     if (!root || !json_is_object(root)) {
         (void)snag_fail(error, error_size, EPROTO, "invalid model-list response: %s",
                        json_error[0] ? json_error : "root is not an object");
         goto out;
     }
     source = json_object_get(root, codex ? "models" : "data");
-    if (!json_is_array(source) ||
-        json_array_size(source) > SNAG_PROVIDER_MODELS_MAX) {
+    if (!json_is_array(source) || json_array_size(source) > SNAG_PROVIDER_MODELS_MAX) {
         (void)snag_fail(error, error_size, EPROTO, "model-list response has no bounded models array");
         goto out;
     }
@@ -1104,8 +932,7 @@ decode_models(const unsigned char *data, size_t len, bool codex,
                 goto out;
             }
             visibility = snag_json_string(model, "visibility");
-            if (!visibility || strcmp(visibility, "list") != 0)
-                continue;
+            if (!visibility || strcmp(visibility, "list") != 0) continue;
             priority = json_object_get(model, "priority");
             if (!json_is_integer(priority)) {
                 (void)snag_fail(error, error_size, EPROTO,
@@ -1120,32 +947,27 @@ decode_models(const unsigned char *data, size_t len, bool codex,
         qsort(refs, ref_count, sizeof(*refs), codex_model_ref_compare);
     }
     for (size_t i = 0; i < (codex ? ref_count : json_array_size(source)); ++i)
-        if (append_model(out, codex ? refs[i].model : json_array_get(source, i),
-                         codex) < 0) {
-            (void)snag_fail(error, error_size, EPROTO,
-                "model-list response contains an invalid model entry");
+        if (append_model(out, codex ? refs[i].model : json_array_get(source, i), codex) < 0) {
+            (void)snag_fail(error, error_size, EPROTO, "model-list response contains an invalid model entry");
             goto out;
         }
     *models = out;
     out = NULL;
     rc = 0;
-out:
-    free(refs);
+out: free(refs);
     json_decref(out);
     json_decref(root);
     return rc;
 }
 
 static int
-parse_models_body(struct provider_ctx *ctx, bool codex, json_t **models,
-                  char *error, size_t error_size)
+parse_models_body(struct provider_ctx *ctx, bool codex, json_t **models, char *error, size_t error_size)
 {
     if (ctx->body_failed) {
         return snag_fail(error, error_size, EOVERFLOW, ctx->error[0] ? ctx->error :
                   "model-list response body exceeds the supported limit");
     }
-    return decode_models(ctx->error_body.data, ctx->error_body.len, codex,
-                         models, error, error_size);
+    return decode_models(ctx->error_body.data, ctx->error_body.len, codex, models, error, error_size);
 }
 
 static bool
@@ -1156,21 +978,17 @@ provider_uses_codex_catalog(const struct snag_provider_config *provider)
     const char *path = authority ? strchr(authority + 3u, '/') : NULL;
     size_t len;
 
-    if (!path)
-        return false;
+    if (!path) return false;
     len = strlen(path);
-    while (len && path[len - 1u] == '/')
-        --len;
-    return len >= sizeof(suffix) - 1u &&
-           memcmp(path + len - (sizeof(suffix) - 1u),
+    while (len && path[len - 1u] == '/') --len;
+    return len >= sizeof(suffix) - 1u && memcmp(path + len - (sizeof(suffix) - 1u),
                   suffix, sizeof(suffix) - 1u) == 0;
 }
 
 const char *
 snag_provider_catalog_protocol(const struct snag_provider_config *provider)
 {
-    if (!provider)
-        return NULL;
+    if (!provider) return NULL;
     return provider_uses_codex_catalog(provider) ? "codex" : "openai";
 }
 
@@ -1201,8 +1019,7 @@ provider_ctx_init(struct provider_ctx *ctx, struct snag_provider_connection conn
 static bool
 connection_valid(struct snag_provider_connection connection)
 {
-    return connection.config && connection.provider && connection.credential &&
-        connection.credential->len;
+    return connection.config && connection.provider && connection.credential && connection.credential->len;
 }
 
 static void
@@ -1210,12 +1027,10 @@ redact_diagnostic(const struct snag_secret_set *secrets, char *error, size_t err
 {
     json_t *message;
     const char *text = NULL;
-    if (!error || !error_size || !error[0])
-        return;
+    if (!error || !error_size || !error[0]) return;
     message = json_object();
     if (message && json_object_set_new(message, "model_text", json_string(error)) == 0 &&
-        snag_secret_result(secrets, message, NULL, 0u) == 0)
-        text = snag_json_string(message, "model_text");
+        snag_secret_result(secrets, message, NULL, 0u) == 0) text = snag_json_string(message, "model_text");
     (void)snprintf(error, error_size, "%s", text ? text : "provider diagnostic omitted");
     json_decref(message);
 }
@@ -1223,12 +1038,9 @@ redact_diagnostic(const struct snag_secret_set *secrets, char *error, size_t err
 static int
 provider_ctx_finish(struct provider_ctx *ctx, int rc, char *error, size_t error_size)
 {
-    if (ctx->cancel_code == 1 || ctx->cancel_code == 2)
-        rc = ctx->cancel_code;
-    if (rc != 0)
-        redact_diagnostic(&ctx->secrets, error, error_size);
-    if (ctx->curl)
-        curl_easy_cleanup(ctx->curl);
+    if (ctx->cancel_code == 1 || ctx->cancel_code == 2) rc = ctx->cancel_code;
+    if (rc != 0) redact_diagnostic(&ctx->secrets, error, error_size);
+    if (ctx->curl) curl_easy_cleanup(ctx->curl);
     curl_slist_free_all(ctx->headers);
     snag_buf_free(&ctx->body);
     snag_buf_free(&ctx->error_body);
@@ -1248,8 +1060,7 @@ auth_pump(void *opaque, uint32_t wait_ms)
         ctx->new_input = true;
         return 0;
     }
-    if (rc)
-        ctx->cancel_code = rc < 0 ? 3 : rc;
+    if (rc) ctx->cancel_code = rc < 0 ? 3 : rc;
     return rc;
 }
 
@@ -1270,12 +1081,9 @@ request_auth_headers(struct provider_ctx *ctx)
 }
 
 static int
-provider_request_setup(struct provider_ctx *ctx,
-                       const struct snag_credential *credential,
-                       const char *path, const char *accept,
-                       const json_t *request, const char *body_error,
-                       size_t (*write_fn)(char *, size_t, size_t, void *),
-                       char *error, size_t error_size)
+provider_request_setup(struct provider_ctx *ctx, const struct snag_credential *credential,
+                       const char *path, const char *accept, const json_t *request, const char *body_error,
+                       size_t (*write_fn)(char *, size_t, size_t, void *), char *error, size_t error_size)
 {
     char url[SNAG_CONFIG_URL_MAX + 64u];
     char request_line[SNAG_CONFIG_URL_MAX + 96u];
@@ -1285,32 +1093,20 @@ provider_request_setup(struct provider_ctx *ctx,
 
     ctx->accept = accept;
     ctx->has_body = has_body;
-    if (credential->root_fd >= 0 &&
-        snag_auth_read(credential->root_fd, ctx->provider, false, NULL,
-                      &ctx->credential, auth_pump, ctx,
-                      error, error_size) < 0)
-        return -1;
-    if (snag_secret_set_build(&ctx->secrets, ctx->config, &ctx->credential,
-                              error, error_size) < 0)
-        return -1;
+    if (credential->root_fd >= 0 && snag_auth_read(credential->root_fd, ctx->provider, false, NULL,
+                      &ctx->credential, auth_pump, ctx, error, error_size) < 0) return -1;
+    if (snag_secret_set_build(&ctx->secrets, ctx->config, &ctx->credential, error, error_size) < 0) return -1;
     if (has_body && snag_json_canonical(request, &ctx->body) < 0)
         return snag_errorf(error, error_size, "%s", body_error);
-    if (provider_endpoint_url(ctx->provider, path, url, sizeof(url), &endpoint,
-                              error, error_size) < 0)
+    if (provider_endpoint_url(ctx->provider, path, url, sizeof(url), &endpoint, error, error_size) < 0)
         return -1;
-    written = snprintf(request_line, sizeof(request_line), "%s %s HTTP/1.1",
-                       has_body ? "POST" : "GET",
+    written = snprintf(request_line, sizeof(request_line), "%s %s HTTP/1.1", has_body ? "POST" : "GET",
                        url_request_target(endpoint));
-    if (written <= 0 || (size_t)written >= sizeof(request_line)) {
+    if (written <= 0 || (size_t)written >= sizeof(request_line))
         return snag_fail(error, error_size, ENAMETOOLONG, "provider request line is too long");
-    }
-    if (snag_http_init() != 0) {
-        return snag_fail(error, error_size, EIO, "libcurl could not initialize");
-    }
+    if (snag_http_init() != 0) return snag_fail(error, error_size, EIO, "libcurl could not initialize");
     ctx->curl = curl_easy_init();
-    if (!ctx->curl) {
-        return snag_fail(error, error_size, ENOMEM, "libcurl easy handle could not initialize");
-    }
+    if (!ctx->curl) return snag_fail(error, error_size, ENOMEM, "libcurl easy handle could not initialize");
     if (request_auth_headers(ctx) < 0)
         return snag_errorf(error, error_size, "provider headers could not be allocated");
     if (render_request_headers(ctx, request_line, accept, has_body) < 0)
@@ -1319,13 +1115,10 @@ provider_request_setup(struct provider_ctx *ctx,
     if (snag_http_trust(ctx->curl) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_URL, endpoint) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_NOSIGNAL, 1L) != CURLE_OK ||
-        curl_easy_setopt(ctx->curl, CURLOPT_HTTPHEADER, ctx->headers) != CURLE_OK ||
-        (has_body ?
+        curl_easy_setopt(ctx->curl, CURLOPT_HTTPHEADER, ctx->headers) != CURLE_OK || (has_body ?
          (curl_easy_setopt(ctx->curl, CURLOPT_POST, 1L) != CURLE_OK ||
-          curl_easy_setopt(ctx->curl, CURLOPT_POSTFIELDS,
-                           (char *)ctx->body.data) != CURLE_OK ||
-          curl_easy_setopt(ctx->curl, CURLOPT_POSTFIELDSIZE_LARGE,
-                           (curl_off_t)ctx->body.len) != CURLE_OK) :
+          curl_easy_setopt(ctx->curl, CURLOPT_POSTFIELDS, (char *)ctx->body.data) != CURLE_OK ||
+          curl_easy_setopt(ctx->curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)ctx->body.len) != CURLE_OK) :
          curl_easy_setopt(ctx->curl, CURLOPT_HTTPGET, 1L) != CURLE_OK) ||
         curl_easy_setopt(ctx->curl, CURLOPT_WRITEFUNCTION, write_fn) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_WRITEDATA, ctx) != CURLE_OK ||
@@ -1336,11 +1129,9 @@ provider_request_setup(struct provider_ctx *ctx,
         curl_easy_setopt(ctx->curl, CURLOPT_TIMEOUT_MS,
                          (long)ctx->provider->request_timeout_ms) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_LOW_SPEED_LIMIT, 1L) != CURLE_OK ||
-        curl_easy_setopt(ctx->curl, CURLOPT_LOW_SPEED_TIME,
-                         (long)low_speed_seconds(
+        curl_easy_setopt(ctx->curl, CURLOPT_LOW_SPEED_TIME, (long)low_speed_seconds(
                              ctx->provider->idle_timeout_ms)) != CURLE_OK ||
-        curl_easy_setopt(ctx->curl, CURLOPT_USERAGENT,
-                         SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) != CURLE_OK ||
+        curl_easy_setopt(ctx->curl, CURLOPT_USERAGENT, SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK) {
         return snag_fail(error, error_size, EIO, "libcurl option setup failed");
     }
@@ -1348,22 +1139,19 @@ provider_request_setup(struct provider_ctx *ctx,
 }
 
 static int
-provider_request_perform(struct provider_ctx *ctx, const char *failure,
-                         char *error, size_t error_size,
+provider_request_perform(struct provider_ctx *ctx, const char *failure, char *error, size_t error_size,
                          unsigned int *retry_count)
 {
     unsigned int retries = 0u;
     unsigned int *retry_out = retry_count ? retry_count : &retries;
-    CURLcode code = perform_with_retry(ctx->curl, ctx, error, error_size,
-                                       retry_out);
+    CURLcode code = perform_with_retry(ctx->curl, ctx, error, error_size, retry_out);
 
     if (code == CURLE_OK && ctx->http_status == 401 &&
         ctx->provider->auth == SNAG_AUTH_CHATGPT && ctx->credential.root_fd >= 0 &&
         !ctx->semantic_body_seen) {
         struct snag_credential refreshed;
         int rc = snag_auth_read(ctx->credential.root_fd, ctx->provider, true,
-                               ctx->credential.value, &refreshed, auth_pump,
-                               ctx, error, error_size);
+                               ctx->credential.value, &refreshed, auth_pump, ctx, error, error_size);
         if (rc < 0) {
             if (ctx->cancel_code == 1 || ctx->cancel_code == 2) {
                 return ctx->cancel_code;
@@ -1372,33 +1160,25 @@ provider_request_perform(struct provider_ctx *ctx, const char *failure,
         }
         ctx->credential = refreshed;
         snag_credential_clear(&refreshed);
-        if (snag_secret_set_build(&ctx->secrets, ctx->config, &ctx->credential,
-                                  error, error_size) < 0)
+        if (snag_secret_set_build(&ctx->secrets, ctx->config, &ctx->credential, error, error_size) < 0)
             return -1;
         if (request_auth_headers(ctx) < 0 ||
-            curl_easy_setopt(ctx->curl, CURLOPT_HTTPHEADER, ctx->headers) != CURLE_OK)
-            return -1;
-        code = perform_with_retry(ctx->curl, ctx, error, error_size,
-                                   retry_out);
+            curl_easy_setopt(ctx->curl, CURLOPT_HTTPHEADER, ctx->headers) != CURLE_OK) return -1;
+        code = perform_with_retry(ctx->curl, ctx, error, error_size, retry_out);
     }
 
-    if (code == CURLE_ABORTED_BY_CALLBACK &&
-        (ctx->cancel_code == 1 || ctx->cancel_code == 2)) {
+    if (code == CURLE_ABORTED_BY_CALLBACK && (ctx->cancel_code == 1 || ctx->cancel_code == 2)) {
         return ctx->cancel_code;
     }
     if (code != CURLE_OK) {
-        snag_errorf(error, error_size, "%s%s%s",
-                   ctx->error[0] ? ctx->error : failure,
-                   ctx->error[0] ? "" : ": ",
-                   ctx->error[0] ? "" : curl_easy_strerror(code));
-        append_retry_suffix(error, error_size, *retry_out,
-                            ctx->request_may_have_been_sent);
+        snag_errorf(error, error_size, "%s%s%s", ctx->error[0] ? ctx->error : failure,
+                   ctx->error[0] ? "" : ": ", ctx->error[0] ? "" : curl_easy_strerror(code));
+        append_retry_suffix(error, error_size, *retry_out, ctx->request_may_have_been_sent);
         return snag_errno(EIO);
     }
     if (ctx->http_status < 200 || ctx->http_status >= 300) {
         (void)classify_non2xx(ctx, error, error_size);
-        append_retry_suffix(error, error_size, *retry_out,
-                            ctx->request_may_have_been_sent);
+        append_retry_suffix(error, error_size, *retry_out, ctx->request_may_have_been_sent);
         return -1;
     }
     return 0;
@@ -1414,45 +1194,34 @@ snag_provider_models_list(struct snag_provider_connection connection,
     unsigned int retry_count = 0u;
     int rc = -1;
 
-    if (models)
-        *models = NULL;
-    if (!connection_valid(connection) || !models) {
+    if (models) *models = NULL;
+    if (!connection_valid(connection) || !models)
         return snag_fail(error, error_size, EINVAL, "invalid model-list request");
-    }
-    provider_ctx_init(&ctx, connection,
-                      SNAG_WIRE_BODY_MAX, SNAG_WIRE_BODY_MAX);
+    provider_ctx_init(&ctx, connection, SNAG_WIRE_BODY_MAX, SNAG_WIRE_BODY_MAX);
     codex = provider_uses_codex_catalog(connection.provider);
     path = codex ? SNAG_CODEX_CATALOG_PATH : "/v1/models";
     if (provider_request_setup(&ctx, connection.credential, path, "application/json",
-                               NULL, NULL, count_write_cb,
-                               error, error_size) == 0 &&
-        provider_request_perform(&ctx, "model discovery failed",
-                                 error, error_size, &retry_count) == 0)
+                               NULL, NULL, count_write_cb, error, error_size) == 0 &&
+        provider_request_perform(&ctx, "model discovery failed", error, error_size, &retry_count) == 0)
         rc = parse_models_body(&ctx, codex, models, error, error_size);
     return provider_ctx_finish(&ctx, rc, error, error_size) == 0 ? 0 : -1;
 }
 
 int
 snag_provider_responses_count(struct snag_provider_connection connection,
-                             const json_t *count_request, uint64_t *input_tokens,
-                             bool *endpoint_unsupported,
-                             char *error, size_t error_size,
-                             unsigned int *retry_count)
+                             const json_t *count_request, uint64_t *input_tokens, bool *endpoint_unsupported,
+                             char *error, size_t error_size, unsigned int *retry_count)
 {
     struct provider_ctx ctx;
     int rc = -1;
 
-    if (retry_count)
-        *retry_count = 0u;
-    if (endpoint_unsupported)
-        *endpoint_unsupported = false;
-    if (!connection_valid(connection) || !count_request || !input_tokens) {
+    if (retry_count) *retry_count = 0u;
+    if (endpoint_unsupported) *endpoint_unsupported = false;
+    if (!connection_valid(connection) || !count_request || !input_tokens)
         return snag_fail(error, error_size, EINVAL, "invalid input-token count request");
-    }
     *input_tokens = 0u;
     if (connection.provider->auth == SNAG_AUTH_CHATGPT) {
-        if (endpoint_unsupported)
-            *endpoint_unsupported = true;
+        if (endpoint_unsupported) *endpoint_unsupported = true;
         return snag_fail(error, error_size, ENOTSUP, "direct Codex does not provide exact input-token preflight");
     }
     provider_ctx_init(&ctx, connection, SNAG_CONTEXT_MAX_REQUEST, SNAG_WIRE_BODY_MAX);
@@ -1460,97 +1229,71 @@ snag_provider_responses_count(struct snag_provider_connection connection,
             "/v1/responses/input_tokens", "application/json", count_request,
             "input-token count request exceeds the bounded body limit",
             count_write_cb, error, error_size) == 0)
-        rc = provider_request_perform(&ctx, "input-token count failed",
-                                      error, error_size, retry_count);
-    if (rc != 0 && endpoint_unsupported &&
-        (ctx.http_status == 405 || ctx.http_status == 501 ||
-         (ctx.http_status == 404 && !ctx.provider_failure.code[0])))
-        *endpoint_unsupported = true;
+        rc = provider_request_perform(&ctx, "input-token count failed", error, error_size, retry_count);
+    if (rc != 0 && endpoint_unsupported && (ctx.http_status == 405 || ctx.http_status == 501 ||
+         (ctx.http_status == 404 && !ctx.provider_failure.code[0]))) *endpoint_unsupported = true;
     if (rc < 0 && snag_provider_failure_is_capacity(&ctx.provider_failure))
         rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
-    if (rc == 0)
-        rc = parse_count_body(&ctx, input_tokens, error, error_size);
+    if (rc == 0) rc = parse_count_body(&ctx, input_tokens, error, error_size);
     return provider_ctx_finish(&ctx, rc, error, error_size);
 }
 
 int
-snag_provider_responses_compact(struct snag_provider_connection connection,
-                               const json_t *compact_request,
-                               struct snag_json_document *output,
-                               char *error, size_t error_size,
+snag_provider_responses_compact(struct snag_provider_connection connection, const json_t *compact_request,
+                               struct snag_json_document *output, char *error, size_t error_size,
                                unsigned int *retry_count)
 {
     struct provider_ctx ctx;
     int rc = -1;
 
-    if (retry_count)
-        *retry_count = 0u;
-    if (output)
-        snag_json_document_free(output);
-    if (!connection_valid(connection) || !compact_request || !output) {
+    if (retry_count) *retry_count = 0u;
+    if (output) snag_json_document_free(output);
+    if (!connection_valid(connection) || !compact_request || !output)
         return snag_fail(error, error_size, EINVAL, "invalid compact request");
-    }
-    provider_ctx_init(&ctx, connection, SNAG_CONTEXT_MAX_COMPACT,
-                      SNAG_CONTEXT_MAX_COMPACT);
+    provider_ctx_init(&ctx, connection, SNAG_CONTEXT_MAX_COMPACT, SNAG_CONTEXT_MAX_COMPACT);
     if (provider_request_setup(&ctx, connection.credential, "/v1/responses/compact",
             "application/json", compact_request,
-            "compact request exceeds the bounded body limit", count_write_cb,
-            error, error_size) == 0)
-        rc = provider_request_perform(&ctx, "compact request failed", error,
-                                      error_size, retry_count);
+            "compact request exceeds the bounded body limit", count_write_cb, error, error_size) == 0)
+        rc = provider_request_perform(&ctx, "compact request failed", error, error_size, retry_count);
     if (rc < 0 && snag_provider_failure_is_capacity(&ctx.provider_failure))
         rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
-    if (rc == 0)
-        rc = parse_compact_body(&ctx, output, error, error_size);
-    if (rc < 0 &&
-        (ctx.http_status == 404 || ctx.http_status == 405 || ctx.http_status == 501))
+    if (rc == 0) rc = parse_compact_body(&ctx, output, error, error_size);
+    if (rc < 0 && (ctx.http_status == 404 || ctx.http_status == 405 || ctx.http_status == 501))
         rc = SNAG_PROVIDER_UNSUPPORTED;
     return provider_ctx_finish(&ctx, rc, error, error_size);
 }
 
 int
-snag_provider_responses_create(struct snag_provider_connection connection,
-                              const json_t *create_request,
+snag_provider_responses_create(struct snag_provider_connection connection, const json_t *create_request,
                               snag_responses_emit_fn emit, void *emit_opaque,
-                              struct snag_response_graph *graph,
-                              struct snag_provider_failure *failure,
-                              char *error, size_t error_size,
-                              unsigned int *retry_count)
+                              struct snag_response_graph *graph, struct snag_provider_failure *failure,
+                              char *error, size_t error_size, unsigned int *retry_count)
 {
     struct provider_ctx ctx;
     int rc = -1;
 
-    if (failure)
-        memset(failure, 0, sizeof(*failure));
-    if (retry_count)
-        *retry_count = 0u;
-    if (!connection_valid(connection) || !create_request || !graph) {
+    if (failure) memset(failure, 0, sizeof(*failure));
+    if (retry_count) *retry_count = 0u;
+    if (!connection_valid(connection) || !create_request || !graph)
         return snag_fail(error, error_size, EINVAL, "invalid provider request");
-    }
     provider_ctx_init(&ctx, connection, SNAG_CONTEXT_MAX_REQUEST, SNAG_WIRE_BODY_MAX);
     snag_responses_stream_init(&ctx.stream, emit, emit_opaque);
     snag_sse_init(&ctx.sse, snag_responses_sse_record, &ctx.stream);
     if (provider_request_setup(&ctx, connection.credential, "/v1/responses",
-            "text/event-stream", create_request,
-            "provider request exceeds the bounded body limit", write_cb,
-            error, error_size) == 0)
-        rc = provider_request_perform(&ctx, "provider transport failed", error,
+            "text/event-stream", create_request, "provider request exceeds the bounded body limit", write_cb,
+            error, error_size) == 0) rc = provider_request_perform(&ctx, "provider transport failed", error,
                                       error_size, retry_count);
-    if (rc != 0)
-        goto out;
+    if (rc != 0) goto out;
     rc = snag_responses_stream_finish(&ctx.stream, graph, error, error_size);
     if (rc != 0) {
-        if (rc > 0)
-            rc = 3;
+        if (rc > 0) rc = 3;
         goto out;
     }
     rc = 0;
 out:
     if (failure) {
-        if (ctx.stream.failed)
-            *failure = ctx.stream.provider_failure;
-        else
-            *failure = ctx.provider_failure;
+        if (ctx.stream.failed) *failure = ctx.stream.provider_failure;
+        else *failure = ctx.provider_failure;
         failure->output_correction = ctx.stream.output_correction;
         if (rc < 0 && snag_provider_failure_is_policy(failure)) {
             const char *skipped = NULL;
@@ -1561,8 +1304,7 @@ out:
             else if (ctx.body_failed) skipped = "body_failure";
             else if (process_controls(&ctx, 0u)) skipped = "control";
             else if (ctx.new_input) skipped = "new_input";
-            if (skipped)
-                (void)snag_strcpy(failure->clarification_skipped,
+            if (skipped) (void)snag_strcpy(failure->clarification_skipped,
                                  sizeof(failure->clarification_skipped), skipped);
             else failure->output_correction = SNAG_OUTPUT_CORRECTION_CYBER_POLICY;
         }

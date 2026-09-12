@@ -17,8 +17,7 @@ struct snag_credential {
 };
 
 void snag_credential_clear(struct snag_credential *credential);
-int snag_credential_resolve(struct snag_credential *credential,
-                            const struct snag_secret_source *source,
+int snag_credential_resolve(struct snag_credential *credential, const struct snag_secret_source *source,
                             char *error, size_t error_size);
 
 #endif

@@ -30,16 +30,12 @@ compaction_interrupted_data(const char *compact_id, const char *reason)
 }
 
 static int
-commit_rendered(struct app_state *app, const char *type, json_t *data,
-                char *error, size_t error_size)
+commit_rendered(struct app_state *app, const char *type, json_t *data, char *error, size_t error_size)
 {
     uint64_t seq;
 
-    if (!data)
-        return snag_fail(error, error_size, ENOMEM, "cannot allocate %s event", type);
-    if (snag_session_commit(&app->session, type, data, &seq,
-                           error, error_size) < 0)
-        return -1;
+    if (!data) return snag_fail(error, error_size, ENOMEM, "cannot allocate %s event", type);
+    if (snag_session_commit(&app->session, type, data, &seq, error, error_size) < 0) return -1;
     if (snag_ui_send(&app->ui, (struct snag_ui_command){
         .kind = SNAG_UI_EVENT, .text = type, .data.seq = seq}) < 0) {
         return snag_errorf(error, error_size, "durable compaction event output failed");
@@ -51,28 +47,23 @@ static int
 compaction_state_valid(const struct app_state *app, const char *reason,
                        bool active_prefix, char *error, size_t error_size)
 {
-    if (!app || !app->config || !reason ||
-        (strcmp(reason, "manual") != 0 && !active_reason(reason)))
+    if (!app || !app->config || !reason || (strcmp(reason, "manual") != 0 && !active_reason(reason)))
         return snag_fail(error, error_size, EINVAL, "invalid compaction reason");
     if (active_prefix) {
-        if (!app->session.active_turn ||
-            app->session.response_open ||
-            app->session.pending_call_count ||
-            app->session.active_compact_id[0] != '\0')
+        if (!app->session.active_turn || app->session.response_open ||
+            app->session.pending_call_count || app->session.active_compact_id[0] != '\0')
             return snag_fail(error, error_size, EINVAL,
                 "pre-response compaction requires an active turn before response");
         return 0;
     }
-    if (app->session.active_turn || app->session.response_open ||
-        app->session.process_count ||
+    if (app->session.active_turn || app->session.response_open || app->session.process_count ||
         app->session.active_compact_id[0] != '\0')
         return snag_fail(error, error_size, EINVAL, "compaction requires an idle session");
     return 0;
 }
 
 static json_t *
-responses_compact_create_request(const json_t *compact_request,
-                                 const char *model, const char *effort,
+responses_compact_create_request(const json_t *compact_request, const char *model, const char *effort,
                                  const struct snag_model_capacity *capacity)
 {
     static const char instruction[] =
@@ -86,25 +77,20 @@ responses_compact_create_request(const json_t *compact_request,
     json_t *copy;
     json_t *request = NULL;
 
-    if (!json_is_array(input) || !model || !effort || !capacity)
-        return NULL;
+    if (!json_is_array(input) || !model || !effort || !capacity) return NULL;
     copy = json_copy(input);
-    if (!copy || json_array_append_new(copy,
-            json_pack("{s:s,s:s}", "role", "developer",
-                      "content", instruction)) < 0)
-        goto out;
+    if (!copy || json_array_append_new(copy, json_pack("{s:s,s:s}", "role", "developer",
+                      "content", instruction)) < 0) goto out;
     request = json_pack("{s:O,s:s,s:b,s:{s:s},s:b,s:b,s:s,s:[],s:s}",
         "input", copy, "model", model, "parallel_tool_calls", 0,
         "reasoning", "effort", effort, "store", 0, "stream", 1,
         "tool_choice", "none", "tools", "truncation", "disabled");
-    if (request && capacity->max_output_tokens &&
-        snag_json_set_new(request, "max_output_tokens",
+    if (request && capacity->max_output_tokens && snag_json_set_new(request, "max_output_tokens",
             json_integer((json_int_t)capacity->max_output_tokens)) < 0) {
         json_decref(request);
         request = NULL;
     }
-out:
-    json_decref(copy);
+out: json_decref(copy);
     return request;
 }
 
@@ -113,10 +99,8 @@ responses_compact_count_request(const json_t *create_request)
 {
     json_t *request = json_copy((json_t *)create_request);
 
-    if (!request)
-        return NULL;
-    if (json_object_del(request, "store") < 0 ||
-        json_object_del(request, "stream") < 0 ||
+    if (!request) return NULL;
+    if (json_object_del(request, "store") < 0 || json_object_del(request, "stream") < 0 ||
         (json_object_get(request, "max_output_tokens") &&
          json_object_del(request, "max_output_tokens") < 0)) {
         json_decref(request);
@@ -127,8 +111,7 @@ responses_compact_count_request(const json_t *create_request)
 
 static int
 run_responses_compaction(struct app_state *app, const json_t *create_request,
-                         const struct snag_credential *credential,
-                         struct snag_json_document *output,
+                         const struct snag_credential *credential, struct snag_json_document *output,
                          char *error, size_t error_size)
 {
     snag_json_document_free(output);
@@ -146,39 +129,29 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
 
     struct snag_response_graph graph = {0};
     rc = snag_provider_responses_create((struct snag_provider_connection){
-        app->config, app->turn_provider, credential, &app->ui,
-        snag_app_provider_input_pump, app},
+        app->config, app->turn_provider, credential, &app->ui, snag_app_provider_input_pump, app},
         create_request, NULL, NULL, &graph, &failure, error, error_size, NULL);
-    if (rc != 0 && snag_provider_failure_is_capacity(&failure))
-        rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
+    if (rc != 0 && snag_provider_failure_is_capacity(&failure)) rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
     if (rc != 0 && !failure.new_input && snag_provider_failure_is_policy(&failure))
         app->turn_policy_stopped = SNAG_POLICY_STOP_PROVIDER;
-    if (rc != 0)
-        goto out;
+    if (rc != 0) goto out;
     rc = -1;
-    if (snag_response_graph_classify(&graph, &decision, error, error_size) < 0)
-        goto out;
-    if (decision.outcome == SNAG_GRAPH_REFUSAL)
-        app->turn_policy_stopped = SNAG_POLICY_STOP_REFUSAL;
+    if (snag_response_graph_classify(&graph, &decision, error, error_size) < 0) goto out;
+    if (decision.outcome == SNAG_GRAPH_REFUSAL) app->turn_policy_stopped = SNAG_POLICY_STOP_REFUSAL;
     struct snag_response_item final = snag_response_graph_item(&graph, decision.final_index);
-    if (decision.outcome != SNAG_GRAPH_FINAL ||
-        decision.final_index >= graph.count || !final.text) {
-        (void)snag_fail(error, error_size, EPROTO,
-                 "Responses compaction did not return a final summary");
+    if (decision.outcome != SNAG_GRAPH_FINAL || decision.final_index >= graph.count || !final.text) {
+        (void)snag_fail(error, error_size, EPROTO, "Responses compaction did not return a final summary");
         goto out;
     }
     rc = snag_context_compact_output_set(output, json_pack("[{s:s,s:s,s:s}]",
-        "type", "message", "role", "user", "content", final.text),
-        error, error_size);
-out:
-    snag_response_graph_free(&graph);
+        "type", "message", "role", "user", "content", final.text), error, error_size);
+out: snag_response_graph_free(&graph);
     return rc;
 #endif
 }
 
 static int
-run_compaction_attempt(struct app_state *app, const char *reason, bool active_prefix,
-               bool allow_native,
+run_compaction_attempt(struct app_state *app, const char *reason, bool active_prefix, bool allow_native,
                const struct snag_credential *provided_credential,
                bool *compacted, char *error, size_t error_size)
 {
@@ -207,19 +180,13 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
     int rc = -1;
 
     snag_credential_clear(&owned_credential);
-    if (compacted)
-        *compacted = false;
-    if (compaction_state_valid(app, reason, active_prefix,
-                               error, error_size) < 0)
-        return -1;
-    model = active_prefix && app->turn_model ? app->turn_model :
-                                               app->session.default_model;
-    effort = active_prefix && app->turn_effort ? app->turn_effort :
-                                                 app->session.default_effort;
+    if (compacted) *compacted = false;
+    if (compaction_state_valid(app, reason, active_prefix, error, error_size) < 0) return -1;
+    model = active_prefix && app->turn_model ? app->turn_model : app->session.default_model;
+    effort = active_prefix && app->turn_effort ? app->turn_effort : app->session.default_effort;
     if (!active_prefix) {
         app->turn_model = model;
-        app->turn_provider = snag_config_provider(
-            app->config, app->session.default_provider[0] ?
+        app->turn_provider = snag_config_provider( app->config, app->session.default_provider[0] ?
                          app->session.default_provider : NULL);
     }
     if (!app->turn_provider) {
@@ -228,13 +195,9 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         goto out;
     }
     native = allow_native && app->turn_provider->native_compaction;
-    if (!active_prefix &&
-        snag_app_capacity_resolve(app, app->turn_provider, model,
-                                 &app->turn_capacity,
-                                 error, error_size) < 0)
-        goto out;
-    threshold = snag_model_compact_threshold(app->turn_provider,
-                                           &app->turn_capacity);
+    if (!active_prefix && snag_app_capacity_resolve(app, app->turn_provider, model,
+                                 &app->turn_capacity, error, error_size) < 0) goto out;
+    threshold = snag_model_compact_threshold(app->turn_provider, &app->turn_capacity);
     if (strcmp(reason, "proactive") == 0 && !threshold) {
         rc = 0;
         goto out;
@@ -242,25 +205,20 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
 #ifndef SNAJPAGENT_TEST_FIXTURE
     if (!credential) {
         if (snag_auth_read(app->store.root_fd, app->turn_provider, false, NULL,
-                          &owned_credential, snag_app_active_input_pump, app,
-                          error, error_size) < 0)
+                          &owned_credential, snag_app_active_input_pump, app, error, error_size) < 0)
             goto out;
         credential = &owned_credential;
     }
 #endif
-    use_exact = snag_app_exact_count_enabled(
-        app->turn_provider->exact_token_count,
+    use_exact = snag_app_exact_count_enabled( app->turn_provider->exact_token_count,
         app->turn_capacity.count_capability);
     char continuation_scope[SNAG_SHA256_HEX_LEN + 1u];
     if (snag_context_continuation_scope(app->turn_provider, model,
-            credential ? credential : &owned_credential, continuation_scope) < 0)
-        goto out;
+            credential ? credential : &owned_credential, continuation_scope) < 0) goto out;
     source_budget = SNAG_CONTEXT_MAX_COMPACT - 4096u;
     for (unsigned int selection = 0u; selection < 8u; ++selection) {
-        build_rc = snag_context_compact_request_build(&app->session, model, effort,
-                                            active_prefix,
-                                            source_budget,
-                                            true, continuation_scope,
+        build_rc = snag_context_compact_request_build(&app->session, model, effort, active_prefix,
+                                            source_budget, true, continuation_scope,
                                             &projection, error, error_size);
         if (build_rc == 1) {
             if (selection != 0u) {
@@ -268,16 +226,13 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                          "no complete history prefix fits the hard context budget");
                 goto out;
             }
-            if (strcmp(reason, "manual") == 0 &&
-                snag_ui_text(&app->ui, SNAG_UI_HOST, active_prefix ?
+            if (strcmp(reason, "manual") == 0 && snag_ui_text(&app->ui, SNAG_UI_HOST, active_prefix ?
                     "compaction waiting for a complete context boundary" :
-                    "compaction skipped; no new context since the previous compact output") < 0)
-                goto out;
+                    "compaction skipped; no new context since the previous compact output") < 0) goto out;
             rc = 0;
             goto out;
         }
-        if (build_rc < 0)
-            goto out;
+        if (build_rc < 0) goto out;
         if (projection.model_input.bytes == 0u || projection.model_input.bytes > (size_t)INT64_MAX) {
             (void)snag_fail(error, error_size, EINVAL, "compact source has invalid bounds");
             goto out;
@@ -290,25 +245,20 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             json_decref(projection.count_request.value);
             projection.count_request.value = responses_compact_count_request(projection.create_request.value);
         }
-        if (projection.create_request.value && app->turn_provider->auth == SNAG_AUTH_CHATGPT &&
-            native &&
-            snag_json_set_new(projection.create_request.value, "instructions", json_string("")) < 0)
-            goto out;
+        if (projection.create_request.value && app->turn_provider->auth == SNAG_AUTH_CHATGPT && native &&
+            snag_json_set_new(projection.create_request.value, "instructions", json_string("")) < 0) goto out;
         if (projection.create_request.value && !native && app->turn_provider->auth == SNAG_AUTH_CHATGPT &&
-            snag_context_codex_request(projection.create_request.value) < 0)
-            goto out;
+            snag_context_codex_request(projection.create_request.value) < 0) goto out;
         if (!projection.create_request.value || !projection.count_request.value ||
             snag_context_provider_model(app->turn_provider, model, projection.create_request.value) < 0 ||
             snag_context_provider_model(app->turn_provider, model, projection.count_request.value) < 0) {
-            (void)snag_fail(error, error_size, ENOMEM,
-                     "cannot build bounded compaction provider request");
+            (void)snag_fail(error, error_size, ENOMEM, "cannot build bounded compaction provider request");
             goto out;
         }
         if (snag_json_document_measure(&projection.create_request, SNAG_CONTEXT_MAX_COMPACT) < 0 || projection.create_request.bytes == 0u ||
             snag_json_document_measure(&projection.count_request, SNAG_CONTEXT_MAX_COMPACT) < 0 ||
             projection.count_request.bytes == 0u) {
-            snprintf(error, error_size,
-                     "compaction provider request exceeds 12 MiB");
+            snprintf(error, error_size, "compaction provider request exceeds 12 MiB");
             goto out;
         }
         if (reduced && !strcmp(prior_request, projection.create_request.sha256)) {
@@ -321,19 +271,16 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         if (use_exact) {
             if (snag_app_provider_activity(app, true) < 0) goto out;
             stage_rc = snag_app_provider_count(app, projection.count_request.value, credential,
-                &input_tokens_bound, &count_method,
-                error, error_size);
+                &input_tokens_bound, &count_method, error, error_size);
             if (snag_app_provider_activity(app, false) < 0) goto out;
             if (stage_rc != 0 && stage_rc != SNAG_APP_COUNT_SKIPPED &&
                 stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW) {
                 rc = stage_rc;
                 goto out;
             }
-            if (stage_rc == SNAG_APP_COUNT_SKIPPED)
-                use_exact = false;
+            if (stage_rc == SNAG_APP_COUNT_SKIPPED) use_exact = false;
         }
-        if (stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW &&
-            !(strcmp(count_method, "exact") == 0 &&
+        if (stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW && !(strcmp(count_method, "exact") == 0 &&
               app->turn_capacity.hard_input_known &&
               input_tokens_bound > app->turn_capacity.hard_input_tokens)) {
             if (snag_random_id(compact_id) < 0) {
@@ -350,12 +297,10 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                         "profile_id", SNAJPAGENT_PROFILE_ID, "reason", reason,
                         "request_sha256", projection.create_request.sha256,
                         "source_seq", (json_int_t)projection.source_seq,
-                        "source_sha256", projection.model_input.sha256), error, error_size) < 0)
-                goto out;
+                        "source_sha256", projection.model_input.sha256), error, error_size) < 0) goto out;
             started = true;
             if (snag_app_provider_activity(app, true) < 0) goto out;
-            stage_rc = native ?
-                snag_app_provider_compact(app, projection.create_request.value, credential,
+            stage_rc = native ? snag_app_provider_compact(app, projection.create_request.value, credential,
                     &output, error, error_size) :
                 run_responses_compaction(app, projection.create_request.value, credential,
                     &output, error, error_size);
@@ -364,14 +309,10 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                 generated = true;
                 break;
             }
-            if (stage_rc == SNAG_PROVIDER_UNSUPPORTED ||
-                stage_rc == SNAG_PROVIDER_CONTEXT_OVERFLOW) {
-                if (commit_rendered(app, "compaction_interrupted",
-                        compaction_interrupted_data(compact_id,
+            if (stage_rc == SNAG_PROVIDER_UNSUPPORTED || stage_rc == SNAG_PROVIDER_CONTEXT_OVERFLOW) {
+                if (commit_rendered(app, "compaction_interrupted", compaction_interrupted_data(compact_id,
                             stage_rc == SNAG_PROVIDER_UNSUPPORTED ?
-                            "endpoint_unavailable" : "context_rejected"),
-                        error, error_size) < 0)
-                    goto out;
+                            "endpoint_unavailable" : "context_rejected"), error, error_size) < 0) goto out;
                 started = false;
             }
             if (stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW) {
@@ -384,8 +325,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         memcpy(prior_request, projection.create_request.sha256, sizeof(prior_request));
         reduced = true;
         source_budget = projection.model_input.bytes / 2u;
-        if (!source_budget)
-            source_budget = 1u;
+        if (!source_budget) source_budget = 1u;
         snag_context_projection_free(&projection);
     }
     if (!generated) {
@@ -394,10 +334,8 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
     }
     output_tokens_bound = 0u;
     if (snag_context_compact_output_count_request_build(output.value,
-            snag_config_model_upstream(app->turn_provider, model),
-            &output_count, error, error_size) < 0 ||
-        output_count.bytes == 0u)
-        goto out;
+            snag_config_model_upstream(app->turn_provider, model), &output_count, error, error_size) < 0 ||
+        output_count.bytes == 0u) goto out;
     if (use_exact) {
         if (snag_app_provider_activity(app, true) < 0) goto out;
         stage_rc = snag_app_provider_count(app, output_count.value, credential,
@@ -417,41 +355,28 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         (void)snag_fail(error, error_size, EOVERFLOW, "compact output bound is too large");
         goto out;
     }
-    if (commit_rendered(app, "compaction_completed",
-            json_pack("{s:s,s:s,s:I,s:O,s:s,s:s,s:s,s:I,s:s,s:s}",
+    if (commit_rendered(app, "compaction_completed", json_pack("{s:s,s:s,s:I,s:O,s:s,s:s,s:s,s:I,s:s,s:s}",
                 "compact_id", compact_id, "count_method", count_method,
                 "input_tokens_bound", (json_int_t)input_tokens_bound, "output", output.value,
                 "output_count_method", output_count_method,
-                "output_count_request_sha256", output_count.sha256,
-                "output_sha256", output.sha256,
+                "output_count_request_sha256", output_count.sha256, "output_sha256", output.sha256,
                 "output_tokens_bound", (json_int_t)output_tokens_bound,
-                "source_sha256", projection.model_input.sha256,
-                "continuation_scope", continuation_scope),
-            error, error_size) < 0)
-        goto out;
-    if (app->networked &&
-        snag_app_irc_snapshot(app, "compaction", error, error_size) < 0)
-        goto out;
+                "source_sha256", projection.model_input.sha256, "continuation_scope", continuation_scope),
+            error, error_size) < 0) goto out;
+    if (app->networked && snag_app_irc_snapshot(app, "compaction", error, error_size) < 0) goto out;
     started = false;
-    if (compacted)
-        *compacted = true;
+    if (compacted) *compacted = true;
     rc = 0;
 out:
     if ((rc == 1 || rc == 2 || rc == SNAG_PROVIDER_NEW_INPUT) && started) {
-        if (commit_rendered(app, "compaction_interrupted",
-                compaction_interrupted_data(compact_id,
-                    rc == 1 ? "steering" : rc == 2 ? "user" : "error"),
-                error, error_size) < 0)
-            rc = -1;
-        else
-            started = false;
+        if (commit_rendered(app, "compaction_interrupted", compaction_interrupted_data(compact_id,
+                    rc == 1 ? "steering" : rc == 2 ? "user" : "error"), error, error_size) < 0) rc = -1;
+        else started = false;
     }
     if (rc < 0 && started && app->session.active_compact_id[0]) {
         char cleanup_error[256] = {0};
-        if (commit_rendered(app, "compaction_interrupted",
-                compaction_interrupted_data(compact_id, "error"),
-                cleanup_error, sizeof(cleanup_error)) < 0)
-            snprintf(error, error_size, "%s", cleanup_error);
+        if (commit_rendered(app, "compaction_interrupted", compaction_interrupted_data(compact_id, "error"),
+                cleanup_error, sizeof(cleanup_error)) < 0) snprintf(error, error_size, "%s", cleanup_error);
     }
     snag_json_document_free(&output);
     snag_json_document_free(&output_count);
@@ -462,18 +387,14 @@ out:
 
 static int
 run_compaction(struct app_state *app, const char *reason, bool active_prefix,
-               const struct snag_credential *credential, bool *compacted,
-               char *error, size_t error_size)
+               const struct snag_credential *credential, bool *compacted, char *error, size_t error_size)
 {
     int rc = run_compaction_attempt(app, reason, active_prefix, true,
                                     credential, compacted, error, error_size);
-    if (rc != SNAG_PROVIDER_UNSUPPORTED)
-        return rc;
+    if (rc != SNAG_PROVIDER_UNSUPPORTED) return rc;
     if (snag_ui_text(&app->ui, SNAG_UI_WARNING,
-        "native compaction unavailable; compacting through Responses") < 0)
-        return -1;
-    if (error_size)
-        error[0] = '\0';
+        "native compaction unavailable; compacting through Responses") < 0) return -1;
+    if (error_size) error[0] = '\0';
     return run_compaction_attempt(app, reason, active_prefix, false,
                                   credential, compacted, error, error_size);
 }
@@ -490,72 +411,53 @@ snag_app_compact_requested(struct app_state *app, char *error, size_t error_size
         app->interrupt_requested = false;
         app->steering_requested = false;
     }
-    if (snag_ui_text(&app->ui, SNAG_UI_HOST,
-            "Compacting context; Ctrl-C interrupts") < 0)
-        return -1;
+    if (snag_ui_text(&app->ui, SNAG_UI_HOST, "Compacting context; Ctrl-C interrupts") < 0) return -1;
     rc = run_compaction(app, "manual", active, NULL, &compacted, error, error_size);
     app->turn_policy_stopped = policy;
     if (rc < 0 && snag_ui_text(&app->ui, SNAG_UI_WARNING,
-            "compaction failed; previous context retained; /compact retries") < 0)
-        return -1;
+            "compaction failed; previous context retained; /compact retries") < 0) return -1;
     if (rc > 0 && snag_ui_text(&app->ui, SNAG_UI_WARNING,
-            "compaction interrupted; previous context retained") < 0)
-        return -1;
-    if (rc == 0 && active && !compacted)
-        return SNAG_APP_COMPACT_DEFERRED;
+            "compaction interrupted; previous context retained") < 0) return -1;
+    if (rc == 0 && active && !compacted) return SNAG_APP_COMPACT_DEFERRED;
     return rc;
 }
 
 int
-snag_app_compact_after_turn(struct app_state *app, uint64_t input_tokens_bound,
-                           const char *count_method,
+snag_app_compact_after_turn(struct app_state *app, uint64_t input_tokens_bound, const char *count_method,
                            char *error, size_t error_size)
 {
     uint64_t threshold;
 
-    if (!app || !app->config || !app->turn_provider ||
-        !count_method_valid(count_method))
+    if (!app || !app->config || !app->turn_provider || !count_method_valid(count_method))
         return snag_fail(error, error_size, EINVAL, "invalid proactive compaction state");
-    threshold = snag_model_compact_threshold(app->turn_provider,
-                                           &app->turn_capacity);
-    if (!snag_app_measured_input(app, &input_tokens_bound) ||
-        !threshold || input_tokens_bound < threshold)
+    threshold = snag_model_compact_threshold(app->turn_provider, &app->turn_capacity);
+    if (!snag_app_measured_input(app, &input_tokens_bound) || !threshold || input_tokens_bound < threshold)
         return 0;
     return run_compaction(app, "proactive", false, NULL, NULL, error, error_size);
 }
 
 int
-snag_app_compact_before_response(struct app_state *app,
-                                const struct snag_credential *credential,
-                                uint64_t input_tokens_bound,
-                                const char *count_method, bool *compacted,
+snag_app_compact_before_response(struct app_state *app, const struct snag_credential *credential,
+                                uint64_t input_tokens_bound, const char *count_method, bool *compacted,
                                 char *error, size_t error_size)
 {
-    if (compacted)
-        *compacted = false;
-    if (!app || !app->config || !app->turn_provider || !compacted ||
-        !count_method_valid(count_method))
+    if (compacted) *compacted = false;
+    if (!app || !app->config || !app->turn_provider || !compacted || !count_method_valid(count_method))
         return snag_fail(error, error_size, EINVAL, "invalid pre-response compaction state");
     {
-        uint64_t threshold = snag_model_compact_threshold(app->turn_provider,
-                                                        &app->turn_capacity);
+        uint64_t threshold = snag_model_compact_threshold(app->turn_provider, &app->turn_capacity);
         uint64_t measured = input_tokens_bound;
-        bool measured_known = strcmp(count_method, "exact") == 0 ||
-            snag_app_measured_input(app, &measured);
-        bool over_hard = strcmp(count_method, "exact") == 0 &&
-            app->turn_capacity.hard_input_known &&
+        bool measured_known = strcmp(count_method, "exact") == 0 || snag_app_measured_input(app, &measured);
+        bool over_hard = strcmp(count_method, "exact") == 0 && app->turn_capacity.hard_input_known &&
             input_tokens_bound > app->turn_capacity.hard_input_tokens;
         bool over_proactive = measured_known && threshold && measured >= threshold;
         int rc;
 
-        if (!over_hard && !over_proactive)
-            return 0;
+        if (!over_hard && !over_proactive) return 0;
         rc = run_compaction(app, over_hard ? "hard_budget" : "proactive",
                             true, credential, compacted, error, error_size);
-        if (rc != 0)
-            return rc;
-        if (over_hard && !*compacted)
-            return snag_fail(error, error_size, EOVERFLOW,
+        if (rc != 0) return rc;
+        if (over_hard && !*compacted) return snag_fail(error, error_size, EOVERFLOW,
                 "context input count %llu (%s) exceeds hard budget %llu; no complete older turn can be compacted",
                 (unsigned long long)input_tokens_bound, count_method,
                 (unsigned long long)app->turn_capacity.hard_input_tokens);
@@ -564,14 +466,11 @@ snag_app_compact_before_response(struct app_state *app,
 }
 
 int
-snag_app_compact_after_capacity_rejection(
-    struct app_state *app, const struct snag_credential *credential,
+snag_app_compact_after_capacity_rejection( struct app_state *app, const struct snag_credential *credential,
     bool *compacted, char *error, size_t error_size)
 {
-    if (compacted)
-        *compacted = false;
+    if (compacted) *compacted = false;
     if (!app || !credential || !compacted)
         return snag_fail(error, error_size, EINVAL, "invalid provider-rejection compaction state");
-    return run_compaction(app, "provider_rejection", true, credential,
-                          compacted, error, error_size);
+    return run_compaction(app, "provider_rejection", true, credential, compacted, error, error_size);
 }

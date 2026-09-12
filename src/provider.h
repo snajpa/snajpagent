@@ -41,27 +41,22 @@ int snag_provider_auth_post(const char *issuer, const char *path, const char *ty
 
 /* Responses operations return 1 for steering or 2 for cancellation. */
 int snag_provider_responses_count(struct snag_provider_connection connection,
-                                 const json_t *request, uint64_t *input_tokens,
-                                 bool *endpoint_unsupported,
-                                 char *error, size_t error_size,
-                                 unsigned int *retry_count);
+                                 const json_t *request, uint64_t *input_tokens, bool *endpoint_unsupported,
+                                 char *error, size_t error_size, unsigned int *retry_count);
 
 int snag_provider_responses_compact(struct snag_provider_connection connection,
                                    const json_t *request, struct snag_json_document *output,
-                                   char *error, size_t error_size,
-                                   unsigned int *retry_count);
+                                   char *error, size_t error_size, unsigned int *retry_count);
 
 int snag_provider_responses_create(struct snag_provider_connection connection,
                                   const json_t *request, snag_responses_emit_fn emit,
                                   void *emit_opaque, struct snag_response_graph *graph,
-                                  struct snag_provider_failure *failure,
-                                  char *error, size_t error_size,
+                                  struct snag_provider_failure *failure, char *error, size_t error_size,
                                   unsigned int *retry_count);
 
 int snag_provider_models_list(struct snag_provider_connection connection,
                              json_t **models, char *error, size_t error_size);
 
-const char *snag_provider_catalog_protocol(
-    const struct snag_provider_config *provider);
+const char *snag_provider_catalog_protocol( const struct snag_provider_config *provider);
 
 #endif

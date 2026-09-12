@@ -43,11 +43,9 @@ mark_sigwinch(int signal_number)
 static bool
 format_unsafe(uint32_t cp)
 {
-    return cp == 0x00adu || cp == 0x061cu || cp == 0x200bu ||
-           cp == 0x200eu || cp == 0x200fu ||
+    return cp == 0x00adu || cp == 0x061cu || cp == 0x200bu || cp == 0x200eu || cp == 0x200fu ||
            (cp >= 0x202au && cp <= 0x202eu) || cp == 0x2060u ||
-           (cp >= 0x2066u && cp <= 0x206fu) || cp == 0xfeffu ||
-           (cp >= 0xfff9u && cp <= 0xfffbu);
+           (cp >= 0x2066u && cp <= 0x206fu) || cp == 0xfeffu || (cp >= 0xfff9u && cp <= 0xfffbu);
 }
 
 struct safe_glyph {
@@ -62,65 +60,50 @@ safe_glyph(const unsigned char *text, size_t len)
 {
     struct safe_glyph glyph = {0};
     glyph.bytes = snag_utf8_decode(text, len, &glyph.cp);
-    if (!glyph.bytes)
-        glyph.cp = *text;
+    if (!glyph.bytes) glyph.cp = *text;
     glyph.width = snag_char_width(glyph.cp);
-    if (!glyph.bytes || glyph.cp < 0x20u || glyph.cp == 0x7fu ||
-        (glyph.cp >= 0x80u && glyph.cp <= 0x9fu) ||
-        format_unsafe(glyph.cp) || glyph.width < 0)
-        glyph.width = snprintf(glyph.escape, sizeof(glyph.escape),
+    if (!glyph.bytes || glyph.cp < 0x20u || glyph.cp == 0x7fu || (glyph.cp >= 0x80u && glyph.cp <= 0x9fu) ||
+        format_unsafe(glyph.cp) || glyph.width < 0) glyph.width = snprintf(glyph.escape, sizeof(glyph.escape),
             glyph.cp <= 0xffu ? "\\x%02X" : "\\u{%X}", (unsigned int)glyph.cp);
-    if (!glyph.bytes)
-        glyph.bytes = 1u;
+    if (!glyph.bytes) glyph.bytes = 1u;
     return glyph;
 }
 
 static int
 append_safe(struct snag_buf *out, const unsigned char *text, size_t len,
-            bool prompt, size_t indent, unsigned int columns,
-            size_t stop, size_t *cursor_byte, bool reverse)
+            bool prompt, size_t indent, unsigned int columns, size_t stop, size_t *cursor_byte, bool reverse)
 {
     size_t col = indent;
     size_t i = 0u;
 
-    if (columns >= 20u)
-        col %= columns;
-    if (cursor_byte)
-        *cursor_byte = reverse ? 0u : out->len;
+    if (columns >= 20u) col %= columns;
+    if (cursor_byte) *cursor_byte = reverse ? 0u : out->len;
     while (i < len) {
         struct safe_glyph glyph = safe_glyph(text + i, len - i);
         uint32_t cp = glyph.cp;
         size_t n = glyph.bytes;
         int width = 0;
 
-        if (glyph.width < 0)
-            return -1;
+        if (glyph.width < 0) return -1;
         /* Composer and banner wrapping share sanitized display-cell geometry. */
-        if (columns >= 20u && !word_space(text[i]) &&
-            (i == 0u || word_space(text[i - 1u]))) {
+        if (columns >= 20u && !word_space(text[i]) && (i == 0u || word_space(text[i - 1u]))) {
             size_t end = i;
-            while (end < len && !word_space(text[end]))
-                ++end;
+            while (end < len && !word_space(text[end])) ++end;
             size_t word = snag_term_text_width((const char *)text + i, end - i);
             if (word <= columns && col && word > columns - col) {
-                if (snag_buf_append(out, prompt ? "\r\n" : "\n", prompt ? 2u : 1u) < 0)
-                    return -1;
+                if (snag_buf_append(out, prompt ? "\r\n" : "\n", prompt ? 2u : 1u) < 0) return -1;
                 col = 0u;
             }
         }
-        if (cursor_byte && (reverse ? out->len <= stop : i == stop))
-            *cursor_byte = reverse ? i : out->len;
+        if (cursor_byte && (reverse ? out->len <= stop : i == stop)) *cursor_byte = reverse ? i : out->len;
         size_t before = out->len;
         if (cp == '\n') {
             if (prompt) {
-                if (snag_buf_append(out, "\r\n", 2u) < 0)
-                    return -1;
+                if (snag_buf_append(out, "\r\n", 2u) < 0) return -1;
                 for (size_t j = 0u; j < indent; ++j)
-                    if (snag_buf_putc(out, ' ') < 0)
-                        return -1;
+                    if (snag_buf_putc(out, ' ') < 0) return -1;
                 col = indent;
-                if (columns >= 20u)
-                    col %= columns;
+                if (columns >= 20u) col %= columns;
             } else {
                 if (snag_buf_putc(out, '\n') < 0) return -1;
                 col = 0u;
@@ -128,23 +111,18 @@ append_safe(struct snag_buf *out, const unsigned char *text, size_t len,
         } else if (cp == '\t') {
             size_t spaces = 4u - (col % 4u);
             for (size_t j = 0u; j < spaces; ++j)
-                if (snag_buf_putc(out, ' ') < 0)
-                    return -1;
+                if (snag_buf_putc(out, ' ') < 0) return -1;
             width = (int)spaces;
         } else {
             width = glyph.width;
-            if (snag_buf_append(out, glyph.escape[0] ?
-                    (const void *)glyph.escape : text + i,
-                    glyph.escape[0] ? (size_t)width : n) < 0)
-                return -1;
+            if (snag_buf_append(out, glyph.escape[0] ? (const void *)glyph.escape : text + i,
+                    glyph.escape[0] ? (size_t)width : n) < 0) return -1;
         }
         if (cp != '\n' || !prompt) {
             if (columns >= 20u && width > 0) {
                 size_t w = (size_t)width;
-                if (w == 2u && out->len - before == n && col + w > columns)
-                    col = 0u;
-                if (col > SIZE_MAX - w)
-                    return -1;
+                if (w == 2u && out->len - before == n && col + w > columns) col = 0u;
+                if (col > SIZE_MAX - w) return -1;
                 col += w;
                 col %= columns;
             } else if (width > 0) {
@@ -152,8 +130,7 @@ append_safe(struct snag_buf *out, const unsigned char *text, size_t len,
             }
         }
         i += n;
-        if (cursor_byte && (reverse ? out->len <= stop : i == stop))
-            *cursor_byte = reverse ? i : out->len;
+        if (cursor_byte && (reverse ? out->len <= stop : i == stop)) *cursor_byte = reverse ? i : out->len;
     }
     return 0;
 }
@@ -166,8 +143,7 @@ snag_term_text_width(const char *value, size_t len)
 
     for (size_t i = 0u; i < len;) {
         struct safe_glyph glyph = safe_glyph(text + i, len - i);
-        if (glyph.width < 0)
-            return SIZE_MAX;
+        if (glyph.width < 0) return SIZE_MAX;
         size_t amount = glyph.cp == '\t' ? 4u - (width % 4u) : (size_t)glyph.width;
         if (!snag_size_add(width, amount, &width)) {
             errno = EOVERFLOW;
@@ -196,14 +172,11 @@ snag_term_write(int fd, const void *text, size_t len)
                  term->output_fd[fd - STDOUT_FILENO] : -1;
 
     /* Input-only checkpoints capture intent, never recursively paint output. */
-    if (term && term->input_only)
-        return 0;
+    if (term && term->input_only) return 0;
 
-    if (fd < 0)
-        return snag_errno(EBADF);
+    if (fd < 0) return snag_errno(EBADF);
     return snag_term_output_write(term ? &term->host : NULL, target >= 0 ? target : fd,
-        text, len, term && term->raw,
-        term && term->input_checkpoint ? output_checkpoint : NULL, term);
+        text, len, term && term->raw, term && term->input_checkpoint ? output_checkpoint : NULL, term);
 }
 
 int
@@ -212,14 +185,11 @@ snag_term_write_safe(int fd, const char *text, size_t len)
     size_t max;
     int rc;
 
-    if (len > (SIZE_MAX - 32u) / 8u)
-        return snag_errno(EOVERFLOW);
+    if (len > (SIZE_MAX - 32u) / 8u) return snag_errno(EOVERFLOW);
     max = len * 8u + 32u;
     struct snag_buf out = {.max = max};
-    rc = append_safe(&out, (const unsigned char *)text, len, false, 0u, 0u,
-                     len + 1u, NULL, false);
-    if (rc == 0)
-        rc = snag_term_write(fd, out.data, out.len);
+    rc = append_safe(&out, (const unsigned char *)text, len, false, 0u, 0u, len + 1u, NULL, false);
+    if (rc == 0) rc = snag_term_write(fd, out.data, out.len);
     snag_buf_free(&out);
     return rc;
 }
@@ -227,16 +197,13 @@ snag_term_write_safe(int fd, const char *text, size_t len)
 int
 snag_term_append_safe(struct snag_buf *out, const char *text, size_t len)
 {
-    return append_safe(out, (const unsigned char *)text, len, false, 0u, 0u,
-                       len + 1u, NULL, false);
+    return append_safe(out, (const unsigned char *)text, len, false, 0u, 0u, len + 1u, NULL, false);
 }
 
 int
-snag_term_append_wrapped(struct snag_buf *out, const char *text, size_t len,
-                         unsigned int columns)
+snag_term_append_wrapped(struct snag_buf *out, const char *text, size_t len, unsigned int columns)
 {
-    return append_safe(out, (const unsigned char *)text, len, false, 0u, columns,
-                       len + 1u, NULL, false);
+    return append_safe(out, (const unsigned char *)text, len, false, 0u, columns, len + 1u, NULL, false);
 }
 
 void
@@ -262,20 +229,16 @@ snag_term_init(struct snag_term *term)
 void
 snag_term_set_typing_pause(struct snag_term *term, uint32_t pause_ms)
 {
-    if (term)
-        term->typing_pause_ms = pause_ms;
+    if (term) term->typing_pause_ms = pause_ms;
 }
 
 int
-snag_term_set_destinations(struct snag_term *term,
-                          const struct snag_irc_destinations *destinations)
+snag_term_set_destinations(struct snag_term *term, const struct snag_irc_destinations *destinations)
 {
-    if (!destinations || destinations->count > SNAG_IRC_DESTINATIONS_MAX)
-        return snag_errno(EINVAL);
+    if (!destinations || destinations->count > SNAG_IRC_DESTINATIONS_MAX) return snag_errno(EINVAL);
     if (!term->destinations) {
         term->destinations = malloc(sizeof(*destinations));
-        if (!term->destinations)
-            return -1;
+        if (!term->destinations) return -1;
     }
     *term->destinations = *destinations;
     if (!term->destination.id && !term->draft.len && destinations->count)
@@ -299,53 +262,44 @@ snag_term_destination_prefix(const struct snag_term *term, char *out, size_t siz
 {
     const struct snag_irc_destination *selected = NULL;
 
-    if (!size)
-        return;
+    if (!size) return;
     out[0] = '\0';
-    if (!term->chat || !term->destinations)
-        return;
+    if (!term->chat || !term->destinations) return;
     for (size_t i = 0u; i < term->destinations->count; ++i)
         if (term->destinations->items[i].target.id == term->destination.id &&
             term->destinations->items[i].target.revision == term->destination.revision)
             selected = &term->destinations->items[i];
     if (!selected && term->destination.id)
         (void)snprintf(out, size, "[%u unavailable] ", term->destination.id);
-    else if (!selected && term->destinations->count)
-        (void)snprintf(out, size, "[choose destination] ");
+    else if (!selected && term->destinations->count) (void)snprintf(out, size, "[choose destination] ");
     else if (selected && (!selected->joined || term->destinations->count > 1u))
         (void)snprintf(out, size, "[%u %s] ", selected->target.id,
             selected->joined ? selected->room : "connecting");
 }
 
 void
-snag_term_destination_route(const struct snag_term *term, const char *text,
-                           struct snag_irc_route *route)
+snag_term_destination_route(const struct snag_term *term, const char *text, struct snag_irc_route *route)
 {
     uint32_t id;
     size_t body;
-    enum snag_irc_target_command command = snag_irc_target_parse(
-        text, text ? strlen(text) : 0u, &id, &body);
+    enum snag_irc_target_command command = snag_irc_target_parse( text, text ? strlen(text) : 0u, &id, &body);
 
     memset(route, 0, sizeof(*route));
-    if (command == SNAG_IRC_TARGET_INVALID)
-        return;
+    if (command == SNAG_IRC_TARGET_INVALID) return;
     if (command == SNAG_IRC_TARGET_NONE) {
-        if (term->destination.id)
-            route->targets[route->count++] = term->destination;
+        if (term->destination.id) route->targets[route->count++] = term->destination;
         return;
     }
     for (size_t i = 0u; term->destinations && i < term->destinations->count; ++i) {
         const struct snag_irc_target *target = &term->destinations->items[i].target;
-        if (command == SNAG_IRC_TARGET_ALL || target->id == id)
-            route->targets[route->count++] = *target;
+        if (command == SNAG_IRC_TARGET_ALL || target->id == id) route->targets[route->count++] = *target;
     }
 }
 
 void
 snag_term_set_color(struct snag_term *term, bool enabled)
 {
-    if (!term)
-        return;
+    if (!term) return;
     term->color = enabled;
 }
 
@@ -354,45 +308,35 @@ snag_term_typing_pause_remaining(const struct snag_term *term, uint64_t now_ms)
 {
     uint64_t elapsed;
 
-    if (!term || !term->active || !term->typing_active ||
-        term->typing_pause_ms == 0u)
-        return 0u;
+    if (!term || !term->active || !term->typing_active || term->typing_pause_ms == 0u) return 0u;
     elapsed = now_ms >= term->last_input_ms ? now_ms - term->last_input_ms : 0u;
-    return elapsed >= term->typing_pause_ms ? 0u :
-           term->typing_pause_ms - (uint32_t)elapsed;
+    return elapsed >= term->typing_pause_ms ? 0u : term->typing_pause_ms - (uint32_t)elapsed;
 }
 
 static void
 output_column_add(struct snag_term *term, size_t width)
 {
-    if (width && term->output_columns + width > term->columns)
-        term->output_columns = 0u;
+    if (width && term->output_columns + width > term->columns) term->output_columns = 0u;
     term->output_columns += width;
 }
 
 int
-snag_term_note_output(struct snag_term *term, const char *text, size_t len,
-                     const char *style)
+snag_term_note_output(struct snag_term *term, const char *text, size_t len, const char *style)
 {
     int rc = -1;
 
-    if (!term || !len)
-        return 0;
+    if (!term || !len) return 0;
     term->output_seen = true;
     term->output_gap = 2u;
     term->output_ended_lf = text[len - 1u] == '\n';
     size_t trailing = 0u;
-    while (trailing < len && trailing < 2u && text[len - trailing - 1u] == '\n')
-        ++trailing;
+    while (trailing < len && trailing < 2u && text[len - trailing - 1u] == '\n') ++trailing;
     term->output_newlines = trailing == len ?
         (unsigned int)trailing + term->output_newlines : (unsigned int)trailing;
-    if (term->output_newlines > 2u)
-        term->output_newlines = 2u;
-    if (!term->opened || !term->capable)
-        return 0;
+    if (term->output_newlines > 2u) term->output_newlines = 2u;
+    if (!term->opened || !term->capable) return 0;
     struct snag_buf safe = {.max = len * 8u + 32u};
-    if (snag_term_append_safe(&safe, text, len) < 0)
-        goto out;
+    if (snag_term_append_safe(&safe, text, len) < 0) goto out;
     for (size_t i = 0u; i < safe.len;) {
         uint32_t cp;
         size_t n = snag_utf8_decode(safe.data + i, safe.len - i, &cp);
@@ -407,18 +351,15 @@ snag_term_note_output(struct snag_term *term, const char *text, size_t len,
                 output_column_add(term, (size_t)width);
                 term->output_cell_width = (size_t)width;
                 snag_buf_reset(&term->output_cell);
-                (void)snag_strcpy(term->output_cell_style,
-                                 sizeof(term->output_cell_style), style);
+                (void)snag_strcpy(term->output_cell_style, sizeof(term->output_cell_style), style);
             }
             if (snag_buf_append(&term->output_cell, safe.data + i, n) < 0 ||
-                snag_buf_append(&term->output_line, safe.data + i, n) < 0)
-                goto out;
+                snag_buf_append(&term->output_line, safe.data + i, n) < 0) goto out;
         }
         i += n;
     }
     rc = 0;
-out:
-    snag_buf_free(&safe);
+out: snag_buf_free(&safe);
     return rc;
 }
 
@@ -429,11 +370,9 @@ snag_term_columns(const struct snag_term *term)
 }
 
 void
-snag_term_set_commands(struct snag_term *term,
-                      const struct snag_term_command *commands, size_t count)
+snag_term_set_commands(struct snag_term *term, const struct snag_term_command *commands, size_t count)
 {
-    if (!term)
-        return;
+    if (!term) return;
     term->commands = commands;
     term->command_count = commands ? count : 0u;
 }
@@ -458,8 +397,7 @@ update_size(struct snag_term *term)
     if (columns != 0u) {
         if (columns >= 20u) {
             term->columns = columns;
-            if (term->raw)
-                term->capable = true;
+            if (term->raw) term->capable = true;
         } else {
             term->columns = columns;
             term->capable = false;
@@ -472,8 +410,7 @@ update_size(struct snag_term *term)
 static int
 set_raw(struct snag_term *term)
 {
-    if (snag_term_input_raw(&term->host) < 0)
-        return -1;
+    if (snag_term_input_raw(&term->host) < 0) return -1;
     term->raw = true;
     return 0;
 }
@@ -493,8 +430,7 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
         return snag_errorf(error, error_size, "cannot enter terminal input mode: %s", strerror(errno));
     if (snag_term_controls_install(&term->host, mark_sigint, mark_sigwinch) < 0) {
         int saved_errno = errno;
-        if (term->raw)
-            (void)snag_term_input_restore(&term->host, true);
+        if (term->raw) (void)snag_term_input_restore(&term->host, true);
         term->raw = false;
         errno = saved_errno;
         return snag_errorf(error, error_size, "cannot install terminal control handlers: %s", strerror(errno));
@@ -504,8 +440,7 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
     sigwinch_pending = 0;
     term->opened = true;
     for (int fd = STDOUT_FILENO; fd <= STDERR_FILENO; ++fd) {
-        if (!snag_isatty(fd))
-            continue;
+        if (!snag_isatty(fd)) continue;
         int copy = snag_term_output_open(&term->host, fd);
         if (copy < 0) {
             int saved_errno = errno;
@@ -527,55 +462,38 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
 }
 
 int
-snag_term_external_begin(struct snag_term *term,
-                        char *error, size_t error_size)
+snag_term_external_begin(struct snag_term *term, char *error, size_t error_size)
 {
     if (!term || !term->opened) {
         errno = EINVAL;
-        return snag_errorf(error, error_size, "terminal is not open: %s",
-                   strerror(errno));
+        return snag_errorf(error, error_size, "terminal is not open: %s", strerror(errno));
     }
-    if (snag_term_hide(term) < 0)
-        goto fail;
-    if (term->bracketed_paste &&
-        snag_term_write(STDERR_FILENO, "\033[?2004l", 8u) < 0)
-        goto fail;
+    if (snag_term_hide(term) < 0) goto fail;
+    if (term->bracketed_paste && snag_term_write(STDERR_FILENO, "\033[?2004l", 8u) < 0) goto fail;
     term->bracketed_paste = false;
-    if (term->raw && snag_term_input_restore(&term->host, true) < 0)
-        goto fail;
+    if (term->raw && snag_term_input_restore(&term->host, true) < 0) goto fail;
     term->raw = false;
-    if (snag_term_output_mode(&term->host, false) < 0)
-        goto fail;
+    if (snag_term_output_mode(&term->host, false) < 0) goto fail;
     return 0;
-fail:
-    return snag_errorf(error, error_size, "cannot release terminal for editor: %s",
-               strerror(errno));
+fail: return snag_errorf(error, error_size, "cannot release terminal for editor: %s", strerror(errno));
 }
 
 int
-snag_term_external_end(struct snag_term *term,
-                      char *error, size_t error_size)
+snag_term_external_end(struct snag_term *term, char *error, size_t error_size)
 {
     if (!term || !term->opened) {
         errno = EINVAL;
-        return snag_errorf(error, error_size, "terminal is not open: %s",
-                   strerror(errno));
+        return snag_errorf(error, error_size, "terminal is not open: %s", strerror(errno));
     }
     sigint_pending = 0;
     sigwinch_pending = 0;
-    if (snag_term_output_mode(&term->host, true) < 0)
-        goto fail;
+    if (snag_term_output_mode(&term->host, true) < 0) goto fail;
     update_size(term);
-    if (term->capable && set_raw(term) < 0)
-        goto fail;
-    if (term->capable &&
-        snag_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0)
-        goto fail;
+    if (term->capable && set_raw(term) < 0) goto fail;
+    if (term->capable && snag_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0) goto fail;
     term->bracketed_paste = term->capable;
     return 0;
-fail:
-    return snag_errorf(error, error_size, "cannot restore terminal after editor: %s",
-               strerror(errno));
+fail: return snag_errorf(error, error_size, "cannot restore terminal after editor: %s", strerror(errno));
 }
 
 static void
@@ -607,9 +525,7 @@ snag_term_hide(struct snag_term *term)
     size_t max;
     int rc = -1;
 
-    if (term->input_only || !term->opened ||
-        (!term->prompt_visible && !term->output_detour))
-        return 0;
+    if (term->input_only || !term->opened || (!term->prompt_visible && !term->output_detour)) return 0;
     snag_buf_reset(&term->painted_prompt);
     if (!term->capable) {
         term->prompt_visible = false;
@@ -620,37 +536,28 @@ snag_term_hide(struct snag_term *term)
         return snag_errno(EOVERFLOW);
     struct snag_buf out = {.max = max};
     if ((term->rendered_cursor_pending_wrap && snag_buf_append(&out, " \b", 2u) < 0) ||
-        (term->rendered_cursor_row + 1u < term->rendered_rows &&
-         snag_buf_printf(&out, "\033[%zuB",
-            term->rendered_rows - term->rendered_cursor_row - 1u) < 0))
-        goto out;
+        (term->rendered_cursor_row + 1u < term->rendered_rows && snag_buf_printf(&out, "\033[%zuB",
+            term->rendered_rows - term->rendered_cursor_row - 1u) < 0)) goto out;
     for (size_t row = term->rendered_rows; row != 0u; --row)
         if (snag_buf_append(&out, "\r\033[2K", 5u) < 0 ||
-            (row > 1u && snag_buf_append(&out, "\033[1A", 4u) < 0))
-            goto out;
-    if (snag_buf_putc(&out, '\r') < 0)
-        goto out;
+            (row > 1u && snag_buf_append(&out, "\033[1A", 4u) < 0)) goto out;
+    if (snag_buf_putc(&out, '\r') < 0) goto out;
     if (term->output_detour) {
         size_t column = term->output_columns < term->columns ?
                         term->output_columns : term->columns - term->output_cell_width;
         if (snag_buf_printf(&out, "\033[%uA", term->output_detour) < 0 ||
-            (column && snag_buf_printf(&out, "\033[%zuC", column) < 0))
-            goto out;
+            (column && snag_buf_printf(&out, "\033[%zuC", column) < 0)) goto out;
         /* Restore VT pending-wrap by repainting the final output cell. */
-        if (term->output_columns >= term->columns &&
-            (snag_buf_append(&out, term->output_cell_style,
+        if (term->output_columns >= term->columns && (snag_buf_append(&out, term->output_cell_style,
                             strlen(term->output_cell_style)) < 0 ||
              snag_buf_append(&out, term->output_cell.data, term->output_cell.len) < 0 ||
-             snag_buf_append(&out, "\033[0m", 4u) < 0))
-            goto out;
+             snag_buf_append(&out, "\033[0m", 4u) < 0)) goto out;
     }
-    if (snag_term_write(STDERR_FILENO, out.data, out.len) < 0)
-        goto out;
+    if (snag_term_write(STDERR_FILENO, out.data, out.len) < 0) goto out;
     clear_prompt_frame(term);
     term->output_detour = 0u;
     rc = 0;
-out:
-    snag_buf_free(&out);
+out: snag_buf_free(&out);
     return rc;
 }
 
@@ -658,27 +565,22 @@ static void
 mark_input_activity(struct snag_term *term)
 {
     term->preferred_column = SIZE_MAX;
-    if (!term->active)
-        return;
+    if (!term->active) return;
     term->typing_active = true;
     term->last_input_ms = snag_monotonic_ms();
 }
 
 static int
-prompt_render_max(const unsigned char *text, size_t len, size_t indent,
-                  size_t extra, size_t *max)
+prompt_render_max(const unsigned char *text, size_t len, size_t indent, size_t extra, size_t *max)
 {
     size_t newlines = 0u;
     size_t total;
 
     for (size_t i = 0u; i < len; ++i)
-        if (text[i] == '\n')
-            ++newlines;
-    if (len > (SIZE_MAX - extra) / 4u)
-        return snag_errno(EOVERFLOW);
+        if (text[i] == '\n') ++newlines;
+    if (len > (SIZE_MAX - extra) / 4u) return snag_errno(EOVERFLOW);
     total = len * 4u + extra;
-    if (newlines && indent > (SIZE_MAX - total) / newlines)
-        return snag_errno(EOVERFLOW);
+    if (newlines && indent > (SIZE_MAX - total) / newlines) return snag_errno(EOVERFLOW);
     *max = total + newlines * indent;
     return 0;
 }
@@ -703,12 +605,10 @@ snag_term_capture_prompt_clock(struct snag_term *term, time_t seconds)
     struct tm local;
     struct snag_prompt_clock *clock = &term->prompt_clock;
 
-    if (clock->captured)
-        return;
+    if (clock->captured) return;
     clock->captured = true;
     clock->valid = seconds != (time_t)-1 && snag_localtime(&seconds, &local) &&
-                   local.tm_hour >= 0 && local.tm_hour <= 23 &&
-                   local.tm_min >= 0 && local.tm_min <= 59 &&
+                   local.tm_hour >= 0 && local.tm_hour <= 23 && local.tm_min >= 0 && local.tm_min <= 59 &&
                    local.tm_sec >= 0 && local.tm_sec <= 60;
     if (clock->valid) {
         clock->hour = local.tm_hour;
@@ -720,19 +620,15 @@ snag_term_capture_prompt_clock(struct snag_term *term, time_t seconds)
 static int
 prepare_spinner(struct snag_term_spinner *spinner, const char *value)
 {
-    size_t pos = value[0] == '\\' && value[1] == '0' ? 2u :
-                 snag_utf8_size((unsigned char)value[0]);
+    size_t pos = value[0] == '\\' && value[1] == '0' ? 2u : snag_utf8_size((unsigned char)value[0]);
 
     memset(spinner, 0, sizeof(*spinner));
-    if (!snag_strcpy(spinner->value, sizeof(spinner->value), value))
-        return -1;
-    spinner->inactive_len = value[0] == '\\' && value[1] == '0' ? 0u :
-                            (unsigned char)pos;
+    if (!snag_strcpy(spinner->value, sizeof(spinner->value), value)) return -1;
+    spinner->inactive_len = value[0] == '\\' && value[1] == '0' ? 0u : (unsigned char)pos;
     while (value[pos]) {
         size_t n = snag_utf8_size((unsigned char)value[pos]);
 
-        if (!n || spinner->frame_count >= 16u)
-            return -1;
+        if (!n || spinner->frame_count >= 16u) return -1;
         spinner->frame_offset[spinner->frame_count] = pos;
         spinner->frame_len[spinner->frame_count++] = (unsigned char)n;
         pos += n;
@@ -753,29 +649,24 @@ compose_prompt(const char *prompt, const struct snag_term_spinner *spinners,
             const struct snag_term_spinner *cell;
             size_t offset = 0u, len;
 
-            if (id >= SNAG_TERM_SPINNER_SLOTS)
-                return -1;
-            if (id == SNAG_TERM_SPINNER_PROVIDER &&
-                (states & (1u << SNAG_TERM_SPINNER_TOOL)))
+            if (id >= SNAG_TERM_SPINNER_SLOTS) return -1;
+            if (id == SNAG_TERM_SPINNER_PROVIDER && (states & (1u << SNAG_TERM_SPINNER_TOOL)))
                 id = SNAG_TERM_SPINNER_TOOL;
             cell = &spinners[id];
             len = cell->inactive_len;
 
-            if (seen & (1u << id))
-                return -1;
+            if (seen & (1u << id)) return -1;
             seen |= 1u << id;
             if ((states & (1u << id)) && cell->frame_count) {
                 unsigned int frame = (unsigned int)(step % cell->frame_count);
                 offset = cell->frame_offset[frame];
                 len = cell->frame_len[frame];
             }
-            if (used > SNAG_TERM_LABEL_BYTES - 1u - len)
-                return -1;
+            if (used > SNAG_TERM_LABEL_BYTES - 1u - len) return -1;
             memcpy(label + used, cell->value + offset, len);
             used += len;
         } else {
-            if (used == SNAG_TERM_LABEL_BYTES - 1u)
-                return -1;
+            if (used == SNAG_TERM_LABEL_BYTES - 1u) return -1;
             label[used++] = (char)*p;
         }
     }
@@ -784,8 +675,7 @@ compose_prompt(const char *prompt, const struct snag_term_spinner *spinners,
 }
 
 static int
-prompt_fits(const char *prompt,
-            const struct snag_term_spinner spinners[SNAG_TERM_SPINNER_COUNT])
+prompt_fits(const char *prompt, const struct snag_term_spinner spinners[SNAG_TERM_SPINNER_COUNT])
 {
     size_t used = 0u;
     unsigned int seen = 0u;
@@ -796,8 +686,7 @@ prompt_fits(const char *prompt,
         if (*p >= SNAG_TERM_SPINNER_MARKER_BASE) {
             unsigned int id = *p - SNAG_TERM_SPINNER_MARKER_BASE;
 
-            if (id >= SNAG_TERM_SPINNER_SLOTS || (seen & (1u << id)))
-                return -1;
+            if (id >= SNAG_TERM_SPINNER_SLOTS || (seen & (1u << id))) return -1;
             seen |= 1u << id;
             len = 0u;
             for (unsigned int source = id; source <=
@@ -805,15 +694,12 @@ prompt_fits(const char *prompt,
                     ++source) {
                 const struct snag_term_spinner *cell = &spinners[source];
 
-                if (cell->inactive_len > len)
-                    len = cell->inactive_len;
+                if (cell->inactive_len > len) len = cell->inactive_len;
                 for (size_t i = 0u; i < cell->frame_count; ++i)
-                    if (cell->frame_len[i] > len)
-                        len = cell->frame_len[i];
+                    if (cell->frame_len[i] > len) len = cell->frame_len[i];
             }
         }
-        if (used > SNAG_TERM_LABEL_BYTES - 1u - len)
-            return -1;
+        if (used > SNAG_TERM_LABEL_BYTES - 1u - len) return -1;
         used += len;
     }
     return used ? 0 : -1;
@@ -823,15 +709,13 @@ static unsigned int
 visible_spinner_states(const struct snag_term *term)
 {
     return term->spinner_states | (term->tool_spinner_off_delay_ms &&
-        snag_monotonic_ms() < term->tool_spinner_off_at ?
-        1u << SNAG_TERM_SPINNER_TOOL : 0u);
+        snag_monotonic_ms() < term->tool_spinner_off_at ? 1u << SNAG_TERM_SPINNER_TOOL : 0u);
 }
 
 static void
 set_spinner_states(struct snag_term *term, unsigned int states)
 {
-    if ((term->spinner_states & (1u << SNAG_TERM_SPINNER_TOOL)) &&
-        !(states & (1u << SNAG_TERM_SPINNER_TOOL)))
+    if ((term->spinner_states & (1u << SNAG_TERM_SPINNER_TOOL)) && !(states & (1u << SNAG_TERM_SPINNER_TOOL)))
         term->tool_spinner_off_at = snag_monotonic_ms() + term->tool_spinner_off_delay_ms;
     if ((states & (1u << SNAG_TERM_SPINNER_TOOL)) || !term->tool_spinner_off_delay_ms)
         term->tool_spinner_off_at = 0u;
@@ -844,12 +728,10 @@ update_spinners(struct snag_term *term, uint64_t step)
     char label[SNAG_TERM_LABEL_BYTES];
     bool changed;
 
-    if (term->input_only)
-        return 0;
+    if (term->input_only) return 0;
     if (snag_monotonic_ms() >= term->tool_spinner_off_at || !term->tool_spinner_off_delay_ms)
         term->tool_spinner_off_at = 0u;
-    if (compose_prompt(term->prompt_template, term->spinner,
-                       visible_spinner_states(term), step, label) < 0)
+    if (compose_prompt(term->prompt_template, term->spinner, visible_spinner_states(term), step, label) < 0)
         return -1;
     changed = strcmp(label, term->label) != 0;
     memcpy(term->label, label, strlen(label) + 1u);
@@ -861,16 +743,13 @@ static bool
 animated_spinners(const struct snag_term *term)
 {
     /* A held static frame also needs one final repaint when its delay expires. */
-    if (term->tool_spinner_off_at)
-        return true;
+    if (term->tool_spinner_off_at) return true;
     unsigned int states = visible_spinner_states(term);
     for (unsigned int slot = 0u; slot < SNAG_TERM_SPINNER_SLOTS; ++slot) {
-        unsigned int id = slot == SNAG_TERM_SPINNER_PROVIDER &&
-            (states & (1u << SNAG_TERM_SPINNER_TOOL)) ?
+        unsigned int id = slot == SNAG_TERM_SPINNER_PROVIDER && (states & (1u << SNAG_TERM_SPINNER_TOOL)) ?
             SNAG_TERM_SPINNER_TOOL : slot;
         if (strchr(term->prompt_template, SNAG_TERM_SPINNER_MARKER_BASE + slot) &&
-            term->spinner[id].frame_count > 1u && (states & (1u << id)))
-            return true;
+            term->spinner[id].frame_count > 1u && (states & (1u << id))) return true;
     }
     return false;
 }
@@ -878,8 +757,7 @@ animated_spinners(const struct snag_term *term)
 static uint64_t
 spinner_step(const struct snag_term *term, uint64_t now)
 {
-    uint64_t elapsed = now >= term->spinner_epoch_ms ?
-                       now - term->spinner_epoch_ms : 0u;
+    uint64_t elapsed = now >= term->spinner_epoch_ms ? now - term->spinner_epoch_ms : 0u;
     return elapsed * term->spinner_per_second / 1000u;
 }
 
@@ -889,18 +767,15 @@ spinner_timeout(struct snag_term *term, int timeout_ms)
     uint64_t now, elapsed, step, boundary, wait;
 
     if (!term->prompt_visible || !term->capable || term->searching ||
-        term->output_depth || !animated_spinners(term))
-        return timeout_ms;
+        term->output_depth || !animated_spinners(term)) return timeout_ms;
     now = snag_monotonic_ms();
     elapsed = now >= term->spinner_epoch_ms ? now - term->spinner_epoch_ms : 0u;
     step = spinner_step(term, now);
-    boundary = ((step + 1u) * 1000u + term->spinner_per_second - 1u) /
-               term->spinner_per_second;
+    boundary = ((step + 1u) * 1000u + term->spinner_per_second - 1u) / term->spinner_per_second;
     wait = boundary > elapsed ? boundary - elapsed : 1u;
     if (term->tool_spinner_off_at) {
         uint64_t remaining = term->tool_spinner_off_at > now ? term->tool_spinner_off_at - now : 1u;
-        if (remaining < wait)
-            wait = remaining;
+        if (remaining < wait) wait = remaining;
     }
     return timeout_ms < 0 || wait < (uint64_t)timeout_ms ? (int)wait : timeout_ms;
 }
@@ -911,19 +786,15 @@ sync_prompt_layout_after_resize(struct snag_term *term)
     size_t cursor_row, cursor_col, end_row, end_col;
 
     /* Reflow the bytes actually painted, not newly word-wrapped draft text. */
-    frame_position(&term->painted_prompt, term->painted_cursor_byte, term->columns,
-                   &cursor_row, &cursor_col);
-    frame_position(&term->painted_prompt, term->painted_prompt.len, term->columns,
-                   &end_row, &end_col);
+    frame_position(&term->painted_prompt, term->painted_cursor_byte, term->columns, &cursor_row, &cursor_col);
+    frame_position(&term->painted_prompt, term->painted_prompt.len, term->columns, &end_row, &end_col);
     /*
      * tmux and VT terminals represent an exact-margin cursor as the pending
      * wrap position on the preceding row after reflow.  The renderer tracks
      * that position as column zero on the next row.  Materialize the pending
      * wrap before erase/movement commands use the recomputed row counts.
      */
-    if (cursor_row != 0u && cursor_col == 0u &&
-        snag_term_write(STDERR_FILENO, " \b", 2u) < 0)
-        return -1;
+    if (cursor_row != 0u && cursor_col == 0u && snag_term_write(STDERR_FILENO, " \b", 2u) < 0) return -1;
     term->rendered_rows = end_row + 1u;
     term->rendered_cursor_row = cursor_row;
     term->rendered_cursor_col = cursor_col;
@@ -958,8 +829,7 @@ prompt_row(const struct snag_buf *frame, size_t start, unsigned int columns)
             return row;
         }
         row.end += n;
-        if (width > 0)
-            row.width += (size_t)width;
+        if (width > 0) row.width += (size_t)width;
     }
     row.soft = row.width == columns;
     row.next = row.end + (row.soft ? 0u : 1u);
@@ -967,8 +837,7 @@ prompt_row(const struct snag_buf *frame, size_t start, unsigned int columns)
 }
 
 static void
-frame_position(const struct snag_buf *frame, size_t offset, unsigned int columns,
-                size_t *row, size_t *col)
+frame_position(const struct snag_buf *frame, size_t offset, unsigned int columns, size_t *row, size_t *col)
 {
     size_t start = 0u;
     *row = 0u;
@@ -997,34 +866,26 @@ compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes,
     size_t indent;
 
     snag_buf_init(out, 0u);
-    if (label_len > (SIZE_MAX - 32u) / 4u)
-        return snag_errno(EOVERFLOW);
+    if (label_len > (SIZE_MAX - 32u) / 4u) return snag_errno(EOVERFLOW);
     out->max = label_len * 4u + 32u;
     /* Search labels can contain a multiline draft; keep labels on their
      * logical line instead of letting a bare LF desynchronize row layout. */
     for (size_t start = 0u, pos = 0u; pos <= label_len; ++pos) {
-        if (pos != label_len && label[pos] != '\n')
-            continue;
+        if (pos != label_len && label[pos] != '\n') continue;
         if (snag_term_append_safe(out, label + start, pos - start) < 0 ||
-            (pos < label_len && snag_buf_append(out, "\\n", 2u) < 0))
-            return -1;
+            (pos < label_len && snag_buf_append(out, "\\n", 2u) < 0)) return -1;
         start = pos + 1u;
     }
     *label_bytes = out->len;
     frame_position(out, out->len, term->columns, end_row, end_col);
     indent = *end_row * term->columns + *end_col;
-    if (prompt_render_max(term->draft.data, term->draft.len, indent,
-                          out->len + 64u, &max) < 0)
-        return -1;
+    if (prompt_render_max(term->draft.data, term->draft.len, indent, out->len + 64u, &max) < 0) return -1;
     out->max = max;
     if (append_safe(out, term->draft.data, term->draft.len, true, indent,
                     term->columns, source_offset ? *source_offset : term->cursor,
-                    &cursor_byte, source_offset != NULL) < 0)
-        return -1;
-    if (source_offset)
-        *source_offset = cursor_byte;
-    else
-        term->painted_cursor_byte = cursor_byte;
+                    &cursor_byte, source_offset != NULL) < 0) return -1;
+    if (source_offset) *source_offset = cursor_byte;
+    else term->painted_cursor_byte = cursor_byte;
     frame_position(out, source_offset ? 0u : cursor_byte, term->columns, cursor_row, cursor_col);
     frame_position(out, out->len, term->columns, end_row, end_col);
     return 0;
@@ -1040,17 +901,13 @@ clip_prompt(struct snag_term *term, struct snag_buf *frame, size_t *label,
     size_t rows = term->rows > 2u ? term->rows - 2u : 1u;
     size_t top = term->viewport_row, start = 0u, end = frame->len;
 
-    if (*end_row < rows)
-        top = 0u;
-    else if (*cursor_row < top)
-        top = *cursor_row;
-    else if (*cursor_row - top >= rows)
-        top = *cursor_row - rows + 1u;
+    if (*end_row < rows) top = 0u;
+    else if (*cursor_row < top) top = *cursor_row;
+    else if (*cursor_row - top >= rows) top = *cursor_row - rows + 1u;
     term->viewport_row = top;
     for (size_t y = 0u, next = 0u; y <= *end_row; ++y) {
         struct prompt_row line = prompt_row(frame, next, term->columns);
-        if (y == top)
-            start = next;
+        if (y == top) start = next;
         if (y == top + rows - 1u) {
             end = line.end;
             break;
@@ -1074,8 +931,7 @@ prompt_cell_end(const unsigned char *data, size_t start, size_t end)
 
     while (pos < end) {
         size_t n = snag_utf8_decode(data + pos, end - pos, &cp);
-        if (snag_char_width(cp) != 0)
-            break;
+        if (snag_char_width(cp) != 0) break;
         pos += n;
     }
     return pos;
@@ -1089,8 +945,7 @@ prompt_cell_start(const unsigned char *data, size_t start, size_t end)
 
     while (pos > start) {
         (void)snag_utf8_decode(data + pos, end - pos, &cp);
-        if (snag_char_width(cp) != 0)
-            break;
+        if (snag_char_width(cp) != 0) break;
         pos = previous_cp(data, pos);
     }
     return pos;
@@ -1109,26 +964,19 @@ same_prompt_cell(const struct snag_term *term, const struct snag_buf *next,
     size_t old_color = colored_prefix(term->painted_label_len, a, ae);
     size_t new_color = colored_prefix(label, b, be);
 
-    if (!term->painted_color)
-        old_color = 0u;
-    if (!term->color)
-        new_color = 0u;
+    if (!term->painted_color) old_color = 0u;
+    if (!term->color) new_color = 0u;
     return ae - a == be - b && old_color == new_color &&
            memcmp(term->painted_prompt.data + a, next->data + b, be - b) == 0;
 }
 
 static int
-prompt_move(struct snag_buf *out, size_t *row, size_t *col,
-            size_t target_row, size_t target_col)
+prompt_move(struct snag_buf *out, size_t *row, size_t *col, size_t target_row, size_t target_col)
 {
-    if (target_row != *row &&
-        snag_buf_printf(out, "\033[%zu%c", target_row > *row ? target_row - *row :
-                       *row - target_row, target_row > *row ? 'B' : 'A') < 0)
-        return -1;
-    if (target_col != *col &&
-        (snag_buf_putc(out, '\r') < 0 ||
-         (target_col && snag_buf_printf(out, "\033[%zuC", target_col) < 0)))
-        return -1;
+    if (target_row != *row && snag_buf_printf(out, "\033[%zu%c", target_row > *row ? target_row - *row :
+                       *row - target_row, target_row > *row ? 'B' : 'A') < 0) return -1;
+    if (target_col != *col && (snag_buf_putc(out, '\r') < 0 ||
+         (target_col && snag_buf_printf(out, "\033[%zuC", target_col) < 0))) return -1;
     *row = target_row;
     *col = target_col;
     return 0;
@@ -1140,10 +988,8 @@ prompt_span(struct snag_buf *out, const struct snag_term *term,
 {
     size_t colored = term->color ? colored_prefix(label, start, end) : 0u;
 
-    if (colored &&
-        (snag_buf_append(out, "\033[1;36m", 7u) < 0 ||
-         snag_buf_append(out, frame->data + start, colored) < 0 ||
-         snag_buf_append(out, "\033[0m", 4u) < 0))
+    if (colored && (snag_buf_append(out, "\033[1;36m", 7u) < 0 ||
+         snag_buf_append(out, frame->data + start, colored) < 0 || snag_buf_append(out, "\033[0m", 4u) < 0))
         return -1;
     return snag_buf_append(out, frame->data + start + colored, end - start - colored);
 }
@@ -1153,16 +999,13 @@ same_prompt_layout(const struct snag_term *term, const struct snag_buf *next)
 {
     size_t a = 0u, b = 0u;
 
-    if (!term->prompt_visible || !term->painted_prompt.len ||
-        term->painted_columns != term->columns)
+    if (!term->prompt_visible || !term->painted_prompt.len || term->painted_columns != term->columns)
         return false;
     while (a <= term->painted_prompt.len && b <= next->len) {
         struct prompt_row old = prompt_row(&term->painted_prompt, a, term->columns);
         struct prompt_row row = prompt_row(next, b, term->columns);
-        if (old.soft != row.soft ||
-            (old.next <= term->painted_prompt.len) != (row.next <= next->len) ||
-            (old.soft && old.width != row.width))
-            return false;
+        if (old.soft != row.soft || (old.next <= term->painted_prompt.len) != (row.next <= next->len) ||
+            (old.soft && old.width != row.width)) return false;
         a = old.next;
         b = row.next;
     }
@@ -1182,11 +1025,9 @@ paint_prompt(struct snag_term *term, struct snag_buf *frame, size_t label,
     int rc = -1;
 
     if (frame->max > (SIZE_MAX - 256u) / 16u || old_rows > SIZE_MAX / 32u ||
-        !snag_size_add(frame->max * 16u + 256u, old_rows * 32u, &max))
-        return snag_errno(EOVERFLOW);
+        !snag_size_add(frame->max * 16u + 256u, old_rows * 32u, &max)) return snag_errno(EOVERFLOW);
     struct snag_buf out = {.max = max};
-    if (term->rendered_cursor_pending_wrap && snag_buf_append(&out, " \b", 2u) < 0)
-        goto out;
+    if (term->rendered_cursor_pending_wrap && snag_buf_append(&out, " \b", 2u) < 0) goto out;
     if (stable) {
         size_t a = 0u, b = 0u, y = 0u;
         while (b <= frame->len) {
@@ -1198,8 +1039,7 @@ paint_prompt(struct snag_term *term, struct snag_buf *frame, size_t label,
             while (a < ae && b < be) {
                 size_t ac = prompt_cell_end(term->painted_prompt.data, a, ae);
                 size_t bc = prompt_cell_end(frame->data, b, be);
-                if (!same_prompt_cell(term, frame, label, a, ac, b, bc))
-                    break;
+                if (!same_prompt_cell(term, frame, label, a, ac, b, bc)) break;
                 prefix += snag_term_text_width((char *)frame->data + b, bc - b);
                 a = ac;
                 b = bc;
@@ -1208,15 +1048,13 @@ paint_prompt(struct snag_term *term, struct snag_buf *frame, size_t label,
             while (old.width == next.width && a < ae && b < be) {
                 size_t ac = prompt_cell_start(term->painted_prompt.data, a, ae);
                 size_t bc = prompt_cell_start(frame->data, b, be);
-                if (!same_prompt_cell(term, frame, label, ac, ae, bc, be))
-                    break;
+                if (!same_prompt_cell(term, frame, label, ac, ae, bc, be)) break;
                 ae = ac;
                 be = bc;
             }
             if (a != ae || b != be) {
                 if (prompt_move(&out, &row, &col, y, prefix) < 0 ||
-                    prompt_span(&out, term, frame, label, b, be) < 0)
-                    goto out;
+                    prompt_span(&out, term, frame, label, b, be) < 0) goto out;
                 col += snag_term_text_width((char *)frame->data + b, be - b);
                 /* Materialize soft wrap with the next row's actual first cell.
                  * CR here would discard the terminal's reflow/join marker. */
@@ -1227,8 +1065,7 @@ paint_prompt(struct snag_term *term, struct snag_buf *frame, size_t label,
                         ++row;
                         if (following.start < following.end) {
                             size_t first = prompt_cell_end(frame->data, following.start, following.end);
-                            if (prompt_span(&out, term, frame, label, following.start, first) < 0)
-                                goto out;
+                            if (prompt_span(&out, term, frame, label, following.start, first) < 0) goto out;
                             col = snag_term_text_width((char *)frame->data + following.start,
                                                        first - following.start);
                         } else if (snag_buf_append(&out, " \b", 2u) < 0) {
@@ -1238,10 +1075,8 @@ paint_prompt(struct snag_term *term, struct snag_buf *frame, size_t label,
                         goto out;
                     }
                 }
-                if (next.width < old.width && snag_buf_append(&out, "\033[K", 3u) < 0)
-                    goto out;
-                if (next.width < old.width && end_row && !end_col && row == end_row)
-                    repair_wrap = true;
+                if (next.width < old.width && snag_buf_append(&out, "\033[K", 3u) < 0) goto out;
+                if (next.width < old.width && end_row && !end_col && row == end_row) repair_wrap = true;
             }
             a = old.next;
             b = next.next;
@@ -1255,36 +1090,28 @@ paint_prompt(struct snag_term *term, struct snag_buf *frame, size_t label,
                     prompt_cell_end(term->painted_prompt.data, start, term->painted_prompt.len);
                 size_t b = frame->data[start] == '\r' ? start + 2u :
                     prompt_cell_end(frame->data, start, frame->len);
-                if (!same_prompt_cell(term, frame, label, start, a, start, b))
-                    break;
+                if (!same_prompt_cell(term, frame, label, start, a, start, b)) break;
                 start = b;
             }
-            frame_position(&term->painted_prompt, start, term->columns,
-                            &prefix_row, &prefix_col);
+            frame_position(&term->painted_prompt, start, term->columns, &prefix_row, &prefix_col);
         }
-        if (prompt_move(&out, &row, &col, prefix_row, prefix_col) < 0)
-            goto out;
+        if (prompt_move(&out, &row, &col, prefix_row, prefix_col) < 0) goto out;
         /* Overwrite in natural wrap order; clear only obsolete row suffixes. */
         for (size_t i = start; i + 1u < frame->len; ++i) {
-            if (frame->data[i] != '\r' || frame->data[i + 1u] != '\n')
-                continue;
+            if (frame->data[i] != '\r' || frame->data[i + 1u] != '\n') continue;
             if (prompt_span(&out, term, frame, label, start, i) < 0 ||
-                snag_buf_append(&out, "\033[K\r\n", 5u) < 0)
-                goto out;
+                snag_buf_append(&out, "\033[K\r\n", 5u) < 0) goto out;
             start = i + 2u;
             ++i;
         }
         if (prompt_span(&out, term, frame, label, start, frame->len) < 0 ||
             (end_row && !end_col && snag_buf_append(&out, " \b", 2u) < 0) ||
-            ((end_col || old_rows > end_row) && snag_buf_append(&out, "\033[K", 3u) < 0))
-            goto out;
+            ((end_col || old_rows > end_row) && snag_buf_append(&out, "\033[K", 3u) < 0)) goto out;
         row = end_row;
         col = end_col;
         repair_wrap = end_row && !end_col && old_rows > end_row;
         for (size_t y = end_row + 1u; y < old_rows; ++y)
-            if (prompt_move(&out, &row, &col, y, 0u) < 0 ||
-                snag_buf_append(&out, "\033[K", 3u) < 0)
-                goto out;
+            if (prompt_move(&out, &row, &col, y, 0u) < 0 || snag_buf_append(&out, "\033[K", 3u) < 0) goto out;
     }
     /* EL on an empty continuation row can clear the preceding soft-wrap
      * marker (not just its cells). Restore it after shrinking to a margin. */
@@ -1294,14 +1121,12 @@ paint_prompt(struct snag_term *term, struct snag_buf *frame, size_t label,
         frame_position(frame, last, term->columns, &last_row, &last_col);
         if (prompt_move(&out, &row, &col, last_row, last_col) < 0 ||
             prompt_span(&out, term, frame, label, last, frame->len) < 0 ||
-            snag_buf_append(&out, " \b", 2u) < 0)
-            goto out;
+            snag_buf_append(&out, " \b", 2u) < 0) goto out;
         row = end_row;
         col = 0u;
     }
     if (prompt_move(&out, &row, &col, cursor_row, cursor_col) < 0 ||
-        snag_term_write(STDERR_FILENO, out.data, out.len) < 0)
-        goto out;
+        snag_term_write(STDERR_FILENO, out.data, out.len) < 0) goto out;
     snag_buf_free(&term->painted_prompt);
     term->painted_prompt = *frame;
     memset(frame, 0, sizeof(*frame));
@@ -1316,8 +1141,7 @@ paint_prompt(struct snag_term *term, struct snag_buf *frame, size_t label,
     term->prompt_visible = true;
     rc = 0;
 out:
-    if (rc < 0)
-        snag_buf_reset(&term->painted_prompt);
+    if (rc < 0) snag_buf_reset(&term->painted_prompt);
     snag_buf_free(&out);
     return rc;
 }
@@ -1333,56 +1157,39 @@ redraw(struct snag_term *term)
     const char *label;
     int rc = -1;
 
-    if (term->input_only || !term->opened || !term->prompt_wanted || term->output_depth)
-        return 0;
-    if (term->prompt_template[0] &&
-        compose_prompt(term->prompt_template, term->spinner,
-                       visible_spinner_states(term),
-                       spinner_step(term, snag_monotonic_ms()), current) < 0)
+    if (term->input_only || !term->opened || !term->prompt_wanted || term->output_depth) return 0;
+    if (term->prompt_template[0] && compose_prompt(term->prompt_template, term->spinner,
+                       visible_spinner_states(term), spinner_step(term, snag_monotonic_ms()), current) < 0)
         return -1;
-    if (term->prompt_template[0])
-        memcpy(term->label, current, strlen(current) + 1u);
+    if (term->prompt_template[0]) memcpy(term->label, current, strlen(current) + 1u);
     label = prompt_label(term, &label_len);
-    if (!term->prompt_visible && term->output_seen &&
-        !term->output_detour) {
+    if (!term->prompt_visible && term->output_seen && !term->output_detour) {
         unsigned int rows = term->output_gap > term->output_newlines ?
             term->output_gap - term->output_newlines : !term->output_ended_lf;
-        if (rows && snag_term_write(STDERR_FILENO,
-                term->capable ? "\r\n\r\n" : "\n\n",
-                rows * (term->capable ? 2u : 1u)) < 0)
-            return -1;
+        if (rows && snag_term_write(STDERR_FILENO, term->capable ? "\r\n\r\n" : "\n\n",
+                rows * (term->capable ? 2u : 1u)) < 0) return -1;
         term->output_detour = term->capable ? rows : 0u;
-        if (!term->output_detour)
-            term->output_seen = false;
+        if (!term->output_detour) term->output_seen = false;
     }
     if (!term->capable) {
-        if (term->prompt_visible)
-            return 0;
-        if ((term->color &&
-             snag_term_write(STDERR_FILENO,
-                             "\033[1;36m", 7u) < 0) ||
+        if (term->prompt_visible) return 0;
+        if ((term->color && snag_term_write(STDERR_FILENO, "\033[1;36m", 7u) < 0) ||
             snag_term_write_safe(STDERR_FILENO, label, label_len) < 0 ||
-            (term->color && snag_term_write(STDERR_FILENO, "\033[0m", 4u) < 0) ||
-            (term->draft.len &&
-             snag_term_write_safe(STDERR_FILENO, (char *)term->draft.data,
-                                  term->draft.len) < 0))
-            return -1;
+            (term->color && snag_term_write(STDERR_FILENO, "\033[0m", 4u) < 0) || (term->draft.len &&
+             snag_term_write_safe(STDERR_FILENO, (char *)term->draft.data, term->draft.len) < 0)) return -1;
         term->prompt_visible = true;
         return 0;
     }
-    if (compose_frame(term, &out, &label_len, &cursor_row, &cursor_col,
-                       &end_row, &end_col, NULL) < 0)
+    if (compose_frame(term, &out, &label_len, &cursor_row, &cursor_col, &end_row, &end_col, NULL) < 0)
         goto out;
     clip_prompt(term, &out, &label_len, &cursor_row, &cursor_col, &end_row, &end_col);
     rc = paint_prompt(term, &out, label_len, cursor_row, cursor_col, end_row, end_col);
-out:
-    snag_buf_free(&out);
+out: snag_buf_free(&out);
     return rc;
 }
 
 int
-snag_term_set_prompt_template(struct snag_term *term, bool active,
-                             const char *label,
+snag_term_set_prompt_template(struct snag_term *term, bool active, const char *label,
                              const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                              uint32_t per_second, unsigned int states)
 {
@@ -1391,52 +1198,39 @@ snag_term_set_prompt_template(struct snag_term *term, bool active,
     size_t len;
     bool unchanged;
 
-    if (!term || !label || !(len = strlen(label)) ||
-        len >= sizeof(term->prompt_template) || !spinners ||
-        per_second < 1u || per_second > 60u ||
-        states >= (1u << SNAG_TERM_SPINNER_COUNT))
+    if (!term || !label || !(len = strlen(label)) || len >= sizeof(term->prompt_template) || !spinners ||
+        per_second < 1u || per_second > 60u || states >= (1u << SNAG_TERM_SPINNER_COUNT))
         return snag_errno(EINVAL);
     for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i)
-        if (!spinners[i] || prepare_spinner(&configured[i], spinners[i]) < 0)
-            goto invalid;
-    if (prompt_fits(label, configured) < 0)
-        goto invalid;
+        if (!spinners[i] || prepare_spinner(&configured[i], spinners[i]) < 0) goto invalid;
+    if (prompt_fits(label, configured) < 0) goto invalid;
     unchanged = strcmp(term->prompt_template, label) == 0 &&
                 term->spinner_states == states && term->spinner_per_second == per_second;
     for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT && unchanged; ++i)
         unchanged = strcmp(term->spinner[i].value, spinners[i]) == 0;
     set_spinner_states(term, states);
     if (compose_prompt(label, configured, visible_spinner_states(term),
-                       unchanged ? spinner_step(term, snag_monotonic_ms()) : 0u,
-                       expanded) < 0)
-        return -1;
-    if (!term->capable &&
-        (term->active != active || strcmp(term->label, expanded) != 0) &&
-        snag_term_hide(term) < 0)
-        return -1;
+                       unchanged ? spinner_step(term, snag_monotonic_ms()) : 0u, expanded) < 0) return -1;
+    if (!term->capable && (term->active != active || strcmp(term->label, expanded) != 0) &&
+        snag_term_hide(term) < 0) return -1;
     memcpy(term->prompt_template, label, len + 1u);
     memcpy(term->label, expanded, strlen(expanded) + 1u);
     memcpy(term->spinner, configured, sizeof(term->spinner));
     term->spinner_per_second = per_second;
-    if (!unchanged)
-        term->spinner_epoch_ms = snag_monotonic_ms();
+    if (!unchanged) term->spinner_epoch_ms = snag_monotonic_ms();
     term->active = active;
-    if (!active)
-        term->typing_active = false;
+    if (!active) term->typing_active = false;
     term->prompt_wanted = true;
     term->line_submission_echoed = false;
     return term->defer_redraw ? 0 : redraw(term);
-invalid:
-    return snag_errno(EINVAL);
+invalid: return snag_errno(EINVAL);
 }
 
 int
 snag_term_set_spinner_states(struct snag_term *term, unsigned int states)
 {
-    if (!term || states >= (1u << SNAG_TERM_SPINNER_COUNT))
-        return snag_errno(EINVAL);
-    if (!term->prompt_template[0] || term->spinner_states == states)
-        return 0;
+    if (!term || states >= (1u << SNAG_TERM_SPINNER_COUNT)) return snag_errno(EINVAL);
+    if (!term->prompt_template[0] || term->spinner_states == states) return 0;
     set_spinner_states(term, states);
     term->spinner_epoch_ms = snag_monotonic_ms();
     return update_spinners(term, 0u);
@@ -1445,10 +1239,8 @@ snag_term_set_spinner_states(struct snag_term *term, unsigned int states)
 int
 snag_term_output_begin(struct snag_term *term)
 {
-    if (!term || !term->opened)
-        return 0;
-    if (term->output_depth == UINT_MAX)
-        return snag_errno(EOVERFLOW);
+    if (!term || !term->opened) return 0;
+    if (term->output_depth == UINT_MAX) return snag_errno(EOVERFLOW);
     if (term->output_depth++ == 0u) {
         int rc;
 
@@ -1465,13 +1257,10 @@ snag_term_output_begin(struct snag_term *term)
 int
 snag_term_output_end(struct snag_term *term)
 {
-    if (!term || !term->opened)
-        return 0;
-    if (!term->output_depth)
-        return snag_errno(EINVAL);
+    if (!term || !term->opened) return 0;
+    if (!term->output_depth) return snag_errno(EINVAL);
     --term->output_depth;
-    if (term->output_depth)
-        return 0;
+    if (term->output_depth) return 0;
     /* A non-addressable terminal cannot erase a temporary streaming prompt. */
     return term->defer_redraw || (!term->capable && term->active) ? 0 : redraw(term);
 }
@@ -1497,11 +1286,9 @@ replace_draft(struct snag_term *term, const char *text)
 {
     size_t len = strlen(text);
 
-    if (len > SNAG_MAX_DIRECT_PROMPT)
-        return snag_errno(EOVERFLOW);
+    if (len > SNAG_MAX_DIRECT_PROMPT) return snag_errno(EOVERFLOW);
     snag_buf_reset(&term->draft);
-    if (snag_buf_append(&term->draft, text, len) < 0)
-        return -1;
+    if (snag_buf_append(&term->draft, text, len) < 0) return -1;
     term->cursor = len;
     term->utf8_pending_len = 0u;
     return redraw(term);
@@ -1521,8 +1308,7 @@ snag_term_consume_echoed_submission(struct snag_term *term, const char *label)
 {
     bool match;
 
-    if (!term || !term->line_submission_echoed)
-        return false;
+    if (!term || !term->line_submission_echoed) return false;
     match = strcmp(label, term->label) == 0;
     term->line_submission_echoed = false;
     return match;
@@ -1544,8 +1330,7 @@ history_up(struct snag_term *term)
     term->history_pending = 1u;
     term->history_reader.budget = 65536u;
     int rc = snag_history_read(&term->history_reader, &term->history, false,
-                               term->history_start, &term->history_start,
-                               &term->history_end, &text);
+                               term->history_start, &term->history_start, &term->history_end, &text);
     if (rc == 2) return 0;
     term->history_pending = 0u;
     if (rc < 0) term->history_reader.warning = true;
@@ -1562,8 +1347,7 @@ history_down(struct snag_term *term)
     term->history_pending = 2u;
     term->history_reader.budget = 65536u;
     int rc = term->history_pos ? snag_history_read(&term->history_reader, &term->history, true,
-                               term->history_end, &term->history_start,
-                               &term->history_end, &text) : 0;
+                               term->history_end, &term->history_start, &term->history_end, &text) : 0;
     if (rc == 2) return 0;
     term->history_pending = 0u;
     if (rc < 0) { term->history_reader.warning = true; return 0; }
@@ -1582,16 +1366,12 @@ history_down(struct snag_term *term)
 static int
 search_label_update(struct snag_term *term)
 {
-    const char *prefix = term->search_failed ?
-                         "(failed reverse-i-search)`" :
-                         "(reverse-i-search)`";
+    const char *prefix = term->search_failed ? "(failed reverse-i-search)`" : "(reverse-i-search)`";
 
     snag_buf_reset(&term->search_label);
     if (snag_buf_append(&term->search_label, prefix, strlen(prefix)) < 0 ||
-        snag_buf_append(&term->search_label, term->search_query.data,
-                       term->search_query.len) < 0 ||
-        snag_buf_append(&term->search_label, "': ", 3u) < 0 ||
-        snag_buf_terminate(&term->search_label) < 0)
+        snag_buf_append(&term->search_label, term->search_query.data, term->search_query.len) < 0 ||
+        snag_buf_append(&term->search_label, "': ", 3u) < 0 || snag_buf_terminate(&term->search_label) < 0)
         return -1;
     return 0;
 }
@@ -1650,8 +1430,7 @@ search_begin(struct snag_term *term)
 }
 
 int
-snag_term_history_set(struct snag_term *term,
-                     struct snag_history_snapshot *snapshot, bool refresh)
+snag_term_history_set(struct snag_term *term, struct snag_history_snapshot *snapshot, bool refresh)
 {
     bool active = term->searching || term->history_pos != SIZE_MAX;
     if (!refresh && active) {
@@ -1690,8 +1469,7 @@ search_accept(struct snag_term *term, bool abort)
     size_t cursor = term->search_original_cursor;
     int rc;
 
-    if (!term->searching)
-        return 0;
+    if (!term->searching) return 0;
     term->searching = false;
     term->search_original = NULL;
     term->search_failed = false;
@@ -1717,10 +1495,8 @@ search_insert(struct snag_term *term, const unsigned char *data, size_t len)
 {
     struct snag_history_cursor before = term->search_found ? term->history_end : snag_history_end(&term->history);
 
-    if (len > SNAG_MAX_DIRECT_PROMPT - term->search_query.len)
-        return snag_errno(EOVERFLOW);
-    if (snag_buf_append(&term->search_query, data, len) < 0)
-        return -1;
+    if (len > SNAG_MAX_DIRECT_PROMPT - term->search_query.len) return snag_errno(EOVERFLOW);
+    if (snag_buf_append(&term->search_query, data, len) < 0) return -1;
     mark_input_activity(term);
     term->history_reader.scanning = false;
     term->search_failed = false;
@@ -1731,8 +1507,7 @@ search_insert(struct snag_term *term, const unsigned char *data, size_t len)
 static int
 search_backspace(struct snag_term *term)
 {
-    if (term->search_query.len)
-        term->search_query.len = previous_cp(term->search_query.data,
+    if (term->search_query.len) term->search_query.len = previous_cp(term->search_query.data,
                                              term->search_query.len);
     mark_input_activity(term);
     term->history_reader.scanning = false;
@@ -1744,11 +1519,9 @@ search_backspace(struct snag_term *term)
 static size_t
 previous_cp(const unsigned char *s, size_t pos)
 {
-    if (!pos)
-        return 0u;
+    if (!pos) return 0u;
     --pos;
-    while (pos && (s[pos] & 0xc0u) == 0x80u)
-        --pos;
+    while (pos && (s[pos] & 0xc0u) == 0x80u) --pos;
     return pos;
 }
 
@@ -1757,30 +1530,23 @@ next_cp(const unsigned char *s, size_t len, size_t pos)
 {
     size_t n;
 
-    if (pos >= len)
-        return len;
+    if (pos >= len) return len;
     n = snag_utf8_size(s[pos]);
     return n && n <= len - pos ? pos + n : pos + 1u;
 }
 
 static int
-replace_range(struct snag_term *term, size_t start, size_t end,
-              const void *data, size_t len)
+replace_range(struct snag_term *term, size_t start, size_t end, const void *data, size_t len)
 {
-    if (start > end || end > term->draft.len)
-        return snag_errno(EINVAL);
+    if (start > end || end > term->draft.len) return snag_errno(EINVAL);
     size_t next_len = term->draft.len - (end - start);
-    if (len > SNAG_MAX_DIRECT_PROMPT - next_len)
-        return snag_errno(EOVERFLOW);
+    if (len > SNAG_MAX_DIRECT_PROMPT - next_len) return snag_errno(EOVERFLOW);
     next_len += len;
-    if (next_len > term->draft.len &&
-        snag_buf_reserve(&term->draft, next_len - term->draft.len) < 0)
+    if (next_len > term->draft.len && snag_buf_reserve(&term->draft, next_len - term->draft.len) < 0)
         return -1;
-    if (end < term->draft.len)
-        memmove(term->draft.data + start + len, term->draft.data + end,
+    if (end < term->draft.len) memmove(term->draft.data + start + len, term->draft.data + end,
                 term->draft.len - end);
-    if (len)
-        memcpy(term->draft.data + start, data, len);
+    if (len) memcpy(term->draft.data + start, data, len);
     term->draft.len = next_len;
     term->cursor = start + len;
     history_reset_navigation(term);
@@ -1811,9 +1577,7 @@ command_name_length(const struct snag_term_command *command)
 {
     size_t len = 0u;
 
-    while (command->syntax[len] &&
-           !word_space((unsigned char)command->syntax[len]))
-        ++len;
+    while (command->syntax[len] && !word_space((unsigned char)command->syntax[len])) ++len;
     return len;
 }
 
@@ -1837,106 +1601,82 @@ completion_add(struct completion *matches, const char *name, size_t len,
     size_t i = 0u;
 
     while (i < prefix_len && i < len &&
-           completion_byte_equal((unsigned char)name[i], prefix[i], matches->fold))
-        ++i;
-    if (i != prefix_len || !len)
-        return 0;
+           completion_byte_equal((unsigned char)name[i], prefix[i], matches->fold)) ++i;
+    if (i != prefix_len || !len) return 0;
     for (size_t pos = 0u; pos < matches->names.len;) {
         const char *previous = (const char *)matches->names.data + pos;
         size_t previous_len = strlen(previous), same = 0u;
-        while (same < len && same < previous_len &&
-               completion_byte_equal((unsigned char)name[same],
-                                     (unsigned char)previous[same], matches->fold))
-            ++same;
-        if (same == len && same == previous_len)
-            return 0;
+        while (same < len && same < previous_len && completion_byte_equal((unsigned char)name[same],
+                                     (unsigned char)previous[same], matches->fold)) ++same;
+        if (same == len && same == previous_len) return 0;
         pos += previous_len + 1u;
     }
-    if (!matches->count)
-        matches->common = len;
+    if (!matches->count) matches->common = len;
     else {
         while (i < matches->common && i < len &&
-               completion_byte_equal((unsigned char)name[i], matches->names.data[i], matches->fold))
-            ++i;
+               completion_byte_equal((unsigned char)name[i], matches->names.data[i], matches->fold)) ++i;
         matches->common = i;
     }
     ++matches->count;
-    return snag_buf_append(&matches->names, name, len) < 0 ? -1 :
-           snag_buf_putc(&matches->names, '\0');
+    return snag_buf_append(&matches->names, name, len) < 0 ? -1 : snag_buf_putc(&matches->names, '\0');
 }
 
 static int
 flush_completions(struct snag_term *term)
 {
-    if (!term->completion_output.len || term->input_only || term->output_depth)
-        return 0;
+    if (!term->completion_output.len || term->input_only || term->output_depth) return 0;
     /* Output may read more input under backpressure. Detach this snapshot so
      * another double Tab cannot invalidate the bytes being written. */
     struct snag_buf output = term->completion_output;
     snag_buf_init(&term->completion_output, SNAG_MAX_DIRECT_PROMPT);
     int rc = -1;
-    if (snag_term_output_begin(term) < 0)
-        goto out;
-    if ((!term->output_seen || term->output_ended_lf ||
-         snag_term_write(STDERR_FILENO, "\n", 1u) == 0) &&
+    if (snag_term_output_begin(term) < 0) goto out;
+    if ((!term->output_seen || term->output_ended_lf || snag_term_write(STDERR_FILENO, "\n", 1u) == 0) &&
         snag_term_write(STDERR_FILENO, output.data, output.len) == 0)
         rc = snag_term_note_output(term, (const char *)output.data, output.len, "");
-    if (snag_term_output_end(term) < 0)
-        rc = -1;
-out:
-    snag_buf_free(&output);
+    if (snag_term_output_end(term) < 0) rc = -1;
+out: snag_buf_free(&output);
     return rc;
 }
 
 static int
-finish_completion(struct snag_term *term, struct completion *matches,
-                   size_t start, size_t end)
+finish_completion(struct snag_term *term, struct completion *matches, size_t start, size_t end)
 {
     bool list = term->completion_armed && matches->count > 1u;
     term->completion_armed = matches->count > 1u;
-    if (!matches->count)
-        return 0;
-    while (matches->common &&
-           !snag_utf8_valid(matches->names.data, matches->common, true))
-        --matches->common;
+    if (!matches->count) return 0;
+    while (matches->common && !snag_utf8_valid(matches->names.data, matches->common, true)) --matches->common;
     if (matches->count == 1u || matches->common > term->cursor - start) {
         size_t len = matches->common;
         if (matches->count == 1u) {
             /* Reuse the sole candidate's terminator for its trailing space. */
             matches->names.data[len++] = ' ';
-            if (end < term->draft.len && term->draft.data[end] == ' ')
-                ++end;
+            if (end < term->draft.len && term->draft.data[end] == ' ') ++end;
         }
-        if (replace_range(term, start, end, matches->names.data, len) < 0)
-            return -1;
+        if (replace_range(term, start, end, matches->names.data, len) < 0) return -1;
     }
-    if (!list)
-        return 0;
+    if (!list) return 0;
     snag_buf_reset(&term->completion_output);
     size_t column = 0u, width = 0u;
     for (size_t pos = 0u; pos < matches->names.len;) {
         const char *name = (const char *)matches->names.data + pos;
         size_t len = strlen(name), cells = snag_term_text_width(name, len) + matches->fold;
-        if (cells > width)
-            width = cells;
+        if (cells > width) width = cells;
         pos += len + 1u;
     }
     for (size_t pos = 0u; pos < matches->names.len;) {
         const char *name = (const char *)matches->names.data + pos;
         size_t len = strlen(name), cells = snag_term_text_width(name, len) + matches->fold;
         if ((matches->fold && snag_buf_putc(&term->completion_output, '@') < 0) ||
-            snag_term_append_safe(&term->completion_output, name, len) < 0)
-            return -1;
+            snag_term_append_safe(&term->completion_output, name, len) < 0) return -1;
         pos += len + 1u;
         column += width + 2u;
         if (pos == matches->names.len || column + width > snag_term_columns(term)) {
-            if (snag_buf_putc(&term->completion_output, '\n') < 0)
-                return -1;
+            if (snag_buf_putc(&term->completion_output, '\n') < 0) return -1;
             column = 0u;
         } else {
             for (size_t pad = cells; pad < width + 2u; ++pad)
-                if (snag_buf_putc(&term->completion_output, ' ') < 0)
-                    return -1;
+                if (snag_buf_putc(&term->completion_output, ' ') < 0) return -1;
         }
     }
     return flush_completions(term);
@@ -1951,12 +1691,9 @@ complete_command_name(struct snag_term *term, bool *handled)
 
     *handled = false;
     if (!prefix_len || !term->draft.len || term->draft.data[0] != '/' ||
-        (term->draft.len > 1u && term->draft.data[1] == '/'))
-        return 0;
-    while (token_end < term->draft.len && !word_space(term->draft.data[token_end]))
-        ++token_end;
-    if (prefix_len > token_end)
-        return 0;
+        (term->draft.len > 1u && term->draft.data[1] == '/')) return 0;
+    while (token_end < term->draft.len && !word_space(term->draft.data[token_end])) ++token_end;
+    if (prefix_len > token_end) return 0;
     *handled = true;
     snag_buf_init(&matches.names, SNAG_MAX_DIRECT_PROMPT);
     size_t destinations = term->destinations ? term->destinations->count : 0u;
@@ -1964,20 +1701,17 @@ complete_command_name(struct snag_term *term, bool *handled)
         char numeric[16u];
         struct snag_term_command command;
 
-        if (i < term->command_count)
-            command = term->commands[i];
+        if (i < term->command_count) command = term->commands[i];
         else {
             (void)snprintf(numeric, sizeof(numeric), "/%u",
                 term->destinations->items[i - term->command_count].target.id);
             command = (struct snag_term_command){numeric, NULL};
         }
         if (command.syntax && completion_add(&matches, command.syntax,
-                command_name_length(&command), term->draft.data, prefix_len) < 0)
-            goto out;
+                command_name_length(&command), term->draft.data, prefix_len) < 0) goto out;
     }
     rc = finish_completion(term, &matches, 0u, token_end);
-out:
-    snag_buf_free(&matches.names);
+out: snag_buf_free(&matches.names);
     return rc;
 }
 
@@ -1999,107 +1733,79 @@ complete_mention(struct snag_term *term, bool *handled)
         (const char *)term->draft.data, term->draft.len, &id, &body);
 
     *handled = false;
-    if (!term->chat && command != SNAG_IRC_TARGET_SEND && command != SNAG_IRC_TARGET_ALL)
-        return 0;
-    while (start && nick_byte(term->draft.data[start - 1u]))
-        --start;
+    if (!term->chat && command != SNAG_IRC_TARGET_SEND && command != SNAG_IRC_TARGET_ALL) return 0;
+    while (start && nick_byte(term->draft.data[start - 1u])) --start;
     if (!start || term->draft.data[start - 1u] != '@' ||
-        (start > 1u && nick_byte(term->draft.data[start - 2u])))
-        return 0;
+        (start > 1u && nick_byte(term->draft.data[start - 2u]))) return 0;
     *handled = true;
-    while (end < term->draft.len && nick_byte(term->draft.data[end]))
-        ++end;
+    while (end < term->draft.len && nick_byte(term->draft.data[end])) ++end;
     size_t prefix = term->cursor - start;
     snag_buf_init(&matches.names, SNAG_MAX_DIRECT_PROMPT);
     size_t destinations = term->destinations ? term->destinations->count : 0u;
     for (size_t destination = 0u; destination < destinations; ++destination) {
         const struct snag_irc_destination *item = &term->destinations->items[destination];
-        if (command == SNAG_IRC_TARGET_INVALID ||
-            (command != SNAG_IRC_TARGET_ALL && item->target.id !=
-             (command == SNAG_IRC_TARGET_SEND ? id : term->destination.id)))
-            continue;
+        if (command == SNAG_IRC_TARGET_INVALID || (command != SNAG_IRC_TARGET_ALL && item->target.id !=
+             (command == SNAG_IRC_TARGET_SEND ? id : term->destination.id))) continue;
       for (const char *nick = item->nicks; nick && *nick;) {
         const char *line = strchr(nick, '\n');
         size_t len = line ? (size_t)(line - nick) : strlen(nick);
 
-        if (completion_add(&matches, nick, len, term->draft.data + start, prefix) < 0)
-            goto out;
+        if (completion_add(&matches, nick, len, term->draft.data + start, prefix) < 0) goto out;
         nick = line ? line + 1u : NULL;
       }
     }
     rc = finish_completion(term, &matches, start, end);
-out:
-    snag_buf_free(&matches.names);
+out: snag_buf_free(&matches.names);
     return rc;
 }
 
 static int
 suspend_terminal(struct snag_term *term)
 {
-    if (!snag_term_can_suspend())
-        return snag_term_write(STDERR_FILENO, "\a", 1u);
-    if (snag_term_hide(term) < 0)
-        return -1;
-    if (term->bracketed_paste &&
-        snag_term_write(STDERR_FILENO, "\033[?2004l", 8u) < 0)
-        return -1;
+    if (!snag_term_can_suspend()) return snag_term_write(STDERR_FILENO, "\a", 1u);
+    if (snag_term_hide(term) < 0) return -1;
+    if (term->bracketed_paste && snag_term_write(STDERR_FILENO, "\033[?2004l", 8u) < 0) return -1;
     term->bracketed_paste = false;
-    if (snag_term_input_flush(&term->host) < 0 ||
-        snag_term_input_restore(&term->host, false) < 0)
-        return -1;
+    if (snag_term_input_flush(&term->host) < 0 || snag_term_input_restore(&term->host, false) < 0) return -1;
     term->raw = false;
-    if (snag_term_suspend() < 0)
-        return -1;
-    if (set_raw(term) < 0)
-        return -1;
-    if (term->capable && snag_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0)
-        return -1;
+    if (snag_term_suspend() < 0) return -1;
+    if (set_raw(term) < 0) return -1;
+    if (term->capable && snag_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0) return -1;
     term->bracketed_paste = term->capable;
     update_size(term);
     return redraw(term);
 }
 
 static int
-complete_action(struct snag_term *term, enum snag_term_action action,
-                enum snag_term_action *out, char **text)
+complete_action(struct snag_term *term, enum snag_term_action action, enum snag_term_action *out, char **text)
 {
     char *copy;
     uint32_t target;
     size_t body;
     enum snag_irc_target_command destination = snag_irc_target_parse(
         (const char *)term->draft.data, term->draft.len, &target, &body);
-    bool verbosity = snag_verbosity_command((const char *)term->draft.data,
-                                           term->draft.len);
+    bool verbosity = snag_verbosity_command((const char *)term->draft.data, term->draft.len);
 
-    if (term->utf8_pending_len || (!term->draft.len && action != SNAG_TERM_SUBMIT))
-        return 0;
-    if (snag_buf_terminate(&term->draft) < 0)
-        return -1;
-    if (action == SNAG_TERM_QUEUE && verbosity)
-        action = SNAG_TERM_SUBMIT;
-    bool local = action == SNAG_TERM_SUBMIT &&
-                 (destination == SNAG_IRC_TARGET_SELECT || verbosity ||
+    if (term->utf8_pending_len || (!term->draft.len && action != SNAG_TERM_SUBMIT)) return 0;
+    if (snag_buf_terminate(&term->draft) < 0) return -1;
+    if (action == SNAG_TERM_QUEUE && verbosity) action = SNAG_TERM_SUBMIT;
+    bool local = action == SNAG_TERM_SUBMIT && (destination == SNAG_IRC_TARGET_SELECT || verbosity ||
                   (term->blank_local && snag_text_blank((char *)term->draft.data)));
-    if (local ? term->local_backlog : term->input_backlog)
-        return snag_term_write(STDERR_FILENO, "\a", 1u);
+    if (local ? term->local_backlog : term->input_backlog) return snag_term_write(STDERR_FILENO, "\a", 1u);
     if (term->capable) {
-        if (snag_term_hide(term) < 0)
-            return -1;
+        if (snag_term_hide(term) < 0) return -1;
     } else {
         term->prompt_visible = false;
         term->line_submission_echoed = true;
     }
-    if (!snag_utf8_valid(term->draft.data, term->draft.len, true))
-        return snag_errno(EILSEQ);
+    if (!snag_utf8_valid(term->draft.data, term->draft.len, true)) return snag_errno(EILSEQ);
     copy = snag_strdup_checked((char *)term->draft.data, SNAG_MAX_DIRECT_PROMPT);
-    if (!copy)
-        return -1;
+    if (!copy) return -1;
     /* A completion separator is not an argument to a bare slash command.
      * Preserve argument/body whitespace and all ordinary or escaped text. */
     if (copy[0] == '/' && copy[1] != '/' && !strchr(copy, '\n') && !strchr(copy, '\r')) {
         size_t token = strcspn(copy, " \t");
-        if (copy[token] && strspn(copy + token, " \t") == strlen(copy + token))
-            copy[token] = '\0';
+        if (copy[token] && strspn(copy + token, " \t") == strlen(copy + token)) copy[token] = '\0';
     }
     snag_buf_reset(&term->draft);
     term->cursor = 0u;
@@ -2118,10 +1824,8 @@ feed_text_byte(struct snag_term *term, unsigned char byte)
     size_t expected;
 
     if (!term->utf8_pending_len && byte < 0x80u) {
-        if (byte == 0u)
-            return snag_errno(EILSEQ);
-        return term->searching ? search_insert(term, &byte, 1u) :
-                                 insert_bytes(term, &byte, 1u);
+        if (byte == 0u) return snag_errno(EILSEQ);
+        return term->searching ? search_insert(term, &byte, 1u) : insert_bytes(term, &byte, 1u);
     }
     if (term->utf8_pending_len >= sizeof(term->utf8_pending)) {
         term->utf8_pending_len = 0u;
@@ -2133,15 +1837,13 @@ feed_text_byte(struct snag_term *term, unsigned char byte)
         term->utf8_pending_len = 0u;
         return snag_errno(EILSEQ);
     }
-    if (term->utf8_pending_len < expected)
-        return 0;
+    if (term->utf8_pending_len < expected) return 0;
     if (!snag_utf8_valid(term->utf8_pending, expected, true)) {
         term->utf8_pending_len = 0u;
         return snag_errno(EILSEQ);
     }
     if ((term->searching ? search_insert(term, term->utf8_pending, expected) :
-                           insert_bytes(term, term->utf8_pending, expected)) < 0)
-        return -1;
+                           insert_bytes(term, term->utf8_pending, expected)) < 0) return -1;
     term->utf8_pending_len = 0u;
     return 0;
 }
@@ -2173,8 +1875,7 @@ move_vertical(struct snag_term *term, bool down, size_t preferred)
         return -1;
     }
     size_t target = row;
-    if (preferred == SIZE_MAX)
-        preferred = col;
+    if (preferred == SIZE_MAX) preferred = col;
     if ((!down && !target) || (down && target == end_row)) {
         term->cursor = down ? term->draft.len : 0u;
         snag_buf_free(&frame);
@@ -2192,29 +1893,25 @@ move_vertical(struct snag_term *term, bool down, size_t preferred)
     while (source < line.end) {
         size_t next = prompt_cell_end(frame.data, source, line.end);
         size_t cells = snag_term_text_width((char *)frame.data + source, next - source);
-        if (width + cells > preferred)
-            break;
+        if (width + cells > preferred) break;
         width += cells;
         source = next;
     }
     snag_buf_free(&frame);
     rc = compose_frame(term, &frame, &label, &row, &col, &end_row, &end_col, &source);
     snag_buf_free(&frame);
-    if (rc < 0)
-        return -1;
+    if (rc < 0) return -1;
     term->cursor = source;
     rc = compose_frame(term, &frame, &label, &row, &col, &end_row, &end_col, NULL);
     snag_buf_free(&frame);
-    if (rc < 0)
-        return -1;
+    if (rc < 0) return -1;
     /* A soft-wrap boundary maps to the next row's first byte. Stay on the
      * requested row, including when its final space starts a display wrap. */
     while (row > target && term->cursor) {
         term->cursor = previous_cp(term->draft.data, term->cursor);
         rc = compose_frame(term, &frame, &label, &row, &col, &end_row, &end_col, NULL);
         snag_buf_free(&frame);
-        if (rc < 0)
-            return -1;
+        if (rc < 0) return -1;
     }
     term->preferred_column = preferred;
     return redraw(term);
@@ -2227,17 +1924,8 @@ struct escape_key {
 };
 
 enum {
-    KEY_UP = 1,
-    KEY_DOWN,
-    KEY_RIGHT,
-    KEY_LEFT,
-    KEY_HOME,
-    KEY_END,
-    KEY_DELETE,
-    KEY_PASTE_BEGIN,
-    KEY_WORD_LEFT,
-    KEY_WORD_RIGHT
-};
+    KEY_UP = 1, KEY_DOWN, KEY_RIGHT, KEY_LEFT, KEY_HOME, KEY_END, KEY_DELETE, KEY_PASTE_BEGIN,
+    KEY_WORD_LEFT, KEY_WORD_RIGHT };
 
 static const struct escape_key keys[] = {
     {"\033[1;5D", 6u, KEY_WORD_LEFT}, {"\033[1;5C", 6u, KEY_WORD_RIGHT},
@@ -2245,12 +1933,9 @@ static const struct escape_key keys[] = {
     {"\033b", 2u, KEY_WORD_LEFT}, {"\033f", 2u, KEY_WORD_RIGHT},
     {"\033\033[D", 4u, KEY_WORD_LEFT}, {"\033\033[C", 4u, KEY_WORD_RIGHT},
     {"\033\033OD", 4u, KEY_WORD_LEFT}, {"\033\033OC", 4u, KEY_WORD_RIGHT},
-    {"\033[A", 3u, KEY_UP}, {"\033[B", 3u, KEY_DOWN},
-    {"\033[C", 3u, KEY_RIGHT}, {"\033[D", 3u, KEY_LEFT},
-    {"\033OA", 3u, KEY_UP}, {"\033OB", 3u, KEY_DOWN},
-    {"\033OC", 3u, KEY_RIGHT}, {"\033OD", 3u, KEY_LEFT},
-    {"\033OH", 3u, KEY_HOME}, {"\033OF", 3u, KEY_END},
-    {"\033[H", 3u, KEY_HOME}, {"\033[F", 3u, KEY_END},
+    {"\033[A", 3u, KEY_UP}, {"\033[B", 3u, KEY_DOWN}, {"\033[C", 3u, KEY_RIGHT}, {"\033[D", 3u, KEY_LEFT},
+    {"\033OA", 3u, KEY_UP}, {"\033OB", 3u, KEY_DOWN}, {"\033OC", 3u, KEY_RIGHT}, {"\033OD", 3u, KEY_LEFT},
+    {"\033OH", 3u, KEY_HOME}, {"\033OF", 3u, KEY_END}, {"\033[H", 3u, KEY_HOME}, {"\033[F", 3u, KEY_END},
     {"\033[1~", 4u, KEY_HOME}, {"\033[4~", 4u, KEY_END},
     {"\033[3~", 4u, KEY_DELETE}, {"\033[200~", 6u, KEY_PASTE_BEGIN}
 };
@@ -2258,19 +1943,15 @@ static const struct escape_key keys[] = {
 static int
 apply_key(struct snag_term *term, int key)
 {
-    if (term->searching && search_accept(term, false) < 0)
-        return -1;
+    if (term->searching && search_accept(term, false) < 0) return -1;
     term->history_pending = 0u;
     term->history_reader.scanning = false;
     size_t preferred = term->preferred_column;
     mark_input_activity(term);
     switch (key) {
-    case KEY_UP:
-        return move_vertical(term, false, preferred);
-    case KEY_DOWN:
-        return move_vertical(term, true, preferred);
-    case KEY_WORD_LEFT:
-        term->cursor = word_left(term);
+    case KEY_UP: return move_vertical(term, false, preferred);
+    case KEY_DOWN: return move_vertical(term, true, preferred);
+    case KEY_WORD_LEFT: term->cursor = word_left(term);
         return redraw(term);
     case KEY_WORD_RIGHT:
         while (term->cursor < term->draft.len && word_space(term->draft.data[term->cursor]))
@@ -2278,29 +1959,20 @@ apply_key(struct snag_term *term, int key)
         while (term->cursor < term->draft.len && !word_space(term->draft.data[term->cursor]))
             term->cursor = next_cp(term->draft.data, term->draft.len, term->cursor);
         return redraw(term);
-    case KEY_RIGHT:
-        term->cursor = next_cp(term->draft.data, term->draft.len, term->cursor);
+    case KEY_RIGHT: term->cursor = next_cp(term->draft.data, term->draft.len, term->cursor);
         return redraw(term);
-    case KEY_LEFT:
-        term->cursor = previous_cp(term->draft.data, term->cursor);
+    case KEY_LEFT: term->cursor = previous_cp(term->draft.data, term->cursor);
         return redraw(term);
-    case KEY_HOME:
-        term->cursor = 0u;
+    case KEY_HOME: term->cursor = 0u;
         return redraw(term);
-    case KEY_END:
-        term->cursor = term->draft.len;
+    case KEY_END: term->cursor = term->draft.len;
         return redraw(term);
-    case KEY_DELETE:
-        return term->cursor < term->draft.len ?
-            delete_range(term, term->cursor,
-                         next_cp(term->draft.data, term->draft.len,
-                                 term->cursor)) : 0;
-    case KEY_PASTE_BEGIN:
-        term->paste = true;
+    case KEY_DELETE: return term->cursor < term->draft.len ?
+            delete_range(term, term->cursor, next_cp(term->draft.data, term->draft.len, term->cursor)) : 0;
+    case KEY_PASTE_BEGIN: term->paste = true;
         term->paste_end_match = 0u;
         return 0;
-    default:
-        return 0;
+    default: return 0;
     }
 }
 
@@ -2315,8 +1987,7 @@ feed_escape(struct snag_term *term, unsigned char byte)
     }
     term->escape[term->escape_len++] = byte;
     for (size_t i = 0u; i < sizeof(keys) / sizeof(keys[0]); ++i) {
-        if (term->escape_len <= keys[i].len &&
-            memcmp(term->escape, keys[i].bytes, term->escape_len) == 0) {
+        if (term->escape_len <= keys[i].len && memcmp(term->escape, keys[i].bytes, term->escape_len) == 0) {
             prefix = true;
             if (term->escape_len == keys[i].len) {
                 int key = keys[i].key;
@@ -2325,8 +1996,7 @@ feed_escape(struct snag_term *term, unsigned char byte)
             }
         }
     }
-    if (!prefix)
-        term->escape_len = 0u;
+    if (!prefix) term->escape_len = 0u;
     return 0;
 }
 
@@ -2347,23 +2017,20 @@ feed_paste(struct snag_term *term, unsigned char byte)
         size_t matched = term->paste_end_match;
         term->paste_end_match = 0u;
         for (size_t i = 0u; i < matched; ++i)
-            if (feed_text_byte(term, end[i]) < 0)
-                return -1;
+            if (feed_text_byte(term, end[i]) < 0) return -1;
         if (byte == end[0]) {
             term->paste_end_match = 1u;
             return 0;
         }
     }
-    if (byte == '\r')
-        byte = '\n';
+    if (byte == '\r') byte = '\n';
     return feed_text_byte(term, byte);
 }
 
 static int
 complete_exit(struct snag_term *term, enum snag_term_action *action)
 {
-    if (snag_term_hide(term) < 0)
-        return -1;
+    if (snag_term_hide(term) < 0) return -1;
     term->prompt_wanted = false;
     *action = SNAG_TERM_EXIT;
     return 1;
@@ -2374,15 +2041,12 @@ cancel_line(struct snag_term *term, enum snag_term_action *action)
 {
     bool interrupt = term->active && !term->searching && !term->draft.len;
 
-    if (!term->input_only && !term->prompt_visible && redraw(term) < 0)
-        return -1;
+    if (!term->input_only && !term->prompt_visible && redraw(term) < 0) return -1;
     if (!term->input_only && term->capable && term->prompt_visible) {
         term->cursor = term->draft.len;
-        if (redraw(term) < 0)
-            return -1;
+        if (redraw(term) < 0) return -1;
     }
-    if (!term->input_only && snag_term_write(STDERR_FILENO, "^C\n", 3u) < 0)
-        return -1;
+    if (!term->input_only && snag_term_write(STDERR_FILENO, "^C\n", 3u) < 0) return -1;
     free(term->search_original);
     term->search_original = NULL;
     term->searching = false;
@@ -2403,8 +2067,7 @@ cancel_line(struct snag_term *term, enum snag_term_action *action)
     }
     clear_prompt_frame(term);
     clear_output_baseline(term);
-logical:
-    history_reset_navigation(term);
+logical: history_reset_navigation(term);
     term->prompt_clock.captured = false;
     term->prompt_wanted = false;
     *action = interrupt ? SNAG_TERM_INTERRUPT : SNAG_TERM_CANCEL;
@@ -2412,52 +2075,40 @@ logical:
 }
 
 static int
-feed_byte(struct snag_term *term, unsigned char byte,
-          enum snag_term_action *action, char **text)
+feed_byte(struct snag_term *term, unsigned char byte, enum snag_term_action *action, char **text)
 {
-    if (byte != '\t')
-        term->completion_armed = false;
+    if (byte != '\t') term->completion_armed = false;
     if (byte == 0x03u) {
         uint64_t now = snag_monotonic_ms();
         if (!term->ctrl_c_count || now - term->ctrl_c_since_ms > 2000u) {
             term->ctrl_c_since_ms = now;
             term->ctrl_c_count = 0u;
         }
-        if (++term->ctrl_c_count == 5u)
-            return complete_exit(term, action);
+        if (++term->ctrl_c_count == 5u) return complete_exit(term, action);
         return cancel_line(term, action);
     }
     term->ctrl_c_count = 0u;
-    if (term->paste)
-        return feed_paste(term, byte);
-    if (term->escape_len)
-        return feed_escape(term, byte);
+    if (term->paste) return feed_paste(term, byte);
+    if (term->escape_len) return feed_escape(term, byte);
     if (byte == 0x1bu) {
         term->escape[0] = byte;
         term->escape_len = 1u;
         return 0;
     }
-    if (term->searching && byte < 0x20u && byte != 0x03u &&
-        byte != 0x07u && byte != 0x08u && byte != 0x12u &&
-        search_accept(term, false) < 0)
-        return -1;
+    if (term->searching && byte < 0x20u && byte != 0x03u && byte != 0x07u && byte != 0x08u && byte != 0x12u &&
+        search_accept(term, false) < 0) return -1;
     switch (byte) {
-    case 0x01u:
-        return apply_key(term, KEY_HOME);
-    case 0x05u:
-        return apply_key(term, KEY_END);
-    case '\r':
-        return complete_action(term, SNAG_TERM_SUBMIT, action, text);
+    case 0x01u: return apply_key(term, KEY_HOME);
+    case 0x05u: return apply_key(term, KEY_END);
+    case '\r': return complete_action(term, SNAG_TERM_SUBMIT, action, text);
     case '\n': {
-        if (!term->capable)
-            return complete_action(term, SNAG_TERM_SUBMIT, action, text);
+        if (!term->capable) return complete_action(term, SNAG_TERM_SUBMIT, action, text);
         unsigned char lf = '\n';
         return insert_bytes(term, &lf, 1u);
     }
     case '\t':
         if (!term->draft.len) {
-            if (term->input_backlog)
-                return snag_term_write(STDERR_FILENO, "\a", 1u);
+            if (term->input_backlog) return snag_term_write(STDERR_FILENO, "\a", 1u);
             *action = SNAG_TERM_VIEW;
             return 1;
         }
@@ -2465,37 +2116,26 @@ feed_byte(struct snag_term *term, unsigned char byte,
             bool handled;
             int rc = complete_command_name(term, &handled);
 
-            if (rc < 0 || handled)
-                return rc;
+            if (rc < 0 || handled) return rc;
             rc = complete_mention(term, &handled);
-            if (rc < 0 || handled)
-                return rc;
+            if (rc < 0 || handled) return rc;
         }
-        if (term->active)
-            return complete_action(term, SNAG_TERM_QUEUE, action, text);
+        if (term->active) return complete_action(term, SNAG_TERM_QUEUE, action, text);
         else {
             unsigned char spaces[4] = {' ', ' ', ' ', ' '};
             size_t count = 4u - (term->cursor % 4u);
             return insert_bytes(term, spaces, count);
         }
     case 0x04u:
-        if (!term->draft.len)
-            return complete_exit(term, action);
-        return term->cursor < term->draft.len ?
-            delete_range(term, term->cursor,
-                         next_cp(term->draft.data, term->draft.len,
-                                 term->cursor)) : 0;
+        if (!term->draft.len) return complete_exit(term, action);
+        return term->cursor < term->draft.len ? delete_range(term, term->cursor,
+                         next_cp(term->draft.data, term->draft.len, term->cursor)) : 0;
     case 0x0cu:
-        if (snag_term_hide(term) < 0)
-            return -1;
-        if (term->capable && snag_term_write(STDERR_FILENO,
-                                            "\033[2J\033[H", 7u) < 0)
-            return -1;
+        if (snag_term_hide(term) < 0) return -1;
+        if (term->capable && snag_term_write(STDERR_FILENO, "\033[2J\033[H", 7u) < 0) return -1;
         return redraw(term);
-    case 0x15u:
-        return delete_range(term, 0u, term->draft.len);
-    case 0x17u:
-        return delete_range(term, word_left(term), term->cursor);
+    case 0x15u: return delete_range(term, 0u, term->draft.len);
+    case 0x17u: return delete_range(term, word_left(term), term->cursor);
     case 0x10u:
         if (term->history_pending == 1u) return 0;
         term->history_reader.scanning = false;
@@ -2504,20 +2144,15 @@ feed_byte(struct snag_term *term, unsigned char byte,
         if (term->history_pending == 2u) return 0;
         term->history_reader.scanning = false;
         return history_down(term);
-    case 0x1au:
-        return suspend_terminal(term);
+    case 0x1au: return suspend_terminal(term);
     case 0x08u:
     case 0x7fu:
-        if (term->searching)
-            return search_backspace(term);
+        if (term->searching) return search_backspace(term);
         return term->cursor ? delete_range(term,
                     previous_cp(term->draft.data, term->cursor), term->cursor) : 0;
-    case 0x07u:
-        return term->searching ? search_accept(term, true) : 0;
-    case 0x12u:
-        return search_begin(term);
-    default:
-        return feed_text_byte(term, byte);
+    case 0x07u: return term->searching ? search_accept(term, true) : 0;
+    case 0x12u: return search_begin(term);
+    default: return feed_text_byte(term, byte);
     }
 }
 
@@ -2527,39 +2162,32 @@ consume_resize(struct snag_term *term)
     bool was_capable;
     bool now_capable;
 
-    if (term->input_only || !sigwinch_pending)
-        return 0;
+    if (term->input_only || !sigwinch_pending) return 0;
     sigwinch_pending = 0;
     term->preferred_column = SIZE_MAX;
-    if (!term->opened)
-        return 0;
+    if (!term->opened) return 0;
     was_capable = term->capable;
     update_size(term);
     now_capable = term->capable;
     term->output_columns = 0u;
     for (size_t i = 0u; i < term->output_line.len;) {
         uint32_t cp;
-        size_t n = snag_utf8_decode(term->output_line.data + i,
-                                term->output_line.len - i, &cp);
+        size_t n = snag_utf8_decode(term->output_line.data + i, term->output_line.len - i, &cp);
         int width = snag_char_width(cp);
 
-        if (width > 0)
-            output_column_add(term, (size_t)width);
+        if (width > 0) output_column_add(term, (size_t)width);
         i += n;
     }
     if ((term->prompt_visible || term->output_detour) && was_capable) {
-        if (term->prompt_visible && now_capable && sync_prompt_layout_after_resize(term) < 0)
-            return -1;
-        if (!now_capable)
-            term->capable = true;
+        if (term->prompt_visible && now_capable && sync_prompt_layout_after_resize(term) < 0) return -1;
+        if (!now_capable) term->capable = true;
         if (snag_term_hide(term) < 0) {
             term->capable = now_capable;
             return -1;
         }
         term->capable = now_capable;
     }
-    if (!term->prompt_wanted || term->output_depth)
-        return 0;
+    if (!term->prompt_wanted || term->output_depth) return 0;
     return redraw(term);
 }
 
@@ -2574,17 +2202,13 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
     *text = NULL;
     if (!term->input_only && term->cancel_pending) {
         term->cancel_pending = false;
-        if (snag_term_hide(term) < 0 ||
-            snag_term_write(STDERR_FILENO, "\n^C\n", 4u) < 0)
-            return -1;
+        if (snag_term_hide(term) < 0 || snag_term_write(STDERR_FILENO, "\n^C\n", 4u) < 0) return -1;
         clear_output_baseline(term);
     }
-    if (consume_resize(term) < 0 || flush_completions(term) < 0)
-        return -1;
+    if (consume_resize(term) < 0 || flush_completions(term) < 0) return -1;
     if (term->prompt_visible && term->capable && !term->searching &&
         !term->output_depth && animated_spinners(term) &&
-        update_spinners(term, spinner_step(term, snag_monotonic_ms())) < 0)
-        return -1;
+        update_spinners(term, spinner_step(term, snag_monotonic_ms())) < 0) return -1;
     if (sigint_pending) {
         (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
         return feed_byte(term, 0x03u, action, text);
@@ -2592,9 +2216,7 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
     if (term->input_pos == term->input_len) {
         term->input_pos = 0u;
         term->input_len = 0u;
-        if (term->searching && term->escape_len == 1u &&
-            (timeout_ms < 0 || timeout_ms > 30))
-            timeout_ms = 30;
+        if (term->searching && term->escape_len == 1u && (timeout_ms < 0 || timeout_ms > 30)) timeout_ms = 30;
         timeout_ms = term->history_pending ? 0 : spinner_timeout(term, timeout_ms);
         rc = snag_term_input_wait(&term->host, wake_fd, timeout_ms);
         if (sigint_pending) {
@@ -2602,25 +2224,21 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
             return feed_byte(term, 0x03u, action, text);
         }
         if (sigwinch_pending) {
-            if (consume_resize(term) < 0)
-                return -1;
-            if (rc < 0 && errno == EINTR)
-                return 0;
+            if (consume_resize(term) < 0) return -1;
+            if (rc < 0 && errno == EINTR) return 0;
         }
         if (rc == 0 && term->searching && term->escape_len == 1u) {
             term->escape_len = 0u;
             return search_accept(term, false);
         }
         if (rc == 0 && animated_spinners(term) &&
-            update_spinners(term, spinner_step(term, snag_monotonic_ms())) < 0)
-            return -1;
+            update_spinners(term, spinner_step(term, snag_monotonic_ms())) < 0) return -1;
         if (rc == 0 && term->history_pending && !term->input_only) {
             if (term->history_pending == 1u) return history_up(term);
             if (term->history_pending == 2u) return history_down(term);
             return search_find(term, term->history_scan);
         }
-        if (rc <= 0)
-            return rc;
+        if (rc <= 0) return rc;
         if (!(rc & SNAG_TERM_WAIT_INPUT)) {
             if (rc & SNAG_TERM_WAIT_END) {
                 *action = SNAG_TERM_EXIT;
@@ -2629,22 +2247,17 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
             return 0;
         }
         count = snag_term_input_read(&term->host, term->input, sizeof(term->input));
-        if (snag_term_input_resized(&term->host))
-            sigwinch_pending = 1;
+        if (snag_term_input_resized(&term->host)) sigwinch_pending = 1;
         if (sigint_pending) {
             (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
             return feed_byte(term, 0x03u, action, text);
         }
         if (sigwinch_pending) {
-            if (consume_resize(term) < 0)
-                return -1;
-            if (count < 0 && errno == EINTR)
-                return 0;
+            if (consume_resize(term) < 0) return -1;
+            if (count < 0 && errno == EINTR) return 0;
         }
-        if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
-            return 0;
-        if (count < 0)
-            return -1;
+        if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 0;
+        if (count < 0) return -1;
         if (count == 0) {
             *action = SNAG_TERM_EXIT;
             return 1;
@@ -2653,10 +2266,8 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
     }
     while (term->input_pos < term->input_len) {
         rc = feed_byte(term, term->input[term->input_pos++], action, text);
-        if (rc < 0)
-            return -1;
-        if (rc > 0)
-            return 1;
+        if (rc < 0) return -1;
+        if (rc > 0) return 1;
     }
     term->input_pos = 0u;
     term->input_len = 0u;
@@ -2666,17 +2277,13 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
 void
 snag_term_close(struct snag_term *term)
 {
-    if (!term)
-        return;
+    if (!term) return;
     if (term->opened) {
         (void)snag_term_hide(term);
-        if (term->bracketed_paste)
-            (void)snag_term_write(STDERR_FILENO, "\033[?2004l", 8u);
-        if (term->raw)
-            (void)snag_term_input_restore(&term->host, true);
+        if (term->bracketed_paste) (void)snag_term_write(STDERR_FILENO, "\033[?2004l", 8u);
+        if (term->raw) (void)snag_term_input_restore(&term->host, true);
     }
-    if (term->controls_installed)
-        snag_term_controls_restore(&term->host);
+    if (term->controls_installed) snag_term_controls_restore(&term->host);
     snag_term_host_close(&term->host);
     history_reset_navigation(term);
     snag_history_snapshot_free(&term->history);
@@ -2689,11 +2296,9 @@ snag_term_close(struct snag_term *term)
     snag_buf_free(&term->output_line);
     snag_buf_free(&term->painted_prompt);
     snag_buf_free(&term->completion_output);
-    if (snag_term_output_owner() == term)
-        snag_term_output_bind(NULL);
+    if (snag_term_output_owner() == term) snag_term_output_bind(NULL);
     for (size_t i = 0u; i < 2u; ++i)
-        if (term->output_fd[i] >= 0)
-            close(term->output_fd[i]);
+        if (term->output_fd[i] >= 0) close(term->output_fd[i]);
     memset(term, 0, sizeof(*term));
     term->output_fd[0] = term->output_fd[1] = -1;
     term->history_reader.fd[0] = term->history_reader.fd[1] = -1;

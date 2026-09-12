@@ -31,36 +31,18 @@
 #define SNAG_CONFIG_IRC_ROOM_MAX 50u
 
 enum snag_color_mode {
-    SNAG_COLOR_AUTO,
-    SNAG_COLOR_ALWAYS,
-    SNAG_COLOR_NEVER
-};
+    SNAG_COLOR_AUTO, SNAG_COLOR_ALWAYS, SNAG_COLOR_NEVER };
 
 enum snag_prompt_field {
-    SNAG_PROMPT_PROVIDER,
-    SNAG_PROMPT_MODEL,
-    SNAG_PROMPT_EFFORT,
-    SNAG_PROMPT_OPERATOR,
-    SNAG_PROMPT_HOST,
-    SNAG_PROMPT_CONTEXT,
-    SNAG_PROMPT_MODE,
-    SNAG_PROMPT_QUEUE,
-    SNAG_PROMPT_HOUR,
-    SNAG_PROMPT_MINUTE,
-    SNAG_PROMPT_SECOND,
-    SNAG_PROMPT_FIELD_COUNT
-};
+    SNAG_PROMPT_PROVIDER, SNAG_PROMPT_MODEL, SNAG_PROMPT_EFFORT, SNAG_PROMPT_OPERATOR,
+    SNAG_PROMPT_HOST, SNAG_PROMPT_CONTEXT, SNAG_PROMPT_MODE, SNAG_PROMPT_QUEUE,
+    SNAG_PROMPT_HOUR, SNAG_PROMPT_MINUTE, SNAG_PROMPT_SECOND, SNAG_PROMPT_FIELD_COUNT };
 
 enum snag_token_count_mode {
-    SNAG_TOKEN_COUNT_AUTO,
-    SNAG_TOKEN_COUNT_OFF,
-    SNAG_TOKEN_COUNT_STRICT
-};
+    SNAG_TOKEN_COUNT_AUTO, SNAG_TOKEN_COUNT_OFF, SNAG_TOKEN_COUNT_STRICT };
 
 enum snag_auth_kind {
-    SNAG_AUTH_API_KEY,
-    SNAG_AUTH_CHATGPT
-};
+    SNAG_AUTH_API_KEY, SNAG_AUTH_CHATGPT };
 
 #define SNAG_CHATGPT_BASE "https://chatgpt.com/backend-api/codex"
 
@@ -153,32 +135,23 @@ void snag_config_init(struct snag_config *config);
 void snag_config_provider_init(struct snag_provider_config *provider, const char *name);
 bool snag_config_name_valid(const char *name);
 void snag_config_free(struct snag_config *config);
-int snag_config_load(struct snag_config *config, const char *explicit_path,
-                    const char *dotdir,
+int snag_config_load(struct snag_config *config, const char *explicit_path, const char *dotdir,
                     char *error, size_t error_size);
-char *snag_config_path(const char *explicit_path, const char *dotdir,
-                      char *error, size_t error_size);
-int snag_config_save_model(const char *path, bool allow_create,
-                          const char *provider, const char *model,
-                          const char *effort,
-                          char *error, size_t error_size);
+char *snag_config_path(const char *explicit_path, const char *dotdir, char *error, size_t error_size);
+int snag_config_save_model(const char *path, bool allow_create, const char *provider, const char *model,
+                          const char *effort, char *error, size_t error_size);
 int snag_config_save_provider(const char *path, bool allow_create,
                              const struct snag_provider_config *provider,
-                             const char *initial_model, const char *effort,
-                             char *error, size_t error_size);
+                             const char *initial_model, const char *effort, char *error, size_t error_size);
 int snag_config_validate_provider(const struct snag_provider_config *provider,
                                  char *error, size_t error_size);
 int snag_config_prompt_expand(const char *text, unsigned int mode,
-                             const char *const values[SNAG_PROMPT_FIELD_COUNT],
-                             unsigned char marker,
+                             const char *const values[SNAG_PROMPT_FIELD_COUNT], unsigned char marker,
                              char *label, size_t label_size);
-const struct snag_provider_config *snag_config_provider(
-    const struct snag_config *config, const char *name);
+const struct snag_provider_config *snag_config_provider( const struct snag_config *config, const char *name);
 bool snag_config_provider_is_openrouter(const struct snag_provider_config *provider);
-const char *snag_config_model_upstream(const struct snag_provider_config *provider,
-                                      const char *model);
-bool snag_config_resolve_limits(const struct snag_config *config, const char *provider,
-                               const char *model,
+const char *snag_config_model_upstream(const struct snag_provider_config *provider, const char *model);
+bool snag_config_resolve_limits(const struct snag_config *config, const char *provider, const char *model,
                                struct snag_model_limit_config *out,
                                const struct snag_model_limit_config *sources[3]);
 

@@ -81,8 +81,7 @@ int snag_ui_text(struct snag_ui *ui, enum snag_ui_operation op, const char *text
 int snag_ui_capture_route(struct snag_ui *ui, const char *text);
 uint32_t snag_ui_pause_remaining(struct snag_ui *ui);
 int snag_ui_open(struct snag_ui *ui, char *error, size_t error_size);
-int snag_ui_external(struct snag_ui *ui, bool begin,
-                      char *error, size_t error_size);
+int snag_ui_external(struct snag_ui *ui, bool begin, char *error, size_t error_size);
 int snag_ui_prompt(struct snag_ui *ui, bool active, const char *label,
                     const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                     uint32_t per_second, unsigned int states);
@@ -92,18 +91,13 @@ int snag_ui_composer(struct snag_ui *ui, bool active, const char *format,
                     const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                     uint32_t per_second, unsigned int states, const char *submitted);
 int snag_ui_validate_prompt(struct snag_ui *ui, const char *label,
-                    const char *const spinners[SNAG_TERM_SPINNER_COUNT],
-                    uint32_t per_second);
+                    const char *const spinners[SNAG_TERM_SPINNER_COUNT], uint32_t per_second);
 int snag_ui_simple_prompt(struct snag_ui *ui, bool active);
 bool snag_ui_leaving(const struct snag_ui *ui);
-int snag_ui_poll(struct snag_ui *ui, int timeout_ms,
-                 enum snag_term_action *action, char **text);
-int snag_ui_submitted(struct snag_ui *ui, const char *label, const char *text,
-                       bool input);
-int snag_ui_public(struct snag_ui *ui, const char *text, size_t len,
-                   struct snag_buf *delivered);
-int snag_ui_orientation(struct snag_ui *ui, const struct snag_session *session,
-                         bool resumed);
+int snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, char **text);
+int snag_ui_submitted(struct snag_ui *ui, const char *label, const char *text, bool input);
+int snag_ui_public(struct snag_ui *ui, const char *text, size_t len, struct snag_buf *delivered);
+int snag_ui_orientation(struct snag_ui *ui, const struct snag_session *session, bool resumed);
 int snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count);
 int snag_ui_history_open(struct snag_ui *ui, const char *dotdir, const char *session_dir);
 int snag_ui_history_add(struct snag_ui *ui, const char *text);

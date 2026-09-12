@@ -53,22 +53,19 @@ definition(const char *rules)
 }
 
 static int
-evaluate(struct snag_rules *rules, json_t *envelope, struct host_log *log,
-         struct snag_rule_verdict *verdict)
+evaluate(struct snag_rules *rules, json_t *envelope, struct host_log *log, struct snag_rule_verdict *verdict)
 {
     struct snag_rule_frame frame = {envelope};
     char error[192] = {0};
     int rc = snag_rules_eval(rules, &frame, host_effect, log, verdict, error, sizeof(error));
-    if (rc < 0)
-        fprintf(stderr, "eval error: %s\n", error);
+    if (rc < 0) fprintf(stderr, "eval error: %s\n", error);
     return rc;
 }
 
 static void
 test_compile_and_simple_verdicts(void)
 {
-    json_t *def = definition(
-        "[{\"name\":\"deny-exec\",\"chain\":\"out\","
+    json_t *def = definition( "[{\"name\":\"deny-exec\",\"chain\":\"out\","
         "\"match\":{\"/tool\":\"^exec_command$\"},\"action\":\"reject\","
         "\"text\":\"Running commands is disabled here.\"}]");
     struct snag_rules *rules = snag_rules_compile(def, NULL, 0u);
@@ -78,14 +75,12 @@ test_compile_and_simple_verdicts(void)
 
     assert(rules && !snag_rules_empty(rules));
     assert(snag_rules_digest(rules)[0]);
-    envelope = json_pack("{s:s,s:s,s:s}", "boundary", "out",
-                         "kind", "tool_call", "tool", "exec_command");
+    envelope = json_pack("{s:s,s:s,s:s}", "boundary", "out", "kind", "tool_call", "tool", "exec_command");
     assert(evaluate(rules, envelope, &log, &verdict) == 0);
     assert(verdict.rejected && verdict.matches == 1u);
     json_decref(envelope);
 
-    envelope = json_pack("{s:s,s:s,s:s}", "boundary", "out",
-                         "kind", "tool_call", "tool", "read_file");
+    envelope = json_pack("{s:s,s:s,s:s}", "boundary", "out", "kind", "tool_call", "tool", "read_file");
     assert(evaluate(rules, envelope, &log, &verdict) == 0);
     assert(!verdict.rejected && verdict.matches == 0u);
     json_decref(envelope);
@@ -96,15 +91,13 @@ test_compile_and_simple_verdicts(void)
 static void
 test_log_and_template(void)
 {
-    json_t *def = definition(
-        "[{\"name\":\"audit\",\"chain\":\"out\",\"match\":{\"/kind\":\"^tool_call$\"},"
+    json_t *def = definition( "[{\"name\":\"audit\",\"chain\":\"out\",\"match\":{\"/kind\":\"^tool_call$\"},"
         "\"action\":\"pass\",\"log\":\"tool=%{/tool} surface=%{/surface}\"}]");
     struct snag_rules *rules = snag_rules_compile(def, NULL, 0u);
     struct host_log log = {0};
     struct snag_rule_verdict verdict;
     json_t *envelope = json_pack("{s:s,s:s,s:s,s:s}", "boundary", "out",
-                                 "kind", "tool_call", "surface", "model",
-                                 "tool", "apply_patch");
+                                 "kind", "tool_call", "surface", "model", "tool", "apply_patch");
 
     assert(evaluate(rules, envelope, &log, &verdict) == 0);
     assert(log.calls == 1u);
@@ -117,8 +110,7 @@ test_log_and_template(void)
 static void
 test_threshold_matching(void)
 {
-    json_t *def = definition(
-        "[{\"name\":\"over\",\"chain\":\"event\",\"at_least\":{\"/percent\":80},"
+    json_t *def = definition( "[{\"name\":\"over\",\"chain\":\"event\",\"at_least\":{\"/percent\":80},"
         "\"action\":\"reject\",\"text\":\"over\"}]");
     struct snag_rules *rules = snag_rules_compile(def, NULL, 0u);
     struct host_log log = {0};
@@ -138,8 +130,7 @@ test_threshold_matching(void)
 static void
 test_jump_and_return(void)
 {
-    json_t *def = definition(
-        "[{\"name\":\"enter\",\"chain\":\"out\",\"match\":{\"/kind\":\"^tool_call$\"},"
+    json_t *def = definition( "[{\"name\":\"enter\",\"chain\":\"out\",\"match\":{\"/kind\":\"^tool_call$\"},"
         "\"action\":\"jump\",\"target\":\"policy\"},"
         "{\"name\":\"deny\",\"chain\":\"policy\",\"match\":{\"/tool\":\"^exec_\"},"
         "\"action\":\"reject\",\"text\":\"denied\"}]");
@@ -160,10 +151,8 @@ test_jump_and_return(void)
 static void
 test_veto_is_sticky(void)
 {
-    json_t *def = definition(
-        "[{\"name\":\"veto\",\"chain\":\"out\",\"match\":{\"/kind\":\"^tool_call$\"},"
-        "\"action\":\"pass\"},"
-        "{\"name\":\"after\",\"chain\":\"out\",\"match\":{\"/kind\":\"^tool_call$\"},"
+    json_t *def = definition( "[{\"name\":\"veto\",\"chain\":\"out\",\"match\":{\"/kind\":\"^tool_call$\"},"
+        "\"action\":\"pass\"}," "{\"name\":\"after\",\"chain\":\"out\",\"match\":{\"/kind\":\"^tool_call$\"},"
         "\"action\":\"pass\",\"log\":\"seen\"}]");
     struct snag_rules *rules = snag_rules_compile(def, NULL, 0u);
     struct host_log log = {.veto_at = 1u};
@@ -188,8 +177,7 @@ test_invalid_definitions_rejected(void)
         "{\"name\":\"x\",\"chain\":\"out\",\"action\":\"pass\"}]",
         "[{\"name\":\"x\",\"chain\":\"out\",\"action\":\"pass\",\"bogus\":1}]",
         "[{\"name\":\"x\",\"chain\":\"out\",\"action\":\"pass\",\"match\":{\"bad\":\"a\"}}]",
-        "[{\"name\":\"x\",\"chain\":\"out\",\"action\":\"jump\"}]"
-    };
+        "[{\"name\":\"x\",\"chain\":\"out\",\"action\":\"jump\"}]" };
 
     for (size_t i = 0u; i < sizeof(bad) / sizeof(bad[0]); ++i) {
         json_t *def = definition(bad[i]);
