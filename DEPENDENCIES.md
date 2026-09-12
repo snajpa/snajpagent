@@ -534,6 +534,8 @@ and file decoders are disabled. This header compatibility does not complete the
 early target's complete application or qualify devices. The media adapter uses
 the compiler finite-value check when the native math header lacks `isfinite`,
 preserving rejection of NaN and infinite dimensions, durations and positions.
+Disposable Office workers use `_exit` to preserve immediate termination without
+global runtime destructors on legacy libc.
 The early FFmpeg compatibility include wraps the native `inttypes.h` and supplies
 missing C99 format macros from Clang's target ABI, keeping 64-bit and pointer
 widths distinct. Direct codec includes use this same owner. Existing system

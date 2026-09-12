@@ -2013,3 +2013,30 @@ int main(void) {
     print("PASS: early OpenBSD media finite checks preserve types, rejection and single evaluation")
 else:
     print("SKIP: Clang unavailable for early OpenBSD finite regression")
+
+# The disposable Office worker must terminate without atexit/global destructors.
+office_source = (root / "src/office.c").read_text()
+assert "_Exit(" not in office_source and "_exit(rc);" in office_source
+worker_stub = re.search(r"#else\n(int snag_office_worker\(.*?\n})",
+                        office_source, re.S).group(1)
+with tempfile.TemporaryDirectory(prefix="office-worker-exit-", dir=root / "build") as tmp:
+    source = Path(tmp) / "worker.c"
+    source.write_text("#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n"
+                      "#include <unistd.h>\n" + worker_stub + r"""
+static void forbidden_destructor(void) { fputs("atexit-ran", stderr); }
+int main(int argc, char **argv) {
+    if (argc == 1) return snag_office_worker(argc, argv) == -1 ? 0 : 2;
+    if (atexit(forbidden_destructor)) return 3;
+    fputs("buffered-data-must-not-flush", stdout);
+    snag_office_worker(argc, argv);
+    return 4;
+}
+""")
+    subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
+                    "-o", str(Path(tmp) / "worker")], check=True)
+    subprocess.run([str(Path(tmp) / "worker")], check=True)
+    result = subprocess.run([str(Path(tmp) / "worker"), "--internal-office-pdf"],
+                            capture_output=True, text=True)
+    assert result.returncode == 1 and not result.stdout
+    assert result.stderr == "This custom build excludes Office import\n"
+print("PASS: Office worker immediate exit preserves failure code and skips buffered/global cleanup")

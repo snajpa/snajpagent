@@ -313,13 +313,15 @@ snag_office_worker(int argc, char **argv)
 done:
     if (rc) (void)fprintf(stderr,"%s\n",error);
     free(dir); free(source_url); free(output_url); free(profile_url);free(runtime);free(program_dir);
-    _Exit(rc);
+    _exit(rc);
+    return rc; /* Old libc headers may omit the noreturn annotation. */
 }
 #else
 int snag_office_worker(int argc, char **argv)
 {
     if (argc < 2 || strcmp(argv[1],"--internal-office-pdf")) return -1;
-    fputs("This custom build excludes Office import\n",stderr); _Exit(1);
+    fputs("This custom build excludes Office import\n",stderr); _exit(1);
+    return 1;
 }
 int snag_office_export(struct snag_session *s, const char *p, const char *m, unsigned int f, unsigned int l,
                         const struct snag_sheet_range *range, int (*pump)(void *, unsigned int), void *opaque, snag_wake_fd wake,

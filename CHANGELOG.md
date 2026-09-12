@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Preserve immediate Office worker termination with legacy libc exit interfaces.
+
 - Preserve nonfinite media-value rejection with early OpenBSD math headers.
 
 - Preserve ZIP filename encoding detection on early OpenBSD without CODESET.
