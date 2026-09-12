@@ -537,6 +537,10 @@ Clang's target-ABI definitions, keeping 64-bit and pointer widths distinct.
 Existing system definitions and printf/scanf implementations remain unchanged.
 The HLS start-offset parser uses native `strtod` and double precision on this
 early target, which lacks `strtof`; signed fractional offsets remain supported.
+The shared legacy FFmpeg min/max compatibility uses available `copysign` to
+preserve signed zero without requiring a `signbit` macro. Early OpenBSD also
+keeps `pow`/`powf` calls from becoming unavailable `exp2` imports.
+Missing `isnormal` uses the compiler classification builtin, including subnormals.
 
 OpenBSD 7.9 qualification covers base/IRC/SSE tests, internal read-only
 inspection and denied writes, parallel commands, PTY execution, durable resume,

@@ -250,7 +250,8 @@ let
     inherit (sourcePkgs.ffmpeg_8) version src;
     patches = sourcePkgs.ffmpeg_8.patches
       ++ lib.optional legacy ./ffmpeg-bsd-thread-headers.patch
-      ++ lib.optionals early [ ./ffmpeg-openbsd35-inttypes.patch ./ffmpeg-openbsd35-hls.patch ];
+      ++ lib.optionals early [ ./ffmpeg-openbsd35-inttypes.patch ./ffmpeg-openbsd35-hls.patch
+                               ./ffmpeg-legacy-libm.patch ];
     nativeBuildInputs = [ pkgs.pkg-config pkgs.perl pkgs.nasm llvm.llvm ];
     buildInputs = [ zlib ];
     strictDeps = true;
@@ -276,7 +277,7 @@ let
         "--cxx=${cxxCompiler} --target=${target} --sysroot=${sdk}"
         "--ar=${tools}/llvm-ar" "--ranlib=${tools}/llvm-ranlib"
         "--nm=${tools}/llvm-nm" "--strip=${tools}/llvm-strip"
-        "--extra-cflags=${cflags}${lib.optionalString legacy " -Dstatic_assert=_Static_assert"}"
+        "--extra-cflags=${cflags}${lib.optionalString legacy " -Dstatic_assert=_Static_assert"}${lib.optionalString early " -fno-builtin-pow -fno-builtin-powf"}"
         "--extra-ldflags=${ldflags}"
       )
     '';

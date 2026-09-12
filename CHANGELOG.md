@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Reuse legacy FFmpeg min/max compatibility on early OpenBSD, preserving signed
+  zero with available copysign and avoiding unavailable optimized math imports.
+
 - Parse early OpenBSD HLS start offsets with native double-precision strtod.
 
 - Supply missing early OpenBSD FFmpeg integer-format macros from the target ABI.

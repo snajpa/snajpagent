@@ -1620,7 +1620,8 @@ formats_patch = (root / "nix/ffmpeg-openbsd35-inttypes.patch").read_text()
 assert '+#include "libavutil/common.h"' in formats_patch
 formats_added = "\n".join(line[1:] for line in formats_patch.split("--- a/libavcodec/fits.c", 1)[0].splitlines()
                          if line.startswith("+") and not line.startswith("+++"))
-assert 'lib.optionals early [ ./ffmpeg-openbsd35-inttypes.patch ./ffmpeg-openbsd35-hls.patch ]' in (root / "nix/openbsd.nix").read_text()
+assert 'lib.optionals early [ ./ffmpeg-openbsd35-inttypes.patch ./ffmpeg-openbsd35-hls.patch' in (root / "nix/openbsd.nix").read_text()
+assert './ffmpeg-legacy-libm.patch ];' in (root / "nix/openbsd.nix").read_text()
 if shutil.which("clang"):
     with tempfile.TemporaryDirectory(prefix="bsd-inttypes-", dir=root / "build") as tmp:
         tmp = Path(tmp)
@@ -1688,3 +1689,30 @@ int main(void) {
                     "-o", str(tmp / "hls")], check=True)
     subprocess.run([str(tmp / "hls")], check=True)
 print("PASS: early OpenBSD HLS offsets keep signed fractional microseconds with native strtod")
+
+# The old-header classification fallback is type-sensitive and evaluates once.
+assert '+#define isnormal(x) __builtin_isnormal(x)' in math_patch
+if shutil.which("clang"):
+    with tempfile.TemporaryDirectory(prefix="bsd-isnormal-", dir=root / "build") as tmp:
+        tmp = Path(tmp)
+        source = tmp / "normal.c"
+        macro = next(line[1:] for line in math_patch.splitlines() if line.startswith("+#define isnormal("))
+        source.write_text("#include <assert.h>\n#include <float.h>\n#include <math.h>\n#undef isnormal\n" + macro + r"""
+int main(void) {
+    assert(!isnormal(0.0) && !isnormal(-0.0));
+    assert(!isnormal(INFINITY) && !isnormal(-INFINITY) && !isnormal(NAN));
+    assert(!isnormal(FLT_TRUE_MIN) && !isnormal(-FLT_TRUE_MIN));
+    assert(!isnormal(DBL_TRUE_MIN) && !isnormal(-DBL_TRUE_MIN));
+    assert(isnormal(FLT_MIN) && isnormal(-FLT_MIN) && isnormal(FLT_MAX));
+    assert(isnormal(DBL_MIN) && isnormal(-DBL_MIN) && isnormal(DBL_MAX));
+    double x = 1.0;
+    assert(isnormal(x++) && x == 2.0);
+    return 0;
+}
+""")
+        subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
+                        "-o", str(tmp / "normal")], check=True)
+        subprocess.run([str(tmp / "normal")], check=True)
+    print("PASS: old BSD isnormal preserves float/double subnormals, infinities and single evaluation")
+else:
+    print("SKIP: Clang unavailable for old BSD classification regression")
