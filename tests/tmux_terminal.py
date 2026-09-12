@@ -3321,6 +3321,98 @@ def run_listener_collision_case(binary, root, provider, environment):
         for terminal in reversed(terminals):
             terminal.close()
 
+def run_resume_network_pairing_case(binary, root, provider, environment):
+    """Topology updates during tools survive replay and startup role overrides."""
+    case = root / "resume-network-pairing"
+    workspace, config = irc_workspace(case / "work", provider.port, "host-model")
+    state = case / "state"
+    endpoint = f"127.0.0.1:{free_loopback_port()}"
+    requests = []
+
+    def respond(handler, request, sequence):
+        requests.append(request)
+        pending = set()
+        outputs = []
+        for item in request["input"]:
+            if item.get("type") == "function_call":
+                pending.add(item["call_id"])
+            elif item.get("type") == "function_call_output":
+                assert item["call_id"] in pending, item
+                pending.remove(item["call_id"])
+                outputs.append(item)
+            elif item.get("role") == "user":
+                assert not pending, f"user input splits tool exchange: {pending}"
+        assert not pending, pending
+        if outputs:
+            body = provider.response_body(sequence, "network pairing verified")
+        else:
+            body = provider.function_body(sequence, "call_network_pair", "exec_command", {
+                "command": "printf once >> marker; while [ ! -f release ]; do sleep 0.05; done",
+                "workdir": str(workspace), "yield_ms": 60000, "timeout_ms": 60000})
+        provider.reply(handler, body.encode())
+
+    provider.runtime_handler = respond
+    try:
+        with TmuxTerminal(case / "first", binary, workspace, state, config, 120, 24,
+                args=("--no-listen", "--no-client"), environment=environment) as terminal:
+            terminal.wait("host-model/medium   0% ›")
+            terminal.submit("check network pairing")
+            wait_event_count(state, "tool_started", 1)
+            terminal.submit_wait(f"/server start {endpoint}", f"hosting started on {endpoint}",
+                                 join_wrapped=True)
+            wait_event_count(state, "irc_snapshot", 1)
+            (workspace / "release").touch()
+            wait_event_count(state, "turn_completed", 1)
+            terminal.wait("network pairing verified")
+            path, events = read_events(state)
+            started = event_list(events, "tool_started")[0]["seq"]
+            finished = event_list(events, "tool_finished")[0]["seq"]
+            assert any(started < e["seq"] < finished for e in event_list(events, "irc_snapshot"))
+            assert not event_list(events, "response_failed"), events[-10:]
+            sid = path.parent.name
+            terminal.exit()
+
+        # Configuration defaults deliberately disagree with the explicit startup roles.
+        with config.open("a") as file:
+            file.write(f"[irc]\nlisten = 127.0.0.1:{free_loopback_port()}\n"
+                       f"client = 127.0.0.1:{free_loopback_port()}\n")
+        for hosted in (True, False):
+            endpoint = f"127.0.0.1:{free_loopback_port()}"
+            roles = ("--listen", endpoint) if hosted else ("--no-listen",)
+            completed = len(event_list(read_events(state)[1], "turn_completed"))
+            with TmuxTerminal(case / ("hosted" if hosted else "offline"), binary,
+                    workspace, state, config, 120, 24,
+                    args=(*roles, "--no-client", "-n", "resumebot", "-o", "resumeop",
+                          "-r", "resumed", "--resume", sid), environment=environment) as terminal:
+                if hosted:
+                    terminal.wait(f"resumeop@{MACHINE_HOSTNAME} :")
+                    with socket.create_connection(("127.0.0.1", int(endpoint.rsplit(":", 1)[1])), timeout=2):
+                        pass
+                    terminal.submit("resumebot: continue after resume")
+                else:
+                    terminal.wait("host-model/medium")
+                    terminal.submit("continue after resume")
+                wait_event_count(state, "turn_completed", completed + 1)
+                terminal.wait("network pairing verified")
+                latest = requests[-1]
+                tools = {tool.get("name") for tool in latest["tools"]}
+                assert ("irc_send" in tools) == hosted, tools
+                if hosted:
+                    snapshots = [item["content"] for item in latest["input"]
+                                 if "[IRC room snapshot;" in item.get("content", "")]
+                    assert f"hosted: {endpoint}" in snapshots[-1], snapshots[-1]
+                    assert "model nick: resumebot" in snapshots[-1], snapshots[-1]
+                    assert "operator nick: resumeop" in snapshots[-1], snapshots[-1]
+                    assert "room: #resumed" in snapshots[-1], snapshots[-1]
+                    assert snapshots[-1].count("destination[") == 1, snapshots[-1]
+                terminal.exit()
+        assert (workspace / "marker").read_text() == "once"
+        assert not provider.failure, provider.failure
+        print("resume network pairing: live tools, replay, role/nick/room overrides ok", flush=True)
+    finally:
+        provider.runtime_handler = None
+
+
 def run_reasoning_boundary_cases(binary, root, provider, environment,
                                  modes=("followup", "resume", "readonly", "unstarted")):
     """A thinking endpoint validates missing state in the current request turn.
@@ -7437,6 +7529,7 @@ def run_irc_case(binary, root):
         run_runtime_history_case(binary, root, provider, environment)
         run_destination_case(binary, root, provider, environment)
         run_listener_collision_case(binary, root, provider, environment)
+        run_resume_network_pairing_case(binary, root, provider, environment)
         run_argument_snapshot_cases(binary, root, provider, environment)
         run_reasoning_boundary_cases(binary, root, provider, environment)
         run_reasoning_continuity_cases(binary, root, provider, environment)

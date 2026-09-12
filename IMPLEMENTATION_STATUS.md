@@ -11,6 +11,11 @@ calls and mark unknown outcomes without rerunning them; empty stdin needs no new
 prompt. User, tool and saved reasoning data retain their provenance. These changes are development-source
 behavior above stable 0.99.5; its downloadable assets remain unchanged.
 
+IRC snapshots and steering are projected after complete tool exchanges, including
+on replay of affected sessions. Interactive resume applies current startup
+network roles and identity overrides before work starts. Existing journals retain
+their original events and completed tool outcomes.
+
 snajpagent is a pre-1.0 terminal coding agent. One interactive session supports
 local rollout and native IRC chat. One-shot mode runs tasks from scripts.
 

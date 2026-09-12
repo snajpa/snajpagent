@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Keep IRC topology updates after complete tool exchanges in model requests,
+  replay and compaction. Existing affected sessions resume with their saved
+  tool results, avoiding missing-tool-output HTTP 400 errors. Cover interactive
+  resume with listener, client, nick and room startup overrides.
 - Align every prose continuation line, including provider source line breaks,
   two spaces under the paragraph text instead of at column zero.
 - Rules can replace a model tool call's payload: `pass` with a `value` rewrites

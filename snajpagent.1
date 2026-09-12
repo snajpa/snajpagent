@@ -450,6 +450,19 @@ and cannot be bypassed by automatic goal work.  Resume restores recorded
 context and accounts for lost command owners; old OS processes and handles
 are not revived.
 .PP
+Interactive resume starts networking from the current configuration and explicit
+startup options.  For example, reopen a session with a hosted IRC server and no
+outgoing client connections:
+.PP
+.nf
+snajpagent --listen=localhost:6667 --no-client \e
+  --resume SESSION_ID
+.fi
+.PP
+Listen, client, nick and room overrides apply before resumed work starts;
+the live network state is shown locally and supplied to the model.
+A requested listener that cannot bind reports a startup error.
+.PP
 Direct input is recorded before preparation, credential acquisition or model
 requests.  A preparation failure retains the pending text, read-only mode and
 selected provider/model/effort.  Resolve the reported dependency and use

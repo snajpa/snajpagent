@@ -32,6 +32,12 @@ Server and client roles are deliberately composable, including
 `-s ENDPOINT -c ENDPOINT`. Incoming traffic is presented to the one local
 agent and operator, but is not blindly bridged from one server to another.
 
+Interactive resume uses current configuration plus these explicit startup
+overrides. It opens the selected listener and client roles before continuing
+saved work, and supplies the resulting topology and identities to the UI and
+model. Historical room snapshots remain conversation data; the live runtime
+owns the current networking state.
+
 The default endpoint is `localhost:6667`. A bare `-s`, `--listen`, `-c`, or
 `--client` uses it. An explicit endpoint accepts `HOST`, `HOST:PORT`,
 `[IPv6]`, or `[IPv6]:PORT`; an omitted port is 6667. Short attached arguments,
@@ -449,6 +455,11 @@ On a compact tool-start line, color covers only the arrow and tool label; an
 workdir, arguments, and captured command-output lines that follow it.
 
 ## Model Input And Steering
+
+Topology snapshots received during a response/tool exchange share the ordered
+deferred-input queue with steering. They appear after all results in that group
+and before the next request, retaining their user-data provenance. Replay and
+compaction apply the same ordering to existing session journals.
 
 When any network role is enabled, the fixed system harness sent before the
 conversation explains:

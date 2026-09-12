@@ -372,6 +372,8 @@ test_compact_groups(struct snag_store *store, const char *workspace)
         commit_event(&session, "response_completed", data);
         commit_event(&session, "tool_started",
                      tool_started_data(turn, call, session.pending_calls[0].action_sha256, workspace));
+        commit_event(&session, "irc_snapshot", checked_json(json_pack("{s:s,s:s,s:i}",
+            "reason", "topology", "text", "compact network update", "timestamp_ms", cycle)));
         if (cycle == 2u) commit_event(&session, "steering_added",
                          steering_added(turn, "a4000000000000000000000000000000", "keep the pairing"));
         result = running_result_limit(handle, text, NULL, 60000);
@@ -1078,6 +1080,8 @@ test_reasoning_continuation(struct snag_store *store, const char *workspace)
     commit_event(&session, "response_completed", data);
     commit_event(&session, "tool_started", tool_started_data(turn, call,
         session.pending_calls[0].action_sha256, workspace));
+    commit_event(&session, "irc_snapshot", checked_json(json_pack("{s:s,s:s,s:i}",
+        "reason", "topology", "text", "network changed during call", "timestamp_ms", 1)));
     commit_event(&session, "tool_finished", tool_finished_data(turn, call,
         snag_tool_result_terminal(true, "tool result")));
 
@@ -1401,7 +1405,11 @@ main(void)
                          command_response, command_call, workspace));
         commit_event(&steered, "tool_started", tool_started_data(command_turn, command_call,
                          steered.pending_calls[0].action_sha256, workspace));
+        commit_event(&steered, "irc_snapshot", checked_json(json_pack("{s:s,s:s,s:i}",
+            "reason", "topology", "text", "hosted: no", "timestamp_ms", 1)));
         commit_event(&steered, "steering_added", steering_added(command_turn, command_steer, "stop or wait"));
+        commit_event(&steered, "irc_snapshot", checked_json(json_pack("{s:s,s:s,s:i}",
+            "reason", "nick", "text", "hosted: localhost:6667", "timestamp_ms", 2)));
         commit_event(&steered, "tool_finished", tool_finished_data(command_turn, command_call,
                          running_result_limit(command_handle, "still running after steer",
                          "steering_handoff", (int)(sizeof( "still running after steer") - 1u))));
@@ -1412,9 +1420,13 @@ main(void)
         assert(strstr(snag_json_string(json_array_get(input, 3), "output"),
                       "still running after steer") != NULL);
         assert_string(json_array_get(input, 3), "output", "still running after steer");
-        assert_string(json_array_get(input, 4), "role", "system");
-        assert(strstr(snag_json_string(json_array_get(input, 4), "content"), "immediate steer") != NULL);
-        assert_string(json_array_get(input, 5), "content", "stop or wait");
+        assert_string(json_array_get(input, 4), "role", "user");
+        assert_string(json_array_get(input, 4), "content", "hosted: no");
+        assert_string(json_array_get(input, 5), "role", "system");
+        assert(strstr(snag_json_string(json_array_get(input, 5), "content"), "immediate steer") != NULL);
+        assert_string(json_array_get(input, 6), "content", "stop or wait");
+        assert_string(json_array_get(input, 7), "role", "user");
+        assert_string(json_array_get(input, 7), "content", "hosted: localhost:6667");
         assert(strstr(snag_json_string(json_array_get(input, json_array_size(input) - 2u), "content"),
                       command_handle) != NULL);
         json_decref(snapshot);

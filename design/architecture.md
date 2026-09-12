@@ -101,6 +101,14 @@ request from its transcript prefix plus that unchanged controller suffix, so
 provider-reported token usage rolls forward across tool cycles. Any controller
 change invalidates the anchor.
 
+IRC snapshots and immediate steering share one ordered deferred-input queue.
+Projection emits them after the complete response/tool-result group, before the
+next request or turn. Snapshots remain user-role network data; only steering
+receives the immediate-steer boundary and input timing metadata. Live requests,
+durable replay and compaction use this same ordering, including journals whose
+snapshots were recorded between a tool start and finish. Journal order remains
+unchanged; replay preserves the recorded result and its matching call identity.
+
 An over-budget request is not sent. Native Codex compaction or the existing
 Responses summary path runs first, and the rebuilt request must be recounted
 below the hard budget. Oversized historical tool/process and assistant text is
