@@ -1917,7 +1917,20 @@ test_audio_transport(void)
         memset(&projection,0,sizeof(projection));
         json_t *steering = json_array();
         assert(snag_context_build(&session, "audio-fixture", "medium", 1u, steering, 2048u, true,
-            &config, NULL, NULL, &projection, error, sizeof(error)) == 0);
+            &config, NULL, NULL, "Fixture: tool details hidden; report meaningful progress.",
+            &projection, error, sizeof(error)) == 0);
+        json_t *input = json_object_get(projection.create_request.value, "input");
+        assert(input == json_object_get(projection.count_request.value, "input"));
+        bool visible = false;
+        for (size_t i = 0; i < json_array_size(input); ++i) {
+            json_t *item = json_array_get(input, i);
+            const char *role = snag_json_string(item, "role");
+            const char *content = snag_json_string(item, "content");
+            if (role && !strcmp(role, "developer") && content &&
+                !strcmp(content, "Fixture: tool details hidden; report meaningful progress."))
+                visible = true;
+        }
+        assert(visible);
         json_t *tools = json_object_get(projection.create_request.value, "tools");
         for (size_t i = 0; i < 3u; ++i) {
             bool declared = false;

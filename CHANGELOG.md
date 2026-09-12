@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Cover multimedia context projection with current operator-visibility hints.
+
 - Add OpenBSD static media dependency wiring and native audio-loader linkage.
   Legacy audio API compatibility and PDF/Office dependencies remain unfinished.
 
