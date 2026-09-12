@@ -3406,6 +3406,9 @@ The device adapter uses miniaudio's low-level API, without its engine or decoder
 FreeBSD uses OSS. With older OSS headers, device enumeration reports only the
 accessible default /dev/dsp node; native format/version metadata is unavailable.
 Capture/playback initialization still negotiates format, channel count and rate.
+OpenBSD uses miniaudio's sndio/audio(4) backends and the system dynamic-loader API.
+The source recipe supplies static media codecs; older OpenBSD audio API
+compatibility remains in development.
 Portable Linux builds link PulseAudio and ALSA clients. A PulseAudio-compatible
 server must already be running; the agent does not start one.
 ALSA uses the host's /usr/share/alsa configuration; ALSA_CONFIG_DIR can select

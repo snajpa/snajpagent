@@ -512,6 +512,15 @@ retains native versioned imports and requires no runtime aliases. Cross-build
 helpers run on the build host; native startup/runtime bytes come from the SDK.
 Preserve the base-system and dependency notices when redistributing.
 
+The multimedia source recipe adds static FFmpeg file-codec libraries and the
+pinned miniaudio header while retaining native pthread/libc imports. Audio uses
+the system dynamic-loader API without libdl. OpenBSD 7.9 media/audio application
+cross-linking has been checked with PDF/Office disabled; it establishes no
+physical-device or target-runtime qualification. Legacy FFmpeg maps missing
+`static_assert` macros to the compiler keyword and includes standard pthread
+declarations before old `pthread_np.h`. Legacy device API compatibility and
+BSD PDF/Office dependency closure remain unfinished.
+
 OpenBSD 7.9 qualification covers base/IRC/SSE tests, internal read-only
 inspection and denied writes, parallel commands, PTY execution, durable resume,
 and TLS trust and hostname checks with local fixtures. The IRC capacity test

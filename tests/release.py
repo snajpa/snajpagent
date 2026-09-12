@@ -663,6 +663,7 @@ for target, expected in (
                 "-framework", "AudioToolbox"]),
     ("Linux", ["-ldl", "-lm"]),
     ("FreeBSD", ["-lm"]),
+    ("OpenBSD", ["-lm"]),
 ):
     actual = subprocess.check_output(["make", "-s", "--no-print-directory", "-f", "-",
                                       "TARGET_OS=" + target],
@@ -1475,3 +1476,33 @@ for name in ("fmin", "fminf", "fmax", "fmaxf"):
 assert '+#include "libm.h"' in math_patch
 assert '+#if !defined(__FreeBSD__) || __FreeBSD__ >= 6' in math_patch
 print("PASS: OSS3 defaults respect access, stop callbacks and unknown native format/version")
+
+# Old BSD extension headers require the standard pthread declarations first.
+openbsd = (root / "nix/openbsd.nix").read_text()
+assert 'lib.optional legacy ./ffmpeg-bsd-thread-headers.patch' in openbsd
+assert 'lib.optionalString legacy " -Dstatic_assert=_Static_assert"' in openbsd
+thread_patch = (root / "nix/ffmpeg-bsd-thread-headers.patch").read_text().splitlines()
+before, after = [], []
+in_hunk = False
+for line in thread_patch:
+    if line.startswith("@@"):
+        in_hunk = True
+    elif in_hunk:
+        if line.startswith((" ", "-")):
+            before.append(line[1:])
+        if line.startswith((" ", "+")):
+            after.append(line[1:])
+with tempfile.TemporaryDirectory(prefix="bsd-thread-headers-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    (tmp / "pthread.h").write_text("typedef int pthread_t; typedef int stack_t;\n")
+    (tmp / "pthread_np.h").write_text("void pthread_set_name_np(pthread_t, const char *);\n"
+                                      "int pthread_stackseg_np(pthread_t, stack_t *);\n")
+    source = tmp / "thread.c"
+    flags = "#define HAVE_PTHREAD_SET_NAME_NP 1\n#define HAVE_PTHREAD_NP_H 1\n"
+    command = ["cc", "-std=c11", "-Wall", "-Werror", "-I" + str(tmp), "-fsyntax-only", str(source)]
+    source.write_text(flags + "\n".join(before))
+    result = subprocess.run(command, capture_output=True)
+    assert result.returncode != 0, "old extension header must reproduce missing pthread types"
+    source.write_text(flags + "\n".join(after))
+    subprocess.run(command, check=True)
+print("PASS: FFmpeg BSD extension headers receive standard pthread declarations first")

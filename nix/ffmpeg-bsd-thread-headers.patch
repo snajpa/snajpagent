@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Older BSD pthread_np.h requires the standard pthread declarations first.
+--- a/libavutil/thread.h
++++ b/libavutil/thread.h
+@@ -27,6 +27,7 @@
+ #if HAVE_PRCTL
+ #include <sys/prctl.h>
+ #elif (HAVE_PTHREAD_SETNAME_NP || HAVE_PTHREAD_SET_NAME_NP) && HAVE_PTHREAD_NP_H
++#include <pthread.h>
+ #include <pthread_np.h>
+ #endif
+ 

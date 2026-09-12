@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Add OpenBSD static media dependency wiring and native audio-loader linkage.
+  Legacy audio API compatibility and PDF/Office dependencies remain unfinished.
+
 - Supply FreeBSD static ZIP/XML Office package readers with SDK-native digest
   linkage; LibreOffice runtime packaging remains separate and unfinished.
 
