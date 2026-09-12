@@ -451,11 +451,12 @@ context and accounts for lost command owners; old OS processes and handles
 are not revived.
 .PP
 Direct input is recorded before preparation, credential acquisition or model
-requests.  A preparation failure retains the pending text, read-only mode and
-selected provider/model/effort.  Resolve the reported dependency and use
+requests.  A preparation failure retains the pending text, accepted attachments,
+read-only mode and selected provider/model/effort.  Resolve the reported dependency and use
 .B /retry
 or resume the session to continue.  Ctrl-C cancels pending input.  A later
-prompt is queued behind retained input rather than replacing it.
+prompt is queued behind retained input rather than replacing it. Attachment
+replay uses the retained bytes and does not reread or reconvert the original files.
 .PP
 Same-turn recovery retains the original working-document paths.  The files
 remain external dependencies: their contents are read when needed, and moved

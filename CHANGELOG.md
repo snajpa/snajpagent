@@ -37,6 +37,9 @@
 - Report missing/extra fields, types, ranges and cross-field errors; disclose
   requested/applied output ceilings and host wait limits. Keep latest-batch host
   feedback visible independently of command-output budgets, including on resume.
+- Retain accepted attachments with pending direct input through preparation
+  failure and resume; preserve durable queue state for voice handoffs and local
+  blank-Enter behavior alongside interactive attachment submission.
 - Continue local multimodal portability: link Windows media/PDF dependencies,
   correct static dependency metadata, adapt legacy file metadata reads, and
   avoid newer CRT locale imports in PDF parsing/formatting. Portable Office

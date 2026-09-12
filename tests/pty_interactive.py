@@ -39,6 +39,9 @@ events = [json.loads(line) for path in Path(DOTDIR).glob("sessions/*/events.json
 turns = [event["data"] for event in events if event["type"] == "turn_started"
          and event["data"].get("text") == "ping" and event["data"].get("content")]
 assert turns, "attachment was not journalled with the ping turn"
+pending = [event["data"] for event in events if event["type"] == "input_received"
+           and event["data"].get("text") == "ping"]
+assert pending and pending[-1]["content"] == turns[-1]["content"]
 part = turns[-1]["content"][0]
 assert part["type"] == "input_image" and part["asset"]["mime_type"] == "image/png"
 assert part["source"]["mime_type"] == "image/png" and "frame 0 only" in part["note"]
@@ -48,12 +51,13 @@ terminal_end = buf.find(b"turn_completed synced") + len(b"turn_completed synced"
 # The always-visible composer changes active/idle in place. Its leftmost
 # unchanged cells and final space need not be emitted again.
 child.wait_idle_prompt(start=terminal_end, timeout=5.0)
-# Preserve the original empty-Enter continuation regression after attachment admission.
-continuation_start = len(buf)
+# Blank Enter stays local after attachment admission and completion too.
+blank_start = len(buf)
+before_events = [path.read_bytes() for path in sorted(Path(DOTDIR, "sessions").glob("*/events.jsonl"))]
 child.send(b"\r")
-child.wait_text(b"fixture answer", start=continuation_start, timeout=5.0)
-terminal_end = child.wait_text(b"turn_completed synced", start=continuation_start, timeout=5.0)
-child.wait_idle_prompt(start=terminal_end)
+child.drain(0.4)
+assert [path.read_bytes() for path in sorted(Path(DOTDIR, "sessions").glob("*/events.jsonl"))] == before_events
+assert b"fixture answer" not in buf[blank_start:]
 child.send(b"slow\r")
 child.wait_text(b"working slowly", timeout=5.0)
 child.send(b"\x03")

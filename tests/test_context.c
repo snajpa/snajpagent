@@ -1395,7 +1395,7 @@ test_image_tool_replay(void)
 
     for (unsigned int replay = 0; replay < 2u; ++replay) {
         assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, empty, 0u, false,
-            NULL, NULL, &projection, error, sizeof(error)) == 0);
+            NULL, NULL, NULL, &projection, error, sizeof(error)) == 0);
         assert(snag_media_request_has_images(projection.create_request.value));
         assert(snag_media_request_check(projection.create_request.value, error, sizeof(error)) == 0);
         json_t *input = json_object_get(projection.create_request.value, "input");
@@ -1468,7 +1468,7 @@ test_image_tool_replay(void)
         assert(json_equal(session.pending_queue[0].content, attached));
         assert(json_equal(session.pending_steering[0].content, attached));
         assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, snapshot, 0u, false,
-            NULL, NULL, &projection, error, sizeof(error)) == 0);
+            NULL, NULL, NULL, &projection, error, sizeof(error)) == 0);
         json_t *inputs = json_object_get(projection.create_request.value, "input");
         bool found = false;
         for (size_t i = 0; i < json_array_size(inputs); ++i) {
@@ -1490,7 +1490,7 @@ test_image_tool_replay(void)
     json_t *wrong_snapshot = json_deep_copy(snapshot);
     assert(json_object_del(json_array_get(wrong_snapshot, 0u), "content") == 0);
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, wrong_snapshot, 0u, false,
-        NULL, NULL, &projection, error, sizeof(error)) < 0);
+        NULL, NULL, NULL, &projection, error, sizeof(error)) < 0);
     json_decref(wrong_snapshot); json_decref(snapshot);
     assert(snag_session_commit(&session, "turn_failed", json_pack("{s:s,s:s,s:s}",
         "class", "provider", "message", "test failure", "turn_id", turn), NULL, error, sizeof(error)) == 0);
@@ -1505,7 +1505,7 @@ test_image_tool_replay(void)
     assert(snag_session_commit(&session, "turn_started", input_event, NULL, error, sizeof(error)) == 0);
     assert(!session.pending_queue_count && !session.pending_steering_count);
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u, false,
-        NULL, NULL, &projection, error, sizeof(error)) == 0);
+        NULL, NULL, NULL, &projection, error, sizeof(error)) == 0);
     assert(snag_media_request_has_images(projection.create_request.value));
     snag_context_projection_free(&projection);
     json_decref(attached);
@@ -1513,7 +1513,7 @@ test_image_tool_replay(void)
     assert(media_fd >= 0 && snag_unlink_at(media_fd, snag_json_string(asset, "id"), false) == 0);
     close(media_fd);
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, empty, 0u, false,
-        NULL, NULL, &projection, error, sizeof(error)) < 0);
+        NULL, NULL, NULL, &projection, error, sizeof(error)) < 0);
     json_decref(original); json_decref(asset); json_decref(empty);
     snag_buf_free(&png); snag_buf_free(&expected);
     snag_context_projection_free(&projection);

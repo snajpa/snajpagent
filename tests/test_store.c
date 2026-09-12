@@ -81,6 +81,25 @@ edited_data(const char *queue_id, const char *text)
 }
 
 static json_t *
+turn_started_data(const struct snag_session *session, const char *turn_id)
+{
+    struct snag_instruction_set instructions = {0};
+    json_t *metadata = snag_instructions_metadata_json(&instructions);
+    assert(metadata);
+    return checked_json(json_pack(
+        "{s:{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b},"
+        "s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:i,s:s}",
+        "config", "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
+        "effort", session->default_effort, "max_output_tokens",
+        "model", session->default_model, "provider", session->default_provider,
+        "profile_id", SNAJPAGENT_PROFILE_ID, "prompt_schema", 1, "replay_schema", 1,
+        "tool_schema", 1, "max_parallel_commands", 4, "parallel_tool_calls", 1,
+        "input_kind", "direct", "read_only", 0, "instructions", metadata,
+        "queue_id", "queue_seq", "text", "queue test", "turn_id", turn_id,
+        "turn_number", (int)session->turn_count + 1, "workspace", session->workspace));
+}
+
+static json_t *
 goal_started_data(const char *goal_id, const char *prompt)
 {
     return checked_json(json_pack("{s:s,s:s}",
@@ -241,6 +260,56 @@ test_failed_append_retry(struct snag_store *store, const char *workspace)
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     assert(!strcmp(session.default_effort, "high"));
     snag_session_close(&session);
+}
+
+static void
+test_pending_input_media(struct snag_store *store, const char *workspace)
+{
+    struct snag_session session;
+    char id[SNAG_ID_HEX_LEN + 1u], error[256], reference[40];
+    const char *turn = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    json_t *asset = NULL, *found = NULL;
+    char *path = NULL;
+    snag_session_init(&session);
+    assert(snag_session_create(store, &session, workspace, "default", "fixture", "medium",
+                               error, sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+    assert(snag_media_save(session.dir_fd, "attachment", 10u, "text/plain", &asset,
+                           error, sizeof(error)) == 0);
+    json_t *content = checked_json(json_pack("[{s:s,s:O}]", "type", "file", "asset", asset));
+    json_t *input = checked_json(json_pack("{s:s,s:[],s:s,s:s,s:b,s:I,s:s,s:O}",
+        "effort", "medium", "instructions", "model", "fixture", "provider", "default",
+        "read_only", 0, "received_at_ms", (json_int_t)1, "text", "queue test", "content", content));
+    commit_event(&session, "input_received", json_incref(input));
+    assert(json_equal(session.pending_input, input) && !session.active_turn);
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(json_equal(session.pending_input, input));
+    assert(snprintf(reference, sizeof(reference), "asset:%s", snag_json_string(asset, "id")) == 38);
+    assert(snag_session_media(&session, reference, NULL, NULL, NULL, &found, &path,
+                              error, sizeof(error)) == 0);
+    assert(json_equal(found, asset));
+    json_decref(found); free(path);
+    uint64_t seq = session.next_seq;
+    /* A pending prompt's attachments cannot disappear or be replaced on start. */
+    assert(snag_session_commit(&session, "turn_started", turn_started_data(&session, turn),
+                               NULL, error, sizeof(error)) < 0);
+    json_t *started = turn_started_data(&session, turn);
+    assert(json_object_set_new(started, "content",
+        json_pack("[{s:s,s:s}]", "type", "input_text", "text", "replacement")) == 0);
+    assert(snag_session_commit(&session, "turn_started", started, NULL, error, sizeof(error)) < 0);
+    assert(session.next_seq == seq && json_equal(session.pending_input, input));
+    started = turn_started_data(&session, turn);
+    assert(json_object_set(started, "content", content) == 0);
+    commit_event(&session, "turn_started", started);
+    assert(session.active_turn && !session.pending_input);
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(session.active_turn && !session.pending_input);
+    snag_session_close(&session);
+    json_decref(input); json_decref(content); json_decref(asset);
 }
 
 static void
@@ -571,6 +640,7 @@ main(void)
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
     test_pending_session(&store, workspace);
     test_failed_append_retry(&store, workspace);
+    test_pending_input_media(&store, workspace);
     test_closure_reserve(&store, workspace);
     assert(snag_session_create(&store, &session, workspace,
                               "default", "gpt-5.5-2026-04-23", "default",
@@ -912,22 +982,7 @@ main(void)
                                   "default", "gpt-5.5-2026-04-23", "default",
                                   error, sizeof(error)) == 0);
         memcpy(id, session.id, sizeof(id));
-        struct snag_instruction_set instructions = {0};
-        json_t *metadata = snag_instructions_metadata_json(&instructions);
-        snag_instructions_free(&instructions);
-        assert(metadata);
-        commit_event(&session, "turn_started",
-            checked_json(json_pack(
-                "{s:{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b},"
-                "s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:i,s:s}",
-                "config", "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
-                "effort", session.default_effort, "max_output_tokens",
-                "model", session.default_model, "provider", session.default_provider,
-                "profile_id", SNAJPAGENT_PROFILE_ID, "prompt_schema", 1, "replay_schema", 1,
-                "tool_schema", 1, "max_parallel_commands", 4, "parallel_tool_calls", 1,
-                "input_kind", "direct", "read_only", 0, "instructions", metadata,
-                "queue_id", "queue_seq", "text", "queue test", "turn_id", turn_id,
-                "turn_number", 1, "workspace", session.workspace)));
+        commit_event(&session, "turn_started", turn_started_data(&session, turn_id));
         json_t *enqueued = queued_data(turn_id, first_id, "first");
         commit_event(&session, "future_turn_queued", json_incref(enqueued));
         const char *first_text = session.pending_queue[0].text;

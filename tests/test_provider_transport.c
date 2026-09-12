@@ -1917,7 +1917,7 @@ test_audio_transport(void)
         memset(&projection,0,sizeof(projection));
         json_t *steering = json_array();
         assert(snag_context_build(&session, "audio-fixture", "medium", 1u, steering, 2048u, true,
-            &config, NULL, &projection, error, sizeof(error)) == 0);
+            &config, NULL, NULL, &projection, error, sizeof(error)) == 0);
         json_t *tools = json_object_get(projection.create_request.value, "tools");
         for (size_t i = 0; i < 3u; ++i) {
             bool declared = false;

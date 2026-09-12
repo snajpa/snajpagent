@@ -572,6 +572,13 @@ independently, and neither changes stored, provider, redirected, or IRC bytes.
 
 ## Media streaming boundary (in development)
 
+Direct input admission records its typed attachment references in `input_received`
+before preparation or provider activity. The pending input retains those references
+through failure and resume; `turn_started` must carry the identical content.
+The composer consumes admitted parts after journal commit, while later draft parts
+remain unsent. Voice handoffs arm the existing queue through its durable
+`future_queue_state` event; the voice owner does not execute coding work.
+
 `base64.c/h` encodes incrementally into a synchronous byte sink with no allocation,
 files, JSON, process or device dependency. It retains at most two pending input
 bytes and uses a 256-byte output block. Finalization supplies padding exactly
