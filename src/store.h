@@ -217,6 +217,10 @@ int snag_store_open(struct snag_store *store, const char *dotdir,
 
 void snag_session_init(struct snag_session *session);
 void snag_session_close(struct snag_session *session);
+/* Resolve a workspace path and require an existing UTF-8 directory. label
+ * names the workspace in diagnostics; NULL uses the bare "workspace" wording. */
+char *snag_workspace_resolve(const char *workspace, const char *label,
+                             char *error, size_t error_size);
 int snag_session_prepare(struct snag_session *session, const char *workspace,
                          const char *provider, const char *model, const char *effort,
                          char *error, size_t error_size);

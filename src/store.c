@@ -2185,20 +2185,30 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
     return rc;
 }
 
-static char *
-canonical_workspace(const char *workspace, char *error, size_t error_size)
+char *
+snag_workspace_resolve(const char *workspace, const char *label,
+                       char *error, size_t error_size)
 {
     char *resolved = snag_realpath(workspace);
     snag_file_info st;
 
     if (!resolved) {
-        snag_errorf(error, error_size, "cannot resolve workspace %s: %s", workspace,
-                  strerror(errno));
+        if (label)
+            snag_errorf(error, error_size, "cannot resolve %s workspace %s: %s",
+                        label, workspace, strerror(errno));
+        else
+            snag_errorf(error, error_size, "cannot resolve workspace %s: %s",
+                        workspace, strerror(errno));
         return NULL;
     }
     if (!snag_text_valid(resolved, 0u, SNAG_PATH_MAX_BYTES) ||
         snag_stat(resolved, &st) < 0 || !S_ISDIR(st.st_mode)) {
-        snag_errorf(error, error_size, "workspace must be an existing UTF-8 directory");
+        if (label)
+            snag_errorf(error, error_size,
+                        "%s workspace must be an existing UTF-8 directory", label);
+        else
+            snag_errorf(error, error_size,
+                        "workspace must be an existing UTF-8 directory");
         free(resolved);
         errno = EINVAL;
         return NULL;
@@ -2211,7 +2221,7 @@ snag_session_prepare(struct snag_session *session, const char *workspace,
                      const char *provider, const char *model, const char *effort,
                      char *error, size_t error_size)
 {
-    char *resolved = canonical_workspace(workspace, error, error_size);
+    char *resolved = snag_workspace_resolve(workspace, NULL, error, error_size);
     int rc = -1;
 
     if (!resolved)

@@ -4148,27 +4148,6 @@ run_tracked_turn(struct app_state *app, const char *prompt,
     return rc;
 }
 
-static char *
-resolve_workspace_path(const char *path, const char *label,
-                       char *error, size_t error_size)
-{
-    char *resolved = snag_realpath(path);
-    snag_file_info st;
-    if (!resolved) {
-        snag_errorf(error, error_size, "cannot resolve %s workspace %s: %s",
-                  label, path, strerror(errno));
-        return NULL;
-    }
-    if (!snag_text_valid(resolved, 0u, SNAG_PATH_MAX_BYTES) ||
-        snag_stat(resolved, &st) < 0 || !S_ISDIR(st.st_mode)) {
-        snag_errorf(error, error_size, "%s workspace must be an existing UTF-8 directory",
-                  label);
-        free(resolved);
-        errno = EINVAL;
-        return NULL;
-    }
-    return resolved;
-}
 char *
 snag_app_dotdir(const char *override, char *error, size_t error_size)
 {
@@ -4755,7 +4734,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     if (!cli->list && config.auto_update)
         (void)snag_ui_update(&app.ui, program, config.update_url);
 #endif
-    workspace = resolve_workspace_path(".", "current", error, sizeof(error));
+    workspace = snag_workspace_resolve(".", "current", error, sizeof(error));
     if (!workspace) {
         goto fail;
     }
@@ -4770,7 +4749,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         const struct snag_provider_config *resume_provider;
         const char *resume_model;
         if (cli->workspace) {
-            relocated_workspace = resolve_workspace_path(cli->workspace, "relocation",
+            relocated_workspace = snag_workspace_resolve(cli->workspace, "relocation",
                                                          error, sizeof(error));
             if (!relocated_workspace)
                 goto invalid;
