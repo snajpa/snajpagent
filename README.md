@@ -25,6 +25,8 @@ snajpagent
 
 Describe a task and press Enter: “Fix the empty-input bug, keep the public API
 unchanged, and run the tests.” The model can read and edit files and run commands.
+Long table cells wrap within their columns when the terminal has room for a
+readable grid.
 Empty Enter leaves a prompt line and opens a fresh prompt, like a shell.
 
 Read its replies and scroll back normally. Tool details are hidden by default;

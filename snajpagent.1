@@ -1030,8 +1030,13 @@ that source, prompts or tool output contain no secrets.
 .PP
 Terminal model text uses color and compact Markdown presentation when enabled.
 Headings, lists, quotes, fenced code, pipe tables, inline code, emphasis,
-strikethrough, and links are supported.  Pipe tables align as a grid when they
-fit and become labeled rows on narrow terminals.  Redirected and durable text
+strikethrough, and links are supported. Pipe tables retain aligned columns and
+wrap long cells at word boundaries within the terminal width. Short columns keep
+their natural width; long columns share the remaining space while preserving
+whole-word minima. Wrapped grids separate logical records with horizontal rules.
+When those minima cannot fit, the table becomes labeled vertical rows, with a
+left border on every continuation line. Inline styles, header emphasis and
+column alignment remain active across wrapped lines. Redirected and durable text
 retains the model's exact bytes.
 .PP
 Plain-text fences labelled text, txt or plaintext omit the language label.

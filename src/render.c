@@ -43,6 +43,11 @@ struct markdown_table_cell {
     size_t len;
 };
 
+struct markdown_table_output {
+    struct snag_buf text, styles;
+    size_t width, offset;
+};
+
 enum snag_render_record_kind {
     SNAG_RENDER_RECORD_BLOCK,
     SNAG_RENDER_RECORD_IRC,
@@ -869,6 +874,7 @@ public_write(struct snag_render *render, const char *text, size_t len,
         return 0;
     if (render->markdown_measuring)
         return 0;
+    if (!color_enabled(render, render->public_fd)) style = 0u;
     if (!render->public_output_open) {
         if (output_begin(render) < 0)
             return -1;
@@ -912,23 +918,30 @@ close_public_output(struct snag_render *render)
     return rc;
 }
 
-/* Styles follow buffered bytes, so Markdown delimiters are not wrap boundaries. */
+/* Styles follow bytes, so Markdown delimiters are not wrap boundaries. */
+static int
+write_styled_span(struct snag_render *render, const char *text,
+                  const unsigned char *styles, size_t len)
+{
+    while (len) {
+        unsigned char style = *styles;
+        size_t n = 1u;
+        /* Terminal-safe writes expand a tab from their span's start column. */
+        if (*text != '\t')
+            while (n < len && styles[n] == style && text[n] != '\t') ++n;
+        if (public_write(render, text, n, style) < 0) return -1;
+        text += n;
+        styles += n;
+        len -= n;
+    }
+    return 0;
+}
+
 static int
 write_wrap_span(struct snag_render *render, const char *text, size_t len)
 {
     size_t offset = (size_t)(text - (const char *)render->wrap_pending.data);
-    while (len) {
-        unsigned char style = render->wrap_styles.data[offset];
-        size_t n = 1u;
-        while (n < len && render->wrap_styles.data[offset + n] == style)
-            ++n;
-        if (public_write(render, text, n, style) < 0)
-            return -1;
-        text += n;
-        offset += n;
-        len -= n;
-    }
-    return 0;
+    return write_styled_span(render, text, render->wrap_styles.data + offset, len);
 }
 
 static int
@@ -1036,6 +1049,16 @@ write_wrapped(struct snag_render *render, const unsigned char *text, size_t len)
     size_t limit = columns >= 20u ? columns - indent : 1024u;
     unsigned char style = markdown_style(render);
 
+    if (render->markdown_measuring) {
+        size_t width = snag_term_text_width((const char *)text, len);
+        if (width == SIZE_MAX || snag_buf_append(&render->wrap_pending, text, len) < 0 ||
+            snag_buf_reserve(&render->wrap_styles, len) < 0 ||
+            !snag_size_add(render->public_column, width, &render->public_column))
+            return -1;
+        if (len) memset(render->wrap_styles.data + render->wrap_styles.len, style, len);
+        render->wrap_styles.len += len;
+        return 0;
+    }
     for (size_t i = 0u; i < len;) {
         size_t n = snag_utf8_size(text[i]);
         bool space = text[i] == ' ' || text[i] == '\t';
@@ -1442,33 +1465,69 @@ markdown_inline_finish(struct snag_render *render)
     return 0;
 }
 
+static int markdown_table_cell(struct snag_render *, const struct markdown_table_cell *, bool);
+
+static void
+markdown_table_output_free(struct markdown_table_output *cell)
+{
+    snag_buf_free(&cell->text);
+    snag_buf_free(&cell->styles);
+}
+
 static int
-markdown_table_cell_width(struct snag_render *render,
-                          const struct markdown_table_cell *cell,
-                          size_t *width)
+markdown_table_prepare(struct snag_render *render, const struct markdown_table_cell *cell,
+                       bool strong, const struct markdown_table_cell *label,
+                       struct markdown_table_output *out)
 {
     struct snag_render probe;
-    int rc;
-
-    if (render_checkpoint(render) < 0)
-        return -1;
+    if (render_checkpoint(render) < 0) return -1;
     memset(&probe, 0, sizeof(probe));
     probe.public_fd = render->public_fd;
-    probe.markdown_rendering = true;
-    probe.markdown_measuring = true;
+    /* Capture semantic styles; the real output applies the current color mode. */
+    probe.color_stdout = probe.color_stderr = true;
+    probe.markdown_rendering = probe.markdown_measuring = true;
     probe.checkpoint = render->checkpoint;
     probe.checkpoint_opaque = render->checkpoint_opaque;
-    snag_buf_init(&probe.wrap_pending, SNAG_MAX_PUBLIC_ITEM);
-    snag_buf_init(&probe.wrap_styles, SNAG_MAX_PUBLIC_ITEM);
-    rc = markdown_inline(&probe, cell->text, cell->len);
-    if (rc == 0)
-        rc = markdown_inline_finish(&probe);
-    if (rc == 0)
-        rc = flush_wrap_pending(&probe);
-    if (rc == 0)
-        *width = probe.public_column;
-    snag_buf_free(&probe.wrap_pending);
-    snag_buf_free(&probe.wrap_styles);
+    /* Visible link delimiters can expand the bounded source. */
+    snag_buf_init(&probe.wrap_pending, 2u * SNAG_MAX_PUBLIC_ITEM);
+    snag_buf_init(&probe.wrap_styles, 2u * SNAG_MAX_PUBLIC_ITEM);
+    int rc = 0;
+    if (label && (markdown_table_cell(&probe, label, true) < 0 ||
+                  markdown_text(&probe, ": ", 2u) < 0)) rc = -1;
+    if (!rc) rc = markdown_table_cell(&probe, cell, strong);
+    if (rc < 0) {
+        snag_buf_free(&probe.wrap_pending);
+        snag_buf_free(&probe.wrap_styles);
+        return -1;
+    }
+    out->text = probe.wrap_pending;
+    out->styles = probe.wrap_styles;
+    out->width = probe.public_column;
+    out->offset = 0u;
+    return 0;
+}
+
+static int
+markdown_table_cell_width(struct snag_render *render, const struct markdown_table_cell *cell,
+                          size_t *width, size_t *minimum)
+{
+    struct markdown_table_output out = {0};
+    if (markdown_table_prepare(render, cell, false, NULL, &out) < 0) return -1;
+    *width = out.width;
+    size_t word = 0u;
+    int rc = 0;
+    for (size_t pos = 0u, checkpoint_at = 0u; pos < out.text.len;) {
+        if (pos >= checkpoint_at) {
+            checkpoint_at = pos + 1024u;
+            if (render_checkpoint(render) < 0) { rc = -1; break; }
+        }
+        size_t n = snag_utf8_size(out.text.data[pos]);
+        if (out.text.data[pos] == ' ' || out.text.data[pos] == '\t') word = 0u;
+        else word += snag_term_text_width((const char *)out.text.data + pos, n);
+        if (word > *minimum) *minimum = word;
+        pos += n;
+    }
+    markdown_table_output_free(&out);
     return rc;
 }
 
@@ -1507,6 +1566,42 @@ markdown_table_cell(struct snag_render *render,
     return 0;
 }
 
+/* Select a physical line after inline parsing, retaining styles and UTF-8. */
+static void
+markdown_table_line(struct markdown_table_output *cell, size_t columns,
+                    size_t *start, size_t *length, size_t *width)
+{
+    size_t pos = cell->offset, used = 0u, split = SIZE_MAX, split_width = 0u;
+    bool previous_space = false;
+    *start = pos;
+    while (pos < cell->text.len) {
+        size_t n = snag_utf8_size(cell->text.data[pos]);
+        size_t w = snag_term_text_width((const char *)cell->text.data + pos, n);
+        bool space = cell->text.data[pos] == ' ' || cell->text.data[pos] == '\t';
+        if (space && !previous_space && pos > *start) { split = pos; split_width = used; }
+        if (w && used + w > columns && pos > *start) break;
+        used += w;
+        pos += n;
+        previous_space = space;
+    }
+    if (pos < cell->text.len && split != SIZE_MAX) { pos = split; used = split_width; }
+    *length = pos - *start;
+    *width = used;
+    while (pos < cell->text.len && (cell->text.data[pos] == ' ' || cell->text.data[pos] == '\t')) ++pos;
+    cell->offset = pos;
+}
+
+static int
+markdown_table_emit(struct snag_render *render, const struct markdown_table_output *cell,
+                    size_t start, size_t length, size_t width)
+{
+    if (flush_wrap_pending(render) < 0 ||
+        (length && write_styled_span(render, (const char *)cell->text.data + start,
+                                    cell->styles.data + start, length) < 0)) return -1;
+    render->public_column += width;
+    return 0;
+}
+
 static int
 markdown_table_grid_row(struct snag_render *render,
                         const struct markdown_table_cell *cells,
@@ -1514,37 +1609,78 @@ markdown_table_grid_row(struct snag_render *render,
                         const enum markdown_table_alignment *alignment,
                         size_t columns, bool header)
 {
-    if (markdown_text(render, "│ ", strlen("│ ")) < 0)
-        return -1;
+    struct markdown_table_output out[MARKDOWN_TABLE_COLUMNS] = {0};
+    int rc = -1;
     for (size_t i = 0u; i < columns; ++i) {
         struct markdown_table_cell empty = {0};
-        const struct markdown_table_cell *cell = i < cell_count ?
-                                                  &cells[i] : &empty;
-        size_t width;
-        size_t before;
-        size_t after;
-
-        if (render_checkpoint(render) < 0 ||
-            markdown_table_cell_width(render, cell, &width) < 0 ||
-            width > widths[i])
-            return snag_errno(EINVAL);
-        if (alignment[i] == TABLE_RIGHT) {
-            before = widths[i] - width;
-        } else if (alignment[i] == TABLE_CENTER) {
-            before = (widths[i] - width) / 2u;
-        } else {
-            before = 0u;
-        }
-        after = widths[i] - width - before;
-        if (markdown_repeat(render, ' ', before) < 0 ||
-            markdown_table_cell(render, cell, header) < 0 ||
-            markdown_repeat(render, ' ', after) < 0 ||
-            markdown_text(render, i + 1u < columns ? " │ " : " │\n",
-                          i + 1u < columns ? strlen(" │ ") :
-                                             strlen(" │\n")) < 0)
-            return -1;
+        if (markdown_table_prepare(render, i < cell_count ? &cells[i] : &empty,
+                                   header, NULL, &out[i]) < 0) goto done;
     }
-    return 0;
+    bool more;
+    do {
+        more = false;
+        if (render_checkpoint(render) < 0 || markdown_text(render, "│ ", strlen("│ ")) < 0) goto done;
+        for (size_t i = 0u; i < columns; ++i) {
+            size_t start, length, width;
+            markdown_table_line(&out[i], widths[i], &start, &length, &width);
+            if (width > widths[i]) goto done;
+            size_t before = alignment[i] == TABLE_RIGHT ? widths[i] - width :
+                            alignment[i] == TABLE_CENTER ? (widths[i] - width) / 2u : 0u;
+            if (markdown_repeat(render, ' ', before) < 0 ||
+                markdown_table_emit(render, &out[i], start, length, width) < 0 ||
+                markdown_repeat(render, ' ', widths[i] - width - before) < 0 ||
+                markdown_text(render, i + 1u < columns ? " │ " : " │\n",
+                              i + 1u < columns ? strlen(" │ ") : strlen(" │\n")) < 0) goto done;
+            more |= out[i].offset < out[i].text.len;
+        }
+    } while (more);
+    rc = 0;
+done:
+    for (size_t i = 0u; i < columns; ++i) markdown_table_output_free(&out[i]);
+    return rc;
+}
+
+static int
+markdown_table_vertical_cell(struct snag_render *render, const struct markdown_table_cell *cell,
+                             const struct markdown_table_cell *label, unsigned int columns)
+{
+    struct markdown_table_output out = {0};
+    if (markdown_table_prepare(render, cell, label == NULL, label, &out) < 0) return -1;
+    int rc = -1;
+    do {
+        size_t start, length, width;
+        markdown_table_line(&out, columns > 3u ? columns - 3u : 1u, &start, &length, &width);
+        if (render_checkpoint(render) < 0 ||
+            markdown_text(render, "│ ", strlen("│ ")) < 0 ||
+            markdown_table_emit(render, &out, start, length, width) < 0 ||
+            markdown_text(render, "\n", 1u) < 0) goto done;
+    } while (out.offset < out.text.len);
+    rc = 0;
+done:
+    markdown_table_output_free(&out);
+    return rc;
+}
+
+/* Water-fill long columns; preserve short columns and whole-word minima. */
+static void
+markdown_table_fit(size_t *widths, const size_t *minimum, size_t count, size_t available)
+{
+    size_t low = 0u, high = 0u;
+    for (size_t i = 0u; i < count; ++i) if (widths[i] > high) high = widths[i];
+    while (low < high) {
+        size_t cap = low + (high - low + 1u) / 2u, sum = 0u;
+        for (size_t i = 0u; i < count; ++i)
+            sum += widths[i] < cap ? widths[i] : minimum[i] > cap ? minimum[i] : cap;
+        if (sum <= available) low = cap; else high = cap - 1u;
+    }
+    size_t natural[MARKDOWN_TABLE_COLUMNS];
+    for (size_t i = 0u; i < count; ++i) {
+        natural[i] = widths[i];
+        widths[i] = widths[i] < low ? widths[i] : minimum[i] > low ? minimum[i] : low;
+        available -= widths[i];
+    }
+    for (size_t i = 0u; i < count && available; ++i)
+        if (widths[i] < natural[i]) { ++widths[i]; --available; }
 }
 
 static bool
@@ -1576,6 +1712,7 @@ markdown_table_render(struct snag_render *render)
     struct markdown_table_cell delimiter[MARKDOWN_TABLE_COLUMNS];
     enum markdown_table_alignment alignment[MARKDOWN_TABLE_COLUMNS];
     size_t widths[MARKDOWN_TABLE_COLUMNS] = {0};
+    size_t minimum[MARKDOWN_TABLE_COLUMNS] = {0};
     const unsigned char *line;
     size_t line_len;
     size_t header_count;
@@ -1585,7 +1722,7 @@ markdown_table_render(struct snag_render *render)
     size_t total;
     unsigned int terminal_columns = snag_term_columns(render->term);
     bool ended_lf = md->table.len && text[md->table.len - 1u] == '\n';
-    bool grid;
+    bool grid, wrapped;
 
     if (!markdown_table_next_line(text, md->table.len, &offset, &line,
                                   &line_len) ||
@@ -1597,10 +1734,10 @@ markdown_table_render(struct snag_render *render)
         !markdown_table_delimiter(delimiter, delimiter_count, alignment))
         return snag_errno(EINVAL);
     for (size_t i = 0u; i < header_count; ++i) {
-        if (markdown_table_cell_width(render, &header[i], &widths[i]) < 0)
+        if (markdown_table_cell_width(render, &header[i], &widths[i], &minimum[i]) < 0)
             return -1;
-        if (!widths[i])
-            widths[i] = 1u;
+        if (!widths[i]) widths[i] = 1u;
+        if (!minimum[i]) minimum[i] = 1u;
     }
     body_offset = offset;
     while (markdown_table_next_line(text, md->table.len, &offset, &line,
@@ -1615,7 +1752,7 @@ markdown_table_render(struct snag_render *render)
         for (size_t i = 0u; i < count && i < header_count; ++i) {
             size_t width;
 
-            if (markdown_table_cell_width(render, &cells[i], &width) < 0)
+            if (markdown_table_cell_width(render, &cells[i], &width, &minimum[i]) < 0)
                 return -1;
             if (width > widths[i])
                 widths[i] = width;
@@ -1627,7 +1764,14 @@ markdown_table_render(struct snag_render *render)
             return snag_errno(EOVERFLOW);
         total += widths[i] + 3u;
     }
-    grid = terminal_columns >= 10u && total < terminal_columns;
+    terminal_columns = snag_term_columns(render->term);
+    size_t minimum_total = 1u + 3u * header_count;
+    for (size_t i = 0u; i < header_count; ++i) minimum_total += minimum[i];
+    grid = terminal_columns >= 10u && minimum_total < terminal_columns;
+    wrapped = grid && total >= terminal_columns;
+    if (wrapped)
+        markdown_table_fit(widths, minimum, header_count, terminal_columns - 2u - 3u * header_count);
+    if (markdown_inline_finish(render) < 0) return -1;
     if (render->public_column) {
         if (markdown_text(render, "\n", 1u) < 0)
             return -1;
@@ -1657,6 +1801,8 @@ markdown_table_render(struct snag_render *render)
             !markdown_table_cells(line, line_len, cells, &count))
             return -1;
         if (grid) {
+            if (row && wrapped && markdown_table_rule(render, "├", "┼", "┤", widths,
+                                                       header_count, true) < 0) return -1;
             if (markdown_table_grid_row(render, cells, count, widths,
                                         alignment, header_count, false) < 0)
                 return -1;
@@ -1668,11 +1814,7 @@ markdown_table_render(struct snag_render *render)
                 const struct markdown_table_cell *cell = i < count ?
                                                           &cells[i] : &empty;
 
-                if (markdown_text(render, "│ ", strlen("│ ")) < 0 ||
-                    markdown_table_cell(render, &header[i], true) < 0 ||
-                    markdown_text(render, ": ", 2u) < 0 ||
-                    markdown_table_cell(render, cell, false) < 0 ||
-                    markdown_text(render, "\n", 1u) < 0)
+                if (markdown_table_vertical_cell(render, cell, &header[i], terminal_columns) < 0)
                     return -1;
             }
         }
@@ -1685,9 +1827,7 @@ markdown_table_render(struct snag_render *render)
     } else {
         if (!row) {
             for (size_t i = 0u; i < header_count; ++i)
-                if (markdown_text(render, "│ ", strlen("│ ")) < 0 ||
-                    markdown_table_cell(render, &header[i], true) < 0 ||
-                    markdown_text(render, "\n", 1u) < 0)
+                if (markdown_table_vertical_cell(render, &header[i], NULL, terminal_columns) < 0)
                     return -1;
         }
         if (markdown_text(render, ended_lf ? "└─\n" : "└─",

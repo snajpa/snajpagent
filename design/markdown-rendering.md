@@ -90,13 +90,22 @@ cells. Inline Markdown remains active inside cells, and the header is bold when
 color is enabled. Tables are bounded to 16 columns; malformed or larger
 candidates retain readable literal Markdown.
 
-When the computed grid is narrower than the terminal, box rules and padded
-columns make alignment visible even without color. When it would reach or
-exceed the right margin, each body row is rendered vertically as `Header:
-value` fields under a compact table marker. The ordinary shared wrapping path
-then keeps every value width-safe. Missing body cells are empty and surplus
-body cells are ignored, matching the presentation-oriented parser's existing
-leniency.
+Grids that fit naturally retain their widths. Wider grids share the available
+content width across long columns while retaining shorter columns and whole-word
+minima. Cell text wraps at word boundaries; alignment and blank continuation
+cells keep columns intact, and horizontal rules separate wrapped logical rows.
+A vertical `Header: value` layout remains for terminals too narrow for those
+minima, with a left border on every continuation line. Missing body cells remain
+empty and surplus cells are ignored.
+
+The existing inline renderer prepares each cell's visible text and semantic
+style masks. Measurement, wrapping and output share terminal-safe display widths
+and styled output; Markdown is never reparsed after splitting a line. Color is
+applied at emission, so a display-mode change cannot leave stale captured colors.
+Only the current row is retained in addition to the bounded source table; link
+expansion is bounded at twice the public-item limit per buffer. Parsing, measuring
+and row output retain UI checkpoints. Streamed, replayed and resized rendering
+uses current terminal width; provider, durable and redirected bytes remain exact.
 
 The parser is deliberately bounded and presentation-focused, not an HTML or
 CommonMark conformance engine. It recognizes complete, well-formed constructs

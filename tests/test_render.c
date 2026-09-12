@@ -1806,6 +1806,135 @@ test_markdown_streaming(void)
     snag_term_close(&term);
 }
 
+static const char *
+load_timeline_table(void)
+{
+    static char text[8192];
+    FILE *file = fopen("tests/fixtures/markdown-timeline.md", "r");
+    assert(file);
+    size_t len = fread(text, 1u, sizeof(text) - 1u, file);
+    assert(!ferror(file) && feof(file) && fclose(file) == 0);
+    text[len] = '\0';
+    const char *table = strstr(text, "| Time | Evidence |");
+    assert(table);
+    return table;
+}
+
+/* Reassemble wrapped cells and compare every displayed value with the fixture. */
+static void
+check_timeline_grid(const char *output, const char *source, unsigned int columns)
+{
+    char values[2][4096] = {{0}};
+    size_t used[2] = {0};
+    unsigned int rows = 0u;
+    size_t table_width = snag_term_text_width(output, (size_t)(strchr(output, '\n') - output));
+    for (const char *line = output; *line;) {
+        const char *end = strchr(line, '\n');
+        if (!end) end = line + strlen(line);
+        assert(snag_term_text_width(line, (size_t)(end - line)) == table_width && table_width < columns);
+        if (!strncmp(line, "│", strlen("│"))) {
+            const char *part = line + strlen("│");
+            for (size_t i = 0u; i < 2u; ++i) {
+                const char *next = strstr(part, "│");
+                assert(next && next < end);
+                const char *finish = next;
+                while (part < finish && *part == ' ') ++part;
+                while (finish > part && finish[-1] == ' ') --finish;
+                size_t len = (size_t)(finish - part);
+                assert(used[i] + len + 2u < sizeof(values[i]));
+                if (len && used[i]) values[i][used[i]++] = ' ';
+                memcpy(values[i] + used[i], part, len);
+                used[i] += len;
+                values[i][used[i]] = '\0';
+                part = next + strlen("│");
+            }
+            assert(part == end);
+        } else if ((!strncmp(line, "├", strlen("├")) || !strncmp(line, "└", strlen("└"))) && used[0]) {
+            const char *part = source + 1u;
+            for (size_t i = 0u; i < 2u; ++i) {
+                const char *next = strchr(part, '|'), *finish = next;
+                assert(next);
+                while (part < finish && *part == ' ') ++part;
+                while (finish > part && finish[-1] == ' ') --finish;
+                assert((size_t)(finish - part) == used[i]);
+                assert(!memcmp(values[i], part, used[i]));
+                values[i][0] = '\0'; used[i] = 0u;
+                part = next + 1u;
+            }
+            source = strchr(source, '\n') + 1u;
+            if (!rows++) source = strchr(source, '\n') + 1u; /* Delimiter row. */
+        }
+        line = *end ? end + 1u : end;
+    }
+    assert(rows == 11u && !*source);
+}
+
+static void
+test_wrapped_markdown_tables(void)
+{
+    char output[32768], whole[32768];
+    const char *timeline = load_timeline_table();
+    const unsigned int widths[] = {40u, 80u, 120u, 160u};
+    for (size_t i = 0u; i < sizeof(widths) / sizeof(widths[0]); ++i) {
+        struct snag_buf delivered = {.max = SNAG_MAX_PUBLIC_ITEM};
+        assert(capture_markdown(timeline, true, true, SNAG_COLOR_NEVER,
+                                widths[i], output, sizeof(output), &delivered) > 0u);
+        if (strstr(output, "┌─ table"))
+            fprintf(stderr, "long two-column cells incorrectly force vertical table fallback\n");
+        assert(!strstr(output, "┌─ table"));
+        assert(strstr(output, "┬") && strstr(output, "┼") && strstr(output, "┴"));
+        assert(delivered.len == strlen(timeline) && !memcmp(delivered.data, timeline, delivered.len));
+        snag_buf_free(&delivered);
+        check_timeline_grid(output, timeline, widths[i]);
+        assert(capture_markdown(timeline, true, false, SNAG_COLOR_NEVER,
+                                widths[i], whole, sizeof(whole), NULL) > 0u);
+        assert(!strcmp(whole, output));
+    }
+    assert(capture_markdown(timeline, true, true, SNAG_COLOR_NEVER, 28u,
+                            output, sizeof(output), NULL) > 0u);
+    assert(strstr(output, "┌─ table"));
+    for (const char *line = output; *line;) {
+        const char *end = strchr(line, '\n');
+        if (!end) end = line + strlen(line);
+        assert(snag_term_text_width(line, (size_t)(end - line)) < 28u);
+        assert(!strncmp(line, "│ ", strlen("│ ")) || !strncmp(line, "┌", strlen("┌")) ||
+               !strncmp(line, "├", strlen("├")) || !strncmp(line, "└", strlen("└")));
+        line = *end ? end + 1u : end;
+    }
+    static const char aligned[] =
+        "| A | B | C |\n| :---: | :---: | ---: |\n"
+        "| abc def ghi jkl mno pqr stu vwx | M | 7 |\n"
+        "| after | middle | 8 | ignored |\n";
+    assert(capture_markdown(aligned, true, true, SNAG_COLOR_NEVER, 35u,
+                            output, sizeof(output), NULL) > 0u);
+    assert(!strstr(output, "┌─ table") && !strstr(output, "ignored"));
+    assert(strstr(output, "│  abc def ghi jkl  │   M    │ 7 │"));
+    assert(strstr(output, "│  mno pqr stu vwx  │        │   │"));
+    static const char styled[] =
+        "| Key | Result |\n| :--- | ---: |\n"
+        "| **café 界 é** | `one two three four five six seven eight nine ten eleven twelve` |\n"
+        "| tab\tkey | ~~struck~~ and [link](https://example.test) plus escaped \\| and `a|b` |\n";
+    assert(capture_markdown(styled, true, true, SNAG_COLOR_NEVER, 48u,
+                            output, sizeof(output), NULL) > 0u);
+    assert(!strstr(output, "┌─ table"));
+    assert(strstr(output, "café 界 é") && strstr(output, "a|b"));
+    size_t styled_width = snag_term_text_width(output, (size_t)(strchr(output, '\n') - output));
+    for (const char *line = output; *line;) {
+        const char *end = strchr(line, '\n');
+        if (!end) end = line + strlen(line);
+        assert(snag_term_text_width(line, (size_t)(end - line)) == styled_width && styled_width < 48u);
+        line = *end ? end + 1u : end;
+    }
+    assert(capture_markdown(styled, true, true, SNAG_COLOR_ALWAYS, 48u,
+                            output, sizeof(output), NULL) > 0u);
+    assert(count_text(output, "\033[0;33m") >= 2u);
+    assert(strstr(output, "\033[0;1mcafé") && strstr(output, "\033[0;4;34mhttps://example.test"));
+    assert(snag_utf8_valid((const unsigned char *)output, strlen(output), true));
+    assert(capture_markdown("**before\n| Key | Value |\n| --- | --- |\n| item | body |\nafter\n",
+                            true, true, SNAG_COLOR_ALWAYS, 80u, output, sizeof(output), NULL) > 0u);
+    assert(!strstr(output, "\033[0;1m┌") && !strstr(output, "\033[0;1mafter"));
+}
+
 static void
 test_markdown_tables(void)
 {
@@ -1831,7 +1960,7 @@ test_markdown_tables(void)
         "│ Count: 7\n"
         "├─ row\n"
         "│ Name: escaped | pipe\n"
-        "│ State: [docs]\n<https://example.test>\n"
+        "│ State: [docs]\n│ <https://example.test>\n"
         "│ Count: 42\n"
         "└─\n"
         "\n• after table\n\n";
@@ -2588,6 +2717,7 @@ main(void)
     test_banner_word_layout();
     test_help_layout();
     test_update_banner();
+    test_wrapped_markdown_tables();
     test_markdown_tables();
     test_tool_previews();
     test_semantic_history();

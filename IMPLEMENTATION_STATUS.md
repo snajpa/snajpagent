@@ -25,6 +25,8 @@ Implemented:
   with latest-batch host feedback preserved across tiny output budgets.
 - Independent tool-call batches, multiple managed command handles, bounded
   redacted output journals, native read/search and strict patch installation.
+- Width-constrained Markdown table grids with styled cell wrapping and framed
+  narrow fallbacks; streamed/replayed source text stays exact.
 - UTF-8 editing, resize/suspend recovery, Markdown, local verbosity and explicit
   IRC destinations. Config edits reload without restarting the session.
 - Shared active/idle command admission, durable deferred controls, responsive

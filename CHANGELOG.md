@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Wrap long Markdown table cells within aligned columns instead of immediately
+  switching to vertical rows. Preserve styles and record boundaries, and retain
+  the left border on every continuation line in the narrow fallback.
+
 - Inform the model of current local verbosity, view and effective tool visibility
   on each request. Guide useful progress when traces are hidden and reduce
   duplicate narration when details are visible, without changing task authority.

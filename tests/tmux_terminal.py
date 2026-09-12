@@ -3515,6 +3515,104 @@ def run_multi_tool_cases(binary, root, provider, environment):
             raise provider.failure
 
 
+def run_wrapped_table_cases(binary, root, table_text=None):
+    """Real terminal output, resize during table buffering, and replay at new widths."""
+    root.mkdir(parents=True)
+    if table_text is None:
+        fixture = Path(__file__).resolve().parent / "fixtures" / "markdown-timeline.md"
+        table_text = fixture.read_text(encoding="utf-8")
+        table_text = table_text[table_text.index("| Time | Evidence |") :]
+    text = table_text + "\nTABLE_WRAP_DONE\n"
+    provider = FakeResponses()
+    environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret")
+    config, state = root / "config.ini", root / "state"
+    write_irc_config(config, provider.port, "host-model")
+    ready, release = threading.Event(), threading.Event()
+
+    def respond(handler, request, sequence):
+        before, after = [], []
+        cut = table_text.index("\n", table_text.index("\n") + 1) + 1
+        split = False
+        for record in provider.response_body(sequence, text).strip().split("\n\n"):
+            event = json.loads(record.split("data: ", 1)[1])
+            if event["type"] == "response.output_text.delta":
+                before.append(provider.event(event["type"], {**event, "delta": text[:cut]}))
+                after.append(provider.event(event["type"], {**event, "delta": text[cut:]}))
+                split = True
+            else:
+                (after if split else before).append(provider.event(event["type"], event))
+        first, rest = "".join(before).encode(), "".join(after).encode()
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/event-stream")
+        handler.send_header("Content-Length", str(len(first) + len(rest)))
+        handler.end_headers()
+        handler.wfile.write(first); handler.wfile.flush()
+        ready.set()
+        assert release.wait(10.0), "table resize did not release the stream"
+        handler.wfile.write(rest); handler.wfile.flush()
+
+    def check_screen(terminal, width):
+        screen = terminal.capture(join_wrapped=True)
+        begin = screen.rfind("┌")
+        end = screen.find("└", begin)
+        assert begin >= 0 and end > begin, screen
+        end = screen.find("\n", end)
+        table = screen[begin : end if end >= 0 else len(screen)]
+        (root / f"table-{width}.txt").write_text(table, encoding="utf-8")
+        assert all(len(line) < width for line in table.splitlines()), table
+        if width == 28:
+            assert table.startswith("┌─ table")
+            assert all(line.startswith(("┌", "├", "│ ", "└")) for line in table.splitlines())
+        else:
+            assert "┬" in table and "┼" in table and "┴" in table and not table.startswith("┌─ table")
+            # Recover every wrapped field, independently of padding and line breaks.
+            actual, fields, borders = [], [[], []], None
+            for line in table.splitlines():
+                assert len(line) == len(table.splitlines()[0]), line
+                if line.startswith("│"):
+                    positions = tuple(i for i, c in enumerate(line) if c == "│")
+                    if borders is None: borders = positions
+                    assert positions == borders, line
+                    values = line.split("│")[1:-1]
+                    assert len(values) == 2
+                    for i, value in enumerate(values):
+                        if value.strip(): fields[i].append(value.strip())
+                elif line.startswith(("├", "└")) and fields[0]:
+                    actual.append([" ".join(parts) for parts in fields]); fields = [[], []]
+            source = [line.split("|")[1:-1] for line in table_text.splitlines() if line.startswith("|")]
+            expected = [[value.strip() for value in row] for row in source[:1] + source[2:]]
+            assert actual == expected, (actual, expected)
+
+    try:
+        provider.runtime_handler = respond
+        with TmuxTerminal(root / "terminal-80", binary, root, state, config, 120, 40,
+                          environment=environment) as terminal:
+            try:
+                terminal.wait("host-model/medium")
+                terminal.submit("render the table")
+                assert ready.wait(8.0)
+                terminal.resize(80, 40)
+                release.set()
+                terminal.wait("TABLE_WRAP_DONE", timeout=10.0, join_wrapped=True)
+                path, events = wait_for_terminal_event(state, {"turn_completed"}, 5.0)
+                assert event_list(events, "response_completed")[0]["data"]["items"][0]["text"] == text
+                check_screen(terminal, 80)
+                sid = path.parent.name
+                terminal.exit()
+            finally:
+                release.set()
+        for width in (120, 28):
+            with TmuxTerminal(root / f"terminal-{width}", binary, root, state, config, width, 40,
+                              args=("--resume", sid), environment=environment) as terminal:
+                terminal.wait("TABLE_WRAP_DONE", timeout=10.0, join_wrapped=True)
+                check_screen(terminal, width)
+                terminal.exit()
+        assert len(provider.requests) == 1, "history replay contacted the model"
+        print("wrapped table resize/80/120/28/raw history: ok", flush=True)
+    finally:
+        release.set(); provider.close()
+
+
 def run_operator_visibility_cases(binary, root):
     root.mkdir(parents=True)
     provider = FakeResponses()
@@ -7145,6 +7243,7 @@ def run_irc_case(binary, root):
         run_argument_snapshot_cases(binary, root, provider, environment)
         run_reasoning_continuity_cases(binary, root, provider, environment)
         run_multi_tool_cases(binary, root, provider, environment)
+        run_wrapped_table_cases(binary, root / "wrapped-table")
         run_operator_visibility_cases(binary, root / "operator-visibility")
         run_tool_contract_cases(binary, root, provider, environment)
         run_output_cap_cases(binary, root, provider, environment)
