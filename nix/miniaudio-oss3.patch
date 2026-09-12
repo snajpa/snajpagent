@@ -1,0 +1,122 @@
+# SPDX-License-Identifier: MIT-0
+# Preserve OSS3 default-device use when system headers lack OSS4 inventory APIs.
+# Enumeration uses access checks only; capture/playback still require device init.
+--- a/miniaudio.h
++++ b/miniaudio.h
+@@ -38473,12 +38473,13 @@
+         return ma_result_from_errno(errno);
+     }
+ 
+     return MA_SUCCESS;
+ }
+ 
++#if defined(SNDCTL_SYSINFO) && defined(SNDCTL_AUDIOINFO)
+ static ma_result ma_context_enumerate_devices__oss(ma_context* pContext, ma_enum_devices_callback_proc callback, void* pUserData)
+ {
+     int fd;
+     oss_sysinfo si;
+     int result;
+ 
+@@ -38689,12 +38690,52 @@
+         return MA_NO_DEVICE;
+     }
+ 
+     return MA_SUCCESS;
+ }
+ 
++#else
++/* OSS3 has no device inventory ioctl. Report only the accessible default node;
++ * actual format/rate/direction negotiation stays in ma_device_init_fd__oss. */
++static ma_result ma_context_get_device_info__oss(ma_context* pContext, ma_device_type deviceType, const ma_device_id* pDeviceID, ma_device_info* pDeviceInfo)
++{
++    const char* name;
++    int mode;
++    (void)pContext;
++    if (deviceType != ma_device_type_playback && deviceType != ma_device_type_capture) {
++        return MA_INVALID_ARGS;
++    }
++    if (pDeviceID != NULL && strcmp(pDeviceID->oss, MA_OSS_DEFAULT_DEVICE_NAME) != 0) {
++        return MA_NO_DEVICE;
++    }
++    mode = deviceType == ma_device_type_playback ? W_OK : R_OK;
++    if (access(MA_OSS_DEFAULT_DEVICE_NAME, mode) != 0) {
++        return MA_NO_DEVICE;
++    }
++    name = deviceType == ma_device_type_playback ? MA_DEFAULT_PLAYBACK_DEVICE_NAME : MA_DEFAULT_CAPTURE_DEVICE_NAME;
++    MA_ZERO_OBJECT(pDeviceInfo);
++    ma_strncpy_s(pDeviceInfo->id.oss, sizeof(pDeviceInfo->id.oss), MA_OSS_DEFAULT_DEVICE_NAME, (size_t)-1);
++    ma_strncpy_s(pDeviceInfo->name, sizeof(pDeviceInfo->name), name, (size_t)-1);
++    pDeviceInfo->isDefault = MA_TRUE;
++    return MA_SUCCESS;
++}
++
++static ma_result ma_context_enumerate_devices__oss(ma_context* pContext, ma_enum_devices_callback_proc callback, void* pUserData)
++{
++    ma_device_info info;
++    if (ma_context_get_device_info__oss(pContext, ma_device_type_playback, NULL, &info) == MA_SUCCESS &&
++        !callback(pContext, ma_device_type_playback, &info, pUserData)) {
++        return MA_SUCCESS;
++    }
++    if (ma_context_get_device_info__oss(pContext, ma_device_type_capture, NULL, &info) == MA_SUCCESS) {
++        callback(pContext, ma_device_type_capture, &info, pUserData);
++    }
++    return MA_SUCCESS;
++}
++#endif
++
+ static ma_result ma_device_uninit__oss(ma_device* pDevice)
+ {
+     MA_ASSERT(pDevice != NULL);
+ 
+     if (pDevice->type == ma_device_type_capture || pDevice->type == ma_device_type_duplex) {
+         close(pDevice->oss.fdCapture);
+@@ -38996,40 +39037,46 @@
+     return MA_SUCCESS;
+ }
+ 
+ static ma_result ma_context_init__oss(ma_context* pContext, const ma_context_config* pConfig, ma_backend_callbacks* pCallbacks)
+ {
+     int fd;
++#ifdef OSS_GETVERSION
+     int ossVersion;
+     int result;
++#endif
+ 
+     MA_ASSERT(pContext != NULL);
+ 
+     (void)pConfig;
+ 
+     /* Try opening a temporary device first so we can get version information. This is closed at the end. */
+     fd = ma_open_temp_device__oss();
+     if (fd == -1) {
+         ma_log_post(ma_context_get_log(pContext), MA_LOG_LEVEL_ERROR, "[OSS] Failed to open temporary device for retrieving system properties.");   /* Looks liks OSS isn't installed, or there are no available devices. */
+         return MA_NO_BACKEND;
+     }
+ 
++#ifdef OSS_GETVERSION
+     /* Grab the OSS version. */
+     ossVersion = 0;
+     result = ioctl(fd, OSS_GETVERSION, &ossVersion);
+     if (result == -1) {
+         close(fd);
+         ma_log_post(ma_context_get_log(pContext), MA_LOG_LEVEL_ERROR, "[OSS] Failed to retrieve OSS version.");
+         return MA_NO_BACKEND;
+     }
+ 
+-    /* The file handle to temp device is no longer needed. Close ASAP. */
+-    close(fd);
+-
+     pContext->oss.versionMajor = ((ossVersion & 0xFF0000) >> 16);
+     pContext->oss.versionMinor = ((ossVersion & 0x00FF00) >> 8);
++#else
++    /* Old OSS headers have no version query; leave the version unknown. */
++    pContext->oss.versionMajor = 0;
++    pContext->oss.versionMinor = 0;
++#endif
++    close(fd);
+ 
+     pCallbacks->onContextInit             = ma_context_init__oss;
+     pCallbacks->onContextUninit           = ma_context_uninit__oss;
+     pCallbacks->onContextEnumerateDevices = ma_context_enumerate_devices__oss;
+     pCallbacks->onContextGetDeviceInfo    = ma_context_get_device_info__oss;
+     pCallbacks->onDeviceInit              = ma_device_init__oss;

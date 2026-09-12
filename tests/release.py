@@ -662,6 +662,7 @@ for target, expected in (
     ("Darwin", ["-framework", "CoreFoundation", "-framework", "CoreAudio",
                 "-framework", "AudioToolbox"]),
     ("Linux", ["-ldl", "-lm"]),
+    ("FreeBSD", ["-lm"]),
 ):
     actual = subprocess.check_output(["make", "-s", "--no-print-directory", "-f", "-",
                                       "TARGET_OS=" + target],
@@ -1271,3 +1272,200 @@ assert '"-DFONT_CONFIGURATION=fontconfig"' in mac_pdf
 assert '"PDF_LIBS=$(pkg-config --static --libs poppler libpng) -lc++"' in macos
 assert "'CXX=${llvm.clang-unwrapped}/bin/clang++ --target=${target} -isysroot ${sdk}'" in macos
 print("PASS: macOS PDF targets generated headers, NASM tools and static font/C++ dependencies")
+
+freebsd = (root / "nix/freebsd.nix").read_text()
+assert '-Dstatic_assert=_Static_assert' in freebsd
+assert 'lib.optional legacy ./ffmpeg-legacy-libm.patch' in freebsd
+math_patch = (root / "nix/ffmpeg-legacy-libm.patch").read_text()
+math_added = "\n".join(line[1:] for line in math_patch.splitlines()
+                        if line.startswith("+") and not line.startswith("+++"))
+with tempfile.TemporaryDirectory(prefix="legacy-math-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    source = tmp / "math.c"
+    replacements = "\n".join(re.search(
+        r"static av_always_inline (?:double|float) " + name + r"\(.*?\n}", math_added, re.S).group(0)
+        for name in ("fmin", "fminf", "fmax", "fmaxf"))
+    source.write_text(r"""
+#include <assert.h>
+#include <math.h>
+#define av_always_inline inline
+#define fmin replacement_fmin
+#define fminf replacement_fminf
+#define fmax replacement_fmax
+#define fmaxf replacement_fmaxf
+""" + replacements + r"""
+int main(void) {
+    const double values[] = {-INFINITY, -123.5, -1.0, -0.0, 0.0, 1.0, 123.5, INFINITY, NAN};
+    for (unsigned i = 0; i < sizeof(values)/sizeof(values[0]); ++i) {
+        for (unsigned j = 0; j < sizeof(values)/sizeof(values[0]); ++j) {
+            double x = values[i], y = values[j];
+            double low = replacement_fmin(x, y), high = replacement_fmax(x, y);
+            float lowf = replacement_fminf((float)x, (float)y);
+            float highf = replacement_fmaxf((float)x, (float)y);
+            if (isnan(x) && isnan(y)) {
+                assert(isnan(low) && isnan(high) && isnan(lowf) && isnan(highf));
+            } else {
+                double a = isnan(x) ? y : isnan(y) ? x : x < y ? x : y;
+                double b = isnan(x) ? y : isnan(y) ? x : x > y ? x : y;
+                assert(low == a && high == b && lowf == (float)a && highf == (float)b);
+                if (x == 0 && y == 0) {
+                    assert(!!signbit(low) == (!!signbit(x) || !!signbit(y)));
+                    assert(!!signbit(high) == (!!signbit(x) && !!signbit(y)));
+                    assert(!!signbit(lowf) == !!signbit(low));
+                    assert(!!signbit(highf) == !!signbit(high));
+                }
+            }
+        }
+    }
+    return 0;
+}
+""")
+    subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source), "-lm",
+                    "-o", str(tmp / "math")], check=True)
+    subprocess.run([str(tmp / "math")], check=True)
+    source.write_text("static_assert(sizeof(int) > 0, \"integer size\");\n")
+    failed = subprocess.run(["cc", "-std=c11", "-Werror", "-fsyntax-only", str(source)], capture_output=True)
+    assert failed.returncode != 0
+    subprocess.run(["cc", "-std=c11", "-Werror", "-Dstatic_assert=_Static_assert",
+                    "-fsyntax-only", str(source)], check=True)
+    source.write_text("static_assert(sizeof(int) == 0, \"must fail\");\n")
+    failed = subprocess.run(["cc", "-std=c11", "-Werror", "-Dstatic_assert=_Static_assert",
+                             "-fsyntax-only", str(source)], capture_output=True)
+    assert failed.returncode != 0, "the alias must preserve failed compile-time assertions"
+print("PASS: legacy FFmpeg math preserves NaNs, infinities, signed zero and compile-time assertions")
+
+# Clang can introduce unavailable exp2 symbols from otherwise portable pow calls.
+assert 'lib.optionalString legacy " -fno-builtin-pow -fno-builtin-powf"' in freebsd
+if shutil.which("clang"):
+    source = ("extern double pow(double, double); extern float powf(float, float);\n"
+              "double power(double x) { return pow(2, x); }\n"
+              "float powerf(float x) { return powf(2, x); }\n"
+              "float table[64];\n"
+              "void generate(void) { for (int i = 0; i < 64; ++i) table[i] = pow(2.0, (i - 15) / 3.0); }\n")
+    # Include FFmpeg's flags: vectorization can introduce exp2 even with
+    # -fno-builtin-exp2. Disable the source builtins instead.
+    for flags in (["-Os"], ["-O3", "-fno-math-errno", "-fno-signed-zeros"]):
+        command = ["clang", "-x", "c", "-", "-S", "-emit-llvm", "-o", "-"] + flags
+        before = subprocess.run(command, input=source, text=True, capture_output=True, check=True).stdout
+        after = subprocess.run(command + ["-fno-builtin-pow", "-fno-builtin-powf"],
+                               input=source, text=True, capture_output=True, check=True).stdout
+        for symbol in (r"(exp2\(|llvm\.exp2\.f64\()", r"(exp2f\(|llvm\.exp2\.f32\()"):
+            assert re.search(r"call[^\n]*@" + symbol, before), "baseline must reproduce libm rewriting"
+        assert not re.search(r"@(llvm\.)?exp2f?[.(]", after), "legacy profile must not introduce exp2"
+        for name in ("pow", "powf"):
+            assert re.search(r"call[^\n]*@" + name + r"\(", after), "preserve available libm function"
+    print("PASS: legacy FFmpeg flags prevent scalar/vectorized exp2/exp2f imports")
+else:
+    print("SKIP: Clang unavailable for legacy FFmpeg libm transformation regression")
+
+# Exercise the actual snapshot comparison using each platform's stat layout.
+media_source = (root / "src/media.c").read_text()
+unchanged = re.search(r"static bool\nunchanged\(.*?\n}", media_source, re.S).group(0)
+with tempfile.TemporaryDirectory(prefix="media-stat-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    for platform in ("POSIX", "__APPLE__", "__FreeBSD__", "_WIN32"):
+        source = tmp / "stat.c"
+        named = platform in ("__APPLE__", "__FreeBSD__")
+        mt, ct = ("st_mtimespec", "st_ctimespec") if named else ("st_mtim", "st_ctim")
+        source.write_text("#include <assert.h>\n#include <stdbool.h>\n" +
+            ("" if platform == "POSIX" else "#define " + platform + " 1\n") +
+            "#define S_ISREG(mode) ((mode) == 1)\n"
+            "typedef struct { unsigned st_dev, st_ino, st_size, st_mtime, st_ctime, st_mode;\n" +
+            "struct { long tv_nsec; } " + mt + ", " + ct + "; } snag_file_info;\n" +
+            unchanged + "\nint main(void) {\n"
+            "snag_file_info a = {.st_mode=1}, b = a; assert(unchanged(&a,&b));\n" +
+            "".join("b=a; ++b." + field + "; assert(!unchanged(&a,&b));\n"
+                    for field in ("st_dev", "st_ino", "st_size", "st_mtime", "st_mode")) +
+            ("" if platform == "_WIN32" else
+             "".join("b=a; ++b." + field + "; assert(!unchanged(&a,&b));\n"
+                     for field in ("st_ctime", mt + ".tv_nsec", ct + ".tv_nsec"))) +
+            "return 0;}\n")
+        subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
+                        "-o", str(tmp / "stat")], check=True)
+        subprocess.run([str(tmp / "stat")], check=True)
+print("PASS: media snapshot comparison preserves identity, size and platform nanoseconds")
+
+# Old OSS headers lack inventory/version queries. Only report accessible default
+# paths; all device opening/format negotiation stays in miniaudio's existing owner.
+oss_patch = (root / "nix/miniaudio-oss3.patch").read_text()
+oss_added = "\n".join(line[1:] for line in oss_patch.splitlines()
+                       if line.startswith("+") and not line.startswith("+++"))
+oss_info = re.search(r"static ma_result ma_context_get_device_info__oss\(.*?\n}", oss_added, re.S).group(0)
+oss_enum = re.search(r"static ma_result ma_context_enumerate_devices__oss\(.*?\n}", oss_added, re.S).group(0)
+with tempfile.TemporaryDirectory(prefix="oss3-default-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    source = tmp / "oss.c"
+    source.write_text(r"""
+#include <assert.h>
+#include <stddef.h>
+#include <string.h>
+typedef int ma_result;
+typedef int ma_device_type;
+typedef struct { int unused; } ma_context;
+typedef struct { char oss[64]; } ma_device_id;
+typedef struct { ma_device_id id; char name[64]; unsigned isDefault, nativeDataFormatCount; } ma_device_info;
+typedef int (*ma_enum_devices_callback_proc)(ma_context*, ma_device_type, const ma_device_info*, void*);
+#define MA_SUCCESS 0
+#define MA_INVALID_ARGS -1
+#define MA_NO_DEVICE -2
+#define MA_TRUE 1
+#define ma_device_type_playback 1
+#define ma_device_type_capture 2
+#define MA_OSS_DEFAULT_DEVICE_NAME "/dev/dsp"
+#define MA_DEFAULT_PLAYBACK_DEVICE_NAME "Default playback"
+#define MA_DEFAULT_CAPTURE_DEVICE_NAME "Default capture"
+#define MA_ZERO_OBJECT(p) memset(p, 0, sizeof(*(p)))
+#define R_OK 4
+#define W_OK 2
+static int permissions, access_calls, callbacks, stop;
+static int access(const char *path, int mode) {
+    assert(!strcmp(path, "/dev/dsp") && (mode == R_OK || mode == W_OK));
+    ++access_calls; return (permissions & mode) ? 0 : -1;
+}
+static void ma_strncpy_s(char *out, size_t size, const char *text, size_t count) {
+    assert(count == (size_t)-1 && strlen(text) < size); strcpy(out, text);
+}
+static int callback(ma_context *context, ma_device_type type, const ma_device_info *info, void *user) {
+    assert(context && user == &permissions);
+    assert(!strcmp(info->id.oss, "/dev/dsp") && info->isDefault && !info->nativeDataFormatCount);
+    assert(!strcmp(info->name, type == ma_device_type_playback ? "Default playback" : "Default capture"));
+    ++callbacks; return !stop;
+}
+""" + oss_info + "\n" + oss_enum + r"""
+int main(void) {
+    ma_context context = {0}; ma_device_info info; ma_device_id id;
+    for (unsigned i = 0; i < 4; ++i) {
+        permissions = ((i & 1) ? R_OK : 0) | ((i & 2) ? W_OK : 0);
+        callbacks = access_calls = stop = 0;
+        assert(ma_context_enumerate_devices__oss(&context, callback, &permissions) == MA_SUCCESS);
+        assert(callbacks == !!(permissions & R_OK) + !!(permissions & W_OK) && access_calls == 2);
+    }
+    permissions = R_OK | W_OK; callbacks = access_calls = 0; stop = 1;
+    assert(ma_context_enumerate_devices__oss(&context, callback, &permissions) == MA_SUCCESS);
+    assert(callbacks == 1 && access_calls == 1);
+    strcpy(id.oss, "/dev/dsp");
+    memset(&info, 0xaa, sizeof(info));
+    assert(ma_context_get_device_info__oss(&context, ma_device_type_capture, &id, &info) == MA_SUCCESS);
+    assert(!info.nativeDataFormatCount && info.isDefault);
+    strcpy(id.oss, "/dev/other"); access_calls = 0;
+    assert(ma_context_get_device_info__oss(&context, ma_device_type_capture, &id, &info) == MA_NO_DEVICE);
+    assert(!access_calls);
+    assert(ma_context_get_device_info__oss(&context, 3, NULL, &info) == MA_INVALID_ARGS);
+    assert(!access_calls);
+    permissions = 0;
+    assert(ma_context_get_device_info__oss(&context, ma_device_type_capture, NULL, &info) == MA_NO_DEVICE);
+    assert(access_calls == 1);
+    return 0;
+}
+""")
+    subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
+                    "-o", str(tmp / "oss")], check=True)
+    subprocess.run([str(tmp / "oss")], check=True)
+assert '#if defined(SNDCTL_SYSINFO) && defined(SNDCTL_AUDIOINFO)' in oss_patch
+assert '#ifdef OSS_GETVERSION' in oss_patch
+assert 'pContext->oss.versionMajor = 0;' in oss_added and 'pContext->oss.versionMinor = 0;' in oss_added
+for name in ("fmin", "fminf", "fmax", "fmaxf"):
+    assert '+' + name + '_args=2' in math_patch
+assert '+#include "libm.h"' in math_patch
+assert '+#if !defined(__FreeBSD__) || __FreeBSD__ >= 6' in math_patch
+print("PASS: OSS3 defaults respect access, stop callbacks and unknown native format/version")

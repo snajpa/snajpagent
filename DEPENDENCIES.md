@@ -414,6 +414,24 @@ The executable is non-PIE at this old ABI baseline. Third-party notices include
 the FreeBSD base components and their GCC runtime licensing alongside the
 application dependency notices.
 
+The multimedia source recipe adds static FFmpeg file-codec libraries and
+miniaudio's OSS backend, using the same native shared threading/libc boundary.
+`static_assert` maps to the compiler's `_Static_assert` for older system headers;
+failed compile-time assertions remain errors. The legacy FFmpeg profile supplies
+missing C99 min/max functions in its existing libm compatibility header, preserving
+NaN, infinity and signed-zero behavior. Its memory allocator keeps old FreeBSD
+math declarations visible. Legacy compiler flags prevent `pow(2, x)` and
+`powf(2, x)` from becoming calls to unavailable `exp2`/`exp2f` symbols.
+Capture/playback links the libc dynamic-loader API
+without a separate libdl. Retained-file checks use FreeBSD's nanosecond stat fields.
+
+For OSS3 headers without inventory/version ioctls, the dependency reports only
+the accessible default `/dev/dsp` node; native formats and version remain unknown
+until supported queries or device initialization supply them. Format, channels
+and sample rate are still negotiated by the existing OSS backend when the user
+starts capture or playback. OSS4 inventory behavior stays intact. These dependency
+adaptations do not qualify physical audio or complete FreeBSD PDF/Office closure.
+
 Actual FreeBSD 8.4 and 14.4 amd64 qualification covers base and IRC tests, internal
 read-only inspection and denied writes, parallel commands, PTY output/status,
 interactive resume and TLS distrust/trust/hostname checks with local fixtures.

@@ -179,6 +179,48 @@ let
   zlib = cmakeLibrary sourcePkgs.zlib [
     "-DZLIB_BUILD_SHARED=OFF" "-DZLIB_BUILD_STATIC=ON" "-DZLIB_BUILD_TESTING=OFF"
   ] [];
+  miniaudio = pkgs.runCommand "miniaudio-freebsd-oss" { nativeBuildInputs = [ pkgs.patch ]; } ''
+    mkdir -p "$out"
+    cp ${pkgs.miniaudio.src}/miniaudio.h "$out/"
+    chmod u+w "$out/miniaudio.h"
+    patch -d "$out" -p1 < ${./miniaudio-oss3.patch}
+  '';
+  av = pkgs.stdenvNoCC.mkDerivation {
+    pname = "ffmpeg-headless-freebsd-${osVersion}";
+    inherit (sourcePkgs.ffmpeg_8) version src;
+    patches = sourcePkgs.ffmpeg_8.patches ++ lib.optional legacy ./ffmpeg-legacy-libm.patch;
+    nativeBuildInputs = [ pkgs.pkg-config pkgs.perl pkgs.nasm llvm.llvm ];
+    buildInputs = [ zlib ];
+    strictDeps = true;
+    enableParallelBuilding = true;
+    dontStrip = true;
+    configurePlatforms = [];
+    configureFlags = [
+      "--enable-cross-compile" "--target-os=freebsd" "--arch=x86_64"
+      "--enable-static" "--disable-shared" "--enable-pic"
+      "--disable-autodetect" "--disable-network" "--disable-programs" "--disable-doc"
+      "--disable-avdevice" "--disable-avfilter"
+      "--enable-avcodec" "--enable-avformat" "--enable-avutil"
+      "--enable-swresample" "--enable-swscale" "--enable-zlib"
+      "--enable-pthreads" "--enable-safe-bitstream-reader" "--enable-pixelutils"
+      "--disable-gpl" "--disable-version3" "--pkg-config-flags=--static"
+    ];
+    preConfigure = ''
+      export PKG_CONFIG_PATH=
+      export PKG_CONFIG_LIBDIR=${zlib}/lib/pkgconfig
+      configureFlagsArray+=(
+        "--host-cc=${pkgs.stdenv.cc}/bin/cc"
+        "--cc=${compiler} --target=${target} --sysroot=${sdk}"
+        "--cxx=${cxxCompiler} --target=${target} --sysroot=${sdk}"
+        "--ar=${tools}/llvm-ar" "--ranlib=${tools}/llvm-ranlib"
+        "--nm=${tools}/llvm-nm" "--strip=${tools}/llvm-strip"
+        # Pre-C11 system assert.h lacks the macro; Clang supports the keyword.
+        # Clang otherwise rewrites pow(2, x) to unavailable legacy libm symbols.
+        "--extra-cflags=${cflags} -Dstatic_assert=_Static_assert${lib.optionalString legacy " -fno-builtin-pow -fno-builtin-powf"}"
+        "--extra-ldflags=${ldflags}"
+      )
+    '';
+  };
   brotli = (cmakeLibrary sourcePkgs.brotli [ "-DBROTLI_DISABLE_TESTS=ON" ] []).overrideAttrs (_: {
     postPatch = lib.optionalString legacy ''
       # This libm has log but not log2; brotli's fallback still requires -lm.
@@ -248,7 +290,7 @@ let
     '';
   });
 in {
-  inherit sdk target compiler tools cflags ldflags jansson tls curl regex unistring;
+  inherit sdk target compiler tools cflags ldflags jansson tls curl av miniaudio regex unistring;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }:
     pkgs.stdenvNoCC.mkDerivation {
@@ -257,7 +299,7 @@ in {
       src = source;
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
-      buildInputs = [ jansson curl ] ++ networkLibraries ++ lib.optional early regex;
+      buildInputs = [ jansson curl av ] ++ networkLibraries ++ lib.optional early regex;
       enableParallelBuilding = true;
       dontStrip = true;
       preBuild = ''
@@ -281,6 +323,9 @@ in {
           'LDFLAGS=--ld-path=${llvm.lld}/bin/ld.lld ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections,--as-needed,-Bstatic${lib.optionalString early " -Wl,--wrap=pthread_join"}'
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson)${lib.optionalString early " -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"}"
+          "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"
+          "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale | sed -E 's/-l?(-l?)?pthread//g')"
+          'MINIAUDIO_CFLAGS=-isystem ${miniaudio}'
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
           "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil${lib.optionalString early " ${compilerBuiltins}/lib/libclang_rt.builtins.a"} -Wl,-Bdynamic -l${threads}"
         )

@@ -3403,6 +3403,9 @@ Build a custom executable without capture, playback or audio-device enumeration.
 The default is WITH_AUDIO_DEVICE=1. MINIAUDIO_CFLAGS supplies the path to
 miniaudio.h; AUDIO_DEVICE_LIBS overrides platform backend link flags.
 The device adapter uses miniaudio's low-level API, without its engine or decoders.
+FreeBSD uses OSS. With older OSS headers, device enumeration reports only the
+accessible default /dev/dsp node; native format/version metadata is unavailable.
+Capture/playback initialization still negotiates format, channel count and rate.
 Portable Linux builds link PulseAudio and ALSA clients. A PulseAudio-compatible
 server must already be running; the agent does not start one.
 ALSA uses the host's /usr/share/alsa configuration; ALSA_CONFIG_DIR can select

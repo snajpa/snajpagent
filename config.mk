@@ -51,7 +51,7 @@ override LDLIBS += $(PDF_LIBS)
 WITH_AUDIO_DEVICE ?= 1
 ifeq ($(WITH_AUDIO_DEVICE),1)
 MINIAUDIO_CFLAGS ?= $(shell pkg-config --cflags miniaudio)
-AUDIO_DEVICE_LIBS ?= $(if $(filter Windows Windows_NT,$(TARGET_OS)),-lole32 -lwinmm,$(if $(filter Darwin,$(TARGET_OS)),-framework CoreFoundation -framework CoreAudio -framework AudioToolbox,-ldl -lm))
+AUDIO_DEVICE_LIBS ?= $(if $(filter Windows Windows_NT,$(TARGET_OS)),-lole32 -lwinmm,$(if $(filter Darwin,$(TARGET_OS)),-framework CoreFoundation -framework CoreAudio -framework AudioToolbox,$(if $(filter FreeBSD,$(TARGET_OS)),-lm,-ldl -lm)))
 AUDIO_DEVICE_OBJ = src/miniaudio.o
 else ifeq ($(WITH_AUDIO_DEVICE),0)
 MINIAUDIO_CFLAGS =

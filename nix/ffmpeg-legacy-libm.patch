@@ -1,0 +1,122 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Keep missing C99 min/max replacements in FFmpeg's existing libm owner.
+# Preserve NaNs, infinities, signed zero and ordinary arithmetic; no codec drops.
+--- a/configure
++++ b/configure
+@@ -2346,12 +2346,16 @@
+     copysign
+     cosf
+     erf
+     exp2
+     exp2f
+     expf
++    fmax
++    fmaxf
++    fmin
++    fminf
+     hypot
+     isfinite
+     isinf
+     isnan
+     ldexpf
+     llrint
+@@ -6991,12 +6995,16 @@
+ check_lib libdl dlfcn.h "dlopen dlsym" || check_lib libdl dlfcn.h "dlopen dlsym" -ldl
+ 
+ check_lib libm math.h sin -lm
+ 
+ atan2f_args=2
+ copysign_args=2
++fmax_args=2
++fmaxf_args=2
++fmin_args=2
++fminf_args=2
+ hypot_args=2
+ ldexpf_args=2
+ powf_args=2
+ 
+ for func in $MATH_FUNCS; do
+     eval check_mathfunc $func \${${func}_args:-1} $libm_extralibs
+--- a/libavutil/libm.h
++++ b/libavutil/libm.h
+@@ -467,7 +467,45 @@
+ static av_always_inline av_const float truncf(float x)
+ {
+     return (x > 0) ? floor(x) : ceil(x);
+ }
+ #endif /* HAVE_TRUNCF */
+ 
++/* C99 min/max functions are missing from some older system libm versions. */
++#if !HAVE_FMIN
++static av_always_inline double fmin(double x, double y)
++{
++    if (isnan(x)) return y;
++    if (isnan(y)) return x;
++    if (x == y) return signbit(x) ? x : y;
++    return x < y ? x : y;
++}
++#endif
++#if !HAVE_FMINF
++static av_always_inline float fminf(float x, float y)
++{
++    if (isnan(x)) return y;
++    if (isnan(y)) return x;
++    if (x == y) return signbit(x) ? x : y;
++    return x < y ? x : y;
++}
++#endif
++#if !HAVE_FMAX
++static av_always_inline double fmax(double x, double y)
++{
++    if (isnan(x)) return y;
++    if (isnan(y)) return x;
++    if (x == y) return signbit(x) ? y : x;
++    return x > y ? x : y;
++}
++#endif
++#if !HAVE_FMAXF
++static av_always_inline float fmaxf(float x, float y)
++{
++    if (isnan(x)) return y;
++    if (isnan(y)) return x;
++    if (x == y) return signbit(x) ? y : x;
++    return x > y ? x : y;
++}
++#endif
++
+ #endif /* AVUTIL_LIBM_H */
+--- a/libavutil/csp.c
++++ b/libavutil/csp.c
+@@ -29,12 +29,13 @@
+ 
+ #include <stdlib.h>
+ #include <math.h>
+ 
+ #include "attributes.h"
+ #include "csp.h"
++#include "libm.h"
+ #include "pixfmt.h"
+ #include "rational.h"
+ 
+ #define AVR(d) { (int)(d * 100000 + 0.5), 100000 }
+ 
+ /*
+--- a/libavutil/mem.c
++++ b/libavutil/mem.c
+@@ -21,13 +21,16 @@
+ 
+ /**
+  * @file
+  * default memory allocator for libavutil
+  */
+ 
++/* Old FreeBSD math.h hides available BSD functions under _XOPEN_SOURCE. */
++#if !defined(__FreeBSD__) || __FreeBSD__ >= 6
+ #define _XOPEN_SOURCE 600
++#endif
+ 
+ #include "config.h"
+ 
+ #include <limits.h>
+ #include <stdint.h>
+ #include <stdlib.h>

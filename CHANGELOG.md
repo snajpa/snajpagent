@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Add FreeBSD static media dependencies and OSS3 default-device compatibility.
+  Preserve native threading, libc loader linkage, compile-time assertions and
+  nanosecond retained-file checks; PDF/Office and audio qualification remain open.
+
 - Supply macOS static ZIP/XML dependencies for Office package checks; linked
   LibreOffice runtime packaging remains separate and unfinished.
 
