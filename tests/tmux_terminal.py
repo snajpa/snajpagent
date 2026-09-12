@@ -1159,9 +1159,13 @@ def run_render_case(binary, root):
         final = terminal.wait("control:\\x1B[31m", timeout=5.0)
         if time.monotonic() - repeat_pause_started < 1.2:
             raise AssertionError("repeated typing pause ended too early")
-        if final.count(exact_margin) != 1:
+        # The turn completes here, so the composer may already carry the idle
+        # marker; count the draft text itself, which must appear exactly once.
+        draft_snapshot = "draft plus again with long resize text"
+        if final.count(draft_snapshot) != 1:
             raise AssertionError(f"draft snapshot scrolled into history:\n{final}")
-        assert_wrapped_order(final, ["supercalifragilisticexpialidocious", exact_margin])
+        assert_wrapped_order(final, ["supercalifragilisticexpialidocious",
+                                     draft_snapshot])
         _, events = wait_for_terminal_event(dotdir, {"turn_completed"}, 5.0)
         joined = terminal.capture(join_wrapped=True)
         assert_wrapped_order(
