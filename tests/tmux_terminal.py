@@ -798,8 +798,13 @@ def run_status_case(binary, root):
                          re.escape(DEFAULT_IDLE_PROMPT), idle), idle
         active = terminal.submit_wait("terminal_status", DEFAULT_ACTIVE_PROMPT, timeout=3.0,
                                join_wrapped=True)
-        assert re.search(r"(?m)^◴  [0-9]{2}:[0-9]{2}:[0-9]{2}" +
-                         re.escape(DEFAULT_ACTIVE_PROMPT), active), active
+        # The configured provider spinner is " ◴"; it blinks, so an immediate
+        # capture catches the blank frame about half the time.
+        active = terminal.wait_until(
+            lambda screen: re.search(
+                r"(?m)^◴  [0-9]{2}:[0-9]{2}:[0-9]{2}" + re.escape(DEFAULT_ACTIVE_PROMPT),
+                screen) is not None,
+            "active prompt with the provider spinner glyph", 3.0, join_wrapped=True)
         terminal.wait("status-first-fragment", timeout=3.0)
         time.sleep(0.85)
         middle = terminal.capture(join_wrapped=True)
@@ -2271,21 +2276,29 @@ def run_goal_interrupt_prompt_case(binary, root, chat=False, burst=False, width=
             terminal.submit("/chat")
             terminal.wait("chat is offline")
         terminal.send_key("C-c")
-        if burst:
-            terminal.run("send-keys", "-t", terminal.target, *(["Enter"] * 8))
         wait_event_count(terminal.dotdir, "goal_paused", 1)
         marker = "C>" if chat else "I>"
         if not chat:
             wait_normalized(terminal, "Goal paused at the current turn boundary", timeout=5)
+        # Burst only once the pause is effective: the rows the assertions below
+        # inspect are exactly the scrollback these Enters produce, so sending
+        # them before the pause lands leaves goal glyphs in that region.
+        if burst:
+            terminal.run("send-keys", "-t", terminal.target, *(["Enter"] * 8))
         terminal.wait(marker)
-        time.sleep(0.1)
-        screen = terminal.capture()
+
+        def interrupted_prompt_only(text):
+            tail = text.split("snajpagent: turn interrupted")[-1]
+            if not chat:
+                tail = tail.split("current turn boundary")[-1]
+            if "⚑" in tail or "⚐" in tail:
+                return False
+            rows = [row.strip() for row in tail.splitlines() if row.strip()]
+            return bool(rows) and all(row == marker for row in rows)
+
+        screen = terminal.wait_until(interrupted_prompt_only,
+                                     "interrupted prompts only", 5.0)
         (case / "interrupted.txt").write_text(screen)
-        tail = screen.split("snajpagent: turn interrupted")[-1]
-        if not chat:
-            tail = tail.split("current turn boundary")[-1]
-        assert "⚑" not in tail and "⚐" not in tail, screen
-        assert all(row.strip() == marker for row in tail.splitlines() if row.strip()), screen
         prompt_count = screen.count(marker)
         before = read_events(terminal.dotdir)[1]
         terminal.run("send-keys", "-t", terminal.target, "Enter", "Enter", "Enter")
