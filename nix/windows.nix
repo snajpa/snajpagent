@@ -135,6 +135,7 @@ let
     "-DZLIB_LIBRARY=${zlib}/lib/libzs.a"
   ] [ zlib png freetype jpeg openjpeg pkgs.boost ]).overrideAttrs (old: {
     cmakeBuildType = "Release";
+    patches = old.patches ++ pkgs.lib.optional legacy ./poppler-ascii-metadata.patch;
     buildInputs = old.buildInputs ++ pkgs.lib.optionals (pty != null) [ pty.cxx pty.unwind ];
     preConfigure = old.preConfigure + ''
       cmakeFlagsArray+=(

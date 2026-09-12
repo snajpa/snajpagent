@@ -975,3 +975,102 @@ int main() {
 assert 'patches = (old.patches or []) ++ [ ./libcxx-legacy-stat.patch ];' in (root / "nix/windows-pty.nix").read_text()
 assert "GetFileInformationByHandleEx" not in stat_function
 print("PASS: legacy libc++ handle stat preserves metadata and reparse errors")
+
+# Compare the ASCII replacements with the dependency's original regex/stream
+# behavior, including malformed metadata, binary strings and diagnostic count.
+ascii_patch = (root / "nix/poppler-ascii-metadata.patch").read_text()
+pdf_patch, base64_patch = ascii_patch.split("--- a/goo/gbase64.cc", 1)
+def patch_side(text, added):
+    return "\n".join(line[1:] for line in text.splitlines()
+                     if line.startswith((" ", "+" if added else "-"))
+                     and not line.startswith(("+++", "---")))
+
+with tempfile.TemporaryDirectory(prefix="poppler-ascii-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    source = tmp / "ascii.cpp"
+    code = r"""
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <iomanip>
+#include <regex>
+#include <sstream>
+#include <string>
+#include <string_view>
+enum PDFSubtype { subtypePDFA, subtypePDFX };
+enum PDFSubtypePart { subtypePartNull, subtypePart1, subtypePart2, subtypePart3,
+    subtypePart4, subtypePart5, subtypePart6, subtypePart7, subtypePart8, subtypePartNone };
+enum PDFSubtypeConformance { subtypeConfNull, subtypeConfA, subtypeConfB,
+    subtypeConfG, subtypeConfN, subtypeConfP, subtypeConfPG, subtypeConfU, subtypeConfNone };
+struct GooString : std::string {
+    using std::string::string;
+    static std::string toLowerCase(std::string s) {
+        for (char &c : s) if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+        return s;
+    }
+};
+struct OutStream {
+    std::string text;
+    void put(char c) { text += c; }
+    void printf(const char *fmt, const char *s = "") { text += std::string(fmt) == "%s" ? s : fmt; }
+};
+"""
+    for added, name in ((False, "original"), (True, "revised")):
+        pdf = patch_side(pdf_patch, added)
+        start = pdf.index("static bool pdfAsciiAlpha(" if added else "static PDFSubtypePart pdfPartFromString(")
+        end = pdf.index("    // Write data", start)
+        metadata = pdf[start:end].replace("const std::regex regex(", "static const std::regex regex(")
+        # Cache only regex construction in the oracle; matching is unchanged.
+        hexcode = pdf[pdf.index("        const char *c = s->c_str();", end):]
+        hexcode = hexcode[:hexcode.index("    } else {")]
+        base64 = patch_side(base64_patch, added)
+        base64 = base64[base64.index("static void b64encodeTriplet("):]
+        code += "\nnamespace " + name + " {\nstatic unsigned warnings;\n"
+        code += "enum { errSyntaxWarning };\nstatic void error(int, int, const char *, const char *) { ++warnings; }\n"
+        code += metadata + "\n" + base64
+        code += "\nstatic std::string hex(const GooString *s) { OutStream out; auto *outStr = &out;\n"
+        code += hexcode + "\nreturn out.text; }\n}\n"
+    code += r"""
+static void check(const std::string &s) {
+    for (PDFSubtype type : {subtypePDFA, subtypePDFX})
+        assert(original::pdfPartFromString(type, s) == revised::pdfPartFromString(type, s));
+    original::warnings = revised::warnings = 0;
+    assert(original::pdfConformanceFromString(s) == revised::pdfConformanceFromString(s));
+    assert(original::warnings == revised::warnings);
+}
+int main() {
+    for (const char *family : {"A", "X", "VT", "E", "UA", "W", "a"})
+        for (char part = '0'; part <= '9'; ++part)
+            for (const char *conf : {"", "A", "b", "G", "n", "p", "U", "pG", "PGx", "abcd", "zz", "1", "\xff"})
+                for (const char *date : {"", ":", "2001", ":2003", "2002", "123", "12345", "::2003", "AB2003"}) {
+                    std::string s = std::string("prefix PDF/") + family + "-" + part + conf + date;
+                    check(s); check(s + " PDF/A-2u");
+                }
+    for (const char *s : {"", "PDF/", "PDF/A-", "PDF/A-PDF/X-1a:2003", "PDF/A-1 PDF/X-3pG", "PDF/A-1zzz PDF/A-2u"})
+        check(s);
+    uint32_t seed = 12345;
+    for (unsigned i = 0; i < 2000; ++i) {
+        std::string s;
+        for (unsigned j = 0; j < i % 80; ++j) {
+            seed = seed * 1664525u + 1013904223u; s += char(seed >> 24);
+        }
+        if (i % 3 == 0) s.insert(s.size() / 2, "PDF/X-3PG:2003");
+        check(s);
+    }
+    GooString bytes;
+    for (unsigned n = 0; n <= 512; ++n) {
+        assert(original::gbase64Encode(bytes.data(), bytes.size()) == revised::gbase64Encode(bytes.data(), bytes.size()));
+        assert(original::hex(&bytes) == revised::hex(&bytes));
+        bytes += char(n);
+    }
+    assert(revised::gbase64Encode("f", 1) == "Zg==");
+    assert(revised::gbase64Encode("foo", 3) == "Zm9v");
+    return 0;
+}
+"""
+    source.write_text(code)
+    subprocess.run(["c++", "-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror", str(source),
+                    "-o", str(tmp / "ascii")], check=True)
+    subprocess.run([str(tmp / "ascii")], check=True, timeout=30)
+print("PASS: Poppler ASCII metadata, hex and base64 match original behavior")
+assert 'pkgs.lib.optional legacy ./poppler-ascii-metadata.patch' in windows

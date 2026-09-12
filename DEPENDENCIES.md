@@ -146,9 +146,11 @@ patch is corrected without changing its Windows boolean ABI; PNG and OpenJPEG
 pkg-config corrections retain their actual static dependencies. These changes
 are covered by build and synthetic regressions; Windows rendering fidelity and
 oldest-OS execution still require runtime qualification.
-The current PDF-enabled x64 executable still imports newer MSVCRT locale APIs;
-the pre-Vista locale adaptation is unfinished. The successful cross-link does
-not establish that this executable loads on XP x64 or Server 2003.
+The legacy recipe parses PDF subtype metadata and formats hexadecimal/base64
+bytes directly, avoiding C++ regex/stream locale dependencies. Before/after
+regressions preserve matching, warning and encoding behavior. The x64
+media/PDF cross-link has no newer MSVCRT locale imports; this import check
+does not establish runtime qualification on XP x64 or Server 2003.
 
 Custom lean builds may set `WITH_AV=0`, `WITH_OFFICE=0`, or
 `WITH_AUDIO_DEVICE=0`; `WITH_PDF=0` also requires `WITH_OFFICE=0` because Office

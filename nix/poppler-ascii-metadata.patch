@@ -1,0 +1,260 @@
+SPDX-License-Identifier: GPL-2.0-or-later
+
+Keep PDF subtype parsing and hex/base64 formatting in ASCII, without a
+C++ regex/stream locale dependency on newer Windows CRT functions.
+
+--- a/poppler/PDFDoc.cc
++++ b/poppler/PDFDoc.cc
+@@ -75,13 +75,10 @@
+ #include <climits>
+ #include <cstdlib>
+ #include <cstddef>
+ #include <cstring>
+ #include <ctime>
+-#include <iomanip>
+-#include <regex>
+-#include <sstream>
+ #include <sys/stat.h>
+ #include "CryptoSignBackend.h"
+ #include "goo/glibc.h"
+ #include "goo/gstrtod.h"
+ #include "goo/GooString.h"
+@@ -421,104 +418,141 @@
++static bool pdfAsciiAlpha(char c)
++{
++    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
++}
++
++static size_t pdfSubtypeDigit(const std::string &text, size_t from)
++{
++    while ((from = text.find("PDF/", from)) != std::string::npos) {
++        size_t digit = from + 4;
++        if (text.compare(digit, 2, "A-") == 0 || text.compare(digit, 2, "X-") == 0 || text.compare(digit, 2, "E-") == 0) {
++            digit += 2;
++        } else if (text.compare(digit, 3, "VT-") == 0 || text.compare(digit, 3, "UA-") == 0) {
++            digit += 3;
++        } else {
++            from += 4;
++            continue;
++        }
++        if (digit < text.size() && text[digit] >= '0' && text[digit] <= '9') {
++            return digit;
++        }
++        from += 4;
++    }
++    return std::string::npos;
++}
++
+ static PDFSubtypePart pdfPartFromString(PDFSubtype subtype, const std::string &pdfsubver)
+ {
+-    const std::regex regex("PDF/(?:A|X|VT|E|UA)-([[:digit:]])(?:[[:alpha:]]{1,2})?:?([[:digit:]]{4})?");
+-    std::smatch match;
+     PDFSubtypePart subtypePart = subtypePartNone;
+-
+-    if (std::regex_search(pdfsubver, match, regex)) {
++    size_t digit = pdfSubtypeDigit(pdfsubver, 0);
++    if (digit != std::string::npos) {
++        const int part = pdfsubver[digit++] - '0';
++        for (unsigned i = 0; i < 2 && digit < pdfsubver.size() && pdfAsciiAlpha(pdfsubver[digit]); ++i) {
++            ++digit;
++        }
++        if (digit < pdfsubver.size() && pdfsubver[digit] == ':') {
++            ++digit;
++        }
+         int date = 0;
+-        const int part = std::stoi(match.str(1));
+-
+-        if (match[2].matched) {
+-            date = std::stoi(match.str(2));
++        for (unsigned i = 0; i < 4; ++i) {
++            if (digit + i >= pdfsubver.size() || pdfsubver[digit + i] < '0' || pdfsubver[digit + i] > '9') {
++                date = 0;
++                break;
++            }
++            date = date * 10 + pdfsubver[digit + i] - '0';
+         }
+ 
+         switch (subtype) {
+         case subtypePDFX:
+             switch (part) {
+             case 1:
+                 switch (date) {
+                 case 2001:
+                 default:
+                     subtypePart = subtypePart1;
+                     break;
+                 case 2003:
+                     subtypePart = subtypePart4;
+                     break;
+                 }
+                 break;
+             case 2:
+                 subtypePart = subtypePart5;
+                 break;
+             case 3:
+                 switch (date) {
+                 case 2002:
+                 default:
+                     subtypePart = subtypePart3;
+                     break;
+                 case 2003:
+                     subtypePart = subtypePart6;
+                     break;
+                 }
+                 break;
+             case 4:
+                 subtypePart = subtypePart7;
+                 break;
+             case 5:
+                 subtypePart = subtypePart8;
+                 break;
+             }
+             break;
+         default:
+             subtypePart = (PDFSubtypePart)part;
+             break;
+         }
+     }
+ 
+     return subtypePart;
+ }
+ 
+ static PDFSubtypeConformance pdfConformanceFromString(const std::string &pdfsubver)
+ {
+-    const std::regex regex("PDF/(?:A|X|VT|E|UA)-[[:digit:]]([[:alpha:]]{1,3})");
+-    std::smatch match;
+-
+-    // match contains the PDF conformance (A, B, G, N, P, PG or U)
+-    if (std::regex_search(pdfsubver, match, regex)) {
+-        // Convert to lowercase as the conformance may appear in both cases
+-        std::string conf = GooString::toLowerCase(match.str(1));
++    size_t digit = 0;
++    while ((digit = pdfSubtypeDigit(pdfsubver, digit)) != std::string::npos) {
++        ++digit;
++        if (digit >= pdfsubver.size() || !pdfAsciiAlpha(pdfsubver[digit])) {
++            continue;
++        }
++        std::string conf;
++        while (conf.size() < 3 && digit < pdfsubver.size() && pdfAsciiAlpha(pdfsubver[digit])) {
++            const char c = pdfsubver[digit++];
++            conf += (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c;
++        }
+         switch (conf.size()) {
+         case 1: {
+             switch (conf[0]) {
+             case 'a':
+                 return subtypeConfA;
+             case 'b':
+                 return subtypeConfB;
+             case 'g':
+                 return subtypeConfG;
+             case 'n':
+                 return subtypeConfN;
+             case 'p':
+                 return subtypeConfP;
+             case 'u':
+                 return subtypeConfU;
+             default:
+                 /**/
+                 break;
+             }
+             break;
+         }
+         case 2: {
+             if (conf == std::string_view("pg")) {
+                 return subtypeConfPG;
+                 break;
+             }
+         }
+         default:
+             /**/
+             break;
+         }
+         error(errSyntaxWarning, -1, "Unexpected pdf subtype {0:s}", conf.c_str());
++        return subtypeConfNone;
+     }
+ 
+     return subtypeConfNone;
+ }
+@@ -1325,17 +1359,17 @@
+ 
+     // Write data
+     if (hasUnicodeByteOrderMark(s->toStr())) {
+         // unicode string don't necessary end with \0
+         const char *c = s->c_str();
+-        std::stringstream stream;
+-        stream << std::setfill('0') << std::hex;
++        static const char digits[] = "0123456789abcdef";
++        outStr->put('<');
+         for (size_t i = 0; i < s->size(); i++) {
+-            stream << std::setw(2) << (0xff & (unsigned int)*(c + i));
+-        }
+-        outStr->printf("<");
+-        outStr->printf("%s", stream.str().c_str());
++            const unsigned char byte = static_cast<unsigned char>(c[i]);
++            outStr->put(digits[byte >> 4]);
++            outStr->put(digits[byte & 15]);
++        }
+         outStr->printf("> ");
+     } else {
+         const char *c = s->c_str();
+         outStr->printf("(");
+         for (size_t i = 0; i < s->size(); i++) {
+--- a/goo/gbase64.cc
++++ b/goo/gbase64.cc
+@@ -1,50 +1,49 @@
+ //========================================================================
+ //
+ // gbase64.cc
+ //
+ // Implementation of a base64 encoder, because another one did not immediately
+ // avail itself.
+ //
+ // This file is licensed under the GPLv2 or later
+ //
+ // Copyright (C) 2018 Greg Knight <lyngvi@gmail.com>
+ //
+ //========================================================================
+ 
+ #include "gbase64.h"
+-#include <sstream>
+ 
+ static void b64encodeTriplet(char output[4], unsigned char a, unsigned char b, unsigned char c)
+ {
+     static const char *base64table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+     output[0] = base64table[((a >> 2) & 0x3f)]; // upper 6 of first byte
+     output[1] = base64table[((a << 4) & 0x30) | ((b >> 4) & 0x0f)]; // lower 2 of first byte, upper 4 of second byte
+     output[2] = base64table[((b << 2) & 0x3c) | ((c >> 6) & 0x03)]; // lower 4 of second byte, upper 2 of third byte
+     output[3] = base64table[((c) & 0x3f)]; // lower 6 of third byte
+ }
+ 
+ std::string gbase64Encode(const void *input, size_t len)
+ {
+     char quad[4];
+     size_t pos = 0;
+-    std::stringstream buf;
++    std::string buf;
+     auto bytes = static_cast<const unsigned char *>(input);
+     for (; pos + 3 <= len; pos += 3) {
+         b64encodeTriplet(quad, bytes[0], bytes[1], bytes[2]);
+-        buf.write(&quad[0], 4);
++        buf.append(quad, 4);
+         bytes += 3;
+     }
+     switch (len - pos) {
+     case 1:
+         b64encodeTriplet(quad, bytes[0], 0, 0);
+         quad[2] = quad[3] = '=';
+-        buf.write(&quad[0], 4);
++        buf.append(quad, 4);
+         break;
+     case 2:
+         b64encodeTriplet(quad, bytes[0], bytes[1], 0);
+         quad[3] = '=';
+-        buf.write(&quad[0], 4);
++        buf.append(quad, 4);
+         break;
+     }
+-    return buf.str();
++    return buf;
+ }

@@ -3366,8 +3366,8 @@ Build a custom lean executable without PDF/Office rendering or their C++ runtime
 WITH_PDF=1 is the default. CXX/CXXFLAGS and PDF_CFLAGS/PDF_LIBS select the
 compiler and matching Poppler/libpng headers and libraries.
 Windows PDF source builds use native Windows font lookup. The portable
-multimodal Windows build remains in development; its pre-Vista C++ locale
-dependencies still require adaptation before it can run on that baseline.
+multimodal Windows build remains experimental; cross-build qualification is
+described in DEPENDENCIES.md.
 .TP
 .B make WITH_OFFICE=0
 Build a custom executable without linked Office import. The default
