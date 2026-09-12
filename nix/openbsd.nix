@@ -243,6 +243,7 @@ let
     cp ${pkgs.miniaudio.src}/miniaudio.h "$out/"
     chmod u+w "$out/miniaudio.h"
     patch -d "$out" -p1 < ${./miniaudio-openbsd-audio4.patch}
+    patch -d "$out" -p1 < ${./miniaudio-openbsd35-headers.patch}
   '';
   av = pkgs.stdenvNoCC.mkDerivation {
     pname = "ffmpeg-headless-openbsd-${osVersion}";

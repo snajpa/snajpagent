@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: MIT-0
+# OpenBSD 3.5 lacks standard wide-file conversion; retain the existing failure path.
+--- a/miniaudio.h
++++ b/miniaudio.h
+@@ -11549,7 +11549,12 @@
+ #include <stdio.h>
+ #if !defined(_MSC_VER) && !defined(__DMC__)
+     #include <strings.h>    /* For strcasecmp(). */
+-    #include <wchar.h>      /* For wcslen(), wcsrtombs() */
++    #if defined(__OpenBSD__)
++        #include <sys/param.h>
++    #endif
++    #if !defined(OpenBSD3_5)
++        #include <wchar.h>  /* For wcsrtombs(). OpenBSD 3.5 has no wchar.h. */
++    #endif
+ #endif
+ #ifdef _MSC_VER
+     #include <float.h>      /* For _controlfp_s constants */
+@@ -13344,7 +13349,7 @@
+ 
+         (void)pAllocationCallbacks;
+     }
+-    #elif !defined(MA_XBOX_NXDK) && !defined(MA_DOS)    /* If your compiler does not support wcsrtombs(), add it here. */
++    #elif !defined(MA_XBOX_NXDK) && !defined(MA_DOS) && !defined(OpenBSD3_5)    /* Requires wcsrtombs(). */
+     {
+         /*
+         Use fopen() on anything other than Windows. Requires a conversion. This is annoying because fopen() is locale specific. The only real way I can
+@@ -17574,7 +17579,7 @@
+         }
+         #endif
+ 
+-        #if defined(_POSIX_THREAD_ATTR_STACKSIZE) && _POSIX_THREAD_ATTR_STACKSIZE >= 0
++        #if defined(_POSIX_THREAD_ATTR_STACKSIZE) && (_POSIX_THREAD_ATTR_STACKSIZE + 0) >= 0
+         {
+             if (stackSize > 0) {
+                 pthread_attr_setstacksize(&attr, stackSize);

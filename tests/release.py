@@ -1586,3 +1586,31 @@ int main(void) {
                     "-o", str(tmp / "pause")], check=True)
     subprocess.run([str(tmp / "pause")], check=True)
 print("PASS: OpenBSD audio(4) pause/start/stop preserves failures, duplex rollback and no drain")
+
+# OpenBSD 3.5 lacks wchar.h and defines its pthread stack-size feature empty.
+old_audio_patch = (root / "nix/miniaudio-openbsd35-headers.patch").read_text()
+old_audio_added = "\n".join(line[1:] for line in old_audio_patch.splitlines()
+                          if line.startswith("+") and not line.startswith("+++"))
+wide_include = old_audio_added.split("    #elif", 1)[0]
+wide_condition = re.search(r"#elif (.*?)\s*/\* Requires wcsrtombs", old_audio_added).group(1)
+stack_condition = re.search(r"#if (defined\(_POSIX_THREAD_ATTR_STACKSIZE\).*?)\n", old_audio_added + "\n").group(1)
+with tempfile.TemporaryDirectory(prefix="openbsd35-headers-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    (tmp / "sys").mkdir()
+    (tmp / "sys/param.h").write_text("#ifdef OLD_OPENBSD\n#define OpenBSD3_5 1\n#endif\n")
+    (tmp / "wchar.h").write_text("#ifdef OLD_OPENBSD\n#error wchar.h unavailable\n#endif\n#define WIDE_HEADER_INCLUDED 1\n")
+    source = tmp / "header.c"
+    command = ["cc", "-std=c11", "-Werror", "-I" + str(tmp), "-fsyntax-only", str(source)]
+    source.write_text("#include <wchar.h>\n")
+    assert subprocess.run(command + ["-DOLD_OPENBSD"], capture_output=True).returncode != 0
+    for old in (True, False):
+        source.write_text("#define __OpenBSD__ 1\n" + wide_include + "\n#if " + wide_condition +
+            "\n#define WIDE_FILE_CONVERSION 1\n#else\n#define WIDE_FILE_CONVERSION 0\n#endif\n" +
+            "_Static_assert(WIDE_FILE_CONVERSION == " + str(int(not old)) + ", \"wide-file route\");\n")
+        subprocess.run(command + (["-DOLD_OPENBSD"] if old else []), check=True)
+    for value, expected in ((None, 0), ("", 1), ("-1", 0), ("0", 1), ("200809L", 1)):
+        macro = "" if value is None else "#define _POSIX_THREAD_ATTR_STACKSIZE " + value + "\n"
+        source.write_text(macro + "#if " + stack_condition + "\n#define ENABLED 1\n#else\n#define ENABLED 0\n#endif\n" +
+                          "_Static_assert(ENABLED == " + str(expected) + ", \"stack-size feature\");\n")
+        subprocess.run(command, check=True)
+print("PASS: old OpenBSD audio preserves wide-file fallback and empty/numeric pthread features")

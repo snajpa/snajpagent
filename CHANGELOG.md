@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Compile the OpenBSD 3.5 audio adapter without unavailable wide-file APIs and
+  preserve empty pthread feature-macro support.
+
 - Preserve nanosecond retained-file checks with early OpenBSD stat layouts.
 
 - Support OpenBSD 5.9 direct audio block sizes and pause/start/stop controls.

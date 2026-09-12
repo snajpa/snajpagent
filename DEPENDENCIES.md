@@ -527,6 +527,11 @@ compatibility and BSD PDF/Office dependency closure remain unfinished; cross-lin
 and mocked lifecycle checks do not qualify physical audio.
 Retained-file snapshots use the BSD nanosecond stat fields, including the
 OpenBSD 3.5 layout, to detect source changes during media preparation.
+The OpenBSD 3.5 device dependency uses its existing unsupported wide-file path
+when the OS lacks `wchar.h`/`wcsrtombs`, and accepts empty pthread stack-size
+feature macros. Application file decoding remains in FFmpeg; miniaudio's engine
+and file decoders are disabled. This header compatibility does not complete the
+early target's media dependencies or qualify devices.
 
 OpenBSD 7.9 qualification covers base/IRC/SSE tests, internal read-only
 inspection and denied writes, parallel commands, PTY execution, durable resume,
