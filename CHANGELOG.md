@@ -10,6 +10,10 @@
   resume with listener, client, nick and room startup overrides.
 - Record current IRC state before interactive resumed work, including offline
   and client-only starts, so startup overrides replace stale hosted snapshots.
+- Keep a session alive when another worker joins its IRC room. Background room
+  traffic now waits for the active turn instead of admitting a second
+  `input_received`, which the store rejects; the rejected transition previously
+  ended the process, so parallel workers saw nobody join.
 - Align every prose continuation line, including provider source line breaks,
   two spaces under the paragraph text instead of at column zero.
 - Rules can replace a model tool call's payload: `pass` with a `value` rewrites

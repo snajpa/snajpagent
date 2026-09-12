@@ -502,7 +502,10 @@ in complete message batches and are admitted through the steering
 path at the earliest safe response/tool boundary. Messages arriving before
 that boundary are coalesced in arrival order, so several mentions cause one
 additional model cycle rather than a cancellation/restart storm. Background
-entries wait for the next response cycle or queued room-update turn. No
+entries wait for the next response cycle or queued room-update turn; they never
+admit a second `input_received` while a turn is live. A peer joining, being
+opped or leaving is ordinary background context and must never end or interrupt
+another worker's session. No
 network read waits for a model call to finish. A room-update turn caused only
 by peers or notifications may end without model-authored chat; snajpagent does
 not remind, retry, or force a reaction to that traffic.

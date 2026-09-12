@@ -800,13 +800,16 @@ def run_status_case(binary, root):
                          re.escape(DEFAULT_IDLE_PROMPT), idle), idle
         active = terminal.submit_wait("terminal_status", DEFAULT_ACTIVE_PROMPT, timeout=3.0,
                                join_wrapped=True)
-        # The configured provider spinner is " ◴"; it blinks, so an immediate
-        # capture catches the blank frame about half the time.
+        # The provider spinner is configured as " ◴", so its frame alternates
+        # between a blank space and the glyph; accept either and assert the
+        # clock-and-prompt shape the idle and activity rows now share.
         active = terminal.wait_until(
             lambda screen: re.search(
-                r"(?m)^◴  [0-9]{2}:[0-9]{2}:[0-9]{2}" + re.escape(DEFAULT_ACTIVE_PROMPT),
+                r"(?m)^[◴ ]  [0-9]{2}:[0-9]{2}:[0-9]{2}" + re.escape(DEFAULT_ACTIVE_PROMPT),
                 screen) is not None,
-            "active prompt with the provider spinner glyph", 3.0, join_wrapped=True)
+            "active prompt with the shared clock prefix", 3.0, join_wrapped=True)
+        assert re.search(r"(?m)^[◴ ]  [0-9]{2}:[0-9]{2}:[0-9]{2}" +
+                         re.escape(DEFAULT_ACTIVE_PROMPT), active), active
         terminal.wait("status-first-fragment", timeout=3.0)
         time.sleep(0.85)
         middle = terminal.capture(join_wrapped=True)

@@ -330,7 +330,10 @@ snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool forc
     size_t used;
 
     if (local_operator) *local_operator = false;
-    if (!app || app->session.pending_input) return NULL;
+    /* Background room traffic waits for the current turn. Admitting a second
+       input_received while one is active is an invalid store transition, which
+       used to take the whole session down as soon as a peer joined the room. */
+    if (!app || app->session.active_turn || app->session.pending_input) return NULL;
     if (app->irc_urgent.len) {
         source = &app->irc_urgent;
         if (local_operator) *local_operator = app->irc_urgent_replies.count != 0u;
