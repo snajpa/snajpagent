@@ -155,9 +155,8 @@ normalize_patch_text(const char *patch, size_t len, char **out, char *error, siz
     size_t line_len = 0;
 
     *out = NULL;
-    if (len > PATCH_TEXT_MAX || !snag_utf8_valid((const unsigned char *)patch, len, true)) {
+    if (len > PATCH_TEXT_MAX || !snag_utf8_valid((const unsigned char *)patch, len, true))
         return snag_fail(error, error_size, EINVAL, "patch must be bounded UTF-8 without NUL");
-    }
     text = malloc(len + 1u);
     if (!text) return -1;
     for (size_t i = 0; i < len; ++i) {
@@ -230,9 +229,8 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set, char *
     size_t i = 1, ops = 0u, hunks = 0u;
 
     if (line_count < 2u) return snag_fail(error, error_size, EINVAL, "patch is missing required frame");
-    if (strcmp(lines[0], "*** Begin Patch") != 0 || strcmp(lines[line_count - 1u], "*** End Patch") != 0) {
+    if (strcmp(lines[0], "*** Begin Patch") != 0 || strcmp(lines[line_count - 1u], "*** End Patch") != 0)
         return snag_fail(error, error_size, EINVAL, "patch frame must begin and end exactly");
-    }
     for (size_t n = 1u; n + 1u < line_count; ++n) {
         if (is_file_header(lines[n]) && ops < PATCH_OP_MAX) ++ops;
         if (is_hunk_header(lines[n]) && hunks < PATCH_HUNK_MAX) ++hunks;

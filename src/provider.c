@@ -1167,9 +1167,8 @@ provider_request_perform(struct provider_ctx *ctx, const char *failure, char *er
         code = perform_with_retry(ctx->curl, ctx, error, error_size, retry_out);
     }
 
-    if (code == CURLE_ABORTED_BY_CALLBACK && (ctx->cancel_code == 1 || ctx->cancel_code == 2)) {
+    if (code == CURLE_ABORTED_BY_CALLBACK && (ctx->cancel_code == 1 || ctx->cancel_code == 2))
         return ctx->cancel_code;
-    }
     if (code != CURLE_OK) {
         snag_errorf(error, error_size, "%s%s%s", ctx->error[0] ? ctx->error : failure,
                    ctx->error[0] ? "" : ": ", ctx->error[0] ? "" : curl_easy_strerror(code));

@@ -946,13 +946,11 @@ validate_config(struct snag_config *config, bool private_file, char *error, size
                       limit->provider, limit->model);
         }
     }
-    if (config->default_timeout_ms > config->max_timeout_ms) {
+    if (config->default_timeout_ms > config->max_timeout_ms)
         return snag_fail(error, error_size, EINVAL, "tool default_timeout_ms cannot exceed max_timeout_ms");
-    }
     if (validate_shell(config, error, error_size) < 0) return -1;
-    if (config->provider[0] && !snag_config_provider(config, config->provider)) {
+    if (config->provider[0] && !snag_config_provider(config, config->provider))
         return snag_fail(error, error_size, EINVAL, "configured agent provider is not defined");
-    }
     return 0;
 }
 

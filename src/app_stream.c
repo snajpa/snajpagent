@@ -190,9 +190,8 @@ snag_app_stream_public(void *opaque, size_t item_index, enum snag_item_kind kind
     } else if (kind != app->stream_kind || phase != app->stream_phase) {
         return stream_fail(app, EPROTO, "public output item kind or phase changed");
     }
-    if (app->partial_bytes > SNAG_MAX_RESPONSE_GRAPH) {
+    if (app->partial_bytes > SNAG_MAX_RESPONSE_GRAPH)
         return stream_fail(app, EOVERFLOW, "partial public output exceeds its bound");
-    }
     partial = partial_public_target(app, item_index, kind, phase, provider_item_id, &partial_created);
     if (!partial) {
         return stream_fail(app, errno, errno == EPROTO ? "public output item identity changed" :

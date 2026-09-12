@@ -298,9 +298,8 @@ start_goal(struct app_state *app, const char *prompt, char *error, size_t error_
 
     if (snag_goal_unfinished(app->session.goal_status))
         return snag_fail(error, error_size, EINVAL, "an unfinished goal already exists");
-    if (snag_random_id(goal_id) < 0) {
+    if (snag_random_id(goal_id) < 0)
         return snag_errorf(error, error_size, "cryptographic goal id generation failed");
-    }
     if (commit_goal_event(app, "goal_started", json_pack("{s:s,s:s}", "goal_id", goal_id, "prompt", prompt),
                           error, error_size) < 0) return -1;
     app->goal_armed = true;

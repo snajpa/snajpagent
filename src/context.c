@@ -622,9 +622,8 @@ append_interrupted_prefix(struct context_builder *builder, const json_t *data, c
 {
     json_t *partial = json_object_get(data, "partial_public");
 
-    if (!json_is_array(partial) || append_response_items(builder, partial, NULL) < 0) {
+    if (!json_is_array(partial) || append_response_items(builder, partial, NULL) < 0)
         return snag_fail(error, error_size, EINVAL, "invalid interrupted public response context");
-    }
     return 0;
 }
 

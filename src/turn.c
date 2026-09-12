@@ -374,9 +374,8 @@ snag_response_graph_classify(const struct snag_response_graph *graph, struct sna
     size_t bad_index = 0;
 
     memset(decision, 0, sizeof(*decision));
-    if (!provider_id_valid(graph->provider_response_id) || graph->count > SNAG_MAX_RESPONSE_ITEMS) {
+    if (!provider_id_valid(graph->provider_response_id) || graph->count > SNAG_MAX_RESPONSE_ITEMS)
         return snag_fail(error, error_size, EINVAL, "response graph has no valid response id");
-    }
     if (identifiers_valid(graph, error, error_size) < 0) return -1;
     for (size_t i = 0; i < graph->count; ++i) {
         struct snag_response_item view = snag_response_graph_item(graph, i);

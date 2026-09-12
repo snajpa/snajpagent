@@ -57,9 +57,8 @@ int
 snag_auth_key(struct snag_auth_tokens *tokens, const char *key, char *error, size_t error_size)
 {
     snag_auth_clear(tokens);
-    if (!token_copy(tokens->credential.value, sizeof(tokens->credential.value), key, false)) {
+    if (!token_copy(tokens->credential.value, sizeof(tokens->credential.value), key, false))
         return snag_fail(error, error_size, EINVAL, "API key must contain 1..16384 non-whitespace ASCII bytes");
-    }
     tokens->credential.len = strlen(key);
     return 0;
 }

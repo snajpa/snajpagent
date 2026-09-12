@@ -380,9 +380,8 @@ int
 snag_irc_apply_cli(struct snag_config *config, const struct snag_cli *cli, char *error, size_t error_size)
 {
     if (!config || !cli) return snag_errno(EINVAL);
-    if ((cli->irc_no_listen && cli->irc_listen) || (cli->irc_no_client && cli->irc_client_count)) {
+    if ((cli->irc_no_listen && cli->irc_listen) || (cli->irc_no_client && cli->irc_client_count))
         return snag_fail(error, error_size, EINVAL, "conflicting positive and negative IRC role options");
-    }
     if (cli->irc_no_listen) config->irc.listen_explicit = false;
     if (cli->irc_no_client) {
         config->irc.client_count = 0u;
@@ -412,9 +411,8 @@ snag_irc_apply_cli(struct snag_config *config, const struct snag_cli *cli, char 
     }
     if (cli->irc_room_name && config_copy(config->irc.room_name, sizeof(config->irc.room_name),
                     cli->irc_room_name, "IRC room name", error, error_size) < 0) return -1;
-    if (snag_irc_enabled(config) && cli->prompt && !cli->prompt_after_dashdash) {
+    if (snag_irc_enabled(config) && cli->prompt && !cli->prompt_after_dashdash)
         return snag_fail(error, error_size, EINVAL, "networked initial chat text must follow --");
-    }
     return snag_irc_normalize(config, error, error_size);
 }
 
