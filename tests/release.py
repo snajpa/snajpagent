@@ -1985,3 +1985,31 @@ int main(void) {
                         str(source), "-o", str(Path(tmp) / "charset")], check=True)
         subprocess.run([str(Path(tmp) / "charset")], check=True)
 print("PASS: ZIP UTF-8 flags preserve explicit, native, fallback and unknown charset behavior")
+
+# Early OpenBSD must reject NaN/infinite media values without a libc isfinite macro.
+av_source = (root / "src/av.c").read_text()
+finite = re.search(r"#if defined\(__OpenBSD__\).*?!defined\(isfinite\)\n.*?\n#endif",
+                   av_source, re.S).group(0)
+if shutil.which("clang"):
+    with tempfile.TemporaryDirectory(prefix="av-finite-", dir=root / "build") as tmp:
+        source = Path(tmp) / "finite.c"
+        source.write_text("#include <assert.h>\n#include <math.h>\n#undef isfinite\n"
+                          "#define __OpenBSD__ 1\n" + finite + r"""
+int main(void) {
+    assert(isfinite(0.0) && isfinite(-0.0) && isfinite(0x1p-1074));
+    assert(isfinite(1.0f) && isfinite(1.0L));
+    assert(!isfinite(NAN) && !isfinite(INFINITY) && !isfinite(-INFINITY));
+    double once = 1.0;
+    assert(isfinite(once++) && once == 2.0);
+    return 0;
+}
+""")
+        subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
+                        "-o", str(Path(tmp) / "finite")], check=True)
+        subprocess.run([str(Path(tmp) / "finite")], check=True)
+        source.write_text("#define __OpenBSD__ 1\n#define isfinite(value) 17\n" + finite +
+                          '\n_Static_assert(isfinite(1.0) == 17, "native macro kept");\n')
+        subprocess.run(["clang", "-std=c11", "-Werror", "-fsyntax-only", str(source)], check=True)
+    print("PASS: early OpenBSD media finite checks preserve types, rejection and single evaluation")
+else:
+    print("SKIP: Clang unavailable for early OpenBSD finite regression")

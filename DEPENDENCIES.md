@@ -531,7 +531,9 @@ The OpenBSD 3.5 device dependency uses its existing unsupported wide-file path
 when the OS lacks `wchar.h`/`wcsrtombs`, and accepts empty pthread stack-size
 feature macros. Application file decoding remains in FFmpeg; miniaudio's engine
 and file decoders are disabled. This header compatibility does not complete the
-early target's media dependencies or qualify devices.
+early target's complete application or qualify devices. The media adapter uses
+the compiler finite-value check when the native math header lacks `isfinite`,
+preserving rejection of NaN and infinite dimensions, durations and positions.
 The early FFmpeg compatibility include wraps the native `inttypes.h` and supplies
 missing C99 format macros from Clang's target ABI, keeping 64-bit and pointer
 widths distinct. Direct codec includes use this same owner. Existing system

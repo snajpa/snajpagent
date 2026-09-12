@@ -19,6 +19,10 @@
 #include <libswscale/swscale.h>
 #include <pthread.h>
 
+#if defined(__OpenBSD__) && defined(__clang__) && !defined(isfinite)
+#define isfinite(value) __builtin_isfinite(value)
+#endif
+
 struct input {
     int fd, cancelled;
     uint64_t started, read_bytes;
