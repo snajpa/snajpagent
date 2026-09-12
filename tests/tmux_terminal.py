@@ -798,7 +798,9 @@ def run_status_case(binary, root):
                          re.escape(DEFAULT_IDLE_PROMPT), idle), idle
         active = terminal.submit_wait("terminal_status", DEFAULT_ACTIVE_PROMPT, timeout=3.0,
                                join_wrapped=True)
-        assert re.search(r"(?m)^◴  [0-9]{2}:[0-9]{2}:[0-9]{2}" +
+        # The activity row shares the idle row's clock prefix; the former ◴
+        # spinner prefix is gone, so assert the same shape for both states.
+        assert re.search(r"(?m)^   [0-9]{2}:[0-9]{2}:[0-9]{2}" +
                          re.escape(DEFAULT_ACTIVE_PROMPT), active), active
         terminal.wait("status-first-fragment", timeout=3.0)
         time.sleep(0.85)
