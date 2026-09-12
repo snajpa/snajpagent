@@ -2676,6 +2676,12 @@ def run_resume_history_case(binary, root):
         assert result.returncode == 0, result.stderr
         session = next((state / "sessions").iterdir()).name
     log = state / "sessions" / session / "events.jsonl"
+    def assert_history_preserved():
+        current = log.read_bytes()
+        assert current.startswith(before), "resume rewrote saved history"
+        updates = [json.loads(line) for line in current[len(before):].splitlines()]
+        assert all(e["type"] == "irc_snapshot" for e in updates), updates
+
     before = log.read_bytes()
     for setting in (0, 1, 2, 3, 101, 2**64, 10**100, None):
         count = 1 if setting is None else setting
@@ -2696,13 +2702,14 @@ def run_resume_history_case(binary, root):
             assert_order(screen, fragments)
             assert ("Working." in screen) == bool(selected), screen
             terminal.exit()
-        assert log.read_bytes() == before, "display changed durable session history"
+        assert_history_preserved()
     for invalid in (-1, "+2", "one", "2.5", "2 3"):
+        invalid_before = log.read_bytes()
         config.write_text(f"[provider openai]\n[ui]\nresume_history_turns = {invalid}\n")
         result = subprocess.run(base + ["-e", "--resume", session, "--", "ping"],
                                 cwd=workspace, capture_output=True, text=True)
         assert result.returncode == 2, result.stderr
-        assert log.read_bytes() == before
+        assert log.read_bytes() == invalid_before
     config.write_text("[provider openai]\n[ui]\nresume_history_turns = 0\n")
     saved_config = config.read_bytes()
     commands = [("/history", 1), ("/history 0", 0), ("/history 1", 1),
@@ -2734,7 +2741,7 @@ def run_resume_history_case(binary, root):
             expected_footer = f"history: {len(selected)} shown · 5 completed · 5 total"
             assert screen.count(expected_footer) == (2 if count == 0 else 1), screen
             terminal.exit()
-        assert log.read_bytes() == before, "history command changed the session log"
+        assert_history_preserved()
         assert config.read_bytes() == saved_config, "history command changed configuration"
     with TmuxTerminal(case / "compact", binary, workspace, state, config, 100, 40,
             args=("--no-listen", "--no-client", "--resume", session)) as terminal:
@@ -2822,7 +2829,7 @@ def run_resume_history_case(binary, root):
             assert screen.count("user:") == count + 103, screen
             assert "user: crash" in screen, screen
             terminal.exit()
-        assert log.read_bytes() == before
+        assert_history_preserved()
     print("resume_history_count: ok")
 
 

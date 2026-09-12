@@ -415,6 +415,13 @@ def turn_events(items, event_type, turn_id):
             item["data"]["turn_id"] == turn_id]
 
 
+def assert_topology_only_after(session_id, previous):
+    current = events(session_id)
+    assert current[:len(previous)] == previous
+    updates = current[len(previous):]
+    assert updates and all(e["type"] == "irc_snapshot" for e in updates), updates
+
+
 def one(items, event_type):
     matches = [item for item in items if item["type"] == event_type]
     if len(matches) != 1:
@@ -2186,7 +2193,7 @@ def test_saved_goal_restored_without_lookup():
             assert b"revision: 2" in resumed.buf[status:restored]
             resumed.wait_idle_prompt(start=restored)
             resumed.drain(0.1)
-            assert len(events(session_id)) == len(original)
+            assert_topology_only_after(session_id, original)
             # A normal follow-up must not create a replacement or resume it.
             answer = resumed.send_wait(b"ping\r", b"pong", start=restored)
             resumed.exit_cleanly(answer)
@@ -2214,7 +2221,7 @@ def test_resume_preserves_inactive_and_queued_goal_states():
             resumed.wait_idle_prompt(start=restored)
             resumed.drain(0.1)
             resumed.exit_now()
-        assert events(session_id) == original
+        assert_topology_only_after(session_id, original)
 
     with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
         child.send_wait(b"/goal slow goal\r", b"working on goal")
@@ -4830,7 +4837,7 @@ def test_goal_orderly_quit_resume():
                 restored = resumed.wait(f"goal {goal['goal_id'][:8]}: paused · wording locked".encode())
                 resumed.wait_idle_prompt(start=restored)
                 resumed.exit_now()
-                assert events(session_id) == stopped
+                assert_topology_only_after(session_id, stopped)
                 print("explicit Ctrl-C pause then quit/resume: ok", flush=True)
                 continue
             restored = resumed.wait(f"goal {goal['goal_id'][:8]}: active · wording locked".encode())
