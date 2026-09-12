@@ -129,6 +129,14 @@ ALSA plugins cannot be loaded by the static binary. ALSA's LGPL-2.1-or-later and
 the PulseAudio client's LGPL-2.1-or-later terms, plus the static libsndfile
 dependency closure, belong in the release's source/relinking materials.
 
+Windows media builds use static FFmpeg libraries and the existing winpthreads
+runtime. External-library autodetection is disabled so the SDK cannot silently
+enable Media Foundation or GPU backends. The pre-Vista recipe preserves its
+selected OS baseline, validates UTF-16 before the older UTF-8 conversion call,
+and obtains random bytes through CryptoAPI rather than importing BCrypt.
+Modern Windows retains FFmpeg's native conversion and BCrypt paths.
+The compatibility patch retains FFmpeg's LGPL-2.1-or-later terms.
+
 Custom lean builds may set `WITH_AV=0`, `WITH_OFFICE=0`, or
 `WITH_AUDIO_DEVICE=0`; `WITH_PDF=0` also requires `WITH_OFFICE=0` because Office
 page validation/rendering uses Poppler. Official desktop releases require all

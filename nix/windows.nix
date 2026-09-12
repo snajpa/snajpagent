@@ -98,6 +98,39 @@ let
       sed -i 's/ -lz$/ -lzs/' "$out/lib/pkgconfig/zlib.pc"
     '';
   });
+  av = (windows.ffmpeg_8.override {
+    inherit zlib;
+    ffmpegVariant = "headless";
+    withHeadlessDeps = false;
+    withSmallDeps = false;
+    withFullDeps = false;
+    withGPL = false;
+    withVersion3 = false;
+    withZlib = true;
+    withSafeBitstreamReader = true;
+    withPixelutils = true;
+    withNetwork = false;
+    withStatic = true;
+    withShared = false;
+    buildFfmpeg = false;
+    buildFfplay = false;
+    buildFfprobe = false;
+    buildAvcodec = true;
+    buildAvformat = true;
+    buildAvutil = true;
+    buildSwresample = true;
+    buildSwscale = true;
+    withDocumentation = false;
+  }).overrideAttrs (old: {
+    # Qualify this static-only profile separately from nixpkgs' MinGW64 marker.
+    meta = old.meta // { broken = false; };
+    patches = (old.patches or []) ++ pkgs.lib.optional legacy ./ffmpeg-legacy-windows.patch;
+    propagatedBuildInputs = (old.propagatedBuildInputs or []) ++ [ pthreads ];
+    configureFlags = old.configureFlags ++ [
+      "--disable-autodetect" "--disable-w32threads" "--enable-pthreads"
+    ];
+    env = (old.env or {}) // { CFLAGS = "-Os -D_WIN32_WINNT=${winver} -DWINVER=${winver}"; };
+  });
   brotli = cmakeLibrary windows.brotli [ "-DBROTLI_DISABLE_TESTS=ON" ] [];
   zstd = (cmakeLibrary windows.zstd [
     "-DZSTD_BUILD_SHARED=OFF" "-DZSTD_BUILD_STATIC=ON"
@@ -146,7 +179,7 @@ let
   pty = if legacy && windows.stdenv.cc.isClang then
     import ./windows-pty.nix { inherit pkgs windows threads winver; } else null;
 in {
-  inherit windows threads jansson tls curl networkLibraries regex pty;
+  inherit windows threads jansson tls curl av networkLibraries regex pty;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }: windows.stdenv.mkDerivation {
     pname = "${packageName}-windows-${arch}";
@@ -154,7 +187,7 @@ in {
     src = source;
     outputs = [ "out" "debug" ];
     nativeBuildInputs = [ windows.buildPackages.pkg-config ];
-    buildInputs = [ threads jansson curl regex ] ++ networkLibraries
+    buildInputs = [ threads jansson curl regex av ] ++ networkLibraries
       ++ pkgs.lib.optionals (pty != null) [ pty.collector pty.cxx pty.unwind ];
     enableParallelBuilding = true;
     dontStrip = true;
@@ -178,6 +211,9 @@ in {
         "LDLIBS=$($PKG_CONFIG --static --libs jansson) -lsnagregex -lunistring -liconv -ladvapi32 -lntdll -lws2_32 -lwinpthread${pkgs.lib.optionalString (pty != null) " -lsnagpty -L${pty.cxx}/lib -lc++ -L${pty.unwind}/lib -lunwind -luser32 -lshell32"}"
         "CURL_CFLAGS=$($PKG_CONFIG --cflags libcurl)"
         "CURL_LIBS=$($PKG_CONFIG --static --libs libcurl)"
+        "AV_CFLAGS=$($PKG_CONFIG --cflags libavformat libavcodec libavutil libswresample libswscale)"
+        "AV_LIBS=$($PKG_CONFIG --static --libs libavformat libavcodec libavutil libswresample libswscale)"
+        'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}'
       )
     '';
     installPhase = ''

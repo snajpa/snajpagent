@@ -680,3 +680,160 @@ actual = subprocess.check_output(["sed", expression],
 assert actual == "Libs: -L/fixture/lib -lzs\nCflags: -I/fixture/include\n"
 assert '"CURL_LIBS=$($PKG_CONFIG --static --libs libcurl)"' in windows
 print("PASS: Windows zlib metadata names its static archive for every consumer")
+
+# Exercise the patched FFmpeg UTF conversion with mock Win32/allocation calls.
+# The patch retains the full function as context; no SDK, device or download.
+ffmpeg_patch = (root / "nix/ffmpeg-legacy-windows.patch").read_text()
+wide_patch = ffmpeg_patch.split("+++ b/libavutil/wchar_filename.h\n", 1)[1]
+wide_source = "\n".join(line[1:] for line in wide_patch.splitlines()
+                        if line.startswith((" ", "+")))
+wide_function = re.search(r"static inline int wchartocp\(.*?\n}", wide_source, re.S).group(0)
+with tempfile.TemporaryDirectory(prefix="ffmpeg-wide-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    source = tmp / "wide.c"
+    source.write_text(r"""
+#include <assert.h>
+#include <errno.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#define wchar_t uint16_t
+#define CP_UTF8 65001u
+typedef unsigned long DWORD;
+static unsigned calls;
+static int fail_convert, fail_alloc;
+#if _WIN32_WINNT >= 0x0600
+#define WC_ERR_INVALID_CHARS 0x80u
+#endif
+static int WideCharToMultiByte(unsigned cp, DWORD flags, const wchar_t *input,
+    int count, char *out, int size, const char *fallback, int *used)
+{
+    assert(input && count == -1 && !fallback && !used);
+#if _WIN32_WINNT >= 0x0600
+    assert(flags == (cp == CP_UTF8 ? WC_ERR_INVALID_CHARS : 0));
+#else
+    assert(flags == 0);
+    (void)cp;
+#endif
+    ++calls;
+    if (fail_convert) return 0;
+    if (out) { assert(size == 3); memcpy(out, "ok", 3); }
+    return 3;
+}
+static void *av_malloc_array(size_t n, size_t size)
+{
+    return fail_alloc ? NULL : malloc(n * size);
+}
+""" + wide_function + r"""
+int main(void)
+{
+    const wchar_t valid[][6] = {{0}, {'a',0}, {0x4e2d,0},
+        {0xd800,0xdc00,0}, {0xdbff,0xdfff,0}, {'a',0xd83d,0xde00,'b',0}};
+    const wchar_t invalid[][4] = {{0xd800,0}, {0xdbff,'a',0},
+        {0xdc00,0}, {0xdfff,0}, {0xd800,0xd800,0xdc00,0}, {0xdc00,0xd800,0}};
+    char *out;
+    for (size_t i = 0; i < sizeof(valid)/sizeof(valid[0]); ++i) {
+        calls = 0; out = NULL;
+        assert(wchartocp(CP_UTF8, valid[i], &out) == 0);
+        assert(calls == 2 && out && !strcmp(out, "ok")); free(out);
+    }
+    for (size_t i = 0; i < sizeof(invalid)/sizeof(invalid[0]); ++i) {
+        calls = 0; out = (char *)1;
+#if _WIN32_WINNT >= 0x0600
+        fail_convert = 1; /* Modern API rejects invalid UTF-16. */
+#endif
+        assert(wchartocp(CP_UTF8, invalid[i], &out) < 0 && !out && errno == EINVAL);
+        assert(calls == (_WIN32_WINNT >= 0x0600 ? 1u : 0u));
+        fail_convert = 0;
+        assert(wchartocp(0, invalid[i], &out) == 0); free(out); /* ACP unchanged. */
+    }
+    fail_convert = 1; out = (char *)1;
+    assert(wchartocp(CP_UTF8, valid[1], &out) < 0 && !out && errno == EINVAL);
+    fail_convert = 0; fail_alloc = 1; out = (char *)1;
+    assert(wchartocp(CP_UTF8, valid[1], &out) < 0 && !out && errno == ENOMEM);
+    return 0;
+}
+""")
+    for baseline in ("0x0500", "0x0502", "0x0600"):
+        binary = tmp / ("wide-" + baseline)
+        subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                        "-D_WIN32_WINNT=" + baseline, str(source), "-o", str(binary)], check=True)
+        subprocess.run([str(binary)], check=True)
+print("PASS: FFmpeg pre-Vista UTF-16 validation preserves modern and ACP paths")
+
+# Check CryptoAPI result propagation and cleanup without calling an OS RNG.
+random_patch = ffmpeg_patch.split("+++ b/libavutil/random_seed.c\n", 1)[1]
+random_source = "\n".join(line[1:] for line in random_patch.splitlines()
+                          if line.startswith((" ", "+")))
+random_function = re.search(r"static int win32_random_bytes\(.*?\n}", random_source, re.S).group(0)
+with tempfile.TemporaryDirectory(prefix="ffmpeg-random-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    source = tmp / "random.c"
+    source.write_text(r"""
+#include <assert.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+typedef unsigned long HCRYPTPROV;
+typedef uint32_t DWORD;
+typedef int BOOL;
+#define PROV_RSA_FULL 1
+#define CRYPT_VERIFYCONTEXT 0xf0000000u
+#define CRYPT_SILENT 0x40u
+#define AVERROR_EXTERNAL -123
+static unsigned acquire_calls, generate_calls, release_calls;
+static int fail;
+static BOOL CryptAcquireContextA(HCRYPTPROV *provider, const char *container,
+                                 const char *name, DWORD type, DWORD flags)
+{
+    ++acquire_calls;
+    assert(!container && !name && type == PROV_RSA_FULL);
+    assert(flags == (CRYPT_VERIFYCONTEXT | CRYPT_SILENT));
+    *provider = 42;
+    return fail != 1;
+}
+static BOOL CryptGenRandom(HCRYPTPROV provider, DWORD len, uint8_t *buf)
+{
+    ++generate_calls;
+    assert(provider == 42 && len <= 16);
+    if (fail == 2) return 0;
+    memset(buf, 0xa5, len);
+    return 1;
+}
+static BOOL CryptReleaseContext(HCRYPTPROV provider, DWORD flags)
+{
+    ++release_calls;
+    assert(provider == 42 && !flags);
+    return fail != 3;
+}
+""" + random_function + r"""
+int main(void)
+{
+    uint8_t buf[16];
+    for (fail = 0; fail < 4; ++fail) {
+        acquire_calls = generate_calls = release_calls = 0;
+        assert(win32_random_bytes(buf, sizeof(buf)) == (fail ? AVERROR_EXTERNAL : 0));
+        assert(acquire_calls == 1 && generate_calls == (fail == 1 ? 0u : 1u));
+        assert(release_calls == generate_calls);
+        if (!fail) for (size_t i = 0; i < sizeof(buf); ++i) assert(buf[i] == 0xa5);
+    }
+    fail = 0;
+    assert(win32_random_bytes(buf, 0) == 0);
+#if SIZE_MAX > UINT32_MAX
+    acquire_calls = generate_calls = release_calls = 0;
+    assert(win32_random_bytes(buf, (size_t)UINT32_MAX + 1) == AVERROR_EXTERNAL);
+    assert(!acquire_calls && !generate_calls && !release_calls);
+#endif
+    return 0;
+}
+""")
+    subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                    str(source), "-o", str(tmp / "random")], check=True)
+    subprocess.run([str(tmp / "random")], check=True)
+assert '+if ! test_cpp_condition windows.h "defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0600"; then' in ffmpeg_patch
+assert '+    return win32_random_bytes(buf, len);' in ffmpeg_patch
+assert 'coremedia bcrypt advapi32 stdatomic"' in ffmpeg_patch
+assert 'pkgs.lib.optional legacy ./ffmpeg-legacy-windows.patch' in windows
+assert '"--disable-autodetect" "--disable-w32threads" "--enable-pthreads"' in windows
+assert '"AV_LIBS=$($PKG_CONFIG --static --libs libavformat libavcodec libavutil libswresample libswscale)"' in windows
+print("PASS: legacy FFmpeg RNG cleanup, failure and length handling; static recipe wiring")

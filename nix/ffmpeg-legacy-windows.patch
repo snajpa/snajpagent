@@ -1,0 +1,164 @@
+SPDX-License-Identifier: LGPL-2.1-or-later
+
+Preserve explicitly selected pre-Vista targets: winpthreads, validated UTF-16
+conversion and CryptoAPI randomness. Modern builds retain their native APIs.
+
+--- a/configure
++++ b/configure
+@@ -4128,7 +4128,7 @@
+ avfilter_suggest="libm stdatomic spirv_compiler"
+ avformat_deps="avcodec avutil"
+ avformat_suggest="libm network zlib stdatomic"
+-avutil_suggest="clock_gettime ffnvcodec gcrypt libm libdrm libmfx opencl openssl user32 vaapi vulkan videotoolbox corefoundation corevideo coremedia bcrypt stdatomic"
++avutil_suggest="clock_gettime ffnvcodec gcrypt libm libdrm libmfx opencl openssl user32 vaapi vulkan videotoolbox corefoundation corevideo coremedia bcrypt advapi32 stdatomic"
+ swresample_deps="avutil"
+ swresample_suggest="libm libsoxr stdatomic"
+ swscale_deps="avutil"
+@@ -6151,7 +6151,7 @@
+         add_${pfx}cppflags -U__STRICT_ANSI__ -D__USE_MINGW_ANSI_STDIO=1
+         eval test \$${pfx_no_}cc_type = "gcc" &&
+             add_${pfx}cppflags -D__printf__=__gnu_printf__
+-        test_${pfx}cpp_condition windows.h "!defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0600" &&
++        test_${pfx}cpp_condition windows.h "!defined(_WIN32_WINNT)" &&
+             add_${pfx}cppflags -D_WIN32_WINNT=0x0600
+         add_${pfx}cppflags -D_POSIX_C_SOURCE=200112 -D_XOPEN_SOURCE=600
+     elif test_${pfx}cpp_condition _mingw.h "defined __MINGW_VERSION"  ||
+@@ -6163,7 +6163,7 @@
+         add_${pfx}cppflags -U__STRICT_ANSI__ -D__USE_MINGW_ANSI_STDIO=1
+         test_${pfx}cpp_condition _mingw.h "__MSVCRT_VERSION__ < 0x0700" &&
+             add_${pfx}cppflags -D__MSVCRT_VERSION__=0x0700
+-        test_${pfx}cpp_condition windows.h "!defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0600" &&
++        test_${pfx}cpp_condition windows.h "!defined(_WIN32_WINNT)" &&
+             add_${pfx}cppflags -D_WIN32_WINNT=0x0600
+         eval test \$${pfx_no_}cc_type = "gcc" &&
+             add_${pfx}cppflags -D__printf__=__gnu_printf__
+@@ -6806,8 +6806,10 @@
+ done
+ 
+ check_lib advapi32 "windows.h"            RegCloseKey          -ladvapi32
+-check_lib bcrypt   "windows.h bcrypt.h"   BCryptGenRandom      -lbcrypt &&
+-    check_cpp_condition bcrypt bcrypt.h "defined BCRYPT_RNG_ALGORITHM"
++if ! test_cpp_condition windows.h "defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0600"; then
++    check_lib bcrypt "windows.h bcrypt.h" BCryptGenRandom -lbcrypt &&
++        check_cpp_condition bcrypt bcrypt.h "defined BCRYPT_RNG_ALGORITHM"
++fi
+ check_lib ole32    "windows.h objbase.h"  CoTaskMemFree        -lole32
+ check_lib shell32  "windows.h shellapi.h" CommandLineToArgvW   -lshell32
+ check_lib psapi    "windows.h psapi.h"    GetProcessMemoryInfo -lpsapi
+--- a/libavutil/wchar_filename.h
++++ b/libavutil/wchar_filename.h
+@@ -32,41 +32,59 @@
+     int num_chars;
+     num_chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, filename_utf8, -1, NULL, 0);
+     if (num_chars <= 0) {
+         *filename_w = NULL;
+         errno = EINVAL;
+         return -1;
+     }
+     *filename_w = (wchar_t *)av_calloc(num_chars, sizeof(wchar_t));
+     if (!*filename_w) {
+         errno = ENOMEM;
+         return -1;
+     }
+     MultiByteToWideChar(CP_UTF8, 0, filename_utf8, -1, *filename_w, num_chars);
+     return 0;
+ }
+ 
+ av_warn_unused_result
+ static inline int wchartocp(unsigned int code_page, const wchar_t *filename_w,
+                             char **filename)
+ {
++#if _WIN32_WINNT < 0x0600
++    DWORD flags = 0;
++    if (code_page == CP_UTF8) {
++        const wchar_t *p = filename_w;
++        while (*p) {
++            unsigned int c = *p++;
++            if (c >= 0xd800 && c <= 0xdbff) {
++                if (*p >= 0xdc00 && *p <= 0xdfff) { ++p; continue; }
++            } else if (c < 0xdc00 || c > 0xdfff) {
++                continue;
++            }
++            *filename = NULL;
++            errno = EINVAL;
++            return -1;
++        }
++    }
++#else
+     DWORD flags = code_page == CP_UTF8 ? WC_ERR_INVALID_CHARS : 0;
++#endif
+     int num_chars = WideCharToMultiByte(code_page, flags, filename_w, -1,
+                                         NULL, 0, NULL, NULL);
+     if (num_chars <= 0) {
+         *filename = NULL;
+         errno = EINVAL;
+         return -1;
+     }
+     *filename = (char *)av_malloc_array(num_chars, sizeof **filename);
+     if (!*filename) {
+         errno = ENOMEM;
+         return -1;
+     }
+     WideCharToMultiByte(code_page, flags, filename_w, -1,
+                         *filename, num_chars, NULL, NULL);
+     return 0;
+ }
+ 
+ av_warn_unused_result
+ static inline int wchartoutf8(const wchar_t *filename_w, char **filename)
+ {
+--- a/libavutil/random_seed.c
++++ b/libavutil/random_seed.c
+@@ -26,7 +26,10 @@
+ #if HAVE_IO_H
+ #include <io.h>
+ #endif
+-#if HAVE_BCRYPT
++#if defined(_WIN32) && _WIN32_WINNT < 0x0600
++#include <windows.h>
++#include <wincrypt.h>
++#elif HAVE_BCRYPT
+ #include <windows.h>
+ #include <bcrypt.h>
+ #endif
+@@ -49,6 +52,22 @@
+ 
+ #ifndef TEST
+ #define TEST 0
++#endif
++
++#if defined(_WIN32) && _WIN32_WINNT < 0x0600
++static int win32_random_bytes(uint8_t *buf, size_t len)
++{
++    HCRYPTPROV provider;
++    BOOL generated, released;
++    if (len > UINT32_MAX)
++        return AVERROR_EXTERNAL;
++    if (!CryptAcquireContextA(&provider, NULL, NULL, PROV_RSA_FULL,
++                              CRYPT_VERIFYCONTEXT | CRYPT_SILENT))
++        return AVERROR_EXTERNAL;
++    generated = CryptGenRandom(provider, (DWORD)len, buf);
++    released = CryptReleaseContext(provider, 0);
++    return generated && released ? 0 : AVERROR_EXTERNAL;
++}
+ #endif
+ 
+ static int read_random(uint8_t *dst, size_t len, const char *file)
+@@ -158,6 +177,9 @@
+ 
+ int av_random_bytes(uint8_t* buf, size_t len)
+ {
++#if defined(_WIN32) && _WIN32_WINNT < 0x0600
++    return win32_random_bytes(buf, len);
++#else
+     int err;
+ 
+ #if HAVE_BCRYPT
+@@ -191,6 +213,7 @@
+ #else
+     return err;
+ #endif
++#endif
+ }
+ 
+ uint32_t av_get_random_seed(void)
