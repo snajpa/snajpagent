@@ -1034,7 +1034,7 @@ image_tool_schema(void)
         "width", "type", "integer", "description", "Source-pixel width, 1..16777216.",
         "height", "type", "integer", "description", "Source-pixel height, 1..16777216.",
         "required", "x", "y", "width", "height");
-    return tool_schema("view_image",
+    return tool_schema("view_image", "path frame crop",
         "Inspect PNG/JPEG/GIF/WebP/BMP/TIFF via bounded linked decoding. Path is literal, workspace-relative or absolute; "
         "no symlinks. asset:ID reuses an accepted source. Optional frame selects one zero-based frame (null=0, max999); "
         "crop selects source pixel x,y,width,height before orientation (null=whole frame). Keeps original plus normalized "
@@ -1054,7 +1054,7 @@ tool_schemas(bool goal_active,
 
     if (!tools) return NULL;
     if (json_array_append_new(tools, image_tool_schema()) < 0 ||
-        json_array_append_new(tools, tool_schema("read_document",
+        json_array_append_new(tools, tool_schema("read_document", "path first last sheet_range",
             "Inspect PDF/Office pages or text/CSV records. first/last inclusive 1-based, up to4 pages/200 records. "
             "For XLSX/ODS use sheet_range {sheet,row,column,rows,columns}, all 1-based except counts; max200 rows/32 columns. "
             "sheet_range and first/last are mutually exclusive. Null selectors select first page, or sheet1 A1:H20 for a workbook. "
@@ -1072,7 +1072,7 @@ tool_schemas(bool goal_active,
                 "rows", "type", "integer", "description", "Number of rows, 1..200.",
                 "columns", "type", "integer", "description", "Number of columns, 1..32.",
                 "required", "sheet", "row", "column", "rows", "columns"))) < 0 ||
-        json_array_append_new(tools, tool_schema("view_video",
+        json_array_append_new(tools, tool_schema("view_video", "path start_s end_s frames",
             "Sample a local video interval as images; not continuous perception. "
             "start_s/end_s integer seconds (up to 30s); frames=1..8. Null defaults 0..30s, 8 frames. "
             "Transcribes the same interval when an audio route is configured (separate API billing); "
@@ -1088,7 +1088,7 @@ tool_schemas(bool goal_active,
     if (config && config->audio.provider[0]) {
         json_t *audio_tool = NULL;
         if (config->audio.listen_model[0]) {
-            audio_tool = tool_schema("listen_audio", "Ask an audio model about speech or sounds in a retained file. "
+            audio_tool = tool_schema("listen_audio", "path start_s end_s question", "Ask an audio model about speech or sounds in a retained file. "
                 "Paid, separate configured API route; no coding history or tools. Requested integer interval <=60s; "
                 "null start selects 0 and null end selects start+60s. Local path or asset:ID; question required. Answer is attributed derived data.",
                 json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:s,s:s}}",
@@ -1099,7 +1099,7 @@ tool_schemas(bool goal_active,
             if (json_array_append_new(tools, audio_tool) < 0) { json_decref(tools); return NULL; }
         }
         if (config->audio.transcribe_model[0]) {
-            audio_tool = tool_schema("transcribe_audio", "Transcribe a selected audio/video interval via a paid audio API. "
+            audio_tool = tool_schema("transcribe_audio", "path start_s end_s", "Transcribe a selected audio/video interval via a paid audio API. "
                 "Local path or asset:ID; integer interval <=60s. Null start selects 0 and null end selects start+60s. "
                 "Speech text only, not sound analysis; no invented timestamps or speakers.",
                 json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s}}",
@@ -1109,7 +1109,7 @@ tool_schemas(bool goal_active,
             if (json_array_append_new(tools, audio_tool) < 0) { json_decref(tools); return NULL; }
         }
         if (!read_only && config->audio.speech_model[0] && config->audio.voice[0]) {
-            audio_tool = tool_schema("speak_text", "Generate AI speech via a paid API and retain a WAV asset. "
+            audio_tool = tool_schema("speak_text", "text", "Generate AI speech via a paid API and retain a WAV asset. "
                 "Does not play or capture sound. text: 1..4096 UTF-8 bytes. Tell listeners the voice is AI-generated.",
                 json_pack("{s:{s:s,s:s}}", "text", "type", "string", "description",
                     "Text to synthesize, 1..4096 UTF-8 bytes. Uses the configured voice and retains a WAV without playback or capture."));

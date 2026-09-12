@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Reconcile multimedia schemas and retained-input context with the common tool
+  contract and system-role host instructions.
+
 - Preserve native unsupported-operation errors in early OpenBSD archive code.
 
 - Keep native math declarations visible in the early OpenBSD FFmpeg allocator.

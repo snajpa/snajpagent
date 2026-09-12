@@ -773,11 +773,15 @@ assert_optional_tool_contract(json_t *tool)
         assert(schema);
         assert(snag_json_string(schema, "description") && *snag_json_string(schema, "description"));
         json_t *nested = json_object_get(schema, "properties");
+        json_t *nested_required = json_object_get(schema, "required");
+        size_t nested_index = 0;
+        assert(json_array_size(nested_required) == json_object_size(nested));
         for (void *child = json_object_iter(nested); child;
              child = json_object_iter_next(nested, child)) {
             const json_t *property = json_object_iter_value(child);
             assert(snag_json_string(property, "description") && *snag_json_string(property, "description"));
-            assert(array_has_string(json_object_get(schema, "required"), json_object_iter_key(child)));
+            const char *required_key = json_string_value(json_array_get(nested_required, nested_index++));
+            assert(required_key && !strcmp(required_key, json_object_iter_key(child)));
         }
     }
     return properties;
@@ -954,7 +958,7 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
             for (size_t j = 0; j < json_array_size(ts); ++j) {
                 json_t *tool = json_array_get(ts, j);
                 if (!strcmp(snag_json_string(tool, "type"), "function"))
-                    (void)assert_strict_tool_contract(tool);
+                    (void)assert_optional_tool_contract(tool);
             }
             if (pass == 0u) {
                 assert(json_array_size(ts) == 9u);

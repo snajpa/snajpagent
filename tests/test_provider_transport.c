@@ -1926,7 +1926,7 @@ test_audio_transport(void)
             json_t *item = json_array_get(input, i);
             const char *role = snag_json_string(item, "role");
             const char *content = snag_json_string(item, "content");
-            if (role && !strcmp(role, "developer") && content &&
+            if (role && !strcmp(role, "system") && content &&
                 !strcmp(content, "Fixture: tool details hidden; report meaningful progress."))
                 visible = true;
         }
