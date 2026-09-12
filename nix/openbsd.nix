@@ -252,6 +252,11 @@ let
       ++ lib.optional legacy ./ffmpeg-bsd-thread-headers.patch
       ++ lib.optionals early [ ./ffmpeg-openbsd35-inttypes.patch ./ffmpeg-openbsd35-hls.patch
                                ./ffmpeg-legacy-libm.patch ];
+    postPatch = lib.optionalString early ''
+      # Reuse the application's exported errno owner without its other wrappers.
+      mkdir -p compat/errno
+      cp ${regex}/include/errno.h compat/errno/
+    '';
     nativeBuildInputs = [ pkgs.pkg-config pkgs.perl pkgs.nasm llvm.llvm ];
     buildInputs = [ zlib ];
     strictDeps = true;
@@ -277,11 +282,28 @@ let
         "--cxx=${cxxCompiler} --target=${target} --sysroot=${sdk}"
         "--ar=${tools}/llvm-ar" "--ranlib=${tools}/llvm-ranlib"
         "--nm=${tools}/llvm-nm" "--strip=${tools}/llvm-strip"
-        "--extra-cflags=${cflags}${lib.optionalString legacy " -Dstatic_assert=_Static_assert"}${lib.optionalString early " -fno-builtin-pow -fno-builtin-powf"}"
+        "--extra-cflags=${cflags}${lib.optionalString legacy " -Dstatic_assert=_Static_assert"}${lib.optionalString early " -fno-builtin-pow -fno-builtin-powf -I$PWD/compat/errno"}"
         "--extra-ldflags=${ldflags}"
       )
     '';
   };
+  xml = cmakeLibrary sourcePkgs.libxml2 [
+    "-DLIBXML2_WITH_PROGRAMS=OFF" "-DLIBXML2_WITH_TESTS=OFF"
+    "-DLIBXML2_WITH_PYTHON=OFF" "-DLIBXML2_WITH_MODULES=OFF"
+    "-DLIBXML2_WITH_ICONV=ON"
+  ] [ iconv ];
+  archive = (cmakeLibrary sourcePkgs.libarchive [
+    "-DENABLE_TAR=OFF" "-DENABLE_CPIO=OFF" "-DENABLE_CAT=OFF"
+    "-DENABLE_UNZIP=OFF" "-DENABLE_TEST=OFF" "-DENABLE_INSTALL=ON"
+    "-DENABLE_OPENSSL=OFF" "-DENABLE_MBEDTLS=OFF" "-DENABLE_NETTLE=OFF"
+    "-DENABLE_CNG=OFF" "-DENABLE_LIBB2=OFF" "-DENABLE_LZ4=OFF"
+    "-DENABLE_LZO=OFF" "-DENABLE_LZMA=OFF" "-DENABLE_ZSTD=OFF"
+    "-DENABLE_BZip2=OFF" "-DENABLE_LIBXML2=OFF" "-DENABLE_EXPAT=OFF"
+    "-DENABLE_WIN32_XMLLITE=OFF" "-DENABLE_PCREPOSIX=OFF"
+    "-DENABLE_PCRE2POSIX=OFF" "-DENABLE_ZLIB=ON" "-DENABLE_ICONV=ON"
+  ] [ zlib iconv ]).overrideAttrs (old: {
+    patches = old.patches ++ lib.optional early ./libarchive-wide-fallbacks.patch;
+  });
   brotli = (cmakeLibrary sourcePkgs.brotli [ "-DBROTLI_DISABLE_TESTS=ON" ] []).overrideAttrs (_: {
     postPatch = lib.optionalString early ''
       # The log2 fallback calls log, which is in the native math library.
@@ -415,7 +437,7 @@ let
     '';
   });
 in {
-  inherit sdk target compiler tools cflags ldflags jansson tls curl av miniaudio regex unistring;
+  inherit sdk target compiler tools cflags ldflags jansson tls curl av miniaudio regex unistring xml archive iconv zlib;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }:
     pkgs.stdenvNoCC.mkDerivation {
@@ -424,7 +446,7 @@ in {
       src = source;
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
-      buildInputs = [ jansson curl av ] ++ networkLibraries ++ [ regex ];
+      buildInputs = [ jansson curl av xml archive ] ++ networkLibraries ++ [ regex ];
       enableParallelBuilding = true;
       dontStrip = true;
       preBuild = ''

@@ -1,11 +1,26 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-# Use the target compiler's integer formats when old OpenBSD headers omit them.
---- a/libavutil/common.h
-+++ b/libavutil/common.h
-@@ -38,6 +38,35 @@
- #include <stdio.h>
- #include <stdlib.h>
- #include <string.h>
+# Keep old system types and supply missing format macros through one compatibility include.
+--- a/configure
++++ b/configure
+@@ -7995,6 +7995,10 @@
+     'static_assert(__STDC_VERSION_STDBIT_H__ >= 202311L, "Compiler lacks stdbit.h")' || \
+     add_cppflags '-I\$(SRC_PATH)/compat/stdbit'
+ 
++# Some old BSD inttypes.h headers provide types without format macros.
++test_cpp_condition inttypes.h 'defined(PRId64) && defined(SCNu32)' ||
++    add_cppflags '-I\$(SRC_PATH)/compat/inttypes'
++
+ # Check if requested libraries were found.
+ for lib in $AUTODETECT_LIBS; do
+     requested $lib && ! enabled $lib && die "ERROR: $lib requested but not found";
+--- /dev/null
++++ b/compat/inttypes/inttypes.h
+@@ -0,0 +1,36 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#ifndef COMPAT_INTTYPES_H
++#define COMPAT_INTTYPES_H
++
++#include_next <inttypes.h>
 +
 +/* Early OpenBSD inttypes.h defines types but omits C99 format macros. */
 +#if defined(__OpenBSD__) && defined(__clang__) && !defined(PRId64)
@@ -35,16 +50,5 @@
 +#define SCNu64 __UINT64_FMTu__
 +#define SCNx64 __UINT64_FMTx__
 +#endif
- 
- #include "attributes.h"
- #include "error.h"
---- a/libavcodec/fits.c
-+++ b/libavcodec/fits.c
-@@ -23,6 +23,7 @@
- #include <limits.h>
- #include <stdio.h>
- #include <string.h>
-+#include "libavutil/common.h"
- #include "libavutil/dict.h"
- #include "libavutil/error.h"
- #include "libavutil/log.h"
++
++#endif /* COMPAT_INTTYPES_H */

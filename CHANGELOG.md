@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Supply OpenBSD static Office package-reader dependencies. Share libarchive's
+  old-system wide-string fallbacks and preserve native overflow errors.
+- Make old FFmpeg integer formats available through its compatibility include
+  path, and reuse the exported Gnulib error definitions on early OpenBSD.
+
 - Reuse legacy FFmpeg min/max compatibility on early OpenBSD, preserving signed
   zero with available copysign and avoiding unavailable optimized math imports.
 

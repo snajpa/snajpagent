@@ -532,15 +532,27 @@ when the OS lacks `wchar.h`/`wcsrtombs`, and accepts empty pthread stack-size
 feature macros. Application file decoding remains in FFmpeg; miniaudio's engine
 and file decoders are disabled. This header compatibility does not complete the
 early target's media dependencies or qualify devices.
-The early FFmpeg header also supplies missing C99 integer-format macros using
-Clang's target-ABI definitions, keeping 64-bit and pointer widths distinct.
-Existing system definitions and printf/scanf implementations remain unchanged.
+The early FFmpeg compatibility include wraps the native `inttypes.h` and supplies
+missing C99 format macros from Clang's target ABI, keeping 64-bit and pointer
+widths distinct. Direct codec includes use this same owner. Existing system
+definitions and printf/scanf implementations remain unchanged.
 The HLS start-offset parser uses native `strtod` and double precision on this
 early target, which lacks `strtof`; signed fractional offsets remain supported.
 The shared legacy FFmpeg min/max compatibility uses available `copysign` to
 preserve signed zero without requiring a `signbit` macro. Early OpenBSD also
 keeps `pow`/`powf` calls from becoming unavailable `exp2` imports.
 Missing `isnormal` uses the compiler classification builtin, including subnormals.
+FFmpeg reuses the application's exported Gnulib `errno.h` through a dependency-local
+include directory, supplying missing `EILSEQ` and `ENOTSUP` without importing
+unrelated Gnulib wrappers or changing native error definitions.
+
+Static libarchive/libxml2 with zlib and iconv supply Office package checks;
+LibreOffice runtime packaging is separate and unfinished. On early OpenBSD,
+libarchive's existing wide-string length/copy fallbacks are shared with its ACL
+and path code, with a missing wide-character search fallback in the same owner.
+Missing `EOVERFLOW` maps to native `ERANGE`, preserving range failures; unsigned
+ZIP diagnostics use the existing integer-size-based format fallback. These
+compatibility adaptations do not qualify Office import or target execution.
 
 OpenBSD 7.9 qualification covers base/IRC/SSE tests, internal read-only
 inspection and denied writes, parallel commands, PTY execution, durable resume,

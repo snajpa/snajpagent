@@ -1617,22 +1617,28 @@ print("PASS: old OpenBSD audio preserves wide-file fallback and empty/numeric pt
 
 # Missing old-OS inttypes macros must match the compiler's actual integer ABI.
 formats_patch = (root / "nix/ffmpeg-openbsd35-inttypes.patch").read_text()
-assert '+#include "libavutil/common.h"' in formats_patch
-formats_added = "\n".join(line[1:] for line in formats_patch.split("--- a/libavcodec/fits.c", 1)[0].splitlines()
-                         if line.startswith("+") and not line.startswith("+++"))
+assert "defined(PRId64) && defined(SCNu32)" in formats_patch
+assert "compat/inttypes'" in formats_patch
+formats_header = "\n".join(line[1:] for line in formats_patch.split("+++ b/compat/inttypes/inttypes.h", 1)[1].splitlines()
+                           if line.startswith("+"))
+assert "#include_next <inttypes.h>" in formats_header
 assert 'lib.optionals early [ ./ffmpeg-openbsd35-inttypes.patch ./ffmpeg-openbsd35-hls.patch' in (root / "nix/openbsd.nix").read_text()
 assert './ffmpeg-legacy-libm.patch ];' in (root / "nix/openbsd.nix").read_text()
 if shutil.which("clang"):
     with tempfile.TemporaryDirectory(prefix="bsd-inttypes-", dir=root / "build") as tmp:
         tmp = Path(tmp)
         source = tmp / "format.c"
+        (tmp / "compat").mkdir()
+        (tmp / "system").mkdir()
+        (tmp / "compat/inttypes.h").write_text(formats_header)
+        (tmp / "system/inttypes.h").write_text("#include <stdint.h>\n")
         body = r"""
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #define __OpenBSD__ 1
-""" + formats_added + r"""
+#include <inttypes.h>
 int main(void) {
     char text[128];
     uint32_t u32 = 0; int32_t i32 = 0; uint64_t u64 = 0; int64_t i64 = 0;
@@ -1651,13 +1657,14 @@ int main(void) {
 }
 """
         source.write_text(body)
-        subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
+        subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                        "-I" + str(tmp / "compat"), "-I" + str(tmp / "system"), str(source),
                         "-o", str(tmp / "format")], check=True)
         subprocess.run([str(tmp / "format")], check=True)
         # Available system formats must never be replaced by the fallback.
-        source.write_text("#include <inttypes.h>\n" + body)
-        subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
-                        "-o", str(tmp / "format")], check=True)
+        source.write_text(body)
+        subprocess.run(["clang", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                        "-I" + str(tmp / "compat"), str(source), "-o", str(tmp / "format")], check=True)
         subprocess.run([str(tmp / "format")], check=True)
     print("PASS: missing BSD integer formats preserve limits, pointer widths and system definitions")
 else:
@@ -1716,3 +1723,84 @@ int main(void) {
     print("PASS: old BSD isnormal preserves float/double subnormals, infinities and single evaluation")
 else:
     print("SKIP: Clang unavailable for old BSD classification regression")
+
+# Reuse the existing Gnulib errno header, without exposing unrelated wrappers.
+openbsd = (root / "nix/openbsd.nix").read_text()
+av = openbsd.split("  av = ", 1)[1].split("  xml = ", 1)[0]
+assert "postPatch = lib.optionalString early" in av
+assert "cp ${regex}/include/errno.h compat/errno/" in av
+assert "-I$PWD/compat/errno" in av
+assert "-I${regex}/include" not in av
+assert "--m4-base=m4 regex errno snprintf vsnprintf" in openbsd
+print("PASS: early FFmpeg reuses the exported Gnulib errno owner in isolation")
+
+# Keep native range errors when old BSD lacks the newer overflow spelling.
+archive_patch = (root / "nix/libarchive-wide-fallbacks.patch").read_text()
+block = re.search(r"\+#ifndef EOVERFLOW\n\+#define .*?\n\+#endif", archive_patch).group(0)
+block = "\n".join(line[1:] for line in block.splitlines())
+with tempfile.TemporaryDirectory(prefix="bsd-native-errno-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    source = tmp / "errno.c"
+    for present in (False, True):
+        source.write_text("#define ERANGE 45\n" +
+                          ("#define EOVERFLOW 99\n" if present else "") + block +
+                          "\n_Static_assert(EOVERFLOW == " + str(99 if present else 45) +
+                          ', "native errno preserved");\n')
+        subprocess.run(["cc", "-std=c11", "-Werror", "-fsyntax-only", str(source)], check=True)
+print("PASS: old BSD overflow spelling preserves native and existing error codes")
+
+# Extend libarchive's existing size-based formats for unsigned ZIP diagnostics.
+platform_patch = archive_patch.rsplit("+++ b/libarchive/archive_platform.h", 1)[1]
+platform = "\n".join(line[1:] for line in platform_patch.splitlines()
+                     if line.startswith(("+", " ")))
+formats = re.search(r"/\* Some platforms lack.*?#endif // !HAVE_INTTYPES_H[^\n]*",
+                    platform, re.S).group(0)
+with tempfile.TemporaryDirectory(prefix="archive-inttypes-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    source = tmp / "formats.c"
+    for int_size, long_size, existing in ((4, 8, False), (2, 4, False), (4, 8, True)):
+        expected = "native-u" if existing else "u" if int_size == 4 else "lu"
+        source.write_text("#include <string.h>\n#define HAVE_INTTYPES_H 1\n" +
+                          f"#define SIZEOF_INT {int_size}\n#define SIZEOF_LONG {long_size}\n" +
+                          ('#define PRIu32 "native-u"\n' if existing else "") + formats +
+                          '\nint main(void) { return strcmp(PRIu32, "' + expected + '"); }\n')
+        subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
+                        "-o", str(tmp / "formats")], check=True)
+        subprocess.run([str(tmp / "formats")], check=True)
+print("PASS: libarchive unsigned formats follow int/long ABI and preserve existing macros")
+
+# Move the existing libarchive helpers to their shared owner, retaining wide paths.
+archive_added = "\n".join(line[1:] for line in archive_patch.splitlines()
+                          if line.startswith("+") and not line.startswith("+++"))
+archive_wide = "\n".join(re.search(r"static inline [^\n]+ " + name + r"\(.*?\n}",
+                                   archive_added, re.S).group(0)
+                          for name in ("wcscpy", "wcslen", "wcschr"))
+assert '+#include "archive_string.h"' in archive_patch
+assert 'check_symbol_exists(wcschr wchar.h HAVE_WCSCHR)' in archive_patch
+assert '#cmakedefine HAVE_WCSCHR 1' in archive_patch
+assert '-static wchar_t * wcscpy' in archive_patch and '-static size_t wcslen' in archive_patch
+with tempfile.TemporaryDirectory(prefix="archive-wide-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    source = tmp / "wide.c"
+    source.write_text("#include <assert.h>\n#include <stddef.h>\n" + archive_wide + r"""
+int main(void) {
+    const wchar_t *text = L"\u017e\u4e2d/path";
+    wchar_t copy[16];
+    assert(wcslen(L"") == 0 && wcslen(text) == 7);
+    assert(wcscpy(copy, text) == copy && wcslen(copy) == 7);
+    for (size_t i = 0; i <= 7; ++i) assert(copy[i] == text[i]);
+    assert(wcschr(copy, L'/') == copy + 2);
+    assert(wcschr(copy, L'\0') == copy + 7);
+    assert(wcschr(copy, L'X') == NULL);
+    assert(wcscpy(copy, L"") == copy && copy[0] == L'\0');
+    assert(wcschr(copy, L'\0') == copy);
+    return 0;
+}
+""")
+    subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
+                    "-o", str(tmp / "wide")], check=True)
+    subprocess.run([str(tmp / "wide")], check=True)
+openbsd = (root / "nix/openbsd.nix").read_text()
+assert 'buildInputs = [ jansson curl av xml archive ]' in openbsd
+assert 'lib.optional early ./libarchive-wide-fallbacks.patch' in openbsd
+print("PASS: libarchive shared wide-string helpers preserve Unicode, terminators and searches")
