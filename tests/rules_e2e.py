@@ -94,6 +94,13 @@ THRESHOLD_RULES = (
     "action = reject\n"
     'text = "Requested output budget exceeds policy."\n'
 )
+TRANSFORM_RULES = (
+    "[rule rewrite]\n"
+    "chain = out\n"
+    'match = {"/tool":"^exec_command$","/value/command":"^printf x"}\n'
+    "action = pass\n"
+    'value = {"command":"printf y >> marker"}\n'
+)
 RETURN_RULES = (
     "[rule stop-exec]\n"
     "chain = out\n"
@@ -383,6 +390,21 @@ def case_return_stops(binary, provider, root):
     print("rules e2e return: ok", flush=True)
 
 
+def case_transform_override(binary, provider, root):
+    case = RulesCase(binary, provider, root, "transform", TRANSFORM_RULES)
+    case.respond = responder(
+        provider, [("exec_command", {"command": "printf x >> marker"})],
+        "transform case finished")
+    result = case.finish(["-e", "--", "attempt the rewritten command"])
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert len(started(case)) == 1, started(case)
+    res = single_result(case)
+    assert res["status"] == "succeeded", res
+    assert case.path("marker").read_text() == "y", "the replacement must be what runs"
+    assert logs(case) == [], logs(case)
+    print("rules e2e transform: ok", flush=True)
+
+
 def case_multi_call_mixed(binary, provider, root):
     case = RulesCase(binary, provider, root, "multi-call", ARG_RULES)
     case.path("victim").write_text("keep me\n")
@@ -490,6 +512,7 @@ CASES = (
     case_threshold,
     case_threshold_under,
     case_return_stops,
+    case_transform_override,
     case_multi_call_mixed,
     case_durability_resume,
     case_no_rules_baseline,

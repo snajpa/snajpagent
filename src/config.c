@@ -707,11 +707,13 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
             if (parse_bool(value, &enabled) < 0) goto invalid;
             return json_object_set_new(rule, key, json_boolean(enabled)) < 0 ? -1 : 0;
         }
-        if (!strcmp(key, "match") || !strcmp(key, "at_least")) {
+        if (!strcmp(key, "match") || !strcmp(key, "at_least") || !strcmp(key, "value")) {
             char json_error[128];
             json_t *parsed = snag_json_load_strict((const unsigned char *)value,
                 strlen(value), SNAG_MAX_EVENT_LINE, json_error, sizeof(json_error));
-            if (!parsed || !json_is_object(parsed) || json_object_size(parsed) == 0u) {
+            bool value_key = !strcmp(key, "value");
+            if (!parsed || !(json_is_object(parsed) || (value_key && json_is_string(parsed))) ||
+                (json_is_object(parsed) && json_object_size(parsed) == 0u)) {
                 json_decref(parsed);
                 goto invalid;
             }

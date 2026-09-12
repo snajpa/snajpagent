@@ -2349,7 +2349,35 @@ finish_call(struct app_state *app, const char *turn_id,
 struct call_rule_host {
     struct app_state *app;
     char message[512];
+    bool replaced;
+    char rule[SNAG_RULE_NAME_MAX + 1u];
 };
+
+/* Replace an object payload in place: every field the replacement provides is
+ * set, and fields it omits are removed. The object is owned by the caller and is
+ * exactly the object native dispatch will consume. */
+static bool
+apply_replacement(json_t *target, const json_t *replacement)
+{
+    if (!json_is_object(target) || !json_is_object(replacement)) return false;
+    for (;;) {
+        const char *extra = NULL;
+        for (void *it = json_object_iter(target); it; it = json_object_iter_next(target, it))
+            if (!json_object_get(replacement, json_object_iter_key(it))) {
+                extra = json_object_iter_key(it);
+                break;
+            }
+        if (!extra) break;
+        (void)json_object_del(target, extra);
+    }
+    for (void *it = json_object_iter((json_t *)replacement); it;
+         it = json_object_iter_next((json_t *)replacement, it)) {
+        const char *key = json_object_iter_key(it);
+        json_t *value = json_object_iter_value(it);
+        if (snag_json_set_new(target, key, json_incref(value)) < 0) return false;
+    }
+    return true;
+}
 
 static int
 call_rule_effect(void *opaque, const struct snag_rule *rule,
@@ -2382,6 +2410,16 @@ call_rule_effect(void *opaque, const struct snag_rule *rule,
                            (const char *)message.data);
         snag_buf_free(&message);
     }
+    if (snag_rule_verb(rule) == SNAG_RULE_PASS && snag_rule_value(rule)) {
+        json_t *target = json_object_get(frame->envelope, "value");
+        if (!apply_replacement(target, snag_rule_value(rule))) {
+            (void)snprintf(host->message, sizeof(host->message),
+                           "A configured rule produced a payload replacement that does not fit this boundary.");
+            return 1; /* Veto: never dispatch an incompatible replacement. */
+        }
+        host->replaced = true;
+        (void)snprintf(host->rule, sizeof(host->rule), "%s", snag_rule_name(rule));
+    }
     return 0;
 }
 
@@ -2394,12 +2432,22 @@ call_rule_check(struct app_state *app, const struct snag_response_item *call,
     struct snag_rule_verdict verdict;
     struct snag_buf text;
     json_t *envelope, *arguments;
+    struct snag_pending_call *pending = NULL;
+    char original[SNAG_SHA256_HEX_LEN + 1u];
     bool owned;
     char rule_error[256] = "";
 
     *rejected = false;
     message[0] = '\0';
+    original[0] = '\0';
     if (snag_rules_empty(app->config->rules)) return 0;
+    if (call->call_id)
+        for (size_t i = 0u; i < app->session.pending_call_count; ++i)
+            if (strcmp(app->session.pending_calls[i].call_id, call->call_id) == 0) {
+                pending = &app->session.pending_calls[i];
+                memcpy(original, pending->action_sha256, sizeof(original));
+                break;
+            }
     owned = call->arguments == NULL;
     arguments = call->arguments ? call->arguments : json_object();
     snag_buf_init(&text, SNAG_MAX_TOOL_ARGUMENTS);
@@ -2428,6 +2476,17 @@ call_rule_check(struct app_state *app, const struct snag_response_item *call,
         *rejected = true;
         (void)snprintf(message, message_size, "%s", host.message[0] ? host.message :
                        "Tool call rejected by the configured rules.");
+    }
+    if (host.replaced) {
+        char effective[SNAG_SHA256_HEX_LEN + 1u];
+        json_t *data;
+        if (!pending || snag_tool_action_digest(call, app->session.workspace, effective) < 0)
+            return snag_errorf(error, error_size, "transformed call has no registered action to update");
+        data = json_pack("{s:s,s:s,s:s,s:s}", "call_id", call->call_id, "rule", host.rule,
+                         "original_sha256", original, "effective_sha256", effective);
+        if (!data || snag_app_commit_event(app, "rule_transform", data, error, error_size) < 0)
+            return -1;
+        memcpy(pending->action_sha256, effective, sizeof(effective));
     }
     return 0;
 }
