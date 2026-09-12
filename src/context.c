@@ -880,6 +880,27 @@ read_only_schema(const char *name)
 }
 
 static json_t *
+write_schema(const char *name)
+{
+    bool write = strcmp(name, "write_file") == 0;
+    json_t *props;
+
+    if (write) props = json_pack("{s:{s:s,s:s},s:{s:s,s:s}}",
+            "path", "type", "string", "description", "Workspace-relative UTF-8 path (1..4096 bytes). Parent directories must already exist; symlinks and .. are rejected.",
+            "content", "type", "string", "description", "New file content, at most 16777216 UTF-8 bytes. Empty creates an empty file. Atomic: a failed write leaves the previous file untouched.");
+    else props = json_pack("{s:{s:s,s:s},s:{s:s,s:s},s:{s:s,s:s},s:{s:[s,s],s:i,s:i,s:s}}",
+            "path", "type", "string", "description", "Workspace-relative UTF-8 path (1..4096 bytes).",
+            "old", "type", "string", "description", "Exact text to replace (1..1048576 bytes). It must occur exactly count times; otherwise nothing changes.",
+            "new", "type", "string", "description", "Replacement text, at most 16777216 bytes; empty deletes the matched text.",
+            "count", "type", "integer", "null", "minimum", 1, "maximum", 1000000,
+                "description", "Exact number of occurrences to replace; null or omitted means exactly one.");
+    return tool_schema(name, write ? "path content" : "path old new", write ?
+        "Create or replace one workspace file atomically. Prefer edit_file for a targeted change." :
+        "Replace exact text in one workspace file atomically; fails without changing the file when the occurrence count differs.",
+        props);
+}
+
+static json_t *
 tool_schemas(bool goal_active, bool goal_create_allowed, bool networked,
              const struct snag_config *config, const char *provider_name, bool read_only)
 {
@@ -910,6 +931,11 @@ tool_schemas(bool goal_active, bool goal_create_allowed, bool networked,
                 "patch", "type", "string", "description", "Patch text in the described format, at most 2097152 UTF-8 bytes. Ordinary diff headers (---/+++) are not accepted.",
                 "workdir", "type", "string", "null", "description", "Omission/null uses the session workspace. A supplied path must equal that workspace."))) < 0 ||
         json_array_append_new(tools, json_pack("{s:s}", "type", search_type)) < 0) goto fail;
+    if (json_array_append_new(tools, read_only_schema("list_files")) < 0 ||
+        json_array_append_new(tools, read_only_schema("read_file")) < 0 ||
+        json_array_append_new(tools, read_only_schema("grep")) < 0 ||
+        json_array_append_new(tools, write_schema("write_file")) < 0 ||
+        json_array_append_new(tools, write_schema("edit_file")) < 0) goto fail;
     if (networked && (json_array_append_new(tools, tool_schema("irc_send", "text",
             "Send bounded room chat as the agent identity. This is the only way "
             "model text reaches the room; assistant response text remains local. "

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "tools_patch.h"
+#include "tools_file.h"
 #include "fs.h"
 
 #include "base.h"
@@ -109,8 +110,8 @@ is_hunk_header(const char *line)
     return strcmp(line, "@@") == 0 || starts_with(line, "@@ ");
 }
 
-static int
-path_valid(const char *path, char *error, size_t error_size)
+int
+snag_file_path_valid(const char *path, char *error, size_t error_size)
 {
     size_t len = strlen(path);
     const char *p = path;
@@ -256,7 +257,7 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set, char *
         } else {
             return snag_fail(error, error_size, EINVAL, "expected a file operation header");
         }
-        if (path_valid(path, error, error_size) < 0 || check_duplicate_path(set, path, error, error_size) < 0)
+        if (snag_file_path_valid(path, error, error_size) < 0 || check_duplicate_path(set, path, error, error_size) < 0)
             return -1;
         if (set->count >= PATCH_OP_MAX) return snag_errno(EOVERFLOW);
         op = &set->ops[set->count++];
@@ -327,8 +328,8 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set, char *
     return 0;
 }
 
-static int
-open_parent_dir(int root_fd, const char *path, char leaf[SNAG_NAME_MAX_BYTES + 1u],
+int
+snag_file_parent(int root_fd, const char *path, char leaf[SNAG_NAME_MAX_BYTES + 1u],
                 char *error, size_t error_size)
 {
     int dir_fd = snag_dup_read(root_fd);
@@ -363,7 +364,7 @@ static int
 prepare_target(int root_fd, struct patch_op *op, char *error, size_t error_size)
 {
     char leaf[SNAG_NAME_MAX_BYTES + 1u];
-    int parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
+    int parent_fd = snag_file_parent(root_fd, op->path, leaf, error, error_size);
     int fd = -1, rc = -1;
 
     if (parent_fd < 0) return -1;
@@ -605,8 +606,8 @@ make_temp_file(int parent_fd, const struct snag_permissions *permissions, char t
     return snag_errno(EEXIST);
 }
 
-static int
-write_temp_file(int parent_fd, const struct snag_buf *bytes, const struct snag_permissions *permissions,
+int
+snag_file_stage(int parent_fd, const struct snag_buf *bytes, const struct snag_permissions *permissions,
                 char temp[SNAG_NAME_MAX_BYTES + 1u])
 {
     int fd = make_temp_file(parent_fd, permissions, temp);
@@ -638,7 +639,7 @@ install_op(int root_fd, const struct patch_op *op, char *error, size_t error_siz
     const char *kind = op->type == OP_ADD ? "add" : op->type == OP_UPDATE ? "update" : "delete";
     const char *failure = "changed before install";
     snag_file_info st;
-    int parent_fd = open_parent_dir(root_fd, op->path, leaf, error, error_size);
+    int parent_fd = snag_file_parent(root_fd, op->path, leaf, error, error_size);
     int rc = -1, saved;
 
     if (parent_fd < 0) return -1;
@@ -659,7 +660,7 @@ install_op(int root_fd, const struct patch_op *op, char *error, size_t error_siz
         if (snag_unlink_at(parent_fd, leaf, false) < 0 || snag_sync_dir(parent_fd) < 0) goto fail;
     } else {
         failure = "could not be staged";
-        if (write_temp_file(parent_fd, &op->new_bytes,
+        if (snag_file_stage(parent_fd, &op->new_bytes,
                              op->type == OP_UPDATE ? &op->permissions : NULL, temp) < 0) {
             temp[0] = '\0'; /* The stage writer owns cleanup on failure. */
             goto fail;

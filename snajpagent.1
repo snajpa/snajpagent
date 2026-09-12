@@ -609,7 +609,8 @@ A leading
 is optional.  The default is derived from the hostname.
 .TP
 .BI \-C " directory"
-Use an existing directory as the workspace.  With
+Use an existing directory as the workspace; the default is the launch
+directory.  Every file tool is workspace-relative.  With
 .BR \-\-resume ,
 relocate the resumed session to it.
 .TP
@@ -1272,6 +1273,8 @@ Run one read-only query, including multiline text.  Native tools list
 files/directories, read whole files or inclusive 1-based line ranges, and
 search text patterns without shells or external commands.  Provider-hosted
 web search is also available when supported by the selected provider/model;
+these same native exploration tools are declared in every ordinary turn, where
+a read-only query restricts the turn to them;
 search queries are sent to that provider.  Normal capabilities return on the
 next ordinary
 turn.  In networked mode the query opens rollout view and sends no IRC reply.
@@ -2195,9 +2198,14 @@ terminal color or Markdown presentation.
 The normal coding-tool surface is
 .BR exec_command ,
 .BR write_stdin ,
+.BR apply_patch ,
+.BR list_files ,
+.BR read_file ,
+.BR grep ,
+.BR write_file
 and
-.BR apply_patch .
-Read-only queries instead expose the native functions
+.BR edit_file .
+Read-only queries expose only the native exploration functions
 .BR list_files ,
 .BR read_file ,
 and
@@ -2495,7 +2503,7 @@ Limits are 2 MiB patch text, 1 MiB per patch line, 256 file operations,
 2048 hunks in total, 16 MiB per regular file and 48 MiB aggregate file data.
 Result text and diff previews are bounded.  Use normal command tools for work
 outside this patch grammar; their local authority is not a workspace sandbox.
-.SS Native read-only inspection
+.SS Native exploration
 .B list_files
 accepts path, recursive, offset and limit.  Path is required; null recursive
 means false.  It lists hidden entries and labels directories, symlinks and
@@ -2519,6 +2527,31 @@ path.  The live filesystem can change between pages.  All inspection tools
 require safe non-symlink paths; file reading requires regular UTF-8 text without
 NUL.  Result, traversal and scan ceilings are listed under AUTOMATION AND
 INTEGRATION.  These tools do not interpret shell globs or ignore files.
+.PP
+These native functions are declared in every turn and are preferred over
+shelling out for reading, searching and listing.  A read-only query exposes them
+without any modification or command capability.
+.SS Native modification
+.B write_file
+accepts path and content.  It creates or replaces one workspace-relative file
+atomically; parent directories must already exist and symlinks are rejected.
+Content is limited to 16777216 UTF-8 bytes.  A failure leaves the previous file
+untouched.
+.PP
+.B edit_file
+accepts path, old, new and an optional count.  It replaces exactly
+.I count
+occurrences of the exact text
+.I old
+(one by default); when the file does not contain exactly that many occurrences,
+nothing changes.  The result is installed atomically.  Prefer
+.B write_file
+for a wholesale replacement and
+.B apply_patch
+for several files or hunks.
+.PP
+Modification tools exist only in ordinary turns; a read-only query exposes none
+of them.
 .SS Hosted search
 .B web_search
 runs on the provider.  The model receives

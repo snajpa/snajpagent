@@ -234,7 +234,7 @@ static bool
 tool_name_valid(const char *name)
 {
     return snag_read_only_tool(name) || snag_string_in(name,
-        "exec_command write_stdin apply_patch create_goal update_goal irc_send irc_state " "irc_topic");
+        "exec_command write_stdin apply_patch write_file edit_file create_goal update_goal irc_send irc_state " "irc_topic");
 }
 
 static bool

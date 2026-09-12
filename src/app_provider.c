@@ -4,6 +4,7 @@
 #include "context.h"
 #include "json.h"
 #include "tools.h"
+#include "tools_write.h"
 #include "wire.h"
 #include "secret.h"
 
@@ -304,25 +305,26 @@ int
 snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
                  const struct snag_credential *credential, json_t **result, char *error, size_t error_size)
 {
+    /* Exploration tools run in every turn. /ro additionally refuses everything
+     * that is not an exploration tool. */
+    if (call && call->name && snag_read_only_tool(call->name)) {
+        struct snag_secret_set secrets = {0};
+        int rc = snag_secret_set_build(&secrets, app->config, credential, error, error_size);
+        if (rc == 0) rc = snag_tools_read_only(call, app->session.workspace,
+                                     snag_app_active_input_pump, app, result);
+        if (rc == 0 && *result) rc = snag_secret_result(&secrets, *result, error, error_size);
+        snag_secret_set_free(&secrets);
+        return rc;
+    }
     if (app->session.active_read_only) {
-        if (call && snag_read_only_tool(call->name)) {
-            struct snag_secret_set secrets = {0};
-            int rc = snag_secret_set_build(&secrets, app->config, credential, error, error_size);
-            if (rc == 0) rc = snag_tools_read_only(call, app->session.workspace,
-                                         snag_app_active_input_pump, app, result);
-            if (rc == 0 && *result) rc = snag_secret_result(&secrets, *result, error, error_size);
-            snag_secret_set_free(&secrets);
-            return rc;
-        }
         *result = snag_tool_result_terminal(false,
             "Tool unavailable: this turn is read-only; use list_files, read_file or grep.");
         return *result ? 0 : -1;
     }
-    if (call && snag_read_only_tool(call->name)) {
-        *result = snag_tool_result_terminal(false,
-            "Native inspection tools are available only in /ro queries.");
-        return *result ? 0 : -1;
-    }
+    if (call && call->name && strcmp(call->name, "write_file") == 0)
+        return snag_tools_write_file(call, app->session.workspace, result, error, error_size);
+    if (call && call->name && strcmp(call->name, "edit_file") == 0)
+        return snag_tools_edit_file(call, app->session.workspace, result, error, error_size);
 
     if (call && call->name && (snag_string_in(call->name, "create_goal update_goal")))
         return snag_app_goal_tool(app, call, result, error, error_size);

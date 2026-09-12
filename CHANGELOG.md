@@ -6,6 +6,18 @@
 
 - Align every prose continuation line, including provider source line breaks,
   two spaces under the paragraph text instead of at column zero.
+- Native exploration tools (list_files, read_file, grep) are declared and
+  runnable in every turn, not only /ro; /ro remains inspection-only. Reading and
+  searching no longer requires shelling out through exec_command.
+- Add write_file (atomic whole-file create or replace) and edit_file (targeted
+  exact replacement; an ambiguous or missing match changes nothing). Both are
+  workspace-relative, reject symlink traversal and keep the previous file on
+  failure; apply_patch remains for several files or hunks.
+- The -C switch sets the workspace (default: the launch directory); every file
+  tool is workspace-relative.
+- Rule effects that are designed but not yet wired (payload transform via
+  pass+value, insert, confirm, helper command) are refused at configuration
+  load with a clear message instead of being accepted and ignored.
 - Rules gain an `accept` action: it stops evaluation and allows the operation,
   so an allowlist can sit in front of a catch-all `reject`. `pass` only
   continues and never exempts a call from a later denial.

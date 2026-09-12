@@ -15,6 +15,29 @@ Preserve the existing passing evidence and report its actual scope honestly.
 Fix known product failures and build failures; do not conceal them behind an
 earlier pass. Publication still requires the operator's shipment authority.
 
+## One worktree per worker
+
+Every agent or concurrent worker uses its own `git worktree` for snajpagent.
+Do not edit, build, commit or install from another worker's worktree, and do not
+treat the canonical `/root/snajpagent` checkout as a shared workspace. Create
+one worktree per task (for example
+`git worktree add -b <branch> ~/ai/worktrees/<short> <base>`), keep it clean at
+handoff, and re-check the target branch tip and the installed binary version
+immediately before landing or installing. Shared checkouts caused avoidable
+divergence: master moved under an in-flight task and an installed binary was
+briefly downgraded.
+
+## Autonomous delivery and design ownership
+
+Agents own ordinary engineering decisions, including tool designs, schemas and
+implementation approach. A written design is a normal deliverable and is
+followed by implementation, tests and landing in the same autonomous flow; it
+is not an approval gate and does not need operator review first. Operator
+decisions are limited to version changes, publication beyond the recorded
+authority, hardware actions and genuine scope or policy changes. Solve genuine
+engineering blockers (for example an integration that would downgrade a shipped
+artifact) rather than deferring them.
+
 ## Staging
 
 Integration happens on the `staging` branch, which tracks `master`. Authorized

@@ -57,6 +57,7 @@ enum snag_rule_verb snag_rule_verb(const struct snag_rule *rule);
 const char *snag_rule_text(const struct snag_rule *rule);
 const char *snag_rule_target(const struct snag_rule *rule);
 const char *snag_rule_log(const struct snag_rule *rule);
+const json_t *snag_rule_value(const struct snag_rule *rule);
 bool snag_rule_confirm(const struct snag_rule *rule);
 
 int snag_rules_eval(const struct snag_rules *rules, struct snag_rule_frame *frame,

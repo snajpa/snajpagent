@@ -229,3 +229,21 @@ See `src/rules.c` (engine), `src/config.c` (`[rule NAME]` parsing),
 `tests/test_rules.c` (matching, flow, veto, invalid definitions) and
 `tests/rules_e2e.py` (real-binary end-to-end: deny, allow, allowlist, jump, log,
 threshold, return, multi-call, resume durability and startup refusals).
+
+## 5. Handoff and lessons for upstream
+
+This is a filter, not a sandbox: a rule can deny a call, but it does not confine
+an admitted call, and matching text is never proof of containment. The facility
+is expected to grow into that role, so the handoff is deliberately explicit:
+
+- Never describe regex matching as security containment.
+- Keep one effect vocabulary so a native confinement action can be added beside
+  `pass`/`accept`/`reject`/`jump`/`return` without a second engine or a mode
+  switch; the matcher and envelope stay unchanged.
+- The exploration and modification tools constrain by construction
+  (workspace-relative paths, atomic replacement, no symlink traversal). Real
+  process, filesystem and network confinement of `exec_command` remains open
+  work and belongs to a native owner, not to rule text.
+- A future confinement owner should be able to reuse the same `[rule NAME]`
+  chains: rules decide *whether* an operation is admitted; the native mechanism
+  decides *what an admitted operation can reach*.
