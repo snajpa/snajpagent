@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Add OpenBSD 7.9 static PDF/font dependencies with native SDK C++ linkage.
+  Preserve private font-library dependencies; legacy PDF closure remains pending.
+
 - Supply NetBSD static ZIP/XML Office package-reader dependencies; PDF and
   LibreOffice runtime closure remain in progress.
 

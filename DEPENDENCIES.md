@@ -568,6 +568,14 @@ Missing `strtoimax` uses native `strtoll` after a compile-time width check. ZIP
 filename flags use existing libcharset detection when native `CODESET` is absent. These
 compatibility adaptations do not qualify Office import or target execution.
 
+The OpenBSD 7.9 PDF recipe supplies static Poppler, libpng, FreeType,
+Fontconfig/Expat, JPEG and OpenJPEG, using the SDK's native libc++/libc++abi.
+Fontconfig reads `/etc/fonts` and uses native X11 font directories rather than
+build-host fonts; static FreeType metadata retains libpng's private math linkage.
+The AV/PDF/audio application cross-links with only native libc++/libc++abi,
+pthread and libc imports and no runtime search path; Office is excluded. No
+target executable was run. Legacy OpenBSD PDF remains pending: the old SDK C++ headers cannot compile the current C++20 API.
+
 OpenBSD 3.5 media/audio application cross-linking and static ZIP/XML package
 checks pass with native libc/pthread imports and no runtime search path. The
 application check excludes PDF and Office import; their complete runtime closure

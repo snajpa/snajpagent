@@ -1807,6 +1807,36 @@ assert 'buildInputs = [ jansson curl av xml archive ]' in openbsd
 assert 'lib.optional early ./libarchive-wide-fallbacks.patch' in openbsd
 print("PASS: libarchive shared wide-string helpers preserve Unicode, terminators and searches")
 
+# OpenBSD's native libc++ supports the current PDF API only on the modern SDK.
+open_pdf = openbsd.split("  pdf = ", 1)[1].split("  xml = ", 1)[0]
+assert '"-DFONT_CONFIGURATION=fontconfig"' in open_pdf
+assert 'cmakeBuildType = "Release";' in open_pdf
+assert './poppler-static-fonts.patch' in open_pdf
+assert '++ lib.optionals (!legacy) [ pdf png freetype expat fontconfig jpeg openjpeg ]' in openbsd
+assert "'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'" in openbsd
+assert '"PDF_LIBS=$(pkg-config --static --libs poppler libpng |' in openbsd
+assert '-Wl,-Bdynamic -lc++ -lc++abi -lm -Wl,-Bstatic' in openbsd
+open_png = openbsd.split("  png = ", 1)[1].split("  freetype = ", 1)[0]
+assert 'cmakeFlagsArray+=("-DCMAKE_C_FLAGS=${cflags} --target=${target} --sysroot=${sdk}")' in open_png
+open_fonts = openbsd.split("  fontconfig = ", 1)[1].split("  jpeg = ", 1)[0]
+assert '"--sysconfdir=/etc"' in open_fonts
+assert '"--with-default-fonts=/usr/X11R6/lib/X11/fonts"' in open_fonts
+font_flags = re.search(r'export FREETYPE_LIBS="(.*?)"', open_fonts).group(1)
+# Reproduce the omitted indirect dependency and exercise the exact recipe command.
+with tempfile.TemporaryDirectory(prefix="openbsd-static-fonts-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    (tmp / "freetype2.pc").write_text("Name: freetype2\nDescription: fixture font library\n"
+        "Version: 1\nLibs: -lfreetype\nRequires.private: libpng\n")
+    (tmp / "libpng.pc").write_text("Name: libpng\nDescription: fixture bitmap library\n"
+        "Version: 1\nLibs: -lpng\nLibs.private: -lm\n")
+    environment = dict(os.environ, PKG_CONFIG_PATH="", PKG_CONFIG_LIBDIR=str(tmp))
+    before = subprocess.check_output(["pkg-config", "--libs", "freetype2"], env=environment, text=True)
+    after = subprocess.check_output(["sh", "-ec", 'printf "%s" "' + font_flags + '"'], env=environment, text=True)
+    assert "-lm" not in before.split()
+    assert after.split() == ["-lfreetype", "-lpng", "-lm"], after
+print("PASS: OpenBSD PDF retains target headers, native C++ and ordered private font dependencies")
+
+
 # Keep libarchive's signed NTFS conversion identical without a missing lldiv ABI.
 time_patch = archive_patch.split("+++ b/libarchive/archive_time.c", 1)[1]
 time_source = "\n".join(line[1:] for line in time_patch.splitlines()

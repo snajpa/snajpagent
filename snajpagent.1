@@ -3371,6 +3371,9 @@ for the selected SDK/deployment target. PDF builds use static Poppler/font
 libraries with the SDK C++ runtime and host font lookup. Office runtime packaging
 remains in development; dependency cross-links do not establish target rendering
 or playback/capture.
+The OpenBSD 7.9 PDF recipe likewise supplies static rendering/font libraries,
+uses the SDK libc++ runtime and reads the host /etc/fonts configuration.
+Legacy OpenBSD PDF dependency closure remains in development.
 .TP
 .B make WITH_PDF=0 WITH_OFFICE=0
 Build a custom lean executable without PDF/Office rendering or their C++ runtimes.
