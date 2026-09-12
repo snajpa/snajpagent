@@ -115,8 +115,8 @@
   * default memory allocator for libavutil
   */
  
-+/* Old FreeBSD math.h hides available BSD functions under _XOPEN_SOURCE. */
-+#if !defined(__FreeBSD__) || __FreeBSD__ >= 6
++/* Old BSD math.h hides available functions under _XOPEN_SOURCE. */
++#if (!defined(__FreeBSD__) || __FreeBSD__ >= 6) && !defined(__OpenBSD__)
  #define _XOPEN_SOURCE 600
 +#endif
  

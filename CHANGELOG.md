@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Keep native math declarations visible in the early OpenBSD FFmpeg allocator.
+
 - Preserve early OpenBSD archive timestamps without the unavailable lldiv ABI.
 
 - Supply OpenBSD static Office package-reader dependencies. Share libarchive's

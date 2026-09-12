@@ -542,6 +542,7 @@ The shared legacy FFmpeg min/max compatibility uses available `copysign` to
 preserve signed zero without requiring a `signbit` macro. Early OpenBSD also
 keeps `pow`/`powf` calls from becoming unavailable `exp2` imports.
 Missing `isnormal` uses the compiler classification builtin, including subnormals.
+The allocator retains native BSD math declarations hidden by `_XOPEN_SOURCE`.
 FFmpeg reuses the application's exported Gnulib `errno.h` through a dependency-local
 include directory, supplying missing `EILSEQ` and `ENOTSUP` without importing
 unrelated Gnulib wrappers or changing native error definitions.

@@ -1474,7 +1474,7 @@ assert 'pContext->oss.versionMajor = 0;' in oss_added and 'pContext->oss.version
 for name in ("fmin", "fminf", "fmax", "fmaxf"):
     assert '+' + name + '_args=2' in math_patch
 assert '+#include "libm.h"' in math_patch
-assert '+#if !defined(__FreeBSD__) || __FreeBSD__ >= 6' in math_patch
+assert '+#if (!defined(__FreeBSD__) || __FreeBSD__ >= 6) && !defined(__OpenBSD__)' in math_patch
 print("PASS: OSS3 defaults respect access, stop callbacks and unknown native format/version")
 
 # Old BSD extension headers require the standard pthread declarations first.
@@ -1848,3 +1848,20 @@ int main(void) {
                     "-o", str(tmp / "time")], check=True)
     subprocess.run([str(tmp / "time")], check=True)
 print("PASS: libarchive NTFS conversion preserves signed and full-width boundary behavior")
+
+# The shared early-BSD math patch must not hide available native declarations.
+math_patch = (root / "nix/ffmpeg-legacy-libm.patch").read_text()
+mem_patch = math_patch.split("+++ b/libavutil/mem.c", 1)[1]
+mem_source = "\n".join(line[1:] for line in mem_patch.splitlines()
+                       if line.startswith(("+", " ")))
+feature = re.search(r"#if .*?\n#define _XOPEN_SOURCE 600\n#endif", mem_source).group(0)
+with tempfile.TemporaryDirectory(prefix="bsd-math-visibility-", dir=root / "build") as tmp:
+    source = Path(tmp) / "feature.c"
+    for defines, expected in (([], True), (["-D__FreeBSD__=5"], False),
+                              (["-D__FreeBSD__=8"], True), (["-D__OpenBSD__=1"], False)):
+        source.write_text(feature + "\n" +
+                          ("#ifndef" if expected else "#ifdef") +
+                          " _XOPEN_SOURCE\n#error wrong native declaration visibility\n#endif\n")
+        subprocess.run(["cc", "-E", "-P", *defines, str(source)],
+                       stdout=subprocess.DEVNULL, check=True)
+print("PASS: early BSD allocator retains native math declarations and other platform features")
