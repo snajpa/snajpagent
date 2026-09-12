@@ -841,7 +841,7 @@ static int
 preview_appendn(struct snag_buf *out, size_t *used, bool *truncated,
                 const char *data, size_t len)
 {
-    static const char marker[] = "... diff preview truncated ...\n";
+    static const char marker[] = "… diff preview truncated\n";
 
     if (*truncated)
         return 0;

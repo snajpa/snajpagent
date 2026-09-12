@@ -332,31 +332,54 @@ free_record(struct snag_render_record *record)
     free(record);
 }
 
+/* One dim marker for display content cut or omitted by the current level. */
+static int
+write_omitted(struct snag_render *render)
+{
+    static const char marker[] = "[…]\n";
+    return write_role_block(render, BOUNDARY_CONTENT, STDERR_FILENO, COLOR_META,
+                            marker, sizeof(marker) - 1u, sizeof(marker) - 1u,
+                            render->stderr_terminal, true);
+}
+
 static int
 write_optional_block(struct snag_render *render, enum snag_presentation kind,
                      const char *color, const char *text, size_t len,
                      size_t colored_len)
 {
     bool ended_lf = true;
+    bool wrote = false;
+    int rc = -1;
+
+    /* A block parks and repaints the composer once, not once per slice. */
+    if (output_begin(render) < 0)
+        return -1;
     while (len) {
         if (render_checkpoint(render) < 0)
-            return -1;
+            goto out;
         if (!snag_render_enabled(render, kind)) {
             if (!ended_lf && write_literal(STDERR_FILENO, "\n") < 0)
-                return -1;
-            return snag_render_host(render, "… [display omitted]");
+                goto out;
+            /* Mark a mid-block downgrade only when something was shown. */
+            rc = wrote ? write_omitted(render) : 0;
+            goto out;
         }
         size_t amount = text_slice(text, len);
         size_t colored = colored_len < amount ? colored_len : amount;
         if (write_role_chunk(render, BOUNDARY_CONTENT, STDERR_FILENO, color, text, amount,
                               colored, render->stderr_terminal, true) < 0)
-            return -1;
+            goto out;
+        wrote = true;
         ended_lf = text[amount - 1u] == '\n';
         text += amount;
         len -= amount;
         colored_len -= colored;
     }
-    return 0;
+    rc = 0;
+out:
+    if (output_end(render) < 0)
+        rc = -1;
+    return rc;
 }
 
 static void
@@ -2808,7 +2831,7 @@ rollout_physical_append(struct snag_render *render,
             record->omitted = true;
             if (record->physical_open) {
                 if (snag_render_public_abort(render) < 0 ||
-                    snag_render_host(render, "… [display omitted]") < 0)
+                    write_omitted(render) < 0)
                     return -1;
                 record->physical_open = false;
             }
@@ -3480,11 +3503,7 @@ tool_body(struct snag_render *render, const struct snag_render_block *block)
     if (offset && block->body.data[offset - 1u] != '\n' &&
         write_literal(STDERR_FILENO, "\n") < 0)
         return -1;
-    if (truncated) {
-        (void)snprintf(header, sizeof(header), "… [%s truncated]\n", label);
-        return write_block(render, STDERR_FILENO, header, strlen(header), true, true);
-    }
-    return 0;
+    return truncated ? write_omitted(render) : 0;
 }
 
 int
@@ -3493,20 +3512,28 @@ snag_render_tool_block(struct snag_render *render, const struct snag_render_bloc
     static const char *const colors[] = {
         COLOR_ACTIVITY, COLOR_SUCCESS, COLOR_WARNING, COLOR_ERROR
     };
+    int rc = -1;
 
     if (!snag_render_enabled(render, SNAG_PRESENT_TOOL))
         return 0;
+    /* One tool row, context and body parks and repaints the composer once. */
+    if (output_begin(render) < 0)
+        return -1;
     if (write_role_block(render, BOUNDARY_CONTENT, STDERR_FILENO,
                       colors[block->role], (const char *)block->text.data,
                       block->text.len, block->colored_len,
                       render->stderr_terminal, true) < 0 || render_checkpoint(render) < 0)
-        return -1;
+        goto out;
     if (block->context.len && snag_render_enabled(render, SNAG_PRESENT_CONTEXT) &&
         write_optional_block(render, SNAG_PRESENT_CONTEXT, "",
                               (const char *)block->context.data,
                               block->context.len, 0u) < 0)
-        return -1;
-    return tool_body(render, block);
+        goto out;
+    rc = tool_body(render, block);
+out:
+    if (output_end(render) < 0)
+        rc = -1;
+    return rc;
 }
 
 static json_t *
@@ -3558,6 +3585,9 @@ render_process_chunks(struct snag_render *render, const json_t *ref,
         snag_json_integer_u64(ref, "stderr_end", &to[1]) < 0)
         return -1;
     struct snag_buf line = {.max = SNAG_MAX_EVENT_LINE};
+    /* One streamed-output burst parks and repaints the composer once. */
+    if (output_begin(render) < 0)
+        return -1;
     while (start < end && snag_render_enabled(render, SNAG_PRESENT_OUTPUT)) {
         unsigned char input[8192];
         size_t want = end - start > sizeof(input) ? sizeof(input) : (size_t)(end - start);
@@ -3622,9 +3652,7 @@ render_process_chunks(struct snag_render *render, const json_t *ref,
             json_decref(event);
             snag_buf_reset(&line);
             if (truncated) {
-                rc = write_optional_block(render, SNAG_PRESENT_OUTPUT, "",
-                    "… [output truncated; complete bytes retained in journal]\n",
-                    strlen("… [output truncated; complete bytes retained in journal]\n"), 0u);
+                rc = write_omitted(render);
                 goto out;
             }
         }
@@ -3632,6 +3660,8 @@ render_process_chunks(struct snag_render *render, const json_t *ref,
     rc = 0;
 out:
     snag_buf_free(&line);
+    if (output_end(render) < 0)
+        rc = -1;
     return rc;
 }
 
@@ -3661,13 +3691,14 @@ render_tool_record(struct snag_render *render, const struct snag_render_record *
         if (record->tool_start) {
             struct snag_response_item call = {
                 .name = (char *)name, .arguments = json_object_get(item, "arguments"),
-                .call_id = strlen(call_id) <= SNAG_ID_HEX_LEN ? call_id : ""
+                .call_id = call_id
             };
             const char *workdir = snag_json_string(data, "resolved_workdir");
             rc = snag_render_prepare_tool_start(&block, &call, workdir ? workdir : "?",
                   record->timeout_ms, render->verbosity, columns);
         } else {
-            rc = snag_render_prepare_tool_finish(&block, name, json_object_get(data, "result"),
+            rc = snag_render_prepare_tool_finish(&block, name, call_id,
+                  json_object_get(data, "result"),
                   record->max_output_bytes, render->verbosity, columns);
         }
         if (rc == 0) {

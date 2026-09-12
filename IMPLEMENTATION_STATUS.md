@@ -38,6 +38,10 @@ Implemented:
   keep stable Up/Down and Ctrl-R history.
 - Live verbosity/view snapshots in model context, with progress guidance based
   on effective tool visibility, including chat suppression and one-shot streams.
+- One rendering contract across verbosity levels: a logical tool block or
+  streamed-output burst parks and repaints the composer once, start and outcome
+  rows share the same short call reference, and one dim `[…]` marks cut or
+  hidden display content while complete output stays in the durable journal.
 - Parameter descriptions and current runtime settings in provider requests;
   actionable argument diagnostics and explicit requested/applied output limits,
   with latest-batch host feedback preserved across tiny output budgets.

@@ -101,6 +101,15 @@ snag_render_block_free(struct snag_render_block *block)
     snag_buf_free(&block->body);
 }
 
+/* One short call reference, shared by both tool rows for any id length. */
+static int
+append_tool_ref(struct snag_buf *row, const char *call_id)
+{
+    if (!call_id || !call_id[0])
+        return 0;
+    return snag_buf_printf(row, " [%.8s]", call_id);
+}
+
 static int
 summary(struct snag_render_block *block, const struct snag_buf *row,
         unsigned int columns, size_t colored_len)
@@ -139,11 +148,10 @@ snag_render_prepare_tool_start(struct snag_render_block *block,
     if (canonical_prefix(call->arguments, &args, bytes, &truncated) < 0)
         goto out;
     bool arguments_truncated = truncated;
-    if (snag_buf_printf(&row, "→ %s", call->name) < 0)
+    if (snag_buf_printf(&row, "→ %s", call->name) < 0 ||
+        append_tool_ref(&row, call->call_id) < 0)
         goto out;
     size_t colored_len = row.len;
-    if (call->call_id && call->call_id[0] && snag_buf_printf(&row, " [%.8s]", call->call_id) < 0)
-        goto out;
     if (snag_buf_append(&row, "  ", 2u) < 0 ||
         preview(&row, (const char *)args.data, args.len, 95u, 95u, true, &truncated) < 0 ||
         (truncated && snag_buf_append(&row, "…", 3u) < 0) ||
@@ -177,7 +185,8 @@ out:
 
 int
 snag_render_prepare_tool_finish(struct snag_render_block *block, const char *name,
-                               const json_t *result, uint32_t max_output_bytes,
+                               const char *call_id, const json_t *result,
+                               uint32_t max_output_bytes,
                                unsigned int level, unsigned int columns)
 {
     const char *status = snag_json_string(result, "status");
@@ -195,7 +204,9 @@ snag_render_prepare_tool_finish(struct snag_render_block *block, const char *nam
     block->role = status && strcmp(status, "succeeded") == 0 ? SNAG_ROLE_SUCCESS :
                   status && strcmp(status, "failed") == 0 ? SNAG_ROLE_ERROR : SNAG_ROLE_WARNING;
     struct snag_buf row = {.max = 4096u};
-    if (snag_buf_printf(&row, "← %s  ", name) < 0)
+    if (snag_buf_printf(&row, "← %s", name) < 0 ||
+        append_tool_ref(&row, call_id) < 0 ||
+        snag_buf_append(&row, "  ", 2u) < 0)
         goto out;
     if (json_is_integer(exit_value)) {
         block->role = json_integer_value(exit_value) ? SNAG_ROLE_ERROR : SNAG_ROLE_SUCCESS;

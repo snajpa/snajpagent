@@ -201,8 +201,9 @@ int snag_render_prepare_tool_start(struct snag_render_block *block,
                           const char *workdir, uint32_t default_timeout_ms,
                           unsigned int level, unsigned int columns);
 int snag_render_prepare_tool_finish(struct snag_render_block *block, const char *name,
-                           const json_t *result, uint32_t max_output_bytes,
-                           unsigned int level, unsigned int columns);
+                           const char *call_id, const json_t *result,
+                           uint32_t max_output_bytes, unsigned int level,
+                           unsigned int columns);
 void snag_render_block_free(struct snag_render_block *block);
 int snag_render_durable(struct snag_render *render, int fd,
                         struct snag_render_source source, const char *type,

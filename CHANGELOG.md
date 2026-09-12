@@ -16,6 +16,12 @@
   turns ascending, consecutive turns coalesced into ranges, repeated turns once.
   Unknown, malformed, oversized and unterminated blocks pass through unchanged;
   redirected output, durable events and provider traffic keep exact bytes.
+- Make verbosity rendering one consistent contract: a logical tool block or
+  streamed-output burst parks and repaints the composer once instead of once per
+  internal slice; start and outcome rows share the same short call reference in
+  the same column, including ids longer than the stored id limit; and one dim
+  `[…]` marker replaces the several long truncation/omission wordings while
+  complete output stays in the durable journal.
 - Fix thinking-mode HTTP 400 on resumed/non-thinking history by restoring an
   explicit host continuation boundary after fixed policy and current state.
   Preserve exact saved reasoning and use the same layout for every provider.

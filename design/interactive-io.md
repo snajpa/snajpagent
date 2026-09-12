@@ -128,6 +128,9 @@ and terminal state, and joins the presentation thread; no thread is detached.
 - The counted cursor detour preserves pending right-margin wrap, wide characters
   and combining marks. One bounded public slice brackets internal parser writes
   so the composer is repainted once per slice, not per character/checkpoint.
+  Tool rows, argument/output blocks and streamed-output bursts each hold one
+  output span, so a logical burst parks and repaints the composer once rather
+  than once per internal slice.
 - `[ui] typing_pause_ms` controls the inactivity pause. It defaults to `500`,
   accepts `0` through `5000`, and applies only to interactive terminal display.
   A value of `0` disables the typing pause without changing composer layout.

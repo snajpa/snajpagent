@@ -1001,13 +1001,14 @@ a group with one empty row around it, and none between members.
 Errors and local-command results appear in either view.
 .TP
 .B 1
-Compact tool start and outcome rows, with a short generic argument prefix.
-No output body.
+Compact tool start and outcome rows, each carrying the same short call reference
+in the same column, with a short generic argument prefix.  No output body.
 .TP
 .B 2
 Add previews of up to 1024 argument and 512 output characters per invocation.
-Count terminal-safe Unicode code
-points; mark omitted content explicitly.
+Count terminal-safe Unicode code points; a dim
+.BR "[…]"
+marks display content that was cut or hidden by the current level.
 .TP
 .B 3
 Full retained tool arguments, effective execution context and results, subject
@@ -1028,7 +1029,11 @@ Add transport diagnostics.
 Levels 4 through 6 are live diagnostics in visible rollout; they are not queued
 behind chat.  Unseen retained work uses the current level on entry to rollout.
 Increasing the level does not replay visited history; lowering it stops now-hidden
-detail between bounded slices.  Redaction of known credentials is not a guarantee
+detail between bounded slices.  A dim
+.BR "[…]"
+marks display content that was shown and then cut or hidden by the current
+level; it is display-only, and complete command output remains in the durable
+session journal.  Redaction of known credentials is not a guarantee
 that source, prompts or tool output contain no secrets.
 .SS Presentation
 .PP

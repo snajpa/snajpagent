@@ -539,8 +539,11 @@ verbosity levels show every actual room message, including the local model's
 own sends, and retained room history. Private model speech and tool internals
 stay in rollout. One process-local level is the exact `-v` count or `/verbose N`;
 configuration reloads never replace it. Level 1 adds compact generic tool start
-and outcome rows without output. Level 2 adds 1,024 argument / 512 output
-character previews; level 3 has full retained tools.
+and outcome rows without output; both rows carry the same short call reference
+in the same column. Level 2 adds 1,024 argument / 512 output
+character previews; level 3 has full retained tools. One dim `[…]` marks
+display content cut or hidden by the current level, display-only with complete
+output retained in the durable journal.
 Levels 4/5/6 add live runtime/durable, redacted protocol and transport diagnostics
 only in visible rollout. Unseen conversation, tool and IRC records use durable
 event references and current presentation policy; raising the level does not

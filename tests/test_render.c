@@ -2057,7 +2057,7 @@ capture_color(enum snag_color_mode mode, bool chat_view,
     assert(result != NULL);
     {
         struct snag_render_block block;
-        assert(snag_render_prepare_tool_finish(&block, call.name, result,
+        assert(snag_render_prepare_tool_finish(&block, call.name, NULL, result,
                                               max_output_bytes, verbosity, 0u) == 0);
         assert(snag_render_tool_block(&render, &block) == 0);
         snag_render_block_free(&block);
@@ -2273,7 +2273,7 @@ test_tool_previews(void)
         assert(result);
         assert(json_object_set_new(result, "model_text", json_stringn(text, n)) == 0);
         for (unsigned int level = 1u; level <= 3u; ++level) {
-            assert(snag_render_prepare_tool_finish(&block, call.name, result, 0u, level, 0u) == 0);
+            assert(snag_render_prepare_tool_finish(&block, call.name, NULL, result, 0u, level, 0u) == 0);
             assert(block.body.len == (level == 1u ? 0u : level == 2u && n > 512u ? 512u : n));
             assert(block.truncated == (level == 2u && n > 512u));
             assert(snag_buf_terminate(&block.text) == 0);
@@ -2352,8 +2352,7 @@ test_semantic_history(void)
         if (level == 1u && rejected)
             assert(!strstr(output, "AAAA") && !strstr(output, "RRRR"));
         assert((strstr(output, "RRRR") != NULL) == (level >= 2u));
-        assert((strstr(output, "[arguments truncated]") != NULL) == (level == 2u && !rejected));
-        assert((strstr(output, "[output truncated]") != NULL) == (level == 2u));
+        assert((strstr(output, "[…]") != NULL) == (level == 2u));
         assert(!strstr(output, "hidden-debug") && !strstr(output, "hidden-protocol"));
         render.verbosity = 6u;
         assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
@@ -2396,14 +2395,14 @@ test_live_downgrade(void)
     memcpy(payload + sizeof(payload) - 12u, "secret-tail", 12u);
     json_t *result = json_object();
     assert(result && json_object_set_new(result, "model_text", json_string(payload)) == 0);
-    assert(snag_render_prepare_tool_finish(&block, "future", result, 0u, 3u, 0u) == 0);
+    assert(snag_render_prepare_tool_finish(&block, "future", NULL, result, 0u, 3u, 0u) == 0);
     snag_render_init(&render, 3u);
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
     render.checkpoint = downgrade_checkpoint;
     render.checkpoint_opaque = &change;
     assert(snag_render_tool_block(&render, &block) == 0);
     (void)drain_available(capture.fd, output, sizeof(output), 0u);
-    assert(strstr(output, "[output truncated]") && !strstr(output, "secret-tail"));
+    assert(strstr(output, "[…]") && !strstr(output, "secret-tail"));
     assert(block.body.len == sizeof(payload) - 1u);
     snag_render_block_free(&block);
     json_decref(result);
@@ -2417,7 +2416,7 @@ test_live_downgrade(void)
     render.checkpoint_opaque = &change;
     assert(snag_render_protocol(&render, "live", payload, strlen(payload)) == 0);
     (void)drain_available(capture.fd, output, sizeof(output), 0u);
-    assert(strstr(output, "[display omitted]") && !strstr(output, "secret-tail"));
+    assert(strstr(output, "[…]") && !strstr(output, "secret-tail"));
     snag_render_free(&render);
     capture_restore(&capture);
     close(capture.fd);
@@ -2666,6 +2665,80 @@ test_citation_blocks(void)
     assert(strcmp(out, chunks[0]) == 0);
 }
 
+static void
+test_tool_ref_rows(void)
+{
+    static const char long_id[] = "call_abcdef1234567890-very-long-provider-id";
+    struct snag_response_item call = {.name = "exec", .call_id = long_id};
+    struct snag_render_block start, finish;
+    json_t *arguments = json_pack("{s:s}", "command", "true");
+    json_t *result = json_pack("{s:s,s:i}", "status", "succeeded", "exit_code", 0);
+    const char *start_ref, *finish_ref;
+
+    assert(arguments != NULL && result != NULL);
+    call.arguments = arguments;
+    assert(snag_render_prepare_tool_start(&start, &call, "/work", 0u, 1u, 80u) == 0);
+    assert(snag_render_prepare_tool_finish(&finish, call.name, long_id, result,
+                                           0u, 1u, 80u) == 0);
+    assert(snag_buf_terminate(&start.text) == 0);
+    assert(snag_buf_terminate(&finish.text) == 0);
+    start_ref = strstr((char *)start.text.data, "[call_abc]");
+    finish_ref = strstr((char *)finish.text.data, "[call_abc]");
+    /* Both rows carry the same 8-character reference at the same column, even
+       when the provider id is longer than the stored id limit. */
+    assert(start_ref != NULL && finish_ref != NULL);
+    assert((size_t)(start_ref - (char *)start.text.data) ==
+           (size_t)(finish_ref - (char *)finish.text.data));
+    assert(strstr((char *)start.text.data, "[call_abcdef1234567890") == NULL);
+    snag_render_block_free(&start);
+    snag_render_block_free(&finish);
+    json_decref(arguments);
+    json_decref(result);
+}
+
+static void
+test_output_span_prompt_repaint(void)
+{
+    const char *frames[SNAG_TERM_SPINNER_COUNT] = {" ", " ", " "};
+    struct snag_term term;
+    struct snag_render render;
+    struct snag_render_block block;
+    struct output_capture capture = capture_open(false, true);
+    char output[8192];
+    char *body = malloc(5001u);
+    json_t *result;
+
+    assert(body != NULL);
+    memset(body, 'x', 5000u);
+    body[5000u] = '\0';
+    snag_term_init(&term);
+    term.opened = term.capable = true;
+    term.columns = 80u;
+    assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
+    snag_render_init(&render, 3u);
+    render.stderr_terminal = true;
+    snag_render_attach_term(&render, &term);
+    assert(snag_term_set_prompt_template(&term, true, "BURST> ", frames, 1u, 0u) == 0);
+    assert(prompt_output(capture.fd, output, sizeof(output)) > 0u);
+    result = json_pack("{s:i,s:i,s:s,s:s}", "duration_ms", 3, "exit_code", 0,
+                       "status", "succeeded", "model_text", body);
+    assert(result != NULL);
+    assert(snag_render_prepare_tool_finish(&block, "exec", NULL, result, 0u, 3u, 80u) == 0);
+    assert(snag_render_tool_block(&render, &block) == 0);
+    snag_render_block_free(&block);
+    json_decref(result);
+    free(body);
+    (void)prompt_output(capture.fd, output, sizeof(output));
+    /* A logical tool burst must park and repaint the composer once, not once
+       per internal output slice. */
+    assert(term.prompt_visible);
+    assert(count_text(output, "BURST> ") == 1u);
+    snag_render_free(&render);
+    snag_term_close(&term);
+    capture_restore(&capture);
+    close(capture.fd);
+}
+
 int
 main(void)
 {
@@ -2791,6 +2864,8 @@ main(void)
     test_prompt_clock();
     test_prompt_spinners();
     test_retained_prompt();
+    test_tool_ref_rows();
+    test_output_span_prompt_repaint();
     test_mention_completion();
     test_completion_choices();
     test_destination_editor();
@@ -2887,7 +2962,7 @@ main(void)
                   "  timeout: 4000ms\n") != NULL);
     assert(strstr(output, "  arguments:") != NULL);
     assert(strstr(output, "  output:\nfixture ") != NULL);
-    assert(strstr(output, "[output truncated]") != NULL);
+    assert(strstr(output, "[…]") != NULL);
     assert(strstr(output, "fixture tool output: café") == NULL);
 
     assert(setenv("NO_COLOR", "1", 1) == 0);

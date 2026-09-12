@@ -508,7 +508,7 @@ after=$($bin --dotdir "$cap_state" --config "$root/tool-output-cap.ini" \
     2>"$root/tool-output-cap.err")
 [ "$after" = done ]
 grep -q '^fixture $' "$root/tool-output-cap.err"
-grep -Fq '[output truncated]' "$root/tool-output-cap.err"
+grep -Fq '[…]' "$root/tool-output-cap.err"
 ! grep -q '^fixture command succeeded$' "$root/tool-output-cap.err"
 python3 - "$cap_state" <<'PY'
 import json

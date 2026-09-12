@@ -356,7 +356,8 @@ appended to model text.
 
 All modes use the same process-local ladder (flag count or `/verbose N`):
 
-- verbosity 1: compact tool start/outcome rows, no output body;
+- verbosity 1: compact tool start/outcome rows, each carrying the same short
+  call reference in the same column, no output body;
 - verbosity 2: 1,024 argument / 512 output character previews;
 - verbosity 3: full retained arguments, execution context and results, preserving
   `[tool] max_output_bytes` and capture limits;
@@ -368,7 +369,11 @@ All modes use the same process-local ladder (flag count or `/verbose N`):
 Levels 4–6 are live-only in visible rollout, never accumulated behind chat.
 Completed tool details refer to durable events and are formatted at the current
 level when first visited. Raising the level does not replay visited records;
-lowering it stops now-ineligible remaining detail. `/verbose` is UI-local and
+lowering it stops now-ineligible remaining detail. One dim `[…]` marks display
+content cut or hidden by the current level; it is display-only and complete
+command output remains in the durable journal. One logical activity burst parks
+and repaints the composer once rather than once per internal output slice.
+`/verbose` is UI-local and
 remains usable during engine work; its reply never becomes a room message.
 There is no config verbosity setting or per-mode level resolver.
 
