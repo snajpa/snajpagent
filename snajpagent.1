@@ -2106,10 +2106,16 @@ inspects model tool calls before dispatch; any other valid name is a jump target
 .B action
 One of
 .BR pass ,
+.BR accept ,
 .BR reject ,
 .BR jump
 or
 .BR return .
+.B pass
+only continues; use
+.B accept
+to stop evaluation and allow the operation ahead of a catch-all
+.BR reject .
 .TP
 .B match
 A JSON object mapping each
@@ -2129,6 +2135,7 @@ The message shown to the model for
 substitutes envelope data and
 .I %%
 is a literal percent.
+A value that starts with a double quote is decoded as a JSON string.
 .TP
 .B target
 The chain entered by

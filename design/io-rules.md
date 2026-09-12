@@ -50,17 +50,23 @@ targets fail configuration load, so a typo never becomes silent policy.
 | Key | Meaning |
 | --- | --- |
 | `chain` | which chain this rule belongs to (entry chain `out`, or a `jump` target) |
-| `action` | `pass`, `reject`, `jump`, or `return` |
+| `action` | `pass`, `accept`, `reject`, `jump`, or `return` |
 | `match` | JSON object of `/json/pointer` → POSIX extended regex; **all** must match |
 | `at_least` | JSON object of `/json/pointer` → inclusive integer lower bound |
 | `text` | message for `reject`; `%{/pointer}` is replaced from the envelope, `%%` is a literal `%` |
 | `target` | chain name for `jump` |
 | `log` | template recorded when the rule matches; does not change the verdict |
 
+A `text` or `log` value that starts with `"` is decoded as a JSON string, so
+escapes and newlines survive; other values are literal.
+
 ### Flow
 
 - Rules run in declaration order within a chain.
 - Falling off a chain passes; a rule reaches no verdict by itself.
+- `pass` only continues; it never exempts a call from a later `reject`.
+- `accept` stops evaluation immediately and allows the operation. Put it before
+  a catch-all `reject` to build an allowlist.
 - `reject` is **sticky**: it marks the operation denied and traversal continues,
   so later logging rules still run.
 - `jump` enters another chain; `return` leaves the current one. A `return` at
@@ -109,19 +115,19 @@ text   = "This workspace is read-only. Inspect with read_file, grep and list_fil
 
 ### Default-deny with an explicit allowlist
 
-A `pass` rule does not stop anything, so make denial explicit and keep the
-allowed set small:
+`accept` stops evaluation, so an allowlist can sit in front of a catch-all
+`reject`. A `pass` rule would not exempt the call from that later denial:
 
 ```ini
-[rule allow-read-only]
+[rule allow-commands]
 chain  = out
-match  = {"/tool":"^(read_file|grep|list_files)$"}
-action = pass
+match  = {"/tool":"^exec_command$"}
+action = accept
 
 [rule deny-everything-else]
 chain  = out
 action = reject
-text   = "Only read-only inspection is permitted here."
+text   = "Only the audited command tool is permitted here."
 ```
 
 ### Reusable policy chains
@@ -219,5 +225,7 @@ the rule language small, makes every evaluation reproducible from the envelope,
 and avoids the replay, scope and consent state that a stateful filter would drag
 in. Filtering stays filtering; confinement stays with the tools themselves.
 
-See `src/rules.c` (engine), `src/config.c` (`[rule NAME]` parsing), and
-`tests/test_rules.c` (matching, flow, veto, invalid definitions).
+See `src/rules.c` (engine), `src/config.c` (`[rule NAME]` parsing),
+`tests/test_rules.c` (matching, flow, veto, invalid definitions) and
+`tests/rules_e2e.py` (real-binary end-to-end: deny, allow, allowlist, jump, log,
+threshold, return, multi-call, resume durability and startup refusals).

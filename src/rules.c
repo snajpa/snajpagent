@@ -191,7 +191,7 @@ static enum snag_rule_verb
 verb_parse(const char *name)
 {
     static const char *const names[] = {
-        "pass", "reject", "jump", "return" };
+        "pass", "accept", "reject", "jump", "return" };
     for (size_t i = 0u; i < SNAG_RULE_VERB_COUNT; ++i)
         if (!strcmp(name, names[i])) return (enum snag_rule_verb)i;
     return SNAG_RULE_VERB_COUNT;
@@ -466,6 +466,7 @@ snag_rules_eval(const struct snag_rules *rules, struct snag_rule_frame *frame,
         if (rc < 0) return -1;
         if (rc > 0) verdict->rejected = true;
         if (rule->verb == SNAG_RULE_REJECT) verdict->rejected = true;
+        if (rule->verb == SNAG_RULE_ACCEPT) return 0;
         if (rule->verb == SNAG_RULE_JUMP) {
             size_t target = chain_index(rules, rule->target);
             if (target == rules->chain_count || depth + 1u >= SNAG_CHAINS_MAX)

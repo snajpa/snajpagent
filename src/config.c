@@ -686,7 +686,19 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
              * in/event hosts are not wired, so refuse them instead of accepting
              * rules that could never fire. */
             if (!strcmp(key, "chain") && (!strcmp(value, "in") || !strcmp(value, "event"))) goto invalid;
-            text = json_string(value);
+            /* Rule messages may be JSON-quoted strings so escapes and newlines
+             * survive; chain/action/target stay plain identifiers. */
+            if ((!strcmp(key, "text") || !strcmp(key, "log")) && value[0] == '"') {
+                char message_error[128];
+                text = snag_json_load_strict((const unsigned char *)value, strlen(value),
+                                             SNAG_MAX_EVENT_LINE, message_error, sizeof(message_error));
+                if (!text || !json_is_string(text)) {
+                    json_decref(text);
+                    goto invalid;
+                }
+            } else {
+                text = json_string(value);
+            }
             if (!text || json_object_set_new(rule, key, text) < 0) return -1;
             return 0;
         }

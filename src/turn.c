@@ -521,6 +521,8 @@ snag_tool_result_not_run(const char *reason)
         help = "Correct field names, types and ranges using the current tool schema. Supply required fields; nullable defaults use JSON null. Do not repeat unchanged invalid arguments.";
     else if (!strcmp(reason, "read_only"))
         help = "This turn permits only its declared read-only tools; use list_files, read_file or grep for local inspection.";
+    else if (!strcmp(reason, "rule_rejected"))
+        help = "A configured rule denied this call. Follow the stated policy or choose an allowed action.";
     else if (!strcmp(reason, "recovery_unstarted"))
         help = "The previous agent process ended before this proposal started. Inspect current state before deciding whether to repeat the work.";
     else if (snag_string_in(reason, "batch_yield operator_yield superseded_by_steering turn_cancelled"))
@@ -573,7 +575,7 @@ reason_is_not_run(const char *reason)
         "protocol_conflict read_only process_limit batch_yield operator_yield process_busy stdin_busy "
         "stdin_closed invalid_arguments managed_process_conflict "
         "managed_process_handle_mismatch recovery_unstarted superseded_by_steering "
-        "turn_cancelled process_interaction_required");
+        "turn_cancelled process_interaction_required rule_rejected");
 }
 
 int

@@ -228,6 +228,7 @@ check: $(TEST_BIN)
 	./tests/test_turn
 	./tests/test_tools
 	./tests/test_store
+	$(MAKE) rulescheck
 	SNAJPAGENT_TEST_NAME='$(NAME)' SNAJPAGENT_TEST_VERSION='$(BUILD_VERSION)' \
 		./tests/test_cli.sh ./$(FIXTURE_BIN)
 	python3 ./tests/test_citations.py ./$(FIXTURE_BIN)
@@ -247,6 +248,9 @@ check: $(TEST_BIN)
 
 stylecheck:
 	./tools/check_style.sh
+
+rulescheck: $(BIN)
+	python3 ./tests/rules_e2e.py ./$(BIN)
 
 depscheck:
 	python3 ./tools/check_deps.py
@@ -425,7 +429,7 @@ install: $(BIN) $(BIN).1
 
 FORCE:
 
-.PHONY: all check stylecheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install help prod-matrix $(PROD_TARGETS) FORCE
+.PHONY: all check stylecheck rulescheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install help prod-matrix $(PROD_TARGETS) FORCE
 
 -include $(COMMON_OBJ:.o=.d) src/main.d
 

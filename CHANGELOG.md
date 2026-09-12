@@ -6,6 +6,19 @@
 
 - Align every prose continuation line, including provider source line breaks,
   two spaces under the paragraph text instead of at column zero.
+- Rules gain an `accept` action: it stops evaluation and allows the operation,
+  so an allowlist can sit in front of a catch-all `reject`. `pass` only
+  continues and never exempts a call from a later denial.
+- A rule-rejected tool call now records the sanctioned `rule_rejected` not-run
+  reason, so the turn continues and the model sees the rule's message instead of
+  failing on an invalid completion event.
+- Rule `text`/`log` values written as JSON strings render without their quoting,
+  and `rule_log` events are accepted by session replay so a session that used a
+  log rule resumes.
+- Add `tests/rules_e2e.py` (run by `make rulescheck` and `make check`): real
+  product binary against the fixture provider, covering deny, allow, argument
+  matching, allowlist default-deny, jump chains, logging, thresholds, return,
+  multi-call batches, resume durability and invalid-config startup refusals.
 - Filter model tool calls with ordered `[rule NAME]` configuration chains.
   Rules match immutable envelope facts and tool arguments (JSON-pointer regex
   and integer thresholds) and pass, reject, jump to a reusable chain, or log a

@@ -2408,7 +2408,7 @@ call_rule_check(struct app_state *app, const struct snag_response_item *call,
         if (owned) json_decref(arguments);
         return snag_errorf(error, error_size, "tool call could not be canonicalized for rules");
     }
-    envelope = json_pack("{s:s,s:s,s:s,s:s,s:o,s:s}",
+    envelope = json_pack("{s:s,s:s,s:s,s:s,s:O,s:s}",
         "boundary", "out", "kind", "tool_call", "surface", "model",
         "tool", call->name ? call->name : "", "value", arguments, "text", (const char *)text.data);
     snag_buf_free(&text);

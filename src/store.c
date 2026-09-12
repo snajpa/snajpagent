@@ -1631,6 +1631,11 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             clear_pending_steering(session);
         }
         clear_turn_state(session);
+    } else if (strcmp(type, "rule_log") == 0) {
+        /* Observational only: a matched filter rule recorded a line. It never
+         * changes session state, but replay must accept it or a session that
+         * used a log rule could not be resumed. */
+        if (!snag_json_exact_keys(data, "chain message rule")) goto invalid;
     } else {
         return snag_fail(error, error_size, ENOTSUP,
                   "event type %s is not implemented by this checkpoint", type);
