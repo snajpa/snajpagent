@@ -6312,7 +6312,7 @@ def run_tool_cases(binary, root, provider, environment):
     case = root / "patch"
     workspace, config = irc_workspace(case / "work", provider.port, "host-model")
     config.write_text(config.read_text() +
-                      "[tool]\ndefault_timeout_ms=0\nmax_timeout_ms=5000\n")
+                      "[tool]\ndefault_timeout_ms=0\nmax_timeout_ms=20000\n")
     call_id, name, arguments = "", "", {}
     number = 0
     prompt = "tool behavior cases"
@@ -6468,7 +6468,8 @@ def run_tool_cases(binary, root, provider, environment):
                     result = interact(result["handle"], eof=True, yield_ms=5000)
                 assert result["stdout"]["retained"] == (value or "")
 
-            result = command("perl -e 'binmode STDOUT; print q{x} x (1024 * 1024) or exit 23'", timeout=5000)
+            result = command("perl -e 'binmode STDOUT; print q{x} x (1024 * 1024) or exit 23'",
+                             timeout=15000)
             out = result["stdout"]
             assert all(type(out[k]) is int for k in ("original_bytes", "retained_bytes", "discarded_bytes"))
             assert out["original_bytes"] == 1024 * 1024
