@@ -522,8 +522,10 @@ declarations before old `pthread_np.h`. OpenBSD 5.9's intermediate audio(4)
 API uses per-direction block sizes and pause controls. Device initialization
 stays paused, explicit start unpauses, and stop clears buffered data through
 native pause semantics without a blocking drain. A failed duplex playback start
-repauses capture. Both sndio and direct audio remain available. OpenBSD 3.5
-compatibility and BSD PDF/Office dependency closure remain unfinished; cross-links
+repauses capture. Both sndio and direct audio remain available. sndio capture
+returns only complete received frames, completing a split frame before returning
+a short read. Blocking playback fails on a short write instead of claiming the
+whole buffer played. BSD PDF/Office runtime closure remains unfinished; cross-links
 and mocked lifecycle checks do not qualify physical audio.
 Retained-file snapshots use the BSD nanosecond stat fields, including the
 OpenBSD 3.5 layout, to detect source changes during media preparation.

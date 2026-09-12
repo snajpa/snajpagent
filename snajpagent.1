@@ -3408,6 +3408,8 @@ FreeBSD uses OSS. With older OSS headers, device enumeration reports only the
 accessible default /dev/dsp node; native format/version metadata is unavailable.
 Capture/playback initialization still negotiates format, channel count and rate.
 OpenBSD uses miniaudio's sndio/audio(4) backends and the system dynamic-loader API.
+sndio capture forwards complete received frames, including split-frame reads;
+a short blocking playback write fails the device operation.
 The source recipe supplies static media codecs. The intermediate OpenBSD 5.9
 direct-audio API remains paused through initialization, starts explicitly and
 stops by pausing and clearing queued device data without a blocking drain.

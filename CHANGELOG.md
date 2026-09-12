@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Preserve actual sndio capture frame counts and split-frame bytes. Report short
+  blocking playback writes as failures instead of fabricated completion.
+
 - Accept omitted media selectors with their documented defaults. Keep crop/sheet
   exclusivity, ranges and strict local argument validation through shared parsing.
 

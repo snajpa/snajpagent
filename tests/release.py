@@ -2127,3 +2127,123 @@ int main(void) {
                        [str(source), "-o", str(Path(tmp) / "thread")], check=True)
         subprocess.run([str(Path(tmp) / "thread")], check=True)
 print("PASS: early BSD audio threads retain stack, cleanup and errors with normal-priority fallback")
+
+# Exercise the actual sndio callbacks with byte-counted synthetic transfers.
+sndio_patch = (root / "nix/miniaudio-sndio-transfers.patch").read_text()
+assert './miniaudio-sndio-transfers.patch' in (root / "nix/openbsd.nix").read_text()
+sndio_before = "\n".join(line[1:] for line in sndio_patch.splitlines()
+                         if line.startswith(("-", " ")) and not line.startswith("---"))
+sndio_after = "\n".join(line[1:] for line in sndio_patch.splitlines()
+                        if line.startswith(("+", " ")) and not line.startswith("+++"))
+with tempfile.TemporaryDirectory(prefix="sndio-transfers-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    prefix = r"""
+#include <assert.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+typedef int ma_result;
+typedef uint32_t ma_uint32;
+typedef uint8_t ma_uint8;
+#define MA_SUCCESS 0
+#define MA_IO_ERROR -1
+#define MA_LOG_LEVEL_ERROR 1
+struct ma_sio_hdl { int unused; };
+typedef size_t (*ma_sio_read_proc)(struct ma_sio_hdl *, void *, size_t);
+typedef size_t (*ma_sio_write_proc)(struct ma_sio_hdl *, const void *, size_t);
+struct context { struct { ma_sio_read_proc sio_read; ma_sio_write_proc sio_write; } sndio; };
+typedef struct {
+    struct context *pContext;
+    struct { void *handleCapture, *handlePlayback; } sndio;
+    struct { unsigned internalFormat, internalChannels; } capture, playback;
+} ma_device;
+static size_t sequence[16], counts, calls, transferred, requested[16];
+static unsigned char *buffer;
+static unsigned logs;
+static unsigned ma_get_bytes_per_frame(unsigned format, unsigned channels) { return format * channels; }
+#define ma_device_get_log(device) (device)
+#define ma_log_post(device, level, message) ((void)(device), (void)(level), (void)(message), ++logs)
+static size_t mock_read(struct ma_sio_hdl *handle, void *data, size_t bytes) {
+    assert(handle && calls < counts && data == buffer + transferred);
+    requested[calls] = bytes;
+    size_t result = sequence[calls++];
+    if (result <= bytes) {
+        for (size_t i=0; i<result; ++i) ((unsigned char*)data)[i]=(unsigned char)(transferred+i);
+        transferred += result;
+    }
+    return result;
+}
+static size_t mock_write(struct ma_sio_hdl *handle, const void *data, size_t bytes) {
+    assert(handle && calls < counts && data == buffer);
+    requested[calls] = bytes;
+    return sequence[calls++];
+}
+static void reset(unsigned char *data, size_t a, size_t b, size_t c) {
+    calls=transferred=logs=0; counts=3; buffer=data;
+    sequence[0]=a; sequence[1]=b; sequence[2]=c;
+    memset(data, 0xcc, 32);
+}
+"""
+    suffix = r"""
+int main(int argc, char **argv) {
+    unsigned char data[32];
+    struct ma_sio_hdl handle;
+    struct context context = {{mock_read, mock_write}};
+    ma_device device = {&context, {&handle, &handle}, {2,2}, {2,2}};
+    ma_uint32 frames;
+    /* These two cases reproduce both pre-fix false success reports. */
+    if (argc > 1 && !strcmp(argv[1], "read-short")) {
+        reset(data,8,0,0); frames=99;
+        return ma_device_read__sndio(&device,data,4,&frames)!=MA_SUCCESS || frames!=2 || calls!=1;
+    }
+    if (argc > 1 && !strcmp(argv[1], "write-short")) {
+        reset(data,8,0,0); frames=99;
+        return ma_device_write__sndio(&device,data,4,&frames)!=MA_IO_ERROR || frames!=0 || calls!=1;
+    }
+    for (unsigned bpf=1; bpf<=8; ++bpf) {
+        device.capture.internalFormat=1; device.capture.internalChannels=bpf;
+        reset(data,bpf*2,0,0); frames=99;
+        assert(ma_device_read__sndio(&device,data,4,&frames)==MA_SUCCESS && frames==2 && calls==1);
+        for (size_t i=0; i<bpf*2; ++i) assert(data[i]==i);
+        assert(data[bpf*2]==0xcc);
+    }
+    device.capture.internalFormat=2; device.capture.internalChannels=2;
+    reset(data,5,1,2); frames=99;
+    assert(ma_device_read__sndio(&device,data,4,&frames)==MA_SUCCESS && frames==2 && calls==3);
+    assert(requested[0]==16 && requested[1]==3 && requested[2]==2);
+    for (unsigned i=0; i<8; ++i) assert(data[i]==i);
+    assert(data[8]==0xcc);
+    reset(data,4,8,4);
+    assert(ma_device_read__sndio(&device,data,4,NULL)==MA_SUCCESS && calls==3 && transferred==16);
+    assert(requested[0]==16 && requested[1]==12 && requested[2]==4);
+    reset(data,0,0,0); frames=99;
+    assert(ma_device_read__sndio(&device,data,4,&frames)==MA_IO_ERROR && frames==0 && logs==1);
+    reset(data,5,0,0); frames=99;
+    assert(ma_device_read__sndio(&device,data,4,&frames)==MA_IO_ERROR && frames==0 && calls==2);
+    reset(data,17,0,0); frames=99;
+    assert(ma_device_read__sndio(&device,data,4,&frames)==MA_IO_ERROR && frames==0);
+    reset(data,0,0,0); frames=99;
+    assert(ma_device_read__sndio(&device,data,0,&frames)==MA_SUCCESS && frames==0 && calls==0);
+    assert(ma_device_write__sndio(&device,data,0,&frames)==MA_SUCCESS && frames==0 && calls==0);
+    reset(data,16,0,0); frames=99;
+    assert(ma_device_write__sndio(&device,data,4,&frames)==MA_SUCCESS && frames==4 && calls==1);
+    reset(data,16,0,0);
+    assert(ma_device_write__sndio(&device,data,4,NULL)==MA_SUCCESS && calls==1);
+    for (unsigned n=0; n<17; ++n) {
+        if (n==16) continue;
+        reset(data,n,0,0); frames=99;
+        assert(ma_device_write__sndio(&device,data,4,&frames)==MA_IO_ERROR && frames==0 && calls==1);
+    }
+    return 0;
+}
+"""
+    for name, callbacks in (("before", sndio_before), ("after", sndio_after)):
+        source = tmp / (name + ".c")
+        source.write_text(prefix + callbacks + suffix)
+        subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
+                        "-o", str(tmp / name)], check=True)
+    for mode in ("read-short", "write-short"):
+        assert subprocess.run([str(tmp / "before"), mode]).returncode == 1
+        subprocess.run([str(tmp / "after"), mode], check=True)
+    subprocess.run([str(tmp / "after")], check=True)
+print("PASS: sndio capture preserves short/split frames and blocking writes reject partial failure")
