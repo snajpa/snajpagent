@@ -299,3 +299,76 @@
  /* Borland warns about its own constants!  */
  #if defined(__BORLANDC__)
  # if HAVE_DECL_UINT64_MAX
+--- a/libarchive/archive_write_set_format_zip.c
++++ b/libarchive/archive_write_set_format_zip.c
+@@ -25,30 +25,33 @@
+  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
+ /*
+  * Development supported by Google Summer of Code 2008.
+  */
+ 
+ #include "archive_platform.h"
+ 
+ #ifdef HAVE_ERRNO_H
+ #include <errno.h>
+ #endif
+ #ifdef HAVE_LANGINFO_H
+ #include <langinfo.h>
+ #endif
++#ifdef HAVE_LOCALCHARSET_H
++#include <localcharset.h>
++#endif
+ #ifdef HAVE_STDLIB_H
+ #include <stdlib.h>
+ #endif
+ #ifdef HAVE_STRING_H
+ #include <string.h>
+ #endif
+ #ifdef HAVE_LIMITS_H
+ #include <limits.h>
+ #endif
+ #ifdef HAVE_UNISTD_H
+ #include <unistd.h>
+ #endif
+ #ifdef HAVE_ZLIB_H
+ #include <zlib.h>
+ #endif
+@@ -940,32 +943,35 @@
+ 					    " for Symlink");
+ 					return (ARCHIVE_FATAL);
+ 				}
+ 				/* No error if we can't convert. */
+ 			} else if (len > 0)
+ 				archive_entry_set_symlink(zip->entry, p);
+ 		}
+ 	}
+ 
+ 	/* If filename isn't ASCII and we can use UTF-8, set the UTF-8 flag. */
+ 	if (!is_all_ascii(archive_entry_pathname(zip->entry))) {
+ 		if (zip->opt_sconv != NULL) {
+ 			if (strcmp(archive_string_conversion_charset_name(
+ 					zip->opt_sconv), "UTF-8") == 0)
+ 				zip->entry_flags |= ZIP_ENTRY_FLAG_UTF8_NAME;
+-#if HAVE_NL_LANGINFO
++#if HAVE_NL_LANGINFO && defined(CODESET)
+ 		} else if (strcmp(nl_langinfo(CODESET), "UTF-8") == 0) {
++			zip->entry_flags |= ZIP_ENTRY_FLAG_UTF8_NAME;
++#elif HAVE_LOCALE_CHARSET && !defined(__APPLE__)
++		} else if (strcmp(locale_charset(), "UTF-8") == 0) {
+ 			zip->entry_flags |= ZIP_ENTRY_FLAG_UTF8_NAME;
+ #endif
+ 		}
+ 	}
+ 	filename_length = path_length(zip->entry);
+ 
+ 	/* Determine appropriate compression and size for this entry. */
+ 	if (type == AE_IFLNK) {
+ 		slink = archive_entry_symlink(zip->entry);
+ 		if (slink != NULL)
+ 			slink_size = strlen(slink);
+ 		else
+ 			slink_size = 0;
+ 		zip->entry_uncompressed_limit = slink_size;
+ 		zip->entry_compressed_size = slink_size;

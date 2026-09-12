@@ -556,7 +556,8 @@ Missing `ENOTSUP` maps to native `EOPNOTSUPP`, and `EOVERFLOW` to native `ERANGE
 preserving unsupported/range failures; unsigned
 ZIP diagnostics use the existing integer-size-based format fallback. NTFS time
 conversion uses equivalent signed division/remainder where `lldiv` is absent.
-Missing `strtoimax` uses native `strtoll` after a compile-time width check. These
+Missing `strtoimax` uses native `strtoll` after a compile-time width check. ZIP
+filename flags use existing libcharset detection when native `CODESET` is absent. These
 compatibility adaptations do not qualify Office import or target execution.
 
 OpenBSD 7.9 qualification covers base/IRC/SSE tests, internal read-only

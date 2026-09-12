@@ -1932,3 +1932,56 @@ int main(void) {
                        [str(source), "-o", str(Path(tmp) / "parse")], check=True)
         subprocess.run([str(Path(tmp) / "parse")], check=True)
 print("PASS: native maximum-width integer parsing preserves values, endpoints and range errors")
+
+# Missing CODESET uses existing libcharset detection without inventing UTF-8.
+zip_patch = archive_patch.split("+++ b/libarchive/archive_write_set_format_zip.c", 1)[1]
+zip_source = "\n".join(line[1:] for line in zip_patch.splitlines()
+                      if line.startswith(("+", " ")))
+zip_flags = re.search(r"\t/\* If filename isn't ASCII.*?\n\tfilename_length", zip_source,
+                      re.S).group(0).rsplit("\n\tfilename_length", 1)[0]
+assert '#include <localcharset.h>' in zip_source
+with tempfile.TemporaryDirectory(prefix="archive-zip-charset-", dir=root / "build") as tmp:
+    source = Path(tmp) / "charset.c"
+    source.write_text(r"""
+#include <assert.h>
+#include <stddef.h>
+#include <string.h>
+#define ZIP_ENTRY_FLAG_UTF8_NAME 1
+struct zip { const char *entry, *opt_sconv; unsigned entry_flags; };
+static const char *detected;
+#define archive_entry_pathname(entry) (entry)
+#define archive_string_conversion_charset_name(conv) (conv)
+#define nl_langinfo(code) ((void)(code), detected)
+#define locale_charset() detected
+static int is_all_ascii(const char *text) {
+    for (; *text; ++text) if ((unsigned char)*text >= 128) return 0;
+    return 1;
+}
+static void flags(struct zip *zip) {
+""" + zip_flags + r"""
+}
+int main(void) {
+    struct zip zip = {"\xc5\xbe", NULL, 0};
+    detected = "UTF-8";
+    flags(&zip);
+#if (HAVE_NL_LANGINFO && defined(CODESET)) || HAVE_LOCALE_CHARSET
+    assert(zip.entry_flags == ZIP_ENTRY_FLAG_UTF8_NAME);
+#else
+    assert(zip.entry_flags == 0);
+#endif
+    detected = "ASCII"; zip.entry_flags = 0; flags(&zip); assert(zip.entry_flags == 0);
+    zip.opt_sconv = "UTF-8"; flags(&zip); assert(zip.entry_flags == ZIP_ENTRY_FLAG_UTF8_NAME);
+    zip.opt_sconv = "ASCII"; zip.entry_flags = 0; detected = "UTF-8";
+    flags(&zip); assert(zip.entry_flags == 0);
+    zip.entry = "plain"; zip.opt_sconv = "UTF-8";
+    flags(&zip); assert(zip.entry_flags == 0);
+    return 0;
+}
+""")
+    for defines in (("-DHAVE_NL_LANGINFO=1", "-DHAVE_LOCALE_CHARSET=1"),
+                    ("-DHAVE_NL_LANGINFO=1", "-DCODESET=1", "-DHAVE_LOCALE_CHARSET=0"),
+                    ("-DHAVE_NL_LANGINFO=1", "-DHAVE_LOCALE_CHARSET=0")):
+        subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", *defines,
+                        str(source), "-o", str(Path(tmp) / "charset")], check=True)
+        subprocess.run([str(Path(tmp) / "charset")], check=True)
+print("PASS: ZIP UTF-8 flags preserve explicit, native, fallback and unknown charset behavior")

@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Preserve ZIP filename encoding detection on early OpenBSD without CODESET.
+
 - Reuse native integer parsing and zero comparisons in old BSD media dependencies.
 
 - Reconcile multimedia schemas and retained-input context with the common tool
