@@ -681,7 +681,8 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         json_t *text;
         if (!rule) goto invalid;
         if (!strcmp(key, "chain") || !strcmp(key, "action") || !strcmp(key, "text") ||
-            !strcmp(key, "target") || !strcmp(key, "log") || !strcmp(key, "to")) {
+            !strcmp(key, "target") || !strcmp(key, "log") || !strcmp(key, "to") ||
+            !strcmp(key, "command")) {
             /* Only the model tool-call boundary is evaluated in this build;
              * in/event hosts are not wired, so refuse them instead of accepting
              * rules that could never fire. */
@@ -709,10 +710,10 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
             if (!text || json_object_set_new(rule, key, text) < 0) return -1;
             return 0;
         }
-        if (!strcmp(key, "confirm")) {
-            bool enabled;
-            if (parse_bool(value, &enabled) < 0) goto invalid;
-            return json_object_set_new(rule, key, json_boolean(enabled)) < 0 ? -1 : 0;
+        if (!strcmp(key, "timeout_ms")) {
+            uint32_t ms;
+            if (parse_u32(value, 1u, 60000u, &ms) < 0) goto invalid;
+            return json_object_set_new(rule, key, json_integer((json_int_t)ms)) < 0 ? -1 : 0;
         }
         if (!strcmp(key, "match") || !strcmp(key, "at_least") || !strcmp(key, "value")) {
             char json_error[128];

@@ -10,6 +10,7 @@
 #include "provider.h"
 #include "render.h"
 #include "rules.h"
+#include "rules_command.h"
 #include "secret.h"
 #include "snajpagent.h"
 #include "store.h"
@@ -2449,6 +2450,94 @@ call_rule_effect(void *opaque, const struct snag_rule *rule,
         if (!host->insertion)
             return -1;
         (void)snprintf(host->rule, sizeof(host->rule), "%s", snag_rule_name(rule));
+    }
+    if (snag_rule_verb(rule) == SNAG_RULE_COMMAND) {
+        struct snag_buf envelope;
+        json_t *reply = NULL;
+        char helper_error[256] = "";
+        int rc;
+
+        snag_buf_init(&envelope, SNAG_RULE_ENVELOPE_MAX + 1u);
+        if (snag_json_canonical(frame->envelope, &envelope) < 0 || snag_buf_terminate(&envelope) < 0) {
+            snag_buf_free(&envelope);
+            (void)snprintf(host->message, sizeof(host->message),
+                           "Rule helper envelope could not be built.");
+            return 1;
+        }
+        rc = snag_rule_command_run(host->app->config, snag_rule_command(rule),
+                                   host->app->session.workspace, snag_rule_timeout_ms(rule),
+                                   (const char *)envelope.data, envelope.len - 1u,
+                                   &reply, helper_error, sizeof(helper_error));
+        snag_buf_free(&envelope);
+        if (rc < 0) {
+            (void)snprintf(host->message, sizeof(host->message), "%s",
+                           helper_error[0] ? helper_error : "Rule helper failed.");
+            return 1; /* A helper that cannot answer denies the pending action. */
+        }
+        if (!reply) return 0; /* Empty successful stdout means pass. */
+        const char *action = snag_json_string(reply, "action");
+        if (!action) {
+            json_decref(reply);
+            (void)snprintf(host->message, sizeof(host->message),
+                           "Rule helper returned an effect without an action.");
+            return 1;
+        }
+        if (!strcmp(action, "pass")) {
+            const json_t *value = json_object_get(reply, "value");
+            if (value) {
+                json_t *target = json_object_get(frame->envelope, "value");
+                if (!apply_replacement(target, value)) {
+                    json_decref(reply);
+                    (void)snprintf(host->message, sizeof(host->message),
+                                   "Rule helper returned a payload replacement that does not fit this boundary.");
+                    return 1;
+                }
+                host->replaced = true;
+                (void)snprintf(host->rule, sizeof(host->rule), "%s", snag_rule_name(rule));
+            }
+        } else if (!strcmp(action, "reject")) {
+            const char *text = snag_json_string(reply, "text");
+            (void)snprintf(host->message, sizeof(host->message), "%s",
+                           text && *text ? text : "Denied by the configured rule helper.");
+            json_decref(reply);
+            return 1;
+        } else if (!strcmp(action, "insert")) {
+            const char *text = snag_json_string(reply, "text");
+            if (text && *text) {
+                char *copy = snag_strdup_checked(text, SNAG_RULE_TEXT_MAX + 1u);
+                if (!copy) {
+                    json_decref(reply);
+                    return -1;
+                }
+                free(host->insertion);
+                host->insertion = copy;
+            }
+        } else {
+            (void)snprintf(host->message, sizeof(host->message),
+                           "Rule helper returned unsupported effect '%s'.", action);
+            json_decref(reply);
+            return 1;
+        }
+        json_decref(reply);
+    }
+    if (snag_rule_verb(rule) == SNAG_RULE_CONFIRM) {
+        struct snag_buf text;
+        char reason[512] = "";
+        char consent_error[256] = "";
+        int consent;
+
+        snag_buf_init(&text, sizeof(reason));
+        if (snag_rule_render(snag_rule_text(rule), frame->envelope, &text) == 0 &&
+            snag_buf_terminate(&text) == 0)
+            (void)snprintf(reason, sizeof(reason), "%s", (const char *)text.data);
+        snag_buf_free(&text);
+        consent = snag_app_consent(host->app, reason, consent_error, sizeof(consent_error));
+        if (consent != 0) {
+            (void)snprintf(host->message, sizeof(host->message), "%s",
+                           consent_error[0] ? consent_error :
+                           "Local confirmation is required and was not given.");
+            return 1; /* Consent is an obligation, not a suggestion. */
+        }
     }
     return 0;
 }

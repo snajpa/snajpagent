@@ -142,6 +142,69 @@ confirm_delete(struct app_state *app, char prefix[9], char *error, size_t error_
     return 0;
 }
 
+/* Fresh local consent for a rule-requested action. The challenge is generated
+ * here and must be typed back; model, IRC and helper bytes cannot answer it.
+ * Returns 0 confirmed, 1 not confirmed (or not presentable), -1 on error. */
+int
+snag_app_consent(struct app_state *app, const char *reason, char *error, size_t error_size)
+{
+    enum snag_term_action action = SNAG_TERM_NONE;
+    char id[SNAG_ID_HEX_LEN + 1u];
+    char text[1024];
+    char *line = NULL;
+    bool matched;
+    int rc;
+
+    if (!app->ui.opened || app->execute) {
+        if (error_size)
+            snprintf(error, error_size, "local confirmation is required and this run cannot present it");
+        return 1;
+    }
+    if (snag_random_id(id) < 0) return -1;
+    id[8] = '\0';
+    if (snprintf(text, sizeof(text), "confirmation required: %s; type %s to confirm",
+                 reason && *reason ? reason : "a configured rule", id) < 0)
+        return -1;
+    if (snag_ui_text(&app->ui, SNAG_UI_HOST, text) < 0 || snag_ui_simple_prompt(&app->ui, false) < 0)
+        return snag_errorf(error, error_size, "confirmation prompt could not be displayed");
+    do {
+        if (snag_tools_service(0, snag_ui_wake_fd(&app->ui), error, error_size) < 0) return -1;
+        rc = snag_ui_poll(&app->ui, 25, &action, &line);
+        if (rc > 0 && action == SNAG_TERM_SUBMIT && !line) rc = 0;
+        if (rc > 0 && action == SNAG_TERM_SUBMIT && line && line[0] == '/' && line[1] != '/') {
+            bool handled = false, prompt_ready = false;
+            (void)snag_ui_history_add(&app->ui, line);
+            rc = snag_app_input_command(app, line, true, &handled, &prompt_ready);
+            free(line);
+            line = NULL;
+            if (rc < 0) return -1;
+            if (app->input_closed) {
+                if (error_size) error[0] = '\0';
+                return 1;
+            }
+            if (!handled && snag_ui_text(&app->ui, SNAG_UI_ERROR, "unknown slash command") < 0) return -1;
+            if (snag_ui_simple_prompt(&app->ui, false) < 0) return -1;
+            rc = 0;
+        }
+    } while (rc == 0);
+    if (rc < 0) {
+        free(line);
+        return snag_errorf(error, error_size, "confirmation input could not be read");
+    }
+    if (action != SNAG_TERM_SUBMIT || !line) {
+        free(line);
+        if (error_size) snprintf(error, error_size, "confirmation was cancelled");
+        return 1;
+    }
+    matched = strcmp(line, id) == 0;
+    free(line);
+    if (!matched) {
+        if (error_size) snprintf(error, error_size, "confirmation did not match the displayed challenge");
+        return 1;
+    }
+    return 0;
+}
+
 int
 snag_app_lifecycle_command(struct app_state *app, const char *line, bool *handled, bool *exit_now)
 {

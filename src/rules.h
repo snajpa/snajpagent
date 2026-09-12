@@ -27,6 +27,8 @@ enum snag_rule_verb {
     SNAG_RULE_JUMP,
     SNAG_RULE_RETURN,
     SNAG_RULE_INSERT,
+    SNAG_RULE_COMMAND,
+    SNAG_RULE_CONFIRM,
     SNAG_RULE_VERB_COUNT
 };
 
@@ -65,7 +67,8 @@ const char *snag_rule_target(const struct snag_rule *rule);
 const char *snag_rule_log(const struct snag_rule *rule);
 const json_t *snag_rule_value(const struct snag_rule *rule);
 const char *snag_rule_to(const struct snag_rule *rule);
-bool snag_rule_confirm(const struct snag_rule *rule);
+const char *snag_rule_command(const struct snag_rule *rule);
+unsigned int snag_rule_timeout_ms(const struct snag_rule *rule);
 
 int snag_rules_eval(const struct snag_rules *rules, struct snag_rule_frame *frame,
                     snag_rule_effect_fn effect, void *opaque,

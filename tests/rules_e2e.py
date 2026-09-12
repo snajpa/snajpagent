@@ -109,6 +109,13 @@ INSERT_RULES = (
     "to = model\n"
     'text = "Policy: prefer read_file before running commands."\n'
 )
+CONFIRM_RULES = (
+    "[rule ask]\n"
+    "chain = out\n"
+    'match = {"/tool":"^exec_command$"}\n'
+    "action = confirm\n"
+    'text = "Run %{/value/command}?"\n'
+)
 RETURN_RULES = (
     "[rule stop-exec]\n"
     "chain = out\n"
@@ -428,6 +435,71 @@ def case_insert_policy(binary, provider, root):
     print("rules e2e insert: ok", flush=True)
 
 
+def case_confirm_headless_denies(binary, provider, root):
+    case = RulesCase(binary, provider, root, "confirm", CONFIRM_RULES)
+    case.respond = responder(
+        provider, [("exec_command", {"command": "printf x >> marker"})],
+        "confirm case finished")
+    result = case.finish(["-e", "--", "confirm this"])
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    res = single_result(case)
+    assert res["status"] == "not_run" and res["reason"] == "rule_rejected", res
+    assert "local confirmation is required" in res["model_text"], res
+    assert not case.path("marker").exists()
+    print("rules e2e confirm-headless-deny: ok", flush=True)
+
+
+def command_case(binary, provider, root, name, script_body, calls=None):
+    case = RulesCase(binary, provider, root, name, "")
+    script = case.case / "helper.sh"
+    script.write_text("#!/bin/sh\ncat >/dev/null\n" + script_body + "\n", encoding="utf-8")
+    script.chmod(0o755)
+    with case.config.open("a", encoding="utf-8") as out:
+        out.write("[rule helper]\nchain = out\nmatch = {\"/tool\":\"^exec_command$\"}\n"
+                  "action = command\ncommand = %s\n" % script)
+    case.respond = responder(
+        provider, calls or [("exec_command", {"command": "printf x >> marker"})],
+        "helper case finished")
+    return case, case.finish(["-e", "--", "helper decision"])
+
+
+def case_command_rejects(binary, provider, root):
+    case, result = command_case(binary, provider, root, "helper-reject",
+                                "printf '%s' '{\"action\":\"reject\",\"text\":\"denied by helper\"}'")
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    res = single_result(case)
+    assert res["status"] == "not_run" and res["reason"] == "rule_rejected", res
+    assert "denied by helper" in res["model_text"], res
+    assert not case.path("marker").exists()
+    print("rules e2e helper-reject: ok", flush=True)
+
+
+def case_command_transforms(binary, provider, root):
+    case, result = command_case(
+        binary, provider, root, "helper-transform",
+        "printf '%s' '{\"action\":\"pass\",\"value\":{\"command\":\"printf y >> marker\"}}'")
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    res = single_result(case)
+    assert res["status"] == "succeeded", res
+    assert case.path("marker").read_text() == "y", "the helper replacement must run"
+    print("rules e2e helper-transform: ok", flush=True)
+
+
+def case_command_empty_passes_and_invalid_denies(binary, provider, root):
+    case, result = command_case(binary, provider, root, "helper-empty", ":")
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    res = single_result(case)
+    assert res["status"] == "succeeded", res
+    assert case.path("marker").read_text() == "x"
+
+    case, result = command_case(binary, provider, root, "helper-invalid", "printf 'not json'")
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    res = single_result(case)
+    assert res["status"] == "not_run" and res["reason"] == "rule_rejected", res
+    assert not case.path("marker").exists()
+    print("rules e2e helper-empty/invalid: ok", flush=True)
+
+
 def case_multi_call_mixed(binary, provider, root):
     case = RulesCase(binary, provider, root, "multi-call", ARG_RULES)
     case.path("victim").write_text("keep me\n")
@@ -537,6 +609,10 @@ CASES = (
     case_return_stops,
     case_transform_override,
     case_insert_policy,
+    case_confirm_headless_denies,
+    case_command_rejects,
+    case_command_transforms,
+    case_command_empty_passes_and_invalid_denies,
     case_multi_call_mixed,
     case_durability_resume,
     case_no_rules_baseline,

@@ -2111,7 +2111,10 @@ One of
 .BR pass ,
 .BR accept ,
 .BR reject ,
-.BR jump
+.BR jump ,
+.BR insert ,
+.BR command ,
+.BR confirm
 or
 .BR return .
 .B pass
@@ -2146,6 +2149,56 @@ The chain entered by
 .TP
 .B log
 A template recorded when the rule matches.  Logging never changes the verdict.
+.TP
+.B value
+A JSON payload applied only with
+.BR pass :
+the call's arguments are replaced by it (fields the replacement omits are
+removed), and the change is recorded as a
+.B rule_transform
+projection linking the original and effective action digests, so replay
+reconstructs the same state and the original proposal stays in the journal.
+.TP
+.B to
+The target of
+.BR insert .
+Only
+.B model
+is accepted: the rendered
+.B text
+is attached to that call's model-visible result as a labelled
+.B [policy]
+block.  Program and IRC targets do not exist at this boundary.
+.TP
+.B command
+A trusted host-user helper path for
+.BR command .
+The canonical envelope is written to the helper's stdin; an empty successful
+stdout means pass, otherwise stdout must be one strict JSON effect:
+.B pass
+with an optional
+.BR value ,
+.B reject
+or
+.B insert
+with
+.BR text .
+Invalid JSON, a nonzero exit, a signal, a deadline overrun, or more than 64 KiB
+on either output stream denies the pending call.  A helper is trusted host-user
+code, not a sandbox, and its own side effects are outside consent.
+.TP
+.B timeout_ms
+Helper deadline for
+.BR command ,
+1 through 60000, default 10000.
+.TP
+.B confirm
+Require fresh local consent before the call runs.  The rendered
+.B text
+is shown with a generated challenge, and the challenge must be typed back at
+the local terminal.  A cancelled, mismatched or unanswerable confirmation (for
+example a one-shot or otherwise non-interactive run) denies the call; model,
+IRC and helper output can never answer it.
 .PP
 The envelope exposes the immutable facts
 .BR boundary ,

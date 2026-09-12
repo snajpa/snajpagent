@@ -15,6 +15,13 @@ snajpagent is a pre-1.0 terminal coding agent. One interactive session supports
 local rollout and native IRC chat. One-shot mode runs tasks from scripts.
 
 Implemented:
+- Rule effects at the tool-call boundary now cover rejection, allowlists
+  (`accept`), reusable chains (`jump`/`return`), pass-through logging, payload
+  transform/override (`pass` with `value`, journaled as a `rule_transform`
+  projection), policy insertion (`insert` with `to = model`) and trusted helpers
+  (`command`, one strict JSON effect from stdout), plus fresh local consent
+  (`confirm`: a generated challenge typed at the local terminal; non-interactive
+  runs deny). Verified by `tests/test_rules.c` and `tests/rules_e2e.py`.
 - Native exploration tools (list_files, read_file, grep) are declared and
   runnable in every turn; /ro remains inspection-only. New modification
   counterparts write_file (atomic whole-file create/replace) and edit_file
