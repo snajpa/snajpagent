@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Preserve nanosecond retained-file checks with early OpenBSD stat layouts.
+
 - Support OpenBSD 5.9 direct audio block sizes and pause/start/stop controls.
   Preserve both audio backends; physical audio remains unqualified.
 

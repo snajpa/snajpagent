@@ -166,7 +166,7 @@ unchanged(const snag_file_info *a, const snag_file_info *b)
         !S_ISREG(b->st_mode)) return false;
 #ifndef _WIN32
     if (a->st_ctime != b->st_ctime) return false;
-#if defined(__APPLE__) || defined(__FreeBSD__)
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__)
     if (a->st_mtimespec.tv_nsec != b->st_mtimespec.tv_nsec ||
         a->st_ctimespec.tv_nsec != b->st_ctimespec.tv_nsec) return false;
 #else

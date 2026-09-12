@@ -1370,9 +1370,9 @@ media_source = (root / "src/media.c").read_text()
 unchanged = re.search(r"static bool\nunchanged\(.*?\n}", media_source, re.S).group(0)
 with tempfile.TemporaryDirectory(prefix="media-stat-", dir=root / "build") as tmp:
     tmp = Path(tmp)
-    for platform in ("POSIX", "__APPLE__", "__FreeBSD__", "_WIN32"):
+    for platform in ("POSIX", "__APPLE__", "__FreeBSD__", "__OpenBSD__", "_WIN32"):
         source = tmp / "stat.c"
-        named = platform in ("__APPLE__", "__FreeBSD__")
+        named = platform in ("__APPLE__", "__FreeBSD__", "__OpenBSD__")
         mt, ct = ("st_mtimespec", "st_ctimespec") if named else ("st_mtim", "st_ctim")
         source.write_text("#include <assert.h>\n#include <stdbool.h>\n" +
             ("" if platform == "POSIX" else "#define " + platform + " 1\n") +

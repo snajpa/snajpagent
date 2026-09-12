@@ -525,6 +525,8 @@ native pause semantics without a blocking drain. A failed duplex playback start
 repauses capture. Both sndio and direct audio remain available. OpenBSD 3.5
 compatibility and BSD PDF/Office dependency closure remain unfinished; cross-links
 and mocked lifecycle checks do not qualify physical audio.
+Retained-file snapshots use the BSD nanosecond stat fields, including the
+OpenBSD 3.5 layout, to detect source changes during media preparation.
 
 OpenBSD 7.9 qualification covers base/IRC/SSE tests, internal read-only
 inspection and denied writes, parallel commands, PTY execution, durable resume,
