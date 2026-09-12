@@ -1,0 +1,30 @@
+SPDX-License-Identifier: IJG
+
+Correct the unclosed HAVE_BOOLEAN guard in the pinned MinGW typedef patch.
+Retain the unsigned-char Windows boolean ABI and existing RPC declarations.
+
+--- a/src/jmorecfg.h
++++ b/src/jmorecfg.h
+@@ -197,15 +197,21 @@
+  * On a few systems, type boolean and/or its values FALSE, TRUE may appear
+  * in standard header files.  Or you may have conflicts with application-
+  * specific header files that you want to include together with these files.
+  * Defining HAVE_BOOLEAN before including jpeglib.h should make it work.
+  */
+ 
+-#ifndef HAVE_BOOLEAN
++#if defined(_WIN32) && !defined(HAVE_BOOLEAN)
++#ifndef __RPCNDR_H__
++typedef unsigned char boolean;
++#endif
++#define HAVE_BOOLEAN
++#endif
++#if !defined(HAVE_BOOLEAN) && !defined(__RPCNDR_H__)
+ typedef int boolean;
+ #endif
+ #ifndef FALSE                   /* in case these macros already exist */
+ #define FALSE   0               /* values of boolean */
+ #endif
+ #ifndef TRUE
+ #define TRUE    1
+ #endif

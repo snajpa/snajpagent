@@ -21,6 +21,7 @@ let
     enableShared = false;
   }).overrideAttrs (old: {
     pname = "libcxx-windows-${arch}-pthread";
+    patches = (old.patches or []) ++ [ ./libcxx-legacy-stat.patch ];
     buildInputs = (old.buildInputs or []) ++ [ threads ];
     cmakeFlags = old.cmakeFlags ++ [
       "-DLIBCXX_HAS_PTHREAD_API=ON" "-DLIBCXX_HAS_WIN32_THREAD_API=OFF"

@@ -37,6 +37,9 @@
 - Report missing/extra fields, types, ranges and cross-field errors; disclose
   requested/applied output ceilings and host wait limits. Keep latest-batch host
   feedback visible independently of command-output budgets, including on resume.
+- Continue local multimodal portability: link Windows media/PDF dependencies,
+  correct static dependency metadata, and adapt legacy file metadata reads.
+  Pre-Vista C++ locale imports and portable Office packaging remain unfinished.
 
 - Accept assistant phases finalized at message completion, including DeepSeek
   Flash's pre-tool commentary. Preserve completed phases through tool follow-ups

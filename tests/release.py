@@ -837,3 +837,141 @@ assert 'pkgs.lib.optional legacy ./ffmpeg-legacy-windows.patch' in windows
 assert '"--disable-autodetect" "--disable-w32threads" "--enable-pthreads"' in windows
 assert '"AV_LIBS=$($PKG_CONFIG --static --libs libavformat libavcodec libavutil libswresample libswscale)"' in windows
 print("PASS: legacy FFmpeg RNG cleanup, failure and length handling; static recipe wiring")
+
+# The pinned JPEG MinGW patch left an outer #ifndef unclosed. Keep its Windows
+# boolean ABI while allowing standalone and predeclared RPC/application types.
+jpeg_patch = (root / "nix/jpeg-mingw-boolean.patch").read_text()
+jpeg_source = "\n".join(line[1:] for line in jpeg_patch.splitlines()
+                       if line.startswith((" ", "+")) and not line.startswith("+++"))
+jpeg_types = jpeg_source[jpeg_source.index("#if defined(_WIN32)"):]
+with tempfile.TemporaryDirectory(prefix="jpeg-boolean-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    for name, prelude, expected in (
+        ("native", "", "sizeof(int)"),
+        ("windows", "#define _WIN32 1\n", "1"),
+        ("rpc", "#define _WIN32 1\n#define __RPCNDR_H__ 1\ntypedef unsigned char boolean;\n", "1"),
+        ("declared", "#define _WIN32 1\n#define HAVE_BOOLEAN 1\ntypedef unsigned char boolean;\n", "1"),
+    ):
+        source = tmp / (name + ".c")
+        source.write_text(prelude + jpeg_types +
+            '\n_Static_assert(sizeof(boolean) == ' + expected + ', "boolean ABI");\n'
+            '_Static_assert(FALSE == 0 && TRUE == 1, "boolean values");\nint main(void) { return 0; }\n')
+        subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
+                        "-o", str(tmp / name)], check=True)
+assert 'builtins.baseNameOf patch != "mingw-boolean.patch"' in windows
+assert 'old.patches ++ [ ./jpeg-mingw-boolean.patch ]' in windows
+print("PASS: JPEG boolean declarations preserve native, Windows and predeclared ABI")
+
+# Poppler rejects MinSizeRel; use the recipe's C++ compiler and native fonts.
+pdf_windows = windows.split("pdf = (cmakeLibrary windows.poppler [", 1)[1].split("  av =", 1)[0]
+assert 'cmakeBuildType = "Release";' in pdf_windows
+assert '"-DFONT_CONFIGURATION=win32"' in pdf_windows
+assert '"CXX=$CXX"' in windows
+assert 'libavformat libavcodec libavutil libswresample libswscale)' in windows
+print("PASS: Windows PDF selects a supported build type and static C++ interface")
+
+png_recipe = windows.split("png = (cmakeLibrary windows.libpng [", 1)[1].split("  freetype =", 1)[0]
+expression = re.search(r"sed -i '([^']+)'", png_recipe).group(1)
+actual = subprocess.check_output(["sed", expression],
+    input="Requires.private: zlib\nLibs.private: -lz -lm\nLibs: -L/example -lpng16\n", text=True)
+assert actual == "Requires.private: zlib\nLibs.private: -lm\nLibs: -L/example -lpng16\n"
+print("PASS: Windows PNG uses zlib pkg-config instead of a redundant -lz")
+
+openjpeg_recipe = windows.split("openjpeg = ", 1)[1].split("  pdf =", 1)[0]
+assert '"$out/lib/pkgconfig/libopenjp2.pc"' in openjpeg_recipe
+assert "--replace-fail '-l-lpthread' '-lpthread'" in openjpeg_recipe
+print("PASS: Windows OpenJPEG metadata keeps a valid pthread library name")
+
+# Test the legacy libc++ handle-stat replacement, including reparse failure and
+# large file identity/size fields, without accessing a real filesystem or SDK.
+stat_patch = (root / "nix/libcxx-legacy-stat.patch").read_text()
+stat_source = "\n".join(line[1:] for line in stat_patch.splitlines()
+                        if line.startswith((" ", "+")) and not line.startswith("+++"))
+stat_function = re.search(r"inline int stat_handle\(.*?\n}", stat_source, re.S).group(0)
+with tempfile.TemporaryDirectory(prefix="libcxx-stat-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    source = tmp / "stat.cpp"
+    source.write_text(r"""
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+using DWORD = uint32_t;
+using HANDLE = void *;
+using FILETIME = uint64_t;
+struct BY_HANDLE_FILE_INFORMATION {
+    DWORD dwFileAttributes;
+    FILETIME ftLastWriteTime, ftLastAccessTime;
+    DWORD nNumberOfLinks, nFileSizeHigh, nFileSizeLow, dwVolumeSerialNumber;
+    DWORD nFileIndexHigh, nFileIndexLow;
+};
+struct StatT {
+    unsigned st_mode;
+    uint64_t st_mtim, st_atim, st_size, st_dev;
+    uint32_t st_nlink;
+    struct { unsigned char id[16]; } st_ino;
+};
+#define FILE_ATTRIBUTE_READONLY 1
+#define FILE_ATTRIBUTE_DIRECTORY 0x10
+#define FILE_ATTRIBUTE_REPARSE_POINT 0x400
+#define _S_IFMT 0xf000
+#define _S_IFDIR 0x4000
+#define _S_IFREG 0x8000
+#define _S_IFLNK 0xa000
+#define MAXIMUM_REPARSE_DATA_BUFFER_SIZE 16384
+#define FSCTL_GET_REPARSE_POINT 0x900a8
+#define IO_REPARSE_TAG_SYMLINK 0xa000000cu
+#define ERROR_INVALID_DATA 13
+static BY_HANDLE_FILE_INFORMATION info;
+static HANDLE handle = &info;
+static bool fail_info, fail_reparse;
+static DWORD tag, returned = 8, last_error;
+static unsigned info_calls, reparse_calls;
+static FILETIME filetime_to_timespec(FILETIME value) { return value; }
+static void SetLastError(DWORD value) { last_error = value; }
+static bool GetFileInformationByHandle(HANDLE h, BY_HANDLE_FILE_INFORMATION *out) {
+    assert(h == handle); ++info_calls;
+    if (fail_info) { last_error = 5; return false; }
+    *out = info; return true;
+}
+static bool DeviceIoControl(HANDLE h, DWORD code, void *in, DWORD in_size,
+                            void *out, DWORD size, DWORD *written, void *overlapped) {
+    assert(h == handle && code == FSCTL_GET_REPARSE_POINT);
+    assert(!in && !in_size && !overlapped && size == MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
+    ++reparse_calls;
+    if (fail_reparse) { last_error = 6; return false; }
+    std::memcpy(out, &tag, sizeof(tag)); *written = returned; return true;
+}
+""" + stat_function + r"""
+int main() {
+    info = {0, 1234567, 7654321, 3, 0xffffffffu, 0x12345678u, 42, 7, 8};
+    StatT out;
+    assert(stat_handle(handle, &out) == 0);
+    assert(info_calls == 1 && !reparse_calls);
+    assert(out.st_mode == (_S_IFREG | 0777) && out.st_nlink == 3 && out.st_dev == 42);
+    assert(out.st_size == UINT64_C(0xffffffff12345678));
+    assert(out.st_mtim == 1234567 && out.st_atim == 7654321);
+    assert(!std::memcmp(out.st_ino.id, &info.nFileIndexHigh, 4));
+    assert(!std::memcmp(out.st_ino.id + 4, &info.nFileIndexLow, 4));
+    for (unsigned i = 8; i < 16; ++i) assert(out.st_ino.id[i] == 0);
+    info.dwFileAttributes = FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_READONLY;
+    assert(stat_handle(handle, &out) == 0 && out.st_mode == (_S_IFDIR | 0555));
+    info.dwFileAttributes |= FILE_ATTRIBUTE_REPARSE_POINT;
+    tag = 0xa0000003u; // Mount-point tags retain the directory mode.
+    assert(stat_handle(handle, &out) == 0 && out.st_mode == (_S_IFDIR | 0555));
+    tag = IO_REPARSE_TAG_SYMLINK;
+    assert(stat_handle(handle, &out) == 0 && out.st_mode == (_S_IFLNK | 0555));
+    returned = 7;
+    assert(stat_handle(handle, &out) == -1 && last_error == ERROR_INVALID_DATA);
+    fail_reparse = true;
+    assert(stat_handle(handle, &out) == -1 && last_error == 6);
+    fail_info = true; reparse_calls = 0;
+    assert(stat_handle(handle, &out) == -1 && last_error == 5 && !reparse_calls);
+    return 0;
+}
+""")
+    subprocess.run(["c++", "-std=c++17", "-Wall", "-Wextra", "-Werror", str(source),
+                    "-o", str(tmp / "stat")], check=True)
+    subprocess.run([str(tmp / "stat")], check=True)
+assert 'patches = (old.patches or []) ++ [ ./libcxx-legacy-stat.patch ];' in (root / "nix/windows-pty.nix").read_text()
+assert "GetFileInformationByHandleEx" not in stat_function
+print("PASS: legacy libc++ handle stat preserves metadata and reparse errors")

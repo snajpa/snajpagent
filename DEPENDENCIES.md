@@ -137,6 +137,19 @@ and obtains random bytes through CryptoAPI rather than importing BCrypt.
 Modern Windows retains FFmpeg's native conversion and BCrypt paths.
 The compatibility patch retains FFmpeg's LGPL-2.1-or-later terms.
 
+Windows PDF builds link Poppler, FreeType, libpng, libjpeg-turbo and OpenJPEG
+statically, using Poppler's native Windows font lookup. The legacy x64 build
+uses the existing pthread-backed libc++ runtime. Its filesystem metadata read
+uses the older handle-based API and retains 64-bit file sizes, identity,
+timestamps and reparse-point classification. The pinned JPEG MinGW typedef
+patch is corrected without changing its Windows boolean ABI; PNG and OpenJPEG
+pkg-config corrections retain their actual static dependencies. These changes
+are covered by build and synthetic regressions; Windows rendering fidelity and
+oldest-OS execution still require runtime qualification.
+The current PDF-enabled x64 executable still imports newer MSVCRT locale APIs;
+the pre-Vista locale adaptation is unfinished. The successful cross-link does
+not establish that this executable loads on XP x64 or Server 2003.
+
 Custom lean builds may set `WITH_AV=0`, `WITH_OFFICE=0`, or
 `WITH_AUDIO_DEVICE=0`; `WITH_PDF=0` also requires `WITH_OFFICE=0` because Office
 page validation/rendering uses Poppler. Official desktop releases require all

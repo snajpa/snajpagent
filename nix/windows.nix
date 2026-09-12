@@ -98,6 +98,50 @@ let
       sed -i 's/ -lz$/ -lzs/' "$out/lib/pkgconfig/zlib.pc"
     '';
   });
+  png = (cmakeLibrary windows.libpng [
+    "-DPNG_SHARED=OFF" "-DPNG_STATIC=ON" "-DPNG_TESTS=OFF" "-DPNG_TOOLS=OFF"
+    "-DZLIB_LIBRARY=${zlib}/lib/libzs.a"
+  ] [ zlib ]).overrideAttrs (_: {
+    postInstall = ''
+      # Requires.private already names zlib, whose Windows archive is libzs.a.
+      sed -i '/^Libs.private:/ s/ -lz\( \|$\)/\1/g' "$out/lib/pkgconfig/"*.pc
+    '';
+  });
+  freetype = cmakeLibrary windows.freetype [
+    "-DFT_DISABLE_BZIP2=ON" "-DFT_DISABLE_BROTLI=ON" "-DFT_DISABLE_HARFBUZZ=ON"
+    "-DFT_REQUIRE_ZLIB=ON" "-DFT_REQUIRE_PNG=ON"
+    "-DZLIB_LIBRARY=${zlib}/lib/libzs.a"
+  ] [ zlib png ];
+  jpeg = (cmakeLibrary windows.libjpeg [
+    "-DENABLE_SHARED=OFF" "-DENABLE_STATIC=ON" "-DWITH_TURBOJPEG=OFF"
+  ] []).overrideAttrs (old: {
+    patches = builtins.filter (patch: builtins.baseNameOf patch != "mingw-boolean.patch")
+      old.patches ++ [ ./jpeg-mingw-boolean.patch ];
+    nativeBuildInputs = old.nativeBuildInputs ++ pkgs.lib.optional windows.stdenv.hostPlatform.isx86 pkgs.nasm;
+  });
+  openjpeg = (cmakeLibrary windows.openjpeg [ "-DBUILD_CODEC=OFF" ] []).overrideAttrs (_: {
+    postInstall = ''
+      substituteInPlace "$out/lib/pkgconfig/libopenjp2.pc" \
+        --replace-fail '-l-lpthread' '-lpthread'
+    '';
+  });
+  pdf = (cmakeLibrary windows.poppler [
+    "-DENABLE_UNSTABLE_API_ABI_HEADERS=ON" "-DFONT_CONFIGURATION=win32"
+    "-DENABLE_UTILS=OFF" "-DENABLE_CPP=OFF" "-DENABLE_GLIB=OFF"
+    "-DENABLE_GOBJECT_INTROSPECTION=OFF" "-DENABLE_QT5=OFF" "-DENABLE_QT6=OFF"
+    "-DBUILD_QT5_TESTS=OFF" "-DBUILD_QT6_TESTS=OFF" "-DBUILD_CPP_TESTS=OFF"
+    "-DBUILD_MANUAL_TESTS=OFF" "-DENABLE_LCMS=OFF" "-DENABLE_LIBCURL=OFF"
+    "-DENABLE_LIBTIFF=OFF" "-DENABLE_NSS3=OFF" "-DENABLE_GPGME=OFF"
+    "-DZLIB_LIBRARY=${zlib}/lib/libzs.a"
+  ] [ zlib png freetype jpeg openjpeg pkgs.boost ]).overrideAttrs (old: {
+    cmakeBuildType = "Release";
+    buildInputs = old.buildInputs ++ pkgs.lib.optionals (pty != null) [ pty.cxx pty.unwind ];
+    preConfigure = old.preConfigure + ''
+      cmakeFlagsArray+=(
+        "-DCMAKE_CXX_FLAGS=-D_WIN32_WINNT=${winver} -DWINVER=${winver}${pkgs.lib.optionalString (pty != null) " -nostdinc++ -isystem ${pkgs.lib.getDev pty.cxx}/include/c++/v1"}"
+      )
+    '';
+  });
   av = (windows.ffmpeg_8.override {
     inherit zlib;
     ffmpegVariant = "headless";
@@ -179,7 +223,7 @@ let
   pty = if legacy && windows.stdenv.cc.isClang then
     import ./windows-pty.nix { inherit pkgs windows threads winver; } else null;
 in {
-  inherit windows threads jansson tls curl av networkLibraries regex pty;
+  inherit windows threads jansson tls curl av png freetype jpeg openjpeg pdf networkLibraries regex pty;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }: windows.stdenv.mkDerivation {
     pname = "${packageName}-windows-${arch}";
@@ -187,7 +231,7 @@ in {
     src = source;
     outputs = [ "out" "debug" ];
     nativeBuildInputs = [ windows.buildPackages.pkg-config ];
-    buildInputs = [ threads jansson curl regex av ] ++ networkLibraries
+    buildInputs = [ threads jansson curl regex av png pdf freetype jpeg openjpeg ] ++ networkLibraries
       ++ pkgs.lib.optionals (pty != null) [ pty.collector pty.cxx pty.unwind ];
     enableParallelBuilding = true;
     dontStrip = true;
@@ -202,7 +246,7 @@ in {
         ${pkgs.lib.optionalString (updateBase != "") "'UPDATE_BASE_URL=${updateBase}' 'UPDATE_TARGET=${updateTarget}'"}
         'TARGET_OS=Windows' 'BIN=${packageName}.exe'
         'DEBUG_SYMBOLS=debug-${packageName}.exe'
-        "CC=$CC" "STRIP=$STRIP" "OBJCOPY=$OBJCOPY"
+        "CC=$CC" "CXX=$CXX" "STRIP=$STRIP" "OBJCOPY=$OBJCOPY"
         'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
         'CPPFLAGS=-D_WIN32_WINNT=${winver} -DWINVER=${winver} -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"${pkgs.lib.optionalString (pty != null) " -DSNAG_LEGACY_PTY"}'
         'CFLAGS=-std=c11 ${if debug then "-Og -g -fno-omit-frame-pointer" else "-Os -g -flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
@@ -213,6 +257,8 @@ in {
         "CURL_LIBS=$($PKG_CONFIG --static --libs libcurl)"
         "AV_CFLAGS=$($PKG_CONFIG --cflags libavformat libavcodec libavutil libswresample libswscale)"
         "AV_LIBS=$($PKG_CONFIG --static --libs libavformat libavcodec libavutil libswresample libswscale)"
+        "PDF_CFLAGS=$($PKG_CONFIG --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')${pkgs.lib.optionalString (pty != null) " -nostdinc++ -isystem ${pkgs.lib.getDev pty.cxx}/include/c++/v1"}"
+        "PDF_LIBS=$($PKG_CONFIG --static --libs poppler libpng)${if pty != null then " -L${pty.cxx}/lib -lc++ -L${pty.unwind}/lib -lunwind" else if windows.stdenv.cc.isClang then " -lc++" else " -lstdc++"}"
         'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}'
       )
     '';
