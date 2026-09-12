@@ -250,7 +250,7 @@ let
     inherit (sourcePkgs.ffmpeg_8) version src;
     patches = sourcePkgs.ffmpeg_8.patches
       ++ lib.optional legacy ./ffmpeg-bsd-thread-headers.patch
-      ++ lib.optional early ./ffmpeg-openbsd35-inttypes.patch;
+      ++ lib.optionals early [ ./ffmpeg-openbsd35-inttypes.patch ./ffmpeg-openbsd35-hls.patch ];
     nativeBuildInputs = [ pkgs.pkg-config pkgs.perl pkgs.nasm llvm.llvm ];
     buildInputs = [ zlib ];
     strictDeps = true;

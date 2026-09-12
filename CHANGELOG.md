@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Parse early OpenBSD HLS start offsets with native double-precision strtod.
+
 - Supply missing early OpenBSD FFmpeg integer-format macros from the target ABI.
 
 - Compile the OpenBSD 3.5 audio adapter without unavailable wide-file APIs and

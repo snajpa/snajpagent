@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Early OpenBSD has strtod but no strtof; retain fractional HLS time offsets.
+--- a/libavformat/hls.c
++++ b/libavformat/hls.c
+@@ -956,7 +956,7 @@
+                 goto fail;
+             }
+             if (av_strstart(ptr, "TIME-OFFSET=", &time_offset_value)) {
+-                float offset = strtof(time_offset_value, NULL);
++                double offset = strtod(time_offset_value, NULL);
+                 pls->start_time_offset = offset * AV_TIME_BASE;
+                 pls->time_offset_flag = 1;
+             } else {

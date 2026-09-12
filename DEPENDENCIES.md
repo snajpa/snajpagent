@@ -535,6 +535,8 @@ early target's media dependencies or qualify devices.
 The early FFmpeg header also supplies missing C99 integer-format macros using
 Clang's target-ABI definitions, keeping 64-bit and pointer widths distinct.
 Existing system definitions and printf/scanf implementations remain unchanged.
+The HLS start-offset parser uses native `strtod` and double precision on this
+early target, which lacks `strtof`; signed fractional offsets remain supported.
 
 OpenBSD 7.9 qualification covers base/IRC/SSE tests, internal read-only
 inspection and denied writes, parallel commands, PTY execution, durable resume,

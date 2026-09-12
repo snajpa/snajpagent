@@ -1619,7 +1619,7 @@ print("PASS: old OpenBSD audio preserves wide-file fallback and empty/numeric pt
 formats_patch = (root / "nix/ffmpeg-openbsd35-inttypes.patch").read_text()
 formats_added = "\n".join(line[1:] for line in formats_patch.splitlines()
                          if line.startswith("+") and not line.startswith("+++"))
-assert 'lib.optional early ./ffmpeg-openbsd35-inttypes.patch' in (root / "nix/openbsd.nix").read_text()
+assert 'lib.optionals early [ ./ffmpeg-openbsd35-inttypes.patch ./ffmpeg-openbsd35-hls.patch ]' in (root / "nix/openbsd.nix").read_text()
 if shutil.which("clang"):
     with tempfile.TemporaryDirectory(prefix="bsd-inttypes-", dir=root / "build") as tmp:
         tmp = Path(tmp)
@@ -1660,3 +1660,30 @@ int main(void) {
     print("PASS: missing BSD integer formats preserve limits, pointer widths and system definitions")
 else:
     print("SKIP: Clang unavailable for old BSD integer-format ABI regression")
+
+# The one HLS start-offset parser can use native double parsing on old OpenBSD.
+hls_patch = (root / "nix/ffmpeg-openbsd35-hls.patch").read_text()
+hls_line = next(line[1:].strip() for line in hls_patch.splitlines()
+                if line.startswith("+") and "offset = " in line)
+with tempfile.TemporaryDirectory(prefix="bsd-hls-offset-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    source = tmp / "hls.c"
+    source.write_text("#include <assert.h>\n#include <stdint.h>\n#include <stdlib.h>\n"
+                      "static int64_t parse(const char *time_offset_value) {\n" + hls_line +
+                      "\nreturn offset * 1000000;\n}\n" + r"""
+int main(void) {
+    assert(parse("0") == 0);
+    assert(parse("1.25") == 1250000);
+    assert(parse("-1.25") == -1250000);
+    assert(parse("86400.125") == INT64_C(86400125000));
+    assert(parse("-0.000125") == -125);
+    assert(parse("1.25e2") == 125000000);
+    assert(parse("1.5tail") == 1500000);
+    assert(parse("not-a-number") == 0);
+    return 0;
+}
+""")
+    subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source),
+                    "-o", str(tmp / "hls")], check=True)
+    subprocess.run([str(tmp / "hls")], check=True)
+print("PASS: early OpenBSD HLS offsets keep signed fractional microseconds with native strtod")
