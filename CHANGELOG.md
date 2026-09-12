@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Supply FreeBSD static ZIP/XML Office package readers with SDK-native digest
+  linkage; LibreOffice runtime packaging remains separate and unfinished.
+
 - Add FreeBSD static media dependencies and OSS3 default-device compatibility.
   Preserve native threading, libc loader linkage, compile-time assertions and
   nanosecond retained-file checks; PDF/Office and audio qualification remain open.

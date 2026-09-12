@@ -1274,6 +1274,12 @@ assert "'CXX=${llvm.clang-unwrapped}/bin/clang++ --target=${target} -isysroot ${
 print("PASS: macOS PDF targets generated headers, NASM tools and static font/C++ dependencies")
 
 freebsd = (root / "nix/freebsd.nix").read_text()
+freebsd_archive = freebsd.split("  archive = ", 1)[1].split("  brotli = ", 1)[0]
+assert '"-DLIBMD_LIBRARY=${sdk}/usr/lib/libmd.a"' in freebsd_archive
+assert '] [ zlib iconv ];' in freebsd_archive
+assert 'buildInputs = [ jansson curl av xml archive ]' in freebsd
+assert '"-DLIBXML2_WITH_MODULES=OFF"' in freebsd and '"-DENABLE_TEST=OFF"' in freebsd_archive
+print("PASS: FreeBSD Office readers use static SDK digests and application dependency wiring")
 assert '-Dstatic_assert=_Static_assert' in freebsd
 assert 'lib.optional legacy ./ffmpeg-legacy-libm.patch' in freebsd
 math_patch = (root / "nix/ffmpeg-legacy-libm.patch").read_text()

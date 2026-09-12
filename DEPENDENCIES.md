@@ -432,6 +432,11 @@ and sample rate are still negotiated by the existing OSS backend when the user
 starts capture or playback. OSS4 inventory behavior stays intact. These dependency
 adaptations do not qualify physical audio or complete FreeBSD PDF/Office closure.
 
+Static libarchive and libxml2 supply the Office package checker, with zlib, iconv
+and the existing SDK libmd archive. The libmd path is explicit because CMake
+otherwise misses the SDK library during digest probes. Package-reader links
+retain native threading/libc; LibreOffice runtime and PDF closure remain open.
+
 Actual FreeBSD 8.4 and 14.4 amd64 qualification covers base and IRC tests, internal
 read-only inspection and denied writes, parallel commands, PTY output/status,
 interactive resume and TLS distrust/trust/hostname checks with local fixtures.

@@ -221,6 +221,22 @@ let
       )
     '';
   };
+  xml = cmakeLibrary sourcePkgs.libxml2 [
+    "-DLIBXML2_WITH_PROGRAMS=OFF" "-DLIBXML2_WITH_TESTS=OFF"
+    "-DLIBXML2_WITH_PYTHON=OFF" "-DLIBXML2_WITH_MODULES=OFF"
+    "-DLIBXML2_WITH_ICONV=ON"
+  ] [ iconv ];
+  archive = cmakeLibrary sourcePkgs.libarchive [
+    "-DLIBMD_LIBRARY=${sdk}/usr/lib/libmd.a"
+    "-DENABLE_TAR=OFF" "-DENABLE_CPIO=OFF" "-DENABLE_CAT=OFF"
+    "-DENABLE_UNZIP=OFF" "-DENABLE_TEST=OFF" "-DENABLE_INSTALL=ON"
+    "-DENABLE_OPENSSL=OFF" "-DENABLE_MBEDTLS=OFF" "-DENABLE_NETTLE=OFF"
+    "-DENABLE_CNG=OFF" "-DENABLE_LIBB2=OFF" "-DENABLE_LZ4=OFF"
+    "-DENABLE_LZO=OFF" "-DENABLE_LZMA=OFF" "-DENABLE_ZSTD=OFF"
+    "-DENABLE_BZip2=OFF" "-DENABLE_LIBXML2=OFF" "-DENABLE_EXPAT=OFF"
+    "-DENABLE_WIN32_XMLLITE=OFF" "-DENABLE_PCREPOSIX=OFF"
+    "-DENABLE_PCRE2POSIX=OFF" "-DENABLE_ZLIB=ON" "-DENABLE_ICONV=ON"
+  ] [ zlib iconv ];
   brotli = (cmakeLibrary sourcePkgs.brotli [ "-DBROTLI_DISABLE_TESTS=ON" ] []).overrideAttrs (_: {
     postPatch = lib.optionalString legacy ''
       # This libm has log but not log2; brotli's fallback still requires -lm.
@@ -290,7 +306,7 @@ let
     '';
   });
 in {
-  inherit sdk target compiler tools cflags ldflags jansson tls curl av miniaudio regex unistring;
+  inherit sdk target compiler tools cflags ldflags jansson tls curl av miniaudio regex unistring xml archive iconv zlib;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }:
     pkgs.stdenvNoCC.mkDerivation {
@@ -299,7 +315,7 @@ in {
       src = source;
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
-      buildInputs = [ jansson curl av ] ++ networkLibraries ++ lib.optional early regex;
+      buildInputs = [ jansson curl av xml archive ] ++ networkLibraries ++ lib.optional early regex;
       enableParallelBuilding = true;
       dontStrip = true;
       preBuild = ''
