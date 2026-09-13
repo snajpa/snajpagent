@@ -100,8 +100,13 @@ append_irc_projection(struct snag_buf *pending, const struct snag_irc_event *eve
     snag_buf_init(&line, SNAG_IRC_TEXT_MAX + SNAG_CONFIG_IRC_ENDPOINT_MAX +
                          SNAG_CONFIG_IRC_ROOM_MAX + SNAG_CONFIG_IRC_NICK_MAX + 256u);
     if (event->stream[0] || event->historical) {
-        rc = snag_buf_printf(&line, "[IRC update id=%s:%llu endpoint=%s room=%s; received content is in the preceding room event]\n",
-            event->stream, (unsigned long long)event->sequence, event->endpoint, event->room);
+        /* This batch text becomes the turn prompt: the operator reads it during
+         * replay and the model receives it as the turn's user message. It has
+         * to stand on its own, so name the update instead of pointing at a room
+         * event the reader may not have; the durable id still ties it back. */
+        rc = snag_buf_printf(&line, "[IRC update id=%s:%llu endpoint=%s room=%s event=%s sender=%s]\n",
+            event->stream, (unsigned long long)event->sequence, event->endpoint, event->room,
+            snag_irc_kind_name(event->kind), event->nick[0] ? event->nick : "server");
         if (rc == 0) rc = append_pending(pending, (const char *)line.data, line.len);
         snag_buf_free(&line);
         return rc;

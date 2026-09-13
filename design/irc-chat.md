@@ -549,7 +549,11 @@ Removing a destination clears its outstanding local-operator reply obligation.
 
 On successful room join/reconnect, the topic and member nicks are admitted as
 a state-only snapshot. Identified live/replayed event payloads are projected
-once from their durable records; scheduling references do not copy their text.
+once from their durable records. The scheduling reference that admits a payload
+names the update itself (endpoint, room, kind, sender and durable id) instead of
+claiming its text lives elsewhere; history replay resolves that reference to the
+retained payload, so the operator reads the room event and never a dangling
+pointer. Scheduling references do not copy the payload text.
 Ordinary live background chat still follows the existing queue/turn boundaries;
 durable `irc_admitted` sequence references record when accepted payloads become
 model context, without storing another copy of their text. Mention and

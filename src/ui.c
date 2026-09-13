@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "ui.h"
+#include "irc.h"
 #include "wake.h"
 #include "update.h"
 
@@ -949,8 +950,95 @@ struct history_replay {
     struct snag_ui *ui;
     struct snag_history_turn turn;
     struct snag_buf response;
+    struct history_irc_payload *payloads;
+    size_t payload_count;
     uint64_t completed, skip, shown, total;
 };
+
+/* Turn prompts name IRC updates by durable id and keep the room event itself
+ * aside; replay resolves the references so the operator reads the room content
+ * rather than an internal pointer. The ring bounds memory for long sessions. */
+#define HISTORY_IRC_PAYLOADS 256u
+
+struct history_irc_payload {
+    char id[SNAG_ID_HEX_LEN + 24u];
+    char *text;
+};
+
+static int
+history_note_irc_event(struct history_replay *history, const json_t *data)
+{
+    struct snag_irc_event event;
+    struct snag_buf rendered;
+    snag_buf_init(&rendered, SNAG_IRC_TEXT_MAX + SNAG_CONFIG_IRC_ENDPOINT_MAX +
+        SNAG_CONFIG_IRC_ROOM_MAX + SNAG_CONFIG_IRC_NICK_MAX + 256u);
+    if (snag_irc_event_read(data, &event) < 0) return 0;
+    if (!event.stream[0] || snag_irc_event_projection(&rendered, &event) < 0 ||
+        !rendered.len || !rendered.data) {
+        snag_buf_free(&rendered);
+        return 0;
+    }
+    if (!history->payloads) {
+        history->payloads = calloc(HISTORY_IRC_PAYLOADS, sizeof(*history->payloads));
+        if (!history->payloads) {
+            snag_buf_free(&rendered);
+            return -1;
+        }
+    }
+    struct history_irc_payload *slot =
+        &history->payloads[history->payload_count % HISTORY_IRC_PAYLOADS];
+    ++history->payload_count;
+    while (rendered.len && ((char *)rendered.data)[rendered.len - 1u] == '\n') --rendered.len;
+    ((char *)rendered.data)[rendered.len] = '\0';
+    (void)snprintf(slot->id, sizeof(slot->id), "%s:%llu", event.stream,
+        (unsigned long long)event.sequence);
+    free(slot->text);
+    slot->text = (char *)rendered.data;
+    return 0;
+}
+
+static const char *
+history_irc_payload(struct history_replay *history, const char *id, size_t len)
+{
+    size_t count;
+    if (!history->payloads) return NULL;
+    count = history->payload_count < HISTORY_IRC_PAYLOADS ?
+        history->payload_count : HISTORY_IRC_PAYLOADS;
+    for (size_t i = 0u; i < count; ++i)
+        if (history->payloads[i].text && strlen(history->payloads[i].id) == len &&
+            !strncmp(history->payloads[i].id, id, len)) return history->payloads[i].text;
+    return NULL;
+}
+
+static char *
+history_resolve_irc(struct history_replay *history, const char *text)
+{
+    static const char marker[] = "[IRC update id=";
+    const char *cursor = text;
+    size_t refs = 0u;
+    struct snag_buf out;
+    if (!text || !strstr(text, marker)) return NULL;
+    for (const char *p = text; (p = strstr(p, marker)) != NULL; p += sizeof(marker) - 1u) ++refs;
+    snag_buf_init(&out, strlen(text) + refs * (SNAG_IRC_TEXT_MAX + 128u) + 1u);
+    while (*cursor) {
+        const char *end = strchr(cursor, '\n');
+        size_t line = end ? (size_t)(end - cursor) : strlen(cursor);
+        const char *payload = NULL;
+        if (line > sizeof(marker) - 1u && !strncmp(cursor, marker, sizeof(marker) - 1u)) {
+            const char *id = cursor + sizeof(marker) - 1u;
+            const char *space = memchr(id, ' ', line - (sizeof(marker) - 1u));
+            if (space) payload = history_irc_payload(history, id, (size_t)(space - id));
+        }
+        if (snag_buf_append(&out, payload ? payload : cursor, payload ? strlen(payload) : line) < 0 ||
+            (end && snag_buf_putc(&out, '\n') < 0)) goto fail;
+        cursor = end ? end + 1 : cursor + line;
+    }
+    if (snag_buf_terminate(&out) < 0) goto fail;
+    return (char *)out.data;
+fail:
+    snag_buf_free(&out);
+    return NULL;
+}
 
 static int
 history_display(struct history_replay *history, const struct snag_history_turn *turn)
@@ -990,7 +1078,13 @@ history_items(struct history_replay *history, const json_t *items)
 static int
 history_finish(struct history_replay *history)
 {
+    char *resolved;
     if (!history->turn.user) return 0;
+    resolved = history_resolve_irc(history, history->turn.user);
+    if (resolved) {
+        free(history->turn.user);
+        history->turn.user = resolved;
+    }
     if (history->response.len) {
         if (snag_buf_terminate(&history->response) < 0 ||
             history_append(&history->turn.assistant, (char *)history->response.data, "\n\n") < 0) return -1;
@@ -1012,6 +1106,8 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
     struct snag_history_turn *turn = &history->turn;
     bool completed = snag_string_in(type, "turn_completed turn_completed_silent");
     (void)state; (void)seq; (void)error; (void)error_size;
+    if (history->ui && !strcmp(type, "irc_event") && history_note_irc_event(history, data) < 0)
+        return -1;
     if (!history->ui) {
         history->completed += completed;
         return 0;
@@ -1067,6 +1163,9 @@ snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count
     free(history.turn.user);
     free(history.turn.assistant);
     snag_buf_free(&history.response);
+    if (history.payloads)
+        for (size_t i = 0u; i < HISTORY_IRC_PAYLOADS; ++i) free(history.payloads[i].text);
+    free(history.payloads);
     return rc;
 }
 

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Name each IRC update in the turn prompt instead of referring to a room event
+  the reader may not have, and resolve those references to the retained room
+  event when replaying history. The prompt is the turn's user message, so the
+  internal pointer text used to reach the operator verbatim during replay.
 - Keep IRC topology updates after complete tool exchanges in model requests,
   replay and compaction. Existing affected sessions resume with their saved
   tool results, avoiding missing-tool-output HTTP 400 errors. Cover interactive

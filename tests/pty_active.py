@@ -1679,6 +1679,55 @@ def test_network_input_recovery_boundaries():
         assert len([e for e in log if e["type"] == "turn_completed"]) == 1
 
 
+def test_irc_update_prompt_names_update_and_replay_resolves_it():
+    """The IRC turn prompt must stand on its own, and replay must show content.
+
+    Regression: the prompt used to read "[IRC update id=...; received content is
+    in the preceding room event]", an internal pointer the operator read as the
+    turn's user message."""
+    port = free_port()
+    args = ["--listen", f"127.0.0.1:{port}", "--no-client",
+            "-n", "replayagent", "-o", "replayop", "-r", "lab"]
+    with Child(args, chat_prompt("replayop")) as child:
+        peer = IRCClient(port, "peer")
+        try:
+            peer.message("replayagent: network_zero")
+            end = child.send_wait(b"/rollout\r", b"network zero local only")
+            sid = child.session_id()
+            child.exit_cleanly(end)
+        finally:
+            peer.close()
+    path = STATE_ROOT / sid / "events.jsonl"
+    lines = path.read_bytes().splitlines(keepends=True)
+    log = [json.loads(line) for line in lines]
+    prompts = [item for item in log if item["type"] == "turn_started" and
+               "[IRC update id=" in item["data"]["text"]]
+    assert prompts, "IRC admission produced no turn prompt"
+    text = prompts[0]["data"]["text"]
+    assert "preceding room event" not in text, text
+    assert "sender=peer" in text and "event=message" in text, text
+    identity = re.search(r"\[IRC update id=([^ ]+)", text).group(1)
+    # A journal written before the fix still replays as the room event.
+    legacy = []
+    for line in lines:
+        record = json.loads(line)
+        if record["type"] == "turn_started" and identity in record["data"].get("text", ""):
+            # Byte-level edit: the store requires its own canonical JSON form.
+            legacy_text = (f"[IRC update id={identity} endpoint=127.0.0.1 room=#lab"
+                           "; received content is in the preceding room event]\n")
+            old = json.dumps(record["data"]["text"])[1:-1].encode()
+            line = line.replace(old, json.dumps(legacy_text)[1:-1].encode())
+        legacy.append(line)
+    path.write_bytes(b"".join(legacy))
+    with Child(["--resume", sid], ready=None) as child:
+        child.wait(b"network_zero")
+        end = len(child.buf)
+        child.exit_now()
+    replayed = child.buf[:end].decode("utf-8", "replace")
+    assert "preceding room event" not in replayed, replayed[-400:]
+    assert "network_zero" in replayed, replayed[-400:]
+
+
 def test_deferred_controls_in_admission_order():
     root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
     marker = root / "deferred-editor-started"
@@ -5106,6 +5155,7 @@ if __name__ == "__main__":
     test_session_prompt_history_exit_and_crash()
     test_multiline_and_paste()
     test_network_input_recovery_boundaries()
+    test_irc_update_prompt_names_update_and_replay_resolves_it()
     test_deferred_controls_in_admission_order()
     test_archive_control_completion_recovery()
     test_exit_preserves_pending_submission()
