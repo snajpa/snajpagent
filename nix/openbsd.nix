@@ -328,7 +328,12 @@ let
   ] []).overrideAttrs (old: {
     nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.nasm ];
   });
-  openjpeg = cmakeLibrary sourcePkgs.openjpeg [ "-DBUILD_CODEC=OFF" ] [];
+  openjpeg = (cmakeLibrary sourcePkgs.openjpeg [ "-DBUILD_CODEC=OFF" ] []).overrideAttrs (_: {
+    postPatch = lib.optionalString early ''
+      substituteInPlace src/lib/openjp2/opj_includes.h \
+        --replace-fail 'return lrintf(f);' 'return __builtin_lrintf(f);'
+    '';
+  });
   pdf = (cmakeLibrary sourcePkgs.poppler [
     "-DENABLE_UNSTABLE_API_ABI_HEADERS=ON" "-DFONT_CONFIGURATION=fontconfig"
     "-DENABLE_UTILS=OFF" "-DENABLE_CPP=OFF" "-DENABLE_GLIB=OFF"
@@ -339,9 +344,14 @@ let
   ] ([ zlib png freetype expat fontconfig jpeg openjpeg pkgs.boost ] ++ lib.optional legacy cxx)).overrideAttrs (old: {
     cmakeBuildType = "Release";
     patches = old.patches ++ [ ./poppler-static-fonts.patch ];
+    postPatch = lib.optionalString early ''
+      substituteInPlace poppler/TextOutputDev.cc \
+        --replace-fail 'fmin(' '__builtin_fmin(' \
+        --replace-fail 'fmax(' '__builtin_fmax('
+    '';
     preConfigure = old.preConfigure + lib.optionalString legacy ''
       cmakeFlagsArray+=(
-        "-DCMAKE_CXX_FLAGS=${cflags} -stdlib=libstdc++ -pthread${lib.optionalString early " -fno-use-cxa-atexit"} -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}"
+        "-DCMAKE_CXX_FLAGS=${cflags} -stdlib=libstdc++ -pthread${lib.optionalString early " -fno-use-cxa-atexit -fno-builtin-pow -fno-builtin-powf -include ${./bsd-legacy-cxx.h}"} -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}"
         "-DCMAKE_EXE_LINKER_FLAGS=${ldflags} -L${cxx}/lib"
       )
     '';
@@ -506,7 +516,7 @@ in {
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
       buildInputs = [ jansson curl av xml archive ] ++ networkLibraries ++ [ regex ]
-        ++ lib.optionals (!legacy) [ pdf png freetype expat fontconfig jpeg openjpeg ];
+        ++ [ pdf png freetype expat fontconfig jpeg openjpeg ] ++ lib.optional legacy cxx;
       enableParallelBuilding = true;
       dontStrip = true;
       preBuild = ''
@@ -531,12 +541,10 @@ in {
           "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"
           "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale | sed -E 's/-l?(-l?)?pthread//g')"
           'MINIAUDIO_CFLAGS=-isystem ${miniaudio}'
-          ${lib.optionalString (!legacy) ''
           'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'
-          'CXXFLAGS=-std=c++20 -stdlib=libc++ ${cflags} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
+          'CXXFLAGS=-std=c++20 ${cflags} ${if legacy then "-nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}" else "-stdlib=libc++"}${lib.optionalString early " -fno-use-cxa-atexit -include ${./bsd-legacy-cxx.h}"} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           "PDF_CFLAGS=$(pkg-config --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')"
-          "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') -Wl,-Bdynamic -lc++ -lc++abi -lm -Wl,-Bstatic"
-          ''}
+          "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') ${if legacy then "${cxx}/lib/libstdc++.a -Wl,-Bdynamic" else "-Wl,-Bdynamic -lc++ -lc++abi"} -lm -Wl,-Bstatic"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
           "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil -Wl,-Bdynamic ${if legacy then "-l:libpthread.so.${threadVersion}" else "-lpthread"}"
         )

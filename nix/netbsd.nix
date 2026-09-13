@@ -274,7 +274,12 @@ let
   ] []).overrideAttrs (old: {
     nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.nasm ];
   });
-  openjpeg = cmakeLibrary sourcePkgs.openjpeg [ "-DBUILD_CODEC=OFF" ] [];
+  openjpeg = (cmakeLibrary sourcePkgs.openjpeg [ "-DBUILD_CODEC=OFF" ] []).overrideAttrs (_: {
+    postPatch = lib.optionalString early ''
+      substituteInPlace src/lib/openjp2/opj_includes.h \
+        --replace-fail 'return lrintf(f);' 'return __builtin_lrintf(f);'
+    '';
+  });
   pdf = (cmakeLibrary sourcePkgs.poppler [
     "-DENABLE_UNSTABLE_API_ABI_HEADERS=ON" "-DFONT_CONFIGURATION=fontconfig"
     "-DENABLE_UTILS=OFF" "-DENABLE_CPP=OFF" "-DENABLE_GLIB=OFF"
@@ -285,9 +290,20 @@ let
   ] ([ zlib png freetype expat fontconfig jpeg openjpeg pkgs.boost ] ++ lib.optional legacy cxx)).overrideAttrs (old: {
     cmakeBuildType = "Release";
     patches = old.patches ++ [ ./poppler-static-fonts.patch ];
+    postPatch = lib.optionalString early ''
+      substituteInPlace poppler/TextOutputDev.cc \
+        --replace-fail 'fmin(' '__builtin_fmin(' \
+        --replace-fail 'fmax(' '__builtin_fmax('
+      # The SDK's function-like isinf macro also expands after a std:: prefix.
+      substituteInPlace fofi/FoFiType1C.cc \
+        --replace-fail 'std::isinf(' '__builtin_isinf('
+      substituteInPlace poppler/Function.cc poppler/MarkedContentOutputDev.cc \
+        poppler/TextOutputDev.cc splash/SplashXPathScanner.cc \
+        --replace-fail 'std::isnan(' '__builtin_isnan('
+    '';
     preConfigure = old.preConfigure + lib.optionalString legacy ''
       cmakeFlagsArray+=(
-        "-DCMAKE_CXX_FLAGS=${cflags} -stdlib=libstdc++ -pthread -fno-builtin-pow -fno-builtin-powf -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}${lib.optionalString early " -include ${./netbsd20-cxx.h}"}"
+        "-DCMAKE_CXX_FLAGS=${cflags} -stdlib=libstdc++ -pthread -fno-builtin-pow -fno-builtin-powf -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}${lib.optionalString early " -include ${./bsd-legacy-cxx.h}"}"
         "-DCMAKE_EXE_LINKER_FLAGS=${ldflags} -L${cxx}/lib"
       )
     '';
@@ -414,9 +430,9 @@ in {
           "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale | sed -E 's/-l?(-l?)?pthread//g')"
           'MINIAUDIO_CFLAGS=-isystem ${miniaudio}'
           'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'
-          'CXXFLAGS=-std=c++20 ${cflags} ${if legacy then "-nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}" else "-stdlib=libstdc++"}${lib.optionalString early " -include ${./netbsd20-cxx.h}"} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
+          'CXXFLAGS=-std=c++20 ${cflags} ${if legacy then "-nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}" else "-stdlib=libstdc++"}${lib.optionalString early " -include ${./bsd-legacy-cxx.h}"} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           "PDF_CFLAGS=$(pkg-config --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')"
-          "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') ${if legacy then "${cxx}/lib/libstdc++.a -Wl,-Bdynamic" else "-Wl,-Bdynamic -lstdc++"} -lm${lib.optionalString (!early) " -lgcc_s"} -Wl,-Bstatic"
+          "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') ${if legacy then "${cxx}/lib/libstdc++.a -Wl,-Bdynamic" else "-Wl,-Bdynamic -lstdc++"} -lm -lgcc_s -Wl,-Bstatic"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
           "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil -Wl,-Bdynamic -lpthread"
         )

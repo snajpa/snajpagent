@@ -73,6 +73,7 @@
     substituteInPlace include/c_global/cstdio \
       --replace-fail '__gnuc_va_list' '__builtin_va_list' \
       --replace-fail 'throw ()' ""
+    patch -p1 < ${./libstdcxx-openbsd35-errors.patch}
   '' + pkgs.lib.optionalString ((os == "freebsd" && pkgs.lib.versionOlder osVersion "5.3")
     || (os == "netbsd" && pkgs.lib.versionOlder osVersion "6.0")
     || (os == "openbsd" && pkgs.lib.versionOlder osVersion "4.0")) ''
@@ -92,7 +93,7 @@
     ln -s gthr-posix.h ../libgcc/gthr-default.h
     # These SDKs hide long-long declarations in strict C++ even though the
     # compiler supports them. Expose the real functions to configure probes.
-    export CXXFLAGS="${cflags} -fPIC -stdlib=libstdc++ -D__LONG_LONG_SUPPORTED=${pkgs.lib.optionalString ((os == "freebsd" && pkgs.lib.versionOlder osVersion "5.3") || (os == "openbsd" && pkgs.lib.versionOlder osVersion "4.0")) " -fno-use-cxa-atexit"}${pkgs.lib.optionalString (os == "netbsd" && pkgs.lib.versionOlder osVersion "4.0") " -include ${./netbsd20-cxx.h}"}"
+    export CXXFLAGS="${cflags} -fPIC -stdlib=libstdc++ -D__LONG_LONG_SUPPORTED=${pkgs.lib.optionalString ((os == "freebsd" && pkgs.lib.versionOlder osVersion "5.3") || (os == "openbsd" && pkgs.lib.versionOlder osVersion "4.0")) " -fno-use-cxa-atexit"}${pkgs.lib.optionalString (pkgs.lib.elem os [ "netbsd" "openbsd" ] && pkgs.lib.versionOlder osVersion "4.0") " -include ${./bsd-legacy-cxx.h}"}"
     export CFLAGS="${cflags} -fPIC"
     export LDFLAGS="--ld-path=${llvm.lld}/bin/ld.lld"
   '';

@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: GPL-3.0-or-later WITH GCC-exception-3.1
+# Keep portable C++ conditions distinct from the SDK's native errno range.
+--- a/config/os/generic/error_constants.h
++++ b/config/os/generic/error_constants.h
+@@ -32,6 +32,20 @@
+
+ #include <bits/c++config.h>
+ #include <cerrno>
++
++// GNU errno-h reserves these values for systems without the native conditions.
++#ifndef EILSEQ
++#define EILSEQ 2015
++#define _GLIBCXX_PORTABLE_EILSEQ 1
++#endif
++#ifndef ENOMSG
++#define ENOMSG 2000
++#define _GLIBCXX_PORTABLE_ENOMSG 1
++#endif
++#ifndef EOVERFLOW
++#define EOVERFLOW 2006
++#define _GLIBCXX_PORTABLE_EOVERFLOW 1
++#endif
+
+ namespace std _GLIBCXX_VISIBILITY(default)
+ {
+--- a/src/c++11/system_error.cc
++++ b/src/c++11/system_error.cc
+@@ -45,6 +45,20 @@
+ namespace
+ {
+   using std::string;
++
++  const char* portable_error_string(int err)
++  {
++#ifdef _GLIBCXX_PORTABLE_EILSEQ
++    if (err == EILSEQ) return "Invalid byte sequence";
++#endif
++#ifdef _GLIBCXX_PORTABLE_ENOMSG
++    if (err == ENOMSG) return "No matching message";
++#endif
++#ifdef _GLIBCXX_PORTABLE_EOVERFLOW
++    if (err == EOVERFLOW) return "Value too large";
++#endif
++    return nullptr;
++  }
+
+ #if _GLIBCXX_HAVE_STRERROR_R
+   // Handle the result of POSIX strerror_r.
+@@ -94,6 +108,7 @@
+
+   string strerror_string(int err)
+   {
++    if (const char* text = portable_error_string(err)) return text;
+     // Estimate maximum length of strerror strings (including "Unknown error").
+     // Any excess capacity here can be used by std::system_error constructors
+     // when concatenating strings.
+@@ -110,6 +125,7 @@
+ #else
+   string strerror_string(int err)
+   {
++    if (const char* text = portable_error_string(err)) return text;
+     return strerror(err); // XXX Not thread-safe.
+   }
+ #endif

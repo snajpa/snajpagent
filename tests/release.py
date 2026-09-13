@@ -1293,12 +1293,86 @@ assert "--replace-fail '((int) *__low)' '((int)(unsigned char) *__low)'" in free
 assert "substituteInPlace configure --replace-fail 'RANLIB -t' 'RANLIB'" in freebsd_cxx
 assert "--replace-fail '__gnuc_va_list' '__builtin_va_list'" in freebsd_cxx
 assert "--replace-fail 'throw ()' \"\"" in freebsd_cxx
+error_patch = (root / "nix/libstdcxx-openbsd35-errors.patch").read_text()
+constants_patch, messages_patch = error_patch.split("--- a/src/c++11/system_error.cc", 1)
+portable_constants = "\n".join(line[1:] for line in constants_patch.splitlines()
+                              if line.startswith("+") and not line.startswith("+++"))
+helper = re.search(r"^\+  const char\* portable_error_string.*?^\+  }", messages_patch,
+                   re.M | re.S).group(0)
+portable_messages = "\n".join(line[1:] for line in helper.splitlines())
+assert messages_patch.count("+    if (const char* text = portable_error_string(err)) return text;") == 2
+if shutil.which("c++"):
+    with tempfile.TemporaryDirectory(prefix="openbsd-errc-", dir=root / "build") as tmp:
+        source, binary = Path(tmp) / "errors.cpp", Path(tmp) / "errors"
+        source.write_text("""
+#include <cassert>
+#include <cstring>
+#include <cerrno>
+#undef EILSEQ
+#undef ENOMSG
+#undef EOVERFLOW
+#ifdef NATIVE_VALUES
+#define EILSEQ 71
+#define ENOMSG 72
+#define EOVERFLOW 73
+#endif
+""" + portable_constants + "\n" + portable_messages + """
+int main() {
+#ifdef NATIVE_VALUES
+    static_assert(EILSEQ == 71 && ENOMSG == 72 && EOVERFLOW == 73, "retain supplied native values");
+    assert(!portable_error_string(EILSEQ) && !portable_error_string(ENOMSG));
+    assert(!portable_error_string(EOVERFLOW));
+#else
+    static_assert(EILSEQ == 2015 && ENOMSG == 2000 && EOVERFLOW == 2006, "GNU errno-h portable values");
+    assert(!std::strcmp(portable_error_string(EILSEQ), "Invalid byte sequence"));
+    assert(!std::strcmp(portable_error_string(ENOMSG), "No matching message"));
+    assert(!std::strcmp(portable_error_string(EOVERFLOW), "Value too large"));
+#endif
+    assert(!portable_error_string(0));
+    assert(!portable_error_string(9999));
+}
+""")
+        for flags in ([], ["-DNATIVE_VALUES"]):
+            subprocess.run(["c++", "-std=c++11", str(source), "-o", str(binary)] + flags, check=True)
+            subprocess.run([str(binary)], check=True)
+print("PASS: portable C++ conditions retain native values and distinct fallback messages")
 if shutil.which("nix-instantiate"):
     subprocess.run(["nix-instantiate", "--parse", str(root / "nix/bsd-cxx.nix")],
                    check=True, stdout=subprocess.DEVNULL)
-assert ' -include ${./netbsd20-cxx.h}' in freebsd_cxx
-netbsd_cxx_header = (root / "nix/netbsd20-cxx.h").read_text()
-assert '#ifdef __cplusplus\n#include <machine/ansi.h>\n#undef _BSD_WCHAR_T_' in netbsd_cxx_header
+assert ' -include ${./bsd-legacy-cxx.h}' in freebsd_cxx
+bsd_cxx_header = (root / "nix/bsd-legacy-cxx.h").read_text()
+assert '#ifdef __NetBSD__\n#include <machine/ansi.h>\n#undef _BSD_WCHAR_T_' in bsd_cxx_header
+if shutil.which("clang++"):
+    with tempfile.TemporaryDirectory(prefix="netbsd-cxx-", dir=root / "build") as tmp:
+        temporary = Path(tmp)
+        (temporary / "machine").mkdir()
+        (temporary / "machine/ansi.h").write_text("#define _BSD_WCHAR_T_ int\n")
+        source = temporary / "types.cpp"
+        source.write_text("""
+#include "bsd-legacy-cxx.h"
+#ifdef _BSD_WCHAR_T_
+typedef _BSD_WCHAR_T_ wchar_t;
+#endif
+static_assert(sizeof(wchar_t) == 4);
+static_assert(!__builtin_isnanf(1.0f));
+static_assert(__builtin_isnanf(__builtin_nanf("")));
+static_assert(!__builtin_isnanl(1.0L));
+static_assert(__builtin_isnanl(__builtin_nanl("")));
+#ifdef __OpenBSD__
+constexpr int category(double value) {
+    return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL, FP_SUBNORMAL, FP_ZERO, value);
+}
+static_assert(category(__builtin_nan("")) == FP_NAN);
+static_assert(category(__builtin_inf()) == FP_INFINITE);
+static_assert(category(1.0) == FP_NORMAL);
+static_assert(category(__DBL_DENORM_MIN__) == FP_SUBNORMAL);
+static_assert(category(-0.0) == FP_ZERO);
+#endif
+""")
+        for target in ("x86_64-unknown-netbsd2.0", "x86_64-unknown-openbsd3.5"):
+            subprocess.run(["clang++", "--target=" + target, "-std=c++20",
+                            "-fsyntax-only", "-I", str(temporary), "-I", str(root / "nix"),
+                            str(source)], check=True)
 freebsd_pdf = freebsd.split("  pdf = ", 1)[1].split("  miniaudio = ", 1)[0]
 assert './poppler-static-fonts.patch' in freebsd_pdf
 assert '-nostdinc++ -isystem ${cxx}/include/c++' in freebsd_pdf
@@ -1894,10 +1968,15 @@ open_pdf = openbsd.split("  pdf = ", 1)[1].split("  xml = ", 1)[0]
 assert '"-DFONT_CONFIGURATION=fontconfig"' in open_pdf
 assert 'cmakeBuildType = "Release";' in open_pdf
 assert './poppler-static-fonts.patch' in open_pdf
-assert '++ lib.optionals (!legacy) [ pdf png freetype expat fontconfig jpeg openjpeg ]' in openbsd
+assert '++ [ pdf png freetype expat fontconfig jpeg openjpeg ] ++ lib.optional legacy cxx' in openbsd
 assert "'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'" in openbsd
 assert '"PDF_LIBS=$(pkg-config --static --libs poppler libpng |' in openbsd
-assert '-Wl,-Bdynamic -lc++ -lc++abi -lm -Wl,-Bstatic' in openbsd
+assert 'else "-Wl,-Bdynamic -lc++ -lc++abi"' in openbsd
+assert '${cxx}/lib/libstdc++.a -Wl,-Bdynamic' in openbsd
+assert '-nostdinc++ -isystem ${cxx}/include/c++' in open_pdf
+assert "--replace-fail 'fmin(' '__builtin_fmin('" in open_pdf
+assert "--replace-fail 'fmax(' '__builtin_fmax('" in open_pdf
+assert "--replace-fail 'return lrintf(f);' 'return __builtin_lrintf(f);'" in openbsd
 open_png = openbsd.split("  png = ", 1)[1].split("  freetype = ", 1)[0]
 assert 'cmakeFlagsArray+=("-DCMAKE_C_FLAGS=${cflags} --target=${target} --sysroot=${sdk}")' in open_png
 open_fonts = openbsd.split("  fontconfig = ", 1)[1].split("  jpeg = ", 1)[0]
@@ -2409,6 +2488,11 @@ assert '-std=c++20 ${cflags} ${if legacy then' in netbsd
 assert '${cxx}/lib/libstdc++.a -Wl,-Bdynamic' in netbsd
 assert 'else "-Wl,-Bdynamic -lstdc++"' in netbsd
 assert '-fno-builtin-pow -fno-builtin-powf -nostdinc++' in net_pdf
+assert "--replace-fail 'fmin(' '__builtin_fmin('" in net_pdf
+assert "--replace-fail 'fmax(' '__builtin_fmax('" in net_pdf
+assert "--replace-fail 'std::isinf(' '__builtin_isinf('" in net_pdf
+assert "--replace-fail 'std::isnan(' '__builtin_isnan('" in net_pdf
+assert "--replace-fail 'return lrintf(f);' 'return __builtin_lrintf(f);'" in netbsd
 assert '"-DEXPAT_DEV_URANDOM=OFF" "-DEXPAT_WITH_ARC4RANDOM=ON"' in netbsd
 net_png = netbsd.split("  png = ", 1)[1].split("  freetype = ", 1)[0]
 assert 'cmakeFlagsArray+=("-DCMAKE_C_FLAGS=${cflags} --target=${target} --sysroot=${sdk}")' in net_png

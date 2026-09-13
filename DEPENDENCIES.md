@@ -608,7 +608,15 @@ Fontconfig reads `/etc/fonts` and uses native X11 font directories rather than
 build-host fonts; static FreeType metadata retains libpng's private math linkage.
 The AV/PDF/audio application cross-links with only native libc++/libc++abi,
 pthread and libc imports and no runtime search path; Office is excluded. No
-target executable was run. Legacy OpenBSD PDF remains pending: the old SDK C++ headers cannot compile the current C++20 API.
+target executable was run. The 5.9 recipe uses the shared static GCC 14 C++
+runtime. Its AV/PDF/audio application also cross-links, with matching symbols,
+only native libc/pthread imports and no runtime search path; Office is excluded.
+
+The 3.5 C++ runtime uses compatible stdio declarations, native varargs and the
+SDK's GetIP/atexit interfaces. Its missing C++ error conditions use GNU errno-h's
+distinct portable identifiers and matching messages; native error values are
+preserved. The shared early-BSD C++ header maps old GCC NaN predicate spellings
+to Clang's type-generic predicate. Full 3.5 PDF linkage remains in progress.
 
 OpenBSD 3.5 media/audio application cross-linking and static ZIP/XML package
 checks pass with native libc/pthread imports and no runtime search path. The
@@ -718,6 +726,8 @@ absent exp2 symbols. Expat uses native arc4random on the legacy SDK.
 Those library checks use 5.2.3; the production legacy target uses 2.0. Its C++
 compilation suppresses the SDK's C wchar_t typedef macro after loading the native
 machine type definitions. The compiler's wchar_t type supplies the same ABI.
+The 2.0 C++ archive now builds. Its PDF dependencies use native compiler math
+operations where the old libm lacks lrintf, fmin, fmax or exp2.
 
 ## macOS ARM64 and Intel cross-builds
 
