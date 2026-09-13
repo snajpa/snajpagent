@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Keep a tool call that refuses its own arguments after dispatch. `edit_file`
+  reports `not_run`/`invalid_arguments` once it reads the target and the old text
+  does not occur exactly once, but the journal rejected that result for a call
+  that had already recorded `tool_started`, so the run ended in an invalid
+  `tool_finished` transition and a failed repair instead of reporting "nothing
+  changed". A started call may now report a refusal when it owns no spawned
+  process; process-owning calls keep the strict rule.
 - Keep the minimal Linux PDF build free of unused gettext/Bash utility dependencies.
 - Honor terminal exit before admitting queued voice or typed work. Pending
   inputs remain available on resume instead of keeping an exiting session busy.

@@ -1613,7 +1613,13 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !(call = find_pending_call(session, call_id)) || call->finished ||
             snag_tool_result_valid(result) < 0 || !status) goto invalid;
         if (call->started) {
-            if (snag_string_in(status, "not_run denied")) goto invalid;
+            /* A tool may refuse its own arguments after dispatch: edit_file reads
+             * the target and reports not_run when the old text does not occur
+             * exactly once. That refusal stays truthful only for a call that
+             * spawned no process, because snag_tool_result_valid already forces a
+             * null handle for not_run/denied; a process-owning call keeps the
+             * strict rule. */
+            if (snag_string_in(status, "not_run denied") && call->process_handle[0]) goto invalid;
         } else if (!snag_string_in(status, "not_run denied")) {
             goto invalid;
         }
