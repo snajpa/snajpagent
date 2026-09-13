@@ -64,7 +64,11 @@ override CPPFLAGS += -DSNAJPAGENT_AUDIO_DEVICE=$(WITH_AUDIO_DEVICE) $(MINIAUDIO_
 override LDLIBS += $(AUDIO_DEVICE_LIBS)
 
 WITH_OFFICE ?= 1
+WITH_OFFICE_COMMANDS ?= 0
 ifeq ($(WITH_OFFICE),1)
+ifeq ($(WITH_OFFICE_COMMANDS),1)
+$(error WITH_OFFICE=1 and WITH_OFFICE_COMMANDS=1 are mutually exclusive Office states)
+endif
 ifneq ($(WITH_PDF),1)
 $(error WITH_OFFICE=1 requires WITH_PDF=1; disable both for a lean build)
 endif
@@ -79,5 +83,10 @@ OFFICE_LIBS =
 else
 $(error WITH_OFFICE must be 1 or 0 (custom lean build))
 endif
-override CPPFLAGS += -DSNAJPAGENT_OFFICE=$(WITH_OFFICE) -DSNAJPAGENT_OFFICE_ROOT='"$(OFFICE_ROOT)"' $(OFFICE_CFLAGS)
+ifneq ($(WITH_OFFICE_COMMANDS),0)
+ifneq ($(WITH_OFFICE_COMMANDS),1)
+$(error WITH_OFFICE_COMMANDS must be 1 or 0 (custom lean build))
+endif
+endif
+override CPPFLAGS += -DSNAJPAGENT_OFFICE=$(WITH_OFFICE) -DSNAJPAGENT_OFFICE_COMMANDS=$(WITH_OFFICE_COMMANDS) -DSNAJPAGENT_OFFICE_ROOT='"$(OFFICE_ROOT)"' $(OFFICE_CFLAGS)
 override LDLIBS += $(OFFICE_LIBS)

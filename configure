@@ -3,14 +3,16 @@
 #
 # snajpagent host configuration.
 #
-# Probes the toolchain and the four optional modalities (linked audio/video,
-# PDF, the audio device, linked Office import) and records the result in the
-# shipped config.mk, which stays the single source of truth for every build
-# rule. Only the detected values are rewritten, so flags, object selection and
-# the expressions the release checks read are never duplicated here.
+# Probes the toolchain and the optional modalities (linked audio/video, PDF, the
+# audio device, and Office import) and records the result in the shipped
+# config.mk, which stays the single source of truth for every build rule. Only
+# the detected values are rewritten, so flags, object selection and the
+# expressions the release checks read are never duplicated here.
 #
-# A component that is not found is disabled and reported; that is never fatal
-# unless its --require-* option was given.
+# Office has three states and one is picked: linked LibreOfficeKit
+# (WITH_OFFICE=1), the command backend that runs a detected soffice binary
+# (WITH_OFFICE_COMMANDS=1), or none. A component that is not found is disabled
+# and reported; that is never fatal unless its --require-* option was given.
 
 set -u
 
@@ -26,6 +28,7 @@ want_av=auto
 want_pdf=auto
 want_audio=auto
 want_office=auto
+want_commands=auto
 
 usage() {
 	cat <<'EOF'
@@ -46,15 +49,22 @@ usage: ./configure [options]
   --with-audio-device     require the audio device backend (miniaudio)
   --without-audio-device  disable the audio device backend
   --require-audio-device  same as --with-audio-device
-  --with-office           require linked Office import (LibreOfficeKit)
-  --without-office        disable linked Office import
+  --with-office           require the linked LibreOfficeKit Office import
+  --without-office        require no Office import at all
   --require-office        same as --with-office
+  --with-office-commands  require the commanded-soffice Office backend
+  --require-office-commands
+                          same as --with-office-commands
+  --without-office-commands
+                          disable the commanded-soffice backend
   -h, --help              this text
 
-By default each modality is enabled when its development files are found and
-disabled with a printed note when they are not. --require-X makes a missing
-component an error, --with-X forces it on, --without-X skips the probe. The
-values remain overridable on the make line, for example make WITH_AV=0.
+Office states are mutually exclusive and one always wins: the linked kit, the
+commands backend, or none. By default the kit is chosen when a runtime is found,
+otherwise the commands backend when a soffice binary is found, otherwise none —
+each with a printed note. --require-X makes a missing component an error,
+--with-X forces that state on, --without-X skips its probe. Detected values stay
+overridable on the make line, for example make WITH_OFFICE_COMMANDS=1.
 EOF
 }
 
@@ -74,6 +84,8 @@ for arg in "$@"; do
 		--without-audio-device) want_audio=off ;;
 		--with-office|--require-office) want_office=require ;;
 		--without-office) want_office=off ;;
+		--with-office-commands|--require-office-commands) want_commands=require ;;
+		--without-office-commands) want_commands=off ;;
 		-h|--help) usage; exit 0 ;;
 		*) printf 'configure: unknown option %s\n' "$arg" >&2; usage >&2; exit 2 ;;
 	esac
@@ -148,27 +160,55 @@ if [ "$WITH_AUDIO_DEVICE" = 0 ] && [ "$want_audio" = require ]; then
 	die 'the audio device backend was required but miniaudio was not found (a miniaudio.pc shim or PKG_CONFIG_PATH entry is needed)'
 fi
 
-# --- linked Office import (LibreOfficeKit) ------------------------------
-# Office import links the kit from an installed runtime and is never bundled;
-# it also needs the PDF reader, because validation goes through Poppler.
-WITH_OFFICE=0
-office_note='not found'
-if [ "$want_office" = off ]; then
-	office_note='disabled by --without-office'
-elif [ "$WITH_PDF" = 0 ]; then
-	office_note='not enabled because linked PDF is off (Office requires it)'
-elif [ -f "$OFFICE_ROOT/../../include/LibreOfficeKit/LibreOfficeKit.h" ] &&
+# --- Office: linked kit, commanded soffice, or none ---------------------
+kit_found=no
+if [ -f "$OFFICE_ROOT/../../include/LibreOfficeKit/LibreOfficeKit.h" ] &&
 	{ [ -f "$OFFICE_ROOT/program/libsofficeapp.so" ] ||
 	  [ -f "$OFFICE_ROOT/program/soffice" ] ||
 	  [ -f "$OFFICE_ROOT/program/soffice.bin" ]; }; then
-	WITH_OFFICE=1
-	office_note="found an installed runtime at $OFFICE_ROOT"
-elif pc_exists libreofficekit; then
-	WITH_OFFICE=1
-	office_note="found through pkg-config (root $OFFICE_ROOT)"
+	kit_found=yes
 fi
-if [ "$WITH_OFFICE" = 0 ] && [ "$want_office" = require ]; then
-	die "linked Office import was required but no runtime was found at $OFFICE_ROOT (use --office-root=DIR)"
+engine_found=no
+if [ -x "$OFFICE_ROOT/program/soffice" ] || [ -x "$OFFICE_ROOT/program/soffice.bin" ] ||
+	command -v soffice >/dev/null 2>&1 || command -v soffice.bin >/dev/null 2>&1 ||
+	command -v soffice.exe >/dev/null 2>&1 || [ -x "$OFFICE_ROOT/program/soffice.exe" ]; then
+	engine_found=yes
+fi
+
+WITH_OFFICE=0
+WITH_OFFICE_COMMANDS=0
+office_note='not found'
+if [ "$want_office" = off ] && [ "$want_commands" = off ]; then
+	office_note='disabled by --without-office and --without-office-commands'
+elif [ "$want_commands" = require ]; then
+	if [ "$engine_found" = yes ]; then
+		WITH_OFFICE_COMMANDS=1
+		office_note="commands backend: engine found at $OFFICE_ROOT or PATH"
+	else
+		die "the commanded Office backend was required but no soffice binary was found (use --office-root=DIR)"
+	fi
+elif [ "$want_office" = require ]; then
+	if [ "$kit_found" = yes ]; then
+		WITH_OFFICE=1
+		office_note="linked kit: installed runtime at $OFFICE_ROOT"
+	elif [ "$engine_found" = yes ]; then
+		die 'the linked kit was required but no LibreOfficeKit development files were found (use --with-office-commands for the engine backend)'
+	else
+		die "linked Office import was required but no runtime was found at $OFFICE_ROOT (use --office-root=DIR)"
+	fi
+elif [ "$kit_found" = yes ] && [ "$WITH_PDF" = 1 ]; then
+	WITH_OFFICE=1
+	office_note="linked kit: installed runtime at $OFFICE_ROOT"
+elif [ "$engine_found" = yes ]; then
+	WITH_OFFICE_COMMANDS=1
+	if [ "$kit_found" = yes ]; then
+		office_note='commands backend: the kit needs linked PDF, which is off'
+	else
+		office_note='commands backend: engine found, no LibreOfficeKit development files'
+	fi
+fi
+if [ "$WITH_OFFICE" = 1 ] && [ "$WITH_PDF" != 1 ]; then
+	die 'the linked Office kit needs linked PDF (WITH_OFFICE=1 requires WITH_PDF=1)'
 fi
 
 # --- record the detected values in config.mk ----------------------------
@@ -190,6 +230,7 @@ set_key WITH_AV "$WITH_AV"
 set_key WITH_PDF "$WITH_PDF"
 set_key WITH_AUDIO_DEVICE "$WITH_AUDIO_DEVICE"
 set_key WITH_OFFICE "$WITH_OFFICE"
+set_key WITH_OFFICE_COMMANDS "$WITH_OFFICE_COMMANDS"
 [ "$manprefix_given" = yes ] && set_key MANPREFIX "$MANPREFIX"
 [ "$office_root_given" = yes ] && set_key OFFICE_ROOT "$OFFICE_ROOT"
 
@@ -197,5 +238,5 @@ printf 'configure: C compiler %s; pkg-config %s\n' "$CC" "$have_pc"
 printf 'configure: av=%s (%s)\n' "$WITH_AV" "$av_note"
 printf 'configure: pdf=%s (%s)\n' "$WITH_PDF" "$pdf_note"
 printf 'configure: audio-device=%s (%s)\n' "$WITH_AUDIO_DEVICE" "$audio_note"
-printf 'configure: office=%s (%s)\n' "$WITH_OFFICE" "$office_note"
-printf 'configure: config.mk updated; override any WITH_* value on the make line (for example make WITH_AV=0)\n'
+printf 'configure: office=%s (%s)\n' "$(if [ "$WITH_OFFICE" = 1 ]; then printf kit; elif [ "$WITH_OFFICE_COMMANDS" = 1 ]; then printf commands; else printf off; fi)" "$office_note"
+printf 'configure: config.mk updated; override any WITH_* value on the make line\n'
