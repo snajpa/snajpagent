@@ -2425,26 +2425,30 @@ def test_command_name_completion():
         (b"/mo", b"/model"),
         (b"/ef", b"/effort"),
         (b"/go", b"/goal"),
-        (b"/v", b"/verbose"),
+        (b"/ve", b"/verbose"),
+        (b"/voi", b"/voice"),
         (b"/q", b"/queue"),
         (b"/ne", b"/next"),
         (b"/ar", b"/archive"),
         (b"/com", b"/compact"),
         (b"/conf", b"/config"),
-        (b"/de", b"/delete"),
+        (b"/del", b"/delete"),
+        (b"/det", b"/detach"),
         (b"/ex", b"/exit"),
     ):
         start = len(child.buf)
         end = child.send_wait(prefix + b"\t", command + b" ", start=start)
         clear_draft_incrementally(child)
 
-    for prefix in (b"/h", b"/c"):
+    for prefix, choices in ((b"/h", (b"/help", b"/history")),
+                            (b"/c", (b"/compact", b"/config")),
+                            (b"/v", (b"/verbose", b"/voice")),
+                            (b"/de", (b"/delete", b"/detach"))):
         start = len(child.buf)
         child.send(prefix + b"\t")
         child.drain(0.08)
-        assert b"/help" not in child.buf[start:] and b"/compact" not in child.buf[start:]
+        assert all(choice not in child.buf[start:] for choice in choices)
         child.send(b"\t")
-        choices = (b"/help", b"/history") if prefix == b"/h" else (b"/compact", b"/config")
         for choice in choices:
             child.wait(choice, start=start)
         # The prefix also occurs inside choices; observe the repainted prompt.
@@ -3760,7 +3764,8 @@ def test_runtime_network_commands():
         log = events(session_id)
         assert not [event for event in log if event["type"] == "steering_added"]
         with Child.from_command(command) as resumed:
-            resumed.wait(b"session id " + session_id[:8].encode())
+            header = resumed.wait(b"session id")
+            resumed.wait(session_id[:8].encode(), start=header)
             resumed.wait(PROMPT.rstrip())
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
                 assert probe.connect_ex(("127.0.0.1", int(endpoint.rsplit(":", 1)[1]))) != 0
@@ -3802,7 +3807,8 @@ def test_network_resume_roles():
     assert client_arguments[client_arguments.index("--client") + 1] == \
         upstream_endpoint
     resumed_client = Child.from_command(client_command)
-    resumed_client.wait(b"session id " + client_id[:8].encode())
+    header = resumed_client.wait(b"session id")
+    resumed_client.wait(client_id[:8].encode(), start=header)
     resumed_client.wait(chat_prompt("clientop"))
     resumed_links = accept_connections(upstream, 2)
     resumed_client.exit_now()
@@ -3832,7 +3838,8 @@ def test_network_resume_roles():
     assert server_arguments[server_arguments.index("--room-name") + 1] == \
         "#lab"
     resumed_server = Child.from_command(server_command)
-    resumed_server.wait(b"session id " + server_id[:8].encode())
+    header = resumed_server.wait(b"session id")
+    resumed_server.wait(server_id[:8].encode(), start=header)
     restored = resumed_server.wait("@firstpeer › retained room message".encode())
     replayed = resumed_server.wait("── history replayed ──".encode(), start=restored)
     assert b" history @firstpeer" not in resumed_server.buf
@@ -3873,7 +3880,8 @@ def test_network_resume_roles():
     assert combined_arguments[combined_arguments.index("--client") + 1] == \
         upstream_endpoint
     resumed_combined = Child.from_command(combined_command)
-    resumed_combined.wait(b"session id " + combined_id[:8].encode())
+    header = resumed_combined.wait(b"session id")
+    resumed_combined.wait(combined_id[:8].encode(), start=header)
     resumed_combined.wait(chat_prompt("combinedop"))
     resumed_links = accept_connections(upstream, 2)
     peer = IRCClient(combined_port, "resumedpeer")

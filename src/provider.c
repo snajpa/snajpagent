@@ -1518,7 +1518,6 @@ snag_provider_voice_close(struct snag_voice_socket *voice)
     free(voice);
 }
 
-
 #if LIBCURL_VERSION_NUM >= 0x075600
 static size_t
 voice_handshake_body(char *bytes,size_t size,size_t count,void *opaque)

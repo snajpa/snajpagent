@@ -312,10 +312,14 @@ class FakeResponses:
                 body = self.response_body(sequence, text).encode()
             self.reply(handler, body, close_header=True)
             handler.close_connection = True
+        except (BrokenPipeError, ConnectionResetError):
+            # Cancellation and orderly exit may close a response in flight.
+            # Protocol/assertion errors still reach the failure path below.
+            handler.close_connection = True
         except Exception as exc:
             with self.lock:
                 if self.failure is None:
-                    self.failure = repr(exc)
+                    self.failure = exc
             try:
                 handler.send_error(500)
             except OSError:
@@ -477,10 +481,12 @@ class FakeResponses:
             body = json.dumps(response, separators=(",", ":")).encode()
             self.reply(handler, body, "application/json", status=status, close_header=True)
             handler.close_connection = True
+        except (BrokenPipeError, ConnectionResetError):
+            handler.close_connection = True
         except Exception as exc:
             with self.lock:
                 if self.failure is None:
-                    self.failure = repr(exc)
+                    self.failure = exc
             try:
                 handler.send_error(500)
             except OSError:
@@ -526,7 +532,7 @@ class FakeResponses:
         if self.thread.is_alive():
             raise AssertionError("fake endpoint thread did not stop")
         if self.failure:
-            raise AssertionError(f"fake endpoint failed: {self.failure}")
+            raise AssertionError(f"fake endpoint failed: {self.failure!r}") from self.failure
 
 
 class TmuxTerminal:
@@ -3502,7 +3508,8 @@ def run_reasoning_boundary_cases(binary, root, provider, environment,
             assert len(outputs) == len(calls)
             assert [i["call_id"] for i in outputs] == [i["call_id"] for i in calls]
             if readonly:
-                assert {t["name"] for t in request["tools"] if t.get("type") == "function"} == {"read_file", "list_files", "grep"}
+                assert {t["name"] for t in request["tools"] if t.get("type") == "function"} == {
+                    "read_file", "list_files", "grep", "view_image", "read_document", "view_video"}
             if mode == "unstarted" and len(outputs) == 1:
                 _, events = read_events(state)
                 assert event_list(events, "tool_finished")[0]["data"]["result"]["status"] == "not_run"
@@ -4051,7 +4058,7 @@ def run_tool_contract_cases(binary, root, provider, environment):
             if mode != "read":
                 assert "default_timeout_ms=" in controls and "workspace=" in controls
             else:
-                assert set(tools) == {"read_file", "list_files", "grep"}
+                assert set(tools) == {"read_file", "list_files", "grep", "view_image", "read_document", "view_video"}
             step = len(outputs)
             if mode == "retry" and step == 1 and not recovering[0]:
                 provider.reply(handler, b'{"error":{"message":"intentional interruption","type":"invalid_request_error"}}',
@@ -7602,7 +7609,8 @@ def run_irc_case(binary, root):
     run_session_process_recovery_case(binary, root / "silent", emit_output=False)
     run_punctuation_case(binary, root)
     provider = FakeResponses()
-    environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
+    # One-shot subprocess cases need the same locale/PATH as terminal cases.
+    environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret")
     try:
         run_token_accounting_cases(binary, root / "token-accounting")
         run_assistant_phase_case(binary, root)
