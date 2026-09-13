@@ -312,6 +312,8 @@ class FakeResponses:
                 body = self.response_body(sequence, text).encode()
             self.reply(handler, body, close_header=True)
             handler.close_connection = True
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # The client already hung up; that is not an endpoint failure.
         except Exception as exc:
             with self.lock:
                 if self.failure is None:
@@ -477,6 +479,8 @@ class FakeResponses:
             body = json.dumps(response, separators=(",", ":")).encode()
             self.reply(handler, body, "application/json", status=status, close_header=True)
             handler.close_connection = True
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # The client already hung up; that is not an endpoint failure.
         except Exception as exc:
             with self.lock:
                 if self.failure is None:
@@ -3520,6 +3524,10 @@ def run_reasoning_boundary_cases(binary, root, provider, environment,
                                   cwd=case, env=environment, capture_output=True, text=True, timeout=20)
             if provider.failure:
                 raise provider.failure
+            if not (case / "marker").exists():
+                raise AssertionError(
+                    "marker was not written (mode=%s): rc=%s\nstdout=%s\nstderr=%s" % (
+                        mode, seed.returncode, seed.stdout[-4000:], seed.stderr[-4000:]))
             assert (case / "marker").read_text() == "x"
             if mode == "followup":
                 assert seed.returncode == 0, (seed.stderr, rejected)
@@ -6702,7 +6710,9 @@ def run_tool_cases(binary, root, provider, environment):
                         rejected = interact(result["handle"], text, eof=eof,
                                             terminate=True, status="not_run")
                         assert rejected["handle"] is None
-                done = interact(result["handle"], terminate=True, status=None)
+                # Termination is asynchronous: without a bounded wait the result can still
+                # carry the process handle and the case reads a false failure.
+                done = interact(result["handle"], terminate=True, yield_ms=5000, status=None)
                 if not invalid:
                     assert done["handle"] is None
 
@@ -7602,7 +7612,9 @@ def run_irc_case(binary, root):
     run_session_process_recovery_case(binary, root / "silent", emit_output=False)
     run_punctuation_case(binary, root)
     provider = FakeResponses()
-    environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
+    # Child processes need the ambient environment too: replacing it wholesale
+    # left the app without a UTF-8 locale, so it refused to start.
+    environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret")
     try:
         run_token_accounting_cases(binary, root / "token-accounting")
         run_assistant_phase_case(binary, root)
