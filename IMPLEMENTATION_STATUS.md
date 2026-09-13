@@ -6,13 +6,15 @@ The multimodal branch implements session-owned image, audio, video and document
 assets, normalized image/page/frame input, audio API operations, local dictation
 and playback, and realtime voice with durable handoff to the existing coding
 turn/queue owner. Native generated-media, context/replay and voice transport
-fixtures pass. Production dependency closure remains unfinished, including
-legacy BSD PDF and the unresolved LibreOffice packaging/execution choice.
-FreeBSD 8.4/5.1 and OpenBSD 5.9 AV/PDF/audio application cross-linking passes with
-static rendering libraries and a modern static C++ runtime. NetBSD 5.2.3 library checks
-are intermediate evidence; the production legacy target is NetBSD 2.0. Its PDF
-integration and the remaining OpenBSD legacy work are in progress; the NetBSD 2.0
-C++ archive builds.
+fixtures pass. Production dependency closure remains unfinished, including the
+remaining platform builds and the unresolved LibreOffice packaging/execution
+choice. AV/PDF/audio application cross-linking passes for FreeBSD 8.4/5.1,
+OpenBSD 7.9/5.9/3.5 and NetBSD 10.1/2.0, with matching symbols and static
+rendering/font libraries. The older SDKs use a static GCC 14 C++ runtime.
+macOS ARM64 and Intel AV/PDF/audio applications also cross-link; combining their
+executables and dSYMs preserves each original slice's bytes and matching UUID.
+These diagnostics exclude Office; cross-linking does not qualify target-OS
+execution, physical audio devices or live providers.
 Target-OS execution, physical audio devices and live media-provider qualification
 are separate from these local fixture results. Multimodal is not shipped yet.
 

@@ -11,8 +11,8 @@
   the 5.1 SDK as well. Legacy PDF dependencies use the SDK entropy API and
   native compiler math operations. The 5.1 AV/PDF/audio application cross-links
   with the SDK's exception and process-exit interfaces.
-- Add the OpenBSD 5.9 static PDF/C++ application dependencies and continue the
-  NetBSD 2.0/OpenBSD 3.5 runtime work with native math operations and distinct
+- Add OpenBSD 5.9/3.5 and NetBSD 2.0 static PDF/C++ application dependencies
+  with native math operations and distinct
   portable C++ error conditions. Supply OpenBSD 3.5's missing OpenJPEG integer
   formats from the compiler's target ABI and use its native unsupported-operation
   error in Fontconfig's atomic-file fallback. Share the early-BSD Poppler math

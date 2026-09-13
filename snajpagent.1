@@ -3566,13 +3566,14 @@ remains in development; dependency cross-links do not establish target rendering
 or playback/capture.
 The OpenBSD 7.9 PDF recipe likewise supplies static rendering/font libraries,
 uses the SDK libc++ runtime and reads the host /etc/fonts configuration.
-The OpenBSD 5.9 recipe uses the shared static GCC 14 C++ runtime with the same
+The OpenBSD 5.9 and 3.5 recipes use the shared static GCC 14 C++ runtime with the same
 font configuration paths.
 The NetBSD 10.1 PDF recipe uses native libstdc++ and /etc/fonts with static
-rendering/font libraries. The FreeBSD 5.1 and 8.4 recipes supply static rendering/font
+rendering/font libraries. NetBSD 2.0 uses static GCC 14 libstdc++ and the native
+exception unwinder with the same font configuration paths.
+The FreeBSD 5.1 and 8.4 recipes supply static rendering/font
 libraries and GCC 14 libstdc++, with native threading, libc and the exception
 unwinder. Fontconfig reads /usr/local/etc/fonts and the host font directories.
-OpenBSD and NetBSD legacy PDF dependency closure remains in development.
 .TP
 .B make WITH_PDF=0 WITH_OFFICE=0
 Build a custom lean executable without PDF/Office rendering or their C++ runtimes.

@@ -625,7 +625,9 @@ distinct portable identifiers and matching messages; native error values are
 preserved. The shared early-BSD C++ header maps old GCC NaN predicate spellings
 to Clang's type-generic predicate. Poppler uses the shared early-BSD compiler
 predicates where the SDK omits standard C++ math declarations. Full 3.5 PDF
-linkage remains in progress.
+application linkage passes with AV and native audio, matching debug symbols,
+only libc.so.30.3/libpthread.so.2.4 imports and no runtime search path.
+Office is excluded from that diagnostic; the executable was not target-run.
 
 OpenBSD 3.5 media/audio application cross-linking and static ZIP/XML package
 checks pass with native libc/pthread imports and no runtime search path. The
@@ -740,6 +742,9 @@ operations where the old libm lacks lrintf, fmin, fmax or exp2. The shared
 early-BSD Poppler adaptations also handle the SDK's function-like math macros.
 The application validates PDF page dimensions with bounded comparisons, retaining
 NaN and infinity rejection without depending on those macros.
+The 2.0 AV/PDF/audio application cross-links with matching debug symbols,
+only libgcc_s.so.1/libpthread.so.0/libc.so.12 imports and no runtime search path.
+Office is excluded from that diagnostic; target execution remains unqualified.
 
 ## macOS ARM64 and Intel cross-builds
 
