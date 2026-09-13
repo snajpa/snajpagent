@@ -617,7 +617,8 @@ target ABI, matching the file-codec compatibility definitions. Fontconfig's
 atomic-file fallback recognizes the SDK's native EOPNOTSUPP error.
 
 The 3.5 C++ runtime uses compatible stdio declarations, native varargs and the
-SDK's GetIP/atexit interfaces. Its missing C++ error conditions use GNU errno-h's
+SDK's GetIP/atexit interfaces. Signal declarations retain C linkage across the
+SDK's headers. Its missing C++ error conditions use GNU errno-h's
 distinct portable identifiers and matching messages; native error values are
 preserved. The shared early-BSD C++ header maps old GCC NaN predicate spellings
 to Clang's type-generic predicate. Poppler uses the shared early-BSD compiler
@@ -735,6 +736,8 @@ machine type definitions. The compiler's wchar_t type supplies the same ABI.
 The 2.0 C++ and PDF archives build. Its PDF dependencies use native compiler math
 operations where the old libm lacks lrintf, fmin, fmax or exp2. The shared
 early-BSD Poppler adaptations also handle the SDK's function-like math macros.
+The application validates PDF page dimensions with bounded comparisons, retaining
+NaN and infinity rejection without depending on those macros.
 
 ## macOS ARM64 and Intel cross-builds
 

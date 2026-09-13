@@ -1,6 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /* The SDK's C type macro would redeclare the native C++ wchar_t keyword. */
 #ifdef __cplusplus
+#ifdef __OpenBSD__
+/* The early SDK declares sys_siglist outside its own C-linkage block. */
+extern "C" {
+#include <signal.h>
+}
+#endif
 #ifdef __NetBSD__
 #include <machine/ansi.h>
 #undef _BSD_WCHAR_T_

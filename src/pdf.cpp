@@ -13,7 +13,6 @@ extern "C" {
 #include <splash/SplashBitmap.h>
 #include <png.h>
 #include <algorithm>
-#include <cmath>
 #include <memory>
 #include <mutex>
 #include <unistd.h>
@@ -148,7 +147,7 @@ snag_pdf_page(struct snag_pdf *pdf, unsigned int page, struct snag_buf *text,
         auto &in = *pdf->input;
         if (!page || page > static_cast<unsigned int>(pdf->doc->getNumPages()) || in.stop()) throw 0;
         double width = pdf->doc->getPageCropWidth(page), height = pdf->doc->getPageCropHeight(page);
-        if (!std::isfinite(width) || !std::isfinite(height) || width <= 0 || height <= 0 || width > 14400 || height > 14400) throw 0;
+        if (!(width > 0 && width <= 14400 && height > 0 && height <= 14400)) throw 0;
         in.text = text;
         TextOutputDev extraction(text_write, &in, true, 0.0, false);
         pdf->doc->displayPage(&extraction, page, 72.0, 72.0, 0, false, true, false, abort_page, &in);

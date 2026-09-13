@@ -1347,6 +1347,7 @@ if shutil.which("clang++"):
         temporary = Path(tmp)
         (temporary / "machine").mkdir()
         (temporary / "machine/ansi.h").write_text("#define _BSD_WCHAR_T_ int\n")
+        (temporary / "signal.h").write_text("extern const char *const sys_siglist[84];\n")
         source = temporary / "types.cpp"
         source.write_text("""
 #include "bsd-legacy-cxx.h"
@@ -1362,6 +1363,7 @@ static_assert(__builtin_isfinite(1.0));
 static_assert(!__builtin_isfinite(__builtin_inf()));
 static_assert(!__builtin_isfinite(__builtin_nan("")));
 #ifdef __OpenBSD__
+extern "C" { extern const char *const sys_siglist[]; }
 constexpr int category(double value) {
     return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL, FP_SUBNORMAL, FP_ZERO, value);
 }
@@ -1970,6 +1972,29 @@ assert 'buildInputs = [ jansson curl av xml archive ]' in openbsd
 assert 'lib.optional early ./libarchive-wide-fallbacks.patch' in openbsd
 print("PASS: libarchive shared wide-string helpers preserve Unicode, terminators and searches")
 
+# Page bounds retain nonfinite rejection when old SDK math macros are present.
+pdf_source = (root / "src/pdf.cpp").read_text()
+page_guard = re.search(r"if \(([^\n]*width[^\n]*)\) throw 0;", pdf_source).group(1)
+with tempfile.TemporaryDirectory(prefix="pdf-page-bounds-", dir=root / "build") as tmp:
+    source, binary = Path(tmp) / "bounds.cpp", Path(tmp) / "bounds"
+    source.write_text("#include <cassert>\n#include <limits>\n#include <initializer_list>\n"
+        "#define isfinite(x) unavailable_old_sdk_macro\n"
+        "static bool valid(double width, double height) { return !(" + page_guard + "); }\n" + r"""
+int main() {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    for (double value : {nan, inf, -inf, -1.0, -0.0, 0.0, 14400.01}) {
+        assert(!valid(value, 100));
+        assert(!valid(100, value));
+    }
+    assert(valid(1, 1) && valid(14400, 14400));
+    assert(valid(std::numeric_limits<double>::min(), 100));
+}
+""")
+    subprocess.run(["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror",
+                    str(source), "-o", str(binary)], check=True)
+    subprocess.run([str(binary)], check=True)
+print("PASS: PDF page bounds reject NaN, infinities and invalid dimensions with legacy math macros")
 # OpenBSD's native libc++ supports the current PDF API only on the modern SDK.
 open_pdf = openbsd.split("  pdf = ", 1)[1].split("  xml = ", 1)[0]
 assert '"-DFONT_CONFIGURATION=fontconfig"' in open_pdf
