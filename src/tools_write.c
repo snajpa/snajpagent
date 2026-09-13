@@ -133,8 +133,7 @@ install_bytes(int parent_fd, const char *leaf, const char *path, const struct sn
 
 /* Returns 0 with *create set, or -1 after filling *error. */
 static int
-prepare(int root_fd, const char *path, char leaf[SNAG_NAME_MAX_BYTES + 1u],
-        char *error, size_t error_size)
+prepare(int root_fd, const char *path, char leaf[SNAG_NAME_MAX_BYTES + 1u], char *error, size_t error_size)
 {
     if (snag_file_path_valid(path, error, error_size) < 0) return -1;
     if (snag_file_parent(root_fd, path, leaf, error, error_size) < 0) return -1;

@@ -163,8 +163,7 @@ snag_app_consent(struct app_state *app, const char *reason, char *error, size_t 
     if (snag_random_id(id) < 0) return -1;
     id[8] = '\0';
     if (snprintf(text, sizeof(text), "confirmation required: %s; type %s to confirm",
-                 reason && *reason ? reason : "a configured rule", id) < 0)
-        return -1;
+                 reason && *reason ? reason : "a configured rule", id) < 0) return -1;
     if (snag_ui_text(&app->ui, SNAG_UI_HOST, text) < 0 || snag_ui_simple_prompt(&app->ui, false) < 0)
         return snag_errorf(error, error_size, "confirmation prompt could not be displayed");
     do {

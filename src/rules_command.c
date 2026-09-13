@@ -15,8 +15,7 @@
 
 int
 snag_rule_command_run(const struct snag_config *config, const char *command,
-                      const char *workdir, unsigned int timeout_ms,
-                      const char *envelope, size_t envelope_len,
+                      const char *workdir, unsigned int timeout_ms, const char *envelope, size_t envelope_len,
                       json_t **reply, char *error, size_t error_size)
 {
     struct snag_child child;
@@ -26,8 +25,7 @@ snag_rule_command_run(const struct snag_config *config, const char *command,
     size_t written = 0u, stderr_bytes = 0u;
     bool stdout_open = true, stderr_open = true, ok = false;
 
-    if (!reply)
-        return snag_fail(error, error_size, EINVAL, "invalid rule helper destination");
+    if (!reply) return snag_fail(error, error_size, EINVAL, "invalid rule helper destination");
     *reply = NULL;
     if (!config || !config->shell || !command || !*command || !workdir || !envelope ||
         envelope_len > RULE_HELPER_IN_MAX || timeout_ms < 1u || timeout_ms > 60000u)
@@ -53,13 +51,11 @@ snag_rule_command_run(const struct snag_config *config, const char *command,
         }
         events[0] = (struct snag_child_event){&child, 0u, stdout_open ? SNAG_CHILD_READ : 0u, 0u};
         events[1] = (struct snag_child_event){&child, 1u, stderr_open ? SNAG_CHILD_READ : 0u, 0u};
-        if (count == 3u)
-            events[2] = (struct snag_child_event){&child, 2u, SNAG_CHILD_WRITE, 0u};
+        if (count == 3u) events[2] = (struct snag_child_event){&child, 2u, SNAG_CHILD_WRITE, 0u};
         ready = snag_child_wait(events, count, SNAG_WAKE_INVALID,
                                 remaining > RULE_HELPER_POLL_MS ? RULE_HELPER_POLL_MS : (int)remaining);
         if (ready < 0) {
-            if (errno == EINTR)
-                continue;
+            if (errno == EINTR) continue;
             snag_errorf(error, error_size, "rule helper wait failed");
             goto out;
         }
@@ -70,8 +66,7 @@ snag_rule_command_run(const struct snag_config *config, const char *command,
                     written += (size_t)n;
                     continue;
                 }
-                if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK))
-                    break;
+                if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) break;
                 /* A helper that closed its input early is still judged by its exit
                  * status and stdout; stop writing and keep draining output. */
                 written = envelope_len;
@@ -79,17 +74,14 @@ snag_rule_command_run(const struct snag_config *config, const char *command,
             }
             if (written >= envelope_len) {
                 snag_child_close_stream(&child, 2u);
-                if (count == 3u)
-                    count = 2u;
+                if (count == 3u) count = 2u;
             }
         }
         for (unsigned int stream = 0u; stream < 2u; ++stream) {
             unsigned char chunk[4096];
             bool *open = stream == 0u ? &stdout_open : &stderr_open;
-            if (!*open)
-                continue;
-            if (!(events[stream].revents & SNAG_CHILD_READ))
-                goto stream_end;
+            if (!*open) continue;
+            if (!(events[stream].revents & SNAG_CHILD_READ)) goto stream_end;
             for (;;) {
                 ssize_t got = snag_child_read(&child, stream, chunk, sizeof(chunk));
                 if (got > 0) {
@@ -98,16 +90,14 @@ snag_rule_command_run(const struct snag_config *config, const char *command,
                             snag_errorf(error, error_size, "rule helper stdout exceeded 64 KiB");
                             goto out;
                         }
-                        if (snag_buf_append(&out, chunk, (size_t)got) < 0)
-                            goto out;
+                        if (snag_buf_append(&out, chunk, (size_t)got) < 0) goto out;
                     } else if ((stderr_bytes += (size_t)got) > RULE_HELPER_OUT_MAX) {
                         snag_errorf(error, error_size, "rule helper stderr exceeded 64 KiB");
                         goto out;
                     }
                     continue;
                 }
-                if (got < 0 && errno == EINTR)
-                    continue;
+                if (got < 0 && errno == EINTR) continue;
                 if (got < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                     snag_errorf(error, error_size, "rule helper output read failed");
                     goto out;
@@ -132,8 +122,7 @@ stream_end:
                     goto out;
                 }
             }
-            if (child.reaped && !stdout_open && !stderr_open)
-                break;
+            if (child.reaped && !stdout_open && !stderr_open) break;
         }
     }
     if (!child.reaped && snag_child_reap(&child) < 0 && errno != ECHILD) {
@@ -162,11 +151,9 @@ stream_end:
     }
 out:
     if (!ok) {
-        if (!error[0])
-            snag_errorf(error, error_size, "rule helper failed");
+        if (!error[0]) snag_errorf(error, error_size, "rule helper failed");
         snag_child_signal(&child, SNAG_CHILD_KILL);
-        if (!child.reaped)
-            (void)snag_child_reap(&child);
+        if (!child.reaped) (void)snag_child_reap(&child);
     }
     snag_child_free(&child);
     snag_buf_free(&out);

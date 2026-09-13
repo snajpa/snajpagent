@@ -1052,8 +1052,7 @@ test_read_only_dispatch(void)
     static const char *const denied[] = {
         "exec_command", "write_stdin", "apply_patch", "create_goal",
         "update_goal", "irc_send", "irc_topic", "irc_state", "unknown", "web_search", "openrouter:web_search",
-        "write_file", "edit_file"
-    };
+        "write_file", "edit_file" };
     struct app_state app = {0};
     struct snag_response_item call = {0};
     json_t *result = NULL;
