@@ -3577,10 +3577,10 @@ linked-PDF build without one asks for \fB--cxx\fR or \fB--without-pdf\fR.
 also accepted.  Export \fBPKG_CONFIG_PATH\fR for the build as well as for the
 probe; without it the probe finds no dependency and turns the modality off.
 The script needs a POSIX shell providing \fBcommand -v\fR; the pinned
-legacy targets build through their own toolchains rather than running it, and
-the Nix derivations pass their modality values explicitly rather than let a
-sandbox probe turn them off.  The \fBmake WITH_*=0/1\fR options below remain
-explicit overrides.
+legacy targets build through their own toolchains rather than running it; the
+Nix app derivations set \fBdontConfigure\fR and take their modality values from
+the tracked config.mk, so no sandbox probe runs.  The \fBmake WITH_*=0/1\fR
+options below remain explicit overrides.
 .TP
 .B make WITH_AV=0
 Build a custom lean executable without linked audio/video file decoding.
