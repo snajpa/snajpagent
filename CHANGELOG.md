@@ -136,8 +136,9 @@
 - Add OpenBSD 7.9 static PDF/font dependencies with native SDK C++ linkage.
   Preserve private font-library dependencies; legacy PDF closure remains pending.
 
-- Supply NetBSD static ZIP/XML Office package-reader dependencies; PDF and
-  LibreOffice runtime closure remain in progress.
+- Supply NetBSD static ZIP/XML Office package-reader dependencies; PDF runtime
+  closure remains in progress; Office loads a LibreOffice runtime installed on
+  the target.
 
 - Keep NetBSD audio thread creation working when native priority scheduling is
   unavailable; preserve normal-priority fallback and error handling.
@@ -199,18 +200,19 @@
   Legacy audio API compatibility and PDF/Office dependencies remain unfinished.
 
 - Supply FreeBSD static ZIP/XML Office package readers with SDK-native digest
-  linkage; LibreOffice runtime packaging remains separate and unfinished.
+  linkage. Office runs from a separately installed runtime, verified before
+  loading.
 
 - Add FreeBSD static media dependencies and OSS3 default-device compatibility.
   Preserve native threading, libc loader linkage, compile-time assertions and
   nanosecond retained-file checks; PDF/Office and audio qualification remain open.
 
-- Supply macOS static ZIP/XML dependencies for Office package checks; linked
-  LibreOffice runtime packaging remains separate and unfinished.
+- Supply macOS static ZIP/XML dependencies for Office package checks. Office runs
+  from a separately installed runtime, verified before loading.
 
 - Add macOS static PDF/font dependencies with SDK-targeted header generation
-  and C++ linkage. Office runtime packaging and target rendering qualification
-  remain in progress.
+  and C++ linkage. Target rendering qualification for Office remains in
+  progress.
 
 - Give macOS FFmpeg archive members distinct source-derived names so dependency
   debug information remains attributable during dSYM generation.

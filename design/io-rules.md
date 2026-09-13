@@ -50,7 +50,7 @@ targets fail configuration load, so a typo never becomes silent policy.
 | Key | Meaning |
 | --- | --- |
 | `chain` | which chain this rule belongs to (entry chain `out`, or a `jump` target) |
-| `action` | `pass`, `accept`, `reject`, `jump`, or `return` |
+| `action` | `pass`, `accept`, `reject`, `jump`, `return`, `insert`, `command`, or `confirm` |
 | `match` | JSON object of `/json/pointer` → POSIX extended regex; **all** must match |
 | `at_least` | JSON object of `/json/pointer` → inclusive integer lower bound |
 | `text` | message for `reject`; `%{/pointer}` is replaced from the envelope, `%%` is a literal `%` |

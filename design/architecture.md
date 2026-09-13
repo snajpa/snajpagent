@@ -581,7 +581,7 @@ presentation, with fenced-code state isolated by endpoint and sender. Operator
 messages and other IRC events remain literal. Markdown and color can be disabled
 independently, and neither changes stored, provider, redirected, or IRC bytes.
 
-## Media streaming boundary (in development)
+## Media streaming boundary
 
 Direct input admission records its typed attachment references in `input_received`
 before preparation or provider activity. The pending input retains those references
