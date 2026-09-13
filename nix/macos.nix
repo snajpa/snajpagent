@@ -325,6 +325,7 @@ in {
       nativeBuildInputs = [ pkgs.pkg-config ];
       buildInputs = [ jansson curl av pdf png freetype expat fontconfig jpeg openjpeg xml archive ] ++ networkLibraries;
       enableParallelBuilding = true;
+      dontConfigure = true;
       dontStrip = true;
       preBuild = ''
         mkdir -p build

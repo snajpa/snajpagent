@@ -523,6 +523,7 @@ in {
       buildInputs = [ jansson curl av xml archive ] ++ networkLibraries ++ [ regex ]
         ++ [ pdf png freetype expat fontconfig jpeg openjpeg ] ++ lib.optional legacy cxx;
       enableParallelBuilding = true;
+      dontConfigure = true;
       dontStrip = true;
       preBuild = ''
         mkdir -p build
