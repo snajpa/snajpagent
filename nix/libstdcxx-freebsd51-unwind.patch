@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-3.0-or-later WITH GCC-exception-3.1
+# Preserve normal rethrow and forced-unwind routing through the SDK's Level 1 API.
+--- a/libsupc++/eh_throw.cc
++++ b/libsupc++/eh_throw.cc
+@@ -126,6 +126,9 @@
+ #if defined(_LIBUNWIND_STD_ABI)
+       _Unwind_RaiseException (&header->unwindHeader);
+ #else
+-      _Unwind_Resume_or_Rethrow (&header->unwindHeader);
++      if (header->unwindHeader.private_1 == 0)
++        _Unwind_RaiseException (&header->unwindHeader);
++      else
++        _Unwind_Resume (&header->unwindHeader);
+ #endif
+ #endif

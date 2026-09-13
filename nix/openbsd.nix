@@ -304,10 +304,12 @@ let
     "-DFT_DISABLE_BZIP2=ON" "-DFT_DISABLE_BROTLI=ON" "-DFT_DISABLE_HARFBUZZ=ON"
     "-DFT_REQUIRE_ZLIB=ON" "-DFT_REQUIRE_PNG=ON"
   ] [ zlib png ];
-  expat = cmakeLibrary sourcePkgs.expat [
+  expat = cmakeLibrary sourcePkgs.expat ([
     "-DEXPAT_SHARED_LIBS=OFF" "-DEXPAT_BUILD_TOOLS=OFF"
     "-DEXPAT_BUILD_EXAMPLES=OFF" "-DEXPAT_BUILD_TESTS=OFF" "-DEXPAT_BUILD_DOCS=OFF"
-  ] [];
+  ] ++ lib.optionals early [
+    "-DEXPAT_DEV_URANDOM=OFF" "-DEXPAT_WITH_ARC4RANDOM=ON"
+  ]) [];
   fontconfig = (autotoolsLibrary sourcePkgs.fontconfig [
     "--disable-docs" "--disable-docbook" "--disable-cache-build" "--disable-nls"
     "--sysconfdir=/etc" "--with-cache-dir=/var/cache/fontconfig"
@@ -334,9 +336,15 @@ let
     "-DBUILD_QT5_TESTS=OFF" "-DBUILD_QT6_TESTS=OFF" "-DBUILD_CPP_TESTS=OFF"
     "-DBUILD_MANUAL_TESTS=OFF" "-DENABLE_LCMS=OFF" "-DENABLE_LIBCURL=OFF"
     "-DENABLE_LIBTIFF=OFF" "-DENABLE_NSS3=OFF" "-DENABLE_GPGME=OFF"
-  ] [ zlib png freetype expat fontconfig jpeg openjpeg pkgs.boost ]).overrideAttrs (old: {
+  ] ([ zlib png freetype expat fontconfig jpeg openjpeg pkgs.boost ] ++ lib.optional legacy cxx)).overrideAttrs (old: {
     cmakeBuildType = "Release";
     patches = old.patches ++ [ ./poppler-static-fonts.patch ];
+    preConfigure = old.preConfigure + lib.optionalString legacy ''
+      cmakeFlagsArray+=(
+        "-DCMAKE_CXX_FLAGS=${cflags} -stdlib=libstdc++ -pthread${lib.optionalString early " -fno-use-cxa-atexit"} -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}"
+        "-DCMAKE_EXE_LINKER_FLAGS=${ldflags} -L${cxx}/lib"
+      )
+    '';
   });
   xml = cmakeLibrary sourcePkgs.libxml2 [
     "-DLIBXML2_WITH_PROGRAMS=OFF" "-DLIBXML2_WITH_TESTS=OFF"

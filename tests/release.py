@@ -1286,10 +1286,56 @@ for setting in ("pkgs.gcc14.cc", '"--enable-clocale=generic"',
                 "-stdlib=libstdc++", "--with-gxx-include-dir="):
     assert setting in freebsd_cxx, setting
 print("PASS: FreeBSD C++ archive retains static output and real POSIX thread probes")
+assert 'os == "netbsd" && pkgs.lib.versionOlder osVersion "6.0"' in freebsd_cxx
+assert 'cp "config/os/generic/$file" "config/os/bsd/netbsd/$file"' in freebsd_cxx
+assert "--replace-fail '(__c);' '(static_cast<unsigned char>(__c));'" in freebsd_cxx
+assert "--replace-fail '((int) *__low)' '((int)(unsigned char) *__low)'" in freebsd_cxx
+assert "substituteInPlace configure --replace-fail 'RANLIB -t' 'RANLIB'" in freebsd_cxx
+assert "--replace-fail '__gnuc_va_list' '__builtin_va_list'" in freebsd_cxx
+assert "--replace-fail 'throw ()' \"\"" in freebsd_cxx
+if shutil.which("nix-instantiate"):
+    subprocess.run(["nix-instantiate", "--parse", str(root / "nix/bsd-cxx.nix")],
+                   check=True, stdout=subprocess.DEVNULL)
+assert ' -include ${./netbsd20-cxx.h}' in freebsd_cxx
+netbsd_cxx_header = (root / "nix/netbsd20-cxx.h").read_text()
+assert '#ifdef __cplusplus\n#include <machine/ansi.h>\n#undef _BSD_WCHAR_T_' in netbsd_cxx_header
 freebsd_pdf = freebsd.split("  pdf = ", 1)[1].split("  miniaudio = ", 1)[0]
 assert './poppler-static-fonts.patch' in freebsd_pdf
 assert '-nostdinc++ -isystem ${cxx}/include/c++' in freebsd_pdf
 assert '${cxx}/lib/libstdc++.a -Wl,-Bdynamic' in freebsd
+assert '${lib.optionalString legacy " -U_XOPEN_SOURCE"}' in freebsd
+assert '${lib.optionalString early " -fno-use-cxa-atexit"}' in freebsd
+assert 'have_unwind_getipinfo=no; if test' in freebsd_cxx
+unwind_patch = (root / "nix/libstdcxx-freebsd51-unwind.patch").read_text()
+unwind_added = "\n".join(line[1:] for line in unwind_patch.splitlines()
+                         if line.startswith("+") and not line.startswith("+++"))
+unwind_removed = "\n".join(line[1:] for line in unwind_patch.splitlines()
+                           if line.startswith("-") and not line.startswith("---"))
+with tempfile.TemporaryDirectory(prefix="freebsd-unwind-", dir=root / "build") as tmp:
+    source, binary = Path(tmp) / "route.c", Path(tmp) / "route"
+    for before, body in ((True, unwind_removed), (False, unwind_added)):
+        source.write_text("""
+#include <assert.h>
+struct exception { unsigned long private_1; };
+struct header { struct exception unwindHeader; };
+static int called;
+static void _Unwind_RaiseException(struct exception *e) { assert(e->private_1 == 0); called = 1; }
+static void _Unwind_Resume(struct exception *e) { assert(e->private_1 != 0); called = 2; }
+static int route(unsigned long marker) {
+    struct header value = {{marker}}, *header = &value;
+""" + body + """
+    return called;
+}
+int main(void) { assert(route(0) == 1); assert(route(1) == 2); assert(route(42) == 2); }
+""")
+        compiled = subprocess.run(["cc", "-std=c11", "-Werror=implicit-function-declaration",
+                                   str(source), "-o", str(binary)], capture_output=True, text=True)
+        if before:
+            assert compiled.returncode and "_Unwind_Resume_or_Rethrow" in compiled.stderr
+        else:
+            assert compiled.returncode == 0, compiled.stderr
+            subprocess.run([str(binary)], check=True)
+print("PASS: legacy FreeBSD rethrow preserves ordinary and forced-unwind routing")
 assert '"-DEXPAT_DEV_URANDOM=OFF" "-DEXPAT_WITH_ARC4RANDOM=ON"' in freebsd
 assert "--replace-fail 'return lrintf(f);' 'return __builtin_lrintf(f);'" in freebsd
 assert "--replace-fail 'fmin(' '__builtin_fmin('" in freebsd_pdf
@@ -2356,11 +2402,14 @@ net_pdf = netbsd.split("  pdf = ", 1)[1].split("  xml = ", 1)[0]
 assert '"-DFONT_CONFIGURATION=fontconfig"' in net_pdf
 assert 'cmakeBuildType = "Release";' in net_pdf
 assert './poppler-static-fonts.patch' in net_pdf
-assert '++ lib.optionals (!legacy) [ pdf png freetype expat fontconfig jpeg openjpeg ]' in netbsd
+assert '++ [ pdf png freetype expat fontconfig jpeg openjpeg ] ++ lib.optional legacy cxx' in netbsd
 assert 'av pdf png freetype expat fontconfig jpeg openjpeg miniaudio' in netbsd
 assert "'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'" in netbsd
-assert '-std=c++20 -stdlib=libstdc++' in netbsd
-assert '-Wl,-Bdynamic -lstdc++ -lm -lgcc_s -Wl,-Bstatic' in netbsd
+assert '-std=c++20 ${cflags} ${if legacy then' in netbsd
+assert '${cxx}/lib/libstdc++.a -Wl,-Bdynamic' in netbsd
+assert 'else "-Wl,-Bdynamic -lstdc++"' in netbsd
+assert '-fno-builtin-pow -fno-builtin-powf -nostdinc++' in net_pdf
+assert '"-DEXPAT_DEV_URANDOM=OFF" "-DEXPAT_WITH_ARC4RANDOM=ON"' in netbsd
 net_png = netbsd.split("  png = ", 1)[1].split("  freetype = ", 1)[0]
 assert 'cmakeFlagsArray+=("-DCMAKE_C_FLAGS=${cflags} --target=${target} --sysroot=${sdk}")' in net_png
 net_fonts = netbsd.split("  fontconfig = ", 1)[1].split("  jpeg = ", 1)[0]

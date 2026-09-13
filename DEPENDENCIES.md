@@ -461,7 +461,9 @@ mutexes, exceptions and wide streams cross-links with only `libm.so.5`,
 `libgcc_s.so.1`, `libthr.so.3` and `libc.so.7`, without a runtime search path.
 The 8.4 AV/PDF/audio application also cross-links and has matching debug symbols;
 its import list is recorded above. Neither artifact was target-executed. The 5.1
-PDF library also builds; application cross-linking is in progress. LibreOffice
+AV/PDF/audio application also cross-links, importing only libc_r.so.5 and libc.so.5
+through `/usr/libexec/ld-elf.so.1`, with matching debug symbols and no runtime search
+path. These application checks explicitly exclude Office. LibreOffice
 runtime packaging remains unresolved. Legacy Expat uses
 the SDK's arc4random implementation; its optional /dev/urandom reader requires
 O_CLOEXEC, which the 5.1 SDK lacks.
@@ -469,8 +471,15 @@ OpenJPEG's legacy rounding wrapper uses Clang's lrintf builtin, which emits the
 amd64 conversion instruction and preserves its floating-point rounding mode.
 Poppler's text-selection min/max operations also use compiler builtins on the
 legacy SDK, retaining NaN handling without importing absent C99 math symbols.
-The same runtime recipe is available to legacy NetBSD and OpenBSD. Their runtime
-builds and application PDF integration remain in progress.
+The legacy application's C++ compilation removes `_XOPEN_SOURCE` to expose the
+SDK's existing math declarations to the matching runtime headers. C compilation
+keeps its POSIX/XSI feature settings.
+The 5.1 C++ build registers process-exit destructors through atexit and uses the
+SDK's original exception APIs. Its rethrow path distinguishes ordinary exceptions
+from forced unwinds, and instruction-pointer lookup uses the existing GetIP
+fallback. Poppler keeps native pow calls when the SDK lacks exp2.
+The same runtime recipe builds on NetBSD 5.2.3 and OpenBSD 5.9. Production legacy
+NetBSD uses the 2.0 SDK; that runtime and OpenBSD 3.5 remain in development.
 
 ### FreeBSD 5.1/5.5 legacy target
 
@@ -698,6 +707,17 @@ with native libstdc++/libgcc_s/pthread/libc imports and no runtime search path,
 with Office excluded. No target executable was run. Legacy PDF and LibreOffice
 runtime closure remain in progress; no LibreOffice packaging or loader design
 is selected.
+
+The legacy C++ runtime recipe uses GCC's portable character classification over
+native libc functions. NetBSD 5.2.3 exposes an 8-bit ctype table; GCC 14's native
+NetBSD port expects the later 16-bit table ABI. Classification and case conversion
+pass unsigned-byte values to libc, including when plain char is signed.
+The C++ and PDF library builds pass. Final application binding work selects the
+SDK's GetIP exception interface and preserves pow calls instead of importing
+absent exp2 symbols. Expat uses native arc4random on the legacy SDK.
+Those library checks use 5.2.3; the production legacy target uses 2.0. Its C++
+compilation suppresses the SDK's C wchar_t typedef macro after loading the native
+machine type definitions. The compiler's wchar_t type supplies the same ABI.
 
 ## macOS ARM64 and Intel cross-builds
 

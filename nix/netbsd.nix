@@ -250,10 +250,12 @@ let
     "-DFT_DISABLE_BZIP2=ON" "-DFT_DISABLE_BROTLI=ON" "-DFT_DISABLE_HARFBUZZ=ON"
     "-DFT_REQUIRE_ZLIB=ON" "-DFT_REQUIRE_PNG=ON"
   ] [ zlib png ];
-  expat = cmakeLibrary sourcePkgs.expat [
+  expat = cmakeLibrary sourcePkgs.expat ([
     "-DEXPAT_SHARED_LIBS=OFF" "-DEXPAT_BUILD_TOOLS=OFF"
     "-DEXPAT_BUILD_EXAMPLES=OFF" "-DEXPAT_BUILD_TESTS=OFF" "-DEXPAT_BUILD_DOCS=OFF"
-  ] [];
+  ] ++ lib.optionals legacy [
+    "-DEXPAT_DEV_URANDOM=OFF" "-DEXPAT_WITH_ARC4RANDOM=ON"
+  ]) [];
   fontconfig = (autotoolsLibrary sourcePkgs.fontconfig [
     "--disable-docs" "--disable-docbook" "--disable-cache-build" "--disable-nls"
     "--sysconfdir=/etc" "--with-cache-dir=/var/cache/fontconfig"
@@ -280,9 +282,15 @@ let
     "-DBUILD_QT5_TESTS=OFF" "-DBUILD_QT6_TESTS=OFF" "-DBUILD_CPP_TESTS=OFF"
     "-DBUILD_MANUAL_TESTS=OFF" "-DENABLE_LCMS=OFF" "-DENABLE_LIBCURL=OFF"
     "-DENABLE_LIBTIFF=OFF" "-DENABLE_NSS3=OFF" "-DENABLE_GPGME=OFF"
-  ] [ zlib png freetype expat fontconfig jpeg openjpeg pkgs.boost ]).overrideAttrs (old: {
+  ] ([ zlib png freetype expat fontconfig jpeg openjpeg pkgs.boost ] ++ lib.optional legacy cxx)).overrideAttrs (old: {
     cmakeBuildType = "Release";
     patches = old.patches ++ [ ./poppler-static-fonts.patch ];
+    preConfigure = old.preConfigure + lib.optionalString legacy ''
+      cmakeFlagsArray+=(
+        "-DCMAKE_CXX_FLAGS=${cflags} -stdlib=libstdc++ -pthread -fno-builtin-pow -fno-builtin-powf -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}${lib.optionalString early " -include ${./netbsd20-cxx.h}"}"
+        "-DCMAKE_EXE_LINKER_FLAGS=${ldflags} -L${cxx}/lib"
+      )
+    '';
   });
   xml = cmakeLibrary sourcePkgs.libxml2 [
     "-DLIBXML2_WITH_PROGRAMS=OFF" "-DLIBXML2_WITH_TESTS=OFF"
@@ -379,7 +387,7 @@ in {
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
       buildInputs = [ jansson curl av xml archive ] ++ networkLibraries ++ [ regex ]
-        ++ lib.optionals (!legacy) [ pdf png freetype expat fontconfig jpeg openjpeg ];
+        ++ [ pdf png freetype expat fontconfig jpeg openjpeg ] ++ lib.optional legacy cxx;
       enableParallelBuilding = true;
       dontStrip = true;
       preBuild = ''
@@ -405,12 +413,10 @@ in {
           "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"
           "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale | sed -E 's/-l?(-l?)?pthread//g')"
           'MINIAUDIO_CFLAGS=-isystem ${miniaudio}'
-          ${lib.optionalString (!legacy) ''
           'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'
-          'CXXFLAGS=-std=c++20 -stdlib=libstdc++ ${cflags} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
+          'CXXFLAGS=-std=c++20 ${cflags} ${if legacy then "-nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}" else "-stdlib=libstdc++"}${lib.optionalString early " -include ${./netbsd20-cxx.h}"} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           "PDF_CFLAGS=$(pkg-config --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')"
-          "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') -Wl,-Bdynamic -lstdc++ -lm -lgcc_s -Wl,-Bstatic"
-          ''}
+          "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') ${if legacy then "${cxx}/lib/libstdc++.a -Wl,-Bdynamic" else "-Wl,-Bdynamic -lstdc++"} -lm${lib.optionalString (!early) " -lgcc_s"} -Wl,-Bstatic"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
           "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil -Wl,-Bdynamic -lpthread"
         )

@@ -292,7 +292,7 @@ let
       # Old SDK headers predate C++20. Use the linked runtime's headers and
       # native libc/thread ABI for CMake's compiler checks as well as Poppler.
       cmakeFlagsArray+=(
-        "-DCMAKE_CXX_FLAGS=${cflags} -stdlib=libstdc++ -pthread -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}"
+        "-DCMAKE_CXX_FLAGS=${cflags} -stdlib=libstdc++ -pthread${lib.optionalString early " -fno-use-cxa-atexit"}${lib.optionalString legacy " -fno-builtin-pow -fno-builtin-powf"} -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}"
         "-DCMAKE_EXE_LINKER_FLAGS=--ld-path=${llvm.lld}/bin/ld.lld -L${cxx}/lib"
       )
     '';
@@ -420,7 +420,7 @@ in {
           "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale | sed -E 's/-l?(-l?)?pthread//g')"
           'MINIAUDIO_CFLAGS=-isystem ${miniaudio}'
           'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'
-          'CXXFLAGS=-std=c++20 ${cflags} -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
+          'CXXFLAGS=-std=c++20 ${cflags}${lib.optionalString legacy " -U_XOPEN_SOURCE"}${lib.optionalString early " -fno-use-cxa-atexit"} -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           "PDF_CFLAGS=$(pkg-config --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')"
           # The explicit archive bypasses Clang's reserved -lstdc++ rewriting.
           "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') ${cxx}/lib/libstdc++.a -Wl,-Bdynamic -lm${lib.optionalString (!legacy) " -lgcc_s"} -Wl,-Bstatic"

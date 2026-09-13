@@ -49,6 +49,41 @@
       wchar_t
       ctype<wchar_t>::
       do_widen(char'
+  '' + pkgs.lib.optionalString (os == "netbsd" && pkgs.lib.versionOlder osVersion "6.0") ''
+    # GCC's NetBSD ctype port expects the newer 16-bit table ABI. Use its
+    # portable implementation over libc's classification functions instead
+    # of reinterpreting the old SDK's 8-bit table or inventing mask aliases.
+    for file in ctype_base.h ctype_inline.h ctype_configure_char.cc; do
+      cp "config/os/generic/$file" "config/os/bsd/netbsd/$file"
+    done
+    # The C classification/conversion domain is unsigned char, including
+    # bytes with the high bit set when this target's char is signed.
+    substituteInPlace config/os/bsd/netbsd/ctype_inline.h \
+      --replace-fail '(__c);' '(static_cast<unsigned char>(__c));'
+    substituteInPlace config/os/bsd/netbsd/ctype_configure_char.cc \
+      --replace-fail '((int) __c)' '((int)(unsigned char) __c)' \
+      --replace-fail '((int) *__low)' '((int)(unsigned char) *__low)'
+  '' + pkgs.lib.optionalString (os == "openbsd") ''
+    # Older libtool assumes native ranlib's timestamp-only option. LLVM
+    # rebuilds the deterministic archive index instead, as in the IDN recipe.
+    substituteInPlace configure --replace-fail 'RANLIB -t' 'RANLIB'
+  '' + pkgs.lib.optionalString (os == "openbsd" && pkgs.lib.versionOlder osVersion "4.0") ''
+    # The SDK exposes only part of C99 stdio. Keep the upstream declarations,
+    # using the compiler's native varargs type and matching visible prototypes.
+    substituteInPlace include/c_global/cstdio \
+      --replace-fail '__gnuc_va_list' '__builtin_va_list' \
+      --replace-fail 'throw ()' ""
+  '' + pkgs.lib.optionalString ((os == "freebsd" && pkgs.lib.versionOlder osVersion "5.3")
+    || (os == "netbsd" && pkgs.lib.versionOlder osVersion "6.0")
+    || (os == "openbsd" && pkgs.lib.versionOlder osVersion "4.0")) ''
+    # These SDK unwinders predate GetIPInfo. Configure otherwise assumes it
+    # exists; select libstdc++'s existing GetIP fallback.
+    substituteInPlace configure \
+      --replace-fail 'if test x$have_unwind_getipinfo = xyes; then' \
+        'have_unwind_getipinfo=no; if test x$have_unwind_getipinfo = xyes; then'
+  '' + pkgs.lib.optionalString (os == "freebsd" && pkgs.lib.versionOlder osVersion "5.3") ''
+    # The 5.1 unwinder also predates the combined resume/rethrow entry point.
+    patch -p1 < ${./libstdcxx-freebsd51-unwind.patch}
   '';
   preConfigure = old.preConfigure + ''
     # A standalone libstdc++ build has no libgcc configure step to select
@@ -57,7 +92,7 @@
     ln -s gthr-posix.h ../libgcc/gthr-default.h
     # These SDKs hide long-long declarations in strict C++ even though the
     # compiler supports them. Expose the real functions to configure probes.
-    export CXXFLAGS="${cflags} -fPIC -stdlib=libstdc++ -D__LONG_LONG_SUPPORTED="
+    export CXXFLAGS="${cflags} -fPIC -stdlib=libstdc++ -D__LONG_LONG_SUPPORTED=${pkgs.lib.optionalString ((os == "freebsd" && pkgs.lib.versionOlder osVersion "5.3") || (os == "openbsd" && pkgs.lib.versionOlder osVersion "4.0")) " -fno-use-cxa-atexit"}${pkgs.lib.optionalString (os == "netbsd" && pkgs.lib.versionOlder osVersion "4.0") " -include ${./netbsd20-cxx.h}"}"
     export CFLAGS="${cflags} -fPIC"
     export LDFLAGS="--ld-path=${llvm.lld}/bin/ld.lld"
   '';

@@ -9,7 +9,8 @@
 - Add the FreeBSD 8.4 static PDF/font dependency chain and select its modern
   static C++ runtime at application link time. Build the C++ runtime against
   the 5.1 SDK as well. Legacy PDF dependencies use the SDK entropy API and
-  native compiler math operations; application cross-linking is in progress.
+  native compiler math operations. The 5.1 AV/PDF/audio application cross-links
+  with the SDK's exception and process-exit interfaces.
 
 - Name each IRC update in the turn prompt instead of referring to a room event
   the reader may not have, and resolve those references to the retained room
