@@ -274,6 +274,23 @@ response_completed_call(const char *turn_id, const char *response_id,
 }
 
 static json_t *
+edit_file_call_item(const char *call_id)
+{
+    return checked_json(json_pack("{s:{s:s,s:s,s:s},s:s,s:s,s:s,s:s,s:s}",
+        "arguments", "new", "replacement", "old", "absent text", "path", "doc.md",
+        "call_id", call_id, "kind", "tool_call", "name", "edit_file",
+        "provider_call_id", "call_edit", "provider_item_id", "item_edit"));
+}
+
+static json_t *
+edit_file_response_completed(const char *turn_id, const char *response_id, const char *call_id)
+{
+    return checked_json(json_pack("{s:i,s:[o],s:s,s:s,s:s,s:s,s:o}",
+        "cycle", 1, "items", edit_file_call_item(call_id), "provider_response_id", "resp_edit",
+        "response_id", response_id, "status", "completed", "turn_id", turn_id, "usage", usage()));
+}
+
+static json_t *
 tool_started_data(const char *turn_id, const char *call_id, const char *action_sha256, const char *workspace)
 {
     return checked_json(json_pack("{s:s,s:s,s:s,s:s}",
@@ -1221,6 +1238,51 @@ test_reasoning_continuation(struct snag_store *store, const char *workspace)
     snag_config_free(&config);
 }
 
+/* A file tool may refuse its own arguments after dispatch: edit_file reads the
+ * target and reports not_run/invalid_arguments when the old text does not occur
+ * exactly once. Session ae23a07f aborted because that truthful pair was rejected
+ * after tool_started, first as an invalid tool_finished transition and then as an
+ * invalid turn_recovery repair at the same sequence. */
+static void
+test_refused_file_call_after_start(struct snag_store *store, const char *workspace)
+{
+    const char *turn = "ab100000000000000000000000000000";
+    const char *response = "ab200000000000000000000000000000";
+    const char *call = "ab300000000000000000000000000000";
+    const char *second_response = "ab400000000000000000000000000000";
+    const char *second = "ab500000000000000000000000000000";
+    struct snag_session session;
+    char error[256] = {0};
+
+    create_session(store, &session, workspace, "default");
+    commit_event(&session, "turn_started", turn_started(turn, 1, "edit", workspace, NULL));
+    commit_event(&session, "response_started", response_started(turn, response, NULL));
+    commit_event(&session, "response_completed", edit_file_response_completed(turn, response, call));
+    commit_event(&session, "tool_started", tool_started_data(turn, call,
+                     session.pending_calls[0].action_sha256, workspace));
+    commit_event(&session, "tool_finished", tool_finished_data(turn, call,
+                     snag_tool_result("not_run", "invalid_arguments",
+                         "Target doc.md contains 0 exact match(es); expected 1. Nothing changed.",
+                         -1, 0u)));
+    assert(!session.pending_call_count);
+    assert(!session.process_count);
+
+    /* The strict rule still holds where the store can check it: a call that owns
+     * a spawned process may not claim it never ran after it started. */
+    struct snag_session process_session;
+    create_session(store, &process_session, workspace, "default");
+    commit_event(&process_session, "turn_started", turn_started(turn, 1, "run", workspace, NULL));
+    commit_event(&process_session, "response_started", response_started(turn, second_response, NULL));
+    commit_event(&process_session, "response_completed", response_completed_call(turn, second_response, second, workspace));
+    commit_event(&process_session, "tool_started", tool_started_data(turn, second,
+                     process_session.pending_calls[0].action_sha256, workspace));
+    assert(snag_session_commit(&process_session, "tool_finished", tool_finished_data(turn, second,
+               snag_tool_result("not_run", "invalid_arguments", "Nothing changed.", -1, 0u)),
+               NULL, error, sizeof(error)) < 0);
+    snag_session_close(&process_session);
+    snag_session_close(&session);
+}
+
 int
 main(void)
 {
@@ -1268,6 +1330,7 @@ main(void)
     test_admitted_room_event_stays_out_of_tool_exchange(&store, workspace);
     test_compact_groups(&store, workspace);
     test_parallel_journal_recovery(&store, workspace);
+    test_refused_file_call_after_start(&store, workspace);
     test_accounting_lineage(&store, workspace);
     create_session(&store, &session, workspace, "default");
     commit_event(&session, "turn_started", turn_started(turn1, 1, "ping", workspace, NULL));
