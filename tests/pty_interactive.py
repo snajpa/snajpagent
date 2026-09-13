@@ -7,6 +7,17 @@ import time
 from pathlib import Path
 from pty_active import Child, DEFAULT_IDLE_PROMPT, DOTDIR, WORKSPACE
 
+# The build reports the compiled profile so a lean configuration can assert its own
+# shapes rather than the multimodal ones. Unset means the full profile, which is what
+# a standalone run of this file has always assumed.
+def _profile_flag(name):
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return True
+    return value.strip().lower() not in ("0", "no", "false", "off")
+
+WITH_AV = _profile_flag("SNAJPAGENT_TEST_WITH_AV")
+
 child = Child(["-vvvv"])
 buf = child.buf
 child.wait_text(DEFAULT_IDLE_PROMPT, timeout=5.0)
@@ -45,7 +56,12 @@ pending = [event["data"] for event in events if event["type"] == "input_received
 assert pending and pending[-1]["content"] == turns[-1]["content"]
 part = turns[-1]["content"][0]
 assert part["type"] == "input_image" and part["asset"]["mime_type"] == "image/png"
-assert part["source"]["mime_type"] == "image/png" and "frame 0 only" in part["note"]
+if WITH_AV:
+    assert part["source"]["mime_type"] == "image/png" and "frame 0 only" in part["note"]
+else:
+    # Without the AV modality a frame-0 image is passed through unchanged (the non-AV
+    # fast path in src/tools_media.c), so there is no derived source or note to check.
+    assert "source" not in part and "note" not in part, part
 assert "image_url" not in part, "base64 should not be duplicated in the journal"
 image.unlink()
 terminal_end = buf.find(b"turn_completed synced") + len(b"turn_completed synced")
