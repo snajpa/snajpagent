@@ -1,0 +1,201 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# snajpagent host configuration.
+#
+# Probes the toolchain and the four optional modalities (linked audio/video,
+# PDF, the audio device, linked Office import) and records the result in the
+# shipped config.mk, which stays the single source of truth for every build
+# rule. Only the detected values are rewritten, so flags, object selection and
+# the expressions the release checks read are never duplicated here.
+#
+# A component that is not found is disabled and reported; that is never fatal
+# unless its --require-* option was given.
+
+set -u
+
+PREFIX=/usr/local
+MANPREFIX=
+CC=${CC:-cc}
+HOST=
+DEBUG=0
+OFFICE_ROOT=/usr/lib/libreoffice
+manprefix_given=no
+office_root_given=no
+want_av=auto
+want_pdf=auto
+want_audio=auto
+want_office=auto
+
+usage() {
+	cat <<'EOF'
+usage: ./configure [options]
+
+  --prefix=DIR            installation prefix (default /usr/local)
+  --manprefix=DIR         manual prefix (default the config.mk expression)
+  --cc=CC                 C compiler (default $CC or cc)
+  --host=TRIPLE           cross target; uses TRIPLE-cc when available
+  --debug                 debug build (DEBUG=1, default 0)
+  --office-root=DIR       installed LibreOffice root (default /usr/lib/libreoffice)
+  --with-av               require linked audio/video (FFmpeg)
+  --without-av            disable linked audio/video
+  --require-av            same as --with-av
+  --with-pdf              require linked PDF (Poppler, libpng)
+  --without-pdf           disable linked PDF
+  --require-pdf           same as --with-pdf
+  --with-audio-device     require the audio device backend (miniaudio)
+  --without-audio-device  disable the audio device backend
+  --require-audio-device  same as --with-audio-device
+  --with-office           require linked Office import (LibreOfficeKit)
+  --without-office        disable linked Office import
+  --require-office        same as --with-office
+  -h, --help              this text
+
+By default each modality is enabled when its development files are found and
+disabled with a printed note when they are not. --require-X makes a missing
+component an error, --with-X forces it on, --without-X skips the probe. The
+values remain overridable on the make line, for example make WITH_AV=0.
+EOF
+}
+
+for arg in "$@"; do
+	case $arg in
+		--prefix=*) PREFIX=${arg#*=} ;;
+		--manprefix=*) MANPREFIX=${arg#*=}; manprefix_given=yes ;;
+		--cc=*) CC=${arg#*=} ;;
+		--host=*) HOST=${arg#*=} ;;
+		--debug) DEBUG=1 ;;
+		--office-root=*) OFFICE_ROOT=${arg#*=}; office_root_given=yes ;;
+		--with-av|--require-av) want_av=require ;;
+		--without-av) want_av=off ;;
+		--with-pdf|--require-pdf) want_pdf=require ;;
+		--without-pdf) want_pdf=off ;;
+		--with-audio-device|--require-audio-device) want_audio=require ;;
+		--without-audio-device) want_audio=off ;;
+		--with-office|--require-office) want_office=require ;;
+		--without-office) want_office=off ;;
+		-h|--help) usage; exit 0 ;;
+		*) printf 'configure: unknown option %s\n' "$arg" >&2; usage >&2; exit 2 ;;
+	esac
+done
+
+die() {
+	printf 'configure: %s\n' "$1" >&2
+	exit 1
+}
+
+if [ -n "$HOST" ] && [ "$CC" = cc ] && command -v "$HOST-cc" >/dev/null 2>&1; then
+	CC="$HOST-cc"
+fi
+
+[ -f config.mk ] ||
+	die 'config.mk is missing from the source tree; it carries the build rules this script tunes'
+
+tmpd=$(mktemp -d "${TMPDIR:-/tmp}/snajpagent-conf.XXXXXX") || die 'cannot create a temporary directory'
+trap 'rm -rf "$tmpd"' EXIT HUP INT TERM
+
+printf '#include <stdio.h>\nint main(void) { return 0; }\n' > "$tmpd/probe.c" ||
+	die 'cannot write the compiler probe'
+if ! $CC -D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 \
+	-std=c11 -Os -w -o "$tmpd/probe" "$tmpd/probe.c" >/dev/null 2>&1; then
+	die "C compiler '$CC' cannot build a C11 program with the project's preprocessing flags"
+fi
+
+PKG_CONFIG=${PKG_CONFIG:-pkg-config}
+have_pc=no
+if command -v "$PKG_CONFIG" >/dev/null 2>&1; then have_pc=yes; fi
+
+pc_exists() {
+	[ "$have_pc" = yes ] && "$PKG_CONFIG" --exists "$@" 2>/dev/null
+}
+
+# --- linked audio/video (FFmpeg) ----------------------------------------
+WITH_AV=0
+av_note='not found'
+if [ "$want_av" = off ]; then
+	av_note='disabled by --without-av'
+elif pc_exists libavformat libavcodec libavutil libswresample libswscale; then
+	WITH_AV=1
+	av_note='found through pkg-config'
+fi
+if [ "$WITH_AV" = 0 ] && [ "$want_av" = require ]; then
+	die 'linked audio/video was required but the FFmpeg development files were not found'
+fi
+
+# --- linked PDF (Poppler, libpng) ---------------------------------------
+WITH_PDF=0
+pdf_note='not found'
+if [ "$want_pdf" = off ]; then
+	pdf_note='disabled by --without-pdf'
+elif pc_exists poppler libpng; then
+	WITH_PDF=1
+	pdf_note='found through pkg-config'
+fi
+if [ "$WITH_PDF" = 0 ] && [ "$want_pdf" = require ]; then
+	die 'linked PDF was required but the Poppler or libpng development files were not found'
+fi
+
+# --- audio device backend (miniaudio) -----------------------------------
+WITH_AUDIO_DEVICE=0
+audio_note='not found'
+if [ "$want_audio" = off ]; then
+	audio_note='disabled by --without-audio-device'
+elif pc_exists miniaudio; then
+	WITH_AUDIO_DEVICE=1
+	audio_note='found through pkg-config'
+fi
+if [ "$WITH_AUDIO_DEVICE" = 0 ] && [ "$want_audio" = require ]; then
+	die 'the audio device backend was required but miniaudio was not found (a miniaudio.pc shim or PKG_CONFIG_PATH entry is needed)'
+fi
+
+# --- linked Office import (LibreOfficeKit) ------------------------------
+# Office import links the kit from an installed runtime and is never bundled;
+# it also needs the PDF reader, because validation goes through Poppler.
+WITH_OFFICE=0
+office_note='not found'
+if [ "$want_office" = off ]; then
+	office_note='disabled by --without-office'
+elif [ "$WITH_PDF" = 0 ]; then
+	office_note='not enabled because linked PDF is off (Office requires it)'
+elif [ -f "$OFFICE_ROOT/../../include/LibreOfficeKit/LibreOfficeKit.h" ] &&
+	{ [ -f "$OFFICE_ROOT/program/libsofficeapp.so" ] ||
+	  [ -f "$OFFICE_ROOT/program/soffice" ] ||
+	  [ -f "$OFFICE_ROOT/program/soffice.bin" ]; }; then
+	WITH_OFFICE=1
+	office_note="found an installed runtime at $OFFICE_ROOT"
+elif pc_exists libreofficekit; then
+	WITH_OFFICE=1
+	office_note="found through pkg-config (root $OFFICE_ROOT)"
+fi
+if [ "$WITH_OFFICE" = 0 ] && [ "$want_office" = require ]; then
+	die "linked Office import was required but no runtime was found at $OFFICE_ROOT (use --office-root=DIR)"
+fi
+
+# --- record the detected values in config.mk ----------------------------
+set_key() {
+	awk -v k="$1" -v v="$2" '
+		BEGIN { seen = 0 }
+		$0 ~ "^" k " \\?= " { print k " ?= " v; seen = 1; next }
+		$0 ~ "^" k " = " { print k " = " v; seen = 1; next }
+		{ print }
+		END { if (!seen) exit 1 }
+	' config.mk > "$tmpd/config.mk" || die "config.mk has no $1 line to set"
+	mv "$tmpd/config.mk" config.mk || die 'cannot update config.mk'
+}
+
+set_key PREFIX "$PREFIX"
+set_key CC "$CC"
+set_key DEBUG "$DEBUG"
+set_key WITH_AV "$WITH_AV"
+set_key WITH_PDF "$WITH_PDF"
+set_key WITH_AUDIO_DEVICE "$WITH_AUDIO_DEVICE"
+set_key WITH_OFFICE "$WITH_OFFICE"
+[ "$manprefix_given" = yes ] && set_key MANPREFIX "$MANPREFIX"
+[ "$office_root_given" = yes ] && set_key OFFICE_ROOT "$OFFICE_ROOT"
+
+printf 'configure: C compiler %s; pkg-config %s\n' "$CC" "$have_pc"
+printf 'configure: av=%s (%s)\n' "$WITH_AV" "$av_note"
+printf 'configure: pdf=%s (%s)\n' "$WITH_PDF" "$pdf_note"
+printf 'configure: audio-device=%s (%s)\n' "$WITH_AUDIO_DEVICE" "$audio_note"
+printf 'configure: office=%s (%s)\n' "$WITH_OFFICE" "$office_note"
+printf 'configure: config.mk updated; override any WITH_* value on the make line (for example make WITH_AV=0)\n'
