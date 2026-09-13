@@ -181,6 +181,7 @@ int snag_app_irc_trace(void *opaque, unsigned int level, char direction,
 int snag_app_irc_restore(struct app_state *app, char *error, size_t error_size);
 int snag_app_irc_flush_urgent(struct app_state *app, char *error, size_t error_size);
 char *snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool force_background);
+bool snag_app_irc_prompt(const char *text);
 int snag_app_irc_snapshot(struct app_state *app, const char *reason, char *error, size_t error_size);
 bool snag_app_exact_count_enabled(enum snag_token_count_mode mode, enum snag_count_capability capability);
 int snag_app_provider_count(struct app_state *app, const json_t *count_request,

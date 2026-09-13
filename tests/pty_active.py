@@ -1728,6 +1728,26 @@ def test_irc_update_prompt_names_update_and_replay_resolves_it():
     assert "network_zero" in replayed, replayed[-400:]
 
 
+def test_irc_admission_is_not_echoed_as_operator_input():
+    """Room traffic is plumbing, not typed input, so it is never echoed.
+
+    Regression: the admission batch was printed at conversation level with the
+    prompt label, showing "[IRC update id=...]" as if the operator typed it."""
+    port = free_port()
+    args = ["--listen", f"127.0.0.1:{port}", "--no-client",
+            "-n", "echoagent", "-o", "echoop", "-r", "lab"]
+    with Child(args, chat_prompt("echoop")) as child:
+        peer = IRCClient(port, "peer")
+        try:
+            peer.message("echoagent: network_zero")
+            end = child.send_wait(b"/rollout\r", b"network zero local only")
+            child.exit_cleanly(end)
+        finally:
+            peer.close()
+    output = bytes(child.buf[:end]).decode("utf-8", "replace")
+    assert "[IRC update id=" not in output, output[-600:]
+
+
 def test_deferred_controls_in_admission_order():
     root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
     marker = root / "deferred-editor-started"
@@ -5156,6 +5176,7 @@ if __name__ == "__main__":
     test_multiline_and_paste()
     test_network_input_recovery_boundaries()
     test_irc_update_prompt_names_update_and_replay_resolves_it()
+    test_irc_admission_is_not_echoed_as_operator_input()
     test_deferred_controls_in_admission_order()
     test_archive_control_completion_recovery()
     test_exit_preserves_pending_submission()

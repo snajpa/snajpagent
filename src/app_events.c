@@ -86,6 +86,16 @@ admit_irc_input(struct app_state *app, struct snag_buf *refs, size_t used,
     return 0;
 }
 
+bool
+snag_app_irc_prompt(const char *text)
+{
+    /* The admission batch is the prompt of an IRC-triggered turn: runtime
+     * plumbing rather than text the operator submitted. Callers must not echo
+     * it as a submission, and it carries no conversation-level formatting. */
+    return text && (!strncmp(text, "[IRC update id=", 15u) ||
+                    !strncmp(text, "[IRC endpoint=", 14u));
+}
+
 static int
 append_irc_projection(struct snag_buf *pending, const struct snag_irc_event *event)
 {

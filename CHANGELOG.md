@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Stop echoing an IRC admission batch as operator input. Room traffic admitted
+  as a turn prompt is runtime plumbing, so conversation level no longer prints
+  the internal `[IRC update id=...]` marker with the prompt label; the chat view
+  and the durable trail already report the admission.
 - Name each IRC update in the turn prompt instead of referring to a room event
   the reader may not have, and resolve those references to the retained room
   event when replaying history. The prompt is the turn's user message, so the

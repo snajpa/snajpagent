@@ -561,8 +561,11 @@ a hosted room counts once regardless of how many clients joined it.
 Explicit numbered sends and broadcasts also work from rollout, but ordinary
 rollout input stays local:
 while idle it starts a model turn, and during active work it steers that turn at
-the next safe boundary.  It never emits an IRC message.  Incoming room traffic
-is not automatically bridged between servers.  Model response text remains local;
+the next safe boundary.  It never emits an IRC message.  Admitted room traffic
+is not echoed as submitted input either: the chat view shows the room events and
+the durable trail records the admission.
+Incoming room traffic is not automatically bridged between servers.
+Model response text remains local;
 .B irc_send
 is the only model-authored path to a room message or notice.  If a
 local-operator mention turn reaches a terminal response without a successful
