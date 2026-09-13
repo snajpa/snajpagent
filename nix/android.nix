@@ -174,6 +174,7 @@ in {
       nativeBuildInputs = [ pkgs.pkg-config ];
       buildInputs = [ jansson curl regex ] ++ networkLibraries;
       enableParallelBuilding = true;
+      dontConfigure = true;
       dontStrip = true;
       preBuild = ''
         mkdir -p build

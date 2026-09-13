@@ -127,6 +127,7 @@ in {
     nativeBuildInputs = [ musl.buildPackages.pkg-config ];
     buildInputs = [ static.jansson curl av pdf static.libpng static.libarchive static.libxml2 alsa pulse ];
     enableParallelBuilding = true;
+    dontConfigure = true;
     dontStrip = true;
     preBuild = ''
       mkdir -p build

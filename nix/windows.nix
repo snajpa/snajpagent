@@ -259,6 +259,7 @@ in {
     buildInputs = [ threads jansson curl regex av png pdf freetype jpeg openjpeg archive xml ] ++ networkLibraries
       ++ pkgs.lib.optionals (pty != null) [ pty.collector pty.cxx pty.unwind ];
     enableParallelBuilding = true;
+    dontConfigure = true;
     dontStrip = true;
     preBuild = ''
       mkdir -p build
