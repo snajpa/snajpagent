@@ -340,6 +340,13 @@ let
   ] [ zlib png freetype expat fontconfig jpeg openjpeg pkgs.boost cxx ]).overrideAttrs (old: {
     cmakeBuildType = "Release";
     patches = old.patches ++ [ ./poppler-static-fonts.patch ];
+    postPatch = lib.optionalString legacy ''
+      # The legacy SDK lacks these C99 declarations and symbols. Clang lowers
+      # its builtins to native min/max instructions with NaN handling.
+      substituteInPlace poppler/TextOutputDev.cc \
+        --replace-fail 'fmin(' '__builtin_fmin(' \
+        --replace-fail 'fmax(' '__builtin_fmax('
+    '';
     preConfigure = old.preConfigure + ''
       # Old SDK headers predate C++20. Use the linked runtime's headers and
       # native libc/thread ABI for CMake's compiler checks as well as Poppler.
@@ -444,7 +451,7 @@ in {
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
       buildInputs = [ jansson curl av xml archive ] ++ networkLibraries ++ lib.optional early regex
-        ++ lib.optionals (!legacy) [ pdf cxx png freetype expat fontconfig jpeg openjpeg ];
+        ++ [ pdf cxx png freetype expat fontconfig jpeg openjpeg ];
       enableParallelBuilding = true;
       dontStrip = true;
       preBuild = ''
@@ -471,13 +478,11 @@ in {
           "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"
           "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale | sed -E 's/-l?(-l?)?pthread//g')"
           'MINIAUDIO_CFLAGS=-isystem ${miniaudio}'
-          ${lib.optionalString (!legacy) ''
           'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'
           'CXXFLAGS=-std=c++20 ${cflags} -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           "PDF_CFLAGS=$(pkg-config --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')"
           # The explicit archive bypasses Clang's reserved -lstdc++ rewriting.
-          "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') ${cxx}/lib/libstdc++.a -Wl,-Bdynamic -lm -lgcc_s -Wl,-Bstatic"
-          ''}
+          "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') ${cxx}/lib/libstdc++.a -Wl,-Bdynamic -lm${lib.optionalString (!legacy) " -lgcc_s"} -Wl,-Bstatic"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
           "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil${lib.optionalString early " ${compilerBuiltins}/lib/libclang_rt.builtins.a"} -Wl,-Bdynamic -l${threads}"
         )

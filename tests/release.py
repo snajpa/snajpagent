@@ -1289,6 +1289,8 @@ assert '-nostdinc++ -isystem ${cxx}/include/c++' in freebsd_pdf
 assert '${cxx}/lib/libstdc++.a -Wl,-Bdynamic' in freebsd
 assert '"-DEXPAT_DEV_URANDOM=OFF" "-DEXPAT_WITH_ARC4RANDOM=ON"' in freebsd
 assert "--replace-fail 'return lrintf(f);' 'return __builtin_lrintf(f);'" in freebsd
+assert "--replace-fail 'fmin(' '__builtin_fmin('" in freebsd_pdf
+assert "--replace-fail 'fmax(' '__builtin_fmax('" in freebsd_pdf
 if shutil.which("clang"):
     # The C driver rewrites reserved -lstdc++ to its selected standard library.
     with tempfile.TemporaryDirectory(prefix="freebsd-pdf-", dir=root / "build") as tmp:
@@ -1300,9 +1302,12 @@ if shutil.which("clang"):
         assert str(archive) in linked and '"-lc++"' not in linked, linked
     rounded = subprocess.run(["clang", "--target=x86_64-unknown-freebsd5.1",
                               "-Os", "-S", "-x", "c", "-", "-o", "-"],
-                             input="long f(float x) { return __builtin_lrintf(x); }\n",
+                             input=("long f(float x) { return __builtin_lrintf(x); }\n"
+                                    "double low(double a,double b) { return __builtin_fmin(a,b); }\n"
+                                    "double high(double a,double b) { return __builtin_fmax(a,b); }\n"),
                              text=True, capture_output=True, check=True).stdout
     assert "cvtss2si" in rounded and "lrintf" not in rounded, rounded
+    assert not re.search(r"\b(call|jmp)q?\s+.*\b(fmin|fmax)\b", rounded), rounded
 print("PASS: FreeBSD PDF selects its static C++ runtime and legacy native entropy")
 freebsd_archive = freebsd.split("  archive = ", 1)[1].split("  brotli = ", 1)[0]
 assert '"-DLIBMD_LIBRARY=${sdk}/usr/lib/libmd.a"' in freebsd_archive

@@ -8,7 +8,8 @@
   inputs remain available on resume instead of keeping an exiting session busy.
 - Add the FreeBSD 8.4 static PDF/font dependency chain and select its modern
   static C++ runtime at application link time. Build the C++ runtime against
-  the 5.1 SDK as well; legacy PDF dependencies remain in progress.
+  the 5.1 SDK as well. Legacy PDF dependencies use the SDK entropy API and
+  native compiler math operations; application cross-linking is in progress.
 
 - Name each IRC update in the turn prompt instead of referring to a room event
   the reader may not have, and resolve those references to the retained room

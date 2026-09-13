@@ -459,12 +459,15 @@ avoids conflicting static-library defaults. A C++20 sample using span, threads,
 mutexes, exceptions and wide streams cross-links with only `libm.so.5`,
 `libgcc_s.so.1`, `libthr.so.3` and `libc.so.7`, without a runtime search path.
 The 8.4 AV/PDF/audio application also cross-links and has matching debug symbols;
-its import list is recorded above. Neither artifact was target-executed. Legacy
-PDF dependencies and the LibreOffice runtime remain pending. Legacy Expat uses
+its import list is recorded above. Neither artifact was target-executed. The 5.1
+PDF library also builds; application cross-linking is in progress. LibreOffice
+runtime packaging remains unresolved. Legacy Expat uses
 the SDK's arc4random implementation; its optional /dev/urandom reader requires
 O_CLOEXEC, which the 5.1 SDK lacks.
 OpenJPEG's legacy rounding wrapper uses Clang's lrintf builtin, which emits the
 amd64 conversion instruction and preserves its floating-point rounding mode.
+Poppler's text-selection min/max operations also use compiler builtins on the
+legacy SDK, retaining NaN handling without importing absent C99 math symbols.
 
 ### FreeBSD 5.1/5.5 legacy target
 

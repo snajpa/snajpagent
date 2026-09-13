@@ -9,8 +9,8 @@ turn/queue owner. Native generated-media, context/replay and voice transport
 fixtures pass. Production dependency closure remains unfinished, including
 legacy BSD PDF and the unresolved LibreOffice packaging/execution choice.
 FreeBSD 8.4 AV/PDF/audio application cross-linking passes with static rendering
-libraries and a modern static C++ runtime. The 5.1 C++ archive builds; its PDF
-dependency chain is still in progress.
+libraries and a modern static C++ runtime. The 5.1 C++ and PDF archives build;
+application cross-linking is in progress.
 Target-OS execution, physical audio devices and live media-provider qualification
 are separate from these local fixture results. Multimodal is not shipped yet.
 
