@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
 #ifdef _WIN32
@@ -35,6 +36,42 @@ char *snag_office_runtime(const char *program,const char *root)
     size_t root_len=snag_path_root_len(dir);
     if((size_t)(last-dir)<root_len)dir[root_len]=0;else *last=0;
     char *path=snag_path_join(dir,root);free(dir);return path;
+}
+
+/* Installed runtimes keep the engine and the LibreOfficeKit library under
+ * <root>/program; a root already naming that directory is accepted too. */
+#if defined(__APPLE__)
+#define OFFICE_KIT_LIBRARY "libsofficeapp.dylib"
+#elif defined(_WIN32)
+#define OFFICE_KIT_LIBRARY "libsofficeapp.dll"
+#else
+#define OFFICE_KIT_LIBRARY "libsofficeapp.so"
+#endif
+
+static bool office_present(const char *path)
+{
+    snag_file_info st;
+    return path && *path && snag_stat(path,&st)==0 && S_ISREG(st.st_mode);
+}
+
+int snag_office_verify_runtime(const char *root,char *error,size_t size)
+{
+    if(!root || !*root) {
+        snag_errorf(error,size,"LibreOffice runtime root is not configured");
+        return -1;
+    }
+    char *program=snag_path_join(root,"program");
+    char *kit=program?snag_path_join(program,OFFICE_KIT_LIBRARY):NULL;
+    char *direct=snag_path_join(root,OFFICE_KIT_LIBRARY);
+    char *engine=program?snag_path_join(program,"soffice"):NULL;
+    bool usable=office_present(kit) || office_present(direct) || office_present(engine);
+    if(!usable)
+        snag_errorf(error,size,
+            "LibreOffice runtime is missing or incomplete at %s: expected %s or %s "
+            "(install LibreOffice, or point OFFICE_ROOT at its lib/libreoffice directory)",
+            root,kit?kit:OFFICE_KIT_LIBRARY,engine?engine:"program/soffice");
+    free(program);free(kit);free(direct);free(engine);
+    return usable?0:-1;
 }
 
 char *snag_office_file_url(const char *path)
@@ -210,6 +247,7 @@ snag_office_worker(int argc, char **argv)
     runtime=snag_office_runtime(executable,SNAJPAGENT_OFFICE_ROOT);
     program_dir=runtime?snag_path_join(runtime,"program"):NULL;
     if(!program_dir)goto done;
+    if(snag_office_verify_runtime(runtime,error,sizeof(error))<0)goto done;
     if (!dir || snag_office_worker_limits(dir,error,sizeof(error))<0) goto done;
     char *profile = snag_path_join(dir,"profile");
     char *output = snag_path_join(dir,"pages.pdf");

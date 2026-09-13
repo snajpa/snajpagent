@@ -11,6 +11,12 @@
   `tool_finished` transition and a failed repair instead of reporting "nothing
   changed". A started call may now report a refusal when it owns no spawned
   process; process-owning calls keep the strict rule.
+- Detect the installed LibreOffice runtime before loading it: verify the runtime
+  root by component presence (the LibreOfficeKit library or the engine
+  executable under a program directory, or a root naming that directory) and
+  report a missing or incomplete installation with the root and the expected
+  component instead of failing at load. No PATH search, and compatibility is
+  never judged from the conversion command's exit status.
 - Keep the minimal Linux PDF build free of unused gettext/Bash utility dependencies.
 - Honor terminal exit before admitting queued voice or typed work. Pending
   inputs remain available on resume instead of keeping an exiting session busy.
