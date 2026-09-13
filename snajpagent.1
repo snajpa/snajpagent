@@ -3566,15 +3566,21 @@ soffice backend, or none.  The linked import also needs the PDF dependency,
 because Office page validation uses Poppler, so a host with the kit but no
 Poppler is reported as commands with that reason rather than as Office not
 found.  By default the kit is chosen when a runtime and that dependency are
-present, otherwise the commands backend when a soffice binary is found.
+present, otherwise the commands backend when a soffice binary is found.  Name a
+state directly with \fB--with-office\fR, \fB--with-office-commands\fR or
+\fB--without-office\fR; the two on-states are mutually exclusive.
 \fB--office-root\fR selects the installed runtime root, \fB--host\fR sets the
-cross target and maps both compilers, \fB--prefix\fR and \fB--manprefix\fR the
-install and manual prefixes, and \fB--cc\fR, \fB--cxx\fR and \fB--debug\fR are
+cross target and maps the compilers, resolving the cross C++ best-effort: a
+linked-PDF build without one asks for \fB--cxx\fR or \fB--without-pdf\fR.
+\fB--prefix\fR and \fB--manprefix\fR set the install and manual prefixes, and
+\fB--cc\fR, \fB--cxx\fR and \fB--debug\fR are
 also accepted.  Export \fBPKG_CONFIG_PATH\fR for the build as well as for the
 probe; without it the probe finds no dependency and turns the modality off.
 The script needs a POSIX shell providing \fBcommand -v\fR; the pinned
-legacy targets build through their own toolchains rather than running it.  The
-\fBmake WITH_*=0/1\fR options below remain explicit overrides.
+legacy targets build through their own toolchains rather than running it, and
+the Nix derivations pass their modality values explicitly rather than let a
+sandbox probe turn them off.  The \fBmake WITH_*=0/1\fR options below remain
+explicit overrides.
 .TP
 .B make WITH_AV=0
 Build a custom lean executable without linked audio/video file decoding.
