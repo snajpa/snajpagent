@@ -449,7 +449,8 @@ adaptations preserve the OSS backend; physical audio qualification remains open.
 Static libarchive and libxml2 supply the Office package checker, with zlib, iconv
 and the existing SDK libmd archive. The libmd path is explicit because CMake
 otherwise misses the SDK library during digest probes. Package-reader links
-retain native threading/libc. LibreOffice runtime packaging remains unresolved.
+retain native threading/libc. Office runs from a separately installed runtime
+whose root is verified before loading; target runtime qualification remains open.
 
 Actual FreeBSD 8.4 and 14.4 amd64 qualification covers base and IRC tests, internal
 read-only inspection and denied writes, parallel commands, PTY output/status,
@@ -603,8 +604,9 @@ FFmpeg reuses the application's exported Gnulib `errno.h` through a dependency-l
 include directory, supplying missing `EILSEQ` and `ENOTSUP` without importing
 unrelated Gnulib wrappers or changing native error definitions.
 
-Static libarchive/libxml2 with zlib and iconv supply Office package checks;
-LibreOffice runtime packaging is separate and unfinished. On early OpenBSD,
+Static libarchive/libxml2 with zlib and iconv supply Office package checks.
+Office runs from a separately installed runtime, verified before loading. On
+early OpenBSD,
 libarchive's existing wide-string length/copy fallbacks are shared with its ACL
 and path code, with a missing wide-character search fallback in the same owner.
 Missing `ENOTSUP` maps to native `EOPNOTSUPP`, and `EOVERFLOW` to native `ERANGE`,
