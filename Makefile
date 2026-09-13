@@ -244,6 +244,9 @@ check: $(TEST_BIN)
 	$(MAKE) rulescheck
 	$(MAKE) toolscheck
 	SNAJPAGENT_TEST_NAME='$(NAME)' SNAJPAGENT_TEST_VERSION='$(BUILD_VERSION)' \
+	SNAJPAGENT_TEST_WITH_AV='$(WITH_AV)' SNAJPAGENT_TEST_WITH_PDF='$(WITH_PDF)' \
+	SNAJPAGENT_TEST_WITH_AUDIO_DEVICE='$(WITH_AUDIO_DEVICE)' \
+	SNAJPAGENT_TEST_WITH_OFFICE='$(WITH_OFFICE)' \
 		./tests/test_cli.sh ./$(FIXTURE_BIN)
 	python3 ./tests/test_citations.py ./$(FIXTURE_BIN)
 	@if command -v tmux >/dev/null 2>&1; then \
