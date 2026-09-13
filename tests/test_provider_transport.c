@@ -1097,6 +1097,55 @@ test_read_only_dispatch(void)
 }
 
 static void
+test_goal_tool_manipulates_unfinished_goals(void)
+{
+    struct snag_config config;
+    struct app_state app = {0};
+    struct snag_response_item call = {0};
+    json_t *result = NULL;
+    char error[256] = {0};
+
+    snag_config_init(&config);
+    app.config = &config;
+    call.kind = SNAG_ITEM_TOOL_CALL;
+    call.name = "update_goal";
+
+    /* A blocked goal is still manipulable: the wording lock, not the status,
+     * is what keeps the model from changing the objective. */
+    app.session.goal_status = SNAG_GOAL_BLOCKED;
+    app.session.goal_locked = true;
+    call.arguments = json_pack("{s:s,s:s}", "action", "rewrite", "text", "reworded objective");
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    assert(strstr(snag_json_string(result, "model_text"), "locked by the user"));
+    json_decref(result);
+    json_decref(call.arguments);
+
+    /* resume mirrors the /goal command: only a paused or blocked goal, text null. */
+    app.session.goal_locked = false;
+    call.arguments = json_pack("{s:s,s:s}", "action", "resume", "text", "extra");
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    assert(strstr(snag_json_string(result, "model_text"), "resume requires text to be null"));
+    json_decref(result);
+    json_decref(call.arguments);
+
+    app.session.goal_status = SNAG_GOAL_ACTIVE;
+    call.arguments = json_pack("{s:s}", "action", "resume");
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    assert(strstr(snag_json_string(result, "model_text"), "only a paused or blocked goal can be resumed"));
+    json_decref(result);
+    json_decref(call.arguments);
+
+    /* A finished goal reports the unfinished-goal gate, not an active one. */
+    app.session.goal_status = SNAG_GOAL_COMPLETED;
+    call.arguments = json_pack("{s:s,s:s}", "action", "block", "text", "done");
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    assert(strstr(snag_json_string(result, "model_text"), "there is no unfinished goal to update"));
+    json_decref(result);
+    json_decref(call.arguments);
+    snag_config_free(&config);
+}
+
+static void
 test_ui_output_order_and_failure(void)
 {
     struct snag_ui ui;
@@ -1380,6 +1429,7 @@ main(void)
     test_provider_auth();
     test_ui_output_order_and_failure();
     test_read_only_dispatch();
+    test_goal_tool_manipulates_unfinished_goals();
     test_local_provider_transport();
     test_openrouter_search_transport();
     test_codex_path_selection();
