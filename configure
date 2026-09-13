@@ -111,17 +111,17 @@ if [ -n "$HOST" ] && [ "$CC" = cc ]; then
 	CC=$host_cc
 fi
 
-# src/pdf.cpp is built with CXX, so a cross target needs a cross C++ too.
+# src/pdf.cpp is the only C++ unit, so a cross target needs a cross C++ only when the
+# linked PDF modality is on: resolve it best-effort here and enforce it after the probes.
+cross_cxx_missing=no
 if [ -n "$HOST" ] && [ "$CXX" = c++ ]; then
-	host_cxx=
 	for candidate in "$HOST-g++" "$HOST-c++" "$HOST-clang++"; do
 		if command -v "$candidate" >/dev/null 2>&1; then
-			host_cxx=$candidate
+			CXX=$candidate
 			break
 		fi
 	done
-	[ -n "$host_cxx" ] || die "no $HOST-g++, $HOST-c++ or $HOST-clang++ found; pass --cxx=<cross compiler>"
-	CXX=$host_cxx
+	[ "$CXX" = c++ ] && cross_cxx_missing=yes
 fi
 
 [ -f config.mk ] ||
@@ -235,6 +235,11 @@ if [ "$WITH_OFFICE" = 1 ] && [ "$WITH_PDF" != 1 ]; then
 	die 'the linked Office kit needs linked PDF (WITH_OFFICE=1 requires WITH_PDF=1)'
 fi
 
+# The PDF object is C++ (src/pdf.cpp); a cross build needs a cross C++ for it.
+if [ "$cross_cxx_missing" = yes ] && [ "$WITH_PDF" = 1 ]; then
+	die "linked PDF compiles src/pdf.cpp with C++, but no $HOST-g++, $HOST-c++ or $HOST-clang++ was found; pass --cxx=<cross compiler> or --without-pdf"
+fi
+
 # --- record the detected values in config.mk ----------------------------
 set_key() {
 	awk -v k="$1" -v v="$2" '
@@ -264,4 +269,6 @@ printf 'configure: av=%s (%s)\n' "$WITH_AV" "$av_note"
 printf 'configure: pdf=%s (%s)\n' "$WITH_PDF" "$pdf_note"
 printf 'configure: audio-device=%s (%s)\n' "$WITH_AUDIO_DEVICE" "$audio_note"
 printf 'configure: office=%s (%s)\n' "$(if [ "$WITH_OFFICE" = 1 ]; then printf kit; elif [ "$WITH_OFFICE_COMMANDS" = 1 ]; then printf commands; else printf off; fi)" "$office_note"
+[ "$cross_cxx_missing" = yes ] &&
+	printf 'configure: note: no %s-g++/c++/clang++ found; the C++ compiler stays %s, which is only needed for linked PDF\n' "$HOST" "$CXX"
 printf 'configure: config.mk updated; override any WITH_* value on the make line\n'
