@@ -9,6 +9,9 @@ turn/queue owner. Native generated-media, context/replay and voice transport
 fixtures pass. Production dependency closure remains unfinished, including the
 remaining platform builds. LibreOffice is resolved from a separately installed
 runtime and is never bundled; the Windows target builds with `WITH_OFFICE=0`.
+Source builds can probe the compiler and the optional modalities with
+`./configure`, which reports what it enabled or disabled and records the result
+in `config.mk`.
 AV/PDF/audio application cross-linking passes for FreeBSD 8.4/5.1,
 OpenBSD 7.9/5.9/3.5 and NetBSD 10.1/2.0, with matching symbols and static
 rendering/font libraries. The older SDKs use a static GCC 14 C++ runtime.

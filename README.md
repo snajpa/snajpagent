@@ -24,7 +24,7 @@ snajpagent
 
 Describe a task and press Enter: “Fix the empty-input bug, keep the public API
 unchanged, and run the tests.” The model can read and edit files and run
-commands. Empty Enter leaves a prompt line and opens a fresh prompt, like a shell.
+commands. Empty Enter opens a fresh prompt, like a shell.
 
 Read its replies and scroll back normally. Tool details are hidden by default;
 `/verbose 1` shows compact activity and `/verbose 2` adds input/result previews,
@@ -273,13 +273,13 @@ for real isolation. `design/io-rules.md` has the full syntax and examples.
 [Choose an executable](https://agent.snajpa.net/downloads.html) for your OS,
 architecture and listed ABI, and rename it to `snajpagent` (`snajpagent.exe` on
 Windows). Compare its SHA-256 with the download row or `SHA256SUMS` **before
-running it**; for an archive, verify the archive before extraction, since its
-hash covers the archive and not the executable inside. Keep the program in a
+running it**; for an archive, verify the archive before extraction, as its
+hash covers the archive, not the executable inside. Keep the program in a
 user-owned directory; debug builds and production symbols are separate.
 
 ### Install on Linux
 
-Choose the matching CPU/kernel variant (modern or legacy i686):
+Choose the matching CPU/kernel variant:
 
 ```sh
 sha256sum ./snajpagent
@@ -353,7 +353,7 @@ on a trusted newer machine and transfer over a trusted channel.
 ### Installation paths, updates and source builds
 
 On Linux, macOS and the BSDs, place the verified executable in `$HOME/.local/bin`,
-add that directory to PATH in your shell startup file, and start it from your
+add that directory to PATH, and start it from your
 project directory; the [manual](https://agent.snajpa.net/manual.html#Getting_started)
 has complete user-local installation, ABI requirements and startup troubleshooting.
 Android remains experimental source work without a production download target.
@@ -365,26 +365,30 @@ Development binaries are debug builds that default to updates off, following
 `latest-dev` when set to `true`. Ordinary source builds remain updater-free; the
 manual covers publisher URLs, permissions and recovery.
 
-The normal POSIX build needs C11 with pthreads, GNU make, pkg-config and
+`./configure` probes the toolchain and the four optional modalities and tunes the
+tracked `config.mk`; `make WITH_*=…` stays an explicit override.
+
+The POSIX build needs C11 with pthreads, GNU make, pkg-config and
 libcurl/Jansson development files. On the BSDs, install GNU make and use `gmake`
 throughout. On Linux and macOS:
 
 ```sh
 git clone https://github.com/snajpa/snajpagent.git
 cd snajpagent
+./configure
 make
 make PREFIX="$HOME/.local" install
 ```
 
 This installs the binary and manual under `$HOME/.local`; the default prefix is
-`/usr/local`, which usually needs administrator privileges. Production needs
+`/usr/local`, which usually needs administrator rights. Production needs
 `strip` and `objcopy` on ELF systems, or `strip` and `dsymutil` on macOS.
-`make DEBUG=1` builds for debugging and `make help` lists build options; see
-[dependency notes](DEPENDENCIES.md) for platform scope.
+`make DEBUG=1` builds for debugging; `make help` lists build options, and
+[dependency notes](DEPENDENCIES.md) cover platform scope.
 
 `make -jN prod-matrix` builds all implemented standalone targets into
 `build/matrix/`, without installation or VMs; the
-[platform notes](DEPENDENCIES.md) list target-specific requirements.
+[platform notes](DEPENDENCIES.md) cover target requirements.
 `make prod-linux-armv6` builds a hard-float static PIE for ARMv6 Raspberry Pi
 1/Zero-class systems and ARMv7 with an ARMv6KZ/VFPv2 baseline;
 `make prod-linux-riscv64` a RISC-V RV64GC/LP64D static PIE;
