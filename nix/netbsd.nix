@@ -290,19 +290,7 @@ let
   ] ([ zlib png freetype expat fontconfig jpeg openjpeg pkgs.boost ] ++ lib.optional legacy cxx)).overrideAttrs (old: {
     cmakeBuildType = "Release";
     patches = old.patches ++ [ ./poppler-static-fonts.patch ];
-    postPatch = lib.optionalString early ''
-      substituteInPlace poppler/TextOutputDev.cc \
-        --replace-fail 'fmin(' '__builtin_fmin(' \
-        --replace-fail 'fmax(' '__builtin_fmax('
-      # The SDK's function-like isinf macro also expands after a std:: prefix.
-      substituteInPlace fofi/FoFiType1C.cc \
-        --replace-fail 'std::isinf(' '__builtin_isinf('
-      substituteInPlace poppler/Function.cc poppler/MarkedContentOutputDev.cc \
-        poppler/TextOutputDev.cc splash/SplashXPathScanner.cc \
-        --replace-fail 'std::isnan(' '__builtin_isnan('
-      substituteInPlace poppler/Gfx.cc poppler/SplashOutputDev.cc poppler/CairoOutputDev.cc \
-        --replace-fail 'std::isfinite(' '__builtin_isfinite('
-    '';
+    postPatch = lib.optionalString early (import ./poppler-legacy-math.nix);
     preConfigure = old.preConfigure + lib.optionalString legacy ''
       cmakeFlagsArray+=(
         "-DCMAKE_CXX_FLAGS=${cflags} -stdlib=libstdc++ -pthread -fno-builtin-pow -fno-builtin-powf -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}${lib.optionalString early " -include ${./bsd-legacy-cxx.h}"}"

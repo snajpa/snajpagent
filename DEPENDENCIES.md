@@ -620,7 +620,9 @@ The 3.5 C++ runtime uses compatible stdio declarations, native varargs and the
 SDK's GetIP/atexit interfaces. Its missing C++ error conditions use GNU errno-h's
 distinct portable identifiers and matching messages; native error values are
 preserved. The shared early-BSD C++ header maps old GCC NaN predicate spellings
-to Clang's type-generic predicate. Full 3.5 PDF linkage remains in progress.
+to Clang's type-generic predicate. Poppler uses the shared early-BSD compiler
+predicates where the SDK omits standard C++ math declarations. Full 3.5 PDF
+linkage remains in progress.
 
 OpenBSD 3.5 media/audio application cross-linking and static ZIP/XML package
 checks pass with native libc/pthread imports and no runtime search path. The
@@ -730,8 +732,9 @@ absent exp2 symbols. Expat uses native arc4random on the legacy SDK.
 Those library checks use 5.2.3; the production legacy target uses 2.0. Its C++
 compilation suppresses the SDK's C wchar_t typedef macro after loading the native
 machine type definitions. The compiler's wchar_t type supplies the same ABI.
-The 2.0 C++ archive now builds. Its PDF dependencies use native compiler math
-operations where the old libm lacks lrintf, fmin, fmax or exp2.
+The 2.0 C++ and PDF archives build. Its PDF dependencies use native compiler math
+operations where the old libm lacks lrintf, fmin, fmax or exp2. The shared
+early-BSD Poppler adaptations also handle the SDK's function-like math macros.
 
 ## macOS ARM64 and Intel cross-builds
 

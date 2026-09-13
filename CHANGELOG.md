@@ -15,7 +15,8 @@
   NetBSD 2.0/OpenBSD 3.5 runtime work with native math operations and distinct
   portable C++ error conditions. Supply OpenBSD 3.5's missing OpenJPEG integer
   formats from the compiler's target ABI and use its native unsupported-operation
-  error in Fontconfig's atomic-file fallback.
+  error in Fontconfig's atomic-file fallback. Share the early-BSD Poppler math
+  adaptations across the NetBSD 2.0 and OpenBSD 3.5 builds.
 
 - Keep admitted room events out of tool exchanges in model requests. A room
   event admitted while a call was outstanding was appended where the admission

@@ -353,11 +353,7 @@ let
   ] ([ zlib png freetype expat fontconfig jpeg openjpeg pkgs.boost ] ++ lib.optional legacy cxx)).overrideAttrs (old: {
     cmakeBuildType = "Release";
     patches = old.patches ++ [ ./poppler-static-fonts.patch ];
-    postPatch = lib.optionalString early ''
-      substituteInPlace poppler/TextOutputDev.cc \
-        --replace-fail 'fmin(' '__builtin_fmin(' \
-        --replace-fail 'fmax(' '__builtin_fmax('
-    '';
+    postPatch = lib.optionalString early (import ./poppler-legacy-math.nix);
     preConfigure = old.preConfigure + lib.optionalString legacy ''
       cmakeFlagsArray+=(
         "-DCMAKE_CXX_FLAGS=${cflags} -stdlib=libstdc++ -pthread${lib.optionalString early " -fno-use-cxa-atexit -fno-builtin-pow -fno-builtin-powf -include ${./bsd-legacy-cxx.h}"} -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}"

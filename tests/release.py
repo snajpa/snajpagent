@@ -1981,8 +1981,11 @@ assert '"PDF_LIBS=$(pkg-config --static --libs poppler libpng |' in openbsd
 assert 'else "-Wl,-Bdynamic -lc++ -lc++abi"' in openbsd
 assert '${cxx}/lib/libstdc++.a -Wl,-Bdynamic' in openbsd
 assert '-nostdinc++ -isystem ${cxx}/include/c++' in open_pdf
-assert "--replace-fail 'fmin(' '__builtin_fmin('" in open_pdf
-assert "--replace-fail 'fmax(' '__builtin_fmax('" in open_pdf
+legacy_pdf_math = (root / "nix/poppler-legacy-math.nix").read_text()
+assert 'postPatch = lib.optionalString early (import ./poppler-legacy-math.nix);' in open_pdf
+for name in ("fmin", "fmax", "isinf", "isnan", "isfinite"):
+    prefix = "std::" if name.startswith("is") else ""
+    assert f"--replace-fail '{prefix}{name}(' '__builtin_{name}('" in legacy_pdf_math
 assert "--replace-fail 'return lrintf(f);' 'return __builtin_lrintf(f);'" in openbsd
 open_png = openbsd.split("  png = ", 1)[1].split("  freetype = ", 1)[0]
 assert 'cmakeFlagsArray+=("-DCMAKE_C_FLAGS=${cflags} --target=${target} --sysroot=${sdk}")' in open_png
@@ -2497,11 +2500,7 @@ assert '-std=c++20 ${cflags} ${if legacy then' in netbsd
 assert '${cxx}/lib/libstdc++.a -Wl,-Bdynamic' in netbsd
 assert 'else "-Wl,-Bdynamic -lstdc++"' in netbsd
 assert '-fno-builtin-pow -fno-builtin-powf -nostdinc++' in net_pdf
-assert "--replace-fail 'fmin(' '__builtin_fmin('" in net_pdf
-assert "--replace-fail 'fmax(' '__builtin_fmax('" in net_pdf
-assert "--replace-fail 'std::isinf(' '__builtin_isinf('" in net_pdf
-assert "--replace-fail 'std::isnan(' '__builtin_isnan('" in net_pdf
-assert "--replace-fail 'std::isfinite(' '__builtin_isfinite('" in net_pdf
+assert 'postPatch = lib.optionalString early (import ./poppler-legacy-math.nix);' in net_pdf
 assert "--replace-fail 'return lrintf(f);' 'return __builtin_lrintf(f);'" in netbsd
 assert '"-DEXPAT_DEV_URANDOM=OFF" "-DEXPAT_WITH_ARC4RANDOM=ON"' in netbsd
 net_png = netbsd.split("  png = ", 1)[1].split("  freetype = ", 1)[0]
