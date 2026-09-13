@@ -945,6 +945,61 @@ test_durable_irc_input_watermark(struct snag_store *store, const char *path)
 }
 
 static void
+test_admitted_room_event_stays_out_of_tool_exchange(struct snag_store *store, const char *workspace)
+{
+    const char *turn = "e1000000000000000000000000000000";
+    const char *response = "e2000000000000000000000000000000";
+    const char *call = "e3000000000000000000000000000000";
+    const char *steer = "ef000000000000000000000000000000";
+    struct snag_session session;
+    struct snag_context_projection projection = {0};
+    struct snag_instruction_set no_instructions = {0};
+    json_t *steering = checked_json(json_pack("[{s:s,s:s}]", "id", steer, "text", "stop or wait"));
+
+    create_session(store, &session, workspace, "default");
+    commit_event(&session, "turn_started", turn_started(turn, 1, "run", workspace, NULL));
+    commit_event(&session, "response_started", response_started(turn, response, NULL));
+    commit_event(&session, "response_completed", response_completed_call(turn, response, call, workspace));
+    commit_event(&session, "tool_started", tool_started_data(turn, call,
+                     session.pending_calls[0].action_sha256, workspace));
+    /* Room traffic admitted while the call is outstanding: the urgent-mention
+     * path records the admission and a steering entry. Neither may split the
+     * exchange, or the provider reads the call as unanswered. */
+    struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u,
+        .endpoint = "localhost:6667", .room = "#lab", .nick = "peer",
+        .text = "mid-exchange room traffic", .stream = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        .sequence = 1u, .historical = true, .input = true};
+    commit_event(&session, "irc_event", snag_irc_event_data(&event));
+    uint64_t received = session.irc_received_seq;
+    commit_event(&session, "irc_admitted", json_pack("{s:[I]}", "sequences", (json_int_t)received));
+    commit_event(&session, "steering_added", steering_added(turn, steer, "stop or wait"));
+    commit_event(&session, "tool_finished", tool_finished_data(turn, call,
+                     snag_tool_result_terminal(true, "tool result")));
+    build_context(&session, 2u, steering, &no_instructions, &projection);
+
+    json_t *input = json_object_get(projection.create_request.value, "input");
+    size_t index = 0u;
+    while (index < json_array_size(input)) {
+        const char *type = snag_json_string(json_array_get(input, index), "type");
+        if (type && !strcmp(type, "function_call")) break;
+        ++index;
+    }
+    assert(index + 1u < json_array_size(input));
+    const char *next = snag_json_string(json_array_get(input, index + 1u), "type");
+    assert(next && !strcmp(next, "function_call_output"));
+    assert(strstr(snag_json_string(json_array_get(input, index + 1u), "output"), "tool result") != NULL);
+    struct snag_buf serialized;
+    snag_buf_init(&serialized, SNAG_CONTEXT_MAX_REQUEST);
+    assert(snag_json_canonical(projection.create_request.value, &serialized) == 0);
+    assert(snag_buf_terminate(&serialized) == 0);
+    assert(strstr((char *)serialized.data, event.text) != NULL);
+    snag_buf_free(&serialized);
+    json_decref(steering);
+    snag_context_projection_free(&projection);
+    snag_session_close(&session);
+}
+
+static void
 test_context_meter_usage(struct snag_store *store, const char *temp)
 {
     char error[256] = {0};
@@ -1210,6 +1265,7 @@ main(void)
     test_provider_model_projection(&store, workspace);
     test_reasoning_continuation(&store, workspace);
     test_durable_irc_input_watermark(&store, workspace);
+    test_admitted_room_event_stays_out_of_tool_exchange(&store, workspace);
     test_compact_groups(&store, workspace);
     test_parallel_journal_recovery(&store, workspace);
     test_accounting_lineage(&store, workspace);

@@ -557,7 +557,10 @@ once from their durable records. The scheduling reference that admits a payload
 names the update itself (endpoint, room, kind, sender and durable id) instead of
 claiming its text lives elsewhere; history replay resolves that reference to the
 retained payload, so the operator reads the room event and never a dangling
-pointer. Scheduling references do not copy the payload text.
+pointer. Scheduling references do not copy the payload text. The payload itself
+waits for the same safe boundary as steering and topology snapshots, so an
+admission that arrives while a tool call is outstanding never separates that
+call from its output.
 Ordinary live background chat still follows the existing queue/turn boundaries;
 durable `irc_admitted` sequence references record when accepted payloads become
 model context, without storing another copy of their text. Mention and
