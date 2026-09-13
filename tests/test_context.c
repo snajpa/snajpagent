@@ -2521,6 +2521,32 @@ main(int argc, char **argv)
         assert(snag_office_verify_runtime(program,message,sizeof(message))==0);
         assert(unlink(library)==0);
         assert(snag_office_verify_runtime(dir,message,sizeof(message))<0);
+        /* Platform gating: a name attested on another platform is not evidence
+         * that this platform's runtime is complete. */
+        {
+            char *foreign=snag_path_join(program,"mergedlo.dll");
+            assert(foreign);
+            created=fopen(foreign,"wb");
+            assert(created && fclose(created)==0);
+            assert(snag_office_verify_runtime(dir,message,sizeof(message))<0);
+            assert(unlink(foreign)==0);
+            free(foreign);
+        }
+        {
+            char *wrong_engine=snag_path_join(program,"soffice.exe");
+            assert(wrong_engine);
+            created=fopen(wrong_engine,"wb");
+            assert(created && fclose(created)==0);
+            assert(snag_office_verify_runtime(dir,message,sizeof(message))<0);
+            assert(unlink(wrong_engine)==0);
+            free(wrong_engine);
+        }
+        /* The candidate list accepts the canonical library even when the engine
+         * is absent, and vice versa: either component marks a complete root. */
+        created=fopen(library,"wb");
+        assert(created && fclose(created)==0);
+        assert(snag_office_verify_runtime(dir,message,sizeof(message))==0);
+        assert(unlink(library)==0);
         assert(rmdir(program)==0 && rmdir(dir)==0);
         free(program);free(engine);free(library);
     }

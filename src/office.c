@@ -39,19 +39,46 @@ char *snag_office_runtime(const char *program,const char *root)
 }
 
 /* Installed runtimes keep the engine and the LibreOfficeKit library under
- * <root>/program; a root already naming that directory is accepted too. */
+ * <root>/program; a root already naming that directory is accepted too.
+ *
+ * The names differ per platform, and the audited installs expose the
+ * LibreOfficeKit hooks from the merged library on Windows and macOS rather than
+ * from a libsofficeapp file, so both attested names are tried with the canonical
+ * one first. The engine carries the platform's usual executable name. Detection
+ * stays by component presence: never PATH, never a conversion command's exit
+ * status. */
 #if defined(__APPLE__)
-#define OFFICE_KIT_LIBRARY "libsofficeapp.dylib"
+static const char *const office_kit_names[]={"libsofficeapp.dylib","libmergedlo.dylib",NULL};
+static const char *const office_engine_names[]={"soffice",NULL};
 #elif defined(_WIN32)
-#define OFFICE_KIT_LIBRARY "libsofficeapp.dll"
+static const char *const office_kit_names[]={"libsofficeapp.dll","mergedlo.dll",NULL};
+static const char *const office_engine_names[]={"soffice.exe","soffice",NULL};
 #else
-#define OFFICE_KIT_LIBRARY "libsofficeapp.so"
+static const char *const office_kit_names[]={"libsofficeapp.so",NULL};
+static const char *const office_engine_names[]={"soffice",NULL};
 #endif
 
 static bool office_present(const char *path)
 {
     snag_file_info st;
     return path && *path && snag_stat(path,&st)==0 && S_ISREG(st.st_mode);
+}
+
+/* True when any attested name exists under dir; the matching path is handed back
+ * through found so the caller owns and releases it. */
+static bool office_component_present(const char *dir,const char *const *names,char **found)
+{
+    if(!dir)return false;
+    for(size_t i=0u;names[i];++i) {
+        char *path=snag_path_join(dir,names[i]);
+        if(path && office_present(path)) {
+            if(found)*found=path;
+            else free(path);
+            return true;
+        }
+        free(path);
+    }
+    return false;
 }
 
 int snag_office_verify_runtime(const char *root,char *error,size_t size)
@@ -61,16 +88,21 @@ int snag_office_verify_runtime(const char *root,char *error,size_t size)
         return -1;
     }
     char *program=snag_path_join(root,"program");
-    char *kit=program?snag_path_join(program,OFFICE_KIT_LIBRARY):NULL;
-    char *direct=snag_path_join(root,OFFICE_KIT_LIBRARY);
-    char *engine=program?snag_path_join(program,"soffice"):NULL;
-    bool usable=office_present(kit) || office_present(direct) || office_present(engine);
-    if(!usable)
+    char *kit=NULL,*engine=NULL;
+    bool usable=office_component_present(program,office_kit_names,&kit) ||
+        office_component_present(root,office_kit_names,&kit) ||
+        office_component_present(program,office_engine_names,&engine);
+    if(!usable) {
+        char *expect_kit=program?snag_path_join(program,office_kit_names[0]):NULL;
+        char *expect_engine=program?snag_path_join(program,office_engine_names[0]):NULL;
         snag_errorf(error,size,
             "LibreOffice runtime is missing or incomplete at %s: expected %s or %s "
             "(install LibreOffice, or point OFFICE_ROOT at its lib/libreoffice directory)",
-            root,kit?kit:OFFICE_KIT_LIBRARY,engine?engine:"program/soffice");
-    free(program);free(kit);free(direct);free(engine);
+            root,expect_kit?expect_kit:office_kit_names[0],
+            expect_engine?expect_engine:"the engine executable");
+        free(expect_kit);free(expect_engine);
+    }
+    free(program);free(kit);free(engine);
     return usable?0:-1;
 }
 
