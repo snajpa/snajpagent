@@ -2402,6 +2402,91 @@ test_office_import(void)
 static void test_office_import(void) {}
 #endif
 
+#if SNAJPAGENT_OFFICE_COMMANDS && !defined(_WIN32)
+static void
+test_office_commands_export(struct snag_store *store, const char *workspace)
+{
+    /* The commands backend drives the target's own engine. Without one the run
+     * is skipped rather than failed, so `make check` stays green on hosts with
+     * no LibreOffice installed; the refusal path is asserted either way. */
+    char *root=snag_path_join(getenv("TMPDIR")?getenv("TMPDIR"):"/tmp","snag-office-cmd-XXXXXX"),error[512];
+    assert(root && mkdtemp(root));
+    char *doc=snag_path_join(root,"probe.fodt");
+    char *runtime=snag_office_runtime(NULL,SNAJPAGENT_OFFICE_ROOT);
+    char *engine=snag_office_command(NULL,SNAJPAGENT_OFFICE_ROOT);
+    struct snag_session session;
+    create_session(store,&session,workspace,"office-commands");
+    /* Room for a converted PDF: the kit path allows up to 32 MiB. */
+    struct snag_buf out; snag_buf_init(&out,32u*1024u*1024u);
+    json_t *metadata=NULL;
+    const char *mime="application/vnd.oasis.opendocument.text";
+    static const char flat_odt[]=
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<office:document xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\""
+        " xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\""
+        " office:version=\"1.3\" office:mimetype=\"application/vnd.oasis.opendocument.text\">"
+        "<office:body><office:text><text:p>commands backend probe</text:p></office:text></office:body>"
+        "</office:document>\n";
+    FILE *created=fopen(doc?doc:"","wb");
+    assert(doc && created && fwrite(flat_odt,1u,sizeof(flat_odt)-1u,created)==sizeof(flat_odt)-1u &&
+        fclose(created)==0);
+    /* A sheet-area selection has no command-line equivalent and must say so. */
+    struct snag_sheet_range range={1u,1u,1u,1u,1u};
+    assert(snag_office_export(&session,doc,mime,1u,1u,&range,NULL,NULL,SNAG_WAKE_INVALID,
+                              &out,&metadata,error,sizeof(error))<0);
+    assert(strstr(error,"linked Office import"));
+    assert(metadata==NULL && out.len==0u);
+    /* Discovery: with no usable runtime root, the target's PATH is consulted. */
+    {
+        char *saved=snag_environment("PATH");
+        char *fake_dir=snag_path_join(root,"bin");
+        assert(fake_dir && mkdir(fake_dir,0700)==0);
+        char *fake=snag_path_join(fake_dir,"soffice");
+        FILE *script=fake?fopen(fake,"wb"):NULL;
+        assert(script && fputs("#!/bin/sh\nexit 1\n",script)>=0 && fclose(script)==0 &&
+            chmod(fake,0700)==0);
+        assert(setenv("PATH",fake_dir,1)==0);
+        char *resolved=snag_office_command(NULL,"");
+        assert(resolved && !strcmp(resolved,fake));
+        free(resolved);
+        if(saved) assert(setenv("PATH",saved,1)==0);
+        assert(unlink(fake)==0 && rmdir(fake_dir)==0);
+        free(saved);free(fake);free(fake_dir);
+    }
+    int have_engine=engine && snag_file_executable(engine)==0;
+    if(!have_engine) {
+        printf("office commands export: skipped (no engine under %s/program)\n",
+               runtime?runtime:SNAJPAGENT_OFFICE_ROOT);
+    } else {
+        metadata=NULL;
+        int rc=snag_office_export(&session,doc,mime,1u,1u,NULL,NULL,NULL,SNAG_WAKE_INVALID,
+                                  &out,&metadata,error,sizeof(error));
+        if(rc!=0) fprintf(stderr,"office commands export failed: %s\n",error);
+        assert(rc==0);
+        assert(metadata && snag_json_string(metadata,"coverage"));
+        assert(strcmp(snag_json_string(metadata,"format"),"pdf")==0);
+        assert(out.len>=5u && memcmp(out.data,"%PDF-",5u)==0);
+        json_decref(metadata);
+        snag_buf_free(&out);
+        snag_buf_init(&out,32u*1024u*1024u);
+        /* Out-of-range pages must be refused, not silently widened. */
+        assert(snag_office_export(&session,doc,mime,7u,7u,NULL,NULL,NULL,SNAG_WAKE_INVALID,
+                                  &out,&metadata,error,sizeof(error))<0);
+        assert(metadata==NULL && out.len==0u);
+    }
+    snag_buf_free(&out);
+    snag_session_close(&session);
+    assert(unlink(doc)==0 && rmdir(root)==0);
+    free(doc);free(engine);free(runtime);free(root);
+}
+#else
+static void
+test_office_commands_export(struct snag_store *store, const char *workspace)
+{
+    (void)store;(void)workspace;
+}
+#endif
+
 static void test_office_limits(void)
 {
 #if SNAJPAGENT_OFFICE && !defined(_WIN32)
@@ -2602,6 +2687,7 @@ main(int argc, char **argv)
     struct snag_context_projection projection = {0};
     struct snag_instruction_set instructions = {0};
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
+    test_office_commands_export(&store, workspace);
     test_input_time_and_recovery(&store, workspace);
     test_public_phase_compaction(&store, workspace);
     test_context_meter_usage(&store, workspace);
