@@ -200,6 +200,11 @@ libxml2's MIT and dict.c ISC terms. These libraries do not supply a LibreOffice
 runtime or change its linked, same-executable worker model; portable Office
 runtime closure remains unfinished.
 
+`./configure` detects the toolchain and the four optional modalities and tunes
+the tracked `config.mk`; a component it cannot find is disabled and reported,
+and its `--require-*` option turns that absence into a clear failure. Export
+`PKG_CONFIG_PATH` for the build as well as for the probe.
+
 Custom lean builds may set `WITH_AV=0`, `WITH_OFFICE=0`, or
 `WITH_AUDIO_DEVICE=0`; `WITH_PDF=0` also requires `WITH_OFFICE=0` because Office
 page validation/rendering uses Poppler. Official desktop releases require all

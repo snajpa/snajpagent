@@ -17,6 +17,11 @@
   would be linked into the artifact, and an installed runtime is never bundled;
   host builds keep the default and load a separately installed runtime via
   `OFFICE_ROOT`.
+- Add a `./configure` entry point that probes the compiler and the four optional
+  modalities, tunes the tracked `config.mk`, and prints what it enabled and what
+  it disabled with the reason. A component that is not found disables its
+  modality unless its `--require-*` option is given, and the `make WITH_*=0/1`
+  flags remain explicit overrides.
 - Keep a tool call that refuses its own arguments after dispatch. `edit_file`
   reports `not_run`/`invalid_arguments` once it reads the target and the old text
   does not occur exactly once, but the journal rejected that result for a call

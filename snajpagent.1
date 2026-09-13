@@ -3546,12 +3546,34 @@ available; see the standalone target below and DEPENDENCIES.md for its
 current qualification scope.
 Plain
 .B make
-builds only for the host, with size optimization and stripping.  ELF production
+builds only for the host, with size optimization and stripping.  Run ./configure
+first for a best-effort build that probes the optional modalities and reports
+what it found.  ELF production
 packaging needs strip and objcopy; macOS needs strip and dsymutil.
 The build version uses the latest reachable Git tag; untagged commits add their
 short revision, and modified checkouts add a -dirty suffix.
 META defines the product name only.  A tagged Git history is required; portable
 build targets pass the same derived identity into their isolated source build.
+.TP
+.B ./configure
+Probes the compiler and the four optional modalities, tunes the tracked
+config.mk with the values it found, and prints a note for each enabled or
+disabled component.  A missing component disables its modality without failing
+the build; \fB--require-X\fR makes that absence an error, \fB--with-X\fR forces
+the state on, and \fB--without-X\fR skips its probe.  Office takes one of three
+mutually exclusive states: the linked LibreOfficeKit import, the commanded
+soffice backend, or none.  The linked import also needs the PDF dependency,
+because Office page validation uses Poppler, so a host with the kit but no
+Poppler is reported as commands with that reason rather than as Office not
+found.  By default the kit is chosen when a runtime and that dependency are
+present, otherwise the commands backend when a soffice binary is found.
+\fB--office-root\fR selects the installed runtime root, \fB--host\fR sets the
+cross target and maps both compilers, \fB--prefix\fR and \fB--manprefix\fR the
+install and manual prefixes, and \fB--cc\fR, \fB--cxx\fR and \fB--debug\fR are
+also accepted.  Export \fBPKG_CONFIG_PATH\fR for the build as well as for the
+probe.  The script needs a POSIX shell providing \fBcommand -v\fR; the pinned
+legacy targets build through their own toolchains rather than running it.  The
+\fBmake WITH_*=0/1\fR options below remain explicit overrides.
 .TP
 .B make WITH_AV=0
 Build a custom lean executable without linked audio/video file decoding.
