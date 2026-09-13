@@ -19,6 +19,7 @@ set -u
 PREFIX=/usr/local
 MANPREFIX=
 CC=${CC:-cc}
+CXX=${CXX:-c++}
 HOST=
 DEBUG=0
 OFFICE_ROOT=/usr/lib/libreoffice
@@ -37,6 +38,7 @@ usage: ./configure [options]
   --prefix=DIR            installation prefix (default /usr/local)
   --manprefix=DIR         manual prefix (default the config.mk expression)
   --cc=CC                 C compiler (default $CC or cc)
+  --cxx=CXX               C++ compiler (default $CXX or c++; src/pdf.cpp needs it)
   --host=TRIPLE           cross target; uses TRIPLE-cc when available
   --debug                 debug build (DEBUG=1, default 0)
   --office-root=DIR       installed LibreOffice root (default /usr/lib/libreoffice)
@@ -73,6 +75,7 @@ for arg in "$@"; do
 		--prefix=*) PREFIX=${arg#*=} ;;
 		--manprefix=*) MANPREFIX=${arg#*=}; manprefix_given=yes ;;
 		--cc=*) CC=${arg#*=} ;;
+		--cxx=*) CXX=${arg#*=} ;;
 		--host=*) HOST=${arg#*=} ;;
 		--debug) DEBUG=1 ;;
 		--office-root=*) OFFICE_ROOT=${arg#*=}; office_root_given=yes ;;
@@ -106,6 +109,19 @@ if [ -n "$HOST" ] && [ "$CC" = cc ]; then
 	done
 	[ -n "$host_cc" ] || die "no $HOST-gcc, $HOST-cc or $HOST-clang found; pass --cc=<cross compiler>"
 	CC=$host_cc
+fi
+
+# src/pdf.cpp is built with CXX, so a cross target needs a cross C++ too.
+if [ -n "$HOST" ] && [ "$CXX" = c++ ]; then
+	host_cxx=
+	for candidate in "$HOST-g++" "$HOST-c++" "$HOST-clang++"; do
+		if command -v "$candidate" >/dev/null 2>&1; then
+			host_cxx=$candidate
+			break
+		fi
+	done
+	[ -n "$host_cxx" ] || die "no $HOST-g++, $HOST-c++ or $HOST-clang++ found; pass --cxx=<cross compiler>"
+	CXX=$host_cxx
 fi
 
 [ -f config.mk ] ||
@@ -233,6 +249,7 @@ set_key() {
 
 set_key PREFIX "$PREFIX"
 set_key CC "$CC"
+set_key CXX "$CXX"
 set_key DEBUG "$DEBUG"
 set_key WITH_AV "$WITH_AV"
 set_key WITH_PDF "$WITH_PDF"
