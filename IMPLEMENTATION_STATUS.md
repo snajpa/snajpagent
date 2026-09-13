@@ -20,6 +20,12 @@ snajpagent is a pre-1.0 terminal coding agent. One interactive session supports
 local rollout and native IRC chat. One-shot mode runs tasks from scripts.
 
 Implemented:
+- Shared-IRC worker coordination: one discovered server per host, workers
+  joining it as clients, and background room traffic that waits for the active
+  turn, so a peer joining, being opped or leaving never ends another session.
+  `~/ai/tests/test_snajpagent_shared_irc.sh` covers host survival and discovery,
+  fresh and resumed workers, `--no-listen`/`--no-client` independence and a
+  worker hosting its own server alongside the shared one.
 - Rule effects at the tool-call boundary now cover rejection, allowlists
   (`accept`), reusable chains (`jump`/`return`), pass-through logging, payload
   transform/override (`pass` with `value`, journaled as a `rule_transform`

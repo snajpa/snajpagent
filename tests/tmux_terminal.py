@@ -7527,6 +7527,74 @@ def run_session_process_recovery_case(binary, root, emit_output=True):
         provider.close()
 
 
+def run_irc_peer_join_case(binary, root):
+    """A peer joining the room must not end a worker that is already there.
+
+    Background room traffic is admitted as a coalesced room-update turn. A join
+    followed by the server opping that member used to admit a second
+    input_received while the first turn was live; the store rejects that
+    transition and the session exited. Every parallel worker died the moment
+    another worker joined, so live sessions saw nobody.
+    """
+    root.mkdir(mode=0o700, parents=True)
+    provider = FakeResponses()
+    endpoint = f"127.0.0.1:{free_loopback_port()}"
+    port = int(endpoint.rsplit(":", 1)[1])
+    environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
+    terminals = {}
+    peer = None
+    try:
+        case = root / "host"
+        workspace, config = irc_workspace(case / "workspace", provider.port, "host-model")
+        terminals["host"] = TmuxTerminal(case / "terminal", binary, workspace,
+            case / "state", config, 100, 24,
+            args=("-s", endpoint, "-n", "hostbot", "-o", "hostop", "-r", "lab"),
+            environment=environment)
+        case = root / "one"
+        workspace, config = irc_workspace(case / "workspace", provider.port, "one-model")
+        terminals["one"] = TmuxTerminal(case / "terminal", binary, workspace,
+            case / "state", config, 100, 24,
+            args=("-c", endpoint, "--no-listen", "-n", "onebot", "-o", "oneop", "-r", "lab"),
+            environment=environment)
+        terminals["host"].wait(f"hostop@{MACHINE_HOSTNAME} :")
+        terminals["one"].wait(f"oneop@{MACHINE_HOSTNAME} :")
+        terminals["one"].wait("── history replayed ──")
+
+        # A raw peer joins and is opped by the server while the worker is idle.
+        peer = socket.create_connection(("127.0.0.1", port), timeout=3)
+        peer.sendall(b"NICK rawpeer\r\nUSER rawpeer 0 * :peer\r\n")
+        time.sleep(0.5)
+        peer.sendall(b"JOIN #lab\r\n")
+        # A second peer joins immediately: its presence can arrive while the
+        # first join's room-update turn is still live, which is the exact
+        # transition that used to end the session.
+        time.sleep(0.4)
+        peer2 = socket.create_connection(("127.0.0.1", port), timeout=3)
+        peer2.sendall(b"NICK rawpeer2\r\nUSER rawpeer2 0 * :peer\r\n")
+        time.sleep(0.4)
+        peer2.sendall(b"JOIN #lab\r\n")
+        time.sleep(2.0)
+
+        terminals["one"].wait("rawpeer joined", timeout=8.0)
+        assert not terminals["one"].dead(), terminals["one"].capture(join_wrapped=True)
+        try:
+            peer2.sendall(b"QUIT\r\n")
+            peer2.close()
+        except OSError:
+            pass
+        print("tmux_terminal irc peer join: ok", flush=True)
+    finally:
+        if peer is not None:
+            try:
+                peer.sendall(b"QUIT\r\n")
+                peer.close()
+            except OSError:
+                pass
+        for terminal in reversed(list(terminals.values())):
+            terminal.close()
+        provider.close()
+
+
 def run_irc_case(binary, root):
     binary = os.path.abspath(binary)
     root.mkdir(mode=0o700, parents=True)
@@ -7582,6 +7650,7 @@ def run_irc_case(binary, root):
     finally:
         provider.close()
     run_irc_chat_case(binary, root / "chat")
+    run_irc_peer_join_case(binary, root / "peer-join")
     run_incremental_history_case(binary, root / "catchup")
     run_interrupted_history_case(binary, root / "interrupted-catchup")
 

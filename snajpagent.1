@@ -533,7 +533,10 @@ Urgent input is coalesced and admitted at the earliest safe boundary;
 generation reaches a safe stream boundary and commands are handed back alive.
 .PP
 Other messages, joins, leaves, mode changes, and topic changes enter model
-context when convenient and do not force a reply.  First join and successful
+context when convenient and do not force a reply.  They wait for an active turn;
+background traffic never admits a second input while one is live, so another
+worker joining, being opped or leaving can never end or interrupt this session.
+First join and successful
 compaction inject bounded room history.  The runtime reconnects outgoing links automatically.
 .PP
 Implicit outgoing nicks form zero-based sequences:
