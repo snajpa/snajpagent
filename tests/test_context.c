@@ -1577,7 +1577,7 @@ static void
 test_image_normalization(void)
 {
     if (!getenv("SNAJPAGENT_TEST_MEDIA")) return;
-    char *root = snag_path_join(getenv("TMPDIR"), "snag-image-codecs-XXXXXX");
+    char *root = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", "snag-image-codecs-XXXXXX");
     assert(root && mkdtemp(root));
     const char *extensions[] = {"png", "jpg", "bmp", "tiff", "webp", "gif"};
     struct snag_buf output, png;
@@ -2024,7 +2024,7 @@ test_office_import(void)
     assert(snag_office_sheet_html(html,&selection,&cells_text)<0 && cells_text.len==kept);
     snag_buf_free(&cells_text);
     if (!getenv("SNAJPAGENT_TEST_MEDIA")) return;
-    char *root=snag_path_join(getenv("TMPDIR"),"snag-office-XXXXXX"), error[256];
+    char *root=snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp","snag-office-XXXXXX"), error[256];
     assert(root && mkdtemp(root));
     char *path=snag_path_join(root,"test.odt");
     const char *names[]={"mimetype","content.xml","META-INF/manifest.xml"};
@@ -2343,7 +2343,7 @@ static void test_office_import(void) {}
 static void test_office_limits(void)
 {
 #if SNAJPAGENT_OFFICE && !defined(_WIN32)
-    char *root=snag_path_join(getenv("TMPDIR"),"snag-office-limits-XXXXXX"),error[256];
+    char *root=snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp","snag-office-limits-XXXXXX"),error[256];
     assert(root && mkdtemp(root));
     char *profile=snag_path_join(root,"profile");
     assert(profile && snag_office_profile(profile,error,sizeof(error))==0);
