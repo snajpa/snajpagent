@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +20,30 @@ def die(message: str) -> None:
 def require(condition: bool, message: str) -> None:
     if not condition:
         die(message)
+
+
+def check_configure() -> None:
+    """The host entry point is POSIX sh; keep it that way on every platform."""
+    script = ROOT / "configure"
+    if not script.exists():
+        return
+    text = script.read_text(encoding="utf-8")
+    require(text.startswith("#!/bin/sh\n"),
+            "configure must name the POSIX shell in its shebang")
+    for number, line in enumerate(text.splitlines(), 1):
+        if line.lstrip().startswith("#"):
+            continue
+        for token in ("[[", "<<<", "pipefail", "$RANDOM", "mapfile", "declare ", "function "):
+            require(token not in line,
+                    f"configure:{number} uses the non-POSIX construct {token!r}")
+    for shell in ("sh", "dash"):
+        binary = shutil.which(shell)
+        if binary is None:
+            continue
+        result = subprocess.run([binary, "-n", str(script)],
+                                capture_output=True, text=True, check=False)
+        require(result.returncode == 0,
+                f"configure must parse under {shell}: {result.stderr.strip()}")
 
 
 def main() -> int:
@@ -46,6 +72,8 @@ def main() -> int:
             "implementation status must name both advertised platforms")
     require("External evidence still required" in qualification,
             "qualification ledger must keep external evidence gap visible")
+
+    check_configure()
 
     print("portabilitycheck: ok (PTY capability covers Linux and macOS; external evidence still explicit)")
     return 0
