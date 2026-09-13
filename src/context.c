@@ -688,7 +688,7 @@ defer_room_event(struct context_builder *builder, const json_t *data)
     snag_buf_init(&text, SNAG_IRC_TEXT_MAX + 2048u);
     int rc = snag_irc_event_projection(&text, &event);
     if (rc == 0) rc = snag_buf_terminate(&text);
-    if (rc == 0) rc = defer_input(builder, (const char *)text.data, NULL, 0u);
+    if (rc == 0) rc = defer_input(builder, (const char *)text.data, NULL, 0u, NULL);
     snag_buf_free(&text);
     return rc;
 }
