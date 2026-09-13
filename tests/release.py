@@ -1276,6 +1276,13 @@ assert "'CXX=${llvm.clang-unwrapped}/bin/clang++ --target=${target} -isysroot ${
 print("PASS: macOS PDF targets generated headers, NASM tools and static font/C++ dependencies")
 
 freebsd = (root / "nix/freebsd.nix").read_text()
+freebsd_cxx = freebsd.split("  cxx = ", 1)[1].split("  jansson = ", 1)[0]
+for setting in ("pkgs.gcc14.cc", '"--enable-clocale=generic"',
+                '"--enable-libstdcxx-threads"', "dontDisableStatic = true;",
+                "ln -s gthr-posix.h ../libgcc/gthr-default.h",
+                "-stdlib=libstdc++", "--with-gxx-include-dir="):
+    assert setting in freebsd_cxx, setting
+print("PASS: FreeBSD C++ archive retains static output and real POSIX thread probes")
 freebsd_archive = freebsd.split("  archive = ", 1)[1].split("  brotli = ", 1)[0]
 assert '"-DLIBMD_LIBRARY=${sdk}/usr/lib/libmd.a"' in freebsd_archive
 assert '] [ zlib iconv ];' in freebsd_archive

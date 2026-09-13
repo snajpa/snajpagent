@@ -447,6 +447,16 @@ ownership across older libc failure paths. Native GNU make builds select BSD
 API declarations and libutil automatically. Use a UTF-8 locale and mounted
 devfs; the qualification guest used `en_US.UTF-8` and UFS for large sparse files.
 
+For the pending PDF closure, `nix/freebsd.nix` also provides a static GCC 14.3.0
+libstdc++ archive built with Clang against the 8.4 SDK. It uses the generic
+locale backend and the native POSIX thread implementation. The build retains
+native wide-character classification, enables real gthread feature probes and
+avoids conflicting static-library defaults. A C++20 sample using span, threads,
+mutexes, exceptions and wide streams cross-links with only `libm.so.5`,
+`libgcc_s.so.1`, `libthr.so.3` and `libc.so.7`, without a runtime search path.
+The sample was not target-executed. This dependency is not yet wired into the
+application's PDF closure; legacy SDK C++ and Office runtime work remain pending.
+
 ### FreeBSD 5.1/5.5 legacy target
 
 `make prod-freebsd-amd64-legacy` builds the full agent against the pinned 5.1
