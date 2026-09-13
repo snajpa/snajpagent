@@ -203,7 +203,11 @@ runtime closure remains unfinished.
 `./configure` detects the toolchain and the four optional modalities and tunes
 the tracked `config.mk`; a component it cannot find is disabled and reported,
 and its `--require-*` option turns that absence into a clear failure. Export
-`PKG_CONFIG_PATH` for the build as well as for the probe. The Nix derivations pass
+`PKG_CONFIG_PATH` for the build as well as for the probe: without it a probe
+finds nothing and turns the tracked modality keys off. That export serves `make`
+too, and a linked profile whose libraries sit outside the default search path
+also needs a runpath on the test binaries, which the build recipe passes through
+`LDFLAGS`. The Nix derivations pass
 their values explicitly and do not run it, so the tracked `config.mk` remains
 their source of truth.
 
