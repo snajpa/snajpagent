@@ -264,6 +264,11 @@ so 32-bit libc builds retain large-file seek/stat/truncate support. Keep that
 feature macro when replacing CPPFLAGS. This does not enlarge a 32-bit address
 space or claim that every old kernel supports modern time/thread APIs.
 
+The Nix-built Linux release artifacts set `WITH_OFFICE=0`: the Office dependency
+in that closure is a static LibreOfficeKit that would be linked into the
+artifact, and an installed runtime is never bundled. Host builds keep
+`WITH_OFFICE=1` and link a separately installed runtime through `OFFICE_ROOT`.
+
 `make prod-linux-ppc32` uses the pinned big-endian PowerPC musl toolchain,
 32-bit hard-float ABI and static compiler atomics for 64-bit shared state.
 The static PIE embeds application libraries, TLS and trust roots and has no
