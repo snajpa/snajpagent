@@ -2447,8 +2447,7 @@ call_rule_effect(void *opaque, const struct snag_rule *rule,
         }
         host->insertion = snag_strdup_checked((const char *)message.data, SNAG_RULE_TEXT_MAX + 1u);
         snag_buf_free(&message);
-        if (!host->insertion)
-            return -1;
+        if (!host->insertion) return -1;
         (void)snprintf(host->rule, sizeof(host->rule), "%s", snag_rule_name(rule));
     }
     if (snag_rule_verb(rule) == SNAG_RULE_COMMAND) {
@@ -2460,8 +2459,7 @@ call_rule_effect(void *opaque, const struct snag_rule *rule,
         snag_buf_init(&envelope, SNAG_RULE_ENVELOPE_MAX + 1u);
         if (snag_json_canonical(frame->envelope, &envelope) < 0 || snag_buf_terminate(&envelope) < 0) {
             snag_buf_free(&envelope);
-            (void)snprintf(host->message, sizeof(host->message),
-                           "Rule helper envelope could not be built.");
+            (void)snprintf(host->message, sizeof(host->message), "Rule helper envelope could not be built.");
             return 1;
         }
         rc = snag_rule_command_run(host->app->config, snag_rule_command(rule),
@@ -2533,8 +2531,7 @@ call_rule_effect(void *opaque, const struct snag_rule *rule,
         snag_buf_free(&text);
         consent = snag_app_consent(host->app, reason, consent_error, sizeof(consent_error));
         if (consent != 0) {
-            (void)snprintf(host->message, sizeof(host->message), "%s",
-                           consent_error[0] ? consent_error :
+            (void)snprintf(host->message, sizeof(host->message), "%s", consent_error[0] ? consent_error :
                            "Local confirmation is required and was not given.");
             return 1; /* Consent is an obligation, not a suggestion. */
         }
@@ -2605,8 +2602,7 @@ call_rule_check(struct app_state *app, const struct snag_response_item *call,
             return snag_errorf(error, error_size, "transformed call has no registered action to update");
         data = json_pack("{s:s,s:s,s:s,s:s}", "call_id", call->call_id, "rule", host.rule,
                          "original_sha256", original, "effective_sha256", effective);
-        if (!data || snag_app_commit_event(app, "rule_transform", data, error, error_size) < 0)
-            return -1;
+        if (!data || snag_app_commit_event(app, "rule_transform", data, error, error_size) < 0) return -1;
         memcpy(pending->action_sha256, effective, sizeof(effective));
     }
     if (host.insertion) {
@@ -2648,10 +2644,8 @@ execute_calls(struct app_state *app, const char *turn_id, const struct snag_resp
     }
     for (size_t i = 0u; i < count; ++i)
         if (call_rule_check(app, &calls[i].call, &calls[i].rule_rejected,
-                            calls[i].rule_message, sizeof(calls[i].rule_message),
-                            &calls[i].insertion,
-                            error, error_size) < 0)
-            return -1;
+                            calls[i].rule_message, sizeof(calls[i].rule_message), &calls[i].insertion,
+                            error, error_size) < 0) return -1;
     while (finished < count) {
         size_t before = finished;
         bool pending = false;

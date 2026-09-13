@@ -63,8 +63,7 @@ invoke(const char *name, json_t *arguments)
     call.arguments = arguments;
     if (strcmp(name, "write_file") == 0)
         rc = snag_tools_write_file(&call, workspace, &result, error, sizeof(error));
-    else
-        rc = snag_tools_edit_file(&call, workspace, &result, error, sizeof(error));
+    else rc = snag_tools_edit_file(&call, workspace, &result, error, sizeof(error));
     assert(rc == 0);
     assert(result);
     return result;

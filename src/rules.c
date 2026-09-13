@@ -197,8 +197,7 @@ static enum snag_rule_verb
 verb_parse(const char *name)
 {
     static const char *const names[] = {
-        "pass", "accept", "reject", "jump", "return", "insert", "command", "confirm"
-    };
+        "pass", "accept", "reject", "jump", "return", "insert", "command", "confirm" };
     for (size_t i = 0u; i < SNAG_RULE_VERB_COUNT; ++i)
         if (!strcmp(name, names[i])) return (enum snag_rule_verb)i;
     return SNAG_RULE_VERB_COUNT;
@@ -228,10 +227,8 @@ compile_rule(struct snag_rules *rules, json_t *definition, size_t index, char *e
              it = json_object_iter_next(definition, it)) {
             const char *key = json_object_iter_key(it);
             static const char *const allowed[] = {
-                "name", "chain", "match", "at_least", "action",
-                "text", "target", "log", "value", "to",
-                "command", "timeout_ms"
-            };
+                "name", "chain", "match", "at_least", "action", "text", "target", "log", "value", "to",
+                "command", "timeout_ms" };
             bool known = false;
             for (size_t i = 0u; i < sizeof(allowed) / sizeof(allowed[0]); ++i)
                 if (!strcmp(key, allowed[i])) known = true;
@@ -252,14 +249,12 @@ compile_rule(struct snag_rules *rules, json_t *definition, size_t index, char *e
     rule->chain_id = chain_index(rules, chain);
     (void)snprintf(rule->chain, sizeof(rule->chain), "%s", chain);
     rule->verb = verb_parse(action);
-    if (rule->verb == SNAG_RULE_VERB_COUNT &&
-        snag_string_in(action, "compact transform"))
+    if (rule->verb == SNAG_RULE_VERB_COUNT && snag_string_in(action, "compact transform"))
         return invalid(error, size, "rule action is defined by the design but not implemented in this build");
     if (rule->verb == SNAG_RULE_VERB_COUNT) return invalid(error, size, "unknown rule action");
     if (rule->verb == SNAG_RULE_JUMP && !name_valid(target))
         return invalid(error, size, "jump needs a target chain");
-    if (rule->verb != SNAG_RULE_JUMP && target)
-        return invalid(error, size, "target applies only to jump");
+    if (rule->verb != SNAG_RULE_JUMP && target) return invalid(error, size, "target applies only to jump");
     if (rule->verb == SNAG_RULE_INSERT) {
         if (!text || !to || (strcmp(to, "program") && strcmp(to, "model") && strcmp(to, "irc")))
             return invalid(error, size, "insert needs to=program|model|irc and text");
@@ -276,8 +271,7 @@ compile_rule(struct snag_rules *rules, json_t *definition, size_t index, char *e
         return invalid(error, size, "command and timeout_ms apply only to command");
     }
     /* pass with value is the single transform/override operation. */
-    if (value && rule->verb != SNAG_RULE_PASS)
-        return invalid(error, size, "value applies only to pass");
+    if (value && rule->verb != SNAG_RULE_PASS) return invalid(error, size, "value applies only to pass");
     if (value) rule->value = json_incref((json_t *)value);
     if (text) {
         rule->text = snag_strdup_checked(text, SNAG_RULE_TEXT_MAX + 1u);
@@ -294,14 +288,12 @@ compile_rule(struct snag_rules *rules, json_t *definition, size_t index, char *e
     }
     if (rule->verb == SNAG_RULE_INSERT) {
         rule->to = snag_strdup_checked(to, SNAG_RULE_NAME_MAX + 1u);
-        if (!rule->to)
-            return -1;
+        if (!rule->to) return -1;
     }
     if (rule->verb == SNAG_RULE_COMMAND) {
         rule->command = snag_strdup_checked(command, 4097u);
         rule->timeout_ms = timeout ? (unsigned int)json_integer_value(timeout) : 10000u;
-        if (!rule->command)
-            return -1;
+        if (!rule->command) return -1;
     }
 
     if (json_is_object(match) && json_object_size(match) > 0u) {
@@ -510,8 +502,7 @@ snag_rules_eval(const struct snag_rules *rules, struct snag_rule_frame *frame,
         ++verdict->matches;
         bool needs_host = rule->log || rule->value || rule->verb == SNAG_RULE_INSERT ||
             rule->verb == SNAG_RULE_COMMAND || rule->verb == SNAG_RULE_CONFIRM;
-        if (!effect && needs_host)
-            return invalid(error, size, "rule effect needs a host handler");
+        if (!effect && needs_host) return invalid(error, size, "rule effect needs a host handler");
         int rc = effect ? effect(opaque, rule, frame, error, size) : 0;
         if (rc < 0) return -1;
         if (rc > 0) verdict->rejected = true;
