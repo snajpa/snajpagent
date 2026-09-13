@@ -371,6 +371,7 @@ help:
 		'make                  Host-native production build (default DEBUG=0)' \
 		'make DEBUG=1          Debug build: -Og, symbols, frame pointers, no stripping' \
 		'make -jN              Parallel host build; no cross-builds or VMs' \
+		'./configure           Probe the host and the four modalities; writes config.mk' \
 		'make -jN prod-matrix   All implemented production targets below; no installs or VMs' \
 		'make prod-linux-x86_64 Self-contained Linux x86-64 via pinned Nix; network/cache on first build' \
 		'make prod-linux-aarch64 Self-contained Linux ARM64 via pinned Nix' \
