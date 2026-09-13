@@ -3627,8 +3627,17 @@ The runtime is verified before it is loaded: its root must hold the
 LibreOfficeKit library or the engine executable under a program directory, and a
 root that already names that directory is accepted. A missing or incomplete
 installation fails with a message naming the root and the expected component
-instead of a load failure. There is no runtime PATH search, and detection never
-relies on a conversion command's exit status.
+instead of a load failure. The linked import is loaded from the verified root without a
+runtime PATH search, and detection never relies on a conversion command's exit
+status.
+The commanded backend links no Office library: it drives the engine installed on
+the target, resolved from OFFICE_ROOT first, then PATH, then the usual library
+directories and versioned LibreOffice roots; when none is found it names the
+roots it searched.  It converts documents to PDF, including page ranges, and
+refuses sheet-area selection and out-of-range pages with a clear message because
+the command line has no equivalent; lossy CSV export and unbounded workbook
+substitution are not offered.  Success is judged from the produced file rather
+than the engine's exit status.
 Linux applies syscall and available filesystem confinement. Other POSIX targets
 report unavailable OS confinement and retain package checks and worker limits.
 Windows applies job CPU/memory limits and an elapsed timer; OS
