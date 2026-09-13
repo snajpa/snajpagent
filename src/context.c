@@ -675,17 +675,20 @@ steering_matches_snapshot(struct context_builder *builder, const char *id,
     return 1;
 }
 
+/* An admitted room event is user input, so it waits for the same safe boundary
+ * as steering and topology snapshots. Appending it where the admission was
+ * recorded splits a tool exchange whenever room traffic arrives while a call is
+ * outstanding, and the provider then reads the call as unanswered. */
 static int
-append_room_event(struct context_builder *builder, const json_t *data)
+defer_room_event(struct context_builder *builder, const json_t *data)
 {
     struct snag_irc_event event;
     struct snag_buf text;
     if (snag_irc_event_read(data, &event) < 0) return -1;
     snag_buf_init(&text, SNAG_IRC_TEXT_MAX + 2048u);
     int rc = snag_irc_event_projection(&text, &event);
-    if (rc == 0 && snag_buf_terminate(&text) == 0)
-        rc = append_message(builder, "user", (const char *)text.data);
-    else rc = -1;
+    if (rc == 0) rc = snag_buf_terminate(&text);
+    if (rc == 0) rc = defer_input(builder, (const char *)text.data, NULL, 0u);
     snag_buf_free(&text);
     return rc;
 }
@@ -744,7 +747,7 @@ context_event(void *opaque, const struct snag_session *state,
             for (j = 0u; j < json_array_size(builder->deferred_irc); ++j) {
                 json_t *pending = json_array_get(builder->deferred_irc, j);
                 if (json_integer_value(json_object_get(pending, "seq")) == wanted) {
-                    if (!summarized && append_room_event(builder, json_object_get(pending, "event")) < 0)
+                    if (!summarized && defer_room_event(builder, json_object_get(pending, "event")) < 0)
                         return -1;
                     if (json_array_remove(builder->deferred_irc, j) < 0) return -1;
                     found = true;

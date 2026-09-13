@@ -347,6 +347,10 @@ local-only: while idle it starts a local turn directly, and while a turn is
 active it is added directly at the next safe boundary. Rollout input is never
 sent as IRC `PRIVMSG`, and its submitted line remains visible exactly once
 with the rollout prompt label that was visible when Enter was pressed.
+The converse holds for room traffic: an admission batch is the prompt of an
+IRC-triggered turn, not operator input, so it is never echoed as a submission.
+The chat view shows the room events and the durable trail records the
+admission; conversation level keeps only the turn's own work.
 
 Switching views never clears or repaints terminal history. It appends a short
 view boundary, emits every semantic item accumulated for the entered view
@@ -553,7 +557,10 @@ once from their durable records. The scheduling reference that admits a payload
 names the update itself (endpoint, room, kind, sender and durable id) instead of
 claiming its text lives elsewhere; history replay resolves that reference to the
 retained payload, so the operator reads the room event and never a dangling
-pointer. Scheduling references do not copy the payload text.
+pointer. Scheduling references do not copy the payload text. The payload itself
+waits for the same safe boundary as steering and topology snapshots, so an
+admission that arrives while a tool call is outstanding never separates that
+call from its output.
 Ordinary live background chat still follows the existing queue/turn boundaries;
 durable `irc_admitted` sequence references record when accepted payloads become
 model context, without storing another copy of their text. Mention and

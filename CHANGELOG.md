@@ -12,6 +12,15 @@
   native compiler math operations. The 5.1 AV/PDF/audio application cross-links
   with the SDK's exception and process-exit interfaces.
 
+- Keep admitted room events out of tool exchanges in model requests. A room
+  event admitted while a call was outstanding was appended where the admission
+  was recorded, so it landed between the call and its output and the provider
+  read the call as unanswered (HTTP 400 "No tool output found"). Admitted
+  payloads now wait for the same safe boundary as steering and snapshots.
+- Stop echoing an IRC admission batch as operator input. Room traffic admitted
+  as a turn prompt is runtime plumbing, so conversation level no longer prints
+  the internal `[IRC update id=...]` marker with the prompt label; the chat view
+  and the durable trail already report the admission.
 - Name each IRC update in the turn prompt instead of referring to a room event
   the reader may not have, and resolve those references to the retained room
   event when replaying history. The prompt is the turn's user message, so the
