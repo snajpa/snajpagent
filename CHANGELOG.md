@@ -4,6 +4,7 @@
 
 ## Unreleased
 
+- Keep the minimal Linux PDF build free of unused gettext/Bash utility dependencies.
 - Honor terminal exit before admitting queued voice or typed work. Pending
   inputs remain available on resume instead of keeping an exiting session busy.
 - Add the FreeBSD 8.4 static PDF/font dependency chain and select its modern

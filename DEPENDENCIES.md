@@ -104,6 +104,11 @@ the accounting fallback. Billing/capacity responses remain provider authority.
 
 ## Linked multimodal dependencies (feature branch)
 
+The minimal Linux Poppler build retains rendering and text extraction while
+excluding command-line utilities and their unused gettext/Bash dependency.
+Legacy FreeType consumers use its pkg-config metadata; generation of the optional
+freetype-config shell helper is disabled while font and compression support remain.
+
 Default native builds additionally use FFmpeg (libavformat, libavcodec,
 libavutil, libswresample, libswscale), Poppler, libpng, and miniaudio 0.11.23.
 FFmpeg and Poppler are reached through narrow file-only adapters in `src/av.c`

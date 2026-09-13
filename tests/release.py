@@ -602,6 +602,14 @@ print("PASS: latest-stable-only downloads match all channel assets, requirements
 # Keep Poppler's own static test consumers linked through the same ordered
 # font dependencies as the application; CMake's imported archives omit them.
 linux = (root / "nix/linux.nix").read_text()
+linux_pdf = linux.split("  pdf = ", 1)[1].split("  office = ", 1)[0]
+assert "minimal = true;" in linux_pdf and "utils = false;" in linux_pdf
+assert "libintl = null;" in linux_pdf
+linux_legacy = (root / "nix/linux-legacy.nix").read_text()
+assert "previous.stdenv.hostPlatform.config == settings.crossSystem.config" in linux_legacy
+legacy_fonts = linux_legacy.split("    freetype = ", 1)[1].split("  });", 1)[0]
+assert "makeWrapper = null;" in legacy_fonts and '"--disable-freetype-config"' in legacy_fonts
+assert 'postInstall = "";' in legacy_fonts and "propagatedBuildInputs" not in legacy_fonts
 assert "./poppler-static-fonts.patch" in linux
 fonts = (root / "nix/poppler-static-fonts.patch").read_text()
 assert "+  if(NOT BUILD_SHARED_LIBS)" in fonts

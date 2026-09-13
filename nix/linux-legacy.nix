@@ -97,6 +97,12 @@ let
       preInstall = "";
       outputs = [ "out" "dev" ];
     });
+    # Font consumers use pkg-config; the optional config script pulls target Bash.
+    freetype = (previous.freetype.override { makeWrapper = null; }).overrideAttrs (old: {
+      configureFlags = builtins.filter (flag: flag != "--enable-freetype-config")
+        old.configureFlags ++ [ "--disable-freetype-config" ];
+      postInstall = "";
+    });
   });
 in {
   inherit libc compiler sdkCompiler;

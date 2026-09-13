@@ -46,6 +46,8 @@ let
   });
   pdf = (static.poppler.override {
     inherit fontconfig;
+    # Intl is used by the disabled pdfsig utility, not the rendering library.
+    libintl = null;
     minimal = true;
     qt5Support = false;
     qt6Support = false;
