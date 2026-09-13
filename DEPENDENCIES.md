@@ -207,9 +207,9 @@ and its `--require-*` option turns that absence into a clear failure. Export
 finds nothing and turns the tracked modality keys off. That export serves `make`
 too, and a linked profile whose libraries sit outside the default search path
 also needs a runpath on the test binaries, which the build recipe passes through
-`LDFLAGS`. The Nix derivations pass
-their values explicitly and do not run it, so the tracked `config.mk` remains
-their source of truth.
+`LDFLAGS`. The Nix derivations pass their values explicitly and do not run it: a
+sandbox probe would find no dependency and turn the modalities off, which is why
+the tracked `config.mk` remains their source of truth.
 
 Custom lean builds may set `WITH_AV=0`, `WITH_OFFICE=0`, or
 `WITH_AUDIO_DEVICE=0`; `WITH_PDF=0` also requires `WITH_OFFICE=0` because Office
