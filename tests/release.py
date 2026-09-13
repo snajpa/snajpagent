@@ -1358,6 +1358,9 @@ static_assert(!__builtin_isnanf(1.0f));
 static_assert(__builtin_isnanf(__builtin_nanf("")));
 static_assert(!__builtin_isnanl(1.0L));
 static_assert(__builtin_isnanl(__builtin_nanl("")));
+static_assert(__builtin_isfinite(1.0));
+static_assert(!__builtin_isfinite(__builtin_inf()));
+static_assert(!__builtin_isfinite(__builtin_nan("")));
 #ifdef __OpenBSD__
 constexpr int category(double value) {
     return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL, FP_SUBNORMAL, FP_ZERO, value);
@@ -2492,6 +2495,7 @@ assert "--replace-fail 'fmin(' '__builtin_fmin('" in net_pdf
 assert "--replace-fail 'fmax(' '__builtin_fmax('" in net_pdf
 assert "--replace-fail 'std::isinf(' '__builtin_isinf('" in net_pdf
 assert "--replace-fail 'std::isnan(' '__builtin_isnan('" in net_pdf
+assert "--replace-fail 'std::isfinite(' '__builtin_isfinite('" in net_pdf
 assert "--replace-fail 'return lrintf(f);' 'return __builtin_lrintf(f);'" in netbsd
 assert '"-DEXPAT_DEV_URANDOM=OFF" "-DEXPAT_WITH_ARC4RANDOM=ON"' in netbsd
 net_png = netbsd.split("  png = ", 1)[1].split("  freetype = ", 1)[0]

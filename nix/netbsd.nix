@@ -300,6 +300,8 @@ let
       substituteInPlace poppler/Function.cc poppler/MarkedContentOutputDev.cc \
         poppler/TextOutputDev.cc splash/SplashXPathScanner.cc \
         --replace-fail 'std::isnan(' '__builtin_isnan('
+      substituteInPlace poppler/Gfx.cc poppler/SplashOutputDev.cc poppler/CairoOutputDev.cc \
+        --replace-fail 'std::isfinite(' '__builtin_isfinite('
     '';
     preConfigure = old.preConfigure + lib.optionalString legacy ''
       cmakeFlagsArray+=(
