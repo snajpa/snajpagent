@@ -47,8 +47,7 @@ run(int argc, char **argv)
     {
         bool handled = false;
         rc = snag_login_dispatch(&cli, &handled);
-        if (!handled)
-            rc = snag_app_run(&cli, argv[0]);
+        if (!handled) rc = snag_app_run(&cli, argv[0]);
     }
     snag_cli_free(&cli);
     return rc;
@@ -60,8 +59,7 @@ int
 wmain(int argc, wchar_t **wide)
 {
     int internal = snag_output_broker_main(argc, wide);
-    if (internal >= 0)
-        return internal;
+    if (internal >= 0) return internal;
     char **argv = snag_wide_arguments(argc, wide);
     if (!argv) {
         (void)fprintf(stderr, "snajpagent: command-line arguments are not valid Unicode\n");

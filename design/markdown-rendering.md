@@ -52,9 +52,10 @@ above and below, including while incomplete. Adjacent paragraphs share one row;
 headings, lists, quotations, fences, tables and prompts respect the same boundary.
 The renderer counts existing terminal newlines and adds only the missing ones.
 Repeated source blank lines at prose boundaries cannot multiply the gap; internal
-code whitespace is preserved. A generated
-soft wrap of prose continues with two spaces, aligned with the first paragraph
-character after `• `, including margin wraps in words split across provider
+code whitespace is preserved. Every prose continuation line continues with two
+spaces aligned with the first paragraph character after `• `, whether the
+renderer generated the wrap or the provider supplied the line break, including
+margin wraps in words split across provider
 deltas. An unfinished fitting word is buffered across provider/style chunks
 until whitespace or item completion, so its punctuation stays attached.
 Overlong words hard-wrap through bounded output. Apostrophes are not special

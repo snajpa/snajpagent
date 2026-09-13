@@ -32,8 +32,7 @@ snag_http_trust(CURL *curl)
 
     if (file && *file) {
         rc = curl_easy_setopt(curl, CURLOPT_CAINFO, file);
-        return rc != CURLE_OK ? rc :
-            curl_easy_setopt(curl, CURLOPT_PROXY_CAINFO, file);
+        return rc != CURLE_OK ? rc : curl_easy_setopt(curl, CURLOPT_PROXY_CAINFO, file);
     }
 #ifdef SNAJPAGENT_CA_BUNDLE
     static const unsigned char compressed[] = {
@@ -43,8 +42,7 @@ snag_http_trust(CURL *curl)
     if (size == ZSTD_CONTENTSIZE_ERROR || size == ZSTD_CONTENTSIZE_UNKNOWN || size >= SIZE_MAX)
         return CURLE_SSL_CACERT_BADFILE;
     char *certificates = malloc((size_t)size + 1u);
-    if (!certificates)
-        return CURLE_OUT_OF_MEMORY;
+    if (!certificates) return CURLE_OUT_OF_MEMORY;
     size_t decoded = ZSTD_decompress(certificates, (size_t)size, compressed, sizeof(compressed));
     if (ZSTD_isError(decoded) || decoded != size) {
         free(certificates);
@@ -52,11 +50,9 @@ snag_http_trust(CURL *curl)
     }
     certificates[decoded] = '\0';
     struct curl_blob bundle = {
-        certificates, decoded + 1u, CURL_BLOB_COPY
-    };
+        certificates, decoded + 1u, CURL_BLOB_COPY };
     rc = curl_easy_setopt(curl, CURLOPT_CAINFO_BLOB, &bundle);
-    if (rc == CURLE_OK)
-        rc = curl_easy_setopt(curl, CURLOPT_PROXY_CAINFO_BLOB, &bundle);
+    if (rc == CURLE_OK) rc = curl_easy_setopt(curl, CURLOPT_PROXY_CAINFO_BLOB, &bundle);
     free(certificates);
     return rc;
 #else

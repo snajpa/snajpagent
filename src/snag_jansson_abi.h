@@ -15,14 +15,7 @@ extern "C" {
 #endif
 
 typedef enum {
-    JSON_OBJECT,
-    JSON_ARRAY,
-    JSON_STRING,
-    JSON_INTEGER,
-    JSON_REAL,
-    JSON_TRUE,
-    JSON_FALSE,
-    JSON_NULL
+    JSON_OBJECT, JSON_ARRAY, JSON_STRING, JSON_INTEGER, JSON_REAL, JSON_TRUE, JSON_FALSE, JSON_NULL
 } json_type;
 
 typedef long long json_int_t;
@@ -74,14 +67,12 @@ json_t *json_null(void);
 void json_delete(json_t *json);
 static inline json_t *json_incref(json_t *json)
 {
-    if (json && json->refcount != (size_t)-1)
-        ++json->refcount;
+    if (json && json->refcount != (size_t)-1) ++json->refcount;
     return json;
 }
 static inline void json_decref(json_t *json)
 {
-    if (json && json->refcount != (size_t)-1 && --json->refcount == 0)
-        json_delete(json);
+    if (json && json->refcount != (size_t)-1 && --json->refcount == 0) json_delete(json);
 }
 
 size_t json_object_size(const json_t *object);
@@ -100,8 +91,7 @@ static inline int json_object_set(json_t *object, const char *key, json_t *value
 {
     return json_object_set_new(object, key, json_incref(value));
 }
-static inline int json_object_setn(json_t *object, const char *key,
-                                   size_t key_len, json_t *value)
+static inline int json_object_setn(json_t *object, const char *key, size_t key_len, json_t *value)
 {
     return json_object_setn_new(object, key, key_len, json_incref(value));
 }
@@ -132,8 +122,7 @@ json_t *json_deep_copy(const json_t *value);
 #define JSON_DECODE_INT_AS_REAL 0x8
 #define JSON_ALLOW_NUL          0x10
 
-json_t *json_loadb(const char *buffer, size_t buflen, size_t flags,
-                   json_error_t *error);
+json_t *json_loadb(const char *buffer, size_t buflen, size_t flags, json_error_t *error);
 
 #ifdef __cplusplus
 }

@@ -11,10 +11,44 @@ calls and mark unknown outcomes without rerunning them; empty stdin needs no new
 prompt. User, tool and saved reasoning data retain their provenance. These changes are development-source
 behavior above stable 0.99.5; its downloadable assets remain unchanged.
 
+IRC snapshots and steering are projected after complete tool exchanges, including
+on replay of affected sessions. Interactive resume applies current startup
+network roles and identity overrides before work starts. Existing journals retain
+their original events and completed tool outcomes.
+
 snajpagent is a pre-1.0 terminal coding agent. One interactive session supports
 local rollout and native IRC chat. One-shot mode runs tasks from scripts.
 
 Implemented:
+- Shared-IRC worker coordination: one discovered server per host, workers
+  joining it as clients, and background room traffic that waits for the active
+  turn, so a peer joining, being opped or leaving never ends another session.
+  `~/ai/tests/test_snajpagent_shared_irc.sh` covers host survival and discovery,
+  fresh and resumed workers, `--no-listen`/`--no-client` independence and a
+  worker hosting its own server alongside the shared one.
+- Rule effects at the tool-call boundary now cover rejection, allowlists
+  (`accept`), reusable chains (`jump`/`return`), pass-through logging, payload
+  transform/override (`pass` with `value`, journaled as a `rule_transform`
+  projection), policy insertion (`insert` with `to = model`) and trusted helpers
+  (`command`, one strict JSON effect from stdout), plus fresh local consent
+  (`confirm`: a generated challenge typed at the local terminal; non-interactive
+  runs deny). Verified by `tests/test_rules.c` and `tests/rules_e2e.py`.
+- Native exploration tools (list_files, read_file, grep) are declared and
+  runnable in every turn; /ro remains inspection-only. New modification
+  counterparts write_file (atomic whole-file create/replace) and edit_file
+  (targeted exact replacement, unchanged file on mismatch) are workspace-relative
+  and never follow symlinks. Verified by `tests/test_write.c`, the real-binary
+  `tests/tools_e2e.py` suite (`make toolscheck`) and updated context/dispatch
+  unit tests.
+- Ordered `[rule NAME]` model tool-call filtering with JSON-pointer regex and
+  integer-threshold matching, pass/accept/reject/jump/return verdicts and
+  templated match logging. Rejected calls answer a factual `rule_rejected`
+  not-run result, journaled and replayed on resume; the engine is stateless and
+  bounded, and configuration load rejects invalid definitions. Verified by
+  `tests/test_rules.c` and the real-binary `tests/rules_e2e.py` suite
+  (`make rulescheck`). Only the `out`/tool-call boundary is wired;
+  `replace`/`insert`/`confirm` and the `in`/`event` hosts remain future work.
+  See `design/io-rules.md`.
 - Named providers and local model settings, shared secret sources, Responses
   streaming, model discovery, token accounting and native/fallback compaction.
 - Reasoning content-part streams, including direct DeepSeek V4 Pro thinking and
@@ -32,6 +66,10 @@ Implemented:
   keep stable Up/Down and Ctrl-R history.
 - Live verbosity/view snapshots in model context, with progress guidance based
   on effective tool visibility, including chat suppression and one-shot streams.
+- One rendering contract across verbosity levels: a logical tool block or
+  streamed-output burst parks and repaints the composer once, start and outcome
+  rows share the same short call reference, and one dim `[…]` marks cut or
+  hidden display content while complete output stays in the durable journal.
 - Parameter descriptions and current runtime settings in provider requests;
   actionable argument diagnostics and explicit requested/applied output limits,
   with latest-batch host feedback preserved across tiny output budgets.

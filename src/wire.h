@@ -18,13 +18,10 @@ struct snag_wire_secrets {
 };
 
 /* Length of the longest secret matching the supplied byte prefix, or zero. */
-size_t snag_wire_secret_match(const unsigned char *data, size_t len,
-                              const struct snag_wire_secrets *secrets);
-int snag_wire_json_redact(const unsigned char *data, size_t len,
-                         const struct snag_wire_secrets *secrets,
+size_t snag_wire_secret_match(const unsigned char *data, size_t len, const struct snag_wire_secrets *secrets);
+int snag_wire_json_redact(const unsigned char *data, size_t len, const struct snag_wire_secrets *secrets,
                          struct snag_buf *out, char *error, size_t error_size);
-int snag_wire_header_redact(const unsigned char *line, size_t len,
-                           const struct snag_wire_secrets *secrets,
+int snag_wire_header_redact(const unsigned char *line, size_t len, const struct snag_wire_secrets *secrets,
                            struct snag_buf *out);
 
 #endif

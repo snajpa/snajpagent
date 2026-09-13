@@ -11,8 +11,7 @@ test_strict_accepts_wire_json(void)
 {
     static const unsigned char input[] = " \n {\"b\":1.5,\"a\":[true,null]} \t";
     char error[192] = {0};
-    json_t *value = snag_json_load_strict(input, sizeof(input) - 1u,
-                                         sizeof(input), error, sizeof(error));
+    json_t *value = snag_json_load_strict(input, sizeof(input) - 1u, sizeof(input), error, sizeof(error));
 
     assert(value);
     assert(json_is_object(value));
@@ -26,8 +25,7 @@ test_strict_rejects_ambiguous_or_invalid_input(void)
 {
     static const unsigned char duplicate[] = "{\"x\":1,\"x\":2}";
     static const unsigned char decoded_nul[] = "{\"x\":\"\\u0000\"}";
-    static const unsigned char invalid_utf8[] = {'{', '"', 'x', '"', ':', '"',
-                                                  0xc0, '"', '}'};
+    static const unsigned char invalid_utf8[] = {'{', '"', 'x', '"', ':', '"', 0xc0, '"', '}'};
     struct input {
         const unsigned char *data;
         size_t len;
@@ -35,15 +33,13 @@ test_strict_rejects_ambiguous_or_invalid_input(void)
     } inputs[] = {
         {duplicate, sizeof(duplicate) - 1u, sizeof(duplicate)},
         {decoded_nul, sizeof(decoded_nul) - 1u, sizeof(decoded_nul)},
-        {invalid_utf8, sizeof(invalid_utf8), sizeof(invalid_utf8)},
-        {(const unsigned char *)"{}", 2u, 1u},
+        {invalid_utf8, sizeof(invalid_utf8), sizeof(invalid_utf8)}, {(const unsigned char *)"{}", 2u, 1u},
         {(const unsigned char *)"", 0u, 1u}
     };
 
     for (size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
         char error[192] = {0};
-        json_t *value = snag_json_load_strict(inputs[i].data, inputs[i].len,
-                                             inputs[i].max,
+        json_t *value = snag_json_load_strict(inputs[i].data, inputs[i].len, inputs[i].max,
                                              error, sizeof(error));
         assert(!value);
         assert(error[0]);
@@ -92,16 +88,13 @@ test_canonical_remains_durable_only(void)
     char error[192] = {0};
     json_t *value;
 
-    value = snag_json_load_canonical(canonical, sizeof(canonical) - 1u,
-                                    error, sizeof(error));
+    value = snag_json_load_canonical(canonical, sizeof(canonical) - 1u, error, sizeof(error));
     assert(value);
     json_decref(value);
 
-    value = snag_json_load_canonical(whitespace, sizeof(whitespace) - 1u,
-                                    error, sizeof(error));
+    value = snag_json_load_canonical(whitespace, sizeof(whitespace) - 1u, error, sizeof(error));
     assert(!value);
-    value = snag_json_load_canonical(real, sizeof(real) - 1u,
-                                    error, sizeof(error));
+    value = snag_json_load_canonical(real, sizeof(real) - 1u, error, sizeof(error));
     assert(!value);
 }
 

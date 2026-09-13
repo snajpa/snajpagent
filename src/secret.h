@@ -18,12 +18,9 @@ struct snag_secret_set {
 };
 
 /* Zero-initialize once; subsequent builds retain old values through rotation. */
-int snag_secret_set_build(struct snag_secret_set *set,
-                          const struct snag_config *config,
-                          const struct snag_credential *credential,
-                          char *error, size_t error_size);
+int snag_secret_set_build(struct snag_secret_set *set, const struct snag_config *config,
+                          const struct snag_credential *credential, char *error, size_t error_size);
 void snag_secret_set_free(struct snag_secret_set *set);
-int snag_secret_result(const struct snag_secret_set *set, json_t *result,
-                       char *error, size_t error_size);
+int snag_secret_result(const struct snag_secret_set *set, json_t *result, char *error, size_t error_size);
 
 #endif

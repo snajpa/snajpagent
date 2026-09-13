@@ -12,9 +12,7 @@
 #define SNAG_MAX_SSE_NAME 4096u
 
 enum snag_sse_record_kind {
-    SNAG_SSE_EVENT,
-    SNAG_SSE_COMMENT
-};
+    SNAG_SSE_EVENT, SNAG_SSE_COMMENT };
 
 struct snag_sse_record {
     enum snag_sse_record_kind kind;
@@ -27,8 +25,7 @@ struct snag_sse_record {
 };
 
 /* The callback may retain no record pointers and returns zero or minus one. */
-typedef int (*snag_sse_record_fn)(void *opaque,
-                                 const struct snag_sse_record *record);
+typedef int (*snag_sse_record_fn)(void *opaque, const struct snag_sse_record *record);
 
 struct snag_sse_parser {
     struct snag_buf line;
@@ -43,12 +40,10 @@ struct snag_sse_parser {
     bool failed;
 };
 
-void snag_sse_init(struct snag_sse_parser *parser, snag_sse_record_fn record,
-                  void *opaque);
+void snag_sse_init(struct snag_sse_parser *parser, snag_sse_record_fn record, void *opaque);
 void snag_sse_free(struct snag_sse_parser *parser);
 int snag_sse_feed(struct snag_sse_parser *parser, const void *data, size_t len,
                  char *error, size_t error_size);
-int snag_sse_finish(struct snag_sse_parser *parser,
-                   char *error, size_t error_size);
+int snag_sse_finish(struct snag_sse_parser *parser, char *error, size_t error_size);
 
 #endif

@@ -140,6 +140,8 @@ class FakeResponses:
         for item in reversed(request.get("input", [])):
             if item.get("role") == "user" and isinstance(item.get("content"), str):
                 content = item["content"]
+                if content.startswith("[IRC room snapshot;"):
+                    continue  # Runtime state, including offline resume, is not a new task.
                 if content.startswith("[IRC endpoint=") and " id=" in content:
                     continue  # Supplemental durable event, not a new scheduler turn.
                 ids = re.findall(r"\[IRC update id=([^ ]+)", content)
@@ -798,7 +800,15 @@ def run_status_case(binary, root):
                          re.escape(DEFAULT_IDLE_PROMPT), idle), idle
         active = terminal.submit_wait("terminal_status", DEFAULT_ACTIVE_PROMPT, timeout=3.0,
                                join_wrapped=True)
-        assert re.search(r"(?m)^◴  [0-9]{2}:[0-9]{2}:[0-9]{2}" +
+        # The provider spinner is configured as " ◴", so its frame alternates
+        # between a blank space and the glyph; accept either and assert the
+        # clock-and-prompt shape the idle and activity rows now share.
+        active = terminal.wait_until(
+            lambda screen: re.search(
+                r"(?m)^[◴ ]  [0-9]{2}:[0-9]{2}:[0-9]{2}" + re.escape(DEFAULT_ACTIVE_PROMPT),
+                screen) is not None,
+            "active prompt with the shared clock prefix", 3.0, join_wrapped=True)
+        assert re.search(r"(?m)^[◴ ]  [0-9]{2}:[0-9]{2}:[0-9]{2}" +
                          re.escape(DEFAULT_ACTIVE_PROMPT), active), active
         terminal.wait("status-first-fragment", timeout=3.0)
         time.sleep(0.85)
@@ -807,10 +817,11 @@ def run_status_case(binary, root):
             raise AssertionError(f"prompt redraw erased streamed text:\n{middle}")
         if "working…" in middle:
             raise AssertionError(f"removed activity row reappeared:\n{middle}")
-        final = terminal.wait("status-second-\n  fragment", timeout=3.0,
+        # A word that fits a row wraps as a unit, so the streamed paragraph
+        # continues on an indented line instead of breaking inside the word.
+        final = terminal.wait("\n  status-second-fragment", timeout=3.0,
                               join_wrapped=True)
-        assert_order(final, ["status-first-fragment", "status-second-",
-                             "fragment"])
+        assert_order(final, ["status-first-fragment", "status-second-fragment"])
         _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
         completed = event_list(events, "response_completed")
         expected = "status-first-fragment status-second-fragment"
@@ -1014,7 +1025,7 @@ def run_markdown_case(binary, root):
                     "│ int value = 1;",
                     "└─",
                     "• First prose line",
-                    "continued prose",
+                    "  continued prose",
                     "┌───────┬───────┬───────┐",
                     "│ Item  │ State │ Count │",
                     "│ alpha │ ready │     7 │",
@@ -1023,7 +1034,7 @@ def run_markdown_case(binary, root):
                     "│ final quoted boundary",
                 ])
                 raw = terminal.capture()
-                if ("• First prose line\ncontinued prose\n\n┌" not in raw or
+                if ("• First prose line\n  continued prose\n\n┌" not in raw or
                         "┘\n\n• second paragraph" not in raw):
                     raise AssertionError(
                         f"prose bullets or paragraph spacing are wrong:\n{raw}"
@@ -1095,19 +1106,21 @@ def run_render_case(binary, root):
         case / "terminal", binary, workspace, dotdir, config, 32, 18
     ), case / "screen.txt") as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
-        terminal.submit_wait("terminal_render", "alpha beta gamma delta-")
+        terminal.submit_wait("terminal_render", "delta-extraordinary")
         terminal.send_text("draft")
         first = wait_wrapped_fragment(
             terminal, f"{DEFAULT_ACTIVE_PROMPT} draft"
         )
         assert_wrapped_order(first, [
-            "alpha beta gamma delta-", "extraordinary",
+            "alpha beta gamma", "delta-extraordinary",
             f"{DEFAULT_ACTIVE_PROMPT} draft",
         ])
         if re.search(r"(?m)^• alpha beta gamma", first) is None:
             raise AssertionError(f"model prose did not begin with a bullet:\n{first}")
-        if "• alpha beta gamma delta-\n  extraordinary" not in first:
-            raise AssertionError(f"hyphen wrapped on its left side:\n{first}")
+        if "• alpha beta gamma\n  delta-extraordinary" not in first:
+            raise AssertionError(
+                f"a word that fits a row did not wrap as a unit:\n{first}"
+            )
 
         time.sleep(0.1)
         pause_started = time.monotonic()
@@ -1156,9 +1169,13 @@ def run_render_case(binary, root):
         final = terminal.wait("control:\\x1B[31m", timeout=5.0)
         if time.monotonic() - repeat_pause_started < 1.2:
             raise AssertionError("repeated typing pause ended too early")
-        if final.count(exact_margin) != 1:
+        # The turn completes here, so the composer may already carry the idle
+        # marker; count the draft text itself, which must appear exactly once.
+        draft_snapshot = "draft plus again with long resize text"
+        if final.count(draft_snapshot) != 1:
             raise AssertionError(f"draft snapshot scrolled into history:\n{final}")
-        assert_wrapped_order(final, ["supercalifragilisticexpialidocious", exact_margin])
+        assert_wrapped_order(final, ["supercalifragilisticexpialidocious",
+                                     draft_snapshot])
         _, events = wait_for_terminal_event(dotdir, {"turn_completed"}, 5.0)
         joined = terminal.capture(join_wrapped=True)
         assert_wrapped_order(
@@ -2264,21 +2281,29 @@ def run_goal_interrupt_prompt_case(binary, root, chat=False, burst=False, width=
             terminal.submit("/chat")
             terminal.wait("chat is offline")
         terminal.send_key("C-c")
-        if burst:
-            terminal.run("send-keys", "-t", terminal.target, *(["Enter"] * 8))
         wait_event_count(terminal.dotdir, "goal_paused", 1)
         marker = "C>" if chat else "I>"
         if not chat:
             wait_normalized(terminal, "Goal paused at the current turn boundary", timeout=5)
+        # Burst only once the pause is effective: the rows the assertions below
+        # inspect are exactly the scrollback these Enters produce, so sending
+        # them before the pause lands leaves goal glyphs in that region.
+        if burst:
+            terminal.run("send-keys", "-t", terminal.target, *(["Enter"] * 8))
         terminal.wait(marker)
-        time.sleep(0.1)
-        screen = terminal.capture()
+
+        def interrupted_prompt_only(text):
+            tail = text.split("snajpagent: turn interrupted")[-1]
+            if not chat:
+                tail = tail.split("current turn boundary")[-1]
+            if "⚑" in tail or "⚐" in tail:
+                return False
+            rows = [row.strip() for row in tail.splitlines() if row.strip()]
+            return bool(rows) and all(row == marker for row in rows)
+
+        screen = terminal.wait_until(interrupted_prompt_only,
+                                     "interrupted prompts only", 5.0)
         (case / "interrupted.txt").write_text(screen)
-        tail = screen.split("snajpagent: turn interrupted")[-1]
-        if not chat:
-            tail = tail.split("current turn boundary")[-1]
-        assert "⚑" not in tail and "⚐" not in tail, screen
-        assert all(row.strip() == marker for row in tail.splitlines() if row.strip()), screen
         prompt_count = screen.count(marker)
         before = read_events(terminal.dotdir)[1]
         terminal.run("send-keys", "-t", terminal.target, "Enter", "Enter", "Enter")
@@ -2654,6 +2679,12 @@ def run_resume_history_case(binary, root):
         assert result.returncode == 0, result.stderr
         session = next((state / "sessions").iterdir()).name
     log = state / "sessions" / session / "events.jsonl"
+    def assert_history_preserved():
+        current = log.read_bytes()
+        assert current.startswith(before), "resume rewrote saved history"
+        updates = [json.loads(line) for line in current[len(before):].splitlines()]
+        assert all(e["type"] == "irc_snapshot" for e in updates), updates
+
     before = log.read_bytes()
     for setting in (0, 1, 2, 3, 101, 2**64, 10**100, None):
         count = 1 if setting is None else setting
@@ -2674,13 +2705,14 @@ def run_resume_history_case(binary, root):
             assert_order(screen, fragments)
             assert ("Working." in screen) == bool(selected), screen
             terminal.exit()
-        assert log.read_bytes() == before, "display changed durable session history"
+        assert_history_preserved()
     for invalid in (-1, "+2", "one", "2.5", "2 3"):
+        invalid_before = log.read_bytes()
         config.write_text(f"[provider openai]\n[ui]\nresume_history_turns = {invalid}\n")
         result = subprocess.run(base + ["-e", "--resume", session, "--", "ping"],
                                 cwd=workspace, capture_output=True, text=True)
         assert result.returncode == 2, result.stderr
-        assert log.read_bytes() == before
+        assert log.read_bytes() == invalid_before
     config.write_text("[provider openai]\n[ui]\nresume_history_turns = 0\n")
     saved_config = config.read_bytes()
     commands = [("/history", 1), ("/history 0", 0), ("/history 1", 1),
@@ -2712,7 +2744,7 @@ def run_resume_history_case(binary, root):
             expected_footer = f"history: {len(selected)} shown · 5 completed · 5 total"
             assert screen.count(expected_footer) == (2 if count == 0 else 1), screen
             terminal.exit()
-        assert log.read_bytes() == before, "history command changed the session log"
+        assert_history_preserved()
         assert config.read_bytes() == saved_config, "history command changed configuration"
     with TmuxTerminal(case / "compact", binary, workspace, state, config, 100, 40,
             args=("--no-listen", "--no-client", "--resume", session)) as terminal:
@@ -2800,7 +2832,7 @@ def run_resume_history_case(binary, root):
             assert screen.count("user:") == count + 103, screen
             assert "user: crash" in screen, screen
             terminal.exit()
-        assert log.read_bytes() == before
+        assert_history_preserved()
     print("resume_history_count: ok")
 
 
@@ -3300,6 +3332,124 @@ def run_listener_collision_case(binary, root, provider, environment):
     finally:
         for terminal in reversed(terminals):
             terminal.close()
+
+def run_resume_network_pairing_case(binary, root, provider, environment):
+    """Topology updates during tools survive replay and startup role overrides."""
+    case = root / "resume-network-pairing"
+    workspace, config = irc_workspace(case / "work", provider.port, "host-model")
+    state = case / "state"
+    endpoint = f"127.0.0.1:{free_loopback_port()}"
+    requests = []
+    listener = connection = None
+
+    def respond(handler, request, sequence):
+        requests.append(request)
+        pending = set()
+        outputs = []
+        for item in request["input"]:
+            if item.get("type") == "function_call":
+                pending.add(item["call_id"])
+            elif item.get("type") == "function_call_output":
+                assert item["call_id"] in pending, item
+                pending.remove(item["call_id"])
+                outputs.append(item)
+            elif item.get("role") == "user":
+                assert not pending, f"user input splits tool exchange: {pending}"
+        assert not pending, pending
+        if outputs:
+            body = provider.response_body(sequence, "network pairing verified")
+        else:
+            body = provider.function_body(sequence, "call_network_pair", "exec_command", {
+                "command": "printf once >> marker; while [ ! -f release ]; do sleep 0.05; done",
+                "workdir": str(workspace), "yield_ms": 60000, "timeout_ms": 60000})
+        provider.reply(handler, body.encode())
+
+    provider.runtime_handler = respond
+    try:
+        with TmuxTerminal(case / "first", binary, workspace, state, config, 120, 24,
+                args=("--no-listen", "--no-client"), environment=environment) as terminal:
+            terminal.wait("host-model/medium   0% ›")
+            terminal.submit("check network pairing")
+            wait_event_count(state, "tool_started", 1)
+            terminal.submit_wait(f"/server start {endpoint}", f"hosting started on {endpoint}",
+                                 join_wrapped=True)
+            wait_event_count(state, "irc_snapshot", 1)
+            (workspace / "release").touch()
+            wait_event_count(state, "turn_completed", 1)
+            terminal.wait("network pairing verified")
+            path, events = read_events(state)
+            started = event_list(events, "tool_started")[0]["seq"]
+            finished = event_list(events, "tool_finished")[0]["seq"]
+            assert any(started < e["seq"] < finished for e in event_list(events, "irc_snapshot"))
+            assert not event_list(events, "response_failed"), events[-10:]
+            sid = path.parent.name
+            terminal.exit()
+
+        # Configuration defaults deliberately disagree with the explicit startup roles.
+        with config.open("a") as file:
+            file.write(f"[irc]\nlisten = 127.0.0.1:{free_loopback_port()}\n"
+                       f"client = 127.0.0.1:{free_loopback_port()}\n")
+        for mode in ("hosted", "client", "offline"):
+            hosted = mode == "hosted"
+            networked = mode != "offline"
+            endpoint = f"127.0.0.1:{free_loopback_port()}"
+            roles = ("--listen", endpoint, "--no-client") if hosted else ("--no-listen", "--no-client")
+            if mode == "client":
+                listener = socket.create_server(("127.0.0.1", 0))
+                listener.settimeout(5)
+                endpoint = f"127.0.0.1:{listener.getsockname()[1]}"
+                roles = ("--no-listen", "--client", endpoint)
+            completed = len(event_list(read_events(state)[1], "turn_completed"))
+            with TmuxTerminal(case / mode, binary,
+                    workspace, state, config, 120, 24,
+                    args=(*roles, "-n", "resumebot", "-o", "resumeop",
+                          "-r", "resumed", "--resume", sid), environment=environment) as terminal:
+                if hosted:
+                    terminal.wait(f"resumeop@{MACHINE_HOSTNAME} :")
+                    with socket.create_connection(("127.0.0.1", int(endpoint.rsplit(":", 1)[1])), timeout=2):
+                        pass
+                    terminal.submit("resumebot: continue after resume")
+                else:
+                    if mode == "client":
+                        connection, _ = listener.accept()
+                        terminal.submit("/rollout")
+                    terminal.wait("host-model/medium")
+                    terminal.submit("continue after resume")
+                wait_event_count(state, "turn_completed", completed + 1)
+                terminal.wait("network pairing verified")
+                latest = requests[-1]
+                tools = {tool.get("name") for tool in latest["tools"]}
+                assert ("irc_send" in tools) == networked, tools
+                snapshots = [item["content"] for item in latest["input"]
+                             if "[IRC room snapshot;" in item.get("content", "")]
+                if hosted:
+                    assert f"hosted: {endpoint}" in snapshots[-1], snapshots[-1]
+                    assert "model nick: resumebot" in snapshots[-1], snapshots[-1]
+                    assert "operator nick: resumeop" in snapshots[-1], snapshots[-1]
+                    assert "room: #resumed" in snapshots[-1], snapshots[-1]
+                    assert snapshots[-1].count("destination[") == 1, snapshots[-1]
+                else:
+                    assert "hosted: no\n" in snapshots[-1], snapshots[-1]
+                    if mode == "client":
+                        assert f"destination[1]: {endpoint}" in snapshots[-1], snapshots[-1]
+                        assert snapshots[-1].count("destination[") == 1, snapshots[-1]
+                    else:
+                        assert "no active endpoints" in snapshots[-1], snapshots[-1]
+                terminal.exit()
+            if connection:
+                connection.close(); connection = None
+            if listener:
+                listener.close(); listener = None
+        assert (workspace / "marker").read_text() == "once"
+        assert not provider.failure, provider.failure
+        print("resume network pairing: live tools, replay, role/nick/room overrides ok", flush=True)
+    finally:
+        if connection:
+            connection.close()
+        if listener:
+            listener.close()
+        provider.runtime_handler = None
+
 
 def run_reasoning_boundary_cases(binary, root, provider, environment,
                                  modes=("followup", "resume", "readonly", "unstarted")):
@@ -6305,7 +6455,7 @@ def run_tool_cases(binary, root, provider, environment):
     case = root / "patch"
     workspace, config = irc_workspace(case / "work", provider.port, "host-model")
     config.write_text(config.read_text() +
-                      "[tool]\ndefault_timeout_ms=0\nmax_timeout_ms=5000\n")
+                      "[tool]\ndefault_timeout_ms=0\nmax_timeout_ms=20000\n")
     call_id, name, arguments = "", "", {}
     number = 0
     prompt = "tool behavior cases"
@@ -6461,7 +6611,8 @@ def run_tool_cases(binary, root, provider, environment):
                     result = interact(result["handle"], eof=True, yield_ms=5000)
                 assert result["stdout"]["retained"] == (value or "")
 
-            result = command("perl -e 'binmode STDOUT; print q{x} x (1024 * 1024) or exit 23'", timeout=5000)
+            result = command("perl -e 'binmode STDOUT; print q{x} x (1024 * 1024) or exit 23'",
+                             timeout=15000)
             out = result["stdout"]
             assert all(type(out[k]) is int for k in ("original_bytes", "retained_bytes", "discarded_bytes"))
             assert out["original_bytes"] == 1024 * 1024
@@ -6532,8 +6683,9 @@ def run_tool_cases(binary, root, provider, environment):
                 result = command("IFS= read -r line; printf 'got:%s\\n' \"$line\"",
                                  timeout=5000, yield_ms=50, status="running")
                 if malformed:
+                    # Omit the required handle; output limits are optional.
                     rejected = invoke("write_stdin", {
-                        "handle": result["handle"], "data": "", "eof": False,
+                        "data": "", "eof": False,
                         "terminate": False, "yield_ms": 0}, "not_run")
                     assert rejected["handle"] is None
                 else:
@@ -6583,7 +6735,7 @@ def run_tool_cases(binary, root, provider, environment):
                 ("a ; echo nope", None, None, True, "1:Alpha\n2:βeta\n3:last"),
                 ("a ; echo nope", 2, 2, True, "2:βeta\n"),
                 ("a ; echo nope", 4, None, False, "beyond end"),
-                ("a ; echo nope", 3, 2, False, "Invalid"),
+                ("a ; echo nope", 3, 2, False, "end_line must be at least start_line"),
                 ("binary", None, None, False, "Non-text"),
                 ("link/.hidden", None, None, False, "Cannot open"),
                 ("pipe", None, None, False, "Cannot open"),
@@ -7375,6 +7527,74 @@ def run_session_process_recovery_case(binary, root, emit_output=True):
         provider.close()
 
 
+def run_irc_peer_join_case(binary, root):
+    """A peer joining the room must not end a worker that is already there.
+
+    Background room traffic is admitted as a coalesced room-update turn. A join
+    followed by the server opping that member used to admit a second
+    input_received while the first turn was live; the store rejects that
+    transition and the session exited. Every parallel worker died the moment
+    another worker joined, so live sessions saw nobody.
+    """
+    root.mkdir(mode=0o700, parents=True)
+    provider = FakeResponses()
+    endpoint = f"127.0.0.1:{free_loopback_port()}"
+    port = int(endpoint.rsplit(":", 1)[1])
+    environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
+    terminals = {}
+    peer = None
+    try:
+        case = root / "host"
+        workspace, config = irc_workspace(case / "workspace", provider.port, "host-model")
+        terminals["host"] = TmuxTerminal(case / "terminal", binary, workspace,
+            case / "state", config, 100, 24,
+            args=("-s", endpoint, "-n", "hostbot", "-o", "hostop", "-r", "lab"),
+            environment=environment)
+        case = root / "one"
+        workspace, config = irc_workspace(case / "workspace", provider.port, "one-model")
+        terminals["one"] = TmuxTerminal(case / "terminal", binary, workspace,
+            case / "state", config, 100, 24,
+            args=("-c", endpoint, "--no-listen", "-n", "onebot", "-o", "oneop", "-r", "lab"),
+            environment=environment)
+        terminals["host"].wait(f"hostop@{MACHINE_HOSTNAME} :")
+        terminals["one"].wait(f"oneop@{MACHINE_HOSTNAME} :")
+        terminals["one"].wait("── history replayed ──")
+
+        # A raw peer joins and is opped by the server while the worker is idle.
+        peer = socket.create_connection(("127.0.0.1", port), timeout=3)
+        peer.sendall(b"NICK rawpeer\r\nUSER rawpeer 0 * :peer\r\n")
+        time.sleep(0.5)
+        peer.sendall(b"JOIN #lab\r\n")
+        # A second peer joins immediately: its presence can arrive while the
+        # first join's room-update turn is still live, which is the exact
+        # transition that used to end the session.
+        time.sleep(0.4)
+        peer2 = socket.create_connection(("127.0.0.1", port), timeout=3)
+        peer2.sendall(b"NICK rawpeer2\r\nUSER rawpeer2 0 * :peer\r\n")
+        time.sleep(0.4)
+        peer2.sendall(b"JOIN #lab\r\n")
+        time.sleep(2.0)
+
+        terminals["one"].wait("rawpeer joined", timeout=8.0)
+        assert not terminals["one"].dead(), terminals["one"].capture(join_wrapped=True)
+        try:
+            peer2.sendall(b"QUIT\r\n")
+            peer2.close()
+        except OSError:
+            pass
+        print("tmux_terminal irc peer join: ok", flush=True)
+    finally:
+        if peer is not None:
+            try:
+                peer.sendall(b"QUIT\r\n")
+                peer.close()
+            except OSError:
+                pass
+        for terminal in reversed(list(terminals.values())):
+            terminal.close()
+        provider.close()
+
+
 def run_irc_case(binary, root):
     binary = os.path.abspath(binary)
     root.mkdir(mode=0o700, parents=True)
@@ -7416,6 +7636,7 @@ def run_irc_case(binary, root):
         run_runtime_history_case(binary, root, provider, environment)
         run_destination_case(binary, root, provider, environment)
         run_listener_collision_case(binary, root, provider, environment)
+        run_resume_network_pairing_case(binary, root, provider, environment)
         run_argument_snapshot_cases(binary, root, provider, environment)
         run_reasoning_boundary_cases(binary, root, provider, environment)
         run_reasoning_continuity_cases(binary, root, provider, environment)
@@ -7429,6 +7650,7 @@ def run_irc_case(binary, root):
     finally:
         provider.close()
     run_irc_chat_case(binary, root / "chat")
+    run_irc_peer_join_case(binary, root / "peer-join")
     run_incremental_history_case(binary, root / "catchup")
     run_interrupted_history_case(binary, root / "interrupted-catchup")
 

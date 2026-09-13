@@ -7,11 +7,7 @@
 #define SNAG_SECRET_MAX 16384u
 
 enum snag_secret_kind {
-    SNAG_SECRET_NONE,
-    SNAG_SECRET_ENV,
-    SNAG_SECRET_LITERAL,
-    SNAG_SECRET_FILE
-};
+    SNAG_SECRET_NONE, SNAG_SECRET_ENV, SNAG_SECRET_LITERAL, SNAG_SECRET_FILE };
 
 /* Owns its strings. Copies are borrowed unless explicitly parsed anew. */
 struct snag_secret_source {

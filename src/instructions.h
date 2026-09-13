@@ -18,14 +18,11 @@ int snag_instructions_add_directory(struct snag_instruction_set *set, const char
                                    char *error, size_t error_size);
 int snag_instructions_add_file(struct snag_instruction_set *set, const char *path,
                               char *error, size_t error_size);
-int snag_instructions_discover(struct snag_instruction_set *set,
-                              const char *workspace,
+int snag_instructions_discover(struct snag_instruction_set *set, const char *workspace,
                               char *error, size_t error_size);
 json_t *snag_instructions_metadata_json(const struct snag_instruction_set *set);
-int snag_instructions_metadata_valid(const json_t *array,
-                                    char *error, size_t error_size);
-int snag_instructions_match_metadata(const struct snag_instruction_set *set,
-                                    const json_t *array,
+int snag_instructions_metadata_valid(const json_t *array, char *error, size_t error_size);
+int snag_instructions_match_metadata(const struct snag_instruction_set *set, const json_t *array,
                                     char *error, size_t error_size);
 
 #endif

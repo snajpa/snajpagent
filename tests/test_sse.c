@@ -21,8 +21,7 @@ capture_record(void *opaque, const struct snag_sse_record *record)
     struct capture *capture = opaque;
 
     assert(record->data_len < sizeof(capture->data));
-    if (record->data_len)
-        memcpy(capture->data, record->data, record->data_len);
+    if (record->data_len) memcpy(capture->data, record->data, record->data_len);
     capture->data[record->data_len] = '\0';
     if (record->kind == SNAG_SSE_COMMENT) {
         ++capture->comments;
@@ -31,11 +30,9 @@ capture_record(void *opaque, const struct snag_sse_record *record)
     ++capture->events;
     assert(record->event_len < sizeof(capture->event));
     assert(record->id_len < sizeof(capture->id));
-    if (record->event_len)
-        memcpy(capture->event, record->event, record->event_len);
+    if (record->event_len) memcpy(capture->event, record->event, record->event_len);
     capture->event[record->event_len] = '\0';
-    if (record->id_len)
-        memcpy(capture->id, record->id, record->id_len);
+    if (record->id_len) memcpy(capture->id, record->id, record->id_len);
     capture->id[record->id_len] = '\0';
     return 0;
 }
@@ -45,8 +42,7 @@ count_record(void *opaque, const struct snag_sse_record *record)
 {
     unsigned int *count = opaque;
 
-    if (record->kind == SNAG_SSE_EVENT)
-        ++*count;
+    if (record->kind == SNAG_SSE_EVENT) ++*count;
     return 0;
 }
 
@@ -71,12 +67,10 @@ test_streams(void)
             "id: one\r\nevent: response.output_text.delta\r\ndata: {\"delta\":\"ha\"}\r"
             "\ndata: {\"delta\":\"ha\"}\r\nretry: 1000\r\n\r\n",
             sizeof("id: one\r\nevent: response.output_text.delta\r\ndata: {\"delta\":\"ha\"}\r") - 1u,
-            {1u, 0u, "response.output_text.delta", "one",
-             "{\"delta\":\"ha\"}\n{\"delta\":\"ha\"}"}
+            {1u, 0u, "response.output_text.delta", "one", "{\"delta\":\"ha\"}\n{\"delta\":\"ha\"}"}
         },
         {
-            ": keepalive\n\nid: stable\n\nevent: empty\ndata:\n\n"
-            "data:\ndata:\n\ndata: final\n\n",
+            ": keepalive\n\nid: stable\n\nevent: empty\ndata:\n\n" "data:\ndata:\n\ndata: final\n\n",
             0u, {3u, 1u, "", "stable", "final"}
         },
         {
@@ -91,11 +85,9 @@ test_streams(void)
         char error[128] = {0};
 
         snag_sse_init(&parser, capture_record, &capture);
-        if (cases[i].split)
-            assert(snag_sse_feed(&parser, cases[i].wire, cases[i].split,
+        if (cases[i].split) assert(snag_sse_feed(&parser, cases[i].wire, cases[i].split,
                                 error, sizeof(error)) == 0);
-        assert(snag_sse_feed(&parser, cases[i].wire + cases[i].split,
-                            strlen(cases[i].wire) - cases[i].split,
+        assert(snag_sse_feed(&parser, cases[i].wire + cases[i].split, strlen(cases[i].wire) - cases[i].split,
                             error, sizeof(error)) == 0);
         assert(snag_sse_finish(&parser, error, sizeof(error)) == 0);
         assert(capture.events == cases[i].expected.events);
@@ -121,8 +113,7 @@ test_bounds(void)
     input[SNAG_MAX_SSE_EVENT] = '\n';
     input[SNAG_MAX_SSE_EVENT + 1u] = '\n';
     snag_sse_init(&parser, count_record, &count);
-    assert(snag_sse_feed(&parser, input, SNAG_MAX_SSE_EVENT + 2u,
-                        error, sizeof(error)) == 0);
+    assert(snag_sse_feed(&parser, input, SNAG_MAX_SSE_EVENT + 2u, error, sizeof(error)) == 0);
     assert(snag_sse_finish(&parser, error, sizeof(error)) == 0);
     assert(count == 1u);
     snag_sse_free(&parser);
@@ -130,8 +121,7 @@ test_bounds(void)
     memset(error, 0, sizeof(error));
     snag_sse_init(&parser, NULL, NULL);
     memset(input, 'x', SNAG_MAX_SSE_EVENT + 1u);
-    assert(snag_sse_feed(&parser, input, SNAG_MAX_SSE_EVENT + 1u,
-                        error, sizeof(error)) < 0);
+    assert(snag_sse_feed(&parser, input, SNAG_MAX_SSE_EVENT + 1u, error, sizeof(error)) < 0);
     assert(strstr(error, "line exceeds"));
     snag_sse_free(&parser);
 
@@ -140,10 +130,8 @@ test_bounds(void)
     memcpy(input, "data: ", 6u);
     memset(input + 6u, 'x', SNAG_MAX_SSE_EVENT - 6u);
     input[SNAG_MAX_SSE_EVENT] = '\n';
-    assert(snag_sse_feed(&parser, input, SNAG_MAX_SSE_EVENT + 1u,
-                        error, sizeof(error)) == 0);
-    assert(snag_sse_feed(&parser, "data: 123456\n", 13u,
-                        error, sizeof(error)) < 0);
+    assert(snag_sse_feed(&parser, input, SNAG_MAX_SSE_EVENT + 1u, error, sizeof(error)) == 0);
+    assert(snag_sse_feed(&parser, "data: 123456\n", 13u, error, sizeof(error)) < 0);
     assert(strstr(error, "event exceeds"));
     snag_sse_free(&parser);
 
@@ -170,12 +158,9 @@ test_failures(void)
         const unsigned char *data;
         size_t len;
     } cases[] = {
-        {bare_cr, sizeof(bare_cr) - 1u},
-        {nul, sizeof(nul) - 1u},
-        {invalid_utf8, sizeof(invalid_utf8)},
-        {retry, sizeof(retry) - 1u},
-        {truncated, sizeof(truncated) - 1u},
-        {event_only, sizeof(event_only) - 1u},
+        {bare_cr, sizeof(bare_cr) - 1u}, {nul, sizeof(nul) - 1u},
+        {invalid_utf8, sizeof(invalid_utf8)}, {retry, sizeof(retry) - 1u},
+        {truncated, sizeof(truncated) - 1u}, {event_only, sizeof(event_only) - 1u},
         {cr_at_eof, sizeof(cr_at_eof) - 1u}
     };
 
@@ -186,10 +171,8 @@ test_failures(void)
         int rc;
 
         snag_sse_init(&parser, capture_record, &capture);
-        rc = snag_sse_feed(&parser, cases[i].data, cases[i].len,
-                          error, sizeof(error));
-        if (rc == 0)
-            rc = snag_sse_finish(&parser, error, sizeof(error));
+        rc = snag_sse_feed(&parser, cases[i].data, cases[i].len, error, sizeof(error));
+        if (rc == 0) rc = snag_sse_finish(&parser, error, sizeof(error));
         assert(rc < 0 && errno == EPROTO);
         assert(error[0]);
         assert(snag_sse_feed(&parser, "", 0u, error, sizeof(error)) < 0);
@@ -206,8 +189,7 @@ test_consumer_failure(void)
 
     errno = 0;
     snag_sse_init(&parser, reject_record, NULL);
-    assert(snag_sse_feed(&parser, stream, sizeof(stream) - 1u,
-                        error, sizeof(error)) < 0);
+    assert(snag_sse_feed(&parser, stream, sizeof(stream) - 1u, error, sizeof(error)) < 0);
     assert(errno == ECANCELED);
     assert(strstr(error, "consumer rejected"));
     snag_sse_free(&parser);

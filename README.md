@@ -31,6 +31,8 @@ Empty Enter leaves a prompt line and opens a fresh prompt, like a shell.
 
 Read its replies and scroll back normally. Tool details are hidden by default;
 `/verbose 1` shows compact activity and `/verbose 2` adds input/result previews.
+Tool rows carry the same short call reference, and cut or hidden display content
+is marked with a dim `[…]`.
 Type these commands and press Enter, even while the model works. `/help` lists
 command syntax and keys; brackets mark optional arguments.
 
@@ -258,6 +260,27 @@ For inspection without commands or edits, use `/ro QUERY`. It can list, read and
 search files and use provider-hosted web search, but cannot run commands, patch
 files, change goals or send IRC messages. `/queue /ro QUERY` asks it next during
 active work. Readable local files remain accessible and session history is recorded.
+
+### Restrict what the model may do
+
+Configuration can filter model tool calls before they run. Add `[rule NAME]`
+sections; they are validated when the configuration loads, so a typo fails
+startup instead of becoming silent policy.
+
+```ini
+[rule deny-recursive-delete]
+chain  = out
+match  = {"/tool":"^exec_command$","/text":"rm[[:space:]]+-[^[:space:]]*[rf]"}
+action = reject
+text   = "Recursive force-delete is disabled; delete explicit paths."
+```
+
+A rejected call is reported to the model as not run, never quietly dropped.
+Rules can `pass`, `reject`, `jump` to a reusable chain, `return`, and log every
+match with a template. **This is filtering, not a sandbox**: a regular expression
+over a command is not confinement, so keep using read-only turns and separate
+accounts for real isolation. See `design/io-rules.md` for the full syntax and a
+gallery of examples.
 
 ## Install and choose a provider
 

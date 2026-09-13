@@ -32,6 +32,12 @@ Server and client roles are deliberately composable, including
 `-s ENDPOINT -c ENDPOINT`. Incoming traffic is presented to the one local
 agent and operator, but is not blindly bridged from one server to another.
 
+Interactive resume uses current configuration plus these explicit startup
+overrides. It opens the selected listener and client roles before continuing
+saved work, and supplies the resulting topology and identities to the UI and
+model. Historical room snapshots remain conversation data; the live runtime
+owns the current networking state.
+
 The default endpoint is `localhost:6667`. A bare `-s`, `--listen`, `-c`, or
 `--client` uses it. An explicit endpoint accepts `HOST`, `HOST:PORT`,
 `[IPv6]`, or `[IPv6]:PORT`; an omitted port is 6667. Short attached arguments,
@@ -356,7 +362,8 @@ appended to model text.
 
 All modes use the same process-local ladder (flag count or `/verbose N`):
 
-- verbosity 1: compact tool start/outcome rows, no output body;
+- verbosity 1: compact tool start/outcome rows, each carrying the same short
+  call reference in the same column, no output body;
 - verbosity 2: 1,024 argument / 512 output character previews;
 - verbosity 3: full retained arguments, execution context and results, preserving
   `[tool] max_output_bytes` and capture limits;
@@ -368,7 +375,11 @@ All modes use the same process-local ladder (flag count or `/verbose N`):
 Levels 4–6 are live-only in visible rollout, never accumulated behind chat.
 Completed tool details refer to durable events and are formatted at the current
 level when first visited. Raising the level does not replay visited records;
-lowering it stops now-ineligible remaining detail. `/verbose` is UI-local and
+lowering it stops now-ineligible remaining detail. One dim `[…]` marks display
+content cut or hidden by the current level; it is display-only and complete
+command output remains in the durable journal. One logical activity burst parks
+and repaints the composer once rather than once per internal output slice.
+`/verbose` is UI-local and
 remains usable during engine work; its reply never becomes a room message.
 There is no config verbosity setting or per-mode level resolver.
 
@@ -445,6 +456,11 @@ workdir, arguments, and captured command-output lines that follow it.
 
 ## Model Input And Steering
 
+Topology snapshots received during a response/tool exchange share the ordered
+deferred-input queue with steering. They appear after all results in that group
+and before the next request, retaining their user-data provenance. Replay and
+compaction apply the same ordering to existing session journals.
+
 When any network role is enabled, the fixed system harness sent before the
 conversation explains:
 
@@ -486,7 +502,10 @@ in complete message batches and are admitted through the steering
 path at the earliest safe response/tool boundary. Messages arriving before
 that boundary are coalesced in arrival order, so several mentions cause one
 additional model cycle rather than a cancellation/restart storm. Background
-entries wait for the next response cycle or queued room-update turn. No
+entries wait for the next response cycle or queued room-update turn; they never
+admit a second `input_received` while a turn is live. A peer joining, being
+opped or leaving is ordinary background context and must never end or interrupt
+another worker's session. No
 network read waits for a model call to finish. A room-update turn caused only
 by peers or notifications may end without model-authored chat; snajpagent does
 not remind, retry, or force a reaction to that traffic.

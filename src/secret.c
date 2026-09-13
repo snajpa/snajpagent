@@ -9,8 +9,7 @@
 void
 snag_secret_set_free(struct snag_secret_set *set)
 {
-    for (size_t i = 0; i < set->wire.count; ++i)
-        snag_secret_bytes_free((char *)set->values[i]);
+    for (size_t i = 0; i < set->wire.count; ++i) snag_secret_bytes_free((char *)set->values[i]);
     memset(set, 0, sizeof(*set));
 }
 
@@ -18,8 +17,7 @@ snag_secret_set_free(struct snag_secret_set *set)
 static int
 append_secret(struct snag_secret_set *set, char *value)
 {
-    if (!value)
-        return -1;
+    if (!value) return -1;
     for (size_t i = 0; i < set->wire.count; ++i)
         if (strcmp(value, set->values[i]) == 0) {
             snag_secret_bytes_free(value);
@@ -34,36 +32,27 @@ append_secret(struct snag_secret_set *set, char *value)
 }
 
 int
-snag_secret_set_build(struct snag_secret_set *set,
-                     const struct snag_config *config,
-                     const struct snag_credential *credential,
-                     char *error, size_t error_size)
+snag_secret_set_build(struct snag_secret_set *set, const struct snag_config *config,
+                     const struct snag_credential *credential, char *error, size_t error_size)
 {
     set->wire.values = set->values;
     if (credential && credential->len &&
-        append_secret(set, snag_strdup_checked(credential->value, SNAG_WIRE_SECRET_MAX)) < 0)
-        goto failed;
-    if (!config)
-        return 0;
+        append_secret(set, snag_strdup_checked(credential->value, SNAG_WIRE_SECRET_MAX)) < 0) goto failed;
+    if (!config) return 0;
     for (size_t i = 0; i < config->provider_count; ++i) {
         const struct snag_secret_source *source = &config->providers[i].api_key;
         char *value = NULL;
-        if (source->kind == SNAG_SECRET_NONE ||
-            snag_secret_source_resolve(source, &value, NULL, 0u) < 0)
+        if (source->kind == SNAG_SECRET_NONE || snag_secret_source_resolve(source, &value, NULL, 0u) < 0)
             continue; /* Inactive providers do not gate the selected one. */
-        if (append_secret(set, value) < 0)
-            goto failed;
+        if (append_secret(set, value) < 0) goto failed;
     }
     for (size_t i = 0; i < config->secret_count; ++i) {
         char *value = NULL;
-        if (snag_secret_source_resolve(&config->secrets[i], &value, error, error_size) < 0)
-            return -1;
-        if (append_secret(set, value) < 0)
-            goto failed;
+        if (snag_secret_source_resolve(&config->secrets[i], &value, error, error_size) < 0) return -1;
+        if (append_secret(set, value) < 0) goto failed;
     }
     return 0;
-failed:
-    return snag_errorf(error, error_size, "cannot retain secret protection snapshot");
+failed: return snag_errorf(error, error_size, "cannot retain secret protection snapshot");
 }
 
 static int
@@ -74,8 +63,7 @@ redact_text(const struct snag_secret_set *set, json_t *result, const char *key,
     json_t *wrapper = NULL, *redacted = NULL;
     int rc = -1;
 
-    if (!json_is_string(text))
-        return 0;
+    if (!json_is_string(text)) return 0;
     struct snag_buf encoded = {.max = SNAG_WIRE_BODY_MAX};
     struct snag_buf clean = {.max = SNAG_WIRE_BODY_MAX};
     wrapper = json_object();

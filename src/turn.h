@@ -48,24 +48,15 @@ struct snag_process_state {
     "ask the operator to clarify."
 
 enum snag_output_correction {
-    SNAG_OUTPUT_CORRECTION_NONE,
-    SNAG_OUTPUT_CORRECTION_EMPTY,
-    SNAG_OUTPUT_CORRECTION_OVERSIZED,
-    SNAG_OUTPUT_CORRECTION_CYBER_POLICY
-};
+    SNAG_OUTPUT_CORRECTION_NONE, SNAG_OUTPUT_CORRECTION_EMPTY,
+    SNAG_OUTPUT_CORRECTION_OVERSIZED, SNAG_OUTPUT_CORRECTION_CYBER_POLICY };
 
 /* These are semantic response items, not a provider plug-in interface. */
 enum snag_item_kind {
-    SNAG_ITEM_ASSISTANT,
-    SNAG_ITEM_REFUSAL,
-    SNAG_ITEM_TOOL_CALL
-};
+    SNAG_ITEM_ASSISTANT, SNAG_ITEM_REFUSAL, SNAG_ITEM_TOOL_CALL };
 
 enum snag_item_phase {
-    SNAG_PHASE_NONE,
-    SNAG_PHASE_COMMENTARY,
-    SNAG_PHASE_FINAL_ANSWER
-};
+    SNAG_PHASE_NONE, SNAG_PHASE_COMMENTARY, SNAG_PHASE_FINAL_ANSWER };
 
 struct snag_response_item {
     enum snag_item_kind kind;
@@ -100,12 +91,7 @@ struct snag_response_graph {
 };
 
 enum snag_graph_outcome {
-    SNAG_GRAPH_CALLS,
-    SNAG_GRAPH_FINAL,
-    SNAG_GRAPH_REFUSAL,
-    SNAG_GRAPH_NONPRODUCTIVE,
-    SNAG_GRAPH_CONFLICT
-};
+    SNAG_GRAPH_CALLS, SNAG_GRAPH_FINAL, SNAG_GRAPH_REFUSAL, SNAG_GRAPH_NONPRODUCTIVE, SNAG_GRAPH_CONFLICT };
 
 struct snag_graph_decision {
     enum snag_graph_outcome outcome;
@@ -118,45 +104,31 @@ void snag_response_graph_free(struct snag_response_graph *graph);
 bool snag_reasoning_item_valid(const json_t *item);
 bool snag_response_continuation_valid(const json_t *items, size_t semantic_count);
 /* Borrowed view; strings/arguments live until the owning graph is changed. */
-struct snag_response_item snag_response_graph_item(const struct snag_response_graph *graph,
-                                                   size_t index);
-int snag_response_graph_set_provider_id(struct snag_response_graph *graph,
-                                       const char *provider_response_id);
-int snag_response_graph_add_public(struct snag_response_graph *graph,
-                                  enum snag_item_kind kind,
-                                  enum snag_item_phase phase,
-                                  const char *provider_item_id,
-                                  const char *text);
-int snag_response_graph_add_call(struct snag_response_graph *graph,
-                                const char *provider_item_id,
-                                const char *provider_call_id,
-                                const char *name, json_t *arguments);
+struct snag_response_item snag_response_graph_item(const struct snag_response_graph *graph, size_t index);
+int snag_response_graph_set_provider_id(struct snag_response_graph *graph, const char *provider_response_id);
+int snag_response_graph_add_public(struct snag_response_graph *graph, enum snag_item_kind kind,
+                                  enum snag_item_phase phase, const char *provider_item_id, const char *text);
+int snag_response_graph_add_call(struct snag_response_graph *graph, const char *provider_item_id,
+                                const char *provider_call_id, const char *name, json_t *arguments);
 int snag_response_graph_classify(const struct snag_response_graph *graph,
-                                struct snag_graph_decision *decision,
-                                char *error, size_t error_size);
+                                struct snag_graph_decision *decision, char *error, size_t error_size);
 json_t *snag_response_graph_json(const struct snag_response_graph *graph);
 int snag_response_usage_valid(const struct snag_response_usage *usage);
 /* Positive rejection facts, zero for absence; result is positive or unknown. */
-uint64_t snag_capacity_safety_ceiling(uint64_t context_limit_tokens,
-                                     uint64_t requested_input_tokens,
+uint64_t snag_capacity_safety_ceiling(uint64_t context_limit_tokens, uint64_t requested_input_tokens,
                                      uint64_t requested_output_tokens);
 json_t *snag_response_usage_json(const struct snag_response_usage *usage);
-int snag_response_usage_from_json(const json_t *value,
-                                 struct snag_response_usage *usage);
-int snag_response_graph_from_json(struct snag_response_graph *graph,
-                                 const json_t *items,
+int snag_response_usage_from_json(const json_t *value, struct snag_response_usage *usage);
+int snag_response_graph_from_json(struct snag_response_graph *graph, const json_t *items,
                                  char *error, size_t error_size);
-int snag_partial_public_validate(const json_t *items,
-                                char *error, size_t error_size);
-int snag_tool_action_digest(const struct snag_response_item *call,
-                           const char *resolved_workdir,
+int snag_partial_public_validate(const json_t *items, char *error, size_t error_size);
+int snag_tool_action_digest(const struct snag_response_item *call, const char *resolved_workdir,
                            char out[SNAG_SHA256_HEX_LEN + 1u]);
 
 const char *snag_item_kind_name(enum snag_item_kind kind);
 const char *snag_item_phase_name(enum snag_item_phase phase);
 
-json_t *snag_tool_result(const char *status, const char *reason,
-                        const char *model_text, int exit_code,
+json_t *snag_tool_result(const char *status, const char *reason, const char *model_text, int exit_code,
                         uint64_t duration_ms);
 json_t *snag_tool_result_not_run(const char *reason);
 json_t *snag_tool_result_terminal(bool succeeded, const char *model_text);

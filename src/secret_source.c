@@ -14,8 +14,7 @@ void
 snag_secret_clear(void *data, size_t len)
 {
     volatile unsigned char *p = data;
-    for (size_t i = 0; i < len; ++i)
-        p[i] = 0;
+    for (size_t i = 0; i < len; ++i) p[i] = 0;
 }
 
 void
@@ -41,8 +40,7 @@ environment_name(const char *name)
 {
     for (size_t i = 0; name[i]; ++i) {
         unsigned char c = (unsigned char)name[i];
-        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-              c == '_' || (i && c >= '0' && c <= '9')))
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || (i && c >= '0' && c <= '9')))
             return false;
     }
     return name[0] && strlen(name) <= 255u;
@@ -59,70 +57,56 @@ snag_secret_source_parse(struct snag_secret_source *out, const char *expression,
     int rc = -1;
 
     struct snag_buf path = {.max = SNAG_SECRET_MAX + 1u};
-    if (!len || len > 65536u)
-        goto invalid;
+    if (!len || len > 65536u) goto invalid;
     source.expression = snag_strdup_checked(expression, 65536u);
-    if (!source.expression)
-        goto invalid;
+    if (!source.expression) goto invalid;
     if (expression[0] == '"') {
         literal = json_loadb(expression, len, JSON_DECODE_ANY, NULL);
         if (!json_is_string(literal) || !json_string_length(literal) ||
             json_string_length(literal) > SNAG_SECRET_MAX ||
-            strlen(json_string_value(literal)) != json_string_length(literal))
-            goto invalid;
+            strlen(json_string_value(literal)) != json_string_length(literal)) goto invalid;
         source.kind = SNAG_SECRET_LITERAL;
         source.value = snag_strdup_checked(json_string_value(literal), SNAG_SECRET_MAX);
     } else if (strncmp(expression, "${", 2u) == 0) {
-        if (len < 4u || len > 258u || expression[len - 1u] != '}')
-            goto invalid;
+        if (len < 4u || len > 258u || expression[len - 1u] != '}') goto invalid;
         source.kind = SNAG_SECRET_ENV;
         source.value = snag_strdup_checked(expression + 2u, 256u);
-        if (!source.value)
-            goto invalid;
+        if (!source.value) goto invalid;
         source.value[len - 3u] = '\0';
-        if (!environment_name(source.value))
-            goto invalid;
+        if (!environment_name(source.value)) goto invalid;
     } else {
         const char *base = NULL;
         source.kind = SNAG_SECRET_FILE;
         source.value = snag_strdup_checked(expression, SNAG_SECRET_MAX);
-        if (!source.value)
-            goto invalid;
+        if (!source.value) goto invalid;
         if (snag_path_root_len(expression)) {
-            if (snag_buf_printf(&path, "%s", expression) < 0)
-                goto invalid;
+            if (snag_buf_printf(&path, "%s", expression) < 0) goto invalid;
         } else if (strncmp(expression, "~/", 2u) == 0) {
             home = snag_home_directory();
             base = home;
-            if (!snag_path_root_len(base) ||
-                snag_buf_printf(&path, "%s/%s", base, expression + 2u) < 0)
+            if (!snag_path_root_len(base) || snag_buf_printf(&path, "%s/%s", base, expression + 2u) < 0)
                 goto invalid;
         } else {
             const char *slash = config_path ? strrchr(config_path, '/') : NULL;
             if (!slash || !snag_path_root_len(config_path) ||
                 snag_buf_append(&path, config_path, (size_t)(slash - config_path)) < 0 ||
-                snag_buf_printf(&path, "/%s", expression) < 0)
-                goto invalid;
+                snag_buf_printf(&path, "/%s", expression) < 0) goto invalid;
         }
-        if (snag_buf_terminate(&path) < 0)
-            goto invalid;
+        if (snag_buf_terminate(&path) < 0) goto invalid;
         snag_path_slashes((char *)path.data);
         source.path = (char *)path.data;
         path.data = NULL;
     }
-    if (!source.value)
-        goto invalid;
+    if (!source.value) goto invalid;
     snag_secret_source_free(out);
     *out = source;
     memset(&source, 0, sizeof(source));
     rc = 0;
     goto done;
-invalid:
-    errno = EINVAL;
+invalid: errno = EINVAL;
     snag_errorf(error, error_size,
                "invalid secret source; use ${ENV}, a double-quoted literal, or a file path");
-done:
-    free(home);
+done: free(home);
     if (json_is_string(literal))
         snag_secret_clear((void *)json_string_value(literal), json_string_length(literal));
     json_decref(literal);
@@ -142,43 +126,33 @@ snag_secret_source_resolve(const struct snag_secret_source *source, char **out,
     *out = NULL;
     if (source->kind == SNAG_SECRET_ENV) {
         value = snag_environment(source->value);
-        if (value)
-            len = strlen(value);
+        if (value) len = strlen(value);
     } else if (source->kind == SNAG_SECRET_LITERAL) {
         const char *text = source->value;
-        while (text && len <= SNAG_SECRET_MAX && text[len])
-            ++len;
-        if (!text || !len || len > SNAG_SECRET_MAX)
-            goto done;
+        while (text && len <= SNAG_SECRET_MAX && text[len]) ++len;
+        if (!text || !len || len > SNAG_SECRET_MAX) goto done;
         value = snag_strdup_checked(text, SNAG_SECRET_MAX);
     } else if (source->kind == SNAG_SECRET_FILE) {
         snag_file_info st;
         /* Reject special files without hanging; symlinks are intentional sources. */
         fd = snag_open_secret_file(source->path);
         if (fd < 0 || snag_fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) ||
-            st.st_size < 0 || (uintmax_t)st.st_size > SNAG_SECRET_MAX + 2u)
-            goto done;
+            st.st_size < 0 || (uintmax_t)st.st_size > SNAG_SECRET_MAX + 2u) goto done;
         value = calloc(SNAG_SECRET_MAX + 4u, 1u);
-        if (!value)
-            goto done;
+        if (!value) goto done;
         while (len < SNAG_SECRET_MAX + 3u) {
             ssize_t n = read(fd, value + len, SNAG_SECRET_MAX + 3u - len);
-            if (n < 0 && errno == EINTR)
-                continue;
-            if (n < 0)
-                goto done;
-            if (!n)
-                break;
+            if (n < 0 && errno == EINTR) continue;
+            if (n < 0) goto done;
+            if (!n) break;
             len += (size_t)n;
         }
         if (len && value[len - 1u] == '\n') {
             value[--len] = '\0';
-            if (len && value[len - 1u] == '\r')
-                value[--len] = '\0';
+            if (len && value[len - 1u] == '\r') value[--len] = '\0';
         }
     }
-    if (!value || !len || len > SNAG_SECRET_MAX ||
-        !snag_utf8_valid((const unsigned char *)value, len, true))
+    if (!value || !len || len > SNAG_SECRET_MAX || !snag_utf8_valid((const unsigned char *)value, len, true))
         goto done;
     *out = value;
     value = NULL;
@@ -188,8 +162,7 @@ done:
         snag_secret_clear(value, len);
         free(value);
     }
-    if (fd >= 0)
-        (void)close(fd);
+    if (fd >= 0) (void)close(fd);
     if (rc < 0) {
         errno = EINVAL;
         snag_errorf(error, error_size, "%s secret source%s%s is unavailable, empty or invalid",

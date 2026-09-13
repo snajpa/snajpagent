@@ -81,8 +81,7 @@ int snag_ui_text(struct snag_ui *ui, enum snag_ui_operation op, const char *text
 int snag_ui_capture_route(struct snag_ui *ui, const char *text);
 uint32_t snag_ui_pause_remaining(struct snag_ui *ui);
 int snag_ui_open(struct snag_ui *ui, char *error, size_t error_size);
-int snag_ui_external(struct snag_ui *ui, bool begin,
-                      char *error, size_t error_size);
+int snag_ui_external(struct snag_ui *ui, bool begin, char *error, size_t error_size);
 int snag_ui_prompt(struct snag_ui *ui, bool active, const char *label,
                     const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                     uint32_t per_second, unsigned int states);
@@ -92,8 +91,7 @@ int snag_ui_composer(struct snag_ui *ui, bool active, const char *format,
                     const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                     uint32_t per_second, unsigned int states, const char *submitted);
 int snag_ui_validate_prompt(struct snag_ui *ui, const char *label,
-                    const char *const spinners[SNAG_TERM_SPINNER_COUNT],
-                    uint32_t per_second);
+                    const char *const spinners[SNAG_TERM_SPINNER_COUNT], uint32_t per_second);
 int snag_ui_simple_prompt(struct snag_ui *ui, bool active);
 bool snag_ui_leaving(const struct snag_ui *ui);
 int snag_ui_insert_draft(struct snag_ui *, const char *);

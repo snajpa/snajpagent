@@ -12,49 +12,38 @@
 static int
 secrets_valid(const struct snag_wire_secrets *secrets)
 {
-    if (!secrets)
-        return 0;
-    if (secrets->count > SNAG_WIRE_SECRET_COUNT_MAX ||
-        (secrets->count && !secrets->values))
+    if (!secrets) return 0;
+    if (secrets->count > SNAG_WIRE_SECRET_COUNT_MAX || (secrets->count && !secrets->values))
         return snag_errno(EINVAL);
     for (size_t i = 0; i < secrets->count; ++i) {
         size_t len;
-        if (!secrets->values[i])
-            return snag_errno(EINVAL);
+        if (!secrets->values[i]) return snag_errno(EINVAL);
         len = strlen(secrets->values[i]);
-        if (!len || len > SNAG_WIRE_SECRET_MAX)
-            return snag_errno(EINVAL);
+        if (!len || len > SNAG_WIRE_SECRET_MAX) return snag_errno(EINVAL);
     }
     return 0;
 }
 
 size_t
-snag_wire_secret_match(const unsigned char *data, size_t len,
-                       const struct snag_wire_secrets *secrets)
+snag_wire_secret_match(const unsigned char *data, size_t len, const struct snag_wire_secrets *secrets)
 {
     size_t best = 0u;
 
-    if (!secrets)
-        return 0u;
+    if (!secrets) return 0u;
     for (size_t i = 0; i < secrets->count; ++i) {
-        if (!secrets->values[i])
-            continue;
+        if (!secrets->values[i]) continue;
         size_t n = strlen(secrets->values[i]);
-        if (n > best && n <= len &&
-            (unsigned char)secrets->values[i][0] == data[0] &&
-            memcmp(data, secrets->values[i], n) == 0)
-            best = n;
+        if (n > best && n <= len && (unsigned char)secrets->values[i][0] == data[0] &&
+            memcmp(data, secrets->values[i], n) == 0) best = n;
     }
     return best;
 }
 
 static bool
-contains_secret(const unsigned char *data, size_t len,
-                const struct snag_wire_secrets *secrets)
+contains_secret(const unsigned char *data, size_t len, const struct snag_wire_secrets *secrets)
 {
     for (size_t i = 0; i < len; ++i)
-        if (snag_wire_secret_match(data + i, len - i, secrets))
-            return true;
+        if (snag_wire_secret_match(data + i, len - i, secrets)) return true;
     return false;
 }
 
@@ -67,15 +56,13 @@ append_redacted(struct snag_buf *out, const unsigned char *data, size_t len,
     for (size_t i = 0; i < len;) {
         size_t matched = snag_wire_secret_match(data + i, len - i, secrets);
         if (matched) {
-            if (snag_buf_append(out, marker, sizeof(marker) - 1u) < 0)
-                return -1;
+            if (snag_buf_append(out, marker, sizeof(marker) - 1u) < 0) return -1;
             i += matched;
             continue;
         }
         unsigned char c = data[i++];
         if (header && (c < 0x20u || c > 0x7eu)) {
-            if (snag_buf_printf(out, "\\x%02x", (unsigned int)c) < 0)
-                return -1;
+            if (snag_buf_printf(out, "\\x%02x", (unsigned int)c) < 0) return -1;
         } else if (snag_buf_putc(out, c) < 0) {
             return -1;
         }
@@ -92,19 +79,14 @@ key_is(const char *key, size_t len, const char *wanted)
 static const char *
 key_redaction(const char *key, size_t len)
 {
-    if (key_is(key, len, "authorization"))
-        return "<redacted:authorization>";
-    if (key_is(key, len, "proxy-authorization"))
-        return "<redacted:proxy-authorization>";
-    if (key_is(key, len, "cookie") || key_is(key, len, "set-cookie"))
-        return "<redacted:cookie>";
+    if (key_is(key, len, "authorization")) return "<redacted:authorization>";
+    if (key_is(key, len, "proxy-authorization")) return "<redacted:proxy-authorization>";
+    if (key_is(key, len, "cookie") || key_is(key, len, "set-cookie")) return "<redacted:cookie>";
     if (key_is(key, len, "x-api-key") || key_is(key, len, "api-key") ||
         key_is(key, len, "openai-api-key") || key_is(key, len, "api_key") ||
         key_is(key, len, "access_token") || key_is(key, len, "refresh_token") ||
-        key_is(key, len, "client_secret"))
-        return "<redacted:credential>";
-    if (key_is(key, len, "encrypted_content"))
-        return "<redacted:encrypted_reasoning>";
+        key_is(key, len, "client_secret")) return "<redacted:credential>";
+    if (key_is(key, len, "encrypted_content")) return "<redacted:encrypted_reasoning>";
     return NULL;
 }
 
@@ -115,8 +97,7 @@ redact_value(json_t *value, const struct snag_wire_secrets *secrets)
 {
     const char *type = snag_json_string(value, "type");
     if (type && (snag_string_in(type, "reasoning reasoning_text summary_text") ||
-                 strncmp(type, "response.reasoning_", 19u) == 0))
-        return json_string("<redacted:reasoning>");
+                 strncmp(type, "response.reasoning_", 19u) == 0)) return json_string("<redacted:reasoning>");
     if (json_is_string(value)) {
         json_t *redacted = NULL;
         struct snag_buf text = {.max = SNAG_WIRE_BODY_MAX};
@@ -138,22 +119,19 @@ redact_value(json_t *value, const struct snag_wire_secrets *secrets)
             }
             json_t *child = replacement ? json_string(replacement) :
                 redact_value(json_object_iter_value(iter), secrets);
-            if (!child || json_object_set_new(value, key, child) < 0)
-                return NULL;
+            if (!child || json_object_set_new(value, key, child) < 0) return NULL;
         }
     } else if (json_is_array(value)) {
         for (size_t i = 0; i < json_array_size(value); ++i) {
             json_t *child = redact_value(json_array_get(value, i), secrets);
-            if (!child || json_array_set_new(value, i, child) < 0)
-                return NULL;
+            if (!child || json_array_set_new(value, i, child) < 0) return NULL;
         }
     }
     return json_incref(value);
 }
 
 int
-snag_wire_json_redact(const unsigned char *data, size_t len,
-                     const struct snag_wire_secrets *secrets,
+snag_wire_json_redact(const unsigned char *data, size_t len, const struct snag_wire_secrets *secrets,
                      struct snag_buf *out, char *error, size_t error_size)
 {
     json_t *value;
@@ -161,17 +139,14 @@ snag_wire_json_redact(const unsigned char *data, size_t len,
 
     if (!out || secrets_valid(secrets) < 0)
         return snag_errorf(error, error_size, "invalid diagnostic secret set");
-    value = snag_json_load_strict(data, len, SNAG_WIRE_BODY_MAX,
-                                 error, error_size);
-    if (!value)
-        return -1;
+    value = snag_json_load_strict(data, len, SNAG_WIRE_BODY_MAX, error, error_size);
+    if (!value) return -1;
     snag_buf_reset(out);
     json_t *redacted = redact_value(value, secrets);
     rc = redacted ? snag_json_diagnostic(redacted, out) : -1;
     json_decref(redacted);
     json_decref(value);
-    if (rc < 0)
-        return snag_errorf(error, error_size, "sanitized JSON exceeds diagnostic bound");
+    if (rc < 0) return snag_errorf(error, error_size, "sanitized JSON exceeds diagnostic bound");
     return 0;
 }
 
@@ -179,20 +154,17 @@ static bool
 header_name_valid(const unsigned char *name, size_t len)
 {
     static const char token_extra[] = "!#$%&'*+-.^_`|~";
-    if (!len)
-        return false;
+    if (!len) return false;
     for (size_t i = 0; i < len; ++i) {
         unsigned char c = name[i];
         if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ||
-              (c >= 'a' && c <= 'z') || strchr(token_extra, c)))
-            return false;
+              (c >= 'a' && c <= 'z') || strchr(token_extra, c))) return false;
     }
     return true;
 }
 
 int
-snag_wire_header_redact(const unsigned char *line, size_t len,
-                       const struct snag_wire_secrets *secrets,
+snag_wire_header_redact(const unsigned char *line, size_t len, const struct snag_wire_secrets *secrets,
                        struct snag_buf *out)
 {
     const unsigned char *colon;
@@ -200,36 +172,27 @@ snag_wire_header_redact(const unsigned char *line, size_t len,
     size_t value_start;
     const char *replacement;
 
-    if (!line || !out || !len || len > SNAG_WIRE_HEADER_MAX ||
-        secrets_valid(secrets) < 0)
+    if (!line || !out || !len || len > SNAG_WIRE_HEADER_MAX || secrets_valid(secrets) < 0)
         return snag_errno(EINVAL);
     colon = memchr(line, ':', len);
-    if (!colon)
-        return snag_errno(EINVAL);
+    if (!colon) return snag_errno(EINVAL);
     name_len = (size_t)(colon - line);
-    if (!header_name_valid(line, name_len))
-        return snag_errno(EINVAL);
+    if (!header_name_valid(line, name_len)) return snag_errno(EINVAL);
     value_start = name_len + 1u;
-    while (value_start < len && (line[value_start] == ' ' || line[value_start] == '\t'))
-        ++value_start;
+    while (value_start < len && (line[value_start] == ' ' || line[value_start] == '\t')) ++value_start;
     snag_buf_reset(out);
     for (size_t i = 0; i < name_len; ++i) {
         unsigned char c = line[i];
-        if (c >= 'A' && c <= 'Z')
-            c = (unsigned char)(c - 'A' + 'a');
-        if (snag_buf_putc(out, c) < 0)
-            return -1;
+        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c - 'A' + 'a');
+        if (snag_buf_putc(out, c) < 0) return -1;
     }
-    if (snag_buf_append(out, ": ", 2u) < 0)
-        return -1;
+    if (snag_buf_append(out, ": ", 2u) < 0) return -1;
     replacement = key_redaction((const char *)line, name_len);
     if (replacement) {
-        if (key_is((const char *)line, name_len, "authorization") &&
-            len - value_start >= 7u &&
+        if (key_is((const char *)line, name_len, "authorization") && len - value_start >= 7u &&
             strncasecmp((const char *)line + value_start, "Bearer ", 7u) == 0)
             replacement = "<redacted:bearer>";
         return snag_buf_append(out, replacement, strlen(replacement));
     }
-    return append_redacted(out, line + value_start, len - value_start,
-                           secrets, true);
+    return append_redacted(out, line + value_start, len - value_start, secrets, true);
 }

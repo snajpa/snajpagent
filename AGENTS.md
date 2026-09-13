@@ -19,6 +19,45 @@ Preserve the existing passing evidence and report its actual scope honestly.
 Fix known product failures and build failures; do not conceal them behind an
 earlier pass. Publication still requires the operator's shipment authority.
 
+## One worktree per worker
+
+Every agent or concurrent worker uses its own `git worktree` for snajpagent.
+Do not edit, build, commit or install from another worker's worktree, and do not
+treat the canonical `/root/snajpagent` checkout as a shared workspace. Create
+one worktree per task (for example
+`git worktree add -b <branch> ~/ai/worktrees/<short> <base>`), keep it clean at
+handoff, and re-check the target branch tip and the installed binary version
+immediately before landing or installing. Shared checkouts caused avoidable
+divergence: master moved under an in-flight task and an installed binary was
+briefly downgraded.
+
+## Autonomous delivery and design ownership
+
+Agents own ordinary engineering decisions, including tool designs, schemas and
+implementation approach. A written design is a normal deliverable and is
+followed by implementation, tests and landing in the same autonomous flow; it
+is not an approval gate and does not need operator review first. Operator
+decisions are limited to version changes, publication beyond the recorded
+authority, hardware actions and genuine scope or policy changes. Solve genuine
+engineering blockers (for example an integration that would downgrade a shipped
+artifact) rather than deferring them.
+
+## Staging
+
+Integration happens on the `staging` branch, which tracks `master`. Authorized
+work lands there first: rebase it onto current `staging`, compile the combined
+tree, and run the fixture-based suite (`make check`, which drives the local fake
+provider; live-provider checks are not part of the gate). A green `staging`
+tree advances `master` by fast-forward, and release tags are cut from `master`
+only after that. Version changes and publication remain with the operator.
+
+The gate exists because `master` is the release line: tags, production-matrix
+binaries and the updater channel all descend from its commits, so unvalidated
+work must not reach it. A change that cannot pass the suite stays on its own
+branch rather than blocking `master`. Two distinct things are called staging —
+this integration branch, and the release staging directory that
+`tools/release.py stage` writes; `RELEASE.md` covers the second.
+
 Source and test line counts have no limits or per-file review thresholds.
 `make sizecheck` reports counts only. Keep designs simple through ordinary
 code review; reintroducing numeric limits requires an explicit operator request.
@@ -44,6 +83,23 @@ Ask before a version-changing step when the operator's decision is absent.
 The canonical release workflow creates the approved Git tag first, then lets
 the build system derive its version. Manual overrides remain available but are
 not required for an ordinary release. See `RELEASE.md` for the release boundary.
+
+## Shared IRC server
+
+Parallel workers share one IRC server instead of each hosting their own. Exactly
+one worker hosts at a time and publishes the endpoint in
+`~/ai/state/snajpagent/shared-irc.json`; everyone else reads that file and
+connects (`-c localhost:6667`, or `[irc] client = localhost:6667`). Never start
+a second server while a published endpoint is healthy. A missing, expired or
+dead-pid entry means nobody hosts: run `~/ai/bin/snajpagent-shared-irc`, which
+starts one under a PTY, waits for the port and publishes the entry, or just
+refreshes it when a server is already listening. `snajpagent-shared-irc.timer`
+runs that script every two minutes, so a host exists without anyone asking and
+a second agent cannot start a competing one.
+
+`make check` and the tmux/PTY suites keep their own fixtures and must not depend
+on the shared server. See
+`~/ai/docs/projects/snajpagent/reference/shared-irc-server.md`.
 
 ## Regression tests
 

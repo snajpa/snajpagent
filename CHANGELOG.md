@@ -4,6 +4,69 @@
 
 ## Unreleased
 
+- Keep IRC topology updates after complete tool exchanges in model requests,
+  replay and compaction. Existing affected sessions resume with their saved
+  tool results, avoiding missing-tool-output HTTP 400 errors. Cover interactive
+  resume with listener, client, nick and room startup overrides.
+- Record current IRC state before interactive resumed work, including offline
+  and client-only starts, so startup overrides replace stale hosted snapshots.
+- Keep a session alive when another worker joins its IRC room. Background room
+  traffic now waits for the active turn instead of admitting a second
+  `input_received`, which the store rejects; the rejected transition previously
+  ended the process, so parallel workers saw nobody join.
+- Align every prose continuation line, including provider source line breaks,
+  two spaces under the paragraph text instead of at column zero.
+- Rules can replace a model tool call's payload: `pass` with a `value` rewrites
+  the arguments (fields the replacement omits are removed) and records a
+  `rule_transform` projection linking the original and effective action digests,
+  so the original stays in the journal and replay reconstructs the same state.
+- Rules can insert policy text: `action = insert` with `to = model` attaches the
+  rendered text to that call's model-visible result as a labelled `[policy]`
+  block, journaled with the outcome.
+- Rules can run a trusted helper: `action = command` writes the canonical
+  envelope to the helper's stdin and accepts either an empty successful stdout
+  (pass) or one strict JSON effect (`pass` with optional `value`, `reject`, or
+  `insert`). Invalid JSON, a nonzero exit, a signal, a timeout or more than
+  64 KiB of output denies the pending call. A helper is trusted host-user code,
+  not a sandbox.
+- Rules can require fresh local consent: `action = confirm` shows the rendered
+  reason with a generated challenge that must be typed back at the local
+  terminal. A cancelled, mismatched or unanswerable confirmation (for example a
+  one-shot run) denies the call; model, IRC and helper output can never answer
+  it.
+- Native exploration tools (list_files, read_file, grep) are declared and
+  runnable in every turn, not only /ro; /ro remains inspection-only. Reading and
+  searching no longer requires shelling out through exec_command.
+- Add write_file (atomic whole-file create or replace) and edit_file (targeted
+  exact replacement; an ambiguous or missing match changes nothing). Both are
+  workspace-relative, reject symlink traversal and keep the previous file on
+  failure; apply_patch remains for several files or hunks.
+- The -C switch sets the workspace (default: the launch directory); every file
+  tool is workspace-relative.
+- Rule effects that are designed but not yet wired (payload transform via
+  pass+value, insert, confirm, helper command) are refused at configuration
+  load with a clear message instead of being accepted and ignored.
+- Rules gain an `accept` action: it stops evaluation and allows the operation,
+  so an allowlist can sit in front of a catch-all `reject`. `pass` only
+  continues and never exempts a call from a later denial.
+- A rule-rejected tool call now records the sanctioned `rule_rejected` not-run
+  reason, so the turn continues and the model sees the rule's message instead of
+  failing on an invalid completion event.
+- Rule `text`/`log` values written as JSON strings render without their quoting,
+  and `rule_log` events are accepted by session replay so a session that used a
+  log rule resumes.
+- Add `tests/rules_e2e.py` (run by `make rulescheck` and `make check`): real
+  product binary against the fixture provider, covering deny, allow, argument
+  matching, allowlist default-deny, jump chains, logging, thresholds, return,
+  multi-call batches, resume durability and invalid-config startup refusals.
+- Filter model tool calls with ordered `[rule NAME]` configuration chains.
+  Rules match immutable envelope facts and tool arguments (JSON-pointer regex
+  and integer thresholds) and pass, reject, jump to a reusable chain, or log a
+  templated match. Rejected calls answer a factual not-run result instead of
+  disappearing. The engine is stateless and bounded; configuration load rejects
+  unknown keys, invalid regexes, duplicate names and unreachable jump targets.
+  Filtering is not containment, and only the tool-call boundary is wired yet.
+  See `design/io-rules.md` for syntax and examples.
 - Supply NetBSD 10.1 static PDF/font dependencies with native C++ runtime and
   system font configuration; legacy PDF closure remains in progress.
 
@@ -93,6 +156,19 @@
   turns ascending, consecutive turns coalesced into ranges, repeated turns once.
   Unknown, malformed, oversized and unterminated blocks pass through unchanged;
   redirected output, durable events and provider traffic keep exact bytes.
+- Make verbosity rendering one consistent contract: a logical tool block or
+  streamed-output burst parks and repaints the composer once instead of once per
+  internal slice; start and outcome rows share the same short call reference in
+  the same column, including ids longer than the stored id limit; and one dim
+  `[…]` marker replaces the several long truncation/omission wordings while
+  complete output stays in the durable journal.
+- Fix thinking-mode HTTP 400 on resumed/non-thinking history by restoring an
+  explicit host continuation boundary after fixed policy and current state.
+  Preserve exact saved reasoning and use the same layout for every provider.
+- Continue saved work with `-e --resume` and no new prompt; preserve nonempty
+  piped input, completed results, original commands with unknown outcomes,
+  queued work, read-only mode and explicit stops. Cover real process/provider
+  interruption and no-result recovery without injecting a new user prompt.
 
 - Add the macOS static FFmpeg file-codec dependency profile and audio-device
   headers. Preserve intermediate assembly relocations through linking; PDF/Office

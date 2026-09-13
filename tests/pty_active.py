@@ -156,6 +156,22 @@ class Child:
         while time.monotonic() < end:
             self.read_once(max(0.0, min(0.05, end - time.monotonic())))
 
+    def wait_quiet(self, settle=0.2, timeout=8.0):
+        # Wait until no output arrives for a settle interval and return the
+        # buffer length, so a measurement never begins inside a pending paint.
+        deadline = time.monotonic() + timeout
+        quiet_since = time.monotonic()
+        while True:
+            if self.read_once(0.02):
+                quiet_since = time.monotonic()
+                continue
+            if time.monotonic() - quiet_since >= settle:
+                return len(self.buf)
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"output never settled for {settle}s; got {bytes(self.buf)!r}"
+                )
+
     def exit_cleanly(self, after):
         self.wait_idle_prompt(start=after, timeout=8.0)
         self.exit_now()
@@ -399,6 +415,13 @@ def turn_events(items, event_type, turn_id):
             item["data"]["turn_id"] == turn_id]
 
 
+def assert_topology_only_after(session_id, previous):
+    current = events(session_id)
+    assert current[:len(previous)] == previous
+    updates = current[len(previous):]
+    assert updates and all(e["type"] == "irc_snapshot" for e in updates), updates
+
+
 def one(items, event_type):
     matches = [item for item in items if item["type"] == event_type]
     if len(matches) != 1:
@@ -465,19 +488,18 @@ def test_incremental_prompt_edit_and_utf8_cursor_column():
         empty_tab_start = len(child.buf)
         end = child.send_wait(b"\t", "── chat ──".encode(), start=empty_tab_start)
         child.send_wait(b"\t", "── rollout ──".encode(), start=end)
-        child.drain()
-        start = len(child.buf)
+        start = child.wait_quiet(0.2)
         child.send(b"a")
-        child.drain()
-        edit = bytes(child.buf[start:])
+        end = child.wait_quiet(0.2)
+        edit = bytes(child.buf[start:end])
         assert edit == b"a", edit
         assert b"\x1b[2K" not in edit, edit
         assert DEFAULT_IDLE_PROMPT not in edit, edit
 
         start = len(child.buf)
         child.send(b"\x1b[D")
-        child.drain()
-        movement = bytes(child.buf[start:])
+        end = child.wait_quiet(0.2)
+        movement = bytes(child.buf[start:end])
         prompt_column = len("   HH:MM:SS") + len(DEFAULT_IDLE_PROMPT.decode())
         assert f"\r\x1b[{prompt_column}C".encode() in movement, movement
         assert f"\r\x1b[{prompt_column + 1}C".encode() not in movement, movement
@@ -509,13 +531,18 @@ def test_static_zero_width_spinner_has_no_refresh():
     idle = DEFAULT_IDLE_PROMPT
     active = DEFAULT_ACTIVE_PROMPT
     with Child(["--config", str(config)], ready=idle) as child:
-        first = child.send_wait(b"terminal_status\r", b"status-first-fragment ")
+        # A blocked engine holds one request active for 2.5s without output, so
+        # the zero-width spinner can be observed without racing a state change.
+        first = child.send_wait(b"engine_blocked\r", b"engine-block-start")
         wait_prompt_painted(child, active, start=first)
         assert re.search("◆ [0-9]{2}:[0-9]{2}:[0-9]{2}".encode() +
                          re.escape(active), child.buf), bytes(child.buf)
-        settled = len(child.buf)
+        settled = child.wait_quiet(0.3)
         child.drain(0.35)
         assert len(child.buf) == settled, bytes(child.buf[settled:])
+        assert b"engine-block-end" not in child.buf
+        child.wait(b"engine-block-end", timeout=8.0)
+        child.exit_cleanly(len(child.buf))
 
 
 def test_prompt_clock_lifetime():
@@ -610,14 +637,13 @@ def test_initial_unrenderable_prompt_is_rejected_atomically():
 def test_incremental_multiline_delete_clears_old_tail():
     with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
         child.send_wait(b"abcdef\nsecond", b"second")
-        child.drain(0.05)
         child.send(b"\x1b[H" + b"\x1b[C" * 6)
-        child.drain(0.05)
 
-        start = len(child.buf)
+        # Absorb the cursor-move repaint before measuring, then wait for the
+        # deletion repaint instead of assuming a fixed latency.
+        start = child.wait_quiet(0.2)
         child.send(b"\x7f\x7f\x7f")
-        child.drain(0.1)
-        end = len(child.buf)
+        end = child.wait_quiet(0.2)
         edit = bytes(child.buf[start:end])
         assert edit.count(b"\x1b[K") == 3, edit
         assert b"second" not in edit and b"\n" not in edit, edit
@@ -2167,7 +2193,7 @@ def test_saved_goal_restored_without_lookup():
             assert b"revision: 2" in resumed.buf[status:restored]
             resumed.wait_idle_prompt(start=restored)
             resumed.drain(0.1)
-            assert len(events(session_id)) == len(original)
+            assert_topology_only_after(session_id, original)
             # A normal follow-up must not create a replacement or resume it.
             answer = resumed.send_wait(b"ping\r", b"pong", start=restored)
             resumed.exit_cleanly(answer)
@@ -2195,7 +2221,7 @@ def test_resume_preserves_inactive_and_queued_goal_states():
             resumed.wait_idle_prompt(start=restored)
             resumed.drain(0.1)
             resumed.exit_now()
-        assert events(session_id) == original
+        assert_topology_only_after(session_id, original)
 
     with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
         child.send_wait(b"/goal slow goal\r", b"working on goal")
@@ -2530,6 +2556,68 @@ def test_retry_budget_survives_response_boundary():
         assert len([e for e in log if e["type"] == "response_completed"]) == 2, log
         assert len([e for e in log if e["type"] == "turn_started"]) == 1, log
         assert one(log, "turn_failed")
+
+
+def test_resume_and_session_persistence():
+    before = session_ids()
+    child = Child([], DEFAULT_IDLE_PROMPT)
+    end = child.send_wait(b"ping\r", b"pong")
+    session_id = child.session_id()
+    child.exit_cleanly(end)
+    assert session_ids() == before | {session_id}
+
+    # Durable records form one contiguous, hash-linked journal.
+    path = STATE_ROOT / session_id / "events.jsonl"
+    records = [json.loads(line) for line in path.read_bytes().split(b"\n") if line]
+    assert records and records[0]["type"] == "session_created", records[:2]
+    assert [record["seq"] for record in records] == list(range(1, len(records) + 1))
+    assert records[0]["prev_sha256"] == "0" * 64
+    for previous, current in zip(records, records[1:]):
+        assert current["prev_sha256"] == previous["event_sha256"], (previous, current)
+    assert all(record["session_id"] == session_id for record in records)
+    assert [event["data"]["text"] for event in records
+            if event["type"] == "turn_started"] == ["ping"]
+
+    # A one-shot follow-up resumes the same session and appends to it.
+    resumed = subprocess.run(
+        [BINARY, "--dotdir", DOTDIR, "--no-listen", "--no-client",
+         "-e", "--resume", session_id, "--", "ping"],
+        cwd=WORKSPACE, env=dict(os.environ), capture_output=True, text=True,
+        timeout=30)
+    assert resumed.returncode == 0, resumed.stderr
+    assert resumed.stdout.strip() == "pong", resumed.stdout
+    assert session_ids() == before | {session_id}
+    grown = [json.loads(line) for line in path.read_bytes().split(b"\n") if line]
+    assert grown[:len(records)] == records
+    assert [event["data"]["text"] for event in grown
+            if event["type"] == "turn_started"] == ["ping", "ping"]
+
+    # Access to one session stays exclusive: a held lock is refused clearly.
+    lock_fd = os.open(path.parent / "lock", os.O_RDWR)
+    try:
+        # Match the product's POSIX record lock (F_SETLK); BSD flock(2) locks
+        # do not conflict with it.
+        fcntl.lockf(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        busy = subprocess.run(
+            [BINARY, "--dotdir", DOTDIR, "--no-listen", "--no-client",
+             "-e", "--resume", session_id, "--", "ping"],
+            cwd=WORKSPACE, env=dict(os.environ), capture_output=True, text=True,
+            timeout=30)
+        assert busy.returncode != 0, busy.stdout
+        assert "session is already open" in busy.stderr, busy.stderr
+    finally:
+        fcntl.lockf(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+    assert len([json.loads(line) for line in path.read_bytes().split(b"\n") if line]) == len(grown)
+
+    # Interactive resume replays the stored turn and accepts a new one.
+    with Child(["--resume", session_id]) as child:
+        end = child.wait(b"pong")
+        end = child.send_wait(b"ping\r", b"pong", start=end)
+        child.exit_cleanly(end)
+    final = [json.loads(line) for line in path.read_bytes().split(b"\n") if line]
+    assert final[:len(grown)] == grown
+    assert len(final) > len(grown)
 
 
 def test_explicit_cancel_is_not_resumed():
@@ -3488,7 +3576,13 @@ def test_empty_session_lifecycle():
                b"selected-before-prompt/high   ?%") as resumed:
         command = resumed.exit_now()
         assert command_arguments(command)[-2:] == ["--resume", sid]
-        assert (STATE_ROOT / sid / "events.jsonl").read_bytes() == saved
+        # Resume records the actual network state without changing history or
+        # inventing a user turn, even when the process is now offline.
+        resumed_log = (STATE_ROOT / sid / "events.jsonl").read_bytes()
+        assert resumed_log.startswith(saved)
+        updates = [json.loads(line) for line in resumed_log[len(saved):].splitlines()]
+        assert updates and all(e["type"] == "irc_snapshot" for e in updates), updates
+        assert all("hosted: no\n" in e["data"]["text"] for e in updates), updates
     print("empty session lifecycle: ok")
 
 
@@ -4743,7 +4837,7 @@ def test_goal_orderly_quit_resume():
                 restored = resumed.wait(f"goal {goal['goal_id'][:8]}: paused · wording locked".encode())
                 resumed.wait_idle_prompt(start=restored)
                 resumed.exit_now()
-                assert events(session_id) == stopped
+                assert_topology_only_after(session_id, stopped)
                 print("explicit Ctrl-C pause then quit/resume: ok", flush=True)
                 continue
             restored = resumed.wait(f"goal {goal['goal_id'][:8]}: active · wording locked".encode())
@@ -5036,6 +5130,7 @@ if __name__ == "__main__":
     test_queue_mutation_commands()
     test_unfinished_public_resume()
     test_retry_budget_survives_response_boundary()
+    test_resume_and_session_persistence()
     test_explicit_cancel_is_not_resumed()
     test_recovery_at_durable_tool_boundaries()
     test_idle_compaction_crash_recovery()
