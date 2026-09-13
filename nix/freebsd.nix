@@ -286,6 +286,69 @@ let
       )
     '';
   };
+  png = (cmakeLibrary sourcePkgs.libpng [
+    "-DPNG_SHARED=OFF" "-DPNG_STATIC=ON" "-DPNG_TESTS=OFF" "-DPNG_TOOLS=OFF"
+  ] [ zlib ]).overrideAttrs (old: {
+    # libpng's header generator invokes Clang directly, outside CMake's target rule.
+    preConfigure = old.preConfigure + ''
+      cmakeFlagsArray+=("-DCMAKE_C_FLAGS=${cflags} --target=${target} --sysroot=${sdk}")
+    '';
+  });
+  freetype = cmakeLibrary sourcePkgs.freetype [
+    "-DFT_DISABLE_BZIP2=ON" "-DFT_DISABLE_BROTLI=ON" "-DFT_DISABLE_HARFBUZZ=ON"
+    "-DFT_REQUIRE_ZLIB=ON" "-DFT_REQUIRE_PNG=ON"
+  ] [ zlib png ];
+  expat = cmakeLibrary sourcePkgs.expat ([
+    "-DEXPAT_SHARED_LIBS=OFF" "-DEXPAT_BUILD_TOOLS=OFF"
+    "-DEXPAT_BUILD_EXAMPLES=OFF" "-DEXPAT_BUILD_TESTS=OFF" "-DEXPAT_BUILD_DOCS=OFF"
+  ] ++ lib.optionals legacy [
+    # The SDK has arc4random; Expat's /dev/urandom path requires newer O_CLOEXEC.
+    "-DEXPAT_DEV_URANDOM=OFF" "-DEXPAT_WITH_ARC4RANDOM=ON"
+  ]) [];
+  fontconfig = (autotoolsLibrary sourcePkgs.fontconfig [
+    "--disable-docs" "--disable-docbook" "--disable-cache-build" "--disable-nls"
+    "--sysconfdir=/usr/local/etc" "--with-cache-dir=/var/cache/fontconfig"
+    "--with-default-fonts=/usr/X11R6/lib/X11/fonts"
+    "--with-add-fonts=/usr/local/share/fonts"
+  ] [ expat freetype png zlib ]).overrideAttrs (old: {
+    nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.gperf pkgs.python3 ];
+    preConfigure = old.preConfigure + ''
+      # Include PNG's private math dependency through FreeType's static metadata.
+      export FREETYPE_LIBS="$(pkg-config --static --libs freetype2)"
+    '';
+    installFlags = [ "sysconfdir=$(out)/etc" "RUN_FC_CACHE_TEST=false" "fc_cachedir=$(TMPDIR)/fontconfig-cache" ];
+  });
+  jpeg = (cmakeLibrary sourcePkgs.libjpeg [
+    "-DENABLE_SHARED=OFF" "-DENABLE_STATIC=ON" "-DWITH_TURBOJPEG=OFF"
+  ] []).overrideAttrs (old: {
+    nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.nasm ];
+  });
+  openjpeg = (cmakeLibrary sourcePkgs.openjpeg [ "-DBUILD_CODEC=OFF" ] []).overrideAttrs (_: {
+    postPatch = lib.optionalString legacy ''
+      # This SDK lacks lrintf; Clang's builtin lowers to native amd64 rounding.
+      substituteInPlace src/lib/openjp2/opj_includes.h \
+        --replace-fail 'return lrintf(f);' 'return __builtin_lrintf(f);'
+    '';
+  });
+  pdf = (cmakeLibrary sourcePkgs.poppler [
+    "-DENABLE_UNSTABLE_API_ABI_HEADERS=ON" "-DFONT_CONFIGURATION=fontconfig"
+    "-DENABLE_UTILS=OFF" "-DENABLE_CPP=OFF" "-DENABLE_GLIB=OFF"
+    "-DENABLE_GOBJECT_INTROSPECTION=OFF" "-DENABLE_QT5=OFF" "-DENABLE_QT6=OFF"
+    "-DBUILD_QT5_TESTS=OFF" "-DBUILD_QT6_TESTS=OFF" "-DBUILD_CPP_TESTS=OFF"
+    "-DBUILD_MANUAL_TESTS=OFF" "-DENABLE_LCMS=OFF" "-DENABLE_LIBCURL=OFF"
+    "-DENABLE_LIBTIFF=OFF" "-DENABLE_NSS3=OFF" "-DENABLE_GPGME=OFF"
+  ] [ zlib png freetype expat fontconfig jpeg openjpeg pkgs.boost cxx ]).overrideAttrs (old: {
+    cmakeBuildType = "Release";
+    patches = old.patches ++ [ ./poppler-static-fonts.patch ];
+    preConfigure = old.preConfigure + ''
+      # Old SDK headers predate C++20. Use the linked runtime's headers and
+      # native libc/thread ABI for CMake's compiler checks as well as Poppler.
+      cmakeFlagsArray+=(
+        "-DCMAKE_CXX_FLAGS=${cflags} -stdlib=libstdc++ -pthread -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}"
+        "-DCMAKE_EXE_LINKER_FLAGS=--ld-path=${llvm.lld}/bin/ld.lld -L${cxx}/lib"
+      )
+    '';
+  });
   xml = cmakeLibrary sourcePkgs.libxml2 [
     "-DLIBXML2_WITH_PROGRAMS=OFF" "-DLIBXML2_WITH_TESTS=OFF"
     "-DLIBXML2_WITH_PYTHON=OFF" "-DLIBXML2_WITH_MODULES=OFF"
@@ -371,7 +434,7 @@ let
     '';
   });
 in {
-  inherit sdk target compiler tools cflags ldflags jansson tls curl av miniaudio regex unistring xml archive iconv zlib cxx;
+  inherit sdk target compiler tools cflags ldflags jansson tls curl av miniaudio regex unistring xml archive iconv zlib cxx pdf png freetype expat fontconfig jpeg openjpeg;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }:
     pkgs.stdenvNoCC.mkDerivation {
@@ -380,7 +443,8 @@ in {
       src = source;
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
-      buildInputs = [ jansson curl av xml archive ] ++ networkLibraries ++ lib.optional early regex;
+      buildInputs = [ jansson curl av xml archive ] ++ networkLibraries ++ lib.optional early regex
+        ++ lib.optionals (!legacy) [ pdf cxx png freetype expat fontconfig jpeg openjpeg ];
       enableParallelBuilding = true;
       dontStrip = true;
       preBuild = ''
@@ -407,6 +471,13 @@ in {
           "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"
           "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale | sed -E 's/-l?(-l?)?pthread//g')"
           'MINIAUDIO_CFLAGS=-isystem ${miniaudio}'
+          ${lib.optionalString (!legacy) ''
+          'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'
+          'CXXFLAGS=-std=c++20 ${cflags} -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
+          "PDF_CFLAGS=$(pkg-config --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')"
+          # The explicit archive bypasses Clang's reserved -lstdc++ rewriting.
+          "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') ${cxx}/lib/libstdc++.a -Wl,-Bdynamic -lm -lgcc_s -Wl,-Bstatic"
+          ''}
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
           "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil${lib.optionalString early " ${compilerBuiltins}/lib/libclang_rt.builtins.a"} -Wl,-Bdynamic -l${threads}"
         )

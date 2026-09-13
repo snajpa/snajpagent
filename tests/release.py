@@ -1283,6 +1283,27 @@ for setting in ("pkgs.gcc14.cc", '"--enable-clocale=generic"',
                 "-stdlib=libstdc++", "--with-gxx-include-dir="):
     assert setting in freebsd_cxx, setting
 print("PASS: FreeBSD C++ archive retains static output and real POSIX thread probes")
+freebsd_pdf = freebsd.split("  pdf = ", 1)[1].split("  miniaudio = ", 1)[0]
+assert './poppler-static-fonts.patch' in freebsd_pdf
+assert '-nostdinc++ -isystem ${cxx}/include/c++' in freebsd_pdf
+assert '${cxx}/lib/libstdc++.a -Wl,-Bdynamic' in freebsd
+assert '"-DEXPAT_DEV_URANDOM=OFF" "-DEXPAT_WITH_ARC4RANDOM=ON"' in freebsd
+assert "--replace-fail 'return lrintf(f);' 'return __builtin_lrintf(f);'" in freebsd
+if shutil.which("clang"):
+    # The C driver rewrites reserved -lstdc++ to its selected standard library.
+    with tempfile.TemporaryDirectory(prefix="freebsd-pdf-", dir=root / "build") as tmp:
+        archive = Path(tmp) / "libstdc++.a"
+        archive.touch()
+        linked = subprocess.run(["clang", "--target=x86_64-unknown-freebsd8.4", "-###",
+                                 str(archive)],
+                                text=True, capture_output=True, check=True).stderr
+        assert str(archive) in linked and '"-lc++"' not in linked, linked
+    rounded = subprocess.run(["clang", "--target=x86_64-unknown-freebsd5.1",
+                              "-Os", "-S", "-x", "c", "-", "-o", "-"],
+                             input="long f(float x) { return __builtin_lrintf(x); }\n",
+                             text=True, capture_output=True, check=True).stdout
+    assert "cvtss2si" in rounded and "lrintf" not in rounded, rounded
+print("PASS: FreeBSD PDF selects its static C++ runtime and legacy native entropy")
 freebsd_archive = freebsd.split("  archive = ", 1)[1].split("  brotli = ", 1)[0]
 assert '"-DLIBMD_LIBRARY=${sdk}/usr/lib/libmd.a"' in freebsd_archive
 assert '] [ zlib iconv ];' in freebsd_archive

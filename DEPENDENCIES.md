@@ -406,7 +406,8 @@ store; external non-Nix media/SDK inputs belong in the ignored `.assets-cache/`.
 The pinned 8.4 release disc supplies system libraries, CRT and headers;
 the same pinned application libraries and embedded roots used by other targets
 are cross-built with LLVM. Application dependencies and libutil are static;
-the only shared imports are the native `libc.so.7` and `libthr.so.3`, loaded by
+the AV/PDF/audio build imports native `libc.so.7`, `libthr.so.3` and the
+`libgcc_s.so.1` exception unwinder, loaded by
 `/libexec/ld-elf.so.1`. Native libc handles the host release's locale-data format;
 8.4's static libc cannot load 14.4's UTF-8 locale data. Keep threading dynamic
 with libc rather than mixing the old static and native shared thread runtimes.
@@ -430,12 +431,12 @@ the accessible default `/dev/dsp` node; native formats and version remain unknow
 until supported queries or device initialization supply them. Format, channels
 and sample rate are still negotiated by the existing OSS backend when the user
 starts capture or playback. OSS4 inventory behavior stays intact. These dependency
-adaptations do not qualify physical audio or complete FreeBSD PDF/Office closure.
+adaptations preserve the OSS backend; physical audio qualification remains open.
 
 Static libarchive and libxml2 supply the Office package checker, with zlib, iconv
 and the existing SDK libmd archive. The libmd path is explicit because CMake
 otherwise misses the SDK library during digest probes. Package-reader links
-retain native threading/libc; LibreOffice runtime and PDF closure remain open.
+retain native threading/libc. LibreOffice runtime packaging remains unresolved.
 
 Actual FreeBSD 8.4 and 14.4 amd64 qualification covers base and IRC tests, internal
 read-only inspection and denied writes, parallel commands, PTY output/status,
@@ -447,15 +448,23 @@ ownership across older libc failure paths. Native GNU make builds select BSD
 API declarations and libutil automatically. Use a UTF-8 locale and mounted
 devfs; the qualification guest used `en_US.UTF-8` and UFS for large sparse files.
 
-For the pending PDF closure, `nix/freebsd.nix` also provides a static GCC 14.3.0
-libstdc++ archive built with Clang against the 8.4 SDK. It uses the generic
+The 8.4 PDF recipe links static Poppler, PNG, FreeType, Expat, fontconfig, JPEG
+and OpenJPEG. Host fonts come from `/usr/local/etc/fonts` configuration and the
+standard `/usr/local/share/fonts` and `/usr/X11R6/lib/X11/fonts` directories.
+The GCC 14.3.0 libstdc++ archive is built with Clang against the selected SDK;
+both 8.4 and 5.1 archive builds pass. It uses the generic
 locale backend and the native POSIX thread implementation. The build retains
 native wide-character classification, enables real gthread feature probes and
 avoids conflicting static-library defaults. A C++20 sample using span, threads,
 mutexes, exceptions and wide streams cross-links with only `libm.so.5`,
 `libgcc_s.so.1`, `libthr.so.3` and `libc.so.7`, without a runtime search path.
-The sample was not target-executed. This dependency is not yet wired into the
-application's PDF closure; legacy SDK C++ and Office runtime work remain pending.
+The 8.4 AV/PDF/audio application also cross-links and has matching debug symbols;
+its import list is recorded above. Neither artifact was target-executed. Legacy
+PDF dependencies and the LibreOffice runtime remain pending. Legacy Expat uses
+the SDK's arc4random implementation; its optional /dev/urandom reader requires
+O_CLOEXEC, which the 5.1 SDK lacks.
+OpenJPEG's legacy rounding wrapper uses Clang's lrintf builtin, which emits the
+amd64 conversion instruction and preserves its floating-point rounding mode.
 
 ### FreeBSD 5.1/5.5 legacy target
 

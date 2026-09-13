@@ -6,8 +6,9 @@
 
 - Honor terminal exit before admitting queued voice or typed work. Pending
   inputs remain available on resume instead of keeping an exiting session busy.
-- Build a modern static C++ runtime against FreeBSD 8.4 system libraries for
-  the PDF dependency chain.
+- Add the FreeBSD 8.4 static PDF/font dependency chain and select its modern
+  static C++ runtime at application link time. Build the C++ runtime against
+  the 5.1 SDK as well; legacy PDF dependencies remain in progress.
 
 - Keep IRC topology updates after complete tool exchanges in model requests,
   replay and compaction. Existing affected sessions resume with their saved
