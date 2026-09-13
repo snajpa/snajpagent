@@ -201,8 +201,8 @@ validate_loaded(const json_t *value, unsigned int depth)
     }
 }
 
-json_t *
-snag_json_load_strict(const unsigned char *data, size_t len, size_t max_len, char *error, size_t error_size)
+static json_t *
+load_json(const unsigned char *data, size_t len, size_t max_len, int flags, char *error, size_t error_size)
 {
     json_error_t jerr;
     json_t *value;
@@ -213,7 +213,7 @@ snag_json_load_strict(const unsigned char *data, size_t len, size_t max_len, cha
         return NULL;
     }
     memset(&jerr, 0, sizeof(jerr));
-    value = json_loadb((const char *)data, len, JSON_REJECT_DUPLICATES | JSON_DECODE_ANY, &jerr);
+    value = json_loadb((const char *)data, len, flags | JSON_DECODE_ANY, &jerr);
     if (!value) {
         if (error_size) (void)snprintf(error, error_size, "JSON at line %d column %d: %.120s",
                            jerr.line, jerr.column, jerr.text);
@@ -227,6 +227,22 @@ snag_json_load_strict(const unsigned char *data, size_t len, size_t max_len, cha
         return NULL;
     }
     return value;
+}
+
+json_t *
+snag_json_load_strict(const unsigned char *data, size_t len, size_t max_len, char *error, size_t error_size)
+{
+    /* A repeated key makes a record ambiguous, which every strict caller
+     * (wire redaction, events, configuration) must refuse rather than guess. */
+    return load_json(data, len, max_len, JSON_REJECT_DUPLICATES, error, error_size);
+}
+
+json_t *
+snag_json_load_arguments(const unsigned char *data, size_t len, size_t max_len, char *error, size_t error_size)
+{
+    /* Providers repeat keys in function arguments; the last value is the
+     * effective one, and failing the whole call loses an otherwise valid turn. */
+    return load_json(data, len, max_len, 0, error, error_size);
 }
 
 json_t *

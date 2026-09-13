@@ -22,6 +22,8 @@ int snag_json_canonical(const json_t *value, struct snag_buf *out);
 int snag_json_diagnostic(const json_t *value, struct snag_buf *out);
 json_t *snag_json_load_strict(const unsigned char *data, size_t len,
                              size_t max_len, char *error, size_t error_size);
+json_t *snag_json_load_arguments(const unsigned char *data, size_t len,
+                                 size_t max_len, char *error, size_t error_size);
 json_t *snag_json_load_canonical(const unsigned char *data, size_t len, char *error, size_t error_size);
 int snag_json_digest(const json_t *value, char out[SNAG_SHA256_HEX_LEN + 1u]);
 int snag_json_digest_bounded(const json_t *value, size_t max, char out[SNAG_SHA256_HEX_LEN + 1u],
