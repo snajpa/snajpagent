@@ -482,8 +482,9 @@ The 8.4 AV/PDF/audio application also cross-links and has matching debug symbols
 its import list is recorded above. Neither artifact was target-executed. The 5.1
 AV/PDF/audio application also cross-links, importing only libc_r.so.5 and libc.so.5
 through `/usr/libexec/ld-elf.so.1`, with matching debug symbols and no runtime search
-path. These application checks explicitly exclude Office. LibreOffice
-runtime packaging remains unresolved. Legacy Expat uses
+path. These application checks explicitly exclude Office, which runs from a
+LibreOffice runtime installed on the target and verified before loading. Legacy
+Expat uses
 the SDK's arc4random implementation; its optional /dev/urandom reader requires
 O_CLOEXEC, which the 5.1 SDK lacks.
 OpenJPEG's legacy rounding wrapper uses Clang's lrintf builtin, which emits the
