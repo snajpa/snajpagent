@@ -615,6 +615,8 @@ only native libc/pthread imports and no runtime search path; Office is excluded.
 The 3.5 OpenJPEG recipe supplies its missing integer-format macros from Clang's
 target ABI, matching the file-codec compatibility definitions. Fontconfig's
 atomic-file fallback recognizes the SDK's native EOPNOTSUPP error.
+Application printf aliases apply to C translation units; the C++ PDF adapter
+retains native declarations required by the standard library's cstdio header.
 
 The 3.5 C++ runtime uses compatible stdio declarations, native varargs and the
 SDK's GetIP/atexit interfaces. Signal declarations retain C linkage across the

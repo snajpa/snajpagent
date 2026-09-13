@@ -538,8 +538,8 @@ in {
           'CC=${compiler} --target=${target} --sysroot=${sdk}'
           'STRIP=${tools}/llvm-strip' 'OBJCOPY=${tools}/llvm-objcopy'
           'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
-          'CPPFLAGS=${lib.optionalString (!early) "-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 "}-D_FILE_OFFSET_BITS=64 ${lib.optionalString early "-Dsnprintf=rpl_snprintf -Dvsnprintf=rpl_vsnprintf -DSNAJPAGENT_LEGACY_PRINTF -Dprintf=snag_legacy_printf -Dfprintf=snag_legacy_fprintf "}-Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\" -DSNAJPAGENT_STATIC_UTF8 -I${regex}/include -I${unistring}/include'
-          'CFLAGS=-std=c11 ${cflags} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
+          'CPPFLAGS=${lib.optionalString (!early) "-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 "}-D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\" -DSNAJPAGENT_STATIC_UTF8 -I${regex}/include -I${unistring}/include'
+          'CFLAGS=-std=c11 ${cflags}${lib.optionalString early " -Dsnprintf=rpl_snprintf -Dvsnprintf=rpl_vsnprintf -DSNAJPAGENT_LEGACY_PRINTF -Dprintf=snag_legacy_printf -Dfprintf=snag_legacy_fprintf"} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           'LDFLAGS=--ld-path=${llvm.lld}/bin/ld.lld ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections,--as-needed,-Bstatic'
           "JANSSON_CFLAGS=$(pkg-config --cflags jansson)"
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson) -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"

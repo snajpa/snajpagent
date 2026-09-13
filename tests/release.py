@@ -2005,6 +2005,10 @@ assert "'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'" in openbsd
 assert '"PDF_LIBS=$(pkg-config --static --libs poppler libpng |' in openbsd
 assert 'else "-Wl,-Bdynamic -lc++ -lc++abi"' in openbsd
 assert '${cxx}/lib/libstdc++.a -Wl,-Bdynamic' in openbsd
+open_cppflags = re.search(r"'CPPFLAGS=([^\n]+)'", openbsd).group(1)
+open_cflags = re.search(r"'CFLAGS=-std=c11 ([^\n]+)'", openbsd).group(1)
+for alias in ("-Dsnprintf=rpl_snprintf", "-Dvsnprintf=rpl_vsnprintf", "-Dprintf=snag_legacy_printf", "-Dfprintf=snag_legacy_fprintf", "-DSNAJPAGENT_LEGACY_PRINTF"):
+    assert alias in open_cflags and alias not in open_cppflags
 assert '-nostdinc++ -isystem ${cxx}/include/c++' in open_pdf
 legacy_pdf_math = (root / "nix/poppler-legacy-math.nix").read_text()
 assert 'postPatch = lib.optionalString early (import ./poppler-legacy-math.nix);' in open_pdf

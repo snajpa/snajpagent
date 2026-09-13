@@ -18,6 +18,7 @@
   error in Fontconfig's atomic-file fallback. Share the early-BSD Poppler math
   adaptations across the NetBSD 2.0 and OpenBSD 3.5 builds. Preserve OpenBSD 3.5
   signal linkage and PDF page-dimension validation with legacy math headers.
+  Keep its C printf compatibility aliases out of C++ standard-library headers.
 
 - Keep admitted room events out of tool exchanges in model requests. A room
   event admitted while a call was outstanding was appended where the admission
