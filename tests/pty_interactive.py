@@ -34,8 +34,9 @@ child.wait_text(b"pong")
 # A prompt redraw can occur while a response is still active.  The durable
 # terminal event is the unambiguous point at which /exit is an idle command.
 child.wait_text(b"turn_completed synced")
-events = [json.loads(line) for path in Path(DOTDIR).glob("sessions/*/events.jsonl")
-          for line in path.read_text().splitlines()]
+# Earlier CLI cases share DOTDIR; directory order is not event chronology.
+journal = Path(DOTDIR, "sessions", child.session_id(), "events.jsonl")
+events = [json.loads(line) for line in journal.read_text().splitlines()]
 turns = [event["data"] for event in events if event["type"] == "turn_started"
          and event["data"].get("text") == "ping" and event["data"].get("content")]
 assert turns, "attachment was not journalled with the ping turn"

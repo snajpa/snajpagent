@@ -248,7 +248,9 @@ snag_app_provider_run(struct app_state *app, const char *prompt, const json_t *s
         const char *search_type = snag_config_provider_is_openrouter(app->turn_provider) ?
                                   "openrouter:web_search" : "web_search";
 
-        if (read_only && json_array_size(ts) != 4u) return -1;
+        size_t read_tools = 7u + (app->config->audio.listen_model[0] != 0) +
+            (app->config->audio.transcribe_model[0] != 0);
+        if (read_only && json_array_size(ts) != read_tools) return -1;
         for (size_t i = 0; read_only && i < json_array_size(ts); ++i) {
             json_t *tool = json_array_get(ts, i);
             const char *type = snag_json_string(tool, "type");

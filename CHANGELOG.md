@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Honor terminal exit before admitting queued voice or typed work. Pending
+  inputs remain available on resume instead of keeping an exiting session busy.
+
 - Keep IRC topology updates after complete tool exchanges in model requests,
   replay and compaction. Existing affected sessions resume with their saved
   tool results, avoiding missing-tool-output HTTP 400 errors. Cover interactive

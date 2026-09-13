@@ -2,6 +2,15 @@
 
 # Implementation status
 
+The multimodal branch implements session-owned image, audio, video and document
+assets, normalized image/page/frame input, audio API operations, local dictation
+and playback, and realtime voice with durable handoff to the existing coding
+turn/queue owner. Native generated-media, context/replay and voice transport
+fixtures pass. Production dependency closure remains unfinished, including
+legacy BSD C++/PDF and the unresolved LibreOffice packaging/execution choice.
+Target-OS execution, physical audio devices and live media-provider qualification
+are separate from these local fixture results. Multimodal is not shipped yet.
+
 Current source includes the shared native tool contract: required operands and
 optional controls, explicit legacy spellings with ambiguity rejection, truthful
 byte-limit naming, and compact verbosity-1 rejection rows in live/history views.

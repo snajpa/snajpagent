@@ -4145,13 +4145,16 @@ interactive_loop(struct app_state *app, const char *initial)
         initial = NULL;
         free(owned);
         owned = NULL;
-        if(snag_app_audio_service(app)<0) {rc=6;break;}
-        if(!prompt && app->session.queue_armed && !app->queue_edit_id[0] && app->session.pending_queue_count) {
-            rc=run_ready_chains(app);if(rc==3 || rc==6)break;continue;
-        }
         if (snag_app_shutdown(app) || app->input_closed) {
             rc = 0;
             break;
+        }
+        if (snag_app_audio_service(app) < 0) { rc = 6; break; }
+        if (!prompt && !snag_ui_leaving(&app->ui) && app->session.queue_armed &&
+            !app->queue_edit_id[0] && app->session.pending_queue_count) {
+            rc = run_ready_chains(app);
+            if (rc == 3 || rc == 6) break;
+            continue;
         }
         if (!prompt) {
             bool local_operator = false;

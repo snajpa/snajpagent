@@ -172,7 +172,7 @@ tests/test_sse: $(PLATFORM_SRC) src/sse.c tests/test_sse.c src/base.h src/fs.h s
 
 tests/test_json: $(PLATFORM_SRC) src/json.c tests/test_json.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/json.h
 
-tests/test_write: $(PLATFORM_SRC) src/json.c src/turn.c src/tools_patch.c src/tools_write.c tests/test_write.c $(HEADERS)
+tests/test_write: $(PLATFORM_SRC) src/json.c src/media.c src/turn.c src/tools_patch.c src/tools_write.c tests/test_write.c $(HEADERS)
 
 tests/test_rules: $(PLATFORM_SRC) src/json.c src/rules.c tests/test_rules.c src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/json.h src/rules.h
 
