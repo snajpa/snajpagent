@@ -3598,6 +3598,9 @@ headers/libraries; there is no runtime PATH search or download.
 OFFICE_CFLAGS and OFFICE_LIBS supply LibreOfficeKit, libarchive and libxml2
 headers/libraries. The runtime is separately installed and never bundled with
 the build; matching fonts come from the host installation.
+The Nix-built Linux release artifacts take this variant, because the Office
+dependency in that closure is a static kit that would be linked into the
+artifact; host builds keep the default and link a separately installed runtime.
 The runtime is verified before it is loaded: its root must hold the
 LibreOfficeKit library or the engine executable under a program directory, and a
 root that already names that directory is accepted. A missing or incomplete
