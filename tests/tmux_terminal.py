@@ -3527,6 +3527,10 @@ def run_reasoning_boundary_cases(binary, root, provider, environment,
                                   cwd=case, env=environment, capture_output=True, text=True, timeout=20)
             if provider.failure:
                 raise provider.failure
+            if not (case / "marker").exists():
+                raise AssertionError(
+                    "marker was not written (mode=%s): rc=%s\nstdout=%s\nstderr=%s" % (
+                        mode, seed.returncode, seed.stdout[-4000:], seed.stderr[-4000:]))
             assert (case / "marker").read_text() == "x"
             if mode == "followup":
                 assert seed.returncode == 0, (seed.stderr, rejected)
@@ -6709,7 +6713,9 @@ def run_tool_cases(binary, root, provider, environment):
                         rejected = interact(result["handle"], text, eof=eof,
                                             terminate=True, status="not_run")
                         assert rejected["handle"] is None
-                done = interact(result["handle"], terminate=True, status=None)
+                # Termination is asynchronous: without a bounded wait the result can still
+                # carry the process handle and the case reads a false failure.
+                done = interact(result["handle"], terminate=True, yield_ms=5000, status=None)
                 if not invalid:
                     assert done["handle"] is None
 

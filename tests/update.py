@@ -59,7 +59,9 @@ url = f"http://127.0.0.1:{server.server_port}/latest-dev/snajpagent-linux-x86_64
 thread = threading.Thread(target=server.serve_forever, daemon=True)
 thread.start()
 
-with tempfile.TemporaryDirectory(prefix="update-", dir=os.environ["TMPDIR"]) as root:
+# Honour TMPDIR when the environment provides it; otherwise use the
+# system default so the check also runs where TMPDIR is unset.
+with tempfile.TemporaryDirectory(prefix="update-", dir=os.environ.get("TMPDIR")) as root:
     root = Path(root)
     def reset(label, data=None, **changes):
         home = root / label
