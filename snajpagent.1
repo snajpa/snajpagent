@@ -3594,6 +3594,12 @@ For a relative bundle, supply explicit OFFICE_CFLAGS and OFFICE_LIBS for the
 build-time headers/libraries; there is no runtime PATH search or download.
 OFFICE_CFLAGS and OFFICE_LIBS supply LibreOfficeKit, libarchive and libxml2
 headers/libraries. The complete runtime and fonts must accompany the build.
+The runtime is verified before it is loaded: its root must hold the
+LibreOfficeKit library or the engine executable under a program directory, and a
+root that already names that directory is accepted. A missing or incomplete
+installation fails with a message naming the root and the expected component
+instead of a load failure. There is no runtime PATH search, and detection never
+relies on a conversion command's exit status.
 Linux applies syscall and available filesystem confinement. Other POSIX targets
 report unavailable OS confinement and retain package checks and worker limits.
 Windows applies job CPU/memory limits and an elapsed timer; OS

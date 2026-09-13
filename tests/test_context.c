@@ -2490,6 +2490,41 @@ main(int argc, char **argv)
     assert(office_root && !strcmp(office_root,"/native/libreoffice"));free(office_root);
     assert(!snag_office_runtime("relative-program","relative-root") && !snag_office_runtime("/program",""));
 #endif
+#ifndef _WIN32
+    {
+        /* Installed-runtime detection is by component presence, never by PATH
+         * or by the engine's exit status: a missing installation must produce a
+         * clear error instead of a load failure. */
+        char pattern[4096], message[256];
+        assert(snprintf(pattern,sizeof(pattern),"%s/snajpagent-office-detect-XXXXXX",
+                        getenv("TMPDIR")?getenv("TMPDIR"):"/tmp")>0);
+        char *dir=mkdtemp(pattern);
+        char *program=dir?snag_path_join(dir,"program"):NULL;
+        char *engine=program?snag_path_join(program,"soffice"):NULL;
+#if defined(__APPLE__)
+        char *library=program?snag_path_join(program,"libsofficeapp.dylib"):NULL;
+#else
+        char *library=program?snag_path_join(program,"libsofficeapp.so"):NULL;
+#endif
+        assert(dir && program && engine && library);
+        assert(snag_office_verify_runtime(dir,message,sizeof(message))<0);
+        assert(strstr(message,"missing or incomplete") && strstr(message,dir));
+        assert(mkdir(program,0700)==0);
+        assert(snag_office_verify_runtime(dir,message,sizeof(message))<0);
+        FILE *created=fopen(engine,"wb");
+        assert(created && fclose(created)==0);
+        assert(snag_office_verify_runtime(dir,message,sizeof(message))==0);
+        assert(unlink(engine)==0);
+        created=fopen(library,"wb");
+        assert(created && fclose(created)==0);
+        assert(snag_office_verify_runtime(dir,message,sizeof(message))==0);
+        assert(snag_office_verify_runtime(program,message,sizeof(message))==0);
+        assert(unlink(library)==0);
+        assert(snag_office_verify_runtime(dir,message,sizeof(message))<0);
+        assert(rmdir(program)==0 && rmdir(dir)==0);
+        free(program);free(engine);free(library);
+    }
+#endif
     const char *url_paths[]={"/doc name/#100%?.odt","C:\\doc name\\h\xc3\xa9llo.odt",
         "\\\\server\\share\\doc name.odt","/back\\slash.odt"};
     const char *url_values[]={"file:///doc%20name/%23100%25%3F.odt","file:///C:/doc%20name/h%C3%A9llo.odt",

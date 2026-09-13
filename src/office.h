@@ -10,6 +10,11 @@ void snag_office_program(const char *);
 /* Absolute build-time root, or relative to the actual executable. Caller owns
  * the result; no PATH/environment lookup. */
 char *snag_office_runtime(const char *program,const char *root);
+/* Verify an installed runtime before it is loaded. Detection is by component
+ * presence, never by PATH or a conversion command's exit status: the engine
+ * still exits 0 on input it could not load. 0 when usable, -1 with a clear
+ * message otherwise. */
+int snag_office_verify_runtime(const char *root,char *,size_t);
 /* Owned percent-encoded file URL from an absolute POSIX, drive or UNC path. */
 char *snag_office_file_url(const char *path);
 /* Create a fresh private profile with macro/link settings before import. */
