@@ -184,6 +184,10 @@ let
           (lib.concatMapStringsSep ":" (dep: "${dep}/lib/pkgconfig") dependencies)}
       '';
     };
+  cxx = import ./bsd-cxx.nix {
+    inherit pkgs autotoolsLibrary cflags llvm osVersion;
+    os = "openbsd";
+  };
   jansson = (cmakeLibrary sourcePkgs.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF" "-DJANSSON_BUILD_DOCS=OFF"
     "-DJANSSON_WITHOUT_TESTS=ON" "-DJANSSON_EXAMPLES=OFF"
@@ -484,7 +488,7 @@ let
     '';
   });
 in {
-  inherit sdk target compiler tools cflags ldflags jansson tls curl av pdf png freetype expat fontconfig jpeg openjpeg miniaudio regex unistring xml archive iconv zlib;
+  inherit sdk target compiler tools cflags ldflags jansson tls curl av pdf png freetype expat fontconfig jpeg openjpeg miniaudio regex unistring xml archive iconv zlib cxx;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }:
     pkgs.stdenvNoCC.mkDerivation {

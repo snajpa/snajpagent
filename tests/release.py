@@ -1276,7 +1276,10 @@ assert "'CXX=${llvm.clang-unwrapped}/bin/clang++ --target=${target} -isysroot ${
 print("PASS: macOS PDF targets generated headers, NASM tools and static font/C++ dependencies")
 
 freebsd = (root / "nix/freebsd.nix").read_text()
-freebsd_cxx = freebsd.split("  cxx = ", 1)[1].split("  jansson = ", 1)[0]
+freebsd_cxx = (root / "nix/bsd-cxx.nix").read_text()
+for system in ("freebsd", "netbsd", "openbsd"):
+    recipe = (root / f"nix/{system}.nix").read_text()
+    assert "cxx = import ./bsd-cxx.nix" in recipe and f'os = "{system}";' in recipe
 for setting in ("pkgs.gcc14.cc", '"--enable-clocale=generic"',
                 '"--enable-libstdcxx-threads"', "dontDisableStatic = true;",
                 "ln -s gthr-posix.h ../libgcc/gthr-default.h",

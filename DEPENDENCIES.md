@@ -451,7 +451,8 @@ devfs; the qualification guest used `en_US.UTF-8` and UFS for large sparse files
 The 8.4 PDF recipe links static Poppler, PNG, FreeType, Expat, fontconfig, JPEG
 and OpenJPEG. Host fonts come from `/usr/local/etc/fonts` configuration and the
 standard `/usr/local/share/fonts` and `/usr/X11R6/lib/X11/fonts` directories.
-The GCC 14.3.0 libstdc++ archive is built with Clang against the selected SDK;
+The shared `nix/bsd-cxx.nix` recipe builds the GCC 14.3.0 libstdc++ archive with
+Clang against the selected SDK;
 both 8.4 and 5.1 archive builds pass. It uses the generic
 locale backend and the native POSIX thread implementation. The build retains
 native wide-character classification, enables real gthread feature probes and
@@ -468,6 +469,8 @@ OpenJPEG's legacy rounding wrapper uses Clang's lrintf builtin, which emits the
 amd64 conversion instruction and preserves its floating-point rounding mode.
 Poppler's text-selection min/max operations also use compiler builtins on the
 legacy SDK, retaining NaN handling without importing absent C99 math symbols.
+The same runtime recipe is available to legacy NetBSD and OpenBSD. Their runtime
+builds and application PDF integration remain in progress.
 
 ### FreeBSD 5.1/5.5 legacy target
 
