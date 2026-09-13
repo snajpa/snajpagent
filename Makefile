@@ -441,7 +441,7 @@ FORCE:
 -include $(COMMON_OBJ:.o=.d) src/main.d
 
 # Focused loopback tests build real executable variants from the same source.
-UPDATE_TEST_SRC = $(PLATFORM_SRC) src/config.c src/secret_source.c src/json.c src/http.c src/update.c tests/test_update.c
+UPDATE_TEST_SRC = $(PLATFORM_SRC) src/config.c src/secret_source.c src/json.c src/rules.c src/http.c src/update.c tests/test_update.c
 UPDATE_TEST_FLAGS = -DSNAJPAGENT_TEST_UPDATE=1 -DSNAJPAGENT_UPDATE_BASE='"https://publisher.test"' -DSNAJPAGENT_UPDATE_TARGET='"linux-x86_64"'
 tests/update-old tests/update-new tests/update-local tests/update-stable tests/update-aside: $(UPDATE_TEST_SRC) $(HEADERS)
 	$(CC) $(CPPFLAGS) $(JANSSON_CFLAGS) $(CURL_CFLAGS) $(CFLAGS) -O0 $(LDFLAGS) -Isrc \

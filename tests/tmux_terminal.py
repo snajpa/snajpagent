@@ -6735,7 +6735,7 @@ def run_tool_cases(binary, root, provider, environment):
                 ("a ; echo nope", None, None, True, "1:Alpha\n2:βeta\n3:last"),
                 ("a ; echo nope", 2, 2, True, "2:βeta\n"),
                 ("a ; echo nope", 4, None, False, "beyond end"),
-                ("a ; echo nope", 3, 2, False, "Invalid"),
+                ("a ; echo nope", 3, 2, False, "end_line must be at least start_line"),
                 ("binary", None, None, False, "Non-text"),
                 ("link/.hidden", None, None, False, "Cannot open"),
                 ("pipe", None, None, False, "Cannot open"),
