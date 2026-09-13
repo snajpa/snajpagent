@@ -97,9 +97,12 @@ snajpagent -c</code></pre>
         including systems you are still learning.</p>
       <p><a href="downloads.html">Download 0.99.5</a> for Linux, macOS, Windows or BSD,
         or build from source. The downloads page lists architectures and requirements.</p>
-      <p>A normal build needs C11/POSIX with pthreads, GNU make, libcurl and Jansson:</p>
+      <p>A normal build needs C11/POSIX with pthreads, GNU make, libcurl and Jansson.
+        <code>./configure</code> probes the compiler and the optional modalities and
+        reports what it enabled and disabled:</p>
       <pre><code>git clone https://github.com/snajpa/snajpagent.git
 cd snajpagent
+./configure
 make
 sudo make install</code></pre>
       <p>On a fresh launch without configuration or credentials, interactive setup
