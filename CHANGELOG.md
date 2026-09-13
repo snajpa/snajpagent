@@ -4,6 +4,18 @@
 
 ## Unreleased
 
+- Let the goal tool act on a paused or blocked goal, and add a `resume` action.
+  `update_goal` refused every action unless the goal was active, so a blocked
+  goal could not be reworded, completed, blocked again or resumed, and there was
+  no model-driven resume at all even though `/goal resume` exists. Any
+  unfinished goal is now manipulable; the wording lock, not the status, is what
+  stops the objective being rewritten, so no second rule is introduced.
+- Tolerate a repeated argument key in provider tool arguments. A provider that
+  emitted the same field twice (for example two `stdin` members) made the call
+  fail as "function arguments are not one strict object" and stalled the turn.
+  Arguments now resolve a duplicate key last-wins, as the provider's own parser
+  does; wire records, events and configuration still reject duplicates so the
+  durable trail stays unambiguous.
 - Keep admitted room events out of tool exchanges in model requests. A room
   event admitted while a call was outstanding was appended where the admission
   was recorded, so it landed between the call and its output and the provider
