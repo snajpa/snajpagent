@@ -538,8 +538,10 @@ snag_app_goal_tool(struct app_state *app, const struct snag_response_item *call,
         !snag_json_arg_text(call->arguments, "action", 1u, 8u, false, &action, error, error_size))
         return tool_result(false, error, result);
     text_value = json_object_get(call->arguments, "text");
-    if (app->session.goal_status != SNAG_GOAL_ACTIVE)
-        return tool_result(false, "there is no active goal to update", result);
+    /* Any unfinished goal is manipulable. The wording lock, not the status,
+     * is what keeps the model from changing the objective. */
+    if (!snag_goal_unfinished(app->session.goal_status))
+        return tool_result(false, "there is no unfinished goal to update", result);
     if (strcmp(action, "rewrite") == 0) {
         if (!snag_json_arg_text(call->arguments, "text", 1u, prompt_limit, false, &text, error, error_size))
             return tool_result(false, error, result);
@@ -575,5 +577,15 @@ snag_app_goal_tool(struct app_state *app, const struct snag_response_item *call,
         app->goal_armed = false;
         return tool_result(true, "goal marked blocked", result);
     }
-    return tool_result(false, "update_goal action must be rewrite, complete or block; use text=null for complete.", result);
+    if (strcmp(action, "resume") == 0) {
+        if (app->session.goal_status != SNAG_GOAL_PAUSED && app->session.goal_status != SNAG_GOAL_BLOCKED)
+            return tool_result(false, "only a paused or blocked goal can be resumed", result);
+        if (text_value && !json_is_null(text_value))
+            return tool_result(false, "resume requires text to be null", result);
+        if (commit_goal_event(app, "goal_resumed", goal_id_data(&app->session), error, error_size) < 0)
+            return -1;
+        app->goal_armed = true;
+        return tool_result(true, "goal resumed; automatic continuation is active", result);
+    }
+    return tool_result(false, "update_goal action must be rewrite, complete, block or resume; use text=null for complete and resume.", result);
 }

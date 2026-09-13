@@ -21,6 +21,24 @@ test_strict_accepts_wire_json(void)
 }
 
 static void
+test_arguments_resolve_duplicate_keys_last_wins(void)
+{
+    static const unsigned char duplicate[] = "{\"x\":1,\"x\":2}";
+    char error[192] = {0};
+    json_t *value = snag_json_load_arguments(duplicate, sizeof(duplicate) - 1u, sizeof(duplicate),
+                                            error, sizeof(error));
+
+    assert(value);
+    assert(json_is_object(value));
+    assert(json_integer_value(json_object_get(value, "x")) == 2);
+    json_decref(value);
+    /* The strict loader still refuses the same input: records must stay
+     * unambiguous, only provider arguments tolerate a repeat. */
+    assert(snag_json_load_strict(duplicate, sizeof(duplicate) - 1u, sizeof(duplicate),
+                                 error, sizeof(error)) == NULL);
+}
+
+static void
 test_strict_rejects_ambiguous_or_invalid_input(void)
 {
     static const unsigned char duplicate[] = "{\"x\":1,\"x\":2}";
@@ -198,6 +216,7 @@ main(void)
     json_decref(value);
     snag_json_document_free(&document);
     test_strict_accepts_wire_json();
+    test_arguments_resolve_duplicate_keys_last_wins();
     test_strict_rejects_ambiguous_or_invalid_input();
     test_nesting_limit();
     test_canonical_remains_durable_only();

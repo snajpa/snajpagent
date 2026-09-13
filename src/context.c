@@ -1093,12 +1093,14 @@ tool_schemas(bool goal_active,
                 "description", "Nonblank UTF-8 objective within the goal wording byte limit shown in runtime context. Requires an explicit user or system/developer request to create a goal."))) < 0)
         goto fail;
     if (goal_active && json_array_append_new(tools, tool_schema("update_goal", "action",
-            "Update the active persistent goal: rewrite uses new wording in text, "
-            "complete requires null text, and block uses a specific reason in text.",
-            json_pack("{s:{s:s,s:[s,s,s],s:s},s:{s:[s,s],s:s}}",
-                "action", "type", "string", "enum", "rewrite", "complete", "block",
-                    "description", "rewrite changes unlocked wording; complete ends a finished goal; block stops continuation with a genuine blocker. Use action, not status.",
-                "text", "type", "string", "null", "description", "Omit text or use JSON null for complete; nonblank new wording for rewrite; nonblank reason for block. Respect runtime goal byte limits."))) < 0)
+            "Update the unfinished persistent goal (active, paused or blocked): rewrite "
+            "uses new wording in text unless the wording is locked, complete requires "
+            "null text, block uses a specific reason, and resume restarts a paused or "
+            "blocked goal and requires null text.",
+            json_pack("{s:{s:s,s:[s,s,s,s],s:s},s:{s:[s,s],s:s}}",
+                "action", "type", "string", "enum", "rewrite", "complete", "block", "resume",
+                    "description", "rewrite changes unlocked wording; complete ends a finished goal; block stops continuation with a genuine blocker; resume restarts a paused or blocked goal. Use action, not status.",
+                "text", "type", "string", "null", "description", "Omit text or use JSON null for complete and resume; nonblank new wording for rewrite; nonblank reason for block. Respect runtime goal byte limits."))) < 0)
         goto fail;
     return tools;
 fail: json_decref(tools);

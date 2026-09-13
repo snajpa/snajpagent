@@ -811,8 +811,8 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle, uint32_t m
         assert_properties(tool, json_pack("{s:{s:s}}", "objective", "type", "string"));
     }
     tool = item_by_field(tools, "name", "update_goal");
-    if (tool) assert_properties(tool, json_pack("{s:{s:s,s:[s,s,s]},s:{s:[s,s]}}",
-            "action", "type", "string", "enum", "rewrite", "complete", "block",
+    if (tool) assert_properties(tool, json_pack("{s:{s:s,s:[s,s,s,s]},s:{s:[s,s]}}",
+            "action", "type", "string", "enum", "rewrite", "complete", "block", "resume",
             "text", "type", "string", "null"));
 }
 

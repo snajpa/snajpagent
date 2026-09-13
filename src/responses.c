@@ -854,8 +854,8 @@ build_call(struct snag_responses_stream *stream, struct snag_response_graph *gra
 
     if (!item->arguments_complete || !item->arguments_seen || !item->name || !item->call_id)
         return stream_fail(stream, EPROTO, "function call did not complete coherently");
-    arguments = snag_json_load_strict(item->arguments.data, item->arguments.len, SNAG_MAX_TOOL_ARGUMENTS,
-                                     json_error, sizeof(json_error));
+    arguments = snag_json_load_arguments(item->arguments.data, item->arguments.len, SNAG_MAX_TOOL_ARGUMENTS,
+                                       json_error, sizeof(json_error));
     if (!arguments || !json_is_object(arguments)) {
         json_decref(arguments);
         return stream_fail(stream, EPROTO, "function arguments are not one strict object: %s", json_error);
