@@ -4,6 +4,12 @@
 
 ## Linked Office import (native development)
 
+LibreOffice is never bundled. `WITH_OFFICE=1` stays the default wherever a
+LibreOfficeKit development input exists and links a separately installed runtime.
+The Windows target builds with `WITH_OFFICE=0`, because the mingw toolchain has
+no such input, so that artifact ships without the Office modality — recorded
+here rather than degraded silently.
+
 `WITH_OFFICE=1` links LibreOfficeKit through `libsofficeapp`, libarchive 3.8.7
 and libxml2 2.15.1. The current runtime is LibreOffice 25.2.6.2 from the pinned
 nixpkgs source already used by `nix/portable.nix`; it is a native dependency,
@@ -197,7 +203,9 @@ runtime closure remains unfinished.
 Custom lean builds may set `WITH_AV=0`, `WITH_OFFICE=0`, or
 `WITH_AUDIO_DEVICE=0`; `WITH_PDF=0` also requires `WITH_OFFICE=0` because Office
 page validation/rendering uses Poppler. Official desktop releases require all
-four enabled.
+four enabled wherever an installed LibreOfficeKit development input exists; the
+Windows target is built with `WITH_OFFICE=0` because none does for mingw, and its
+artifact ships without linked Office import.
 The branch's portable recipes have not yet been reconciled with these inputs;
 the historical closure descriptions below do not qualify multimodal artifacts.
 
@@ -728,9 +736,9 @@ Fontconfig/Expat, JPEG and OpenJPEG, using native libstdc++/libm/libgcc_s.
 Fontconfig uses `/etc/fonts` and native X11 font directories. Static FreeType
 metadata retains private PNG math linkage. The AV/PDF/audio application cross-links
 with native libstdc++/libgcc_s/pthread/libc imports and no runtime search path,
-with Office excluded. No target executable was run. Legacy PDF and LibreOffice
-runtime closure remain in progress; no LibreOffice packaging or loader design
-is selected.
+with Office excluded at compile time. No target executable was run. Legacy PDF
+closure remains in progress; LibreOffice is resolved from a separately installed
+runtime and is never bundled.
 
 The legacy C++ runtime recipe uses GCC's portable character classification over
 native libc functions. NetBSD 5.2.3 exposes an 8-bit ctype table; GCC 14's native
@@ -852,8 +860,8 @@ at `build/matrix/windows-x86_64/bin/snajpagent.exe`; `.debug/` contains optional
 matching symbols. Nix and third-party runtime DLLs are not needed on Windows.
 Filesystem/ACL, native Unicode console, process jobs/overlapped pipes, ConPTY,
 IRC and provider integration are implemented. Runtime qualification is scoped
-to the actual tested modern guests; old Windows and other architectures remain
-in progress.
+to the actual tested modern guests; the Windows cross build is measured with
+Office disabled (`WITH_OFFICE=0`), and other architectures remain in progress.
 
 `make prod-windows-arm64` uses the same recipes with pinned nixpkgs
 `ucrtAarch64`, LLVM 21.1.7 and statically linked winpthreads. Its native PE32+

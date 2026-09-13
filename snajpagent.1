@@ -3562,8 +3562,8 @@ WITH_AV=1. AV_CFLAGS and AV_LIBS override pkg-config flags for cross-builds.
 The macOS cross-build supplies static file-codec libraries and miniaudio headers
 for the selected SDK/deployment target. PDF builds use static Poppler/font
 libraries with the SDK C++ runtime and host font lookup. Office runtime packaging
-remains in development; dependency cross-links do not establish target rendering
-or playback/capture.
+is never bundled: it runs from a separately installed runtime. Dependency
+cross-links do not establish target rendering or playback/capture.
 The OpenBSD 7.9 PDF recipe likewise supplies static rendering/font libraries,
 uses the SDK libc++ runtime and reads the host /etc/fonts configuration.
 The OpenBSD 5.9 and 3.5 recipes use the shared static GCC 14 C++ runtime with the same
@@ -3581,7 +3581,10 @@ WITH_PDF=1 is the default. CXX/CXXFLAGS and PDF_CFLAGS/PDF_LIBS select the
 compiler and matching Poppler/libpng headers and libraries.
 Windows PDF source builds use native Windows font lookup. The portable
 multimodal Windows build remains experimental; cross-build qualification is
-described in DEPENDENCIES.md.
+described in DEPENDENCIES.md. The Windows target builds with WITH_OFFICE=0,
+because no LibreOfficeKit development input exists for the mingw toolchain; its
+artifact therefore ships without linked Office import, while every target whose
+installed runtime provides LibreOfficeKit keeps the modality enabled.
 .TP
 .B make WITH_OFFICE=0
 Build a custom executable without linked Office import. The default
@@ -3593,7 +3596,8 @@ spaces, non-ASCII names and URI punctuation.
 For a relative bundle, supply explicit OFFICE_CFLAGS and OFFICE_LIBS for the
 build-time headers/libraries; there is no runtime PATH search or download.
 OFFICE_CFLAGS and OFFICE_LIBS supply LibreOfficeKit, libarchive and libxml2
-headers/libraries. The complete runtime and fonts must accompany the build.
+headers/libraries. The runtime is separately installed and never bundled with
+the build; matching fonts come from the host installation.
 The runtime is verified before it is loaded: its root must hold the
 LibreOfficeKit library or the engine executable under a program directory, and a
 root that already names that directory is accepted. A missing or incomplete
@@ -3607,7 +3611,7 @@ filesystem/network/exec confinement is reported unavailable.
 Windows, macOS, FreeBSD, OpenBSD and NetBSD recipes include static ZIP/XML
 package-reader dependencies. The
 LibreOffice runtime and its components are still required; portable Office
-packaging remains in development.
+packaging is never bundled and is resolved from a separately installed runtime.
 .TP
 .B make WITH_AUDIO_DEVICE=0
 Build a custom executable without capture, playback or audio-device enumeration.

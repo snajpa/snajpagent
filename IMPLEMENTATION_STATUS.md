@@ -7,8 +7,9 @@ assets, normalized image/page/frame input, audio API operations, local dictation
 and playback, and realtime voice with durable handoff to the existing coding
 turn/queue owner. Native generated-media, context/replay and voice transport
 fixtures pass. Production dependency closure remains unfinished, including the
-remaining platform builds and the unresolved LibreOffice packaging/execution
-choice. AV/PDF/audio application cross-linking passes for FreeBSD 8.4/5.1,
+remaining platform builds. LibreOffice is resolved from a separately installed
+runtime and is never bundled; the Windows target builds with `WITH_OFFICE=0`.
+AV/PDF/audio application cross-linking passes for FreeBSD 8.4/5.1,
 OpenBSD 7.9/5.9/3.5 and NetBSD 10.1/2.0, with matching symbols and static
 rendering/font libraries. The older SDKs use a static GCC 14 C++ runtime.
 macOS ARM64 and Intel AV/PDF/audio applications also cross-link; combining their

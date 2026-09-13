@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- Ship the multimodal modalities the manual and website describe: linked image,
+  document and video reading, audio transcription and dictation, and realtime
+  voice. Office is linked from a separately installed runtime and is never
+  bundled.
+- Build the Windows target without linked Office import (`WITH_OFFICE=0`). No
+  LibreOfficeKit development input exists for the mingw toolchain, so that
+  artifact ships without the Office modality while every target whose installed
+  runtime provides one keeps it enabled.
 - Keep a tool call that refuses its own arguments after dispatch. `edit_file`
   reports `not_run`/`invalid_arguments` once it reads the target and the old text
   does not occur exactly once, but the journal rejected that result for a call
@@ -247,7 +255,8 @@
   feedback visible independently of command-output budgets, including on resume.
 - Add Windows static Office ZIP/XML dependencies. Preserve legacy threading and
   fail-closed XML hash seeding without newer Windows initialization/RNG imports;
-  LibreOffice runtime packaging remains in development.
+  LibreOffice itself is never bundled and is loaded from a separately installed
+  runtime.
 
 - Retain accepted attachments with pending direct input through preparation
   failure and resume; preserve durable queue state for voice handoffs and local
