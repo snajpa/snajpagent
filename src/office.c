@@ -12,6 +12,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
+#ifndef _WIN32
+#include <dirent.h>
+#endif
 #ifdef _WIN32
 #include <io.h>
 #endif
@@ -55,7 +58,9 @@ static const char *const office_kit_names[]={"libsofficeapp.dll","mergedlo.dll",
 static const char *const office_engine_names[]={"soffice.exe","soffice",NULL};
 #else
 static const char *const office_kit_names[]={"libsofficeapp.so",NULL};
-static const char *const office_engine_names[]={"soffice",NULL};
+/* `soffice` is the supported entry point even when it is a shell wrapper: it sets
+ * up what the bare soffice.bin expects, and the conversion child inherits PATH. */
+static const char *const office_engine_names[]={"soffice","soffice.bin",NULL};
 #endif
 
 static bool office_present(const char *path)
@@ -159,11 +164,56 @@ out:
     return rc;
 }
 
-#if SNAJPAGENT_OFFICE
-#define LOK_USE_UNSTABLE_API
-#include <LibreOfficeKit/LibreOfficeKit.h>
-extern LibreOfficeKit *libreofficekit_hook_2(const char *, const char *);
+/* Engine discovery for the commands backend: the installed runtime root first, then
+ * the target's PATH, then the usual and versioned installation roots, so a
+ * distribution or vendor install is found without configuration. Caller owns it. */
+char *snag_office_command(const char *program,const char *root)
+{
+    char *runtime=snag_office_runtime(program,root);
+    char *dir=runtime?snag_path_join(runtime,"program"):NULL;
+    char *found=NULL;
+    if(dir && office_component_present(dir,office_engine_names,&found)) {
+        free(dir);free(runtime);return found;
+    }
+    free(dir);free(runtime);
+    static const char *const names[]={"soffice","libreoffice",NULL};
+    for(size_t i=0u;names[i];++i) {
+        char *path=snag_program_path(names[i]);
+        if(path && strchr(path,'/') && snag_file_executable(path)==0) return path;
+        free(path);
+    }
+#ifndef _WIN32
+    static const char *const roots[]={"/usr/lib/libreoffice","/usr/lib64/libreoffice",
+        "/usr/local/lib/libreoffice","/opt/libreoffice",NULL};
+    for(size_t i=0u;roots[i];++i) {
+        char *program_dir=snag_path_join(roots[i],"program");
+        if(program_dir && office_component_present(program_dir,office_engine_names,&found)) {
+            free(program_dir);return found;
+        }
+        free(program_dir);
+    }
+    /* Versioned installs: /usr/lib/libreoffice-7.6, /opt/libreoffice25.2, ... */
+    static const char *const parents[]={"/usr/lib","/usr/lib64","/opt",NULL};
+    for(size_t i=0u;parents[i];++i) {
+        DIR *parent=opendir(parents[i]);
+        if(!parent)continue;
+        struct dirent *entry;
+        for(unsigned scanned=0u;(entry=readdir(parent)) && scanned<256u;++scanned) {
+            if(strncmp(entry->d_name,"libreoffice",11u))continue;
+            char *base=snag_path_join(parents[i],entry->d_name);
+            char *program_dir=base?snag_path_join(base,"program"):NULL;
+            if(program_dir && office_component_present(program_dir,office_engine_names,&found)) {
+                free(program_dir);free(base);closedir(parent);return found;
+            }
+            free(program_dir);free(base);
+        }
+        closedir(parent);
+    }
+#endif
+    return NULL;
+}
 
+/* Shared by both Office backends: the document types the modality claims. */
 static bool office_type(const char *mime)
 {
     return mime && (!strcmp(mime,"application/vnd.openxmlformats-officedocument.wordprocessingml.document") ||
@@ -173,6 +223,11 @@ static bool office_type(const char *mime)
         !strcmp(mime,"application/vnd.oasis.opendocument.presentation") ||
         !strcmp(mime,"application/vnd.oasis.opendocument.spreadsheet"));
 }
+
+#if SNAJPAGENT_OFFICE
+#define LOK_USE_UNSTABLE_API
+#include <LibreOfficeKit/LibreOfficeKit.h>
+extern LibreOfficeKit *libreofficekit_hook_2(const char *, const char *);
 
 struct office_progress {
     int work_fd;
@@ -385,6 +440,153 @@ done:
     free(dir); free(source_url); free(output_url); free(profile_url);free(runtime);free(program_dir);
     _exit(rc);
     return rc; /* Old libc headers may omit the noreturn annotation. */
+}
+#elif SNAJPAGENT_OFFICE_COMMANDS
+/* Command backend: drive the installed LibreOffice through its own executable.
+ * The linked worker's confinement denies execve, so this path runs in the parent
+ * and never loads the runtime itself. Page-range export only: sheet-area
+ * selection has no command-line equivalent and is refused rather than guessed. */
+int snag_office_worker(int argc, char **argv)
+{
+    if (argc < 2 || strcmp(argv[1],"--internal-office-pdf")) return -1;
+    fputs("This build drives the installed LibreOffice command line, not the linked worker\n",stderr);
+    _exit(1);
+    return 1;
+}
+
+/* The CLI takes one PDF export filter per document family. */
+static const char *office_filter(const char *mime)
+{
+    if (strstr(mime,"spreadsheet")) return "calc_pdf_Export";
+    if (strstr(mime,"presentation")) return "impress_pdf_Export";
+    return "writer_pdf_Export";
+}
+
+int snag_office_export(struct snag_session *session, const char *path, const char *mime,
+        unsigned int first, unsigned int last, const struct snag_sheet_range *range,
+        int (*pump)(void *, unsigned int), void *opaque, snag_wake_fd wake,
+        struct snag_buf *out, json_t **metadata, char *error, size_t size)
+{
+    *metadata=NULL;
+    if ((range && !snag_sheet_range_valid(range)) || !office_type(mime) || !*executable ||
+        !first || last < first || last-first > 3u || last > 100000u) {
+        snag_errorf(error,size,"Invalid Office page selection or unavailable internal executable");
+        return -1;
+    }
+    if (range) {
+        snag_errorf(error,size,"Sheet-area Office selection requires the linked Office import; "
+            "this build uses the installed command line (WITH_OFFICE_COMMANDS=1)");
+        return -1;
+    }
+    char *engine=snag_office_command(executable,SNAJPAGENT_OFFICE_ROOT);
+    if (!engine) {
+        snag_errorf(error,size,"No LibreOffice engine found: tried %s, the PATH, and the usual installation roots",
+            SNAJPAGENT_OFFICE_ROOT);
+        return -1;
+    }
+    int work=snag_media_work_open(session->dir_fd,error,size);
+    if (work<0) { free(engine); return -1; }
+    char *dir=snag_path_join(session->dir_path,SNAG_MEDIA_WORK_NAME);
+    char *profile=dir?snag_path_join(dir,"profile"):NULL;
+    char *profile_url=profile?snag_office_file_url(profile):NULL;
+    char *source_url=snag_office_file_url(path);
+    char profile_arg[SNAG_PATH_MAX_BYTES+32u], convert_arg[96], pages[24];
+    if (first==last) snprintf(pages,sizeof(pages),"%u",first);
+    else snprintf(pages,sizeof(pages),"%u-%u",first,last);
+    snprintf(profile_arg,sizeof(profile_arg),"-env:UserInstallation=%s",profile_url?profile_url:"");
+    /* The format token comes first: `pdf:<filter>:<json options>`. Without the
+     * leading `pdf:` the engine treats the filter name as the target format and
+     * writes a differently named file, which the check below then rejects. */
+    snprintf(convert_arg,sizeof(convert_arg),"pdf:%s:{\"PageRange\":{\"type\":\"string\",\"value\":\"%s\"}}",
+        office_filter(mime),pages);
+    const char *args[]={engine,"--headless","--invisible","--nodefault","--norestore","--nolockcheck",
+        "--nofirststartwizard",profile_arg,"--convert-to",convert_arg,"--outdir",dir,
+        path,NULL};
+    int rc=-1;
+    size_t original=out->len;
+    struct snag_buf trace;
+    snag_buf_init(&trace,4096u);
+    if (!dir || !profile || !profile_url || !source_url) {
+        snag_errorf(error,size,"Office conversion workspace is unavailable");
+        goto out;
+    }
+    if (snag_office_profile(profile,error,size)!=0) goto out;
+    if (snag_convert_internal(args,dir,&trace,pump,opaque,wake,error,size)!=0) goto out;
+    if (snag_media_work_check(work)<0) {
+        snag_errorf(error,size,"Office temporary files exceeded 256 MiB / 4096 entries / depth 32, or became unsafe");
+        goto out;
+    }
+    /* The command line writes <basename>.pdf into the work directory. */
+    const char *base=strrchr(path,'/');
+    base=base?base+1:path;
+    char stem[SNAG_PATH_MAX_BYTES], pdf_name[SNAG_PATH_MAX_BYTES];
+    if (snprintf(stem,sizeof(stem),"%s",base)>=(int)sizeof(stem)) {
+        snag_errorf(error,size,"Office source name is too long");
+        goto out;
+    }
+    char *dot=strrchr(stem,'.');
+    if (dot) *dot=0;
+    if (snprintf(pdf_name,sizeof(pdf_name),"%s.pdf",stem)>=(int)sizeof(pdf_name)) {
+        snag_errorf(error,size,"Office output name is too long");
+        goto out;
+    }
+    int fd=snag_open_inspect_path(dir,pdf_name);
+    snag_file_info st;
+    if (fd<0 || snag_fstat(fd,&st)<0 || st.st_size<5 || st.st_size>32u*1024u*1024u-4096u) {
+        snag_errorf(error,size,"Office PDF is absent or exceeds 32 MiB: %.200s",
+            trace.data?(const char *)trace.data:"");
+        if (fd>=0) close(fd);
+        goto out;
+    }
+    char *pdf_path=snag_path_join(dir,pdf_name);
+    struct snag_pdf *pdf=NULL; unsigned int produced=0;
+    int opened=pdf_path?snag_pdf_open(pdf_path,NULL,NULL,&pdf,&produced,error,size):-1;
+    free(pdf_path); snag_pdf_close(pdf);
+    if (opened || produced!=last-first+1u) {
+        if (!opened) snag_errorf(error,size,"Office export returned %u pages for requested range %u-%u",
+            produced,first,last);
+        close(fd);
+        goto out;
+    }
+    char block[65536]; ssize_t got;
+    while ((got=read(fd,block,sizeof(block)))>0)
+        if (snag_buf_append(out,block,(size_t)got)<0) {
+            snag_errorf(error,size,"Converted Office PDF exceeds the caller's output budget");
+            close(fd);
+            goto out;
+        }
+    close(fd);
+    if (got<0) {
+        snag_errorf(error,size,"Cannot read the converted Office PDF: %s",strerror(errno));
+        goto out;
+    }
+    char coverage[1536];
+    snprintf(coverage,sizeof(coverage),
+        "LibreOffice command line (%s): imported document page %u-%u only. "
+        "Layout, fonts and computed values may differ from the originating application. "
+        "Macros, scripts and link updates disabled by a private profile; the runtime is the user's own installation. "
+        "Other pages, slides, sheets, cells and speaker notes uninspected.",
+        office_filter(mime),first,last);
+    *metadata=json_pack("{s:s,s:s,s:s}","format","pdf","page_kind","Imported document page",
+        "coverage",coverage);
+    rc=*metadata?0:-1;
+out:
+    if (rc) {
+        out->len=original; json_decref(*metadata); *metadata=NULL;
+        /* Never return an unexplained failure: name the status and whatever the
+         * engine printed, so a host-level problem is diagnosable from the error. */
+        if (error && size && !error[0])
+            snag_errorf(error,size,"Office command export failed (rc=%d): %.200s",rc,
+                trace.data?(const char *)trace.data:"no engine output");
+    }
+    snag_buf_free(&trace);
+    close(work);
+    char cleanup_error[256];
+    if (snag_media_work_remove(session->dir_fd,cleanup_error,sizeof(cleanup_error))!=0 && !rc) {
+        snag_errorf(error,size,"%s",cleanup_error); rc=-1;
+    }
+    free(dir);free(profile);free(profile_url);free(source_url);free(engine);
+    return rc;
 }
 #else
 int snag_office_worker(int argc, char **argv)
