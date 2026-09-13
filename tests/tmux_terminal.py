@@ -6683,8 +6683,9 @@ def run_tool_cases(binary, root, provider, environment):
                 result = command("IFS= read -r line; printf 'got:%s\\n' \"$line\"",
                                  timeout=5000, yield_ms=50, status="running")
                 if malformed:
+                    # Omit the required handle; output limits are optional.
                     rejected = invoke("write_stdin", {
-                        "handle": result["handle"], "data": "", "eof": False,
+                        "data": "", "eof": False,
                         "terminate": False, "yield_ms": 0}, "not_run")
                     assert rejected["handle"] is None
                 else:
