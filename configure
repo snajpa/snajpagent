@@ -96,8 +96,16 @@ die() {
 	exit 1
 }
 
-if [ -n "$HOST" ] && [ "$CC" = cc ] && command -v "$HOST-cc" >/dev/null 2>&1; then
-	CC="$HOST-cc"
+if [ -n "$HOST" ] && [ "$CC" = cc ]; then
+	host_cc=
+	for candidate in "$HOST-gcc" "$HOST-cc" "$HOST-clang"; do
+		if command -v "$candidate" >/dev/null 2>&1; then
+			host_cc=$candidate
+			break
+		fi
+	done
+	[ -n "$host_cc" ] || die "no $HOST-gcc, $HOST-cc or $HOST-clang found; pass --cc=<cross compiler>"
+	CC=$host_cc
 fi
 
 [ -f config.mk ] ||
