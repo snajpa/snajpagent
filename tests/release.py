@@ -1784,6 +1784,10 @@ formats_header = "\n".join(line[1:] for line in formats_patch.split("+++ b/compa
 assert "#include_next <inttypes.h>" in formats_header
 assert 'lib.optionals early [ ./ffmpeg-openbsd35-inttypes.patch ./ffmpeg-openbsd35-hls.patch' in (root / "nix/openbsd.nix").read_text()
 assert './ffmpeg-legacy-libm.patch ];' in (root / "nix/openbsd.nix").read_text()
+openjpeg_recipe = (root / "nix/openbsd.nix").read_text().split("  openjpeg = ", 1)[1].split("  pdf = ", 1)[0]
+assert "lib.optionalString early" in openjpeg_recipe
+for macro in ("#define PRId64 __INT64_FMTd__", "#define PRIi64 __INT64_FMTi__", "#define PRIu32 __UINT32_FMTu__"):
+    assert macro in openjpeg_recipe and macro in formats_header
 if shutil.which("clang"):
     with tempfile.TemporaryDirectory(prefix="bsd-inttypes-", dir=root / "build") as tmp:
         tmp = Path(tmp)
@@ -1985,6 +1989,8 @@ assert 'cmakeFlagsArray+=("-DCMAKE_C_FLAGS=${cflags} --target=${target} --sysroo
 open_fonts = openbsd.split("  fontconfig = ", 1)[1].split("  jpeg = ", 1)[0]
 assert '"--sysconfdir=/etc"' in open_fonts
 assert '"--with-default-fonts=/usr/X11R6/lib/X11/fonts"' in open_fonts
+assert "lib.optionalString early" in open_fonts
+assert "--replace-fail 'errno == ENOTSUP' 'errno == EOPNOTSUPP'" in open_fonts
 font_flags = re.search(r'export FREETYPE_LIBS="(.*?)"', open_fonts).group(1)
 # Reproduce the omitted indirect dependency and exercise the exact recipe command.
 with tempfile.TemporaryDirectory(prefix="openbsd-static-fonts-", dir=root / "build") as tmp:

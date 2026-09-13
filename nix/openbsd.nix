@@ -317,6 +317,9 @@ let
     "--with-add-fonts=/usr/local/share/fonts"
   ] [ expat freetype png zlib ]).overrideAttrs (old: {
     nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.gperf pkgs.python3 ];
+    postPatch = lib.optionalString early ''
+      substituteInPlace src/fcatomic.c --replace-fail 'errno == ENOTSUP' 'errno == EOPNOTSUPP'
+    '';
     preConfigure = old.preConfigure + ''
       # Include PNG's private math dependency through FreeType's static metadata.
       export FREETYPE_LIBS="$(pkg-config --static --libs freetype2)"
@@ -331,6 +334,12 @@ let
   openjpeg = (cmakeLibrary sourcePkgs.openjpeg [ "-DBUILD_CODEC=OFF" ] []).overrideAttrs (_: {
     postPatch = lib.optionalString early ''
       substituteInPlace src/lib/openjp2/opj_includes.h \
+        --replace-fail '#include <inttypes.h>' '#include <inttypes.h>
+      #ifndef PRId64
+      #define PRId64 __INT64_FMTd__
+      #define PRIi64 __INT64_FMTi__
+      #define PRIu32 __UINT32_FMTu__
+      #endif' \
         --replace-fail 'return lrintf(f);' 'return __builtin_lrintf(f);'
     '';
   });

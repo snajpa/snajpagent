@@ -13,7 +13,9 @@
   with the SDK's exception and process-exit interfaces.
 - Add the OpenBSD 5.9 static PDF/C++ application dependencies and continue the
   NetBSD 2.0/OpenBSD 3.5 runtime work with native math operations and distinct
-  portable C++ error conditions.
+  portable C++ error conditions. Supply OpenBSD 3.5's missing OpenJPEG integer
+  formats from the compiler's target ABI and use its native unsupported-operation
+  error in Fontconfig's atomic-file fallback.
 
 - Keep admitted room events out of tool exchanges in model requests. A room
   event admitted while a call was outstanding was appended where the admission

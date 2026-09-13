@@ -612,6 +612,10 @@ target executable was run. The 5.9 recipe uses the shared static GCC 14 C++
 runtime. Its AV/PDF/audio application also cross-links, with matching symbols,
 only native libc/pthread imports and no runtime search path; Office is excluded.
 
+The 3.5 OpenJPEG recipe supplies its missing integer-format macros from Clang's
+target ABI, matching the file-codec compatibility definitions. Fontconfig's
+atomic-file fallback recognizes the SDK's native EOPNOTSUPP error.
+
 The 3.5 C++ runtime uses compatible stdio declarations, native varargs and the
 SDK's GetIP/atexit interfaces. Its missing C++ error conditions use GNU errno-h's
 distinct portable identifiers and matching messages; native error values are
