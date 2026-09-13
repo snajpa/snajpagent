@@ -41,6 +41,11 @@ MARKDOWN_TEXT = (
     "> final quoted boundary"
 )
 DEFAULT_IDLE_PROMPT = " openai/gpt-5.5-2026-04-23/medium   0% ›"
+
+# How long a harness waits for the app to supply the next tool call. A supply
+# budget, not a speed assertion: generous enough to survive a loaded machine,
+# for example a full release matrix building concurrently.
+SUPPLY_TIMEOUT = 15.0
 DEFAULT_ACCOUNTED_IDLE_PROMPT = " openai/gpt-5.5-2026-04-23/medium   ?% ›"
 DEFAULT_ACTIVE_PROMPT = " openai/gpt-5.5-2026-04-23/medium   ?% »"
 MACHINE_HOSTNAME = socket.gethostname()
@@ -2223,7 +2228,7 @@ def run_persistent_model_recovery_case(binary, root):
                 args=("--no-listen", "--no-client"), environment=env) as terminal:
             terminal.wait("initial-model/mediumI>")
             terminal.submit("start original")
-            assert ready.wait(3)
+            assert ready.wait(SUPPLY_TIMEOUT)
             terminal.submit("/model next-model/low")
             terminal.wait("until changed")
             for text in ("queued one", "queued two"):
@@ -2356,7 +2361,7 @@ def run_goal_interrupt_http_case(binary, root, chat=False):
                 args=("--no-listen", "--no-client"), environment=env) as terminal:
             terminal.wait("I>")
             terminal.submit("/goal inspect local file")
-            assert ready.wait(3)
+            assert ready.wait(SUPPLY_TIMEOUT)
             terminal.wait("goal waiting")
             if chat:
                 terminal.submit("/chat"); terminal.wait("chat is offline")
@@ -2379,7 +2384,7 @@ def run_goal_interrupt_http_case(binary, root, chat=False):
             assert len(requests) == 1
             ready.clear()
             terminal.submit("/goal resume")
-            assert ready.wait(3)
+            assert ready.wait(SUPPLY_TIMEOUT)
             terminal.wait("⚑A>")
             terminal.send_key("C-c")
             wait_event_count(state, "goal_paused", 2)
@@ -2538,7 +2543,7 @@ def run_blank_enter_stream_case(binary, root, help_commands=False):
             terminal.wait_until(lambda text: text.count("idle>") == 3, "idle blank lines")
             assert not requests and not list((state / "sessions").glob("*/events.jsonl"))
             terminal.submit("stream-check")
-            assert ready.wait(3)
+            assert ready.wait(SUPPLY_TIMEOUT)
             terminal.wait("stream-before")
             before = terminal.capture().count("busy>")
             history = (state / "prompt_history").read_bytes()
@@ -6473,7 +6478,7 @@ def run_tool_cases(binary, root, provider, environment):
     ready = threading.Event()
 
     def respond(handler, request, sequence):
-        assert ready.wait(3), "test did not supply the next tool call"
+        assert ready.wait(SUPPLY_TIMEOUT), "test did not supply the next tool call"
         ready.clear()
         outputs = sum(item.get("type") == "function_call_output" for item in request["input"])
         assert outputs == (number - 1 if name else number), request
