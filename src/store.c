@@ -589,6 +589,13 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
     bool current_turn = session->active_turn && event_turn_id &&
                         !strcmp(event_turn_id, session->active_turn_id);
 
+    /* A refused transition names the clause that failed and the call it concerned,
+     * so a crash report is diagnostic without a debug build: every rejection below
+     * sets clause before jumping to invalid. */
+    const char *clause = NULL;
+    const char *diag_call = NULL;
+    const char *diag_status = NULL;
+
     if (strcmp(type, "session_created") == 0) {
         const char *effort = snag_json_string(data, "default_effort");
         const char *model = snag_json_string(data, "default_model");
@@ -1612,10 +1619,16 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *status = snag_json_string(result, "status");
         const char *handle = snag_json_string(result, "handle");
         struct snag_pending_call *call;
-        if (!snag_json_exact_keys(data, "call_id result turn_id") || !current_turn ||
-            !session->response_complete || !call_id ||
-            !(call = find_pending_call(session, call_id)) || call->finished ||
-            snag_tool_result_valid(result) < 0 || !status) goto invalid;
+        diag_call = call_id;
+        diag_status = status;
+        if (!snag_json_exact_keys(data, "call_id result turn_id")) { clause = "keys"; goto invalid; }
+        if (!current_turn) { clause = "turn"; goto invalid; }
+        if (!session->response_complete) { clause = "complete"; goto invalid; }
+        if (!call_id) { clause = "call"; goto invalid; }
+        if (!(call = find_pending_call(session, call_id))) { clause = "found"; goto invalid; }
+        if (call->finished) { clause = "fin"; goto invalid; }
+        if (snag_tool_result_valid(result) < 0) { clause = "valid"; goto invalid; }
+        if (!status) { clause = "status"; goto invalid; }
         if (call->started) {
             /* A tool may refuse its own arguments after dispatch: edit_file reads
              * the target and reports not_run when the old text does not occur
@@ -1623,28 +1636,39 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
              * spawned no process, because snag_tool_result_valid already forces a
              * null handle for not_run/denied; a process-owning call keeps the
              * strict rule. */
-            if (snag_string_in(status, "not_run denied") && call->process_handle[0]) goto invalid;
+            if (snag_string_in(status, "not_run denied") && call->process_handle[0]) {
+                clause = "not-run-with-process";
+                goto invalid;
+            }
         } else if (!snag_string_in(status, "not_run denied")) {
+            clause = "unstarted-status";
             goto invalid;
         }
         struct snag_process_state *process = snag_session_process(session, call->process_handle);
         if (call->started && call->process_handle[0]) {
-            if (!process) goto invalid;
+            if (!process) { clause = "process"; goto invalid; }
             json_t *ref = json_object_get(result, "output_ref");
             if (ref) {
                 const char *ref_handle = snag_json_string(ref, "handle");
                 const char *const begin[] = {"stdout_start", "stderr_start"};
                 const char *const end[] = {"stdout_end", "stderr_end"};
-                if (!ref_handle || strcmp(ref_handle, process->handle)) goto invalid;
+                if (!ref_handle || strcmp(ref_handle, process->handle)) {
+                    clause = "output-ref-handle";
+                    goto invalid;
+                }
                 for (unsigned int s = 0u; s < 2u; ++s) {
                     uint64_t from, to;
                     if (snag_json_integer_u64(ref, begin[s], &from) < 0 ||
                         snag_json_integer_u64(ref, end[s], &to) < 0 ||
-                        from != process->collected_bytes[s] || to != process->output_bytes[s]) goto invalid;
+                        from != process->collected_bytes[s] || to != process->output_bytes[s]) {
+                        clause = "output-ref-bounds";
+                        goto invalid;
+                    }
                     process->collected_bytes[s] = to;
                 }
             } else if ((process->output_bytes[0] || process->output_bytes[1]) &&
                        strcmp(status, "outcome_unknown")) {
+                clause = "output-unref";
                 goto invalid;
             }
             if (!strcmp(status, "running")) {
@@ -1765,7 +1789,13 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
     }
     if (!session->pending_queue_count) session->queue_armed = false;
     return 0;
-invalid: return snag_fail(error, error_size, EINVAL, "invalid %s transition at sequence %llu", type,
+invalid:
+    if (clause)
+        return snag_fail(error, error_size, EINVAL,
+            "invalid %s transition at sequence %llu (clause=%s call=%s status=%s)", type,
+            (unsigned long long)seq, clause, diag_call ? diag_call : "-",
+            diag_status ? diag_status : "-");
+    return snag_fail(error, error_size, EINVAL, "invalid %s transition at sequence %llu", type,
               (unsigned long long)seq);
 }
 
