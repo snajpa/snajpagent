@@ -3574,9 +3574,12 @@ cross target and maps the compilers, resolving the cross C++ best-effort: a
 linked-PDF build without one asks for \fB--cxx\fR or \fB--without-pdf\fR.
 \fB--prefix\fR and \fB--manprefix\fR set the install and manual prefixes, and
 \fB--cc\fR, \fB--cxx\fR and \fB--debug\fR are
-also accepted.  An option the script does not recognise exits 2 with the usage
-text, leaving the tracked config.mk untouched, so a packaging recipe's own flags
-fail loudly rather than being ignored.  Export \fBPKG_CONFIG_PATH\fR for the
+also accepted.  GNU packaging flags are accepted and noted: the standard
+directory and Autoconf-style options are ignored, \fB--mandir\fR is a synonym
+for \fB--manprefix\fR, and a \fB--host\fR naming this machine is treated as
+native.  The install layout stays \fB--prefix\fR and \fB--manprefix\fR.  An
+option the script does not know exits 2 with the usage text and leaves the
+tracked config.mk untouched.  Export \fBPKG_CONFIG_PATH\fR for the
 build as well as for the probe; without it the probe finds no dependency and
 turns the modality off.
 The script needs a POSIX shell providing \fBcommand -v\fR; the pinned
