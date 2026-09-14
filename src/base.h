@@ -115,6 +115,8 @@ int snag_random_id(char out[SNAG_ID_HEX_LEN + 1u]);
 int snag_random_bytes(unsigned char *out, size_t len);
 uint64_t snag_time_ms(void);
 uint64_t snag_monotonic_ms(void);
+/* Throughput in milli-tokens per second; 0 when nothing is measurable. */
+uint64_t snag_rate_microtokens_per_second(uint64_t tokens, uint64_t elapsed_ms);
 int snag_sleep_ms(unsigned int milliseconds);
 void snag_ignore_sigpipe(void);
 bool snag_text_locale_init(void);

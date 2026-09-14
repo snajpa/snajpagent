@@ -97,6 +97,19 @@ bool snag_input_observation_matches(const struct snag_input_observation *,
     const char *provider, const char *model, const char *effort,
     const char *source_sha256, const char *compact_id);
 
+/* Per-session usage totals, accumulated where a completed response is applied, so a
+ * resumed session derives them from its journal rather than from memory. */
+struct snag_usage_totals {
+    uint64_t responses;
+    uint64_t input_tokens;
+    uint64_t cached_input_tokens;
+    uint64_t uncached_input_tokens;
+    uint64_t output_tokens;
+    uint64_t reasoning_tokens;
+    uint64_t total_tokens;
+    bool cached_seen;
+};
+
 struct snag_session {
     char id[SNAG_ID_HEX_LEN + 1u];
     char prev_sha256[SNAG_SHA256_HEX_LEN + 1u];
@@ -105,6 +118,7 @@ struct snag_session {
     char final_item_id[SNAG_ID_HEX_LEN + 1u];
     char final_response_id[SNAG_ID_HEX_LEN + 1u];
     struct snag_input_observation active_accounting, usage_anchor, context_meter;
+    struct snag_usage_totals usage_totals;
     struct snag_process_state processes[SNAG_MAX_PROCESSES];
     size_t process_count;
     uint64_t irc_received_seq, irc_consumed_seq, response_irc_seq;

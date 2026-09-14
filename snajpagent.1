@@ -1653,6 +1653,12 @@ bounds.  These methods are not interchangeable exact counts.
 shows the capacity source and accounting method.  Catalog refresh resets the
 count-capability probe and preserves observations only for an identical source.
 .PP
+.B /status
+also reports prompt-cache reuse and speed: input tokens split into cached and
+uncached, the same totals for the current process beside them (program totals
+restart with the process while session totals survive a resume), and tokens per
+second for the running turn and for the most recent response.
+.PP
 Automatic compaction uses the provider threshold and resolved input capacity;
 setting the proactive threshold to zero does not disable capacity handling.
 Native compaction is used when enabled.  Set

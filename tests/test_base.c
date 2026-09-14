@@ -3279,9 +3279,21 @@ wmain(int argc, wchar_t **wide)
     return rc;
 }
 #else
+static void
+test_rate_math(void)
+{
+    assert(snag_rate_microtokens_per_second(0u, 1000u) == 0u);
+    assert(snag_rate_microtokens_per_second(10u, 0u) == 0u);
+    assert(snag_rate_microtokens_per_second(10u, 1000u) == 10000000u);
+    assert(snag_rate_microtokens_per_second(1u, 2000u) == 500000u);
+    assert(snag_rate_microtokens_per_second(3u, 1000u) == 3000000u);
+    assert(snag_rate_microtokens_per_second(UINT64_MAX, 1u) == UINT64_MAX);
+}
+
 int
 main(int argc, char **argv)
 {
+    test_rate_math();
     return run_base(argc, argv);
 }
 #endif

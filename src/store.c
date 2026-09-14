@@ -1529,6 +1529,36 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !json_is_array(items) || snag_response_usage_from_json(json_object_get(data, "usage"),
                                          &graph.usage) < 0 ||
             snag_response_graph_classify(&graph, &decision, error, error_size) < 0) goto invalid;
+        if (graph.usage.cached_known || graph.usage.input_known || graph.usage.output_known ||
+            graph.usage.reasoning_known || graph.usage.total_known) {
+            struct snag_usage_totals *totals = &session->usage_totals;
+            if (totals->responses != UINT64_MAX) ++totals->responses;
+            if (graph.usage.input_known && totals->input_tokens <= UINT64_MAX - graph.usage.input_tokens)
+                totals->input_tokens += graph.usage.input_tokens;
+            if (graph.usage.cached_known && (!graph.usage.input_known ||
+                graph.usage.cached_input_tokens <= graph.usage.input_tokens)) {
+                /* The reported cache figure is believed only while it stays a subset of the input. */
+                totals->cached_seen = true;
+                if (totals->cached_input_tokens <= UINT64_MAX - graph.usage.cached_input_tokens)
+                    totals->cached_input_tokens += graph.usage.cached_input_tokens;
+                if (graph.usage.input_known) {
+                    uint64_t uncached = graph.usage.input_tokens - graph.usage.cached_input_tokens;
+                    if (totals->uncached_input_tokens <= UINT64_MAX - uncached)
+                        totals->uncached_input_tokens += uncached;
+                }
+            } else if (graph.usage.input_known &&
+                       totals->uncached_input_tokens <= UINT64_MAX - graph.usage.input_tokens) {
+                /* No cache figure, or an impossible one: the whole input counts as uncached. */
+                totals->uncached_input_tokens += graph.usage.input_tokens;
+            }
+            if (graph.usage.output_known && totals->output_tokens <= UINT64_MAX - graph.usage.output_tokens)
+                totals->output_tokens += graph.usage.output_tokens;
+            if (graph.usage.reasoning_known &&
+                totals->reasoning_tokens <= UINT64_MAX - graph.usage.reasoning_tokens)
+                totals->reasoning_tokens += graph.usage.reasoning_tokens;
+            if (graph.usage.total_known && totals->total_tokens <= UINT64_MAX - graph.usage.total_tokens)
+                totals->total_tokens += graph.usage.total_tokens;
+        }
         if (graph.usage.input_known) {
             session->usage_anchor = session->active_accounting;
             /* An already-started compaction may finish during the response.

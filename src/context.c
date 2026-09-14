@@ -1358,6 +1358,23 @@ snag_context_compact_output_count_request_build(const json_t *output, const char
     return 0;
 }
 
+void
+snag_context_cache_key(const struct snag_session *session, const char *provider, const char *model,
+                       char out[SNAG_CACHE_KEY_LEN + 1u])
+{
+    char material[512], digest[SNAG_SHA256_HEX_LEN + 1u];
+    int len;
+
+    if (!out) return;
+    out[0] = '\0';
+    if (!session || !session->id[0] || !model) return;
+    len = snprintf(material, sizeof(material), "%s|%s|%s|%s", session->id, provider ? provider : "",
+                   model, SNAJPAGENT_PROFILE_ID);
+    if (len < 0 || (size_t)len >= sizeof(material)) return;
+    snag_sha256_hex(material, (size_t)len, digest);
+    (void)snprintf(out, SNAG_CACHE_KEY_LEN + 1u, "%.32s", digest);
+}
+
 int
 snag_context_build(struct snag_session *session, const char *model, const char *effort, unsigned int cycle,
                   const json_t *steering, uint64_t max_output_tokens, bool max_output_known,
@@ -1504,10 +1521,17 @@ snag_context_build(struct snag_session *session, const char *model, const char *
     json_decref(metadata);
     if (max_output_known && snag_json_set_new(projection->model_input.value, "max_output_tokens",
             json_integer((json_int_t)max_output_tokens)) < 0) goto projection_error;
-    projection->create_request.value = json_pack("{s:O,s:s,s:b,s:{s:s},s:b,s:b,s:s,s:O,s:s}",
-        "input", builder.request_input, "model", upstream_model,
-        "parallel_tool_calls", session->parallel_tool_calls, "reasoning", "effort", effort,
-        "store", 0, "stream", 1, "tool_choice", "auto", "tools", builder.tools, "truncation", "disabled");
+      /* Prompt caching keys on a stable request prefix, so the cache key is derived only from
+       * session, provider, model and profile identity: identical for every request of a session
+       * (and across resume), and impossible to perturb with turn, cycle or timing. */
+      char cache_key[SNAG_CACHE_KEY_LEN + 1u];
+      snag_context_cache_key(session, provider ? provider->name : NULL, upstream_model, cache_key);
+      if (!cache_key[0]) goto projection_error;
+      projection->create_request.value = json_pack("{s:O,s:s,s:b,s:{s:s},s:b,s:b,s:s,s:O,s:s,s:s}",
+          "input", builder.request_input, "model", upstream_model,
+          "parallel_tool_calls", session->parallel_tool_calls, "reasoning", "effort", effort,
+          "store", 0, "stream", 1, "tool_choice", "auto", "tools", builder.tools, "truncation", "disabled",
+          "prompt_cache_key", cache_key);
     if ((max_output_known && snag_json_set_new(projection->create_request.value, "max_output_tokens",
              json_integer((json_int_t)max_output_tokens)) < 0) ||
         snag_json_set_new(projection->create_request.value, "include",

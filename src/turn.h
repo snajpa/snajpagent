@@ -74,10 +74,13 @@ struct snag_response_usage {
     uint64_t output_tokens;
     uint64_t reasoning_tokens;
     uint64_t total_tokens;
+    /* Input tokens the provider served from its prompt cache, when it reports them. */
+    uint64_t cached_input_tokens;
     bool input_known;
     bool output_known;
     bool reasoning_known;
     bool total_known;
+    bool cached_known;
 };
 
 struct snag_response_graph {

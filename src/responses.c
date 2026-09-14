@@ -590,6 +590,13 @@ parse_provider_usage(struct snag_responses_stream *stream, const json_t *respons
         snag_json_optional_u64(value, "output_tokens", &usage.output_tokens, &usage.output_known) < 0 ||
         snag_json_optional_u64(value, "total_tokens", &usage.total_tokens, &usage.total_known) < 0)
         return stream_fail(stream, EPROTO, "invalid response usage");
+    json_t *input_details = json_object_get(value, "input_tokens_details");
+    if (input_details && !json_is_null(input_details)) {
+        if (!json_is_object(input_details) ||
+            snag_json_optional_u64(input_details, "cached_tokens", &usage.cached_input_tokens,
+                                  &usage.cached_known) < 0)
+            return stream_fail(stream, EPROTO, "invalid response cached-input usage");
+    }
     details = json_object_get(value, "output_tokens_details");
     if (details && !json_is_null(details)) {
         if (!json_is_object(details) || snag_json_optional_u64(details, "reasoning_tokens",

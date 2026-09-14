@@ -2601,6 +2601,196 @@ static void test_office_limits(void)
 #endif
 }
 
+static json_t *
+response_completed_with_usage(const char *turn_id, const char *response_id, const char *text,
+                              json_t *usage_json)
+{
+    return checked_json(json_pack("{s:i,s:[o],s:s,s:s,s:s,s:s,s:o}",
+        "cycle", 1, "items", assistant_item(text), "provider_response_id", "resp_1",
+        "response_id", response_id, "status", "completed", "turn_id", turn_id, "usage", usage_json));
+}
+
+static void
+test_cache_accounting(struct snag_store *store, const char *workspace)
+{
+    struct snag_session session;
+    struct snag_response_usage parsed;
+    json_t *snapshot, *five, *four;
+    const char *turn = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", *response = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const char *turn2 = "cccccccccccccccccccccccccccccccc", *response2 = "dddddddddddddddddddddddddddddddd";
+
+    create_session(store, &session, workspace, "medium");
+    commit_event(&session, "turn_started", turn_started(turn, 1, "cache probe", workspace, NULL));
+    commit_event(&session, "response_started", response_started(turn, response, NULL));
+    commit_event(&session, "response_completed", response_completed_with_usage(turn, response, "first",
+        json_pack("{s:i,s:i,s:i,s:i,s:i}", "input_tokens", 1000, "output_tokens", 50,
+                  "reasoning_tokens", 5, "total_tokens", 1050, "cached_tokens", 800)));
+    assert(session.usage_totals.responses == 1u && session.usage_totals.cached_seen);
+    assert(session.usage_totals.input_tokens == 1000u && session.usage_totals.cached_input_tokens == 800u);
+    assert(session.usage_totals.uncached_input_tokens == 200u && session.usage_totals.output_tokens == 50u);
+    assert(session.usage_totals.reasoning_tokens == 5u && session.usage_totals.total_tokens == 1050u);
+
+    /* A provider that reports no cache detail must count every input token as uncached. */
+    commit_event(&session, "turn_completed", turn_completed(turn, response));
+    commit_event(&session, "turn_started", turn_started(turn2, 2, "cache probe two", workspace, NULL));
+    commit_event(&session, "response_started", response_started(turn2, response2, NULL));
+    commit_event(&session, "response_completed",
+                 response_completed_with_usage(turn2, response2, "second", usage()));
+    assert(session.usage_totals.responses == 2u && session.usage_totals.input_tokens == 1010u);
+    assert(session.usage_totals.cached_input_tokens == 800u);
+    assert(session.usage_totals.uncached_input_tokens == 210u && session.usage_totals.output_tokens == 51u);
+    assert(session.usage_totals.total_tokens == 1061u);
+
+    /* Both journal forms parse, and the cached field is serialized only when known. */
+    five = json_pack("{s:i,s:i,s:i,s:i,s:i}", "input_tokens", 9, "output_tokens", 2,
+                     "reasoning_tokens", 1, "total_tokens", 11, "cached_tokens", 7);
+    four = json_pack("{s:i,s:i,s:n,s:i}", "input_tokens", 10, "output_tokens", 1,
+                     "reasoning_tokens", "total_tokens", 11);
+    assert(five && four);
+    memset(&parsed, 0, sizeof(parsed));
+    assert(snag_response_usage_from_json(five, &parsed) == 0 && parsed.cached_known &&
+           parsed.cached_input_tokens == 7u);
+    snapshot = snag_response_usage_json(&parsed);
+    assert(snapshot && json_integer_value(json_object_get(snapshot, "cached_tokens")) == 7);
+    json_decref(snapshot);
+    memset(&parsed, 0, sizeof(parsed));
+    assert(snag_response_usage_from_json(four, &parsed) == 0 && !parsed.cached_known);
+    snapshot = snag_response_usage_json(&parsed);
+    assert(snapshot && json_object_get(snapshot, "cached_tokens") == NULL);
+    json_decref(snapshot);
+    json_decref(five);
+    json_decref(four);
+}
+
+static void
+test_prompt_cache_key(struct snag_store *store, const char *workspace)
+{
+    struct snag_session session, other;
+    struct snag_context_projection first = {0}, again = {0}, alien = {0};
+    json_t *empty = json_array();
+    const char *turn = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", *key, *same, *different;
+
+    assert(empty);
+    create_session(store, &session, workspace, "medium");
+    commit_event(&session, "turn_started", turn_started(turn, 1u, "cache key probe", workspace, NULL));
+    build_context(&session, 1u, empty, NULL, &first);
+    key = snag_json_string(first.create_request.value, "prompt_cache_key");
+    assert(key && strlen(key) == 32u);
+    for (size_t i = 0; i < 32u; ++i)
+        assert((key[i] >= '0' && key[i] <= '9') || (key[i] >= 'a' && key[i] <= 'f'));
+
+    /* Every request path uses one derivation, so the key cannot drift between them. */
+    {
+        char from_helper[SNAG_CACHE_KEY_LEN + 1u], repeated[SNAG_CACHE_KEY_LEN + 1u];
+        snag_context_cache_key(&session, NULL, SNAJPAGENT_MODEL, from_helper);
+        snag_context_cache_key(&session, NULL, SNAJPAGENT_MODEL, repeated);
+        assert(from_helper[0] && strcmp(from_helper, repeated) == 0);
+        assert(strlen(from_helper) == 32u);
+    }
+    /* Routing reuses a cached prefix only while the key is identical across requests. */
+    build_context(&session, 2u, empty, NULL, &again);
+    same = snag_json_string(again.create_request.value, "prompt_cache_key");
+    assert(same && strcmp(key, same) == 0);
+
+    /* A different session must not share another conversation's cache space. */
+    create_session(store, &other, workspace, "medium");
+    commit_event(&other, "turn_started", turn_started(turn, 1u, "cache key probe", workspace, NULL));
+    build_context(&other, 1u, empty, NULL, &alien);
+    different = snag_json_string(alien.create_request.value, "prompt_cache_key");
+    assert(different && strcmp(key, different) != 0);
+
+    snag_context_projection_free(&first);
+    snag_context_projection_free(&again);
+    snag_context_projection_free(&alien);
+    json_decref(empty);
+}
+
+/* A provider reuses a cached prefix only while the earlier part of the request stays
+ * byte-identical, so this locks the property that governs cache reuse: the conversation items of
+ * the previous request must survive, in order and unchanged, at the head of the next request.
+ * Trailing host-state notes may move (they describe the current request, not the history), but
+ * nothing that varies per request may be placed among or before the conversation. */
+static void
+test_request_prefix_stability(struct snag_store *store, const char *workspace)
+{
+    struct snag_session session;
+    struct snag_context_projection first = {0}, second = {0};
+    struct snag_config config;
+    json_t *empty = json_array(), *before, *after;
+    char error[512] = {0};
+    const char *turn = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", *response = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const char *turn2 = "cccccccccccccccccccccccccccccccc";
+    bool described = false;
+
+    assert(empty);
+    /* A config is present so the request carries the host-derived text a real session sends
+     * (command environment, verbosity and visibility), which must not vary between requests. */
+    snag_config_init(&config);
+    create_session(store, &session, workspace, "medium");
+    /* A request is built at the start of each turn, so the first turn is open when it is built. */
+    commit_event(&session, "turn_started", turn_started(turn, 1u, "prefix probe one", workspace, NULL));
+    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u, false, &config, NULL,
+                              NULL, NULL, &first, error, sizeof(error)) == 0);
+    commit_event(&session, "response_started", response_started(turn, response, NULL));
+    commit_event(&session, "response_completed", response_completed(turn, response, "first answer"));
+    commit_event(&session, "turn_completed", turn_completed(turn, response));
+    commit_event(&session, "turn_started", turn_started(turn2, 2u, "prefix probe two", workspace, NULL));
+    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u, false, &config, NULL,
+                              NULL, NULL, &second, error, sizeof(error)) == 0);
+
+    before = json_object_get(first.create_request.value, "input");
+    after = json_object_get(second.create_request.value, "input");
+    size_t earlier = json_array_size(before), later = json_array_size(after);
+    assert(earlier > 0u && later > earlier);
+
+    /* The head of the earlier request up to and including its last conversation item. */
+    size_t conversation = 0u;
+    for (size_t i = 0u; i < earlier; ++i) {
+        const char *role = snag_json_string(json_array_get(before, i), "role");
+        if (role && (!strcmp(role, "user") || !strcmp(role, "assistant") || !strcmp(role, "tool")))
+            conversation = i + 1u;
+    }
+    assert(conversation > 0u && later > conversation);
+    for (size_t i = 0u; i < conversation; ++i) {
+        char a[SNAG_SHA256_HEX_LEN + 1u], b[SNAG_SHA256_HEX_LEN + 1u];
+        assert(snag_json_digest(json_array_get(before, i), a) == 0);
+        assert(snag_json_digest(json_array_get(after, i), b) == 0);
+        if (strcmp(a, b) != 0) {
+            const char *ar = snag_json_string(json_array_get(before, i), "role");
+            const char *br = snag_json_string(json_array_get(after, i), "role");
+            const char *ac = snag_json_string(json_array_get(before, i), "content");
+            const char *bc = snag_json_string(json_array_get(after, i), "content");
+            fprintf(stderr, "request prefix moved at item %zu: %s -> %s\n"
+                            "  earlier role=%s content=%.300s\n  later   role=%s content=%.300s\n",
+                    i, a, b, ar ? ar : "(none)", ac ? ac : "(none)", br ? br : "(none)", bc ? bc : "(none)");
+            assert(0);
+        }
+    }
+    /* Host-derived text must not churn between requests either, or the cached prefix ends early. */
+    for (size_t i = 0u; i < earlier; ++i) {
+        const char *content = snag_json_string(json_array_get(before, i), "content");
+        char digest[SNAG_SHA256_HEX_LEN + 1u];
+        if (!content || strncmp(content, "Command environment", strlen("Command environment")) != 0) continue;
+        described = true;
+        assert(snag_json_digest(json_array_get(before, i), digest) == 0);
+        bool found = false;
+        for (size_t k = 0u; k < later && !found; ++k) {
+            char other[SNAG_SHA256_HEX_LEN + 1u];
+            assert(snag_json_digest(json_array_get(after, k), other) == 0);
+            if (strcmp(digest, other) == 0) found = true;
+        }
+        if (!found) {
+            fprintf(stderr, "host-derived request text changed between requests: %.300s\n", content);
+            assert(0);
+        }
+    }
+    /* The check above is only meaningful if that text was actually present. */
+    assert(described);
+    snag_context_projection_free(&first);
+    snag_context_projection_free(&second);
+    json_decref(empty);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2746,6 +2936,9 @@ main(int argc, char **argv)
     test_input_time_and_recovery(&store, workspace);
     test_public_phase_compaction(&store, workspace);
     test_context_meter_usage(&store, workspace);
+    test_cache_accounting(&store, workspace);
+    test_prompt_cache_key(&store, workspace);
+    test_request_prefix_stability(&store, workspace);
     test_read_only_and_queue_controllers(&store, workspace);
     test_provider_model_projection(&store, workspace);
     test_reasoning_continuation(&store, workspace);

@@ -611,3 +611,13 @@ snag_base64_decode(struct snag_buf *out, const char *text)
     }
     return 0;
 }
+
+/* Throughput in micro-tokens per second: fine enough that a slow stream still reads truthfully,
+ * zero when nothing is measurable, and saturating rather than wrapping. */
+uint64_t
+snag_rate_microtokens_per_second(uint64_t tokens, uint64_t elapsed_ms)
+{
+    if (!tokens || !elapsed_ms) return 0u;
+    if (tokens > UINT64_MAX / 1000000000u) return UINT64_MAX;
+    return (tokens * 1000000000u) / elapsed_ms;
+}
