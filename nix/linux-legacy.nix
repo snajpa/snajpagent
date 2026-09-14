@@ -14,6 +14,17 @@ let
       '';
     };
     overlays = pkgs.overlays ++ [ (_: previous: {
+      # `check` 0.15.2 is a build dependency here: it is the framework the static
+      # pulseaudio links, and its own test suite does not compile against these
+      # uClibc headers. tests/check_check_sub.c calls usleep, which this uClibc-ng
+      # declares only behind __USE_BSD (features.h:339-341 derives that from
+      # _BSD_SOURCE/_SVID_SOURCE, and -D_BSD_SOURCE through CFLAGS did not reach
+      # it either), while the suite builds with -Wfatal-errors. None of that suite
+      # is in the shipped artifact, so the framework library is built and the
+      # self-tests are skipped rather than the upstream source being patched.
+      check = previous.check.overrideAttrs (_: {
+        makeFlags = [ "SUBDIRS=lib" ];
+      });
       uclibc-ng = (previous.uclibc-ng.override {
         extraConfig = ''
           UCLIBC_HAS_LIBUTIL y
