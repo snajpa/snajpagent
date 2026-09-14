@@ -62,12 +62,13 @@ Development builds use latest-dev, retain debug information and default to updat
 
 ## Platform requirements and scope
 
-- Linux: x86-64, AArch64, ARMv6, RISC-V 64-bit, PowerPC 64-bit little-endian, PowerPC 32-bit
-  big-endian and i686. `linux-i686-legacy` is **not built for 0.99.6**: its pinned uClibc source set
-  cannot build it (the pin's own `check` framework test suite, then fontconfig 2.17.1's `fc-cache` link
-  against undefined `Brotli*` symbols with a verified-correct link order). That is a chain inside the
-  pin rather than a defect in this tree, the target stays buildable through its own recipe, and no other
-  artifact inherits the pin.
+- Linux: x86-64, AArch64, ARMv6, PowerPC 64-bit little-endian, PowerPC 32-bit
+  big-endian and i686. `linux-i686-legacy` and `linux-riscv64` are **not built for 0.99.6**: the legacy
+  target's pinned uClibc source set cannot build it (the pin's own `check` framework test suite, then
+  fontconfig 2.17.1's `fc-cache` link against undefined `Brotli*` symbols with a verified-correct link
+  order), and the RISC-V target fails one wall past its fixed FFmpeg syscall constant (libjpeg-turbo's
+  static-SIMD coverage tool does not compile). Both are chains inside their pins rather than defects in
+  this tree, both stay buildable through their own recipes, and no other artifact inherits them.
 - macOS: experimental Intel, Apple Silicon and universal builds, macOS 11+. ARM64 is ad-hoc signed;
   Intel is unsigned. Developer ID signing and notarization are absent, and execution is unqualified.
 - Windows: experimental x64 and ARM64 builds using OS DLLs; ARM64 needs UCRT.
