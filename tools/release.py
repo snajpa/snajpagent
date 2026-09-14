@@ -21,6 +21,13 @@ def targets(revision=None):
     return [target.removeprefix("prod-") for target in line[1].split()]
 
 
+def deferred(revision=None):
+    """Targets deliberately outside the shipped matrix; their recipes stay resolvable."""
+    makefile = git_text(revision, "Makefile") if revision else (ROOT / "Makefile").read_text()
+    line = re.search(r"^DEFERRED_TARGETS = (.+)$", makefile, re.M)
+    return [] if line is None else [target.removeprefix("prod-") for target in line[1].split()]
+
+
 def git_text(revision, name):
     return subprocess.check_output(["git", "show", f"{revision}:{name}"], cwd=ROOT, text=True)
 
