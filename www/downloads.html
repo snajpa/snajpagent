@@ -68,7 +68,7 @@
               </tr>
               <tr data-target="linux-riscv64">
                 <td>RISC-V 64-bit · experimental</td><td>4.15+¹<br>RV64GC / LP64D</td>
-                <td>Not built in this release: this release does not build this target. The recipe stays buildable.</td>
+                <td>Not built in this release: its pinned closure fails one wall past the fixed FFmpeg syscall constant (libjpeg-turbo's static-SIMD coverage tool does not compile). The recipe stays buildable.</td>
               </tr>
               <tr data-target="linux-ppc64le">
                 <td>PowerPC 64-bit LE · experimental</td><td>3.13+¹<br>POWER8 / ELFv2</td>
@@ -80,7 +80,7 @@
               </tr>
               <tr data-target="linux-ppc32">
                 <td>PowerPC 32-bit BE · experimental</td><td>2.6.39+¹<br>Hard-float</td>
-                <td>Not built in this release: this release does not build this target. The recipe stays buildable.</td>
+                <td>Not built in this release: its pinned musl closure cannot link coreutils 9.8's <code>libstdbuf.so</code> (<code>__stack_chk_fail_local</code> is undefined outside glibc). The recipe stays buildable.</td>
               </tr>
             </tbody>
           </table>
