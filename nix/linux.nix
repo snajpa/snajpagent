@@ -140,11 +140,16 @@ in {
         ${pkgs.lib.optionalString (updateBase != "") "'UPDATE_BASE_URL=${updateBase}' 'UPDATE_TARGET=${updateTarget}'"}
         'TARGET_OS=Linux'
         # Release artifacts must not bundle LibreOffice: the standing rule is
-        # installed runtimes only, never bundled on any platform, and the Office
-        # dependency here would be linked into the artifact. Host builds keep
-        # WITH_OFFICE=1 by default and link a separately installed runtime via
-        # OFFICE_ROOT, so only these target builds take the flag off.
-        'WITH_OFFICE=0'
+        # installed runtimes only, never bundled on any platform, and the linked
+        # Office dependency in this closure would be pulled into the artifact as
+        # static archives (the shared fallback would bake a store path in via
+        # rpath). The commanded state needs no Office headers at build time and
+        # resolves the target's own installed engine at run time, reported
+        # clearly when absent; host builds keep WITH_OFFICE=1 and link a
+        # separately installed runtime via OFFICE_ROOT. The office member is
+        # still imported below because the release tooling splits the pdf span
+        # on it.
+        'WITH_OFFICE=0' 'WITH_OFFICE_COMMANDS=1'
         "CC=$CC" "CXX=$CXX" "STRIP=$STRIP" "OBJCOPY=$OBJCOPY"
         "GIT_HEAD=${revision}" "BUILD_VERSION=${version}"
         'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"${pkgs.lib.optionalString clockFallback " -DSNAJPAGENT_LEGACY_LINUX_CLOCK"}'
