@@ -1595,7 +1595,10 @@ Show numbered destinations, selection, endpoints, members, and channel-operator 
 .BR /N " [" text "]"
 Select numbered destination N.  With text, send there once without changing
 selection.  Numbers remain stable for this process and are not reused after
-removal.  With a sole destination the same syntax remains valid.
+removal.  A number names the same endpoint across reconnects: when an endpoint
+returns with a changed advertised room, or otherwise republishes its topology,
+the selection follows that number instead of staying unavailable.  With a sole
+destination the same syntax remains valid.
 .TP
 .B /all text
 Broadcast once to the destinations present at submission.  This does not
