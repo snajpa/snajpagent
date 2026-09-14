@@ -189,6 +189,7 @@ in {
           'DEBUG=${if debug then "1" else "0"}'
           ${lib.optionalString (updateBase != "") "'UPDATE_BASE_URL=${updateBase}' 'UPDATE_TARGET=${updateTarget}'"}
           'TARGET_OS=Linux' 'CC=${compiler}'
+          'WITH_OFFICE=0' 'WITH_OFFICE_COMMANDS=1'
           'STRIP=${tools}/llvm-strip' 'OBJCOPY=${tools}/llvm-objcopy'
           'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
           'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -I${regex}/include -I${unistring}/include -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"'

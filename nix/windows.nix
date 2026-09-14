@@ -272,7 +272,10 @@ in {
         ${pkgs.lib.optionalString (updateBase != "") "'UPDATE_BASE_URL=${updateBase}' 'UPDATE_TARGET=${updateTarget}'"}
         'TARGET_OS=Windows' 'BIN=${packageName}.exe'
         'DEBUG_SYMBOLS=debug-${packageName}.exe'
-        'WITH_OFFICE=0'
+        # The commanded state needs no LibreOfficeKit headers, no import library
+        # and no bundled runtime: the target's own installed engine is resolved
+        # at run time and reported clearly when absent.
+        'WITH_OFFICE=0' 'WITH_OFFICE_COMMANDS=1'
         "CC=$CC" "CXX=$CXX" "STRIP=$STRIP" "OBJCOPY=$OBJCOPY"
         'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
         'CPPFLAGS=-D_WIN32_WINNT=${winver} -DWINVER=${winver} -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"${pkgs.lib.optionalString (pty != null) " -DSNAG_LEGACY_PTY"}'
