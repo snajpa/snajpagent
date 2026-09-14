@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Name a provider-issued tool call by the provider's own call id on both sides
+  of the   request. A call carried that id only when the section being built
+  matched its   continuation scope, so a scope change between requests could
+  send the call under one   id and its result under another, and the provider
+  then rejected the next request with   HTTP 400 "No tool output found for tool
+  call"; both sides now use the recorded   provider id whenever the item carries
+  one.
 - Make a refused store transition explain itself: the error now names the failing
   clause, the call it concerned and the result status, instead of only the event
   type and sequence, so a crash report is diagnostic without a debug build.
