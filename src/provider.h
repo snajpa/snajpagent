@@ -31,6 +31,8 @@ struct snag_provider_connection {
     struct snag_ui *render;
     snag_provider_pump_fn pump;
     void *pump_opaque;
+    /* Stable per-conversation identity, sent to the proxy as its cache-affinity key; NULL omits it. */
+    const char *session_id;
 };
 
 enum snag_audio_operation { SNAG_AUDIO_LISTEN, SNAG_AUDIO_TRANSCRIBE, SNAG_AUDIO_SPEAK };

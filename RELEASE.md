@@ -91,7 +91,7 @@ The current required outputs are:
 | `linux-ppc64le` | `snajpagent` | POWER8 little-endian ELFv2 static PIE with embedded application libraries and trust roots; experimental |
 | `linux-ppc32` | `snajpagent` | 32-bit big-endian PowerPC hard-float static PIE; needs secure OS entropy; experimental |
 | `linux-i686` | `snajpagent` | 32-bit self-contained static, linked non-PIE: the pinned FFmpeg's CELT SIMD object carries absolute relocations that a static-PIE link refuses; not Linux 2.4 qualification |
-| `linux-i686-legacy` | `snajpagent` | Static non-PIE LinuxThreads; Linux 2.4.27 exercised; added after 0.99.1 |
+| `linux-i686-legacy` | `snajpagent` | Static non-PIE LinuxThreads; Linux 2.4.27 exercised; added after 0.99.1; **not built for 0.99.6**: the pinned uClibc source set cannot build it (check 0.15.2's own test suite, then fontconfig 2.17.1's `fc-cache` link against undefined `Brotli*` symbols while the link order is the one static archives need — a chain inside the pin, not this tree; `make prod-linux-i686-legacy` stays buildable) |
 | `macos-x86_64` | `snajpagent` | Intel, static application libraries; experimental |
 | `macos-arm64` | `snajpagent` | Apple Silicon, static application libraries; experimental |
 | `macos-universal` | `snajpagent` | Both macOS slices in one native executable; experimental |

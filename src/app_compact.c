@@ -130,7 +130,7 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
 
     struct snag_response_graph graph = {0};
     rc = snag_provider_responses_create((struct snag_provider_connection){
-        app->config, app->turn_provider, credential, &app->ui, snag_app_provider_input_pump, app},
+        app->config, app->turn_provider, credential, &app->ui, snag_app_provider_input_pump, app, app->session.id},
         create_request, NULL, NULL, &graph, &failure, error, error_size, NULL);
     if (rc != 0 && snag_provider_failure_is_capacity(&failure)) rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
     if (rc != 0 && !failure.new_input && snag_provider_failure_is_policy(&failure))
