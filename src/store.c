@@ -580,6 +580,26 @@ context_meter_set(struct snag_session *session, uint64_t tokens)
     session->context_meter.input_tokens = tokens;
 }
 
+/* A refused transition aborts the process, so its message is printed once and lost with the
+ * terminal. Persisting it beside the session makes the next occurrence self-capturing instead of
+ * needing somebody to keep a scrollback: this never changes the refusal path, so every error here
+ * is ignored. */
+static void
+record_refusal(const struct snag_session *session, const char *detail)
+{
+    char *path;
+    FILE *log;
+
+    if (!session || !session->workspace || !detail) return;
+    path = snag_path_join(session->workspace, "refusals.log");
+    if (!path) return;
+    log = fopen(path, "a");
+    free(path);
+    if (!log) return;
+    (void)fprintf(log, "%s\n", detail);
+    (void)fclose(log);
+}
+
 static int
 apply_event(struct snag_session *session, const char *type, const json_t *data,
             uint64_t seq, bool live, char *error, size_t error_size)
@@ -1823,13 +1843,19 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
     if (!session->pending_queue_count) session->queue_armed = false;
     return 0;
 invalid:
-    if (clause)
-        return snag_fail(error, error_size, EINVAL,
-            "invalid %s transition at sequence %llu (clause=%s call=%s status=%s)", type,
-            (unsigned long long)seq, clause, diag_call ? diag_call : "-",
-            diag_status ? diag_status : "-");
-    return snag_fail(error, error_size, EINVAL, "invalid %s transition at sequence %llu", type,
-              (unsigned long long)seq);
+    {
+        char detail[512];
+        if (clause)
+            (void)snprintf(detail, sizeof(detail),
+                "invalid %s transition at sequence %llu (clause=%s call=%s status=%s)", type,
+                (unsigned long long)seq, clause, diag_call ? diag_call : "-",
+                diag_status ? diag_status : "-");
+        else
+            (void)snprintf(detail, sizeof(detail), "invalid %s transition at sequence %llu", type,
+                (unsigned long long)seq);
+        record_refusal(session, detail);
+        return snag_fail(error, error_size, EINVAL, "%s", detail);
+    }
 }
 
 static int
