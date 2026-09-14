@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "render.h"
+#include "store.h"
 #include "snajpagent.h"
 
 #include <assert.h>
@@ -2819,6 +2820,26 @@ main(void)
     snag_render_set_color(&render, SNAG_COLOR_AUTO);
     assert(!render.color_stderr);
     assert(unsetenv("NO_COLOR") == 0);
+    /* A draft at the direct-prompt cap must clamp, not fail. The old behaviour returned EOVERFLOW
+     * from the insert, the runtime latched it as fatal, and the poll then returned it on every pass
+     * without reading input - no keystroke, not even Ctrl-C, could be consumed, so a session holding
+     * an oversized draft was unreachable except by signal. */
+    {
+        struct snag_term capper;
+        size_t cap = SNAG_MAX_DIRECT_PROMPT;
+        char *chunk = malloc(cap + 8u);
+        assert(chunk != NULL);
+        memset(chunk, 'a', cap + 8u);
+        chunk[cap + 8u - 1u] = '\0';
+        snag_term_init(&capper);
+        assert(snag_term_insert_draft(&capper, chunk) == 0);
+        assert(capper.draft.len == cap);
+        assert(capper.draft_clamped);
+        assert(snag_term_insert_draft(&capper, "more") == 0);
+        assert(capper.draft.len == cap);
+        snag_term_close(&capper);
+        free(chunk);
+    }
     puts("test_render: ok");
     return 0;
 }

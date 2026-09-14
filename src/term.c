@@ -1579,7 +1579,15 @@ replace_range(struct snag_term *term, size_t start, size_t end, const void *data
 {
     if (start > end || end > term->draft.len) return snag_errno(EINVAL);
     size_t next_len = term->draft.len - (end - start);
-    if (len > SNAG_MAX_DIRECT_PROMPT - next_len) return snag_errno(EOVERFLOW);
+    /* A full draft stops accepting characters instead of failing: an error here used to latch the
+     * runtime's fatal slot, and the poll then returned that same error on every pass without reading
+     * input - no keystroke, not even Ctrl-C, could be consumed, so the session could only be stopped
+     * by signal. Dropping the excess is the contract a shell applies at its line limit, and the draft
+     * stays editable, submittable and cancellable. */
+    if (len > SNAG_MAX_DIRECT_PROMPT - next_len) {
+        len = SNAG_MAX_DIRECT_PROMPT - next_len;
+        term->draft_clamped = true;
+    }
     next_len += len;
     if (next_len > term->draft.len && snag_buf_reserve(&term->draft, next_len - term->draft.len) < 0)
         return -1;
