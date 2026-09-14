@@ -24,6 +24,9 @@ Later source changes are listed under Unreleased in CHANGELOG.md.
   between requests can no longer send a call under one id and its result under another.
 - `-m` accepts the catalogue index the numbered model listing prints, not only a name; an out-of-range
   index fails instead of being sent upstream.
+- A journal written by an earlier build still loads: the rules that govern what the model may do now are
+  enforced when an event is committed rather than while replaying history, so a goal the operator locked and
+  a model block recorded before that rule existed can no longer leave the session unresumable.
 - A goal the operator has locked is frozen in its objective: the model may not reword, block or cancel
   it, refused in the tool before dispatch and again in the store wherever the event names the model,
   while finishing or resuming it stays allowed. A refused store transition also names its own failing

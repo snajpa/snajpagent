@@ -582,7 +582,7 @@ context_meter_set(struct snag_session *session, uint64_t tokens)
 
 static int
 apply_event(struct snag_session *session, const char *type, const json_t *data,
-            uint64_t seq, char *error, size_t error_size)
+            uint64_t seq, bool live, char *error, size_t error_size)
 {
     uint64_t n;
     const char *event_turn_id = snag_json_string(data, "turn_id");
@@ -660,8 +660,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 goto invalid;
             previous = (uint64_t)json_integer_value(item);
         }
-        if (input && apply_event(session, "input_received", input, seq, error, error_size) < 0) return -1;
-        if (steering && apply_event(session, "steering_added", steering, seq, error, error_size) < 0) return -1;
+        if (input && apply_event(session, "input_received", input, seq, true, error, error_size) < 0) return -1;
+        if (steering && apply_event(session, "steering_added", steering, seq, true, error, error_size) < 0) return -1;
     } else if (strcmp(type, "irc_snapshot") == 0) {
         const char *reason = snag_json_string(data, "reason");
         const char *text = snag_json_string(data, "text");
@@ -728,7 +728,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         /* An operator lock freezes the objective, not the goal's ending: the model may
          * not reword or block a locked goal, but it may still finish one. Operator events
          * carry no actor or actor "user", so they are unaffected. */
-        if (model && session->goal_locked && snag_string_in(action, "reworded blocked cancelled"))
+          /* The lock governs what this build accepts, not what an older build already wrote:
+           * enforcing it while replaying would leave the affected journal unrestorable. */
+        if (live && model && session->goal_locked && snag_string_in(action, "reworded blocked cancelled"))
             goto invalid;
         enum snag_goal_status status = session->goal_status;
 
@@ -1898,7 +1900,7 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
                 goto out;
             }
             if (!common_event_valid(event, verifier, seq, &type, &data, error, error_size) ||
-                (!cursor && apply_event(verifier, type, data, seq, error, error_size) < 0)) {
+                (!cursor && apply_event(verifier, type, data, seq, false, error, error_size) < 0)) {
                 json_decref(event);
                 goto out;
             }
@@ -2027,7 +2029,7 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
     }
     if (!data || clone_session_state(session, &staged) < 0) {
         (void)snag_fail(error, error_size, ENOMEM, "cannot stage %s event", type);
-    } else if ((staged.last_time_ms = snag_time_ms(), apply_event(&staged, type, data, session->next_seq,
+    } else if ((staged.last_time_ms = snag_time_ms(), apply_event(&staged, type, data, session->next_seq, true,
                           error, error_size)) == 0) {
         /* Append updates the staged metadata too. No live state is adopted
          * until durable append succeeds; descriptors and dir_path are borrowed. */

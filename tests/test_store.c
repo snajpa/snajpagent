@@ -819,6 +819,66 @@ main(void)
         assert(session.goal_turn_count == 0u);
     }
 
+    {
+        /* The lock governs what this build accepts, not what an older build already wrote: a model
+         * block recorded before the lock rule existed must still replay, while the same event
+         * committed now stays refused. Self-contained, in its own store, so the rest of the suite
+         * sees no extra session. */
+        const char *locked_goal = "33333333333333333333333333333333";
+        char legacy_state[4096], legacy_work[4096], legacy_id[SNAG_ID_HEX_LEN + 1u], legacy_error[256];
+        struct snag_store legacy_store;
+        struct snag_session legacy_session;
+        struct snag_buf legacy_line = {.max = 1024u * 1024u};
+        char digest[SNAG_SHA256_HEX_LEN + 1u], journal[4096];
+        json_t *legacy_data, *legacy_event;
+        FILE *file;
+
+        assert(snprintf(legacy_state, sizeof(legacy_state), "%s/legacy-state", temp) > 0);
+        assert(mkdir(legacy_state, 0700) == 0);
+        assert(snprintf(legacy_work, sizeof(legacy_work), "%s/legacy-work", temp) > 0);
+        assert(mkdir(legacy_work, 0700) == 0);
+        snag_store_init(&legacy_store);
+        snag_session_init(&legacy_session);
+        assert(snag_store_open(&legacy_store, legacy_state, legacy_error, sizeof(legacy_error)) == 0);
+        assert(snag_session_create(&legacy_store, &legacy_session, legacy_work, "default", "model",
+                                   "high", legacy_error, sizeof(legacy_error)) == 0);
+        assert(snag_strcpy(legacy_id, sizeof(legacy_id), legacy_session.id));
+        commit_event(&legacy_session, "goal_started", goal_started_data(locked_goal, "legacy replay"));
+        commit_event(&legacy_session, "goal_lock_changed", goal_lock_data(locked_goal, true));
+        assert(snag_session_commit(&legacy_session, "goal_blocked",
+                   goal_reason_data(locked_goal, "model", "reason", "refused while live"),
+                   NULL, legacy_error, sizeof(legacy_error)) < 0);
+
+        /* Write the block the way a build without the rule would have written it. */
+        legacy_data = goal_reason_data(locked_goal, "model", "reason", "written before the rule");
+        legacy_event = json_pack("{s:O,s:s,s:I,s:s,s:I,s:s,s:i}", "data", legacy_data,
+            "prev_sha256", legacy_session.prev_sha256, "seq", (json_int_t)legacy_session.next_seq,
+            "session_id", legacy_session.id, "time_ms", (json_int_t)legacy_session.last_time_ms,
+            "type", "goal_blocked", "v", 1);
+        json_decref(legacy_data);
+        assert(legacy_event && snag_json_digest(legacy_event, digest) == 0);
+        assert(json_object_set_new(legacy_event, "event_sha256", json_string(digest)) == 0);
+        assert(snag_json_canonical(legacy_event, &legacy_line) == 0);
+        assert(snag_buf_putc(&legacy_line, '\n') == 0);
+        assert(snprintf(journal, sizeof(journal), "%s/sessions/%s/events.jsonl", legacy_state,
+                        legacy_id) > 0);
+        file = fopen(journal, "ab");
+        assert(file && fwrite(legacy_line.data, 1u, legacy_line.len, file) == legacy_line.len);
+        assert(fclose(file) == 0);
+        json_decref(legacy_event);
+        snag_buf_free(&legacy_line);
+
+        /* Reopening is the replay that used to fail. */
+        snag_session_close(&legacy_session);
+        snag_session_init(&legacy_session);
+        assert(snag_session_open(&legacy_store, &legacy_session, legacy_id,
+                                 legacy_error, sizeof(legacy_error)) == 0);
+        assert(legacy_session.goal_locked && legacy_session.goal_status == SNAG_GOAL_BLOCKED);
+        assert(legacy_session.goal_blocker &&
+               strcmp(legacy_session.goal_blocker, "written before the rule") == 0);
+        snag_session_close(&legacy_session);
+    }
+
     assert(snag_session_archive(&session, NULL, error, sizeof(error)) == 0);
     assert(session.archived);
     assert(snprintf(list_path, sizeof(list_path), "%s/list", temp) > 0);
