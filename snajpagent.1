@@ -1215,11 +1215,11 @@ Selection is accepted during active work and changes the next full turn and all
 later turns until changed. It persists across session resume without a save suffix.
 The active turn retains its model/provider/effort.  The final save suffix also
 works with numbered rows. A bare model name uses the highest recognized effort
-in its cached effort list (or the first unrecognized effort if none are ranked),
+in its configured or cached effort list (or the first unrecognized effort if none are ranked),
 then the cached default, then the current next-turn effort. This interactive
 selection differs from the startup
 .B \-m
-option, which uses the first cached effort. Two components mean model/effort;
+option, which uses the first configured or cached effort. Two components mean model/effort;
 include all three components to name a provider explicitly.
 .TP
 .B /config
