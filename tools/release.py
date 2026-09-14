@@ -124,8 +124,15 @@ def pages(args):
             dest = descriptor.with_suffix("")
             temporary = dest.with_name(dest.name + ".download")
             try:
+                # The release CDN answers intermittent 5xx through the Pages runner's egress proxy
+                # (observed: 504 on a different asset each dispatch, while the same URLs return 200
+                # from an ordinary host), so retry a bounded number of times. The size and digest
+                # checks below are unchanged: a retry can recover a transient failure, never accept
+                # different bytes.
                 subprocess.run(["curl", "--fail", "--location", "--proto", "=https", "--proto-redir", "=https",
                                 "--max-time", "120", "--max-filesize", str(meta["size"]),
+                                "--retry", "6", "--retry-delay", "3", "--retry-all-errors",
+                                "--retry-max-time", "600",
                                 "--output", str(temporary), meta["url"]], check=True)
                 if temporary.stat().st_size != meta["size"] or digest(temporary) != meta["sha256"]:
                     raise ValueError(f"release asset mismatch: {descriptor}")
