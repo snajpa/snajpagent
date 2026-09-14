@@ -203,8 +203,9 @@ runtime closure remains unfinished.
 `./configure` detects the toolchain and the four optional modalities and tunes
 the tracked `config.mk`; a component it cannot find is disabled and reported,
 and its `--require-*` option turns that absence into a clear failure. A distro
-recipe's GNU directory flags such as `--bindir`, `--libdir` or `--sysconfdir` are
-not accepted and exit 2 with the usage text, and `--host=<native triple>` exits 1
+A distro recipe's GNU directory flags such as `--bindir`, `--libdir` or
+`--sysconfdir` are not accepted and exit 2 with the usage text, and
+`--host=<native triple>` exits 1
 unless that triple's cross compiler exists, because the script looks for
 `<triple>-gcc` or an explicit `--cc`; every rejection leaves the tracked
 `config.mk` byte-identical. Export
@@ -282,9 +283,10 @@ so 32-bit libc builds retain large-file seek/stat/truncate support. Keep that
 feature macro when replacing CPPFLAGS. This does not enlarge a 32-bit address
 space or claim that every old kernel supports modern time/thread APIs.
 
-The Nix-built Linux release artifacts set `WITH_OFFICE=0`: the Office dependency
-in that closure is a static LibreOfficeKit that would be linked into the
-artifact, and an installed runtime is never bundled. Host builds keep
+The Nix-built Linux release artifacts set `WITH_OFFICE=0`: that closure's Office
+dependency is a static LibreOfficeKit whose archives would have to be linked into
+the artifact, since the runtime-style `-lsofficeapp` link finds no shared library
+there, and an installed runtime is never bundled. Host builds keep
 `WITH_OFFICE=1` and link a separately installed runtime through `OFFICE_ROOT`.
 
 `make prod-linux-ppc32` uses the pinned big-endian PowerPC musl toolchain,
