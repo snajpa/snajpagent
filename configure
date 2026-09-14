@@ -37,6 +37,7 @@ usage: ./configure [options]
 
   --prefix=DIR            installation prefix (default /usr/local)
   --manprefix=DIR         manual prefix (default the config.mk expression)
+                          (--mandir is accepted as a synonym)
   --cc=CC                 C compiler (default $CC or cc)
   --cxx=CXX               C++ compiler (default $CXX or c++; src/pdf.cpp needs it)
   --host=TRIPLE           cross target; uses TRIPLE-cc when available
@@ -61,6 +62,12 @@ usage: ./configure [options]
                           disable the commanded-soffice backend
   -h, --help              this text
 
+Packaging options (--bindir, --libdir, --sysconfdir, --build and the rest of the
+GNU-standard directory and triplet set) are recognised and ignored with a printed
+note, so a distro recipe that passes them can still run this script; genuinely
+unknown options remain an error, and the layout is not configurable beyond --prefix
+and --manprefix.
+
 Office states are mutually exclusive and one always wins: the linked kit, the
 commands backend, or none. By default the kit is chosen when a runtime is found,
 otherwise the commands backend when a soffice binary is found, otherwise none —
@@ -70,10 +77,20 @@ overridable on the make line, for example make WITH_OFFICE_COMMANDS=1.
 EOF
 }
 
+packaging_ignored=
 for arg in "$@"; do
 	case $arg in
 		--prefix=*) PREFIX=${arg#*=} ;;
-		--manprefix=*) MANPREFIX=${arg#*=}; manprefix_given=yes ;;
+		--manprefix=*|--mandir=*) MANPREFIX=${arg#*=}; manprefix_given=yes ;;
+		--exec-prefix=*|--bindir=*|--sbindir=*|--libexecdir=*|--sysconfdir=*|\
+		--sharedstatedir=*|--localstatedir=*|--runstatedir=*|--libdir=*|\
+		--includedir=*|--oldincludedir=*|--datarootdir=*|--datadir=*|--infodir=*|\
+		--localedir=*|--docdir=*|--htmldir=*|--dvidir=*|--pdfdir=*|--psdir=*|\
+		--build=*|--target=*|--program-prefix=*|--program-suffix=*|\
+		--program-transform-name=*|--disable-dependency-tracking|\
+		--disable-silent-rules|--enable-silent-rules|--disable-nls|--with-pic|\
+		--enable-shared|--disable-shared|--enable-static|--disable-static)
+			packaging_ignored="$packaging_ignored $arg" ;;
 		--cc=*) CC=${arg#*=} ;;
 		--cxx=*) CXX=${arg#*=} ;;
 		--host=*) HOST=${arg#*=} ;;
@@ -94,27 +111,59 @@ for arg in "$@"; do
 	esac
 done
 
+if [ -n "$packaging_ignored" ]; then
+	printf 'configure: note: ignored packaging options:%s\n' "$packaging_ignored"
+	printf 'configure: note: this build installs to %s/bin and its own manual prefix,\n' "$PREFIX"
+	printf 'configure: note: and has no shared/static, i18n or dependency-tracking\n'
+	printf 'configure: note: switches; see --help for the options that apply\n'
+fi
+
 die() {
 	printf 'configure: %s\n' "$1" >&2
 	exit 1
 }
 
+# A packaging macro usually passes --host=<triple> (RPM's %configure always does),
+# and for a native build that triple is this machine's own. Accept that form after
+# dropping a vendor component, so x86_64-linux-gnu matches x86_64-unknown-linux-gnu,
+# and say so; a triple that is not this machine still needs a real cross compiler.
+normalize_triple() {
+	triple_arch=${1%%-*}
+	triple_rest=${1#*-}
+	case $triple_rest in
+		unknown-*|pc-*|none-*|build-*|redhat-*|suse-*|debian-*)
+			triple_rest=${triple_rest#*-} ;;
+	esac
+	printf '%s-%s' "$triple_arch" "$triple_rest"
+}
+
+host_is_build=no
 if [ -n "$HOST" ] && [ "$CC" = cc ]; then
-	host_cc=
-	for candidate in "$HOST-gcc" "$HOST-cc" "$HOST-clang"; do
-		if command -v "$candidate" >/dev/null 2>&1; then
-			host_cc=$candidate
-			break
-		fi
-	done
-	[ -n "$host_cc" ] || die "no $HOST-gcc, $HOST-cc or $HOST-clang found; pass --cc=<cross compiler>"
-	CC=$host_cc
+	build_triple=$($CC -dumpmachine 2>/dev/null) || build_triple=
+	build_norm=$(normalize_triple "$build_triple")
+	host_norm=$(normalize_triple "$HOST")
+	if [ -n "$build_triple" ] && [ "$build_norm" = "$host_norm" ]; then
+		host_is_build=yes
+		printf 'configure: note: --host=%s is this build machine (%s);\n' \
+			"$HOST" "$build_triple"
+		printf 'configure: note: the host compiler %s stays, pass --cc= for a cross build\n' "$CC"
+	else
+		host_cc=
+		for candidate in "$HOST-gcc" "$HOST-cc" "$HOST-clang"; do
+			if command -v "$candidate" >/dev/null 2>&1; then
+				host_cc=$candidate
+				break
+			fi
+		done
+		[ -n "$host_cc" ] || die "no $HOST-gcc, $HOST-cc or $HOST-clang found; pass --cc=<cross compiler>"
+		CC=$host_cc
+	fi
 fi
 
 # src/pdf.cpp is the only C++ unit, so a cross target needs a cross C++ only when the
 # linked PDF modality is on: resolve it best-effort here and enforce it after the probes.
 cross_cxx_missing=no
-if [ -n "$HOST" ] && [ "$CXX" = c++ ]; then
+if [ -n "$HOST" ] && [ "$host_is_build" = no ] && [ "$CXX" = c++ ]; then
 	for candidate in "$HOST-g++" "$HOST-c++" "$HOST-clang++"; do
 		if command -v "$candidate" >/dev/null 2>&1; then
 			CXX=$candidate
