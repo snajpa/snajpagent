@@ -259,6 +259,7 @@ check: $(TEST_BIN)
 	$(MAKE) stylecheck
 	$(MAKE) depscheck
 	$(MAKE) portabilitycheck
+	$(MAKE) configurecheck
 	$(MAKE) depclosurecheck
 	$(MAKE) evidencetoolcheck
 	$(MAKE) sizecheck
@@ -277,6 +278,9 @@ depscheck:
 
 portabilitycheck:
 	python3 ./tools/check_portability.py
+
+configurecheck:
+	sh ./tests/test_configure.sh
 
 depclosurecheck: $(BIN)
 	python3 ./tools/check_dependency_closure.py ./$(BIN)
@@ -450,7 +454,7 @@ install: $(BIN) $(BIN).1
 
 FORCE:
 
-.PHONY: all check stylecheck rulescheck toolscheck depscheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install help prod-matrix $(PROD_TARGETS) FORCE
+.PHONY: all check stylecheck rulescheck toolscheck depscheck configurecheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install help prod-matrix $(PROD_TARGETS) FORCE
 
 -include $(COMMON_OBJ:.o=.d) src/main.d
 
