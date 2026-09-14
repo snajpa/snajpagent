@@ -13,8 +13,9 @@
   artifact ships without the Office modality while every target whose installed
   runtime provides one keeps it enabled.
 - Build the Nix Linux release artifacts without linked Office import
-  (`WITH_OFFICE=0`). The Office dependency in that closure is a static kit that
-  would be linked into the artifact, and an installed runtime is never bundled;
+  (`WITH_OFFICE=0`). The Office dependency in that closure is a static kit whose
+  archives would have to be linked into the artifact, and an installed runtime is
+  never bundled;
   host builds keep the default and load a separately installed runtime via
   `OFFICE_ROOT`.
 - Add a `./configure` entry point that probes the compiler and the four optional

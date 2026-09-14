@@ -3576,8 +3576,9 @@ linked-PDF build without one asks for \fB--cxx\fR or \fB--without-pdf\fR.
 \fB--cc\fR, \fB--cxx\fR and \fB--debug\fR are
 also accepted.  An option the script does not recognise exits 2 with the usage
 text, leaving the tracked config.mk untouched, so a packaging recipe's own flags
-fail loudly rather than being ignored.  Export \fBPKG_CONFIG_PATH\fR for the build as well as for the
-probe; without it the probe finds no dependency and turns the modality off.
+fail loudly rather than being ignored.  Export \fBPKG_CONFIG_PATH\fR for the
+build as well as for the probe; without it the probe finds no dependency and
+turns the modality off.
 The script needs a POSIX shell providing \fBcommand -v\fR; the pinned
 legacy targets build through their own toolchains rather than running it; the
 Nix app derivations set \fBdontConfigure\fR and take their modality values from
