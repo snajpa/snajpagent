@@ -1513,8 +1513,10 @@ Pause automatic continuation at the current turn boundary.
 Resume a paused or blocked goal.
 .TP
 .BR /goal " lock|unlock"
-Deny or permit model-authored wording changes.  Operator rewording remains
-available.
+Freeze the goal against model changes, or release it.  A locked goal refuses
+every model-originated transition - rewording, pausing, resuming, completing,
+blocking or cancelling - in the tool and again in the store, so only the
+operator can change it; operator commands remain available.
 .TP
 .B /goal complete
 Mark the current goal successfully completed.
