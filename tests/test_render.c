@@ -2840,6 +2840,7 @@ main(void)
         snag_term_close(&capper);
         free(chunk);
     }
+#define CANARY "canary-content-free-check"
     /* The composer trace is off unless asked, names the branch that suppressed a repaint, and is
      * content-free. */
     {
@@ -2861,6 +2862,11 @@ main(void)
             const char *frames[SNAG_TERM_SPINNER_COUNT];
             for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i) frames[i] = "x";
             (void)snag_term_set_prompt_template(&traced, true, "trace", frames, 1u, 1u);
+            /* A caller name containing "draft" must not be mistaken for content, so the
+             * content-free rule is asserted against a canary that is provably in the draft. */
+            assert(snag_term_insert_draft(&traced, CANARY) == 0);
+            assert(traced.draft.len == strlen(CANARY));
+            assert(snag_term_restore_draft(&traced, CANARY) == 0);
         }
         snag_term_close(&traced);
         assert(unsetenv("SNAJPAGENT_TERM_TRACE") == 0);
@@ -2873,7 +2879,8 @@ main(void)
         assert(strstr(buf, "ev=skip src=output_depth") != NULL);
         assert(strstr(buf, "ev=paint src=compose_frame") != NULL);
         assert(strstr(buf, "want=") != NULL && strstr(buf, "vis=") != NULL && strstr(buf, "rows=") != NULL);
-        assert(strstr(buf, "draft") == NULL && strstr(buf, "prompt=") == NULL);
+        assert(strstr(buf, "src=restore_draft") != NULL);      /* a "draft" caller is not content */
+        assert(strstr(buf, CANARY) == NULL);                    /* and no content is recorded at all */
         assert(strstr(buf, "want-true src=set_prompt_template") != NULL);
         unlink(path);
     }
