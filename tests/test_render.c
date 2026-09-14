@@ -2857,6 +2857,11 @@ main(void)
         assert(setenv("SNAJPAGENT_TERM_TRACE", path, 1) == 0);
         snag_term_trace(&traced, "skip", "output_depth");
         snag_term_trace(&traced, "paint", "compose_frame");
+        {
+            const char *frames[SNAG_TERM_SPINNER_COUNT];
+            for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i) frames[i] = "x";
+            (void)snag_term_set_prompt_template(&traced, true, "trace", frames, 1u, 1u);
+        }
         snag_term_close(&traced);
         assert(unsetenv("SNAJPAGENT_TERM_TRACE") == 0);
         fd = open(path, O_RDONLY);
@@ -2869,6 +2874,7 @@ main(void)
         assert(strstr(buf, "ev=paint src=compose_frame") != NULL);
         assert(strstr(buf, "want=") != NULL && strstr(buf, "vis=") != NULL && strstr(buf, "rows=") != NULL);
         assert(strstr(buf, "draft") == NULL && strstr(buf, "prompt=") == NULL);
+        assert(strstr(buf, "want-true src=set_prompt_template") != NULL);
         unlink(path);
     }
     puts("test_render: ok");

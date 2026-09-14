@@ -1196,6 +1196,11 @@ out:
  * path is re-read per call, so a test can enable it without restarting. */
 static int g_trace_fd = -1;
 
+#define SNAG_TRACE_CAP (1024u * 1024u)
+
+static size_t g_trace_bytes;
+static bool g_trace_truncated;
+
 void
 snag_term_trace(const struct snag_term *term, const char *event, const char *source)
 {
@@ -1209,6 +1214,12 @@ snag_term_trace(const struct snag_term *term, const char *event, const char *sou
         if (path && *path) g_trace_fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
     }
     if (g_trace_fd < 0) return;
+    if (g_trace_bytes >= SNAG_TRACE_CAP) {
+        if (g_trace_truncated) return;
+        g_trace_truncated = true;               /* one line, then silent: the first episode survives */
+        event = "truncated";
+        source = "cap";
+    }
     n = snprintf(line, sizeof(line),
         "t=%llu ev=%s src=%s want=%u vis=%u depth=%u nl=%u gap=%u detour=%u defer=%u rows=%u cur=%u,%u margin=%u pw=%u\n",
         (unsigned long long)snag_monotonic_ms(), event, source ? source : "-",
@@ -1227,6 +1238,7 @@ snag_term_trace(const struct snag_term *term, const char *event, const char *sou
         if (errno == EINTR) continue;
         break;
     }
+    g_trace_bytes += (size_t)n;
 }
 
 static int
@@ -1309,6 +1321,7 @@ snag_term_set_prompt_template(struct snag_term *term, bool active, const char *l
     term->active = active;
     if (!active) term->typing_active = false;
     term->prompt_wanted = true;
+    snag_term_trace(term, "want-true", "set_prompt_template");
     term->line_submission_echoed = false;
     return term->defer_redraw ? 0 : redraw(term);
 invalid: return snag_errno(EINVAL);
@@ -1387,6 +1400,7 @@ snag_term_restore_draft(struct snag_term *term, const char *text)
 {
     term->completion_armed = false;
     term->prompt_wanted = true;
+    snag_term_trace(term, "want-true", "restore_draft");
     mark_input_activity(term);
     return replace_draft(term, text);
 }
@@ -1665,7 +1679,7 @@ snag_term_audio(struct snag_term *term, const char *label, bool dictating)
     if (!snag_strcpy(term->audio_label, sizeof(term->audio_label), label)) return -1;
     if(!*label)memset(term->caption,0,sizeof(term->caption));
     term->dictating = dictating;
-    if (*label) term->prompt_wanted = true;
+    if (*label) { term->prompt_wanted = true; snag_term_trace(term, "want-true", "audio"); }
     if (dictating && term->searching && search_accept(term, false) < 0) return -1;
     return redraw(term);
 }
@@ -1934,6 +1948,7 @@ complete_action(struct snag_term *term, enum snag_term_action action, enum snag_
     snag_buf_reset(&term->draft);
     term->cursor = 0u;
     term->prompt_wanted = false;
+    snag_term_trace(term, "want-false", "complete_action");
     term->typing_active = false;
     term->prompt_clock.captured = false;
     history_reset_navigation(term);
@@ -2156,6 +2171,7 @@ complete_exit(struct snag_term *term, enum snag_term_action *action)
 {
     if (snag_term_hide(term) < 0) return -1;
     term->prompt_wanted = false;
+    snag_term_trace(term, "want-false", "complete_exit");
     *action = SNAG_TERM_EXIT;
     return 1;
 }
@@ -2194,6 +2210,7 @@ cancel_line(struct snag_term *term, enum snag_term_action *action)
 logical: history_reset_navigation(term);
     term->prompt_clock.captured = false;
     term->prompt_wanted = false;
+    snag_term_trace(term, "want-false", "cancel_line");
     *action = interrupt ? SNAG_TERM_INTERRUPT : SNAG_TERM_CANCEL;
     return 1;
 }
@@ -2321,7 +2338,10 @@ consume_resize(struct snag_term *term)
         }
         term->capable = now_capable;
     }
-    if (!term->prompt_wanted || term->output_depth) return 0;
+    if (!term->prompt_wanted || term->output_depth) {
+        snag_term_trace(term, "resize-skip", !term->prompt_wanted ? "not-wanted" : "output_depth");
+        return 0;
+    }
     return redraw(term);
 }
 

@@ -419,6 +419,7 @@ read_input(struct snag_ui_display *display, int timeout_ms)
     if (item->local) {
         item->action = SNAG_TERM_NONE;
         term->prompt_wanted = true;
+        snag_term_trace(term, "want-true", "read_input-local");
         display->local = item;
         display->local_acknowledged = false;
         return 0;
@@ -441,6 +442,7 @@ read_input(struct snag_ui_display *display, int timeout_ms)
                item->history_refresh || item->history_warning || item->error) {
         if (item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE) {
             term->prompt_wanted = true;
+            snag_term_trace(term, "want-true", "read_input-submit");
             if (item->action == SNAG_TERM_SUBMIT && item->snapshot.active &&
                 item->snapshot.view == SNAG_RENDER_ROLLOUT && item->text &&
                 (item->text[0] != '/' || item->text[1] == '/')) {
