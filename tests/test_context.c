@@ -3433,8 +3433,19 @@ main(int argc, char **argv)
         assert(item_by_field(tools, "name", "create_goal") == NULL);
         assert(item_by_field(tools, "name", "update_goal") != NULL);
         assert(continuation != NULL);
-        assert_string(continuation, "role", "system");
-        assert_string(continuation, "content", SNAG_GOAL_CONTINUATION_TEXT);
+        assert_string(continuation, "role", "user");
+        assert(strstr(snag_json_string(continuation, "content"),
+                      "[snajpagent host continuation — not a new user message]\n") != NULL);
+        assert(strstr(snag_json_string(continuation, "content"), SNAG_GOAL_CONTINUATION_TEXT) != NULL);
+        /* Gateways can lift every system/developer message. The goal request
+         * must still be the last conversation item after retained history. */
+        json_t *last_conversation = NULL;
+        for (size_t i = 0; i < json_array_size(semantic); ++i) {
+            json_t *item = json_array_get(semantic, i);
+            const char *role = snag_json_string(item, "role");
+            if (!role || (strcmp(role, "system") && strcmp(role, "developer"))) last_conversation = item;
+        }
+        assert(last_conversation == continuation);
         assert(controller != NULL);
         assert(strstr(snag_json_string(controller, "content"), "finish compacted work") != NULL);
         assert(strstr(snag_json_string(controller, "content"), "wording locked") != NULL);

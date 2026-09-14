@@ -230,7 +230,11 @@ One native contract applies to all providers. Fixed policy is system-level;
 a final developer-level host continuation explicitly requests the next response
 after conversation normalization and all current state. This boundary is distinct
 from a new operator message and from fixed policy; it must survive tool follow-up,
-resume, queued/read-only/goal work and summary requests. Preserve compatible
+resume, queued/read-only/goal work and summary requests. Automatic goal turns
+also carry a labelled host request in the user-role conversation slot so that
+instruction-hoisting gateways retain the current task beside its history. This
+transport marker adds no operator input, approval or goal-state transition.
+Preserve compatible
 reasoning unchanged, including when older replies have no reasoning to replay. User/tool items keep their provenance, and historical compacted
 items keep their saved roles. Newly generated compaction summaries are user-role
 data rather than new trusted instructions. Required fields, unknown names,
