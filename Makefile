@@ -437,8 +437,13 @@ help:
 # fontconfig 2.17.1's fc-cache link failing on undefined Brotli* symbols although the
 # link order is the one static archives need and the archive that defines them is on the
 # line. That is a chain inside the pin rather than a defect in this tree, and the target
-# stays buildable for anyone working the pin: `make prod-linux-i686-legacy` is untouched.
+# stays buildable for anyone working the pin: it is kept in DEFERRED_TARGETS below so
+# `make prod-linux-i686-legacy` still resolves.
 # Evidence: ~/ai/state/snajpagent/release-drive-agent4-20260914.md.
+# Targets that are buildable by name but outside this release's matrix. The rules for
+# every entry of both lists are generated together (see below), so this keeps the command
+# working without putting the target back into prod-matrix or into staging.
+DEFERRED_TARGETS = prod-linux-i686-legacy
 PROD_TARGETS = prod-linux-x86_64 prod-linux-aarch64 prod-linux-armv6 prod-linux-riscv64 prod-linux-ppc64le prod-linux-ppc32 prod-macos-arm64 prod-macos-x86_64 prod-macos-universal prod-windows-x86_64 prod-windows-arm64 prod-linux-i686 prod-freebsd-amd64 prod-freebsd-amd64-legacy prod-openbsd-amd64 prod-openbsd-amd64-legacy prod-openbsd-amd64-early prod-netbsd-amd64-legacy prod-netbsd-amd64
 
 prod-matrix: $(PROD_TARGETS)
@@ -457,7 +462,7 @@ prod-nixpkgs:
 			--option download-attempts 2 "$$url" "$$hash" && exit 0; \
 	done; exit 1
 
-$(PROD_TARGETS): | prod-nixpkgs
+$(PROD_TARGETS) $(DEFERRED_TARGETS): | prod-nixpkgs
 	@mkdir -p build/matrix
 	nix-build nix/portable.nix -A $(patsubst prod-%,%,$@) \
 		--argstr buildVersion '$(BUILD_VERSION)' --argstr buildRevision '$(GIT_HEAD)' \
@@ -474,7 +479,7 @@ install: $(BIN) $(BIN).1
 
 FORCE:
 
-.PHONY: all check stylecheck rulescheck toolscheck depscheck configurecheck leancheck officecheck nixcheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install help prod-matrix $(PROD_TARGETS) FORCE
+.PHONY: all check stylecheck rulescheck toolscheck depscheck configurecheck leancheck officecheck nixcheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install help prod-matrix $(PROD_TARGETS) $(DEFERRED_TARGETS) FORCE
 
 -include $(COMMON_OBJ:.o=.d) src/main.d
 
