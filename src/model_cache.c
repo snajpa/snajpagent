@@ -498,6 +498,56 @@ snag_model_metadata(const struct snag_model_cache *cache,
     return snag_model_cache_find(cache, provider->name, snag_config_model_upstream(provider, model));
 }
 
+static bool
+selector_is_index(const char *selector, size_t *index)
+{
+    size_t number = 0u;
+    const unsigned char *p = (const unsigned char *)selector;
+
+    if (!selector) return false;
+    if (*p == '#') ++p;
+    if (!*p) return false;
+    for (; *p; ++p) {
+        size_t digit;
+        if (*p < '0' || *p > '9') return false;
+        digit = (size_t)(*p - '0');
+        if (number > (SIZE_MAX - digit) / 10u) return false;
+        number = number * 10u + digit;
+    }
+    *index = number;
+    return true;
+}
+
+int
+snag_model_select_selector(const struct snag_model_cache *cache,
+                           const struct snag_config *config, const char *selector,
+                           const struct snag_provider_config *fallback_provider, const char *fallback_effort,
+                           struct snag_model_selection *selection, char *error, size_t error_size)
+{
+    char composed[SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_EFFORT_MAX + 3u];
+    const char *provider = NULL, *model = NULL, *effort = NULL;
+    size_t index = 0u;
+    int rc, written;
+
+    /* Without a catalogue an index cannot be resolved, so keep name semantics rather than
+     * silently sending bare digits upstream as a model name. */
+    if (!cache || !selector_is_index(selector, &index))
+        return snag_model_select(cache, config, selector, fallback_provider, fallback_effort,
+                                 selection, error, error_size);
+    rc = snag_model_entry(cache, config, index, fallback_effort, &provider, &model, &effort);
+    if (rc > 0) {
+        snag_errorf(error, error_size,
+                    "model index %zu is not in the catalogue; refresh it with the model listing",
+                    index);
+        return -1;
+    }
+    if (rc < 0) return -1;
+    written = snprintf(composed, sizeof(composed), "%s/%s/%s", provider, model, effort);
+    if (written < 0 || (size_t)written >= sizeof(composed)) return -1;
+    return snag_model_select(cache, config, composed, fallback_provider, fallback_effort,
+                             selection, error, error_size);
+}
+
 int
 snag_model_select(const struct snag_model_cache *cache,
                   const struct snag_config *config, const char *selector,

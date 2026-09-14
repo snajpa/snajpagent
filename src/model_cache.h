@@ -74,6 +74,11 @@ int snag_model_select(const struct snag_model_cache *cache,
                       const struct snag_config *config, const char *selector,
                       const struct snag_provider_config *fallback_provider, const char *fallback_effort,
                       struct snag_model_selection *selection, char *error, size_t error_size);
+/* Same, but also accepts the numbered entry the model listing prints ("12" or "#12"). */
+int snag_model_select_selector(const struct snag_model_cache *cache,
+                               const struct snag_config *config, const char *selector,
+                               const struct snag_provider_config *fallback_provider, const char *fallback_effort,
+                               struct snag_model_selection *selection, char *error, size_t error_size);
 
 const char *snag_model_cache_best_effort(const json_t *model, const char *fallback);
 

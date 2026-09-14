@@ -4351,7 +4351,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         char ignored[256] = {0};
         if (!cli->update_model_cache)
             (void)snag_model_cache_load(&app.store, &app.model_cache, ignored, sizeof(ignored));
-        if (snag_model_select(&app.model_cache, &config, cli->model,
+        if (snag_model_select_selector(&app.model_cache, &config, cli->model,
                 snag_config_provider(&config, cli->provider), new_effort,
                 &selection, error, sizeof(error)) < 0) {
             goto invalid;
