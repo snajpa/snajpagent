@@ -122,6 +122,30 @@ test_local_models(struct snag_store *store, struct snag_model_cache *cache)
         assert(strcmp(name, "codex") == 0);
     }
     assert(saw_small && saw_large);
+    /* The model listing prints "N. provider / model / effort", so -m must accept that N. The
+     * control below shows why: the name-only selector resolves "1" as a literal model called
+     * "1", which the upstream mapping passes through unchanged and the provider then serves as
+     * its own default, which is the bug where -m 32 never switched the model. */
+    {
+        struct snag_model_selection selected;
+        const char *entry_provider = NULL, *entry_model = NULL, *entry_effort = NULL;
+        assert(snag_model_entry(cache, &config, 1u, "medium",
+                                &entry_provider, &entry_model, &entry_effort) == 0);
+        assert(snag_model_select(cache, &config, "1", provider, "medium",
+                                 &selected, error, sizeof(error)) == 0);
+        assert(strcmp(selected.model, "1") == 0); /* the pre-fix reading, kept as the control */
+        assert(snag_model_select_selector(cache, &config, "1", provider, "medium",
+                                          &selected, error, sizeof(error)) == 0);
+        assert(strcmp(selected.provider->name, entry_provider) == 0 &&
+               strcmp(selected.model, entry_model) == 0 &&
+               strcmp(selected.effort, entry_effort) == 0);
+        assert(snag_model_select_selector(cache, &config, "#1", provider, "medium",
+                                          &selected, error, sizeof(error)) == 0);
+        assert(strcmp(selected.model, entry_model) == 0);
+        assert(snag_model_select_selector(cache, &config, "999", provider, "medium",
+                                          &selected, error, sizeof(error)) < 0);
+        assert(strstr(error, "not in the catalogue") != NULL);
+    }
     assert(snag_model_cache_record(store, cache, provider, "codex", "large",
                                   SNAG_COUNT_UNKNOWN, 400000u, error, sizeof(error)) == 0);
     assert(snag_model_cache_find(cache, "codex", "large") == NULL);
