@@ -3574,7 +3574,9 @@ cross target and maps the compilers, resolving the cross C++ best-effort: a
 linked-PDF build without one asks for \fB--cxx\fR or \fB--without-pdf\fR.
 \fB--prefix\fR and \fB--manprefix\fR set the install and manual prefixes, and
 \fB--cc\fR, \fB--cxx\fR and \fB--debug\fR are
-also accepted.  Export \fBPKG_CONFIG_PATH\fR for the build as well as for the
+also accepted.  An option the script does not recognise exits 2 with the usage
+text, leaving the tracked config.mk untouched, so a packaging recipe's own flags
+fail loudly rather than being ignored.  Export \fBPKG_CONFIG_PATH\fR for the build as well as for the
 probe; without it the probe finds no dependency and turns the modality off.
 The script needs a POSIX shell providing \fBcommand -v\fR; the pinned
 legacy targets build through their own toolchains rather than running it; the
