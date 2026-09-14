@@ -36,9 +36,8 @@ Later source changes are listed under Unreleased in CHANGELOG.md.
 
 ## Known issues
 
-- **Not a regression:** one interruption path can still refuse a state transition — a managed call whose owner
-  is lost while the call is running — so an affected turn ends with `invalid <type> transition at sequence N`
-  instead of a completed result. 0.99.6 does not fix it. Every shipped binary now names the failing clause, the
+- **Not a regression:** one interruption path can still refuse a state transition, so an affected turn ends with `invalid <type> transition at sequence N`
+  instead of a completed result. 0.99.6 does not fix it. Every 0.99.6 binary names the failing clause, the
   call and the result status inside that refusal, so the next live occurrence explains itself, and the fix
   follows in the next development build once one occurrence names its clause.
 
