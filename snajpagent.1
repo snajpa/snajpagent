@@ -662,6 +662,11 @@ With an omitted effort, use the first effort listed for that model in the
 local cache, then its cached default, then the configured reasoning effort.
 .B \-\-effort
 explicitly overrides the selector's effort.  Typed model IDs need not be cached.
+A number, or \fB#\fR followed by a number, selects the entry at that position in the
+numbered model listing, so a model copied from the listing selects what the
+listing
+showed; an index outside the catalogue is an error rather than a literal model
+name.
 Each component must be nonempty; for upstream IDs containing slashes, define a
 provider-local model name in the configuration.
 The provider/model/effort selection becomes the session preference until changed.
