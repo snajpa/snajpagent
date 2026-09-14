@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Let `-m` take the catalogue index the numbered model listing prints (`-m 3` or
+`-m '#3'`), not only a name, so a selector copied from the listing resolves to
+  the entry it named; an out-of-range index now fails instead of being sent
+  upstream as a
+  literal model name.
 - Ship the multimodal modalities the manual and website describe: linked image,
   document and video reading, audio transcription and dictation, and realtime
   voice. Office is linked from a separately installed runtime and is never
