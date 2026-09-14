@@ -885,6 +885,10 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
         int fatal = atomic_load(&runtime->fatal);
         if (fatal) {
             errno = fatal;
+            /* An oversized draft or an invalid byte is an input condition, not a broken runtime.
+             * Report it once and let the loop read input again; keeping it latched starved the
+             * session of all keystrokes, which is how a full draft made a session unreachable. */
+            if (fatal == EOVERFLOW || fatal == EILSEQ) atomic_store(&runtime->fatal, 0);
             return -1;
         }
         if (atomic_load(&runtime->exit_requested)) {
