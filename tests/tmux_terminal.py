@@ -2986,12 +2986,14 @@ def run_configured_efforts_case(binary, root, provider, environment):
         terminal.submit_wait("/config", "configuration reloaded:", join_wrapped=True)
         terminal.submit_wait("/model cache", "4. ordinary / standard-model / max", join_wrapped=True)
         assert json.loads(cache_path.read_text())["providers"] == raw["providers"]
+    # Use the fake endpoint's ordinary completion model for the wire checks.
+    config.write_text(config.read_text().replace("standard-model", "one-model"))
     # The actual HTTP payload must retain every explicit effort, even one not listed.
     for effort in ("none", "low", "high", "max", "unlisted"):
         marker = f"configured-effort-{effort}"
         result = subprocess.run(
             [os.path.abspath(binary), "--config", str(config), "--dotdir", str(case / ("wire-" + effort)),
-             "--no-listen", "--no-client", "-m", f"ordinary/standard-model/{effort}", "-e", "--", marker],
+             "--no-listen", "--no-client", "-m", f"ordinary/one-model/{effort}", "-e", "--", marker],
             cwd=workspace, env=environment, capture_output=True, timeout=30,
         )
         assert result.returncode == 0, result.stderr.decode(errors="replace")
