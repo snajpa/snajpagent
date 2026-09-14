@@ -2989,16 +2989,25 @@ def run_configured_efforts_case(binary, root, provider, environment):
     # Use the fake endpoint's ordinary completion model for the wire checks.
     config.write_text(config.read_text().replace("standard-model", "one-model"))
     # The actual HTTP payload must retain every explicit effort, even one not listed.
-    for effort in ("none", "low", "high", "max", "unlisted"):
-        marker = f"configured-effort-{effort}"
-        result = subprocess.run(
-            [os.path.abspath(binary), "--config", str(config), "--dotdir", str(case / ("wire-" + effort)),
-             "--no-listen", "--no-client", "-m", f"ordinary/one-model/{effort}", "-e", "--", marker],
-            cwd=workspace, env=environment, capture_output=True, timeout=30,
-        )
-        assert result.returncode == 0, result.stderr.decode(errors="replace")
-        requests = provider.matching_requests(marker)
-        assert requests and all(r["body"]["reasoning"]["effort"] == effort for r in requests)
+    def reply(handler, request, sequence):
+        provider.reply(handler, provider.response_body(sequence, "effort accepted").encode(), close_header=True)
+        handler.close_connection = True
+
+    previous_handler = provider.runtime_handler
+    provider.runtime_handler = reply
+    try:
+        for effort in ("none", "low", "high", "max", "unlisted"):
+            marker = f"configured-effort-{effort}"
+            result = subprocess.run(
+                [os.path.abspath(binary), "--config", str(config), "--dotdir", str(case / ("wire-" + effort)),
+                 "--no-listen", "--no-client", "-m", f"ordinary/one-model/{effort}", "-e", "--", marker],
+                cwd=workspace, env=environment, capture_output=True, timeout=30,
+            )
+            assert result.returncode == 0, result.stderr.decode(errors="replace")
+            requests = provider.matching_requests(marker)
+            assert requests and all(r["body"]["reasoning"]["effort"] == effort for r in requests)
+    finally:
+        provider.runtime_handler = previous_handler
     print("tmux_terminal configured efforts: ok", flush=True)
 
 
