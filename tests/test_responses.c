@@ -2,6 +2,7 @@
 #include "responses.h"
 
 #include <assert.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -984,6 +985,50 @@ test_message_completion_finalizes_phase(void)
             }
 }
 
+static void
+test_typeless_and_non_object_records_rejected(void)
+{
+    static const char typeless[] = "{\"foo\":1}";
+    static const char non_object[] = "[1,2]";
+    static const char keepalive[] = "{\"type\":\"keepalive\"}";
+    struct snag_responses_stream stream;
+    struct snag_sse_record record;
+    int rc;
+
+    memset(&record, 0, sizeof(record));
+    record.kind = SNAG_SSE_EVENT;
+
+    snag_responses_stream_init(&stream, NULL, NULL);
+    record.data = (const unsigned char *)typeless;
+    record.data_len = strlen(typeless);
+    errno = 0;
+    rc = snag_responses_sse_record(&stream, &record);
+    assert(rc < 0);
+    assert(errno == EPROTO);
+    assert(stream.failed);
+    assert(strcmp(stream.error, "Responses event has no type") == 0);
+    snag_responses_stream_free(&stream);
+
+    snag_responses_stream_init(&stream, NULL, NULL);
+    record.data = (const unsigned char *)non_object;
+    record.data_len = strlen(non_object);
+    errno = 0;
+    rc = snag_responses_sse_record(&stream, &record);
+    assert(rc < 0);
+    assert(errno == EPROTO);
+    assert(strcmp(stream.error, "Responses event has no type") == 0);
+    snag_responses_stream_free(&stream);
+
+    /* A typed record still parses, so this case pins the typeless shape rather
+     * than passing on a stream that rejects every record. */
+    snag_responses_stream_init(&stream, NULL, NULL);
+    record.data = (const unsigned char *)keepalive;
+    record.data_len = strlen(keepalive);
+    assert(snag_responses_sse_record(&stream, &record) == 0);
+    assert(!stream.failed);
+    snag_responses_stream_free(&stream);
+}
+
 int
 main(void)
 {
@@ -1011,6 +1056,7 @@ main(void)
     test_refusal();
     test_invalid_call_after_public_item();
     test_protocol_conflicts_fail_closed();
+    test_typeless_and_non_object_records_rejected();
     test_structured_capacity_failure();
     test_interleaved_content_bound();
     test_provider_context_formats();
