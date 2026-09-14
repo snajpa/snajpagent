@@ -1256,8 +1256,10 @@ redraw(struct snag_term *term)
     int rc = -1;
 
     if (term->submit_awaiting_activity) {
-        /* Held until the submitted turn shows activity, or the bound expires. */
-        if (visible_spinner_states(term) ||
+        /* Only the idle-form paint is held: an active (busy) composer is itself
+         * evidence that the submitted turn is processing, and delaying it would
+         * delay steering, which the manual keeps immediate during output. */
+        if (term->active || visible_spinner_states(term) ||
             snag_monotonic_ms() - term->submit_awaiting_since_ms > SNAG_TERM_SUBMIT_ACTIVITY_MS)
             term->submit_awaiting_activity = false;
         else return 0;
