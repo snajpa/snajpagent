@@ -110,6 +110,8 @@ enum model_fixture {
 };
 
 static bool authentication_fixture;
+/* When set, the transport fixture requires this exact header line. */
+static const char *expected_session_header;
 
 static const struct retry_case {
     const char *prefix;
@@ -218,6 +220,9 @@ read_request(int fd, struct http_request *request)
         server_fail("OpenRouter title header missing");
     if (!header_contains(request->headers, "User-Agent: " SNAJPAGENT_NAME "/"
                          SNAJPAGENT_VERSION)) server_fail("product user agent missing or stale");
+    if (expected_session_header &&
+        !header_contains(request->headers, expected_session_header))
+        server_fail("session identity header missing or altered");
     cl = content_length(request->headers);
     if (strcmp(request->method, "GET") == 0 && cl < 0) cl = 0;
     if (cl < 0 || cl > (long)(sizeof(request->body) - 1u)) server_fail("invalid content length");
@@ -645,7 +650,59 @@ transport_connection(struct snag_config *config, struct snag_credential *credent
     snag_config_init(config);
     assert(snag_strcpy(config->providers[0].base_url, sizeof(config->providers[0].base_url), base_url));
     transport_settings(&config->providers[0], credential);
-    return (struct snag_provider_connection){config, &config->providers[0], credential, NULL, NULL, NULL};
+    return (struct snag_provider_connection){config, &config->providers[0], credential, NULL, NULL, NULL, NULL};
+}
+
+/* The proxy keys prompt-cache affinity on a session identity from its session lane; without it every
+ * request is pinned per-request and reuse collapses. This asserts the header reaches the wire: the fixture
+ * aborts the request if the exact line is missing, so the case cannot pass vacuously. */
+static void
+test_session_identity_header(void)
+{
+    static const char session_id[] = "0123456789abcdef0123456789abcdef";
+    struct local_server server;
+    struct snag_config config;
+    struct snag_credential credential;
+    struct emitted_text emitted;
+    json_t *request;
+    json_t *models = NULL;
+    struct snag_response_graph graph = {0};
+    uint64_t tokens = 0u;
+    unsigned int retries = 99u;
+    char error[256] = {0};
+
+    /* Set before the server forks: the fixture child inherits this expectation. */
+    expected_session_header = "session_id: 0123456789abcdef0123456789abcdef";
+    start_server(&server, MODEL_OPENAI, true, "");
+    struct snag_provider_connection connection = {
+        &config, &config.providers[1], &credential, NULL, NULL, NULL, session_id};
+    snag_config_init(&config);
+    snag_config_provider_init(&config.providers[1], "second");
+    config.provider_count = 2u;
+    assert(snprintf(config.providers[1].name, sizeof(config.providers[1].name), "transport") > 0);
+    assert(snprintf(config.providers[1].base_url, sizeof(config.providers[1].base_url),
+                    "%s/v1/", server.endpoint) > 0);
+    transport_settings(&config.providers[1], &credential);
+
+    /* Every provider request must carry the session identity: the fixture aborts the request when the exact
+     * header line is absent or altered, so the case cannot pass vacuously. The call order mirrors the
+     * fixture's canned replies (models, count, create). */
+    assert(snag_provider_models_list(connection, &models, error, sizeof(error)) == 0);
+    json_decref(models);
+
+    request = request_with_marker("transport-count");
+    assert(snag_provider_responses_count(connection, request, &tokens, NULL, error, sizeof(error),
+                                         &retries) == 0);
+    json_decref(request);
+
+    memset(&emitted, 0, sizeof(emitted));
+    snag_buf_init(&emitted.text, 128u);
+    request = request_with_marker("transport-create");
+    assert(snag_provider_responses_create(connection, request, emit_capture, &emitted, &graph, NULL,
+                                          error, sizeof(error), &retries) == 0);
+    json_decref(request);
+    snag_buf_free(&emitted.text);
+    expected_session_header = NULL;
 }
 
 static void
@@ -664,7 +721,7 @@ test_local_provider_transport(void)
 
     start_server(&server, MODEL_OPENAI, true, "");
     struct snag_provider_connection connection = {
-        &config, &config.providers[1], &credential, NULL, NULL, NULL};
+        &config, &config.providers[1], &credential, NULL, NULL, NULL, NULL};
     snag_config_init(&config);
     snag_config_provider_init(&config.providers[1], "second");
     config.provider_count = 2u;
@@ -755,7 +812,7 @@ test_codex_path_selection(void)
     struct snag_credential credential;
     char error[256] = {0};
     struct snag_provider_connection connection = {
-        &config, &config.providers[0], &credential, NULL, NULL, NULL};
+        &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL};
 
     snag_config_init(&config);
     transport_settings(&config.providers[0], &credential);
@@ -932,7 +989,7 @@ test_create_retries(void)
         snag_buf_init(&emitted.text, 1024u);
         int rc = snag_provider_responses_create((struct snag_provider_connection){
             &config, &config.providers[0], &credential, cancellation.code ? &ui : NULL,
-            cancellation.code ? cancel_retry : NULL, &cancellation},
+            cancellation.code ? cancel_retry : NULL, &cancellation, NULL},
             request, emit_capture, &emitted, &graph, &failure, error, sizeof(error), &retries);
         if (cancellation.code) {
             snag_ui_free(&ui);
@@ -995,7 +1052,7 @@ test_policy_clarification_after_reasoning(void)
     credential_set(&credential, "transport-secret");
     snag_buf_init(&emitted.text, 1024u);
     int rc = snag_provider_responses_create((struct snag_provider_connection){
-        &config, &config.providers[0], &credential, NULL, NULL, NULL},
+        &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL},
         request, emit_capture, &emitted, &graph, &failure, error, sizeof(error), &retries);
     assert(rc < 0 && retries == 0u && emitted.text.len == 0u);
     assert(!strcmp(failure.code, "cyber_policy"));
@@ -1633,7 +1690,7 @@ test_provider_auth(void)
             assert(snag_auth_read(store.root_fd, &config.providers[0], false, NULL,
                 &credential, NULL, NULL, error, sizeof(error)) == 0);
             int rc = snag_provider_models_list((struct snag_provider_connection){
-                &config, &config.providers[0], &credential, NULL, NULL, NULL}, &models, error, sizeof(error));
+                &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL}, &models, error, sizeof(error));
             if (rc < 0 && mode == MODEL_AUTH_401) (void)fprintf(stderr, "auth fixture failed: %s\n", error);
             assert((rc == 0) == (mode == MODEL_AUTH_401));
             if (rc == 0) assert(json_array_size(models) == 1u);
@@ -1655,7 +1712,7 @@ test_provider_auth(void)
         start_server(&server, pass == 2u ? MODEL_COMPACT_403 : MODEL_COMPACT_404, false, "");
         assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
         int rc = snag_provider_responses_compact((struct snag_provider_connection){
-            &config, &config.providers[0], &credential, NULL, NULL, NULL},
+            &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL},
             request, &output, error, sizeof(error), NULL);
         assert(rc == (pass < 2u ? SNAG_PROVIDER_UNSUPPORTED : -1));
         assert(output.value == NULL);
@@ -2477,6 +2534,7 @@ main(void)
     test_read_only_dispatch();
     test_goal_tool_manipulates_unfinished_goals();
     test_local_provider_transport();
+    test_session_identity_header();
     test_openrouter_search_transport();
     test_codex_path_selection();
     test_structured_create_failures();

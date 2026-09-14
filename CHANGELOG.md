@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Send the session identity to the provider in the header the proxy keys prompt-cache affinity on,
+  so consecutive requests of one session can reuse the provider's cached prefix instead of being
+  pinned per request; the identity is derived from the session and covers the compaction request too.
+
 - Report the session and program usage counters in a compact form (`1.0k`, `807.4M`) and hold the
   throughput figure back until a turn has run for a second, so a long resumed session can no longer
   fill `/status` with nine-digit numbers that read as noise.

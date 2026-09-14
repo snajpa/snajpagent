@@ -38,6 +38,7 @@ struct provider_ctx {
     CURL *curl;
     const struct snag_config *config;
     const struct snag_provider_config *provider;
+    const char *session_id;
     struct snag_ui *render;
     snag_provider_pump_fn pump;
     void *pump_opaque;
@@ -1012,6 +1013,7 @@ provider_ctx_init(struct provider_ctx *ctx, struct snag_provider_connection conn
     memset(ctx, 0, sizeof(*ctx));
     ctx->config = connection.config;
     ctx->provider = connection.provider;
+    ctx->session_id = connection.session_id;
     ctx->render = connection.render;
     ctx->pump = connection.pump;
     ctx->pump_opaque = connection.pump_opaque;
@@ -1074,6 +1076,8 @@ request_auth_headers(struct provider_ctx *ctx)
     struct curl_slist *headers = NULL;
     if (append_named_header(&headers, "Accept", ctx->accept) < 0 ||
         (ctx->has_body && !ctx->multipart && append_header(&headers, "Content-Type: application/json") < 0) ||
+        (ctx->session_id && ctx->session_id[0] &&
+         append_named_header(&headers, "session_id", ctx->session_id) < 0) ||
         append_provider_headers(&headers, ctx->provider, &ctx->credential) < 0 ||
         curl_easy_setopt(ctx->curl, CURLOPT_HTTPHEADER, headers) != CURLE_OK) {
         curl_slist_free_all(headers);
@@ -1443,7 +1447,7 @@ snag_provider_audio(enum snag_audio_operation operation, const json_t *request,
         (operation != SNAG_AUDIO_SPEAK && (!wav || !wav->len || wav->len > 12u * 1024u * 1024u))) {
         snag_errorf(error, error_size, "Audio requires a configured API-key route and valid request"); return -1;
     }
-    provider_ctx_init(&ctx, (struct snag_provider_connection){config,provider,credential,NULL,pump,opaque},
+    provider_ctx_init(&ctx, (struct snag_provider_connection){config,provider,credential,NULL,pump,opaque,NULL},
                        20u * 1024u * 1024u, 65536u);
     ctx.audio_output = output;
     ctx.multipart = operation == SNAG_AUDIO_TRANSCRIBE;
