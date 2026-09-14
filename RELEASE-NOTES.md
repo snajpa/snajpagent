@@ -16,7 +16,10 @@ Later source changes are listed under Unreleased in CHANGELOG.md.
   its prompt-cache affinity on. Consecutive requests of one session can therefore reuse the provider's
   cached prefix instead of being pinned per request: the measured baseline this addresses is 270 of 610
   large requests served under 10% from cache, with the cold class costing about five times more per
-  output token than the warm one. The measured improvement is being verified against that baseline.
+  output token than the warm one. The first measurement after the change — one fresh session, 20
+  requests — shows 87.5% of input tokens served from cache against 30.0% for the same proxy before it,
+  with the reuse growing as the session does; one request in that set was still cold, so this is a
+  measured improvement rather than a guarantee.
 - Usage accounting records cached and uncached input tokens separately, per session (derived from the
   journal, so it survives a resume) and per program, and `/status` reports both with tokens per second
   for the running turn and the most recent response.
