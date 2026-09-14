@@ -44,3 +44,27 @@ while IFS= read -r file; do
     esac
 done
 printf '%s\n' 'stylecheck: ok'
+
+# Prompt-cache contract: a provider reuses a cached prefix only while the request carries the same
+# cache key, so every provider request envelope must set it and take it from the shared derivation.
+# Fails closed: a new request path cannot quietly ship without cache keys.
+envelopes=$(grep -l '"store", 0, "stream", 1' src/*.c | sort | tr '\n' ' ')
+test "$envelopes" = "src/app_compact.c src/context.c " || {
+    echo "unexpected provider request envelope set: $envelopes" >&2
+    exit 1
+}
+for file in src/app_compact.c src/context.c; do
+    grep -q '"prompt_cache_key"' "$file" || {
+        echo "$file builds a provider request envelope without prompt_cache_key" >&2
+        exit 1
+    }
+done
+grep -q 'snag_context_cache_key' src/context.h || {
+    echo "src/context.h must declare the shared cache key derivation" >&2
+    exit 1
+}
+grep -q 'snag_context_cache_key(' src/app_compact.c || {
+    echo "the compaction request must take its key from the shared derivation" >&2
+    exit 1
+}
+

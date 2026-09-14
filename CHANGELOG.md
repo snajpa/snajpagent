@@ -15,8 +15,8 @@
 - Report throughput in `/status`: tokens per second for the running turn and for the most recent
   response, with a rate fine enough that a slow stream does not read as zero.
 - Guard the caching contract: a request-prefix test requires the previous request's conversation
-  head to stay byte-identical, and `make cachecheck` fails closed if any request path builds a
-  provider envelope without the cache key.
+  head to stay byte-identical, and the suite's tree check fails closed if any request path builds
+  a provider envelope without the cache key.
 
 - Name a provider-issued tool call by the provider's own call id on both sides
   of the   request. A call carried that id only when the section being built
