@@ -558,7 +558,12 @@ view.  Model text and tools belong to the
 .B rollout
 view regardless of verbosity.  Chat input goes to the selected room as the
 local operator.  Multiple destinations receive short source/prompt labels;
-a hosted room counts once regardless of how many clients joined it.
+a hosted room counts once regardless of how many clients joined it.  After a
+submission the composer returns once that turn has begun processing rather than
+at once, so a ready-looking prompt never appears under a line nothing has acted
+on yet; keys typed in that window are buffered and appear with the composer,
+while an empty, slash-command or display-only submission still repaints
+immediately.
 Explicit numbered sends and broadcasts also work from rollout, but ordinary
 rollout input stays local:
 while idle it starts a model turn, and during active work it steers that turn at

@@ -428,6 +428,70 @@ test_prompt_clock(void)
 }
 
 static void
+test_submit_holds_composer_until_activity(void)
+{
+    struct snag_term term;
+    struct output_capture capture;
+    enum snag_term_action action;
+    char *text = NULL;
+    char output[8192];
+    char prompt[] = {'x', (char)(SNAG_TERM_SPINNER_MARKER_BASE + SNAG_TERM_SPINNER_PROVIDER), '>', ' ', '\0'};
+    const char *spinners[SNAG_TERM_SPINNER_COUNT] = {" \u2691", " \u25f4\u25f7\u25f6\u25f5", " \u280b\u2819"};
+
+    snag_term_init(&term);
+    term.opened = term.capable = term.raw = true;
+    term.columns = 80u;
+    assert(snag_term_set_prompt_template(&term, false, prompt, spinners, 8u, 0u) == 0);
+
+    /* A submission holds the composer: while the turn has reported no activity,
+     * no composed label is written - otherwise the inactive glyph paints a
+     * ready-looking prompt under the line just submitted. */
+    assert(snag_term_restore_draft(&term, "held") == 0);
+    capture = capture_open(false, true);
+    term.input[0] = '\r';
+    term.input_len = 1u;
+    assert(snag_term_poll(&term, 0, -1, &action, &text) == 1);
+    assert(action == SNAG_TERM_SUBMIT && text && strcmp(text, "held") == 0);
+    free(text);
+    text = NULL;
+    term.input_pos = term.input_len = 0u;
+    (void)capture_close(&capture, output, sizeof(output), 0u);
+    assert(strstr(output, "x >") == NULL);
+    assert(strstr(output, "\u25f4") == NULL);
+
+    /* Activity releases the hold and the first composed frame carries the glyph. */
+    capture = capture_open(false, true);
+    assert(snag_term_set_spinner_states(&term, 1u << SNAG_TERM_SPINNER_PROVIDER) == 0);
+    /* The app re-arms the composer when the turn reports activity; that paint is
+     * the one the hold was waiting for, and it carries the activity glyph. */
+    assert(snag_term_set_prompt_template(&term, true, prompt, spinners, 8u,
+                                        1u << SNAG_TERM_SPINNER_PROVIDER) == 0);
+    (void)capture_close(&capture, output, sizeof(output), 0u);
+    assert(strstr(output, "\u25f4") != NULL);
+
+    /* A hold whose turn never reports activity expires, so input cannot stick. */
+    assert(snag_term_set_spinner_states(&term, 0u) == 0);
+    assert(snag_term_restore_draft(&term, "again") == 0);
+    capture = capture_open(false, true);
+    term.input[0] = '\r';
+    term.input_len = 1u;
+    assert(snag_term_poll(&term, 0, -1, &action, &text) == 1);
+    free(text);
+    text = NULL;
+    term.input_pos = term.input_len = 0u;
+    (void)capture_close(&capture, output, sizeof(output), 0u);
+    assert(strstr(output, "x >") == NULL);
+    struct timespec past = {.tv_sec = 0, .tv_nsec = 300000000L};
+    assert(nanosleep(&past, NULL) == 0);
+    capture = capture_open(false, true);
+    assert(snag_term_set_prompt_template(&term, false, prompt, spinners, 8u, 0u) == 0);
+    (void)capture_close(&capture, output, sizeof(output), 0u);
+    assert(strstr(output, "x >") != NULL);
+
+    snag_term_close(&term);
+}
+
+static void
 test_prompt_spinners(void)
 {
     struct snag_term term;
@@ -2662,6 +2726,7 @@ main(void)
     assert(count_text(output, "verbosity 5 exposes") == 1u);
     assert(strstr(output, "> POST https://example.test\n"));
 
+    test_submit_holds_composer_until_activity();
     test_input_model_boundaries();
     test_model_prompt_boundaries();
     test_paragraph_spacing();

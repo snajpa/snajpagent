@@ -15,6 +15,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#define SNAG_TERM_SUBMIT_ACTIVITY_MS 250u
+
 static atomic_uint sigint_pending;
 static volatile sig_atomic_t sigwinch_pending;
 static int redraw(struct snag_term *term);
@@ -737,6 +739,7 @@ set_spinner_states(struct snag_term *term, unsigned int states)
     if ((states & (1u << SNAG_TERM_SPINNER_TOOL)) || !term->tool_spinner_off_delay_ms)
         term->tool_spinner_off_at = 0u;
     term->spinner_states = states;
+    if (states) term->submit_awaiting_activity = false;
 }
 
 static int
@@ -1252,6 +1255,13 @@ redraw(struct snag_term *term)
     const char *label;
     int rc = -1;
 
+    if (term->submit_awaiting_activity) {
+        /* Held until the submitted turn shows activity, or the bound expires. */
+        if (visible_spinner_states(term) ||
+            snag_monotonic_ms() - term->submit_awaiting_since_ms > SNAG_TERM_SUBMIT_ACTIVITY_MS)
+            term->submit_awaiting_activity = false;
+        else return 0;
+    }
     if (term->input_only || !term->opened || !term->prompt_wanted || term->output_depth) {
         snag_term_trace(term, "skip", term->input_only ? "input_only" : !term->opened ? "closed" :
             !term->prompt_wanted ? "not-wanted" : "output_depth");
@@ -1930,6 +1940,12 @@ complete_action(struct snag_term *term, enum snag_term_action action, enum snag_
     bool local = action == SNAG_TERM_SUBMIT && (destination == SNAG_IRC_TARGET_SELECT || verbosity ||
                   (term->blank_local && snag_text_blank((char *)term->draft.data)));
     if (local ? term->local_backlog : term->input_backlog) return snag_term_write(STDERR_FILENO, "\a", 1u);
+    if (action == SNAG_TERM_SUBMIT && !local && term->draft.len &&
+        (term->draft.data[0] != '/' ||
+         (term->draft.len > 1u && term->draft.data[1] == '/'))) {
+        term->submit_awaiting_activity = true;
+        term->submit_awaiting_since_ms = snag_monotonic_ms();
+    }
     if (term->capable) {
         if (snag_term_hide(term) < 0) return -1;
     } else {
