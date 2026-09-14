@@ -1515,8 +1515,9 @@ Resume a paused or blocked goal.
 .BR /goal " lock|unlock"
 Freeze the goal against model changes, or release it.  A locked goal refuses
 every model-originated transition - rewording, pausing, resuming, completing,
-blocking or cancelling - in the tool and again in the store, so only the
-operator can change it; operator commands remain available.
+blocking or cancelling - in the tool before dispatch, and in the store wherever
+the event names the model as actor, so only the operator can change it; the
+operator's own commands remain available.
 .TP
 .B /goal complete
 Mark the current goal successfully completed.
