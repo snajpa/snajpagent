@@ -1,9 +1,9 @@
 {
   "name": "snajpagent",
   "target": "freebsd-amd64",
-  "version": "0.99.5",
-  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.5/snajpagent-0.99.5-freebsd-amd64",
-  "sha256": "726391b307afdb2a8061c9b5dec742c2f46bf188d2f02c4bad4f4eb05df0caef",
-  "size": 4027544,
+  "version": "0.99.6",
+  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.6/snajpagent-0.99.6-freebsd-amd64",
+  "sha256": "feffce6378342844faffab0fbf329f2f41d6b4ed3846d96b04b4d098994674b4",
+  "size": 29747808,
   "changelog": "https://agent.snajpa.net/downloads.html#changelog"
 }
