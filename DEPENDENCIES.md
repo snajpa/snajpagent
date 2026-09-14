@@ -334,7 +334,9 @@ separate ARMv6/ARMv7 atomic routines and selects them from the kernel's CPU
 capabilities at startup, so its merged ELF instruction attributes include
 routines above the executable's baseline.
 
-`make prod-linux-i686` builds the full 32-bit static-PIE agent with the same
+`make prod-linux-i686` builds the full 32-bit static agent, linked non-PIE because
+the pinned FFmpeg's CELT SIMD object carries absolute relocations that a static-PIE
+link refuses, with the same
 application libraries and compressed embedded roots. It uses an i686 baseline,
 64-bit musl file offsets/time_t, and no required extra runtime libraries.
 Existing static units and TLS work under Pentium II/III CPU emulation, without

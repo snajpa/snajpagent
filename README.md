@@ -394,7 +394,7 @@ This installs the binary and manual under `$HOME/.local`; the default prefix is
 `make prod-linux-riscv64` a RISC-V RV64GC/LP64D static PIE;
 `make prod-linux-ppc64le` a little-endian POWER8 ELFv2 static PIE;
 `make prod-linux-ppc32` a 32-bit big-endian PowerPC static PIE;
-`make prod-linux-i686` a modern 32-bit Linux static PIE; and
+`make prod-linux-i686` a modern 32-bit Linux static executable, linked non-PIE; and
 `make prod-linux-i686-legacy` a static non-PIE executable for Linux 2.4.27 with
 embedded TLS, roots and locale data. The legacy build needs working procfs and
 secure OS entropy; see [platform limits](DEPENDENCIES.md).
