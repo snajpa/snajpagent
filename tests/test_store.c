@@ -761,12 +761,19 @@ main(void)
         assert(session.log_end == durable_end);
         assert(session.next_seq == durable_seq);
         assert(strcmp(session.goal_prompt, "finish the release") == 0);
+        /* Locked also means the model may not block or complete it, which it could
+         * do before this rule existed. */
+        assert(snag_session_commit(&session, "goal_blocked",
+            goal_reason_data(goal1, "model", "reason", "dependency unavailable"), NULL, error, sizeof(error)) < 0);
+        assert(snag_session_commit(&session, "goal_completed", goal_actor_data(goal1, "model"), NULL,
+            error, sizeof(error)) < 0);
+        assert(session.goal_status == SNAG_GOAL_ACTIVE && session.goal_blocker == NULL);
         commit_event(&session, "goal_reworded",
                      goal_reworded_data(goal1, "user", "finish and publish the release"));
         assert(session.goal_revision == 2u);
         commit_event(&session, "goal_lock_changed", goal_lock_data(goal1, false));
         assert(!session.goal_locked);
-        commit_event(&session, "goal_lock_changed", goal_lock_data(goal1, true));
+        /* Unlocked again, so the model's own block and completion below are allowed. */
         commit_event(&session, "goal_paused", goal_reason_data(goal1, NULL, "reason", "user"));
         assert(session.goal_status == SNAG_GOAL_PAUSED);
         assert(snag_session_commit(&session, "goal_completed", goal_actor_data(goal1, "model"), NULL,

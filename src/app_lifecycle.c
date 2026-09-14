@@ -538,8 +538,11 @@ snag_app_goal_tool(struct app_state *app, const struct snag_response_item *call,
         !snag_json_arg_text(call->arguments, "action", 1u, 8u, false, &action, error, error_size))
         return tool_result(false, error, result);
     text_value = json_object_get(call->arguments, "text");
-    /* Any unfinished goal is manipulable. The wording lock, not the status,
-     * is what keeps the model from changing the objective. */
+    /* An operator lock freezes the goal for the model: it may not reword it, block
+     * it, complete it, resume it or cancel it. The store enforces the same rule, so
+     * a locked goal stays frozen even if a future caller forgets this check. */
+    if (app->session.goal_locked)
+        return tool_result(false, "goal is locked by the operator; only the operator can change it", result);
     if (!snag_goal_unfinished(app->session.goal_status))
         return tool_result(false, "there is no unfinished goal to update", result);
     if (strcmp(action, "rewrite") == 0) {
@@ -547,7 +550,6 @@ snag_app_goal_tool(struct app_state *app, const struct snag_response_item *call,
             return tool_result(false, error, result);
         if (!goal_text_valid(text, prompt_limit)) return tool_result(false,
                 "new goal wording is blank, invalid, or exceeds the configured limit", result);
-        if (app->session.goal_locked) return tool_result(false, "goal wording is locked by the user", result);
         if (strcmp(text, app->session.goal_prompt) == 0)
             return tool_result(true, "goal wording is unchanged", result);
         if (commit_goal_event(app, "goal_reworded", goal_text_data(&app->session, "model", text),
