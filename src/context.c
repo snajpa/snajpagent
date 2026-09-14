@@ -104,14 +104,26 @@ static int
 append_tool_call(struct context_builder *builder, const struct snag_response_item *call, bool scoped)
 {
     char *args = canonical_string(call->arguments, SNAG_MAX_TOOL_ARGUMENTS);
+    bool provider_id = call->provider_call_id && call->provider_call_id[0];
+    /* A call the provider issued must be named by the provider's own id on both sides, in
+     * every section: the result is appended from a separate tool_finished event and may be
+     * built when this section is not scoped, which used to send the internal id here and the
+     * provider id there. */
     json_t *request = json_pack("{s:s,s:s,s:s,s:s}",
-        "type", "function_call", "call_id", scoped ? call->provider_call_id : call->call_id,
+        "type", "function_call", "call_id", provider_id ? call->provider_call_id : call->call_id,
         "name", call->name, "arguments", args);
-    if (scoped) {
+    if (provider_id) {
         if (!builder->call_ids) builder->call_ids = json_object();
-        if (!builder->call_ids || !request ||
-            snag_json_set_new(request, "id", json_string(call->provider_item_id)) < 0 ||
-            json_object_set_new(builder->call_ids, call->call_id, json_string(call->provider_call_id)) < 0) {
+        if (!builder->call_ids
+            || json_object_set_new(builder->call_ids, call->call_id,
+                                   json_string(call->provider_call_id)) < 0) {
+            free(args);
+            json_decref(request);
+            return -1;
+        }
+    }
+    if (scoped) {
+        if (!request || snag_json_set_new(request, "id", json_string(call->provider_item_id)) < 0) {
             free(args);
             json_decref(request);
             return -1;

@@ -1308,8 +1308,12 @@ test_reasoning_continuation(struct snag_store *store, const char *workspace)
             0, false, &config, different, NULL, NULL, &projection, error, sizeof(error)) == 0);
         json_t *input = json_object_get(projection.create_request.value, "input");
         assert(!item_by_field(input, "type", "reasoning"));
-        assert_string(item_by_field(input, "type", "function_call"), "call_id", call);
-        assert_string(item_by_field(input, "type", "function_call_output"), "call_id", call);
+        /* The provider issued call_exec for this call. Naming the internal id here, or emitting
+         * the result under it, leaves the provider's own call without an output - the
+         * "No tool output found for tool call" rejection. Both sides use the provider id whenever
+         * one exists, whatever the continuation scope of the section they are built in. */
+        assert_string(item_by_field(input, "type", "function_call"), "call_id", "call_exec");
+        assert_string(item_by_field(input, "type", "function_call_output"), "call_id", "call_exec");
     }
     struct snag_context_projection compact = {0};
     assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium",
@@ -1505,7 +1509,13 @@ test_image_tool_replay(void)
         json_t *input = json_object_get(projection.create_request.value, "input");
         assert(input == json_object_get(projection.count_request.value, "input"));
         json_t *out = item_by_field(input,"type", "function_call_output");
-        assert(out && !strcmp(snag_json_string(out, "call_id"), call_id));
+        /* Both sides must name the same call, and a call the provider issued must carry the
+         * provider's own id: naming the internal id here left the provider's call without
+         * an output, which is the "No tool output found for tool call" rejection. */
+        json_t *call_item = item_by_field(input,"type", "function_call");
+        assert(call_item && out);
+        assert(!strcmp(snag_json_string(out, "call_id"), snag_json_string(call_item, "call_id")));
+        assert(strcmp(snag_json_string(call_item, "call_id"), call_id) != 0);
         json_t *content = json_object_get(out, "output");
         assert(json_is_array(content) && json_array_size(content) == image_index+2u);
         assert(!strcmp(snag_json_string(json_array_get(content, 1u), "text"), "before"));
