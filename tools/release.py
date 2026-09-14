@@ -131,8 +131,8 @@ def pages(args):
                 # different bytes.
                 subprocess.run(["curl", "--fail", "--location", "--proto", "=https", "--proto-redir", "=https",
                                 "--max-time", "120", "--max-filesize", str(meta["size"]),
-                                "--retry", "6", "--retry-delay", "3", "--retry-all-errors",
-                                "--retry-max-time", "600",
+                                "--retry", "10", "--retry-delay", "10",
+                                "--retry-max-time", "900",
                                 "--output", str(temporary), meta["url"]], check=True)
                 if temporary.stat().st_size != meta["size"] or digest(temporary) != meta["sha256"]:
                     raise ValueError(f"release asset mismatch: {descriptor}")

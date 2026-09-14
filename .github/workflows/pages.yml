@@ -125,7 +125,13 @@ jobs:
           """)
           PYTHON
       - name: Include verified update-channel executables
-        run: python3 tools/release.py pages
+        run: |
+          for attempt in 1 2 3; do
+            python3 tools/release.py pages && exit 0
+            echo "materialization attempt $attempt failed; retrying in 120s"
+            sleep 120
+          done
+          exit 1
       - uses: actions/upload-pages-artifact@v5
         with:
           path: www
