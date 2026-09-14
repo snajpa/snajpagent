@@ -3331,7 +3331,11 @@ main(int argc, char **argv)
         }
     }
 
+    commit_event(&session, "goal_lock_changed", checked_json(json_pack("{s:s,s:b}",
+        "goal_id", goal, "locked", false)));
     commit_event(&session, "goal_resumed", json_pack("{s:s}", "goal_id", goal));
+    /* The lock freezes the goal against model transitions, so the operator unlock above is
+     * what keeps this model-attributed block legal on an otherwise locked goal. */
     commit_event(&session, "goal_blocked", json_pack("{s:s,s:s,s:s}",
                      "goal_id", goal, "actor", "model", "reason", "retained dependency"));
     snag_session_close(&session);
