@@ -2363,6 +2363,20 @@ consume_resize(struct snag_term *term)
     return redraw(term);
 }
 
+/* The submit hold keeps a ready-looking prompt off the screen until the submitted
+ * turn reacts. That release has to be scheduled rather than discovered: a
+ * submission whose outcome starts no turn (a local error, such as a mismatched
+ * delete confirmation) never reaches set_spinner_states, and nothing calls redraw
+ * afterwards, so the composer would stay unrepainted until the next keystroke. */
+static int
+release_expired_submit_hold(struct snag_term *term)
+{
+    if (!term->submit_awaiting_activity) return 0;
+    if (snag_monotonic_ms() - term->submit_awaiting_since_ms < SNAG_TERM_SUBMIT_ACTIVITY_MS) return 0;
+    term->submit_awaiting_activity = false;
+    return redraw(term);
+}
+
 int
 snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
               enum snag_term_action *action, char **text)
@@ -2381,6 +2395,7 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
     if (term->prompt_visible && term->capable && !term->searching &&
         !term->output_depth && animated_spinners(term) &&
         update_spinners(term, spinner_step(term, snag_monotonic_ms())) < 0) return -1;
+    if (release_expired_submit_hold(term) < 0) return -1;
     if (sigint_pending) {
         (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
         return feed_byte(term, 0x03u, action, text);
@@ -2392,6 +2407,14 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
             (timeout_ms < 0 || timeout_ms > 30))
             timeout_ms = 30;
         timeout_ms = term->history_pending ? 0 : spinner_timeout(term, timeout_ms);
+        if (term->submit_awaiting_activity) {
+            /* Wake at the hold's own deadline, so it can be released and repainted
+             * even when the submission's outcome had no turn to report activity. */
+            uint64_t elapsed = snag_monotonic_ms() - term->submit_awaiting_since_ms;
+            uint64_t remaining = elapsed < SNAG_TERM_SUBMIT_ACTIVITY_MS ?
+                SNAG_TERM_SUBMIT_ACTIVITY_MS - elapsed : 0u;
+            if (timeout_ms < 0 || (uint64_t)timeout_ms > remaining) timeout_ms = (int)remaining;
+        }
         rc = snag_term_input_wait(&term->host, wake_fd, timeout_ms);
         if (sigint_pending) {
             (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
@@ -2417,6 +2440,7 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
             if (term->history_pending == 2u) return history_down(term);
             return search_find(term, term->history_scan);
         }
+        if (rc == 0 && release_expired_submit_hold(term) < 0) return -1;
         if (rc <= 0) return rc;
         if (!(rc & SNAG_TERM_WAIT_INPUT)) {
             if (rc & SNAG_TERM_WAIT_END) {

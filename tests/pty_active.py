@@ -1630,6 +1630,24 @@ def test_prompt_history_and_reverse_search():
     assert "history-noninteractive-excluded" not in records
 
 
+def test_submitted_line_without_turn_returns_composer():
+    # A plain-line submission takes the composer hold until the submitted turn
+    # reports activity. A mismatched /delete confirmation is answered as such a
+    # line and starts no turn, so nothing but the hold's own deadline can bring
+    # the composer back -- and it must do so with nothing else typed. The leading
+    # turn gives the session a log, so /delete asks for confirmation instead of
+    # exiting the way an unborn session does.
+    child = Child([], PROMPT.rstrip())
+    answer = child.send_wait(b"delete-hold-probe\r", b"fixture answer")
+    child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=answer)
+    confirm = child.send_wait(b"/delete\r", b"delete is irreversible")
+    child.wait(PROMPT.rstrip(), start=confirm)
+    mismatch = child.send_wait(b"composer-hold-mismatch\r",
+                               b"delete confirmation did not match", start=confirm)
+    child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=mismatch)
+    child.exit_now()
+
+
 def test_multiline_and_paste():
     child = Child([], PROMPT.rstrip())
     first_end = child.send_wait(b"line one\nline two\r", b"fixture answer")
@@ -5175,6 +5193,7 @@ if __name__ == "__main__":
     test_ctrl_c_cancels_partial_editor_states()
     test_interrupt()
     test_prompt_history_and_reverse_search()
+    test_submitted_line_without_turn_returns_composer()
     test_history_local_first_archive()
     test_history_repeated_resume_exit()
     test_history_large_archive()
