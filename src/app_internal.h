@@ -37,6 +37,11 @@ struct partial_public_item {
 struct app_audio;
 struct app_voice;
 struct app_state {
+    /* A user-requested view switch is "in flight" while its target view has not become current;
+     * further switch requests are ignored until then, with a deadline so the block cannot stick
+     * if the view never lands. SNAG_RENDER_VIEW_COUNT in switch_target means "none in flight". */
+    enum snag_render_view switch_target;
+    uint64_t switch_deadline_ms;
     struct app_audio *audio;
     struct app_voice *voice;
     struct snag_store store;

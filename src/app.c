@@ -1714,13 +1714,30 @@ select_view(struct app_state *app, enum snag_render_view view, bool active)
         .kind = SNAG_UI_VIEW, .data.value = view}) < 0 || set_input_prompt(app, active) < 0) return -1;
     return 0;
 }
+/* A user-requested view switch. Announce it before the repaint, which can take a moment, so the
+ * keystroke is visibly accepted, and refuse to start another switch while one is in flight so
+ * repeated requests cannot queue a second one. */
+static int
+user_switch_view(struct app_state *app, enum snag_render_view view, bool active)
+{
+    if (snag_ui_view(&app->ui) == view) return select_view(app, view, active);
+    if (app->switch_target != SNAG_RENDER_VIEW_COUNT && snag_ui_view(&app->ui) != app->switch_target &&
+        snag_monotonic_ms() < app->switch_deadline_ms) return 0;
+    if (app_textf(app, SNAG_UI_HOST, "switching to %s",
+                  view == SNAG_RENDER_CHAT ? "chat" : "rollout") < 0) return -1;
+    if (select_view(app, view, active) < 0) return -1;
+    app->switch_target = view;
+    app->switch_deadline_ms = snag_monotonic_ms() + 500u;
+    return 0;
+}
+
 static int
 toggle_view(struct app_state *app)
 {
     enum snag_render_view view;
 
     view = app->ui.view == SNAG_RENDER_CHAT ? SNAG_RENDER_ROLLOUT : SNAG_RENDER_CHAT;
-    return select_view(app, view, app->session.active_turn);
+    return user_switch_view(app, view, app->session.active_turn);
 }
 static int
 network_command(struct app_state *app, const char *line, bool *handled)
@@ -2001,7 +2018,7 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         return snag_ui_history(&app->ui, &app->session, count);
     }
     if (strcmp(line, "/chat") == 0) {
-        int rc = select_view(app, SNAG_RENDER_CHAT, active);
+        int rc = user_switch_view(app, SNAG_RENDER_CHAT, active);
 
         *prompt_ready = rc == 0;
         if (rc == 0 && !app->networked)
@@ -2009,7 +2026,7 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         return rc;
     }
     if (strcmp(line, "/rollout") == 0) {
-        int rc = select_view(app, SNAG_RENDER_ROLLOUT, active);
+        int rc = user_switch_view(app, SNAG_RENDER_ROLLOUT, active);
 
         *prompt_ready = rc == 0;
         return rc;
@@ -4362,6 +4379,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     bool signal_handlers_installed = false;
     int rc = 3;
     memset(&app, 0, sizeof(app));
+    app.switch_target = SNAG_RENDER_VIEW_COUNT;
     snag_buf_init(&app.irc_urgent, SNAG_MAX_IRC_SNAPSHOT);
     snag_buf_init(&app.irc_urgent_refs, SNAG_MAX_IRC_SNAPSHOT);
     snag_buf_init(&app.irc_background_refs, SNAG_MAX_IRC_SNAPSHOT);
