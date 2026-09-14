@@ -137,12 +137,20 @@ json_t *
 snag_response_usage_json(const struct snag_response_usage *usage)
 {
     if (snag_response_usage_valid(usage) < 0) return NULL;
-    return json_pack("{s:o,s:o,s:o,s:o}", "input_tokens", usage->input_known ?
-            json_integer((json_int_t)usage->input_tokens) : json_null(),
-        "output_tokens", usage->output_known ? json_integer((json_int_t)usage->output_tokens) : json_null(),
-        "reasoning_tokens", usage->reasoning_known ?
-            json_integer((json_int_t)usage->reasoning_tokens) : json_null(),
-        "total_tokens", usage->total_known ? json_integer((json_int_t)usage->total_tokens) : json_null());
+    return usage->cached_known ?
+        json_pack("{s:o,s:o,s:o,s:o,s:o}", "input_tokens", usage->input_known ?
+                json_integer((json_int_t)usage->input_tokens) : json_null(),
+            "output_tokens", usage->output_known ? json_integer((json_int_t)usage->output_tokens) : json_null(),
+            "reasoning_tokens", usage->reasoning_known ?
+                json_integer((json_int_t)usage->reasoning_tokens) : json_null(),
+            "total_tokens", usage->total_known ? json_integer((json_int_t)usage->total_tokens) : json_null(),
+            "cached_tokens", json_integer((json_int_t)usage->cached_input_tokens)) :
+        json_pack("{s:o,s:o,s:o,s:o}", "input_tokens", usage->input_known ?
+                json_integer((json_int_t)usage->input_tokens) : json_null(),
+            "output_tokens", usage->output_known ? json_integer((json_int_t)usage->output_tokens) : json_null(),
+            "reasoning_tokens", usage->reasoning_known ?
+                json_integer((json_int_t)usage->reasoning_tokens) : json_null(),
+            "total_tokens", usage->total_known ? json_integer((json_int_t)usage->total_tokens) : json_null());
 }
 
 int
@@ -151,7 +159,11 @@ snag_response_usage_from_json(const json_t *value, struct snag_response_usage *u
     struct snag_response_usage parsed;
 
     memset(&parsed, 0, sizeof(parsed));
-    if (!usage || !snag_json_exact_keys(value, "input_tokens output_tokens reasoning_tokens total_tokens") ||
+    /* Journals written before cache accounting carry the four-key form; accept both. */
+    if (!usage || (!snag_json_exact_keys(value, "input_tokens output_tokens reasoning_tokens total_tokens") &&
+                   !snag_json_exact_keys(value, "input_tokens output_tokens reasoning_tokens total_tokens "
+                                                "cached_tokens")) ||
+        snag_json_optional_u64(value, "cached_tokens", &parsed.cached_input_tokens, &parsed.cached_known) < 0 ||
         snag_json_optional_u64(value, "input_tokens", &parsed.input_tokens, &parsed.input_known) < 0 ||
         snag_json_optional_u64(value, "output_tokens", &parsed.output_tokens, &parsed.output_known) < 0 ||
         snag_json_optional_u64(value, "reasoning_tokens", &parsed.reasoning_tokens,

@@ -4,6 +4,20 @@
 
 ## Unreleased
 
+- Send a stable prompt cache key on every request, derived once from the session, provider, model
+  and profile, so a provider can reuse a session's cached prefix; the compaction request, the
+  largest request a session sends, carried no key at all before this.
+- Record prompt-cache reuse: the live provider path reads
+  `input_tokens_details.cached_tokens`, the durable form keeps it when the provider reports it,
+  and each session totals cached and uncached input, output, reasoning and total where a
+  completion is applied, so a resumed session derives them from its own journal; each program
+  totals the completions this process saw, so the two differ after a resume.
+- Report throughput in `/status`: tokens per second for the running turn and for the most recent
+  response, with a rate fine enough that a slow stream does not read as zero.
+- Guard the caching contract: a request-prefix test requires the previous request's conversation
+  head to stay byte-identical, and `make cachecheck` fails closed if any request path builds a
+  provider envelope without the cache key.
+
 - Name a provider-issued tool call by the provider's own call id on both sides
   of the   request. A call carried that id only when the section being built
   matched its   continuation scope, so a scope change between requests could

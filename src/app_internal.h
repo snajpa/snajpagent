@@ -43,6 +43,15 @@ struct app_state {
     json_t *draft_content;
     bool attaching;
     struct snag_session session;
+
+    /* Program-scope usage: this process only, so after a resume it differs from session scope. */
+    struct snag_usage_totals program_usage;
+    /* Throughput: the running turn, and the last response with its own duration. */
+    uint64_t turn_started_ms;
+    uint64_t turn_output_tokens;
+    uint64_t response_started_ms;
+    uint64_t last_response_ms;
+    uint64_t last_response_output_tokens;
     struct snag_ui ui;
     struct snag_irc *irc;
     struct snag_irc_destinations irc_destinations;

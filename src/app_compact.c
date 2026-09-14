@@ -250,6 +250,17 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             snag_json_set_new(projection.create_request.value, "instructions", json_string("")) < 0) goto out;
         if (projection.create_request.value && !native && app->turn_provider->auth == SNAG_AUTH_CHATGPT &&
             snag_context_codex_request(projection.create_request.value) < 0) goto out;
+          /* The compaction request is the largest request a session sends, so it carries the same
+           * session cache key as an ordinary request; a key derived per request path would place the
+           * compacted history in a different cache space from the turn that produced it. */
+          char compact_cache_key[SNAG_CACHE_KEY_LEN + 1u];
+          snag_context_cache_key(&app->session, app->turn_provider ? app->turn_provider->name : NULL,
+                                 snag_config_model_upstream(app->turn_provider, model), compact_cache_key);
+          if (compact_cache_key[0] &&
+              ((projection.create_request.value && snag_json_set_new(projection.create_request.value,
+                    "prompt_cache_key", json_string(compact_cache_key)) < 0) ||
+               (projection.count_request.value && snag_json_set_new(projection.count_request.value,
+                    "prompt_cache_key", json_string(compact_cache_key)) < 0))) goto out;
         if (!projection.create_request.value || !projection.count_request.value ||
             snag_context_provider_model(app->turn_provider, model, projection.create_request.value) < 0 ||
             snag_context_provider_model(app->turn_provider, model, projection.count_request.value) < 0) {
