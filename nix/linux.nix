@@ -29,6 +29,17 @@ let
     buildSwscale = true;
     withDocumentation = false;
   }).overrideAttrs (old: {
+    # riscv64's linux headers predate the riscv_hwprobe syscall, so FFmpeg's
+    # libavutil/riscv/cpu.c calls syscall(__NR_riscv_hwprobe, ...) with the constant
+    # undeclared; under -Werror the follow-on return-type diagnostic becomes fatal.
+    # Supply the number the kernel's syscall table defines (258); kernels without the
+    # syscall return -ENOSYS, which the caller already handles. Verified by building the
+    # riscv64 FFmpeg derivation, which previously failed at libavutil/riscv/cpu.o.
+    postPatch = (old.postPatch or "") +
+      pkgs.lib.optionalString musl.stdenv.hostPlatform.isRiscV ''
+        sed -i '1i #ifndef __NR_riscv_hwprobe\n#define __NR_riscv_hwprobe 258\n#endif' \
+          libavutil/riscv/cpu.c
+      '';
     # `make check` also builds optional tools/examples requiring avfilter and
     # device libraries. This profile builds and tests the five linked libraries.
     checkPhase = ''
