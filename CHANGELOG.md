@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Make a refused store transition explain itself: the error now names the failing
+  clause, the call it concerned and the result status, instead of only the event
+  type and sequence, so a crash report is diagnostic without a debug build.
 - Freeze a locked goal against model changes: a lock now refuses every
   model-originated transition (rewording, pausing, resuming, completing,
   blocking, cancelling), enforced in the tool and again in the store, so only

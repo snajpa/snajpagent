@@ -589,6 +589,25 @@ test_media(const struct snag_session *session)
     free(source); free(link);
 }
 
+static void
+test_refusal_diagnostic(const char *workspace)
+{
+    struct snag_session session;
+    char error[256] = {0};
+
+    /* A refused transition must name the clause that failed and the call it
+     * concerned, so a crash report is diagnostic without a debug build. */
+    snag_session_init(&session);
+    assert(snag_session_prepare(&session, workspace, "default", "model", "high",
+               error, sizeof(error)) == 0);
+    assert(snag_session_commit(&session, "tool_finished",
+               json_pack("{s:s}", "call_id", "0123456789abcdef"), NULL, error,
+               sizeof(error)) < 0);
+    assert(strstr(error, "clause=keys") != NULL);
+    assert(strstr(error, "call=0123456789abcdef") != NULL);
+    snag_session_close(&session);
+}
+
 int
 main(void)
 {
@@ -1020,6 +1039,7 @@ main(void)
         assert(!strcmp(session.pending_queue[0].text, "second edited"));
         snag_session_close(&session);
     }
+    test_refusal_diagnostic(workspace);
     test_audio_usage(&store,workspace);
     test_voice_queue(&store,workspace);
     snag_store_close(&store);
