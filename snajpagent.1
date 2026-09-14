@@ -2563,7 +2563,8 @@ Explicit goal requests expose
 when no unfinished goal exists.  An active goal exposes
 .B update_goal
 for rewriting, completion, or blocking.  A paused or blocked goal exposes
-neither.  Wording locks prevent model rewording, not completion or blocking.
+neither.  A locked goal refuses the model's rewording, blocking and cancelling;
+completion and resume stay available, so a locked goal can still finish.
 .PP
 IRC is the network integration.  The event log is durable internal state, not
 a stable external API while snajpagent remains pre-1.0.
