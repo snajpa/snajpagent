@@ -2949,6 +2949,46 @@ main(void)
         assert(strstr(buf, "want-true src=set_prompt_template") != NULL);
         unlink(path);
     }
+    /* B1: a plain ASCII/LF chunk skips the escaping pass, but every other class must still be
+     * escaped or expanded exactly as before - these assertions fail if the fast path is taken for
+     * a tab, a CR, an invalid byte, a wide glyph or any non-ASCII byte. */
+    {
+        struct snag_term t;
+        snag_term_init(&t);
+        t.opened = true;
+        t.capable = true;
+        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell); t.output_columns = 0u; t.output_newlines = 0u;
+        assert(snag_term_note_output(&t, "abc def", 7u, "s") == 0);
+        assert(t.output_line.len == 7u && memcmp(t.output_line.data, "abc def", 7u) == 0);
+        assert(t.output_columns == 7u);
+        assert(t.output_cell.len == 1u && memcmp(t.output_cell.data, "f", 1u) == 0);
+        assert(t.output_cell_width == 1u);
+        /* tab: expanded by column, so a fast path here would drop three spaces */
+        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell); t.output_columns = 0u; t.output_newlines = 0u;
+        assert(snag_term_note_output(&t, "a\tb", 3u, "s") == 0);
+        assert(t.output_line.len == 5u && memcmp(t.output_line.data, "a   b", 5u) == 0);
+        assert(t.output_columns == 5u);
+        /* carriage return: escaped to four characters */
+        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell); t.output_columns = 0u; t.output_newlines = 0u;
+        assert(snag_term_note_output(&t, "a\rb", 3u, "s") == 0);
+        assert(t.output_line.len == 6u && memcmp(t.output_line.data, "a\\x0Db", 6u) == 0);
+        assert(t.output_columns == 6u);
+        /* invalid UTF-8: escaped, not copied */
+        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell); t.output_columns = 0u; t.output_newlines = 0u;
+        assert(snag_term_note_output(&t, "\xff", 1u, "s") == 0);
+        assert(t.output_line.len == 4u && memcmp(t.output_line.data, "\\xFF", 4u) == 0);
+        assert(t.output_columns == 4u);
+        /* wide glyph: preserved, width 2 */
+        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell); t.output_columns = 0u; t.output_newlines = 0u;
+        assert(snag_term_note_output(&t, "\xe4\xb8\xad", 3u, "s") == 0);
+        assert(t.output_line.len == 3u && memcmp(t.output_line.data, "\xe4\xb8\xad", 3u) == 0);
+        assert(t.output_columns == 2u && t.output_cell_width == 2u);
+        /* newline resets the line model and is counted */
+        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell); t.output_columns = 0u; t.output_newlines = 0u;
+        assert(snag_term_note_output(&t, "ab\n", 3u, "s") == 0);
+        assert(t.output_columns == 0u && t.output_line.len == 0u && t.output_newlines == 1u);
+        snag_term_close(&t);
+    }
     puts("test_render: ok");
     return 0;
 }
