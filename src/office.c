@@ -214,6 +214,7 @@ char *snag_office_command(const char *program,const char *root)
 }
 
 /* Shared by both Office backends: the document types the modality claims. */
+#if SNAJPAGENT_OFFICE || SNAJPAGENT_OFFICE_COMMANDS
 static bool office_type(const char *mime)
 {
     return mime && (!strcmp(mime,"application/vnd.openxmlformats-officedocument.wordprocessingml.document") ||
@@ -223,6 +224,7 @@ static bool office_type(const char *mime)
         !strcmp(mime,"application/vnd.oasis.opendocument.presentation") ||
         !strcmp(mime,"application/vnd.oasis.opendocument.spreadsheet"));
 }
+#endif
 
 #if SNAJPAGENT_OFFICE
 #define LOK_USE_UNSTABLE_API
