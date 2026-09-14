@@ -9,8 +9,9 @@
   type and sequence, so a crash report is diagnostic without a debug build.
 - Freeze a locked goal against model changes: a lock now refuses every
   model-originated transition (rewording, pausing, resuming, completing,
-  blocking, cancelling), enforced in the tool and again in the store, so only
-  the operator can change a locked goal.
+  blocking, cancelling) in the tool before dispatch, and in the store wherever
+  the event names the model as actor, so only the operator can change a locked
+  goal.
 - Let `-m` take the catalogue index the numbered model listing prints (`-m 3` or
 `-m '#3'`), not only a name, so a selector copied from the listing resolves to
   the entry it named; an out-of-range index now fails instead of being sent
