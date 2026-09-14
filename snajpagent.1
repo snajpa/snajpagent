@@ -3027,8 +3027,9 @@ when the tool succeeds.
 .B update_goal
 requires action; text depends on the action. Rewrite requires new wording; complete
 accepts omitted or null text; block requires a specific reason.  Only an active goal
-advertises it.  A wording lock rejects model rewording, not completion or
-blocking; the operator retains explicit control through slash commands.
+advertises it.  A wording lock refuses the model's rewording, blocking and
+cancelling while completion and resume stay available; the operator retains
+explicit control through slash commands.
 .SS Model IRC controls
 .B irc_state
 accepts an empty object and reports the actual current destinations and room
