@@ -2656,7 +2656,12 @@ is irrelevant. Omitted optional controls use their documented defaults;
 nullable fields also accept JSON null. The string "null" remains literal data.
 Fixed policy uses system messages for every provider. Each model request ends
 with an explicit developer-level host continuation, separate from operator input
-and approval. Saved reasoning stays in its compatible order before this boundary;
+and approval. Automatic goal turns additionally carry a labelled host request in
+the user-role conversation slot. It keeps the current goal request alongside
+retained history when a gateway moves instruction messages out of the input.
+This transport marker creates no operator input, approval, receipt timestamp or
+goal transition; paused goals remain paused on resume. Saved reasoning stays in
+its compatible order before the developer boundary;
 history with non-thinking replies also remains resumable. Summary requests use
 the same separation. User requests and tool results retain their provenance.
 Media parameter descriptions include crop and sheet coordinates, index origins,

@@ -160,17 +160,20 @@ When a model turn ends:
 
 Goal state, wording changes, locks, blockers, and status transitions are
 append-only session events. Resume reconstructs them from the same validated
-event log as turns and tools. Synthetic continuation turns are identified as
-goal turns in that log and do not masquerade as new user messages.
+event log as turns and tools. Synthetic continuation turns remain identified as
+goal turns in that log. For provider transport, each goal request uses a labelled
+host-continuation message in the user-role input slot. This keeps the current
+goal request in the conversation when gateways move developer/system messages
+into top-level instructions, including when previous assistant replies remain.
+Historical markers stay history; restoring them never resumes a paused goal.
 
-Gateways may move developer/system messages into top-level instructions. When
-compaction leaves only those messages, request projection adds one labelled
-host-continuation marker in the user-role input slot. It is transport input,
-not a new operator message: it carries no new task, approval, receipt timestamp
-or goal transition. Existing instruction roles and compact output remain intact.
-The marker is regenerated only when needed, included in request hashes/counts,
-and omitted whenever user, assistant or tool conversation remains. Responses
-compaction uses the same rule for instruction-only source context.
+The same labelled input is used as a fallback when compaction leaves only
+instruction messages. That fallback is added only when no user, assistant or
+tool conversation remains; Responses compaction follows the same rule. Both
+forms are transport input, not new operator messages: they add no task, approval,
+receipt timestamp or goal transition. They are included in request hashes/counts.
+The final developer-level response boundary and compatible reasoning remain
+intact. Pause, read-only, queued work and frozen-turn rules remain unchanged.
 
 Restoration is separate from continuation. Reopening a session automatically
 displays its saved goal, wording, status, revision, lock and blocker, even when

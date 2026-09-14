@@ -145,8 +145,8 @@ class FakeResponses:
         for item in reversed(request.get("input", [])):
             if item.get("role") == "user" and isinstance(item.get("content"), str):
                 content = item["content"]
-                if content.startswith("[IRC room snapshot;"):
-                    continue  # Runtime state, including offline resume, is not a new task.
+                if content.startswith(("[IRC room snapshot;", "[snajpagent host continuation —")):
+                    continue  # Host context/continuation is not new operator input.
                 if content.startswith("[IRC endpoint=") and " id=" in content:
                     continue  # Supplemental durable event, not a new scheduler turn.
                 ids = re.findall(r"\[IRC update id=([^ ]+)", content)
@@ -5642,6 +5642,104 @@ def run_assistant_phase_case(binary, root):
         provider.close()
 
 
+def gateway_conversation(request):
+    """Retain conversation after a gateway hoists text-only instruction messages."""
+    return [i for i in request.get("input", []) if not (
+        i.get("type", "message") == "message" and
+        i.get("role") in ("developer", "system") and isinstance(i.get("content"), str))]
+
+
+def run_goal_request_boundary_cases(binary, root, modes=("next", "recovery", "resume")):
+    marker = "[snajpagent host continuation — not a new user message]\n"
+    for mode in modes:
+        case = root / ("goal-input-" + mode)
+        workspace = case / "w"
+        workspace.mkdir(mode=0o700, parents=True)
+        state, config = case / "s", case / "c.ini"
+        provider = FakeResponses()
+        write_irc_config(config, provider.port, "host-model")
+        environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret")
+        requests, counts, missing = [], [], []
+        held, release = threading.Event(), threading.Event()
+        terminal = None
+
+        def respond(handler, request, sequence):
+            requests.append(request)
+            active = any(i.get("role") == "system" and
+                i.get("content", "").startswith("Persistent goal ") and
+                " is active " in i["content"] for i in request["input"])
+            if not active:
+                text = "goal request boundary done" if counts else "retained historical reply"
+                body = provider.response_body(sequence, text)
+            else:
+                conversation = gateway_conversation(request)
+                # A current runtime snapshot can follow the request on resume.
+                # The goal must survive hoisting after the last assistant reply;
+                # a historical marker before that reply does not supply new work.
+                goal_index = max((i for i, item in enumerate(conversation)
+                    if item.get("role") == "user" and item.get("content", "").startswith(marker)
+                    and item["content"].endswith("Continue the active goal from its durable state.")), default=-1)
+                assistant_index = max((i for i, item in enumerate(conversation)
+                    if item.get("role") == "assistant"), default=-1)
+                if goal_index <= assistant_index:
+                    missing.append(request)
+                counts.append(sum(i.get("role") == "user" and
+                    i.get("content", "").startswith(marker) for i in conversation))
+                attempt = len(counts)
+                if attempt == 1:
+                    # Retained assistant text must not become the next request.
+                    body = provider.response_body(sequence, "Acknowledged the host metadata.")
+                elif mode == "resume" and attempt == 2:
+                    held.set()
+                    release.wait(12)
+                    handler.close_connection = True
+                    return
+                elif mode == "recovery" and attempt == 2:
+                    body = provider.event("response.failed", {"response": {"error": {
+                        "code": "upstream_unavailable", "message": "retry this goal request"}}})
+                else:
+                    body = provider.function_body(sequence, "goal_done", "update_goal",
+                        {"action": "complete", "text": None})
+            provider.reply(handler, body.encode(), close_header=True)
+            handler.close_connection = True
+
+        provider.runtime_handler = respond
+        try:
+            terminal = TmuxTerminal(case / "t", binary, workspace, state, config, 130, 28,
+                args=("--no-listen", "--no-client"), environment=environment)
+            terminal.wait("host-model/medium")
+            terminal.submit_wait("seed goal boundary", "retained historical reply")
+            terminal.submit_wait("/goal regression continue the durable objective", "Goal set")
+            if mode == "resume":
+                assert held.wait(10), terminal.capture()
+                sid = read_events(state)[0].parent.name
+                terminal.exit()
+                terminal.close()
+                release.set()
+                terminal = TmuxTerminal(case / "r", binary, workspace, state, config, 130, 28,
+                    args=("--no-listen", "--no-client", "--resume", sid), environment=environment)
+            terminal.wait("goal request boundary done", timeout=25)
+            assert not missing, ("automatic goal request vanished from the gateway conversation",
+                [[(i.get("role"), i.get("type"), str(i.get("content", ""))[:180])
+                  for i in gateway_conversation(r)[-5:]] for r in missing], counts)
+            assert counts == ([1, 2] if mode == "next" else [1, 2, 2]), counts
+            _, events = read_events(state)
+            assert len(event_list(events, "goal_completed")) == 1
+            assert not event_list(events, "goal_paused")
+            assert not event_list(events, "goal_blocked")
+            assert len([e for e in event_list(events, "turn_started") if e["data"]["input_kind"] == "goal"]) == 2
+            for request in requests:
+                assert request["input"][-1]["role"] == "developer"
+                assert request["input"][-1]["content"].startswith("Host continuation:")
+            terminal.exit()
+            print("goal request boundary " + mode + ": ok", flush=True)
+        finally:
+            release.set()
+            if terminal is not None:
+                terminal.close()
+            provider.close()
+
+
 def run_goal_recovery_cases(binary, root, provider, environment):
     for mode in ("capacity", "snapshot", "steer", "cancel", "running"):
         case = root / ("gr-" + mode)
@@ -6201,10 +6299,7 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
         def respond(handler, request, sequence):
             # Common Responses gateways lift text-only developer/system messages
             # into instructions. Seven instruction items can still yield input=[].
-            conversation = [i for i in request.get("input", []) if not (
-                i.get("type", "message") == "message" and
-                i.get("role") in ("developer", "system") and
-                isinstance(i.get("content"), str))]
+            conversation = gateway_conversation(request)
             if not conversation:
                 rejected.append(request)
                 send(handler, json.dumps({"error": {"code": "missing_required_parameter",
@@ -6291,18 +6386,20 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
             assert goal_requests
             for request in goal_requests:
                 markers = [i for i in request["input"] if i.get("content", "").startswith(marker)]
-                assert len(markers) <= 1, "continuation markers accumulated across retries"
+                assert len(markers) == 1, "current goal request missing or duplicated across retries"
+                assert markers[0]["role"] == "user"
+                fallbacks = [i for i in markers if "Continue from the existing instructions" in i["content"]]
                 original_inputs = [i for i in request["input"] if i.get("role") == "user" and
                                    not i.get("content", "").startswith(marker)]
                 if original_inputs:
-                    assert not markers, "added synthetic input alongside real conversation"
+                    assert not fallbacks, "added an empty-input fallback alongside conversation"
                 assert request["input"][-1]["role"] == "developer"
                 assert request["input"][-1]["content"].startswith("Host continuation:")
                 if mode in ("resume", "manual"):
-                    # Summary text is untrusted conversation data, so it already
-                    # supplies input after instruction hoisting; no empty-input
-                    # marker is needed beside it.
-                    assert not markers
+                    # Summary data already supplies nonempty input. The current
+                    # goal request still needs its own conversation-level anchor.
+                    assert not fallbacks
+                    assert "Continue the active goal" in markers[0]["content"]
                     assert "seed-user-café" not in json.dumps(request["input"], ensure_ascii=False)
                     assert not any(i.get("content", "").startswith("[snajpagent input metadata")
                                    for i in request["input"]), "host marker acquired user timing"
@@ -7754,6 +7851,7 @@ def run_irc_case(binary, root):
     try:
         run_token_accounting_cases(binary, root / "token-accounting")
         run_assistant_phase_case(binary, root)
+        run_goal_request_boundary_cases(binary, root)
         run_goal_recovery_cases(binary, root, provider, environment)
         run_queue_dispatch_retry_case(binary, root)
         for active, chat, width, verbosity in ((False, False, 100, 0), (False, True, 28, 2),

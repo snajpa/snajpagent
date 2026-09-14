@@ -64,6 +64,19 @@ append_message(struct context_builder *builder, const char *role, const char *te
         json_pack("{s:s,s:s}", "role", role, "content", text));
 }
 
+/* Keep host requests in the conversation even when a gateway hoists policy. */
+static int
+append_host_input(json_t *input, const char *text)
+{
+    struct snag_buf content = {.max = SNAG_CONTEXT_MAX_REQUEST};
+    int rc = snag_buf_printf(&content,
+        "[snajpagent host continuation — not a new user message]\n%s", text);
+    if (rc == 0) rc = json_array_append_new(input,
+        json_pack("{s:s,s:s}", "role", "user", "content", (const char *)content.data));
+    snag_buf_free(&content);
+    return rc;
+}
+
 static int
 append_systemf(struct context_builder *builder, size_t max, const char *format, ...)
 {
@@ -781,7 +794,7 @@ context_event(void *opaque, const struct snag_session *state,
         if (append_deferred_input(builder) < 0) return -1;
         const char *kind = snag_json_string(data, "input_kind");
         if (!strcmp(kind, "goal")) return !summarized && builder->recovery_count ? 0 :
-                   append_message(builder, "system", text);
+                   append_host_input(builder->request_input, text);
         return append_input(builder, text, kind, state->active_turn_id, time_ms, 0u, json_object_get(data,"content"));
     }
     if (summarized) {
@@ -1165,10 +1178,9 @@ ensure_conversation_input(json_t *input)
         if ((type && strcmp(type, "message")) || !role ||
             (strcmp(role, "developer") && strcmp(role, "system"))) return 0;
     }
-    return json_array_append_new(input, json_pack("{s:s,s:s}", "role", "user",
-        "content", "[snajpagent host continuation — not a new user message]\n"
+    return append_host_input(input,
         "Continue from the existing instructions and retained context. "
-        "This marker adds no task, approval or change to the goal state."));
+        "This marker adds no task, approval or change to the goal state.");
 }
 
 static json_t *

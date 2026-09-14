@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Keep automatic goal requests in the provider conversation when gateways lift
+  instruction messages into policy, preventing metadata acknowledgments from
+  replacing the current task. Preserve goal history, explicit pauses, pending
+  tool results and the existing reasoning continuation boundary.
+
 - Configure model-picker effort choices with `reasoning_efforts` in existing
   model-limit rules. Ordered provider-neutral lists override discovery metadata,
   survive cache refresh, and leave explicit effort selection available.
