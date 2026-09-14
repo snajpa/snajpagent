@@ -14,10 +14,15 @@
   runtime provides one keeps it enabled.
 - Build the Nix Linux release artifacts without linked Office import
   (`WITH_OFFICE=0`). The Office dependency in that closure is a static kit whose
-  archives would have to be linked into the artifact, and an installed runtime is
-  never bundled;
+  archives would have to be linked into the artifact, and an installed runtime
+  is never bundled;
   host builds keep the default and load a separately installed runtime via
   `OFFICE_ROOT`.
+- Add the commanded Office engine (`WITH_OFFICE_COMMANDS=1`): it links no Office
+  library, prepares a private profile, resolves an installed `soffice` at run
+  time from PATH and the usual and versioned installation roots, exports
+  page-range PDF, and refuses sheet-area selection and out-of-range pages with a
+  clear message because the command line has no equivalent for them.
 - Add a `./configure` entry point that probes the compiler and the four optional
   modalities, tunes the tracked `config.mk`, and prints what it enabled and what
   it disabled with the reason. A component that is not found disables its

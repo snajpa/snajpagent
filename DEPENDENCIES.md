@@ -203,12 +203,11 @@ runtime closure remains unfinished.
 `./configure` detects the toolchain and the four optional modalities and tunes
 the tracked `config.mk`; a component it cannot find is disabled and reported,
 and its `--require-*` option turns that absence into a clear failure. A distro
-A distro recipe's GNU directory flags such as `--bindir`, `--libdir` or
-`--sysconfdir` are not accepted and exit 2 with the usage text, and
-`--host=<native triple>` exits 1
-unless that triple's cross compiler exists, because the script looks for
-`<triple>-gcc` or an explicit `--cc`; every rejection leaves the tracked
-`config.mk` byte-identical. Export
+recipe's GNU packaging flags are accepted and noted: the standard directory and
+Autoconf-style options are ignored, `--mandir` is a synonym for `--manprefix`,
+and `--host=<this machine>` is treated as native, while the install layout stays
+`--prefix` and `--manprefix`. An option the script does not know still exits 2
+with the usage text and leaves the tracked `config.mk` byte-identical. Export
 `PKG_CONFIG_PATH` for the build as well as for the probe: without it a probe
 finds nothing and turns the tracked modality keys off. That export serves `make`
 too, and a linked profile whose libraries sit outside the default search path
@@ -284,9 +283,9 @@ feature macro when replacing CPPFLAGS. This does not enlarge a 32-bit address
 space or claim that every old kernel supports modern time/thread APIs.
 
 The Nix-built Linux release artifacts set `WITH_OFFICE=0`: that closure's Office
-dependency is a static LibreOfficeKit whose archives would have to be linked into
-the artifact, since the runtime-style `-lsofficeapp` link finds no shared library
-there, and an installed runtime is never bundled. Host builds keep
+dependency is a static LibreOfficeKit whose archives would have to be linked
+into the artifact, since the runtime-style `-lsofficeapp` link finds no shared
+library there, and an installed runtime is never bundled. Host builds keep
 `WITH_OFFICE=1` and link a separately installed runtime through `OFFICE_ROOT`.
 
 `make prod-linux-ppc32` uses the pinned big-endian PowerPC musl toolchain,
