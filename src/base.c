@@ -621,3 +621,31 @@ snag_rate_microtokens_per_second(uint64_t tokens, uint64_t elapsed_ms)
     if (tokens > UINT64_MAX / 1000000000u) return UINT64_MAX;
     return (tokens * 1000000000u) / elapsed_ms;
 }
+
+void
+snag_format_count(char *out, size_t size, uint64_t value)
+{
+    static const char *const units[] = { "", "k", "M", "G", "T", "P" };
+    uint64_t scaled = value, remainder = 0u;
+    size_t unit = 0u;
+
+    if (!out || size == 0u) return;
+    out[0] = '\0';
+    while (scaled >= 1000u && unit + 1u < sizeof(units) / sizeof(units[0])) {
+        remainder = scaled % 1000u;
+        scaled /= 1000u;
+        ++unit;
+    }
+    if (unit == 0u) {
+        (void)snprintf(out, size, "%llu", (unsigned long long)value);
+        return;
+    }
+    /* Round to one decimal so a counter reads the way a person would say it. */
+    uint64_t tenths = (remainder * 10u + 500u) / 1000u;
+    if (tenths >= 10u) {
+        ++scaled;
+        tenths = 0u;
+    }
+    (void)snprintf(out, size, "%llu.%01llu%s", (unsigned long long)scaled,
+                   (unsigned long long)tenths, units[unit]);
+}

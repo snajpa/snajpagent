@@ -995,25 +995,32 @@ render_status(struct app_state *app)
     }
       if (app->session.usage_totals.responses) {
           const struct snag_usage_totals *totals = &app->session.usage_totals;
+          char counted[5][24];
+          snag_format_count(counted[0], sizeof(counted[0]), totals->responses);
+          snag_format_count(counted[1], sizeof(counted[1]), totals->input_tokens);
+          snag_format_count(counted[2], sizeof(counted[2]), totals->cached_input_tokens);
+          snag_format_count(counted[3], sizeof(counted[3]), totals->uncached_input_tokens);
+          snag_format_count(counted[4], sizeof(counted[4]), totals->output_tokens);
           if (snag_buf_printf(&text,
-                  "\nsession usage: %llu responses · input=%llu tokens (cached=%llu, uncached=%llu) · output=%llu",
-                  (unsigned long long)totals->responses, (unsigned long long)totals->input_tokens,
-                  (unsigned long long)totals->cached_input_tokens,
-                  (unsigned long long)totals->uncached_input_tokens,
-                  (unsigned long long)totals->output_tokens) < 0) goto out;
+                  "\nsession usage: %s responses · input %s tokens (cached %s, uncached %s) · output %s",
+                  counted[0], counted[1], counted[2], counted[3], counted[4]) < 0) goto out;
           if (!totals->cached_seen && snag_buf_append(&text,
                   "\ncache: the provider reported no cached input tokens in this session",
-                  strlen("\ncache: the provider reported no cached input tokens in this session")) < 0) goto out;
+                  strlen("\ncache: the provider reported no cached input tokens in this session")) < 0)
+              goto out;
       }
       if (app->program_usage.responses) {
           const struct snag_usage_totals *program = &app->program_usage;
+          char counted[6][24];
+          snag_format_count(counted[0], sizeof(counted[0]), program->responses);
+          snag_format_count(counted[1], sizeof(counted[1]), program->input_tokens);
+          snag_format_count(counted[2], sizeof(counted[2]), program->cached_input_tokens);
+          snag_format_count(counted[3], sizeof(counted[3]), program->uncached_input_tokens);
+          snag_format_count(counted[4], sizeof(counted[4]), program->output_tokens);
+          snag_format_count(counted[5], sizeof(counted[5]), program->total_tokens);
           if (snag_buf_printf(&text,
-                  "\nprogram usage: %llu responses · input=%llu tokens (cached=%llu, uncached=%llu) · output=%llu · total=%llu",
-                  (unsigned long long)program->responses, (unsigned long long)program->input_tokens,
-                  (unsigned long long)program->cached_input_tokens,
-                  (unsigned long long)program->uncached_input_tokens,
-                  (unsigned long long)program->output_tokens,
-                  (unsigned long long)program->total_tokens) < 0) goto out;
+                  "\nprogram usage: %s responses · input %s tokens (cached %s, uncached %s) · output %s · total %s",
+                  counted[0], counted[1], counted[2], counted[3], counted[4], counted[5]) < 0) goto out;
       }
       if (app->turn_started_ms) {
           uint64_t now = snag_monotonic_ms();
@@ -1021,12 +1028,17 @@ render_status(struct app_state *app)
           uint64_t turn_milli = snag_rate_microtokens_per_second(app->turn_output_tokens, turn_ms) / 1000u;
           uint64_t last_milli = snag_rate_microtokens_per_second(app->last_response_output_tokens,
                                                                 app->last_response_ms) / 1000u;
-          if (snag_buf_printf(&text,
-                  "\nspeed: this turn %llu.%01llu tok/s over %llu.%01llu s · last response %llu.%01llu tok/s",
-                  (unsigned long long)(turn_milli / 1000u), (unsigned long long)((turn_milli % 1000u) / 100u),
-                  (unsigned long long)(turn_ms / 1000u), (unsigned long long)((turn_ms % 1000u) / 100u),
-                  (unsigned long long)(last_milli / 1000u), (unsigned long long)((last_milli % 1000u) / 100u)) < 0)
-              goto out;
+          char turn[96], last[64];
+          if (turn_ms < 1000u) (void)snprintf(turn, sizeof(turn), "too early to rate");
+          else (void)snprintf(turn, sizeof(turn), "%llu.%01llu tok/s over %llu.%01llu s",
+                              (unsigned long long)(turn_milli / 1000u),
+                              (unsigned long long)((turn_milli % 1000u) / 100u),
+                              (unsigned long long)(turn_ms / 1000u),
+                              (unsigned long long)((turn_ms % 1000u) / 100u));
+          (void)snprintf(last, sizeof(last), "%llu.%01llu tok/s",
+                         (unsigned long long)(last_milli / 1000u),
+                         (unsigned long long)((last_milli % 1000u) / 100u));
+          if (snag_buf_printf(&text, "\nspeed: this turn %s · last response %s", turn, last) < 0) goto out;
       }
     if (app->irc && (snag_buf_putc(&text, '\n') < 0 || snag_irc_state(app->irc, &text, NULL, 0u) < 0))
         goto out;

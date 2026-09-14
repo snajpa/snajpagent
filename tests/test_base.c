@@ -3288,6 +3288,16 @@ test_rate_math(void)
     assert(snag_rate_microtokens_per_second(1u, 2000u) == 500000u);
     assert(snag_rate_microtokens_per_second(3u, 1000u) == 3000000u);
     assert(snag_rate_microtokens_per_second(UINT64_MAX, 1u) == UINT64_MAX);
+    {
+        char out[24];
+        snag_format_count(out, sizeof(out), 0u); assert(!strcmp(out, "0"));
+        snag_format_count(out, sizeof(out), 999u); assert(!strcmp(out, "999"));
+        snag_format_count(out, sizeof(out), 1000u); assert(!strcmp(out, "1.0k"));
+        snag_format_count(out, sizeof(out), 15104u); assert(!strcmp(out, "15.1k"));
+        snag_format_count(out, sizeof(out), 807384372u); assert(!strcmp(out, "807.4M"));
+        snag_format_count(out, sizeof(out), 1500000000u); assert(!strcmp(out, "1.5G"));
+        snag_format_count(out, sizeof(out), 4823276u); assert(!strcmp(out, "4.8M"));
+    }
 }
 
 int

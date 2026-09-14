@@ -117,6 +117,8 @@ uint64_t snag_time_ms(void);
 uint64_t snag_monotonic_ms(void);
 /* Throughput in milli-tokens per second; 0 when nothing is measurable. */
 uint64_t snag_rate_microtokens_per_second(uint64_t tokens, uint64_t elapsed_ms);
+/* Compact human form of a counter: 0, 999, 1.0k, 807.4M. */
+void snag_format_count(char *out, size_t size, uint64_t value);
 int snag_sleep_ms(unsigned int milliseconds);
 void snag_ignore_sigpipe(void);
 bool snag_text_locale_init(void);
