@@ -538,10 +538,11 @@ snag_app_goal_tool(struct app_state *app, const struct snag_response_item *call,
         !snag_json_arg_text(call->arguments, "action", 1u, 8u, false, &action, error, error_size))
         return tool_result(false, error, result);
     text_value = json_object_get(call->arguments, "text");
-    /* An operator lock freezes the goal for the model: it may not reword it, block
-     * it, complete it, resume it or cancel it. The store enforces the same rule, so
-     * a locked goal stays frozen even if a future caller forgets this check. */
-    if (app->session.goal_locked)
+    /* An operator lock freezes the objective: the model may not reword or block a
+     * locked goal. Finishing it stays allowed, so a locked goal can still be brought
+     * to a successful end rather than staying active forever; the store enforces the
+     * same rule, so a future caller that forgets this check changes nothing. */
+    if (app->session.goal_locked && (strcmp(action, "rewrite") == 0 || strcmp(action, "block") == 0))
         return tool_result(false, "goal is locked by the operator; only the operator can change it", result);
     if (!snag_goal_unfinished(app->session.goal_status))
         return tool_result(false, "there is no unfinished goal to update", result);
