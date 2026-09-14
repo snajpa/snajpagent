@@ -118,6 +118,23 @@ External evidence still required for stronger platform claims includes actual
 macOS execution and broader Windows desktop/legacy coverage. These disclosed
 gaps do not prevent shipping explicitly experimental builds under RELEASE.md.
 
+For 0.99.6, `PROD_TARGETS` is seventeen entries and three targets are explicitly deferred inside the tagged
+tree — `linux-i686-legacy`, `linux-riscv64` and `linux-ppc32` — each with its reason recorded in the Makefile
+and restated in the release table, the release notes and the download page. Build evidence for this release is
+artifact-level: every shipped executable was verified by size, update marker and embedded version, which is
+build evidence and not runtime testing, and no new operating-system or kernel runtime qualification was
+performed. Linux x86-64 carries the release's one live-provider result — the prompt-cache reuse measurement,
+87.5% of input tokens served from cache against 30.0% before the change in a single session — which is
+live-provider evidence for that host and provider only. The i686 target is now linked static non-PIE after the
+pinned FFmpeg's CELT object refused a static-PIE link; the RISC-V target's FFmpeg wall was fixed before the
+target was deferred at the wall behind it; and the 32-bit big-endian PowerPC target fails at a link its pinned
+toolchain resolves through the 32-bit powerpc CRT/spec, which introduces a reference to
+`__stack_chk_fail_local` (the package's own object carries no such undefined reference) that musl does not
+provide. A remedy shape is identified for that last one — supplying the alias, which keeps stack protection;
+rebuilding without stack protection also links but drops it — and the fix is carried into the development
+build, where the next item to check is boost's `No best alternative for libs/mpi/build/boost_mpi` line.
+Prior platform evidence above retains its original scope.
+
 ## Documentation and current-source coverage
 
 The current manual and design contracts are checked against source behavior;
