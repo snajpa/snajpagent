@@ -332,6 +332,19 @@ output_column_add(struct snag_term *term, size_t width)
     term->output_columns += width;
 }
 
+/* True when append_safe(..., prompt=false, columns=0, indent=0) would be byte-identical to its
+ * input: printable ASCII and newlines only. Tabs, carriage returns and other controls, DEL, C1,
+ * invalid UTF-8, every non-ASCII codepoint and format-unsafe text keep the escaping path. */
+static bool
+plain_ascii(const char *text, size_t len)
+{
+    const unsigned char *bytes = (const unsigned char *)text;
+
+    for (size_t i = 0u; i < len; ++i)
+        if (bytes[i] != '\n' && (bytes[i] < 0x20u || bytes[i] > 0x7eu)) return false;
+    return true;
+}
+
 int
 snag_term_note_output(struct snag_term *term, const char *text, size_t len, const char *style)
 {
@@ -347,11 +360,21 @@ snag_term_note_output(struct snag_term *term, const char *text, size_t len, cons
         (unsigned int)trailing + term->output_newlines : (unsigned int)trailing;
     if (term->output_newlines > 2u) term->output_newlines = 2u;
     if (!term->opened || !term->capable) return 0;
-    struct snag_buf safe = {.max = len * 8u + 32u};
-    if (snag_term_append_safe(&safe, text, len) < 0) goto out;
-    for (size_t i = 0u; i < safe.len;) {
+    /* One scan decides whether the escaping pass has anything to do; when it does not, the
+     * accounting loop runs over the caller's bytes, saving a glyph-by-glyph pass and the scratch
+     * buffer. */
+    const unsigned char *bytes = (const unsigned char *)text;
+    size_t bytes_len = len;
+    struct snag_buf safe = {0};
+    if (!plain_ascii(text, len)) {
+        safe.max = len * 8u + 32u;
+        if (snag_term_append_safe(&safe, text, len) < 0) goto out;
+        bytes = safe.data;
+        bytes_len = safe.len;
+    }
+    for (size_t i = 0u; i < bytes_len;) {
         uint32_t cp;
-        size_t n = snag_utf8_decode(safe.data + i, safe.len - i, &cp);
+        size_t n = snag_utf8_decode(bytes + i, bytes_len - i, &cp);
         int width = cp == '\n' ? 0 : snag_char_width(cp);
 
         if (cp == '\n') {
@@ -365,8 +388,8 @@ snag_term_note_output(struct snag_term *term, const char *text, size_t len, cons
                 snag_buf_reset(&term->output_cell);
                 (void)snag_strcpy(term->output_cell_style, sizeof(term->output_cell_style), style);
             }
-            if (snag_buf_append(&term->output_cell, safe.data + i, n) < 0 ||
-                snag_buf_append(&term->output_line, safe.data + i, n) < 0) goto out;
+            if (snag_buf_append(&term->output_cell, bytes + i, n) < 0 ||
+                snag_buf_append(&term->output_line, bytes + i, n) < 0) goto out;
         }
         i += n;
     }
