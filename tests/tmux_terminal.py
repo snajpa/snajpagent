@@ -3315,6 +3315,61 @@ def run_destination_case(binary, root, provider, environment):
             terminal.close()
 
 
+def run_destination_reconnect_case(binary, root, provider, environment):
+    """A reconnect that advertises a different room keeps the selection usable."""
+    case = root / "destination-reconnect"
+    endpoint = f"127.0.0.1:{free_loopback_port()}"
+    terminals = []
+
+    def start(name, model, args):
+        unit = case / name
+        workspace, config = irc_workspace(unit / "work", provider.port, model)
+        terminal = TmuxTerminal(unit / "terminal", binary, workspace,
+            unit / "state", config, 100, 24, args=args, environment=environment)
+        terminals.append(terminal)
+        if "-c" in args:
+            terminal.wait("── history replayed ──")
+        return terminal
+
+    try:
+        host = start("host", "host-model",
+            ["-s", endpoint, "-n", "hostbot", "-o", "hostop", "-r", "alpha"])
+        client = start("client", "one-model",
+            ["-c", endpoint, "-n", "clientbot", "-o", "clientop"])
+        host.wait("clientop joined")
+        client.wait("clientop joined")
+        client.submit("reconnect-before")
+        host.wait("reconnect-before")
+
+        # The room the endpoint advertises changes while the client is selected
+        # on it. The selection must keep working instead of staying unavailable.
+        host.exit()
+        replacement = start("replacement", "host-model",
+            ["-s", endpoint, "-n", "hostbot", "-o", "hostop", "-r", "gamma"])
+        replacement.wait("clientop joined")
+        client.wait("clientop joined", timeout=20.0, join_wrapped=True)
+        client.submit("reconnect-after")
+        deadline = time.monotonic() + 20.0
+        delivered = False
+        while time.monotonic() < deadline:
+            delivered = "reconnect-after" in replacement.capture()
+            if delivered:
+                break
+            time.sleep(0.05)
+        screen = client.capture(join_wrapped=True)
+        assert delivered, screen
+        assert "not performed" not in screen, screen
+        for terminal in reversed(terminals):
+            if not terminal.dead():
+                terminal.send_key("C-u")
+                terminal.send_key("C-d")
+                terminal.wait_dead()
+        print("tmux_terminal destination reconnect: ok", flush=True)
+    finally:
+        for terminal in reversed(terminals):
+            terminal.close()
+
+
 def run_listener_collision_case(binary, root, provider, environment):
     endpoint = f"localhost:{free_loopback_port()}"
     terminals = []
@@ -7654,6 +7709,7 @@ def run_irc_case(binary, root):
         run_runtime_boundary_cases(binary, root, provider, environment)
         run_runtime_history_case(binary, root, provider, environment)
         run_destination_case(binary, root, provider, environment)
+        run_destination_reconnect_case(binary, root, provider, environment)
         run_listener_collision_case(binary, root, provider, environment)
         run_resume_network_pairing_case(binary, root, provider, environment)
         run_argument_snapshot_cases(binary, root, provider, environment)

@@ -242,8 +242,17 @@ snag_term_set_destinations(struct snag_term *term, const struct snag_irc_destina
         if (!term->destinations) return -1;
     }
     *term->destinations = *destinations;
-    if (!term->destination.id && !term->draft.len && destinations->count)
+    if (term->destination.id) {
+        /* A number names the same endpoint across topology changes; adopt its
+         * fresh revision so ordinary chat keeps targeting the selection. */
+        for (size_t i = 0u; i < destinations->count; ++i)
+            if (destinations->items[i].target.id == term->destination.id) {
+                term->destination = destinations->items[i].target;
+                break;
+            }
+    } else if (!term->draft.len && destinations->count) {
         term->destination = destinations->items[0].target;
+    }
     return redraw(term);
 }
 

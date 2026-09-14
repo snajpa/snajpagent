@@ -12,6 +12,14 @@
   throughput figure back until a turn has run for a second, so a long resumed session can no longer
   fill `/status` with nine-digit numbers that read as noise.
 
+- Keep ordinary chat on its selected destination after a topology change: the
+  terminal cached the destination's revision, so an endpoint that returned with
+  a changed advertised room left every later typed message refused as
+  "destination 1: not performed: unavailable or changed" and the prompt chip
+  reading `[1 unavailable]` until the number was reselected. A number now names
+  the endpoint, and the selection adopts the fresh target whenever the endpoint
+  republishes its topology; frozen model requests still fail individually
+  against their own revision.
 - Send a stable prompt cache key on every request, derived once from the session, provider, model
   and profile, so a provider can reuse a session's cached prefix; the compaction request, the
   largest request a session sends, carried no key at all before this.
