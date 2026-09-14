@@ -173,9 +173,9 @@ cached exact-count capability and whether a byte/token estimate has been
 learned, without turning the picker into a diagnostics dump.
 
 `/model NUMBER` selects the exact displayed row. `/model #NUMBER` is accepted
-as an equivalent explicit-number spelling. Numbering is read from the same
-cache file that was displayed, so the selected provider/model/effort triple is
-durably saved together. An index outside the displayed cache is rejected, but
+as an equivalent explicit-number spelling. Numbering follows the current cache and configuration; list again after
+refreshing or reloading before reusing a number. The selected provider/model/effort
+triple is durably saved together. An index outside the displayed cache is rejected, but
 that index check does not constrain manually entered model identifiers.
 
 Appending the separate final word `save`, or its one-letter spelling `s`, to
@@ -222,11 +222,11 @@ MODEL / EFFORT
 PROVIDER / MODEL / EFFORT
 ```
 
-- `MODEL` uses the current session provider. If that model has advertised
-  reasoning variants in the cache, snajpagent chooses the highest recognized
-  thinking level; if none can be ranked, it chooses the provider's first
-  advertised variant. If the typed model is not cached or has no advertised
-  variants, its cached default or the current session effort is retained.
+- `MODEL` uses the current session provider. A configured effort list takes
+  precedence over cached variants. snajpagent chooses the highest recognized
+  thinking level in the effective list, or its first name if none can be ranked.
+  Without listed variants, its cached default or the current session effort is
+  retained.
 - `MODEL / EFFORT` uses the current session provider and the named thinking
   level.
 - `PROVIDER / MODEL / EFFORT` uses the named configured provider and thinking

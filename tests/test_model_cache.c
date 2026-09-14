@@ -54,6 +54,7 @@ test_selectors(void)
     const char *bad[] = {"", "/m", "m/", "p//high", "p/m/high/extra", "missing/m/high"};
     snag_config_init(&config);
     config.provider_count = 2u;
+    snag_secret_source_free(&config.providers[0].api_key);
     snag_config_provider_init(&config.providers[0], "p");
     snag_config_provider_init(&config.providers[1], "q");
     const struct snag_provider_config *first = &config.providers[0];
