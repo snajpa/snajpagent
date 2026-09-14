@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Freeze a locked goal against model changes: a lock now refuses every
+  model-originated transition (rewording, pausing, resuming, completing,
+  blocking, cancelling), enforced in the tool and again in the store, so only
+  the operator can change a locked goal.
 - Let `-m` take the catalogue index the numbered model listing prints (`-m 3` or
 `-m '#3'`), not only a name, so a selector copied from the listing resolves to
   the entry it named; an out-of-range index now fails instead of being sent
@@ -63,7 +67,7 @@
   goal could not be reworded, completed, blocked again or resumed, and there was
   no model-driven resume at all even though `/goal resume` exists. Any
   unfinished goal is now manipulable; the wording lock, not the status, is what
-  stops the objective being rewritten, so no second rule is introduced.
+  stops the objective from being rewritten by the model.
 - Tolerate a repeated argument key in provider tool arguments. A provider that
   emitted the same field twice (for example two `stdin` members) made the call
   fail as "function arguments are not one strict object" and stalled the turn.
