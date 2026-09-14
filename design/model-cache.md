@@ -162,8 +162,9 @@ stored in the cache rather than inferred from filesystem metadata.
 
 The catalog begins with the selected provider, model, and reasoning effort,
 then shows one flat numbered list of discovered provider/model/reasoning
-variants. Models whose endpoint supplies no reasoning metadata still get one
-selectable row using the configured/default reasoning effort. Provider names
+variants. Models use configured effort lists when supplied. Otherwise, models whose
+endpoint supplies no reasoning metadata get one selectable row using the
+configured/default reasoning effort. Provider names
 are shown so duplicate model IDs from different providers remain distinct.
 Each model line also shows the advertised normal context, maximum context,
 maximum input, and maximum output when known; unknown facts remain visibly
@@ -186,6 +187,29 @@ the file, and creates a missing default file privately. A write failure leaves
 the current session selection unchanged. A bare `/model save` or `/model s`
 continues to mean the typed model ID `save` or `s`; the suffix is special only
 when a nonempty selector precedes it.
+
+## Configured Effort Lists
+
+An existing `[model-limit PROVIDER/MODEL]` rule can provide
+`reasoning_efforts = ["max", "high", "low", "none"]`. The value is an ordered
+JSON array with 1–32 distinct names, each 1–63 UTF-8 bytes; ASCII whitespace,
+controls and slash are invalid. The catalog and configuration share structural
+validation. Provider-defined names have no membership whitelist or wire mapping.
+
+Resolution uses the existing per-field provider defaults, matching patterns in
+file order, then exact local model rule. A configured list replaces advertised
+efforts; without one the provider's list/default and global fallback retain their
+existing behavior. An effort-only rule supplies no numeric capacity or capacity
+provenance. Aliases match their local names, not the upstream identifier.
+
+The list is applied when listing/selecting; it never mutates `models.json` and
+survives refresh and `/model ... save`. Numbered selection follows list order;
+startup `-m` with omitted effort uses the first listed name. Interactive bare
+`/model MODEL` retains highest-recognized selection, or the first unfamiliar
+name, including configured models without a downloaded cache. Explicit effort
+selection remains accepted outside the list. Reload applies new metadata while
+preserving the current preference and frozen active turn; malformed configuration
+leaves the prior configuration active. Config rules alone do not discover models.
 
 ## Typed Selector Grammar
 

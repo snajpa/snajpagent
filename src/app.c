@@ -1382,11 +1382,12 @@ select_typed_model(struct app_state *app, char *value, bool save)
     }
     {
         char ignored[256] = {0};
-        if (snag_model_cache_load(&app->store, &app->model_cache, ignored, sizeof(ignored)) == 0) {
-            const json_t *cached = snag_model_metadata(&app->model_cache, provider, model);
-            known_in_cache = cached != NULL;
-            if (count == 1u) effort = snag_model_cache_best_effort(cached, resolve_effort(effort));
-        }
+        const json_t *cached = NULL;
+        if (snag_model_cache_load(&app->store, &app->model_cache, ignored, sizeof(ignored)) == 0)
+            cached = snag_model_metadata(&app->model_cache, provider, model);
+        known_in_cache = cached != NULL;
+        if (count == 1u)
+            effort = snag_model_best_effort(app->config, provider->name, model, cached, resolve_effort(effort));
     }
     return commit_model_selection(app, provider, model, resolve_effort(effort), known_in_cache, save);
 }

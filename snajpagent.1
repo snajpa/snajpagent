@@ -1995,7 +1995,7 @@ Up to 128 rules are accepted.
 Set provider-wide defaults with [model-limit PROVIDER], patterned rules with
 [model-limit PROVIDER/PATTERN], and exact rules with [model-limit PROVIDER/MODEL].
 The first slash separates the provider; remaining slashes belong to the model.
-Set at least one of:
+Set at least one numeric field below or reasoning_efforts:
 .TP
 .B context_window_tokens
 Total context tokens, 1 through 4000000000.
@@ -2011,6 +2011,34 @@ exact model. The star matches zero or more characters over the whole local
 model name. Duplicate targets/keys are errors. Unspecified fields inherit
 catalog metadata. Explicit values supersede the catalog, but output headroom
 and learned backend ceilings still constrain usable input.
+.PP
+.B reasoning_efforts
+sets an ordered JSON array of effort names for the model picker, for example:
+.PP
+.nf
+[model-limit example/fast-model]
+reasoning_efforts = ["max", "high", "low", "none"]
+.fi
+.PP
+The list overrides the provider's advertised efforts, including when discovery
+supplies none. It uses the same provider/pattern/exact precedence as the numeric
+fields and may be the only setting in a rule. Aliases match their local names.
+Lists contain 1 through 32 distinct, nonempty UTF-8 strings of at most 63 bytes;
+ASCII whitespace, control characters and slash are rejected. Names are
+provider-defined. The program forwards selected names without provider-specific
+translation; the existing effort shorthand default still means medium.
+.PP
+Numbered selection follows list order. Startup \-m without an explicit effort
+uses the first listed effort. Interactive /model MODEL chooses the highest
+recognized level, or the first listed name when all are unfamiliar. Explicit
+/effort and model/effort selections remain usable even when absent from the
+list. A configured list also applies to typed models before cache discovery;
+listing an undiscovered model still requires a model-alias declaration.
+.PP
+The array remains in configuration; /model cache stores only provider metadata.
+Reload configuration with /config or start a new process to apply an edited
+list. Invalid lists reject the reload while preserving the active configuration.
+Existing turn/session effort preferences remain unchanged until selected again.
 .SS "model-alias PROVIDER/NAME"
 Up to 128 declarations are accepted. The local name uses the provider-name
 syntax. The required model key is a literal upstream model ID. These declarations

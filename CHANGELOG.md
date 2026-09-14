@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Configure model-picker effort choices with `reasoning_efforts` in existing
+  model-limit rules. Ordered provider-neutral lists override discovery metadata,
+  survive cache refresh, and leave explicit effort selection available.
+
 - Send the session identity to the provider in the header the proxy keys prompt-cache affinity on,
   so consecutive requests of one session can reuse the provider's cached prefix instead of being
   pinned per request; the identity is derived from the session and covers the compaction request too.

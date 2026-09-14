@@ -6,9 +6,11 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "secret_source.h"
+#include "snag_jansson.h"
 
 #define SNAG_CONFIG_MODEL_MAX 256u
 #define SNAG_CONFIG_EFFORT_MAX 64u
+#define SNAG_CONFIG_EFFORTS_MAX 32u
 #define SNAG_CONFIG_PROMPT_MAX 1024u
 #define SNAG_CONFIG_SPINNER_MAX 69u
 #define SNAG_CONFIG_SPINNER_FRAMES_MAX 16u
@@ -90,6 +92,7 @@ struct snag_model_limit_config {
     uint64_t context_window_tokens;
     uint64_t max_input_tokens;
     uint64_t max_output_tokens;
+    json_t *reasoning_efforts; /* Owned by config; resolved rules borrow it. */
 };
 
 struct snag_audio_config {
@@ -145,6 +148,7 @@ void snag_config_init(struct snag_config *config);
 void snag_config_provider_init(struct snag_provider_config *provider, const char *name);
 bool snag_config_name_valid(const char *name);
 void snag_config_free(struct snag_config *config);
+bool snag_config_efforts_valid(const json_t *efforts);
 int snag_config_load(struct snag_config *config, const char *explicit_path, const char *dotdir,
                           char *error, size_t error_size);
 char *snag_config_path(const char *explicit_path, const char *dotdir, char *error, size_t error_size);

@@ -2,6 +2,10 @@
 
 # Implementation status
 
+Model-limit rules support provider-neutral `reasoning_efforts` arrays for catalog
+rows and selection. Configuration overrides discovery without altering its cache;
+explicit efforts remain available. Numeric capacity provenance stays independent.
+
 The multimodal branch implements session-owned image, audio, video and document
 assets, normalized image/page/frame input, audio API operations, local dictation
 and playback, and realtime voice with durable handoff to the existing coding

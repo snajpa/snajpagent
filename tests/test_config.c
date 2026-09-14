@@ -47,6 +47,69 @@ expect_invalid(const char *path)
 }
 
 static void
+test_configured_efforts(const char *path)
+{
+    struct snag_config config;
+    struct snag_model_limit_config resolved;
+    const struct snag_model_limit_config *sources[3];
+    char error[256] = {0};
+    const char *valid = "[provider p]\n[model-limit p/m]\n"
+        "reasoning_efforts = [\"none\", \"low\", \"high\", \"max\"]\n"
+        "[model-limit p]\nreasoning_efforts=[\"broad\"]\n"
+        "[model-limit p/m*]\nreasoning_efforts=[\"pattern\"]\n";
+    const char *invalid[] = {"[]", "null", "{}", "[1]", "[\"\"]", "[\"high\",\"high\"]",
+        "[\"low\",]", "[\"a\\u0000b\"]", "[\"bad\\nvalue\"]", "[\"a/b\"]", "[\" low\"]",
+        "[\"low\"]\nreasoning_efforts=[\"max\"]"};
+    write_bytes(path, valid, strlen(valid));
+    load_config(&config, path, NULL);
+    assert(!snag_config_resolve_limits(&config, "p", "m", &resolved, sources));
+    assert(!sources[0] && !sources[1] && !sources[2]); /* Efforts are not capacity facts. */
+    assert(json_array_size(resolved.reasoning_efforts) == 4u);
+    assert(!strcmp(json_string_value(json_array_get(resolved.reasoning_efforts, 3u)), "max"));
+    (void)snag_config_resolve_limits(&config, "p", "match", &resolved, NULL);
+    assert(!strcmp(json_string_value(json_array_get(resolved.reasoning_efforts, 0u)), "pattern"));
+    (void)snag_config_resolve_limits(&config, "p", "other", &resolved, NULL);
+    assert(!strcmp(json_string_value(json_array_get(resolved.reasoning_efforts, 0u)), "broad"));
+    (void)snag_config_resolve_limits(&config, "other", "m", &resolved, NULL);
+    assert(!resolved.reasoning_efforts);
+    snag_config_free(&config);
+    assert(snag_config_save_model(path, false, "p", "m", "max", error, sizeof(error)) == 0);
+    load_config(&config, path, NULL);
+    assert(!strcmp(config.reasoning_effort, "max"));
+    assert(json_array_size(config.model_limits[0].reasoning_efforts) == 4u);
+    snag_config_free(&config);
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        char text[512];
+        int n = snprintf(text, sizeof(text), "[provider p]\n[model-limit p/m]\nreasoning_efforts=%s\n", invalid[i]);
+        assert(n > 0 && (size_t)n < sizeof(text));
+        write_bytes(path, text, (size_t)n);
+        expect_invalid(path);
+    }
+    for (size_t count = SNAG_CONFIG_EFFORTS_MAX; count <= SNAG_CONFIG_EFFORTS_MAX + 1u; ++count) {
+        char text[4096];
+        size_t used = (size_t)snprintf(text, sizeof(text), "[provider p]\n[model-limit p/m]\nreasoning_efforts=[");
+        for (size_t i = 0; i < count; ++i)
+            used += (size_t)snprintf(text + used, sizeof(text) - used, "%s\"effort-%zu\"", i ? "," : "", i);
+        used += (size_t)snprintf(text + used, sizeof(text) - used, "]\n");
+        write_bytes(path, text, used);
+        if (count == SNAG_CONFIG_EFFORTS_MAX) {
+            load_config(&config, path, NULL);
+            snag_config_free(&config);
+        } else expect_invalid(path);
+    }
+    for (size_t len = SNAG_CONFIG_EFFORT_MAX - 1u; len <= SNAG_CONFIG_EFFORT_MAX; ++len) {
+        char text[512], effort[SNAG_CONFIG_EFFORT_MAX + 1u];
+        memset(effort, 'x', len); effort[len] = '\0';
+        int n = snprintf(text, sizeof(text), "[provider p]\n[model-limit p/m]\nreasoning_efforts=[\"%s\"]\n", effort);
+        write_bytes(path, text, (size_t)n);
+        if (len < SNAG_CONFIG_EFFORT_MAX) {
+            load_config(&config, path, NULL);
+            snag_config_free(&config);
+        } else expect_invalid(path);
+    }
+}
+
+static void
 expect_ui(const char *path, const char *key, const char *value, bool valid)
 {
     struct snag_config config;
@@ -709,6 +772,7 @@ main(void)
             values, 0xfdu, expanded, sizeof(expanded)) < 0);
     }
 
+    test_configured_efforts(path);
     test_numeric_settings(path);
     test_io_rules(path);
     test_auth_settings(path);

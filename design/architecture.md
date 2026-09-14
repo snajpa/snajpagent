@@ -94,6 +94,9 @@ otherwise sendable first request before a provider attempt. Source-bound
 catalog limits or an exact `[model-limit PROVIDER/MODEL]` tuple determine the
 hard input budget; `auto_compact_input_tokens = 0` disables only proactive
 policy, never an authoritative hard guard.
+Model-limit rules also carry optional ordered `reasoning_efforts` arrays. These
+resolve at selection/display time, separately from numeric capacity provenance
+and raw provider cache metadata; effort names stay provider-defined.
 
 Response and tool-result items grow immediately before the trailing active
 goal/process controller messages. Anchor comparison reconstructs the previous
