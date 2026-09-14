@@ -3616,14 +3616,16 @@ WITH_PDF=1 is the default. CXX/CXXFLAGS and PDF_CFLAGS/PDF_LIBS select the
 compiler and matching Poppler/libpng headers and libraries.
 Windows PDF source builds use native Windows font lookup. The portable
 multimodal Windows build remains experimental; cross-build qualification is
-described in DEPENDENCIES.md. The Windows target builds with WITH_OFFICE=0,
-because no LibreOfficeKit development input exists for the mingw toolchain; its
-artifact therefore ships without linked Office import, while every target whose
-installed runtime provides LibreOfficeKit keeps the modality enabled.
+described in DEPENDENCIES.md. The Windows target takes the commanded Office
+state, like every release artifact: no Office library is linked and an engine
+installed on the target is resolved when it runs, while host builds whose
+installed runtime provides LibreOfficeKit keep the linked import enabled.
 .TP
 .B make WITH_OFFICE=0
-Build a custom executable without linked Office import. The default
-WITH_OFFICE=1 requires WITH_PDF=1. OFFICE_ROOT selects the LibreOffice runtime directory;
+Build a custom executable without linked Office import; WITH_OFFICE_COMMANDS=1
+selects the commanded engine instead of the unsupported-operation stubs. The
+default WITH_OFFICE=1 requires WITH_PDF=1. OFFICE_ROOT selects the LibreOffice
+runtime directory;
 an absolute path selects a native installation, while a relative path is resolved
 from the actual executable directory, independent of the working directory.
 Drive and UNC roots are retained on Windows; document/profile file URLs encode

@@ -5,10 +5,11 @@
 ## Linked Office import (native development)
 
 LibreOffice is never bundled. `WITH_OFFICE=1` stays the default wherever a
-LibreOfficeKit development input exists and links a separately installed runtime.
-The Windows target builds with `WITH_OFFICE=0`, because the mingw toolchain has
-no such input, so that artifact ships without the Office modality — recorded
-here rather than degraded silently.
+LibreOfficeKit development input exists and links a separately installed
+runtime; release artifacts instead take the commanded Office state
+(`WITH_OFFICE=0` with `WITH_OFFICE_COMMANDS=1`), which links no Office library
+and resolves an engine installed on the target when it runs. Nothing about that
+state is silent: each artifact's state is recorded rather than degraded quietly.
 
 `WITH_OFFICE=1` links LibreOfficeKit through `libsofficeapp`, libarchive 3.8.7
 and libxml2 2.15.1. The current runtime is LibreOffice 25.2.6.2 from the pinned
@@ -25,8 +26,9 @@ portable matrix. Linux musl recipes include static FFmpeg built-in codecs
 (zlib enabled; network/programs/GPL-only codecs disabled), Poppler core/Splash, libpng,
 libarchive, libxml2 and the pinned miniaudio header. LibreOffice's component
 runtime and its dependencies still require portable packaging; these recipe
-inputs alone do not produce a complete distribution. `WITH_OFFICE=0` supplies
-explicit unsupported-operation stubs for custom builds.
+inputs alone do not produce a complete distribution. `WITH_OFFICE=0` without
+`WITH_OFFICE_COMMANDS=1` supplies explicit unsupported-operation stubs for
+custom builds.
 The Linux library-only FFmpeg profile runs upstream `testprogs fate`; the broad
 `check` target also builds tools/examples requiring omitted avfilter/device
 libraries. `nix/office-linux.nix` defines the headless static LibreOfficeKit
@@ -220,10 +222,10 @@ needs, such as `WITH_OFFICE=0` in the Linux and Windows targets.
 
 Custom lean builds may set `WITH_AV=0`, `WITH_OFFICE=0`, or
 `WITH_AUDIO_DEVICE=0`; `WITH_PDF=0` also requires `WITH_OFFICE=0` because Office
-page validation/rendering uses Poppler. Official desktop releases require all
-four enabled wherever an installed LibreOfficeKit development input exists; the
-Windows target is built with `WITH_OFFICE=0` because none does for mingw, and its
-artifact ships without linked Office import.
+page validation/rendering uses Poppler. Official desktop releases never bundle a
+runtime: they take the commanded engine (`WITH_OFFICE=0` with
+`WITH_OFFICE_COMMANDS=1`), which links no Office library and resolves an engine
+installed on the target, verified before use and reported when absent.
 The branch's portable recipes have not yet been reconciled with these inputs;
 the historical closure descriptions below do not qualify multimodal artifacts.
 
@@ -282,11 +284,12 @@ so 32-bit libc builds retain large-file seek/stat/truncate support. Keep that
 feature macro when replacing CPPFLAGS. This does not enlarge a 32-bit address
 space or claim that every old kernel supports modern time/thread APIs.
 
-The Nix-built Linux release artifacts set `WITH_OFFICE=0`: that closure's Office
-dependency is a static LibreOfficeKit whose archives would have to be linked
-into the artifact, since the runtime-style `-lsofficeapp` link finds no shared
-library there, and an installed runtime is never bundled. Host builds keep
-`WITH_OFFICE=1` and link a separately installed runtime through `OFFICE_ROOT`.
+The Nix-built Linux release artifacts take the commanded Office state
+(`WITH_OFFICE=0` with `WITH_OFFICE_COMMANDS=1`): no Office library is linked,
+and the engine installed on the target is resolved when it runs. Linking that
+closure's static LibreOfficeKit instead would put its archives into the
+artifact, which is why the linked import stays a host-build choice, where
+`WITH_OFFICE=1` loads a separately installed runtime through `OFFICE_ROOT`.
 
 `make prod-linux-ppc32` uses the pinned big-endian PowerPC musl toolchain,
 32-bit hard-float ABI and static compiler atomics for 64-bit shared state.

@@ -8,16 +8,11 @@
   document and video reading, audio transcription and dictation, and realtime
   voice. Office is linked from a separately installed runtime and is never
   bundled.
-- Build the Windows target without linked Office import (`WITH_OFFICE=0`). No
-  LibreOfficeKit development input exists for the mingw toolchain, so that
-  artifact ships without the Office modality while every target whose installed
-  runtime provides one keeps it enabled.
-- Build the Nix Linux release artifacts without linked Office import
-  (`WITH_OFFICE=0`). The Office dependency in that closure is a static kit whose
-  archives would have to be linked into the artifact, and an installed runtime
-  is never bundled;
-  host builds keep the default and load a separately installed runtime via
-  `OFFICE_ROOT`.
+- Take the commanded Office state in every release artifact (`WITH_OFFICE=0`
+  with `WITH_OFFICE_COMMANDS=1`) rather than the linked import, so no artifact
+  bundles a runtime and the engine installed on the target is resolved when it
+  runs; host builds keep the linked import by default and load a separately
+  installed runtime via `OFFICE_ROOT`.
 - Add the commanded Office engine (`WITH_OFFICE_COMMANDS=1`): it links no Office
   library, prepares a private profile, resolves an installed `soffice` at run
   time from PATH and the usual and versioned installation roots, exports

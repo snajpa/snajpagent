@@ -7,8 +7,9 @@ assets, normalized image/page/frame input, audio API operations, local dictation
 and playback, and realtime voice with durable handoff to the existing coding
 turn/queue owner. Native generated-media, context/replay and voice transport
 fixtures pass. Production dependency closure remains unfinished, including the
-remaining platform builds. LibreOffice is resolved from a separately installed
-runtime and is never bundled; the Windows target builds with `WITH_OFFICE=0`.
+remaining platform builds. LibreOffice is never bundled: host builds resolve a
+separately installed runtime, and release artifacts take the commanded engine
+(`WITH_OFFICE=0` with `WITH_OFFICE_COMMANDS=1`).
 Source builds can probe the compiler and the optional modalities with
 `./configure`, which reports what it enabled or disabled and records the result
 in `config.mk`.
