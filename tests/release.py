@@ -455,22 +455,23 @@ assert "linux-armv7" not in release.targets()
 print("PASS: shared 32-bit ARM target retains its ARMv6 toolchain and identity")
 
 # Deferred targets retain callable recipes without joining a release matrix.
-deferred = re.search(r"^DEFERRED_TARGETS = (.+)$", (root / "Makefile").read_text(), re.M)[1].split()
-assert "linux-riscv64" in release.targets() or "prod-linux-riscv64" in deferred
+assert "linux-riscv64" not in release.targets()
+assert "linux-riscv64" in release.deferred()
 assert ('linux-riscv64 = (linux pkgs.pkgsCross.riscv64-musl).application '
         '(args "linux-riscv64");') in portable
-print("PASS: retained RISC-V target uses the static musl recipe and its own identity")
+print("PASS: deferred RISC-V target retains its static musl recipe and own identity")
 
 assert "linux-ppc64le" in release.targets()
 assert ('linux-ppc64le = (linux pkgs.pkgsCross.musl-power).application '
         '(args "linux-ppc64le");') in portable
 print("PASS: POWER8 Linux matrix target uses static musl and its own identity")
 
-assert "linux-ppc32" in release.targets() or "prod-linux-ppc32" in deferred
+assert "linux-ppc32" not in release.targets()
+assert "linux-ppc32" in release.deferred()
 assert 'linux-ppc32 = (linux (import pkgs.path {' in portable
 assert 'crossSystem.config = "powerpc-unknown-linux-musl";' in portable
 assert '})).application (args "linux-ppc32");' in portable
-print("PASS: retained big-endian PowerPC32 target selects static musl")
+print("PASS: deferred big-endian PowerPC32 target retains its static musl recipe")
 
 
 
