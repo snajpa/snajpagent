@@ -509,6 +509,7 @@ fail: return snag_errorf(error, error_size, "cannot restore terminal after edito
 static void
 clear_prompt_frame(struct snag_term *term)
 {
+    snag_term_trace(term, "clear-frame", "pre-zero");
     term->prompt_visible = false;
     term->rendered_rows = 0u;
     term->rendered_cursor_row = 0u;
@@ -535,8 +536,13 @@ snag_term_hide(struct snag_term *term)
     size_t max;
     int rc = -1;
 
-    if (term->input_only || !term->opened || (!term->prompt_visible && !term->output_detour)) return 0;
+    if (term->input_only || !term->opened || (!term->prompt_visible && !term->output_detour)) {
+        snag_term_trace(term, "hide-noop", term->input_only ? "input_only" : !term->opened ? "closed" :
+            "no-frame");
+        return 0;
+    }
     snag_buf_reset(&term->painted_prompt);
+    snag_term_trace(term, "hide-erase", "painted_prompt");
     if (!term->capable) {
         term->prompt_visible = false;
         return snag_term_write(STDERR_FILENO, "\n", 1u);
@@ -1185,6 +1191,44 @@ out:
     return rc;
 }
 
+/* Composer trace. Off unless SNAJPAGENT_TERM_TRACE names a path; records flags, counters, row
+ * geometry and branch names only - never prompt or response text - so a trace can be shared. The
+ * path is re-read per call, so a test can enable it without restarting. */
+static int g_trace_fd = -1;
+
+void
+snag_term_trace(const struct snag_term *term, const char *event, const char *source)
+{
+    char line[320];
+    int n;
+    size_t off = 0u;
+
+    if (!term) return;
+    if (g_trace_fd < 0) {
+        const char *path = getenv("SNAJPAGENT_TERM_TRACE");
+        if (path && *path) g_trace_fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+    }
+    if (g_trace_fd < 0) return;
+    n = snprintf(line, sizeof(line),
+        "t=%llu ev=%s src=%s want=%u vis=%u depth=%u nl=%u gap=%u detour=%u defer=%u rows=%u cur=%u,%u margin=%u pw=%u\n",
+        (unsigned long long)snag_monotonic_ms(), event, source ? source : "-",
+        term->prompt_wanted ? 1u : 0u, term->prompt_visible ? 1u : 0u,
+        (unsigned)term->output_depth, (unsigned)term->output_newlines, (unsigned)term->output_gap,
+        (unsigned)term->output_detour, term->defer_redraw ? 1u : 0u, (unsigned)term->rendered_rows,
+        (unsigned)term->rendered_cursor_row, (unsigned)term->rendered_cursor_col,
+        term->rendered_end_at_margin ? 1u : 0u, term->rendered_cursor_pending_wrap ? 1u : 0u);
+    if (n <= 0) return;
+    if ((size_t)n > sizeof(line) - 1u) n = (int)sizeof(line) - 1u;
+    /* One write per event: these fire per frame, never per byte, and the line is ~160 bytes, so
+     * this cannot mask the timing the trace exists to capture. */
+    while (off < (size_t)n) {
+        ssize_t w = write(g_trace_fd, line + off, (size_t)n - off);
+        if (w > 0) { off += (size_t)w; continue; }
+        if (errno == EINTR) continue;
+        break;
+    }
+}
+
 static int
 redraw(struct snag_term *term)
 {
@@ -1196,7 +1240,11 @@ redraw(struct snag_term *term)
     const char *label;
     int rc = -1;
 
-    if (term->input_only || !term->opened || !term->prompt_wanted || term->output_depth) return 0;
+    if (term->input_only || !term->opened || !term->prompt_wanted || term->output_depth) {
+        snag_term_trace(term, "skip", term->input_only ? "input_only" : !term->opened ? "closed" :
+            !term->prompt_wanted ? "not-wanted" : "output_depth");
+        return 0;
+    }
     if (term->prompt_template[0] && compose_prompt(term->prompt_template, term->spinner,
                        visible_spinner_states(term), spinner_step(term, snag_monotonic_ms()), current) < 0)
         return -1;
@@ -1219,6 +1267,7 @@ redraw(struct snag_term *term)
         term->prompt_visible = true;
         return 0;
     }
+    snag_term_trace(term, "paint", "compose_frame");
     if (compose_frame(term, &out, &label_len, &cursor_row, &cursor_col, &end_row, &end_col, NULL) < 0)
         goto out;
     clip_prompt(term, &out, &label_len, &cursor_row, &cursor_col, &end_row, &end_col);

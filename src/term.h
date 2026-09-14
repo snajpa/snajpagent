@@ -163,6 +163,9 @@ int snag_term_open(struct snag_term *term, char *error, size_t error_size);
 void snag_term_close(struct snag_term *term);
 int snag_term_external_begin(struct snag_term *term, char *error, size_t error_size);
 int snag_term_external_end(struct snag_term *term, char *error, size_t error_size);
+/* Optional content-free composer trace; empty unless SNAJPAGENT_TERM_TRACE names a path. */
+void snag_term_trace(const struct snag_term *term, const char *event, const char *source);
+
 int snag_term_set_prompt_template(struct snag_term *term, bool active, const char *label,
                                  const char *const spinners[SNAG_TERM_SPINNER_COUNT],
                                  uint32_t per_second, unsigned int states);

@@ -2840,6 +2840,37 @@ main(void)
         snag_term_close(&capper);
         free(chunk);
     }
+    /* The composer trace is off unless asked, names the branch that suppressed a repaint, and is
+     * content-free. */
+    {
+        char path[] = "/var/tmp/composer-trace-XXXXXX";
+        struct snag_term traced;
+        char buf[4096];
+        ssize_t got;
+        int fd = mkstemp(path);
+        assert(fd >= 0);
+        close(fd);
+        assert(unlink(path) == 0);
+        snag_term_init(&traced);
+        snag_term_trace(&traced, "skip", "output_depth");     /* gate unset: must write nothing */
+        assert(access(path, F_OK) != 0);
+        assert(setenv("SNAJPAGENT_TERM_TRACE", path, 1) == 0);
+        snag_term_trace(&traced, "skip", "output_depth");
+        snag_term_trace(&traced, "paint", "compose_frame");
+        snag_term_close(&traced);
+        assert(unsetenv("SNAJPAGENT_TERM_TRACE") == 0);
+        fd = open(path, O_RDONLY);
+        assert(fd >= 0);
+        got = read(fd, buf, sizeof(buf) - 1u);
+        close(fd);
+        assert(got > 0);
+        buf[got] = '\0';
+        assert(strstr(buf, "ev=skip src=output_depth") != NULL);
+        assert(strstr(buf, "ev=paint src=compose_frame") != NULL);
+        assert(strstr(buf, "want=") != NULL && strstr(buf, "vis=") != NULL && strstr(buf, "rows=") != NULL);
+        assert(strstr(buf, "draft") == NULL && strstr(buf, "prompt=") == NULL);
+        unlink(path);
+    }
     puts("test_render: ok");
     return 0;
 }
