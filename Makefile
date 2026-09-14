@@ -263,7 +263,6 @@ check: $(TEST_BIN)
 	$(MAKE) officecheck
 	$(MAKE) nixcheck
 	$(MAKE) leancheck
-	$(MAKE) cachecheck
 	$(MAKE) depclosurecheck
 	$(MAKE) evidencetoolcheck
 	$(MAKE) sizecheck
@@ -279,9 +278,6 @@ toolscheck: $(BIN)
 
 depscheck:
 	python3 ./tools/check_deps.py
-
-cachecheck:
-	python3 tools/check_prompt_cache.py
 
 portabilitycheck:
 	python3 ./tools/check_portability.py
@@ -470,7 +466,7 @@ install: $(BIN) $(BIN).1
 
 FORCE:
 
-.PHONY: all check stylecheck rulescheck toolscheck depscheck configurecheck leancheck officecheck nixcheck cachecheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install help prod-matrix $(PROD_TARGETS) FORCE
+.PHONY: all check stylecheck rulescheck toolscheck depscheck configurecheck leancheck officecheck nixcheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install help prod-matrix $(PROD_TARGETS) FORCE
 
 -include $(COMMON_OBJ:.o=.d) src/main.d
 
