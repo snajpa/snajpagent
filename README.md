@@ -235,6 +235,8 @@ and slash-command exceptions.
 providers; select a row by number or with `/model PROVIDER/MODEL/EFFORT`. Both
 `/model` and `-m` select from the next full turn onward, including across
 resume; add `save` to write the selection into the configuration file.
+Model-limit rules can supply `reasoning_efforts = ["max", "high", "low", "none"]`
+when a provider omits effort choices; the manual covers precedence and selection.
 
 The prompt's context percentage compares the last measured request input with
 the resolved input budget, from provider-reported counts. A fresh session starts

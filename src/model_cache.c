@@ -14,7 +14,6 @@
 
 #define SNAG_MODEL_CACHE_FILE_MAX (8u * 1024u * 1024u)
 #define SNAG_MODEL_CACHE_MODELS_MAX 4096u
-#define SNAG_MODEL_CACHE_EFFORTS_MAX 32u
 #define SNAG_MODEL_CACHE_ENTRIES_MAX 32768u
 #define SNAG_MODEL_CACHE_INPUT_MAX (32u * 1024u * 1024u)
 #define SNAG_MODEL_CACHE_SCHEMA 1u
@@ -103,15 +102,7 @@ model_valid(const json_t *model, bool cached)
     if (!json_is_null(fallback) && !snag_json_bounded_string(fallback, SNAG_CONFIG_EFFORT_MAX - 1u))
         return false;
     efforts = json_object_get(model, "efforts");
-    if (!json_is_array(efforts) || json_array_size(efforts) > SNAG_MODEL_CACHE_EFFORTS_MAX) return false;
-    for (size_t i = 0; i < json_array_size(efforts); ++i) {
-        json_t *effort = json_array_get(efforts, i);
-        if (!snag_json_bounded_string(effort, SNAG_CONFIG_EFFORT_MAX - 1u)) return false;
-        for (size_t j = 0; j < i; ++j)
-            if (strcmp(json_string_value(json_array_get(efforts, j)), json_string_value(effort)) == 0)
-                return false;
-    }
-    return true;
+    return snag_config_efforts_valid(efforts);
 }
 
 static bool
@@ -464,16 +455,24 @@ effort_rank(const char *effort)
     return -1;
 }
 
-const char *
-snag_model_cache_best_effort(const json_t *model, const char *fallback)
+static const json_t *
+model_efforts(const struct snag_config *config, const char *provider, const char *model, const json_t *metadata)
 {
-    json_t *efforts;
+    struct snag_model_limit_config rule = {0};
+    if (config) (void)snag_config_resolve_limits(config, provider, model, &rule, NULL);
+    return rule.reasoning_efforts ? rule.reasoning_efforts : json_object_get(metadata, "efforts");
+}
+
+const char *
+snag_model_best_effort(const struct snag_config *config, const char *provider, const char *model,
+                       const json_t *metadata, const char *fallback)
+{
+    const json_t *efforts;
     json_t *fallback_value;
     const char *best = NULL;
     int best_rank = -1;
 
-    if (!model_valid(model, model && json_object_get(model, "count_capability") != NULL)) return fallback;
-    efforts = json_object_get(model, "efforts");
+    efforts = model_efforts(config, provider, model, metadata);
     for (size_t i = 0; i < json_array_size(efforts); ++i) {
         const char *effort = json_string_value(json_array_get(efforts, i));
         int rank = effort_rank(effort);
@@ -484,7 +483,7 @@ snag_model_cache_best_effort(const json_t *model, const char *fallback)
         }
     }
     if (best) return best;
-    fallback_value = json_object_get(model, "default_effort");
+    fallback_value = json_object_get(metadata, "default_effort");
     if (json_is_string(fallback_value)) return json_string_value(fallback_value);
     return fallback;
 }
@@ -586,7 +585,7 @@ snag_model_select(const struct snag_model_cache *cache,
     }
     if (!effort) {
         const json_t *metadata = snag_model_metadata(cache, provider, model);
-        const char *first = json_string_value(json_array_get( json_object_get(metadata, "efforts"), 0u));
+        const char *first = json_string_value(json_array_get(model_efforts(config, provider->name, model, metadata), 0u));
         if (!first) first = json_string_value(json_object_get(metadata, "default_effort"));
         effort = first ? first : fallback_effort;
     }
@@ -602,14 +601,14 @@ invalid: snag_errorf(error, error_size,
 }
 
 static int
-visit_model(const json_t *metadata, const char *provider, const char *model,
+visit_model(const struct snag_config *config, const json_t *metadata, const char *provider, const char *model,
              const char *fallback, size_t *index, snag_model_entry_fn visit, void *opaque)
 {
-    const json_t *efforts = metadata ? json_object_get(metadata, "efforts") : NULL;
+    const json_t *efforts = model_efforts(config, provider, model, metadata);
     size_t variants = json_array_size(efforts);
     for (size_t i = 0; i < (variants ? variants : 1u); ++i) {
         const char *effort = variants ? json_string_value(json_array_get(efforts, i)) :
-                            snag_model_cache_best_effort(metadata, fallback);
+                            snag_model_best_effort(config, provider, model, metadata, fallback);
         int rc = visit(opaque, ++*index, provider, model, effort, metadata);
         if (rc) return rc;
     }
@@ -634,7 +633,7 @@ snag_model_each(const struct snag_model_cache *cache, const struct snag_config *
             for (size_t k = 0; k < provider->model_count; ++k)
                 if (!strcmp(provider->models[k].name, model)) defined = true;
             if (!defined) {
-                int rc = visit_model(metadata, name, model, fallback_effort, &index, visit, opaque);
+                int rc = visit_model(config, metadata, name, model, fallback_effort, &index, visit, opaque);
                 if (rc) return rc;
             }
         }
@@ -643,7 +642,7 @@ snag_model_each(const struct snag_model_cache *cache, const struct snag_config *
         const struct snag_provider_config *provider = &config->providers[i];
         for (size_t j = 0; j < provider->model_count; ++j) {
             const char *model = provider->models[j].name;
-            int rc = visit_model(snag_model_metadata(cache, provider, model), provider->name,
+            int rc = visit_model(config, snag_model_metadata(cache, provider, model), provider->name,
                                   model, fallback_effort, &index, visit, opaque);
             if (rc) return rc;
         }

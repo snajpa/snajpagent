@@ -80,7 +80,8 @@ int snag_model_select_selector(const struct snag_model_cache *cache,
                                const struct snag_provider_config *fallback_provider, const char *fallback_effort,
                                struct snag_model_selection *selection, char *error, size_t error_size);
 
-const char *snag_model_cache_best_effort(const json_t *model, const char *fallback);
+const char *snag_model_best_effort(const struct snag_config *config, const char *provider, const char *model,
+                                  const json_t *metadata, const char *fallback);
 
 int snag_model_capacity_resolve( const struct snag_model_cache *cache, const struct snag_config *config,
     const struct snag_provider_config *provider, const char *model,

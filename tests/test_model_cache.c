@@ -122,6 +122,28 @@ test_local_models(struct snag_store *store, struct snag_model_cache *cache)
         assert(strcmp(name, "codex") == 0);
     }
     assert(saw_small && saw_large);
+    json_t *before = json_deep_copy(cache->providers);
+    assert(before);
+    config.model_limits[0].reasoning_efforts = load_json("[\"low\",\"high\"]");
+    config.model_limits[1].reasoning_efforts = load_json("[\"none\",\"max\"]");
+    size_t small_count = 0u, large_count = 0u;
+    for (size_t i = 1u; snag_model_entry(cache, &config, i, "xhigh", &name, &model, &effort) == 0; ++i) {
+        if (!strcmp(model, "small")) {
+            assert(!strcmp(effort, small_count++ ? "max" : "none"));
+        } else if (!strcmp(model, "large")) {
+            assert(!strcmp(effort, large_count++ ? "high" : "low"));
+        }
+    }
+    assert(small_count == 2u && large_count == 2u);
+    assert(!strcmp(snag_model_best_effort(&config, "codex", "small", NULL, "xhigh"), "max"));
+    assert(!strcmp(snag_model_best_effort(&config, "codex", "large", NULL, "xhigh"), "high"));
+    struct snag_model_selection selected;
+    assert(snag_model_select(cache, &config, "small", provider, "xhigh", &selected, error, sizeof(error)) == 0);
+    assert(!strcmp(selected.effort, "none")); /* CLI retains first-listed startup behavior. */
+    assert(snag_model_select(cache, &config, "small/custom", provider, "xhigh", &selected, error, sizeof(error)) == 0);
+    assert(!strcmp(selected.effort, "custom"));
+    assert(json_equal(before, cache->providers));
+    json_decref(before);
     /* The model listing prints "N. provider / model / effort", so -m must accept that N. The
      * control below shows why: the name-only selector resolves "1" as a literal model called
      * "1", which the upstream mapping passes through unchanged and the provider then serves as

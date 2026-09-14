@@ -2937,6 +2937,69 @@ def write_catalog_config(path, provider_port):
     )
 
 
+def run_configured_efforts_case(binary, root, provider, environment):
+    case = root / "configured-efforts"
+    workspace = case / "workspace"
+    workspace.mkdir(mode=0o700, parents=True)
+    config = case / "config.ini"
+    write_catalog_config(config, provider.port)
+    base = config.read_text().replace("reasoning_effort = low", "reasoning_effort = xhigh")
+    base = base.replace("request_timeout_ms = 5000\n", "request_timeout_ms = 5000\nexact_token_count = false\nnative_compaction = false\n")
+    rule = '[model-limit ordinary/standard-model]\nreasoning_efforts = ["none", "low", "high", "max"]\n'
+    config.write_text(base + rule)
+    edited = case / "edited.ini"
+    editor = case / "editor.sh"
+    editor.write_text('#!/bin/sh\ncp "$SNAJPAGENT_EFFORT_CONFIG" "$1"\n')
+    editor.chmod(0o700)
+    environment = dict(environment, EDITOR=str(editor), VISUAL=str(editor), SNAJPAGENT_EFFORT_CONFIG=str(edited))
+    with fixture_terminal(TmuxTerminal(
+        case / "terminal", binary, workspace, case / "state", config,
+        110, 30, environment=environment,
+    ), case / "screen.txt") as terminal:
+        terminal.wait(" ordinary/uncached-start/xhigh")
+        # A configured effort list also resolves before a catalog exists.
+        terminal.submit_wait("/model standard-model", "ordinary / standard-model / max", join_wrapped=True)
+        screen = terminal.submit_wait("/model cache", "cache updated:", join_wrapped=True)
+        for index, effort in enumerate(("none", "low", "high", "max"), 1):
+            assert f"{index}. ordinary / standard-model / {effort}" in screen, screen
+        cache_path = terminal.dotdir / "models.json"
+        raw = json.loads(cache_path.read_text())
+        assert raw["providers"][0]["models"][0]["efforts"] == ["medium"]
+        assert raw["providers"][0]["models"][0]["default_effort"] == "medium"
+        before = cache_path.read_bytes()
+        paths = provider.catalog_paths()
+        for index, effort in enumerate(("none", "low", "high", "max"), 1):
+            terminal.submit_wait(f"/model {index}", f"ordinary / standard-model / {effort}", join_wrapped=True)
+        terminal.submit_wait("/model list", "4. ordinary / standard-model / max", join_wrapped=True)
+        assert provider.catalog_paths() == paths
+        assert cache_path.read_bytes() == before
+        terminal.submit_wait("/model 4 save", "ordinary / standard-model / max", join_wrapped=True)
+        assert rule.strip() in config.read_text()
+        saved = config.read_text()
+        edited.write_text(saved.replace('["none", "low", "high", "max"]', '["custom", "low"]'))
+        terminal.submit_wait("/config", "configuration reloaded:", join_wrapped=True)
+        terminal.submit_wait("/model list", "1. ordinary / standard-model / custom", join_wrapped=True)
+        edited.write_text(saved.replace('["none", "low", "high", "max"]', '[]'))
+        terminal.submit_wait("/config", "invalid configuration", join_wrapped=True)
+        terminal.submit_wait("/model list", "1. ordinary / standard-model / custom", join_wrapped=True)
+        edited.write_text(saved)
+        terminal.submit_wait("/config", "configuration reloaded:", join_wrapped=True)
+        terminal.submit_wait("/model cache", "4. ordinary / standard-model / max", join_wrapped=True)
+        assert json.loads(cache_path.read_text())["providers"] == raw["providers"]
+    # The actual HTTP payload must retain every explicit effort, even one not listed.
+    for effort in ("none", "low", "high", "max", "unlisted"):
+        marker = f"configured-effort-{effort}"
+        result = subprocess.run(
+            [os.path.abspath(binary), "--config", str(config), "--dotdir", str(case / ("wire-" + effort)),
+             "--no-listen", "--no-client", "-m", f"ordinary/standard-model/{effort}", "-e", "--", marker],
+            cwd=workspace, env=environment, capture_output=True, timeout=30,
+        )
+        assert result.returncode == 0, result.stderr.decode(errors="replace")
+        requests = provider.matching_requests(marker)
+        assert requests and all(r["body"]["reasoning"]["effort"] == effort for r in requests)
+    print("tmux_terminal configured efforts: ok", flush=True)
+
+
 def run_model_catalog_case(binary, root, provider, environment):
     case = root / "model-catalog"
     workspace = case / "workspace"
@@ -7722,6 +7785,7 @@ def run_irc_case(binary, root):
         run_output_cap_cases(binary, root, provider, environment)
         run_ctrl_d_cases(binary, root, provider, environment)
         run_model_catalog_case(binary, root, provider, environment)
+        run_configured_efforts_case(binary, root, provider, environment)
     finally:
         provider.close()
     run_irc_chat_case(binary, root / "chat")

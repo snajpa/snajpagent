@@ -138,6 +138,8 @@ snag_config_free(struct snag_config *config)
         snag_secret_source_free(&config->providers[i].api_key);
         free(config->providers[i].models);
     }
+    for (size_t i = 0; i < config->model_limit_count; ++i)
+        json_decref(config->model_limits[i].reasoning_efforts);
     for (size_t i = 0; i < config->secret_count; ++i) snag_secret_source_free(&config->secrets[i]);
     memset(config, 0, sizeof(*config));
 }
@@ -554,7 +556,22 @@ claim_key(struct parse_state *state, const char *key)
 }
 
 enum setting_kind {
-    SET_TEXT, SET_HEADER, SET_HTTPS, SET_U32, SET_U64, SET_BOOL, SET_SPINNER };
+    SET_TEXT, SET_HEADER, SET_HTTPS, SET_U32, SET_U64, SET_BOOL, SET_SPINNER, SET_EFFORTS };
+
+bool
+snag_config_efforts_valid(const json_t *efforts)
+{
+    if (!json_is_array(efforts) || json_array_size(efforts) > SNAG_CONFIG_EFFORTS_MAX) return false;
+    for (size_t i = 0; i < json_array_size(efforts); ++i) {
+        const char *effort = snag_json_bounded_string(json_array_get(efforts, i), SNAG_CONFIG_EFFORT_MAX - 1u);
+        if (!effort) return false;
+        for (const unsigned char *p = (const unsigned char *)effort; *p; ++p)
+            if (*p <= 0x20u || *p == 0x7fu || *p == '/') return false;
+        for (size_t j = 0; j < i; ++j)
+            if (!strcmp(json_string_value(json_array_get(efforts, j)), effort)) return false;
+    }
+    return true;
+}
 
 static int
 parse_audio(struct parse_state *state, const char *key, const char *value)
@@ -604,6 +621,7 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         {SECTION_MODEL_LIMIT, "context_window_tokens", SET_U64, &limit->context_window_tokens, 1, SNAG_CONFIG_TOKEN_LIMIT_MAX},
         {SECTION_MODEL_LIMIT, "max_input_tokens", SET_U64, &limit->max_input_tokens, 1, SNAG_CONFIG_TOKEN_LIMIT_MAX},
         {SECTION_MODEL_LIMIT, "max_output_tokens", SET_U64, &limit->max_output_tokens, 1, SNAG_CONFIG_TOKEN_LIMIT_MAX},
+        {SECTION_MODEL_LIMIT, "reasoning_efforts", SET_EFFORTS, &limit->reasoning_efforts, 0, 0},
         {SECTION_MODEL_ALIAS, "model", SET_HEADER, state->models[state->model_alias_index].model.upstream, 0, SNAG_CONFIG_MODEL_MAX},
         {SECTION_UI, "typing_pause_ms", SET_U32, &config->typing_pause_ms, 0, 5000},
         {SECTION_UI, "markdown", SET_BOOL, &config->markdown, 0, 0},
@@ -638,6 +656,16 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         case SET_U64: return parse_u64(value, min, max, target);
         case SET_BOOL: return parse_bool(value, target);
         case SET_SPINNER: return parse_spinner(target, value);
+        case SET_EFFORTS: {
+            json_t *efforts = snag_json_load_strict((const unsigned char *)value, strlen(value),
+                                                   SNAG_CONFIG_FILE_MAX, NULL, 0u);
+            if (!snag_config_efforts_valid(efforts) || !json_array_size(efforts)) {
+                json_decref(efforts);
+                goto invalid;
+            }
+            *(json_t **)target = efforts;
+            return 0;
+        }
         }
     }
     switch (state->section) {
@@ -995,7 +1023,8 @@ validate_config(struct snag_config *config, bool private_file, char *error, size
     for (size_t i = 0; i < config->model_limit_count; ++i) {
         const struct snag_model_limit_config *limit = &config->model_limits[i];
         if (!snag_config_provider(config, limit->provider) ||
-            (!limit->context_window_tokens && !limit->max_input_tokens && !limit->max_output_tokens) ||
+            (!limit->context_window_tokens && !limit->max_input_tokens && !limit->max_output_tokens &&
+             !limit->reasoning_efforts) ||
             (limit->context_window_tokens && limit->max_output_tokens &&
              limit->max_output_tokens >= limit->context_window_tokens)) {
             return snag_fail(error, error_size, EINVAL, "invalid model-limit section for %s/%s",
@@ -1451,6 +1480,7 @@ snag_config_resolve_limits(const struct snag_config *config, const char *provide
                 out->max_output_tokens = rule->max_output_tokens;
                 if (sources) sources[2] = rule;
             }
+            if (rule->reasoning_efforts) out->reasoning_efforts = rule->reasoning_efforts;
         }
     }
     return out->context_window_tokens || out->max_input_tokens || out->max_output_tokens;

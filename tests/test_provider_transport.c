@@ -751,7 +751,7 @@ test_local_provider_transport(void)
         assert(json_is_null(json_object_get( limits, "context_window_tokens")));
         assert(json_is_null(json_object_get(limits, "max_output_tokens")));
     }
-    assert(strcmp(snag_model_cache_best_effort(json_array_get(models, 1), "fallback"), "quantum") == 0);
+    assert(strcmp(snag_model_best_effort(NULL, NULL, NULL, json_array_get(models, 1), "fallback"), "quantum") == 0);
     json_decref(models);
     models = NULL;
 
