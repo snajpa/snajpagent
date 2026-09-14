@@ -2473,6 +2473,51 @@ test_office_commands_export(struct snag_store *store, const char *workspace)
         assert(snag_office_export(&session,doc,mime,7u,7u,NULL,NULL,NULL,SNAG_WAKE_INVALID,
                                   &out,&metadata,error,sizeof(error))<0);
         assert(metadata==NULL && out.len==0u);
+        /* The other two families share this path but pick a different PDF filter,
+         * so each gets its own flat-XML fixture here rather than only the text one. */
+        static const char flat_fods[]=
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            "<office:document xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\""
+            " xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\""
+            " xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\""
+            " office:version=\"1.3\" office:mimetype=\"application/vnd.oasis.opendocument.spreadsheet\">"
+            "<office:body><office:spreadsheet><table:table table:name=\"Sheet1\">"
+            "<table:table-row>"
+            "<table:table-cell office:value-type=\"float\" office:value=\"1\"><text:p>1</text:p></table:table-cell>"
+            "<table:table-cell office:value-type=\"float\" office:value=\"2\"><text:p>2</text:p></table:table-cell>"
+            "</table:table-row></table:table></office:spreadsheet></office:body></office:document>\n";
+        static const char flat_fodp[]=
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            "<office:document xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\""
+            " xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\""
+            " xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\""
+            " office:version=\"1.3\" office:mimetype=\"application/vnd.oasis.opendocument.presentation\">"
+            "<office:body><office:presentation><draw:page draw:name=\"p1\">"
+            "<draw:frame draw:name=\"t\"><draw:text-box><text:p>slide</text:p></draw:text-box></draw:frame>"
+            "</draw:page></office:presentation></office:body></office:document>\n";
+        struct { const char *name,*mime,*xml; size_t len; } families[]={
+            {"probe.fods","application/vnd.oasis.opendocument.spreadsheet",flat_fods,sizeof(flat_fods)-1u},
+            {"probe.fodp","application/vnd.oasis.opendocument.presentation",flat_fodp,sizeof(flat_fodp)-1u}
+        };
+        for (size_t i=0u;i<sizeof(families)/sizeof(families[0]);i++) {
+            char *fam=snag_path_join(root,families[i].name);
+            FILE *fam_file=fam?fopen(fam,"wb"):NULL;
+            assert(fam && fam_file &&
+                fwrite(families[i].xml,1u,families[i].len,fam_file)==families[i].len &&
+                fclose(fam_file)==0);
+            metadata=NULL;
+            int frc=snag_office_export(&session,fam,families[i].mime,1u,1u,NULL,NULL,NULL,
+                                       SNAG_WAKE_INVALID,&out,&metadata,error,sizeof(error));
+            if(frc!=0) fprintf(stderr,"office commands export (%s) failed: %s\n",families[i].name,error);
+            assert(frc==0);
+            assert(metadata && strcmp(snag_json_string(metadata,"format"),"pdf")==0);
+            assert(out.len>=5u && memcmp(out.data,"%PDF-",5u)==0);
+            json_decref(metadata);
+            snag_buf_free(&out);
+            snag_buf_init(&out,32u*1024u*1024u);
+            assert(unlink(fam)==0);
+            free(fam);
+        }
     }
     snag_buf_free(&out);
     snag_session_close(&session);
