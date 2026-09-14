@@ -725,10 +725,11 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *prompt = snag_json_string(data, "prompt");
         const char *reason = snag_json_string(data, "reason");
         bool model = actor && strcmp(actor, "model") == 0;
-        /* An operator lock freezes the goal for the model: no model-originated
-         * transition is accepted while it is locked. Operator events carry no actor
-         * or actor "user", so they are unaffected. */
-        if (model && session->goal_locked) goto invalid;
+        /* An operator lock freezes the objective, not the goal's ending: the model may
+         * not reword or block a locked goal, but it may still finish one. Operator events
+         * carry no actor or actor "user", so they are unaffected. */
+        if (model && session->goal_locked && snag_string_in(action, "reworded blocked cancelled"))
+            goto invalid;
         enum snag_goal_status status = session->goal_status;
 
         if (!snag_goal_unfinished(status) || !goal_id || strcmp(goal_id, session->goal_id) != 0) goto invalid;
