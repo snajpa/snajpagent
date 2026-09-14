@@ -1281,8 +1281,13 @@ def run_command_transcript_case(binary, root, active=False, chat=False, width=12
             terminal.submit("queue_slow")
             terminal.wait("working slowly")
         if chat:
-            terminal.submit("/chat")
+            screen = terminal.submit_wait("/chat", "switching to chat", join_wrapped=True)
+            assert "switching to chat" in screen, screen
             terminal.wait("C›")
+            # A switch to the view already shown must not announce a switch again.
+            terminal.submit("/chat")
+            time.sleep(0.4)
+            assert terminal.capture().count("switching to chat") == 1, terminal.capture()
         label = "C›" if chat else "A»" if active else "I›"
         for command, output in (("/commands", "unknown slash command"),
                                 ("/status", "session:"),
