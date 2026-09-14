@@ -605,6 +605,23 @@ test_refusal_diagnostic(const char *workspace)
                sizeof(error)) < 0);
     assert(strstr(error, "clause=keys") != NULL);
     assert(strstr(error, "call=0123456789abcdef") != NULL);
+    /* The same refusal is persisted beside the session, so a later occurrence is captured without
+     * anyone keeping a terminal scrollback. Read the live session's own directory rather than
+     * assuming the layout, and scan the whole append-only file. */
+    {
+        char path[PATH_MAX];
+        char content[4096];
+        size_t got;
+        FILE *log;
+        (void)snprintf(path, sizeof(path), "%s/refusals.log", session.workspace);
+        log = fopen(path, "r");
+        assert(log != NULL);
+        got = fread(content, 1u, sizeof(content) - 1u, log);
+        content[got] = '\0';
+        (void)fclose(log);
+        assert(strstr(content, "clause=keys") != NULL);
+        assert(strstr(content, "call=0123456789abcdef") != NULL);
+    }
     snag_session_close(&session);
 }
 
