@@ -14,11 +14,11 @@
 - Make a refused store transition explain itself: the error now names the failing
   clause, the call it concerned and the result status, instead of only the event
   type and sequence, so a crash report is diagnostic without a debug build.
-- Freeze a locked goal against model changes: a lock now refuses every
-  model-originated transition (rewording, pausing, resuming, completing,
-  blocking, cancelling) in the tool before dispatch, and in the store wherever
-  the event names the model as actor, so only the operator can change a locked
-  goal.
+- Freeze a locked goal's objective against model changes: the model may no
+  longer reword, block or cancel one, refused in the tool before dispatch and
+  again in the store wherever the event names the model as actor, while
+  finishing or resuming a locked goal stays allowed so it can still reach a
+  successful end.
 - Let `-m` take the catalogue index the numbered model listing prints (`-m 3` or
 `-m '#3'`), not only a name, so a selector copied from the listing resolves to
   the entry it named; an out-of-range index now fails instead of being sent
