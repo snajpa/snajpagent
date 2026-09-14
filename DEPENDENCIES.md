@@ -202,7 +202,12 @@ runtime closure remains unfinished.
 
 `./configure` detects the toolchain and the four optional modalities and tunes
 the tracked `config.mk`; a component it cannot find is disabled and reported,
-and its `--require-*` option turns that absence into a clear failure. Export
+and its `--require-*` option turns that absence into a clear failure. A distro
+recipe's GNU directory flags such as `--bindir`, `--libdir` or `--sysconfdir` are
+not accepted and exit 2 with the usage text, and `--host=<native triple>` exits 1
+unless that triple's cross compiler exists, because the script looks for
+`<triple>-gcc` or an explicit `--cc`; every rejection leaves the tracked
+`config.mk` byte-identical. Export
 `PKG_CONFIG_PATH` for the build as well as for the probe: without it a probe
 finds nothing and turns the tracked modality keys off. That export serves `make`
 too, and a linked profile whose libraries sit outside the default search path
