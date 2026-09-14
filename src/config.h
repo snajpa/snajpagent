@@ -165,6 +165,7 @@ int snag_config_prompt_expand(const char *text, unsigned int mode,
 const struct snag_provider_config *snag_config_provider( const struct snag_config *config, const char *name);
 bool snag_config_provider_is_openrouter(const struct snag_provider_config *provider);
 const char *snag_config_model_upstream(const struct snag_provider_config *provider, const char *model);
+/* Returns numeric-limit presence; out also borrows the resolved effort list. */
 bool snag_config_resolve_limits(const struct snag_config *config, const char *provider, const char *model,
                                struct snag_model_limit_config *out,
                                const struct snag_model_limit_config *sources[3]);
