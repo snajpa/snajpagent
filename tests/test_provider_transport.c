@@ -1387,13 +1387,14 @@ test_goal_tool_manipulates_unfinished_goals(void)
     call.kind = SNAG_ITEM_TOOL_CALL;
     call.name = "update_goal";
 
-    /* A blocked goal is still manipulable: the wording lock, not the status,
-     * is what keeps the model from changing the objective. */
+    /* A locked goal is frozen for the model: the operator lock, not the status,
+     * is what keeps the model from changing the objective, and the refusal names
+     * the lock so the model can report why it stopped. */
     app.session.goal_status = SNAG_GOAL_BLOCKED;
     app.session.goal_locked = true;
     call.arguments = json_pack("{s:s,s:s}", "action", "rewrite", "text", "reworded objective");
     assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
-    assert(strstr(snag_json_string(result, "model_text"), "locked by the user"));
+    assert(strstr(snag_json_string(result, "model_text"), "locked by the operator"));
     json_decref(result);
     json_decref(call.arguments);
 
