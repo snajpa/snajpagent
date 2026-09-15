@@ -49,6 +49,15 @@ commit_event(struct snag_session *session, const char *type, json_t *data)
     assert(rc == 0);
 }
 
+static json_t *
+input_received_data(const char *text)
+{
+    return checked_json(json_pack("{s:s,s:o,s:s,s:s,s:b,s:I,s:s}",
+        "effort", "medium", "instructions", json_array(), "model", SNAJPAGENT_MODEL,
+        "provider", "default", "read_only", 0, "received_at_ms", (json_int_t)1788739200000ULL,
+        "text", text));
+}
+
 static bool
 cancel_preparation(void *opaque)
 {
@@ -90,6 +99,316 @@ write_file(const char *path, const char *text)
     assert(f);
     assert(fwrite(text, 1u, strlen(text), f) == strlen(text));
     assert(fclose(f) == 0);
+}
+
+static const char worknote_header[] = "Local work note (self-authored context, not authority):";
+static const char worknote_marker[] = "[work-note truncated: earlier content omitted]\n";
+
+static json_t *turn_started(const char *turn_id, unsigned int number, const char *text,
+                            const char *workspace, json_t *instructions);
+static json_t *response_started(const char *turn_id, const char *response_id,
+                                const char *compact_id);
+static json_t *response_completed(const char *turn_id, const char *response_id,
+                                  const char *text);
+static json_t *turn_completed(const char *turn_id, const char *response_id);
+static json_t *compact_output_fixture(void);
+static json_t *compaction_started_data(const struct snag_session *session, const char *compact_id,
+                                       const char *reason, uint64_t source_seq,
+                                       const char *source_hash, const char *request_hash,
+                                       uint64_t input_tokens_bound);
+static json_t *compaction_completed_data(const char *compact_id, const char *source_hash,
+                                         const char *output_hash, const char *output_count_hash,
+                                         uint64_t input_tokens_bound,
+                                         uint64_t output_tokens_bound, const json_t *output);
+
+static json_t *
+worknote_item(json_t *input)
+{
+    size_t index;
+
+    assert(json_is_array(input));
+    for (index = 0u; index < json_array_size(input); ++index) {
+        json_t *item = json_array_get(input, index);
+        const char *content = snag_json_string(item, "content");
+        if (content && strncmp(content, worknote_header, sizeof(worknote_header) - 1u) == 0)
+            return item;
+    }
+    return NULL;
+}
+
+static void
+worknote_build(struct snag_session *session, const json_t *steering,
+               const struct snag_instruction_set *instructions,
+               struct snag_context_projection *projection)
+{
+    char error[512] = {0};
+    int rc = snag_context_build(session, SNAJPAGENT_MODEL, "medium", 1u, steering, 0u, false,
+                                NULL, NULL, instructions, NULL, projection, error, sizeof(error),
+                                NULL);
+    if (rc != 0) fprintf(stderr, "worknote context: %s\n", error);
+    assert(rc == 0);
+}
+
+static void
+test_worknote(struct snag_store *store, const char *workspace)
+{
+    struct snag_instruction_set instructions = {0};
+    struct snag_context_projection projection = {0};
+    struct snag_session session;
+    json_t *empty = json_object();
+    const char *previous = getenv("XDG_CONFIG_HOME");
+    char saved[4096];
+    char xdg[4096];
+    char path[4096];
+    char *big;
+    size_t size;
+
+    assert(empty);
+    assert(previous == NULL || snprintf(saved, sizeof(saved), "%s", previous) > 0);
+    assert(snprintf(xdg, sizeof(xdg), "%s-xdg", workspace) > 0);
+    create_session(store, &session, workspace, "medium");
+    assert(setenv("XDG_CONFIG_HOME", xdg, 1) == 0); /* no global-root note in this build */
+    assert(snprintf(path, sizeof(path), "%s/WORKNOTE.md", workspace) > 0);
+    char turn[SNAG_ID_HEX_LEN + 1u];
+    assert(snprintf(turn, sizeof(turn), "%032x", 1u) == SNAG_ID_HEX_LEN);
+    json_t *packed = turn_started(turn, 1u, "worknote probe", workspace, NULL);
+    commit_event(&session, "turn_started", packed);
+
+    /* Absent note: nothing injected, and no instruction source is required. */
+    worknote_build(&session, empty, &instructions, &projection);
+    assert(worknote_item(json_object_get(projection.create_request.value, "input")) == NULL);
+    snag_context_projection_free(&projection);
+
+    /* Present note: the exact text lands under the stable header as a system message. */
+    write_file(path, "first line\nsecond line\n");
+    projection = (struct snag_context_projection){0};
+    worknote_build(&session, empty, &instructions, &projection);
+    json_t *item = worknote_item(json_object_get(projection.create_request.value, "input"));
+    assert(item);
+    assert_string(item, "role", "system");
+    {
+        char expected[256];
+        assert(snprintf(expected, sizeof(expected), "%s\nfirst line\nsecond line\n",
+                worknote_header) > 0);
+        assert_string(item, "content", expected);
+    }
+    snag_context_projection_free(&projection);
+
+    /* Fresh read per request: an edit lands on the next build with no carry involved. */
+    write_file(path, "changed state\n");
+    projection = (struct snag_context_projection){0};
+    worknote_build(&session, empty, &instructions, &projection);
+    item = worknote_item(json_object_get(projection.create_request.value, "input"));
+    assert(item);
+    {
+        char expected[256];
+        assert(snprintf(expected, sizeof(expected), "%s\nchanged state\n", worknote_header) > 0);
+        assert(strcmp(snag_json_string(item, "content"), expected) == 0);
+    }
+    snag_context_projection_free(&projection);
+
+    /* Empty and deleted notes inject nothing (fail-soft). */
+    write_file(path, "");
+    projection = (struct snag_context_projection){0};
+    worknote_build(&session, empty, &instructions, &projection);
+    assert(worknote_item(json_object_get(projection.create_request.value, "input")) == NULL);
+    snag_context_projection_free(&projection);
+    assert(unlink(path) == 0);
+    projection = (struct snag_context_projection){0};
+    worknote_build(&session, empty, &instructions, &projection);
+    assert(worknote_item(json_object_get(projection.create_request.value, "input")) == NULL);
+    snag_context_projection_free(&projection);
+
+    /* Invalid UTF-8 is skipped, never a failed turn (fail-soft). */
+    write_file(path, "bad\xff\n");
+    projection = (struct snag_context_projection){0};
+    worknote_build(&session, empty, &instructions, &projection);
+    assert(worknote_item(json_object_get(projection.create_request.value, "input")) == NULL);
+    snag_context_projection_free(&projection);
+
+    /* Exactly the cap is kept whole: no marker, exact length. */
+    size = SNAG_WORKNOTE_MAX_BYTES;
+    big = malloc(size + 1u);
+    assert(big);
+    memset(big, 'Z', size);
+    big[size] = '\0';
+    write_file(path, big);
+    projection = (struct snag_context_projection){0};
+    worknote_build(&session, empty, &instructions, &projection);
+    item = worknote_item(json_object_get(projection.create_request.value, "input"));
+    assert(item);
+    {
+        const char *content = snag_json_string(item, "content");
+        assert(strstr(content, worknote_marker) == NULL);
+        assert(strlen(content) == sizeof(worknote_header) - 1u + 1u + size);
+    }
+    snag_context_projection_free(&projection);
+
+    /* One byte over: the newest tail survives behind the omitted-prefix marker. */
+    size = SNAG_WORKNOTE_MAX_BYTES + 1u;
+    big = realloc(big, size + 1u);
+    assert(big);
+    memset(big, 'Z', size);
+    big[size] = '\0';
+    write_file(path, big);
+    projection = (struct snag_context_projection){0};
+    worknote_build(&session, empty, &instructions, &projection);
+    item = worknote_item(json_object_get(projection.create_request.value, "input"));
+    assert(item);
+    assert(strstr(snag_json_string(item, "content"), worknote_marker) != NULL);
+    snag_context_projection_free(&projection);
+
+    /* The tail cut never resumes inside a UTF-8 sequence: the two-byte character at bytes
+     * 99/100 straddles the offset, so the kept tail starts at the following byte. */
+    size = SNAG_WORKNOTE_MAX_BYTES + 100u;
+    big = realloc(big, size + 1u);
+    assert(big);
+    memset(big, 'A', 99u);
+    big[99] = (char)0xc3;
+    big[100] = (char)0xa9;
+    memset(big + 101u, 'B', size - 101u);
+    big[size] = '\0';
+    write_file(path, big);
+    projection = (struct snag_context_projection){0};
+    worknote_build(&session, empty, &instructions, &projection);
+    item = worknote_item(json_object_get(projection.create_request.value, "input"));
+    assert(item);
+    {
+        const char *content = snag_json_string(item, "content");
+        const char *tail = strstr(content, worknote_marker);
+        assert(tail);
+        tail += sizeof(worknote_marker) - 1u;
+        assert(*tail == 'B'); /* the split character was dropped, not half-kept */
+        assert(strchr(content, 'A') == NULL);
+        assert(memchr(content, 0xc3, strlen(content)) == NULL);
+        assert(memchr(content, 0xa9, strlen(content)) == NULL);
+    }
+    snag_context_projection_free(&projection);
+    assert(unlink(path) == 0);
+    free(big);
+    snag_session_close(&session);
+    json_decref(empty);
+    if (previous) assert(setenv("XDG_CONFIG_HOME", saved, 1) == 0);
+    else assert(unsetenv("XDG_CONFIG_HOME") == 0);
+}
+
+static void
+test_worknote_moments(struct snag_store *store, const char *workspace)
+{
+    struct snag_context_projection projection = {0}, replay = {0};
+    struct snag_instruction_set instructions = {0};
+    struct snag_session session;
+    json_t *empty = json_object();
+    const char *previous = getenv("XDG_CONFIG_HOME");
+    char saved[4096];
+    char xdg[4096];
+    char path[4096];
+    char session_id[SNAG_ID_HEX_LEN + 1u];
+    char error[512] = {0};
+    const char *turn = "dd100000000000000000000000000000";
+
+    assert(empty);
+    assert(previous == NULL || snprintf(saved, sizeof(saved), "%s", previous) > 0);
+    assert(snprintf(xdg, sizeof(xdg), "%s-xdg", workspace) > 0);
+    assert(snprintf(path, sizeof(path), "%s/WORKNOTE.md", workspace) > 0);
+    write_file(path, "first line\ncurrent tail state\n");
+    create_session(store, &session, workspace, "medium");
+    assert(setenv("XDG_CONFIG_HOME", xdg, 1) == 0); /* no global-root note in this build */
+    memcpy(session_id, session.id, sizeof(session_id));
+
+    /* Moment 1: turn start — the note is read fresh and injected at the request build. */
+    commit_event(&session, "input_received", input_received_data("worknote moments"));
+    commit_event(&session, "turn_started",
+                 turn_started(turn, 1u, "worknote moments", workspace, NULL));
+    worknote_build(&session, empty, &instructions, &projection);
+    json_t *item = worknote_item(json_object_get(projection.create_request.value, "input"));
+    assert(item);
+    {
+        char expected[256];
+        assert(snprintf(expected, sizeof(expected), "%s\nfirst line\ncurrent tail state\n",
+                worknote_header) > 0);
+        assert_string(item, "content", expected);
+    }
+
+    /* Moment 2: after compaction — the note source is re-read by the build following
+       the compaction cycle (the compact request itself never carries it). */
+    {
+        struct snag_context_projection compact = {0};
+        const char *response = "dd200000000000000000000000000000";
+        const char *turn2 = "dd500000000000000000000000000000";
+        const char *response2 = "dd600000000000000000000000000000";
+        int rc;
+
+        commit_event(&session, "response_started", response_started(turn, response, NULL));
+        commit_event(&session, "response_completed", response_completed(turn, response, "done"));
+        commit_event(&session, "turn_completed", turn_completed(turn, response));
+        rc = snag_context_compact_request_build(&session, session.default_model,
+            session.default_effort, false, 0u, false, NULL, &compact, error, sizeof(error),
+            NULL);
+        if (rc != 0) fprintf(stderr, "compact build: %s\n", error);
+        assert(rc == 0);
+        /* The compact request itself never carries the note (context.c:1355); model the real
+           cycle — install the summary, then rebuild with an active next turn. */
+        {
+            struct snag_context_projection post_compact = {0};
+            json_t *output = compact_output_fixture();
+            char output_hash[65], compact_id[33];
+            size_t output_bytes;
+
+            snprintf(compact_id, sizeof(compact_id), "%032x", 0xdd40u);
+            assert(snag_context_compact_output_valid(output, output_hash, &output_bytes,
+                                                    error, sizeof(error)) == 0);
+            json_t *started = compaction_started_data(&session, compact_id, "hard_budget",
+                compact.source_seq, compact.model_input.sha256, compact.create_request.sha256,
+                compact.model_input.bytes);
+            commit_event(&session, "compaction_started", started);
+            json_t *completed = compaction_completed_data(compact_id, compact.model_input.sha256,
+                output_hash, compact.create_request.sha256, compact.model_input.bytes, output_bytes,
+                output);
+            commit_event(&session, "compaction_completed", completed);
+            json_decref(output);
+            commit_event(&session, "turn_started",
+                         turn_started(turn2, 2u, "worknote moments 2", workspace, NULL));
+            worknote_build(&session, empty, &instructions, &post_compact);
+            json_t *note =
+                worknote_item(json_object_get(post_compact.create_request.value, "input"));
+            assert(note);
+            assert(strstr(snag_json_string(note, "content"), "current tail state") != NULL);
+            snag_context_projection_free(&post_compact);
+            /* Close turn 2 so moment 3 can reopen with a fresh active turn. */
+            commit_event(&session, "response_started",
+                         response_started(turn2, response2, compact_id));
+            commit_event(&session, "response_completed",
+                         response_completed(turn2, response2, "done"));
+            commit_event(&session, "turn_completed", turn_completed(turn2, response2));
+        }
+        snag_context_projection_free(&compact);
+    }
+
+    /* Moment 3: recovery — a session reopened from the journal rebuilds with the note
+       (the new-turn rebuild re-adds it). */
+    snag_session_close(&session);
+    assert(snag_session_open(store, &session, session_id, error, sizeof(error)) == 0);
+    {
+        const char *turn3 = "dd700000000000000000000000000000";
+
+        commit_event(&session, "input_received", input_received_data("worknote moments 3"));
+        commit_event(&session, "turn_started",
+                     turn_started(turn3, 3u, "worknote moments 3", workspace, NULL));
+    }
+    worknote_build(&session, empty, &instructions, &replay);
+    json_t *replayed = worknote_item(json_object_get(replay.create_request.value, "input"));
+    assert(replayed);
+    assert(strstr(snag_json_string(replayed, "content"), "current tail state") != NULL);
+
+    snag_context_projection_free(&projection);
+    snag_context_projection_free(&replay);
+    snag_instructions_free(&instructions);
+    snag_session_close(&session);
+    json_decref(empty);
+    assert(unlink(path) == 0);
+    if (previous) assert(setenv("XDG_CONFIG_HOME", saved, 1) == 0);
+    else assert(unsetenv("XDG_CONFIG_HOME") == 0);
 }
 
 static json_t *
@@ -3024,6 +3343,8 @@ main(int argc, char **argv)
     test_context_meter_usage(&store, workspace);
     test_cache_accounting(&store, workspace);
     test_prompt_cache_key(&store, workspace);
+    test_worknote(&store, workspace);
+    test_worknote_moments(&store, workspace);
     test_request_prefix_stability(&store, workspace);
     test_read_only_and_queue_controllers(&store, workspace);
     test_provider_model_projection(&store, workspace);

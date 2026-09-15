@@ -306,3 +306,50 @@ snag_instructions_match_metadata(const struct snag_instruction_set *set, const j
 mismatch: return snag_fail(error, error_size, EINVAL,
                 "active turn instruction paths no longer match advertised paths");
 }
+
+int
+snag_instructions_worknote(const char *workspace, char **note,
+                           char *error, size_t error_size)
+{
+    struct snag_instruction_set probe = {0};
+    char *canonical_workspace = NULL;
+    char *global = NULL;
+    const char *dirs[2];
+    size_t dir_count = 0u;
+    char scratch[256];
+    int rc = -1;
+
+    (void)error;
+    (void)error_size;
+    *note = NULL;
+    /* Fail-soft by design: absence, invalid candidates and an unavailable global root all read
+     * as "no note"; only allocation failure reports -1, and the caller treats it as no note. */
+    canonical_workspace = workspace && *workspace ? snag_realpath(workspace) : NULL;
+    if (canonical_workspace) dirs[dir_count++] = canonical_workspace;
+    global = config_instruction_root(scratch, sizeof(scratch));
+    if (global) dirs[dir_count++] = global;
+    for (size_t i = 0u; i < dir_count; ++i) {
+        char *path = snag_path_join(dirs[i], SNAG_WORKNOTE_NAME);
+        bool added = false;
+        int inspected;
+
+        if (!path) goto out;
+        inspected = try_candidate(&probe, path, &added, scratch, sizeof(scratch));
+        free(path);
+        if (inspected == 0 && added) {
+            /* Transfer the canonical path out of the probe set. */
+            *note = probe.paths[0];
+            probe.paths[0] = NULL;
+            probe.count = 0u;
+            rc = 0;
+            goto out;
+        }
+        snag_instructions_free(&probe);
+    }
+    rc = 0;
+out:
+    snag_instructions_free(&probe);
+    free(global);
+    free(canonical_workspace);
+    return rc;
+}

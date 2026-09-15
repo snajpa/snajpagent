@@ -106,6 +106,65 @@ main(void)
     (void)unlink(path);
     snag_instructions_free(&set);
 
+    /* The work note: workspace first, then the global root; one note; fail-soft; no cap slot. */
+    char *note = NULL;
+    assert(snag_instructions_worknote(leaf, &note, error, sizeof(error)) == 0);
+    assert(note == NULL); /* absent everywhere */
+    assert(snag_instructions_worknote("", &note, error, sizeof(error)) == 0);
+    assert(note == NULL);
+    assert(snprintf(path, sizeof(path), "%s/WORKNOTE.md", config) > 0);
+    write_file(path, "global note\n");
+    assert(snag_instructions_worknote(leaf, &note, error, sizeof(error)) == 0);
+    assert(note && strcmp(note, path) == 0); /* global-root fallback */
+    free(note);
+    note = NULL;
+    assert(snprintf(path, sizeof(path), "%s/WORKNOTE.md", leaf) > 0);
+    write_file(path, "workspace note\n");
+    assert(snag_instructions_worknote(leaf, &note, error, sizeof(error)) == 0);
+    assert(note && strcmp(note, path) == 0); /* workspace wins */
+    free(note);
+    note = NULL;
+    assert(unlink(path) == 0);
+    assert(symlink("AGENTS.md", path) == 0);
+    assert(snag_instructions_worknote(leaf, &note, error, sizeof(error)) == 0);
+    assert(note && strstr(note, "/snajpagent/WORKNOTE.md") != NULL); /* invalid candidate skipped */
+    free(note);
+    note = NULL;
+    assert(unlink(path) == 0);
+
+    /* Orthogonality with the 16-source cap: the note consumes no slot and survives a full set. */
+    char deep[4096];
+    char level[4096];
+    assert(snprintf(deep, sizeof(deep), "%s", leaf) > 0);
+    for (unsigned i = 1u; i <= 12u; ++i) {
+        assert(snprintf(level, sizeof(level), "%s/d%u", deep, i) > 0);
+        mkdir_checked(level);
+        assert(snprintf(path, sizeof(path), "%s/AGENTS.md", level) > 0);
+        write_file(path, "deep guidance\n");
+        assert(snprintf(deep, sizeof(deep), "%s", level) > 0);
+    }
+    assert(snag_instructions_discover(&set, deep, error, sizeof(error)) == 0);
+    assert(set.count == 16u); /* the cap is reached exactly, note present but uncounted */
+    assert(snprintf(path, sizeof(path), "%s/WORKNOTE.md", deep) > 0);
+    write_file(path, "deep note\n");
+    assert(snag_instructions_worknote(deep, &note, error, sizeof(error)) == 0);
+    assert(note && strcmp(note, path) == 0);
+    free(note);
+    note = NULL;
+    snag_instructions_free(&set);
+    assert(snprintf(level, sizeof(level), "%s/d13", deep) > 0);
+    mkdir_checked(level);
+    assert(snprintf(path, sizeof(path), "%s/AGENTS.md", level) > 0);
+    write_file(path, "over\n");
+    assert(snprintf(deep, sizeof(deep), "%s", level) > 0);
+    assert(snag_instructions_discover(&set, deep, error, sizeof(error)) < 0);
+    assert(errno == EOVERFLOW); /* one source too many still fails on its own */
+    assert(snag_instructions_worknote(deep, &note, error, sizeof(error)) == 0);
+    assert(note && strstr(note, "/snajpagent/WORKNOTE.md") != NULL);
+    free(note);
+    note = NULL;
+    snag_instructions_free(&set);
+
     puts("test_instructions: ok");
     return 0;
 }
