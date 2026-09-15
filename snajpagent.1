@@ -563,7 +563,8 @@ submission the composer returns once that turn has begun processing rather than
 at once, so a ready-looking prompt never appears under a line nothing has acted
 on yet; keys typed in that window are buffered and appear with the composer,
 while an empty, slash-command or display-only submission still repaints
-immediately.
+immediately.  A turn that never reports processing returns the composer after a
+brief bounded delay (250 ms).
 Explicit numbered sends and broadcasts also work from rollout, but ordinary
 rollout input stays local:
 while idle it starts a model turn, and during active work it steers that turn at
