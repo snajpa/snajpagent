@@ -588,6 +588,17 @@ parse_audio(struct parse_state *state, const char *key, const char *value)
     errno = EINVAL; return -1;
 }
 
+const struct snag_model_limit_config *
+snag_config_model_limit_exact(const struct snag_config *config,
+    const char *provider, const char *model)
+{
+    if (!config || !provider || !model) return NULL;
+    for (size_t i = 0; i < config->model_limit_count; ++i)
+        if (strcmp(config->model_limits[i].provider, provider) == 0 &&
+            strcmp(config->model_limits[i].model, model) == 0) return &config->model_limits[i];
+    return NULL;
+}
+
 static int
 parse_setting(struct parse_state *state, const char *key, const char *value)
 {
@@ -622,6 +633,7 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         {SECTION_MODEL_LIMIT, "max_input_tokens", SET_U64, &limit->max_input_tokens, 1, SNAG_CONFIG_TOKEN_LIMIT_MAX},
         {SECTION_MODEL_LIMIT, "max_output_tokens", SET_U64, &limit->max_output_tokens, 1, SNAG_CONFIG_TOKEN_LIMIT_MAX},
         {SECTION_MODEL_LIMIT, "reasoning_efforts", SET_EFFORTS, &limit->reasoning_efforts, 0, 0},
+        {SECTION_MODEL_LIMIT, "steering", SET_TEXT, limit->steering, 0, sizeof(limit->steering)},
         {SECTION_MODEL_ALIAS, "model", SET_HEADER, state->models[state->model_alias_index].model.upstream, 0, SNAG_CONFIG_MODEL_MAX},
         {SECTION_UI, "typing_pause_ms", SET_U32, &config->typing_pause_ms, 0, 5000},
         {SECTION_UI, "markdown", SET_BOOL, &config->markdown, 0, 0},
@@ -1024,10 +1036,15 @@ validate_config(struct snag_config *config, bool private_file, char *error, size
         const struct snag_model_limit_config *limit = &config->model_limits[i];
         if (!snag_config_provider(config, limit->provider) ||
             (!limit->context_window_tokens && !limit->max_input_tokens && !limit->max_output_tokens &&
-             !limit->reasoning_efforts) ||
+             !limit->reasoning_efforts && !limit->steering[0]) ||
             (limit->context_window_tokens && limit->max_output_tokens &&
              limit->max_output_tokens >= limit->context_window_tokens)) {
             return snag_fail(error, error_size, EINVAL, "invalid model-limit section for %s/%s",
+                      limit->provider, limit->model);
+        }
+        if (limit->steering[0] && strcmp(limit->steering, "mentions") != 0 &&
+            strcmp(limit->steering, "all") != 0) {
+            return snag_fail(error, error_size, EINVAL, "invalid model-limit steering for %s/%s",
                       limit->provider, limit->model);
         }
     }

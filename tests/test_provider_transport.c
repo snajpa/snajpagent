@@ -1815,6 +1815,38 @@ test_provider_auth(void)
 }
 
 static void
+test_irc_steering_mode(void)
+{
+    struct snag_config config = {0};
+    struct app_state app = {0};
+    char error[256] = {0};
+    snag_session_init(&app.session);
+    assert(snag_ui_init(&app.ui) == 0);
+    app.config = &config;
+    app.irc_urgent.max = 128u;
+    app.irc_background.max = 128u;
+    assert(snag_buf_append(&app.irc_background, "room", sizeof("room")) == 0);
+    app.session.active_turn = true;
+    strcpy(config.model, "m");
+    strcpy(app.session.active_turn_provider, "p");
+    /* Default `mentions`: mid-turn, background room traffic is not admitted. */
+    assert(snag_app_irc_flush_urgent(&app, error, sizeof(error)) == 0);
+    assert(app.irc_background.len == sizeof("room"));
+    /* `all`: the background projection is attempted; invalid UTF-8 fails it
+     * without consuming the projection. */
+    config.model_limit_count = 1u;
+    strcpy(config.model_limits[0].provider, "p");
+    strcpy(config.model_limits[0].model, "m");
+    strcpy(config.model_limits[0].steering, "all");
+    app.irc_background.data[0] = 0xff;
+    assert(snag_app_irc_flush_urgent(&app, error, sizeof(error)) < 0);
+    assert(app.irc_background.len == sizeof("room"));
+    snag_buf_free(&app.irc_background);
+    snag_ui_free(&app.ui);
+    snag_session_close(&app.session);
+}
+
+static void
 test_irc_failed_intent_retains_pending(void)
 {
     struct snag_config config = {0};
@@ -2773,6 +2805,7 @@ main(void)
 #if SNAJPAGENT_AUDIO_DEVICE
     test_native_media();
 #endif
+    test_irc_steering_mode();
     test_irc_failed_intent_retains_pending();
 #if SNAJPAGENT_AUDIO_DEVICE && defined(MA_NO_RUNTIME_LINKING) && defined(MA_ENABLE_ALSA)
     test_static_alsa_config();

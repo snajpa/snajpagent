@@ -22,6 +22,7 @@
 #define SNAG_CONFIG_PROVIDER_MAX 16u
 #define SNAG_CONFIG_PROVIDER_NAME_MAX 63u
 #define SNAG_CONFIG_MODEL_LIMIT_MAX 128u
+#define SNAG_CONFIG_STEERING_MAX 8u
 #define SNAG_CONFIG_MODEL_ALIAS_MAX 128u
 #define SNAG_CONFIG_TOKEN_LIMIT_MAX UINT64_C(4000000000)
 /* Outside the numeric compaction range; zero continues to mean disabled. */
@@ -89,6 +90,7 @@ struct snag_provider_config {
 struct snag_model_limit_config {
     char provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
     char model[SNAG_CONFIG_MODEL_MAX];
+    char steering[SNAG_CONFIG_STEERING_MAX + 1u];
     uint64_t context_window_tokens;
     uint64_t max_input_tokens;
     uint64_t max_output_tokens;
@@ -169,5 +171,10 @@ const char *snag_config_model_upstream(const struct snag_provider_config *provid
 bool snag_config_resolve_limits(const struct snag_config *config, const char *provider, const char *model,
                                struct snag_model_limit_config *out,
                                const struct snag_model_limit_config *sources[3]);
+
+/* Exact provider+model entry for per-model IRC steering; NULL when absent. */
+const struct snag_model_limit_config *
+snag_config_model_limit_exact(const struct snag_config *config,
+    const char *provider, const char *model);
 
 #endif

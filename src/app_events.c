@@ -336,15 +336,36 @@ snag_app_irc_flush_urgent(struct app_state *app, char *error, size_t error_size)
     size_t used;
     char *text;
     int rc;
+    const struct snag_model_limit_config *limit;
+    bool admit_all;
 
-    if (!app || !app->session.active_turn || !app->irc_urgent.len) return 0;
-    if (snag_random_id(steering_id) < 0 || !(text = pending_batch(&app->irc_urgent, &used))) return -1;
-    rc = admit_irc_input(app, &app->irc_urgent_refs, used, "steering_added",
-            snag_app_steering_added_data(app->session.active_turn_id, steering_id, text), error, error_size);
-    free(text);
-    if (rc < 0) return -1;
-    consume_pending(&app->irc_urgent, used);
-    admit_replies(app, used);
+    if (!app || !app->session.active_turn) return 0;
+    limit = snag_config_model_limit_exact(app->config, app->session.active_turn_provider,
+        app->config->model);
+    admit_all = limit && strcmp(limit->steering, "all") == 0;
+    if (!app->irc_urgent.len && !(admit_all && app->irc_background.len)) return 0;
+    if (app->irc_urgent.len) {
+        if (snag_random_id(steering_id) < 0 || !(text = pending_batch(&app->irc_urgent, &used)))
+            return -1;
+        rc = admit_irc_input(app, &app->irc_urgent_refs, used, "steering_added",
+                snag_app_steering_added_data(app->session.active_turn_id, steering_id, text),
+                error, error_size);
+        free(text);
+        if (rc < 0) return -1;
+        consume_pending(&app->irc_urgent, used);
+        admit_replies(app, used);
+    }
+    if (admit_all && app->irc_background.len) {
+        if (snag_random_id(steering_id) < 0 ||
+            !(text = pending_batch(&app->irc_background, &used))) return -1;
+        rc = admit_irc_input(app, &app->irc_background_refs, used, "steering_added",
+                snag_app_steering_added_data(app->session.active_turn_id, steering_id, text),
+                error, error_size);
+        free(text);
+        if (rc < 0) return -1;
+        consume_pending(&app->irc_background, used);
+        if (!app->irc_background.len) app->irc_background_since_ms = 0u;
+    }
     return 0;
 }
 
