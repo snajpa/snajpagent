@@ -11,7 +11,8 @@ Later source changes are listed under Unreleased in CHANGELOG.md.
 
 - The composer returns once the submitted turn reports processing instead of repainting a
   ready-looking prompt immediately underneath it. Text typed in that window is buffered and
-  appears with the composer; empty, slash-command and display-only submissions stay immediate.
+  appears with the composer; empty, slash-command and display-only submissions stay immediate,
+  and a turn that never reports processing returns it after a brief bounded delay.
 - Images, documents and sampled video referenced in a conversation are read natively, and Office
   work is driven through the engine installed on the target rather than a bundled runtime. Modalities
   are compiled per target and the shipped matrix reflects what each platform actually carries.
