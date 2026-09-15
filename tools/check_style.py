@@ -114,8 +114,8 @@ def added_lines(base):
         print("check_style.py: git is not available", file=sys.stderr)
         sys.exit(2)
     except subprocess.CalledProcessError as exc:
-        print("check_style.py: cannot diff against base '%s' (git exit %d)" % (base, exc.returncode),
-              file=sys.stderr)
+        print("check_style.py: cannot diff against base '%s' (git exit %d)"
+              % (base, exc.returncode), file=sys.stderr)
         sys.exit(2)
     added = {}
     path = None
