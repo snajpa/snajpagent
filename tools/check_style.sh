@@ -2,10 +2,26 @@
 # SPDX-License-Identifier: GPL-2.0-only
 set -eu
 
-test "$#" -eq 0 || {
-    echo "usage: $0" >&2
+changed=false
+base=
+if [ "$#" -eq 0 ]; then
+    :
+elif [ "$#" -eq 1 ] && [ "$1" = "--changed" ]; then
+    changed=true
+elif [ "$#" -eq 1 ] && [ "${1#--changed=}" != "$1" ]; then
+    changed=true
+    base=${1#--changed=}
+elif [ "$#" -eq 2 ] && [ "$1" = "--changed" ]; then
+    changed=true
+    base=$2
+else
+    echo "usage: $0 [--changed <base>]" >&2
     exit 2
-}
+fi
+if [ "$changed" = true ] && [ -z "$base" ]; then
+    echo "$0: --changed requires an explicit base revision" >&2
+    exit 2
+fi
 
 dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 fail=0
@@ -65,6 +81,10 @@ find src tests tools -type f \( -name '*.c' -o -name '*.h' -o -name '*.sh' \) -p
 } || fail=1
 
 python3 "$dir/check_style.py" || fail=1
+
+if [ "$changed" = true ]; then
+    python3 "$dir/check_style.py" --changed "$base" || fail=$?
+fi
 
 if [ "$fail" -ne 0 ]; then
     exit "$fail"
