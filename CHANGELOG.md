@@ -9,6 +9,11 @@
   Model API) rejected `"none"` with HTTP 400 and failed the whole turn, including
   its derived input-token count request. Tool-less requests never send a tool
   choice now, and the terminal suite fails if one does.
+- Announce an accepted empty-draft chat/rollout switch (`/chat`, `/rollout` or
+  Tab) with a durable `switching to chat`/`switching to rollout` line before the
+  repaint, so the keystroke is visibly accepted; a repeat switch is ignored while
+  one is in flight (until the target view becomes current, or the 500 ms bound
+  expires), and switching to the view already shown stays silent.
 
 - Finish all requests and reap the local server in the session-header transport
   test, allowing test runners to close their output pipes after completion.
