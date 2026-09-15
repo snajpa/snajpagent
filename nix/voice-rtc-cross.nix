@@ -20,6 +20,6 @@ let
 in {
   inherit rtc juice srtp sctp opus;
   dependencies = [ rtc juice srtp sctp opus ];
-  cflags = "-I${rtc}/include -I${opus}/include";
+  cflags = "-DRTC_STATIC -I${rtc}/include -I${opus}/include";
   libs = "-L${rtc}/lib -ldatachannel -L${juice}/lib -ljuice -L${srtp}/lib -lsrtp2 -L${sctp}/lib -lusrsctp -L${opus}/lib -lopus -L${tls}/lib -lmbedtls -lmbedx509 -lmbedcrypto";
 }

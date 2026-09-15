@@ -1585,7 +1585,7 @@ struct snag_voice_socket {
     CURL *curl;
     CURLM *multi;
     struct curl_slist *headers;
-    bool global,added,closed;
+    bool global,added,closed,native,connected,sending;
     curl_off_t receive_offset;
     curl_socket_t socket;
 };
@@ -1594,6 +1594,16 @@ void
 snag_provider_voice_close(struct snag_voice_socket *voice)
 {
     if(!voice)return;
+#if LIBCURL_VERSION_NUM >= 0x075600
+    if(voice->native && voice->connected && !voice->closed && !voice->sending) {
+        static const char close_session[]="{\"type\":\"session.close\"}";
+        size_t sent=0;
+        (void)curl_ws_send(voice->curl,close_session,sizeof(close_session)-1u,&sent,0,CURLWS_TEXT);
+    }
+    if(voice->connected && !voice->closed) {
+        size_t sent=0;(void)curl_ws_send(voice->curl,"",0u,&sent,0,CURLWS_CLOSE);
+    }
+#endif
     if(voice->added)curl_multi_remove_handle(voice->multi,voice->curl);
     if(voice->multi)curl_multi_cleanup(voice->multi);
     if(voice->curl)curl_easy_cleanup(voice->curl);
@@ -1638,6 +1648,7 @@ voice_connect(const struct snag_provider_config *provider,const struct snag_cred
     else if(!strncmp(base,"http://[::1]:",13u)) {scheme="ws";authority=base+7u;}
     if(!authority) {snag_errorf(error,size,"Realtime microphone transport requires an HTTPS provider URL");return -1;}
     voice=calloc(1,sizeof(*voice));if(!voice)goto failed;
+    voice->native=call!=NULL;
     if(snag_http_init()!=CURLE_OK)goto failed;
     voice->global=true;
     const curl_version_info_data *version=curl_version_info(CURLVERSION_NOW);
@@ -1692,7 +1703,7 @@ voice_connect(const struct snag_provider_config *provider,const struct snag_cred
             }
             if(curl_easy_getinfo(curl,CURLINFO_ACTIVESOCKET,&voice->socket)!=CURLE_OK ||
                 voice->socket==CURL_SOCKET_BAD)goto failed;
-            *out=voice;return 0;
+            voice->connected=true;*out=voice;return 0;
         }
         if(!running || curl_multi_poll(voice->multi,NULL,0,20,NULL)!=CURLM_OK)goto failed;
     }
@@ -1722,7 +1733,7 @@ snag_provider_voice_send(struct snag_voice_socket *voice,const void *bytes,size_
     size_t sent=0;
     CURLcode rc=curl_ws_send(voice->curl,(const char *)bytes+*offset,length-*offset,&sent,0,CURLWS_TEXT);
     if(sent>length-*offset || (rc!=CURLE_OK && rc!=CURLE_AGAIN))goto failed;
-    *offset+=sent;return 0;
+    *offset+=sent;voice->sending=*offset<length;return 0;
 #else
     (void)bytes;(void)length;(void)offset;
 #endif

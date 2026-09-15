@@ -178,7 +178,7 @@ in {
         "PDF_LIBS=$($PKG_CONFIG --static --libs poppler libpng) -lstdc++"
         "MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src} $($PKG_CONFIG --cflags alsa libpulse) -DMA_NO_RUNTIME_LINKING -DMA_ENABLE_ONLY_SPECIFIC_BACKENDS -DMA_ENABLE_ALSA -DMA_ENABLE_PULSEAUDIO"
         "AUDIO_DEVICE_LIBS=$($PKG_CONFIG --static --libs alsa libpulse)"
-        "RTC_CFLAGS=-I${voice.rtc.dev}/include -I${voice.opus.dev}/include"
+        "RTC_CFLAGS=-DRTC_STATIC -I${voice.rtc.dev}/include -I${voice.opus.dev}/include"
         "RTC_LIBS=-L${voice.rtc}/lib -ldatachannel -L${voice.juice}/lib -ljuice $($PKG_CONFIG --static --libs opus libsrtp2 usrsctp openssl) -lstdc++"
       )
     '';

@@ -286,6 +286,9 @@ native_done:
     if(snag_voice_begin(v->protocol,v->error,sizeof(v->error))<0)goto done;
     while(!atomic_load(&v->stop)) {
         uint64_t now=snag_monotonic_ms();
+        if(v->announced && v->rtc && !snag_voice_rtc_ready(v->rtc)) {
+            strcpy(v->error,"Native voice media connection stopped");break;
+        }
         if((!snag_voice_ready(v->protocol) || (v->rtc && !snag_voice_rtc_ready(v->rtc))) &&
             now-v->start_ms>v->provider.connect_timeout_ms+10000u) {
             strcpy(v->error,"Voice session or media connection did not become ready");break;
@@ -381,9 +384,9 @@ native_done:
 failed:
     strcpy(v->error,"Realtime voice stopped because its device, protocol or mailbox became unavailable");
 done:
-    snag_voice_rtc_close(v->rtc);v->rtc=NULL;
     snag_audio_close(v->device);v->device=NULL;
     snag_provider_voice_close(v->socket);v->socket=NULL;
+    snag_voice_rtc_close(v->rtc);v->rtc=NULL;
     snag_voice_free(v->protocol);v->protocol=NULL;
     snag_credential_clear(&v->credential);
     atomic_store_explicit(&v->done,true,memory_order_release);return NULL;
