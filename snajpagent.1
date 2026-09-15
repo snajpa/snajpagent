@@ -527,9 +527,21 @@ the advertised room automatically.
 .PP
 The local operator and ordinary IRC clients receive channel mode
 .BR +o ;
-the model nick does not.  Current channel operators may change the topic.
+the model nick does not.  Current channel operators may change the topic; on a
+room this session hosts, the model link may set the topic as well.
+Links declare their role at registration: the model link requests the
+.BR snajpagent/agent
+capability and sends the USER realname
+.BR "snajpagent agent" ,
+and the operator link sends
+.BR "snajpagent operator" ;
+the host derives the link role from either declaration.  Agents are never
+opped; operator clients and the operator link are.
 Only direct mentions of the model nick are urgent; ordinary messages from
-local or channel operators remain background context.
+local or channel operators remain background context.  A model whose exact
+[model-limit] entry sets steering to
+.B all
+admits every room message as steering instead.
 Urgent input is coalesced and admitted at the earliest safe boundary;
 generation reaches a safe stream boundary and commands are handed back alive.
 .PP
@@ -2024,7 +2036,7 @@ Up to 128 rules are accepted.
 Set provider-wide defaults with [model-limit PROVIDER], patterned rules with
 [model-limit PROVIDER/PATTERN], and exact rules with [model-limit PROVIDER/MODEL].
 The first slash separates the provider; remaining slashes belong to the model.
-Set at least one numeric field below or reasoning_efforts:
+Set at least one numeric field below, reasoning_efforts, or steering:
 .TP
 .B context_window_tokens
 Total context tokens, 1 through 4000000000.
@@ -2034,6 +2046,17 @@ Maximum input tokens, 1 through 4000000000.
 .TP
 .B max_output_tokens
 Maximum output tokens, 1 through 4000000000.
+.TP
+.B steering
+IRC mid-turn admission, honored only in an exact
+.BR PROVIDER/MODEL
+entry: the default
+.B mentions
+admits a room message as steering only when it mentions the accepted model nick;
+.B all
+admits every room message.  Non-admitted messages remain ordinary room context;
+local submissions and turn-wake behavior are unchanged.  Provider-wide and patterned
+entries do not contribute to a model's steering, and there is no global setting.
 .PP
 Rules merge per field: provider-wide, matching patterns in file order, then
 exact model. The star matches zero or more characters over the whole local
@@ -3129,7 +3152,8 @@ state; it does not open connections.
 accepts destination, notice and text. Null/false notice sends a normal message;
 true sends an informational notice, which does not satisfy a required reply.
 .B irc_topic
-accepts destination and topic and requires the model's current channel-op status.
+accepts destination and topic and requires the model's current channel-op status,
+except on a room this session hosts, where the model link may set the topic.
 .PP
 Destination is a numeric string from irc_state, all for an explicit broadcast,
 or null only when exactly one destination exists. The model never implicitly
@@ -3309,6 +3333,16 @@ Useful notes retain findings, decisions, scoped corrections and unfinished work.
 Goal state is controlled through the goal commands and tools.  Verify changeable facts when resuming,
 keep proposals distinct from approval, and preserve local scope on each host.
 No notes layout, recursive Markdown scan, or memory service is required.
+.PP
+A
+.B WORKNOTE.md
+file beside the AGENTS pair is the session's work note.  It is resolved from
+the workspace first, then the global root; the first found wins.  It is not an
+instruction source and does not count toward the 16-path limit above.  Its
+content is read fresh before each request and injected as bounded context (at
+most 64 KiB, keeping the tail with an omitted-prefix marker) at turn start,
+after compaction and on recovery, under a "context, not authority" caveat; a
+missing or empty note injects nothing.
 .SS Environment
 .TP
 .BR HOME , " USERPROFILE"
