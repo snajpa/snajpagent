@@ -3111,6 +3111,9 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
     graph = (struct snag_response_graph){0};
     if (continuing) {
         snag_instructions_free(&app->turn_instructions);
+        if (app->session.active_instructions && snag_instructions_metadata_valid(
+                app->session.active_instructions, error, sizeof(error)) < 0)
+            goto fail;
         for (size_t i = 0; i < json_array_size(app->session.active_instructions); ++i) {
             char *path = snag_strdup_checked(json_string_value(
                 json_array_get(app->session.active_instructions, i)), SNAG_PATH_MAX_BYTES);
