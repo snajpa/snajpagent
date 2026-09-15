@@ -28,6 +28,10 @@
 #endif
 #endif
 
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0
+#endif
+
 #ifdef _WIN32
 #define SNAG_NAME_MAX_BYTES (255u * 4u)
 #else
