@@ -344,6 +344,7 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     struct snag_irc_route route = {0}, frozen;
     uint32_t removed_id;
 
+    assert(snag_irc_destinations_generation(NULL) == 0u);
     init_server_config(&upstream_config, upstream_port);
     upstream = open_server(&upstream_config, &upstream_capture);
     tick(upstream, 1u);
@@ -378,14 +379,17 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     assert(strcmp(snag_irc_model_nick(runtime), "agent1") == 0);
     joins = upstream_capture.events[SNAG_IRC_JOIN];
     revision = snag_irc_routing_revision(runtime);
+    uint64_t destination_generation = snag_irc_destinations_generation(runtime);
     assert(snag_irc_configure(runtime, &config, "/private-workspace", error, sizeof(error)) == 0);
     assert(snag_irc_routing_revision(runtime) == revision);
+    assert(snag_irc_destinations_generation(runtime) == destination_generation);
 
     /* A failed listener addition leaves the existing client connected. */
     assert(snag_irc_add(runtime, &config, "/private-workspace", true, other, error, sizeof(error)) < 0);
     tick(upstream, 2u);
     assert(upstream_capture.events[SNAG_IRC_JOIN] == joins);
     assert(snag_irc_routing_revision(runtime) == revision);
+    assert(snag_irc_destinations_generation(runtime) == destination_generation);
 
     config.irc.listen_explicit = true;
     assert(snag_irc_configure(runtime, &config, "/private-workspace", error, sizeof(error)) == 0);
@@ -987,6 +991,7 @@ static void __attribute__((noinline)) test_client_reconnect(void)
     assert(strstr((const char *)snapshot.data, "]: /workspace") != NULL);
     snag_buf_free(&snapshot);
     assert(snag_irc_routing_revision(client) == revision);
+    uint64_t destination_generation = snag_irc_destinations_generation(client);
 
     /* Same endpoint can advertise a different room on reconnect. */
     snag_irc_close(next_server);
@@ -995,11 +1000,18 @@ static void __attribute__((noinline)) test_client_reconnect(void)
     next_server = open_server(&server_config, &next_capture);
     wait_pair_state(next_server, client, "joined #other");
     assert(snag_irc_routing_revision(client) > revision);
+    assert(snag_irc_destinations_generation(client) > destination_generation);
     snag_buf_init(&snapshot, SNAG_MAX_IRC_SNAPSHOT);
     assert(snag_irc_state(client, &snapshot, error, sizeof(error)) == 0);
     assert(snag_buf_terminate(&snapshot) == 0);
     assert(strstr((const char *)snapshot.data, "joined #other"));
     snag_buf_free(&snapshot);
+
+    pump_pair(next_server, client, 1u);
+    uint64_t steady_generation = snag_irc_destinations_generation(client);
+    tick(client, 2u);
+    tick(client, 2u);
+    assert(snag_irc_destinations_generation(client) == steady_generation);
 
     snag_irc_close(client);
     snag_irc_close(next_server);
