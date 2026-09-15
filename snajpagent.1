@@ -528,6 +528,14 @@ the advertised room automatically.
 The local operator and ordinary IRC clients receive channel mode
 .BR +o ;
 the model nick does not.  Current channel operators may change the topic.
+Links declare their role at registration: the model link requests the
+.BR snajpagent/agent
+capability and sends the USER realname
+.BR "snajpagent agent" ,
+and the operator link sends
+.BR "snajpagent operator" ;
+the host derives the link role from either declaration.  Agents are never
+opped; operator clients and the operator link are.
 Only direct mentions of the model nick are urgent; ordinary messages from
 local or channel operators remain background context.
 Urgent input is coalesced and admitted at the earliest safe boundary;
