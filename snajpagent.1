@@ -527,7 +527,8 @@ the advertised room automatically.
 .PP
 The local operator and ordinary IRC clients receive channel mode
 .BR +o ;
-the model nick does not.  Current channel operators may change the topic.
+the model nick does not.  Current channel operators may change the topic; on a
+room this session hosts, the model link may set the topic as well.
 Links declare their role at registration: the model link requests the
 .BR snajpagent/agent
 capability and sends the USER realname
@@ -3151,7 +3152,8 @@ state; it does not open connections.
 accepts destination, notice and text. Null/false notice sends a normal message;
 true sends an informational notice, which does not satisfy a required reply.
 .B irc_topic
-accepts destination and topic and requires the model's current channel-op status.
+accepts destination and topic and requires the model's current channel-op status,
+except on a room this session hosts, where the model link may set the topic.
 .PP
 Destination is a numeric string from irc_state, all for an explicit broadcast,
 or null only when exactly one destination exists. The model never implicitly
