@@ -160,14 +160,17 @@ slow_then_cancel_pump(void *opaque, unsigned int timeout_ms)
 }
 
 static json_t *
-run_grep_pump(const char *workspace, const char *arguments, snag_tool_pump_fn pump, int *status)
+run_grep_pump(const char *workspace, const char *arguments,
+              snag_tool_pump_fn pump, int *status)
 {
-    struct snag_response_item call = {.kind = SNAG_ITEM_TOOL_CALL, .name = (char *)"grep"};
+    struct snag_response_item call = {
+        .kind = SNAG_ITEM_TOOL_CALL, .name = (char *)"grep"};
     json_t *result = NULL;
     char error[128];
 
     call.arguments = snag_json_load_strict((const unsigned char *)arguments,
-                                           strlen(arguments), 8192u, error, sizeof(error));
+                                           strlen(arguments), 8192u,
+                                           error, sizeof(error));
     assert(call.arguments);
     *status = snag_tools_read_only(&call, workspace, pump, NULL, &result);
     assert(snag_tool_result_valid(result) == 0);
@@ -179,8 +182,9 @@ static void
 test_read_pump_cadence(void)
 {
     const unsigned int lines = 8000u;
-    const char *arguments = "{\"path\":\"many.txt\",\"pattern\":\"line 7999\",\"recursive\":false,"
-                            "\"ignore_case\":false,\"literal\":true,\"offset\":null,\"limit\":null}";
+    const char *arguments = "{\"path\":\"many.txt\",\"pattern\":\"line 7999\","
+                            "\"recursive\":false,\"ignore_case\":false,"
+                            "\"literal\":true,\"offset\":null,\"limit\":null}";
 #ifdef _WIN32
     const char *scratch = getenv("TMP");
 #else
@@ -203,7 +207,8 @@ test_read_pump_cadence(void)
     assert(root && dir >= 0 && file >= 0);
     out = fdopen(file, "w");
     assert(out);
-    for (unsigned int i = 0u; i < lines; ++i) assert(fprintf(out, "line %u\n", i) > 0);
+    for (unsigned int i = 0u; i < lines; ++i)
+        assert(fprintf(out, "line %u\n", i) > 0);
     assert(fclose(out) == 0);
 
     /* The first checkpoint pumps before any line is scanned, so a cancel
@@ -221,7 +226,8 @@ test_read_pump_cadence(void)
     result = run_grep_pump(root, arguments, counting_pump, &status);
     elapsed = snag_monotonic_ms() - started;
     assert(status == 0);
-    assert(strstr(snag_json_string(result, "model_text"), "many.txt:8000:line 7999"));
+    assert(strstr(snag_json_string(result, "model_text"),
+                  "many.txt:8000:line 7999"));
     assert(strstr(snag_json_string(result, "model_text"), "Complete;"));
     assert(cadence_pump_calls >= 1u);
     assert(cadence_pump_calls <= lines / 16u + 8u);
