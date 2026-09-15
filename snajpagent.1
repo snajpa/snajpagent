@@ -1333,7 +1333,9 @@ Stop local audio before reloading configuration or preparing attachments.
 .B /voice on
 Start a voice conversation using the selected provider and its credentials.
 Direct Codex subscriptions and codex-lb use native subscription voice; compatible
-BYOK providers use their Realtime API. [audio] settings are optional overrides.
+BYOK providers use their Realtime API. A codex-lb gateway must use its
+/backend-api/codex base for native voice; a bare /v1 base does not select it.
+[audio] settings are optional overrides.
 The prompt identifies microphone capture, which starts after connection setup.
 Microphone audio goes to the provider's media servers and replies
 are synthesized speech. Use a headset: software acoustic echo cancellation is

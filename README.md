@@ -153,7 +153,9 @@ accepted originals and prepared results stay with the saved session.
 `/dictate` inserts speech into your editable draft. `/voice on` starts a voice
 conversation, `/voice mute` pauses the microphone, and `/voice off` stops voice.
 These commands use the selected provider and its credentials: a Codex subscription,
-codex-lb, or a compatible BYOK provider. Use a headset for duplex voice.
+codex-lb, or a compatible BYOK provider. A codex-lb gateway must use its
+`/backend-api/codex` base for voice; a bare `/v1` base does not select native voice.
+Use a headset for duplex voice.
 `/play asset:ID` plays a saved audio asset. The
 [manual](https://agent.snajpa.net/manual.html) covers provider setup, selectors,
 data destinations and capture controls.
