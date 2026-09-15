@@ -165,13 +165,15 @@ snag_app_sync_destinations(struct app_state *app)
     struct snag_irc_destinations current;
     uint64_t generation = snag_irc_destinations_generation(app->irc);
 
-    /* Rebuilding and comparing the whole destination set only means something after the
-     * runtime mutated one; the pump runs inside read-tool walk checkpoints, where the
-     * rebuild costs more than the walk it serves. */
-    if (app->irc_destinations_ready && generation == app->irc_destinations_generation)
+    /* Rebuilding and comparing the whole destination set only means something
+     * after the runtime mutated one; the pump runs inside read-tool walk
+     * checkpoints, where the rebuild costs more than the walk it serves. */
+    if (app->irc_destinations_ready &&
+        generation == app->irc_destinations_generation)
         return 0;
     snag_irc_destinations(app->irc, &current);
-    if (app->irc_destinations_ready && memcmp(&current, &app->irc_destinations, sizeof(current)) == 0) {
+    if (app->irc_destinations_ready &&
+        memcmp(&current, &app->irc_destinations, sizeof(current)) == 0) {
         app->irc_destinations_generation = generation;
         return 0;
     }
