@@ -3423,7 +3423,11 @@ main(int argc, char **argv)
         gate = json_array_get(input, json_array_size(input) - 2u);
         gate_text = snag_json_string(gate, "content");
         assert(gate_text != NULL);
-        assert(strstr(gate_text, "independent work") != NULL);
+        assert_string(json_array_get(input, json_array_size(input) - 2u), "role", "user");
+        json_t *policy = message_matching(input, "Unsettled-command snapshots");
+        assert_string(policy, "role", "system");
+        assert(strstr(snag_json_string(policy, "content"), "independent work") != NULL);
+        assert(strstr(snag_json_string(policy, "content"), "until every handle is settled") != NULL);
         assert(strstr(gate_text, handle) != NULL);
     }
     {
@@ -3454,7 +3458,11 @@ main(int argc, char **argv)
                "max_output_bytes=4000") != NULL);
         gate_text = snag_json_string( json_array_get(input, json_array_size(input) - 2u), "content");
         assert(gate_text != NULL);
-        assert(strstr(gate_text, "independent work") != NULL);
+        assert_string(json_array_get(input, json_array_size(input) - 2u), "role", "user");
+        json_t *policy = message_matching(input, "Unsettled-command snapshots");
+        assert_string(policy, "role", "system");
+        assert(strstr(snag_json_string(policy, "content"), "independent work") != NULL);
+        assert(strstr(snag_json_string(policy, "content"), "until every handle is settled") != NULL);
         assert(strstr(gate_text, handle) != NULL);
         snag_config_free(&network_config);
     }

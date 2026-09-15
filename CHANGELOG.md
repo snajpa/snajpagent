@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Preserve prompt-cache prefixes through command yields, result collection and
+  new input. Keep changing process snapshots, input timing and tool-limit
+  feedback in labelled conversation data, with command-settlement rules in
+  fixed policy, so instruction-hoisting gateways do not move those facts ahead
+  of the retained conversation.
+
 - Recover oversized context after changing provider/model/account binding by
   compacting a smaller complete history prefix. Keep later history and the
   previous compact output until recovery succeeds, and validate the binding

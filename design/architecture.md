@@ -49,6 +49,15 @@ apply on subsequent request snapshots without changing an in-flight request.
 
 ## Runtime Loop
 
+Input receipt/admission metadata, unsettled-command snapshots and latest-batch
+tool feedback are labelled user-slot host data. Their values and journal
+provenance are unchanged. Fixed system policy retains command-settlement rules;
+goal controls, permission restrictions and operator presentation policy keep
+their instruction roles. Instruction-hoisting gateways therefore see a stable
+policy prefix as command handles appear, change and settle. Changing facts stay
+with the conversation, preserving its earlier cacheable prefix. The user slot
+does not represent a new operator request or authorize a goal transition.
+
 Each accepted user turn is projected into an OpenAI-compatible Responses API
 request. Streaming events update the terminal as they arrive. A final answer,
 refusal, or completed tool cycle closes the turn; it does not close the
