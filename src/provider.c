@@ -198,8 +198,8 @@ header_cb(char *buffer, size_t size, size_t nmemb, void *opaque)
         }
     }
     if (ctx->location && clean_len > 9u && !strncasecmp((const char *)line,"location:",9u)) {
-        size_t begin=9u;while(begin<clean_len && (line[begin]==' ' || line[begin]=='\t'))++begin;
-        if(clean_len-begin>=ctx->location_size)return 0;
+        size_t begin=9u;while (begin<clean_len && (line[begin]==' ' || line[begin]=='\t'))++begin;
+        if (clean_len-begin>=ctx->location_size)return 0;
         memcpy(ctx->location,line+begin,clean_len-begin);ctx->location[clean_len-begin]=0;
     }
     if (snag_ui_enabled(ctx->render, SNAG_PRESENT_WIRE)) {
@@ -1011,7 +1011,8 @@ snag_provider_catalog_protocol(const struct snag_provider_config *provider)
 bool
 snag_provider_native_audio(const struct snag_provider_config *provider)
 {
-    return provider && (provider->auth == SNAG_AUTH_CHATGPT || provider_uses_codex_catalog(provider));
+    return provider && (provider->auth == SNAG_AUTH_CHATGPT ||
+        provider_uses_codex_catalog(provider));
 }
 
 const struct snag_provider_config *
@@ -1026,7 +1027,9 @@ snag_provider_audio_config(const struct snag_config *config, const char *selecte
     bool native = snag_provider_native_audio(provider);
     if (!snag_strcpy(audio->provider, sizeof(audio->provider), provider->name)) return NULL;
     if (!audio->transcribe_model[0]) strcpy(audio->transcribe_model, "gpt-4o-transcribe");
-    if (!audio->realtime_model[0]) strcpy(audio->realtime_model, native ? "gpt-live-1-codex" : "gpt-realtime");
+    if (!audio->realtime_model[0])
+        strcpy(audio->realtime_model,
+            native ? "gpt-live-1-codex" : "gpt-realtime");
     if (!audio->voice[0]) strcpy(audio->voice, native ? "cove" : "marin");
     return provider;
 }
@@ -1546,32 +1549,39 @@ out:
 }
 
 int
-snag_provider_voice_call(const struct snag_config *config,const struct snag_provider_config *provider,
+snag_provider_voice_call(const struct snag_config *config,
+    const struct snag_provider_config *provider,
     const struct snag_credential *credential,const char *sdp,const json_t *session,
-    snag_provider_pump_fn pump,void *opaque,struct snag_buf *answer,char call[257],char *error,size_t size)
+    snag_provider_pump_fn pump,void *opaque,struct snag_buf *answer,
+    char call[257],char *error,size_t size)
 {
     struct provider_ctx ctx;
     char location[1024]={0};int rc=-1;
-    if(!snag_provider_native_audio(provider) || !sdp || !json_is_object(session))return -1;
-    provider_ctx_init(&ctx,(struct snag_provider_connection){config,provider,credential,NULL,pump,opaque,NULL},
+    if (!snag_provider_native_audio(provider) || !sdp || !json_is_object(session))return -1;
+    provider_ctx_init(&ctx,
+        (struct snag_provider_connection){config,provider,credential,NULL,
+            pump,opaque,NULL},
         65536u,65536u);
     ctx.audio_output=answer;ctx.location=location;ctx.location_size=sizeof(location);
     json_t *body=json_pack("{s:s,s:O}","sdp",sdp,"session",session);
-    if(!body || provider_request_setup(&ctx,credential,
+    if (!body || provider_request_setup(&ctx,credential,
         "/realtime/calls?intent=quicksilver&architecture=avas","application/sdp",body,
         "Native voice session exceeds request capacity",audio_write_cb,error,size)<0)goto out;
-    if(append_header(&ctx.headers,"openai-alpha: quicksilver=v2")<0 ||
+    if (append_header(&ctx.headers,"openai-alpha: quicksilver=v2")<0 ||
         curl_easy_setopt(ctx.curl,CURLOPT_HTTPHEADER,ctx.headers)!=CURLE_OK)goto out;
     begin_attempt(&ctx);
     CURLcode code=perform_request(ctx.curl,process_controls,&ctx,SNAG_WAKE_INVALID,25);
-    if(ctx.cancel_code) {rc=ctx.cancel_code;goto out;}
-    if(code!=CURLE_OK || ctx.http_status!=201) {
-        snag_errorf(error,size,"Native voice call failed (HTTP %ld, %s)",ctx.http_status,curl_easy_strerror(code));goto out;
+    if (ctx.cancel_code) {rc=ctx.cancel_code;goto out;}
+    if (code!=CURLE_OK || ctx.http_status!=201) {
+        snag_errorf(error,size,"Native voice call failed (HTTP %ld, %s)",
+            ctx.http_status,curl_easy_strerror(code));
+        goto out;
     }
-    char *query=strchr(location,'?');if(query)*query=0;
+    char *query=strchr(location,'?');if (query)*query=0;
     const char *id=strrchr(location,'/');id=id?id+1u:location;
     size_t n=strlen(id);
-    if(!n || n>256u || strspn(id,"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._~-")!=n ||
+    if (!n || n>256u ||
+        strspn(id,"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._~-")!=n ||
         (!strchr(id,'-') && strncmp(id,"rtc_",4u)) || snag_buf_terminate(answer)<0) {
         snag_errorf(error,size,"Native voice returned invalid SDP or call identity");goto out;
     }
@@ -1595,12 +1605,12 @@ snag_provider_voice_close(struct snag_voice_socket *voice)
 {
     if(!voice)return;
 #if LIBCURL_VERSION_NUM >= 0x075600
-    if(voice->native && voice->connected && !voice->closed && !voice->sending) {
+    if (voice->native && voice->connected && !voice->closed && !voice->sending) {
         static const char close_session[]="{\"type\":\"session.close\"}";
         size_t sent=0;
         (void)curl_ws_send(voice->curl,close_session,sizeof(close_session)-1u,&sent,0,CURLWS_TEXT);
     }
-    if(voice->connected && !voice->closed) {
+    if (voice->connected && !voice->closed) {
         size_t sent=0;(void)curl_ws_send(voice->curl,"",0u,&sent,0,CURLWS_CLOSE);
     }
 #endif
@@ -1622,7 +1632,8 @@ voice_handshake_body(char *bytes,size_t size,size_t count,void *opaque)
 
 static int
 voice_connect(const struct snag_provider_config *provider,const struct snag_credential *credential,
-    const char *model,const char *call,snag_provider_pump_fn pump,void *opaque,struct snag_voice_socket **out,char *error,size_t size)
+    const char *model,const char *call,snag_provider_pump_fn pump,void *opaque,
+    struct snag_voice_socket **out,char *error,size_t size)
 {
     *out=NULL;
 #if LIBCURL_VERSION_NUM >= 0x075600
@@ -1630,22 +1641,30 @@ voice_connect(const struct snag_provider_config *provider,const struct snag_cred
     char endpoint[SNAG_CONFIG_URL_MAX+64u],url[SNAG_CONFIG_URL_MAX+3u*SNAG_CONFIG_MODEL_MAX+80u];
     const char *base=NULL,*scheme="wss",*authority=NULL;
     char *escaped=NULL;int rc=-1;
-    if(!provider || (!call && provider->auth!=SNAG_AUTH_API_KEY) || !credential || !credential->len ||
+    if (!provider || (!call && provider->auth!=SNAG_AUTH_API_KEY) ||
+        !credential || !credential->len ||
         credential->len>SNAG_CREDENTIAL_MAX || !model || !*model || strlen(model)>=SNAG_CONFIG_MODEL_MAX) {
         snag_errorf(error,size,"Realtime voice requires an explicit API-key route and model");return -1;
     }
-    if(call) {
-        if(provider->auth==SNAG_AUTH_CHATGPT) {
-            if(snprintf(endpoint,sizeof(endpoint),"https://api.openai.com/v1/live/%s",call)>=(int)sizeof(endpoint))return -1;
+    if (call) {
+        if (provider->auth==SNAG_AUTH_CHATGPT) {
+            if (snprintf(endpoint,sizeof(endpoint),
+                    "https://api.openai.com/v1/live/%s",call)>=
+                    (int)sizeof(endpoint))
+                return -1;
             base=endpoint;
         } else {
-            char path[260];if(snprintf(path,sizeof(path),"/%s",call)>=(int)sizeof(path) ||
-                provider_endpoint_url(provider,path,endpoint,sizeof(endpoint),&base,error,size)<0)return -1;
+            char path[260];if (snprintf(path,sizeof(path),"/%s",call)>=(int)sizeof(path) ||
+                provider_endpoint_url(provider,path,endpoint,sizeof(endpoint),
+                    &base,error,size)<0)
+                    return -1;
         }
-    } else if(provider_endpoint_url(provider,"/v1/realtime",endpoint,sizeof(endpoint),&base,error,size)<0)return -1;
+    } else if (provider_endpoint_url(provider,"/v1/realtime",endpoint,
+            sizeof(endpoint),&base,error,size)<0)
+        return -1;
     if(!strncmp(base,"https://",8u))authority=base+8u;
     else if(!strncmp(base,"http://127.0.0.1:",17u)) {scheme="ws";authority=base+7u;}
-    else if(!strncmp(base,"http://[::1]:",13u)) {scheme="ws";authority=base+7u;}
+    else if (!strncmp(base,"http://[::1]:",13u)) {scheme="ws";authority=base+7u;}
     if(!authority) {snag_errorf(error,size,"Realtime microphone transport requires an HTTPS provider URL");return -1;}
     voice=calloc(1,sizeof(*voice));if(!voice)goto failed;
     voice->native=call!=NULL;
@@ -1666,8 +1685,10 @@ voice_connect(const struct snag_provider_config *provider,const struct snag_cred
         append_authorization(&voice->headers,credential)<0 ||
         append_named_header(&voice->headers,"HTTP-Referer",provider->openrouter_referer)<0 ||
         append_named_header(&voice->headers,"X-OpenRouter-Title",provider->openrouter_title)<0)goto failed;
-    if(call && (append_header(&voice->headers,"openai-alpha: quicksilver=v2")<0 ||
-        append_named_header(&voice->headers,"ChatGPT-Account-Id",credential->account_id)<0))goto failed;
+    if (call && (append_header(&voice->headers,"openai-alpha: quicksilver=v2")<0 ||
+        append_named_header(&voice->headers,"ChatGPT-Account-Id",
+            credential->account_id)<0))
+            goto failed;
 #if defined(SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS) || defined(SNAJPAGENT_TEST_FIXTURE)
     /* RFC 6455 sample nonce makes the existing local C fixture self-contained. */
     if(!strcmp(scheme,"ws") && append_header(&voice->headers,"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==")<0)goto failed;
@@ -1718,10 +1739,12 @@ done:
 }
 
 int snag_provider_voice_open(const struct snag_provider_config *p,const struct snag_credential *c,
-    const char *model,snag_provider_pump_fn pump,void *opaque,struct snag_voice_socket **out,char *e,size_t n)
+    const char *model,snag_provider_pump_fn pump,void *opaque,
+    struct snag_voice_socket **out,char *e,size_t n)
 { return voice_connect(p,c,model,NULL,pump,opaque,out,e,n); }
 int snag_provider_voice_attach(const struct snag_provider_config *p,const struct snag_credential *c,
-    const char *call,snag_provider_pump_fn pump,void *opaque,struct snag_voice_socket **out,char *e,size_t n)
+    const char *call,snag_provider_pump_fn pump,void *opaque,
+    struct snag_voice_socket **out,char *e,size_t n)
 { return voice_connect(p,c,"native",call,pump,opaque,out,e,n); }
 
 int

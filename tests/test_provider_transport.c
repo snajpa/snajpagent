@@ -423,25 +423,32 @@ audio_server_child(int listen_fd, enum model_fixture mode)
 static void
 server_child(int listen_fd, enum model_fixture models, bool transport)
 {
-    if(models>=MODEL_NATIVE_TRANSCRIBE && models<=MODEL_NATIVE_CALL_DENIED) {
+    if (models>=MODEL_NATIVE_TRANSCRIBE && models<=MODEL_NATIVE_CALL_DENIED) {
         struct http_request request;int fd=accept(listen_fd,NULL,NULL);
-        if(fd<0)server_fail("native voice accept failed");
+        if (fd<0)server_fail("native voice accept failed");
         read_request(fd,&request);
-        if(strcmp(request.method,"POST"))server_fail("native voice method");
-        if(models==MODEL_NATIVE_TRANSCRIBE) {
-            if(strcmp(request.path,"/backend-api/transcribe") || !strstr(request.body,"name=\"file\""))
+        if (strcmp(request.method,"POST"))server_fail("native voice method");
+        if (models==MODEL_NATIVE_TRANSCRIBE) {
+            if (strcmp(request.path,"/backend-api/transcribe") ||
+                !strstr(request.body,"name=\"file\""))
                 server_fail("native transcription endpoint");
             send_response(fd,200u,"application/json","{\"text\":\"native transcript\"}");
         } else {
-            if(strcmp(request.path,"/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas") ||
-                !strstr(request.headers,"openai-alpha: quicksilver=v2") || !strstr(request.body,"\"sdp\"") ||
+            if (strcmp(request.path,
+                "/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas") ||
+                !strstr(request.headers,"openai-alpha: quicksilver=v2") ||
+                !strstr(request.body,"\"sdp\"") ||
                 !strstr(request.body,"\"session\""))server_fail("native call request");
-            if(models==MODEL_NATIVE_CALL_DENIED)send_response(fd,403u,"application/json","{\"error\":{\"message\":\"access denied\"}}");
+            if (models==MODEL_NATIVE_CALL_DENIED)
+                send_response(fd,403u,"application/json",
+                    "{\"error\":{\"message\":\"access denied\"}}");
             else {
                 static const char answer[]="v=0\r\ns=native fixture\r\n";
                 char header[256];int n=snprintf(header,sizeof(header),
-                    "HTTP/1.1 201 Created\r\nContent-Type: application/sdp\r\nContent-Length: %zu\r\n%sConnection: close\r\n\r\n",
-                    sizeof(answer)-1u,models==MODEL_NATIVE_CALL?"Location: /v1/realtime/calls/rtc_native\r\n":"");
+                    "HTTP/1.1 201 Created\r\nContent-Type: application/sdp\r\n"
+                    "Content-Length: %zu\r\n%sConnection: close\r\n\r\n",
+                    sizeof(answer)-1u,
+                    models==MODEL_NATIVE_CALL?"Location: /v1/realtime/calls/rtc_native\r\n":"");
                 write_all_or_die(fd,header,(size_t)n);write_all_or_die(fd,answer,sizeof(answer)-1u);
             }
         }
@@ -2342,7 +2349,8 @@ static void test_audio_provider_selection(void)
     assert(provider && !strcmp(resolved.provider,provider->name));
     assert(!strcmp(resolved.realtime_model,"gpt-realtime") && !strcmp(resolved.voice,"marin"));
     assert(!config.audio.provider[0] && !config.audio.realtime_model[0]);
-    strcpy(config.providers[0].base_url,SNAG_CHATGPT_BASE);config.providers[0].auth=SNAG_AUTH_CHATGPT;
+    strcpy(config.providers[0].base_url,SNAG_CHATGPT_BASE);
+    config.providers[0].auth=SNAG_AUTH_CHATGPT;
     provider=snag_provider_audio_config(&config,NULL,&resolved);
     assert(provider && snag_provider_native_audio(provider));
     assert(!strcmp(resolved.realtime_model,"gpt-live-1-codex") && !strcmp(resolved.voice,"cove"));
@@ -2355,7 +2363,8 @@ static void test_audio_provider_selection(void)
     strcpy(config.audio.voice,"custom-voice");
     provider=snag_provider_audio_config(&config,config.providers[0].name,&resolved);
     assert(provider==&config.providers[1] && !snag_provider_native_audio(provider));
-    assert(!strcmp(resolved.realtime_model,"custom-voice-model") && !strcmp(resolved.voice,"custom-voice"));
+    assert(!strcmp(resolved.realtime_model,"custom-voice-model") &&
+        !strcmp(resolved.voice,"custom-voice"));
     snag_config_free(&config);
 }
 
@@ -2365,21 +2374,27 @@ static void test_native_voice_protocol(void)
     struct snag_voice_io io={voice_send,voice_notice,voice_play,voice_interrupt};
     struct snag_voice *v=snag_voice_new(&io,&f,"gpt-live-1-codex","gpt-4o-transcribe","cove");
     json_t *session=snag_voice_native_session(v);
-    assert(session && !strcmp(snag_json_string(json_object_get(session,"delegation"),"type"),"client"));
+    assert(session &&
+        !strcmp(snag_json_string(json_object_get(session,"delegation"),"type"),"client"));
     json_decref(session);
     assert(snag_voice_begin(v,error,sizeof(error))==0 && snag_voice_ready(v));
     assert(json_array_size(f.sent)==0u); /* Existing native call, no public session.update. */
-    json_t *created=json_pack("{s:s,s:{s:s,s:s}}","type","turn.created","turn","id","native-input","role","user");
+    json_t *created=json_pack("{s:s,s:{s:s,s:s}}","type","turn.created",
+        "turn","id","native-input","role","user");
     assert(voice_deliver(v,created)==0 && f.interrupts==1u);
-    json_t *delegation=json_pack("{s:s,s:{s:s,s:s,s:s,s:s,s:[{s:s,s:s}]}}","type","delegation.created",
-        "item","id","native-call","type","delegation","target","client","user_bidi_turn_id","native-input",
+    json_t *delegation=json_pack("{s:s,s:{s:s,s:s,s:s,s:s,s:[{s:s,s:s}]}}",
+        "type","delegation.created",
+        "item","id","native-call","type","delegation","target","client",
+        "user_bidi_turn_id","native-input",
         "content","type","input_text","text","inspect the worktree");
     assert(voice_deliver(v,json_incref(delegation))==0);
     assert(voice_notice_count(&f,"voice_handoff")==0u); /* Wait for final user transcript. */
     assert(voice_deliver(v,json_pack("{s:s,s:{s:s,s:s,s:s}}","type","turn.done","turn",
         "id","native-input","role","user","transcript","please inspect the worktree"))==0);
-    assert(voice_notice_count(&f,"voice_handoff")==1u && voice_notice_count(&f,"voice_transcript")==1u);
-    assert(voice_deliver(v,json_incref(delegation))==0 && voice_notice_count(&f,"voice_handoff")==1u);
+    assert(voice_notice_count(&f,"voice_handoff")==1u &&
+        voice_notice_count(&f,"voice_transcript")==1u);
+    assert(voice_deliver(v,json_incref(delegation))==0 &&
+        voice_notice_count(&f,"voice_handoff")==1u);
     assert(snag_voice_result(v,"wrong-call","result",error,sizeof(error))<0);
     voice_end(v,&f);json_decref(delegation);
 
@@ -2388,7 +2403,8 @@ static void test_native_voice_protocol(void)
     json_decref(snag_voice_native_session(v));assert(snag_voice_begin(v,error,sizeof(error))==0);
     assert(voice_deliver(v,json_pack("{s:s,s:{s:s,s:s,s:s}}","type","turn.done","turn",
         "id","native-input","role","user","transcript","please inspect the worktree"))==0);
-    assert(voice_deliver(v,json_pack("{s:s,s:{s:s,s:s,s:s,s:[{s:s,s:s}]}}","type","delegation.created",
+    assert(voice_deliver(v,json_pack("{s:s,s:{s:s,s:s,s:s,s:[{s:s,s:s}]}}",
+        "type","delegation.created",
         "item","id","native-call","target","client","user_bidi_turn_id","native-input",
         "content","type","input_text","text","inspect the worktree"))==0);
     assert(voice_notice_count(&f,"voice_handoff")==1u);
@@ -2403,30 +2419,37 @@ static void test_native_voice_protocol(void)
 
 static void test_native_voice_transport(void)
 {
-    for(unsigned int direct=0;direct<2u;++direct)for(int mode=MODEL_NATIVE_TRANSCRIBE;mode<=MODEL_NATIVE_CALL_DENIED;++mode) {
+    for (unsigned int direct=0;direct<2u;++direct)
+        for (int mode=MODEL_NATIVE_TRANSCRIBE;mode<=MODEL_NATIVE_CALL_DENIED;++mode) {
         struct local_server server;struct snag_config config;struct snag_credential credential;
         char error[256]={0},call[257]={0};struct snag_buf output={.max=65536u};
         start_server(&server,(enum model_fixture)mode,false,"/backend-api/codex");
         struct snag_provider_connection conn=transport_connection(&config,&credential,
             direct?SNAG_CHATGPT_BASE:server.endpoint);
         config.providers[0].auth=direct?SNAG_AUTH_CHATGPT:SNAG_AUTH_API_KEY;
-        if(direct)strcpy(credential.account_id,"acct-test");
+        if (direct)strcpy(credential.account_id,"acct-test");
         assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE",server.endpoint,1)==0);
         int rc;
-        if(mode==MODEL_NATIVE_TRANSCRIBE) {
-            make_fixture_wav();struct snag_buf wav={.data=fixture_wav,.len=sizeof(fixture_wav),.max=sizeof(fixture_wav)};
+        if (mode==MODEL_NATIVE_TRANSCRIBE) {
+            make_fixture_wav();
+            struct snag_buf wav={.data=fixture_wav,.len=sizeof(fixture_wav),
+                .max=sizeof(fixture_wav)};
             json_t *request=json_pack("{s:s}","model","gpt-4o-transcribe");
-            rc=snag_provider_audio(SNAG_AUDIO_TRANSCRIBE,request,&wav,&config,conn.provider,&credential,
+            rc=snag_provider_audio(SNAG_AUDIO_TRANSCRIBE,request,&wav,&config,
+                conn.provider,&credential,
                 NULL,NULL,&output,error,sizeof(error));json_decref(request);
             assert(!rc && output.len && !memcmp(output.data,"{\"text\":",8u));
         } else {
             json_t *session=json_pack("{s:s}","model","gpt-live-1-codex");
-            rc=snag_provider_voice_call(&config,conn.provider,&credential,"v=0\r\n",session,NULL,NULL,
+            rc=snag_provider_voice_call(&config,conn.provider,&credential,
+                "v=0\r\n",session,NULL,NULL,
                 &output,call,error,sizeof(error));json_decref(session);
-            if(mode==MODEL_NATIVE_CALL)assert(!rc && !strcmp(call,"rtc_native") && output.len);
+            if (mode==MODEL_NATIVE_CALL)assert(!rc && !strcmp(call,"rtc_native") && output.len);
             else assert(rc<0 && !call[0] && error[0]);
         }
-        snag_buf_free(&output);snag_config_free(&config);snag_credential_clear(&credential);stop_server(&server);
+        snag_buf_free(&output);
+        snag_config_free(&config);
+        snag_credential_clear(&credential);stop_server(&server);
     }
     assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE")==0);
 }
@@ -2435,46 +2458,54 @@ static void test_native_voice_transport(void)
 static void native_echo(int id,const char *data,int length,void *opaque)
 {
     (void)opaque;
-    if(length<12 || length>2048 || (((const unsigned char *)data)[1]&127u)!=111u)return;
+    if (length<12 || length>2048 || (((const unsigned char *)data)[1]&127u)!=111u)return;
     unsigned char packet[2048];memcpy(packet,data,(size_t)length);
     packet[8]=packet[9]=packet[10]=0;packet[11]=88;
     (void)rtcSendMessage(id,(const char *)packet,length);
 }
 static void native_gathered(int id,rtcGatheringState state,void *opaque)
-{(void)id;if(state==RTC_GATHERING_COMPLETE)atomic_store((atomic_bool *)opaque,true);}
+{(void)id;if (state==RTC_GATHERING_COMPLETE)atomic_store((atomic_bool *)opaque,true);}
 static void test_native_media(void)
 {
     struct snag_voice_rtc *media=NULL;char error[256]={0},answer[32768];
     struct snag_buf offer={.max=32768u};atomic_bool gathered;atomic_init(&gathered,false);
     assert(snag_voice_rtc_open(&media,error,sizeof(error))==0);
     uint64_t deadline=snag_monotonic_ms()+10000u;int rc=0;
-    while(!rc && snag_monotonic_ms()<deadline) {rc=snag_voice_rtc_offer(media,&offer);snag_sleep_ms(5u);}
+    while (!rc && snag_monotonic_ms()<deadline) {
+            rc=snag_voice_rtc_offer(media,&offer);snag_sleep_ms(5u);}
     assert(rc==1);
     rtcConfiguration configuration={.disableAutoNegotiation=true,.forceMediaTransport=true};
     int pc=rtcCreatePeerConnection(&configuration);assert(pc>=0);rtcSetUserPointer(pc,&gathered);
     assert(rtcSetGatheringStateChangeCallback(pc,native_gathered)==0);
-    rtcTrackInit init={.direction=RTC_DIRECTION_SENDRECV,.codec=RTC_CODEC_OPUS,.payloadType=111,.ssrc=88,.mid="0"};
+    rtcTrackInit init={.direction=RTC_DIRECTION_SENDRECV,
+        .codec=RTC_CODEC_OPUS,.payloadType=111,.ssrc=88,.mid="0"};
     int track=rtcAddTrackEx(pc,&init);assert(track>=0);rtcSetUserPointer(track,&gathered);
     assert(rtcSetMessageCallback(track,native_echo)==0);
-    assert(rtcSetRemoteDescription(pc,(char *)offer.data,"offer")==0 && rtcSetLocalDescription(pc,"answer")==0);
-    while(!atomic_load(&gathered) && snag_monotonic_ms()<deadline)snag_sleep_ms(5u);
+    assert(rtcSetRemoteDescription(pc,(char *)offer.data,"offer")==0 &&
+        rtcSetLocalDescription(pc,"answer")==0);
+    while (!atomic_load(&gathered) && snag_monotonic_ms()<deadline)snag_sleep_ms(5u);
     assert(atomic_load(&gathered) && rtcGetLocalDescription(pc,answer,sizeof(answer))>0);
     assert(snag_voice_rtc_answer(media,answer)==0);
-    while(!snag_voice_rtc_ready(media) && snag_monotonic_ms()<deadline)snag_sleep_ms(5u);
+    while (!snag_voice_rtc_ready(media) && snag_monotonic_ms()<deadline)snag_sleep_ms(5u);
     assert(snag_voice_rtc_ready(media));
-    int16_t input[480],output[2880];for(unsigned int i=0;i<480u;++i)input[i]=(i/24u)%2u?8000:-8000;
+    int16_t input[480],output[2880];for (unsigned int i=0;i<480u;++i)input[i]=(i/24u)%2u?8000:-8000;
     unsigned int samples=0,peak=0;uint64_t next=snag_monotonic_ms();deadline=next+1200u;
-    while(snag_monotonic_ms()<deadline) {
-        if(snag_monotonic_ms()>=next) {assert(snag_voice_rtc_input(media,input,480u)==0);next+=20u;}
+    while (snag_monotonic_ms()<deadline) {
+        if (snag_monotonic_ms()>=next) {
+            assert(snag_voice_rtc_input(media,input,480u)==0);next+=20u;}
         int n=snag_voice_rtc_output(media,output,2880u);assert(n>=0);
         samples+=(unsigned int)n;
-        for(int i=0;i<n;++i) {unsigned int v=output[i]<0?-output[i]:output[i];if(v>peak)peak=v;}
+        for (int i=0;i<n;++i) {
+            unsigned int v=output[i]<0?-output[i]:output[i];
+            if (v>peak)peak=v;
+        }
         snag_sleep_ms(2u);
     }
     assert(samples>12000u && peak>1000u);
     assert(snag_voice_rtc_input(media,input,200u)==0 && snag_voice_rtc_input(media,NULL,0u)==0);
     snag_voice_rtc_flush(media);snag_voice_rtc_close(media);
-    rtcSetMessageCallback(track,NULL);rtcDeleteTrack(track);rtcDeletePeerConnection(pc);snag_buf_free(&offer);
+    rtcSetMessageCallback(track,NULL);rtcDeleteTrack(track);
+    rtcDeletePeerConnection(pc);snag_buf_free(&offer);
 }
 #endif
 static void voice_commit(struct snag_voice *voice,const char *id,const char *transcript)
