@@ -372,7 +372,8 @@ class FakeResponses:
             assert len(outputs) == 1 and len(outputs[0].encode()) <= effective
             assert f"max_output_bytes={effective}" in outputs[0]
             if selected is not None and selected > ceiling:
-                controls = str([i for i in request["input"] if i.get("role") == "system"])
+                controls = str([i for i in request["input"] if i.get("role") == "system" or
+                                str(i.get("content", "")).startswith("[snajpagent host continuation —")])
                 assert f"Requested max_output_bytes={selected}" in controls
                 assert f"applied max_output_bytes={effective}" in controls
             return self.response_body(sequence, "tool cap confirmed")
@@ -392,6 +393,7 @@ class FakeResponses:
         for item in request["input"]:
             text = item.get("content", "")
             if isinstance(text, str) and "The preceding JSON describes unsettled commands" in text:
+                text = text.removeprefix("[snajpagent host continuation — not a new user message]\n")
                 jobs = json.loads(text.split("\n", 1)[0])
         if not calls:
             # A cannot finish until B launches: this detects actual overlap,
@@ -4191,8 +4193,9 @@ def run_tool_contract_cases(binary, root, provider, environment):
             assert inputs[-1]["content"].startswith("Host continuation:")
             assert any(i.get("role") == "user" for i in inputs)
             outputs = [i for i in inputs if i.get("type") == "function_call_output"]
-            controls = "\n".join(i["content"] for i in inputs if i.get("role") == "system"
-                                 and isinstance(i.get("content"), str))
+            controls = "\n".join(i["content"] for i in inputs if isinstance(i.get("content"), str)
+                                 and (i.get("role") == "system" or
+                                      i["content"].startswith("[snajpagent host continuation —")))
             if mode != "read":
                 assert "default_timeout_ms=" in controls and "workspace=" in controls
             else:
@@ -5649,6 +5652,76 @@ def gateway_conversation(request):
         i.get("role") in ("developer", "system") and isinstance(i.get("content"), str))]
 
 
+def run_host_cache_prefix_case(binary, root):
+    """Volatile host facts must not change an instruction-hoisting gateway's policy prefix."""
+    workspace = root / "w"
+    workspace.mkdir(mode=0o700, parents=True)
+    state, config = root / "s", root / "c.ini"
+    provider = FakeResponses()
+    write_irc_config(config, provider.port, "host-model")
+    config.chmod(0o600)
+    environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret")
+    requests = []
+
+    def respond(handler, request, sequence):
+        requests.append(request)
+        if len(requests) == 1:
+            body = provider.function_body(sequence, "cache-start", "exec_command", {
+                "command": "read line; printf cache-result", "workdir": str(workspace),
+                "stdin": None, "yield_ms": 1, "max_output_bytes": 8000})
+        elif len(requests) == 2:
+            _, events = read_events(state)
+            result = event_list(events, "tool_finished")[-1]["data"]["result"]
+            assert result["status"] == "running", result
+            body = provider.function_body(sequence, "cache-collect", "write_stdin", {
+                "handle": result["handle"], "data": "ready\n", "eof": True,
+                "yield_ms": 1000})
+        else:
+            body = provider.response_body(sequence, "cache complete")
+        provider.reply(handler, body.encode(), "text/event-stream")
+
+    provider.runtime_handler = respond
+    try:
+        command = [binary, "--dotdir", str(state), "--config", str(config), "-e"]
+        first = subprocess.run(command + ["--", "cache prefix " + "retained-history " * 1000],
+                               cwd=workspace, env=environment, capture_output=True, text=True, timeout=20)
+        assert first.returncode == 0 and first.stdout.strip() == "cache complete", first.stderr
+        journal, events = read_events(state)
+        sid = journal.parent.name
+        assert [e["data"]["result"]["status"] for e in event_list(events, "tool_finished")] == ["running", "succeeded"]
+        again = subprocess.run(command + ["--resume", sid, "--", "new timed input"],
+                               cwd=workspace, env=environment, capture_output=True, text=True, timeout=20)
+        assert again.returncode == 0 and again.stdout.strip() == "cache complete", again.stderr
+        assert len(requests) == 4, len(requests)
+        (root / "requests.json").write_text(json.dumps(requests))
+        policies = [[i["content"] for i in request["input"] if i.get("role") in ("system", "developer")
+                     and isinstance(i.get("content"), str)] for request in requests]
+        changed = [i for i, policy in enumerate(policies) if policy != policies[0]]
+        assert not changed, f"volatile facts changed the hoisted policy prefix in requests {changed}"
+        assert any("No final answer or goal completion until every handle is settled." in text for text in policies[0])
+        assert len({r["prompt_cache_key"] for r in requests}) == 1
+        marker = "[snajpagent host continuation — not a new user message]\n"
+        previous = []
+        for request in requests:
+            conversation = gateway_conversation(request)
+            history = [i for i in conversation if not str(i.get("content", "")).startswith(marker)]
+            assert history[:len(previous)] == previous, "retained conversation prefix changed"
+            previous = history
+            for item in request["input"]:
+                text = str(item.get("content", ""))
+                if text.startswith("[snajpagent input metadata") or "The preceding JSON describes unsettled commands" in text or "Host tool feedback for the latest batch" in text:
+                    assert item.get("role") == "user", item.get("role")
+        running = "\n".join(str(i.get("content", "")) for i in gateway_conversation(requests[1]))
+        assert "The preceding JSON describes unsettled commands" in running
+        assert "Host tool feedback for the latest batch" in running and "8000" in running and "6000" in running
+        settled = "\n".join(str(i.get("content", "")) for i in gateway_conversation(requests[2]))
+        assert "The preceding JSON describes unsettled commands" not in settled
+        assert "cache-result" in json.dumps(gateway_conversation(requests[2]))
+        print("host cache prefix running/collected/timed-input/feedback: ok", flush=True)
+    finally:
+        provider.close()
+
+
 def run_goal_request_boundary_cases(binary, root, modes=("next", "recovery", "resume")):
     marker = "[snajpagent host continuation — not a new user message]\n"
     for mode in modes:
@@ -6477,7 +6550,7 @@ def run_automatic_turn_retry_cases(binary, root, provider, environment):
             requests.append(request)
             n = len(requests)
             metadata.append([i["content"] for i in request["input"]
-                if i.get("role") == "system" and i.get("content", "").startswith("[snajpagent input metadata")])
+                if i.get("role") == "user" and i.get("content", "").startswith("[snajpagent input metadata")])
             if n == 1:
                 if mode == "success":
                     body = provider.function_body(sequence, "read", "read_file", {
@@ -7883,6 +7956,7 @@ def run_irc_case(binary, root):
         run_token_accounting_cases(binary, root / "token-accounting")
         run_assistant_phase_case(binary, root)
         run_goal_request_boundary_cases(binary, root)
+        run_host_cache_prefix_case(binary, root / "host-cache-prefix")
         run_goal_recovery_cases(binary, root, provider, environment)
         run_queue_dispatch_retry_case(binary, root)
         for active, chat, width, verbosity in ((False, False, 100, 0), (False, True, 28, 2),
