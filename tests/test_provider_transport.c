@@ -2298,6 +2298,75 @@ static void voice_end(struct snag_voice *voice,struct voice_fixture *f)
 {
     snag_voice_free(voice);json_decref(f->sent);json_decref(f->notices);
 }
+
+static size_t voice_notice_count(const struct voice_fixture *,const char *);
+
+static void test_audio_provider_selection(void)
+{
+    struct snag_config config;snag_config_init(&config);
+    struct snag_audio_config resolved;
+    const struct snag_provider_config *provider=snag_provider_audio_config(&config,NULL,&resolved);
+    assert(provider && !strcmp(resolved.provider,provider->name));
+    assert(!strcmp(resolved.realtime_model,"gpt-realtime") && !strcmp(resolved.voice,"marin"));
+    assert(!config.audio.provider[0] && !config.audio.realtime_model[0]);
+    strcpy(config.providers[0].base_url,SNAG_CHATGPT_BASE);config.providers[0].auth=SNAG_AUTH_CHATGPT;
+    provider=snag_provider_audio_config(&config,NULL,&resolved);
+    assert(provider && snag_provider_native_audio(provider));
+    assert(!strcmp(resolved.realtime_model,"gpt-live-1-codex") && !strcmp(resolved.voice,"cove"));
+    assert(!strcmp(resolved.transcribe_model,"gpt-4o-transcribe"));
+    config.providers[0].auth=SNAG_AUTH_API_KEY;
+    strcpy(config.providers[0].base_url,"http://127.0.0.1:2455/backend-api/codex/");
+    assert(snag_provider_native_audio(snag_provider_audio_config(&config,NULL,&resolved)));
+    config.provider_count=2u;snag_config_provider_init(&config.providers[1],"byok");
+    strcpy(config.audio.provider,"byok");strcpy(config.audio.realtime_model,"custom-voice-model");
+    strcpy(config.audio.voice,"custom-voice");
+    provider=snag_provider_audio_config(&config,config.providers[0].name,&resolved);
+    assert(provider==&config.providers[1] && !snag_provider_native_audio(provider));
+    assert(!strcmp(resolved.realtime_model,"custom-voice-model") && !strcmp(resolved.voice,"custom-voice"));
+    snag_config_free(&config);
+}
+
+static void test_native_voice_protocol(void)
+{
+    struct voice_fixture f={.sent=json_array(),.notices=json_array()};char error[256];
+    struct snag_voice_io io={voice_send,voice_notice,voice_play,voice_interrupt};
+    struct snag_voice *v=snag_voice_new(&io,&f,"gpt-live-1-codex","gpt-4o-transcribe","cove");
+    json_t *session=snag_voice_native_session(v);
+    assert(session && !strcmp(snag_json_string(json_object_get(session,"delegation"),"type"),"client"));
+    json_decref(session);
+    assert(snag_voice_begin(v,error,sizeof(error))==0 && snag_voice_ready(v));
+    assert(json_array_size(f.sent)==0u); /* Existing native call, no public session.update. */
+    json_t *created=json_pack("{s:s,s:{s:s,s:s}}","type","turn.created","turn","id","native-input","role","user");
+    assert(voice_deliver(v,created)==0 && f.interrupts==1u);
+    json_t *delegation=json_pack("{s:s,s:{s:s,s:s,s:s,s:s,s:[{s:s,s:s}]}}","type","delegation.created",
+        "item","id","native-call","type","delegation","target","client","user_bidi_turn_id","native-input",
+        "content","type","input_text","text","inspect the worktree");
+    assert(voice_deliver(v,json_incref(delegation))==0);
+    assert(voice_notice_count(&f,"voice_handoff")==0u); /* Wait for final user transcript. */
+    assert(voice_deliver(v,json_pack("{s:s,s:{s:s,s:s,s:s}}","type","turn.done","turn",
+        "id","native-input","role","user","transcript","please inspect the worktree"))==0);
+    assert(voice_notice_count(&f,"voice_handoff")==1u && voice_notice_count(&f,"voice_transcript")==1u);
+    assert(voice_deliver(v,json_incref(delegation))==0 && voice_notice_count(&f,"voice_handoff")==1u);
+    assert(snag_voice_result(v,"wrong-call","result",error,sizeof(error))<0);
+    voice_end(v,&f);json_decref(delegation);
+
+    memset(&f,0,sizeof(f));f.sent=json_array();f.notices=json_array();
+    v=snag_voice_new(&io,&f,"gpt-live-1-codex","gpt-4o-transcribe","cove");
+    json_decref(snag_voice_native_session(v));assert(snag_voice_begin(v,error,sizeof(error))==0);
+    assert(voice_deliver(v,json_pack("{s:s,s:{s:s,s:s,s:s}}","type","turn.done","turn",
+        "id","native-input","role","user","transcript","please inspect the worktree"))==0);
+    assert(voice_deliver(v,json_pack("{s:s,s:{s:s,s:s,s:s,s:[{s:s,s:s}]}}","type","delegation.created",
+        "item","id","native-call","target","client","user_bidi_turn_id","native-input",
+        "content","type","input_text","text","inspect the worktree"))==0);
+    assert(voice_notice_count(&f,"voice_handoff")==1u);
+    assert(snag_voice_result(v,"native-call","inspection complete",error,sizeof(error))==0);
+    assert(!strcmp(snag_json_string(voice_last(f.sent),"type"),"delegation.context.append"));
+    assert(!strcmp(snag_json_string(voice_last(f.sent),"channel"),"speakable"));
+    assert(snag_voice_mute(v,true,error,sizeof(error))==0);
+    size_t sent=json_array_size(f.sent);
+    assert(snag_voice_respond(v,true,error,sizeof(error))==0 && json_array_size(f.sent)==sent);
+    voice_end(v,&f);
+}
 static void voice_commit(struct snag_voice *voice,const char *id,const char *transcript)
 {
     assert(voice_deliver(voice,json_pack("{s:s,s:s}","type","input_audio_buffer.committed","item_id",id))==0);
@@ -2551,6 +2620,8 @@ static void test_voice_captions(void)
 int
 main(void)
 {
+    test_audio_provider_selection();
+    test_native_voice_protocol();
     test_irc_failed_intent_retains_pending();
 #if SNAJPAGENT_AUDIO_DEVICE && defined(MA_NO_RUNTIME_LINKING) && defined(MA_ENABLE_ALSA)
     test_static_alsa_config();

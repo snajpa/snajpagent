@@ -9,6 +9,8 @@
   Model API) rejected `"none"` with HTTP 400 and failed the whole turn, including
   its derived input-token count request. Tool-less requests never send a tool
   choice now, and the terminal suite fails if one does.
+- Add Codex subscription and codex-lb voice support. Dictation and voice use the
+  selected provider's credentials and defaults; `[audio]` supplies optional overrides.
 
 - Finish all requests and reap the local server in the session-header transport
   test, allowing test runners to close their output pipes after completion.
