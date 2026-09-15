@@ -204,6 +204,7 @@ int snag_app_parse_queue_argument(const char *argument, enum queue_command_kind 
 
 json_t *snag_app_input_received_data(struct app_state *, const char *, bool);
 
+bool snag_app_context_cancelled(void *opaque);
 int snag_app_active_input_pump(void *opaque, unsigned int timeout_ms);
 int snag_app_provider_input_pump(void *opaque, unsigned int timeout_ms);
 int snag_app_provider_activity(struct app_state *app, bool active);

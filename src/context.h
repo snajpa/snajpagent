@@ -21,6 +21,11 @@ int snag_context_continuation_scope(const struct snag_provider_config *provider,
 int snag_context_provider_model(const struct snag_provider_config *provider,
                                 const char *model, json_t *request);
 
+struct snag_context_control {
+    bool (*cancelled)(void *opaque);
+    void *opaque;
+};
+
 struct snag_context_projection {
     struct snag_json_document model_input, create_request, count_request;
     char continuation_scope[SNAG_SHA256_HEX_LEN + 1u];
@@ -39,7 +44,8 @@ int snag_context_build(struct snag_session *session, const char *model,
                       uint64_t max_output_tokens, bool max_output_known,
                       const struct snag_config *config, const char *continuation_scope,
                       const struct snag_instruction_set *instructions, const char *operator_visibility,
-                      struct snag_context_projection *projection, char *error, size_t error_size);
+                      struct snag_context_projection *projection, char *error, size_t error_size,
+                      const struct snag_context_control *control);
 /* One derivation for every request path: the key is stable for a session (and across resume),
  * distinct across sessions, and independent of turn, cycle or timing. */
 #define SNAG_CACHE_KEY_LEN 32u
@@ -49,7 +55,7 @@ int snag_context_compact_request_build(struct snag_session *session, const char 
                                       bool active_prefix, uint64_t source_budget,
                                       bool allow_oversized_first, const char *continuation_scope,
                                       struct snag_context_projection *projection,
-                                      char *error, size_t error_size);
+                                      char *error, size_t error_size, const struct snag_context_control *control);
 int snag_context_compact_output_count_request_build(const json_t *output, const char *model,
                                       struct snag_json_document *count_request,
                                       char *error, size_t error_size);

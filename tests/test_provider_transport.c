@@ -1928,7 +1928,7 @@ test_audio_transport(void)
         json_t *steering = json_array();
         assert(snag_context_build(&session, "audio-fixture", "medium", 1u, steering, 2048u, true,
             &config, NULL, NULL, "Fixture: tool details hidden; report meaningful progress.",
-            &projection, error, sizeof(error)) == 0);
+            &projection, error, sizeof(error), NULL) == 0);
         json_t *input = json_object_get(projection.create_request.value, "input");
         assert(input == json_object_get(projection.count_request.value, "input"));
         bool visible = false;

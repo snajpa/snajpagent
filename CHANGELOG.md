@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Complete context recovery across fresh chat, queued input and session resume,
+  including repeated reductions of a large retained history. Avoid quadratic
+  compact-prefix encoding, make preparation cancellable and show pending Ctrl-C
+  feedback. Announce automatic compaction and accept completed message
+  announcements with harmless empty placeholders while preserving real errors.
+
 - Preserve prompt-cache prefixes through command yields, result collection and
   new input. Keep changing process snapshots, input timing and tool-limit
   feedback in labelled conversation data, with command-settlement rules in

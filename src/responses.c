@@ -393,12 +393,14 @@ message_snapshot(struct snag_responses_stream *stream, size_t output_index,
 
     const char *invalid = !id ? "id" : !role || strcmp(role, "assistant") ? "role" :
         phase && phase_value(phase) == SNAG_PHASE_NONE ? "phase" : !json_is_array(content) ? "content" :
-        !status || strcmp(status, complete ? "completed" : "in_progress") ? "status" : NULL;
+        !status || (complete ? strcmp(status, "completed") != 0 :
+                    !snag_string_in(status, "in_progress completed")) ? "status" : NULL;
     if (invalid) {
         char diagnostic[96];
         (void)snprintf(diagnostic, sizeof(diagnostic), "invalid assistant message snapshot: %s", invalid);
         return stream_fail(stream, EPROTO, diagnostic);
     }
+    complete = complete || !strcmp(status, "completed");
     item = output_index < stream->item_count ? find_item(stream, output_index, id, SNAG_WIRE_ITEM_MESSAGE) :
            new_item(stream, output_index, SNAG_WIRE_ITEM_MESSAGE, id);
     if (!item) return -1;
@@ -827,7 +829,7 @@ build_message(struct snag_responses_stream *stream, struct snag_response_graph *
     if (kind == SNAG_WIRE_PART_NONE && item->part_count) goto out;
     if (!text.len) {
         stream->output_correction = SNAG_OUTPUT_CORRECTION_EMPTY;
-        rc = 1;
+        rc = kind == SNAG_WIRE_PART_REFUSAL ? 1 : 2;
         goto out;
     }
     failure = "cannot terminate assistant message";
@@ -900,6 +902,7 @@ snag_responses_stream_finish(struct snag_responses_stream *stream, struct snag_r
                             char *error, size_t error_size)
 {
     int rc = -1;
+    bool empty_message = false, empty_final = false;
 
     if (stream->failed || !stream->created || !stream->terminal || !stream->response_id) {
         if (!stream->failed) (void)stream_fail(stream, EPROTO, "Responses stream ended before completion");
@@ -927,6 +930,11 @@ snag_responses_stream_finish(struct snag_responses_stream *stream, struct snag_r
         }
         if (item->kind == SNAG_WIRE_ITEM_MESSAGE) {
             rc = build_message(stream, &staged, item);
+            if (rc == 2) {
+                empty_message = true;
+                empty_final |= item->phase && phase_value(item->phase) == SNAG_PHASE_FINAL_ANSWER;
+                continue;
+            }
         } else if (item->kind == SNAG_WIRE_ITEM_FUNCTION_CALL) {
             rc = build_call(stream, &staged, item);
         } else if (item->kind != SNAG_WIRE_ITEM_INERT) {
@@ -935,6 +943,16 @@ snag_responses_stream_finish(struct snag_responses_stream *stream, struct snag_r
             continue;
         }
         if (rc != 0) goto staged_out;
+    }
+    if (empty_message) {
+        bool usable = staged.count != 0u && !empty_final;
+        for (size_t i = 0u; !usable && i < staged.count; ++i) {
+            struct snag_response_item item = snag_response_graph_item(&staged, i);
+            usable = item.kind == SNAG_ITEM_TOOL_CALL || item.kind == SNAG_ITEM_REFUSAL ||
+                item.phase == SNAG_PHASE_FINAL_ANSWER;
+        }
+        if (!usable) { rc = 1; goto staged_out; }
+        stream->output_correction = SNAG_OUTPUT_CORRECTION_NONE;
     }
     if (normalize_implicit_message_terminal(&staged) < 0) {
         rc = stream_fail(stream, ENOMEM, "cannot retain implicit terminal phase");

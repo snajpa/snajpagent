@@ -5091,6 +5091,20 @@ def test_editor_during_blocked_engine(key=b"\r"):
             raise failure
 
 
+def test_pending_interrupt_during_blocked_engine():
+    with Child([]) as child:
+        child.wait_idle_prompt()
+        child.send_wait(b"engine_blocked\r", b"engine-block-start")
+        after = child.send_wait(b"\x03", b"Cancellation requested; waiting...", timeout=0.5)
+        assert b"engine-block-end" not in child.buf
+        child.send(b"\x03\x03")
+        child.drain(0.15)
+        assert b"\n" not in child.buf[after:], "pending interrupt printed fresh prompt lines"
+        done = child.wait(b"turn interrupted", start=after, timeout=4)
+        child.wait_idle_prompt(start=done)
+        child.exit_cleanly(done)
+
+
 def test_stalled_output_consumes_input():
     for level in range(7):
         child = Child(["-v"] * level + ["--no-markdown"])
@@ -5142,6 +5156,7 @@ if __name__ == "__main__":
     test_editor_during_render_flood()
     test_editor_during_blocked_engine()
     test_editor_during_blocked_engine(b"\t")
+    test_pending_interrupt_during_blocked_engine()
     test_active_verbosity()
     test_five_ctrl_c_exit()
     test_ctrl_c_sequence_reset()

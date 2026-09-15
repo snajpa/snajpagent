@@ -2181,7 +2181,7 @@ again:;
         }
         app->interrupt_requested = true;
         free(line);
-        return set_input_prompt(app, true) < 0 ? -1 : 2;
+        return 2;
     }
     if (action == SNAG_TERM_VIEW) return input_view_toggle(app);
     if (!line) return 0;
@@ -3064,7 +3064,6 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
     char rejected_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
     char over_budget_request_hash[SNAG_SHA256_HEX_LEN + 1u] = {0};
     unsigned int hard_compaction_attempts = 0u, cyber_clarifications = 0u;
-    bool capacity_recovery_used = false;
     bool continuing = app->session.active_turn;
     unsigned int next_cycle = continuing ? app->session.active_cycle + 1u : 1u;
     struct snag_credential credential;
@@ -3204,11 +3203,30 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             result = 3;
             goto out;
         }
+        /* A rejection survives fresh-input handoff, interruption and reopen. Only
+         * the rejected binding and uncompacted lineage require preparation here. */
+        if (snag_input_observation_matches(&app->session.capacity_rejection,
+                app->turn_provider->name, app->turn_model, app->turn_effort,
+                provider_source_hash, app->session.compact_id)) {
+            bool compacted = false;
+            apply_capacity_ceiling(app, app->turn_provider, app->turn_model, &app->turn_capacity);
+            int recovery = hard_compaction_attempts++ < 8u ?
+                snag_app_compact_after_capacity_rejection(app, &credential,
+                    &compacted, error, sizeof(error)) : -1;
+            if (recovery == 0 && compacted) goto rebuild_request;
+            if (recovery == 1 && (app->steering_requested || app->control_requested))
+                goto steered_before_response;
+            if (recovery == 2 && app->interrupt_requested) goto user_interrupted;
+            result = finish_turn_failure(app, retry, turn_id, NULL, "context",
+                error[0] ? error : "context capacity rejection could not be reduced", error, sizeof(error));
+            goto out;
+        }
         steering = snag_app_steering_snapshot(&app->session);
         error[0] = '\0';
         if (!steering || snag_random_id(response_id) < 0 ||
             snag_app_request_build(app, steering, cycle, &credential, &projection,
                                    &count_method, &request_body, error, sizeof(error)) < 0) {
+            if (app->interrupt_requested) goto user_interrupted;
             result = finish_turn_failure(app, retry, turn_id, NULL, "context",
                 error[0] ? error : "response context projection failed", error, sizeof(error));
             goto out;
@@ -3274,7 +3292,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 goto rebuild_request;
             }
         }
-        if (capacity_recovery_used && strcmp(rejected_request_hash, projection.create_request.sha256) == 0) {
+        if (rejected_request_hash[0] && strcmp(rejected_request_hash, projection.create_request.sha256) == 0) {
             static const char failure[] = "capacity recovery produced an identical provider request";
             result = finish_turn_failure(app, retry, turn_id, NULL, "context", failure, error, sizeof(error));
             goto out;
@@ -3414,55 +3432,22 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                            (app->stream_error[0] ? app->stream_error :
                             "assistant output could not be delivered") :
                            (error[0] ? error : "provider response failed"));
-            if (replay_safe && !capacity_recovery_used) {
-                bool compacted = false;
-                char provider_source_hash[SNAG_SHA256_HEX_LEN + 1u];
-
-                provider_capacity_source_sha256(app->turn_provider, app->turn_model, provider_source_hash);
-
-                if (strcmp(rejected_request_hash, projection.create_request.sha256) == 0) {
-                    (void)snprintf(failure, sizeof(failure),
-                                   "provider rejected an identical context request twice");
-                } else if (commit_event(app, "response_capacity_rejected",
+            if (replay_safe && hard_compaction_attempts < 8u &&
+                strcmp(rejected_request_hash, projection.create_request.sha256)) {
+                if (commit_event(app, "response_capacity_rejected",
                         snag_app_response_capacity_rejected_data(
                             turn_id, response_id, cycle, projection.create_request.sha256,
                             &provider_failure, &app->turn_capacity,
                             provider_source_hash), error, sizeof(error)) < 0) {
                     report_message = error[0] ? error : "capacity rejection could not be persisted";
                     goto fail;
-                } else {
-                    int recovery_rc;
-                    bool ceiling_matches;
-
-                    memcpy(rejected_request_hash, projection.create_request.sha256,
-                           sizeof(rejected_request_hash));
-                    ceiling_matches = capacity_ceiling_matches( app, app->turn_provider, app->turn_model);
-                    if (ceiling_matches) snag_app_record_model_accounting(app, SNAG_COUNT_UNKNOWN,
-                            app->session.capacity_ceiling_input_tokens);
-                    apply_capacity_ceiling(app, app->turn_provider, app->turn_model, &app->turn_capacity);
-                    snag_app_response_cycle_release(app, &graph, &steering, &projection, &request_body);
-                    for (;;) {
-                        error[0] = '\0';
-                        recovery_rc = snag_app_compact_after_capacity_rejection(
-                                app, &credential, &compacted, error, sizeof(error));
-                        if (recovery_rc == 1 && app->steering_requested) {
-                            app->steering_requested = false;
-                            continue;
-                        }
-                        if (recovery_rc == 2 && app->interrupt_requested) goto user_interrupted;
-                        break;
-                    }
-                    if (recovery_rc == 0 && compacted) {
-                        capacity_recovery_used = true;
-                        continue;
-                    }
-                    (void)snprintf(failure, sizeof(failure),
-                        "context capacity rejection could not be reduced%s%.*s", error[0] ? ": " : "", 190,
-                        error[0] ? error : "");
-                    result = finish_turn_failure(app, retry, turn_id, NULL, "context",
-                                                  failure, error, sizeof(error));
-                    goto out;
                 }
+                memcpy(rejected_request_hash, projection.create_request.sha256,
+                       sizeof(rejected_request_hash));
+                if (capacity_ceiling_matches(app, app->turn_provider, app->turn_model))
+                    snag_app_record_model_accounting(app, SNAG_COUNT_UNKNOWN,
+                        app->session.capacity_ceiling_input_tokens);
+                continue;
             }
             partial = snag_app_partial_public_json(app);
             if (!partial) {

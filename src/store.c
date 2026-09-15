@@ -1408,6 +1408,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             session->capacity_ceiling_input_tokens = expected_ceiling;
             session->capacity_ceiling_valid = true;
         }
+        session->capacity_rejection = session->active_accounting;
         clear_response_state(session);
     } else if (strcmp(type, "response_output_correction") == 0) {
         const char *correction_id = snag_json_string(data, "correction_id");
@@ -1529,6 +1530,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->response_complete = false;
         session->response_terminal = SNAG_RESPONSE_TERMINAL_FAILED;
         session->response_handoff = json_is_true(json_object_get(data, "new_input"));
+        if (!strcmp(class_name, "context") && !json_array_size(partial))
+            session->capacity_rejection = session->active_accounting;
         if (has_retry && (snag_json_integer_u64(data, "turn_retry_attempts", &session->turn_retry_attempts) < 0 ||
                           session->turn_retry_attempts > (uint64_t)UINT32_MAX + 1u)) goto invalid;
         if (has_policy) session->policy_stopped = json_is_true(json_object_get(data, "policy_stopped")) ?
@@ -1560,6 +1563,11 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !json_is_array(items) || snag_response_usage_from_json(json_object_get(data, "usage"),
                                          &graph.usage) < 0 ||
             snag_response_graph_classify(&graph, &decision, error, error_size) < 0) goto invalid;
+        if (snag_input_observation_matches(&session->capacity_rejection,
+                session->active_accounting.provider, session->active_accounting.model,
+                session->active_accounting.effort, session->active_accounting.provider_source_sha256,
+                session->capacity_rejection.compact_id))
+            session->capacity_rejection.valid = false;
         if (graph.usage.cached_known || graph.usage.input_known || graph.usage.output_known ||
             graph.usage.reasoning_known || graph.usage.total_known) {
             struct snag_usage_totals *totals = &session->usage_totals;

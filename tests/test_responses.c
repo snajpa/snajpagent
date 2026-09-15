@@ -178,6 +178,61 @@ test_failed_snapshot_preserves_only_consistent_text(void)
 }
 
 static void
+test_completed_announcements_and_empty_placeholders(void)
+{
+    static const char announced[] =
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"m\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}}\n\n"
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[]}}\n\n";
+    static const char placeholder[] =
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":[{\"id\":\"empty\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[]},{\"id\":\"m\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"summary\"}]}]}}\n\n";
+    const char *const wires[] = {announced, placeholder};
+    unsigned int failed = 0u;
+    for (size_t i = 0u; i < sizeof(wires) / sizeof(wires[0]); ++i) {
+        struct parsed_stream parsed = parsed_new(1024u);
+        int rc = parse_stream(wires[i], 1u, &parsed);
+        if (rc != 0) {
+            fprintf(stderr, "completed/placeholder case %zu: rc=%d %s\n", i, rc, parsed.error);
+            ++failed;
+        } else {
+            assert(parsed.graph.count == 1u);
+            struct snag_response_item item = snag_response_graph_item(&parsed.graph, 0u);
+            assert(item.kind == SNAG_ITEM_ASSISTANT && item.phase == SNAG_PHASE_FINAL_ANSWER);
+            assert(!strcmp(item.text, "summary"));
+        }
+        parsed_free(&parsed);
+    }
+    assert(failed == 0u);
+    /* Empty finals cannot promote commentary; real calls/refusals still carry
+     * their own outcome. An empty refusal remains a correction, not permission. */
+    static const char *const tails[] = {
+        "{\"id\":\"m\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[{\"type\":\"output_text\",\"text\":\"working\"}]}",
+        "{\"id\":\"f\",\"type\":\"function_call\",\"status\":\"completed\",\"call_id\":\"c\",\"name\":\"read_file\",\"arguments\":\"{}\"}",
+        "{\"id\":\"m\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"refusal\",\"refusal\":\"declined\"}]}"
+    };
+    for (size_t i = 0u; i < 4u; ++i) {
+        struct parsed_stream parsed = parsed_new(4096u);
+        struct snag_buf wire = {.max = 4096u};
+        assert(snag_buf_printf(&wire,
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"status\":\"completed\",\"output\":["
+            "{\"id\":\"e\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[%s]},%s]}}\n\n",
+            i == 3u ? "{\"type\":\"refusal\",\"refusal\":\"\"}" : "",
+            tails[i == 3u ? 1u : i]) == 0);
+        assert(snag_buf_terminate(&wire) == 0);
+        assert(parse_stream((char *)wire.data, 7u, &parsed) == (i == 0u || i == 3u ? 1 : 0));
+        if (i == 1u || i == 2u) {
+            assert(parsed.graph.count == 1u);
+            assert(snag_response_graph_item(&parsed.graph, 0u).kind ==
+                (i == 1u ? SNAG_ITEM_TOOL_CALL : SNAG_ITEM_REFUSAL));
+        }
+        snag_buf_free(&wire);
+        parsed_free(&parsed);
+    }
+}
+
+static void
 test_empty_public_items_get_specific_correction(void)
 {
     static const char streamed[] =
@@ -996,6 +1051,7 @@ main(void)
     test_terminal_snapshot_can_supply_unseen_items();
     test_failed_snapshot_preserves_only_consistent_text();
     test_empty_public_items_get_specific_correction();
+    test_completed_announcements_and_empty_placeholders();
     test_oversized_public_items_get_specific_correction();
     test_structured_keepalives_do_not_end_response();
     test_public_stream(0u);

@@ -14,6 +14,7 @@
 #include <string.h>
 
 struct context_builder {
+    const struct snag_context_control *control;
     const struct snag_session *session;
     const char *continuation_scope;
     uint64_t compact_seq;
@@ -44,6 +45,7 @@ struct context_builder {
     uint64_t compact_budget;
     uint64_t compact_best_seq;
     size_t compact_best_request_count;
+    size_t compact_measured_count, compact_measured_bytes;
     bool compact_best_known;
     bool compact_allow_oversized_first;
 };
@@ -264,6 +266,16 @@ out:
     return rc;
 }
 
+static void
+compact_forget_item(struct context_builder *builder, const json_t *item)
+{
+    for (size_t i = 0u; i < builder->compact_measured_count; ++i)
+        if (json_array_get(builder->request_input, i) == item) {
+            builder->compact_measured_count = 0u;
+            break;
+        }
+}
+
 static int
 append_host_failed(struct context_builder *builder, const char *class_name)
 {
@@ -280,6 +292,7 @@ append_host_failed(struct context_builder *builder, const char *class_name)
         builder->recovery_index = json_array_size(builder->request_input);
         return append_message(builder, "system", text);
     }
+    compact_forget_item(builder, json_array_get(builder->request_input, builder->recovery_index));
     return json_object_set_new(json_array_get(builder->request_input, builder->recovery_index),
                                "content", json_string(text));
 }
@@ -346,6 +359,7 @@ admit_context_input(struct context_builder *builder, const json_t *data)
                 if (steer && !strcmp(id, steer)) found = true;
             }
             if (!found || json_integer_value(json_object_get(entry, "first"))) continue;
+            if (!list) compact_forget_item(builder, json_object_get(entry, "message"));
             if (json_object_set_new(entry, "first", json_integer((json_int_t)when)) < 0 ||
                 (!list && render_input_time(entry) < 0)) return -1;
         }
@@ -594,6 +608,26 @@ out: snag_buf_free(&notice);
 }
 
 static int
+compact_source_bytes(struct context_builder *builder, size_t *bytes)
+{
+    size_t count = json_array_size(builder->request_input);
+    if (count < builder->compact_measured_count) builder->compact_measured_count = 0u;
+    if (!builder->compact_measured_count) builder->compact_measured_bytes = 2u;
+    for (size_t i = builder->compact_measured_count; i < count; ++i) {
+        size_t item_bytes, comma = i != 0u;
+        if (snag_json_digest_bounded(json_array_get(builder->request_input, i),
+                SNAG_CONTEXT_MAX_COMPACT, NULL, &item_bytes) < 0) return -1;
+        if (builder->compact_measured_bytes > SNAG_CONTEXT_MAX_COMPACT - comma ||
+            item_bytes > SNAG_CONTEXT_MAX_COMPACT - comma - builder->compact_measured_bytes)
+            return snag_errno(EOVERFLOW);
+        builder->compact_measured_bytes += comma + item_bytes;
+        builder->compact_measured_count = i + 1u;
+    }
+    *bytes = builder->compact_measured_bytes;
+    return 0;
+}
+
+static int
 compact_complete_boundary(struct context_builder *builder, uint64_t seq, char *error, size_t error_size)
 {
     size_t count, source_bytes;
@@ -604,7 +638,7 @@ compact_complete_boundary(struct context_builder *builder, uint64_t seq, char *e
         builder->compact_best_request_count = json_array_size(builder->request_input);
         return 0;
     }
-    if (snag_json_digest_bounded(builder->request_input, SNAG_CONTEXT_MAX_COMPACT, NULL, &source_bytes) < 0) {
+    if (compact_source_bytes(builder, &source_bytes) < 0) {
         if (errno == EOVERFLOW && builder->compact_best_known) goto trim;
         return snag_errorf(error, error_size, "cannot encode complete compaction group within 12 MiB");
     }
@@ -723,6 +757,9 @@ context_event(void *opaque, const struct snag_session *state,
               uint64_t seq, const char *type, const json_t *data, char *error, size_t error_size)
 {
     struct context_builder *builder = opaque;
+    if (builder->control && builder->control->cancelled &&
+        builder->control->cancelled(builder->control->opaque))
+        return snag_fail(error, error_size, ECANCELED, "context preparation cancelled");
     const char *text = snag_json_string(data, "text");
     bool summarized = seq <= builder->compact_seq;
     bool current = !strcmp(state->active_turn_id, builder->target_turn_id);
@@ -1195,6 +1232,9 @@ compact_event(void *opaque, const struct snag_session *state,
               uint64_t seq, const char *type, const json_t *data, char *error, size_t error_size)
 {
     struct context_builder *builder = opaque;
+    if (builder->control && builder->control->cancelled &&
+        builder->control->cancelled(builder->control->opaque))
+        return snag_fail(error, error_size, ECANCELED, "context preparation cancelled");
     size_t before = json_array_size(builder->request_input);
     bool was_active = builder->active_turn;
     bool group = snag_string_in(type, "response_completed tool_finished process_closed");
@@ -1264,7 +1304,8 @@ int
 snag_context_compact_request_build(struct snag_session *session, const char *model, const char *effort,
                       bool active_prefix, uint64_t source_budget,
                       bool allow_oversized_first, const char *continuation_scope,
-                      struct snag_context_projection *projection, char *error, size_t error_size)
+                      struct snag_context_projection *projection, char *error, size_t error_size,
+                      const struct snag_context_control *control)
 {
     struct context_builder builder;
     int rc = -1;
@@ -1273,6 +1314,7 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
     snag_context_projection_free(projection);
     memset(&builder, 0, sizeof(builder));
     builder.session = session;
+    builder.control = control;
     builder.continuation_scope = continuation_scope;
     builder.compact_seq = session && (!session->compact_scope[0] ||
         (continuation_scope && !strcmp(session->compact_scope, continuation_scope))) ?
@@ -1392,7 +1434,8 @@ snag_context_build(struct snag_session *session, const char *model, const char *
                   const json_t *steering, uint64_t max_output_tokens, bool max_output_known,
                   const struct snag_config *config, const char *continuation_scope,
                   const struct snag_instruction_set *instructions, const char *operator_visibility,
-                  struct snag_context_projection *projection, char *error, size_t error_size)
+                  struct snag_context_projection *projection, char *error, size_t error_size,
+                      const struct snag_context_control *control)
 {
     static const char harness[] =
         "You are " SNAJPAGENT_NAME ", a local coding agent. Be concise, preserve user-visible progress, inspect before destructive changes, and use only declared tools. "
@@ -1417,6 +1460,7 @@ snag_context_build(struct snag_session *session, const char *model, const char *
     snag_context_projection_free(projection);
     memset(&builder, 0, sizeof(builder));
     builder.session = session;
+    builder.control = control;
     builder.instructions = instructions;
     builder.continuation_scope = continuation_scope;
     builder.compact_seq = session && (!session->compact_scope[0] ||

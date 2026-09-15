@@ -515,6 +515,14 @@ operator_visibility(const struct app_state *app, char *text, size_t size)
     return n >= 0 && (size_t)n < size ? 0 : snag_errno(EOVERFLOW);
 }
 
+bool
+snag_app_context_cancelled(void *opaque)
+{
+    struct app_state *app = opaque;
+    return app->interrupt_requested || snag_app_shutdown(app) || snag_ui_leaving(&app->ui) ||
+        (!app->queue_edit_id[0] && snag_ui_interrupt_pending(&app->ui));
+}
+
 int
 snag_app_request_build(struct app_state *app, const json_t *steering, unsigned int cycle,
                        const struct snag_credential *credential, struct snag_context_projection *projection,
@@ -522,6 +530,7 @@ snag_app_request_build(struct app_state *app, const json_t *steering, unsigned i
                        char *error, size_t error_size)
 {
     int rc;
+    const struct snag_context_control control = {snag_app_context_cancelled, app};
 
     app->request_networked = snag_irc_enabled(app->config) && !app->session.active_read_only;
     snag_irc_capture_route(app->irc, &app->irc_request_route);
@@ -532,11 +541,14 @@ snag_app_request_build(struct app_state *app, const json_t *steering, unsigned i
     if (snag_context_continuation_scope(app->turn_provider, app->turn_model,
                                        credential, continuation_scope) < 0)
         return snag_errorf(error, error_size, "cannot bind provider continuation");
+    if (snag_app_provider_activity(app, true) < 0) return -1;
     rc = snag_context_build(&app->session, app->turn_model, app->turn_effort,
         cycle, steering, app->turn_capacity.max_output_tokens,
         app->turn_capacity.max_output_tokens, app->config, continuation_scope,
-        &app->turn_instructions, visibility, projection, error, error_size);
-
+        &app->turn_instructions, visibility, projection, error, error_size, &control);
+    bool cancelled = rc < 0 && errno == ECANCELED;
+    if (snag_app_provider_activity(app, false) < 0) return -1;
+    if (cancelled) (void)snag_app_active_input_pump(app, 0u);
     if (rc < 0) return -1;
     memcpy(projection->continuation_scope, continuation_scope, sizeof(projection->continuation_scope));
     *count_method = "unknown";

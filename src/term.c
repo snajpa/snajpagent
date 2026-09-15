@@ -2180,6 +2180,7 @@ static int
 cancel_line(struct snag_term *term, enum snag_term_action *action)
 {
     bool interrupt = term->active && !term->searching && !term->draft.len;
+    if (interrupt && term->interrupt_pending) return 0;
 
     if (!term->input_only && !term->prompt_visible && redraw(term) < 0) return -1;
     if (!term->input_only && term->capable && term->prompt_visible) {
