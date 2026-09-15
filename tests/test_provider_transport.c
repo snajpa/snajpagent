@@ -2231,6 +2231,10 @@ test_voice_socket(void)
     struct snag_voice_socket *voice=NULL;char error[256];
     strcpy(provider.base_url,"http://remote.invalid");
     assert(snag_provider_voice_open(&provider,&credential,"fixture",NULL,NULL,&voice,error,sizeof(error))<0 && !voice);
+    strcpy(provider.base_url,"http://127.0.0.1:1/v1/");
+    assert(snag_provider_voice_open(&provider,&credential,"fixture",NULL,NULL,
+        &voice,error,sizeof(error))<0 && !voice);
+    assert(strstr(error,"/backend-api/codex"));
     for(unsigned int mode=0;mode<6u;++mode) {
         fprintf(stderr,"WebSocket fixture mode %u\n",mode);
         struct local_server server;
@@ -2495,9 +2499,11 @@ static void test_native_media(void)
             assert(snag_voice_rtc_input(media,input,480u)==0);next+=20u;}
         int n=snag_voice_rtc_output(media,output,2880u);assert(n>=0);
         samples+=(unsigned int)n;
-        for (int i=0;i<n;++i) {
-            unsigned int v=output[i]<0?-output[i]:output[i];
-            if (v>peak)peak=v;
+        for (int i = 0; i < n; ++i) {
+            unsigned int v = output[i] < 0 ? -output[i] : output[i];
+            if (v > peak) {
+                peak = v;
+            }
         }
         snag_sleep_ms(2u);
     }
