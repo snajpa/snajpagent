@@ -63,6 +63,9 @@ let
         done
       '';
     });
+  voiceRtc = import ./voice-rtc-cross.nix {
+    inherit pkgs cmakeLibrary tls; sourcePkgs = windows;
+  };
   jansson = cmakeLibrary windows.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF"
     "-DJANSSON_BUILD_DOCS=OFF"
@@ -256,7 +259,7 @@ in {
     src = source;
     outputs = [ "out" "debug" ];
     nativeBuildInputs = [ windows.buildPackages.pkg-config ];
-    buildInputs = [ threads jansson curl regex av png pdf freetype jpeg openjpeg archive xml ] ++ networkLibraries
+    buildInputs = [ threads jansson curl regex av png pdf freetype jpeg openjpeg archive xml ] ++ voiceRtc.dependencies ++ networkLibraries
       ++ pkgs.lib.optionals (pty != null) [ pty.collector pty.cxx pty.unwind ];
     enableParallelBuilding = true;
     dontConfigure = true;
@@ -289,6 +292,8 @@ in {
         "AV_LIBS=$($PKG_CONFIG --static --libs libavformat libavcodec libavutil libswresample libswscale)"
         "PDF_CFLAGS=$($PKG_CONFIG --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')${pkgs.lib.optionalString (pty != null) " -nostdinc++ -isystem ${pkgs.lib.getDev pty.cxx}/include/c++/v1"}"
         "PDF_LIBS=$($PKG_CONFIG --static --libs poppler libpng)${if pty != null then " -L${pty.cxx}/lib -lc++ -L${pty.unwind}/lib -lunwind" else if windows.stdenv.cc.isClang then " -lc++" else " -lstdc++"}"
+        "RTC_CFLAGS=${voiceRtc.cflags}"
+        "RTC_LIBS=${voiceRtc.libs} ${if pty != null then "-L${pty.cxx}/lib -lc++ -L${pty.unwind}/lib -lunwind" else if windows.stdenv.cc.isClang then "-lc++" else "-lstdc++"}"
         'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}'
       )
     '';

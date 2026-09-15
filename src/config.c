@@ -1039,12 +1039,8 @@ validate_config(struct snag_config *config, bool private_file, char *error, size
         return -1;
     const struct snag_audio_config *audio = &config->audio;
     const struct snag_provider_config *audio_provider = snag_config_provider(config, audio->provider);
-    if ((audio->provider[0] && (!audio_provider || audio_provider->auth != SNAG_AUTH_API_KEY)) ||
-        (!audio->provider[0] && (audio->listen_model[0] || audio->transcribe_model[0] ||
-            audio->speech_model[0] || audio->realtime_model[0] || audio->voice[0])) ||
-        (!!(audio->speech_model[0] || audio->realtime_model[0]) != !!audio->voice[0]) ||
-        (audio->realtime_model[0] && !audio->transcribe_model[0])) {
-        snag_errorf(error, error_size, "audio needs an API-key provider; speech/realtime requires voice, and realtime requires transcribe_model");
+    if (audio->provider[0] && !audio_provider) {
+        snag_errorf(error, error_size, "audio provider is not configured");
         errno = EINVAL; return -1;
     }
     if (config->provider[0] && !snag_config_provider(config, config->provider)) {

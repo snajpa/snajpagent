@@ -49,7 +49,7 @@ usage: ./configure [options]
   --with-pdf              require linked PDF (Poppler, libpng)
   --without-pdf           disable linked PDF
   --require-pdf           same as --with-pdf
-  --with-audio-device     require the audio device backend (miniaudio)
+  --with-audio-device     require miniaudio, libdatachannel and Opus
   --without-audio-device  disable the audio device backend
   --require-audio-device  same as --with-audio-device
   --with-office           require the linked LibreOfficeKit Office import
@@ -226,11 +226,16 @@ audio_note='not found'
 if [ "$want_audio" = off ]; then
 	audio_note='disabled by --without-audio-device'
 elif pc_exists miniaudio; then
-	WITH_AUDIO_DEVICE=1
-	audio_note='found through pkg-config'
+	printf '#include <rtc/rtc.h>\n#include <opus/opus.h>\nint main(void) { return rtcIsOpen(-1) || opus_get_version_string()==0; }\n' > "$tmpd/audio.c"
+	if $CC ${RTC_CFLAGS:-} -o "$tmpd/audio" "$tmpd/audio.c" ${RTC_LIBS:--ldatachannel -lopus} >/dev/null 2>&1; then
+		WITH_AUDIO_DEVICE=1
+		audio_note='miniaudio and native voice transport found'
+	else
+		audio_note='libdatachannel or Opus development files missing'
+	fi
 fi
 if [ "$WITH_AUDIO_DEVICE" = 0 ] && [ "$want_audio" = require ]; then
-	die 'the audio device backend was required but miniaudio was not found (a miniaudio.pc shim or PKG_CONFIG_PATH entry is needed)'
+	die 'audio devices require miniaudio, libdatachannel and Opus development files (MINIAUDIO_CFLAGS/RTC_CFLAGS/RTC_LIBS may select nonstandard paths)'
 fi
 
 # --- Office: linked kit, commanded soffice, or none ---------------------

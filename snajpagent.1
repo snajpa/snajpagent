@@ -1307,8 +1307,9 @@ it does not queue a future yield or interrupt a provider request.
 .TP
 .B /dictate
 Start one microphone interval, up to 60 seconds, using the configured capture
-device. Requires a raw interactive terminal and an explicit audio API provider
-and transcribe_model. The MIC ON prompt appears before capture starts.
+device. Requires a raw interactive terminal. Uses the selected provider's
+credentials and transcription defaults; [audio] can override them.
+The MIC ON prompt appears before capture starts.
 Enter finishes; Escape or Ctrl-C cancels. Capture also finishes at the limit.
 The microphone closes before transcription is requested. While transcribing,
 Escape cancels; a request already sent may have been billed and is never
@@ -1330,10 +1331,11 @@ empty values select system defaults. Ambiguous duplicate names are rejected.
 Stop local audio before reloading configuration or preparing attachments.
 .TP
 .B /voice on
-Start a realtime voice conversation in a raw interactive terminal. Configure
-[audio] provider, realtime_model, transcribe_model and voice first.
-The prompt identifies microphone capture; connection and configuration acceptance
-precede activation. Microphone audio goes to the selected API provider and replies
+Start a voice conversation using the selected provider and its credentials.
+Direct Codex subscriptions and codex-lb use native subscription voice; compatible
+BYOK providers use their Realtime API. [audio] settings are optional overrides.
+The prompt identifies microphone capture, which starts after connection setup.
+Microphone audio goes to the provider's media servers and replies
 are synthesized speech. Use a headset: software acoustic echo cancellation is
 not provided. Keyboard editing and ordinary submission remain available.
 .PP
@@ -1977,38 +1979,39 @@ Optional printable ASCII
 .B X-Title
 value.
 .SS audio
-File-audio tools and realtime voice use a separately selected API route. All fields default to
-empty; only configured operations appear in the model's tools.
+Optional audio preferences. Dictation and voice inherit the selected provider;
+explicit values below override its defaults.
 .TP
 .B provider
-Name of an existing provider with auth=api_key. Its credentials, base URL,
-TLS settings and timeouts apply to audio requests. Codex subscription OAuth
-credentials cannot authorize this route. Configuration does not verify that
-the provider supports the requested audio endpoints.
+Name of a configured provider. Empty uses the selected coding provider.
+Credentials, endpoints and timeouts follow that provider. A codex-lb key
+authenticates to the gateway; direct Codex uses the subscription login.
 .TP
 .B listen_model
 Audio-capable Chat Completions model for listen_audio.
 .TP
 .B transcribe_model
-Transcription model for transcribe_audio, /dictate and realtime input captions.
+Transcription model for transcribe_audio, /dictate and public Realtime input captions.
+The default is gpt-4o-transcribe. Native voice supplies its own transcripts.
 .TP
 .B realtime_model
-Realtime conversation model for /voice on. Requires transcribe_model and voice.
-The selected provider must support the realtime WebSocket endpoint; the linked
-libcurl must support WSS. An empty value leaves realtime voice unconfigured.
+Conversation model for /voice on. Empty selects gpt-live-1-codex for native Codex
+voice or gpt-realtime for public Realtime.
 .TP
 .B speech_model
 Speech-generation model for speak_text. Set together with voice.
 .TP
 .B voice
-Voice identifier accepted by speech_model or realtime_model. Set together with
-at least one of these models.
+Voice identifier. Empty selects cove for native Codex voice or marin for public
+Realtime. A configured speech_model can use this value for speech generation.
 .TP
 .B capture_device, playback_device
 Exact device names from /voice devices. Empty values use system defaults.
 These settings alone authorize no capture or playback.
 .PP
-These requests have separate provider billing. File-audio calls carry the selected
+Subscription audio uses subscription access; BYOK audio uses that provider's
+API billing. Failures do not switch billing routes. Unsupported operations are
+reported explicitly. File-audio calls carry the selected
 sound or synthesis text, without coding history or executable tools. Realtime
 voice also receives its attributed coding results through the existing owner.
 A failed or

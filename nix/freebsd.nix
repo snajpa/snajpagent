@@ -167,6 +167,11 @@ let
     inherit pkgs autotoolsLibrary cflags llvm osVersion;
     os = "freebsd";
   };
+  voiceRtc = import ./voice-rtc-cross.nix {
+    inherit pkgs cmakeLibrary tls; sourcePkgs = sourcePkgs;
+    cxxFlags = "${cflags} -stdlib=libstdc++ -pthread${lib.optionalString early " -fno-use-cxa-atexit"}${lib.optionalString legacy " -fno-builtin-pow -fno-builtin-powf"} -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}";
+    cxxLibraries = "--ld-path=${llvm.lld}/bin/ld.lld -L${cxx}/lib";
+  };
   jansson = cmakeLibrary sourcePkgs.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF" "-DJANSSON_BUILD_DOCS=OFF"
     "-DJANSSON_WITHOUT_TESTS=ON" "-DJANSSON_EXAMPLES=OFF"
@@ -391,7 +396,7 @@ in {
       src = source;
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
-      buildInputs = [ jansson curl av xml archive ] ++ networkLibraries ++ lib.optional early regex
+      buildInputs = [ jansson curl av xml archive ] ++ voiceRtc.dependencies ++ networkLibraries ++ lib.optional early regex
         ++ [ pdf cxx png freetype expat fontconfig jpeg openjpeg ];
       enableParallelBuilding = true;
       dontConfigure = true;
@@ -420,6 +425,8 @@ in {
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson)${lib.optionalString early " -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"}"
           "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"
           "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale | sed -E 's/-l?(-l?)?pthread//g')"
+          "RTC_CFLAGS=${voiceRtc.cflags}"
+          "RTC_LIBS=${voiceRtc.libs} ${cxx}/lib/libstdc++.a -Wl,-Bdynamic -lm${lib.optionalString (!legacy) " -lgcc_s"} -Wl,-Bstatic"
           'MINIAUDIO_CFLAGS=-isystem ${miniaudio}'
           'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'
           'CXXFLAGS=-std=c++20 ${cflags}${lib.optionalString legacy " -U_XOPEN_SOURCE"}${lib.optionalString early " -fno-use-cxa-atexit"} -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'

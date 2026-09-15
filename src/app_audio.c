@@ -86,8 +86,10 @@ static int
 transcribe(struct app_state *app)
 {
     struct app_audio *audio = app->audio;
-    const struct snag_audio_config *cfg = &app->config->audio;
-    const struct snag_provider_config *provider = snag_config_provider(app->config, cfg->provider);
+    struct snag_audio_config resolved;
+    const struct snag_provider_config *provider = snag_provider_audio_config(app->config,
+        app->session.default_provider, &resolved);
+    const struct snag_audio_config *cfg = &resolved;
     struct snag_credential credential;
     struct snag_secret_set secrets = {0};
     struct snag_buf response, usage_text;
@@ -238,10 +240,13 @@ snag_app_audio_command(struct app_state *app, const char *line, bool *handled)
         else rc = snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
         snag_buf_free(&names); return rc;
     }
-    const struct snag_audio_config *cfg = &app->config->audio;
-    const struct snag_provider_config *provider = snag_config_provider(app->config, cfg->provider);
-    if (dictate && (!provider || provider->auth != SNAG_AUTH_API_KEY || !cfg->transcribe_model[0]))
-        return snag_ui_text(&app->ui, SNAG_UI_ERROR, "Configure [audio] provider (auth=api_key) and transcribe_model before /dictate.");
+    struct snag_audio_config resolved;
+    const struct snag_provider_config *provider = snag_provider_audio_config(app->config,
+        app->session.default_provider, &resolved);
+    const struct snag_audio_config *cfg = &resolved;
+    if (dictate && !provider)
+        return snag_ui_text(&app->ui, SNAG_UI_ERROR,
+            "Selected dictation provider is not configured.");
     if (play && (strncmp(line, "/play asset:", 12u) || !snag_hex_is_lower(line + 12u, SNAG_ID_HEX_LEN)))
         return snag_ui_text(&app->ui, SNAG_UI_ERROR, "Use /play asset:ID for an accepted session audio asset, or /play stop.");
     struct app_audio *audio = calloc(1u, sizeof(*audio));

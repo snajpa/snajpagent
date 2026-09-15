@@ -168,6 +168,11 @@ let
     inherit pkgs autotoolsLibrary cflags llvm osVersion;
     os = "netbsd";
   };
+  voiceRtc = import ./voice-rtc-cross.nix {
+    inherit pkgs cmakeLibrary tls; sourcePkgs = sourcePkgs;
+    cxxFlags = "${cflags} -stdlib=libstdc++ -pthread -fno-builtin-pow -fno-builtin-powf -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}${lib.optionalString early " -include ${./bsd-legacy-cxx.h}"}";
+    cxxLibraries = "${ldflags} -L${cxx}/lib";
+  };
   jansson = cmakeLibrary sourcePkgs.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF" "-DJANSSON_BUILD_DOCS=OFF"
     "-DJANSSON_WITHOUT_TESTS=ON" "-DJANSSON_EXAMPLES=OFF"
@@ -392,7 +397,7 @@ in {
       src = source;
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
-      buildInputs = [ jansson curl av xml archive ] ++ networkLibraries ++ [ regex ]
+      buildInputs = [ jansson curl av xml archive ] ++ voiceRtc.dependencies ++ networkLibraries ++ [ regex ]
         ++ [ pdf png freetype expat fontconfig jpeg openjpeg ] ++ lib.optional legacy cxx;
       enableParallelBuilding = true;
       dontConfigure = true;
@@ -420,6 +425,8 @@ in {
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson) -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"
           "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"
           "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale | sed -E 's/-l?(-l?)?pthread//g')"
+          "RTC_CFLAGS=${voiceRtc.cflags}"
+          "RTC_LIBS=${voiceRtc.libs} ${if legacy then "${cxx}/lib/libstdc++.a -Wl,-Bdynamic" else "-Wl,-Bdynamic -lstdc++"} -lm -lgcc_s -Wl,-Bstatic"
           'MINIAUDIO_CFLAGS=-isystem ${miniaudio}'
           'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'
           'CXXFLAGS=-std=c++20 ${cflags} ${if legacy then "-nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}" else "-stdlib=libstdc++"}${lib.optionalString early " -include ${./bsd-legacy-cxx.h}"} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
