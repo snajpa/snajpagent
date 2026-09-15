@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Recover oversized context after changing provider/model/account binding by
+  compacting a smaller complete history prefix. Keep later history and the
+  previous compact output until recovery succeeds, and validate the binding
+  throughout compaction instead of rejecting the smaller prefix as an invalid
+  journal transition.
+
 - Keep automatic goal requests in the provider conversation when gateways lift
   instruction messages into policy, preventing metadata acknowledgments from
   replacing the current task. Preserve goal history, explicit pauses, pending

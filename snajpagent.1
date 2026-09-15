@@ -1928,6 +1928,9 @@ replaying completed tools.  Exact-count-driven reduction and summary selection
 are bounded to eight attempts.  Summary requests shrink to smaller complete
 history groups only after exact counts or actual context rejections, not estimates.
 An irreducible prompt/group fails clearly; the durable history is retained.
+After a provider/model/account change, recovery may rebuild a smaller prefix
+than the previous binding compacted. Later conversation remains available, and
+interrupted recovery retains the previous compact output.
 .TP
 .B native_compaction
 Use the provider's native compaction endpoint.  When false, use an ordinary
@@ -3488,7 +3491,11 @@ Compaction sends compatible reasoning with the selected history, then replaces
 that prefix normally. A provider/account switch rebuilds ordinary history when
 the saved compact output has a different continuation binding; private compact
 state is not forwarded to the new provider. Older sessions cannot recover reasoning discarded by
-an earlier executable. Plaintext provider reasoning is sensitive journal data:
+an earlier executable. If the rebuilt history exceeds the new model's context,
+recovery reduces the summary request to smaller complete history groups. This
+can start before the previous model's compacted boundary without discarding
+later conversation or replaying completed tools.
+Plaintext provider reasoning is sensitive journal data:
 protect the session directory and its backups as you would the conversation.
 .SS Provider failures
 Ordinary failures that otherwise offer

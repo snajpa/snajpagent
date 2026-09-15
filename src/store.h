@@ -127,6 +127,7 @@ struct snag_session {
     char compact_id[SNAG_ID_HEX_LEN + 1u];
     char active_compact_id[SNAG_ID_HEX_LEN + 1u];
     char active_compact_source_sha256[SNAG_SHA256_HEX_LEN + 1u];
+    char active_compact_scope[SNAG_SHA256_HEX_LEN + 1u];
     char default_provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
     char goal_id[SNAG_ID_HEX_LEN + 1u];
     char default_model[SNAG_MODEL_MAX_BYTES];

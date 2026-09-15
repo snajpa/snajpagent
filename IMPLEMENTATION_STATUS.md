@@ -84,6 +84,9 @@ Implemented:
   Completed plaintext/encrypted reasoning is durable provider-bound continuation,
   replayed with original tool-call pairing across cycles and resume, and included
   in compatible compaction input. It is excluded from public/history rendering.
+  Compaction start/completion share that binding; overflow recovery after a
+  binding change can rebuild an earlier complete prefix while retaining later
+  history and preserving the previous output on interruption.
 - Private durable sessions, replay, steering, queues, goals and read-only turns.
 - Terminal presentation of provider citation blocks as one compact reference
   (`[cite: turn 0-2]`); unknown or malformed blocks and all redirected, durable
