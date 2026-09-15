@@ -4090,6 +4090,49 @@ run_queued_chain(struct app_state *app)
     return 0;
 }
 
+static bool
+timer_due(const struct app_state *app)
+{
+    return app && app->session.timer_id[0] && app->session.timer_due_ms &&
+           snag_time_ms() >= app->session.timer_due_ms;
+}
+
+static int
+run_due_timer(struct app_state *app)
+{
+    char timer_id[SNAG_ID_HEX_LEN + 1u];
+    char *text;
+    char error[256] = {0};
+    int rc;
+
+    if (!timer_due(app)) return 0;
+    memcpy(timer_id, app->session.timer_id, sizeof(timer_id));
+    text = snag_strdup_checked(app->session.timer_text, SNAG_MAX_TIMER_TEXT);
+    if (!text) return 3;
+    if (commit_event(app, "timer_fired", json_pack("{s:s}", "timer_id", timer_id),
+                     error, sizeof(error)) < 0) {
+        free(text);
+        (void)app_error(app, error);
+        return 3;
+    }
+    rc = run_tracked_turn(app, text, NULL, false, false, NULL);
+    free(text);
+    return rc;
+}
+
+static int
+idle_poll_timeout(const struct app_state *app)
+{
+    int timeout = app->audio || app->voice || app->networked || app->irc_background.len ? 25 : -1;
+    if (app->session.timer_id[0] && app->session.timer_due_ms) {
+        uint64_t now = snag_time_ms();
+        uint64_t remaining = app->session.timer_due_ms > now ? app->session.timer_due_ms - now : 0u;
+        if (remaining < (uint64_t)(timeout < 0 ? INT_MAX : timeout))
+            timeout = remaining > (uint64_t)INT_MAX ? INT_MAX : (int)remaining;
+    }
+    return timeout;
+}
+
 static int
 run_ready_chains(struct app_state *app)
 {
@@ -4131,6 +4174,11 @@ run_ready_chains(struct app_state *app)
         }
         if (app->session.queue_armed && !app->queue_edit_id[0] && app->session.pending_queue_count != 0u) {
             turn_rc = run_queued_chain(app);
+            if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY) return turn_rc;
+            continue;
+        }
+        if (timer_due(app)) {
+            turn_rc = run_due_timer(app);
             if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY) return turn_rc;
             continue;
         }
@@ -4221,7 +4269,8 @@ interactive_loop(struct app_state *app, const char *initial)
                      snag_ui_capture_route(&app->ui, initial) < 0))) return 6;
     if (apply_controls(app) < 0) return 3;
     if (app->input_closed) return 0;
-    if (!initial && (app->session.queue_armed || app->goal_armed || app->session.active_turn || app->session.pending_input)) {
+    if (!initial && (app->session.queue_armed || app->goal_armed || app->session.active_turn ||
+                     app->session.pending_input || timer_due(app))) {
         rc = run_ready_chains(app);
         if (rc == 3 || rc == 6) return rc;
     }
@@ -4253,7 +4302,7 @@ interactive_loop(struct app_state *app, const char *initial)
                 if (rc == 3 || rc == 6)
                     break;
                 if ((rc == 0 || rc == SNAG_APP_INPUT_READY) &&
-                    (app->session.queue_armed || app->goal_armed)) {
+                    (app->session.queue_armed || app->goal_armed || timer_due(app))) {
                     rc = run_ready_chains(app);
                     if (rc == 3 || rc == 6) break;
                 }
@@ -4264,9 +4313,7 @@ interactive_loop(struct app_state *app, const char *initial)
             if (app->ui.active != app->session.active_turn &&
                 set_input_prompt(app, app->session.active_turn) < 0)
                 goto ui_failed;
-            int poll_rc = snag_ui_poll(&app->ui,
-                app->audio || app->voice || app->networked || app->irc_background.len ? 25 : -1,
-                &action, &owned);
+            int poll_rc = snag_ui_poll(&app->ui, idle_poll_timeout(app), &action, &owned);
             if (owned) app->input_received_ms = app->ui.input_received_ms;
             history_warning(app);
             if (poll_rc < 0) {
@@ -4290,8 +4337,13 @@ interactive_loop(struct app_state *app, const char *initial)
                     break;
                 }
             }
-            if (poll_rc == 0)
+            if (poll_rc == 0) {
+                if (timer_due(app)) {
+                    rc = run_ready_chains(app);
+                    if (rc == 3 || rc == 6) break;
+                }
                 continue;
+            }
             if (action == SNAG_TERM_DICTATE_DONE || action == SNAG_TERM_DICTATE_CANCEL) {
                 free(owned); owned = NULL;
                 if (snag_app_audio_action(app, action) < 0) return 6;
@@ -4556,7 +4608,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
             rc = run_tracked_turn(&app, query, NULL, false, read_only, NULL);
         }
         if ((rc == 0 || rc == SNAG_APP_INPUT_READY) &&
-            (!cli->prompt || app.session.queue_armed || app.goal_armed)) rc = run_ready_chains(&app);
+            (!cli->prompt || app.session.queue_armed || app.goal_armed || timer_due(&app))) rc = run_ready_chains(&app);
         goto out;
     }
     if (snag_ui_open(&app.ui, error, sizeof(error)) < 0) goto fail;

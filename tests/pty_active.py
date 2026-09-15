@@ -1953,6 +1953,113 @@ def test_goal_quoted_reserved_wording():
     assert [item["data"]["input_kind"] for item in turns] == ["goal"]
 
 
+def test_timer_wakes_an_ordinary_model_turn():
+    child = Child([], PROMPT.rstrip())
+    scheduled_end = child.send_wait(b"timer_test\r", b"timer scheduled")
+    handled_end = child.wait(b"timer reminder handled", start=scheduled_end)
+    child.exit_cleanly(handled_end)
+
+    log = events(child.session_id())
+    turns = [event for event in log if event["type"] == "turn_started"]
+    scheduled = one(log, "timer_scheduled")
+    fired = one(log, "timer_fired")
+    assert len(turns) == 2
+    assert turns[0]["data"]["input_kind"] == "direct"
+    assert turns[0]["data"]["text"] == "timer_test"
+    assert turns[1]["data"]["input_kind"] == "direct"
+    assert turns[1]["data"]["text"] == "timer fired"
+    assert scheduled["seq"] < fired["seq"] < turns[1]["seq"]
+
+
+def test_timer_wakes_while_goal_stays_blocked():
+    child = Child([], PROMPT.rstrip())
+    handled_end = child.send_wait(b"/goal timer blocked goal\r", b"timer reminder handled")
+    child.exit_cleanly(handled_end)
+
+    log = events(child.session_id())
+    turns = [event for event in log if event["type"] == "turn_started"]
+    blocked = one(log, "goal_blocked")
+    scheduled = one(log, "timer_scheduled")
+    fired = one(log, "timer_fired")
+    assert [turn["data"]["input_kind"] for turn in turns] == ["goal", "direct"]
+    assert turns[1]["data"]["text"] == "timer fired"
+    assert blocked["seq"] < scheduled["seq"] < fired["seq"] < turns[1]["seq"]
+    assert not [event for event in log if event["type"] in {"goal_resumed", "goal_completed"}]
+
+
+def test_timer_replacement_and_cancellation():
+    replacement = Child([], PROMPT.rstrip())
+    replacement_end = replacement.send_wait(b"timer_replace_test\r", b"timer replacement scheduled")
+    handled_end = replacement.wait(b"timer replacement handled", start=replacement_end)
+    replacement.exit_cleanly(handled_end)
+
+    replacement_log = events(replacement.session_id())
+    replacement_turns = [event for event in replacement_log if event["type"] == "turn_started"]
+    replacement_scheduled = [event for event in replacement_log if event["type"] == "timer_scheduled"]
+    replacement_cancelled = [event for event in replacement_log if event["type"] == "timer_cancelled"]
+    replacement_fired = [event for event in replacement_log if event["type"] == "timer_fired"]
+    assert [event["data"]["text"] for event in replacement_scheduled] == [
+        "timer original", "timer replacement fired"]
+    assert len(replacement_cancelled) == 1 and len(replacement_fired) == 1
+    assert replacement_cancelled[0]["data"]["timer_id"] == replacement_scheduled[0]["data"]["timer_id"]
+    assert replacement_fired[0]["data"]["timer_id"] == replacement_scheduled[1]["data"]["timer_id"]
+    assert [turn["data"]["text"] for turn in replacement_turns] == [
+        "timer_replace_test", "timer replacement fired"]
+
+    cancellation = Child([], PROMPT.rstrip())
+    cancelled_end = cancellation.send_wait(b"timer_cancel_test\r", b"timer cancelled")
+    idle_end = cancellation.wait_idle_prompt(start=cancelled_end)
+    cancellation.drain(1.1)
+    assert b"timer cancellation fired" not in cancellation.buf[idle_end:]
+    cancellation.exit_now()
+
+    cancellation_log = events(cancellation.session_id())
+    cancellation_turns = [event for event in cancellation_log if event["type"] == "turn_started"]
+    cancellation_scheduled = [event for event in cancellation_log if event["type"] == "timer_scheduled"]
+    cancellation_cancelled = [event for event in cancellation_log if event["type"] == "timer_cancelled"]
+    assert [event["data"]["text"] for event in cancellation_scheduled] == ["timer cancellation fired"]
+    assert len(cancellation_cancelled) == 1
+    assert cancellation_cancelled[0]["data"]["timer_id"] == cancellation_scheduled[0]["data"]["timer_id"]
+    assert not [event for event in cancellation_log if event["type"] == "timer_fired"]
+    assert [turn["data"]["text"] for turn in cancellation_turns] == ["timer_cancel_test"]
+
+
+def test_dynamic_irc_lifecycle_and_refusal():
+    port = free_port()
+    endpoint = f"127.0.0.1:{port}"
+    host_args = ["--no-listen", "--no-client", "-n", "hostbot", "-o", "hostop", "-r", "lab"]
+    client_args = ["--no-listen", "--no-client", "-n", "connectbot", "-o", "connectop", "-r", "lab"]
+    with Child(host_args, PROMPT.rstrip()) as host:
+        hosted_end = host.send_wait(f"irc_host_test {endpoint}\r".encode(), b"IRC hosted")
+        host.wait_idle_prompt(start=hosted_end)
+        watcher = IRCClient(port, "watcher")
+        try:
+            with Child(client_args, PROMPT.rstrip()) as client:
+                watch_start = len(watcher.buf)
+                connected_end = client.send_wait(f"irc_connect_test {endpoint}\r".encode(), b"IRC connected")
+                watcher.wait(b":connectbot!", start=watch_start)
+                disconnect_start = len(watcher.buf)
+                disconnected_end = client.send_wait(f"irc_disconnect_test {endpoint}\r".encode(),
+                                                    b"IRC disconnected", start=connected_end)
+                watcher.wait(b" QUIT :", start=disconnect_start)
+                client.exit_cleanly(disconnected_end)
+        finally:
+            watcher.close()
+        stopped_end = host.send_wait(f"irc_host_disconnect_test {endpoint}\r".encode(),
+                                     b"IRC host disconnected", start=hosted_end)
+        host.exit_cleanly(stopped_end)
+
+    refusal = Child(["--no-listen", "--no-client"], PROMPT.rstrip())
+    refused_end = refusal.send_wait(b"irc_refusal_test\r", b"IRC refusal handled")
+    refusal.exit_cleanly(refused_end)
+    failed = [event for event in events(refusal.session_id())
+              if event["type"] == "tool_finished" and
+              event["data"]["result"]["status"] == "failed"]
+    assert len(failed) == 1
+    assert failed[0]["data"]["result"]["model_text"].startswith(
+        "Select a destination number string")
+
+
 def test_goal_automatic_continuation():
     child = Child([], PROMPT.rstrip())
     checkpoint_end = child.send_wait(b"/goal automatic goal\r", b"goal checkpoint")
@@ -5242,6 +5349,10 @@ if __name__ == "__main__":
     test_durable_queue_scheduling()
     test_resume_preserves_armed_fifo()
     test_goal_quoted_reserved_wording()
+    test_timer_wakes_an_ordinary_model_turn()
+    test_timer_wakes_while_goal_stays_blocked()
+    test_timer_replacement_and_cancellation()
+    test_dynamic_irc_lifecycle_and_refusal()
     test_goal_automatic_continuation()
     test_model_created_goal_continuation()
     test_goal_configured_wording_limit()

@@ -1031,6 +1031,12 @@ tool_schemas(bool goal_active,
     const char *search_type = snag_config_provider_is_openrouter(
         snag_config_provider(config, provider_name)) ? "openrouter:web_search" : "web_search";
 
+    /* State affects execution, never catalog visibility. */
+    (void)goal_active;
+    (void)goal_create_allowed;
+    (void)networked;
+    (void)read_only;
+
     if (!tools) return NULL;
     if (json_array_append_new(tools, image_tool_schema()) < 0 ||
         json_array_append_new(tools, tool_schema("read_document", "path",
@@ -1064,44 +1070,24 @@ tool_schemas(bool goal_active,
         json_decref(tools);
         return NULL;
     }
-    if (config && config->audio.provider[0]) {
-        json_t *audio_tool = NULL;
-        if (config->audio.listen_model[0]) {
-            audio_tool = tool_schema("listen_audio", "path question", "Ask an audio model about speech or sounds in a retained file. "
-                "Paid, separate configured API route; no coding history or tools. Requested integer interval <=60s; "
-                "null start selects 0 and null end selects start+60s. Local path or asset:ID; question required. Answer is attributed derived data.",
-                json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:s,s:s}}",
-                    "path", "type", "string", "description", "Literal workspace-relative or absolute audio/video path without symlinks, or asset:ID for an accepted source.",
-                    "start_s", "type", "integer", "null", "description", "Start in whole seconds, 0..86400; omitted/null selects 0.",
-                    "end_s", "type", "integer", "null", "description", "Exclusive end in whole seconds, greater than start_s and at most 60 seconds later; omitted/null selects start_s+60.",
-                    "question", "type", "string", "description", "Question about the selected speech or sounds, 1..16384 UTF-8 bytes. Sent to the configured audio model without coding history or tools."));
-            if (json_array_append_new(tools, audio_tool) < 0) { json_decref(tools); return NULL; }
-        }
-        if (config->audio.transcribe_model[0]) {
-            audio_tool = tool_schema("transcribe_audio", "path", "Transcribe a selected audio/video interval via a paid audio API. "
-                "Local path or asset:ID; integer interval <=60s. Omitted/null start selects 0 and omitted/null end selects start+60s. "
-                "Speech text only, not sound analysis; no invented timestamps or speakers.",
-                json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s}}",
-                    "path", "type", "string", "description", "Literal workspace-relative or absolute audio/video path without symlinks, or asset:ID for an accepted source.",
-                    "start_s", "type", "integer", "null", "description", "Start in whole seconds, 0..86400; omitted/null selects 0.",
-                    "end_s", "type", "integer", "null", "description", "Exclusive end in whole seconds, greater than start_s and at most 60 seconds later; omitted/null selects start_s+60."));
-            if (json_array_append_new(tools, audio_tool) < 0) { json_decref(tools); return NULL; }
-        }
-        if (!read_only && config->audio.speech_model[0] && config->audio.voice[0]) {
-            audio_tool = tool_schema("speak_text", "text", "Generate AI speech via a paid API and retain a WAV asset. "
-                "Does not play or capture sound. text: 1..4096 UTF-8 bytes. Tell listeners the voice is AI-generated.",
-                json_pack("{s:{s:s,s:s}}", "text", "type", "string", "description",
-                    "Text to synthesize, 1..4096 UTF-8 bytes. Uses the configured voice and retains a WAV without playback or capture."));
-            if (json_array_append_new(tools, audio_tool) < 0) { json_decref(tools); return NULL; }
-        }
-    }
-    if (read_only) {
-        if (json_array_append_new(tools, read_only_schema("list_files")) < 0 ||
-            json_array_append_new(tools, read_only_schema("read_file")) < 0 ||
-            json_array_append_new(tools, read_only_schema("grep")) < 0 ||
-            json_array_append_new(tools, json_pack("{s:s}", "type", search_type)) < 0) goto fail;
-        return tools;
-    }
+    if (json_array_append_new(tools, tool_schema("listen_audio", "path question", "Ask an audio model about speech or sounds in a retained file. Paid, separate configured API route; no coding history or tools. If no audio route is configured, execution returns a factual unavailable result.",
+            json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:s,s:s}}",
+                "path", "type", "string", "description", "Literal workspace-relative or absolute audio/video path without symlinks, or asset:ID for an accepted source.",
+                "start_s", "type", "integer", "null", "description", "Start in whole seconds, 0..86400; omitted/null selects 0.",
+                "end_s", "type", "integer", "null", "description", "Exclusive end in whole seconds, greater than start_s and at most 60 seconds later; omitted/null selects start+60s.",
+                "question", "type", "string", "description", "Question about the selected speech or sounds, 1..16384 UTF-8 bytes. Sent to the configured audio model without coding history or tools."))) < 0 ||
+        json_array_append_new(tools, tool_schema("transcribe_audio", "path", "Transcribe a selected audio/video interval via a paid audio API. If no audio route is configured, execution returns a factual unavailable result.",
+            json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s}}",
+                "path", "type", "string", "description", "Literal workspace-relative or absolute audio/video path without symlinks, or asset:ID for an accepted source.",
+                "start_s", "type", "integer", "null", "description", "Start in whole seconds, 0..86400; omitted/null selects 0.",
+                "end_s", "type", "integer", "null", "description", "Exclusive end in whole seconds, greater than start_s and at most 60 seconds later; omitted/null selects start+60s."))) < 0 ||
+        json_array_append_new(tools, tool_schema("speak_text", "text", "Generate AI speech via a paid API and retain a WAV asset. If no speech route is configured, execution returns a factual unavailable result.",
+            json_pack("{s:{s:s,s:s}}", "text", "type", "string", "description",
+                "Text to synthesize, 1..4096 UTF-8 bytes. Uses the configured voice and retains a WAV without playback or capture."))) < 0 ||
+        json_array_append_new(tools, read_only_schema("list_files")) < 0 ||
+        json_array_append_new(tools, read_only_schema("read_file")) < 0 ||
+        json_array_append_new(tools, read_only_schema("grep")) < 0 ||
+        json_array_append_new(tools, json_pack("{s:s}", "type", search_type)) < 0) goto fail;
     if (json_array_append_new(tools, exec_tool_schema(config ? config->max_timeout_ms : UINT32_MAX,
                 config ? config->max_output_tokens : SNAG_DEFAULT_TOOL_OUTPUT_TOKENS)) < 0 ||
         json_array_append_new(tools, stdin_tool_schema(config ? config->max_output_tokens :
@@ -1115,37 +1101,35 @@ tool_schemas(bool goal_active,
             "Example: *** Begin Patch\n*** Add File: example.txt\n+hello\n*** End Patch\n",
             json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s}}",
                 "patch", "type", "string", "description", "Patch text in the described format, at most 2097152 UTF-8 bytes. Ordinary diff headers (---/+++) are not accepted.",
-                "workdir", "type", "string", "null", "description", "Omission/null uses the session workspace. A supplied path must equal that workspace."))) < 0 ||
-        json_array_append_new(tools, json_pack("{s:s}", "type", search_type)) < 0) goto fail;
-    if (json_array_append_new(tools, read_only_schema("list_files")) < 0 ||
-        json_array_append_new(tools, read_only_schema("read_file")) < 0 ||
-        json_array_append_new(tools, read_only_schema("grep")) < 0 ||
-        json_array_append_new(tools, write_schema("write_file")) < 0 ||
+                "workdir", "type", "string", "null", "description", "Omission/null uses the session workspace. A supplied path must equal the workspace."))) < 0) goto fail;
+    if (json_array_append_new(tools, write_schema("write_file")) < 0 ||
         json_array_append_new(tools, write_schema("edit_file")) < 0) goto fail;
-    if (networked && (json_array_append_new(tools, tool_schema("irc_send", "text",
-            "Send bounded room chat as the agent identity. This is the only way "
-            "model text reaches the room; assistant response text remains local. "
-            "Set destination to a numbered destination string from irc_state, "
-            "or all for an explicit broadcast. Omission/null selects the sole destination "
-            "only when there is exactly one. Sends never follow operator UI selection. "
-            "Set notice true only for a non-reply informational notice. "
-            "Connection, join, and retry work is owned by the runtime.",
+    if (json_array_append_new(tools, tool_schema("irc_send", "text",
+            "Send bounded room chat as the agent identity. This is the only way model text reaches the room; assistant response text remains local. Use irc_state for a destination; if no endpoint is connected, execution returns a factual unavailable result.",
             json_pack("{s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:s,s:s}}",
                 "destination", "type", "string", "null", "description", "Number string returned by irc_state; all broadcasts; null selects a sole available destination.",
                 "notice", "type", "boolean", "null", "description", "True sends NOTICE; false/null sends PRIVMSG.",
                 "text", "type", "string", "description", "Nonempty UTF-8 message for the selected recipients; maximum 2097152 bytes."))) < 0 ||
-         json_array_append_new(tools, tool_schema("irc_state", "",
-            "Read the already-maintained room, topic, endpoint, membership, and "
-            "operator state without polling or changing connections.", json_object())) < 0 ||
-         json_array_append_new(tools, tool_schema("irc_topic", "topic",
-            "Change the room topic as the agent identity; this succeeds only "
-            "where that identity currently has channel operator mode. Destination "
-            "is a numbered string from irc_state, all for explicit broadcast, "
-            "or null only when exactly one destination exists.", json_pack("{s:{s:[s,s],s:s},s:{s:s,s:s}}",
+        json_array_append_new(tools, tool_schema("irc_state", "",
+            "Read the already-maintained room, topic, endpoint, membership, and operator state without polling or changing connections.", json_object())) < 0 ||
+        json_array_append_new(tools, tool_schema("irc_topic", "topic",
+            "Change the room topic as the agent identity; execution checks connection and operator privilege at runtime.",
+            json_pack("{s:{s:[s,s],s:s},s:{s:s,s:s}}",
                 "destination", "type", "string", "null", "description", "Number string from irc_state, all for broadcast, or null for a sole destination.",
-                "topic", "type", "string", "description", "UTF-8 channel topic (at most 2097152 bytes); empty string clears it. Requires channel operator mode."))) < 0))
+                "topic", "type", "string", "description", "UTF-8 channel topic (at most 2097152 bytes); empty string clears it."))) < 0 ||
+        json_array_append_new(tools, tool_schema("irc_connect", "endpoint",
+            "Connect the agent to an IRC endpoint using the configured identity and room. The runtime owns sockets, joining and retries.",
+            json_pack("{s:{s:s,s:s}}", "endpoint", "type", "string", "description", "IRC host:port endpoint to connect."))) < 0 ||
+        json_array_append_new(tools, tool_schema("irc_host", "endpoint",
+            "Host an IRC endpoint as the agent identity. The runtime owns the listener, joining and retries.",
+            json_pack("{s:{s:s,s:s}}", "endpoint", "type", "string", "description", "Local IRC listen endpoint to host."))) < 0 ||
+        json_array_append_new(tools, tool_schema("irc_disconnect", "endpoint hosting",
+            "Disconnect a runtime-owned IRC client or hosted endpoint. Existing room history remains durable.",
+            json_pack("{s:{s:s,s:s},s:{s:s,s:s}}",
+                "endpoint", "type", "string", "description", "IRC endpoint to remove.",
+                "hosting", "type", "boolean", "description", "True removes a hosted listener; false removes a client connection."))) < 0)
         goto fail;
-    if (goal_create_allowed && json_array_append_new(tools, tool_schema("create_goal", "objective",
+    if (json_array_append_new(tools, tool_schema("create_goal", "objective",
             "Create a persistent goal only when the user or system/developer "
             "instructions explicitly request it; never infer one from ordinary "
             "work. Writing or committing goal documentation does not activate "
@@ -1154,7 +1138,7 @@ tool_schemas(bool goal_active,
             json_pack("{s:{s:s,s:s}}", "objective", "type", "string",
                 "description", "Nonblank UTF-8 objective within the goal wording byte limit shown in runtime context. Requires an explicit user or system/developer request to create a goal."))) < 0)
         goto fail;
-    if (goal_active && json_array_append_new(tools, tool_schema("update_goal", "action",
+    if (json_array_append_new(tools, tool_schema("update_goal", "action",
             "Update the unfinished persistent goal (active, paused or blocked): rewrite "
             "uses new wording in text unless the wording is locked, complete requires "
             "null text, block uses a specific reason, and resume restarts a paused or "
@@ -1163,6 +1147,13 @@ tool_schemas(bool goal_active,
                 "action", "type", "string", "enum", "rewrite", "complete", "block", "resume",
                     "description", "rewrite changes unlocked wording; complete ends a finished goal; block stops continuation with a genuine blocker; resume restarts a paused or blocked goal. Use action, not status.",
                 "text", "type", "string", "null", "description", "Omit text or use JSON null for complete and resume; nonblank new wording for rewrite; nonblank reason for block. Respect runtime goal byte limits."))) < 0)
+        goto fail;
+    if (json_array_append_new(tools, tool_schema("timer", "delay_ms text",
+            "Schedule one durable one-shot reminder for the model. A positive delay_ms schedules or replaces the current timer; delay_ms=0 cancels it and permits text=null. When due, the runtime starts a fresh ordinary model turn with the reminder text.",
+            json_pack("{s:{s:s,s:I,s:I,s:s},s:{s:[s,s],s:s}}",
+                "delay_ms", "type", "integer", "minimum", 0, "maximum", (json_int_t)UINT32_MAX,
+                    "description", "Milliseconds before the reminder turn; 0 cancels the current timer.",
+                "text", "type", "string", "null", "description", "Nonblank UTF-8 reminder text for a positive delay; null is valid only when delay_ms is 0."))) < 0)
         goto fail;
     return tools;
 fail: json_decref(tools);

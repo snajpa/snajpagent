@@ -592,3 +592,49 @@ snag_app_goal_tool(struct app_state *app, const struct snag_response_item *call,
     }
     return tool_result(false, "update_goal action must be rewrite, complete, block or resume; use text=null for complete and resume.", result);
 }
+
+int
+snag_app_timer_tool(struct app_state *app, const struct snag_response_item *call,
+                   json_t **result, char *error, size_t error_size)
+{
+    const json_t *delay_value;
+    const json_t *text_value;
+    const char *text = NULL;
+    uint64_t delay_ms, due_ms;
+    char timer_id[SNAG_ID_HEX_LEN + 1u];
+    char message[256];
+
+    *result = NULL;
+    if (!call || !call->arguments || !snag_json_exact_keys(call->arguments, "delay_ms text"))
+        return tool_result(false, "timer requires exactly delay_ms and text fields", result);
+    delay_value = json_object_get(call->arguments, "delay_ms");
+    text_value = json_object_get(call->arguments, "text");
+    if (!json_is_integer(delay_value) || json_integer_value(delay_value) < 0 ||
+        (uint64_t)json_integer_value(delay_value) > UINT32_MAX)
+        return tool_result(false, "delay_ms must be an integer from 0 through 4294967295", result);
+    delay_ms = (uint64_t)json_integer_value(delay_value);
+    if (delay_ms == 0u) {
+        if (text_value && !json_is_null(text_value))
+            return tool_result(false, "timer cancellation requires text=null", result);
+        if (!app->session.timer_id[0]) return tool_result(true, "no timer was armed", result);
+        if (commit_goal_event(app, "timer_cancelled", json_pack("{s:s}",
+                "timer_id", app->session.timer_id), error, error_size) < 0) return -1;
+        return tool_result(true, "timer cancelled", result);
+    }
+    if (!json_is_string(text_value) || !(text = json_string_value(text_value)) ||
+        !goal_text_valid(text, SNAG_MAX_TIMER_TEXT))
+        return tool_result(false, "timer text must be nonblank valid UTF-8 within 256 KiB", result);
+    if (snag_time_ms() > UINT64_MAX - delay_ms)
+        return tool_result(false, "timer delay exceeds the host clock range", result);
+    due_ms = snag_time_ms() + delay_ms;
+    if (snag_random_id(timer_id) < 0) return -1;
+    if (app->session.timer_id[0] &&
+        commit_goal_event(app, "timer_cancelled", json_pack("{s:s}",
+                "timer_id", app->session.timer_id), error, error_size) < 0) return -1;
+    if (commit_goal_event(app, "timer_scheduled", json_pack("{s:s,s:I,s:s}",
+            "timer_id", timer_id, "due_ms", (json_int_t)due_ms, "text", text),
+            error, error_size) < 0) return -1;
+    (void)snprintf(message, sizeof(message), "timer %s scheduled for %llu", timer_id,
+                   (unsigned long long)due_ms);
+    return tool_result(true, message, result);
+}

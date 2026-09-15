@@ -1433,15 +1433,12 @@ Current image bounds and provider requirements are listed under Image inspection
 .SS Read-only queries
 .TP
 .BI /ro " query"
-Run one read-only query, including multiline text.  Native tools list
-files/directories, read whole files or inclusive 1-based line ranges, and
-search text patterns without shells or external commands.  Provider-hosted
-web search is also available when supported by the selected provider/model;
-these same native exploration tools are declared in every ordinary turn, where
-a read-only query restricts the turn to them;
-search queries are sent to that provider.  Normal capabilities return on the
-next ordinary
-turn.  In networked mode the query opens rollout view and sends no IRC reply.
+Run one read-only query, including multiline text. Every request carries the
+complete native tool catalog. A read-only query permits inspection and supported
+provider web-search work; a call that would perform a side effect returns a
+read-only tool result and performs none. Normal execution permissions apply on
+the next ordinary turn. In networked mode the query opens rollout view and sends
+no IRC reply.
 During active work, Enter and Tab queue the read-only query as a future full
 turn.  You can also use
 .B /queue /ro query
@@ -2668,13 +2665,14 @@ Graceful exit after signal
 .IR N .
 .SS Tool reference
 These are model-callable tools, not slash commands to type into the composer.
-The advertised functions depend on turn mode, goal state and networking.
-Arguments use strict JSON objects: all declared fields are present, with
+Every provider request advertises the complete native catalog. Read-only mode,
+goal and queue state, network configuration, continuation mode and current
+endpoint state do not remove a schema. A declaration describes a call shape;
+runtime validation and tool results report whether the current turn can perform
+that call. Arguments use strict JSON objects: all declared fields are present, with
 .B null
-where a nullable field should use its default.  Unknown fields are rejected.
-Runtime validation and tool results remain authoritative even if a provider
-accepts an invalid declaration.  Pre-1.0 tool and event formats are not a
-stable third-party automation API.
+where a nullable field should use its default. Unknown fields are rejected.
+Pre-1.0 tool and event formats are not a stable third-party automation API.
 .SS Argument validation and applied limits
 Every provider receives the same native tool contract: required operands,
 optional controls, types, ranges and parameter descriptions. Object key order
@@ -2858,8 +2856,8 @@ NUL.  Result, traversal and scan ceilings are listed under AUTOMATION AND
 INTEGRATION.  These tools do not interpret shell globs or ignore files.
 .PP
 These native functions are declared in every turn and are preferred over
-shelling out for reading, searching and listing.  A read-only query exposes them
-without any modification or command capability.
+shelling out for reading, searching and listing. A read-only turn executes them
+under the same bounded path; other declared tools return a read-only refusal.
 .SS Native modification
 .B write_file
 accepts path and content.  It creates or replaces one workspace-relative file
@@ -2879,8 +2877,9 @@ for a wholesale replacement and
 .B apply_patch
 for several files or hunks.
 .PP
-Modification tools exist only in ordinary turns; a read-only query exposes none
-of them.
+Modification tools are declared in every turn. They execute only in an ordinary
+turn; a read-only attempt returns a terminal refusal and leaves the workspace
+unchanged.
 .SS Image inspection
 .B view_image
 accepts a literal path to PNG, JPEG, GIF, WebP, BMP or TIFF bytes, relative to
@@ -3088,32 +3087,50 @@ OpenRouter's endpoint selects its corresponding native search declaration
 automatically.  Search availability and charges depend on the provider.
 .SS Model goal controls
 .B create_goal
-accepts objective text and is available only when creating a goal is explicitly
-requested and no unfinished goal already exists.  Goal creation takes effect
-when the tool succeeds.
+accepts objective text and is declared in every request. It succeeds only when
+goal creation is explicitly requested and no unfinished goal already exists.
+Goal creation takes effect when the tool succeeds.
 .PP
 .B update_goal
 requires action; text depends on the action. Rewrite requires new wording; complete
-accepts omitted or null text; block requires a specific reason.  Only an active goal
-advertises it.  A wording lock refuses the model's rewording, blocking and
+accepts omitted or null text; block requires a specific reason. It succeeds only
+for an active goal. A wording lock refuses the model's rewording, blocking and
 cancelling while completion and resume stay available; the operator retains
 explicit control through slash commands.
+.SS Timer
+.B timer
+accepts delay_ms and text. A positive delay_ms and nonblank text replace any
+current one-shot timer. delay_ms 0 cancels the current timer and requires text
+null. The schedule is durable across resume. When due, the foreground process
+records the firing and admits one fresh ordinary turn containing the stored text.
+That turn does not resume a paused or blocked goal. Timer calls remain subject
+to the current turn's policy and cannot authorize a refused side effect.
 .SS Model IRC controls
+.B irc_connect
+accepts endpoint and adds an outgoing endpoint using the current IRC identity
+and room settings.
+.B irc_host
+accepts endpoint and starts the built-in server there.
+.B irc_disconnect
+accepts endpoint and hosting. hosting false removes an outgoing endpoint;
+true removes the hosted endpoint. Each call reports the requested local endpoint
+transition. Use irc_state to inspect the current endpoint and room state after it.
+.PP
 .B irc_state
 accepts an empty object and reports the actual current destinations and room
 state; it does not open connections.
 .B irc_send
-accepts destination, notice and text.  Null/false notice sends a normal message;
+accepts destination, notice and text. Null/false notice sends a normal message;
 true sends an informational notice, which does not satisfy a required reply.
 .B irc_topic
 accepts destination and topic and requires the model's current channel-op status.
 .PP
 Destination is a numeric string from irc_state, all for an explicit broadcast,
-or null only when exactly one destination exists.  The model never implicitly
-follows the operator's selected room.  Text and topic are bounded UTF-8;
-topic is at most 280 bytes with no newline.  Successful send acceptance is not
-proof that every remote participant received it.  Runtime joining, history and
-reconnection are not model-managed tools.
+or null only when exactly one destination exists. The model never implicitly
+follows the operator's selected room. Text and topic are bounded UTF-8;
+topic is at most 280 bytes with no newline. Successful send acceptance is not
+proof that every remote participant received it. The runtime owns joining,
+history, reconnecting and room traffic after an endpoint transition.
 .SH "Sessions and files"
 .SS Session durability
 Resume continues unfinished model/tool turns from their durable state, without

@@ -189,6 +189,52 @@ add_goal_call(struct snag_response_graph *graph, unsigned int cycle,
                                        create ? "create_goal" : "update_goal", args);
 }
 
+static int
+add_timer_call(struct snag_response_graph *graph, unsigned int cycle, unsigned int index,
+               uint64_t delay_ms, const char *text)
+{
+    return indexed_call(graph, cycle, index, "timer",
+        json_pack("{s:I,s:s}", "delay_ms", (json_int_t)delay_ms, "text", text));
+}
+
+static int
+add_timer_cancel_call(struct snag_response_graph *graph, unsigned int cycle, unsigned int index)
+{
+    return indexed_call(graph, cycle, index, "timer", json_pack("{s:I,s:n}", "delay_ms", (json_int_t)0, "text"));
+}
+
+static int
+add_timer_replacement_calls(struct snag_response_graph *graph, unsigned int cycle)
+{
+    if (add_timer_call(graph, cycle, 0u, 1000u, "timer original") < 0) return -1;
+    return add_timer_call(graph, cycle, 1u, 25u, "timer replacement fired");
+}
+
+static int
+add_timer_cancellation_calls(struct snag_response_graph *graph, unsigned int cycle)
+{
+    if (add_timer_call(graph, cycle, 0u, 1000u, "timer cancellation fired") < 0) return -1;
+    return add_timer_cancel_call(graph, cycle, 1u);
+}
+
+static int
+add_irc_lifecycle_call(struct snag_response_graph *graph, unsigned int cycle, const char *name,
+                       const char *endpoint, bool hosting)
+{
+    json_t *args = strcmp(name, "irc_disconnect") == 0 ?
+        json_pack("{s:s,s:b}", "endpoint", endpoint, "hosting", hosting) :
+        json_pack("{s:s}", "endpoint", endpoint);
+
+    return indexed_call(graph, cycle, 0u, name, args);
+}
+
+static int
+add_block_and_timer_call(struct snag_response_graph *graph, unsigned int cycle)
+{
+    if (add_goal_call(graph, cycle, false, "block", "waiting for timer") < 0) return -1;
+    return add_timer_call(graph, cycle, 0u, 25u, "timer fired");
+}
+
 static bool
 managed_prompt(const char *prompt)
 {
@@ -235,6 +281,50 @@ fixture_response(const char *prompt, const json_t *steering, const char *workspa
     if (strcmp(prompt, "citation_markers") == 0) return final_answer(&out, "msg_fixture_citations",
             "citations: " "\xee\x88\x80" "cite" "\xee\x88\x82" "turn2view0"
             "\xee\x88\x82" "turn0view3" "\xee\x88\x81" " tail");
+    if (strcmp(prompt, "timer_test") == 0) {
+        if (cycle == 1u) return add_timer_call(graph, cycle, 0u, 25u, "timer fired");
+        return final_answer(&out, "msg_fixture_timer_scheduled", "timer scheduled");
+    }
+    if (strcmp(prompt, "timer fired") == 0)
+        return final_answer(&out, "msg_fixture_timer_fired", "timer reminder handled");
+    if (strcmp(prompt, "timer_replace_test") == 0) {
+        if (cycle == 1u) return add_timer_replacement_calls(graph, cycle);
+        return final_answer(&out, "msg_fixture_timer_replaced", "timer replacement scheduled");
+    }
+    if (strcmp(prompt, "timer replacement fired") == 0)
+        return final_answer(&out, "msg_fixture_timer_replacement_fired", "timer replacement handled");
+    if (strcmp(prompt, "timer_cancel_test") == 0) {
+        if (cycle == 1u) return add_timer_cancellation_calls(graph, cycle);
+        return final_answer(&out, "msg_fixture_timer_cancelled", "timer cancelled");
+    }
+    if (strncmp(prompt, "irc_host_test ", sizeof("irc_host_test ") - 1u) == 0) {
+        const char *endpoint = prompt + sizeof("irc_host_test ") - 1u;
+
+        if (cycle == 1u) return add_irc_lifecycle_call(graph, cycle, "irc_host", endpoint, true);
+        return final_answer(&out, "msg_fixture_irc_hosted", "IRC hosted");
+    }
+    if (strncmp(prompt, "irc_host_disconnect_test ", sizeof("irc_host_disconnect_test ") - 1u) == 0) {
+        const char *endpoint = prompt + sizeof("irc_host_disconnect_test ") - 1u;
+
+        if (cycle == 1u) return add_irc_lifecycle_call(graph, cycle, "irc_disconnect", endpoint, true);
+        return final_answer(&out, "msg_fixture_irc_host_disconnected", "IRC host disconnected");
+    }
+    if (strncmp(prompt, "irc_connect_test ", sizeof("irc_connect_test ") - 1u) == 0) {
+        const char *endpoint = prompt + sizeof("irc_connect_test ") - 1u;
+
+        if (cycle == 1u) return add_irc_lifecycle_call(graph, cycle, "irc_connect", endpoint, false);
+        return final_answer(&out, "msg_fixture_irc_connected", "IRC connected");
+    }
+    if (strncmp(prompt, "irc_disconnect_test ", sizeof("irc_disconnect_test ") - 1u) == 0) {
+        const char *endpoint = prompt + sizeof("irc_disconnect_test ") - 1u;
+
+        if (cycle == 1u) return add_irc_lifecycle_call(graph, cycle, "irc_disconnect", endpoint, false);
+        return final_answer(&out, "msg_fixture_irc_disconnected", "IRC disconnected");
+    }
+    if (strcmp(prompt, "irc_refusal_test") == 0) {
+        if (cycle == 1u) return add_irc_send_call(graph, cycle, 0u, "no destination");
+        return final_answer(&out, "msg_fixture_irc_refused", "IRC refusal handled");
+    }
     if (strcmp(prompt, SNAG_GOAL_CONTINUATION_TEXT) == 0) {
         if (!goal_prompt) goto allocation;
         if (strcmp(goal_prompt, "failing goal") == 0 && cycle <= 4u)
@@ -252,6 +342,8 @@ fixture_response(const char *prompt, const json_t *steering, const char *workspa
         }
         if (strcmp(goal_prompt, "automatic goal") == 0 && goal_turn_count == 1u)
             return final_answer(&out, "msg_fixture_goal_checkpoint", "goal checkpoint");
+        if (strcmp(goal_prompt, "timer blocked goal") == 0 && goal_turn_count == 1u && cycle == 1u)
+            return add_block_and_timer_call(graph, cycle);
         if (strcmp(goal_prompt, "rewrite goal") == 0 && cycle == 1u)
             return add_goal_call(graph, cycle, false, "rewrite", "rewritten goal");
         if (strcmp(goal_prompt, "rewritten goal") == 0 && cycle == 2u)

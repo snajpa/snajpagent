@@ -586,9 +586,14 @@ so restart and replay cannot change which network context the model saw.
 
 ## Model IRC Tools
 
-Requests constructed with network roles expose native bounded IRC tools alongside the existing
-coding tools:
+Every provider request exposes the same bounded IRC tool schemas alongside the
+coding tools. Endpoint state controls results rather than catalog visibility:
 
+- `irc_connect` adds an outgoing endpoint using the current identity and room
+  settings;
+- `irc_host` adds the built-in server endpoint;
+- `irc_disconnect` removes the named outgoing or hosted endpoint, selected by
+  its required `hosting` flag;
 - `irc_send` sends a room message or notice as the agent identity;
 - `irc_state` returns the current endpoints, joins, room, topic, accepted local
   aliases, member nicks, and operator flags from already-maintained runtime
@@ -596,24 +601,28 @@ coding tools:
 - `irc_topic` requests a topic change as the agent identity and succeeds only
   where that identity currently has the required channel mode.
 
-Sends and topic tools accept optional nullable string `destination`: a numbered target
-from maintained state, `all` for an explicit broadcast, or omission/null when the frozen
-request has exactly one destination. Omitted `notice` defaults to false. Operator UI selection never redirects a
-model reply. Each target produces its own attributed local echo and queue/failure
-result. Queue acceptance is not proof of remote delivery. Local-mention reply
-obligations belong to their originating targets, not an unrelated successful send.
+Connect, host and disconnect report their local endpoint transition. A following
+`irc_state` reports the current topology. Sends and topic tools accept optional
+nullable string `destination`: a numbered target from maintained state, `all`
+for an explicit broadcast, or omission/null when the frozen request has exactly
+one destination. Omitted `notice` defaults to false. Operator UI selection never
+redirects a model reply. Each target produces its own attributed local echo and
+queue/failure result. Queue acceptance is not proof of remote delivery.
+Local-mention reply obligations belong to their originating targets, not an
+unrelated successful send.
 
 Tool calls are durable and use the same start/result ordering and secret-safe
 rendering as other tools. One `-v` shows compact calls without output; `-vv`
 previews 1,024 argument and 512 output characters, and `-vvv` shows full retained
-calls/results. Debug detail starts at four flags. `[tool] max_output_bytes` bounds only terminal
-presentation; its default `0` is unlimited, and the complete redacted output
-is always persisted. Command output supplied to the model is separately
-bounded by the calling command tool's `max_output_bytes`. IRC tools never open sockets,
-join, poll, reconnect, wait for traffic, or expose a manual reconnect action.
-The event loop owns those operations continuously. `irc_send` is the exclusive
-room-speech path and may be used any number of times during a turn. Assistant
-response text remains local even at a terminal response boundary.
+calls/results. Debug detail starts at four flags. `[tool] max_output_bytes` bounds
+only terminal presentation; its default `0` is unlimited, and the complete
+redacted output is always persisted. Command output supplied to the model is
+separately bounded by the calling command tool's `max_output_bytes`. Lifecycle
+calls perform one explicit endpoint transition. The event loop owns connection,
+joining, polling, history, reconnect and room traffic after that transition.
+`irc_send` is the exclusive room-speech path and may be used any number of times
+during a turn. Assistant response text remains local even at a terminal response
+boundary.
 
 The request freezes its tool contract and per-destination identities/revisions when constructed,
 including before token counting. Later topology changes do not rewrite or

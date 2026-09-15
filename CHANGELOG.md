@@ -25,6 +25,14 @@
   throughout compaction instead of rejecting the smaller prefix as an invalid
   journal transition.
 
+- Advertise the complete native tool catalog in every provider request. Runtime
+  policy and availability return factual tool results for read-only calls,
+  unavailable routes and other current constraints.
+- Add durable one-shot timer calls with replacement and cancellation, and admit a
+  fresh ordinary turn when a timer is due without resuming a blocked or paused
+  goal. Add model-controlled IRC endpoint connect, host and disconnect calls;
+  the runtime retains ownership of connection, room and reconnect activity.
+
 - Keep automatic goal requests in the provider conversation when gateways lift
   instruction messages into policy, preventing metadata acknowledgments from
   replacing the current task. Preserve goal history, explicit pauses, pending

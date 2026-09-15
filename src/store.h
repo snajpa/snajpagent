@@ -18,6 +18,7 @@
 #define SNAG_MAX_PENDING_TURNS 128u
 #define SNAG_MAX_PENDING_QUEUE_TEXT (16u * 1024u * 1024u)
 #define SNAG_MAX_IRC_SNAPSHOT (8u * 1024u * 1024u)
+#define SNAG_MAX_TIMER_TEXT (256u * 1024u)
 #define SNAG_IRC_REPLY_REMINDER_TEXT \
     "Use irc_send to reply to the local operator in the IRC room before " \
     "ending this turn."
@@ -130,6 +131,7 @@ struct snag_session {
     char active_compact_scope[SNAG_SHA256_HEX_LEN + 1u];
     char default_provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
     char goal_id[SNAG_ID_HEX_LEN + 1u];
+    char timer_id[SNAG_ID_HEX_LEN + 1u];
     char default_model[SNAG_MODEL_MAX_BYTES];
     char active_turn_model[SNAG_MODEL_MAX_BYTES];
     char active_turn_provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
@@ -146,6 +148,7 @@ struct snag_session {
     const char *active_prompt;
     const char *goal_prompt;
     const char *goal_blocker;
+    const char *timer_text;
     /* Private immutable string owners; text fields above and in pending inputs borrow. */
     json_t *strings;
     json_t *compact_output;
@@ -169,6 +172,7 @@ struct snag_session {
     uint64_t recovery_count;
     uint64_t goal_revision;
     uint64_t goal_turn_count;
+    uint64_t timer_due_ms;
     size_t pending_steering_bytes;
     size_t pending_queue_bytes;
     unsigned int active_cycle;
