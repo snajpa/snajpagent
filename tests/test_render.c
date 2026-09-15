@@ -1110,7 +1110,6 @@ test_punctuation_wrapping(void)
         assert(snprintf(first_output, sizeof(first_output), "%s%s", prefix, "1234567890") > 0);
         for (size_t i = 0u; i < sizeof(punctuation) / sizeof(punctuation[0]);
              ++i) {
-
             assert(snprintf(second, sizeof(second), "%smores", punctuation[i]) > 0);
             assert(snprintf(second_output, sizeof(second_output), "%s1234567890", prefix) > 0);
             assert(snprintf(delivered_output, sizeof(delivered_output),
@@ -1126,7 +1125,6 @@ test_punctuation_wrapping(void)
             snag_buf_free(&delivered);
         }
         {
-
             assert(snprintf(first_output, sizeof(first_output), "%s1234567890", prefix) > 0);
             assert(snprintf(second_output, sizeof(second_output), "%s1234567890", prefix) > 0);
             struct snag_buf delivered = {.max = 32u};
@@ -1379,7 +1377,6 @@ test_update_banner(void)
     assert(!strcmp(output, banner));
     snag_render_free(&render);
     snag_term_close(&term);
-
 }
 
 static void
