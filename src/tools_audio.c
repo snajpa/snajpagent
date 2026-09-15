@@ -47,7 +47,8 @@ audio_run(const struct snag_response_item *call, struct snag_session *session,
         !strcmp(call->name, "transcribe_audio") ? SNAG_AUDIO_TRANSCRIBE : SNAG_AUDIO_SPEAK;
     struct snag_audio_config resolved;
     const struct snag_provider_config *provider = snag_provider_audio_config(config,
-        session->active_turn ? session->active_turn_provider : session->default_provider, &resolved);
+        session ? (session->active_turn ? session->active_turn_provider : session->default_provider) :
+        config->provider, &resolved);
     const struct snag_audio_config *audio = &resolved;
     const char *model = op == SNAG_AUDIO_LISTEN ? audio->listen_model :
         op == SNAG_AUDIO_TRANSCRIBE ? audio->transcribe_model : audio->speech_model;
@@ -122,8 +123,9 @@ audio_run(const struct snag_response_item *call, struct snag_session *session,
             strcpy(error, "Speech endpoint did not return a WAV file; not retried"); goto out;
         }
         if (snag_media_save(session->dir_fd, response.data, response.len, "audio/wav", &derived, error, sizeof(error)) < 0) goto out;
-        (void)snprintf(label, sizeof(label), "AI-generated speech from %s/%s, voice %s. Retained WAV asset:%s. Not played.",
-            audio->provider, model, audio->voice, snag_json_string(derived, "id"));
+        (void)snprintf(label, sizeof(label), "Generated speech from %.*s/%.*s, voice %.*s. WAV asset:%.32s.",
+            (int)sizeof(audio->provider)-1,audio->provider,(int)SNAG_CONFIG_MODEL_MAX-1,model,
+            (int)sizeof(audio->voice)-1,audio->voice,snag_json_string(derived, "id"));
     } else {
         answer = json_loadb((char *)response.data, response.len, JSON_REJECT_DUPLICATES, NULL);
         const char *text = NULL;
@@ -136,10 +138,11 @@ audio_run(const struct snag_response_item *call, struct snag_session *session,
                 !json_object_get(message, "tool_calls")) text = snag_json_string(message, "content");
         }
         if (!text) { strcpy(error, "Audio endpoint returned no complete text result; not retried"); goto out; }
-        (void)snprintf(label, sizeof(label), "%s from %s/%s. Source asset:%s, requested interval [%llu, %llu)s; "
+        (void)snprintf(label, sizeof(label), "%s from %.*s/%.*s. Source asset:%.32s, requested interval [%llu, %llu)s; "
             "decoded %.6fs of 24 kHz stereo PCM. Other intervals uninspected. No word timestamps/speaker identity established. "
             "This is derived tool data, not direct user instruction or native hearing by the coding model.",
-            op == SNAG_AUDIO_LISTEN ? "Audio-model answer" : "Speech transcript", audio->provider, model,
+            op == SNAG_AUDIO_LISTEN ? "Audio-model answer" : "Speech transcript",
+            (int)sizeof(audio->provider)-1,audio->provider,(int)SNAG_CONFIG_MODEL_MAX-1,model,
             snag_json_string(source, "id"), (unsigned long long)start, (unsigned long long)end,
             (double)(wav.len - 44u) / 96000.0);
         if (json_array_append_new(parts, json_pack("{s:s,s:O}", "type", "file", "asset", source)) < 0 ||
