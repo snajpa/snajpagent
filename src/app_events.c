@@ -163,15 +163,24 @@ int
 snag_app_sync_destinations(struct app_state *app)
 {
     struct snag_irc_destinations current;
+    uint64_t generation = snag_irc_destinations_generation(app->irc);
 
-    snag_irc_destinations(app->irc, &current);
-    if (app->irc_destinations_ready && memcmp(&current, &app->irc_destinations, sizeof(current)) == 0)
+    /* Rebuilding and comparing the whole destination set only means something after the
+     * runtime mutated one; the pump runs inside read-tool walk checkpoints, where the
+     * rebuild costs more than the walk it serves. */
+    if (app->irc_destinations_ready && generation == app->irc_destinations_generation)
         return 0;
+    snag_irc_destinations(app->irc, &current);
+    if (app->irc_destinations_ready && memcmp(&current, &app->irc_destinations, sizeof(current)) == 0) {
+        app->irc_destinations_generation = generation;
+        return 0;
+    }
     if (snag_ui_send(&app->ui, (struct snag_ui_command){
         .kind = SNAG_UI_DESTINATIONS, .data.destinations = &current}) < 0) return -1;
     prune_replies(&app->irc_urgent_replies, &current, app->irc_urgent_reply_offsets);
     prune_replies(&app->irc_turn_replies, &current, NULL);
     app->irc_destinations = current;
+    app->irc_destinations_generation = generation;
     app->irc_destinations_ready = true;
     return 0;
 }

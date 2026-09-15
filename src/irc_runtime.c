@@ -67,6 +67,7 @@ struct snag_irc {
     size_t head, count;
     uint64_t published, admitted;
     uint64_t routing_revision;
+    uint64_t destinations_generation;
     snag_wake_fd wake[2];
     bool stopping;
     bool identity_changed; /* Mailbox-locked; retained across command drains. */
@@ -305,6 +306,7 @@ drain(struct snag_irc *irc, int timeout_ms)
             }
             owner->view = record->view;
             owner->target.revision = record->view.revision;
+            ++irc->destinations_generation;
         }
         pthread_mutex_unlock(&irc->mutex);
         if (record->kind == IRC_EVENT) {
@@ -438,6 +440,7 @@ snag_irc_add(struct snag_irc *irc, const struct snag_config *config,
     }
     ++irc->owner_count;
     ++irc->routing_revision;
+    ++irc->destinations_generation;
     irc->identity_changed = true;
     return 0;
 fail: free_owner(owner);
@@ -494,6 +497,7 @@ snag_irc_remove(struct snag_irc *irc, bool hosting, const char *endpoint, char *
     memmove(irc->owners + index, irc->owners + index + 1u,
             (--irc->owner_count - index) * sizeof(*irc->owners));
     ++irc->routing_revision;
+    ++irc->destinations_generation;
     irc->identity_changed = true;
     snag_irc_core_remember(irc->history, &event);
     return irc->event_fn ? irc->event_fn(irc->opaque, &event) : 0;
@@ -535,6 +539,12 @@ uint64_t
 snag_irc_routing_revision(const struct snag_irc *irc)
 {
     return irc ? irc->routing_revision : 0u;
+}
+
+uint64_t
+snag_irc_destinations_generation(const struct snag_irc *irc)
+{
+    return irc ? irc->destinations_generation : 0u;
 }
 
 static bool
