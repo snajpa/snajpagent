@@ -127,6 +127,7 @@ let
       "--without-ca-path"
     ];
   });
+  voice = import ./voice-rtc.nix { inherit pkgs; target = static; };
 in {
   inherit static tls curl av pdf office fontconfig alsa pulse;
   application = { source, packageName, version, revision, debug ? false,
@@ -136,7 +137,8 @@ in {
     src = source;
     outputs = [ "out" "debug" ];
     nativeBuildInputs = [ musl.buildPackages.pkg-config ];
-    buildInputs = [ static.jansson curl av pdf static.libpng static.libarchive static.libxml2 alsa pulse ];
+    buildInputs = [ static.jansson curl av pdf static.libpng static.libarchive static.libxml2 alsa pulse
+      voice.rtc voice.juice voice.opus static.srtp static.usrsctp static.openssl ];
     enableParallelBuilding = true;
     dontConfigure = true;
     dontStrip = true;
@@ -176,6 +178,8 @@ in {
         "PDF_LIBS=$($PKG_CONFIG --static --libs poppler libpng) -lstdc++"
         "MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src} $($PKG_CONFIG --cflags alsa libpulse) -DMA_NO_RUNTIME_LINKING -DMA_ENABLE_ONLY_SPECIFIC_BACKENDS -DMA_ENABLE_ALSA -DMA_ENABLE_PULSEAUDIO"
         "AUDIO_DEVICE_LIBS=$($PKG_CONFIG --static --libs alsa libpulse)"
+        "RTC_CFLAGS=-I${voice.rtc.dev}/include -I${voice.opus.dev}/include"
+        "RTC_LIBS=-L${voice.rtc}/lib -ldatachannel -L${voice.juice}/lib -ljuice $($PKG_CONFIG --static --libs opus libsrtp2 usrsctp openssl) -lstdc++"
       )
     '';
     installPhase = ''

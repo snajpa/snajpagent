@@ -50,6 +50,10 @@ override CPPFLAGS += -DSNAJPAGENT_PDF=$(WITH_PDF)
 override LDLIBS += $(PDF_LIBS)
 WITH_AUDIO_DEVICE ?= 1
 ifeq ($(WITH_AUDIO_DEVICE),1)
+RTC_CFLAGS ?=
+RTC_LIBS ?= -ldatachannel -lopus
+override CPPFLAGS += $(RTC_CFLAGS)
+override LDLIBS += $(RTC_LIBS)
 MINIAUDIO_CFLAGS ?= $(shell pkg-config --cflags miniaudio)
 AUDIO_DEVICE_LIBS ?= $(if $(filter Windows Windows_NT,$(TARGET_OS)),-lole32 -lwinmm,$(if $(filter Darwin,$(TARGET_OS)),-framework CoreFoundation -framework CoreAudio -framework AudioToolbox,$(if $(filter FreeBSD OpenBSD NetBSD,$(TARGET_OS)),-lm,-ldl -lm)))
 AUDIO_DEVICE_OBJ = src/miniaudio.o

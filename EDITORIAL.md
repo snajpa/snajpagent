@@ -22,6 +22,8 @@ manuals, release descriptions and task-facing explanations about this project.
 - **Defensive filler.** Do not answer hypothetical objections or narrate internal
   plans, audit precautions, editorial choices or evidence collection on a page
   where they have no bearing on the reader's action. Delete irrelevant material.
+  State current capabilities directly. Continuity claims belong only where a
+  release comparison or transition affects the reader's decision.
   Avoid repeating a fact as a disclaimer or explaining what an absent feature
   would have meant. Keep test history, validation methods, earlier-build
   comparisons, evidence provenance and qualification TODOs out of homepage,
@@ -76,4 +78,4 @@ remove irrelevant text and repeated justification. Check rhetorical patterns
 and personal mentions in surrounding passages, not only the reported sentence.
 Verify technical claims against current source and preserve necessary conditions.
 Use ordinary editorial review; do not add a word blacklist, scoring system or
-prose-generation framework. Record findings briefly in working notes.
+  prose-generation framework. Record findings briefly in working notes.

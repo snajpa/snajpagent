@@ -45,10 +45,12 @@ audio_run(const struct snag_response_item *call, struct snag_session *session,
 {
     enum snag_audio_operation op = !strcmp(call->name, "listen_audio") ? SNAG_AUDIO_LISTEN :
         !strcmp(call->name, "transcribe_audio") ? SNAG_AUDIO_TRANSCRIBE : SNAG_AUDIO_SPEAK;
-    const struct snag_audio_config *audio = &config->audio;
+    struct snag_audio_config resolved;
+    const struct snag_provider_config *provider = snag_provider_audio_config(config,
+        session->active_turn ? session->active_turn_provider : session->default_provider, &resolved);
+    const struct snag_audio_config *audio = &resolved;
     const char *model = op == SNAG_AUDIO_LISTEN ? audio->listen_model :
         op == SNAG_AUDIO_TRANSCRIBE ? audio->transcribe_model : audio->speech_model;
-    const struct snag_provider_config *provider = snag_config_provider(config, audio->provider);
     struct snag_credential credential;
     struct snag_secret_set secrets = {0};
     struct snag_buf wav, response;
@@ -60,8 +62,8 @@ audio_run(const struct snag_response_item *call, struct snag_session *session,
     snag_credential_clear(&credential);
     snag_buf_init(&wav, 60u * 96000u + 44u);
     snag_buf_init(&response, op == SNAG_AUDIO_SPEAK ? SNAG_MEDIA_REQUEST_MAX : 256u * 1024u);
-    if (!audio->provider[0] || !provider || !model[0] || provider->auth == SNAG_AUTH_CHATGPT) {
-        strcpy(error, "Configure an explicit [audio] API provider and operation model; Codex subscription auth is not an audio API credential"); goto out;
+    if (!provider || !model[0]) {
+        strcpy(error, "Selected provider has no model configured for this audio operation"); goto out;
     }
     if (op == SNAG_AUDIO_SPEAK) {
         const char *text = snag_json_string(call->arguments, "text");
