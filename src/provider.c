@@ -1277,6 +1277,7 @@ snag_provider_responses_create(struct snag_provider_connection connection, const
                               char *error, size_t error_size, unsigned int *retry_count)
 {
     struct provider_ctx ctx;
+    char diagnostic[sizeof(ctx.stream.diagnostic)] = {0};
     int rc = -1;
 
     if (failure) memset(failure, 0, sizeof(*failure));
@@ -1298,6 +1299,7 @@ snag_provider_responses_create(struct snag_provider_connection connection, const
     }
     rc = 0;
 out:
+    if (ctx.stream.failed) (void)snag_strcpy(diagnostic, sizeof(diagnostic), ctx.stream.diagnostic);
     if (failure) {
         if (ctx.stream.failed) *failure = ctx.stream.provider_failure;
         else *failure = ctx.provider_failure;
@@ -1319,7 +1321,13 @@ out:
         failure->retry_after_ms = ctx.retry_after_present ? ctx.retry_after_ms : 0u;
         redact_diagnostic(&ctx.secrets, failure->message, sizeof(failure->message));
     }
-    return provider_ctx_finish(&ctx, rc, error, error_size);
+    rc = provider_ctx_finish(&ctx, rc, error, error_size);
+    if (rc < 0 && diagnostic[0] && error && error_size) {
+        char message[1024];
+        (void)snprintf(message, sizeof(message), "%s; %s", error, diagnostic);
+        (void)snag_strcpy(error, error_size, message);
+    }
+    return rc;
 }
 
 static size_t

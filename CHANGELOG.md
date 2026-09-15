@@ -32,6 +32,9 @@
   fresh ordinary turn when a timer is due without resuming a blocked or paused
   goal. Add model-controlled IRC endpoint connect, host and disconnect calls;
   the runtime retains ownership of connection, room and reconnect activity.
+- Record a content-free shape diagnostic for malformed Responses SSE records:
+  event name, byte count, hash prefix, JSON class and capped top-level keys,
+  while retaining strict parser rejection and never storing payload values.
 
 - Keep automatic goal requests in the provider conversation when gateways lift
   instruction messages into policy, preventing metadata acknowledgments from
