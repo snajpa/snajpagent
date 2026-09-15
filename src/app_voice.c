@@ -161,7 +161,7 @@ static int owner_play(void *opaque,const char *item,const int16_t *samples,uint3
 static uint32_t owner_interrupt(void *opaque)
 {
     struct app_voice *v=opaque;
-    if(v->rtc)snag_voice_rtc_flush(v->rtc);
+    if (v->rtc)snag_voice_rtc_flush(v->rtc);
     if(!v->device)return 0;
     /* Read before flush, so callback progress racing the flush cannot be
      * attributed to audio heard by the user. Subtract device pipeline latency. */
@@ -205,7 +205,7 @@ static int owner_mute(struct app_voice *v)
     int rc=v->device?snag_audio_mute(v->device,mute):0;
     if(rc)return rc<0?-1:0;
     v->applied_mute=mute;
-    if(mute && v->rtc && snag_voice_rtc_input(v->rtc,NULL,0u)<0)return -1;
+    if (mute && v->rtc && snag_voice_rtc_input(v->rtc,NULL,0u)<0)return -1;
     /* An unsent audio message can be withdrawn. A partially sent frame must
      * finish before clear, preserving WebSocket framing. */
     if(mute && v->send_count && !v->send_offset && v->send_audio[v->send_read]) {
@@ -257,39 +257,48 @@ static void *voice_owner(void *opaque)
     struct app_voice *v=opaque;
     struct snag_voice_io io={owner_send,owner_notice,owner_play,owner_interrupt};
     v->start_ms=snag_monotonic_ms();
-    v->protocol=snag_voice_new(&io,v,v->config.realtime_model,v->config.transcribe_model,v->config.voice);
-    if(!v->protocol)goto done;
-    if(snag_provider_native_audio(&v->provider)) {
+    v->protocol=snag_voice_new(&io,v,v->config.realtime_model,
+        v->config.transcribe_model,v->config.voice);
+    if (!v->protocol)goto done;
+    if (snag_provider_native_audio(&v->provider)) {
         struct snag_buf offer={.max=32768u},answer={.max=32768u};char call[257];
         json_t *session=snag_voice_native_session(v->protocol);int rc=-1;
-        if(!session || snag_voice_rtc_open(&v->rtc,v->error,sizeof(v->error))<0)goto native_done;
-        while(!atomic_load(&v->stop) && snag_monotonic_ms()-v->start_ms<15000u) {
+        if (!session || snag_voice_rtc_open(&v->rtc,v->error,sizeof(v->error))<0)goto native_done;
+        while (!atomic_load(&v->stop) && snag_monotonic_ms()-v->start_ms<15000u) {
             rc=snag_voice_rtc_offer(v->rtc,&offer);
-            if(rc)break;
+            if (rc)break;
             snag_sleep_ms(10u);
         }
-        if(rc!=1) {rc=-1;snprintf(v->error,sizeof(v->error),"Native voice media preparation stopped or timed out");goto native_done;}
+        if (rc!=1) {
+            rc=-1;
+            snprintf(v->error,sizeof(v->error),
+                "Native voice media preparation stopped or timed out");
+            goto native_done;
+        }
         rc=snag_provider_voice_call(NULL,&v->provider,&v->credential,(char *)offer.data,session,
             owner_controls,v,&answer,call,v->error,sizeof(v->error));
-        if(rc)goto native_done;
-        if(snag_voice_rtc_answer(v->rtc,(char *)answer.data)<0) {
-            rc=-1;strcpy(v->error,"Native voice media answer could not be applied");goto native_done;
+        if (rc)goto native_done;
+        if (snag_voice_rtc_answer(v->rtc,(char *)answer.data)<0) {
+            rc=-1;
+            strcpy(v->error,"Native voice media answer could not be applied");
+            goto native_done;
         }
         rc=snag_provider_voice_attach(&v->provider,&v->credential,call,owner_controls,v,
             &v->socket,v->error,sizeof(v->error));
 native_done:
         json_decref(session);snag_buf_free(&offer);snag_buf_free(&answer);
-        if(rc)goto done;
-    } else if(snag_provider_voice_open(&v->provider,&v->credential,v->config.realtime_model,owner_controls,v,
+        if (rc)goto done;
+    } else if (snag_provider_voice_open(&v->provider,&v->credential,
+        v->config.realtime_model,owner_controls,v,
         &v->socket,v->error,sizeof(v->error)))goto done;
     snag_credential_clear(&v->credential);
-    if(snag_voice_begin(v->protocol,v->error,sizeof(v->error))<0)goto done;
+    if (snag_voice_begin(v->protocol,v->error,sizeof(v->error))<0)goto done;
     while(!atomic_load(&v->stop)) {
         uint64_t now=snag_monotonic_ms();
-        if(v->announced && v->rtc && !snag_voice_rtc_ready(v->rtc)) {
+        if (v->announced && v->rtc && !snag_voice_rtc_ready(v->rtc)) {
             strcpy(v->error,"Native voice media connection stopped");break;
         }
-        if((!snag_voice_ready(v->protocol) || (v->rtc && !snag_voice_rtc_ready(v->rtc))) &&
+        if ((!snag_voice_ready(v->protocol) || (v->rtc && !snag_voice_rtc_ready(v->rtc))) &&
             now-v->start_ms>v->provider.connect_timeout_ms+10000u) {
             strcpy(v->error,"Voice session or media connection did not become ready");break;
         }
@@ -308,7 +317,7 @@ native_done:
             json_t *event=snag_json_load_strict(v->receive.data,v->receive.len,VOICE_MESSAGE,v->error,sizeof(v->error));
             if(!event)goto done;
             const char *type=snag_json_string(event,"type");
-            if(type && (!strcmp(type,"session.created") || !strcmp(type,"session.started"))) {
+            if (type && (!strcmp(type,"session.created") || !strcmp(type,"session.started"))) {
                 uint64_t expires;
                 if(!snag_json_integer_u64(json_object_get(event,"session"),"expires_at",&expires)) {
                     uint64_t seconds=(uint64_t)time(NULL);
@@ -320,7 +329,9 @@ native_done:
             snag_secret_clear(v->receive.data,v->receive.len);snag_buf_reset(&v->receive);
             if(rc<0)goto done;
         }
-        if(snag_voice_ready(v->protocol) && (!v->rtc || snag_voice_rtc_ready(v->rtc)) && !v->announced) {
+        if (snag_voice_ready(v->protocol) &&
+            (!v->rtc || snag_voice_rtc_ready(v->rtc)) &&
+            !v->announced) {
             json_t *event=json_pack("{s:s}","type","voice_ready");
             int rc=event?owner_notice(v,event):-1;json_decref(event);if(rc<0)goto failed;
             v->announced=true;
@@ -362,14 +373,15 @@ native_done:
                     snag_voice_input(v->protocol,pcm,n,v->error,sizeof(v->error))):0;
                 snag_secret_clear(pcm,sizeof(pcm));if(rc<0)break;
             }
-            if(v->rtc) {
-                for(unsigned int i=0;i<4u;++i) {
+            if (v->rtc) {
+                for (unsigned int i=0;i<4u;++i) {
                     int16_t pcm[2880];
                     int n=snag_voice_rtc_output(v->rtc,pcm,2880u);
-                    if(n<0 || (n>0 && snag_voice_native_output(v->protocol,pcm,(uint32_t)n)<0)) {
-                        strcpy(v->error,"Native voice media stopped or playback fell behind");goto done;
+                    if (n<0 || (n>0 && snag_voice_native_output(v->protocol,pcm,(uint32_t)n)<0)) {
+                        strcpy(v->error,"Native voice media stopped or playback fell behind");
+                        goto done;
                     }
-                    if(!n)break;
+                    if (!n)break;
                 }
             }
             bool drained=snag_audio_pending(v->device)==0u;
@@ -608,14 +620,17 @@ int snag_app_voice_command(struct app_state *app,const char *line,bool *handled)
     const struct snag_provider_config *provider=snag_provider_audio_config(app->config,
         app->session.default_provider,&resolved);
     const struct snag_audio_config *cfg=&resolved;
-    if(!provider)return snag_ui_text(&app->ui,SNAG_UI_ERROR,"Selected voice provider is not configured.");
+    if (!provider)
+        return snag_ui_text(&app->ui,SNAG_UI_ERROR,"Selected voice provider is not configured.");
     if(snag_ui_voice(&app->ui,"[voice connecting; mic off; /voice off cancels] ")!=0)
         return snag_ui_text(&app->ui,SNAG_UI_ERROR,"Voice requires a raw interactive terminal with a visible capture prompt.");
-    char message[SNAG_CONFIG_URL_MAX+SNAG_CONFIG_MODEL_MAX+SNAG_CONFIG_PROVIDER_NAME_MAX+256u],error[256];
+    char message[SNAG_CONFIG_URL_MAX+SNAG_CONFIG_MODEL_MAX+SNAG_CONFIG_PROVIDER_NAME_MAX+256u],
+        error[256];
     if(snag_session_persist(&app->store,&app->session,error,sizeof(error))<0) {
         snag_ui_audio(&app->ui,"",false);return snag_ui_text(&app->ui,SNAG_UI_ERROR,error);
     }
-    snprintf(message,sizeof(message),"Voice sends microphone audio and coding context to %.*s. Use /voice mute or /voice off.",
+    snprintf(message,sizeof(message),
+        "Voice sends microphone audio and coding context to %.*s. Use /voice mute or /voice off.",
         (int)sizeof(cfg->provider)-1,cfg->provider);
     if(snag_ui_text(&app->ui,SNAG_UI_HOST,message)<0)return -1;
     struct app_voice *v=calloc(1,sizeof(*v));if(!v)return -1;

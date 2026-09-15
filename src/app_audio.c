@@ -245,7 +245,8 @@ snag_app_audio_command(struct app_state *app, const char *line, bool *handled)
         app->session.default_provider, &resolved);
     const struct snag_audio_config *cfg = &resolved;
     if (dictate && !provider)
-        return snag_ui_text(&app->ui, SNAG_UI_ERROR, "Selected dictation provider is not configured.");
+        return snag_ui_text(&app->ui, SNAG_UI_ERROR,
+            "Selected dictation provider is not configured.");
     if (play && (strncmp(line, "/play asset:", 12u) || !snag_hex_is_lower(line + 12u, SNAG_ID_HEX_LEN)))
         return snag_ui_text(&app->ui, SNAG_UI_ERROR, "Use /play asset:ID for an accepted session audio asset, or /play stop.");
     struct app_audio *audio = calloc(1u, sizeof(*audio));
