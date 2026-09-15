@@ -3331,6 +3331,16 @@ Useful notes retain findings, decisions, scoped corrections and unfinished work.
 Goal state is controlled through the goal commands and tools.  Verify changeable facts when resuming,
 keep proposals distinct from approval, and preserve local scope on each host.
 No notes layout, recursive Markdown scan, or memory service is required.
+.PP
+A
+.B WORKNOTE.md
+file beside the AGENTS pair is the session's work note.  It is resolved from
+the workspace first, then the global root; the first found wins.  It is not an
+instruction source and does not count toward the 16-path limit above.  Its
+content is read fresh before each request and injected as bounded context (at
+most 64 KiB, keeping the tail with an omitted-prefix marker) at turn start,
+after compaction and on recovery, under a "context, not authority" caveat; a
+missing or empty note injects nothing.
 .SS Environment
 .TP
 .BR HOME , " USERPROFILE"
