@@ -686,7 +686,7 @@ test_session_identity_header(void)
 
     /* Every provider request must carry the session identity: the fixture aborts the request when the exact
      * header line is absent or altered, so the case cannot pass vacuously. The call order mirrors the
-     * fixture's canned replies (models, count, create). */
+     * fixture's canned replies (models, count, create, compact). */
     assert(snag_provider_models_list(connection, &models, error, sizeof(error)) == 0);
     json_decref(models);
 
@@ -702,6 +702,16 @@ test_session_identity_header(void)
                                           error, sizeof(error), &retries) == 0);
     json_decref(request);
     snag_buf_free(&emitted.text);
+    snag_response_graph_free(&graph);
+    struct snag_json_document compact_output = {0};
+    request = request_with_marker("transport-compact");
+    assert(snag_provider_responses_compact(connection, request, &compact_output,
+                                          error, sizeof(error), &retries) == 0);
+    json_decref(request);
+    snag_json_document_free(&compact_output);
+    snag_credential_clear(&credential);
+    snag_config_free(&config);
+    stop_server(&server);
     expected_session_header = NULL;
 }
 

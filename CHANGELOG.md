@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Finish all requests and reap the local server in the session-header transport
+  test, allowing test runners to close their output pipes after completion.
+
 - Complete context recovery across fresh chat, queued input and session resume,
   including repeated reductions of a large retained history. Avoid quadratic
   compact-prefix encoding, make preparation cancellable and show pending Ctrl-C
