@@ -81,8 +81,10 @@ shown/completed totals. These are conversation turns, separate from the Up/Ctrl-
 prompt-entry history.
 
 Use `/ro QUERY` for a read-only query; during work it queues a separate read-only
-turn without changing the current turn's permissions. `/yield` returns an active
-tool wait to the model while leaving the process and its handle alive.
+turn without changing the current turn's permissions. Every request declares the
+same native tool catalog. A read-only turn runs its permitted inspection calls
+and returns a refusal for a state-changing call. `/yield` returns an active tool
+wait to the model while leaving the process and its handle alive.
 
 `/compact` reduces model context while retaining the full local log, reporting
 progress, completion, waiting or interruption. Empty-draft Ctrl-C interrupts it,

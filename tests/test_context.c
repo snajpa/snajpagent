@@ -945,31 +945,24 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
 
             assert(web && json_object_size(web) == 1u);
             assert(!item_by_field(ts, "type", openrouter ? "web_search" : "openrouter:web_search"));
-            assert(item_by_field(ts, "name", "listen_audio"));
-            assert(item_by_field(ts, "name", "transcribe_audio"));
-            assert((item_by_field(ts, "name", "speak_text") != NULL) == (pass != 0u));
+            static const char *const unconditional[] = {
+                "view_image", "read_document", "view_video", "listen_audio", "transcribe_audio",
+                "speak_text", "exec_command", "write_stdin", "apply_patch", "list_files", "read_file",
+                "grep", "write_file", "edit_file", "irc_send", "irc_state", "irc_topic", "irc_connect",
+                "irc_host", "irc_disconnect", "create_goal", "update_goal", "timer" };
+            assert(json_array_size(ts) == 24u);
+            for (size_t k = 0u; k < sizeof(unconditional) / sizeof(unconditional[0]); ++k)
+                assert(item_by_field(ts, "name", unconditional[k]));
             for (size_t j = 0; j < json_array_size(ts); ++j) {
                 json_t *tool = json_array_get(ts, j);
                 if (!strcmp(snag_json_string(tool, "type"), "function"))
                     (void)assert_optional_tool_contract(tool);
             }
-            if (pass == 0u) {
-                assert(json_array_size(ts) == 9u);
-                assert(item_by_field(ts, "name", "list_files") && item_by_field(ts, "name", "read_file") &&
-                       item_by_field(ts, "name", "grep"));
-                (void)assert_optional_tool_contract(item_by_field(ts, "name", "list_files"));
-                (void)assert_optional_tool_contract(item_by_field(ts, "name", "read_file"));
-                (void)assert_optional_tool_contract(item_by_field(ts, "name", "grep"));
-                assert(item_by_field(ts,"name","view_image"));
-            } else {
-                assert(item_by_field(ts, "name", "exec_command"));
-                assert(item_by_field(ts, "name", "update_goal"));
-                assert(item_by_field(ts, "name", "list_files") && item_by_field(ts, "name", "read_file") &&
-                       item_by_field(ts, "name", "grep"));
-                assert(item_by_field(ts, "name", "write_file") && item_by_field(ts, "name", "edit_file"));
-                (void)assert_optional_tool_contract(item_by_field(ts, "name", "write_file"));
-                (void)assert_optional_tool_contract(item_by_field(ts, "name", "edit_file"));
-            }
+            (void)assert_optional_tool_contract(item_by_field(ts, "name", "list_files"));
+            (void)assert_optional_tool_contract(item_by_field(ts, "name", "read_file"));
+            (void)assert_optional_tool_contract(item_by_field(ts, "name", "grep"));
+            (void)assert_optional_tool_contract(item_by_field(ts, "name", "write_file"));
+            (void)assert_optional_tool_contract(item_by_field(ts, "name", "edit_file"));
         }
         struct snag_buf serialized = {.max = SNAG_CONTEXT_MAX_REQUEST};
         assert(snag_json_canonical(projection.create_request.value, &serialized) == 0);
@@ -3372,10 +3365,10 @@ main(int argc, char **argv)
     assert_string(projection.count_request.value, "model", SNAJPAGENT_MODEL);
     {
         json_t *tools = json_object_get(projection.create_request.value, "tools");
-        assert(json_array_size(tools) == 13u);
+        assert(json_array_size(tools) == 24u);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
         assert(item_by_field(tools, "name", "create_goal") != NULL);
-        assert(item_by_field(tools, "name", "update_goal") == NULL);
+        assert(item_by_field(tools, "name", "update_goal") != NULL);
     }
     items = json_object_get(projection.model_input.value, "items");
     request_input = json_object_get(projection.create_request.value, "input");
@@ -3455,8 +3448,8 @@ main(int argc, char **argv)
         json_t *gate;
         const char *gate_text;
         assert(json_is_array(tools));
-        assert(json_array_size(tools) == 13);
-        assert(item_by_field(tools, "name", "create_goal") == NULL);
+        assert(json_array_size(tools) == 24);
+        assert(item_by_field(tools, "name", "create_goal") != NULL);
         assert(item_by_field(tools, "name", "update_goal") != NULL);
         assert(item_by_field(tools, "name", "exec_command") != NULL);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
@@ -3495,12 +3488,12 @@ main(int argc, char **argv)
                                  &instructions, NULL, &projection, error, sizeof(error), NULL) == 0);
         tools = json_object_get(projection.create_request.value, "tools");
         input = json_object_get(projection.create_request.value, "input");
-        assert(json_array_size(tools) == 16u);
+        assert(json_array_size(tools) == 24u);
         assert(item_by_field(tools, "name", "irc_send"));
         assert(item_by_field(tools, "name", "irc_state"));
         assert(item_by_field(tools, "name", "irc_topic"));
         assert(item_by_field(tools, "name", "write_stdin"));
-        assert(item_by_field(tools, "name", "create_goal") == NULL);
+        assert(item_by_field(tools, "name", "create_goal") != NULL);
         assert(item_by_field(tools, "name", "update_goal") != NULL);
         assert_context_tool_schemas(tools, NULL, network_config.max_timeout_ms, 777u);
         assert(strstr(snag_json_string(item_by_field(input, "type", "function_call_output"), "output"),
@@ -3545,9 +3538,9 @@ main(int argc, char **argv)
             json_object_get(projection.create_request.value, "input"), "type", "function_call_output");
         const char *historical_text;
 
-        assert(json_array_size(tools) == 13u);
+        assert(json_array_size(tools) == 24u);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
-        assert(item_by_field(tools, "name", "create_goal") == NULL);
+        assert(item_by_field(tools, "name", "create_goal") != NULL);
         assert(item_by_field(tools, "name", "update_goal") != NULL);
         assert(continuation != NULL);
         assert_string(continuation, "role", "user");
@@ -3599,7 +3592,7 @@ main(int argc, char **argv)
         tools = json_object_get(projection.create_request.value, "tools");
         semantic = json_object_get(projection.model_input.value, "items");
         harness = message_matching(semantic, "IRC chat mode is active.");
-        assert(json_array_size(tools) == 16u);
+        assert(json_array_size(tools) == 24u);
         assert_context_tool_schemas(tools, NULL, 7654321u, 6000u);
         assert(item_by_field(tools, "name", "irc_send") != NULL);
         assert(item_by_field(tools, "name", "irc_state") != NULL);
@@ -3633,10 +3626,10 @@ main(int argc, char **argv)
         json_t *tools = json_object_get(projection.create_request.value, "tools");
         json_t *semantic = json_object_get(projection.model_input.value, "items");
 
-        assert(json_array_size(tools) == 12u);
+        assert(json_array_size(tools) == 24u);
         assert_context_tool_schemas(tools, NULL, UINT32_MAX, 6000u);
-        assert(item_by_field(tools, "name", "create_goal") == NULL);
-        assert(item_by_field(tools, "name", "update_goal") == NULL);
+        assert(item_by_field(tools, "name", "create_goal") != NULL);
+        assert(item_by_field(tools, "name", "update_goal") != NULL);
         json_t *restored = message_matching(semantic, "Persistent goal ");
         assert(restored && strstr(snag_json_string(restored, "content"), "is paused"));
         assert(strstr(snag_json_string(restored, "content"), "wording locked"));
@@ -3666,7 +3659,7 @@ main(int argc, char **argv)
     json_t *restored = message_matching(json_object_get(projection.model_input.value, "items"), "Persistent goal ");
     assert(restored && strstr(snag_json_string(restored, "content"), "is blocked"));
     assert(strstr(snag_json_string(restored, "content"), "Recorded blocker:\nretained dependency"));
-    assert(!item_by_field(json_object_get(projection.create_request.value, "tools"), "name", "update_goal"));
+    assert(item_by_field(json_object_get(projection.create_request.value, "tools"), "name", "update_goal"));
 
     json_decref(empty_steering);
     snag_context_projection_free(&projection);

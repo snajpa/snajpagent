@@ -718,6 +718,28 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !valid_trash_name(session, trash)) goto invalid;
         memcpy(session->trash_name, trash, SNAG_TRASH_NAME_LEN + 1u);
         session->delete_requested = true;
+    } else if (strcmp(type, "timer_scheduled") == 0) {
+        const char *timer_id = snag_json_string(data, "timer_id");
+        const char *text = snag_json_string(data, "text");
+        uint64_t due_ms;
+        if (!snag_json_exact_keys(data, "due_ms text timer_id") ||
+            !timer_id || !snag_hex_is_lower(timer_id, SNAG_ID_HEX_LEN) ||
+            snag_json_integer_u64(data, "due_ms", &due_ms) < 0 || !due_ms ||
+            !snag_text_valid(text, 1u, SNAG_MAX_TIMER_TEXT) || snag_text_blank(text) ||
+            replace_text(session, &session->timer_text, "timer_text", text, SNAG_MAX_TIMER_TEXT) < 0)
+            goto invalid;
+        memcpy(session->timer_id, timer_id, sizeof(session->timer_id));
+        session->timer_due_ms = due_ms;
+    } else if (snag_string_in(type, "timer_fired timer_cancelled")) {
+        const char *timer_id = snag_json_string(data, "timer_id");
+        if (!snag_json_exact_keys(data, "timer_id") || !timer_id ||
+            !snag_hex_is_lower(timer_id, SNAG_ID_HEX_LEN) || !session->timer_id[0] ||
+            strcmp(timer_id, session->timer_id) != 0)
+            goto invalid;
+        json_object_del(session->strings, "timer_text");
+        session->timer_text = NULL;
+        session->timer_id[0] = '\0';
+        session->timer_due_ms = 0u;
     } else if (strcmp(type, "goal_started") == 0) {
         const char *goal_id = snag_json_string(data, "goal_id");
         const char *prompt = snag_json_string(data, "prompt");

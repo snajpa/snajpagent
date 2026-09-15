@@ -165,6 +165,8 @@ int snag_app_help(struct app_state *app, const char *command);
 int snag_app_goal_command(struct app_state *app, const char *line, bool active);
 int snag_app_goal_tool(struct app_state *app, const struct snag_response_item *call,
                       json_t **result, char *error, size_t error_size);
+int snag_app_timer_tool(struct app_state *app, const struct snag_response_item *call,
+                       json_t **result, char *error, size_t error_size);
 int snag_app_goal_pause(struct app_state *app, const char *reason, char *error, size_t error_size);
 
 enum queue_command_kind {

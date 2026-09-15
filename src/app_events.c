@@ -532,7 +532,7 @@ snag_app_request_build(struct app_state *app, const json_t *steering, unsigned i
     int rc;
     const struct snag_context_control control = {snag_app_context_cancelled, app};
 
-    app->request_networked = snag_irc_enabled(app->config) && !app->session.active_read_only;
+    app->request_networked = app->networked && !app->session.active_read_only;
     snag_irc_capture_route(app->irc, &app->irc_request_route);
     char visibility[2048];
     if (operator_visibility(app, visibility, sizeof(visibility)) < 0)

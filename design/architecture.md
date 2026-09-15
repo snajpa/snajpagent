@@ -22,6 +22,13 @@ produce actionable key/type/range diagnostics for commands, native inspection,
 patches, goals and IRC; string argument values are excluded from diagnostics.
 Nonexecution results explain slot limits, pending/closed input, stale/busy handles
 and control handoffs. Execution and lifecycle validation remain at their existing owners.
+Every projection contains the same native function-name set; provider-native web
+search retains its provider-specific type. Catalog visibility describes call
+shapes while runtime state determines the factual execution result. A one-shot
+timer replaces any prior timer in the durable session, and its due event admits a
+fresh ordinary turn without changing paused or blocked goal state. IRC lifecycle
+calls add or remove endpoints through the engine; the normal IRC event loop then
+owns connection, joining, history and reconnect work.
 
 Command-output ceilings retain their existing clamping semantics. Requested and
 applied limits are reported in durable results; the context projection also

@@ -242,23 +242,9 @@ snag_app_provider_run(struct app_state *app, const char *prompt, const json_t *s
         return snag_errno(EOVERFLOW);
     }
     {
-        json_t *ts = json_object_get(create_request, "tools");
         json_t *input = json_object_get(create_request, "input");
         bool read_only = app->session.active_read_only;
-        const char *search_type = snag_config_provider_is_openrouter(app->turn_provider) ?
-                                  "openrouter:web_search" : "web_search";
 
-        size_t read_tools = 7u + (app->config->audio.listen_model[0] != 0) +
-            (app->config->audio.transcribe_model[0] != 0);
-        if (read_only && json_array_size(ts) != read_tools) return -1;
-        for (size_t i = 0; read_only && i < json_array_size(ts); ++i) {
-            json_t *tool = json_array_get(ts, i);
-            const char *type = snag_json_string(tool, "type");
-
-            if (type && strcmp(type, search_type) == 0 && json_object_size(tool) == 1u) continue;
-            if (!type || strcmp(type, "function") != 0 ||
-                !snag_read_only_tool(snag_json_string(tool, "name"))) return -1;
-        }
         for (size_t i = 0; i < json_array_size(input); ++i) {
             json_t *message = json_array_get(input, i);
             const char *role = snag_json_string(message, "role");
@@ -381,16 +367,47 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
     if (call && call->name && strcmp(call->name, "edit_file") == 0)
         return snag_tools_edit_file(call, app->session.workspace, result, error, error_size);
 
+    if (call && call->name && strcmp(call->name, "timer") == 0)
+        return snag_app_timer_tool(app, call, result, error, error_size);
     if (call && call->name && (snag_string_in(call->name, "create_goal update_goal")))
         return snag_app_goal_tool(app, call, result, error, error_size);
-    if (call && call->name && (snag_string_in(call->name, "irc_send irc_topic irc_state"))) {
-        const char *failure = NULL;
+    if (call && call->name && snag_string_in(call->name, "irc_connect irc_host irc_disconnect")) {
+        const char *endpoint = NULL;
+        bool hosting = strcmp(call->name, "irc_host") == 0;
+        char message[256];
+        int rc;
 
-        if (!app->request_networked) failure = "IRC tools were not available in this request.";
-        if (failure) {
-            *result = snag_tool_result_terminal(false, failure);
-            return *result ? 0 : -1;
+        *result = NULL;
+        if (!app->irc)
+            return (*result = snag_tool_result_terminal(false,
+                "IRC runtime is not available in this one-shot process.")) ? 0 : -1;
+        if (!strcmp(call->name, "irc_disconnect")) {
+            if (!snag_json_arg_keys(call->arguments, "endpoint", "hosting", error, error_size) ||
+                !snag_json_arg_text(call->arguments, "endpoint", 1u, SNAG_CONFIG_IRC_ENDPOINT_MAX,
+                                    false, &endpoint, error, error_size) ||
+                !snag_json_arg_bool(call->arguments, "hosting", false, &hosting, error, error_size))
+                return (*result = snag_tool_result_terminal(false, error)) ? 0 : -1;
+            rc = snag_irc_remove(app->irc, hosting, endpoint, error, error_size);
+        } else {
+            if (!snag_json_arg_keys(call->arguments, "endpoint", "", error, error_size) ||
+                !snag_json_arg_text(call->arguments, "endpoint", 1u, SNAG_CONFIG_IRC_ENDPOINT_MAX,
+                                    false, &endpoint, error, error_size))
+                return (*result = snag_tool_result_terminal(false, error)) ? 0 : -1;
+            rc = snag_irc_add(app->irc, app->config, app->session.workspace, hosting,
+                              endpoint, error, error_size);
         }
+        if (rc < 0)
+            return (*result = snag_tool_result_terminal(false, error[0] ? error :
+                "IRC endpoint transition failed.")) ? 0 : -1;
+        app->networked = true;
+        if (snag_app_sync_destinations(app) < 0)
+            return snag_errorf(error, error_size, "IRC destination state could not be refreshed");
+        if (!strcmp(call->name, "irc_disconnect") && !app->irc_destinations.count)
+            app->networked = false;
+        (void)snprintf(message, sizeof(message), "IRC %s succeeded for %s",
+                       !strcmp(call->name, "irc_connect") ? "connect" :
+                       !strcmp(call->name, "irc_host") ? "host" : "disconnect", endpoint);
+        return (*result = snag_tool_result_terminal(true, message)) ? 0 : -1;
     }
     if (call && call->name && strcmp(call->name, "irc_state") == 0) {
         int rc;
@@ -422,6 +439,11 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
                                 SNAG_MAX_PUBLIC_ITEM, false, &text, error, error_size) ||
             (!topic && !snag_json_arg_bool(call->arguments, "notice", false, &notice, error, error_size))) {
             *result = snag_tool_result_terminal(false, error);
+            return *result ? 0 : -1;
+        }
+        if (!app->irc) {
+            *result = snag_tool_result_terminal(false,
+                "IRC runtime is not connected or hosted; use irc_connect or irc_host first.");
             return *result ? 0 : -1;
         }
         if (!irc_tool_route(app, json_object_get(call->arguments, "destination"), &route)) {

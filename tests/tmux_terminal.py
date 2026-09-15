@@ -54,6 +54,12 @@ EMPTY_OUTPUT_CORRECTION = (
     "You tried to send an empty assistant message. "
     "Send nonempty text or take another action."
 )
+NATIVE_FUNCTION_NAMES = {
+    "view_image", "read_document", "view_video", "listen_audio", "transcribe_audio",
+    "speak_text", "exec_command", "write_stdin", "apply_patch", "list_files", "read_file",
+    "grep", "write_file", "edit_file", "irc_send", "irc_state", "irc_topic", "irc_connect",
+    "irc_host", "irc_disconnect", "create_goal", "update_goal", "timer",
+}
 
 
 def read_events(dotdir):
@@ -3566,7 +3572,7 @@ def run_resume_network_pairing_case(binary, root, provider, environment):
                 terminal.wait("network pairing verified")
                 latest = requests[-1]
                 tools = {tool.get("name") for tool in latest["tools"]}
-                assert ("irc_send" in tools) == networked, tools
+                assert "irc_send" in tools, tools
                 snapshots = [item["content"] for item in latest["input"]
                              if "[IRC room snapshot;" in item.get("content", "")]
                 if hosted:
@@ -3649,8 +3655,7 @@ def run_reasoning_boundary_cases(binary, root, provider, environment,
             assert len(outputs) == len(calls)
             assert [i["call_id"] for i in outputs] == [i["call_id"] for i in calls]
             if readonly:
-                assert {t["name"] for t in request["tools"] if t.get("type") == "function"} == {
-                    "read_file", "list_files", "grep", "view_image", "read_document", "view_video"}
+                assert {t["name"] for t in request["tools"] if t.get("type") == "function"} == NATIVE_FUNCTION_NAMES
             if mode == "unstarted" and len(outputs) == 1:
                 _, events = read_events(state)
                 assert event_list(events, "tool_finished")[0]["data"]["result"]["status"] == "not_run"
@@ -4204,7 +4209,7 @@ def run_tool_contract_cases(binary, root, provider, environment):
             if mode != "read":
                 assert "default_timeout_ms=" in controls and "workspace=" in controls
             else:
-                assert set(tools) == {"read_file", "list_files", "grep", "view_image", "read_document", "view_video"}
+                assert set(tools) == NATIVE_FUNCTION_NAMES
             step = len(outputs)
             if mode == "retry" and step == 1 and not recovering[0]:
                 provider.reply(handler, b'{"error":{"message":"intentional interruption","type":"invalid_request_error"}}',
@@ -4454,7 +4459,7 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 terminal.submit("runtime-main")
                 assert arrived.wait(5.0), "provider did not receive the initial request"
                 initial = json.dumps(requests[0], sort_keys=True)
-                assert "irc_send" not in {tool.get("name") for tool in requests[0]["tools"]}
+                assert "irc_send" in {tool.get("name") for tool in requests[0]["tools"]}
                 if view == "chat":
                     terminal.submit_wait("/chat", "chat is offline")
                 terminal.submit_wait(f"/server start {endpoint}", f"hosting started on {endpoint}", join_wrapped=True)
@@ -4504,7 +4509,7 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 assert endpoint in second and "sender=runtimepeer operator=true" in second
                 assert "no active endpoints" in second
                 assert prefix.rstrip() in second, "IRC mention truncated the provider's answer"
-                assert "irc_send" not in {tool.get("name") for tool in requests[1]["tools"]}
+                assert "irc_send" in {tool.get("name") for tool in requests[1]["tools"]}
                 _, log = read_events(terminal.dotdir)
                 admitted = [event["data"]["steering"]["text"] for event in event_list(log, "irc_admitted")
                             if "steering" in event["data"]]
@@ -6645,7 +6650,8 @@ def run_automatic_turn_retry_cases(binary, root, provider, environment):
             if mode != "success":
                 assert (workspace / "once").read_text() == "x", mode
             else:
-                assert all("exec_command" not in json.dumps(r["tools"]) for r in requests)
+                assert all(any(tool.get("name") == "exec_command" for tool in request["tools"])
+                           for request in requests)
             assert all(m[0] == metadata[0][0] for m in metadata)
             for request in requests[2:]:
                 assert sum(i.get("role") == "user" and i.get("content") == original for i in request["input"]) == 1
@@ -6753,7 +6759,7 @@ def run_manual_retry_cases(binary, root, provider, environment):
                 assert "retained tool result" in json.dumps(request), "retry lost tool context"
                 assert "still paused" not in json.dumps(request), "retry consumed paused queue"
                 names = {tool.get("name") for tool in request["tools"]}
-                assert ("exec_command" not in names) == (mode == "read-only-resume")
+                assert "exec_command" in names
             if mode == "queue":
                 assert len(event_list(events, "future_turn_queued")) == 1
                 assert all(e["data"]["input_kind"] == "direct" for e in turns)
