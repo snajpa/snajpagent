@@ -212,6 +212,7 @@ configure_prompt(struct snag_ui_display *display, const struct snag_ui_prompt *p
         text = label;
     }
     for (size_t i = 0u; i < SNAG_TERM_SPINNER_COUNT; ++i) frames[i] = prompt->frames[i];
+    if (term->interrupt_pending) text = "Cancellation requested; waiting... ";
     return snag_term_set_prompt_template(term, prompt->active, text, frames, prompt->rate, prompt->states);
 }
 
@@ -284,6 +285,8 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         if (snag_render_before_prompt(render) < 0) return -1;
         term->defer_redraw = false;
         if (command->data.prompt.active && !term->active) ++display->turn_generation;
+        if (!command->data.prompt.active)
+            term->interrupt_pending = false;
         prompt_free(&display->prompt);
         display->prompt = command->data.prompt;
         memset(&command->data.prompt, 0, sizeof(command->data.prompt));
@@ -381,6 +384,7 @@ read_input(struct snag_ui_display *display, int timeout_ms)
     if (item->text) item->received_ms = snag_time_ms();
     take_snapshot(display, &item->snapshot);
     if (item->text) snag_term_destination_route(term, item->text, &item->route);
+    if (item->action == SNAG_TERM_INTERRUPT) term->interrupt_pending = true;
     if (item->action == SNAG_TERM_CANCEL || item->action == SNAG_TERM_INTERRUPT ||
         item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE) {
         bool deferred = term->defer_redraw;
@@ -870,6 +874,13 @@ bool
 snag_ui_leaving(const struct snag_ui *ui)
 {
     return ui && ui->runtime && atomic_load(&ui->runtime->exit_requested);
+}
+
+bool
+snag_ui_interrupt_pending(const struct snag_ui *ui)
+{
+    uint64_t pending = ui && ui->runtime ? atomic_load(&ui->runtime->interrupt) : 0u;
+    return pending && pending == ui->turn_generation;
 }
 
 int

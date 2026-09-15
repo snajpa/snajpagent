@@ -162,7 +162,11 @@ non-public content-part events on inert items are discarded after validation.
 Public text, refusals and function arguments retain exact semantic-item checks.
 A known successful terminal snapshot remains required, while malformed envelopes and unknown
 non-Responses event types fail closed. A response with no actionable item is
-nonproductive. An explicit empty or oversized assistant message instead
+nonproductive. Completed message announcements use the same snapshot validation
+as completed output. Empty text placeholders may accompany usable messages,
+calls or refusals; omit those placeholders without promoting commentary when an
+explicit final is empty. An empty refusal still requires correction. A wholly
+empty or oversized assistant message instead
 creates one terse, size-specific system correction for the next model
 cycle; the normal operator UI does not present that correction as an error.
 
@@ -223,10 +227,22 @@ requested-input detail lowers a durable in-session safety ceiling and updates
 the same source/model-bound cache observation; replay restores the session
 fact and later budget resolution applies either only while its source binding
 still matches.
-The runtime compacts and retries once only with a different request hash.
-Partial output, an identical request, failed compaction, or a second rejection
-terminates locally as a context-capacity failure rather than entering an
-unbounded retry.
+The reducer retains the rejected input observation independently of active-turn
+state, including context failures that hand off to fresh input. Request preparation
+checks its provider/model/effort/source binding and compact lineage before sending.
+Compaction, followed by another rejection, can reduce another complete prefix;
+the existing eight-reduction bound and identical-request check limit each attempt.
+Successful response completion clears the matching rejection. Failed compaction
+retains the recovery obligation across retries and reopen.
+
+Compact-prefix selection measures newly appended items at complete boundaries,
+invalidating its byte total when a previously measured item changes. It avoids
+re-encoding every growing prefix. Both context walkers check an owner-provided
+cancellation callback between events without pumping mutations into the journal
+being read. The owner consumes pending input after unwinding the projection.
+The display thread shows a pending cancellation immediately and keeps it until
+the engine publishes idle. Automatic compaction announces its work before source
+preparation, including when the provider supplies no visible summary deltas.
 
 An active persistent goal schedules another ordinary turn after a normal final
 answer. Durable queued user turns take precedence over that continuation.

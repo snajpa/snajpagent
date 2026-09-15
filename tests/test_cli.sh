@@ -1091,7 +1091,7 @@ assert starts[1]["data"]["hard_input_tokens"] == 89999
 assert starts[0]["seq"] < rejected[0]["seq"] < compacted[0]["seq"] < starts[1]["seq"]
 PY
 
-# With outer retries disabled, a second typed rejection is terminal.
+# A second rejection with no remaining complete source is still terminal.
 second_state="$root/capacity-second-state"
 mkdir -m 700 "$second_state"
 printf '[agent]\nmax_turn_retries=0\n[provider openai]\n' > "$second_state/config.ini"
@@ -1110,7 +1110,7 @@ rejected = [event for event in events
             if event["type"] == "response_capacity_rejected"]
 failed = [event for event in events if event["type"] == "turn_failed"
           and event["data"]["turn_id"] == turn["data"]["turn_id"]]
-assert len(starts) == 2 and len(rejected) == 1 and len(failed) == 1
+assert len(starts) == 2 and len(rejected) == 2 and len(failed) == 1
 assert failed[0]["data"]["class"] == "context"
 PY
 

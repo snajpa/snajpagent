@@ -216,11 +216,22 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
     char continuation_scope[SNAG_SHA256_HEX_LEN + 1u];
     if (snag_context_continuation_scope(app->turn_provider, model,
             credential ? credential : &owned_credential, continuation_scope) < 0) goto out;
+    if (strcmp(reason, "manual") && snag_ui_text(&app->ui, SNAG_UI_HOST,
+            "Compacting context; Ctrl-C interrupts") < 0) goto out;
     source_budget = SNAG_CONTEXT_MAX_COMPACT - 4096u;
+    const struct snag_context_control control = {snag_app_context_cancelled, app};
     for (unsigned int selection = 0u; selection < 8u; ++selection) {
+        if (snag_app_provider_activity(app, true) < 0) goto out;
         build_rc = snag_context_compact_request_build(&app->session, model, effort, active_prefix,
                                             source_budget, true, continuation_scope,
-                                            &projection, error, error_size);
+                                            &projection, error, error_size, &control);
+        bool cancelled = build_rc < 0 && errno == ECANCELED;
+        if (snag_app_provider_activity(app, false) < 0) goto out;
+        if (cancelled) {
+            rc = snag_app_active_input_pump(app, 0u);
+            if (rc == 0) rc = -1;
+            goto out;
+        }
         if (build_rc == 1) {
             if (selection != 0u) {
                 (void)snag_fail(error, error_size, EOVERFLOW,

@@ -58,7 +58,7 @@ struct snag_term {
     int (*input_checkpoint)(void *);
     void *input_opaque;
     int output_fd[2];
-    bool input_only, cancel_pending, dictating;
+    bool input_only, cancel_pending, interrupt_pending, dictating;
     char audio_label[64];
     char caption[2][384]; /* Display-only recent text, never composer input. */
     struct snag_term_host host;

@@ -94,6 +94,7 @@ int snag_ui_validate_prompt(struct snag_ui *ui, const char *label,
                     const char *const spinners[SNAG_TERM_SPINNER_COUNT], uint32_t per_second);
 int snag_ui_simple_prompt(struct snag_ui *ui, bool active);
 bool snag_ui_leaving(const struct snag_ui *ui);
+bool snag_ui_interrupt_pending(const struct snag_ui *ui);
 int snag_ui_insert_draft(struct snag_ui *, const char *);
 int snag_ui_audio(struct snag_ui *, const char *, bool);
 /* Acknowledged live-capture label, with normal keyboard submission enabled. */

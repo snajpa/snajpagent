@@ -7397,7 +7397,7 @@ def run_interrupted_history_case(binary, root):
 
 
 def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "openrouter", "llama", "vllm",
-                                                  "summary-irreducible", "summary-auth", "proactive", "scope-switch")):
+                                                  "summary-irreducible", "summary-auth", "proactive", "scope-switch", "sized")):
     """Exercise production count/summary recovery using the existing local server."""
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     for mode in modes:
@@ -7418,7 +7418,7 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
                            "text/event-stream" if sse else "application/json", status)
 
         def overflow(handler, sequence):
-            if mode == "scope-switch":
+            if mode in ("scope-switch", "sized"):
                 send(handler, 200, provider.event("response.failed", {
                     "type": "response.failed", "response": {"error": {
                         "code": "context_length_exceeded", "message": "Your input exceeds the context window."}}}), True)
@@ -7447,7 +7447,12 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
             if request.get("tool_choice") == "none":
                 summaries.append(request)
                 size = len(json.dumps(request["input"]))
-                if mode == "scope-switch" and request["model"] == "host-model":
+                if mode == "sized":
+                    if size > 6000:
+                        overflow(handler, sequence)
+                    else:
+                        send(handler, 200, provider.response_body(sequence, "small retained summary"), True)
+                elif mode == "scope-switch" and request["model"] == "host-model":
                     send(handler, 200, provider.response_body(sequence, "original scoped summary"), True)
                 elif mode == "summary-auth":
                     send(handler, 401, {"error": {"code": "invalid_api_key"}})
@@ -7471,8 +7476,10 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
                 send(handler, 200, provider.function_body(sequence, "counted-read", "exec_command", {
                     "command": "cat input.txt", "workdir": str(case), "pty": False,
                     "stdin": None, "timeout_ms": None, "yield_ms": 1000, "max_output_tokens": 1000}), True)
+            elif (mode == "sized" and len(json.dumps(request["input"])) > 6500):
+                overflow(handler, sequence)
             elif ((mode == "scope-switch" and not rebuilt[0]) or
-                  (mode not in ("exact", "count-overflow", "proactive") and not failed[0])):
+                  (mode not in ("exact", "count-overflow", "proactive", "sized") and not failed[0])):
                 failed[0] = True
                 overflow(handler, sequence)
             else:
@@ -7499,7 +7506,7 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
             return result
         try:
             sid = None
-            for i in range(4):
+            for i in range(8 if mode == "sized" else 4):
                 result = run(f"seed-{i} " + "x" * 2000, sid)
                 assert result.returncode == 0, (mode, result.stderr)
                 sid = next((dotdir / "sessions").iterdir()).name
@@ -7518,15 +7525,12 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
             result = run("recover", sid, "local/one-model/medium" if mode == "scope-switch" else None)
             _, events = read_events(dotdir)
             if mode in ("summary-irreducible", "summary-auth"):
-                assert result.returncode == 0 and result.stdout.strip() == "recovered", (mode, result.stderr)
-                assert 1 <= len(summaries) <= 8
-                assert not event_list(events, "compaction_completed")
-                assert len(event_list(events, "turn_recovery")) == 1
-                assert not event_list(events, "turn_failed")
+                assert result.returncode != 0, (mode, result.stderr)
+                assert summaries and not event_list(events, "compaction_completed")
+                assert event_list(events, "turn_recovery")
+                assert len([r for r in creates if provider.latest_user(r) == "recover"]) == 1
                 for i in range(4):
                     assert f"seed-{i} " in json.dumps(creates[-1]["input"])
-                if mode == "summary-auth":
-                    assert len(summaries) == 1
             else:
                 assert result.returncode == 0 and result.stdout.strip() == "recovered", (mode, result.stderr)
                 if not exact:
@@ -7541,8 +7545,13 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
                 else:
                     assert event_list(events, "compaction_completed"), mode
                     if mode != "proactive":
-                        assert 2 <= len(summaries) <= 8
+                        assert 2 <= len(summaries) <= (64 if mode == "sized" else 8)
                         assert len(json.dumps(summaries[-1])) < len(json.dumps(summaries[0]))
+                if mode == "sized":
+                    assert len(event_list(events, "response_capacity_rejected")) >= 2
+                    assert len(event_list(events, "compaction_completed")) >= 2
+                    assert not event_list(events, "turn_recovery")
+                    assert provider.latest_user(creates[-1]) == "recover"
                 if mode == "scope-switch":
                     completed = event_list(events, "compaction_completed")[-1]["data"]
                     started = next(e["data"] for e in events if e["type"] == "compaction_started"
@@ -7558,6 +7567,119 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
             print(f"token accounting production {mode}: ok", flush=True)
         finally:
             provider.close()
+
+
+def run_capacity_handoff_cases(binary, root, modes=("queue", "chat", "cancel")):
+    """Recovery survives fresh input and reopen; pending compaction remains cancellable."""
+    for mode in modes:
+        case = root / mode
+        case.mkdir(parents=True)
+        state, config = case / "s", case / "c.ini"
+        provider = FakeResponses()
+        write_irc_config(config, provider.port, "host-model")
+        ready, release, summarizing = threading.Event(), threading.Event(), threading.Event()
+        requests, summaries = [], []
+        environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret")
+        terminal, peer = None, None
+        endpoint = f"127.0.0.1:{free_loopback_port()}"
+
+        def respond(handler, request, sequence):
+            if request.get("tool_choice") == "none":
+                summaries.append(request)
+                summarizing.set()
+                if mode == "cancel":
+                    release.wait(10)
+                response = {"id": f"resp_{sequence}", "status": "in_progress", "output": []}
+                item = {"id": f"msg_{sequence}", "type": "message", "status": "completed",
+                        "role": "assistant", "phase": "final_answer",
+                        "content": [{"type": "output_text", "text": "retained setup summary"}]}
+                empty = {"id": f"empty_{sequence}", "type": "message", "status": "completed",
+                         "role": "assistant", "phase": "commentary", "content": []}
+                body = provider.event("response.created", {"response": response})
+                body += provider.event("response.output_item.added", {"output_index": 0, "item": empty})
+                body += provider.event("response.output_item.added", {"output_index": 1, "item": item})
+                body += provider.event("response.completed", {"response": {
+                    **response, "status": "completed", "output": [empty, item]}})
+            else:
+                requests.append(request)
+                if provider.latest_user(request) == "overflow" and not ready.is_set():
+                    ready.set()
+                    if mode != "cancel":
+                        assert release.wait(10)
+                    body = provider.event("response.failed", {"response": {"error": {
+                        "code": "context_length_exceeded", "message": "context too large"}}})
+                else:
+                    body = provider.response_body(sequence, "handoff recovered" if summaries else "seed complete")
+            try:
+                provider.reply(handler, body.encode(), close_header=True)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        provider.runtime_handler = respond
+        try:
+            terminal = TmuxTerminal(case / "t", binary, case, state, config, 130, 28,
+                args=("-s", endpoint, "-n", "recoverybot", "-o", "recoveryop", "-r", "lab"),
+                environment=environment)
+            terminal.wait(f"recoveryop@{MACHINE_HOSTNAME} :")
+            terminal.submit("seed history")
+            wait_event_count(state, "turn_completed", 1)
+            if mode == "chat":
+                peer = socket.create_connection(("127.0.0.1", int(endpoint.rsplit(":", 1)[1])))
+                peer.sendall(b"NICK recoverypeer\r\nUSER recoverypeer 0 * :human\r\nJOIN #lab\r\n")
+                terminal.wait("recoverypeer joined")
+                wait_irc_idle([terminal])
+            terminal.submit("/rollout")
+            terminal.submit("overflow")
+            assert ready.wait(5)
+            if mode == "queue":
+                terminal.submit("/queue fresh-capacity-input")
+                wait_event_count(state, "future_turn_queued", 1)
+            elif mode == "chat":
+                peer.sendall(b"PRIVMSG #lab :fresh-capacity-input\r\n")
+                deadline = time.monotonic() + 3
+                while not any(e["data"].get("text") == "fresh-capacity-input"
+                              for e in event_list(read_events(state)[1], "irc_event")):
+                    assert time.monotonic() < deadline, "chat was not admitted"
+                    time.sleep(0.02)
+            else:
+                assert summarizing.wait(5)
+                terminal.wait("Compacting context; Ctrl-C interrupts")
+                terminal.send_key("C-c")
+                log = wait_event_count(state, "turn_interrupted", 1, timeout=2)
+                assert event_list(log, "compaction_interrupted")[-1]["data"]["reason"] == "user"
+                assert not event_list(log, "compaction_completed")
+                release.set()
+                terminal.exit()
+                print("capacity handoff cancel ok", flush=True)
+                continue
+            release.set()
+            terminal.wait("handoff recovered", timeout=15)
+            path, log = read_events(state)
+            failed = next(e for e in event_list(log, "response_failed") if e["data"].get("new_input"))
+            assert event_list(log, "compaction_completed")
+            assert not event_list(log, "response_output_correction")
+            assert "fresh-capacity-input" in json.dumps(requests[-1])
+            terminal.exit()
+            if mode == "queue":
+                terminal.close()
+                # Reopen the genuine handoff boundary, before a summary exists.
+                path.write_bytes(b"".join(path.read_bytes().splitlines(keepends=True)[:failed["seq"]]))
+                summaries.clear()
+                terminal = TmuxTerminal(case / "r", binary, case, state, config, 130, 28,
+                    args=("--no-listen", "--no-client", "--resume", path.parent.name),
+                    environment=environment)
+                terminal.wait("handoff recovered", timeout=15)
+                assert summaries and "fresh-capacity-input" in json.dumps(requests[-1])
+                terminal.exit()
+            assert provider.failure is None, provider.failure
+        finally:
+            release.set()
+            if peer is not None:
+                peer.close()
+            if terminal is not None:
+                terminal.close()
+            provider.close()
+        print("capacity handoff", mode, "ok", flush=True)
 
 
 def run_tool_yield_cases(binary, root, provider, environment):
@@ -7954,6 +8076,7 @@ def run_irc_case(binary, root):
     environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret")
     try:
         run_token_accounting_cases(binary, root / "token-accounting")
+        run_capacity_handoff_cases(binary, root / "capacity-handoff")
         run_assistant_phase_case(binary, root)
         run_goal_request_boundary_cases(binary, root)
         run_host_cache_prefix_case(binary, root / "host-cache-prefix")

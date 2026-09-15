@@ -849,7 +849,10 @@ Insert a newline without submitting.
 Leave the visible draft in scrollback, append literal
 .BR ^C ,
 start a new line, and open a clean prompt.  With an empty active composer, also
-interrupt the turn and pause automatic goal continuation. The next idle prompt
+interrupt the turn and pause automatic goal continuation. While the engine settles
+the interruption, the prompt shows "Cancellation requested; waiting...".
+Further empty-draft interrupts keep that pending prompt on the same line.
+Context preparation checks cancellation between journal events. The next idle prompt
 reflects the settled goal state; its active goal flag is cleared before the pause
 notice redraws it. Empty Enter afterwards stays local and leaves the goal paused.
 Five consecutive presses within two seconds exit;
@@ -1685,7 +1688,8 @@ waits for a complete context boundary, finishes, or is interrupted.  An idle
 request with no new context reports that it was skipped.  Whitespace after the
 command is accepted; additional arguments are rejected.
 .PP
-During compaction, Ctrl-C with an empty draft interrupts the operation; a
+Automatic and manual compaction announce that context is being compacted.
+During compaction, Ctrl-C with an empty draft interrupts preparation or the provider request; a
 nonempty draft is cleared first.  Cancelling a turn does not cancel a later
 manual compaction.  Text entered during idle compaction is saved as a future
 turn and runs afterwards; during active-turn compaction it remains steering.
@@ -1932,9 +1936,13 @@ no local tokenizer or byte-to-token conversion is substituted.
 .PP
 Proactive compaction uses exact preflight or the last compatible measured input
 usage.  New uncounted additions may exceed the limit; a recognized context
-rejection before any output triggers one compact-and-retry recovery without
-replaying completed tools.  Exact-count-driven reduction and summary selection
-are bounded to eight attempts.  Summary requests shrink to smaller complete
+rejection before any output triggers compact-and-retry recovery without
+replaying completed tools. Rejection remains recorded across new chat or queued
+input, interruption and resume; the matching context is reduced before its next
+request. Further rejections can reduce additional complete prefixes, with up to
+eight reductions per turn attempt and eight source selections per summary.
+An unchanged rejected request or irreducible group remains an error.
+Summary requests shrink to smaller complete
 history groups only after exact counts or actual context rejections, not estimates.
 An irreducible prompt/group fails clearly; the durable history is retained.
 After a provider/model/account change, recovery may rebuild a smaller prefix
@@ -3471,7 +3479,11 @@ A streaming assistant message can begin with a provisional
 .B commentary
 or
 .B final_answer
-phase. Its first completed snapshot determines the phase retained for tool
+phase. A message may already be completed when first announced.
+Empty text placeholders accompanying usable messages or tool calls are omitted;
+an empty final does not turn commentary into a final answer, and empty refusals
+remain invalid. A genuinely empty response still receives the normal correction.
+Its first completed snapshot determines the phase retained for tool
 follow-ups and session resume. Live text keeps its original streaming presentation;
 completion reconciles any remaining text once. A conflicting phase in a later
 completed snapshot is a protocol error, as are inconsistent message identity or
