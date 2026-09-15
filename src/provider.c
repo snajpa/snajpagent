@@ -1666,6 +1666,9 @@ voice_connect(const struct snag_provider_config *provider,const struct snag_cred
     else if(!strncmp(base,"http://127.0.0.1:",17u)) {scheme="ws";authority=base+7u;}
     else if (!strncmp(base,"http://[::1]:",13u)) {scheme="ws";authority=base+7u;}
     if(!authority) {snag_errorf(error,size,"Realtime microphone transport requires an HTTPS provider URL");return -1;}
+    bool local_gateway = !call && base &&
+        (!strncmp(base, "http://127.0.0.1:", 17u) ||
+            !strncmp(base, "http://[::1]:", 13u));
     voice=calloc(1,sizeof(*voice));if(!voice)goto failed;
     voice->native=call!=NULL;
     if(snag_http_init()!=CURLE_OK)goto failed;
@@ -1719,8 +1722,13 @@ voice_connect(const struct snag_provider_config *provider,const struct snag_cred
             long status=0;
             curl_easy_getinfo(curl,CURLINFO_RESPONSE_CODE,&status);
             if(message->data.result!=CURLE_OK || status!=101) {
-                snag_errorf(error,size,"Realtime connection failed (HTTP %ld, %s); not retried",status,
-                    curl_easy_strerror(message->data.result));goto done;
+                const char *hint = local_gateway ?
+                    ", a local subscription gateway requires "
+                    "the /backend-api/codex base" : "";
+                snag_errorf(error, size,
+                    "Realtime connection failed (HTTP %ld, %s)%s; not retried",
+                    status, curl_easy_strerror(message->data.result), hint);
+                goto done;
             }
             if(curl_easy_getinfo(curl,CURLINFO_ACTIVESOCKET,&voice->socket)!=CURLE_OK ||
                 voice->socket==CURL_SOCKET_BAD)goto failed;
@@ -1729,7 +1737,13 @@ voice_connect(const struct snag_provider_config *provider,const struct snag_cred
         if(!running || curl_multi_poll(voice->multi,NULL,0,20,NULL)!=CURLM_OK)goto failed;
     }
 failed:
-    snag_errorf(error,size,"Cannot establish realtime WebSocket transport");
+    if (local_gateway)
+        snag_errorf(error, size,
+            "Cannot establish realtime WebSocket transport; a local "
+            "subscription gateway requires the /backend-api/codex base");
+    else
+        snag_errorf(error, size,
+            "Cannot establish realtime WebSocket transport");
 done:
     curl_free(escaped);snag_provider_voice_close(voice);return rc;
 #else
