@@ -360,18 +360,47 @@ snag_term_note_output(struct snag_term *term, const char *text, size_t len, cons
         (unsigned int)trailing + term->output_newlines : (unsigned int)trailing;
     if (term->output_newlines > 2u) term->output_newlines = 2u;
     if (!term->opened || !term->capable) return 0;
-    /* One scan decides whether the escaping pass has anything to do; when it does not, the
-     * accounting loop runs over the caller's bytes, saving a glyph-by-glyph pass and the scratch
-     * buffer. */
+    /* One scan picks the inner loop: a plain chunk takes the run loop below (one bulk append
+     * per line, one closed-form column update); anything else keeps the glyph-by-glyph escaping
+     * path and its scratch buffer. */
     const unsigned char *bytes = (const unsigned char *)text;
     size_t bytes_len = len;
     struct snag_buf safe = {0};
-    if (!plain_ascii(text, len)) {
-        safe.max = len * 8u + 32u;
-        if (snag_term_append_safe(&safe, text, len) < 0) goto out;
-        bytes = safe.data;
-        bytes_len = safe.len;
+    if (plain_ascii(text, len)) {
+        size_t i = 0u;
+        while (i < bytes_len) {
+            size_t end = i;
+            while (end < bytes_len && bytes[end] != '\n') ++end;
+            size_t run = end - i;
+            if (run) {
+                /* output_column_add's wrap rule, run-wise: ((column + run - 1) % columns) + 1,
+                 * or 1 when columns is 0. */
+                if (term->columns == 0u) {
+                    term->output_columns = 1u;
+                } else {
+                    size_t column = term->output_columns;
+                    if (column >= term->columns) column = 0u;
+                    term->output_columns = (column + run - 1u) % term->columns + 1u;
+                }
+                term->output_cell_width = 1u;
+                snag_buf_reset(&term->output_cell);
+                (void)snag_strcpy(term->output_cell_style, sizeof(term->output_cell_style), style);
+                if (snag_buf_append(&term->output_cell, bytes + end - 1u, 1u) < 0 ||
+                    snag_buf_append(&term->output_line, bytes + i, run) < 0) goto out;
+            }
+            if (end == bytes_len) break;
+            term->output_columns = 0u;
+            snag_buf_reset(&term->output_cell);
+            snag_buf_reset(&term->output_line);
+            i = end + 1u;
+        }
+        rc = 0;
+        goto out;
     }
+    safe.max = len * 8u + 32u;
+    if (snag_term_append_safe(&safe, text, len) < 0) goto out;
+    bytes = safe.data;
+    bytes_len = safe.len;
     for (size_t i = 0u; i < bytes_len;) {
         uint32_t cp;
         size_t n = snag_utf8_decode(bytes + i, bytes_len - i, &cp);
