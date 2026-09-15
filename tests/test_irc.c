@@ -776,8 +776,11 @@ static void __attribute__((noinline)) test_server(void)
     send_text(human, "MODE #lab -o agent\r\n");
     wait_wire(server, human, wire, sizeof(wire), "MODE #lab -o agent");
     error[0] = '\0';
-    assert(send_all(server, true, SNAG_IRC_TOPIC, "denied", error, sizeof(error)) == 1);
-    assert(errno == EACCES);
+    /* Session-hosted room: the model link sets the topic even while un-opped. */
+    assert(send_all(server, true, SNAG_IRC_TOPIC, "hosted agent topic", error, sizeof(error)) == 0);
+    tick(server, 5u);
+    drain_ready(server, human, wire, sizeof(wire));
+    assert(strstr(wire, "TOPIC #lab :hosted agent topic") != NULL);
     ping_without_engine(human);
     assert(snag_socket_close(human) == 0);
     tick(server, 5u);
@@ -1312,6 +1315,14 @@ static void __attribute__((noinline)) test_client_events(void)
         wait_pair_event(NULL, client, &capture, SNAG_IRC_MODE, modes + 2u);
         assert(send_all(client, false, SNAG_IRC_TOPIC, "not op", error, sizeof(error)) == 1);
         assert(send_all(client, true, SNAG_IRC_TOPIC, "agent op", error, sizeof(error)) == 0);
+        /* External rooms keep the joined+opped rule for the model link too. */
+        send_text(agent_fd, ":friend!u@fake MODE #lab -o agent7\r\n");
+        tick(client, 5u);
+        error[0] = '\0';
+        assert(send_all(client, true, SNAG_IRC_TOPIC, "external", error, sizeof(error)) == 1);
+        assert(errno == EACCES);
+        send_text(agent_fd, ":friend!u@fake MODE #lab +o agent7\r\n");
+        tick(client, 5u);
         send_text(operator_fd, ":remoteagent!u@fake JOIN #lab\r\n"
             ":remoteagent!u@fake PRIVMSG #lab :old nick is someone else\r\n"
             ":friend!u@fake PART #lab :bye\r\n");

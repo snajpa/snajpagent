@@ -1490,7 +1490,8 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             "A queued send is not proof of remote receipt. " "Coding tools act only on the local "
             "workspace. The runtime owns sockets, joining, history, and "
             "reconnect: do not poll or babysit them. Use irc_state for cached state, "
-            "and irc_topic only when the agent has +o. A local operator mention turn "
+            "and irc_topic only when the agent has +o or hosts the room. A local "
+            "operator mention turn "
             "requires one successful irc_send message; a notice does not count "
             "as a reply, and peer/background traffic requires no response.",
             config->irc.model_nick, config->irc.operator_nick) < 0 ||

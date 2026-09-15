@@ -2224,9 +2224,11 @@ set_topic_as(struct snag_irc_core *irc, const char *topic, enum link_role role,
     if (sanitize_text(clean, sizeof(clean), topic) < 0)
         return snag_errorf(error, error_size, "IRC topic is invalid or too long");
     identity = &irc->conns[role];
-    if (!identity->joined || !identity->op) return snag_fail(error, error_size, EACCES,
-                  role == LINK_AGENT ? "agent identity is not an operator in any joined room" :
-                  "operator identity is not an operator in any joined room");
+    bool hosted_agent = irc->hosting && role == LINK_AGENT;
+    if (!identity->joined || (!identity->op && !hosted_agent))
+        return snag_fail(error, error_size, EACCES,
+                      role == LINK_AGENT ? "agent identity is not an operator in any joined room" :
+                      "operator identity is not an operator in any joined room");
     if (irc->hosting) {
         memcpy(irc->topic, clean, strlen(clean) + 1u);
         if (server_publish(irc, SNAG_IRC_TOPIC, identity->nick, "local", clean, true, true) < 0) goto fail;
