@@ -74,6 +74,7 @@ struct snag_responses_stream {
     enum snag_output_correction output_correction;
     struct snag_provider_failure provider_failure;
     char error[256];
+    char diagnostic[512];
 };
 
 void snag_responses_stream_init(struct snag_responses_stream *stream,

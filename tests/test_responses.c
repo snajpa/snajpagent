@@ -1043,7 +1043,7 @@ test_message_completion_finalizes_phase(void)
 static void
 test_typeless_and_non_object_records_rejected(void)
 {
-    static const char typeless[] = "{\"foo\":1}";
+    static const char typeless[] = "{\"kind\":\"private-value\"}";
     static const char non_object[] = "[1,2]";
     static const char keepalive[] = "{\"type\":\"keepalive\"}";
     struct snag_responses_stream stream;
@@ -1062,6 +1062,10 @@ test_typeless_and_non_object_records_rejected(void)
     assert(errno == EPROTO);
     assert(stream.failed);
     assert(strcmp(stream.error, "Responses event has no type") == 0);
+    assert(strstr(stream.diagnostic, "event=-") != NULL);
+    assert(strstr(stream.diagnostic, "json=object") != NULL);
+    assert(strstr(stream.diagnostic, "keys=kind") != NULL);
+    assert(strstr(stream.diagnostic, "private-value") == NULL);
     snag_responses_stream_free(&stream);
 
     snag_responses_stream_init(&stream, NULL, NULL);

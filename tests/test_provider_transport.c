@@ -84,6 +84,7 @@ enum model_fixture {
     MODEL_LIMIT_CONFLICT,
     MODEL_CREATE_HTTP_FAILURE,
     MODEL_CREATE_SSE_FAILURE,
+    MODEL_CREATE_TYPELESS,
     MODEL_OPENROUTER_SEARCH,
     MODEL_CREATE_RETRY,
     MODEL_COUNT_404,
@@ -427,6 +428,11 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
             server_fail("invalid native compact path");
         send_response(fd, models == MODEL_COMPACT_404 ? 404u : 403u, "application/json", "{\"detail\":\"Not Found\"}");
         (void)close(fd);
+        _exit(0);
+    }
+    if (models == MODEL_CREATE_TYPELESS) {
+        serve_one(listen_fd, 200u, "POST", "/v1/responses", NULL, "text/event-stream",
+                  "data: {\"kind\":\"private-value\"}\n\n");
         _exit(0);
     }
     static const char create_sse[] = "event: response.created\n"
@@ -882,6 +888,30 @@ test_structured_create_failures(void)
         snag_config_free(&config);
         stop_server(&server);
     }
+}
+
+static void
+test_typeless_create_diagnostic(void)
+{
+    struct local_server server;
+    struct snag_config config;
+    struct snag_credential credential;
+    json_t *request = request_with_marker("typeless-diagnostic");
+    char error[1024] = {0};
+    struct snag_response_graph graph = {0};
+
+    start_server(&server, MODEL_CREATE_TYPELESS, false, "/v1");
+    assert(snag_provider_responses_create(transport_connection(&config, &credential, server.endpoint),
+        request, NULL, NULL, &graph, NULL, error, sizeof(error), NULL) < 0);
+    assert(strstr(error, "Responses event has no type") != NULL);
+    assert(strstr(error, "Responses record diagnostic: event=-") != NULL);
+    assert(strstr(error, "json=object") != NULL);
+    assert(strstr(error, "keys=kind") != NULL);
+    assert(strstr(error, "private-value") == NULL);
+    snag_response_graph_free(&graph);
+    json_decref(request);
+    snag_config_free(&config);
+    stop_server(&server);
 }
 
 struct retry_cancel {
@@ -2548,6 +2578,7 @@ main(void)
     test_openrouter_search_transport();
     test_codex_path_selection();
     test_structured_create_failures();
+    test_typeless_create_diagnostic();
     test_create_retries();
     test_policy_clarification_after_reasoning();
     test_count_capability_statuses();
