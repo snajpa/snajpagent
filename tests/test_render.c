@@ -2986,6 +2986,43 @@ main(void)
         assert(t.output_columns == 0u && t.output_line.len == 0u && t.output_newlines == 1u);
         snag_term_close(&t);
     }
+    /* B1 follow-up: a plain chunk is accounted run-wise (one bulk append per line and the
+     * closed-form wrap update), so long runs, wraps and line resets must land on the exact state
+     * the glyph loop produced. */
+    {
+        struct snag_term t;
+        snag_term_init(&t);
+        t.opened = true;
+        t.capable = true;
+        t.columns = 5u;
+        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell); t.output_columns = 0u; t.output_newlines = 0u;
+        /* a run crossing the wrap boundary: 1..5, reset, 1..3 */
+        assert(snag_term_note_output(&t, "abcdefgh", 8u, "s") == 0);
+        assert(t.output_line.len == 8u && memcmp(t.output_line.data, "abcdefgh", 8u) == 0);
+        assert(t.output_columns == 3u);
+        assert(t.output_cell.len == 1u && memcmp(t.output_cell.data, "h", 1u) == 0);
+        assert(t.output_cell_width == 1u);
+        /* a full line wraps on the next run */
+        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell); t.output_columns = 0u; t.output_newlines = 0u;
+        assert(snag_term_note_output(&t, "abcde", 5u, "s") == 0);
+        assert(t.output_columns == 5u);
+        assert(snag_term_note_output(&t, "f", 1u, "s") == 0);
+        assert(t.output_columns == 1u);
+        assert(t.output_line.len == 6u && memcmp(t.output_line.data, "abcdef", 6u) == 0);
+        assert(t.output_cell.len == 1u && memcmp(t.output_cell.data, "f", 1u) == 0);
+        /* a newline mid-chunk resets the line model and keeps only the tail */
+        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell); t.output_columns = 0u; t.output_newlines = 0u;
+        assert(snag_term_note_output(&t, "ab\ncde", 6u, "s") == 0);
+        assert(t.output_line.len == 3u && memcmp(t.output_line.data, "cde", 3u) == 0);
+        assert(t.output_columns == 3u);
+        assert(t.output_cell.len == 1u && memcmp(t.output_cell.data, "e", 1u) == 0);
+        /* a trailing newline leaves an empty line model */
+        snag_buf_reset(&t.output_line); snag_buf_reset(&t.output_cell); t.output_columns = 0u; t.output_newlines = 0u;
+        assert(snag_term_note_output(&t, "xy\n", 3u, "s") == 0);
+        assert(t.output_columns == 0u && t.output_line.len == 0u && t.output_cell.len == 0u);
+        assert(t.output_newlines == 1u);
+        snag_term_close(&t);
+    }
     puts("test_render: ok");
     return 0;
 }
