@@ -7323,11 +7323,11 @@ def run_interrupted_history_case(binary, root):
     assert not errors, errors
 
 
-def run_token_accounting_cases(binary, root):
+def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "openrouter", "llama", "vllm",
+                                                  "summary-irreducible", "summary-auth", "proactive", "scope-switch")):
     """Exercise production count/summary recovery using the existing local server."""
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    for mode in ("exact", "count-overflow", "openrouter", "llama", "vllm",
-                 "summary-irreducible", "summary-auth", "proactive"):
+    for mode in modes:
         case = root / mode
         case.mkdir(mode=0o700)
         dotdir, config = case / "state", case / "config.ini"
@@ -7337,6 +7337,7 @@ def run_token_accounting_cases(binary, root):
         rejected_size = [None]
         failed = [False]
         tool_issued = [False]
+        rebuilt = [False]
 
         def send(handler, status, payload, sse=False):
             body = payload.encode() if sse else json.dumps(payload).encode()
@@ -7344,7 +7345,11 @@ def run_token_accounting_cases(binary, root):
                            "text/event-stream" if sse else "application/json", status)
 
         def overflow(handler, sequence):
-            if mode == "openrouter":
+            if mode == "scope-switch":
+                send(handler, 200, provider.event("response.failed", {
+                    "type": "response.failed", "response": {"error": {
+                        "code": "context_length_exceeded", "message": "Your input exceeds the context window."}}}), True)
+            elif mode == "openrouter":
                 send(handler, 200, provider.event("response.failed", {
                     "type": "response.failed", "response": {
                         "error": {"code": "invalid_prompt", "message": "too large"},
@@ -7369,7 +7374,9 @@ def run_token_accounting_cases(binary, root):
             if request.get("tool_choice") == "none":
                 summaries.append(request)
                 size = len(json.dumps(request["input"]))
-                if mode == "summary-auth":
+                if mode == "scope-switch" and request["model"] == "host-model":
+                    send(handler, 200, provider.response_body(sequence, "original scoped summary"), True)
+                elif mode == "summary-auth":
                     send(handler, 401, {"error": {"code": "invalid_api_key"}})
                 elif mode == "summary-irreducible":
                     overflow(handler, sequence)
@@ -7379,6 +7386,7 @@ def run_token_accounting_cases(binary, root):
                     overflow(handler, sequence)
                 else:
                     text = "summary of prior seeds"
+                    rebuilt[0] = True
                     send(handler, 200, provider.response_body(sequence, text), True)
                 return
             creates.append(request)
@@ -7390,7 +7398,8 @@ def run_token_accounting_cases(binary, root):
                 send(handler, 200, provider.function_body(sequence, "counted-read", "exec_command", {
                     "command": "cat input.txt", "workdir": str(case), "pty": False,
                     "stdin": None, "timeout_ms": None, "yield_ms": 1000, "max_output_tokens": 1000}), True)
-            elif mode not in ("exact", "count-overflow", "proactive") and not failed[0]:
+            elif ((mode == "scope-switch" and not rebuilt[0]) or
+                  (mode not in ("exact", "count-overflow", "proactive") and not failed[0])):
                 failed[0] = True
                 overflow(handler, sequence)
             else:
@@ -7405,8 +7414,10 @@ def run_token_accounting_cases(binary, root):
                 "auto_compact_input_tokens=0\n[model-limit local/host-model]\nmax_input_tokens=10000\n")
         config.write_text(base)
         config.chmod(0o600)
-        def run(text, sid=None):
+        def run(text, sid=None, model=None):
             command = [binary, "--dotdir", str(dotdir), "--config", str(config), "-e"]
+            if model:
+                command += ["-m", model]
             if sid:
                 command += ["--resume", sid]
             result = subprocess.run(command + ["--", text], cwd=case,
@@ -7421,7 +7432,17 @@ def run_token_accounting_cases(binary, root):
                 sid = next((dotdir / "sessions").iterdir()).name
             if mode == "proactive":
                 config.write_text(base.replace("auto_compact_input_tokens=0", "auto_compact_input_tokens=1"))
-            result = run("recover", sid)
+            if mode == "scope-switch":
+                config.write_text(base.replace("auto_compact_input_tokens=0", "auto_compact_input_tokens=1"))
+                result = run("compact-before-switch", sid)
+                assert result.returncode == 0, result.stderr
+                _, prior = read_events(dotdir)
+                previous = event_list(prior, "compaction_completed")[-1]["data"]
+                previous_start = next(e["data"] for e in prior if e["type"] == "compaction_started"
+                                      and e["data"]["compact_id"] == previous["compact_id"])
+                summaries.clear()
+                config.write_text(base.replace("local/host-model", "local/one-model"))
+            result = run("recover", sid, "local/one-model/medium" if mode == "scope-switch" else None)
             _, events = read_events(dotdir)
             if mode in ("summary-irreducible", "summary-auth"):
                 assert result.returncode == 0 and result.stdout.strip() == "recovered", (mode, result.stderr)
@@ -7449,6 +7470,16 @@ def run_token_accounting_cases(binary, root):
                     if mode != "proactive":
                         assert 2 <= len(summaries) <= 8
                         assert len(json.dumps(summaries[-1])) < len(json.dumps(summaries[0]))
+                if mode == "scope-switch":
+                    completed = event_list(events, "compaction_completed")[-1]["data"]
+                    started = next(e["data"] for e in events if e["type"] == "compaction_started"
+                                   and e["data"]["compact_id"] == completed["compact_id"])
+                    assert started["source_seq"] < previous_start["source_seq"]
+                    assert started["continuation_scope"] == completed["continuation_scope"]
+                    assert completed["continuation_scope"] != previous["continuation_scope"]
+                    assert not event_list(events, "turn_recovery") and not event_list(events, "turn_failed")
+                    assert "original scoped summary" not in json.dumps(creates[-1]["input"])
+                    assert "seed-3 " in json.dumps(creates[-1]["input"])
             replay = subprocess.run([binary, "--dotdir", str(dotdir), "-l"], capture_output=True, text=True)
             assert replay.returncode == 0, replay.stderr
             print(f"token accounting production {mode}: ok", flush=True)

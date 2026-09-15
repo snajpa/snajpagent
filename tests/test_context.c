@@ -289,10 +289,12 @@ commit_counted_compaction(struct snag_session *session, const char *id, const ch
     assert(snag_context_compact_output_valid(output, hash, &bytes, error, sizeof(error)) == 0);
     assert(snag_context_compact_output_count_request_build(output, model, &count, error, sizeof(error)) == 0);
     assert(count.value && count.bytes > 0u);
-    commit_event(session, "compaction_started",
-        compaction_started_data(session, id, reason, projection->source_seq,
+    json_t *started = compaction_started_data(session, id, reason, projection->source_seq,
             projection->model_input.sha256, projection->create_request.sha256,
-            projection->model_input.bytes));
+            projection->model_input.bytes);
+    if (projection->continuation_scope[0]) assert(json_object_set_new(started, "continuation_scope",
+            json_string(projection->continuation_scope)) == 0);
+    commit_event(session, "compaction_started", started);
     json_t *completed = compaction_completed_data(id, projection->model_input.sha256, hash,
         count.sha256, projection->model_input.bytes, bytes, output);
     if (projection->continuation_scope[0]) assert(json_object_set_new(completed, "continuation_scope",
@@ -1331,6 +1333,64 @@ test_reasoning_continuation(struct snag_store *store, const char *workspace)
     assert(!item_by_field(json_object_get(projection.create_request.value, "input"), "type", "compaction_summary"));
     assert(!item_by_field(json_object_get(projection.create_request.value, "input"), "type", "reasoning"));
     assert(item_by_field(json_object_get(projection.create_request.value, "input"), "type", "function_call"));
+    /* A new scope may need to summarize a smaller prefix than the old scope did.
+     * Keep the paired call/result together and replay the remaining history. */
+    assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium",
+        true, 1u, true, different, &compact, error, sizeof(error)) == 0);
+    uint64_t rebuilt_seq = compact.source_seq;
+    assert(rebuilt_seq < session.compact_seq);
+    json_t *rebuilt = json_object_get(compact.create_request.value, "input");
+    assert(!item_by_field(rebuilt, "type", "compaction_summary"));
+    assert(!item_by_field(rebuilt, "type", "reasoning"));
+    assert_string(item_by_field(rebuilt, "type", "function_call"), "call_id", "call_exec");
+    assert_string(item_by_field(rebuilt, "type", "function_call_output"), "call_id", "call_exec");
+    uint64_t previous_seq = session.compact_seq, next_seq = session.next_seq;
+    for (unsigned int invalid = 0u; invalid < 5u; ++invalid) {
+        data = compaction_started_data(&session, "78000000000000000000000000000000",
+            "provider_rejection", rebuilt_seq, compact.model_input.sha256,
+            compact.create_request.sha256, compact.model_input.bytes);
+        if (invalid) assert(json_object_set_new(data, "continuation_scope",
+            invalid == 1u ? json_string(scope) : invalid == 2u ? json_string("invalid") :
+            invalid == 3u ? json_null() : json_integer(1)) == 0);
+        assert(snag_session_commit(&session, "compaction_started", data, NULL, error, sizeof(error)) < 0);
+        assert(session.next_seq == next_seq && !session.active_compact_id[0]);
+    }
+    data = compaction_started_data(&session, "78000000000000000000000000000000",
+        "provider_rejection", rebuilt_seq, compact.model_input.sha256,
+        compact.create_request.sha256, compact.model_input.bytes);
+    assert(json_object_set_new(data, "continuation_scope", json_string(different)) == 0);
+    commit_event(&session, "compaction_started", data);
+    snag_session_close(&session);
+    assert(snag_session_open(store, &session, saved, error, sizeof(error)) == 0);
+    assert(!strcmp(session.active_compact_scope, different));
+    char summary_hash[65];
+    assert(snag_json_digest(summary, summary_hash) == 0);
+    next_seq = session.next_seq;
+    for (unsigned int invalid = 0u; invalid < 3u; ++invalid) {
+        data = compaction_completed_data(session.active_compact_id, compact.model_input.sha256,
+            summary_hash, compact.create_request.sha256, compact.model_input.bytes, 1u, summary);
+        if (invalid) assert(json_object_set_new(data, "continuation_scope",
+            invalid == 1u ? json_string(scope) : json_null()) == 0);
+        assert(snag_session_commit(&session, "compaction_completed", data, NULL, error, sizeof(error)) < 0);
+        assert(session.next_seq == next_seq && session.compact_seq == previous_seq);
+        assert(!strcmp(session.compact_scope, scope) && !strcmp(session.active_compact_scope, different));
+    }
+    commit_event(&session, "compaction_interrupted", json_pack("{s:s,s:s}",
+        "compact_id", session.active_compact_id, "reason", "context_rejected"));
+    assert(!session.active_compact_scope[0] && session.compact_seq == previous_seq);
+    assert(!strcmp(session.compact_scope, scope));
+    commit_counted_compaction(&session, "77000000000000000000000000000000",
+        "provider_rejection", SNAJPAGENT_MODEL, &compact, summary);
+    assert(session.compact_seq == rebuilt_seq && !strcmp(session.compact_scope, different));
+    snag_session_close(&session);
+    assert(snag_session_open(store, &session, saved, error, sizeof(error)) == 0);
+    assert(session.compact_seq == rebuilt_seq && !strcmp(session.compact_scope, different));
+    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2, empty,
+        0, false, &config, different, NULL, NULL, &projection, error, sizeof(error)) == 0);
+    rebuilt = json_object_get(projection.create_request.value, "input");
+    assert(item_by_field(rebuilt, "type", "compaction_summary"));
+    assert(item_by_field(rebuilt, "content", "done"));
+    assert(!item_by_field(rebuilt, "type", "function_call"));
     json_decref(summary);
     snag_context_projection_free(&compact);
     strcpy(credential.account_id, "oauth-account");

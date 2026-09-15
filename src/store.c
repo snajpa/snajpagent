@@ -362,6 +362,7 @@ clear_compaction_state(struct snag_session *session)
 {
     session->active_compact_id[0] = '\0';
     session->active_compact_source_sha256[0] = '\0';
+    session->active_compact_scope[0] = '\0';
     session->active_compact_source_seq = 0u;
 }
 
@@ -817,6 +818,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *model = snag_json_string(data, "model");
         const char *profile = snag_json_string(data, "profile_id");
         const char *capability = snag_json_string(data, "capability_version");
+        const char *scope = snag_json_string(data, "continuation_scope");
         uint64_t source_seq;
         uint64_t tokens;
         bool active_prefix;
@@ -824,9 +826,12 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
 
         active_prefix = session->active_turn && !session->response_open;
         expected_model = active_prefix ? session->active_turn_model : session->default_model;
-        if (!snag_json_exact_keys(data,
+        if (!snag_json_arg_keys(data,
             "capability_version compact_id count_method count_request_sha256 input_tokens_bound model "
-            "predecessor_compact_id profile_id reason request_sha256 source_seq source_sha256") ||
+            "predecessor_compact_id profile_id reason request_sha256 source_seq source_sha256",
+            "continuation_scope", error, error_size) ||
+            (json_object_get(data, "continuation_scope") &&
+             (!scope || !snag_hex_is_lower(scope, SNAG_SHA256_HEX_LEN))) ||
             (session->active_turn && !active_prefix) || session->response_open ||
             session->pending_call_count || (!active_prefix && session->process_count) ||
             session->active_compact_id[0] != '\0' ||
@@ -840,7 +845,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !profile || strcmp(profile, SNAJPAGENT_PROFILE_ID) != 0 || !capability ||
             strcmp(capability, SNAJPAGENT_CAPABILITY_VERSION) != 0 ||
             snag_json_integer_u64(data, "source_seq", &source_seq) < 0 ||
-            source_seq == 0u || source_seq >= seq || source_seq <= session->compact_seq ||
+            source_seq == 0u || source_seq >= seq ||
+            (source_seq <= session->compact_seq &&
+             (!scope || !session->compact_scope[0] || !strcmp(scope, session->compact_scope))) ||
             snag_json_integer_u64(data, "input_tokens_bound", &tokens) < 0 ||
             (strcmp(method, "unknown") == 0 ? tokens != 0u : tokens == 0u)) goto invalid;
         if (session->compact_id[0] == '\0') {
@@ -852,6 +859,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         memcpy(session->active_compact_source_sha256, source_hash,
                sizeof(session->active_compact_source_sha256));
         session->active_compact_source_seq = source_seq;
+        session->active_compact_scope[0] = '\0';
+        if (scope) memcpy(session->active_compact_scope, scope, sizeof(session->active_compact_scope));
     } else if (strcmp(type, "compaction_interrupted") == 0) {
         static const char reasons[] = "steering user endpoint_unavailable context_rejected error";
         const char *compact_id = snag_json_string(data, "compact_id");
@@ -880,12 +889,12 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *scope = snag_json_string(data, "continuation_scope");
         if (json_object_get(data, "continuation_scope") &&
             (!scope || !snag_hex_is_lower(scope, SNAG_SHA256_HEX_LEN))) goto invalid;
-        if (!snag_json_exact_keys(data,
+        if (session->active_compact_scope[0] &&
+            (!scope || strcmp(scope, session->active_compact_scope))) goto invalid;
+        if (!snag_json_arg_keys(data,
             "compact_id count_method input_tokens_bound output output_count_method "
-            "output_count_request_sha256 output_sha256 output_tokens_bound source_sha256") &&
-            !snag_json_exact_keys(data,
-            "compact_id count_method input_tokens_bound output output_count_method "
-            "output_count_request_sha256 output_sha256 output_tokens_bound source_sha256 continuation_scope"))
+            "output_count_request_sha256 output_sha256 output_tokens_bound source_sha256",
+            "continuation_scope", error, error_size))
             goto invalid;
         if (session->active_compact_id[0] == '\0' ||
             !compact_id || strcmp(compact_id, session->active_compact_id) != 0 ||

@@ -300,7 +300,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                 goto out;
             }
             if (commit_rendered(app, "compaction_started",
-                    json_pack("{s:s,s:s,s:s,s:s,s:I,s:s,s:s?,s:s,s:s,s:s,s:I,s:s}",
+                    json_pack("{s:s,s:s,s:s,s:s,s:I,s:s,s:s?,s:s,s:s,s:s,s:I,s:s,s:s}",
                         "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
                         "compact_id", compact_id, "count_method", count_method,
                         "count_request_sha256", projection.count_request.sha256,
@@ -309,7 +309,8 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                         "profile_id", SNAJPAGENT_PROFILE_ID, "reason", reason,
                         "request_sha256", projection.create_request.sha256,
                         "source_seq", (json_int_t)projection.source_seq,
-                        "source_sha256", projection.model_input.sha256), error, error_size) < 0) goto out;
+                        "source_sha256", projection.model_input.sha256,
+                        "continuation_scope", continuation_scope), error, error_size) < 0) goto out;
             started = true;
             if (snag_app_provider_activity(app, true) < 0) goto out;
             stage_rc = native ? snag_app_provider_compact(app, projection.create_request.value, credential,
