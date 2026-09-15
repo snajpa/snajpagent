@@ -650,7 +650,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !snag_text_valid(snag_json_string(data,"model"),1u,(SNAG_MODEL_MAX_BYTES)-1u) ||
             !snag_text_valid(snag_json_string(data,"report"),1u,(256u*1024u)-1u))goto invalid;
     } else if (strcmp(type,"voice_event")==0) {
-
         static const char types[]="voice_started voice_stopped voice_transcript voice_usage voice_asr_failed voice_interrupted voice_response voice_result voice_muted";
         const json_t *event=json_object_get(data,"event");
         const char *kind=snag_json_string(event,"type");

@@ -4031,7 +4031,6 @@ out: free(resolved);
 static void
 write_resume_command(struct app_state *app, const char *program, const char *dotdir)
 {
-
     if (!dotdir || app->session.log_fd < 0 || app->session.delete_requested) return;
     struct snag_buf command = {.max = RESUME_COMMAND_MAX};
     if (build_resume_command(app, program, dotdir, &command) == 0 &&

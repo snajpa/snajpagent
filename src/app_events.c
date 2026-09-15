@@ -25,7 +25,6 @@ append_pending(struct snag_buf *pending, const char *text, size_t len)
 static char *
 pending_batch(const struct snag_buf *pending, size_t *used)
 {
-
     *used = 0u;
     struct snag_buf batch = {.max = SNAG_MAX_STEERING_TEXT + 1u};
     while (*used < pending->len) {
