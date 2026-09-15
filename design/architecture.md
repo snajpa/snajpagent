@@ -240,8 +240,9 @@ invalidating its byte total when a previously measured item changes. It avoids
 re-encoding every growing prefix. Both context walkers check an owner-provided
 cancellation callback between events without pumping mutations into the journal
 being read. The owner consumes pending input after unwinding the projection.
-The display thread shows a pending cancellation immediately and keeps it until
-the engine publishes idle. Automatic compaction announces its work before source
+The display thread shows pending cancellation immediately, until the engine
+publishes idle or acknowledges an editor-only cancellation with an active prompt.
+Automatic compaction announces its work before source
 preparation, including when the provider supplies no visible summary deltas.
 
 An active persistent goal schedules another ordinary turn after a normal final

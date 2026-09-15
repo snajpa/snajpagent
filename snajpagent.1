@@ -852,6 +852,7 @@ start a new line, and open a clean prompt.  With an empty active composer, also
 interrupt the turn and pause automatic goal continuation. While the engine settles
 the interruption, the prompt shows "Cancellation requested; waiting...".
 Further empty-draft interrupts keep that pending prompt on the same line.
+Cancelling a queue edit restores the active prompt and leaves the turn interruptible.
 Context preparation checks cancellation between journal events. The next idle prompt
 reflects the settled goal state; its active goal flag is cleared before the pause
 notice redraws it. Empty Enter afterwards stays local and leaves the goal paused.

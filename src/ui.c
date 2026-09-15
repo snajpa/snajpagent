@@ -285,7 +285,10 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         if (snag_render_before_prompt(render) < 0) return -1;
         term->defer_redraw = false;
         if (command->data.prompt.active && !term->active) ++display->turn_generation;
-        if (!command->data.prompt.active)
+        /* After consuming Ctrl-C the owner can acknowledge an editor-only
+         * cancellation with another active prompt; the model turn continues. */
+        if (!command->data.prompt.active ||
+            atomic_load(&display->runtime->interrupt) != display->turn_generation)
             term->interrupt_pending = false;
         prompt_free(&display->prompt);
         display->prompt = command->data.prompt;

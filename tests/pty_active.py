@@ -5091,6 +5091,20 @@ def test_editor_during_blocked_engine(key=b"\r"):
             raise failure
 
 
+def test_queue_editor_cancel_keeps_turn_interruptible():
+    with Child([]) as child:
+        child.wait_idle_prompt()
+        child.send_wait(b"queue_slow\r", b"working slowly")
+        child.send_wait(b"/q retained item\r", b"queued (/next or /q c)")
+        child.send_wait(b"/q 1 edit\r", "edit 1 ›".encode())
+        child.send(b"\x15")
+        prompt = DEFAULT_ACTIVE_PROMPT.replace(b"?% ", b"?% (1) ")
+        end = child.send_wait(b"\x03", prompt, timeout=1)
+        assert not any(e["type"] == "turn_interrupted" for e in events(child.session_id()))
+        end = child.send_wait(b"\x03", b"turn interrupted", start=end)
+        child.exit_cleanly(end)
+
+
 def test_pending_interrupt_during_blocked_engine():
     with Child([]) as child:
         child.wait_idle_prompt()
@@ -5157,6 +5171,7 @@ if __name__ == "__main__":
     test_editor_during_blocked_engine()
     test_editor_during_blocked_engine(b"\t")
     test_pending_interrupt_during_blocked_engine()
+    test_queue_editor_cancel_keeps_turn_interruptible()
     test_active_verbosity()
     test_five_ctrl_c_exit()
     test_ctrl_c_sequence_reset()
