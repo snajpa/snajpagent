@@ -14,6 +14,8 @@
   repaint, so the keystroke is visibly accepted; a repeat switch is ignored while
   one is in flight (until the target view becomes current, or the 500 ms bound
   expires), and switching to the view already shown stays silent.
+- Add Codex subscription and codex-lb voice support. Dictation and voice use the
+  selected provider's credentials and defaults; `[audio]` supplies optional overrides.
 
 - Finish all requests and reap the local server in the session-header transport
   test, allowing test runners to close their output pipes after completion.

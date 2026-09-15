@@ -150,12 +150,11 @@ Use `/attach PATH` to stage an image, inspect the staged list with
 Office or text documents, sample a video interval, or transcribe an audio file;
 accepted originals and prepared results stay with the saved session.
 
-With an audio provider configured, `/dictate` places a microphone transcript in
-your editable draft and `/play asset:ID` plays a retained audio asset.
-`/voice on` starts a realtime conversation alongside the coding queue,
-`/voice mute` pauses microphone forwarding, and `/voice off` stops voice;
-capture starts only through an explicit local command. Use a headset for duplex
-voice. The configured audio API receives speech and bills it separately; the
+`/dictate` inserts speech into your editable draft. `/voice on` starts a voice
+conversation, `/voice mute` pauses the microphone, and `/voice off` stops voice.
+These commands use the selected provider and its credentials: a Codex subscription,
+codex-lb, or a compatible BYOK provider. Use a headset for duplex voice.
+`/play asset:ID` plays a saved audio asset. The
 [manual](https://agent.snajpa.net/manual.html) covers provider setup, selectors,
 data destinations and capture controls.
 
