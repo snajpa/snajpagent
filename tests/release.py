@@ -1227,7 +1227,7 @@ assert '"--host-cc=${pkgs.stdenv.cc}/bin/cc"' in mac_av
 assert '"--cc=${compiler} --target=${target} -isysroot ${sdk}"' in mac_av
 assert '"--disable-postproc"' not in mac_av  # Removed in pinned FFmpeg 8.
 assert '"AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale)"' in macos
-assert 'buildInputs = [ jansson curl av pdf png freetype expat fontconfig jpeg openjpeg xml archive ] ++ networkLibraries;' in macos
+assert 'buildInputs = [ jansson curl av pdf png freetype expat fontconfig jpeg openjpeg xml archive ] ++ voiceRtc.dependencies ++ networkLibraries;' in macos
 assert "'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}'" in macos
 assert 'makeFlags = [ "ASMSTRIPFLAGS=" ];' in mac_av
 # Upstream's assembler rule conditionally invokes STRIP via ASMSTRIPFLAGS.
