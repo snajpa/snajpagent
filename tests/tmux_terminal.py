@@ -5829,7 +5829,7 @@ def run_goal_recovery_cases(binary, root, provider, environment):
             requests.append(request)
             attempt = len(requests)
             meta = [i["content"] for i in request["input"]
-                    if i.get("role") == "system" and
+                    if i.get("role") == "user" and
                     i.get("content", "").startswith("[snajpagent input metadata")]
             metadata.append(meta)
             if attempt == 1:
