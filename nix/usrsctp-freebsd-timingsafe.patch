@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# usrsctp: FreeBSD < 12 lacks the libc timingsafe_bcmp; provide the userspace
+# implementation there (the existing guard covers every other platform).
+--- a/usrsctplib/netinet/sctp_os_userspace.h
++++ b/usrsctplib/netinet/sctp_os_userspace.h
+@@ -1132,7 +1132,9 @@
+ 
+ #define SCTP_IS_LISTENING(inp) ((inp->sctp_flags & SCTP_PCB_FLAGS_ACCEPTING) != 0)
+ 
+-#if defined(__APPLE__) || defined(__DragonFly__) || defined(__linux__) || defined(__native_client__) || defined(__NetBSD__) || defined(_WIN32) || defined(__Fuchsia__) || defined(__EMSCRIPTEN__)
++/* FreeBSD releases before 12 predate the libc timingsafe_bcmp; provide
++   the userspace implementation there. */
++#if defined(__APPLE__) || defined(__DragonFly__) || defined(__linux__) || defined(__native_client__) || defined(__NetBSD__) || defined(_WIN32) || defined(__Fuchsia__) || defined(__EMSCRIPTEN__) || (defined(__FreeBSD__) && __FreeBSD_version < 1200000)
+ int
+ timingsafe_bcmp(const void *, const void *, size_t);
+ #endif
+--- a/usrsctplib/netinet/sctp_userspace.c
++++ b/usrsctplib/netinet/sctp_userspace.c
+@@ -126,7 +126,9 @@
+ }
+ #endif
+ 
+-#if defined(__APPLE__) || defined(__DragonFly__) || defined(__linux__) || defined(__native_client__) || defined(__NetBSD__) || defined(_WIN32) || defined(__Fuchsia__) || defined(__EMSCRIPTEN__)
++/* FreeBSD releases before 12 predate the libc timingsafe_bcmp; provide
++   the userspace implementation there. */
++#if defined(__APPLE__) || defined(__DragonFly__) || defined(__linux__) || defined(__native_client__) || defined(__NetBSD__) || defined(_WIN32) || defined(__Fuchsia__) || defined(__EMSCRIPTEN__) || (defined(__FreeBSD__) && __FreeBSD_version < 1200000)
+ int
+ timingsafe_bcmp(const void *b1, const void *b2, size_t n)
+ {
