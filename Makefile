@@ -48,6 +48,19 @@ override CPPFLAGS += -DSNAJPAGENT_NAME='"$(NAME)"' -DSNAJPAGENT_VERSION='"$(BUIL
 override CFLAGS += -pthread
 override LDFLAGS += -pthread
 
+# Poppler 26 reshaped two C++ APIs src/pdf.cpp uses (BaseStream::copy now
+# returns unique_ptr, SplashOutputDev takes the paper color by pointer).
+# Default keeps the Poppler to 25.x shape the matrix pins; host builds against
+# Poppler 26 pass HAVE_POPPLER_NEW_API=1 on the make line.
+HAVE_POPPLER_NEW_API ?= 0
+ifeq ($(HAVE_POPPLER_NEW_API),0)
+override CPPFLAGS += -DHAVE_POPPLER_NEW_API=0
+else ifeq ($(HAVE_POPPLER_NEW_API),1)
+override CPPFLAGS += -DHAVE_POPPLER_NEW_API=1
+else
+$(error HAVE_POPPLER_NEW_API must be 0 (poppler to 25.x API) or 1 (poppler 26 API))
+endif
+
 BIN = $(NAME)
 TARGET_OS := $(shell uname -s)
 ifeq ($(TARGET_OS),FreeBSD)

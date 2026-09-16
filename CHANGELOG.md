@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Build the PDF modality against system Poppler 26: `HAVE_POPPLER_NEW_API=1`
+  selects the reshaped stream/renderer C++ APIs, default 0 keeps the Poppler
+  to 25.x shape. Verified by a Poppler 26 host link plus a syntax check of the
+  default branch against Poppler 25.10 headers.
 - Simplify model tool-call rules to first-match-wins allow/deny. Each
   `[rule NAME]` section now takes only `match` (JSON-pointer regex pairs),
   `action` (`allow` or `deny`) and `message` (deny text); the first matching

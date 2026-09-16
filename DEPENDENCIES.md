@@ -124,7 +124,9 @@ through their C APIs. `RTC_CFLAGS`/`RTC_LIBS` select nonstandard installations.
 Portable builds use libjuice for ICE, plus DTLS and SRTP. BYOK uses libcurl
 WebSockets. `WITH_AUDIO_DEVICE=0` disables audio devices and native voice media.
 FFmpeg and Poppler are reached through narrow file-only adapters in `src/av.c`
-and `src/pdf.cpp`; PDF requires C++20. Miniaudio is compiled once in
+and `src/pdf.cpp`; PDF requires C++20. System Poppler 26 reshaped the stream
+and renderer C++ APIs: host builds against it pass `HAVE_POPPLER_NEW_API=1`
+on the make line (default 0 keeps the Poppler to 25.x shape the matrix pins). Miniaudio is compiled once in
 `src/miniaudio.c` from its dependency header. The low-level device callback
 moves native PCM only; engine, resource manager, node graph and file decoders
 are disabled. No third-party source is copied into the repository.
