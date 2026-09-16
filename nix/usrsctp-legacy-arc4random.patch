@@ -1,12 +1,17 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # usrsctp: FreeBSD < 8 and NetBSD < 10 lack arc4random_buf; fill from the
-# same PRNG via a distinctly named helper (no libc redeclaration risk).
+# same PRNG via a distinctly named helper. <sys/param.h> supplies the
+# version macros this branch otherwise lacks.
 --- a/usrsctplib/user_environment.c
 +++ b/usrsctplib/user_environment.c
-@@ -123,6 +123,27 @@
+@@ -123,6 +123,31 @@
  #elif defined(__FreeBSD__) || defined(__DragonFly__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__APPLE__) || defined(__Bitrig__)
  #include <stdlib.h>
  
++#if defined(__FreeBSD__) || defined(__NetBSD__)
++#include <sys/param.h>	/* __FreeBSD_version / __NetBSD_Version__ */
++#endif
++
 +#if (defined(__FreeBSD__) && __FreeBSD_version < 800000) || (defined(__NetBSD__) && __NetBSD_Version__ < 1000000000)
 +/* Legacy BSDs predate arc4random_buf; fill from the same PRNG. */
 +#include <string.h>
@@ -31,7 +36,7 @@
  void
  init_random(void)
  {
-@@ -132,7 +153,11 @@
+@@ -132,7 +157,11 @@
  void
  read_random(void *buf, size_t size)
  {
