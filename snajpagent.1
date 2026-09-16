@@ -3177,7 +3177,10 @@ or null only when exactly one destination exists. The model never implicitly
 follows the operator's selected room. Text and topic are bounded UTF-8;
 topic is at most 280 bytes with no newline. Successful send acceptance is not
 proof that every remote participant received it. The runtime owns joining,
-history, reconnecting and room traffic after an endpoint transition.
+history, reconnecting and room traffic after an endpoint transition. A
+destination number keeps naming the same endpoint across reconnects: a send
+with a stale revision follows the number to its current revision, while a
+claimed future revision still fails.
 .SH "Sessions and files"
 .SS Session durability
 Resume continues unfinished model/tool turns from their durable state, without

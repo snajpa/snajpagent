@@ -805,6 +805,7 @@ snag_responses_sse_record(void *opaque, const struct snag_sse_record *record)
     json_t *root;
     const char *type;
     char json_error[192] = {0};
+    char fallback[64u];
     int rc;
 
     if (stream->failed) return snag_errno(EPROTO);
@@ -827,6 +828,26 @@ snag_responses_sse_record(void *opaque, const struct snag_sse_record *record)
         return stream_fail(stream, EPROTO, "invalid Responses JSON: %s", json_error);
     }
     type = snag_json_string(root, "type");
+    if (!type && json_is_object(root) && record->event_len > 0u &&
+        record->event_len < sizeof(fallback)) {
+        /* Some relays forward the SSE event name without the JSON type.
+         * Trust the name only when it is a bare token; anything else keeps
+         * the strict rejection below, as do records with no event name. */
+        bool token = true;
+        for (size_t i = 0u; i < record->event_len; ++i) {
+            unsigned char c = record->event[i];
+            if (!(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') &&
+                !(c >= '0' && c <= '9') && c != '.' && c != '_' && c != '-') {
+                token = false;
+                break;
+            }
+        }
+        if (token) {
+            memcpy(fallback, record->event, record->event_len);
+            fallback[record->event_len] = '\0';
+            type = fallback;
+        }
+    }
     if (!json_is_object(root) || !type) {
         record_diagnostic(stream, record, root, json_is_object(root) ? "object" : "non-object");
         json_decref(root);
