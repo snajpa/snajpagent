@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# usrsctp: FreeBSD < 8 lacks TAILQ_FOREACH_SAFE; extend the userspace fallback
+# guard (inner #ifndefs keep it a no-op where the SDK provides the macro).
+--- a/usrsctplib/netinet/sctp_os_userspace.h
++++ b/usrsctplib/netinet/sctp_os_userspace.h
+@@ -1104,7 +1104,7 @@
+ 	} while (0)
+ #endif
+ 
+-#if defined(__linux__)
++#if defined(__linux__) || (defined(__FreeBSD__) && __FreeBSD_version < 800000)
+ #if !defined(TAILQ_FOREACH_SAFE)
+ #define TAILQ_FOREACH_SAFE(var, head, field, tvar)             \
+          for ((var) = ((head)->tqh_first);                     \

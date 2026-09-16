@@ -171,8 +171,9 @@ let
     inherit pkgs cmakeLibrary tls; sourcePkgs = sourcePkgs;
     # Both FreeBSD SDKs' net/if.h need struct sockaddr complete first.
     rtcPatches = [ ./libdatachannel-bsd-sockaddr.patch ];
-    # Both FreeBSD SDKs predate the libc timingsafe_bcmp.
-    sctpPatches = [ ./usrsctp-freebsd-timingsafe.patch ];
+    # Both FreeBSD SDKs predate the libc timingsafe_bcmp; 5.1 also lacks
+    # TAILQ_FOREACH_SAFE.
+    sctpPatches = [ ./usrsctp-freebsd-timingsafe.patch ./usrsctp-freebsd-tailq-safe.patch ];
     cxxFlags = "${cflags} -stdlib=libstdc++ -pthread${lib.optionalString early " -fno-use-cxa-atexit"}${lib.optionalString legacy " -fno-builtin-pow -fno-builtin-powf"} -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}";
     cxxLibraries = "--ld-path=${llvm.lld}/bin/ld.lld -L${cxx}/lib";
   };
