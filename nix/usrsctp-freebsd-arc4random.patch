@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# usrsctp: FreeBSD < 8 lacks arc4random_buf; fill from the same PRNG
+# (arc4random() is present on the legacy SDKs).
+--- a/usrsctplib/user_environment.c
++++ b/usrsctplib/user_environment.c
+@@ -123,6 +123,27 @@
+ #elif defined(__FreeBSD__) || defined(__DragonFly__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__APPLE__) || defined(__Bitrig__)
+ #include <stdlib.h>
+ 
++#if defined(__FreeBSD__) && __FreeBSD_version < 800000
++/* FreeBSD < 8 predates arc4random_buf; fill from the same PRNG. */
++#include <string.h>
++static void
++arc4random_buf(void *buf, size_t n)
++{
++	unsigned char *p = buf;
++
++	while (n >= 4) {
++		uint32_t v = arc4random();
++		memcpy(p, &v, 4);
++		p += 4;
++		n -= 4;
++	}
++	if (n > 0) {
++		uint32_t v = arc4random();
++		memcpy(p, &v, n);
++	}
++}
++#endif
++
+ void
+ init_random(void)
+ {
