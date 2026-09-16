@@ -190,8 +190,16 @@ let
   };
   voiceRtc = import ./voice-rtc-cross.nix {
     inherit pkgs cmakeLibrary tls; sourcePkgs = sourcePkgs;
-    cxxFlags = "${cflags} -stdlib=libstdc++ -pthread${lib.optionalString early " -fno-use-cxa-atexit -fno-builtin-pow -fno-builtin-powf -include ${./bsd-legacy-cxx.h}"} -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}";
-    cxxLibraries = "${ldflags} -L${cxx}/lib";
+    # OpenBSD 3.5's inttypes.h omits the C99 format macros (PRIx64).
+    srtpPatches = lib.optional early ./libsrtp-openbsd35-inttypes.patch;
+    # OpenBSD 7.x dropped struct route_in6 from the userland headers; the
+    # legacy SDKs still provide it, so only the modern targets take the patch.
+    sctpPatches = lib.optional (!legacy) ./usrsctp-openbsd-route-in6.patch;
+    # Keep the C++ runtime consistent with the variant's application flags and
+    # the RTC link line: legacy/early use the built libstdc++, non-legacy the
+    # SDK's libc++ (forcing libstdc++ here pulls the unbuilt 7.9 runtime).
+    cxxFlags = "${cflags} ${if legacy then "-stdlib=libstdc++" else "-stdlib=libc++"} -pthread${lib.optionalString early " -fno-use-cxa-atexit -fno-builtin-pow -fno-builtin-powf -include ${./bsd-legacy-cxx.h}"}${lib.optionalString legacy " -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}"}";
+    cxxLibraries = "${ldflags}${lib.optionalString legacy " -L${cxx}/lib"}";
   };
   jansson = (cmakeLibrary sourcePkgs.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF" "-DJANSSON_BUILD_DOCS=OFF"
@@ -215,6 +223,8 @@ let
     postPatch = ''
       perl scripts/config.pl set MBEDTLS_THREADING_C
       perl scripts/config.pl set MBEDTLS_THREADING_PTHREAD
+      # libdatachannel uses the DTLS-SRTP API; enable it (PROTO_DTLS is on).
+      perl scripts/config.pl set MBEDTLS_SSL_DTLS_SRTP
       substituteInPlace library/net_sockets.c \
         --replace-fail 'fd >= FD_SETSIZE' '(unsigned int) fd >= FD_SETSIZE'
     '' + lib.optionalString early ''

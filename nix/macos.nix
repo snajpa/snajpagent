@@ -144,6 +144,8 @@ let
     postPatch = ''
       perl scripts/config.pl set MBEDTLS_THREADING_C
       perl scripts/config.pl set MBEDTLS_THREADING_PTHREAD
+      # libdatachannel uses the DTLS-SRTP API; enable it (PROTO_DTLS is on).
+      perl scripts/config.pl set MBEDTLS_SSL_DTLS_SRTP
     '';
   });
   zlib = cmakeLibrary sourcePkgs.zlib [
