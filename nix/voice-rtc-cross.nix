@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 { pkgs, sourcePkgs, cmakeLibrary, tls, cxxFlags ? null, cxxLibraries ? null,
-  rtcFlags ? [], srtpPatches ? [], sctpPatches ? [] }:
+  rtcFlags ? [], rtcPatches ? [], srtpPatches ? [], sctpPatches ? [] }:
 let
   source = import ./voice-rtc.nix { inherit pkgs; target = sourcePkgs; };
   juice = cmakeLibrary source.juice [ "-DNO_TESTS=ON" "-DNO_SERVER=ON" ] [];
@@ -24,6 +24,7 @@ let
     "-DUSE_NICE=OFF" "-DUSE_MBEDTLS=ON" "-DPREFER_SYSTEM_LIB=ON" "-DUSE_SYSTEM_JUICE=ON"
     "-DNO_WEBSOCKET=ON" "-DNO_EXAMPLES=ON" "-DNO_TESTS=ON"
   ] ++ rtcFlags) [ juice srtp sctp plog tls ]).overrideAttrs (old: {
+    patches = (old.patches or []) ++ rtcPatches;
     preConfigure = old.preConfigure + pkgs.lib.optionalString (cxxFlags != null) ''
       cmakeFlagsArray+=("-DCMAKE_CXX_FLAGS=${cxxFlags}" "-DCMAKE_EXE_LINKER_FLAGS=${cxxLibraries}")
     '';
