@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Add `/state`: session state including the goal and its actions. `/goal` is
+  an alias for `/state goal`; all previous `/goal` forms work unchanged
+  through the alias.
 - Omit `tool_choice` from the compaction summary request. The request declares no
   tools, so the choice was inert, but a provider that accepts only `"auto"` (Meta
   Model API) rejected `"none"` with HTTP 400 and failed the whole turn, including

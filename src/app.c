@@ -156,12 +156,14 @@ static const struct snag_term_command commands[] = {
     {"/model PROVIDER/MODEL/EFFORT [save|s]", "select explicit provider/model/effort"},
     {"/config", "edit/reload configuration at a safe boundary"},
     {"/effort [LEVEL]", "show/set provider-defined effort (default means medium)"},
-    {"/goal [status|help]", "show current goal or this usage"},
-    {"/goal [set] TEXT", "start/reword goal; set accepts reserved first words"},
-    {"/goal \"TEXT\"", "start/reword with quoted wording"},
-    {"/goal pause|resume", "stop/restart automatic continuation"},
-    {"/goal lock|unlock", "prevent/allow model rewording"},
-    {"/goal complete|cancel|clear", "end goal; clear=cancel; current turn finishes"},
+    {"/state", "session state including goal and its actions"},
+    {"/state goal [status|help]", "show goal section or this usage"},
+    {"/state goal [set] TEXT", "start/reword goal; set accepts reserved first words"},
+    {"/state goal \"TEXT\"", "start/reword with quoted wording"},
+    {"/state goal pause|resume", "stop/restart automatic continuation"},
+    {"/state goal lock|unlock", "prevent/allow model rewording"},
+    {"/state goal complete|cancel|clear", "end goal; clear=cancel; current turn finishes"},
+    {"/goal ...", "alias for /state goal ..."},
     {"/ro QUERY", "one read-only turn; queued during active work"},
     {"/verbose [0..6]", "show/set verbosity for this process"},
     {"/queue [TEXT]", "list/add future turns (alias /q)"}, {"/queue clear|c", "remove all queued turns"},
@@ -1952,6 +1954,39 @@ apply_controls(struct app_state *app)
     return result;
 }
 
+static const char goal_actions_text[] =
+    "goal actions: status, set TEXT, pause, resume, lock, unlock, complete, cancel, clear, help";
+
+static int
+state_command(struct app_state *app, const char *line, bool active)
+{
+    const char *argument = line + 6u;
+
+    while (isspace((unsigned char)*argument)) ++argument;
+    if (!*argument) {
+        if (render_status(app) < 0) return -1;
+        if (snag_app_goal_command(app, "/goal", active) < 0) return -1;
+        return snag_ui_text(&app->ui, SNAG_UI_HOST, goal_actions_text);
+    }
+    if (strncmp(argument, "goal", 4u) == 0 && (!argument[4] || isspace((unsigned char)argument[4]))) {
+        if (!argument[4]) {
+            if (snag_app_goal_command(app, "/goal", active) < 0) return -1;
+            return snag_ui_text(&app->ui, SNAG_UI_HOST, goal_actions_text);
+        }
+        size_t rest = strlen(argument + 4u);
+        char *mapped = malloc(5u + rest + 1u);
+        int rc;
+
+        if (!mapped) return snag_errno(ENOMEM);
+        memcpy(mapped, "/goal", 5u);
+        memcpy(mapped + 5u, argument + 4u, rest + 1u);
+        rc = snag_app_goal_command(app, mapped, active);
+        free(mapped);
+        return rc;
+    }
+    return app_error(app, "unknown /state section; use /state, /state goal, or /help");
+}
+
 static int
 handle_common_command(struct app_state *app, const char *line, bool active, bool *handled, bool *prompt_ready)
 {
@@ -2041,9 +2076,22 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         return change_effort(app, NULL, active);
     if (strncmp(line, "/effort ", 8u) == 0)
         return change_effort(app, line + 8u, active);
+    if (strcmp(line, "/state") == 0 || strncmp(line, "/state ", 7u) == 0)
+        return state_command(app, line, active);
     if (strncmp(line, "/goal", 5u) == 0 &&
-        (!line[5] || isspace((unsigned char)line[5])))
-        return snag_app_goal_command(app, line, active);
+        (!line[5] || isspace((unsigned char)line[5]))) {
+        /* /goal is an alias for /state goal. */
+        size_t rest = strlen(line + 5u);
+        char *mapped = malloc(11u + rest + 1u);
+        int rc;
+
+        if (!mapped) return snag_errno(ENOMEM);
+        memcpy(mapped, "/state goal", 11u);
+        memcpy(mapped + 11u, line + 5u, rest + 1u);
+        rc = state_command(app, mapped, active);
+        free(mapped);
+        return rc;
+    }
     if (snag_string_in(line, "/names /topic")) {
         int rc;
 

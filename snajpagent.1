@@ -422,11 +422,11 @@ snajpagent to keep taking turns toward an explicit result:
 .PP
 It continues until complete, paused, cancelled or blocked.  Waiting operator
 prompts run before the next automatic goal turn.
-.B /goal status
+.B /state goal status
 shows its state and any blocker.
-.B /goal pause
+.B /state goal pause
 pauses automatic continuation at a turn boundary;
-.B /goal resume
+.B /state goal resume
 starts it again.  Pausing does not kill a command already running.
 Ordinary errors retain the goal and recover automatically.  Policy stops and
 provider refusals pause automatic goal continuation.
@@ -441,8 +441,13 @@ or reopen the newest for the current workspace with
 .PP
 Exit is not goal pause.  No work runs after exit, but a saved active goal
 continues when resumed.  Use
-.B /goal pause
+.B /state goal pause
 first if you want it to remain paused.  Other goal states remain unchanged.
+.B /state
+shows session state including the goal and its actions;
+.B /goal
+is an alias for
+.BR /state " goal" .
 Armed waiting prompts continue after recovered active work.  Paused prompts
 need
 .B /next
@@ -1185,12 +1190,24 @@ Show concise syntax, aliases, defaults and essential keys for all commands.
 Square brackets mark optional parts, a vertical bar separates alternatives,
 and uppercase words are values to supply. Required goal and queue subcommands
 are listed explicitly. Long help lines wrap at word boundaries.
-.B /goal help
+.B /state goal help
 shows the same goal forms separately.
+.B /goal
+is an alias for
+.BR /state " goal" .
 .TP
 .B /status
 Show session, selection, queue, verbosity, capacity, token accounting, requested
 network roles and actual connection state.
+.TP
+.B /state
+Show session state including the goal and its actions: the
+.B /status
+report, the durable goal with status and blocker, and the available goal
+actions.
+.B /goal
+is an alias for
+.BR /state " goal" .
 .TP
 .BR /history " [N]"
 Show the last N turns, oldest first, including unfinished, failed and interrupted work.  Default: 1.  Available during
@@ -1511,46 +1528,50 @@ composer leaves its active goal running; Ctrl-C on an empty composer interrupts
 the turn and pauses that goal.
 Goal controls accept whitespace around the command word.  Extra wording after a
 control is rejected; use quotes or
-.B /goal set
+.B /state goal set
 to start goal text with a command word.
 .TP
-.BR /goal , " /goal status"
-Show the durable goal.  Queued prompts run before automatic goal continuation,
+.BR /state " goal, " /state " goal status"
+Show the durable goal with its actions.  Queued prompts run before automatic
+goal continuation,
 without fresh goal reminders throughout those turns.  A retained unarmed queue
 cannot be bypassed: use
 .B /next
 or explicit goal start/resume to arm it.  An open queue editor prevents draining.
+.B /goal
+is an alias for
+.BR /state " goal" .
 .TP
-.BI /goal " text"
+.BI /state " goal text"
 Start a goal, or reword the unfinished goal.  Quote the text or use
-.B /goal set
+.B /state goal set
 when its first word is a goal command.
 .TP
-.BI /goal " set text"
+.BI /state " goal set text"
 Explicitly start or reword a goal.
 .TP
-.B /goal pause
+.B /state goal pause
 Pause automatic continuation at the current turn boundary.
 .TP
-.B /goal resume
+.B /state goal resume
 Resume a paused or blocked goal.
 .TP
-.BR /goal " lock|unlock"
+.BR /state " goal lock|unlock"
 Freeze the goal's objective against model changes, or release it.  A locked
 goal refuses the model's rewording, blocking and cancelling, in the tool before
 dispatch and again in the store wherever the event names the model as actor,
 while finishing or resuming a locked goal stays allowed, so it can still reach
 a successful end; the operator's own commands remain available.
 .TP
-.B /goal complete
+.B /state goal complete
 Mark the current goal successfully completed.
 .TP
-.BR /goal " clear|cancel"
+.BR /state " goal clear|cancel"
 Cancel the current goal and stop automatic continuation.  An in-progress turn
 finishes normally; use Ctrl-C to interrupt it.  The cancelled goal remains
 visible in status and history.  A new goal can be started afterwards.
 .TP
-.B /goal help
+.B /state goal help
 Show the complete goal grammar.
 .SS Queue
 .TP
@@ -3491,9 +3512,9 @@ cannot be skipped by automatic goal continuation.
 .B A goal continued when I resumed.
 Resume preserves its saved state, and foreground exit does not pause an active
 goal.  Use
-.B /goal pause
+.B /state goal pause
 when you want automatic continuation to stay paused, then exit.  Use
-.B /goal status
+.B /state goal status
 to see the saved wording, status and any blocker.  No background daemon runs
 after the process exits.
 .TP
