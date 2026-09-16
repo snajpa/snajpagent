@@ -1,0 +1,132 @@
+# SPDX-License-Identifier: MPL-2.0
+# libjuice 1.7.0 Windows 0x0502 (WS2003-class) poll() compatibility:
+# - The Windows SDK gates `struct pollfd`, the POLL* constants and `WSAPoll`
+#   behind _WIN32_WINNT >= 0x0600; mirror the SDK definitions exactly
+#   (winsock2.h values/layout) and provide a select()-based poll().
+# - No WSAPoll import: a static import resolves at load time and is not
+#   available on WS2003-class runtimes.
+# - Arrays larger than FD_SETSIZE (64) -- the bundled server polls one
+#   descriptor per allocation -- are scanned in chunks with a bounded time
+#   slice per chunk; descriptors equal to INVALID_SOCKET are ignored.
+# - Timeouts are milliseconds (poll() semantics); readiness maps to
+#   POLLIN/POLLOUT; the select() exception set is reported as POLLERR
+#   (plus POLLHUP when SO_ERROR is set).
+--- a/src/socket.h
++++ b/src/socket.h
+@@ -43,9 +43,115 @@
+ #define IP_DONTFRAG IP_DONTFRAGMENT
+ #define HOST_NAME_MAX 256
+ 
+-#define poll WSAPoll
+ typedef ULONG nfds_t;
+ 
++#if (_WIN32_WINNT >= 0x0600)
++#define poll WSAPoll
++#else
++/* _WIN32_WINNT < 0x0600 (WS2003-class): the Windows SDK gates `struct pollfd`,
++   the POLL* constants and `WSAPoll` behind 0x0600. Mirror the SDK definitions
++   (winsock2.h values/layout) and provide a select()-based poll(). */
++typedef struct pollfd {
++  SOCKET fd;
++  short  events;
++  short  revents;
++} WSAPOLLFD, *PWSAPOLLFD, *LPWSAPOLLFD;
++
++#define POLLRDNORM 0x0100
++#define POLLRDBAND 0x0200
++#define POLLIN    (POLLRDNORM | POLLRDBAND)
++#define POLLPRI    0x0400
++
++#define POLLWRNORM 0x0010
++#define POLLOUT   (POLLWRNORM)
++#define POLLWRBAND 0x0020
++
++#define POLLERR    0x0001
++#define POLLHUP    0x0002
++#define POLLNVAL   0x0004
++
++#define JUICE_POLL_CHUNK_MS 10
++
++static inline int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
++	int infinite = (timeout < 0);
++	DWORD start = GetTickCount();
++	nfds_t i, begin;
++	int total = 0;
++
++	for (i = 0; i < nfds; ++i)
++		fds[i].revents = 0;
++
++	for (;;) {
++		for (begin = 0; begin < nfds; begin += FD_SETSIZE) {
++			fd_set rd, wr, ex;
++			struct timeval tv, *ptv;
++			nfds_t end = begin + FD_SETSIZE, j;
++			int ret, slice, any = 0, ready = 0;
++
++			if (end > nfds)
++				end = nfds;
++			FD_ZERO(&rd);
++			FD_ZERO(&wr);
++			FD_ZERO(&ex);
++			for (j = begin; j < end; ++j) {
++				struct pollfd *p = &fds[j];
++				if (p->fd == INVALID_SOCKET)
++					continue; /* ignored descriptor, as in poll() */
++				any = 1;
++				if (p->events & (POLLIN | POLLRDNORM | POLLRDBAND))
++					FD_SET(p->fd, &rd);
++				if (p->events & (POLLOUT | POLLWRNORM | POLLWRBAND))
++					FD_SET(p->fd, &wr);
++				FD_SET(p->fd, &ex);
++			}
++			if (!any)
++				continue;
++			if (total > 0) {
++				slice = 0; /* collect remaining readiness without waiting */
++			} else if (nfds > FD_SETSIZE) {
++				slice = infinite ? JUICE_POLL_CHUNK_MS
++				                 : (int)((DWORD)start + (DWORD)timeout - GetTickCount());
++				if (slice > JUICE_POLL_CHUNK_MS)
++					slice = JUICE_POLL_CHUNK_MS;
++			} else {
++				slice = timeout; /* exact poll() semantics for a single chunk */
++			}
++			if (slice < 0)
++				slice = 0;
++			tv.tv_sec = slice / 1000;
++			tv.tv_usec = (slice % 1000) * 1000;
++			ptv = (infinite && nfds <= FD_SETSIZE) ? NULL : &tv;
++			ret = select(0, &rd, &wr, &ex, ptv);
++			if (ret == SOCKET_ERROR)
++				return -1;
++			for (j = begin; j < end; ++j) {
++				struct pollfd *p = &fds[j];
++				if (p->fd == INVALID_SOCKET)
++					continue;
++				if (FD_ISSET(p->fd, &rd))
++					p->revents |= POLLIN;
++				if (FD_ISSET(p->fd, &wr))
++					p->revents |= POLLOUT;
++				if (FD_ISSET(p->fd, &ex)) {
++					int err = 0, len = (int)sizeof(err);
++					getsockopt(p->fd, SOL_SOCKET, SO_ERROR, (char *)&err, &len);
++					p->revents |= POLLERR;
++					if (err)
++						p->revents |= POLLHUP;
++				}
++				if (p->revents)
++					++ready;
++			}
++			total += ready;
++		}
++		if (total > 0)
++			return total;
++		if (!infinite && (int)((DWORD)start + (DWORD)timeout - GetTickCount()) <= 0)
++			return 0;
++	}
++}
++#endif
++
+ #define SEADDRINUSE WSAEADDRINUSE
+ #define SEINTR WSAEINTR
+ #define SEAGAIN WSAEWOULDBLOCK
