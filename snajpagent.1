@@ -3151,6 +3151,11 @@ null. The schedule is durable across resume. When due, the foreground process
 records the firing and admits one fresh ordinary turn containing the stored text.
 That turn does not resume a paused or blocked goal. Timer calls remain subject
 to the current turn's policy and cannot authorize a refused side effect.
+.SS Steering
+.B defer_steering
+takes no arguments. The model calls it to switch steering off for the
+remainder of the turn. Steering messages queue and run after the turn ends
+instead of interrupting. New turns start with steers on.
 .SS Model IRC controls
 .B irc_connect
 accepts endpoint and adds an outgoing endpoint using the current IRC identity

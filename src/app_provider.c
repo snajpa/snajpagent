@@ -369,6 +369,14 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
 
     if (call && call->name && strcmp(call->name, "timer") == 0)
         return snag_app_timer_tool(app, call, result, error, error_size);
+    if (call && call->name && strcmp(call->name, "defer_steering") == 0) {
+        if (!call->arguments || !snag_json_exact_keys(call->arguments, ""))
+            return (*result = snag_tool_result_terminal(false,
+                "defer_steering takes no arguments: {}.")) ? 0 : -1;
+        app->steering_deferred = true;
+        return (*result = snag_tool_result_terminal(true,
+            "steering deferred for the remainder of the turn")) ? 0 : -1;
+    }
     if (call && call->name && (snag_string_in(call->name, "create_goal update_goal")))
         return snag_app_goal_tool(app, call, result, error, error_size);
     if (call && call->name && snag_string_in(call->name, "irc_connect irc_host irc_disconnect")) {
