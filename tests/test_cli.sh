@@ -795,6 +795,19 @@ assert [turn["effort"] for turn in turns] == ["medium", "low", "low"]
 assert len([event for event in events if event["type"] == "model_selection_changed"]) == 1
 PY
 
+# Resume accepts options after the session id; bare follow-up still requires --.
+resume_opt_state="$root/resume-opt-state"
+mkdir -m 700 "$resume_opt_state"
+$bin --dotdir "$resume_opt_state" -e -- ping >/dev/null 2>"$root/resume-opt-seed.err"
+resume_opt_id=$(find "$resume_opt_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+out=$($bin --dotdir "$resume_opt_state" -e --resume "$resume_opt_id" --effort low -- ping 2>"$root/resume-opt.err")
+[ "$out" = pong ]
+expect_exit 2 $bin --dotdir "$resume_opt_state" -e --resume "$resume_opt_id" ping >"$root/resume-opt-bare.out" 2>"$root/resume-opt-bare.err"
+[ ! -s "$root/resume-opt-bare.out" ]
+grep -q 'resume follow-up must follow --' "$root/resume-opt-bare.err"
+out=$($bin --dotdir "$resume_opt_state" -e --resume "$resume_opt_id" -C "$root/work2" -- ping 2>"$root/resume-opt-relocate.err")
+[ "$out" = pong ]
+
 # Automatic compaction is threshold-gated and durable.
 auto_state="$root/auto-compact-state"
 mkdir -m 700 "$auto_state"
