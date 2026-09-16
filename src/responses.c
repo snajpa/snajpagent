@@ -812,6 +812,10 @@ snag_responses_sse_record(void *opaque, const struct snag_sse_record *record)
     /* OpenRouter appends an SSE sentinel after the Responses terminal event. */
     if (stream->terminal && !record->event_len && record->data_len == 6u &&
         memcmp(record->data, "[DONE]", 6u) == 0) return 0;
+    /* Subscription-billed responses append a usage report after completion;
+     * it carries window percentages only, no token counts, so ignore it. */
+    if (stream->terminal && record->event_len == sizeof("response.subscription_usage") - 1u &&
+        memcmp(record->event, "response.subscription_usage", record->event_len) == 0) return 0;
     if (stream->terminal) {
         record_diagnostic(stream, record, NULL, "not-parsed");
         return stream_fail(stream, EPROTO, "Responses event follows terminal completion");

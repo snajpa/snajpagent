@@ -390,6 +390,12 @@ snag_provider_auth_post(const char *issuer, const char *path, const char *type, 
             snag_errorf(error, error_size, "authentication server returned an invalid response");
             goto out;
         }
+    } else if (*status >= 400 && *status < 500) {
+        /* Device-grant outcomes arrive as client errors with a machine-readable body. */
+        json_t *details = snag_json_load_strict(output.data, output.len, (96u * 1024u),
+                                                parse_error, sizeof(parse_error));
+        if (json_is_object(details)) *response = details;
+        else json_decref(details);
     }
     rc = 0;
 out:
@@ -1192,7 +1198,8 @@ provider_request_perform(struct provider_ctx *ctx, const char *failure, char *er
     CURLcode code = perform_with_retry(ctx->curl, ctx, error, error_size, retry_out);
 
     if (code == CURLE_OK && ctx->http_status == 401 &&
-        ctx->provider->auth == SNAG_AUTH_CHATGPT && ctx->credential.root_fd >= 0 &&
+        (ctx->provider->auth == SNAG_AUTH_CHATGPT ||
+         ctx->provider->auth == SNAG_AUTH_META) && ctx->credential.root_fd >= 0 &&
         !ctx->semantic_body_seen) {
         struct snag_credential refreshed;
         int rc = snag_auth_read(ctx->credential.root_fd, ctx->provider, true,
