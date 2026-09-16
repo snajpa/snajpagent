@@ -15,7 +15,8 @@ enum snag_cli_auth_command {
 
 struct snag_cli {
     enum snag_cli_auth_command auth_command;
-    bool device_auth;
+    bool openai_device_auth;
+    bool meta_device_auth;
     bool with_api_key;
     const char *auth_provider;
     bool resume;

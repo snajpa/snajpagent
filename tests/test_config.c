@@ -259,6 +259,27 @@ test_auth_settings(const char *path)
     assert(strcmp(config.model, "chosen/model") == 0);
     snag_config_free(&config);
 
+    /* Meta subscription accepts the versioned and bare API bases. */
+    static const char meta_bad[] = "[provider default]\nauth=meta\nbase_url=https://other.test\n";
+    static const char meta_bare[] = "[provider default]\nauth=meta\nbase_url=https://api.meta.ai\n";
+    write_bytes(path, meta_bad, sizeof(meta_bad) - 1u);
+    expect_invalid(path);
+    write_bytes(path, meta_bare, sizeof(meta_bare) - 1u);
+    load_config(&config, path, NULL);
+    assert(config.provider_count == 1u);
+    assert(config.providers[0].auth == SNAG_AUTH_META);
+    snag_config_free(&config);
+    provider.auth = SNAG_AUTH_META;
+    strcpy(provider.base_url, SNAG_META_BASE);
+    assert(snag_config_validate_provider(&provider, error, sizeof(error)) == 0);
+    strcpy(provider.base_url, SNAG_META_BASE_BARE);
+    assert(snag_config_validate_provider(&provider, error, sizeof(error)) == 0);
+    assert(snag_config_save_provider(path, false, &provider, NULL, NULL, error, sizeof(error)) == 0);
+    load_config(&config, path, NULL);
+    assert(config.providers[0].auth == SNAG_AUTH_META);
+    assert(strcmp(config.providers[0].base_url, SNAG_META_BASE_BARE) == 0);
+    snag_config_free(&config);
+
     /* Model edits preserve original bytes, including comments and line endings. */
     static const struct { const char *input, *output; } edits[] = {
         {"[agent]\r\n# model = ignored\r\n model \t= old\r\n",

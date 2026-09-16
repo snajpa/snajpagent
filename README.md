@@ -415,7 +415,7 @@ native pthread ABIs; see the [platform notes](DEPENDENCIES.md). Plain `make`
 builds only the host platform.
 
 Without configuration or credentials, the first interactive launch offers
-ChatGPT/Codex subscription, OpenRouter, OpenAI or custom-provider setup;
+ChatGPT/Codex or Meta subscription, OpenRouter, OpenAI or custom-provider setup;
 authenticate and choose a [supported model](#supported-providers). `snajpagent login status`
 reports local credential sources without contacting a provider, and the manual
 explains login methods and logout.
@@ -470,7 +470,7 @@ implementation. GPL-2.0-only; see [COPYING](COPYING).
 
 ## Supported providers
 
-Supported connections: OpenAI, ChatGPT/Codex subscription, OpenRouter, and custom
+Supported connections: OpenAI, ChatGPT/Codex and Meta subscriptions, OpenRouter, and custom
 providers with an OpenAI-compatible Responses API.
 
 - **OpenAI GPT-5+:** recommended; the only model family thoroughly tested with
