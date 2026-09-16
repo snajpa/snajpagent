@@ -346,6 +346,30 @@ only_resume "$root/err"
 $bin -l >"$root/list" 2>"$root/err"
 grep -q "^$(printf %.8s "$id").*2" "$root/list"
 
+# The list marks sessions held open by a live process.
+live_state="$root/live-state"
+mkdir -m 700 "$live_state"
+$bin --dotdir "$live_state" -e -- ping >/dev/null 2>"$root/live-seed.err"
+live_id=$(find "$live_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+$bin --dotdir "$live_state" -e --resume "$live_id" -- one_shot_signal_wait \
+    >"$root/live-hold.out" 2>"$root/live-hold.err" &
+live_pid=$!
+attempt=0
+while ! grep -q 'waiting for shutdown' "$root/live-hold.err"; do
+    kill -0 "$live_pid"
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt 200 ]
+    sleep 0.01
+done
+$bin --dotdir "$live_state" -l >"$root/live-list" 2>"$root/live-list.err"
+grep -q "^$(printf %.8s "$live_id").*live" "$root/live-list"
+kill -s TERM "$live_pid"
+set +e
+wait "$live_pid"
+set -e
+$bin --dotdir "$live_state" -l >"$root/live-list2" 2>"$root/live-list2.err"
+grep -q "^$(printf %.8s "$live_id").*idle" "$root/live-list2"
+
 expect_exit 4 $bin -e -- empty >"$root/empty.out" 2>"$root/empty.err"
 [ ! -s "$root/empty.out" ]
 grep -q 'provider completed without a final answer' "$root/empty.err"
@@ -1176,6 +1200,7 @@ TERM=xterm "$(dirname "$bin")/pty_interactive.py" "$bin" "$root/work"
 TERM=dumb "$(dirname "$bin")/pty_interactive.py" "$bin" "$root/work"
 TERM=xterm python3 "$(dirname "$bin")/pty_terminal_matrix.py" "$bin" "$root/work"
 TERM=xterm "$(dirname "$bin")/pty_active.py" "$bin" "$root/work"
+TERM=xterm "$(dirname "$bin")/pty_wait_notices.py" "$bin" "$root/work"
 # Give PTY child teardown a short settle window before the EXIT cleanup removes
 # the shared temporary state/workspace tree.
 sleep 0.1

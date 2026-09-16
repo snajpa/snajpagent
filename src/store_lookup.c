@@ -212,6 +212,23 @@ snag_session_open_last(struct snag_store *store, struct snag_session *session,
     return open_full_id(store, session, best, error, error_size);
 }
 
+static bool
+session_live(int dir_fd)
+{
+    int fd;
+    bool live;
+    int saved_errno;
+
+    if (dir_fd < 0) return false;
+    fd = snag_create_private_at(dir_fd, "lock", false);
+    if (fd < 0) return false;
+    live = snag_lock_file(fd, false) < 0 && (errno == EAGAIN || errno == EACCES);
+    saved_errno = errno;
+    (void)close(fd);
+    errno = saved_errno;
+    return live;
+}
+
 int
 snag_store_list(struct snag_store *store, const char *workspace, bool all,
                 bool include_archived, snag_store_emit_fn emit, void *opaque, char *error, size_t error_size)
@@ -226,8 +243,10 @@ snag_store_list(struct snag_store *store, const char *workspace, bool all,
         struct snag_session snapshot;
         if (matching_snapshot(store, &snapshot, entry, workspace, all, include_archived) < 0) continue;
         struct snag_buf row = {.max = 8192u};
-        if (snag_buf_printf(&row, "%.8s\t%s\t%llu\t%s\t%s%s%s\n", entry, snapshot.default_model,
+        bool live = session_live(snapshot.dir_fd);
+        if (snag_buf_printf(&row, "%.8s\t%s\t%llu\t%s\t%s\t%s%s%s\n", entry, snapshot.default_model,
                            (unsigned long long)snapshot.turn_count, snapshot.archived ? "archived" : "active",
+                           live ? "live" : "idle",
                            snapshot.first_user ? snapshot.first_user : "",
                            all ? "\t" : "", all ? snapshot.workspace : "") < 0 ||
             emit(opaque, (const char *)row.data, row.len) < 0) {
