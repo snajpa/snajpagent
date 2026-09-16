@@ -772,6 +772,18 @@ snag_irc_send_route(struct snag_irc *irc, const struct snag_irc_route *route,
         for (size_t j = 0u; irc && j < irc->owner_count; ++j)
             if (irc->owners[j]->target.id == route->targets[i].id &&
                 irc->owners[j]->target.revision == route->targets[i].revision) owner = irc->owners[j];
+        if (!owner && irc)
+            for (size_t j = 0u; j < irc->owner_count; ++j)
+                if (irc->owners[j]->target.id == route->targets[i].id &&
+                    route->targets[i].revision < irc->owners[j]->target.revision) {
+                    /* A number names the endpoint, not one published revision
+                     * of it: a stored route gone stale across a reconnect still
+                     * reaches the same destination. A claimed future revision
+                     * still fails below, keeping the wrong-revision guard. */
+                    request.revision = irc->owners[j]->target.revision;
+                    owner = irc->owners[j];
+                    break;
+                }
         if (owner) rc = request_owner(owner, &request);
         if (rc == 0) ++accepted;
         if (rc != 0) {
