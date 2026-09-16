@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Omit `tool_choice` from the compaction summary request. The request declares no
+  tools, so the choice was inert, but a provider that accepts only `"auto"` (Meta
+  Model API) rejected `"none"` with HTTP 400 and failed the whole turn, including
+  its derived input-token count request. Tool-less requests never send a tool
+  choice now, and the terminal suite fails if one does.
+
 - Finish all requests and reap the local server in the session-header transport
   test, allowing test runners to close their output pipes after completion.
 
