@@ -438,12 +438,12 @@ in {
           "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"
           "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale | sed -E 's/-l?(-l?)?pthread//g')"
           "RTC_CFLAGS=${voiceRtc.cflags}"
-          "RTC_LIBS=${voiceRtc.libs} ${if legacy then "${cxx}/lib/libstdc++.a -Wl,-Bdynamic" else "-Wl,-Bdynamic -lstdc++"} -lm -lgcc_s -Wl,-Bstatic"
+          "RTC_LIBS=${voiceRtc.libs} ${cxx}/lib/libstdc++.a -Wl,-Bdynamic${lib.optionalString (!legacy) " -lstdc++"} -lm -lgcc_s -Wl,-Bstatic"
           'MINIAUDIO_CFLAGS=-isystem ${miniaudio}'
           'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'
           'CXXFLAGS=-std=c++20 ${cflags} ${if legacy then "-nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}" else "-stdlib=libstdc++"}${lib.optionalString early " -include ${./bsd-legacy-cxx.h}"} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           "PDF_CFLAGS=$(pkg-config --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')"
-          "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') ${if legacy then "${cxx}/lib/libstdc++.a -Wl,-Bdynamic" else "-Wl,-Bdynamic -lstdc++"} -lm -lgcc_s -Wl,-Bstatic"
+          "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') ${cxx}/lib/libstdc++.a -Wl,-Bdynamic${lib.optionalString (!legacy) " -lstdc++"} -lm -lgcc_s -Wl,-Bstatic"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
           "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil -Wl,-Bdynamic -lpthread${lib.optionalString legacy " ${legacyRt}/lib/liblegacyrt.a"}"
         )

@@ -65,11 +65,15 @@ let
     });
   voiceRtc = import ./voice-rtc-cross.nix {
     inherit pkgs cmakeLibrary tls; sourcePkgs = windows;
+    # mingw-aarch64 has no RTCD arm; presume NEON (mandatory on aarch64).
+    opusFlags = pkgs.lib.optional windows.stdenv.hostPlatform.isAarch64 "-DOPUS_MAY_HAVE_NEON=OFF";
+    # The presumed path needs the may-have prototypes/includes; RTCD stays out.
+    opusCflags = pkgs.lib.optionalString windows.stdenv.hostPlatform.isAarch64 "-DOPUS_ARM_MAY_HAVE_NEON -DOPUS_ARM_MAY_HAVE_NEON_INTR";
     # usrsctp.h's _WIN32 fallback (no _MSC_VER) defines uint{8,16,32,64}_t
     # macros; have it include "stdint.h" instead so libc++ sees real types.
     # The escaped quotes survive CMake's cache and the ninja build lines that
     # /bin/sh runs, so the compiler sees -DSCTP_STDINT_INCLUDE="stdint.h".
-    rtcFlags = [ "-DCMAKE_CXX_FLAGS=-DSCTP_STDINT_INCLUDE=\\\"stdint.h\\\"" ];
+    rtcFlags = [ "-DCMAKE_CXX_FLAGS=${pkgs.lib.optionalString windows.stdenv.hostPlatform.isAarch64 "-DJUICE_STATIC "}-DSCTP_STDINT_INCLUDE=\\\"stdint.h\\\"" ];
   };
   jansson = cmakeLibrary windows.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF"
