@@ -23,108 +23,43 @@ SECRET = "irc-ui-secret"
 
 DENY_RULES = (
     "[rule deny-exec]\n"
-    "chain = out\n"
-    'match = {"/kind":"^tool_call$","/tool":"^exec_command$"}\n'
-    "action = reject\n"
-    'text = "Blocked %{/tool}: %{/value/command} (100%%)"\n'
+    'match = {"/tool":"^exec_command$"}\n'
+    "action = deny\n"
+    'message = "Blocked: exec_command calls are disabled here."\n'
 )
 ARG_RULES = (
     "[rule deny-rm]\n"
-    "chain = out\n"
     'match = {"/tool":"^exec_command$","/value/command":"^rm "}\n'
-    "action = reject\n"
-    'text = "rm is disabled here."\n'
+    "action = deny\n"
+    'message = "rm is disabled here."\n'
 )
 ALLOWLIST_RULES = (
     "[rule allow-exec]\n"
-    "chain = out\n"
     'match = {"/tool":"^exec_command$"}\n'
-    "action = accept\n"
+    "action = allow\n"
     "[rule deny-everything-else]\n"
-    "chain = out\n"
-    "action = reject\n"
-    'text = "Only the audited command tool is permitted."\n'
+    "action = deny\n"
+    'message = "Only the audited command tool is permitted."\n'
 )
-PASS_THEN_DENY_RULES = (
-    "[rule observe]\n"
-    "chain = out\n"
-    'match = {"/kind":"^tool_call$"}\n'
-    "action = pass\n"
-    "[rule deny-exec]\n"
-    "chain = out\n"
-    'match = {"/tool":"^exec_command$"}\n'
-    "action = reject\n"
-    'text = "pass does not exempt a call."\n'
-)
-JUMP_RULES = (
-    "[rule enter-policy]\n"
-    "chain = out\n"
-    'match = {"/kind":"^tool_call$"}\n'
-    "action = jump\n"
-    "target = host-policy\n"
-    "[rule no-shell]\n"
-    "chain = host-policy\n"
-    'match = {"/tool":"^exec_command$"}\n'
-    "action = reject\n"
-    'text = "Reusable policy denied %{/tool}."\n'
-)
-LOG_RULES = (
+AUDIT_RULES = (
     "[rule audit]\n"
-    "chain = out\n"
-    'match = {"/kind":"^tool_call$"}\n'
-    "action = pass\n"
-    'log = "tool=%{/tool} args=%{/text}"\n'
+    "action = allow\n"
 )
 STICKY_RULES = (
     "[rule deny-exec]\n"
-    "chain = out\n"
     'match = {"/tool":"^exec_command$"}\n'
-    "action = reject\n"
-    'text = "denied %{/tool}"\n'
+    "action = deny\n"
+    'message = "denied exec_command"\n'
     "[rule audit]\n"
-    "chain = out\n"
-    'match = {"/kind":"^tool_call$"}\n'
-    "action = pass\n"
-    'log = "audit %{/tool}"\n'
+    "action = allow\n"
 )
-THRESHOLD_RULES = (
-    "[rule big-budget]\n"
-    "chain = out\n"
-    'at_least = {"/value/max_output_tokens":1000000}\n'
-    "action = reject\n"
-    'text = "Requested output budget exceeds policy."\n'
-)
-TRANSFORM_RULES = (
-    "[rule rewrite]\n"
-    "chain = out\n"
-    'match = {"/tool":"^exec_command$","/value/command":"^printf x"}\n'
-    "action = pass\n"
-    'value = {"command":"printf y >> marker"}\n'
-)
-INSERT_RULES = (
-    "[rule warn]\n"
-    "chain = out\n"
+ORDER_RULES = (
+    "[rule deny-all]\n"
+    "action = deny\n"
+    'message = "deny-all matched first."\n'
+    "[rule allow-exec]\n"
     'match = {"/tool":"^exec_command$"}\n'
-    "action = insert\n"
-    "to = model\n"
-    'text = "Policy: prefer read_file before running commands."\n'
-)
-CONFIRM_RULES = (
-    "[rule ask]\n"
-    "chain = out\n"
-    'match = {"/tool":"^exec_command$"}\n'
-    "action = confirm\n"
-    'text = "Run %{/value/command}?"\n'
-)
-RETURN_RULES = (
-    "[rule stop-exec]\n"
-    "chain = out\n"
-    'match = {"/tool":"^exec_command$"}\n'
-    "action = return\n"
-    "[rule unreachable-deny]\n"
-    "chain = out\n"
-    "action = reject\n"
-    'text = "unreachable for exec_command"\n'
+    "action = allow\n"
 )
 
 
@@ -219,6 +154,12 @@ def single_result(case):
     return entries[0]["data"]["result"]
 
 
+def assert_log_line(entries, index, rule, decision, tool):
+    data = entries[index]["data"]
+    assert data["rule"] == rule and data["chain"] == "out", data
+    assert data["message"] == f"rule={rule} decision={decision} tool={tool}", data
+
+
 def case_deny(binary, provider, root):
     case = RulesCase(binary, provider, root, "deny", DENY_RULES)
     seen = []
@@ -231,15 +172,13 @@ def case_deny(binary, provider, root):
     assert not started(case), started(case)
     res = single_result(case)
     assert res["status"] == "not_run" and res["reason"] == "rule_rejected", res
-    text = res["model_text"]
-    assert text.startswith("Blocked exec_command:"), text
-    assert not text.startswith('"'), text
-    assert "printf x >> marker" in text, text
-    assert "(100%)" in text, text
+    assert "Blocked: exec_command calls are disabled here." in res["model_text"], res
     assert not case.path("marker").exists(), "denied command must not run"
-    assert seen and "Blocked exec_command:" in seen[-1]["output"], seen
+    assert seen and "Blocked: exec_command" in seen[-1]["output"], seen
     assert "deny case finished" in result.stdout, result.stdout
-    assert not logs(case), logs(case)
+    entries = logs(case)
+    assert len(entries) == 1, entries
+    assert_log_line(entries, 0, "deny-exec", "deny", "exec_command")
     print("rules e2e deny: ok", flush=True)
 
 
@@ -295,23 +234,8 @@ def case_allowlist(binary, provider, root):
     print("rules e2e allowlist: ok", flush=True)
 
 
-def case_jump_chain(binary, provider, root):
-    case = RulesCase(binary, provider, root, "jump-chain", JUMP_RULES)
-    case.respond = responder(
-        provider, [("exec_command", {"command": "printf x >> marker"})],
-        "jump case finished")
-    result = case.finish(["-e", "--", "try through the shared policy"])
-    assert result.returncode == 0, (result.stdout, result.stderr)
-    assert not started(case), started(case)
-    res = single_result(case)
-    assert res["status"] == "not_run" and res["reason"] == "rule_rejected", res
-    assert "Reusable policy denied exec_command." in res["model_text"], res
-    assert not case.path("marker").exists()
-    print("rules e2e jump-chain: ok", flush=True)
-
-
-def case_log(binary, provider, root):
-    case = RulesCase(binary, provider, root, "log", LOG_RULES)
+def case_audit_log(binary, provider, root):
+    case = RulesCase(binary, provider, root, "audit", AUDIT_RULES)
     case.respond = responder(
         provider, [("exec_command", {"command": "printf x >> marker"})],
         "log case finished")
@@ -319,18 +243,15 @@ def case_log(binary, provider, root):
     assert result.returncode == 0, (result.stdout, result.stderr)
     assert len(started(case)) == 1, started(case)
     assert single_result(case)["status"] == "succeeded"
-    assert case.path("marker").read_text() == "x", "logging must not block the call"
+    assert case.path("marker").read_text() == "x", "auditing must not block the call"
     entries = logs(case)
     assert len(entries) == 1, entries
-    data = entries[0]["data"]
-    assert data["rule"] == "audit" and data["chain"] == "out", data
-    assert data["message"].startswith("tool=exec_command"), data
-    assert "printf x >> marker" in data["message"], data
-    print("rules e2e log: ok", flush=True)
+    assert_log_line(entries, 0, "audit", "allow", "exec_command")
+    print("rules e2e audit-log: ok", flush=True)
 
 
-def case_sticky_reject_then_log(binary, provider, root):
-    case = RulesCase(binary, provider, root, "sticky", STICKY_RULES)
+def case_deny_then_audit(binary, provider, root):
+    case = RulesCase(binary, provider, root, "deny-audit", STICKY_RULES)
     case.respond = responder(
         provider, [("exec_command", {"command": "printf x >> marker"})],
         "sticky case finished")
@@ -338,166 +259,28 @@ def case_sticky_reject_then_log(binary, provider, root):
     assert result.returncode == 0, (result.stdout, result.stderr)
     res = single_result(case)
     assert res["status"] == "not_run" and res["reason"] == "rule_rejected", res
+    assert "denied exec_command" in res["model_text"], res
     assert not case.path("marker").exists()
     entries = logs(case)
-    assert len(entries) == 1, ("later log rule must still run after a reject", entries)
-    assert entries[0]["data"]["message"] == "audit exec_command", entries[0]
-    print("rules e2e sticky-reject-then-log: ok", flush=True)
+    assert len(entries) == 2, ("deny plus trailing audit must both log", entries)
+    assert_log_line(entries, 0, "deny-exec", "deny", "exec_command")
+    assert_log_line(entries, 1, "audit", "allow", "exec_command")
+    print("rules e2e deny-then-audit: ok", flush=True)
 
 
-def case_pass_does_not_exempt(binary, provider, root):
-    case = RulesCase(binary, provider, root, "pass-then-deny", PASS_THEN_DENY_RULES)
+def case_order_first_match_wins(binary, provider, root):
+    case = RulesCase(binary, provider, root, "order", ORDER_RULES)
     case.respond = responder(
         provider, [("exec_command", {"command": "printf x >> marker"})],
-        "pass-then-deny finished")
-    result = case.finish(["-e", "--", "a pass rule must not exempt this call"])
+        "order case finished")
+    result = case.finish(["-e", "--", "first matching rule decides"])
     assert result.returncode == 0, (result.stdout, result.stderr)
     assert not started(case), started(case)
     res = single_result(case)
     assert res["status"] == "not_run" and res["reason"] == "rule_rejected", res
-    assert "pass does not exempt a call." in res["model_text"], res
+    assert "deny-all matched first." in res["model_text"], res
     assert not case.path("marker").exists()
-    print("rules e2e pass-does-not-exempt: ok", flush=True)
-
-
-def case_threshold(binary, provider, root):
-    case = RulesCase(binary, provider, root, "threshold", THRESHOLD_RULES)
-    case.respond = responder(
-        provider,
-        [("exec_command", {"command": "printf x >> marker",
-                           "max_output_tokens": 1000000})],
-        "threshold case finished")
-    result = case.finish(["-e", "--", "request a huge budget"])
-    assert result.returncode == 0, (result.stdout, result.stderr)
-    assert not started(case), started(case)
-    res = single_result(case)
-    assert res["status"] == "not_run" and res["reason"] == "rule_rejected", res
-    assert "Requested output budget exceeds policy." in res["model_text"], res
-    print("rules e2e threshold: ok", flush=True)
-
-
-def case_threshold_under(binary, provider, root):
-    case = RulesCase(binary, provider, root, "threshold-under", THRESHOLD_RULES)
-    case.respond = responder(
-        provider,
-        [("exec_command", {"command": "printf x >> marker",
-                           "max_output_tokens": 100})],
-        "threshold under case finished")
-    result = case.finish(["-e", "--", "request a small budget"])
-    assert result.returncode == 0, (result.stdout, result.stderr)
-    assert len(started(case)) == 1, started(case)
-    assert single_result(case)["status"] == "succeeded"
-    assert case.path("marker").read_text() == "x"
-    print("rules e2e threshold-under: ok", flush=True)
-
-
-def case_return_stops(binary, provider, root):
-    case = RulesCase(binary, provider, root, "return", RETURN_RULES)
-    case.respond = responder(
-        provider, [("exec_command", {"command": "printf x >> marker"})],
-        "return case finished")
-    result = case.finish(["-e", "--", "return stops the policy"])
-    assert result.returncode == 0, (result.stdout, result.stderr)
-    assert len(started(case)) == 1, ("return at the entry chain must stop before the reject rule",
-                                     started(case))
-    assert single_result(case)["status"] == "succeeded"
-    assert case.path("marker").read_text() == "x"
-    print("rules e2e return: ok", flush=True)
-
-
-def case_transform_override(binary, provider, root):
-    case = RulesCase(binary, provider, root, "transform", TRANSFORM_RULES)
-    case.respond = responder(
-        provider, [("exec_command", {"command": "printf x >> marker"})],
-        "transform case finished")
-    result = case.finish(["-e", "--", "attempt the rewritten command"])
-    assert result.returncode == 0, (result.stdout, result.stderr)
-    assert len(started(case)) == 1, started(case)
-    res = single_result(case)
-    assert res["status"] == "succeeded", res
-    assert case.path("marker").read_text() == "y", "the replacement must be what runs"
-    assert logs(case) == [], logs(case)
-    print("rules e2e transform: ok", flush=True)
-
-
-def case_insert_policy(binary, provider, root):
-    case = RulesCase(binary, provider, root, "insert", INSERT_RULES)
-    case.respond = responder(
-        provider, [("exec_command", {"command": "printf x >> marker"})],
-        "insert case finished")
-    result = case.finish(["-e", "--", "insert a policy note"])
-    assert result.returncode == 0, (result.stdout, result.stderr)
-    res = single_result(case)
-    assert res["status"] == "succeeded", res
-    assert "[policy]" in res["model_text"], res
-    assert "prefer read_file" in res["model_text"], res
-    assert case.path("marker").read_text() == "x"
-    print("rules e2e insert: ok", flush=True)
-
-
-def case_confirm_headless_denies(binary, provider, root):
-    case = RulesCase(binary, provider, root, "confirm", CONFIRM_RULES)
-    case.respond = responder(
-        provider, [("exec_command", {"command": "printf x >> marker"})],
-        "confirm case finished")
-    result = case.finish(["-e", "--", "confirm this"])
-    assert result.returncode == 0, (result.stdout, result.stderr)
-    res = single_result(case)
-    assert res["status"] == "not_run" and res["reason"] == "rule_rejected", res
-    assert "local confirmation is required" in res["model_text"], res
-    assert not case.path("marker").exists()
-    print("rules e2e confirm-headless-deny: ok", flush=True)
-
-
-def command_case(binary, provider, root, name, script_body, calls=None):
-    case = RulesCase(binary, provider, root, name, "")
-    script = case.case / "helper.sh"
-    script.write_text("#!/bin/sh\ncat >/dev/null\n" + script_body + "\n", encoding="utf-8")
-    script.chmod(0o755)
-    with case.config.open("a", encoding="utf-8") as out:
-        out.write("[rule helper]\nchain = out\nmatch = {\"/tool\":\"^exec_command$\"}\n"
-                  "action = command\ncommand = %s\n" % script)
-    case.respond = responder(
-        provider, calls or [("exec_command", {"command": "printf x >> marker"})],
-        "helper case finished")
-    return case, case.finish(["-e", "--", "helper decision"])
-
-
-def case_command_rejects(binary, provider, root):
-    case, result = command_case(binary, provider, root, "helper-reject",
-                                "printf '%s' '{\"action\":\"reject\",\"text\":\"denied by helper\"}'")
-    assert result.returncode == 0, (result.stdout, result.stderr)
-    res = single_result(case)
-    assert res["status"] == "not_run" and res["reason"] == "rule_rejected", res
-    assert "denied by helper" in res["model_text"], res
-    assert not case.path("marker").exists()
-    print("rules e2e helper-reject: ok", flush=True)
-
-
-def case_command_transforms(binary, provider, root):
-    case, result = command_case(
-        binary, provider, root, "helper-transform",
-        "printf '%s' '{\"action\":\"pass\",\"value\":{\"command\":\"printf y >> marker\"}}'")
-    assert result.returncode == 0, (result.stdout, result.stderr)
-    res = single_result(case)
-    assert res["status"] == "succeeded", res
-    assert case.path("marker").read_text() == "y", "the helper replacement must run"
-    print("rules e2e helper-transform: ok", flush=True)
-
-
-def case_command_empty_passes_and_invalid_denies(binary, provider, root):
-    case, result = command_case(binary, provider, root, "helper-empty", ":")
-    assert result.returncode == 0, (result.stdout, result.stderr)
-    res = single_result(case)
-    assert res["status"] == "succeeded", res
-    assert case.path("marker").read_text() == "x"
-
-    case, result = command_case(binary, provider, root, "helper-invalid", "printf 'not json'")
-    assert result.returncode == 0, (result.stdout, result.stderr)
-    res = single_result(case)
-    assert res["status"] == "not_run" and res["reason"] == "rule_rejected", res
-    assert not case.path("marker").exists()
-    print("rules e2e helper-empty/invalid: ok", flush=True)
+    print("rules e2e order-first-match-wins: ok", flush=True)
 
 
 def case_multi_call_mixed(binary, provider, root):
@@ -528,7 +311,7 @@ def case_durability_resume(binary, provider, root):
     result = case.finish(["-e", "--", "first turn"])
     assert result.returncode == 0, (result.stdout, result.stderr)
     assert single_result(case)["status"] == "not_run"
-    assert len(logs(case)) == 1, logs(case)
+    assert len(logs(case)) == 2, logs(case)
     log_path, _ = harness.read_events(case.state)
     session = log_path.parent.name
 
@@ -543,7 +326,7 @@ def case_durability_resume(binary, provider, root):
     prior = [item for item in seen[0]["input"]
              if item.get("type") == "function_call_output"]
     assert any("denied exec_command" in (item.get("output") or "") for item in prior), prior
-    assert len(logs(case)) == 1, ("resume must not drop or duplicate the rule log", logs(case))
+    assert len(logs(case)) == 2, ("resume must not drop or duplicate the rule log", logs(case))
     print("rules e2e durability-resume: ok", flush=True)
 
 
@@ -574,25 +357,46 @@ def assert_startup_refused(binary, provider, root, name, rules):
 
 def case_invalid_configs(binary, provider, root):
     assert_startup_refused(
-        binary, provider, root, "invalid-jump",
-        "[rule bad-jump]\nchain = out\naction = jump\ntarget = nowhere\n")
-    assert_startup_refused(
         binary, provider, root, "invalid-regex",
-        '[rule bad-regex]\nchain = out\nmatch = {"/tool":"("}\naction = reject\n'
-        'text = "x"\n')
-    assert_startup_refused(
-        binary, provider, root, "invalid-entry-chain",
-        "[rule in-chain]\nchain = in\naction = reject\ntext = \"x\"\n")
+        '[rule bad-regex]\nmatch = {"/tool":"("}\naction = deny\n'
+        'message = "x"\n')
     assert_startup_refused(
         binary, provider, root, "invalid-key",
-        "[rule unknown-key]\nchain = out\naction = pass\nbogus = 1\n")
+        "[rule unknown-key]\naction = allow\nbogus = 1\n")
     assert_startup_refused(
         binary, provider, root, "invalid-action",
-        "[rule bad-action]\nchain = out\naction = explode\n")
+        "[rule bad-action]\naction = explode\n")
     assert_startup_refused(
         binary, provider, root, "invalid-duplicate",
-        "[rule dup]\nchain = out\naction = pass\n"
-        "[rule dup]\nchain = out\naction = pass\n")
+        "[rule dup]\naction = allow\n"
+        "[rule dup]\naction = allow\n")
+    assert_startup_refused(
+        binary, provider, root, "invalid-message-on-allow",
+        '[rule noisy-allow]\naction = allow\nmessage = "x"\n')
+    assert_startup_refused(
+        binary, provider, root, "removed-chain",
+        "[rule old]\nchain = out\naction = deny\nmessage = \"x\"\n")
+    assert_startup_refused(
+        binary, provider, root, "removed-jump",
+        "[rule old]\naction = jump\ntarget = policy\n")
+    assert_startup_refused(
+        binary, provider, root, "removed-text",
+        "[rule old]\naction = deny\ntext = \"x\"\n")
+    assert_startup_refused(
+        binary, provider, root, "removed-threshold",
+        "[rule old]\naction = deny\nmessage = \"x\"\nat_least = {\"/n\":1}\n")
+    assert_startup_refused(
+        binary, provider, root, "removed-template",
+        "[rule old]\naction = deny\nmessage = \"x\"\nlog = \"t\"\n")
+    assert_startup_refused(
+        binary, provider, root, "removed-command",
+        "[rule old]\naction = command\ncommand = /bin/true\n")
+    assert_startup_refused(
+        binary, provider, root, "removed-confirm",
+        "[rule old]\naction = confirm\nmessage = \"x\"\n")
+    assert_startup_refused(
+        binary, provider, root, "removed-transform",
+        "[rule old]\naction = allow\nvalue = {\"a\":1}\n")
 
 
 CASES = (
@@ -600,19 +404,9 @@ CASES = (
     case_allow_nonmatching,
     case_deny_by_argument,
     case_allowlist,
-    case_jump_chain,
-    case_log,
-    case_sticky_reject_then_log,
-    case_pass_does_not_exempt,
-    case_threshold,
-    case_threshold_under,
-    case_return_stops,
-    case_transform_override,
-    case_insert_policy,
-    case_confirm_headless_denies,
-    case_command_rejects,
-    case_command_transforms,
-    case_command_empty_passes_and_invalid_denies,
+    case_audit_log,
+    case_deny_then_audit,
+    case_order_first_match_wins,
     case_multi_call_mixed,
     case_durability_resume,
     case_no_rules_baseline,

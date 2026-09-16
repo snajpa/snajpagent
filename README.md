@@ -261,17 +261,18 @@ becoming silent policy.
 
 ```ini
 [rule deny-recursive-delete]
-chain  = out
-match  = {"/tool":"^exec_command$","/text":"rm[[:space:]]+-[^[:space:]]*[rf]"}
-action = reject
-text   = "Recursive force-delete is disabled; delete explicit paths."
+match   = {"/tool":"^exec_command$","/text":"rm[[:space:]]+-[^[:space:]]*[rf]"}
+action  = deny
+message = "Recursive force-delete is disabled; delete explicit paths."
 ```
 
 A rejected call is reported to the model as not run, never quietly dropped.
-Rules can `pass`, `reject`, `jump` to a reusable chain, `return`, and log every
-match with a template. **This is filtering, not a sandbox**: a regular expression
-over a command is not confinement, so use read-only turns and separate accounts
-for real isolation. `design/io-rules.md` has the full syntax and examples.
+The first matching rule decides; a trailing match-all `allow` audits the whole
+session without changing any verdict. **This is filtering, not a sandbox**:
+a regular expression over a command is not confinement, so use read-only turns
+and separate accounts for real isolation. `design/io-rules.md` has the full
+syntax, worked examples and the 0.99.7 migration table; ready-made policies
+live in `examples/io-rules/`.
 
 ## Install and choose a provider
 

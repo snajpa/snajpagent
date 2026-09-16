@@ -3,8 +3,8 @@
 # Model and I/O rules
 
 A small, stateless policy filter for what the model may do. Rules live in the
-normal configuration file, are checked at a real trust boundary, and can pass,
-deny, log, or jump to a reusable policy chain.
+normal configuration file as one ordered list, are checked at a real trust
+boundary, and either allow or deny each proposed action.
 
 This is **filtering, not containment**. A rule decides whether a proposed action
 is admitted. It never makes an underlying interpreter safe: matching a command
@@ -13,28 +13,31 @@ reported as not run rather than silently swallowed.
 
 ## 1. The model in one page
 
-Three things to learn:
+Two things to learn:
 
 1. An **envelope** describes one operation about to cross a boundary.
-2. **Rules** in an ordered chain match the envelope and produce a verdict.
-3. **Chains** are named rule lists; `jump` reuses one from another.
+2. **Rules** in declaration order match the envelope; the first match decides.
 
 ```ini
 [rule deny-recursive-delete]
-chain  = out
-match  = {"/kind":"^tool_call$","/text":"rm[[:space:]]+-[a-z]*r[a-z]*f"}
-action = reject
-text   = "Recursive force-delete is disabled. Delete specific paths instead."
+match  = {"/tool":"^exec_command$","/text":"rm[[:space:]]+-[a-z]*r[a-z]*f"}
+action = deny
+message = "Recursive force-delete is disabled. Delete specific paths instead."
 ```
+
+A rule is one `[rule NAME]` section with three keys: `match`, `action`,
+`message`. Every key besides these three — chains, jumps, thresholds,
+templates, helper verbs — fails configuration load loudly instead of becoming
+silent policy.
 
 ### Envelope
 
 The engine matches against a JSON object of immutable facts plus one payload.
-Current boundary: a model tool call (`out` / `tool_call`).
+Current boundary: a model tool call.
 
 | Field | Meaning |
 | --- | --- |
-| `boundary` | `out` (proposed effect) or `in` (returned data); `event` for lifecycle notices |
+| `boundary` | always `out` (proposed effect) in this build |
 | `kind` | `tool_call` today |
 | `surface` | who originated it: `model`, `operator`, `irc`, `host` |
 | `tool` | native tool name, e.g. `exec_command`, `apply_patch`, `read_file` |
@@ -43,37 +46,17 @@ Current boundary: a model tool call (`out` / `tool_call`).
 
 ### Rules
 
-A rule is one `[rule NAME]` section. Every key is optional except `chain` and
-`action`; unknown keys, bad regexes, duplicate names, and unreachable `jump`
-targets fail configuration load, so a typo never becomes silent policy.
-
 | Key | Meaning |
 | --- | --- |
-| `chain` | which chain this rule belongs to (entry chain `out`, or a `jump` target) |
-| `action` | `pass`, `accept`, `reject`, `jump`, `return`, `insert`, `command`, or `confirm` |
-| `match` | JSON object of `/json/pointer` → POSIX extended regex; **all** must match |
-| `at_least` | JSON object of `/json/pointer` → inclusive integer lower bound |
-| `text` | message for `reject`; `%{/pointer}` is replaced from the envelope, `%%` is a literal `%` |
-| `target` | chain name for `jump` |
-| `log` | template recorded when the rule matches; does not change the verdict |
+| `match` | JSON object of `/json/pointer` → POSIX extended regex; **all** must match. Absent means match everything. |
+| `action` | `allow` or `deny`. The first matching rule decides; no match allows. |
+| `message` | message shown to the model for `deny`. A value starting with `"` is decoded as a JSON string. Refused on `allow`. |
 
-A `text` or `log` value that starts with `"` is decoded as a JSON string, so
-escapes and newlines survive; other values are literal.
-
-### Flow
-
-- Rules run in declaration order within a chain.
-- Falling off a chain passes; a rule reaches no verdict by itself.
-- `pass` only continues; it never exempts a call from a later `reject`.
-- `accept` stops evaluation immediately and allows the operation. Put it before
-  a catch-all `reject` to build an allowlist.
-- `reject` is **sticky**: it marks the operation denied and traversal continues,
-  so later logging rules still run.
-- `jump` enters another chain; `return` leaves the current one. A `return` at
-  the entry chain stops evaluation.
-- A rule may carry a `log` template and any action; logging never changes flow.
-- A match is a *whole-operation* decision. There is no "first match wins":
-  explicit `reject` rules define denial, which keeps policy declarative.
+Every matched rule records one fixed audit line,
+`rule=<name> decision=<allow|deny> tool=<tool>`, as a durable `rule_log`
+event — including rules after the deciding one, so a trailing match-all rule
+audits the whole session without changing any verdict. Logging never changes
+the verdict. At most 256 rules, 63-byte names, 64 KiB per message.
 
 ## 2. Worked examples
 
@@ -81,98 +64,64 @@ escapes and newlines survive; other values are literal.
 
 ```ini
 [rule deny-rm-rf]
-chain  = out
-match  = {"/tool":"^exec_command$","/text":"rm[[:space:]]+-[^[:space:]]*[rf]"}
-action = reject
-text   = "Recursive or forced rm is disabled. Remove explicit paths instead."
+match   = {"/tool":"^exec_command$","/text":"rm[[:space:]]+-[^[:space:]]*[rf]"}
+action  = deny
+message = "Recursive or forced rm is disabled. Remove explicit paths instead."
 
 [rule deny-device-write]
-chain  = out
-match  = {"/text":"(mkfs|dd[[:space:]]+[^|]*of=/dev/)"}
-action = reject
-text   = "Raw device writes are disabled in this workspace."
+match   = {"/text":"(mkfs|dd[[:space:]]+[^|]*of=/dev/)"}
+action  = deny
+message = "Raw device writes are disabled in this workspace."
 ```
 
 ### Deny credential exfiltration
 
 ```ini
 [rule deny-secret-upload]
-chain  = out
-match  = {"/tool":"^exec_command$","/text":"(curl|wget)[^\n]*\\$\\{?[A-Z_]*KEY"}
-action = reject
-text   = "Refusing to send environment secrets to a network command."
+match   = {"/tool":"^exec_command$","/text":"(curl|wget)[^\n]*\\$\\{?[A-Z_]*KEY"}
+action  = deny
+message = "Refusing to send environment secrets to a network command."
 ```
 
 ### Read-only workspace mode
 
 ```ini
 [rule deny-writes]
-chain  = out
-match  = {"/tool":"^(apply_patch|write_stdin|exec_command)$"}
-action = reject
-text   = "This workspace is read-only. Inspect with read_file, grep and list_files."
+match   = {"/tool":"^(apply_patch|exec_command)$"}
+action  = deny
+message = "This workspace is read-only. Inspect with read_file and grep."
 ```
 
 ### Default-deny with an explicit allowlist
 
-`accept` stops evaluation, so an allowlist can sit in front of a catch-all
-`reject`. A `pass` rule would not exempt the call from that later denial:
+Put allowed tools first and a match-all `deny` last:
 
 ```ini
 [rule allow-commands]
-chain  = out
 match  = {"/tool":"^exec_command$"}
-action = accept
+action = allow
 
 [rule deny-everything-else]
-chain  = out
-action = reject
-text   = "Only the audited command tool is permitted here."
-```
-
-### Reusable policy chains
-
-```ini
-[rule inspect]
-chain  = out
-match  = {"/kind":"^tool_call$"}
-action = jump
-target = host-policy
-
-[rule no-network]
-chain  = host-policy
-match  = {"/text":"(curl|wget|ssh|scp|nc)[[:space:]]"}
-action = reject
-text   = "Network clients are disabled on this host."
-
-[rule no-privilege]
-chain  = host-policy
-match  = {"/text":"(^|[|;&[:space:]])(sudo|doas|su)[[:space:]]"}
-action = reject
-text   = "Privilege escalation is disabled."
+action  = deny
+message = "Only the audited command tool is permitted here."
 ```
 
 ### Audit everything, decide nothing
 
+A trailing match-all `allow` logs each call without deciding it:
+
 ```ini
 [rule audit-tool-calls]
-chain  = out
-match  = {"/kind":"^tool_call$"}
-action = pass
-log    = "tool=%{/tool} args=%{/text}"
+action = allow
 ```
-
-The line is written as a durable `rule_log` event. Template values are envelope
-data, never re-interpreted as configuration or operator input.
 
 ### Deny encoded or nested execution
 
 ```ini
 [rule deny-encoded-exec]
-chain  = out
-match  = {"/tool":"^exec_command$","/text":"(base64[[:space:]]+-d|eval[[:space:]]|\\$\\(|`)"}
-action = reject
-text   = "Encoded or nested execution is disabled; run the real operation explicitly."
+match   = {"/tool":"^exec_command$","/text":"(base64[[:space:]]+-d|eval[[:space:]]|\\$\\(|`)"}
+action  = deny
+message = "Encoded or nested execution is disabled; run the real operation explicitly."
 ```
 
 ### Match a structured argument, not text
@@ -181,69 +130,59 @@ text   = "Encoded or nested execution is disabled; run the real operation explic
 
 ```ini
 [rule deny-outside-workspace]
-chain  = out
-match  = {"/tool":"^apply_patch$","/value/patch":"\\.\\./"}
-action = reject
-text   = "Patches may not escape the workspace with .. paths."
-```
-
-### Thresholds
-
-`at_least` matches only known integers and never a missing field:
-
-```ini
-[rule large-write]
-chain  = out
-at_least = {"/value/bytes":1048576}
-action = reject
-text   = "Writes over 1 MiB are disabled here."
+match   = {"/tool":"^apply_patch$","/value/patch":"\\.\\./"}
+action  = deny
+message = "Patches may not escape the workspace with .. paths."
 ```
 
 ## 3. Semantics and limits
 
-- **Bounded.** At most 256 rules, 64 chains, 4096 visited rules per evaluation,
-  63-byte names, 64 KiB per text template.
+- **Bounded.** At most 256 rules and 63-byte names; one linear scan per call.
 - **Deterministic.** Validation happens at configuration load; there is no
   runtime rule-generation path and no hidden default action.
-- **Not stateful.** There is no `once`, rate limit, or per-session counter in the
-  engine, so a rule behaves identically on every evaluation.
-- **No helper processes.** Rules cannot run programs or rewrite payloads in this
-  build. `replace`, `insert`, `confirm` and external decisions are the next
-  slice; they are intentionally absent rather than accepted and ignored.
-- **One wired boundary.** Only the model tool-call boundary (`out`/`tool_call`)
-  is evaluated in this build. `in` and `event` chains are refused in
-  configuration until their hosts exist, so a rule can never silently never fire.
+- **Not stateful.** A rule behaves identically on every evaluation.
+- **One wired boundary.** Only the model tool-call boundary is evaluated.
 - **POSIX regular expressions.** `match` uses `regcomp(REG_EXTENDED)`, whole
   substring semantics; anchor with `^`/`$` yourself.
 
 ## 4. Why this shape
 
-The engine is a pure function. It owns no journal, no threads, no timers and no
-second state machine. The calling owner performs the only side effects:
-recording a `rule_log` event and producing a factual not-run result. That keeps
-the rule language small, makes every evaluation reproducible from the envelope,
-and avoids the replay, scope and consent state that a stateful filter would drag
-in. Filtering stays filtering; confinement stays with the tools themselves.
+The engine is a pure function over one ordered list: first match wins, every
+match is logged the same way, and there is no second state machine. That keeps
+every evaluation reproducible from the envelope and every policy readable top
+to bottom. Filtering stays filtering; confinement stays with the tools
+themselves.
 
 See `src/rules.c` (engine), `src/config.c` (`[rule NAME]` parsing),
-`tests/test_rules.c` (matching, flow, veto, invalid definitions) and
-`tests/rules_e2e.py` (real-binary end-to-end: deny, allow, allowlist, jump, log,
-threshold, return, multi-call, resume durability and startup refusals).
+`tests/test_rules.c` (matching, order, invalid definitions),
+`tests/rules_e2e.py` (real-binary end-to-end) and `examples/io-rules/`.
 
-## 5. Handoff and lessons for upstream
+## 5. Migration from 0.99.7
+
+0.99.7 shipped chains, jump/return flow, thresholds, log templates and the
+insert/command/confirm/value verbs. 0.99.8 keeps only `match`, `action`
+(`allow`/`deny`) and `message`; any other rule key fails startup with a
+pointer here. Rewrite guide:
+
+| 0.99.7 | 0.99.8 |
+| --- | --- |
+| `chain = out` | delete the line; all rules form one list |
+| `action = reject` + `text` | `action = deny` + `message` (same text) |
+| `action = accept` | `action = allow` |
+| `action = pass` without `log` | delete the rule (a pass decided nothing) |
+| `action = pass` with `log` | trailing match-all `action = allow` (fixed audit line replaces the template) |
+| `jump`/`target` chains | paste the target chain's rules at the jump, in order |
+| `return` | delete it; earlier rules already decided by position |
+| `at_least` thresholds | no replacement; re-request if you enforced one |
+| `insert`/`command`/`confirm`/`value` | no replacement; re-request with your use case |
+
+## 6. Handoff and lessons for upstream
 
 This is a filter, not a sandbox: a rule can deny a call, but it does not confine
-an admitted call, and matching text is never proof of containment. The facility
-is expected to grow into that role, so the handoff is deliberately explicit:
+an admitted call, and matching text is never proof of containment.
 
 - Never describe regex matching as security containment.
-- Keep one effect vocabulary so a native confinement action can be added beside
-  `pass`/`accept`/`reject`/`jump`/`return` without a second engine or a mode
-  switch; the matcher and envelope stay unchanged.
+- Real process, filesystem and network confinement of `exec_command` remains
+  open work and belongs to a native owner, not to rule text.
 - The exploration and modification tools constrain by construction
-  (workspace-relative paths, atomic replacement, no symlink traversal). Real
-  process, filesystem and network confinement of `exec_command` remains open
-  work and belongs to a native owner, not to rule text.
-- A future confinement owner should be able to reuse the same `[rule NAME]`
-  chains: rules decide *whether* an operation is admitted; the native mechanism
-  decides *what an admitted operation can reach*.
+  (workspace-relative paths, atomic replacement, no symlink traversal).
