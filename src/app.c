@@ -188,6 +188,9 @@ static const struct snag_term_command commands[] = {
     {"/chat", "show IRC room activity"},
     {"/rollout", "show local model activity"},
     {"/topic [TEXT]", "show/set selected room topic"},
+    {"/nick [NICK]", "show/set agent nick (shared via IRC)"},
+    {"/steering [mentions|all|clear]", "show/set steering admission for next turn"},
+    {"/banner [TEXT|clear]", "show/set session banner echoed in later requests"},
     {"/names", "numbered destinations, members and modes"},
     {"/server [start [ENDPOINT]|stop]", "show/start/stop hosting; default localhost:6667"},
     {"/connect [ENDPOINT]", "add outgoing connection; default localhost:6667"},
@@ -1823,14 +1826,15 @@ network_command(struct app_state *app, const char *line, bool *handled)
 }
 
 static int
-send_operator_routed(struct app_state *app, const char *line, const char *text, enum snag_irc_event_kind kind)
+send_irc_routed(struct app_state *app, const char *line, const char *text, enum snag_irc_event_kind kind,
+                bool model)
 {
     char error[256] = {0};
     int rc;
     bool show = app->ui.input_route.count > 1u;
 
     struct snag_buf report = {.max = 8192u};
-    rc = snag_irc_send_route(app->irc, &app->ui.input_route, false, kind,
+    rc = snag_irc_send_route(app->irc, &app->ui.input_route, model, kind,
                               text, &report, error, sizeof(error));
     if ((rc == 0 || rc == 2) && persist_session(app, error, sizeof(error)) < 0) {
         snag_buf_reset(&report);
@@ -1848,6 +1852,150 @@ send_operator_routed(struct app_state *app, const char *line, const char *text, 
     if (rc == 1) return snag_ui_send(&app->ui, (struct snag_ui_command){
             .kind = SNAG_UI_DRAFT, .text = line});
     return rc < 0 ? -1 : 0;
+}
+
+static int
+send_operator_routed(struct app_state *app, const char *line, const char *text, enum snag_irc_event_kind kind)
+{
+    return send_irc_routed(app, line, text, kind, false);
+}
+
+static int
+change_nick(struct app_state *app, const char *line)
+{
+    const char *model_nick = app->irc ? snag_irc_model_nick(app->irc) : NULL;
+    const char *operator_nick = app->irc ? snag_irc_operator_nick(app->irc) : NULL;
+    const char *start = line + 5u;
+    const char *end;
+    struct snag_buf nick = {.max = 64u * 1024u};
+    int rc;
+
+    while (isspace((unsigned char)*start)) ++start;
+    end = start + strlen(start);
+    while (end > start && isspace((unsigned char)end[-1])) --end;
+    if (end == start) {
+        return app_textf(app, SNAG_UI_HOST, "model nick: %s\noperator nick: %s",
+            model_nick && *model_nick ? model_nick : "<none>",
+            operator_nick && *operator_nick ? operator_nick : "<none>");
+    }
+    if (snag_buf_printf(&nick, "%.*s", (int)(end - start), start) < 0 ||
+        snag_buf_terminate(&nick) < 0) {
+        snag_buf_free(&nick);
+        return -1;
+    }
+    if (model_nick && strcmp(model_nick, (const char *)nick.data) == 0) {
+        snag_buf_free(&nick);
+        return app_textf(app, SNAG_UI_HOST, "nick unchanged: %s", model_nick);
+    }
+    rc = send_irc_routed(app, line, (const char *)nick.data, SNAG_IRC_NICK, true);
+    if (rc == 0 && snag_strcpy(app->config->irc.model_nick,
+            sizeof(app->config->irc.model_nick), (const char *)nick.data))
+        app->config->irc.model_nick_implicit = false;
+    else if (rc == 0) {
+        snag_buf_free(&nick);
+        return -1;
+    }
+    snag_buf_free(&nick);
+    return rc;
+}
+
+static const char *
+effective_steering(struct app_state *app, bool *overridden)
+{
+    const struct snag_model_limit_config *limit;
+    const struct snag_provider_config *provider;
+
+    if (app->session.steering_override && *app->session.steering_override) {
+        if (overridden) *overridden = true;
+        return app->session.steering_override;
+    }
+    provider = next_provider(app);
+    if (provider) {
+        limit = snag_config_model_limit_exact(app->config, provider->name,
+                                              app->session.default_model);
+        if (limit && limit->steering[0]) {
+            if (overridden) *overridden = false;
+            return limit->steering;
+        }
+    }
+    if (overridden) *overridden = false;
+    return "mentions";
+}
+
+static int
+change_steering(struct app_state *app, const char *line)
+{
+    const char *start = line + 9u;
+    const char *end;
+    char error[256] = {0};
+    char mode[16];
+    size_t len;
+    bool overridden;
+    const char *effective;
+
+    while (isspace((unsigned char)*start)) ++start;
+    end = start + strlen(start);
+    while (end > start && isspace((unsigned char)end[-1])) --end;
+    if (end == start) {
+        effective = effective_steering(app, &overridden);
+        return app_textf(app, SNAG_UI_HOST, "steering for next turn: %s (%s)",
+            effective, overridden ? "session override" : "config");
+    }
+    len = (size_t)(end - start);
+    if (len >= sizeof(mode)) return app_error(app, "usage: /steering [mentions|all|clear]");
+    memcpy(mode, start, len);
+    mode[len] = '\0';
+    if (strcmp(mode, "clear") == 0) {
+        mode[0] = '\0';
+    } else if (strcmp(mode, "mentions") != 0 && strcmp(mode, "all") != 0) {
+        return app_error(app, "usage: /steering [mentions|all|clear]");
+    }
+    if (snag_app_commit_event(app, "steering_updated", json_pack("{s:s}", "mode", mode),
+                              error, sizeof(error)) < 0)
+        return app_error(app, error[0] ? error : "steering could not be updated");
+    effective = effective_steering(app, &overridden);
+    return app_textf(app, SNAG_UI_HOST, "steering for next turn: %s (%s)",
+        effective, overridden ? "session override" : "config");
+}
+
+static int
+change_banner(struct app_state *app, const char *line)
+{
+    const char *start = line + 7u;
+    const char *end;
+    struct snag_buf text = {.max = SNAG_BANNER_MAX + 1u};
+    char error[256] = {0};
+    int rc;
+
+    while (isspace((unsigned char)*start)) ++start;
+    end = start + strlen(start);
+    while (end > start && isspace((unsigned char)end[-1])) --end;
+    if (end == start) {
+        if (!app->session.banner_text || !*app->session.banner_text)
+            return app_textf(app, SNAG_UI_HOST, "banner: none");
+        return app_textf(app, SNAG_UI_HOST, "banner:\n%s", app->session.banner_text);
+    }
+    if ((size_t)(end - start) == 5u && strncmp(start, "clear", 5u) == 0) {
+        if (snag_app_commit_event(app, "banner_updated", json_pack("{s:s}", "text", ""),
+                                  error, sizeof(error)) < 0)
+            return app_error(app, error[0] ? error : "banner could not be cleared");
+        return app_textf(app, SNAG_UI_HOST, "banner cleared");
+    }
+    if (snag_buf_printf(&text, "%.*s", (int)(end - start), start) < 0 ||
+        snag_buf_terminate(&text) < 0) {
+        snag_buf_free(&text);
+        return -1;
+    }
+    if (!snag_text_valid((const char *)text.data, 1u, SNAG_BANNER_MAX)) {
+        snag_buf_free(&text);
+        return app_error(app, "banner must be nonblank valid UTF-8 within 4 KiB");
+    }
+    rc = snag_app_commit_event(app, "banner_updated",
+                               json_pack("{s:s}", "text", (const char *)text.data),
+                               error, sizeof(error));
+    snag_buf_free(&text);
+    if (rc < 0) return app_error(app, error[0] ? error : "banner could not be updated");
+    return app_textf(app, SNAG_UI_HOST, "banner updated; echoed after compaction and at next-turn start");
 }
 
 static int
@@ -2054,6 +2202,11 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         return rc < 0 ? app_error(app, error[0] ? error : "IRC state could not be displayed") : 0;
     }
     if (strncmp(line, "/topic ", 7u) == 0) return send_operator_routed(app, line, line + 7u, SNAG_IRC_TOPIC);
+    if (strcmp(line, "/nick") == 0 || strncmp(line, "/nick ", 6u) == 0) return change_nick(app, line);
+    if (strcmp(line, "/steering") == 0 || strncmp(line, "/steering ", 10u) == 0)
+        return change_steering(app, line);
+    if (strcmp(line, "/banner") == 0 || strncmp(line, "/banner ", 8u) == 0)
+        return change_banner(app, line);
     *handled = false;
     return 0;
 }

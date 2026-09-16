@@ -12,6 +12,11 @@
   name is a bare token: the event name stands in for the missing type. Records
   with no event name, non-token names, or non-object payloads still fail with
   the recorded diagnostic.
+
+- Lead/IRC session set: `/nick` renames the agent nick over regular IRC,
+  `/steering` admits mentions or every message per session, `/banner` keeps a
+  short work cursor restated in later requests across compaction.
+
 - Omit `tool_choice` from the compaction summary request. The request declares no
   tools, so the choice was inert, but a provider that accepts only `"auto"` (Meta
   Model API) rejected `"none"` with HTTP 400 and failed the whole turn, including

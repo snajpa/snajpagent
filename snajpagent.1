@@ -1277,6 +1277,23 @@ resolves to
 .B medium
 when used for a turn.
 .TP
+.BR /nick " [" NICK "]"
+Show the agent and operator nicks, or rename the agent nick. The new nick is
+shared through IRC so other clients see lead/worker renames; the config file
+keeps the configured default. Names follow IRC nick rules; invalid names are
+rejected and a server refusal arrives as a server notice.
+.TP
+.BR /steering " [mentions|all|clear]"
+Show or set which IRC traffic reaches the model as steering: only mentions, or
+every message. A session override wins over configuration until cleared;
+clear returns to configuration. Without configuration the default admits
+mentions only.
+.TP
+.BR /banner " [TEXT|clear]"
+Show, set, or clear the session banner: a short work cursor the model maintains
+for itself. The banner is restated in later requests, so it survives compaction
+and is present at the next turn. Keep it brief and specific to the ongoing work.
+.TP
 .BR /verbose " [0..6]"
 Show or set this process's current verbosity immediately, even during active
 work (Enter or active-turn Tab).  Subsequent output uses the new level;
