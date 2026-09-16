@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MPL-2.0
-# libdatachannel 0.23.2: FreeBSD 5.1 has neither ::round nor std::round (the
-# recipe libstdc++ targets a pre-C99 C library); round half away from zero
-# with plain arithmetic (identical semantics for RTP timestamps).
+# libdatachannel 0.23.2: the 2003-era SDKs (FreeBSD 5.1, OpenBSD 3.5) have
+# neither ::round nor std::round (pre-C99 C libraries); round half away
+# from zero with plain arithmetic (identical semantics for RTP timestamps).
 --- a/src/rtppacketizationconfig.cpp
 +++ b/src/rtppacketizationconfig.cpp
 @@ -44,7 +44,8 @@
