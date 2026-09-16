@@ -61,7 +61,7 @@ in assert buildRevision == null || buildRevision == revision; rec {
   linux-ppc64le = (linux pkgs.pkgsCross.musl-power).application (args "linux-ppc64le");
   linux-ppc32 = (linux (import pkgs.path {
     crossSystem.config = "powerpc-unknown-linux-musl";
-    overlays = [ (import ./source-mirrors.nix) ];
+    overlays = [ (import ./source-mirrors.nix) (import ./ppc32-ssp.nix) ];
   })).application (args "linux-ppc32");
   netbsd-amd64 = (import ./netbsd.nix {
     inherit pkgs;
