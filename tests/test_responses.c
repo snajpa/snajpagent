@@ -1088,6 +1088,42 @@ test_typeless_and_non_object_records_rejected(void)
     snag_responses_stream_free(&stream);
 }
 
+static void
+test_event_name_fallback_for_typeless_records(void)
+{
+    static const char payload[] = "{}";
+    struct snag_responses_stream stream;
+    struct snag_sse_record record;
+    int rc;
+
+    memset(&record, 0, sizeof(record));
+    record.kind = SNAG_SSE_EVENT;
+
+    /* An SSE event name stands in for a missing JSON type when it is a bare
+     * token: a benign response.* record then parses instead of failing. */
+    snag_responses_stream_init(&stream, NULL, NULL);
+    record.event = (const unsigned char *)"response.progress";
+    record.event_len = strlen("response.progress");
+    record.data = (const unsigned char *)payload;
+    record.data_len = strlen(payload);
+    rc = snag_responses_sse_record(&stream, &record);
+    assert(rc == 0);
+    assert(!stream.failed);
+    snag_responses_stream_free(&stream);
+
+    /* A non-token event name keeps the strict rejection. */
+    snag_responses_stream_init(&stream, NULL, NULL);
+    record.event = (const unsigned char *)"response.created evil";
+    record.event_len = strlen("response.created evil");
+    record.data = (const unsigned char *)payload;
+    record.data_len = strlen(payload);
+    errno = 0;
+    rc = snag_responses_sse_record(&stream, &record);
+    assert(rc < 0);
+    assert(strcmp(stream.error, "Responses event has no type") == 0);
+    snag_responses_stream_free(&stream);
+}
+
 int
 main(void)
 {
@@ -1117,6 +1153,7 @@ main(void)
     test_invalid_call_after_public_item();
     test_protocol_conflicts_fail_closed();
     test_typeless_and_non_object_records_rejected();
+    test_event_name_fallback_for_typeless_records();
     test_structured_capacity_failure();
     test_interleaved_content_bound();
     test_provider_context_formats();
