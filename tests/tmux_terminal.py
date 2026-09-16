@@ -93,6 +93,18 @@ def normalize_space(text):
     return " ".join(text.split())
 
 
+def is_summary_request(request):
+    """Compaction summary requests declare no tools; ordinary turns always do.
+
+    They must not carry tool_choice either: with an empty tools array the choice
+    is inert, and a provider that accepts only "auto" (Meta Model API) rejects
+    any other value with HTTP 400."""
+    if request.get("tools") != []:
+        return False
+    assert "tool_choice" not in request, "a tool-less request must not set tool_choice"
+    return True
+
+
 class FakeResponses:
     AGENTS = {
         "host-model": "hostbot",
@@ -5940,7 +5952,7 @@ def run_nested_command_cases(binary, root, modes=("nested", "nested-resume", "po
         terminal = None
         def respond(handler, request, sequence):
             seen.append(request)
-            if mode.startswith("nested") and request.get("tool_choice") == "none":
+            if mode.startswith("nested") and is_summary_request(request):
                 ready.set()
                 release.wait(8)
             if mode == "policy":
@@ -6145,7 +6157,7 @@ def run_manual_compaction_cases(binary, root, modes=("after-cancel", "native-can
         terminal = None
 
         def respond(handler, request, sequence):
-            if request.get("tool_choice") == "none":
+            if is_summary_request(request):
                 summaries.append(request)
                 started.set()
                 if mode in ("progress", "input", "input-failure", "steer", "cancel-active") and len(summaries) == 1:
@@ -6291,7 +6303,7 @@ def run_compaction_text_cases(binary, root):
         terminal = None
 
         def respond(handler, request, sequence):
-            if request.get("tool_choice") != "none":
+            if not is_summary_request(request):
                 body = provider.response_body(sequence, "seed result")
             else:
                 requests.append(request)
@@ -6388,7 +6400,7 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
                 send(handler, json.dumps({"error": {"code": "missing_required_parameter",
                     "message": "One of input or previous_response_id or prompt or conversation must be provided."}}), 400)
                 return
-            if request.get("tool_choice") == "none":
+            if is_summary_request(request):
                 summaries.append(request)
                 if mode in ("recover", "manual", "legacy") and len(summaries) <= 4:
                     send(handler, provider.event("response.failed", {"type": "response.failed",
@@ -7455,7 +7467,7 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
                 send(handler, 200, {"object": "response.input_tokens", "input_tokens": 42})
 
         def respond(handler, request, sequence):
-            if request.get("tool_choice") == "none":
+            if is_summary_request(request):
                 summaries.append(request)
                 size = len(json.dumps(request["input"]))
                 if mode == "sized":
@@ -7595,7 +7607,7 @@ def run_capacity_handoff_cases(binary, root, modes=("queue", "chat", "cancel")):
         endpoint = f"127.0.0.1:{free_loopback_port()}"
 
         def respond(handler, request, sequence):
-            if request.get("tool_choice") == "none":
+            if is_summary_request(request):
                 summaries.append(request)
                 summarizing.set()
                 if mode == "cancel":

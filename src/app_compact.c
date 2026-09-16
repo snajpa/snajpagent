@@ -82,10 +82,12 @@ responses_compact_create_request(const json_t *compact_request, const char *mode
     copy = json_copy(input);
     if (!copy || json_array_append_new(copy, json_pack("{s:s,s:s}", "role", "developer",
                       "content", instruction)) < 0) goto out;
-    request = json_pack("{s:O,s:s,s:b,s:{s:s},s:b,s:b,s:s,s:[],s:s}",
+    /* No tool_choice: this request declares no tools, so the choice is inert,
+     * and a provider that accepts only "auto" rejects every other value. */
+    request = json_pack("{s:O,s:s,s:b,s:{s:s},s:b,s:b,s:[],s:s}",
         "input", copy, "model", model, "parallel_tool_calls", 0,
         "reasoning", "effort", effort, "store", 0, "stream", 1,
-        "tool_choice", "none", "tools", "truncation", "disabled");
+        "tools", "truncation", "disabled");
     if (request && capacity->max_output_tokens && snag_json_set_new(request, "max_output_tokens",
             json_integer((json_int_t)capacity->max_output_tokens)) < 0) {
         json_decref(request);
