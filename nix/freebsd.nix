@@ -170,7 +170,7 @@ let
   voiceRtc = import ./voice-rtc-cross.nix {
     inherit pkgs cmakeLibrary tls; sourcePkgs = sourcePkgs;
     # Both FreeBSD SDKs' net/if.h need struct sockaddr complete first.
-    rtcPatches = [ ./libdatachannel-bsd-sockaddr.patch ];
+    rtcPatches = [ ./libdatachannel-bsd-sockaddr.patch ] ++ lib.optional legacy ./libdatachannel-freebsd51-round.patch;
     # Both FreeBSD SDKs predate the libc timingsafe_bcmp; 5.1 also lacks
     # TAILQ_FOREACH_SAFE.
     sctpPatches = [ ./usrsctp-freebsd-timingsafe.patch ./usrsctp-legacy-arc4random.patch ./usrsctp-bsd-tailq-safe.patch ];
