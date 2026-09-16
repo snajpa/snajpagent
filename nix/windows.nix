@@ -292,7 +292,7 @@ in {
         'WITH_OFFICE=0' 'WITH_OFFICE_COMMANDS=1'
         "CC=$CC" "CXX=$CXX" "STRIP=$STRIP" "OBJCOPY=$OBJCOPY"
         'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
-        'CPPFLAGS=-D_WIN32_WINNT=${winver} -DWINVER=${winver} -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"${pkgs.lib.optionalString (pty != null) " -DSNAG_LEGACY_PTY"}'
+        'CPPFLAGS=-D_WIN32_WINNT=${winver} -DWINVER=${winver} -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"${pkgs.lib.optionalString (pty != null) " -DSNAG_LEGACY_PTY -nostdinc++ -isystem ${pkgs.lib.getDev pty.cxx}/include/c++/v1"}'
         'CFLAGS=-std=c11 ${if debug then "-Og -g -fno-omit-frame-pointer" else "-Os -g -flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
         'LDFLAGS=-static -municode ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections${pkgs.lib.optionalString legacy ",--major-os-version,5,--minor-os-version,${if arch == "x86_64" then "2" else "0"},--major-subsystem-version,5,--minor-subsystem-version,${if arch == "x86_64" then "2" else "0"}"}'
         "JANSSON_CFLAGS=$($PKG_CONFIG --cflags jansson)"
