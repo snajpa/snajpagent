@@ -9,6 +9,12 @@
   Model API) rejected `"none"` with HTTP 400 and failed the whole turn, including
   its derived input-token count request. Tool-less requests never send a tool
   choice now, and the terminal suite fails if one does.
+- Ship experimental `windows-x86_64` builds: the Windows legacy path (0x0502)
+  gains a `select()`-based `poll()` shim, an `AI_NUMERICSERV` fallback,
+  `SystemFunction036` randomness and pty/libc++ header alignment
+  (build-validated; Windows execution is unqualified and the runtime
+  behavior is not yet exercised).
+
 - Announce an accepted empty-draft chat/rollout switch (`/chat`, `/rollout` or
   Tab) with a durable `switching to chat`/`switching to rollout` line before the
   repaint, so the keystroke is visibly accepted; a repeat switch is ignored while
