@@ -1,0 +1,68 @@
+# SPDX-License-Identifier: MPL-2.0
+# libjuice 1.7.0 legacy-BSD portability:
+# - BSD net/if.h (OpenBSD 5.9/3.5, NetBSD, FreeBSD 8.4/5.1) uses struct
+#   sockaddr by value; include <sys/socket.h> before it.
+# - NetBSD 2.0 / FreeBSD 5.1 / OpenBSD 3.5 SDKs predate AI_NUMERICSERV and
+#   MSG_NOSIGNAL; define zero-flag fallbacks for the portable paths.
+# - OpenBSD 3.5 inttypes.h lacks the C99 PRI macros; print the one site with
+#   an explicit cast and %llu.
+# - OpenBSD 3.5 keeps struct timespec/clock_gettime in sys/time.h; include it,
+#   and fall back to the realtime clock where CLOCK_MONOTONIC is missing
+#   (FreeBSD 5.1), matching the existing non-monotonic Apple fallback.
+# - The zero MSG_NOSIGNAL fallback is safe here: the application ignores
+#   SIGPIPE via snag_ignore_sigpipe() on POSIX; Windows is a documented no-op.
+--- a/src/socket.h
++++ b/src/socket.h
+@@ -64,6 +64,8 @@
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <limits.h>
++/* BSD net/if.h uses struct sockaddr by value; give it the definition. */
++#include <sys/socket.h>
+ #include <net/if.h>
+ #include <netdb.h>
+ #include <netinet/in.h>
+@@ -77,6 +79,15 @@
+ #include <sys/types.h>
+ #include <unistd.h>
+ 
++/* Legacy BSD SDKs (e.g. NetBSD 2.0, FreeBSD 5.1, OpenBSD 3.5) predate these
++   flags; a zero flag is a no-op in the portable paths below. */
++#ifndef AI_NUMERICSERV
++#define AI_NUMERICSERV 0
++#endif
++#ifndef MSG_NOSIGNAL
++#define MSG_NOSIGNAL 0
++#endif
++
+ #ifndef __linux__
+ #define NO_PMTUDISC
+ #endif
+--- a/src/agent.c
++++ b/src/agent.c
+@@ -2426,7 +2426,8 @@
+ 		}
+ 	}
+ 
+-	JLOG_VERBOSE("Adding new candidate pair, priority=%" PRIu64, pair.priority);
++	JLOG_VERBOSE("Adding new candidate pair, priority=%llu",
++	             (unsigned long long)pair.priority);
+ 
+ 	// Add pair
+ 	ice_candidate_pair_t *pos = agent->candidate_pairs + agent->candidate_pairs_count;
+--- a/src/timestamp.c
++++ b/src/timestamp.c
+@@ -12,6 +12,13 @@
+ #include <windows.h>
+ #else
+ #include <time.h>
++#include <sys/time.h> // struct timespec and clock_gettime on older BSD SDKs
++
++#if !defined(__APPLE__) && !defined(CLOCK_MONOTONIC)
++// Older SDKs (FreeBSD 5.1) predate the monotonic clock; the realtime clock
++// is the best available source, as in the Apple fallback below.
++#define CLOCK_MONOTONIC 0
++#endif
+ 
+ // clock_gettime() is not implemented on older versions of OS X (< 10.12)
+ #if defined(__APPLE__) && !defined(CLOCK_MONOTONIC)

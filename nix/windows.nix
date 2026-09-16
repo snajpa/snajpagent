@@ -65,6 +65,11 @@ let
     });
   voiceRtc = import ./voice-rtc-cross.nix {
     inherit pkgs cmakeLibrary tls; sourcePkgs = windows;
+    # usrsctp.h's _WIN32 fallback (no _MSC_VER) defines uint{8,16,32,64}_t
+    # macros; have it include "stdint.h" instead so libc++ sees real types.
+    # The escaped quotes survive CMake's cache and the ninja build lines that
+    # /bin/sh runs, so the compiler sees -DSCTP_STDINT_INCLUDE="stdint.h".
+    rtcFlags = [ "-DCMAKE_CXX_FLAGS=-DSCTP_STDINT_INCLUDE=\\\"stdint.h\\\"" ];
   };
   jansson = cmakeLibrary windows.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF"
@@ -83,6 +88,8 @@ let
     postPatch = ''
       perl scripts/config.pl set MBEDTLS_THREADING_C
       perl scripts/config.pl set MBEDTLS_THREADING_PTHREAD
+      # libdatachannel uses the DTLS-SRTP API; enable it (PROTO_DTLS is on).
+      perl scripts/config.pl set MBEDTLS_SSL_DTLS_SRTP
     '' + pkgs.lib.optionalString legacy ''
       substituteInPlace library/CMakeLists.txt \
         --replace-fail 'ws2_32 bcrypt' 'ws2_32 advapi32'

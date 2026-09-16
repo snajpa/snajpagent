@@ -12,6 +12,7 @@ let
       rev = "5948a4162d37bc213d6051b67ee2876ccc5a99a6";
       sha256 = "0xa8p87m1w9192jap14rz4c9xyi8q17gyqm6675kgqsqm6ni353h";
     };
+    patches = [ ./libjuice-bsd-legacy.patch ];
     nativeBuildInputs = [ pkgs.cmake pkgs.ninja ];
     cmakeFlags = [ "-DBUILD_SHARED_LIBS=OFF" "-DNO_TESTS=ON" "-DNO_SERVER=ON" ];
   };

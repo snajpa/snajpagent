@@ -67,6 +67,9 @@
     # Older libtool assumes native ranlib's timestamp-only option. LLVM
     # rebuilds the deterministic archive index instead, as in the IDN recipe.
     substituteInPlace configure --replace-fail 'RANLIB -t' 'RANLIB'
+    # OpenBSD 7.x renamed the ctype masks to _CTYPE_*; keep the historical
+    # spellings compiling against either SDK generation.
+    patch -p1 < ${./libstdcxx-openbsd-ctype-masks.patch}
   '' + pkgs.lib.optionalString (os == "openbsd" && pkgs.lib.versionOlder osVersion "4.0") ''
     # The SDK exposes only part of C99 stdio. Keep the upstream declarations,
     # using the compiler's native varargs type and matching visible prototypes.
