@@ -192,9 +192,11 @@ let
     inherit pkgs cmakeLibrary tls; sourcePkgs = sourcePkgs;
     # OpenBSD 3.5's inttypes.h omits the C99 format macros (PRIx64).
     srtpPatches = lib.optional early ./libsrtp-openbsd35-inttypes.patch;
+    # 3.5's netinet/in.h needs sys/types.h first; seed the checked header.
+    srtpFlags = lib.optional early "-DHAVE_NETINET_IN_H=1";
     # OpenBSD 7.x dropped struct route_in6 from the userland headers; the
     # legacy SDKs still provide it, so only the modern targets take the patch.
-    sctpPatches = lib.optional (!legacy) ./usrsctp-openbsd-route-in6.patch;
+    sctpPatches = [ ./usrsctp-bsd-tailq-safe.patch ] ++ lib.optional (!legacy) ./usrsctp-openbsd-route-in6.patch;
     # OpenBSD 5.9/3.5 net/if.h needs struct sockaddr complete first (7.9 does not).
     rtcPatches = lib.optional legacy ./libdatachannel-bsd-sockaddr.patch;
     # Keep the C++ runtime consistent with the variant's application flags and

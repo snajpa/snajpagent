@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0-only
 { pkgs, sourcePkgs, cmakeLibrary, tls, cxxFlags ? null, cxxLibraries ? null,
-  rtcFlags ? [], rtcPatches ? [], srtpPatches ? [], sctpPatches ? [] }:
+  rtcFlags ? [], rtcPatches ? [], srtpPatches ? [], srtpFlags ? [], sctpPatches ? [] }:
 let
   source = import ./voice-rtc.nix { inherit pkgs; target = sourcePkgs; };
   juice = cmakeLibrary source.juice [ "-DNO_TESTS=ON" "-DNO_SERVER=ON" ] [];
-  srtp = (cmakeLibrary sourcePkgs.srtp [ "-DENABLE_OPENSSL=OFF" "-DTEST_APPS=OFF" ] []).overrideAttrs (old: {
+  srtp = (cmakeLibrary sourcePkgs.srtp ([ "-DENABLE_OPENSSL=OFF" "-DLIBSRTP_TEST_APPS=OFF" ] ++ srtpFlags) []).overrideAttrs (old: {
     patches = (old.patches or []) ++ srtpPatches;
     postPatch = (old.postPatch or "") + ''
       # ntohl() is u_long under Windows (winsock); align the %08x debug formats.

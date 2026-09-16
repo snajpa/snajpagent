@@ -170,6 +170,8 @@ let
   };
   voiceRtc = import ./voice-rtc-cross.nix {
     inherit pkgs cmakeLibrary tls; sourcePkgs = sourcePkgs;
+    # NetBSD 2.0's sys/queue.h lacks TAILQ_FOREACH_SAFE.
+    sctpPatches = [ ./usrsctp-bsd-tailq-safe.patch ];
     cxxFlags = "${cflags} -stdlib=libstdc++ -pthread -fno-builtin-pow -fno-builtin-powf -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}${lib.optionalString early " -include ${./bsd-legacy-cxx.h}"}";
     cxxLibraries = "${ldflags} -L${cxx}/lib";
   };
