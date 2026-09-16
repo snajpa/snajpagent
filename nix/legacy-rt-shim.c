@@ -10,14 +10,23 @@
 #include <time.h>
 #include <unistd.h>
 
+#if defined(__OpenBSD__)
+/* OpenBSD's SSP reads a hidden canary symbol; its libc supplies __guard and
+   __stack_smash_handler but not this hidden definition. */
+__attribute__((visibility("hidden"))) uintptr_t __guard_local =
+    (uintptr_t)0x0badc0defeedfaceULL;
+#define LEGACYRT_GUARD __guard_local
+#else
 uintptr_t __stack_chk_guard = (uintptr_t)0x0badc0defeedfaceULL;
+#define LEGACYRT_GUARD __stack_chk_guard
+#endif
 
 __attribute__((constructor)) static void
 legacyrt_seed_guard(void)
 {
-	__stack_chk_guard ^= (uintptr_t)getpid();
-	__stack_chk_guard ^= (uintptr_t)&__stack_chk_guard;
-	__stack_chk_guard ^= (uintptr_t)time((time_t *)0);
+	LEGACYRT_GUARD ^= (uintptr_t)getpid();
+	LEGACYRT_GUARD ^= (uintptr_t)&LEGACYRT_GUARD;
+	LEGACYRT_GUARD ^= (uintptr_t)time((time_t *)0);
 }
 
 void
