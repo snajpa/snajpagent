@@ -1476,7 +1476,7 @@ turns stay cancelled; retained completed or uncertain tool calls are never
 blindly executed again.  Paused queues and goals remain paused.
 Ordinary turns retry failures automatically up to
 .B max_turn_retries
-additional times (default five), then display the manual retry hint.
+additional times (default five), then display the manual retry hint. A repeated identical definitive provider rejection fails at once instead of replaying.
 Automatic retry counts and their original limit survive restart.  A successful
 actionable response or manual retry after terminal failure starts a fresh budget.
 Active goals recover ordinary failures without an attempt limit.  Same-process

@@ -9,6 +9,7 @@
 #include "credential.h"
 #include "json.h"
 #include "provider.h"
+#include "provider_retry.h"
 #include "render.h"
 #include "rules.h"
 #include "rules_command.h"
@@ -65,6 +66,9 @@ struct turn_retry {
     uint32_t limit;
     enum snag_goal_status goal_status;
     bool pending, new_input;
+    char last_failure_code[64];
+    char last_failure_type[64];
+    char last_failure_message[256];
 };
 
 static bool
@@ -3480,6 +3484,27 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 app->turn_policy_stopped = SNAG_POLICY_STOP_PROVIDER;
             if (!app->stream_failed && provider_failure.new_input &&
                 app->session.goal_status != SNAG_GOAL_ACTIVE) retry->limit = retry->attempts;
+            /* A repeated identical provider rejection would replay byte-identically:
+             * stop the turn instead of burning the whole budget on it. */
+            if (!provider_failure.new_input && !snag_provider_failure_is_policy(&provider_failure) &&
+                !capacity_failure && !app->stream_failed &&
+                app->session.goal_status != SNAG_GOAL_ACTIVE &&
+                provider_failure.output_correction == SNAG_OUTPUT_CORRECTION_NONE &&
+                (provider_failure.code[0] || provider_failure.type[0]) &&
+                !snag_provider_failure_retryable(0, provider_failure.code, provider_failure.type)) {
+                if (!strcmp(retry->last_failure_code, provider_failure.code) &&
+                    !strcmp(retry->last_failure_type, provider_failure.type) &&
+                    !strcmp(retry->last_failure_message, provider_failure.message))
+                    retry->limit = retry->attempts;
+                else {
+                    (void)snag_strcpy(retry->last_failure_code, sizeof(retry->last_failure_code),
+                                      provider_failure.code);
+                    (void)snag_strcpy(retry->last_failure_type, sizeof(retry->last_failure_type),
+                                      provider_failure.type);
+                    (void)snag_strcpy(retry->last_failure_message, sizeof(retry->last_failure_message),
+                                      provider_failure.message);
+                }
+            }
             if (fail_response(app, retry, turn_id, response_id, cycle, class_name,
                               failure, partial, provider_retry_count, app->stream_failed ?
                               (app->stream_errno == EPROTO ? "protocol_failure" : "output_failure") :
@@ -3612,6 +3637,9 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         }
         if (decision.outcome == SNAG_GRAPH_CALLS || decision.outcome == SNAG_GRAPH_FINAL) {
             retry->attempts = 0u;
+            retry->last_failure_code[0] = '\0';
+            retry->last_failure_type[0] = '\0';
+            retry->last_failure_message[0] = '\0';
             app->recovery_delay_ms = 0u;
         }
         if (app->networked && !app->session.active_read_only &&
