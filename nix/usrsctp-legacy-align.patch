@@ -1,13 +1,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # usrsctp: legacy SDKs lack the kernel alignment macros the shim uses
-# (NetBSD 2.x: __ALIGNBYTES; OpenBSD 3.5: _ALIGN). Presence-gated fallbacks,
-# values mirroring the modern sysroots (amd64/_types.h, amd64/cdefs.h).
+# (NetBSD 2.x: __ALIGNBYTES; OpenBSD 3.5: _ALIGN). Presence-gated fallbacks
+# placed in the POSIX branch, before the CMSG_ALIGN platform chain; values
+# mirror the modern sysroots (amd64/_types.h, amd64/cdefs.h).
 --- a/usrsctplib/netinet/sctp_os_userspace.h
 +++ b/usrsctplib/netinet/sctp_os_userspace.h
-@@ -243,6 +243,16 @@
-  * but that check doesn't work in all cases. So be more pedantic...
+@@ -1064,6 +1064,16 @@
+ /* with the current included files, this is defined in Linux but
+  *  in FreeBSD, it is behind a _KERNEL in sys/socket.h ...
   */
- #define CMSG_DATA(x) WSA_CMSG_DATA(x)
 +/* Legacy SDKs (NetBSD 2.x, OpenBSD 3.5) lack these kernel alignment macros;
 +   define them where the SDK does not (values mirror amd64/_types.h and
 +   amd64/cdefs.h). */
@@ -18,6 +19,6 @@
 +#define _ALIGN(p) (((unsigned long)(p) + __ALIGNBYTES) & ~__ALIGNBYTES)
 +#endif
 +
- #define CMSG_ALIGN(x) WSA_CMSGDATA_ALIGN(x)
- #ifndef CMSG_FIRSTHDR
- #define CMSG_FIRSTHDR(x) WSA_CMSG_FIRSTHDR(x)
+ #if defined(__DragonFly__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__native_client__)
+ /* stolen from /usr/include/sys/socket.h */
+ #define CMSG_ALIGN(n)   _ALIGN(n)
