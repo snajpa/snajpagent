@@ -11,8 +11,23 @@
 #   (FreeBSD 5.1), matching the existing non-monotonic Apple fallback.
 # - The zero MSG_NOSIGNAL fallback is safe here: the application ignores
 #   SIGPIPE via snag_ignore_sigpipe() on POSIX; Windows is a documented no-op.
+# - mingw-w64's ws2tcpip.h exposes AI_NUMERICSERV only for _WIN32_WINNT >=
+#   0x0600; the Windows x86_64 target pins 0x0502, so supply the SDK value.
 --- a/src/socket.h
 +++ b/src/socket.h
+@@ -24,6 +24,12 @@
+ #include <iphlpapi.h>
+ #include <windows.h>
+ 
++/* mingw-w64's ws2tcpip.h exposes AI_NUMERICSERV only for _WIN32_WINNT >= 0x0600
++   (value 0x00000008); the Windows x86_64 target pins 0x0502. Supply it there. */
++#ifndef AI_NUMERICSERV
++#define AI_NUMERICSERV 0x00000008
++#endif
++
+ #ifdef __MINGW32__
+ #include <sys/stat.h>
+ #include <sys/time.h>
 @@ -64,6 +64,8 @@
  #include <errno.h>
  #include <fcntl.h>
