@@ -44,7 +44,9 @@ enum snag_token_count_mode {
     SNAG_TOKEN_COUNT_AUTO, SNAG_TOKEN_COUNT_OFF, SNAG_TOKEN_COUNT_STRICT };
 
 enum snag_auth_kind {
-    SNAG_AUTH_API_KEY, SNAG_AUTH_CHATGPT };
+    SNAG_AUTH_API_KEY, SNAG_AUTH_CHATGPT, SNAG_AUTH_META };
+
+#define SNAG_META_BASE "https://api.meta.ai/v1"
 
 #define SNAG_CHATGPT_BASE "https://chatgpt.com/backend-api/codex"
 

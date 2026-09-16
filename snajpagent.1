@@ -214,7 +214,7 @@ Use the source-build instructions below for other build environments; an
 unlisted OS or ABI is not a qualified binary target.
 .SS Provider setup
 On a fresh interactive launch without configuration or existing environment
-credentials, choose ChatGPT/Codex, OpenRouter, OpenAI, or a custom provider.
+credentials, choose ChatGPT/Codex, Meta subscription, OpenRouter, OpenAI, or a custom provider.
 Complete device login or enter a masked API key (blank selects an environment
 variable), optionally fetch that provider's catalog, and choose a model.
 Setup creates a minimal private configuration and separate credential store,
@@ -1718,6 +1718,7 @@ must precede the login/logout command.
 .BI "login " [provider]
 Authenticate a configured provider or choose one of the
 .BR codex ,
+.BR meta ,
 .BR openrouter ,
 .BR openai ,
 and
@@ -1727,9 +1728,11 @@ fallback to another provider or authentication method.  Login does not change
 the default model in an existing configuration.
 .TP
 .B --device-auth
-Use the native Codex device flow.  Open the printed verification URL and enter
-the one-time code.  Device login must be enabled in the ChatGPT account or
-workspace.  Waiting is bounded to 15 minutes; Ctrl-C cancels.
+Use the native device flow of a direct Codex or Meta provider.  Open the
+printed verification page and confirm or enter the one-time code.  ChatGPT
+device login must be enabled in the ChatGPT account or workspace.  Waiting
+is bounded by the issued link lifetime; Ctrl-C cancels.
+MUSE_AUTH_URL and MUSE_CLIENT_ID override the Meta issuer and client identifier.
 .TP
 .B --with-api-key
 Read one API key from stdin for explicit login.  No key argument is accepted.
@@ -1744,7 +1747,7 @@ provider or refreshing tokens.  Provider entitlements require a remote check.
 .TP
 .BI "logout " [provider]
 Remove only the selected provider's stored login.  If omitted, select the
-configured default provider.  Environment variables and Codex's own credentials
+configured default provider.  Environment variables and the Codex or Meta CLI credentials
 are not modified; other provider logins remain intact.
 .PP
 Automatic setup never consumes piped task input or runs for execution, resume,
@@ -1888,6 +1891,12 @@ Authentication method:
 uses stored Codex OAuth credentials with automatic refresh.
 ChatGPT auth requires the exact base
 .BR https://chatgpt.com/backend-api/codex
+and no api_key setting.
+.B meta
+uses stored Meta subscription OAuth credentials with automatic refresh while
+the issuer honors it.
+Meta auth requires the exact base
+.BR https://api.meta.ai/v1
 and no api_key setting.
 These tokens are never sent to a custom endpoint.  Existing bearer-auth
 Codex-compatible proxies use

@@ -40,6 +40,7 @@ snag_auth_kind_name(enum snag_auth_kind kind)
     switch (kind) {
     case SNAG_AUTH_API_KEY: return "api_key";
     case SNAG_AUTH_CHATGPT: return "chatgpt";
+    case SNAG_AUTH_META: return "meta";
     }
     return "invalid";
 }
@@ -78,8 +79,13 @@ static bool
 provider_valid(const struct snag_provider_config *provider)
 {
     if (!provider || !snag_config_name_valid(provider->name) ||
-        (provider->auth != SNAG_AUTH_API_KEY && provider->auth != SNAG_AUTH_CHATGPT)) return false;
-    return provider->auth != SNAG_AUTH_CHATGPT || strcmp(provider->base_url, SNAG_CHATGPT_BASE) == 0;
+        (provider->auth != SNAG_AUTH_API_KEY && provider->auth != SNAG_AUTH_CHATGPT &&
+         provider->auth != SNAG_AUTH_META)) return false;
+    if (provider->auth == SNAG_AUTH_CHATGPT)
+        return strcmp(provider->base_url, SNAG_CHATGPT_BASE) == 0;
+    if (provider->auth == SNAG_AUTH_META)
+        return strcmp(provider->base_url, SNAG_META_BASE) == 0;
+    return true;
 }
 
 static int
@@ -155,11 +161,16 @@ read_tokens(int dir, const struct snag_provider_config *provider, struct snag_au
         !token_copy(tokens->credential.value, sizeof(tokens->credential.value),
                      snag_json_string(value, "access_token"), false) ||
         !token_copy(tokens->refresh_token, sizeof(tokens->refresh_token),
-                     snag_json_string(value, "refresh_token"), provider->auth != SNAG_AUTH_CHATGPT) ||
+                     snag_json_string(value, "refresh_token"),
+                     provider->auth == SNAG_AUTH_API_KEY ||
+                     provider->auth == SNAG_AUTH_META) ||
         !token_copy(tokens->credential.account_id, sizeof(tokens->credential.account_id),
-                     snag_json_string(value, "account_id"), provider->auth != SNAG_AUTH_CHATGPT) ||
+                     snag_json_string(value, "account_id"),
+                     provider->auth == SNAG_AUTH_API_KEY ||
+                     provider->auth == SNAG_AUTH_META) ||
         snag_json_integer_u64(value, "expires_at_ms", &tokens->expires_at_ms) < 0 ||
-        (provider->auth == SNAG_AUTH_CHATGPT && !tokens->expires_at_ms) ||
+        ((provider->auth == SNAG_AUTH_CHATGPT || provider->auth == SNAG_AUTH_META) &&
+         !tokens->expires_at_ms) ||
         (provider->auth == SNAG_AUTH_API_KEY && (tokens->expires_at_ms ||
             tokens->refresh_token[0] || tokens->credential.account_id[0]))) goto out;
     tokens->credential.len = strlen(tokens->credential.value);
@@ -324,14 +335,17 @@ snag_auth_read(int root_fd, const struct snag_provider_config *provider,
         rc = -1;
         goto done;
     }
-    if (provider->auth == SNAG_AUTH_CHATGPT && (force || tokens.expires_at_ms <= snag_time_ms() + 60000u)) {
+    if ((provider->auth == SNAG_AUTH_CHATGPT || provider->auth == SNAG_AUTH_META) &&
+        (force || tokens.expires_at_ms <= snag_time_ms() + 60000u)) {
         rc = -1;
         dir = auth_dir(root_fd, false);
         if (dir < 0 || (lock = lock_provider(dir, provider->name, pump, opaque)) < 0 ||
             read_tokens(dir, provider, &tokens) != 0) goto done;
         if ((force && stale && strcmp(stale, tokens.credential.value) == 0) ||
             tokens.expires_at_ms <= snag_time_ms() + 60000u) {
-            if (snag_auth_refresh(&tokens, pump, opaque, error, error_size) < 0 ||
+            int (*refresh)(struct snag_auth_tokens *, snag_auth_pump_fn, void *, char *, size_t) =
+                provider->auth == SNAG_AUTH_META ? snag_auth_refresh_meta : snag_auth_refresh;
+            if (refresh(&tokens, pump, opaque, error, error_size) < 0 ||
                 write_tokens(dir, provider, &tokens) < 0) goto done;
         }
         rc = 0;

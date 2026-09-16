@@ -72,6 +72,11 @@
   the endpoint, and the selection adopts the fresh target whenever the endpoint
   republishes its topology; frozen model requests still fail individually
   against their own revision.
+- Add a Meta subscription provider next to the paid Meta API-key regime. The Meta login runs
+  the native OAuth2 device flow and stores endpoint-bound credentials with automatic refresh
+  while the issuer honors it, and serves the Muse subscription over the same Responses path as
+  an API key. Authentication error bodies with a machine-readable code are now parsed, so a
+  device-grant denial or expiry surfaces instead of a bare HTTP status.
 - Send a stable prompt cache key on every request, derived once from the session, provider, model
   and profile, so a provider can reuse a session's cached prefix; the compaction request, the
   largest request a session sends, carried no key at all before this.

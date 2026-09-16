@@ -673,6 +673,7 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         if (!strcmp(key, "auth")) {
             if (!strcmp(value, "api_key")) provider->auth = SNAG_AUTH_API_KEY;
             else if (!strcmp(value, "chatgpt")) provider->auth = SNAG_AUTH_CHATGPT;
+            else if (!strcmp(value, "meta")) provider->auth = SNAG_AUTH_META;
             else goto invalid;
             return 0;
         }
@@ -1019,6 +1020,12 @@ validate_config(struct snag_config *config, bool private_file, char *error, size
             return snag_fail(error, error_size, EINVAL,
                        "chatgpt authentication requires " SNAG_CHATGPT_BASE " and no api_key");
         }
+        if (config->providers[i].auth == SNAG_AUTH_META &&
+            (strcmp(config->providers[i].base_url, SNAG_META_BASE) != 0 ||
+             config->providers[i].api_key.kind != SNAG_SECRET_NONE)) {
+            return snag_fail(error, error_size, EINVAL,
+                       "meta authentication requires " SNAG_META_BASE " and no api_key");
+        }
     }
     for (size_t i = 0; i < config->model_limit_count; ++i) {
         const struct snag_model_limit_config *limit = &config->model_limits[i];
@@ -1120,7 +1127,8 @@ out: snag_config_free(&candidate);
 static int
 provider_settings(struct snag_buf *output, const struct snag_provider_config *p)
 {
-    const char *auth = p->auth == SNAG_AUTH_CHATGPT ? "chatgpt" : "api_key";
+    const char *auth = p->auth == SNAG_AUTH_CHATGPT ? "chatgpt" :
+        p->auth == SNAG_AUTH_META ? "meta" : "api_key";
     if (snag_buf_printf(output, "auth = %s\nbase_url = %s\nnative_compaction = %s\nparallel_tool_calls = %s\n",
                         auth, p->base_url, p->native_compaction ? "true" : "false",
                         p->parallel_tool_calls ? "true" : "false") < 0) return -1;
@@ -1218,8 +1226,10 @@ int
 snag_config_validate_provider(const struct snag_provider_config *provider, char *error, size_t error_size)
 {
     int rc = -1;
-    if (!provider || !snag_config_name_valid(provider->name) || (provider->auth == SNAG_AUTH_CHATGPT &&
-         (strcmp(provider->base_url, SNAG_CHATGPT_BASE) || provider->api_key.kind != SNAG_SECRET_NONE)))
+    if (!provider || !snag_config_name_valid(provider->name) || ((provider->auth == SNAG_AUTH_CHATGPT || provider->auth == SNAG_AUTH_META) &&
+         ((provider->auth == SNAG_AUTH_CHATGPT && strcmp(provider->base_url, SNAG_CHATGPT_BASE)) ||
+          (provider->auth == SNAG_AUTH_META && strcmp(provider->base_url, SNAG_META_BASE)) ||
+          provider->api_key.kind != SNAG_SECRET_NONE)))
         return snag_errorf(error, error_size, "invalid provider or ChatGPT endpoint");
     struct snag_buf text = {.max = SNAG_CONFIG_FILE_MAX};
     if (snag_buf_printf(&text, "[provider %s]\n", provider->name) == 0 &&
@@ -1376,7 +1386,8 @@ snag_config_save_provider(const char *path, bool allow_create, const struct snag
                          const char *initial_model, const char *effort, char *error, size_t error_size)
 {
     if (!provider || !snag_config_name_valid(provider->name) ||
-        (provider->auth == SNAG_AUTH_CHATGPT && strcmp(provider->base_url, SNAG_CHATGPT_BASE)) ||
+        ((provider->auth == SNAG_AUTH_CHATGPT && strcmp(provider->base_url, SNAG_CHATGPT_BASE)) ||
+        (provider->auth == SNAG_AUTH_META && strcmp(provider->base_url, SNAG_META_BASE))) ||
         strchr(provider->base_url, '\n') || strchr(provider->base_url, '\r'))
         return snag_errorf(error, error_size, "invalid provider settings");
     return save_config_settings(path, allow_create, provider->name,

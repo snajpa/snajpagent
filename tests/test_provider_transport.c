@@ -107,7 +107,12 @@ enum model_fixture {
     MODEL_AUTH_REFRESH,
     MODEL_AUTH_REFRESH_FAILURE,
     MODEL_AUTH_401,
-    MODEL_AUTH_401_TWICE
+    MODEL_AUTH_401_TWICE,
+    MODEL_META_DEVICE,
+    MODEL_META_DENIED,
+    MODEL_META_EXPIRED,
+    MODEL_META_REFRESH,
+    MODEL_META_REFRESH_FAILURE
 };
 
 static bool authentication_fixture;
@@ -273,8 +278,80 @@ serve_one(int listen_fd, unsigned int status, const char *method, const char *pa
 }
 
 static void
+meta_auth_server_child(int listen_fd, enum model_fixture fixture)
+{
+    struct http_request request;
+    int fd;
+
+    authentication_fixture = true;
+    (void)alarm(15u);
+    if (fixture == MODEL_META_REFRESH || fixture == MODEL_META_REFRESH_FAILURE) {
+        fd = accept(listen_fd, NULL, NULL);
+        if (fd < 0) server_fail("meta accept failed");
+        read_request(fd, &request);
+        if (strcmp(request.method, "POST") || strcmp(request.path, "/oidc/device/token/") ||
+            !strstr(request.body, "grant_type=refresh_token") ||
+            !strstr(request.body, "meta-old-refresh")) server_fail("wrong Meta refresh request");
+        if (fixture == MODEL_META_REFRESH_FAILURE)
+            send_response(fd, 401u, "application/json", "{\"error\":\"revoked\"}");
+        else
+            send_response(fd, 200u, "application/json",
+                          "{\"access_token\":\"meta-new-access\",\"refresh_token\":\"meta-new-refresh\",\"expires_in\":3600}");
+        if (close(fd) < 0) server_fail("close Meta refresh socket failed");
+        _exit(0);
+    }
+fd = accept(listen_fd, NULL, NULL);
+    if (fd < 0) server_fail("meta accept failed");
+    read_request(fd, &request);
+    if (strcmp(request.method, "POST") || strcmp(request.path, "/oidc/device/authorization/") ||
+        !strstr(request.body, "client_id=")) server_fail("wrong Meta authorization request");
+    send_response(fd, 200u, "application/json",
+                  "{\"device_code\":\"meta-device\",\"user_code\":\"ABCD-1234\","
+                  "\"verification_uri\":\"https://auth.meta.com/oidc/device/\","
+                  "\"verification_uri_complete\":\"https://auth.meta.com/oidc/device/?code=ABCD-1234\","
+                  "\"expires_in\":900,\"interval\":1}");
+    if (close(fd) < 0) server_fail("close Meta authorization socket failed");
+    if (fixture == MODEL_META_DENIED || fixture == MODEL_META_EXPIRED) {
+        fd = accept(listen_fd, NULL, NULL);
+        if (fd < 0) server_fail("meta accept failed");
+        read_request(fd, &request);
+        if (strcmp(request.method, "POST") || strcmp(request.path, "/oidc/device/token/") ||
+            !strstr(request.body, "device_code=meta-device"))
+            server_fail("wrong Meta token request");
+        if (fixture == MODEL_META_DENIED)
+            send_response(fd, 400u, "application/json", "{\"error\":\"access_denied\"}");
+        else
+            send_response(fd, 400u, "application/json", "{\"error\":\"expired_token\"}");
+        if (close(fd) < 0) server_fail("close Meta token socket failed");
+        _exit(0);
+    }
+    fd = accept(listen_fd, NULL, NULL);
+    if (fd < 0) server_fail("meta accept failed");
+    read_request(fd, &request);
+    if (strcmp(request.method, "POST") || strcmp(request.path, "/oidc/device/token/") ||
+        !strstr(request.body, "device_code=meta-device"))
+        server_fail("wrong Meta token request");
+    send_response(fd, 400u, "application/json", "{\"error\":\"authorization_pending\"}");
+    if (close(fd) < 0) server_fail("close Meta token socket failed");
+    fd = accept(listen_fd, NULL, NULL);
+    if (fd < 0) server_fail("meta accept failed");
+    read_request(fd, &request);
+    if (strcmp(request.method, "POST") || strcmp(request.path, "/oidc/device/token/") ||
+        !strstr(request.body, "device_code=meta-device"))
+        server_fail("wrong Meta token request");
+    send_response(fd, 200u, "application/json",
+                  "{\"access_token\":\"meta-access\",\"refresh_token\":\"meta-refresh\",\"expires_in\":3600}");
+    if (close(fd) < 0) server_fail("close Meta token socket failed");
+    _exit(0);
+}
+
+static void
 auth_server_child(int listen_fd, enum model_fixture fixture)
 {
+    if (fixture >= MODEL_META_DEVICE) {
+        meta_auth_server_child(listen_fd, fixture);
+        return;
+    }
     static const char tokens[] =
         "{\"access_token\":\"new-access\",\"refresh_token\":\"new-refresh\",\"expires_in\":3600,"
         "\"id_token\":\"e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC10ZXN0In19.sig\"}";
@@ -1740,6 +1817,87 @@ test_provider_auth(void)
         stop_server(&server);
     }
     assert(unsetenv("SNAJPAGENT_TEST_AUTH_BASE") == 0);
+    /* Meta subscription: token responses keep prior refresh and account. */
+    config.providers[1].auth = SNAG_AUTH_META;
+    strcpy(config.providers[1].base_url, SNAG_META_BASE);
+    {
+        json_t *response = json_object();
+        snag_auth_clear(&tokens);
+        assert(snag_auth_token_response_meta(response, &tokens, error, sizeof(error)) < 0);
+        assert(tokens.credential.len == 0u);
+        assert(snag_auth_key(&tokens, "old-access", error, sizeof(error)) == 0);
+        strcpy(tokens.refresh_token, "meta-old-refresh");
+        strcpy(tokens.credential.account_id, "meta-user");
+        assert(json_object_set_new(response, "access_token", json_string("rotated-access")) == 0);
+        assert(json_object_set_new(response, "expires_in", json_integer(3600)) == 0);
+        assert(snag_auth_token_response_meta(response, &tokens, error, sizeof(error)) == 0);
+        assert(!strcmp(tokens.credential.value, "rotated-access"));
+        assert(!strcmp(tokens.refresh_token, "meta-old-refresh"));
+        assert(!strcmp(tokens.credential.account_id, "meta-user"));
+        assert(tokens.expires_at_ms > snag_time_ms());
+        snag_auth_json_free(response);
+    }
+    {
+        json_t *jwt = json_object();
+        snag_auth_clear(&tokens);
+        assert(json_object_set_new(jwt, "access_token", json_string("h.eyJzdWIiOiJtZXRhLXVzZXIiLCJleHAiOjk5OTk5OTk5OTl9.sig")) == 0);
+        assert(snag_auth_token_response_meta(jwt, &tokens, error, sizeof(error)) == 0);
+        assert(!strcmp(tokens.credential.account_id, "meta-user"));
+        assert(tokens.expires_at_ms == 9999999999u * 1000u);
+        assert(!tokens.refresh_token[0]);
+        assert(json_object_set_new(jwt, "access_token", json_string("h.eyJzdWIiOiJzb21lb25lLWVsc2UiLCJleHAiOjk5OTk5OTk5OTl9.sig")) == 0);
+        assert(json_object_set_new(jwt, "expires_in", json_integer(3600)) == 0);
+        assert(snag_auth_token_response_meta(jwt, &tokens, error, sizeof(error)) < 0);
+        snag_auth_json_free(jwt);
+    }
+    for (int mode = MODEL_META_DEVICE; mode <= MODEL_META_EXPIRED; ++mode) {
+        start_server(&server, (enum model_fixture)mode, false, "");
+        assert(setenv("SNAJPAGENT_TEST_META_AUTH_BASE", server.endpoint, 1) == 0);
+        memset(error, 0, sizeof(error));
+        int rc = snag_auth_device_meta(&tokens, NULL, NULL, error, sizeof(error));
+        if (mode == MODEL_META_DEVICE) {
+            assert(rc == 0);
+            assert(!strcmp(tokens.credential.value, "meta-access"));
+            assert(!strcmp(tokens.refresh_token, "meta-refresh"));
+            assert(tokens.expires_at_ms > snag_time_ms());
+        } else {
+            assert(rc < 0);
+            assert(tokens.credential.len == 0u);
+        }
+        stop_server(&server);
+    }
+
+    for (int mode = MODEL_META_REFRESH; mode <= MODEL_META_REFRESH_FAILURE; ++mode) {
+        assert(snag_auth_key(&tokens, "old-access", error, sizeof(error)) == 0);
+        strcpy(tokens.refresh_token, "meta-old-refresh");
+        tokens.expires_at_ms = 1u;
+        assert(snag_auth_save(store.root_fd, &config.providers[1], &tokens, NULL,
+                              NULL, NULL, error, sizeof(error)) == 0);
+        start_server(&server, (enum model_fixture)mode, false, "");
+        assert(setenv("SNAJPAGENT_TEST_META_AUTH_BASE", server.endpoint, 1) == 0);
+        memset(error, 0, sizeof(error));
+        if (mode == MODEL_META_REFRESH) {
+            assert(snag_auth_read(store.root_fd, &config.providers[1], false, NULL,
+                &credential, NULL, NULL, error, sizeof(error)) == 0);
+            assert(!strcmp(credential.value, "meta-new-access"));
+            assert(snag_auth_load(store.root_fd, &config.providers[1], &loaded, error, sizeof(error)) == 0);
+            assert(!strcmp(loaded.refresh_token, "meta-new-refresh"));
+        } else {
+            assert(snag_auth_read(store.root_fd, &config.providers[1], false, NULL,
+                &credential, NULL, NULL, error, sizeof(error)) < 0);
+            assert(snag_auth_load(store.root_fd, &config.providers[1], &loaded, error, sizeof(error)) == 0);
+            assert(!strcmp(loaded.refresh_token, "meta-old-refresh"));
+        }
+        stop_server(&server);
+    }
+    assert(unsetenv("SNAJPAGENT_TEST_META_AUTH_BASE") == 0);
+    strcpy(config.providers[1].base_url, "https://different.test");
+    assert(snag_auth_load(store.root_fd, &config.providers[1], &loaded, error, sizeof(error)) < 0);
+    strcpy(config.providers[1].base_url, SNAG_META_BASE);
+    assert(snag_auth_load(store.root_fd, &config.providers[1], &loaded, error, sizeof(error)) == 0);
+    assert(!strcmp(loaded.credential.value, "old-access"));
+    assert(snag_auth_logout(store.root_fd, &config.providers[1], NULL, NULL, error, sizeof(error)) == 0);
+    assert(unlinkat(store.root_fd, "auth/other.lock", 0) == 0);
     for (unsigned int pass = 0u; pass < 3u; ++pass) {
         json_t *request = request_with_marker("transport-compact");
         struct snag_json_document output = {0};
