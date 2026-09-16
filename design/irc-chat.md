@@ -273,7 +273,9 @@ and never reused for a removed endpoint. A number names the endpoint, not one
 published revision of it: when a topology change republishes the selected
 endpoint (reconnect to a different advertised room, remove/re-add), the
 selection adopts the new target so ordinary chat input keeps reaching it.
-Frozen requests still fail individually against their own revision. One hosted room or outgoing endpoint
+A frozen model request carrying a stale revision for a still-present number
+follows it the same way; only a claimed future revision fails individually
+against its own revision. One hosted room or outgoing endpoint
 counts once, not once per participant or model/operator socket.
 
 Single-destination use hides the extra labels but accepts the same commands.

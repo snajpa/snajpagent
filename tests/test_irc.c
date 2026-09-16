@@ -441,6 +441,17 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     ++route.targets[0].revision;
     assert(snag_irc_send_route(runtime, &route, true, SNAG_IRC_MESSAGE,
         "wrong-revision", NULL, error, sizeof(error)) == 1);
+    /* A stored route gone stale across a reconnect still names the same
+     * destination by id: it rebinds instead of failing like a future revision. */
+    snag_irc_destinations(runtime, &destinations);
+    for (size_t i = 0u; i < destinations.count; ++i)
+        if (destinations.items[i].target.id == route.targets[0].id &&
+            destinations.items[i].target.revision > 0u) {
+            route.targets[0] = destinations.items[i].target;
+            --route.targets[0].revision;
+        }
+    assert(snag_irc_send_route(runtime, &route, true, SNAG_IRC_MESSAGE,
+        "stale-revision", NULL, error, sizeof(error)) == 0);
     snag_irc_capture_route(runtime, &frozen);
     assert(frozen.count == 2u);
 
