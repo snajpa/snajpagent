@@ -2538,7 +2538,7 @@ assert 'av pdf png freetype expat fontconfig jpeg openjpeg miniaudio' in netbsd
 assert "'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'" in netbsd
 assert '-std=c++20 ${cflags} ${if legacy then' in netbsd
 assert '${cxx}/lib/libstdc++.a -Wl,-Bdynamic' in netbsd
-assert 'else "-Wl,-Bdynamic -lstdc++"' in netbsd
+assert '${cxx}/lib/libstdc++.a -Wl,-Bdynamic${lib.optionalString (!legacy) " -lstdc++"}' in netbsd
 assert '-fno-builtin-pow -fno-builtin-powf -nostdinc++' in net_pdf
 assert 'postPatch = lib.optionalString early (import ./poppler-legacy-math.nix);' in net_pdf
 assert "--replace-fail 'return lrintf(f);' 'return __builtin_lrintf(f);'" in netbsd
