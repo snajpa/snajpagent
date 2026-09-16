@@ -460,6 +460,9 @@ snajpagent --listen=localhost:6667 --no-client \e
 .fi
 .PP
 Listen, client, nick and room overrides apply before resumed work starts;
+resume options may appear before or after the session id, while
+follow-up text still requires
+.BR -- .
 the live network state is shown locally and supplied to the model.
 A fresh snapshot on interactive resume also records offline and client-only
 state, replacing the previous process's topology as the latest network context.
