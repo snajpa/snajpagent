@@ -11,6 +11,12 @@ let
   compiler = if legacy then "${oldCompiler}/bin/clang" else "${llvm.clang-unwrapped}/bin/clang";
   cxxCompiler = if legacy then "${oldCompiler}/bin/clang++" else "${llvm.clang-unwrapped}/bin/clang++";
   tools = "${llvm.llvm}/bin";
+  legacyRt = pkgs.runCommand "legacyrt-freebsd-${osVersion}" {} ''
+    mkdir -p $out/lib
+    ${compiler} --target=${target} --sysroot=${sdk} -Os -fno-stack-protector \
+      -c ${./legacy-rt-shim.c} -o legacyrt.o
+    ${tools}/llvm-ar rcs $out/lib/liblegacyrt.a legacyrt.o
+  '';
   sdk = pkgs.stdenvNoCC.mkDerivation {
     pname = "freebsd-amd64-sysroot";
     version = osVersion;
@@ -441,7 +447,7 @@ in {
           # The explicit archive bypasses Clang's reserved -lstdc++ rewriting.
           "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') ${cxx}/lib/libstdc++.a -Wl,-Bdynamic -lm${lib.optionalString (!legacy) " -lgcc_s"} -Wl,-Bstatic"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
-          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil${lib.optionalString early " ${compilerBuiltins}/lib/libclang_rt.builtins.a"} -Wl,-Bdynamic -l${threads}"
+          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil${lib.optionalString early " ${compilerBuiltins}/lib/libclang_rt.builtins.a"} -Wl,-Bdynamic -l${threads}${lib.optionalString legacy " ${legacyRt}/lib/liblegacyrt.a"}"
         )
       '';
       installPhase = ''

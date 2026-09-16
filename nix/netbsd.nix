@@ -18,6 +18,12 @@ let
     "${mirror}/NetBSD-${osVersion}/amd64/binary/sets/${set}.${setSuffix}") mirrors;
   llvm = pkgs.llvmPackages_21;
   tools = "${llvm.llvm}/bin";
+  legacyRt = pkgs.runCommand "legacyrt-netbsd-${osVersion}" {} ''
+    mkdir -p $out/lib
+    ${compiler} --target=${target} --sysroot=${sdk} -Os -fno-stack-protector \
+      -c ${./legacy-rt-shim.c} -o legacyrt.o
+    ${tools}/llvm-ar rcs $out/lib/liblegacyrt.a legacyrt.o
+  '';
   sdk = pkgs.stdenvNoCC.mkDerivation {
     pname = "netbsd-amd64-sysroot";
     version = osVersion;
@@ -439,7 +445,7 @@ in {
           "PDF_CFLAGS=$(pkg-config --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')"
           "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') ${if legacy then "${cxx}/lib/libstdc++.a -Wl,-Bdynamic" else "-Wl,-Bdynamic -lstdc++"} -lm -lgcc_s -Wl,-Bstatic"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
-          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil -Wl,-Bdynamic -lpthread"
+          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil -Wl,-Bdynamic -lpthread${lib.optionalString legacy " ${legacyRt}/lib/liblegacyrt.a"}"
         )
       '';
       installPhase = ''

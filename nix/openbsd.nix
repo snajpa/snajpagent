@@ -12,6 +12,12 @@ let
   target = "x86_64-unknown-openbsd${osVersion}";
   llvm = pkgs.llvmPackages_21;
   tools = "${llvm.llvm}/bin";
+  legacyRt = pkgs.runCommand "legacyrt-openbsd-${osVersion}" {} ''
+    mkdir -p $out/lib
+    ${compiler} --target=${target} --sysroot=${sdk} -Os -fno-stack-protector \
+      -c ${./legacy-rt-shim.c} -o legacyrt.o
+    ${tools}/llvm-ar rcs $out/lib/liblegacyrt.a legacyrt.o
+  '';
   mirrors = (lib.optionals (!legacy) [
     "https://cdn.openbsd.org/pub/OpenBSD"
     "https://ftp.hostserver.de/pub/OpenBSD"
@@ -574,7 +580,7 @@ in {
           "PDF_CFLAGS=$(pkg-config --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')"
           "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') ${if legacy then "${cxx}/lib/libstdc++.a -Wl,-Bdynamic" else "-Wl,-Bdynamic -lc++ -lc++abi"} -lm -Wl,-Bstatic"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
-          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil -Wl,-Bdynamic ${if legacy then "-l:libpthread.so.${threadVersion}" else "-lpthread"}"
+          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil -Wl,-Bdynamic ${if legacy then "-l:libpthread.so.${threadVersion}" else "-lpthread"}${lib.optionalString early " ${legacyRt}/lib/liblegacyrt.a"}"
         )
       '';
       installPhase = ''
