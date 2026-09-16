@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# usrsctp: legacy SDKs lack the kernel alignment macros the shim uses
+# (NetBSD 2.x: __ALIGNBYTES; OpenBSD 3.5: _ALIGN). Presence-gated fallbacks,
+# values mirroring the modern sysroots (amd64/_types.h, amd64/cdefs.h).
+--- a/usrsctplib/netinet/sctp_os_userspace.h
++++ b/usrsctplib/netinet/sctp_os_userspace.h
+@@ -243,6 +243,16 @@
+  * but that check doesn't work in all cases. So be more pedantic...
+  */
+ #define CMSG_DATA(x) WSA_CMSG_DATA(x)
++/* Legacy SDKs (NetBSD 2.x, OpenBSD 3.5) lack these kernel alignment macros;
++   define them where the SDK does not (values mirror amd64/_types.h and
++   amd64/cdefs.h). */
++#ifndef __ALIGNBYTES
++#define __ALIGNBYTES (sizeof(long) - 1)
++#endif
++#ifndef _ALIGN
++#define _ALIGN(p) (((unsigned long)(p) + __ALIGNBYTES) & ~__ALIGNBYTES)
++#endif
++
+ #define CMSG_ALIGN(x) WSA_CMSGDATA_ALIGN(x)
+ #ifndef CMSG_FIRSTHDR
+ #define CMSG_FIRSTHDR(x) WSA_CMSG_FIRSTHDR(x)
