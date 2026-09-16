@@ -124,6 +124,7 @@ isolated development build is not yet a release target. Do not wait for all
 planned ports before releasing the implemented matrix, or silently drop a
 target to work around a build failure. Removing an implemented release target
 requires an explicit scope decision, recorded in the release notes.
+Once a target has shipped it stays in the matrix; removal needs root0, no silent deferrals.
 
 ## Assets and identity
 
