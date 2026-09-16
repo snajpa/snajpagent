@@ -196,7 +196,7 @@ let
     srtpFlags = lib.optional early "-DHAVE_NETINET_IN_H=1";
     # OpenBSD 7.x dropped struct route_in6 from the userland headers; the
     # legacy SDKs still provide it, so only the modern targets take the patch.
-    sctpPatches = [ ./usrsctp-bsd-tailq-safe.patch ] ++ lib.optional early ./usrsctp-openbsd35-systypes.patch ++ lib.optional early ./usrsctp-legacy-align.patch ++ lib.optional early ./usrsctp-legacy-timingsafe.patch ++ lib.optional (!legacy) ./usrsctp-openbsd-route-in6.patch;
+    sctpPatches = [ ./usrsctp-bsd-tailq-safe.patch ] ++ lib.optional early ./usrsctp-openbsd35-systypes.patch ++ lib.optional early ./usrsctp-legacy-align.patch ++ lib.optional early ./usrsctp-legacy-enotsup.patch ++ lib.optional early ./usrsctp-legacy-timingsafe.patch ++ lib.optional (!legacy) ./usrsctp-openbsd-route-in6.patch;
     # OpenBSD 5.9/3.5 net/if.h needs struct sockaddr complete first (7.9 does not).
     rtcPatches = lib.optional legacy ./libdatachannel-bsd-sockaddr.patch;
     # Keep the C++ runtime consistent with the variant's application flags and
