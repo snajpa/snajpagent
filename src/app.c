@@ -1889,7 +1889,6 @@ apply_controls(struct app_state *app)
     app->applying_controls = true;
     app->control_requested = false;
     if (!app->session.active_turn && !app->input_closed) {
-        app->interrupt_requested = false;
         app->steering_requested = false;
     }
     int result = 0;
@@ -1948,7 +1947,6 @@ apply_controls(struct app_state *app)
         if (rc < 0 && bit != SNAG_CONTROL_COMPACT) { result = -1; break; }
     }
     app->applying_controls = false;
-    if (!app->session.active_turn && !app->input_closed) app->interrupt_requested = false;
     return result;
 }
 
@@ -4155,6 +4153,12 @@ run_ready_chains(struct app_state *app)
             continue;
         }
         if (app->session.active_turn) {
+            /* Post-cancel deferral: a user interrupt ends the turn with no
+             * new turn from model/queue/reminder/goal sources. Pending user
+             * input and IRC traffic still wake via their own branches below;
+             * everything else waits for the next direct turn start, which
+             * clears interrupt_requested on entry to run_tracked_turn. */
+            if (app->interrupt_requested) return 0;
             if (app->session.policy_stopped) return 0;
             if (app->session.active_goal && app->session.goal_status != SNAG_GOAL_ACTIVE) return 0;
             turn_rc = run_tracked_turn(app, app->session.active_prompt, NULL,
@@ -4174,6 +4178,9 @@ run_ready_chains(struct app_state *app)
                 continue;
             }
         }
+        /* Post-cancel deferral (see above): queue/timer/goal wait for the
+         * next direct turn start; IRC already had its chance above. */
+        if (app->interrupt_requested) return 0;
         if (app->session.queue_armed && !app->queue_edit_id[0] && app->session.pending_queue_count != 0u) {
             turn_rc = run_queued_chain(app);
             if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY) return turn_rc;
@@ -4213,6 +4220,10 @@ submit_idle(struct app_state *app, const char *prompt, enum snag_render_view inp
         return rc < 0 ? 3 : 0;
     }
     if (snag_text_blank(prompt)) return 0;
+    /* A non-blank user submission ends post-cancel deferral: the user is
+     * present, so subsequent ready chains (queue/timer/goal) may run. The
+     * direct turn itself also clears interrupt_requested on entry. */
+    app->interrupt_requested = false;
     rc = snag_app_input_command(app, prompt, app->session.active_turn, &handled, prompt_ready);
     if (rc < 0) return 3;
     if (!handled && single_line && prompt[0] == '/' && prompt[1] != '/') {
