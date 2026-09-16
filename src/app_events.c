@@ -342,7 +342,9 @@ snag_app_irc_flush_urgent(struct app_state *app, char *error, size_t error_size)
     if (!app || !app->session.active_turn) return 0;
     limit = snag_config_model_limit_exact(app->config, app->session.active_turn_provider,
         app->config->model);
-    admit_all = limit && strcmp(limit->steering, "all") == 0;
+    admit_all = (app->session.steering_override && *app->session.steering_override) ?
+        strcmp(app->session.steering_override, "all") == 0 :
+        (limit && strcmp(limit->steering, "all") == 0);
     if (!app->irc_urgent.len && !(admit_all && app->irc_background.len)) return 0;
     if (app->irc_urgent.len) {
         if (snag_random_id(steering_id) < 0 || !(text = pending_batch(&app->irc_urgent, &used)))

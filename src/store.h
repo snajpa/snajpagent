@@ -23,6 +23,7 @@
     "Use irc_send to reply to the local operator in the IRC room before " \
     "ending this turn."
 #define SNAG_MAX_GOAL_PROMPT (1024u * 1024u)
+#define SNAG_BANNER_MAX (4u * 1024u)
 #define SNAG_MAX_GOAL_BLOCKER (64u * 1024u)
 #define SNAG_GOAL_CONTINUATION_TEXT "Continue the active goal from its durable state."
 
@@ -149,6 +150,8 @@ struct snag_session {
     const char *goal_prompt;
     const char *goal_blocker;
     const char *timer_text;
+    const char *banner_text;
+    const char *steering_override;
     /* Private immutable string owners; text fields above and in pending inputs borrow. */
     json_t *strings;
     json_t *compact_output;

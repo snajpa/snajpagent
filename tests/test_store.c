@@ -372,6 +372,39 @@ static void voice_status(struct snag_session *session,const char *queue,const ch
 }
 
 static void
+test_banner_steering(struct snag_store *store,const char *workspace)
+{
+    struct snag_session session;char id[33],error[256];
+    uint64_t durable_seq;
+    snag_session_init(&session);
+    assert(snag_session_create(store,&session,workspace,"default",SNAJPAGENT_MODEL,"medium",error,sizeof(error))==0);
+    memcpy(id,session.id,sizeof(id));
+    assert(!session.banner_text && !session.steering_override);
+    commit_event(&session,"banner_updated",checked_json(json_pack("{s:s}","text","lead cursor: land r33")));
+    assert(session.banner_text && !strcmp(session.banner_text,"lead cursor: land r33"));
+    commit_event(&session,"steering_updated",checked_json(json_pack("{s:s}","mode","all")));
+    assert(session.steering_override && !strcmp(session.steering_override,"all"));
+    durable_seq = session.next_seq;
+    assert(snag_session_commit(&session,"steering_updated",checked_json(json_pack("{s:s}","mode","every")),NULL,error,sizeof(error))<0);
+    assert(session.next_seq == durable_seq);
+    assert(session.steering_override && !strcmp(session.steering_override,"all"));
+    assert(snag_session_commit(&session,"banner_updated",checked_json(json_pack("{s:i}","text",1)),NULL,error,sizeof(error))<0);
+    assert(session.next_seq == durable_seq);
+    assert(session.banner_text && !strcmp(session.banner_text,"lead cursor: land r33"));
+    snag_session_close(&session);snag_session_init(&session);
+    assert(snag_session_open(store,&session,id,error,sizeof(error))==0);
+    assert(session.banner_text && !strcmp(session.banner_text,"lead cursor: land r33"));
+    assert(session.steering_override && !strcmp(session.steering_override,"all"));
+    commit_event(&session,"banner_updated",checked_json(json_pack("{s:s}","text","")));
+    commit_event(&session,"steering_updated",checked_json(json_pack("{s:s}","mode","")));
+    assert(!session.banner_text && !session.steering_override);
+    snag_session_close(&session);snag_session_init(&session);
+    assert(snag_session_open(store,&session,id,error,sizeof(error))==0);
+    assert(!session.banner_text && !session.steering_override);
+    snag_session_close(&session);
+}
+
+static void
 test_voice_queue(struct snag_store *store,const char *workspace)
 {
     struct snag_session session;char id[33],queue[33],again[33],error[256];bool duplicate;
@@ -1117,6 +1150,7 @@ main(void)
     test_refusal_diagnostic(workspace);
     test_audio_usage(&store,workspace);
     test_voice_queue(&store,workspace);
+    test_banner_steering(&store,workspace);
     snag_store_close(&store);
     free(temp);
     puts("test_store: ok");

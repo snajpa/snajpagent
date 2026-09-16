@@ -824,6 +824,28 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         }
         session->goal_status = status;
         if (!strcmp(action, "resumed") && session->pending_queue_count) session->queue_armed = true;
+    } else if (strcmp(type, "banner_updated") == 0) {
+        const char *text = snag_json_string(data, "text");
+        if (!snag_json_exact_keys(data, "text") || !text) goto invalid;
+        if (!*text) {
+            json_object_del(session->strings, "banner_text");
+            session->banner_text = NULL;
+        } else if (!snag_text_valid(text, 1u, SNAG_BANNER_MAX) ||
+                   replace_text(session, &session->banner_text, "banner_text", text,
+                                SNAG_BANNER_MAX) < 0) {
+            goto invalid;
+        }
+    } else if (strcmp(type, "steering_updated") == 0) {
+        const char *mode = snag_json_string(data, "mode");
+        if (!snag_json_exact_keys(data, "mode") || !mode) goto invalid;
+        if (!*mode) {
+            json_object_del(session->strings, "steering_override");
+            session->steering_override = NULL;
+        } else if ((strcmp(mode, "mentions") != 0 && strcmp(mode, "all") != 0) ||
+                   replace_text(session, &session->steering_override, "steering_override", mode,
+                                sizeof("mentions")) < 0) {
+            goto invalid;
+        }
     } else if (strcmp(type, "compaction_started") == 0) {
         static const char methods[] =
             "exact media_upper_bound unknown anchored_upper_bound statistical_upper_estimate qualified_upper_bound";
