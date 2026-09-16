@@ -22,6 +22,12 @@
   an alias for `/state goal`; all previous `/goal` forms work unchanged
   through the alias.
 
+
+- Stop turn recovery after a repeated identical definitive provider rejection
+  instead of replaying it through the whole retry budget (e.g. five identical
+  HTTP 400s). Single failures, transient errors, policy/capacity paths, goals
+  and output corrections keep existing retry behavior.
+
 - Omit `tool_choice` from the compaction summary request. The request declares no
   tools, so the choice was inert, but a provider that accepts only `"auto"` (Meta
   Model API) rejected `"none"` with HTTP 400 and failed the whole turn, including
