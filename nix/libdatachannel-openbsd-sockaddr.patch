@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MPL-2.0
+# libdatachannel 0.23.2 BSD portability: net/if.h (OpenBSD 5.9/3.5,
+# FreeBSD 8.4/5.1) uses struct sockaddr by value; include <sys/socket.h>
+# before it (mirrors the libjuice fix).
+--- a/src/impl/socket.hpp
++++ b/src/impl/socket.hpp
+@@ -64,6 +64,9 @@
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <limits.h>
++/* BSD net/if.h (OpenBSD 5.9/3.5, FreeBSD 8.4/5.1) uses struct sockaddr by
++   value; give it the definition first. */
++#include <sys/socket.h>
+ #include <net/if.h>
+ #include <netdb.h>
+ #include <netinet/in.h>
