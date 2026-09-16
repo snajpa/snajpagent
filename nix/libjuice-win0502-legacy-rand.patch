@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: MPL-2.0
+# libjuice 1.7.0 Windows 0x0502 (WS2003-class) random source:
+# - bcrypt.dll (BCryptGenRandom) is Windows Vista or later; the legacy
+#   target uses SystemFunction036 (RtlGenRandom, advapi32) instead,
+#   matching the recipe legacy bcrypt->advapi32 mapping.
+--- a/src/random.c
++++ b/src/random.c
+@@ -41,12 +41,21 @@
+ 
+ #include <windows.h>
+ //
++#if (_WIN32_WINNT >= 0x0600)
+ #include <bcrypt.h>
++#else
++#include <ntsecapi.h> // SystemFunction036 (RtlGenRandom), exported by advapi32
++#endif
+ 
+ static int random_bytes(void *buf, size_t size) {
++#if (_WIN32_WINNT >= 0x0600)
+ 	// Requires Windows 7 or later
+ 	NTSTATUS status = BCryptGenRandom(NULL, (PUCHAR)buf, (ULONG)size, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+ 	return !status ? 0 : -1;
++#else
++	// WS2003-class: bcrypt.dll is Windows Vista or later; use the legacy CSPRNG.
++	return SystemFunction036(buf, (ULONG)size) ? 0 : -1;
++#endif
+ }
+ 
+ #else
