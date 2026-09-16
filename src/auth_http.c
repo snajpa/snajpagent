@@ -414,15 +414,36 @@ snag_auth_token_response_meta(json_t *response, struct snag_auth_tokens *tokens,
     else if (snag_json_integer_u64(response, "expires_in", &lifetime) == 0 &&
              lifetime > 0u && lifetime <= 365u * 86400u)
         next.expires_at_ms = snag_time_ms() + lifetime * 1000u;
-    else goto out;
+    else
+        /* RFC 8628 expires_in is only RECOMMENDED; Meta omits it with opaque
+         * tokens, so assume one hour rather than failing the login. */
+        next.expires_at_ms = snag_time_ms() + 3600u * 1000u;
     if (next.expires_at_ms <= snag_time_ms()) goto out;
     *tokens = next;
     rc = 0;
 out: snag_auth_clear(&next);
     json_decref(access);
     json_decref(identity);
-    if (rc < 0 && !error[0])
-        snag_errorf(error, error_size, "authentication response lacks valid tokens, account, or expiry");
+    if (rc < 0 && !error[0]) {
+        /* Keys only, never values: enough to see the issuer's shape. */
+        static const char *const probe[] = {"access_token", "token_type", "expires_in",
+            "refresh_token", "id_token", "scope", "error", "error_description"};
+        char fields[128];
+        size_t used = 0u;
+        fields[0] = '\0';
+        for (size_t i = 0u; i < sizeof(probe) / sizeof(probe[0]); ++i) {
+            size_t len = strlen(probe[i]);
+            if (!json_object_get(response, probe[i])) continue;
+            if (used + len + 2u >= sizeof(fields)) break;
+            if (used) fields[used++] = ',';
+            memcpy(fields + used, probe[i], len + 1u);
+            used += len;
+        }
+        if (fields[0])
+            snag_errorf(error, error_size, "authentication response lacks valid tokens, account, or expiry (fields: %s)", fields);
+        else
+            snag_errorf(error, error_size, "authentication response lacks valid tokens, account, or expiry");
+    }
     return rc;
 }
 
