@@ -6553,7 +6553,7 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
 
 
 def run_automatic_turn_retry_cases(binary, root, provider, environment):
-    modes = ("success", "exhaust", "zero", "one", "budget", "steer", "cancel", "running", "paused", "one-shot", "server", "renewed")
+    modes = ("success", "exhaust", "zero", "one", "budget", "steer", "cancel", "running", "paused", "one-shot", "server", "renewed", "deterministic", "varied")
     for mode in modes:
         case = root / ("ar-" + mode)
         workspace = case / "w"
@@ -6579,6 +6579,17 @@ def run_automatic_turn_retry_cases(binary, root, provider, environment):
             n = len(requests)
             metadata.append([i["content"] for i in request["input"]
                 if i.get("role") == "user" and i.get("content", "").startswith("[snajpagent input metadata")])
+            if mode in ("deterministic", "varied"):
+                if mode == "varied" and n >= 3:
+                    body = provider.response_body(sequence, "automatic retry finished")
+                else:
+                    failures.append(n)
+                    call = "call_00_fixture" if mode == "deterministic" else f"call_0{n}_fixture"
+                    provider.reply(handler, json.dumps({"error": {"code": "invalid_request_error",
+                        "message": f"No tool output found for tool call {call}.",
+                        "param": None, "type": "invalid_request_error"}}).encode(),
+                        content_type="application/json", status=400)
+                    return
             if n == 1:
                 if mode == "success":
                     body = provider.function_body(sequence, "read", "read_file", {
@@ -6643,7 +6654,7 @@ def run_automatic_turn_retry_cases(binary, root, provider, environment):
                     else:
                         terminal.submit("fresh retry steer")
                 if mode != "cancel":
-                    terminal.wait("turn failed; try /retry" if mode in ("exhaust", "zero", "one", "budget", "paused", "server")
+                    terminal.wait("turn failed; try /retry" if mode in ("exhaust", "zero", "one", "budget", "paused", "server", "deterministic")
                                   else "automatic retry finished", timeout=30 if mode == "renewed" else 20)
                 screen = terminal.capture()
             _, events = read_events(case / "s")
@@ -6654,7 +6665,17 @@ def run_automatic_turn_retry_cases(binary, root, provider, environment):
                 assert len(event_list(events, "turn_recovery")) == limit + int(mode == "budget")
                 assert len(event_list(events, "turn_failed")) == 1
                 assert screen.count("turn failed; try /retry") == 1
-            else:
+            elif mode != "deterministic":
+                assert not event_list(events, "turn_failed")
+            if mode == "deterministic":
+                assert len(requests) == 2, requests
+                assert len(failures) == 2
+                assert len(event_list(events, "turn_recovery")) == 1
+                assert len(event_list(events, "turn_failed")) == 1
+                assert screen.count("turn failed; try /retry") == 1
+            if mode == "varied":
+                assert len(requests) == 3, requests
+                assert len(event_list(events, "turn_recovery")) == 2
                 assert not event_list(events, "turn_failed")
             if mode == "renewed":
                 assert len(failures) == 10
@@ -6665,7 +6686,7 @@ def run_automatic_turn_retry_cases(binary, root, provider, environment):
                 assert not event_list(events, "goal_resumed")
             else:
                 assert not event_list(events, "goal_paused")
-            if mode != "success":
+            if mode not in ("success", "deterministic", "varied"):
                 assert (workspace / "once").read_text() == "x", mode
             else:
                 assert all(any(tool.get("name") == "exec_command" for tool in request["tools"])
