@@ -73,7 +73,7 @@ let
     # macros; have it include "stdint.h" instead so libc++ sees real types.
     # The escaped quotes survive CMake's cache and the ninja build lines that
     # /bin/sh runs, so the compiler sees -DSCTP_STDINT_INCLUDE="stdint.h".
-    rtcFlags = [ "-DCMAKE_CXX_FLAGS=${"-DJUICE_STATIC "}-DSCTP_STDINT_INCLUDE=\\\"stdint.h\\\"" ];
+    rtcFlags = [ "-DCMAKE_CXX_FLAGS=${"-DJUICE_STATIC "}-DSCTP_STDINT_INCLUDE=\\\"stdint.h\\\"${pkgs.lib.optionalString (pty != null) " -D_WIN32_WINNT=${winver} -DWINVER=${winver} -nostdinc++ -isystem ${pkgs.lib.getDev pty.cxx}/include/c++/v1"}" ];
   };
   jansson = cmakeLibrary windows.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF"
