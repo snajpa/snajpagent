@@ -74,6 +74,7 @@ let
     # The escaped quotes survive CMake's cache and the ninja build lines that
     # /bin/sh runs, so the compiler sees -DSCTP_STDINT_INCLUDE="stdint.h".
     rtcFlags = [ "-DCMAKE_CXX_FLAGS=${"-DJUICE_STATIC "}-DSCTP_STDINT_INCLUDE=\\\"stdint.h\\\"${pkgs.lib.optionalString (pty != null) " -D_WIN32_WINNT=${winver} -DWINVER=${winver} -nostdinc++ -isystem ${pkgs.lib.getDev pty.cxx}/include/c++/v1"}" ];
+    rtcPatches = pkgs.lib.optional legacy ./libdatachannel-legacy-ai-flags.patch;
   };
   jansson = cmakeLibrary windows.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF"
