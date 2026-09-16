@@ -1,14 +1,16 @@
 # SPDX-License-Identifier: MPL-2.0
-# libdatachannel 0.23.2: FreeBSD 5.1 math.h predates C99 round(); use the
-# std::round overload (the file already includes <cmath>).
+# libdatachannel 0.23.2: FreeBSD 5.1 has neither ::round nor std::round (the
+# recipe libstdc++ targets a pre-C99 C library); round half away from zero
+# with plain arithmetic (identical semantics for RTP timestamps).
 --- a/src/rtppacketizationconfig.cpp
 +++ b/src/rtppacketizationconfig.cpp
-@@ -44,7 +44,7 @@
+@@ -44,7 +44,8 @@
  }
  
  uint32_t RtpPacketizationConfig::getTimestampFromSeconds(double seconds, uint32_t clockRate) {
 -	return uint32_t(int64_t(round(seconds * double(clockRate)))); // convert to integer then cast to u32
-+	return uint32_t(int64_t(std::round(seconds * double(clockRate)))); // convert to integer then cast to u32
++	const double v = seconds * double(clockRate);
++	return uint32_t(int64_t(v + (v >= 0 ? 0.5 : -0.5))); // round half away from zero
  }
  
  uint32_t RtpPacketizationConfig::secondsToTimestamp(double seconds) {
