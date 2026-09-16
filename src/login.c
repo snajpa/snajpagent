@@ -157,12 +157,12 @@ choose_provider(const struct snag_cli *cli, struct snag_config *config,
                            sizeof(provider->base_url), false, false, error, error_size) < 0) return -1;
         }
     }
-    if (cli->device_auth) {
-        if (strcmp(provider->base_url, SNAG_CHATGPT_BASE) != 0 &&
-            strcmp(provider->base_url, SNAG_META_BASE) != 0)
-            return snag_errorf(error, error_size, "--device-auth requires a direct Codex or Meta provider");
-        provider->auth = strcmp(provider->base_url, SNAG_META_BASE) == 0 ?
-            SNAG_AUTH_META : SNAG_AUTH_CHATGPT;
+    if (cli->openai_device_auth || cli->meta_device_auth) {
+        if (cli->meta_device_auth && !snag_is_meta_base(provider->base_url))
+            return snag_errorf(error, error_size, "--meta-device-auth requires a Meta provider");
+        if (cli->openai_device_auth && strcmp(provider->base_url, SNAG_CHATGPT_BASE) != 0)
+            return snag_errorf(error, error_size, "--openai-device-auth requires a direct Codex provider");
+        provider->auth = cli->meta_device_auth ? SNAG_AUTH_META : SNAG_AUTH_CHATGPT;
         snag_secret_source_free(&provider->api_key);
     }
     if (!*existing && !cli->auth_provider && strcmp(selection, "custom") != 0) {
@@ -196,7 +196,7 @@ acquire_login(const struct snag_cli *cli, struct snag_provider_config *provider,
     char key[SNAG_CREDENTIAL_MAX + 1u];
     int rc;
     if (provider->api_key.kind == SNAG_SECRET_NONE && root_fd >= 0 &&
-        !cli->device_auth && !cli->with_api_key) {
+        !cli->openai_device_auth && !cli->meta_device_auth && !cli->with_api_key) {
         rc = snag_auth_load(root_fd, provider, tokens, error, error_size);
         if (rc < 0) return -1;
         if (rc == 0 && (provider->auth == SNAG_AUTH_API_KEY ||

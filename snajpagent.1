@@ -24,7 +24,7 @@ snajpagent \- terminal coding agent with built-in IRC
 .RI [ options ]
 .B login
 .RI [ provider ]
-.RI [ --device-auth " | --with-api-key]"
+.RI [ --openai-device-auth " | --meta-device-auth | --with-api-key]"
 .br
 .B snajpagent
 .RI [ options ]
@@ -1727,12 +1727,20 @@ presets.  Existing environment authentication remains explicit; there is no
 fallback to another provider or authentication method.  Login does not change
 the default model in an existing configuration.
 .TP
-.B --device-auth
-Use the native device flow of a direct Codex or Meta provider.  Open the
+.B --openai-device-auth
+Use the native device flow of a direct Codex provider.  Open the
 printed verification page and confirm or enter the one-time code.  ChatGPT
 device login must be enabled in the ChatGPT account or workspace.  Waiting
 is bounded by the issued link lifetime; Ctrl-C cancels.
+.TP
+.B --meta-device-auth
+Use the native OAuth2 device flow of a Meta provider
+.RB ( https://api.meta.ai
+with or without
+.BR /v1 ).
+Open the printed verification page and confirm or enter the one-time code.
 MUSE_AUTH_URL and MUSE_CLIENT_ID override the Meta issuer and client identifier.
+Waiting is bounded by the issued link lifetime; Ctrl-C cancels.
 .TP
 .B --with-api-key
 Read one API key from stdin for explicit login.  No key argument is accepted.
