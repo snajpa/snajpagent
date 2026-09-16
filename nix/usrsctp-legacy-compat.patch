@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
-# usrsctp: legacy SDKs lack the kernel alignment macros the shim uses
-# (NetBSD 2.x: __ALIGNBYTES; OpenBSD 3.5: _ALIGN). Presence-gated fallbacks
-# placed in the POSIX branch, before the CMSG_ALIGN platform chain; values
-# mirror the modern sysroots (amd64/_types.h, amd64/cdefs.h).
+# usrsctp: legacy-POSIX compat fallbacks (POSIX branch, before the CMSG_ALIGN
+# chain): __ALIGNBYTES/_ALIGN for NetBSD 2.x + OpenBSD 3.5, and ENOTSUP for
+# OpenBSD 3.5. All presence-gated; values mirror the modern sysroots.
 --- a/usrsctplib/netinet/sctp_os_userspace.h
 +++ b/usrsctplib/netinet/sctp_os_userspace.h
-@@ -1064,6 +1064,16 @@
+@@ -1064,6 +1064,22 @@
  /* with the current included files, this is defined in Linux but
   *  in FreeBSD, it is behind a _KERNEL in sys/socket.h ...
   */
@@ -17,6 +16,12 @@
 +#endif
 +#ifndef _ALIGN
 +#define _ALIGN(p) (((unsigned long)(p) + __ALIGNBYTES) & ~__ALIGNBYTES)
++#endif
++
++/* OpenBSD 3.5's errno.h predates ENOTSUP; the BSDs equate it with
++   EOPNOTSUPP. Presence-gated. */
++#ifndef ENOTSUP
++#define ENOTSUP EOPNOTSUPP
 +#endif
 +
  #if defined(__DragonFly__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__native_client__)
