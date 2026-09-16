@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Add a `defer_steering` model tool: the model switches steering off for the
+  remainder of the turn; steering messages queue and run after the turn ends.
+  New turns start with steers on.
 - Omit `tool_choice` from the compaction summary request. The request declares no
   tools, so the choice was inert, but a provider that accepts only `"auto"` (Meta
   Model API) rejected `"none"` with HTTP 400 and failed the whole turn, including

@@ -198,6 +198,12 @@ add_timer_call(struct snag_response_graph *graph, unsigned int cycle, unsigned i
 }
 
 static int
+add_defer_steering_call(struct snag_response_graph *graph, unsigned int cycle, unsigned int index)
+{
+    return indexed_call(graph, cycle, index, "defer_steering", json_pack("{}"));
+}
+
+static int
 add_timer_cancel_call(struct snag_response_graph *graph, unsigned int cycle, unsigned int index)
 {
     return indexed_call(graph, cycle, index, "timer", json_pack("{s:I,s:n}", "delay_ms", (json_int_t)0, "text"));
@@ -284,6 +290,14 @@ fixture_response(const char *prompt, const json_t *steering, const char *workspa
     if (strcmp(prompt, "timer_test") == 0) {
         if (cycle == 1u) return add_timer_call(graph, cycle, 0u, 25u, "timer fired");
         return final_answer(&out, "msg_fixture_timer_scheduled", "timer scheduled");
+    }
+    if (strcmp(prompt, "defer_slow_test") == 0) {
+        if (cycle == 1u) return add_defer_steering_call(graph, cycle, 0u);
+        if (emit_public(&out, SNAG_ITEM_ASSISTANT,
+                SNAG_PHASE_COMMENTARY, "msg_fixture_defer_slow_commentary", "working slowly\n", 0) < 0)
+            goto allocation;
+        if ((control = wait_ticks(&out, 150u)) != 0) return control;
+        return final_answer(&out, "msg_fixture_defer_slow_final", "defer slow complete");
     }
     if (strcmp(prompt, "timer fired") == 0)
         return final_answer(&out, "msg_fixture_timer_fired", "timer reminder handled");

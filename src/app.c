@@ -2264,7 +2264,9 @@ again:;
                         (void)snag_ui_send(&app->ui, (struct snag_ui_command){
                             .kind = SNAG_UI_DRAFT, .text = line});
                 } else {
-                    app->steering_requested = true;
+                    /* Deferred steers queue (steering_added above) without
+                     * interrupting; they are admitted at turn end. */
+                    if (!app->steering_deferred) app->steering_requested = true;
                     rc = set_input_prompt(app, true);
                 }
             }
@@ -3807,6 +3809,8 @@ run_tracked_turn(struct app_state *app, const char *prompt,
         queued = &queued_copy;
     }
     if (!app->input_closed) app->interrupt_requested = false;
+    /* New turns start with steers on; deferral lasts one turn only. */
+    app->steering_deferred = false;
     if (!app->input_received_ms) app->input_received_ms = snag_time_ms();
     app->ui.input_received_ms = 0u;
     for (;;) {

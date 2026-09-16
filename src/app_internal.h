@@ -97,6 +97,11 @@ struct app_state {
     int stream_errno;
     char stream_error[256];
     bool steering_requested;
+    /* Model-switched steer deferral: while set for the current turn,
+     * steering inputs are recorded (steering_added) but do not interrupt;
+     * they are admitted at turn end for the next turn. Cleared at each new
+     * turn start (steers on by default). */
+    bool steering_deferred;
     bool control_requested, applying_controls;
     bool tool_waiting, yield_requested;
     uint64_t input_generation;
