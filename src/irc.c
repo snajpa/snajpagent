@@ -2239,6 +2239,40 @@ set_topic_as(struct snag_irc_core *irc, const char *topic, enum link_role role,
 fail: return snag_errorf(error, error_size, "cannot queue IRC topic change");
 }
 
+static int
+set_nick_as(struct snag_irc_core *irc, const char *nick, enum link_role role,
+            char *error, size_t error_size)
+{
+    char clean[SNAG_CONFIG_IRC_NICK_MAX + 1u];
+    char old[SNAG_CONFIG_IRC_NICK_MAX + 1u];
+    struct irc_conn *identity;
+
+    if (!irc || !nick || !nick_valid(nick))
+        return snag_fail(error, error_size, EINVAL, "IRC nick is invalid");
+    if (!snag_strcpy(clean, sizeof(clean), nick))
+        return snag_errorf(error, error_size, "IRC nick is invalid");
+    identity = &irc->conns[role];
+    if (!snag_strcpy(old, sizeof(old), identity->nick)) old[0] = '\0';
+    if (irc->hosting) {
+        if (!snag_strcpy(identity->nick, sizeof(identity->nick), clean) ||
+            !snag_strcpy(identity->accepted_nick, sizeof(identity->accepted_nick), clean))
+            goto fail;
+        if (server_publish(irc, SNAG_IRC_NICK, old, "local", clean,
+                           identity->joined && identity->op, true) < 0)
+            goto fail;
+        return 0;
+    }
+    if (!snag_strcpy(identity->preferred_nick, sizeof(identity->preferred_nick), clean) ||
+        !snag_strcpy(identity->nick, sizeof(identity->nick), clean))
+        goto fail;
+    identity->nick_implicit = false;
+    identity->nick_suffix = 0u;
+    if (!identity->joined) return 0;
+    if (queue_line(identity, "NICK %s", clean) < 0) goto fail;
+    return 0;
+fail: return snag_errorf(error, error_size, "cannot change IRC nick");
+}
+
 int
 snag_irc_core_send(struct snag_irc_core *irc, bool model, enum snag_irc_event_kind kind, const char *text,
                    char *error, size_t error_size)
@@ -2246,6 +2280,7 @@ snag_irc_core_send(struct snag_irc_core *irc, bool model, enum snag_irc_event_ki
     enum link_role role = model ? LINK_AGENT : LINK_OPERATOR;
 
     if (kind == SNAG_IRC_TOPIC) return set_topic_as(irc, text, role, error, error_size);
+    if (kind == SNAG_IRC_NICK) return set_nick_as(irc, text, role, error, error_size);
     return send_chat(irc, role, kind, text, error, error_size);
 }
 

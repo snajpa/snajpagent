@@ -811,6 +811,35 @@ static void __attribute__((noinline)) test_server(void)
     snag_config_free(&config);
 }
 
+static void __attribute__((noinline)) test_nick_rename(void)
+{
+    struct snag_config config;
+    struct capture capture = {0};
+    struct snag_irc *server;
+    unsigned short port = free_port();
+    char error[256] = {0};
+    unsigned int nicks_before;
+
+    init_server_config(&config, port);
+    server = open_server(&config, &capture);
+    assert(strcmp(snag_irc_model_nick(server), "agent") == 0);
+    nicks_before = capture.events[SNAG_IRC_NICK];
+    /* Session-hosted rename shares the new agent nick via a NICK event. */
+    assert(send_all(server, true, SNAG_IRC_NICK, "lead", error, sizeof(error)) == 0);
+    assert(strcmp(snag_irc_model_nick(server), "lead") == 0);
+    assert(capture.events[SNAG_IRC_NICK] == nicks_before + 1u);
+    assert(strcmp(capture.last_nick.nick, "agent") == 0);
+    assert(strcmp(capture.last_nick.text, "lead") == 0);
+    /* Invalid nicks are rejected and leave the identity alone. */
+    assert(send_all(server, true, SNAG_IRC_NICK, "9bad nick", error, sizeof(error)) != 0);
+    assert(strcmp(snag_irc_model_nick(server), "lead") == 0);
+    assert(capture.events[SNAG_IRC_NICK] == nicks_before + 1u);
+    /* The operator identity is untouched by the agent rename. */
+    assert(strcmp(snag_irc_operator_nick(server), "operator") == 0);
+    snag_irc_close(server);
+    snag_config_free(&config);
+}
+
 static void
 pump_pair(struct snag_irc *server, struct snag_irc *client, unsigned int rounds)
 {
@@ -1442,6 +1471,7 @@ main(int argc, char **argv)
     test_listener_collision();
     test_runtime_roles();
     test_server();
+    test_nick_rename();
     test_client_reconnect();
     test_default_nick_sequence();
     test_client_nick_collision(true);

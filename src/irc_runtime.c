@@ -755,7 +755,8 @@ snag_irc_send_route(struct snag_irc *irc, const struct snag_irc_route *route,
     }
     frozen = *route;
     route = &frozen;
-    if (kind != SNAG_IRC_TOPIC && kind != SNAG_IRC_MESSAGE && (kind != SNAG_IRC_NOTICE || !model))
+    if (kind != SNAG_IRC_TOPIC && kind != SNAG_IRC_MESSAGE && (kind != SNAG_IRC_NOTICE || !model) &&
+        (kind != SNAG_IRC_NICK || !model))
         return snag_errno(EINVAL);
     for (size_t i = 0u; i < route->count; ++i)
         for (size_t j = 0u; j < i; ++j)
