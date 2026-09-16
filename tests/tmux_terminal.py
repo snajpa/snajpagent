@@ -2141,6 +2141,11 @@ def run_lifecycle_case(binary, root):
                 len(event_list(events, "goal_cancelled")) != 1 or \
                 len(event_list(events, "compaction_completed")) != 1:
             raise AssertionError("lifecycle presentation changed durable events")
+        terminal.submit_wait("/state", "goal actions:")
+        terminal.submit_wait("/state goal new state goal", "• Goal set")
+        terminal.submit_wait("/state", "new state goal")
+        terminal.submit_wait("/goal", "new state goal")
+        terminal.submit_wait("/state goal cancel", "• Goal cleared")
         terminal.exit()
 
 
@@ -2439,8 +2444,9 @@ def run_help_case(binary, root, active=False, chat=False, width=80):
         wait_normalized(terminal, "Full reference: man snajpagent", timeout=5.0)
         screen = terminal.capture()
         text = normalize_space(terminal.capture(join_wrapped=True))
-        for syntax in ("/goal [status|help]", "/goal [set] TEXT", '/goal "TEXT"',
-                "/goal pause|resume", "/goal lock|unlock", "/goal complete|cancel|clear",
+        for syntax in ("/state", "/state goal [status|help]", "/state goal [set] TEXT", '/state goal "TEXT"',
+                "/state goal pause|resume", "/state goal lock|unlock", "/state goal complete|cancel|clear",
+                "/goal ...",
                 "/queue N delete|d", "/queue N edit|e", "/queue Nd|Ne",
                 "/model [#]N [save|s]", "/model MODEL[/EFFORT] [save|s]",
                 "/model PROVIDER/MODEL/EFFORT [save|s]", "[optional]", "UPPERCASE"):
@@ -2471,7 +2477,7 @@ def run_help_case(binary, root, active=False, chat=False, width=80):
         terminal.submit("/goal help")
         terminal.wait("clear=cancel")
         goal = normalize_space(terminal.capture(join_wrapped=True))
-        assert '/goal "TEXT"' in goal and "/goal pause|resume" in goal
+        assert '/state goal "TEXT"' in goal and "/state goal pause|resume" in goal
         assert "/model PROVIDER" not in goal
         terminal.exit()
         _, log = maybe_events(terminal.dotdir)
