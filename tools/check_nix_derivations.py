@@ -60,8 +60,28 @@ def check_derivations() -> None:
     print(f"nixcheck: ok ({sites} application derivations keep dontConfigure)")
 
 
+def check_riscv64_matrix() -> None:
+    """riscv64 stays in PROD only with its pin fix present."""
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    prod = re.search(r"^PROD_TARGETS = (.+)$", makefile, re.M)
+    deferred = re.search(r"^DEFERRED_TARGETS = (.+)$", makefile, re.M)
+    require(prod is not None, "Makefile lacks PROD_TARGETS")
+    require(deferred is not None, "Makefile lacks DEFERRED_TARGETS")
+    require("prod-linux-riscv64" in prod.group(1).split(),
+            "prod-linux-riscv64 missing from PROD_TARGETS")
+    require("prod-linux-riscv64" not in deferred.group(1).split(),
+            "prod-linux-riscv64 still deferred")
+    linux_nix = (ROOT / "nix" / "linux.nix").read_text(encoding="utf-8")
+    require("simdcoverage" in linux_nix and "isRiscV" in linux_nix,
+            "nix/linux.nix lacks riscv64 simdcoverage guard")
+    require("libjpeg_turbo" in linux_nix and "staticFixed" in linux_nix,
+            "nix/linux.nix lacks set-wide jpeg fix")
+    print("nixcheck: ok (riscv64 in PROD with pin fix)")
+
+
 def main() -> int:
     check_derivations()
+    check_riscv64_matrix()
     return 0
 
 
