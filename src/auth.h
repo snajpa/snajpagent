@@ -37,6 +37,13 @@ int snag_auth_device(struct snag_auth_tokens *tokens, snag_auth_pump_fn pump, vo
                     char *error, size_t error_size);
 int snag_auth_refresh(struct snag_auth_tokens *tokens, snag_auth_pump_fn pump, void *opaque,
                      char *error, size_t error_size);
+int snag_auth_device_meta(struct snag_auth_tokens *tokens, snag_auth_pump_fn pump,
+                          void *opaque, char *error, size_t error_size);
+int snag_auth_refresh_meta(struct snag_auth_tokens *tokens, snag_auth_pump_fn pump,
+                           void *opaque, char *error, size_t error_size);
+int snag_auth_token_response_meta(json_t *response, struct snag_auth_tokens *tokens,
+                                  char *error, size_t error_size);
+
 int snag_auth_token_response(json_t *response, struct snag_auth_tokens *tokens,
                             char *error, size_t error_size);
 
