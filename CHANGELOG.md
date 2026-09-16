@@ -72,8 +72,10 @@
   the endpoint, and the selection adopts the fresh target whenever the endpoint
   republishes its topology; frozen model requests still fail individually
   against their own revision.
-- Add a Meta subscription provider next to the paid Meta API-key regime. The Meta login runs
-  the native OAuth2 device flow and stores endpoint-bound credentials with automatic refresh
+- Add a Meta subscription provider next to the paid Meta API-key regime. `login --meta-device-auth`
+  (mirrored by `--openai-device-auth` for the direct Codex provider) runs the native OAuth2 device
+  flow against either Meta API base (`https://api.meta.ai`, with or without `/v1`) and stores
+  endpoint-bound credentials with automatic refresh
   while the issuer honors it, and serves the Muse subscription over the same Responses path as
   an API key. Authentication error bodies with a machine-readable code are now parsed, so a
   device-grant denial or expiry surfaces instead of a bare HTTP status.

@@ -84,7 +84,7 @@ provider_valid(const struct snag_provider_config *provider)
     if (provider->auth == SNAG_AUTH_CHATGPT)
         return strcmp(provider->base_url, SNAG_CHATGPT_BASE) == 0;
     if (provider->auth == SNAG_AUTH_META)
-        return strcmp(provider->base_url, SNAG_META_BASE) == 0;
+        return snag_is_meta_base(provider->base_url);
     return true;
 }
 

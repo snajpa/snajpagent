@@ -1021,10 +1021,10 @@ validate_config(struct snag_config *config, bool private_file, char *error, size
                        "chatgpt authentication requires " SNAG_CHATGPT_BASE " and no api_key");
         }
         if (config->providers[i].auth == SNAG_AUTH_META &&
-            (strcmp(config->providers[i].base_url, SNAG_META_BASE) != 0 ||
+            (!snag_is_meta_base(config->providers[i].base_url) ||
              config->providers[i].api_key.kind != SNAG_SECRET_NONE)) {
             return snag_fail(error, error_size, EINVAL,
-                       "meta authentication requires " SNAG_META_BASE " and no api_key");
+                       "meta authentication requires " SNAG_META_BASE_BARE "[/v1] and no api_key");
         }
     }
     for (size_t i = 0; i < config->model_limit_count; ++i) {
@@ -1228,7 +1228,7 @@ snag_config_validate_provider(const struct snag_provider_config *provider, char 
     int rc = -1;
     if (!provider || !snag_config_name_valid(provider->name) || ((provider->auth == SNAG_AUTH_CHATGPT || provider->auth == SNAG_AUTH_META) &&
          ((provider->auth == SNAG_AUTH_CHATGPT && strcmp(provider->base_url, SNAG_CHATGPT_BASE)) ||
-          (provider->auth == SNAG_AUTH_META && strcmp(provider->base_url, SNAG_META_BASE)) ||
+          (provider->auth == SNAG_AUTH_META && !snag_is_meta_base(provider->base_url)) ||
           provider->api_key.kind != SNAG_SECRET_NONE)))
         return snag_errorf(error, error_size, "invalid provider or ChatGPT endpoint");
     struct snag_buf text = {.max = SNAG_CONFIG_FILE_MAX};
@@ -1387,7 +1387,7 @@ snag_config_save_provider(const char *path, bool allow_create, const struct snag
 {
     if (!provider || !snag_config_name_valid(provider->name) ||
         ((provider->auth == SNAG_AUTH_CHATGPT && strcmp(provider->base_url, SNAG_CHATGPT_BASE)) ||
-        (provider->auth == SNAG_AUTH_META && strcmp(provider->base_url, SNAG_META_BASE))) ||
+        (provider->auth == SNAG_AUTH_META && !snag_is_meta_base(provider->base_url))) ||
         strchr(provider->base_url, '\n') || strchr(provider->base_url, '\r'))
         return snag_errorf(error, error_size, "invalid provider settings");
     return save_config_settings(path, allow_create, provider->name,
