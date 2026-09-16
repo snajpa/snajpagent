@@ -196,7 +196,7 @@ let
     # legacy SDKs still provide it, so only the modern targets take the patch.
     sctpPatches = lib.optional (!legacy) ./usrsctp-openbsd-route-in6.patch;
     # OpenBSD 5.9/3.5 net/if.h needs struct sockaddr complete first (7.9 does not).
-    rtcPatches = lib.optional legacy ./libdatachannel-openbsd-sockaddr.patch;
+    rtcPatches = lib.optional legacy ./libdatachannel-bsd-sockaddr.patch;
     # Keep the C++ runtime consistent with the variant's application flags and
     # the RTC link line: legacy/early use the built libstdc++, non-legacy the
     # SDK's libc++ (forcing libstdc++ here pulls the unbuilt 7.9 runtime).

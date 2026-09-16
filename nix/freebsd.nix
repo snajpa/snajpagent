@@ -169,6 +169,8 @@ let
   };
   voiceRtc = import ./voice-rtc-cross.nix {
     inherit pkgs cmakeLibrary tls; sourcePkgs = sourcePkgs;
+    # Both FreeBSD SDKs' net/if.h need struct sockaddr complete first.
+    rtcPatches = [ ./libdatachannel-bsd-sockaddr.patch ];
     cxxFlags = "${cflags} -stdlib=libstdc++ -pthread${lib.optionalString early " -fno-use-cxa-atexit"}${lib.optionalString legacy " -fno-builtin-pow -fno-builtin-powf"} -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}";
     cxxLibraries = "--ld-path=${llvm.lld}/bin/ld.lld -L${cxx}/lib";
   };
