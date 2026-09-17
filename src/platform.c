@@ -523,6 +523,105 @@ out: free(command);
     return rc;
 }
 
+/* Run a pager over a private copy of text; see the POSIX implementation for
+ * the %s convention and the *shown contract. */
+int
+snag_pager_show(const char *command, const char *text, size_t length, bool *shown,
+                void (*service)(void *), void *opaque)
+{
+    wchar_t directory[32768], file[32768];
+    wchar_t *template = NULL, *quoted = NULL, *line = NULL;
+    DWORD directory_length, written, status = 0, waited;
+    HANDLE handle = INVALID_HANDLE_VALUE;
+    PROCESS_INFORMATION child;
+    STARTUPINFOW startup = {.cb = sizeof(startup)};
+    size_t at, occurrences = 0u, quoted_size, line_size;
+    bool created = false;
+    int rc = -1;
+
+    *shown = false;
+    directory_length = GetTempPathW((DWORD)(sizeof(directory) / sizeof(directory[0])), directory);
+    if (!directory_length) return -1;
+    if (!GetTempFileNameW(directory, L"snp", 0, file)) return -1;
+    created = true;
+    handle = CreateFileW(file, GENERIC_WRITE, 0, NULL, TRUNCATE_EXISTING, FILE_ATTRIBUTE_TEMPORARY, NULL);
+    if (handle == INVALID_HANDLE_VALUE) goto out;
+    for (at = 0u; at < length;) {
+        size_t chunk = length - at > 0x40000000u ? 0x40000000u : length - at;
+        written = 0u;
+        if (!WriteFile(handle, text + at, (DWORD)chunk, &written, NULL) || !written) goto out;
+        at += (size_t)written;
+    }
+    if (!CloseHandle(handle)) {
+        handle = INVALID_HANDLE_VALUE;
+        goto out;
+    }
+    handle = INVALID_HANDLE_VALUE;
+    if (!(template = snag_utf8_to_wide(command))) goto out;
+    for (const wchar_t *p = template; (p = wcsstr(p, L"%s")) != NULL; p += 2) ++occurrences;
+    quoted_size = wcslen(file) * 2u + 3u;
+    if (!(quoted = calloc(quoted_size, sizeof(*quoted)))) goto out;
+    at = 0u;
+    quoted[at++] = L'"';
+    for (size_t i = 0u; file[i];) {
+        size_t slashes = 0u;
+        while (file[i] == L'\\') {
+            ++slashes;
+            ++i;
+        }
+        size_t copies = !file[i] || file[i] == L'"' ? 2u * slashes : slashes;
+        while (copies--) quoted[at++] = L'\\';
+        if (file[i] == L'"') quoted[at++] = L'\\';
+        if (file[i]) quoted[at++] = file[i++];
+    }
+    quoted[at++] = L'"';
+    quoted[at] = 0;
+    line_size = wcslen(template) + (occurrences + 2u) * (at + 1u) + 4u;
+    if (!(line = calloc(line_size, sizeof(*line)))) goto out;
+    if (occurrences) {
+        size_t out = 0u, quoted_length = wcslen(quoted);
+        for (const wchar_t *p = template; *p;) {
+            if (p[0] == L'%' && p[1] == L's') {
+                memcpy(line + out, quoted, quoted_length * sizeof(*line));
+                out += quoted_length;
+                p += 2;
+            } else {
+                line[out++] = *p++;
+            }
+        }
+        line[out] = 0;
+    } else {
+        size_t template_length = wcslen(template), quoted_length = wcslen(quoted);
+        memcpy(line, template, template_length * sizeof(*line));
+        line[template_length] = L' ';
+        memcpy(line + template_length + 1u, quoted, (quoted_length + 1u) * sizeof(*line));
+    }
+    if (!CreateProcessW(NULL, line, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &child)) {
+        path_error(GetLastError());
+        goto out;
+    }
+    (void)CloseHandle(child.hThread);
+    do {
+        waited = WaitForSingleObject(child.hProcess, service ? 25u : INFINITE);
+        if (waited == WAIT_TIMEOUT && service) service(opaque);
+    } while (waited == WAIT_TIMEOUT);
+    if (waited != WAIT_OBJECT_0 || !GetExitCodeProcess(child.hProcess, &status)) {
+        path_error(GetLastError());
+        (void)CloseHandle(child.hProcess);
+        goto out;
+    }
+    (void)CloseHandle(child.hProcess);
+    *shown = true;
+    rc = 0;
+out:
+    if (handle != INVALID_HANDLE_VALUE) (void)CloseHandle(handle);
+    if (created) (void)DeleteFileW(file);
+    free(template);
+    free(quoted);
+    free(line);
+    return rc;
+}
+
 struct nt_path {
     wchar_t *wide;
     UNICODE_STRING name;
@@ -2043,6 +2142,101 @@ snag_editor_run(const char *path, bool *success, void (*service)(void *), void *
     if (got != child) return -1;
     *success = WIFEXITED(status) && WEXITSTATUS(status) == 0;
     return 0;
+}
+
+/* Run a pager over a private copy of text. The command may place %s where the
+ * file path goes; without it the quoted path is appended. *shown is false when
+ * the command could not start, so the caller can fall back to direct output. */
+int
+snag_pager_show(const char *command, const char *text, size_t length, bool *shown,
+                void (*service)(void *), void *opaque)
+{
+    char *path = NULL, *quoted = NULL, *script = NULL;
+    const char *directory;
+    size_t path_size, quoted_length = 2u, script_length, at = 0u, occurrences = 0u;
+    int fd = -1, status, rc = -1;
+    pid_t child, got;
+
+    *shown = false;
+    directory = getenv("TMPDIR");
+    if (!directory || !*directory) directory = "/tmp";
+    path_size = strlen(directory) + sizeof("/snajpagent-pager-XXXXXX");
+    if (!(path = malloc(path_size))) goto out;
+    (void)snprintf(path, path_size, "%s/snajpagent-pager-XXXXXX", directory);
+    if ((fd = mkstemp(path)) < 0) goto out;
+    while (at < length) {
+        ssize_t written = write(fd, text + at, length - at);
+        if (written < 0) {
+            if (errno == EINTR) continue;
+            goto out;
+        }
+        at += (size_t)written;
+    }
+    if (close(fd) < 0) goto out;
+    fd = -1;
+    for (const char *p = path; *p; ++p) quoted_length += *p == '\'' ? 4u : 1u;
+    if (!(quoted = malloc(quoted_length + 1u))) goto out;
+    at = 0u;
+    quoted[at++] = '\'';
+    for (const char *p = path; *p; ++p) {
+        if (*p == '\'') {
+            memcpy(quoted + at, "'\\''", 4u);
+            at += 4u;
+        } else {
+            quoted[at++] = *p;
+        }
+    }
+    quoted[at++] = '\'';
+    quoted[at] = '\0';
+    for (const char *p = command; (p = strstr(p, "%s")) != NULL; p += 2) ++occurrences;
+    script_length = strlen(command) + (occurrences + 1u) * quoted_length + 2u;
+    if (!(script = malloc(script_length))) goto out;
+    at = 0u;
+    if (occurrences) {
+        for (const char *p = command; *p;) {
+            if (p[0] == '%' && p[1] == 's') {
+                memcpy(script + at, quoted, quoted_length);
+                at += quoted_length;
+                p += 2;
+            } else {
+                script[at++] = *p++;
+            }
+        }
+        script[at] = '\0';
+    } else {
+        int written = snprintf(script, script_length, "%s %s", command, quoted);
+        if (written < 0 || (size_t)written >= script_length) goto out;
+    }
+    child = fork();
+    if (child < 0) goto out;
+    if (child == 0) {
+        sigset_t signals;
+        sigemptyset(&signals);
+        (void)sigprocmask(SIG_SETMASK, &signals, NULL);
+        execl(SNAG_SYSTEM_SHELL, "sh", "-c", script, "snajpagent-pager", (char *)NULL);
+        _exit(127);
+    }
+    do {
+        got = waitpid(child, &status, service ? WNOHANG : 0);
+        if (!got && service) {
+            service(opaque);
+            (void)snag_sleep_ms(25u);
+        }
+    } while (!got || (got < 0 && errno == EINTR));
+    if (got != child) goto out;
+    *shown = WIFEXITED(status) && WEXITSTATUS(status) != 126 && WEXITSTATUS(status) != 127;
+    rc = 0;
+out:
+    {
+        int saved = errno;
+        if (fd >= 0) (void)close(fd);
+        if (path) (void)unlink(path);
+        free(path);
+        free(quoted);
+        free(script);
+        errno = saved;
+    }
+    return rc;
 }
 
 int

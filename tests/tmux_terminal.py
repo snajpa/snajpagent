@@ -613,6 +613,7 @@ class TmuxTerminal:
         env = os.environ.copy()
         env.pop("TMUX", None)
         env["LC_ALL"] = "C.utf8"
+        env["PAGER"] = ""
         if environment:
             env.update(environment)
         try:
@@ -2872,6 +2873,63 @@ def run_resume_history_case(binary, root):
     print("resume_history_count: ok")
 
 
+def wait_file_contains(path, needle, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if needle in path.read_text(encoding="utf-8"):
+                return
+        except FileNotFoundError:
+            pass
+        time.sleep(0.05)
+    raise AssertionError(f"{path} did not receive {needle!r}")
+
+
+def run_pager_case(binary, root):
+    """[ui] pager pages the catalogue through $PAGER, a template, or not at all."""
+    case = root / "pager"
+    case.mkdir(parents=True)
+    provider = FakeResponses()
+    captured = case / "captured-pager.txt"
+    templated = case / "captured-template.txt"
+    script = case / "capture-pager.sh"
+    script.write_text("#!/bin/sh\ncp \"$1\" '" + str(captured) + "'\n", encoding="utf-8")
+    script.chmod(0o755)
+    env = {"SNAJPAGENT_IRC_UI_KEY": "pager-secret"}
+
+    try:
+        workspace, config = irc_workspace(case / "off" / "work", provider.port, "host-model", pager="off")
+        with TmuxTerminal(case / "off" / "terminal", binary, workspace, case / "off" / "state", config,
+                100, 32, args=("--no-listen", "--no-client"), environment=env) as terminal:
+            terminal.wait("host-model/medium", join_wrapped=True)
+            terminal.submit_wait("/model cache", "cache updated:", join_wrapped=True)
+
+        workspace, config = irc_workspace(case / "template" / "work", provider.port, "host-model",
+                pager=f"cp %s {templated}")
+        with TmuxTerminal(case / "template" / "terminal", binary, workspace, case / "template" / "state",
+                config, 100, 32, args=("--no-listen", "--no-client"), environment=env) as terminal:
+            terminal.wait("host-model/medium", join_wrapped=True)
+            terminal.submit("/model cache")
+            wait_file_contains(templated, "cache updated:")
+            time.sleep(0.5)
+            assert "cache updated:" not in terminal.capture(), "template pager left the catalogue on screen"
+            assert "selected:" in templated.read_text(encoding="utf-8")
+
+        workspace, config = irc_workspace(case / "default" / "work", provider.port, "host-model")
+        with TmuxTerminal(case / "default" / "terminal", binary, workspace, case / "default" / "state",
+                config, 100, 32, args=("--no-listen", "--no-client"),
+                environment={**env, "PAGER": str(script)}) as terminal:
+            terminal.wait("host-model/medium", join_wrapped=True)
+            terminal.submit("/model cache")
+            wait_file_contains(captured, "cache updated:")
+            time.sleep(0.5)
+            assert "cache updated:" not in terminal.capture(), "default pager left the catalogue on screen"
+            assert "selected:" in captured.read_text(encoding="utf-8")
+    finally:
+        provider.close()
+    print("pager catalogue: ok", flush=True)
+
+
 def run_fixture(binary, workspace, root):
     del workspace
     root.mkdir(mode=0o700, parents=True)
@@ -2888,6 +2946,7 @@ def run_fixture(binary, workspace, root):
     for width in (20, 28, 40, 80, 120):
         run_banner_layout_case(binary, root, width)
     run_resume_history_case(binary, root)
+    run_pager_case(binary, root)
     run_status_case(binary, root)
     run_paced_decode_case(binary, root)
     run_paced_decode_case(binary, root, width=24)
@@ -2924,7 +2983,8 @@ def free_loopback_port():
         return sock.getsockname()[1]
 
 
-def write_irc_config(path, provider_port, model):
+def write_irc_config(path, provider_port, model, pager=None):
+    pager_line = "" if pager is None else f"pager = {pager}\n"
     path.write_text(
         f"[agent]\nmodel = {model}\nread_agents_md = false\n"
         f"[provider fake]\nbase_url = http://127.0.0.1:{provider_port}/v1\n"
@@ -2932,15 +2992,15 @@ def write_irc_config(path, provider_port, model):
         "connect_timeout_ms = 1000\nidle_timeout_ms = 3000\n"
         "request_timeout_ms = 5000\nauto_compact_input_tokens = 0\n"
         "exact_token_count = false\nnative_compaction = false\n"
-        "[ui]\ntyping_pause_ms = 50\ncolor = never\n",
+        "[ui]\ntyping_pause_ms = 50\ncolor = never\n" + pager_line,
         encoding="utf-8",
     )
 
 
-def irc_workspace(workspace, provider_port, model):
+def irc_workspace(workspace, provider_port, model, pager=None):
     workspace.mkdir(mode=0o700, parents=True)
     config = workspace.parent / "config.ini"
-    write_irc_config(config, provider_port, model)
+    write_irc_config(config, provider_port, model, pager)
     return workspace, config
 
 

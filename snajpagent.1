@@ -1201,7 +1201,9 @@ Empty replay also displays the counts.  Uses the same replay as
 without changing configuration or model context.
 .TP
 .BR /model " [list]"
-Read the local provider/model catalog.  No provider request is made.
+Read the local provider/model catalog.  No provider request is made.  On an
+interactive terminal the displayed catalogue pages through the configured
+.BR pager .
 .TP
 .B /model cache
 Refresh every configured provider through its authenticated model endpoint,
@@ -2127,6 +2129,21 @@ also restores its room history.
 .TP
 .B typing_pause_ms
 Output pause after an input edit, 0 through 5000.  Default: 500.
+.TP
+.B pager
+Model-catalogue paging:
+.B on
+(the default) runs
+.B $PAGER
+when the catalogue is displayed on a terminal and the variable is set;
+.B off
+prints the catalogue directly; any other value is a command template.  A
+template may contain
+.B %s
+where a private temporary file with the listing goes; without it the path is
+appended.  The command runs only in interactive mode with terminal output; a
+command that cannot start leaves the listing to the normal display.  Example:
+.BR "pager = less -R %s" .
 .TP
 .B prompt
 Data-only prompt template containing exactly one

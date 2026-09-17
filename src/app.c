@@ -1205,6 +1205,38 @@ append_model_row(void *opaque, size_t index, const char *provider, const char *m
     return 0;
 }
 
+static void service_external(void *opaque);
+
+/* The configured pager command, or NULL to print the catalogue directly. */
+static const char *
+pager_command(const struct app_state *app)
+{
+    const char *value = app->config->pager;
+    const char *pager;
+
+    if (!*value || strcmp(value, "off") == 0) return NULL;
+    if (strcmp(value, "on") != 0) return value;
+    pager = getenv("PAGER");
+    return pager && *pager ? pager : NULL;
+}
+
+/* Page the catalogue when it has a terminal and a configured pager; false
+ * leaves direct display to the caller. */
+static bool
+page_model_catalog(struct app_state *app, const char *text, size_t length)
+{
+    const char *command = pager_command(app);
+    char error[256] = {0};
+    bool shown = false;
+    int rc;
+
+    if (!command || snag_isatty(STDERR_FILENO) != 1) return false;
+    if (snag_ui_external(&app->ui, true, error, sizeof(error)) < 0) return false;
+    rc = snag_pager_show(command, text, length, &shown, service_external, app);
+    if (snag_ui_external(&app->ui, false, error, sizeof(error)) < 0) return shown;
+    return rc == 0 && shown;
+}
+
 static int
 render_model_catalog(struct app_state *app)
 {
@@ -1241,7 +1273,10 @@ render_model_catalog(struct app_state *app)
         goto out;
     }
     if (snag_buf_terminate(&text) < 0) goto out;
-    rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
+    if (page_model_catalog(app, (const char *)text.data, text.len))
+        rc = 0;
+    else
+        rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
 out: snag_buf_free(&text);
     return rc;
 }
@@ -1637,7 +1672,7 @@ out: snag_config_free(&candidate);
 }
 
 static void
-service_config_editor(void *opaque)
+service_external(void *opaque)
 {
     struct app_state *app = opaque;
     char error[256] = {0};
@@ -1659,7 +1694,7 @@ run_config_editor(struct app_state *app, bool *success, char *error, size_t erro
         return 1;
     }
     if (snag_ui_external(&app->ui, true, error, error_size) < 0) return -1;
-    int rc = snag_editor_run(app->config_path, success, service_config_editor, app);
+    int rc = snag_editor_run(app->config_path, success, service_external, app);
     int saved = errno;
     if (snag_ui_external(&app->ui, false, error, error_size) < 0) return -1;
     if (rc < 0) {
