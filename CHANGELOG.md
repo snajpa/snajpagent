@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- `/model cache` refreshes the catalogue and reports the new timestamp without
+  printing the listing; `/model` and `/model list` display the catalogue.
+
 - Add a `[ui] pager` option for the model catalogue. The default `on` pages the
   listing through `$PAGER` in an interactive terminal; `off` prints it directly,
   and any other value is a command template where `%s` receives a private

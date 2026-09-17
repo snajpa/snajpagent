@@ -1237,6 +1237,28 @@ page_model_catalog(struct app_state *app, const char *text, size_t length)
     return rc == 0 && shown;
 }
 
+/* Format the catalogue timestamp for the refresh report and the listing footer. */
+static void
+cache_timestamp(char *buffer, size_t size, uint64_t updated_at_ms)
+{
+    time_t seconds = (time_t)(updated_at_ms / 1000u);
+    struct tm broken;
+
+    if (snag_gmtime(&seconds, &broken) &&
+        strftime(buffer, size, "%Y-%m-%dT%H:%M:%SZ", &broken) != 0u)
+        return;
+    (void)snprintf(buffer, size, "%llu ms since epoch", (unsigned long long)updated_at_ms);
+}
+
+static int
+report_cache_updated(struct app_state *app)
+{
+    char timestamp[64];
+
+    cache_timestamp(timestamp, sizeof(timestamp), app->model_cache.updated_at_ms);
+    return app_textf(app, SNAG_UI_HOST, "cache updated: %s", timestamp);
+}
+
 static int
 render_model_catalog(struct app_state *app)
 {
@@ -1245,15 +1267,12 @@ render_model_catalog(struct app_state *app)
     struct snag_buf text;
     char error[256] = {0};
     char timestamp[64];
-    time_t seconds;
-    struct tm broken;
     struct model_catalog_view view = {app->config, &text};
     int rc = -1;
 
     if (!selected) return app_error(app, "selected provider is not present in the current configuration");
     if (snag_app_capacity_resolve(app, selected, app->session.default_model, &capacity,
                                  error, sizeof(error)) < 0) return app_error(app, error);
-    seconds = (time_t)(app->model_cache.updated_at_ms / 1000u);
     snag_buf_init(&text, 16u * 1024u * 1024u);
     if (snag_buf_printf(&text, "selected: %s / %s / %s", selected->name, app->session.default_model,
                        resolve_effort(app->session.default_effort) ?
@@ -1265,13 +1284,8 @@ render_model_catalog(struct app_state *app)
         snag_model_each(&app->model_cache, app->config,
                           resolve_effort(app->config->reasoning_effort), append_model_row, &view) < 0)
         goto out;
-    if (snag_gmtime(&seconds, &broken) && strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ",
-                 &broken) != 0u) {
-        if (snag_buf_printf(&text, "\ncache updated: %s", timestamp) < 0) goto out;
-    } else if (snag_buf_printf(&text, "\ncache updated: %llu ms since epoch", (unsigned long long)
-                                  app->model_cache.updated_at_ms) < 0) {
-        goto out;
-    }
+    cache_timestamp(timestamp, sizeof(timestamp), app->model_cache.updated_at_ms);
+    if (snag_buf_printf(&text, "\ncache updated: %s", timestamp) < 0) goto out;
     if (snag_buf_terminate(&text) < 0) goto out;
     if (page_model_catalog(app, (const char *)text.data, text.len))
         rc = 0;
@@ -1487,7 +1501,7 @@ change_model(struct app_state *app, const char *value, bool active)
         if (active || (!app->applying_controls && !app->session.pending_log))
             rc = request_control(app, SNAG_CONTROL_CACHE, "/model cache");
         else if (load_model_cache(app, true, error, sizeof(error)) < 0) rc = app_error(app, error);
-        else rc = render_model_catalog(app);
+        else rc = report_cache_updated(app);
         free(copy);
         return rc;
     }
