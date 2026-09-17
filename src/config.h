@@ -12,6 +12,7 @@
 #define SNAG_CONFIG_EFFORT_MAX 64u
 #define SNAG_CONFIG_EFFORTS_MAX 32u
 #define SNAG_CONFIG_PROMPT_MAX 1024u
+#define SNAG_CONFIG_PAGER_MAX 256u
 #define SNAG_CONFIG_SPINNER_MAX 69u
 #define SNAG_CONFIG_SPINNER_FRAMES_MAX 16u
 #define SNAG_CONFIG_PATH_MAX (16u * 1024u)
@@ -124,6 +125,7 @@ struct snag_config {
     bool markdown;
     uint64_t resume_history_turns;
     uint32_t typing_pause_ms;
+    char pager[SNAG_CONFIG_PAGER_MAX];
     char prompt[SNAG_CONFIG_PROMPT_MAX + 1u];
     char prompt_spinner_goal[SNAG_CONFIG_SPINNER_MAX];
     char prompt_spinner_provider[SNAG_CONFIG_SPINNER_MAX];

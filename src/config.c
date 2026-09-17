@@ -111,6 +111,7 @@ snag_config_init(struct snag_config *config)
     config->markdown = true;
     config->resume_history_turns = 1u;
     config->typing_pause_ms = 500u;
+    memcpy(config->pager, "on", 3u);
     memcpy(config->prompt, prompt, sizeof(prompt));
     memcpy(config->prompt_spinner_goal, " ⚑", sizeof(" ⚑"));
     memcpy(config->prompt_spinner_provider, " ◴◷◶◵", sizeof(" ◴◷◶◵"));
@@ -624,6 +625,7 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         {SECTION_MODEL_LIMIT, "reasoning_efforts", SET_EFFORTS, &limit->reasoning_efforts, 0, 0},
         {SECTION_MODEL_ALIAS, "model", SET_HEADER, state->models[state->model_alias_index].model.upstream, 0, SNAG_CONFIG_MODEL_MAX},
         {SECTION_UI, "typing_pause_ms", SET_U32, &config->typing_pause_ms, 0, 5000},
+        {SECTION_UI, "pager", SET_TEXT, config->pager, 0, sizeof(config->pager)},
         {SECTION_UI, "markdown", SET_BOOL, &config->markdown, 0, 0},
         {SECTION_UI, "prompt_spinner_goal", SET_SPINNER, config->prompt_spinner_goal, 0, 0},
         {SECTION_UI, "prompt_spinner_provider", SET_SPINNER, config->prompt_spinner_provider, 0, 0},

@@ -751,9 +751,17 @@ main(void)
         {"prompt", "{chat:{unknown}}{rollout-idle:y}{rollout-active:z}", false},
         {"prompt", "{chat:{goal_spinner}{goal_spinner}}{rollout-idle:y}" "{rollout-active:z}", false},
         {"prompt", "{chat:{activity_spinner}{activity_spinner}}{rollout-idle:y}" "{rollout-active:z}", false},
-        {"prompt", "{chat:}{rollout-idle:y}{rollout-active:z}", false}, };
+        {"prompt", "{chat:}{rollout-idle:y}{rollout-active:z}", false},
+        {"pager", "on", true}, {"pager", "off", true},
+        {"pager", "less -R %s", true}, {"pager", "", false}, };
     for (size_t i = 0u; i < sizeof(ui_cases) / sizeof(ui_cases[0]); ++i)
         expect_ui(path, ui_cases[i].key, ui_cases[i].value, ui_cases[i].valid);
+    {
+        struct snag_config defaults;
+        snag_config_init(&defaults);
+        assert(strcmp(defaults.pager, "on") == 0);
+        snag_config_free(&defaults);
+    }
     {
         const char *values[SNAG_PROMPT_FIELD_COUNT] = {
             "prov", "model", "high", "", "host", "0", "rollout-idle", "0", "12", "34", "56"};

@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Add a `[ui] pager` option for the model catalogue. The default `on` pages the
+  listing through `$PAGER` in an interactive terminal; `off` prints it directly,
+  and any other value is a command template where `%s` receives a private
+  temporary file with the listing (for example `less -R %s`). The pager is never
+  used when the catalogue output is not a terminal.
+
 - Accept quoted components in model selectors. A component wrapped in matching
   single or double quotes keeps embedded slashes, so OpenRouter-style
   vendor/model IDs work typed directly (`-m 'openrouter/"openai/gpt-4.1-mini"'`,

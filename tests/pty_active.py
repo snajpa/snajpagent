@@ -59,7 +59,11 @@ class Child:
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(WORKSPACE)
-            env = dict(os.environ if env is None else env)
+            if env is None:
+                env = dict(os.environ)
+                env["PAGER"] = ""
+            else:
+                env = dict(env)
             if term is not None:
                 env["TERM"] = term
             if cols is not None:
