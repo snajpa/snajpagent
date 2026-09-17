@@ -673,8 +673,19 @@ numbered model listing, so a model copied from the listing selects what the
 listing
 showed; an index outside the catalogue is an error rather than a literal model
 name.
-Each component must be nonempty; for upstream IDs containing slashes, define a
-provider-local model name in the configuration.
+Each component must be nonempty.  Wrap a component in matching single or
+double quotes to keep embedded slashes, for upstream IDs such as OpenRouter's
+vendor/model form:
+.B openrouter/"openai/gpt-4.1-mini"
+or
+.BR openrouter/"openai/gpt-4.1-mini"/high .
+Protect those quotes from the shell, for example
+.BR \-m \(aqopenrouter/\(dqopenai/gpt-4.1-mini\(dq\(aq .
+A quoted vendor/model designator still honours a configured provider prefix,
+so
+.B \(dqopenrouter/openai/gpt-4.1-mini\(dq
+selects the same model.  A provider-local model name in the configuration
+remains available for IDs used often.
 The provider/model/effort selection becomes the session preference until changed.
 It survives later turns and session resume, including when you exit before running
 the next turn. An already active turn or admitted pending input retains its saved
@@ -1219,8 +1230,12 @@ A final
 or
 .B s
 writes the selection to the active configuration.  Typed model IDs need not
-exist in the cache.  Use a numbered row for an ID containing
-.BR / .
+exist in the cache.  Wrap a component in matching single or double quotes for
+an ID containing
+.BR / ,
+as with
+.BR \-m ;
+a numbered row avoids selector ambiguity too.
 Selection is accepted during active work and changes the next full turn and all
 later turns until changed. It persists across session resume without a save suffix.
 The active turn retains its model/provider/effort.  The final save suffix also
@@ -3465,9 +3480,10 @@ Typing a model ID is allowed; the provider decides whether it is usable.
 reads only local cache.
 .B /model cache
 makes an explicit authenticated discovery request.  A failed refresh does not
-replace a working cache.  For IDs containing slashes, numbered rows avoid
-selector ambiguity.  A different local provider name can also change which
-configured limits and source-bound observations apply.
+replace a working cache.  For IDs containing slashes, quote the component or
+use a numbered row to avoid selector ambiguity.  A different local provider
+name can also change which configured limits and source-bound observations
+apply.
 .TP
 .B Authentication or token counting failed.
 Use

@@ -523,7 +523,7 @@ snag_model_select_selector(const struct snag_model_cache *cache,
                            const struct snag_provider_config *fallback_provider, const char *fallback_effort,
                            struct snag_model_selection *selection, char *error, size_t error_size)
 {
-    char composed[SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_EFFORT_MAX + 3u];
+    char composed[SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_EFFORT_MAX + 5u];
     const char *provider = NULL, *model = NULL, *effort = NULL;
     size_t index = 0u;
     int rc, written;
@@ -541,10 +541,54 @@ snag_model_select_selector(const struct snag_model_cache *cache,
         return -1;
     }
     if (rc < 0) return -1;
-    written = snprintf(composed, sizeof(composed), "%s/%s/%s", provider, model, effort);
+    written = strchr(model, '/') ?
+        snprintf(composed, sizeof(composed), "%s/\"%s\"/%s", provider, model, effort) :
+        snprintf(composed, sizeof(composed), "%s/%s/%s", provider, model, effort);
     if (written < 0 || (size_t)written >= sizeof(composed)) return -1;
     return snag_model_select(cache, config, composed, fallback_provider, fallback_effort,
                              selection, error, error_size);
+}
+
+/* Quote-aware split of a model selector into at most three slash-separated
+ * components. A component wrapped in matching single or double quotes keeps
+ * embedded slashes (upstream IDs such as OpenRouter's vendor/model form) and
+ * loses the quotes; any other use of a quote character is malformed.
+ * parts[] points into copy. Returns the component count, -1 when a fourth
+ * component starts, or -2 for malformed quoting. */
+int
+snag_model_split_selector(char *copy, char *parts[3])
+{
+    size_t count = 0u;
+    char quote = '\0';
+
+    parts[count++] = copy;
+    for (char *p = copy; *p; ++p) {
+        if (quote) {
+            if (*p == quote) quote = '\0';
+        } else if (*p == '\'' || *p == '"') {
+            quote = *p;
+        } else if (*p == '/') {
+            if (count == 3u) return -1;
+            *p = '\0';
+            parts[count++] = p + 1u;
+        }
+    }
+    if (quote) return -2;
+    for (size_t i = 0u; i < count; ++i) {
+        size_t len = strlen(parts[i]);
+        if (!len) continue;
+        if (parts[i][0] == '\'' || parts[i][0] == '"') {
+            char q = parts[i][0];
+            if (len < 2u || parts[i][len - 1u] != q) return -2;
+            for (size_t j = 1u; j < len - 1u; ++j)
+                if (parts[i][j] == q) return -2;
+            memmove(parts[i], parts[i] + 1u, len - 2u);
+            parts[i][len - 2u] = '\0';
+        } else if (strchr(parts[i], '\'') || strchr(parts[i], '"')) {
+            return -2;
+        }
+    }
+    return (int)count;
 }
 
 int
@@ -556,21 +600,38 @@ snag_model_select(const struct snag_model_cache *cache,
     char copy[SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_EFFORT_MAX + 2u];
     char *parts[3], *model;
     const char *effort = NULL;
-    size_t count = 1u;
+    size_t count;
+    int split;
     const struct snag_provider_config *provider = fallback_provider;
 
     if (!selector || !snag_strcpy(copy, sizeof(copy), selector)) goto invalid;
-    parts[0] = copy;
-    for (char *p = copy; *p; ++p) {
-        if (*p != '/') continue;
-        if (count == 3u) goto invalid;
-        *p = '\0';
-        parts[count++] = p + 1u;
+    split = snag_model_split_selector(copy, parts);
+    if (split == -2) {
+        snag_errorf(error, error_size,
+            "invalid model selector; wrap a whole component in matching '...' or \"...\" to keep its slashes");
+        return -1;
     }
+    if (split < 0) goto invalid;
+    count = (size_t)split;
     for (size_t i = 0u; i < count; ++i)
         if (!parts[i][0]) goto invalid;
     model = parts[0];
-    if (count == 3u || (count == 2u && (snag_config_provider(config, parts[0]) ||
+    if (count == 1u) {
+        /* A quoted vendor/model designator keeps its slash; a configured
+         * leading name still selects the provider, as with two components. */
+        char *slash = strchr(model, '/');
+        if (slash) {
+            *slash = '\0';
+            provider = snag_config_provider(config, model);
+            if (provider) {
+                model = slash + 1u;
+                if (!*model) goto invalid;
+            } else {
+                *slash = '/';
+                provider = fallback_provider;
+            }
+        }
+    } else if (count == 3u || (count == 2u && (snag_config_provider(config, parts[0]) ||
             (fallback_provider && !strcmp(fallback_provider->name, parts[0]))))) {
         provider = fallback_provider && !strcmp(fallback_provider->name, parts[0]) ?
             fallback_provider : snag_config_provider(config, parts[0]);

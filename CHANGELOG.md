@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Accept quoted components in model selectors. A component wrapped in matching
+  single or double quotes keeps embedded slashes, so OpenRouter-style
+  vendor/model IDs work typed directly (`-m 'openrouter/"openai/gpt-4.1-mini"'`,
+  `/model "openrouter/openai/gpt-4.1-mini"`). A quoted vendor/model designator
+  still honours a configured provider prefix, and mismatched quotes are
+  rejected with a dedicated error.
+
 - Omit `tool_choice` from the compaction summary request. The request declares no
   tools, so the choice was inert, but a provider that accepts only `"auto"` (Meta
   Model API) rejected `"none"` with HTTP 400 and failed the whole turn, including

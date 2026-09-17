@@ -51,7 +51,8 @@ test_selectors(void)
     struct snag_config config;
     struct snag_model_selection selected;
     char error[256] = {0};
-    const char *bad[] = {"", "/m", "m/", "p//high", "p/m/high/extra", "missing/m/high"};
+    const char *bad[] = {"", "/m", "m/", "p//high", "p/m/high/extra", "missing/m/high",
+        "p/\"q/m", "p/q\"/m", "\"p", "p/\"a\"b/c", "p/\"\"/high"};
     snag_config_init(&config);
     config.provider_count = 2u;
     snag_secret_source_free(&config.providers[0].api_key);
@@ -68,9 +69,29 @@ test_selectors(void)
     assert(snag_model_select(NULL, &config, "q/m/low", first, "medium", &selected,
                              error, sizeof(error)) == 0);
     assert(selected.provider == &config.providers[1] && !strcmp(selected.effort, "low"));
+    /* Quoted components keep embedded slashes for upstream IDs such as
+     * OpenRouter's vendor/model form. */
+    assert(snag_model_select(NULL, &config, "p/\"q/m\"", first, "medium", &selected,
+                             error, sizeof(error)) == 0);
+    assert(selected.provider == first && !strcmp(selected.model, "q/m") &&
+           !strcmp(selected.effort, "medium"));
+    assert(snag_model_select(NULL, &config, "'x/y'", first, "medium", &selected,
+                             error, sizeof(error)) == 0);
+    assert(selected.provider == first && !strcmp(selected.model, "x/y"));
+    assert(snag_model_select(NULL, &config, "p/'q/m'/low", NULL, "medium", &selected,
+                             error, sizeof(error)) == 0);
+    assert(selected.provider == first && !strcmp(selected.model, "q/m") &&
+           !strcmp(selected.effort, "low"));
+    /* A quoted vendor/model designator still honours a configured provider prefix. */
+    assert(snag_model_select(NULL, &config, "\"q/m\"", NULL, "medium", &selected,
+                             error, sizeof(error)) == 0);
+    assert(selected.provider == &config.providers[1] && !strcmp(selected.model, "m"));
     for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i)
         assert(snag_model_select(NULL, &config, bad[i], first, "medium", &selected,
                                  error, sizeof(error)) < 0);
+    assert(snag_model_select(NULL, &config, "p/\"q/m", first, "medium", &selected,
+                             error, sizeof(error)) < 0);
+    assert(strstr(error, "matching") != NULL);
     char oversized[SNAG_CONFIG_MODEL_MAX + 1u];
     memset(oversized, 'x', sizeof(oversized) - 1u);
     oversized[sizeof(oversized) - 1u] = '\0';
@@ -168,6 +189,45 @@ test_local_models(struct snag_store *store, struct snag_model_cache *cache)
         assert(snag_model_select_selector(cache, &config, "999", provider, "medium",
                                           &selected, error, sizeof(error)) < 0);
         assert(strstr(error, "not in the catalogue") != NULL);
+    }
+    /* A catalogue model whose local ID contains a slash (OpenRouter-style
+     * vendor/model) must survive the composed provider/model/effort selector
+     * the index path builds. */
+    {
+        struct snag_config slash_config;
+        struct snag_model_selection selected;
+        const char *entry_provider = NULL, *entry_model = NULL, *entry_effort = NULL;
+        char slash_effort[64] = {0};
+        char selector[32];
+        size_t slash_index = 0u;
+        bool saw_slash = false;
+
+        snag_config_init(&slash_config);
+        slash_config.provider_count = 1u;
+        strcpy(slash_config.providers[0].name, "paid");
+        strcpy(slash_config.providers[0].base_url, "https://api.example.test/v1");
+        slash_config.providers[0].models = calloc(1u, sizeof(*slash_config.providers[0].models));
+        assert(slash_config.providers[0].models);
+        slash_config.providers[0].model_count = 1u;
+        strcpy(slash_config.providers[0].models[0].name, "org/model");
+        strcpy(slash_config.providers[0].models[0].upstream, "org/model");
+        for (size_t i = 1u; snag_model_entry(cache, &slash_config, i, "medium",
+                                             &entry_provider, &entry_model, &entry_effort) == 0; ++i) {
+            if (!strcmp(entry_provider, "paid") && !strcmp(entry_model, "org/model")) {
+                slash_index = i;
+                saw_slash = true;
+                (void)snprintf(slash_effort, sizeof(slash_effort), "%s", entry_effort);
+            }
+        }
+        assert(saw_slash && slash_index != 0u);
+        (void)snprintf(selector, sizeof(selector), "%zu", slash_index);
+        assert(snag_model_select_selector(cache, &slash_config, selector,
+                                          &slash_config.providers[0], "medium",
+                                          &selected, error, sizeof(error)) == 0);
+        assert(strcmp(selected.provider->name, "paid") == 0);
+        assert(strcmp(selected.model, "org/model") == 0);
+        assert(strcmp(selected.effort, slash_effort) == 0);
+        snag_config_free(&slash_config);
     }
     assert(snag_model_cache_record(store, cache, provider, "codex", "large",
                                   SNAG_COUNT_UNKNOWN, 400000u, error, sizeof(error)) == 0);
