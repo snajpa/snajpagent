@@ -3109,7 +3109,9 @@ def test_compaction_policy_selection():
     child = Child(["--config", str(config), "--no-color"])
     try:
         child.wait(PROMPT.rstrip())
-        end = child.send_wait(b"/model cache\r", b"compact=745560 (auto)")
+        end = child.send_wait(b"/model cache\r", b"cache updated:")
+        child.wait(PROMPT.rstrip(), start=end)
+        end = child.send_wait(b"/model\r", b"compact=745560 (auto)", start=len(child.buf))
         child.wait(PROMPT.rstrip(), start=end)
         original_cache = cache_path.read_bytes()
         for selector, expected in (
@@ -3203,9 +3205,12 @@ def test_model_cache_and_selection():
 
     # Explicit refresh creates the complete all-provider cache.
     start = len(child.buf)
-    child.send_wait(b"/model cache\r", b"selected: first / uncached-start / low", start=start)
-    child.wait(b"1. first / gpt-5.6-luna / high", start=start)
-    child.wait(b"16. second / vendor/future-model / low", start=start)
+    child.send_wait(b"/model cache\r", b"cache updated:", start=start)
+    child.wait(PROMPT.rstrip(), start=start)
+    list_start = len(child.buf)
+    child.send_wait(b"/model list\r", b"selected: first / uncached-start / low", start=list_start)
+    child.wait(b"1. first / gpt-5.6-luna / high", start=list_start)
+    child.wait(b"16. second / vendor/future-model / low", start=list_start)
     cache = json.loads(cache_path.read_text(encoding="utf-8"))
     assert cache_path.stat().st_mode & 0o777 == 0o600
     assert cache["schema_version"] == 1
@@ -3217,10 +3222,10 @@ def test_model_cache_and_selection():
     assert first_model["observed_input_bytes"] == 0
     assert first_model["observed_input_tokens"] == 0
     assert first_model["observed_hard_input_tokens"] == 0
-    child.wait(b"count=unknown", start=start)
-    child.wait(b"count=unknown", start=start)
+    child.wait(b"count=unknown", start=list_start)
+    child.wait(b"count=unknown", start=list_start)
     stamp = cached_timestamp(cache)
-    end = child.wait(stamp + b"\r\n", start=start)
+    end = child.wait(stamp + b"\r\n", start=list_start)
     end = child.wait(initial_prompt, start=end)
 
     # /model list is a cache-only alias and retains the stored timestamp.
@@ -3232,11 +3237,12 @@ def test_model_cache_and_selection():
     assert cache_path.stat().st_ino == original_inode
 
     # A later explicit refresh atomically replaces the complete catalog.
-    child.send_wait(b"/model cache\r", b"16. second / vendor/future-model / low", start=end)
+    end = child.send_wait(b"/model cache\r", b"cache updated:", start=end)
     refreshed = json.loads(cache_path.read_text(encoding="utf-8"))
     assert refreshed["updated_at_ms"] >= cache["updated_at_ms"]
     assert cache_path.stat().st_ino != original_inode
     refreshed_stamp = cached_timestamp(refreshed)
+    end = child.send_wait(b"/model list\r", b"16. second / vendor/future-model / low", start=end)
     end = child.wait(refreshed_stamp + b"\r\n", start=end)
     end = child.wait(initial_prompt, start=end)
 
@@ -3328,7 +3334,10 @@ def test_model_configuration_save():
     child = Child(["--config", str(config)], PROMPT.rstrip())
 
     # Selection without a suffix remains session-only.
-    cached = child.send_wait(b"/model cache\r", b"16. second / vendor/future-model / low")
+    cached = child.send_wait(b"/model cache\r", b"cache updated:")
+    child.wait(PROMPT.rstrip(), start=cached)
+    list_start = len(child.buf)
+    cached = child.send_wait(b"/model list\r", b"16. second / vendor/future-model / low", start=list_start)
     child.wait(PROMPT.rstrip(), start=cached)
     end = child.send_wait(b"/model #9\r",
         b"model for next turn: second / gpt-5.6-luna / high"

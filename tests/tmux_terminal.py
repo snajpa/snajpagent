@@ -2903,28 +2903,31 @@ def run_pager_case(binary, root):
                 100, 32, args=("--no-listen", "--no-client"), environment=env) as terminal:
             terminal.wait("host-model/medium", join_wrapped=True)
             terminal.submit_wait("/model cache", "cache updated:", join_wrapped=True)
+            terminal.submit_wait("/model", "selected:", join_wrapped=True)
 
         workspace, config = irc_workspace(case / "template" / "work", provider.port, "host-model",
                 pager=f"cp %s {templated}")
         with TmuxTerminal(case / "template" / "terminal", binary, workspace, case / "template" / "state",
                 config, 100, 32, args=("--no-listen", "--no-client"), environment=env) as terminal:
             terminal.wait("host-model/medium", join_wrapped=True)
-            terminal.submit("/model cache")
-            wait_file_contains(templated, "cache updated:")
+            terminal.submit_wait("/model cache", "cache updated:", join_wrapped=True)
+            terminal.submit("/model")
+            wait_file_contains(templated, "selected:")
             time.sleep(0.5)
-            assert "cache updated:" not in terminal.capture(), "template pager left the catalogue on screen"
-            assert "selected:" in templated.read_text(encoding="utf-8")
+            assert "selected:" not in terminal.capture(), "template pager left the catalogue on screen"
+            assert "cache updated:" in templated.read_text(encoding="utf-8")
 
         workspace, config = irc_workspace(case / "default" / "work", provider.port, "host-model")
         with TmuxTerminal(case / "default" / "terminal", binary, workspace, case / "default" / "state",
                 config, 100, 32, args=("--no-listen", "--no-client"),
                 environment={**env, "PAGER": str(script)}) as terminal:
             terminal.wait("host-model/medium", join_wrapped=True)
-            terminal.submit("/model cache")
-            wait_file_contains(captured, "cache updated:")
+            terminal.submit_wait("/model cache", "cache updated:", join_wrapped=True)
+            terminal.submit("/model")
+            wait_file_contains(captured, "selected:")
             time.sleep(0.5)
-            assert "cache updated:" not in terminal.capture(), "default pager left the catalogue on screen"
-            assert "selected:" in captured.read_text(encoding="utf-8")
+            assert "selected:" not in terminal.capture(), "default pager left the catalogue on screen"
+            assert "cache updated:" in captured.read_text(encoding="utf-8")
     finally:
         provider.close()
     print("pager catalogue: ok", flush=True)
@@ -3044,7 +3047,8 @@ def run_configured_efforts_case(binary, root, provider, environment):
         terminal.wait(" ordinary/uncached-start/xhigh")
         # A configured effort list also resolves before a catalog exists.
         terminal.submit_wait("/model standard-model", "ordinary / standard-model / max", join_wrapped=True)
-        screen = terminal.submit_wait("/model cache", "cache updated:", join_wrapped=True)
+        terminal.submit_wait("/model cache", "cache updated:", join_wrapped=True)
+        screen = terminal.submit_wait("/model list", "4. ordinary / standard-model / max", join_wrapped=True)
         for index, effort in enumerate(("none", "low", "high", "max"), 1):
             assert f"{index}. ordinary / standard-model / {effort}" in screen, screen
         cache_path = terminal.dotdir / "models.json"
@@ -3069,7 +3073,8 @@ def run_configured_efforts_case(binary, root, provider, environment):
         terminal.submit_wait("/model list", "1. ordinary / standard-model / custom", join_wrapped=True)
         edited.write_text(saved)
         terminal.submit_wait("/config", "configuration reloaded:", join_wrapped=True)
-        terminal.submit_wait("/model cache", "4. ordinary / standard-model / max", join_wrapped=True)
+        terminal.submit_wait("/model cache", "cache updated:", join_wrapped=True)
+        terminal.submit_wait("/model list", "4. ordinary / standard-model / max", join_wrapped=True)
         assert json.loads(cache_path.read_text())["providers"] == raw["providers"]
     # Use the fake endpoint's ordinary completion model for the wire checks.
     config.write_text(config.read_text().replace("standard-model", "one-model"))
@@ -3109,7 +3114,11 @@ def run_model_catalog_case(binary, root, provider, environment):
         terminal.wait(" ordinary/uncached-start/low   0% ›")
         terminal.submit_wait("/verbose 6", "verbosity: 6")
         before = provider.catalog_paths()
-        screen = terminal.submit_wait("/model cache", "5. codex / codex-late / ultra",
+        refresh_screen = terminal.submit_wait("/model cache", "cache updated:", join_wrapped=True)
+        assert "> GET /backend-api/codex/models?client_version=0.146.0 HTTP/1.1" in refresh_screen
+        assert "> authorization:" in refresh_screen and "<redacted:bearer>" in refresh_screen
+        assert "irc-ui-secret" not in refresh_screen
+        screen = terminal.submit_wait("/model list", "5. codex / codex-late / ultra",
                                join_wrapped=True)
         for expected in (
                 "1. ordinary / standard-model / medium",
@@ -3120,9 +3129,6 @@ def run_model_catalog_case(binary, root, provider, environment):
                 raise AssertionError(
                     f"model catalog UI omitted {expected!r}:\n{screen}"
                 )
-        assert "> GET /backend-api/codex/models?client_version=0.146.0 HTTP/1.1" in screen
-        assert "> authorization:" in screen and "<redacted:bearer>" in screen
-        assert "irc-ui-secret" not in screen
         cache_path = terminal.dotdir / "models.json"
         cache = json.loads(cache_path.read_text(encoding="utf-8"))
         if cache.get("schema_version") != 1:

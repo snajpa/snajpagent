@@ -1207,7 +1207,10 @@ interactive terminal the displayed catalogue pages through the configured
 .TP
 .B /model cache
 Refresh every configured provider through its authenticated model endpoint,
-replace the cache atomically, and display it.  A normalized API path ending in
+replace the cache atomically, and report the new timestamp without printing
+the catalogue; use
+.B /model list
+to display it.  A normalized API path ending in
 .B /backend-api/codex
 uses
 .BR /models?client_version=0.146.0 ;
