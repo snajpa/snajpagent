@@ -1346,20 +1346,18 @@ select_typed_model(struct app_state *app, char *value, bool save)
     const char *model;
     const char *effort;
     char *parts[3];
-    size_t count = 0u;
+    size_t count;
+    int split;
     bool known_in_cache = false;
 
-    parts[count++] = value;
-    for (char *p = value; *p; ++p) {
-        if (*p != '/') continue;
-        if (count == 3u) {
-            (void)app_error(app,
-                "model selector has more than three slash-separated components; use a cached number for model IDs containing slash");
-            return -1;
-        }
-        *p = '\0';
-        parts[count++] = p + 1u;
+    split = snag_model_split_selector(value, parts);
+    if (split < 0) {
+        (void)app_error(app, split == -2 ?
+            "model selector has mismatched quotes; wrap a whole component in matching '...' or \"...\"" :
+            "model selector has more than three slash-separated components; quote a component or use a cached number for IDs containing slash");
+        return -1;
     }
+    count = (size_t)split;
     for (size_t i = 0; i < count; ++i) {
         parts[i] = trim_selector_part(parts[i]);
         if (!parts[i][0]) {
@@ -1368,12 +1366,31 @@ select_typed_model(struct app_state *app, char *value, bool save)
         }
     }
     provider = count == 3u ? snag_config_provider(app->config, parts[0]) : next_provider(app);
+    model = parts[count == 3u ? 1u : 0u];
+    if (count == 1u) {
+        /* A quoted vendor/model designator keeps its slash; a configured
+         * leading name still selects the provider. */
+        char *slash = strchr(model, '/');
+        if (slash) {
+            *slash = '\0';
+            const struct snag_provider_config *named = snag_config_provider(app->config, model);
+            if (named) {
+                provider = named;
+                model = slash + 1u;
+            } else {
+                *slash = '/';
+            }
+        }
+        if (!model[0]) {
+            (void)app_error(app, "model selector contains an empty component");
+            return -1;
+        }
+    }
     if (!provider) {
         (void)app_error(app, count == 3u ? "model selector names an unconfigured provider" :
             "no provider is configured");
         return -1;
     }
-    model = parts[count == 3u ? 1u : 0u];
     effort = count >= 2u ? parts[count - 1u] : app->session.default_effort;
     if (strlen(model) >= SNAG_CONFIG_MODEL_MAX ||
         !snag_utf8_valid((const unsigned char *)model, strlen(model), true) || !resolve_effort(effort)) {

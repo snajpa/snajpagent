@@ -69,6 +69,13 @@ struct snag_model_selection {
     char model[SNAG_CONFIG_MODEL_MAX];
     char effort[SNAG_CONFIG_EFFORT_MAX];
 };
+/* Quote-aware split of a model selector into at most three slash-separated
+ * components. A component wrapped in matching single or double quotes keeps
+ * embedded slashes (upstream IDs such as OpenRouter's vendor/model form) and
+ * loses the quotes; any other use of a quote character is malformed.
+ * parts[] points into copy. Returns the component count, -1 when a fourth
+ * component starts, or -2 for malformed quoting. */
+int snag_model_split_selector(char *copy, char *parts[3]);
 /* A configured provider prefix disambiguates provider/model from model/effort. */
 int snag_model_select(const struct snag_model_cache *cache,
                       const struct snag_config *config, const char *selector,
