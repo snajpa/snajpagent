@@ -625,6 +625,29 @@ test_refusal_diagnostic(const char *workspace)
     snag_session_close(&session);
 }
 
+static void
+test_many_queued_turns(struct snag_store *store, const char *workspace)
+{
+    static const char turn_id[] = "55555555555555555555555555555555";
+    struct snag_session session;
+    char error[256] = {0};
+
+    snag_session_init(&session);
+    assert(snag_session_create(store, &session, workspace, "default", "gpt-5.5-2026-04-23", "default",
+                              error, sizeof(error)) == 0);
+    commit_event(&session, "turn_started", turn_started_data(&session, turn_id));
+    for (unsigned int i = 0; i < 130u; ++i) {
+        char queue_id[SNAG_ID_HEX_LEN + 1u], text[32];
+        (void)snprintf(queue_id, sizeof(queue_id), "%032x", 0x400000u + i);
+        (void)snprintf(text, sizeof(text), "queued %u", i);
+        commit_event(&session, "future_turn_queued", queued_data(turn_id, queue_id, text));
+    }
+    assert(session.pending_queue_count == 130u);
+    assert(session.pending_queue_bytes > 0u);
+    assert(strcmp(session.pending_queue[129].text, "queued 129") == 0);
+    snag_session_close(&session);
+}
+
 int
 main(void)
 {
@@ -1117,6 +1140,7 @@ main(void)
     test_refusal_diagnostic(workspace);
     test_audio_usage(&store,workspace);
     test_voice_queue(&store,workspace);
+    test_many_queued_turns(&store,workspace);
     snag_store_close(&store);
     free(temp);
     puts("test_store: ok");

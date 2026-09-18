@@ -155,9 +155,11 @@ snag_session_init(struct snag_session *session)
 static void
 free_session_state(struct snag_session *session)
 {
-    free(session->pending_calls);
     for(size_t i=0;i<session->pending_steering_count;++i)json_decref(session->pending_steering[i].content);
     for(size_t i=0;i<session->pending_queue_count;++i)json_decref(session->pending_queue[i].content);
+    free(session->pending_calls);
+    free(session->pending_steering);
+    free(session->pending_queue);
     json_decref(session->strings);
     json_decref(session->compact_output);
     json_decref(session->pending_input);
@@ -482,6 +484,16 @@ static int
 add_pending_steering(struct snag_session *session, const char *id, const char *text, size_t len, uint64_t seq)
 {
     struct snag_pending_steering *pending;
+    if (session->pending_steering_count == session->pending_steering_capacity) {
+        size_t capacity = session->pending_steering_capacity ?
+            session->pending_steering_capacity * 2u : 16u;
+        struct snag_pending_steering *grown;
+        if (capacity < session->pending_steering_capacity) return snag_errno(EOVERFLOW);
+        grown = realloc(session->pending_steering, capacity * sizeof(*grown));
+        if (!grown) return snag_errno(ENOMEM);
+        session->pending_steering = grown;
+        session->pending_steering_capacity = capacity;
+    }
     pending = &session->pending_steering[session->pending_steering_count];
     memset(pending, 0, sizeof(*pending));
     if (replace_text(session, &pending->text, id, text, SNAG_MAX_STEERING_TEXT) < 0) return -1;
@@ -999,8 +1011,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !steering_id || !snag_hex_is_lower(steering_id, SNAG_ID_HEX_LEN) ||
             pending_user_id_exists(session, steering_id) || !text || !*text ||
             (len = strlen(text)) > SNAG_MAX_STEERING_TEXT ||
-            session->pending_steering_count >= SNAG_MAX_STEERING_PER_TURN || session->pending_steering_bytes >
-                SNAG_MAX_STEERING_PER_TURN * SNAG_MAX_STEERING_TEXT - len ||
+            session->pending_steering_bytes > SNAG_MAX_PENDING_STEERING_BYTES - len ||
             (reminder && (!session->response_complete ||
                           (session->response_outcome != SNAG_GRAPH_NONPRODUCTIVE &&
                            session->response_outcome != SNAG_GRAPH_FINAL &&
@@ -1055,8 +1066,17 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             if ((voice ? (session->active_turn ? (!turn_id || strcmp(turn_id,session->active_turn_id)) :
                     !json_is_null(json_object_get(data,"while_turn_id"))) :
                 (!turn_id || strcmp(turn_id,session->active_turn?session->active_turn_id:""))) ||
-                pending_user_id_exists(session, queue_id) ||
-                session->pending_queue_count >= SNAG_MAX_PENDING_TURNS) goto invalid;
+                pending_user_id_exists(session, queue_id)) goto invalid;
+            if (session->pending_queue_count == session->pending_queue_capacity) {
+                size_t capacity = session->pending_queue_capacity ?
+                    session->pending_queue_capacity * 2u : 16u;
+                struct snag_queued_turn *grown;
+                if (capacity < session->pending_queue_capacity) goto invalid;
+                grown = realloc(session->pending_queue, capacity * sizeof(*grown));
+                if (!grown) return -1;
+                session->pending_queue = grown;
+                session->pending_queue_capacity = capacity;
+            }
             queued = &session->pending_queue[session->pending_queue_count];
         } else {
             for (size_t i = 0; i < session->pending_queue_count && !queued; ++i)
@@ -1089,7 +1109,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
 
         if (!snag_json_exact_keys(data, "queue_ids reason") || !reason ||
             strcmp(reason, "user") != 0 || !json_is_array(ids) ||
-            !(count = json_array_size(ids)) || count > SNAG_MAX_PENDING_TURNS) goto invalid;
+            !(count = json_array_size(ids))) goto invalid;
         /* IDs must follow queue order. Mutations remain in the event stage. */
         for (size_t i = 0u; i < session->pending_queue_count; ++i) {
             struct snag_queued_turn *queued = &session->pending_queue[i];
@@ -1446,8 +1466,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             (!cyber && strcmp(text, SNAG_EMPTY_OUTPUT_CORRECTION) != 0 &&
              strcmp(text, SNAG_OVERSIZED_OUTPUT_CORRECTION) != 0) ||
             snag_partial_public_validate(partial, error, error_size) < 0 ||
-            session->pending_steering_count >= SNAG_MAX_STEERING_PER_TURN || session->pending_steering_bytes >
-                SNAG_MAX_STEERING_PER_TURN * SNAG_MAX_STEERING_TEXT - (len = strlen(text))) goto invalid;
+            session->pending_steering_bytes > SNAG_MAX_PENDING_STEERING_BYTES - (len = strlen(text))) goto invalid;
         if (cyber)
             for (size_t i = 0; i < json_array_size(partial); ++i)
                 if (strcmp(snag_json_string(json_array_get(partial, i), "kind"), "assistant")) goto invalid;
@@ -2100,11 +2119,13 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
     *staged = *source;
     staged->pending_calls = NULL;
     staged->pending_call_capacity = 0u;
+    staged->pending_steering = NULL;
+    staged->pending_steering_count = 0u;
+    staged->pending_steering_capacity = 0u;
+    staged->pending_queue = NULL;
+    staged->pending_queue_count = 0u;
+    staged->pending_queue_capacity = 0u;
     staged->strings = source->strings ? json_copy(source->strings) : NULL;
-    for(size_t i=0;i<staged->pending_steering_count;++i)
-        staged->pending_steering[i].content=json_incref(source->pending_steering[i].content);
-    for(size_t i=0;i<staged->pending_queue_count;++i)
-        staged->pending_queue[i].content=json_incref(source->pending_queue[i].content);
     staged->compact_output = json_incref(source->compact_output);
     staged->pending_input = json_incref(source->pending_input);
     staged->active_instructions = json_incref(source->active_instructions);
@@ -2115,6 +2136,26 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
         memcpy(staged->pending_calls, source->pending_calls,
                source->pending_call_capacity * sizeof(*staged->pending_calls));
         staged->pending_call_capacity = source->pending_call_capacity;
+    }
+    if (source->pending_steering_count) {
+        staged->pending_steering = malloc(source->pending_steering_capacity * sizeof(*staged->pending_steering));
+        if (!staged->pending_steering) return -1;
+        memcpy(staged->pending_steering, source->pending_steering,
+               source->pending_steering_capacity * sizeof(*staged->pending_steering));
+        staged->pending_steering_capacity = source->pending_steering_capacity;
+        staged->pending_steering_count = source->pending_steering_count;
+        for(size_t i=0;i<staged->pending_steering_count;++i)
+            staged->pending_steering[i].content=json_incref(source->pending_steering[i].content);
+    }
+    if (source->pending_queue_count) {
+        staged->pending_queue = malloc(source->pending_queue_capacity * sizeof(*staged->pending_queue));
+        if (!staged->pending_queue) return -1;
+        memcpy(staged->pending_queue, source->pending_queue,
+               source->pending_queue_capacity * sizeof(*staged->pending_queue));
+        staged->pending_queue_capacity = source->pending_queue_capacity;
+        staged->pending_queue_count = source->pending_queue_count;
+        for(size_t i=0;i<staged->pending_queue_count;++i)
+            staged->pending_queue[i].content=json_incref(source->pending_queue[i].content);
     }
     return source->strings && !staged->strings ? -1 : 0;
 }
