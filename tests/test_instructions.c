@@ -106,6 +106,24 @@ main(void)
     (void)unlink(path);
     snag_instructions_free(&set);
 
+    /* More than the former sixteen discovery sources are retained. */
+    {
+        struct snag_instruction_set many = {0};
+        for (unsigned int i = 0u; i < 20u; ++i) {
+            assert(snprintf(path, sizeof(path), "%s/many-%u", temp, i) > 0);
+            mkdir_checked(path);
+            assert(snprintf(leaf, sizeof(leaf), "%s/AGENTS.md", path) > 0);
+            write_file(leaf, "many\n");
+            assert(snag_instructions_add_file(&many, leaf, error, sizeof(error)) == 0);
+        }
+        assert(many.count == 20u);
+        metadata = snag_instructions_metadata_json(&many);
+        assert(metadata && json_array_size(metadata) == 20u);
+        assert(snag_instructions_metadata_valid(metadata, error, sizeof(error)) == 0);
+        json_decref(metadata);
+        snag_instructions_free(&many);
+    }
+
     puts("test_instructions: ok");
     return 0;
 }

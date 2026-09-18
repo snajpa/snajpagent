@@ -20,6 +20,10 @@
   source lists and rows size themselves from their entries, and media content
   stays bounded by its byte budgets.
 
+- Remove the sixteen-source instruction discovery ceiling. Any number of
+  canonical instruction files is retained; each path keeps its existing
+  bound and the projected entry-point list sizes itself from the set.
+
 - Show provider-hosted web searches as private rollout tool rows. A `web_search`
   item records a start row carrying the search action and query, then a finish
   row carrying the provider's terminal status and retained source URLs, at the

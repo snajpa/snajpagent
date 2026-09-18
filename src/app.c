@@ -3201,7 +3201,8 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             char *path = snag_strdup_checked(json_string_value(
                 json_array_get(app->session.active_instructions, i)), SNAG_PATH_MAX_BYTES);
             if (!path) goto fail;
-            app->turn_instructions.paths[app->turn_instructions.count++] = path;
+            if (snag_instructions_add_owned(&app->turn_instructions, path,
+                                           error, sizeof(error)) < 0) goto fail;
         }
     } else {
         if (app->config->read_agents_md) {
