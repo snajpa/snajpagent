@@ -501,11 +501,14 @@ append_instruction_messages(struct context_builder *builder)
 {
     struct snag_buf text;
     json_t *paths;
+    size_t per_path = SNAG_PATH_MAX_BYTES * 6u + 4u, budget;
     int rc = -1;
 
     if (!builder->instructions || !builder->instructions->count) return 0;
+    if (builder->instructions->count > (SIZE_MAX - 1024u) / per_path) return snag_errno(EOVERFLOW);
+    budget = builder->instructions->count * per_path + 1024u;
     paths = snag_instructions_metadata_json(builder->instructions);
-    snag_buf_init(&text, SNAG_MAX_INSTRUCTION_SOURCES * (SNAG_PATH_MAX_BYTES * 6u + 4u) + 1024u);
+    snag_buf_init(&text, budget);
     if (paths && snag_buf_printf(&text,
             "Working-document entry points (JSON paths, not file contents):\n") == 0 &&
         snag_json_canonical(paths, &text) == 0 && snag_buf_printf(&text,

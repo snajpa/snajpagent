@@ -7,10 +7,9 @@
 #include "snag_jansson.h"
 #include <stddef.h>
 
-#define SNAG_MAX_INSTRUCTION_SOURCES 16u
 struct snag_instruction_set {
-    char *paths[SNAG_MAX_INSTRUCTION_SOURCES];
-    size_t count;
+    char **paths;
+    size_t count, capacity;
 };
 
 void snag_instructions_free(struct snag_instruction_set *set);
@@ -18,6 +17,9 @@ int snag_instructions_add_directory(struct snag_instruction_set *set, const char
                                    char *error, size_t error_size);
 int snag_instructions_add_file(struct snag_instruction_set *set, const char *path,
                               char *error, size_t error_size);
+/* Takes ownership of an already canonical path; grows the set as needed. */
+int snag_instructions_add_owned(struct snag_instruction_set *set, char *path,
+                               char *error, size_t error_size);
 int snag_instructions_discover(struct snag_instruction_set *set, const char *workspace,
                               char *error, size_t error_size);
 json_t *snag_instructions_metadata_json(const struct snag_instruction_set *set);

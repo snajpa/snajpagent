@@ -1161,14 +1161,21 @@ for args in (["-d"], ["-d", ""], ["-d", str(agents)],
     assert result.returncode == 2, (args, result.stderr)
     assert len(turns()) == 2
 args = []
-for i in range(17):
+limit_docs = []
+for i in range(20):
     directory = root / f"docs-limit-{i}"
     directory.mkdir()
-    (directory / "AGENTS.md").touch()
+    doc = directory / "AGENTS.md"
+    doc.touch()
+    limit_docs.append(str(doc))
     args += ["-d", str(directory)]
 result = subprocess.run([*common, *args, "-e", "--", "ping"],
                         text=True, capture_output=True, timeout=15)
-assert result.returncode == 2 and "exceeds 16 files" in result.stderr, result.stderr
+assert result.returncode == 0, result.stderr
+limit_session = max((state / "sessions").iterdir(), key=lambda p: p.stat().st_mtime)
+limit_turns = [e["data"] for e in map(json.loads, (limit_session / "events.jsonl").read_text().splitlines())
+               if e["type"] == "turn_started"]
+assert limit_turns and limit_turns[-1]["instructions"][-20:] == limit_docs, limit_turns[-1]["instructions"]
 print("working-docs CLI: ok")
 PY
 
