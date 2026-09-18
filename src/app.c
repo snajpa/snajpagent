@@ -2824,36 +2824,25 @@ call_rule_check(struct app_state *app, const struct snag_response_item *call,
     return 0;
 }
 
+struct call_slot {
+    struct snag_response_item call;
+    char handle[SNAG_ID_HEX_LEN + 1u];
+    bool started, finished, process;
+    bool rule_rejected;
+    char rule_message[512];
+    char *insertion;
+};
+
 static int
-execute_calls(struct app_state *app, const char *turn_id, const struct snag_response_graph *graph,
-              const struct snag_credential *credential, char *error, size_t error_size)
+run_call_batch(struct app_state *app, const char *turn_id, const struct snag_credential *credential,
+               struct call_slot *calls, size_t count, char *error, size_t error_size)
 {
-    struct {
-        struct snag_response_item call;
-        char handle[SNAG_ID_HEX_LEN + 1u];
-        bool started, finished, process;
-        bool rule_rejected;
-        char rule_message[512];
-        char *insertion;
-    } calls[SNAG_MAX_RESPONSE_ITEMS] = {0}; /* one slot per representable response item */
-    size_t count = 0u, finished = 0u;
+    size_t finished = 0u;
     uint64_t began = snag_monotonic_ms(), deadline = UINT64_MAX;
     const char *handoff = NULL;
     int control = 0;
     bool first_wave = true;
 
-    for (size_t i = 0u; i < graph->count; ++i) {
-        struct snag_response_item view = snag_response_graph_item(graph, i);
-        const struct snag_response_item *call = &view;
-        if (call->kind != SNAG_ITEM_TOOL_CALL) continue;
-        calls[count].call = *call;
-#ifndef SNAJPAGENT_TEST_FIXTURE
-        calls[count].process = !app->session.active_read_only &&
-            (!strcmp(call->name, "exec_command") || !strcmp(call->name, "write_stdin"));
-        app->tool_waiting |= calls[count].process;
-#endif
-        ++count;
-    }
     for (size_t i = 0u; i < count; ++i)
         if (call_rule_check(app, &calls[i].call, &calls[i].rule_rejected,
                             calls[i].rule_message, sizeof(calls[i].rule_message), &calls[i].insertion,
@@ -3026,6 +3015,38 @@ handoff:
         return 2;
     }
     return 0;
+}
+
+static int
+execute_calls(struct app_state *app, const char *turn_id, const struct snag_response_graph *graph,
+              const struct snag_credential *credential, char *error, size_t error_size)
+{
+    struct call_slot *calls;
+    size_t count = 0u, slot = 0u;
+    int rc;
+
+    for (size_t i = 0u; i < graph->count; ++i)
+        if (snag_response_graph_item(graph, i).kind == SNAG_ITEM_TOOL_CALL) ++count;
+    calls = count ? calloc(count, sizeof(*calls)) : NULL;
+    if (count && !calls) {
+        snag_errorf(error, error_size, "cannot allocate the call batch");
+        return -1;
+    }
+    for (size_t i = 0u; i < graph->count; ++i) {
+        struct snag_response_item view = snag_response_graph_item(graph, i);
+        const struct snag_response_item *call = &view;
+        if (call->kind != SNAG_ITEM_TOOL_CALL) continue;
+        calls[slot].call = *call;
+#ifndef SNAJPAGENT_TEST_FIXTURE
+        calls[slot].process = !app->session.active_read_only &&
+            (!strcmp(call->name, "exec_command") || !strcmp(call->name, "write_stdin"));
+        app->tool_waiting |= calls[slot].process;
+#endif
+        ++slot;
+    }
+    rc = run_call_batch(app, turn_id, credential, calls, count, error, error_size);
+    free(calls);
+    return rc;
 }
 
 /* Return the command exit status after the durable transition. Pre-response
@@ -4717,6 +4738,8 @@ out:
     snag_buf_free(&app.irc_urgent_refs);
     snag_buf_free(&app.irc_background_refs);
     snag_buf_free(&app.irc_background);
+    snag_app_clear_partial_public(&app);
+    free(app.partial);
     free(config_path);
     free(dotdir);
     free(relocated_workspace);

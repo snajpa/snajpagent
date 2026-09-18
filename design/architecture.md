@@ -337,7 +337,7 @@ There is no default count ceiling on response cycles, tool invocations, or
 calls within one response. A turn continues until it completes, is explicitly
 interrupted, or hits an actual provider, protocol, storage, or
 machine-representation failure.
-Per-response item, argument, output, and wire-size bounds remain in force.
+Per-response argument, output, and wire-size bounds remain in force.
 
 `[tool] max_parallel_commands` bounds unsettled commands (default 4, range
 1–32). The launching call's existing opaque local ID is also its process

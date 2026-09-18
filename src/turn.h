@@ -8,7 +8,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define SNAG_MAX_RESPONSE_ITEMS 96u
 /* Parse only local prompt syntax; never apply this to model or IRC messages. */
 const char *snag_prompt_parse(const char *text, bool *read_only);
 bool snag_prompt_command(const char *text);

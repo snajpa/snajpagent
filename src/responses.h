@@ -8,7 +8,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define SNAG_MAX_RESPONSE_PARTS 96u
 struct snag_provider_failure {
     char code[64];
     char type[64];
@@ -71,10 +70,8 @@ struct snag_wire_item {
 };
 
 struct snag_responses_stream {
-    struct snag_wire_item items[SNAG_MAX_RESPONSE_ITEMS];
-    struct snag_wire_part parts[SNAG_MAX_RESPONSE_PARTS];
-    size_t item_count;
-    size_t part_count;
+    struct snag_wire_item *items;
+    size_t item_count, item_capacity;
     size_t aggregate_bytes;
     char *response_id;
     struct snag_response_usage usage;

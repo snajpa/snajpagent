@@ -146,7 +146,7 @@ def case_rule_denies_write(binary, provider, root):
 
 
 def case_wide_call_batch(binary, provider, root):
-    calls = [("read_file", {"path": "probe.txt"}) for _ in range(40)]
+    calls = [("read_file", {"path": "probe.txt"}) for _ in range(120)]
     seen = []
 
     def respond(handler, request, sequence):
@@ -160,7 +160,7 @@ def case_wide_call_batch(binary, provider, root):
         provider.reply(handler, provider.response_body(sequence, "wide batch done").encode())
 
     case, result, events = run_case(
-        binary, provider, root, "wide-batch", "read the probe forty times", respond,
+        binary, provider, root, "wide-batch", "read the probe many times", respond,
         prepare=lambda case: (case / "probe.txt").write_text("hello world\n"))
     assert result.returncode == 0, (result.stdout, result.stderr)
     entries = finished(events)
