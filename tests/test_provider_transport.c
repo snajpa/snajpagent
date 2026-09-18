@@ -1373,10 +1373,21 @@ test_media_count_fallback(void)
     assert(snag_media_token_bound(request, app.turn_provider, 1025u, &expected, error, sizeof(error)) == 0);
     assert(snag_app_provider_count(&app, request, &credential, &tokens, &method, error, sizeof(error)) == SNAG_APP_COUNT_SKIPPED);
     assert(tokens == expected && !strcmp(method, "media_upper_bound"));
+    /* A media bound is a valid count method for compaction: the pre-response
+     * and post-turn guards must accept it instead of failing the turn. */
+    {
+        bool compacted = true;
+        assert(snag_app_compact_before_response(&app, &credential, tokens, method,
+                                                &compacted, error, sizeof(error)) == 0);
+        assert(!compacted);
+        assert(snag_app_compact_after_turn(&app, tokens, method, error, sizeof(error)) == 0);
+    }
     strcpy(config.providers[0].base_url, "https://api.openai.com");
     config.model_limit_count = 0u;
     config.providers[0].exact_token_count = SNAG_TOKEN_COUNT_AUTO;
     app.turn_capacity.count_capability = SNAG_COUNT_UNSUPPORTED;
+    /* Back on the built-in sizing table: recompute the expected bound. */
+    assert(snag_media_token_bound(request, app.turn_provider, 0u, &expected, error, sizeof(error)) == 0);
     assert(snag_app_provider_count(&app, request, &credential, &tokens, &method, error, sizeof(error)) == SNAG_APP_COUNT_SKIPPED);
     /* Compressed payload length changes neither vision budget nor textual count. */
     assert(json_object_set_new(part, "image_url", json_string("data:image/png;base64,YWJjYWJjYWJjYWJj")) == 0);
