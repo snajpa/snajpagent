@@ -471,6 +471,24 @@ test_io_rules(const char *path)
     expect_invalid(path);
 }
 
+static void
+test_many_config_secrets(const char *path)
+{
+    struct snag_config config;
+    char text[4096];
+    size_t used = 0u;
+
+    used += (size_t)snprintf(text + used, sizeof(text) - used,
+                             "[provider openai]\napi_key = ${OPENAI_API_KEY}\n[tool]\n");
+    for (unsigned int i = 0u; i < 70u; ++i)
+        used += (size_t)snprintf(text + used, sizeof(text) - used, "secret = \"many-%u\"\n", i);
+    write_bytes(path, text, used);
+    load_config(&config, path, NULL);
+    assert(config.secret_count == 70u);
+    assert(config.secrets[69].kind == SNAG_SECRET_LITERAL);
+    snag_config_free(&config);
+}
+
 int
 main(void)
 {
@@ -922,6 +940,7 @@ main(void)
     }
 
     test_layered_limits_and_secrets(path);
+    test_many_config_secrets(path);
     assert(unlink(path) == 0);
     free(temp);
     puts("test_config: ok");

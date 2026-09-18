@@ -18,7 +18,6 @@
 #define SNAG_CONFIG_PATH_MAX (16u * 1024u)
 #define SNAG_CONFIG_FILE_MAX (64u * 1024u)
 #define SNAG_CONFIG_URL_MAX 2048u
-#define SNAG_CONFIG_SECRET_MAX 64u
 #define SNAG_CONFIG_ENV_NAME_MAX 255u
 #define SNAG_CONFIG_PROVIDER_MAX 16u
 #define SNAG_CONFIG_PROVIDER_NAME_MAX 63u
@@ -141,12 +140,15 @@ struct snag_config {
     uint32_t max_output_tokens;
     uint32_t max_output_bytes;
     struct snag_rules *rules;
-    struct snag_secret_source secrets[SNAG_CONFIG_SECRET_MAX];
-    size_t secret_count;
+    struct snag_secret_source *secrets;
+    size_t secret_count, secret_capacity;
     char source_path[SNAG_CONFIG_PATH_MAX + 1u];
 };
 
 void snag_config_init(struct snag_config *config);
+/* Growable protected-value list; parses and retains one additional source. */
+int snag_config_add_secret(struct snag_config *config, const char *value, const char *source_path,
+                           char *error, size_t error_size);
 void snag_config_provider_init(struct snag_provider_config *provider, const char *name);
 bool snag_config_name_valid(const char *name);
 void snag_config_free(struct snag_config *config);

@@ -24,6 +24,10 @@
   canonical instruction files is retained; each path keeps its existing
   bound and the projected entry-point list sizes itself from the set.
 
+- Remove the sixty-four secret-source and one-hundred-twenty-eight
+  secret-value ceilings. Additional protected values are retained on demand;
+  source syntax, length, and resolution rules are unchanged.
+
 - Show provider-hosted web searches as private rollout tool rows. A `web_search`
   item records a start row carrying the search action and query, then a finish
   row carrying the provider's terminal status and retained source URLs, at the

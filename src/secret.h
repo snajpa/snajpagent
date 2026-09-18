@@ -7,13 +7,9 @@
 #include "wire.h"
 #include "snag_jansson.h"
 
-#define SNAG_SECRET_VALUES_MAX 128u
-
-_Static_assert(SNAG_SECRET_VALUES_MAX <= SNAG_WIRE_SECRET_COUNT_MAX,
-               "wire secret limit must cover configured secrets");
-
 struct snag_secret_set {
-    const char *values[SNAG_SECRET_VALUES_MAX];
+    const char **values;
+    size_t capacity;
     struct snag_wire_secrets wire;
 };
 
