@@ -155,6 +155,7 @@ snag_session_init(struct snag_session *session)
 static void
 free_session_state(struct snag_session *session)
 {
+    free(session->pending_calls);
     for(size_t i=0;i<session->pending_steering_count;++i)json_decref(session->pending_steering[i].content);
     for(size_t i=0;i<session->pending_queue_count;++i)json_decref(session->pending_queue[i].content);
     json_decref(session->strings);
@@ -354,7 +355,6 @@ clear_response_state(struct snag_session *session)
     session->final_item_id[0] = '\0';
     session->final_response_id[0] = '\0';
     session->pending_call_count = 0;
-    memset(session->pending_calls, 0, sizeof(session->pending_calls));
 }
 
 static void
@@ -1461,7 +1461,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         size_t len = text ? strlen(text) : 0u;
         if (!snag_json_exact_keys(data, "cycle index item offset response_id turn_id") ||
             !current_response(session, data) || snag_json_integer_u64(data, "index", &index) < 0 ||
-            index >= SNAG_MAX_RESPONSE_ITEMS || snag_json_integer_u64(data, "offset", &offset) < 0 ||
+            snag_json_integer_u64(data, "offset", &offset) < 0 ||
             !len || len > SNAG_MAX_PUBLIC_ITEM ||
             session->response_public_bytes > SNAG_MAX_RESPONSE_GRAPH - len) goto invalid;
         json_t *one = json_pack("[O]", item);
@@ -1645,8 +1645,18 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             struct snag_response_item view = snag_response_graph_item(&graph, i);
             const struct snag_response_item *item = &view;
             if (item->kind == SNAG_ITEM_TOOL_CALL) {
-                struct snag_pending_call *pending =
-                    &session->pending_calls[session->pending_call_count++];
+                struct snag_pending_call *pending;
+                if (session->pending_call_count == session->pending_call_capacity) {
+                    size_t capacity = session->pending_call_capacity ?
+                        session->pending_call_capacity * 2u : 16u;
+                    struct snag_pending_call *grown;
+                    if (capacity < session->pending_call_capacity) return -1;
+                    grown = realloc(session->pending_calls, capacity * sizeof(*grown));
+                    if (!grown) return -1;
+                    session->pending_calls = grown;
+                    session->pending_call_capacity = capacity;
+                }
+                pending = &session->pending_calls[session->pending_call_count++];
                 memset(pending, 0, sizeof(*pending));
                 memcpy(pending->call_id, item->call_id, sizeof(pending->call_id));
                 if (!snag_strcpy(pending->tool_name, sizeof(pending->tool_name), item->name)) {
@@ -1772,7 +1782,6 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (all_pending_finished(session) && session->response_outcome == SNAG_GRAPH_CALLS) {
             session->response_complete = false;
             session->pending_call_count = 0;
-            memset(session->pending_calls, 0, sizeof(session->pending_calls));
             session->active_response_id[0] = '\0';
         }
     } else if (snag_string_in(type, "hosted_search_started hosted_search_finished")) {
@@ -2089,6 +2098,8 @@ static int
 clone_session_state(const struct snag_session *source, struct snag_session *staged)
 {
     *staged = *source;
+    staged->pending_calls = NULL;
+    staged->pending_call_capacity = 0u;
     staged->strings = source->strings ? json_copy(source->strings) : NULL;
     for(size_t i=0;i<staged->pending_steering_count;++i)
         staged->pending_steering[i].content=json_incref(source->pending_steering[i].content);
@@ -2098,6 +2109,13 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
     staged->pending_input = json_incref(source->pending_input);
     staged->active_instructions = json_incref(source->active_instructions);
     staged->response_public = json_incref(source->response_public);
+    if (source->pending_call_count) {
+        staged->pending_calls = malloc(source->pending_call_capacity * sizeof(*staged->pending_calls));
+        if (!staged->pending_calls) return -1;
+        memcpy(staged->pending_calls, source->pending_calls,
+               source->pending_call_capacity * sizeof(*staged->pending_calls));
+        staged->pending_call_capacity = source->pending_call_capacity;
+    }
     return source->strings && !staged->strings ? -1 : 0;
 }
 

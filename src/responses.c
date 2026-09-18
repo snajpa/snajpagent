@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -185,7 +186,7 @@ copy_once(struct snag_responses_stream *stream, char **target,
 
 static int
 json_index(struct snag_responses_stream *stream, const json_t *object,
-           const char *key, size_t limit, size_t *out)
+           const char *key, size_t *out)
 {
     json_t *value;
     json_int_t integer;
@@ -194,7 +195,7 @@ json_index(struct snag_responses_stream *stream, const json_t *object,
     *out = 0u;
     value = json_object_get(object, key);
     if (!json_is_integer(value) || (integer = json_integer_value(value)) < 0 ||
-        (uint64_t)integer >= (uint64_t)limit) return stream_fail(stream, EPROTO, "invalid %s", key);
+        (uintmax_t)integer > (uintmax_t)SIZE_MAX) return stream_fail(stream, EPROTO, "invalid %s", key);
     *out = (size_t)integer;
     return 0;
 }
@@ -219,6 +220,12 @@ wire_item_free(struct snag_wire_item *item)
     free(item->name);
     free(item->call_id);
     snag_buf_free(&item->arguments);
+    while (item->parts) {
+        struct snag_wire_part *part = item->parts;
+        item->parts = part->next;
+        snag_buf_free(&part->text);
+        free(part);
+    }
     memset(item, 0, sizeof(*item));
 }
 
@@ -242,7 +249,7 @@ void
 snag_responses_stream_free(struct snag_responses_stream *stream)
 {
     for (size_t i = 0; i < stream->item_count; ++i) wire_item_free(&stream->items[i]);
-    for (size_t i = 0; i < stream->part_count; ++i) snag_buf_free(&stream->parts[i].text);
+    free(stream->items);
     free(stream->response_id);
     memset(stream, 0, sizeof(*stream));
 }
@@ -259,9 +266,24 @@ new_item(struct snag_responses_stream *stream, size_t output_index,
 {
     struct snag_wire_item *item;
 
-    if (output_index != stream->item_count || output_index >= SNAG_MAX_RESPONSE_ITEMS) {
+    if (output_index != stream->item_count) {
         (void)stream_fail(stream, EPROTO, "response output indexes are not contiguous");
         return NULL;
+    }
+    if (stream->item_count == stream->item_capacity) {
+        size_t capacity = stream->item_capacity ? stream->item_capacity * 2u : 16u;
+        struct snag_wire_item *grown;
+        if (capacity < stream->item_capacity || capacity > SIZE_MAX / sizeof(*grown)) {
+            (void)stream_fail(stream, EOVERFLOW, "response item capacity overflow");
+            return NULL;
+        }
+        grown = realloc(stream->items, capacity * sizeof(*grown));
+        if (!grown) {
+            (void)stream_fail(stream, ENOMEM, "cannot grow response item storage");
+            return NULL;
+        }
+        stream->items = grown;
+        stream->item_capacity = capacity;
     }
     item = &stream->items[stream->item_count];
     memset(item, 0, sizeof(*item));
@@ -295,18 +317,25 @@ part_at(struct snag_responses_stream *stream, struct snag_wire_item *item,
 {
     struct snag_wire_part **part = &item->parts;
 
-    if (content_index > item->part_count || content_index >= SNAG_MAX_RESPONSE_PARTS) {
+    if (content_index > item->part_count) {
         (void)stream_fail(stream, EPROTO, "message content indexes are not contiguous");
         return NULL;
     }
     for (size_t i = 0; i < content_index; ++i) part = &(*part)->next;
     if (content_index == item->part_count) {
-        if (!create || stream->part_count >= SNAG_MAX_RESPONSE_PARTS) {
+        struct snag_wire_part *created;
+        if (!create) {
             (void)stream_fail(stream, EPROTO, "message content part was not announced");
             return NULL;
         }
-        *part = &stream->parts[stream->part_count++];
-        **part = (struct snag_wire_part){.kind = kind, .text = {.max = SNAG_MAX_PUBLIC_ITEM}};
+        created = calloc(1u, sizeof(*created));
+        if (!created) {
+            (void)stream_fail(stream, ENOMEM, "cannot allocate message content part");
+            return NULL;
+        }
+        created->kind = kind;
+        created->text.max = SNAG_MAX_PUBLIC_ITEM;
+        *part = created;
         ++item->part_count;
     } else if ((*part)->kind != kind) {
         (void)stream_fail(stream, EPROTO, "message content kind changed");
@@ -681,8 +710,7 @@ handle_output_item(struct snag_responses_stream *stream, const json_t *root, boo
     size_t output_index;
     json_t *item = json_object_get(root, "item");
 
-    if (!stream->created || json_index(stream, root, "output_index", SNAG_MAX_RESPONSE_ITEMS,
-                                       &output_index) < 0) return -1;
+    if (!stream->created || json_index(stream, root, "output_index", &output_index) < 0) return -1;
     return item_snapshot(stream, output_index, item, complete);
 }
 
@@ -695,8 +723,8 @@ handle_content_part(struct snag_responses_stream *stream, const json_t *root,
     size_t content_index;
     struct snag_wire_item *item;
 
-    if (json_index(stream, root, "output_index", SNAG_MAX_RESPONSE_ITEMS, &output_index) < 0 ||
-        json_index(stream, root, "content_index", SNAG_MAX_RESPONSE_PARTS, &content_index) < 0) return -1;
+    if (json_index(stream, root, "output_index", &output_index) < 0 ||
+        json_index(stream, root, "content_index", &content_index) < 0) return -1;
     /* Reasoning and other ignored items may also emit content-part events.
      * Discard only non-public parts of an already registered inert item;
      * text/refusal events still require the exact message identity below. */
@@ -722,7 +750,7 @@ handle_arguments(struct snag_responses_stream *stream, const json_t *root, bool 
     size_t output_index;
     struct snag_wire_item *item;
 
-    if (json_index(stream, root, "output_index", SNAG_MAX_RESPONSE_ITEMS, &output_index) < 0) return -1;
+    if (json_index(stream, root, "output_index", &output_index) < 0) return -1;
     item = find_item(stream, output_index, item_id, SNAG_WIRE_ITEM_FUNCTION_CALL);
     if (!item) return -1;
     return reconcile_arguments(stream, item, arguments, !complete, complete);
@@ -779,7 +807,7 @@ handle_response_completed(struct snag_responses_stream *stream, const json_t *ro
     if (parse_provider_usage(stream, response) < 0) return -1;
     output = json_object_get(response, "output");
     if (output) {
-        if (!json_is_array(output) || json_array_size(output) > SNAG_MAX_RESPONSE_ITEMS)
+        if (!json_is_array(output))
             return stream_fail(stream, EPROTO, "invalid terminal response output");
         for (size_t i = 0; i < json_array_size(output); ++i)
             if (item_snapshot(stream, i, json_array_get(output, i), true) < 0) return -1;

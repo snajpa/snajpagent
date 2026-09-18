@@ -8,6 +8,10 @@
   tool calls within the existing response-shape bounds; each result's
   context-safety share is divided by the response's actual call count.
 
+- Remove the per-response item and content-part ceilings. The response decoder
+  grows its item storage on demand and allocates content parts individually;
+  the response-graph and wire byte limits still bound every response.
+
 - Show provider-hosted web searches as private rollout tool rows. A `web_search`
   item records a start row carrying the search action and query, then a finish
   row carrying the provider's terminal status and retained source URLs, at the

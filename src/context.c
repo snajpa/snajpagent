@@ -24,7 +24,7 @@ struct context_builder {
     json_t *tools;
     json_t *request_input;
     json_t *tool_feedback;
-    size_t response_calls; /* Calls in the response whose results are projected. */
+    size_t tool_result_bytes; /* Projected tool-result bytes in this request. */
     json_t *deferred_input;
     json_t *input_timing;
     size_t recovery_index;
@@ -206,11 +206,12 @@ append_tool_result(struct context_builder *builder, const char *call_id, const j
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     int rc = -1;
 
-    /* The response's calls share the request budget, so a full batch still fits
-     * without a per-response call ceiling. Results projected without their
-     * response in scope assume the largest representable response. */
-    size_t calls = builder->response_calls ? builder->response_calls : SNAG_MAX_RESPONSE_ITEMS;
-    uint32_t share = SNAG_CONTEXT_MAX_REQUEST / (16u * calls);
+    /* Tool results share one sixteenth of the request budget; each result is
+     * clamped so the running total stays inside it. */
+    size_t budget = SNAG_CONTEXT_MAX_REQUEST / 16u;
+    uint32_t share = (uint32_t)(budget - (builder->tool_result_bytes < budget ?
+                                          builder->tool_result_bytes : budget));
+    if (!share) share = 1u;
     if (limit > share) {
         uint32_t selected = limit;
         limit = share;
@@ -257,6 +258,11 @@ append_tool_result(struct context_builder *builder, const char *call_id, const j
             snag_json_string(result, "status"), len, digest, builder->session->dir_path) < 0 ||
             snag_buf_terminate(&notice) < 0) goto out;
         output_text = (const char *)notice.data;
+    }
+    if (builder->tool_result_bytes < SNAG_CONTEXT_MAX_REQUEST / 16u) {
+        size_t remaining = SNAG_CONTEXT_MAX_REQUEST / 16u - builder->tool_result_bytes;
+        size_t projected = strlen(output_text);
+        builder->tool_result_bytes += projected < remaining ? projected : remaining;
     }
 
     json_t *output = snag_media_message_content(builder->session->dir_fd, output_text,
@@ -568,10 +574,6 @@ append_response_items(struct context_builder *builder, const json_t *items, cons
         .items = (json_t *)items, .count = json_array_size(items) }; /* Borrowed validated journal items. */
     struct snag_buf notice = {.max = 4096u};
     int rc = -1;
-
-    builder->response_calls = 0u;
-    for (size_t i = 0u; i < graph.count; ++i)
-        builder->response_calls += snag_response_graph_item(&graph, i).kind == SNAG_ITEM_TOOL_CALL;
 
     for (size_t i = 0; i <= graph.count; ++i) {
         while (cursor < json_array_size(continuation)) {

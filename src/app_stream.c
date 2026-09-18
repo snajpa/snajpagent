@@ -5,6 +5,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -22,7 +23,6 @@ void
 snag_app_clear_partial_public(struct app_state *app)
 {
     for (size_t i = 0; i < app->partial_count; ++i) snag_buf_free(&app->partial[i].text);
-    memset(app->partial, 0, sizeof(app->partial));
     app->partial_count = 0;
     app->partial_bytes = 0;
 }
@@ -36,8 +36,7 @@ partial_public_target(struct app_state *app, size_t graph_index,
     size_t id_len;
 
     *created = false;
-    if (!provider_item_id || kind == SNAG_ITEM_TOOL_CALL ||
-        phase == SNAG_PHASE_NONE || graph_index >= SNAG_MAX_RESPONSE_ITEMS) {
+    if (!provider_item_id || kind == SNAG_ITEM_TOOL_CALL || phase == SNAG_PHASE_NONE) {
         errno = EPROTO;
         return NULL;
     }
@@ -48,9 +47,20 @@ partial_public_target(struct app_state *app, size_t graph_index,
         return NULL;
     }
     if (app->partial_count == 0u || app->partial[app->partial_count - 1u].graph_index != graph_index) {
-        if (app->partial_count >= SNAG_MAX_RESPONSE_ITEMS) {
-            errno = EOVERFLOW;
-            return NULL;
+        if (app->partial_count == app->partial_capacity) {
+            size_t capacity = app->partial_capacity ? app->partial_capacity * 2u : 16u;
+            struct partial_public_item *grown;
+            if (capacity < app->partial_capacity) {
+                errno = EOVERFLOW;
+                return NULL;
+            }
+            grown = realloc(app->partial, capacity * sizeof(*grown));
+            if (!grown) {
+                errno = ENOMEM;
+                return NULL;
+            }
+            app->partial = grown;
+            app->partial_capacity = capacity;
         }
         item = &app->partial[app->partial_count++];
         memset(item, 0, sizeof(*item));
