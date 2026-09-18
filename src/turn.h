@@ -15,7 +15,6 @@ bool snag_prompt_command(const char *text);
 bool snag_read_only_tool(const char *name);
 /* Provider item/call identity: UTF-8 text without control or C1 bytes. */
 bool snag_provider_id_valid(const char *s);
-#define SNAG_MAX_CALLS_PER_RESPONSE 32u
 #define SNAG_MAX_PROCESSES 32u
 
 /* Durable identity/output counters plus engine-owned observations, never PIDs. */

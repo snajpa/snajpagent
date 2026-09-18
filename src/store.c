@@ -1645,11 +1645,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             struct snag_response_item view = snag_response_graph_item(&graph, i);
             const struct snag_response_item *item = &view;
             if (item->kind == SNAG_ITEM_TOOL_CALL) {
-                struct snag_pending_call *pending;
-                if (session->pending_call_count >= SNAG_MAX_CALLS_PER_RESPONSE) {
-                    goto invalid;
-                }
-                pending = &session->pending_calls[session->pending_call_count++];
+                struct snag_pending_call *pending =
+                    &session->pending_calls[session->pending_call_count++];
                 memset(pending, 0, sizeof(*pending));
                 memcpy(pending->call_id, item->call_id, sizeof(pending->call_id));
                 if (!snag_strcpy(pending->tool_name, sizeof(pending->tool_name), item->name)) {

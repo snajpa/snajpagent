@@ -179,7 +179,8 @@ struct snag_session {
     uint64_t turn_retry_attempts;
     uint32_t turn_retry_limit;
     enum snag_graph_outcome response_outcome;
-    struct snag_pending_call pending_calls[SNAG_MAX_CALLS_PER_RESPONSE];
+    /* One slot per representable response item; calls have no separate ceiling. */
+    struct snag_pending_call pending_calls[SNAG_MAX_RESPONSE_ITEMS];
     struct snag_pending_steering pending_steering[SNAG_MAX_STEERING_PER_TURN];
     struct snag_queued_turn pending_queue[SNAG_MAX_PENDING_TURNS];
     size_t pending_call_count;
