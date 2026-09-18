@@ -2835,7 +2835,7 @@ execute_calls(struct app_state *app, const char *turn_id, const struct snag_resp
         bool rule_rejected;
         char rule_message[512];
         char *insertion;
-    } calls[SNAG_MAX_CALLS_PER_RESPONSE] = {0};
+    } calls[SNAG_MAX_RESPONSE_ITEMS] = {0}; /* one slot per representable response item */
     size_t count = 0u, finished = 0u;
     uint64_t began = snag_monotonic_ms(), deadline = UINT64_MAX;
     const char *handoff = NULL;

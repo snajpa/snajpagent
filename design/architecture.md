@@ -333,10 +333,11 @@ explicit system boundary and each exact user-role steer in arrival order.
 Public response indexes are strictly increasing but need not be consecutive,
 because non-public provider items occupy indexes too.
 
-There is no default count ceiling on response cycles or tool invocations in a
-turn. A turn continues until it completes, is explicitly interrupted, or hits
-an actual provider, protocol, storage, or machine-representation failure.
-Per-response item, call, argument, output, and wire-size bounds remain in force.
+There is no default count ceiling on response cycles, tool invocations, or
+calls within one response. A turn continues until it completes, is explicitly
+interrupted, or hits an actual provider, protocol, storage, or
+machine-representation failure.
+Per-response item, argument, output, and wire-size bounds remain in force.
 
 `[tool] max_parallel_commands` bounds unsettled commands (default 4, range
 1–32). The launching call's existing opaque local ID is also its process

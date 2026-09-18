@@ -315,6 +315,22 @@ main(void)
         assert(snag_response_usage_valid(&usage) < 0);
     }
 
+    /* A response may carry more calls than the former 32-call ceiling. */
+    {
+        struct snag_response_graph wide = {0};
+        char item[32], call[32];
+        assert(snag_response_graph_set_provider_id(&wide, "resp_wide") == 0);
+        for (size_t i = 0u; i < 40u; ++i) {
+            (void)snprintf(item, sizeof(item), "item_wide_%zu", i);
+            (void)snprintf(call, sizeof(call), "call_wide_%zu", i);
+            assert(snag_response_graph_add_call(&wide, item, call, "read_file",
+                                               checked_json(json_pack("{s:s}", "path", "probe.txt"))) == 0);
+        }
+        assert(snag_response_graph_classify(&wide, &decision, error, sizeof(error)) == 0);
+        assert(decision.outcome == SNAG_GRAPH_CALLS && decision.call_count == 40u);
+        snag_response_graph_free(&wide);
+    }
+
     test_native_read_results();
     puts("test_turn: ok");
     return 0;

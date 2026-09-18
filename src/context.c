@@ -24,6 +24,7 @@ struct context_builder {
     json_t *tools;
     json_t *request_input;
     json_t *tool_feedback;
+    size_t response_calls; /* Calls in the response whose results are projected. */
     json_t *deferred_input;
     json_t *input_timing;
     size_t recovery_index;
@@ -205,9 +206,14 @@ append_tool_result(struct context_builder *builder, const char *call_id, const j
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     int rc = -1;
 
-    if (limit > SNAG_CONTEXT_MAX_REQUEST / (16u * SNAG_MAX_CALLS_PER_RESPONSE)) {
+    /* The response's calls share the request budget, so a full batch still fits
+     * without a per-response call ceiling. Results projected without their
+     * response in scope assume the largest representable response. */
+    size_t calls = builder->response_calls ? builder->response_calls : SNAG_MAX_RESPONSE_ITEMS;
+    uint32_t share = SNAG_CONTEXT_MAX_REQUEST / (16u * calls);
+    if (limit > share) {
         uint32_t selected = limit;
-        limit = SNAG_CONTEXT_MAX_REQUEST / (16u * SNAG_MAX_CALLS_PER_RESPONSE);
+        limit = share;
         char feedback[192];
         (void)snprintf(feedback, sizeof(feedback),
             "Result max_output_bytes=%u reduced to %u UTF-8 bytes by the host context-safety maximum.",
@@ -562,6 +568,10 @@ append_response_items(struct context_builder *builder, const json_t *items, cons
         .items = (json_t *)items, .count = json_array_size(items) }; /* Borrowed validated journal items. */
     struct snag_buf notice = {.max = 4096u};
     int rc = -1;
+
+    builder->response_calls = 0u;
+    for (size_t i = 0u; i < graph.count; ++i)
+        builder->response_calls += snag_response_graph_item(&graph, i).kind == SNAG_ITEM_TOOL_CALL;
 
     for (size_t i = 0; i <= graph.count; ++i) {
         while (cursor < json_array_size(continuation)) {

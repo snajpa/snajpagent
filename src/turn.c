@@ -284,21 +284,13 @@ item_valid(const json_t *value)
 static int
 append_item(struct snag_response_graph *graph, json_t *value)
 {
-    size_t bytes, total, calls = 0u;
+    size_t bytes, total;
     int rc = -1;
 
     if (!value) return -1;
     if (!item_valid(value)) {
         errno = EINVAL;
         goto out;
-    }
-    if (!strcmp(snag_json_string(value, "kind"), "tool_call")) {
-        for (size_t i = 0u; i < graph->count; ++i)
-            calls += snag_response_graph_item(graph, i).kind == SNAG_ITEM_TOOL_CALL;
-        if (calls >= SNAG_MAX_CALLS_PER_RESPONSE) {
-            errno = EINVAL;
-            goto out;
-        }
     }
     if (graph->count >= SNAG_MAX_RESPONSE_ITEMS ||
         snag_json_digest_bounded(value, SNAG_MAX_RESPONSE_GRAPH, NULL, &bytes) < 0 ||
@@ -409,8 +401,6 @@ snag_response_graph_classify(const struct snag_response_graph *graph, struct sna
             ++calls;
         }
     }
-    if (calls > SNAG_MAX_CALLS_PER_RESPONSE)
-        return snag_fail(error, error_size, EOVERFLOW, "response graph exceeds 32 tool calls");
     {
         json_t *items = graph->items ? json_incref(graph->items) : json_array();
         int rc = items ? snag_json_digest_bounded(items, SNAG_MAX_RESPONSE_GRAPH, NULL, NULL) : -1;

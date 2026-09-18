@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Remove the 32-call per-response ceiling. A response may carry any number of
+  tool calls within the existing response-shape bounds; each result's
+  context-safety share is divided by the response's actual call count.
+
 - Show provider-hosted web searches as private rollout tool rows. A `web_search`
   item records a start row carrying the search action and query, then a finish
   row carrying the provider's terminal status and retained source URLs, at the
