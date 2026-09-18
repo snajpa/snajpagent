@@ -93,6 +93,7 @@ struct snag_model_limit_config {
     uint64_t context_window_tokens;
     uint64_t max_input_tokens;
     uint64_t max_output_tokens;
+    uint64_t image_tokens; /* Per-image ceiling for local image-request bounding. */
     json_t *reasoning_efforts; /* Owned by config; resolved rules borrow it. */
 };
 

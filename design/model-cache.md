@@ -274,8 +274,10 @@ max_input_tokens = 922000
 max_output_tokens = 128000
 ```
 
-All three keys are optional, but a section must provide at least one. Support
-provider-wide `[model-limit PROVIDER]`, `*`-pattern targets and exact model names.
+The numeric keys `context_window_tokens`, `max_input_tokens`, `max_output_tokens`
+and `image_tokens` are optional, but a section must provide at least one numeric
+field or `reasoning_efforts`. Support provider-wide `[model-limit PROVIDER]`,
+`*`-pattern targets and exact model names.
 Merge each field in that order, with later patterns winning and exact rules last.
 Match the whole provider-local model name once, not its upstream mapping. Reject
 duplicate targets and duplicate keys. Unspecified fields use source-bound catalog
@@ -283,6 +285,14 @@ metadata; specified fields supersede it. Independent ceilings intersect, while a
 output reservation that leaves no input is an error. Without usable configured
 or catalog values the hard capacity is unknown.
 Configuration facts are never written into `models.json`.
+
+`image_tokens` is not a capacity field. It declares the provider-documented
+per-image token ceiling for the matched local model; local media bounding uses
+it on any provider route when exact counting is unavailable, superseding the
+built-in OpenAI image sizing table. A route whose documentation gives a
+per-image ceiling, such as DeepSeek's `deepseek-flash` with 1,024 tokens per
+image, therefore gets a conservative local bound instead of failing with no
+qualified image token bound.
 
 `[model-alias PROVIDER/NAME] model = UPSTREAM` defines an ordinary model exposed by
 that provider. Targets are literal upstream IDs; no recursive aliases or alias

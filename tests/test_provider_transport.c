@@ -1200,7 +1200,7 @@ test_count_modes(void)
             json_t *item = json_pack("{s:s,s:[{s:s,s:s,s:s}]}", "role", "user", "content",
                 "type", "input_image", "detail", "high", "image_url", "data:image/png;base64,YWJj");
             assert(json_array_append_new(json_object_get(request, "input"), item) == 0);
-            assert(snag_media_token_bound(request, app.turn_provider, &expected, error, sizeof(error)) == 0);
+            assert(snag_media_token_bound(request, app.turn_provider, 0u, &expected, error, sizeof(error)) == 0);
         }
         rc = snag_app_provider_count(&app, request, &credential,
                                     &tokens, &method, error, sizeof(error));
@@ -1361,10 +1361,20 @@ test_media_count_fallback(void)
     uint64_t tokens = 0, expected = 0;
     const char *method = "qualified_upper_bound";
     char error[256] = {0};
-    assert(snag_media_token_bound(request, app.turn_provider, &expected, error, sizeof(error)) == 0);
+    assert(snag_media_token_bound(request, app.turn_provider, 0u, &expected, error, sizeof(error)) == 0);
     config.providers[0].exact_token_count = SNAG_TOKEN_COUNT_OFF;
     assert(snag_app_provider_count(&app, request, &credential, &tokens, &method, error, sizeof(error)) == SNAG_APP_COUNT_SKIPPED);
     assert(tokens == expected && !strcmp(method, "media_upper_bound"));
+    /* A configured per-image ceiling enables the bound on any provider route. */
+    strcpy(config.providers[0].base_url, "https://api.deepseek.com");
+    config.model_limit_count = 1u;
+    strcpy(config.model_limits[0].provider, config.providers[0].name);
+    config.model_limits[0].image_tokens = 1025u;
+    assert(snag_media_token_bound(request, app.turn_provider, 1025u, &expected, error, sizeof(error)) == 0);
+    assert(snag_app_provider_count(&app, request, &credential, &tokens, &method, error, sizeof(error)) == SNAG_APP_COUNT_SKIPPED);
+    assert(tokens == expected && !strcmp(method, "media_upper_bound"));
+    strcpy(config.providers[0].base_url, "https://api.openai.com");
+    config.model_limit_count = 0u;
     config.providers[0].exact_token_count = SNAG_TOKEN_COUNT_AUTO;
     app.turn_capacity.count_capability = SNAG_COUNT_UNSUPPORTED;
     assert(snag_app_provider_count(&app, request, &credential, &tokens, &method, error, sizeof(error)) == SNAG_APP_COUNT_SKIPPED);

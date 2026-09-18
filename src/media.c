@@ -470,9 +470,10 @@ snag_media_request_has_images(const json_t *request)
 /* OpenAI images/vision sizing table, checked 2026-09-07. Deliberately budget
  * maximum processed dimensions, not compressed bytes. +1 covers the documented
  * rounding discrepancy. See DEPENDENCIES.md. Unknown/specialized models need
- * exact counting. No inferred model-family prefixes or future snapshots. */
+ * exact counting or a configured image_tokens ceiling. No inferred
+ * model-family prefixes or future snapshots. */
 static uint64_t
-image_token_ceiling(const struct snag_provider_config *provider, const char *model)
+image_token_ceiling(const struct snag_provider_config *provider, const char *model, uint64_t configured)
 {
     static const struct { const char *model; uint32_t tokens; } bounds[] = {
         {"gpt-5.6-sol", 3001}, {"gpt-5.6-terra", 3001}, {"gpt-5.6-luna", 3001},
@@ -481,6 +482,9 @@ image_token_ceiling(const struct snag_provider_config *provider, const char *mod
         {"gpt-5.2", 7374}, {"gpt-4.1-mini", 9955}, {"gpt-4.1-mini-2025-04-14", 9955},
         {"gpt-5.1", 2311}, {"gpt-4.1", 2806}, {"gpt-4o", 2806}, {"gpt-4o-mini", 93506}
     };
+    /* A [model-limit] image_tokens value declares the documented per-image
+     * ceiling for the selected local model and applies on any route. */
+    if (configured) return configured;
     if (!provider || !model) return 0;
     bool direct = !strcmp(provider->base_url, "https://api.openai.com") ||
         !strcmp(provider->base_url, "https://api.openai.com/") ||
@@ -495,15 +499,16 @@ image_token_ceiling(const struct snag_provider_config *provider, const char *mod
 
 int
 snag_media_token_bound(const json_t *request, const struct snag_provider_config *provider,
-                       uint64_t *tokens, char *error, size_t size)
+                       uint64_t configured_image_tokens, uint64_t *tokens, char *error, size_t size)
 {
-    uint64_t ceiling = image_token_ceiling(provider, snag_json_string(request, "model"));
+    uint64_t ceiling = image_token_ceiling(provider, snag_json_string(request, "model"),
+                                           configured_image_tokens);
     json_t *copy = NULL, *input = NULL;
     uint64_t images = 0;
     size_t bytes = 0;
     int rc = -1;
     if (!ceiling) {
-        snag_errorf(error, size, "No qualified image token bound for this model/route; use exact counting or a documented supported model.");
+        snag_errorf(error, size, "No qualified image token bound for this model/route; use exact counting, a documented supported model, or an image_tokens model-limit rule.");
         return -1;
     }
     if (snag_media_request_check(request, error, size) < 0) return -1;

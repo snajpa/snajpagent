@@ -264,16 +264,17 @@ static void
 test_layered_limits_and_secrets(const char *path)
 {
     static const char text[] = "[model-limit codex-lb/gpt-6-astra]\nmax_output_tokens=16000\n"
-        "[model-limit codex-lb]\ncontext_window_tokens=500000\n"
-        "[model-limit codex-lb/gpt-*]\nmax_input_tokens=450000\nmax_output_tokens=32000\n"
+        "[model-limit codex-lb]\ncontext_window_tokens=500000\nimage_tokens=700\n"
+        "[model-limit codex-lb/gpt-*]\nmax_input_tokens=450000\nmax_output_tokens=32000\nimage_tokens=800\n"
         "[model-limit codex-lb/gpt-6-*]\nmax_input_tokens=460000\n"
-        "[model-limit codex-lb/small*]\nmax_output_tokens=8000\n"
-        "[model-limit codex-lb/small]\ncontext_window_tokens=128000\n"
+        "[model-limit codex-lb/small*]\nmax_output_tokens=8000\nimage_tokens=850\n"
+        "[model-limit codex-lb/small]\ncontext_window_tokens=128000\nimage_tokens=900\n"
         "[model-alias codex-lb/small]\nmodel=gpt-6-astra\n"
         "[model-alias codex-lb/large]\nmodel=gpt-6-astra\n"
         "[provider codex-lb]\napi_key=${CODEX_LB_API_KEY}\n" "[provider default]\napi_key=./keys/key\n"
         "[model-alias default/small]\nmodel=org/model\n"
         "[model-limit default/org/*]\ncontext_window_tokens=64000\n"
+        "[model-limit default/only-image]\nimage_tokens=1025\n"
         "[tool]\nsecret=${ONE}\nsecret=./file key\nsecret=\"${literal}\"\n";
     static const char *const invalid[] = {
         "[provider]\n", "[provider:first]\n", "[provider p]\napi_key_env=OLD\n",
@@ -283,7 +284,10 @@ test_layered_limits_and_secrets(const char *path)
         "[provider p]\n[model-limit p/*]\nmax_input_tokens=1\nmax_input_tokens=2\n",
         "[provider p]\n[model-alias p/a]\n", "[provider p]\n[model-alias p/a]\nmodel=m\nmodel=n\n",
         "[provider p]\n[model-alias p/a]\nmodel=m\n[model-alias p/a]\nmodel=n\n",
-        "[provider p]\n[model-alias p/a/b]\nmodel=m\n" };
+        "[provider p]\n[model-alias p/a/b]\nmodel=m\n",
+        "[provider p]\n[model-limit p]\nimage_tokens=0\n",
+        "[provider p]\n[model-limit p]\nimage_tokens=4000000001\n",
+        "[provider p]\n[model-limit p]\nimage_tokens=1\nimage_tokens=2\n" };
     struct snag_config config;
     struct snag_model_limit_config limits;
     const struct snag_model_limit_config *sources[3];
@@ -297,15 +301,21 @@ test_layered_limits_and_secrets(const char *path)
     assert(snag_config_resolve_limits(&config, "codex-lb", "gpt-6-astra", &limits, sources));
     assert(limits.context_window_tokens == 500000u);
     assert(limits.max_input_tokens == 460000u && limits.max_output_tokens == 16000u);
+    assert(limits.image_tokens == 800u);
     assert(strcmp(sources[2]->model, "gpt-6-astra") == 0);
     assert(snag_config_resolve_limits(&config, "codex-lb", "small", &limits, sources));
     assert(limits.context_window_tokens == 128000u && !limits.max_input_tokens);
     assert(limits.max_output_tokens == 8000u && strcmp(sources[0]->model, "small") == 0);
+    assert(limits.image_tokens == 900u);
     assert(snag_config_resolve_limits(&config, "codex-lb", "large", &limits, sources));
     assert(limits.context_window_tokens == 500000u && !limits.max_output_tokens);
+    assert(limits.image_tokens == 800u);
     assert(!snag_config_resolve_limits(&config, "default", "small", &limits, sources));
+    assert(!limits.image_tokens);
     assert(snag_config_resolve_limits(&config, "default", "org/model", &limits, sources));
     assert(limits.context_window_tokens == 64000u && !limits.max_input_tokens);
+    assert(!snag_config_resolve_limits(&config, "default", "only-image", &limits, sources));
+    assert(limits.image_tokens == 1025u);
     assert(!snag_config_resolve_limits(&config, "default", "xorg/model", &limits, sources));
     assert(config.secret_count == 3u && config.secrets[2].kind == SNAG_SECRET_LITERAL);
     assert(strcmp(config.secrets[2].value, "${literal}") == 0);

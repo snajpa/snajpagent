@@ -10,8 +10,10 @@ completed announcements and empty text placeholders alongside usable output,
 retaining final/refusal validation and corrections for genuinely empty replies.
 
 Model-limit rules support provider-neutral `reasoning_efforts` arrays for catalog
-rows and selection. Configuration overrides discovery without altering its cache;
-explicit efforts remain available. Numeric capacity provenance stays independent.
+rows and selection, plus an `image_tokens` per-image ceiling that local media
+bounding uses on any route when exact counting is unavailable. Configuration
+overrides discovery without altering its cache; explicit efforts remain available.
+Numeric capacity provenance stays independent.
 
 The multimodal branch implements session-owned image, audio, video and document
 assets, normalized image/page/frame input, audio API operations, local dictation
