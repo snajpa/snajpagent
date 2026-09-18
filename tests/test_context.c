@@ -2877,6 +2877,28 @@ test_request_prefix_stability(struct snag_store *store, const char *workspace)
     json_decref(empty);
 }
 
+static void
+test_many_pending_steers(struct snag_store *store, const char *workspace)
+{
+    static const char turn[] = "d1000000000000000000000000000000";
+    static const char response[] = "d2000000000000000000000000000000";
+    struct snag_session session;
+
+    create_session(store, &session, workspace, "medium");
+    commit_event(&session, "turn_started", turn_started(turn, 1, "steer batch", workspace, NULL));
+    commit_event(&session, "response_started", response_started(turn, response, NULL));
+    for (unsigned int i = 0; i < 40u; ++i) {
+        char id[SNAG_ID_HEX_LEN + 1u], text[32];
+        (void)snprintf(id, sizeof(id), "%032x", 0x500000u + i);
+        (void)snprintf(text, sizeof(text), "steer %u", i);
+        commit_event(&session, "steering_added", steering_added(turn, id, text));
+    }
+    assert(session.pending_steering_count == 40u);
+    assert(session.pending_steering_bytes > 0u);
+    assert(strcmp(session.pending_steering[39].text, "steer 39") == 0);
+    snag_session_close(&session);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -3034,6 +3056,7 @@ main(int argc, char **argv)
     test_large_compact_prefix(&store, workspace);
     test_voice_completed_result(&store, workspace);
     test_parallel_journal_recovery(&store, workspace);
+    test_many_pending_steers(&store, workspace);
     test_refused_file_call_after_start(&store, workspace);
     test_accounting_lineage(&store, workspace);
     create_session(&store, &session, workspace, "default");

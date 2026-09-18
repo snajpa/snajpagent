@@ -578,7 +578,7 @@ static int
 validate_prompt_values(struct snag_ui *ui, const struct snag_config *config,
                        const struct snag_provider_config *provider, const char *model, const char *effort)
 {
-    char hostname[256u], queue[32u];
+    char hostname[256u];
     const char *values[SNAG_PROMPT_FIELD_COUNT];
     const char *spinners[SNAG_TERM_SPINNER_COUNT] = {
         config->prompt_spinner_goal, config->prompt_spinner_provider, config->prompt_spinner_tool };
@@ -593,12 +593,11 @@ validate_prompt_values(struct snag_ui *ui, const struct snag_config *config,
     values[3] = config->irc.operator_nick;
     values[4] = hostname;
     values[5] = "100";
-    (void)snprintf(queue, sizeof(queue), "%u", SNAG_MAX_PENDING_TURNS);
     values[SNAG_PROMPT_HOUR] = "23";
     values[SNAG_PROMPT_MINUTE] = "59";
     values[SNAG_PROMPT_SECOND] = "60";
     for (unsigned int full = 0u; full < 2u; ++full) {
-        values[SNAG_PROMPT_QUEUE] = full ? queue : "0";
+        values[SNAG_PROMPT_QUEUE] = full ? "999" : "0";
         for (unsigned int mode = 0u; mode < 3u; ++mode) {
             values[6] = mode == 0u ? "chat" : mode == 1u ? "rollout-idle" : "rollout-active";
             if (snag_config_prompt_expand(config->prompt, mode, values,

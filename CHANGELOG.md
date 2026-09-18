@@ -12,6 +12,9 @@
   grows its item storage on demand and allocates content parts individually;
   the response-graph and wire byte limits still bound every response.
 
+- Remove the fixed pending-steering (32) and queued-turn (128) count ceilings.
+  Both lists grow on demand; per-item text and total byte bounds still apply.
+
 - Show provider-hosted web searches as private rollout tool rows. A `web_search`
   item records a start row carrying the search action and query, then a finish
   row carrying the provider's terminal status and retained source URLs, at the
