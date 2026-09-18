@@ -1831,7 +1831,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 goto invalid;
             }
             if (sources) {
-                if (!json_is_array(sources) || json_array_size(sources) > SNAG_MAX_HOSTED_SOURCES)
+                if (!json_is_array(sources))
                     { clause = "sources"; goto invalid; }
                 for (size_t i = 0; i < json_array_size(sources); ++i)
                     if (!snag_text_valid(json_string_value(json_array_get(sources, i)), 1u,

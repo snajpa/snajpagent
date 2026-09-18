@@ -2733,6 +2733,24 @@ test_hosted_search_rows(void)
     assert(snag_render_prepare_hosted_finish(&block, "ws_2", "failed", NULL, 1u, 0u) == 0);
     assert(block.role == SNAG_ROLE_ERROR);
     snag_render_block_free(&block);
+    /* Any number of retained sources is counted and rendered. */
+    {
+        json_t *many = json_array();
+        assert(many);
+        for (size_t i = 0u; i < 40u; ++i) {
+            char url[64];
+            (void)snprintf(url, sizeof(url), "https://example.test/%zu", i);
+            assert(json_array_append_new(many, json_string(url)) == 0);
+        }
+        assert(snag_render_prepare_hosted_finish(&block, "ws_many", "completed", many, 2u, 0u) == 0);
+        assert(block.role == SNAG_ROLE_SUCCESS);
+        assert(snag_buf_terminate(&block.text) == 0);
+        assert(strstr((char *)block.text.data, "completed · 40 sources") != NULL);
+        assert(snag_buf_terminate(&block.body) == 0);
+        assert(strstr((char *)block.body.data, "https://example.test/0") != NULL);
+        snag_render_block_free(&block);
+        json_decref(many);
+    }
     json_decref(action);
     json_decref(sources);
 }

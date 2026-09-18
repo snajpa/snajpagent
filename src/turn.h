@@ -33,7 +33,6 @@ struct snag_process_state {
 #define SNAG_MAX_PROVIDER_ID 512u
 /* Provider-hosted web-search evidence retained for display only. */
 #define SNAG_MAX_HOSTED_ACTION (16u * 1024u)
-#define SNAG_MAX_HOSTED_SOURCES 16u
 #define SNAG_MAX_HOSTED_SOURCE_URL 2048u
 #define SNAG_MAX_TOOL_ARGUMENTS (2u * 1024u * 1024u)
 #define SNAG_MAX_RESPONSE_GRAPH (8u * 1024u * 1024u)

@@ -1258,6 +1258,41 @@ test_stream_accepts_many_parts(void)
     snag_buf_free(&wire);
 }
 
+static void
+test_hosted_search_many_sources(void)
+{
+    struct snag_buf wire = {.max = 256u * 1024u};
+    struct snag_buf sources = {.max = 128u * 1024u};
+    struct parsed_stream parsed = parsed_new(1024u);
+    struct hosted_capture hosted = {0};
+
+    assert(snag_buf_printf(&sources, "[") == 0);
+    for (unsigned int i = 0u; i < 20u; ++i)
+        assert(snag_buf_printf(&sources, "%s{\"type\":\"url\",\"url\":\"https://example.test/%u\"}",
+                               i ? "," : "", i) == 0);
+    assert(snag_buf_printf(&sources, "]") == 0);
+    assert(snag_buf_terminate(&sources) == 0);
+    assert(snag_buf_printf(&wire,
+        "event: response.created\n"
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_many\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "event: response.output_item.added\n"
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"ws_many\",\"type\":\"web_search_call\",\"status\":\"in_progress\",\"action\":{\"type\":\"search\",\"query\":\"many\"}}}\n\n"
+        "event: response.output_item.done\n"
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"ws_many\",\"type\":\"web_search_call\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"many\"},\"sources\":") == 0);
+    assert(snag_buf_append(&wire, sources.data, sources.len) == 0);
+    assert(snag_buf_printf(&wire,
+        "}}\n\n"
+        "event: response.completed\n"
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_many\",\"status\":\"completed\",\"output\":[]}}\n\n") == 0);
+    assert(snag_buf_terminate(&wire) == 0);
+    assert(parse_hosted((const char *)wire.data, &parsed, &hosted) == 0);
+    assert(hosted.calls == 2u);
+    assert(!hosted.started[1] && strcmp(hosted.status[1], "completed") == 0 && hosted.sources[1] == 20u);
+    parsed_free(&parsed);
+    snag_buf_free(&sources);
+    snag_buf_free(&wire);
+}
+
 int
 main(void)
 {
@@ -1283,6 +1318,7 @@ main(void)
     test_public_stream(5u);
     test_inert_only_response_has_empty_graph();
     test_hosted_search_activity();
+    test_hosted_search_many_sources();
     test_function_call_arguments();
     test_refusal();
     test_invalid_call_after_public_item();

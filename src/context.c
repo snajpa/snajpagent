@@ -1276,8 +1276,7 @@ snag_context_compact_output_valid(const json_t *output, char output_hash[SNAG_SH
 {
     if (output_hash) output_hash[0] = '\0';
     if (output_bytes) *output_bytes = 0u;
-    if (!json_is_array(output) || json_array_size(output) == 0u ||
-        json_array_size(output) > SNAG_CONTEXT_MAX_COMPACT_ITEMS) {
+    if (!json_is_array(output) || json_array_size(output) == 0u) {
         return snag_fail(error, error_size, EINVAL, "compact output must be a nonempty bounded array");
     }
     for (size_t i = 0; i < json_array_size(output); ++i) {

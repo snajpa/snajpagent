@@ -567,7 +567,7 @@ hosted_sources_copy(const json_t *value)
     json_t *sources;
 
     if (!json_is_array(value) || !(sources = json_array())) return NULL;
-    for (size_t i = 0; i < json_array_size(value) && json_array_size(sources) < SNAG_MAX_HOSTED_SOURCES; ++i) {
+    for (size_t i = 0; i < json_array_size(value); ++i) {
         const json_t *entry = json_array_get(value, i);
         const char *url = json_is_string(entry) ? json_string_value(entry) :
                           snag_json_string(entry, "url");
