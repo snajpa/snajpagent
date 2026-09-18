@@ -1778,6 +1778,44 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             memset(session->pending_calls, 0, sizeof(session->pending_calls));
             session->active_response_id[0] = '\0';
         }
+    } else if (snag_string_in(type, "hosted_search_started hosted_search_finished")) {
+        /* Provider-executed search evidence: display-only and never a local
+         * call, so it carries no pending-call or result contract. */
+        bool started = strcmp(type, "hosted_search_started") == 0;
+        const char *item_id = snag_json_string(data, "item_id");
+        const char *status = snag_json_string(data, "status");
+        json_t *action = json_object_get(data, "action");
+        json_t *sources = json_object_get(data, "sources");
+
+        if (!current_turn) { clause = "turn"; goto invalid; }
+        if (!session->response_open) { clause = "open"; goto invalid; }
+        if (!snag_provider_id_valid(item_id)) { clause = "item"; goto invalid; }
+        if (started) {
+            if (!snag_json_exact_keys(data, "item_id turn_id") &&
+                !snag_json_exact_keys(data, "action item_id turn_id")) { clause = "keys"; goto invalid; }
+            if (action && (!json_is_object(action) ||
+                snag_json_digest_bounded(action, SNAG_MAX_HOSTED_ACTION, NULL, NULL) < 0)) {
+                clause = "action";
+                goto invalid;
+            }
+        } else {
+            if (!snag_text_valid(status, 1u, 64u)) { clause = "status"; goto invalid; }
+            if (!snag_json_exact_keys(data, "item_id status turn_id") &&
+                !snag_json_exact_keys(data, "item_id sources status turn_id")) {
+                clause = "keys";
+                goto invalid;
+            }
+            if (sources) {
+                if (!json_is_array(sources) || json_array_size(sources) > SNAG_MAX_HOSTED_SOURCES)
+                    { clause = "sources"; goto invalid; }
+                for (size_t i = 0; i < json_array_size(sources); ++i)
+                    if (!snag_text_valid(json_string_value(json_array_get(sources, i)), 1u,
+                                         SNAG_MAX_HOSTED_SOURCE_URL)) {
+                        clause = "source";
+                        goto invalid;
+                    }
+            }
+        }
     } else if (strcmp(type, "process_output") == 0) {
         const char *handle = snag_json_string(data, "handle");
         struct snag_process_state *process = snag_session_process(session, handle);

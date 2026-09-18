@@ -212,6 +212,8 @@ static void
 wire_item_free(struct snag_wire_item *item)
 {
     json_decref(item->reasoning);
+    json_decref(item->hosted_action);
+    json_decref(item->hosted_sources);
     free(item->id);
     free(item->phase);
     free(item->name);
@@ -226,6 +228,14 @@ snag_responses_stream_init(struct snag_responses_stream *stream, snag_responses_
     memset(stream, 0, sizeof(*stream));
     stream->emit = emit;
     stream->opaque = opaque;
+}
+
+void
+snag_responses_stream_set_hosted(struct snag_responses_stream *stream,
+                                 snag_responses_hosted_fn hosted, void *opaque)
+{
+    stream->hosted = hosted;
+    stream->hosted_opaque = opaque;
 }
 
 void
@@ -506,6 +516,104 @@ inert_snapshot(struct snag_responses_stream *stream, size_t output_index)
     return new_item(stream, output_index, SNAG_WIRE_ITEM_INERT, NULL) ? 0 : -1;
 }
 
+/* Provider-hosted search items are executed remotely: retain bounded evidence
+ * for display, never a local call. Exact item types stay inert for the graph. */
+static bool
+hosted_search_type(const char *type)
+{
+    return type && (!strcmp(type, "web_search_call") || !strcmp(type, "openrouter:web_search"));
+}
+
+static json_t *
+hosted_action_copy(const json_t *value)
+{
+    if (!json_is_object(value) ||
+        snag_json_digest_bounded(value, SNAG_MAX_HOSTED_ACTION, NULL, NULL) < 0) return NULL;
+    return json_deep_copy(value);
+}
+
+static json_t *
+hosted_sources_copy(const json_t *value)
+{
+    json_t *sources;
+
+    if (!json_is_array(value) || !(sources = json_array())) return NULL;
+    for (size_t i = 0; i < json_array_size(value) && json_array_size(sources) < SNAG_MAX_HOSTED_SOURCES; ++i) {
+        const json_t *entry = json_array_get(value, i);
+        const char *url = json_is_string(entry) ? json_string_value(entry) :
+                          snag_json_string(entry, "url");
+        json_t *copy;
+        if (!url || !snag_text_valid(url, 1u, SNAG_MAX_HOSTED_SOURCE_URL)) continue;
+        copy = json_string(url);
+        if (!copy || json_array_append_new(sources, copy) < 0) {
+            json_decref(sources);
+            return NULL;
+        }
+    }
+    return sources;
+}
+
+static int
+hosted_notify(struct snag_responses_stream *stream, struct snag_wire_item *item, bool finished)
+{
+    int rc;
+
+    if (!stream->hosted) return 0;
+    rc = stream->hosted(stream->hosted_opaque, !finished, item->id,
+                        item->hosted_status[0] ? item->hosted_status : NULL,
+                        item->hosted_action, item->hosted_sources);
+    if (rc < 0) return stream_fail(stream, errno ? errno : EIO,
+                                   "hosted search activity could not be delivered");
+    return 0;
+}
+
+static int
+hosted_snapshot(struct snag_responses_stream *stream, size_t output_index,
+                const json_t *snapshot, bool complete)
+{
+    const char *id = snag_json_string(snapshot, "id");
+    const char *status = snag_json_string(snapshot, "status");
+    struct snag_wire_item *item;
+    json_t *action_value = json_object_get(snapshot, "action");
+    json_t *sources_value = json_object_get(snapshot, "sources");
+    json_t *action, *sources;
+
+    if (!snag_provider_id_valid(id))
+        return stream_fail(stream, EPROTO, "invalid hosted search item");
+    if (output_index < stream->item_count) {
+        item = &stream->items[output_index];
+        if (item->kind != SNAG_WIRE_ITEM_INERT || !item->hosted_search || !item->id ||
+            strcmp(item->id, id) != 0)
+            return stream_fail(stream, EPROTO, "response item kind or order conflict");
+    } else if (!(item = new_item(stream, output_index, SNAG_WIRE_ITEM_INERT, id))) {
+        return -1;
+    }
+    item->hosted_search = true;
+    if ((action = hosted_action_copy(action_value))) {
+        json_decref(item->hosted_action);
+        item->hosted_action = action;
+    }
+    /* OpenRouter nests its source list inside the search action. */
+    if (!sources_value && json_is_object(action_value)) sources_value = json_object_get(action_value, "sources");
+    if ((sources = hosted_sources_copy(sources_value))) {
+        json_decref(item->hosted_sources);
+        item->hosted_sources = sources;
+    }
+    if (status && snag_text_valid(status, 1u, sizeof(item->hosted_status) - 1u))
+        (void)snag_strcpy(item->hosted_status, sizeof(item->hosted_status), status);
+    /* The start row waits for the action that names the search, or for the
+     * terminal snapshot when the provider never supplies one. */
+    if (!item->hosted_started && (item->hosted_action || complete)) {
+        if (hosted_notify(stream, item, false) < 0) return -1;
+        item->hosted_started = true;
+    }
+    if (complete && !item->hosted_finished) {
+        if (hosted_notify(stream, item, true) < 0) return -1;
+        item->hosted_finished = true;
+    }
+    return 0;
+}
+
 static int
 item_snapshot(struct snag_responses_stream *stream, size_t output_index,
               const json_t *snapshot, bool complete)
@@ -517,6 +625,7 @@ item_snapshot(struct snag_responses_stream *stream, size_t output_index,
     if (strcmp(type, "message") == 0) return message_snapshot(stream, output_index, snapshot, complete);
     if (strcmp(type, "function_call") == 0)
         return function_snapshot(stream, output_index, snapshot, complete);
+    if (hosted_search_type(type)) return hosted_snapshot(stream, output_index, snapshot, complete);
     if (inert_snapshot(stream, output_index) < 0) return -1;
     struct snag_wire_item *item = &stream->items[output_index];
     if (strcmp(type, "reasoning") != 0) return item->reasoning_seen ? stream_fail(stream, EPROTO,

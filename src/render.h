@@ -187,6 +187,13 @@ int snag_render_prepare_tool_start(struct snag_render_block *block, const struct
 int snag_render_prepare_tool_finish(struct snag_render_block *block, const char *name,
                            const char *call_id, const json_t *result,
                            uint32_t max_output_bytes, unsigned int level, unsigned int columns);
+/* Provider-hosted search rows reuse the tool-row grammar with their own
+ * evidence: the action names the search, the status and sources close it. */
+int snag_render_prepare_hosted_start(struct snag_render_block *block, const char *item_id,
+                           const json_t *action, unsigned int level, unsigned int columns);
+int snag_render_prepare_hosted_finish(struct snag_render_block *block, const char *item_id,
+                           const char *status, const json_t *sources,
+                           unsigned int level, unsigned int columns);
 void snag_render_block_free(struct snag_render_block *block);
 int snag_render_durable(struct snag_render *render, int fd,
                         struct snag_render_source source, const char *type,

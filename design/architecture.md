@@ -515,6 +515,9 @@ lookalike/subdomain hosts do not select OpenRouter. The same selection applies
 to semantic, request, and count projections and to ordinary and `/ro` turns.
 No search configuration or new local function is introduced. Hosted output
 remains provider-owned; local function dispatch stays restricted as before.
+Bounded search evidence (the action and query, terminal status, and retained
+sources) is retained for display as tool rows in the rollout, live and on
+resume; it never enters the local call graph, dispatcher, or model context.
 The same hostname identity recognizes OpenRouter's absent optional token-count
 route (404) in automatic counting; strict counting still fails, and generic
 404/authentication failures remain errors. HTTP response status comes from

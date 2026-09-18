@@ -1007,6 +1007,10 @@ conversation text.  Redirected diagnostics keep their original bytes.
 At level 1, tool rows include rejected and otherwise unexecuted attempts with
 a short status reason. These private rollout rows appear live and in history;
 full arguments and output stay at their existing higher detail levels.
+Provider-hosted web searches appear as those same private rows: the search
+action and query, then the provider's terminal status and retained sources.
+They stay display evidence executed by the provider, never a local call, and
+a resumed session replays them.
 .PP
 Each model request includes a snapshot of the local verbosity, current
 rollout/chat view and effective tool-detail visibility, derived from the same
@@ -3121,6 +3125,11 @@ runs on the provider.  The model receives
 provider search results in the same turn; external pages remain untrusted data.
 OpenRouter's endpoint selects its corresponding native search declaration
 automatically.  Search availability and charges depend on the provider.
+.PP
+Each search is journaled and shown as a display-only tool row: a start row
+with the action and query, then a finish row with the provider's status and
+retained sources.  The row is never a local function call, command or
+dispatcher target, and it cannot be vetoed after the provider ran the search.
 .SS Model goal controls
 .B create_goal
 accepts objective text and is declared in every request. It succeeds only when

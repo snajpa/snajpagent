@@ -210,3 +210,76 @@ out: snag_buf_free(&row);
     if (rc < 0) snag_render_block_free(block);
     return rc;
 }
+
+int
+snag_render_prepare_hosted_start(struct snag_render_block *block, const char *item_id,
+                                 const json_t *action, unsigned int level, unsigned int columns)
+{
+    struct snag_buf args = {0};
+    bool truncated = false;
+    bool arguments_truncated = false;
+    size_t limit = snag_presentation_limit(SNAG_PRESENT_ARGUMENTS, level);
+    size_t bytes = limit == SIZE_MAX ? SNAG_MAX_HOSTED_ACTION * 2u + 2u :
+                   limit ? limit * 4u + 16u : 512u;
+    int rc = -1;
+
+    block_init(block, SNAG_PRESENT_ARGUMENTS);
+    block->role = SNAG_ROLE_ACTIVITY;
+    struct snag_buf row = {.max = 4096u};
+    if (action && canonical_prefix(action, &args, bytes, &truncated) < 0) goto out;
+    arguments_truncated = truncated;
+    if (snag_buf_printf(&row, "→ web_search") < 0 || append_tool_ref(&row, item_id) < 0) goto out;
+    size_t colored_len = row.len;
+    if (action && (snag_buf_append(&row, "  ", 2u) < 0 ||
+        preview(&row, (const char *)args.data, args.len, 95u, 95u, true, &truncated) < 0 ||
+        (truncated && snag_buf_append(&row, "…", 3u) < 0))) goto out;
+    if (summary(block, &row, columns, colored_len) < 0) goto out;
+    if (limit && action) {
+        block->truncated = arguments_truncated;
+        if (preview(&block->body, (const char *)args.data, args.len,
+                    limit, SIZE_MAX, false, &block->truncated) < 0) goto out;
+    }
+    rc = 0;
+out: snag_buf_free(&args);
+    snag_buf_free(&row);
+    if (rc < 0) snag_render_block_free(block);
+    return rc;
+}
+
+int
+snag_render_prepare_hosted_finish(struct snag_render_block *block, const char *item_id,
+                                  const char *status, const json_t *sources,
+                                  unsigned int level, unsigned int columns)
+{
+    size_t limit = snag_presentation_limit(SNAG_PRESENT_OUTPUT, level);
+    size_t count = json_array_size(sources);
+    struct snag_buf row = {.max = 4096u};
+    struct snag_buf body = {0};
+    int rc = -1;
+
+    block_init(block, SNAG_PRESENT_OUTPUT);
+    block->role = status && !strcmp(status, "completed") ? SNAG_ROLE_SUCCESS :
+                  status && (!strcmp(status, "failed") || !strcmp(status, "incomplete")) ?
+                      SNAG_ROLE_ERROR : SNAG_ROLE_WARNING;
+    if (snag_buf_printf(&row, "← web_search") < 0 || append_tool_ref(&row, item_id) < 0 ||
+        snag_buf_append(&row, "  ", 2u) < 0 ||
+        snag_buf_printf(&row, "%s", status && status[0] ? status : "unknown") < 0) goto out;
+    if (count && snag_buf_printf(&row, " · %zu %s", count, count == 1u ? "source" : "sources") < 0)
+        goto out;
+    if (summary(block, &row, columns, row.len) < 0) goto out;
+    if (limit && count) {
+        snag_buf_init(&body, SNAG_MAX_HOSTED_SOURCES * (SNAG_MAX_HOSTED_SOURCE_URL + 1u));
+        for (size_t i = 0; i < count; ++i) {
+            const char *url = json_string_value(json_array_get(sources, i));
+            if (!url) continue;
+            if (snag_buf_printf(&body, "%s%s", body.len ? "\n" : "", url) < 0) goto out;
+        }
+        if (preview(&block->body, (const char *)body.data, body.len,
+                    limit, SIZE_MAX, false, &block->truncated) < 0) goto out;
+    }
+    rc = 0;
+out: snag_buf_free(&row);
+    snag_buf_free(&body);
+    if (rc < 0) snag_render_block_free(block);
+    return rc;
+}

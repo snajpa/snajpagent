@@ -2689,6 +2689,54 @@ test_output_span_prompt_repaint(void)
     close(capture.fd);
 }
 
+static void
+test_hosted_search_rows(void)
+{
+    static const char prefix[] = "→ web_search [ws_1]";
+    struct snag_render_block block;
+    json_t *action = json_pack("{s:s,s:s}", "query", "selinux 6.18", "type", "search");
+    json_t *sources = json_pack("[s,s]", "https://example.test/selinux",
+                                "https://example.test/kernel");
+
+    assert(action && sources);
+    for (unsigned int level = 1u; level <= 3u; ++level) {
+        assert(snag_render_prepare_hosted_start(&block, "ws_1", action, level, 0u) == 0);
+        assert(block.role == SNAG_ROLE_ACTIVITY);
+        assert(snag_buf_terminate(&block.text) == 0);
+        assert(strncmp((char *)block.text.data, prefix, sizeof(prefix) - 1u) == 0);
+        assert(strstr((char *)block.text.data, "\"query\":\"selinux 6.18\"") != NULL);
+        assert((block.body.len != 0u) == (level >= 2u));
+        snag_render_block_free(&block);
+
+        assert(snag_render_prepare_hosted_finish(&block, "ws_1", "completed", sources,
+                                                 level, 0u) == 0);
+        assert(block.role == SNAG_ROLE_SUCCESS);
+        assert(snag_buf_terminate(&block.text) == 0);
+        assert(strcmp((char *)block.text.data,
+                      "← web_search [ws_1]  completed · 2 sources\n") == 0);
+        assert((block.body.len != 0u) == (level >= 2u));
+        if (level >= 2u) {
+            assert(snag_buf_terminate(&block.body) == 0);
+            assert(strstr((char *)block.body.data, "https://example.test/selinux\n") != NULL);
+        }
+        snag_render_block_free(&block);
+    }
+    /* Without an action the row still identifies the item and invents nothing. */
+    assert(snag_render_prepare_hosted_start(&block, "ws_2", NULL, 1u, 0u) == 0);
+    assert(snag_buf_terminate(&block.text) == 0);
+    assert(strcmp((char *)block.text.data, "→ web_search [ws_2]\n") == 0);
+    assert(block.body.len == 0u);
+    snag_render_block_free(&block);
+    assert(snag_render_prepare_hosted_finish(&block, "ws_2", "in_progress", NULL, 1u, 0u) == 0);
+    assert(block.role == SNAG_ROLE_WARNING);
+    snag_render_block_free(&block);
+    assert(snag_render_prepare_hosted_finish(&block, "ws_2", "failed", NULL, 1u, 0u) == 0);
+    assert(block.role == SNAG_ROLE_ERROR);
+    snag_render_block_free(&block);
+    json_decref(action);
+    json_decref(sources);
+}
+
 int
 main(void)
 {
@@ -2815,6 +2863,7 @@ main(void)
     test_wrapped_markdown_tables();
     test_markdown_tables();
     test_tool_previews();
+    test_hosted_search_rows();
     test_semantic_history();
     test_live_downgrade();
     for (unsigned int verbosity = 0u; verbosity <= 6u; ++verbosity) test_append_only_views(verbosity);

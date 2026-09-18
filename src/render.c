@@ -46,7 +46,8 @@ struct markdown_table_output {
 };
 
 enum snag_render_record_kind {
-    SNAG_RENDER_RECORD_BLOCK, SNAG_RENDER_RECORD_IRC, SNAG_RENDER_RECORD_TOOL, SNAG_RENDER_RECORD_PUBLIC };
+    SNAG_RENDER_RECORD_BLOCK, SNAG_RENDER_RECORD_IRC, SNAG_RENDER_RECORD_TOOL,
+    SNAG_RENDER_RECORD_HOSTED, SNAG_RENDER_RECORD_PUBLIC };
 
 struct snag_render_record {
     struct snag_render_record *next;
@@ -73,6 +74,7 @@ struct snag_render_record {
     struct snag_render_source source, response;
     uint32_t timeout_ms, max_output_bytes;
     bool tool_start;
+    bool hosted_start;
     bool omitted;
 };
 
@@ -82,6 +84,7 @@ static int close_public_output(struct snag_render *render);
 static int markdown_gap(struct snag_render *render);
 static int flush_wrap_pending(struct snag_render *render);
 static int render_tool_record(struct snag_render *render, const struct snag_render_record *record);
+static int render_hosted_record(struct snag_render *render, const struct snag_render_record *record);
 static json_t *source_event(struct snag_render *render, struct snag_render_source source);
 
 const char *
@@ -2856,6 +2859,8 @@ flush_view(struct snag_render *render, enum snag_render_view view)
             rc = render_irc_record(render, record);
         } else if (record->kind == SNAG_RENDER_RECORD_TOOL) {
             rc = render_tool_record(render, record);
+        } else if (record->kind == SNAG_RENDER_RECORD_HOSTED) {
+            rc = render_hosted_record(render, record);
         } else {
             rc = 0;
             if (record->source.len && !record->text.data) {
@@ -3124,6 +3129,37 @@ out: json_decref(event);
     return rc;
 }
 
+static int
+render_hosted_record(struct snag_render *render, const struct snag_render_record *record)
+{
+    json_t *event = NULL;
+    struct snag_render_block block;
+    const char *item_id;
+    unsigned int columns;
+    int rc = -1;
+
+    if (!snag_render_enabled(render, SNAG_PRESENT_TOOL)) return 0;
+    event = source_event(render, record->source);
+    if (!event) goto out;
+    json_t *data = json_object_get(event, "data");
+    item_id = snag_json_string(data, "item_id");
+    columns = render->term ? render->term->columns : 0u;
+    if (record->hosted_start) {
+        rc = snag_render_prepare_hosted_start(&block, item_id, json_object_get(data, "action"),
+                                              render->verbosity, columns);
+    } else {
+        rc = snag_render_prepare_hosted_finish(&block, item_id, snag_json_string(data, "status"),
+                                               json_object_get(data, "sources"),
+                                               render->verbosity, columns);
+    }
+    if (rc == 0) {
+        rc = snag_render_tool_block(render, &block);
+        snag_render_block_free(&block);
+    }
+out: json_decref(event);
+    return rc;
+}
+
 int
 snag_render_durable(struct snag_render *render, int fd, struct snag_render_source source,
                     const char *type, uint32_t timeout_ms, uint32_t max_output_bytes)
@@ -3183,6 +3219,17 @@ snag_render_durable(struct snag_render *render, int fd, struct snag_render_sourc
         }
         json_decref(event);
         return rc;
+    }
+    /* Hosted rows carry their own evidence and precede the response that owns
+     * them, so they do not depend on a completed response source. */
+    if (snag_string_in(type, "hosted_search_started hosted_search_finished")) {
+        struct snag_render_record *hosted = calloc(1u, sizeof(*hosted));
+        if (!hosted) return -1;
+        hosted->kind = SNAG_RENDER_RECORD_HOSTED;
+        hosted->source = source;
+        hosted->hosted_start = strcmp(type, "hosted_search_started") == 0;
+        queue_record(render, SNAG_RENDER_ROLLOUT, hosted);
+        return render->view == SNAG_RENDER_ROLLOUT ? flush_view(render, render->view) : 0;
     }
     bool start = strcmp(type, "tool_started") == 0;
     if ((!start && strcmp(type, "tool_finished") != 0) || !render->response_source.len) return 0;
