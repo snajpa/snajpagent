@@ -2,6 +2,7 @@
 #include "render.h"
 
 #include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -268,7 +269,16 @@ snag_render_prepare_hosted_finish(struct snag_render_block *block, const char *i
         goto out;
     if (summary(block, &row, columns, row.len) < 0) goto out;
     if (limit && count) {
-        snag_buf_init(&body, SNAG_MAX_HOSTED_SOURCES * (SNAG_MAX_HOSTED_SOURCE_URL + 1u));
+        size_t needed = 0u;
+        for (size_t i = 0; i < count; ++i) {
+            const char *url = json_string_value(json_array_get(sources, i));
+            size_t length;
+            if (!url) continue;
+            length = strlen(url);
+            if (length > SIZE_MAX - needed - 1u) goto out;
+            needed += length + 1u;
+        }
+        snag_buf_init(&body, needed ? needed : 1u);
         for (size_t i = 0; i < count; ++i) {
             const char *url = json_string_value(json_array_get(sources, i));
             if (!url) continue;

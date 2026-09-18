@@ -15,6 +15,11 @@
 - Remove the fixed pending-steering (32) and queued-turn (128) count ceilings.
   Both lists grow on demand; per-item text and total byte bounds still apply.
 
+- Remove the compact-output item, hosted-source, and media part/image count
+  ceilings. Compact output stays bounded by its 12 MiB document limit, hosted
+  source lists and rows size themselves from their entries, and media content
+  stays bounded by its byte budgets.
+
 - Show provider-hosted web searches as private rollout tool rows. A `web_search`
   item records a start row carrying the search action and query, then a finish
   row carrying the provider's terminal status and retained source URLs, at the

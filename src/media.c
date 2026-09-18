@@ -355,9 +355,8 @@ media_base64(int session_fd, const json_t *asset, struct snag_buf *out,
 bool
 snag_media_content_valid(const json_t *content)
 {
-    if (!json_is_array(content) || !json_array_size(content) || json_array_size(content) > 32u)
+    if (!json_is_array(content) || !json_array_size(content))
         return false;
-    size_t images = 0;
     uint64_t bytes = 0;
     for (size_t i = 0; i < json_array_size(content); ++i) {
         json_t *part = json_array_get(content, i);
@@ -378,7 +377,7 @@ snag_media_content_valid(const json_t *content)
             mime = snag_json_string(asset, "mime_type");
             if (strcmp(mime, "image/png") && strcmp(mime, "image/jpeg")) return false;
             (void)snag_json_integer_u64(asset, "bytes", &size);
-            if (++images > 8u || size > SNAG_MEDIA_REQUEST_MAX - bytes) return false;
+            if (size > SNAG_MEDIA_REQUEST_MAX - bytes) return false;
             bytes += size;
         } else return false;
     }
@@ -558,7 +557,7 @@ int
 snag_media_request_check(const json_t *request, char *error, size_t error_size)
 {
     json_t *input = json_object_get(request, "input");
-    size_t images = 0, bytes = 0;
+    size_t bytes = 0;
     for (size_t i = 0; i < json_array_size(input); ++i) {
         json_t *item = json_array_get(input, i);
         json_t *parts = json_object_get(item, "content");
@@ -572,7 +571,7 @@ snag_media_request_check(const json_t *request, char *error, size_t error_size)
             if (!encoded || strncmp(url, "data:image/", 11u)) goto invalid;
             encoded += 8u;
             size_t len = strlen(encoded);
-            if (!len || len % 4u || ++images > 8u) goto invalid;
+            if (!len || len % 4u) goto invalid;
             size_t size = len / 4u * 3u - (encoded[len - 1u] == '=') -
                           (encoded[len - 2u] == '=');
             if (size > SNAG_MEDIA_REQUEST_MAX - bytes) goto invalid;
@@ -581,7 +580,7 @@ snag_media_request_check(const json_t *request, char *error, size_t error_size)
     }
     return 0;
 invalid:
-    snag_errorf(error, error_size, "Image request exceeds 8 images / 12 MiB, or contains invalid image data.");
+    snag_errorf(error, error_size, "Image request exceeds 12 MiB, or contains invalid image data.");
     errno = EFBIG;
     return -1;
 }
