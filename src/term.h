@@ -17,6 +17,7 @@
 #define SNAG_TERM_SPINNER_COUNT 3u
 #define SNAG_TERM_SPINNER_SLOTS 2u
 #define SNAG_TERM_SPINNER_MARKER_BASE 0xfdu
+#define SNAG_TERM_SPINNER_BYTES 80u
 
 enum snag_term_spinner_id {
     SNAG_TERM_SPINNER_GOAL, SNAG_TERM_SPINNER_PROVIDER, SNAG_TERM_SPINNER_TOOL };
@@ -30,9 +31,9 @@ struct snag_prompt_clock {
 };
 
 struct snag_term_spinner {
-    char value[80];
-    size_t frame_offset[16];
-    unsigned char frame_len[16];
+    char value[SNAG_TERM_SPINNER_BYTES];
+    unsigned char frame_offset[SNAG_TERM_SPINNER_BYTES];
+    unsigned char frame_len[SNAG_TERM_SPINNER_BYTES];
     unsigned char inactive_len;
     unsigned char frame_count;
 };

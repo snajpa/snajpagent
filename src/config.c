@@ -41,8 +41,8 @@ struct parse_state {
     struct {
         char provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
         struct snag_provider_model model;
-    } models[SNAG_CONFIG_MODEL_ALIAS_MAX];
-    size_t model_count;
+    } *models;
+    size_t model_count, model_capacity;
     json_t *rules;
     size_t rule_index;
 };
@@ -247,7 +247,7 @@ unsafe_prompt_cp(uint32_t cp)
 static int
 parse_spinner(char dst[SNAG_CONFIG_SPINNER_MAX], const char *value)
 {
-    size_t len = strlen(value), pos, frames = 0u, previous = SIZE_MAX;
+    size_t len = strlen(value), pos, previous = SIZE_MAX;
 
     if (len < 3u || value[0] != '"' || value[len - 1u] != '"' || len - 2u >= SNAG_CONFIG_SPINNER_MAX ||
         memchr(value + 1u, '"', len - 2u)) goto invalid;
@@ -264,7 +264,7 @@ parse_spinner(char dst[SNAG_CONFIG_SPINNER_MAX], const char *value)
         uint32_t cp;
         size_t n = snag_utf8_decode((const unsigned char *)value + pos, len - pos, &cp);
 
-        if (!n || ++frames > SNAG_CONFIG_SPINNER_FRAMES_MAX || snag_char_width(cp) != 1 ||
+        if (!n || snag_char_width(cp) != 1 ||
             unsafe_prompt_cp(cp) || (previous != SIZE_MAX && n == pos - previous &&
             memcmp(value + previous, value + pos, n) == 0)) goto invalid;
         previous = pos;
@@ -495,13 +495,23 @@ set_model_alias_section(struct parse_state *state, char *name)
     char *slash = strchr(name, '/');
     size_t index;
 
-    if (!slash || state->model_count >= SNAG_CONFIG_MODEL_ALIAS_MAX) goto invalid;
+    if (!slash) goto invalid;
     *slash = '\0';
     if (!snag_config_name_valid(name) || !snag_config_name_valid(slash + 1u)) goto invalid;
     for (size_t i = 0; i < state->model_count; ++i)
         if (strcmp(state->models[i].provider, name) == 0 &&
             strcmp(state->models[i].model.name, slash + 1u) == 0) goto invalid;
+    if (state->model_count == state->model_capacity) {
+        size_t capacity = state->model_capacity ? state->model_capacity * 2u : 8u;
+        void *grown;
+        if (capacity < state->model_capacity) goto invalid;
+        grown = realloc(state->models, capacity * sizeof(*state->models));
+        if (!grown) return -1;
+        state->models = grown;
+        state->model_capacity = capacity;
+    }
     index = state->model_alias_index = state->model_count++;
+    memset(&state->models[index], 0, sizeof(state->models[index]));
     (void)snag_strcpy(state->models[index].provider, sizeof(state->models[index].provider), name);
     (void)snag_strcpy(state->models[index].model.name, sizeof(state->models[index].model.name), slash + 1u);
     state->section = SECTION_MODEL_ALIAS;
@@ -588,7 +598,7 @@ enum setting_kind {
 bool
 snag_config_efforts_valid(const json_t *efforts)
 {
-    if (!json_is_array(efforts) || json_array_size(efforts) > SNAG_CONFIG_EFFORTS_MAX) return false;
+    if (!json_is_array(efforts)) return false;
     for (size_t i = 0; i < json_array_size(efforts); ++i) {
         const char *effort = snag_json_bounded_string(json_array_get(efforts, i), SNAG_CONFIG_EFFORT_MAX - 1u);
         if (!effort) return false;
@@ -821,6 +831,15 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
 invalid: return snag_errno(EINVAL);
 }
 
+static void
+free_parse_state(struct parse_state *state)
+{
+    json_decref(state->rules);
+    state->rules = NULL;
+    free(state->models);
+    state->models = NULL;
+}
+
 static int
 parse_file(struct snag_config *config, char *text, char *error, size_t error_size)
 {
@@ -830,6 +849,11 @@ parse_file(struct snag_config *config, char *text, char *error, size_t error_siz
 
     memset(&state, 0, sizeof(state));
     state.config = config;
+    /* The settings table borrows the current alias row even outside an alias
+     * section, so the growable list starts allocated. */
+    state.model_capacity = 8u;
+    state.models = malloc(state.model_capacity * sizeof(*state.models));
+    if (!state.models) return -1;
     /* A present file has only its declared providers, including zero. */
     for (size_t i = 0; i < config->provider_count; ++i) {
         snag_secret_source_free(&config->providers[i].api_key);
@@ -864,7 +888,7 @@ parse_file(struct snag_config *config, char *text, char *error, size_t error_siz
             if (rc < 0) {
                 snag_errorf(error, error_size, "invalid configuration at line %u; use named [provider NAME], "
                           "api_key with ${ENV}, quoted literal or path, and repeatable tool secret", number);
-                json_decref(state.rules);
+                free_parse_state(&state);
                 return -1;
             }
         }
@@ -879,13 +903,14 @@ parse_file(struct snag_config *config, char *text, char *error, size_t error_siz
             if (strcmp(config->providers[j].name, state.models[i].provider) == 0)
                 provider = &config->providers[j];
         if (!provider || !state.models[i].model.upstream[0]) {
-            json_decref(state.rules);
-            return snag_errorf(error, error_size, "model-alias %s/%s needs a configured provider and one real upstream target",
+            snag_errorf(error, error_size, "model-alias %s/%s needs a configured provider and one real upstream target",
                        state.models[i].provider, state.models[i].model.name);
+            free_parse_state(&state);
+            return -1;
         }
         models = realloc(provider->models, (provider->model_count + 1u) * sizeof(*models));
         if (!models) {
-            json_decref(state.rules);
+            free_parse_state(&state);
             return -1;
         }
         provider->models = models;
@@ -894,11 +919,12 @@ parse_file(struct snag_config *config, char *text, char *error, size_t error_siz
     {
         json_t *definition = json_object();
         if (!definition) {
-            json_decref(state.rules);
+            free_parse_state(&state);
             return -1;
         }
         if (state.rules) {
             if (json_object_set_new(definition, "rules", state.rules) < 0) {
+                free_parse_state(&state);
                 json_decref(definition);
                 return -1;
             }
@@ -907,8 +933,12 @@ parse_file(struct snag_config *config, char *text, char *error, size_t error_siz
         snag_rules_free(config->rules);
         config->rules = snag_rules_compile(definition, error, error_size);
         json_decref(definition);
-        if (!config->rules) return -1;
+        if (!config->rules) {
+            free_parse_state(&state);
+            return -1;
+        }
     }
+    free_parse_state(&state);
     return 0;
 }
 

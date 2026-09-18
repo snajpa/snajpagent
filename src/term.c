@@ -670,8 +670,8 @@ prepare_spinner(struct snag_term_spinner *spinner, const char *value)
     while (value[pos]) {
         size_t n = snag_utf8_size((unsigned char)value[pos]);
 
-        if (!n || spinner->frame_count >= 16u) return -1;
-        spinner->frame_offset[spinner->frame_count] = pos;
+        if (!n || spinner->frame_count >= sizeof(spinner->frame_offset)) return -1;
+        spinner->frame_offset[spinner->frame_count] = (unsigned char)pos;
         spinner->frame_len[spinner->frame_count++] = (unsigned char)n;
         pos += n;
     }
