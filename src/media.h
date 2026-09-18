@@ -42,8 +42,12 @@ json_t *snag_media_message_content(int session_fd, const char *text, const json_
                                   char *error, size_t error_size);
 struct snag_provider_config;
 /* Known model/route high-detail maximum patch/tile budget plus bounded textual
- * request bytes. No base64 text tokenization or mutation of the request. */
-int snag_media_token_bound(const json_t *, const struct snag_provider_config *, uint64_t *, char *, size_t);
+ * request bytes. A nonzero configured_image_tokens is a provider-documented
+ * per-image ceiling for the selected local model and applies on any route,
+ * superseding the built-in table. No base64 text tokenization or mutation of
+ * the request. */
+int snag_media_token_bound(const json_t *, const struct snag_provider_config *, uint64_t configured_image_tokens,
+                           uint64_t *, char *, size_t);
 /* Accepts a request or its input array. */
 bool snag_media_request_has_images(const json_t *request);
 

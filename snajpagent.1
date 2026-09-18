@@ -2053,6 +2053,20 @@ Maximum input tokens, 1 through 4000000000.
 .TP
 .B max_output_tokens
 Maximum output tokens, 1 through 4000000000.
+.TP
+.B image_tokens
+Provider-documented per-image input ceiling in tokens, 1 through 4000000000,
+for the matched local model.  Local image-request bounding uses it on any
+provider route when exact counting is unavailable, in place of the built-in
+OpenAI image sizing table.
+.PP
+For example, DeepSeek documents a 1,024-token ceiling per image for
+deepseek-flash:
+.PP
+.nf
+[model-limit deepseek/deepseek-flash]
+image_tokens = 1024
+.fi
 .PP
 Rules merge per field: provider-wide, matching patterns in file order, then
 exact model. The star matches zero or more characters over the whole local
@@ -2970,7 +2984,9 @@ gpt-5.5 (including 2026-04-23), and gpt-5.4/mini/nano; 7,374 for gpt-5.2;
 2,806 for gpt-4.1 and gpt-4o; and 93,506 for gpt-4o-mini.
 These are deliberately maximum-size bounds, not exact counts or billing quotes.
 Other names, specialized variants, custom base URLs and proxy routes require
-exact counting. An unbudgetable image request fails without dropping images
+exact counting unless the applicable [model-limit] rule declares an
+image_tokens per-image ceiling, which enables the same local bound on any
+route. An unbudgetable image request fails without dropping images
 or disabling text-only requests.
 .PP
 Protocol display omits media-bearing request bodies rather than printing data

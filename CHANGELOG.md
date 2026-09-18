@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Add `image_tokens` to `[model-limit]` rules: a provider-documented per-image
+  token ceiling that local media bounding uses on any provider route when exact
+  counting is unavailable, in place of the built-in OpenAI image sizing table.
+  Image input on routes such as `deepseek-flash` (1,024 tokens per image per
+  DeepSeek's documentation) now gets a conservative bound instead of failing
+  with no qualified image token bound.
+
 - Show provider-hosted web searches as private rollout tool rows. A `web_search`
   item records a start row carrying the search action and query, then a finish
   row carrying the provider's terminal status and retained source URLs, at the

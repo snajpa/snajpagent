@@ -1612,20 +1612,29 @@ test_image_tool_replay(void)
         json_t *budget_request = json_copy(projection.count_request.value);
         assert(json_object_set_new(budget_request, "model", json_string("gpt-5.5")) == 0);
         uint64_t budget = 0, larger = 0;
-        assert(snag_media_token_bound(budget_request, &provider, &budget, error, sizeof(error)) == 0);
+        assert(snag_media_token_bound(budget_request, &provider, 0u, &budget, error, sizeof(error)) == 0);
         assert(budget > 3001u && budget < projection.model_input.bytes + 10000u);
         assert(!strcmp(snag_json_string(json_array_get(content, image_index), "image_url"), (char *)expected.data));
         assert(json_object_set_new(budget_request, "model", json_string("gpt-4o-mini")) == 0);
-        assert(snag_media_token_bound(budget_request, &provider, &larger, error, sizeof(error)) == 0);
+        assert(snag_media_token_bound(budget_request, &provider, 0u, &larger, error, sizeof(error)) == 0);
         assert(larger > budget + 90000u);
         assert(json_object_set_new(budget_request, "model", json_string("gpt-5.5-specialized-unknown")) == 0);
         larger = 91u;
-        assert(snag_media_token_bound(budget_request, &provider, &larger, error, sizeof(error)) < 0 && larger == 91u);
+        assert(snag_media_token_bound(budget_request, &provider, 0u, &larger, error, sizeof(error)) < 0 && larger == 91u);
         assert(json_object_set_new(budget_request, "model", json_string("gpt-5.5")) == 0);
         strcpy(provider.base_url, "https://api.openai.com.attacker.invalid");
-        assert(snag_media_token_bound(budget_request, &provider, &larger, error, sizeof(error)) < 0);
+        assert(snag_media_token_bound(budget_request, &provider, 0u, &larger, error, sizeof(error)) < 0);
         strcpy(provider.base_url, SNAG_CHATGPT_BASE); provider.auth = SNAG_AUTH_CHATGPT;
-        assert(snag_media_token_bound(budget_request, &provider, &larger, error, sizeof(error)) == 0 && larger == budget);
+        assert(snag_media_token_bound(budget_request, &provider, 0u, &larger, error, sizeof(error)) == 0 && larger == budget);
+        /* A configured per-image ceiling supersedes the table on any route. */
+        assert(snag_media_token_bound(budget_request, &provider, 1025u, &larger, error, sizeof(error)) == 0 &&
+               larger == budget - 3001u + 1025u);
+        assert(json_object_set_new(budget_request, "model", json_string("deepseek-flash")) == 0);
+        strcpy(provider.base_url, "https://api.deepseek.com"); provider.auth = SNAG_AUTH_API_KEY;
+        larger = 0;
+        assert(snag_media_token_bound(budget_request, &provider, 0u, &larger, error, sizeof(error)) < 0 && larger == 0u);
+        assert(snag_media_token_bound(budget_request, &provider, 1025u, &larger, error, sizeof(error)) == 0);
+        assert(larger > 1025u && larger < budget + 10000u);
         json_decref(budget_request);
         if (!replay) {
             json_t *many = json_deep_copy(projection.create_request.value);

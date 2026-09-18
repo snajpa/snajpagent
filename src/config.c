@@ -622,6 +622,7 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         {SECTION_MODEL_LIMIT, "context_window_tokens", SET_U64, &limit->context_window_tokens, 1, SNAG_CONFIG_TOKEN_LIMIT_MAX},
         {SECTION_MODEL_LIMIT, "max_input_tokens", SET_U64, &limit->max_input_tokens, 1, SNAG_CONFIG_TOKEN_LIMIT_MAX},
         {SECTION_MODEL_LIMIT, "max_output_tokens", SET_U64, &limit->max_output_tokens, 1, SNAG_CONFIG_TOKEN_LIMIT_MAX},
+        {SECTION_MODEL_LIMIT, "image_tokens", SET_U64, &limit->image_tokens, 1, SNAG_CONFIG_TOKEN_LIMIT_MAX},
         {SECTION_MODEL_LIMIT, "reasoning_efforts", SET_EFFORTS, &limit->reasoning_efforts, 0, 0},
         {SECTION_MODEL_ALIAS, "model", SET_HEADER, state->models[state->model_alias_index].model.upstream, 0, SNAG_CONFIG_MODEL_MAX},
         {SECTION_UI, "typing_pause_ms", SET_U32, &config->typing_pause_ms, 0, 5000},
@@ -1026,7 +1027,7 @@ validate_config(struct snag_config *config, bool private_file, char *error, size
         const struct snag_model_limit_config *limit = &config->model_limits[i];
         if (!snag_config_provider(config, limit->provider) ||
             (!limit->context_window_tokens && !limit->max_input_tokens && !limit->max_output_tokens &&
-             !limit->reasoning_efforts) ||
+             !limit->image_tokens && !limit->reasoning_efforts) ||
             (limit->context_window_tokens && limit->max_output_tokens &&
              limit->max_output_tokens >= limit->context_window_tokens)) {
             return snag_fail(error, error_size, EINVAL, "invalid model-limit section for %s/%s",
@@ -1482,8 +1483,11 @@ snag_config_resolve_limits(const struct snag_config *config, const char *provide
                 out->max_output_tokens = rule->max_output_tokens;
                 if (sources) sources[2] = rule;
             }
+            if (rule->image_tokens) out->image_tokens = rule->image_tokens;
             if (rule->reasoning_efforts) out->reasoning_efforts = rule->reasoning_efforts;
         }
     }
+    /* Capacity presence only; reasoning_efforts and image_tokens merge
+     * independently of the capacity callers' source selection. */
     return out->context_window_tokens || out->max_input_tokens || out->max_output_tokens;
 }
