@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Accept `media_upper_bound` as a valid count method in the pre-response and
+  post-turn compaction guards. A request that includes an image on a route
+  without exact counting reports the conservative media bound; the stale guard
+  list rejected that legitimate state and failed the turn with `invalid
+  pre-response compaction state`. Image input on `deepseek-flash` (with a
+  configured `image_tokens` ceiling) now reaches the provider.
+
 - Add `image_tokens` to `[model-limit]` rules: a provider-documented per-image
   token ceiling that local media bounding uses on any provider route when exact
   counting is unavailable, in place of the built-in OpenAI image sizing table.

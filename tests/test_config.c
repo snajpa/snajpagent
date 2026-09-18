@@ -309,7 +309,9 @@ test_layered_limits_and_secrets(const char *path)
     assert(limits.image_tokens == 900u);
     assert(snag_config_resolve_limits(&config, "codex-lb", "large", &limits, sources));
     assert(limits.context_window_tokens == 500000u && !limits.max_output_tokens);
-    assert(limits.image_tokens == 800u);
+    /* Limits match the provider-local name: the alias "large" sees the
+     * provider-wide rule, not the gpt-* patterns of its upstream model. */
+    assert(limits.image_tokens == 700u);
     assert(!snag_config_resolve_limits(&config, "default", "small", &limits, sources));
     assert(!limits.image_tokens);
     assert(snag_config_resolve_limits(&config, "default", "org/model", &limits, sources));

@@ -15,7 +15,10 @@
 static bool
 count_method_valid(const char *method)
 {
-    return snag_string_in(method, "exact unknown");
+    /* The local image bound produces the legitimate conservative
+     * media_upper_bound method when exact counting is unavailable; the
+     * non-exact branches below already treat it conservatively. */
+    return snag_string_in(method, "exact unknown media_upper_bound");
 }
 
 static bool
