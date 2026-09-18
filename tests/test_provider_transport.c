@@ -704,7 +704,7 @@ test_session_identity_header(void)
     memset(&emitted, 0, sizeof(emitted));
     snag_buf_init(&emitted.text, 128u);
     request = request_with_marker("transport-create");
-    assert(snag_provider_responses_create(connection, request, emit_capture, &emitted, &graph, NULL,
+    assert(snag_provider_responses_create(connection, request, emit_capture, &emitted, NULL, NULL, &graph, NULL,
                                           error, sizeof(error), &retries) == 0);
     json_decref(request);
     snag_buf_free(&emitted.text);
@@ -783,7 +783,7 @@ test_local_provider_transport(void)
     memset(&emitted, 0, sizeof(emitted));
     snag_buf_init(&emitted.text, 128u);
     assert(snag_provider_responses_create(connection,
-        request, emit_capture, &emitted, &graph, NULL, error, sizeof(error), &retries) == 0);
+        request, emit_capture, &emitted, NULL, NULL, &graph, NULL, error, sizeof(error), &retries) == 0);
     assert(strcmp(graph.provider_response_id, "resp_transport") == 0);
     assert(graph.count == 1u);
     assert(strcmp(snag_response_graph_item(&graph, 0).text, "local transport") == 0);
@@ -874,7 +874,7 @@ test_structured_create_failures(void)
         struct snag_response_graph graph = {0};
         memset(&failure, 0, sizeof(failure));
         assert(snag_provider_responses_create(connection,
-            request, NULL, NULL, &graph, &failure, error, sizeof(error), NULL) < 0);
+            request, NULL, NULL, NULL, NULL, &graph, &failure, error, sizeof(error), NULL) < 0);
         assert(snag_provider_failure_is_capacity(&failure));
         assert(!strstr(error, "transport-secret"));
         assert(!strstr(failure.message, "transport-secret"));
@@ -902,7 +902,7 @@ test_typeless_create_diagnostic(void)
 
     start_server(&server, MODEL_CREATE_TYPELESS, false, "/v1");
     assert(snag_provider_responses_create(transport_connection(&config, &credential, server.endpoint),
-        request, NULL, NULL, &graph, NULL, error, sizeof(error), NULL) < 0);
+        request, NULL, NULL, NULL, NULL, &graph, NULL, error, sizeof(error), NULL) < 0);
     assert(strstr(error, "Responses event has no type") != NULL);
     assert(strstr(error, "Responses record diagnostic: event=-") != NULL);
     assert(strstr(error, "json=object") != NULL);
@@ -1030,7 +1030,7 @@ test_create_retries(void)
         int rc = snag_provider_responses_create((struct snag_provider_connection){
             &config, &config.providers[0], &credential, cancellation.code ? &ui : NULL,
             cancellation.code ? cancel_retry : NULL, &cancellation, NULL},
-            request, emit_capture, &emitted, &graph, &failure, error, sizeof(error), &retries);
+            request, emit_capture, &emitted, NULL, NULL, &graph, &failure, error, sizeof(error), &retries);
         if (cancellation.code) {
             snag_ui_free(&ui);
             assert(dup2(saved_stderr, STDERR_FILENO) == STDERR_FILENO);
@@ -1093,7 +1093,7 @@ test_policy_clarification_after_reasoning(void)
     snag_buf_init(&emitted.text, 1024u);
     int rc = snag_provider_responses_create((struct snag_provider_connection){
         &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL},
-        request, emit_capture, &emitted, &graph, &failure, error, sizeof(error), &retries);
+        request, emit_capture, &emitted, NULL, NULL, &graph, &failure, error, sizeof(error), &retries);
     assert(rc < 0 && retries == 0u && emitted.text.len == 0u);
     assert(!strcmp(failure.code, "cyber_policy"));
     assert(failure.output_correction == SNAG_OUTPUT_CORRECTION_CYBER_POLICY);
@@ -1260,7 +1260,7 @@ test_openrouter_search_transport(void)
     snag_buf_init(&emitted.text, 128u);
     struct snag_response_graph graph = {0};
     assert(snag_provider_responses_create(connection,
-        request, emit_capture, &emitted, &graph, NULL, error, sizeof(error), &retries) == 0);
+        request, emit_capture, &emitted, NULL, NULL, &graph, NULL, error, sizeof(error), &retries) == 0);
     assert(!retries);
     assert(graph.count == 2u);
     assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
@@ -1282,7 +1282,7 @@ test_openrouter_search_transport(void)
     snag_buf_reset(&emitted.text);
     emitted.calls = 0u;
     assert(snag_provider_responses_create(connection,
-        request, emit_capture, &emitted, &graph, NULL, error, sizeof(error), &retries) == 0);
+        request, emit_capture, &emitted, NULL, NULL, &graph, NULL, error, sizeof(error), &retries) == 0);
     assert(graph.count == 1u && snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
     assert(strcmp(snag_response_graph_item(&graph, 0).text, "local transport") == 0);
     assert(emitted.calls == 1u && !retries);

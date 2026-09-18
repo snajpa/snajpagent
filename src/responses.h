@@ -25,6 +25,13 @@ struct snag_provider_failure {
 typedef int (*snag_responses_emit_fn)(void *opaque, size_t output_index, enum snag_item_kind kind,
                                      enum snag_item_phase phase, const char *provider_item_id,
                                      const char *text, size_t len);
+/* Provider-executed hosted tool activity: bounded, display-only evidence,
+ * never a local function call. `started` carries the item identity and the
+ * search action when the provider has already supplied it; `finished` carries
+ * the terminal status and any retained result sources. Borrowed for the call. */
+typedef int (*snag_responses_hosted_fn)(void *opaque, bool started, const char *item_id,
+                                        const char *status, const json_t *action,
+                                        const json_t *sources);
 
 enum snag_wire_item_kind {
     SNAG_WIRE_ITEM_NONE, SNAG_WIRE_ITEM_MESSAGE, SNAG_WIRE_ITEM_FUNCTION_CALL, SNAG_WIRE_ITEM_INERT };
@@ -54,6 +61,13 @@ struct snag_wire_item {
     bool arguments_seen;
     bool arguments_complete;
     bool complete;
+    /* Hosted web-search evidence, bounded and display-only. */
+    bool hosted_search;
+    bool hosted_started;
+    bool hosted_finished;
+    char hosted_status[65];
+    json_t *hosted_action;
+    json_t *hosted_sources;
 };
 
 struct snag_responses_stream {
@@ -66,6 +80,8 @@ struct snag_responses_stream {
     struct snag_response_usage usage;
     snag_responses_emit_fn emit;
     void *opaque;
+    snag_responses_hosted_fn hosted;
+    void *hosted_opaque;
     bool created;
     bool terminal;
     bool failed;
@@ -79,6 +95,8 @@ struct snag_responses_stream {
 
 void snag_responses_stream_init(struct snag_responses_stream *stream,
                                snag_responses_emit_fn emit, void *opaque);
+void snag_responses_stream_set_hosted(struct snag_responses_stream *stream,
+                                      snag_responses_hosted_fn hosted, void *opaque);
 void snag_responses_stream_free(struct snag_responses_stream *stream);
 int snag_responses_sse_record(void *opaque, const struct snag_sse_record *record);
 int snag_responses_stream_finish(struct snag_responses_stream *stream, struct snag_response_graph *graph,

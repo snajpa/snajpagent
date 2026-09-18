@@ -63,6 +63,8 @@ struct fixture_output {
     snag_responses_emit_fn emit;
     snag_provider_pump_fn pump;
     void *opaque;
+    snag_responses_hosted_fn hosted;
+    void *hosted_opaque;
 };
 
 static int
@@ -246,10 +248,11 @@ static int
 fixture_response(const char *prompt, const json_t *steering, const char *workspace, unsigned int cycle,
                      const char *goal_prompt, uint64_t goal_turn_count,
                      snag_responses_emit_fn emit, snag_provider_pump_fn pump, void *opaque,
+                     snag_responses_hosted_fn hosted, void *hosted_opaque,
                      struct snag_response_graph *graph, struct snag_provider_failure *failure,
                      char *error, size_t error_size)
 {
-    struct fixture_output out = {graph, emit, pump, opaque};
+    struct fixture_output out = {graph, emit, pump, opaque, hosted, hosted_opaque};
     int control;
     if (strcmp(prompt, "crash") == 0 && cycle == 1u) _exit(99);
     if (strcmp(prompt, "provider_fail") == 0 && cycle == 1u)
@@ -272,6 +275,32 @@ fixture_response(const char *prompt, const json_t *steering, const char *workspa
         if (!steering_contains(steering, SNAG_OVERSIZED_OUTPUT_CORRECTION))
             return snag_errorf(error, error_size, "fixture did not receive oversized correction");
         return final_answer(&out, "msg_fixture_oversized_recovered", "oversized message recovered");
+    }
+    if (strcmp(prompt, "hosted_search") == 0) {
+        json_t *action = json_pack("{s:s,s:s}", "query", "selinux 6.18", "type", "search");
+        json_t *sources = json_pack("[s]", "https://example.test/selinux");
+        int hosted_rc = 0;
+
+        if (!action || !sources) {
+            json_decref(action);
+            json_decref(sources);
+            goto allocation;
+        }
+        if (emit_public(&out, SNAG_ITEM_ASSISTANT, SNAG_PHASE_COMMENTARY,
+                        "msg_fixture_hosted_commentary", "searching the fixture web\n", 0) < 0) {
+            json_decref(action);
+            json_decref(sources);
+            goto allocation;
+        }
+        if (out.hosted)
+            hosted_rc = out.hosted(out.hosted_opaque, true, "ws_fixture_1", "in_progress", action, NULL);
+        if (hosted_rc == 0 && out.hosted)
+            hosted_rc = out.hosted(out.hosted_opaque, false, "ws_fixture_1", "completed",
+                                   action, sources);
+        json_decref(action);
+        json_decref(sources);
+        if (hosted_rc < 0) return -1;
+        return final_answer(&out, "msg_fixture_hosted", "hosted search complete");
     }
     if (strcmp(prompt, "context_anchor_chain") == 0) {
         set_usage(graph, 8000u + (uint64_t)(cycle - 1u) * 24000u, 100u);
@@ -859,6 +888,7 @@ snag_fixture_response(const char *prompt, const json_t *steering, const json_t *
                      const char *workspace, unsigned int cycle,
                      const char *goal_prompt, uint64_t goal_turn_count,
                      snag_responses_emit_fn emit, snag_provider_pump_fn pump, void *opaque,
+                     snag_responses_hosted_fn hosted, void *hosted_opaque,
                      struct snag_response_graph *graph, struct snag_provider_failure *failure,
                      char *error, size_t error_size)
 {
@@ -882,7 +912,8 @@ snag_fixture_response(const char *prompt, const json_t *steering, const json_t *
         }
     }
     rc = fixture_response((char *)resolved.data, expanded, workspace, cycle,
-                           goal_prompt, goal_turn_count, emit, pump, opaque, graph, failure, error, error_size);
+                           goal_prompt, goal_turn_count, emit, pump, opaque, hosted, hosted_opaque,
+                           graph, failure, error, error_size);
     if (rc == 0 && !graph->usage.input_known &&
         snag_string_in((char *)resolved.data, "ping native_compact_unavailable compact_budget"))
         set_usage(graph, !strcmp((char *)resolved.data, "compact_budget") ? 90000u : 1000u, 1u);

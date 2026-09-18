@@ -73,8 +73,8 @@ snag_item_phase_name(enum snag_item_phase phase)
     return NULL;
 }
 
-static bool
-provider_id_valid(const char *s)
+bool
+snag_provider_id_valid(const char *s)
 {
     if (!snag_text_valid(s, 1u, SNAG_MAX_PROVIDER_ID)) return false;
     size_t len = strlen(s);
@@ -235,7 +235,7 @@ int
 snag_response_graph_set_provider_id(struct snag_response_graph *graph, const char *provider_response_id)
 {
     char *copy;
-    if (!provider_id_valid(provider_response_id)) return snag_errno(EINVAL);
+    if (!snag_provider_id_valid(provider_response_id)) return snag_errno(EINVAL);
     copy = snag_strdup_checked(provider_response_id, SNAG_MAX_PROVIDER_ID);
     if (!copy) return -1;
     free(graph->provider_response_id);
@@ -267,10 +267,10 @@ item_valid(const json_t *value)
                                      "call_id" : "local_item_id");
 
     if (!kind || !id || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN) ||
-        !provider_id_valid(snag_json_string(value, "provider_item_id"))) return false;
+        !snag_provider_id_valid(snag_json_string(value, "provider_item_id"))) return false;
     if (!strcmp(kind, "tool_call")) return snag_json_exact_keys(value,
             "arguments call_id kind name provider_call_id provider_item_id") &&
-            provider_id_valid(snag_json_string(value, "provider_call_id")) &&
+            snag_provider_id_valid(snag_json_string(value, "provider_call_id")) &&
             tool_name_valid(snag_json_string(value, "name")) &&
             arguments_bounded(json_object_get(value, "arguments"));
     return snag_string_in(kind, "assistant refusal") &&
@@ -325,7 +325,7 @@ snag_response_graph_add_public(struct snag_response_graph *graph,
     char id[SNAG_ID_HEX_LEN + 1u];
     if (!public_kind(kind) || (phase != SNAG_PHASE_FINAL_ANSWER &&
          (kind != SNAG_ITEM_ASSISTANT || phase != SNAG_PHASE_COMMENTARY)) ||
-        !provider_id_valid(provider_item_id) || !snag_text_valid(text, 1u, SNAG_MAX_PUBLIC_ITEM))
+        !snag_provider_id_valid(provider_item_id) || !snag_text_valid(text, 1u, SNAG_MAX_PUBLIC_ITEM))
         return snag_errno(EINVAL);
     if (snag_random_id(id) < 0) return -1;
     return append_item(graph, json_pack("{s:s,s:s,s:s,s:s,s:s}",
@@ -340,7 +340,7 @@ snag_response_graph_add_call(struct snag_response_graph *graph,
 {
     char id[SNAG_ID_HEX_LEN + 1u];
     json_t *value;
-    if (!provider_id_valid(provider_item_id) || !provider_id_valid(provider_call_id) ||
+    if (!snag_provider_id_valid(provider_item_id) || !snag_provider_id_valid(provider_call_id) ||
         !tool_name_valid(name) || !arguments_bounded(arguments)) {
         json_decref(arguments);
         return snag_errno(EINVAL);
@@ -388,14 +388,14 @@ snag_response_graph_classify(const struct snag_response_graph *graph, struct sna
     size_t bad_index = 0;
 
     memset(decision, 0, sizeof(*decision));
-    if (!provider_id_valid(graph->provider_response_id) || graph->count > SNAG_MAX_RESPONSE_ITEMS)
+    if (!snag_provider_id_valid(graph->provider_response_id) || graph->count > SNAG_MAX_RESPONSE_ITEMS)
         return snag_fail(error, error_size, EINVAL, "response graph has no valid response id");
     if (identifiers_valid(graph, error, error_size) < 0) return -1;
     for (size_t i = 0; i < graph->count; ++i) {
         struct snag_response_item view = snag_response_graph_item(graph, i);
         const struct snag_response_item *item = &view;
         bad_index = i;
-        if (!provider_id_valid(item->provider_item_id)) {
+        if (!snag_provider_id_valid(item->provider_item_id)) {
             return snag_fail(error, error_size, EINVAL, "response item %zu has invalid identity", i);
         }
         if (!item_valid(json_array_get(graph->items, i))) goto bad_item;

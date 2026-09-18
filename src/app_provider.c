@@ -43,6 +43,7 @@ int snag_fixture_response(const char *prompt, const json_t *steering, const json
                          const char *workspace, unsigned int cycle,
                          const char *goal_prompt, uint64_t goal_turn_count,
                          snag_responses_emit_fn emit, snag_provider_pump_fn pump, void *opaque,
+                         snag_responses_hosted_fn hosted, void *hosted_opaque,
                          struct snag_response_graph *graph, struct snag_provider_failure *failure,
                          char *error, size_t error_size);
 int snag_fixture_tool(const struct snag_response_item *call, snag_provider_pump_fn pump, void *pump_opaque,
@@ -99,6 +100,44 @@ snag_app_exact_count_enabled(enum snag_token_count_mode mode, enum snag_count_ca
 {
     return mode == SNAG_TOKEN_COUNT_STRICT || (mode == SNAG_TOKEN_COUNT_AUTO &&
          capability != SNAG_COUNT_UNSUPPORTED);
+}
+
+/* Hosted search is executed by the provider; journal and render it as a tool
+ * row without ever treating it as a local call the dispatcher could run. */
+static int
+hosted_search_activity(void *opaque, bool started, const char *item_id, const char *status,
+                       const json_t *action, const json_t *sources)
+{
+    struct app_state *app = opaque;
+    char error[256] = {0};
+    const char *turn_id = app->session.active_turn_id;
+    json_t *data;
+    int rc;
+
+    if (!turn_id[0]) return snag_errno(EPROTO);
+    if (!(data = json_object()) ||
+        json_object_set_new(data, "item_id", json_string(item_id)) < 0 ||
+        json_object_set_new(data, "turn_id", json_string(turn_id)) < 0) {
+        json_decref(data);
+        return snag_errno(errno ? errno : ENOMEM);
+    }
+    if (started) {
+        /* The callback lends its values; the event owns its own copies. */
+        if (action && json_object_set_new(data, "action", json_deep_copy(action)) < 0) {
+            json_decref(data);
+            return snag_errno(errno ? errno : ENOMEM);
+        }
+    } else {
+        if (json_object_set_new(data, "status",
+                                json_string(status && status[0] ? status : "unknown")) < 0 ||
+            (sources && json_object_set_new(data, "sources", json_deep_copy(sources)) < 0)) {
+            json_decref(data);
+            return snag_errno(errno ? errno : ENOMEM);
+        }
+    }
+    rc = snag_app_commit_event(app, started ? "hosted_search_started" : "hosted_search_finished",
+                               data, error, sizeof(error));
+    return rc < 0 ? snag_errno(errno ? errno : EIO) : 0;
 }
 
 #ifndef SNAJPAGENT_TEST_FIXTURE
@@ -262,7 +301,7 @@ snag_app_provider_run(struct app_state *app, const char *prompt, const json_t *s
     return snag_fixture_response(prompt, steering, create_request, app->session.workspace, cycle,
                                 app->session.goal_prompt, app->session.goal_turn_count,
                                 snag_app_stream_public, snag_app_active_input_pump,
-                                app, graph, failure, error, error_size);
+                                app, hosted_search_activity, app, graph, failure, error, error_size);
 #else
     (void)prompt;
     (void)steering;
@@ -270,7 +309,8 @@ snag_app_provider_run(struct app_state *app, const char *prompt, const json_t *s
     if (retry_count) *retry_count = 0u;
     return snag_provider_responses_create((struct snag_provider_connection){
         app->config, app->turn_provider, credential, &app->ui, snag_app_provider_input_pump, app, app->session.id},
-        create_request, snag_app_stream_public, app, graph, failure, error, error_size, retry_count);
+        create_request, snag_app_stream_public, app, hosted_search_activity, app,
+        graph, failure, error, error_size, retry_count);
 #endif
 }
 

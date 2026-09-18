@@ -76,7 +76,8 @@ int snag_provider_responses_compact(struct snag_provider_connection connection,
 
 int snag_provider_responses_create(struct snag_provider_connection connection,
                                   const json_t *request, snag_responses_emit_fn emit,
-                                  void *emit_opaque, struct snag_response_graph *graph,
+                                  void *emit_opaque, snag_responses_hosted_fn hosted,
+                                  void *hosted_opaque, struct snag_response_graph *graph,
                                   struct snag_provider_failure *failure, char *error, size_t error_size,
                                   unsigned int *retry_count);
 

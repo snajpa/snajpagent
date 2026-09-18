@@ -1088,6 +1088,111 @@ test_typeless_and_non_object_records_rejected(void)
     snag_responses_stream_free(&stream);
 }
 
+struct hosted_capture {
+    size_t calls;
+    bool started[4];
+    char item_id[4][64], status[4][64], query[4][128];
+    size_t sources[4];
+};
+
+static int
+capture_hosted(void *opaque, bool started, const char *item_id, const char *status,
+               const json_t *action, const json_t *sources)
+{
+    struct hosted_capture *capture = opaque;
+    size_t index = capture->calls;
+    const char *query = snag_json_string(action, "query");
+
+    if (index >= 4u) return snag_errno(EOVERFLOW);
+    capture->started[index] = started;
+    (void)snprintf(capture->item_id[index], sizeof(capture->item_id[index]), "%s", item_id);
+    if (status) (void)snprintf(capture->status[index], sizeof(capture->status[index]), "%s", status);
+    if (query) (void)snprintf(capture->query[index], sizeof(capture->query[index]), "%s", query);
+    capture->sources[index] = json_array_size(sources);
+    ++capture->calls;
+    return 0;
+}
+
+static int
+parse_hosted(const char *wire, struct parsed_stream *parsed, struct hosted_capture *hosted)
+{
+    struct snag_responses_stream responses;
+    struct snag_sse_parser sse;
+    size_t len = strlen(wire);
+    int rc = 0;
+
+    snag_responses_stream_init(&responses, capture_emit, parsed);
+    snag_responses_stream_set_hosted(&responses, capture_hosted, hosted);
+    snag_sse_init(&sse, snag_responses_sse_record, &responses);
+    for (size_t offset = 0u; offset < len && rc == 0;) {
+        size_t take = 23u;
+        if (take > len - offset) take = len - offset;
+        rc = snag_sse_feed(&sse, wire + offset, take, parsed->error, sizeof(parsed->error));
+        offset += take;
+    }
+    if (rc == 0) rc = snag_sse_finish(&sse, parsed->error, sizeof(parsed->error));
+    if (rc == 0)
+        rc = snag_responses_stream_finish(&responses, &parsed->graph,
+                                          parsed->error, sizeof(parsed->error));
+    else if (responses.failed)
+        (void)snprintf(parsed->error, sizeof(parsed->error), "%s", snag_responses_stream_error(&responses));
+    snag_sse_free(&sse);
+    snag_responses_stream_free(&responses);
+    return rc;
+}
+
+static void
+test_hosted_search_activity(void)
+{
+    /* OpenAI-style item: the action arrives with the added snapshot. */
+    static const char openai_wire[] =
+        "event: response.created\n"
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_hosted\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "event: response.output_item.added\n"
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"ws_1\",\"type\":\"web_search_call\",\"status\":\"in_progress\",\"action\":{\"type\":\"search\",\"query\":\"selinux 6.18\"}}}\n\n"
+        "event: response.web_search_call.searching\n"
+        "data: {\"type\":\"response.web_search_call.searching\",\"output_index\":0,\"item_id\":\"ws_1\"}\n\n"
+        "event: response.output_item.done\n"
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"ws_1\",\"type\":\"web_search_call\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"selinux 6.18\"},\"sources\":[{\"type\":\"url\",\"url\":\"https://example.test/selinux\"}]}}\n\n"
+        "event: response.completed\n"
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_hosted\",\"status\":\"completed\",\"output\":[]}}\n\n";
+    /* OpenRouter-style item: query and sources arrive only at completion. */
+    static const char openrouter_wire[] =
+        "event: response.created\n"
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_openrouter\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "event: response.output_item.added\n"
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"openrouter:web_search\",\"id\":\"ws_tmp_abc123\",\"status\":\"in_progress\"}}\n\n"
+        "event: response.output_item.done\n"
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"openrouter:web_search\",\"id\":\"ws_tmp_abc123\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"example domains\",\"sources\":[{\"type\":\"url\",\"url\":\"https://example.com\"}]}}}\n\n"
+        "event: response.completed\n"
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_openrouter\",\"status\":\"completed\",\"output\":[]}}\n\n";
+    struct parsed_stream parsed = parsed_new(1024u);
+    struct hosted_capture hosted = {0};
+
+    assert(parse_hosted(openai_wire, &parsed, &hosted) == 0);
+    assert(parsed.calls == 0u);
+    assert(parsed.graph.count == 0u);
+    assert(hosted.calls == 2u);
+    assert(hosted.started[0] && strcmp(hosted.item_id[0], "ws_1") == 0 &&
+           strcmp(hosted.query[0], "selinux 6.18") == 0 &&
+           strcmp(hosted.status[0], "in_progress") == 0);
+    assert(!hosted.started[1] && strcmp(hosted.item_id[1], "ws_1") == 0 &&
+           strcmp(hosted.status[1], "completed") == 0 &&
+           strcmp(hosted.query[1], "selinux 6.18") == 0 && hosted.sources[1] == 1u);
+    parsed_free(&parsed);
+
+    memset(&hosted, 0, sizeof(hosted));
+    parsed = parsed_new(1024u);
+    assert(parse_hosted(openrouter_wire, &parsed, &hosted) == 0);
+    assert(parsed.calls == 0u && parsed.graph.count == 0u);
+    assert(hosted.calls == 2u);
+    assert(hosted.started[0] && strcmp(hosted.item_id[0], "ws_tmp_abc123") == 0 &&
+           strcmp(hosted.query[0], "example domains") == 0);
+    assert(!hosted.started[1] && strcmp(hosted.status[1], "completed") == 0 &&
+           hosted.sources[1] == 1u);
+    parsed_free(&parsed);
+}
+
 int
 main(void)
 {
@@ -1112,6 +1217,7 @@ main(void)
     test_public_stream(4u);
     test_public_stream(5u);
     test_inert_only_response_has_empty_graph();
+    test_hosted_search_activity();
     test_function_call_arguments();
     test_refusal();
     test_invalid_call_after_public_item();

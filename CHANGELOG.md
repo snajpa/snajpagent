@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Show provider-hosted web searches as private rollout tool rows. A `web_search`
+  item records a start row carrying the search action and query, then a finish
+  row carrying the provider's terminal status and retained source URLs, at the
+  existing tool-row detail levels, live and on resume. Hosted search remains
+  provider-executed: it is never a local call, cannot be vetoed, and the rows
+  never enter the local dispatch graph or the model's context.
+
 - `/model cache` refreshes the catalogue and reports the new timestamp without
   printing the listing; `/model` and `/model list` display the catalogue.
 

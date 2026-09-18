@@ -1627,6 +1627,34 @@ def run_tool_case(binary, root):
         terminal.exit()
 
 
+def run_hosted_search_case(binary, root):
+    """A provider-executed search is journaled and displayed as tool rows."""
+    case = root / "hosted-search"
+    with TmuxTerminal.fixture(binary, case, 100, 24) as terminal:
+        terminal.wait(DEFAULT_IDLE_PROMPT)
+        terminal.submit_wait("/verbose 1", "verbosity: 1")
+        screen = terminal.submit_wait("hosted_search", "hosted search complete",
+                                      join_wrapped=True)
+        assert_order(screen, [
+            "searching the fixture web",
+            "→ web_search [ws_fixtu]",
+            '"query":"selinux 6.18"',
+            "← web_search [ws_fixtu]  completed · 1 source",
+        ])
+        _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
+        started = event_list(events, "hosted_search_started")
+        finished = event_list(events, "hosted_search_finished")
+        if len(started) != 1 or len(finished) != 1:
+            raise AssertionError(f"hosted search events: {started} {finished}")
+        if started[0]["data"].get("action", {}).get("query") != "selinux 6.18":
+            raise AssertionError(f"hosted start action: {started[0]}")
+        if finished[0]["data"].get("status") != "completed":
+            raise AssertionError(f"hosted finish status: {finished[0]}")
+        if finished[0]["data"].get("sources") != ["https://example.test/selinux"]:
+            raise AssertionError(f"hosted finish sources: {finished[0]}")
+        terminal.exit()
+
+
 def wait_idle_prompt_at_bottom(terminal, prompt, timeout=5.0):
     return terminal.wait_until(
         lambda screen: screen.rstrip().endswith(prompt.rstrip()),
@@ -2969,6 +2997,7 @@ def run_fixture(binary, workspace, root):
     run_queue_case(binary, root)
     run_tool_spinner_delay_case(binary, root)
     run_tool_case(binary, root)
+    run_hosted_search_case(binary, root)
     run_retained_composer_case(binary, root)
     run_lifecycle_case(binary, root)
     run_draft_navigation_case(binary, root)
