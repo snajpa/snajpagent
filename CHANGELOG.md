@@ -28,6 +28,10 @@
   secret-value ceilings. Additional protected values are retained on demand;
   source syntax, length, and resolution rules are unchanged.
 
+- Remove the model-alias (128), reasoning-effort (32), and spinner-frame (16)
+  ceilings. Configuration parsing and prompt rendering accept any count
+  bounded by the existing file, text, and per-entry limits.
+
 - Show provider-hosted web searches as private rollout tool rows. A `web_search`
   item records a start row carrying the search action and query, then a finish
   row carrying the provider's terminal status and retained source URLs, at the

@@ -524,6 +524,16 @@ test_prompt_spinners(void)
     assert(snag_term_set_prompt_template(&term, false, oversized, wide, 8u, 0u) < 0);
     assert(memcmp(saved, term.label, sizeof(saved)) == 0);
     {
+        /* Frame capacity follows the spinner string; the former 16-frame cap
+         * is gone, so a longer sequence is accepted and fully retained. */
+        const char *many[SNAG_TERM_SPINNER_COUNT] = {"\\0abcdefghijklmnopqrstuvwxyz0123", " ", "\\0"};
+
+        assert(snag_term_set_prompt_template(&term, false, prompt, many, 8u, 0u) == 0);
+        assert(term.spinner[SNAG_TERM_SPINNER_GOAL].frame_count == 30u);
+        assert(snag_term_set_spinner_states(&term, 1u << SNAG_TERM_SPINNER_GOAL) == 0);
+        assert(strcmp(term.label, "xa >") == 0);
+    }
+    {
         const char padded[] = "\xfd\xfe  9%> ";
         const char *stable[] = {" ⚑", " P", " ⠋"};
         const char *compact[] = {"\\0◆", "\\0P", "\\0T"};

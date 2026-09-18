@@ -85,17 +85,16 @@ test_configured_efforts(const char *path)
         write_bytes(path, text, (size_t)n);
         expect_invalid(path);
     }
-    for (size_t count = SNAG_CONFIG_EFFORTS_MAX; count <= SNAG_CONFIG_EFFORTS_MAX + 1u; ++count) {
+    for (size_t count = 32u; count <= 64u; count += 32u) {
         char text[4096];
         size_t used = (size_t)snprintf(text, sizeof(text), "[provider p]\n[model-limit p/m]\nreasoning_efforts=[");
         for (size_t i = 0; i < count; ++i)
             used += (size_t)snprintf(text + used, sizeof(text) - used, "%s\"effort-%zu\"", i ? "," : "", i);
         used += (size_t)snprintf(text + used, sizeof(text) - used, "]\n");
         write_bytes(path, text, used);
-        if (count == SNAG_CONFIG_EFFORTS_MAX) {
-            load_config(&config, path, NULL);
-            snag_config_free(&config);
-        } else expect_invalid(path);
+        load_config(&config, path, NULL);
+        assert(json_array_size(config.model_limits[0].reasoning_efforts) == count);
+        snag_config_free(&config);
     }
     for (size_t len = SNAG_CONFIG_EFFORT_MAX - 1u; len <= SNAG_CONFIG_EFFORT_MAX; ++len) {
         char text[512], effort[SNAG_CONFIG_EFFORT_MAX + 1u];
@@ -472,6 +471,48 @@ test_io_rules(const char *path)
 }
 
 static void
+test_many_model_aliases(const char *path)
+{
+    struct snag_config config;
+    char text[16384];
+    size_t used = 0u;
+
+    used += (size_t)snprintf(text + used, sizeof(text) - used, "[provider p]\n");
+    for (unsigned int i = 0u; i < 140u; ++i)
+        used += (size_t)snprintf(text + used, sizeof(text) - used,
+                                 "[model-alias p/m%u]\nmodel=upstream-%u\n", i, i);
+    write_bytes(path, text, used);
+    load_config(&config, path, NULL);
+    assert(config.provider_count == 1u);
+    assert(config.providers[0].model_count == 140u);
+    snag_config_free(&config);
+}
+
+static void
+test_spinner_frames(const char *path)
+{
+    char value[128];
+    size_t used;
+
+    /* The frame count follows the value's byte bound; the former 16-frame
+     * ceiling is gone, so a longer sequence must load. */
+    used = (size_t)snprintf(value, sizeof(value), "\"\\0");
+    for (unsigned int i = 0u; i < 40u; ++i)
+        used += (size_t)snprintf(value + used, sizeof(value) - used, "%c", (char)('a' + i % 26u));
+    used += (size_t)snprintf(value + used, sizeof(value) - used, "\"");
+    assert(used < sizeof(value));
+    expect_ui(path, "prompt_spinner_goal", value, true);
+
+    /* The per-entry string bound still rejects an over-long sequence. */
+    used = (size_t)snprintf(value, sizeof(value), "\"\\0");
+    for (unsigned int i = 0u; i < 67u; ++i)
+        used += (size_t)snprintf(value + used, sizeof(value) - used, "%c", (char)('a' + i % 26u));
+    used += (size_t)snprintf(value + used, sizeof(value) - used, "\"");
+    assert(used < sizeof(value));
+    expect_ui(path, "prompt_spinner_goal", value, false);
+}
+
+static void
 test_many_config_secrets(const char *path)
 {
     struct snag_config config;
@@ -741,7 +782,7 @@ main(void)
     } ui_cases[] = {
         {"prompt_spinner_goal", "\"\\0\"", true}, {"prompt_spinner_goal", "\" \"", true},
         {"prompt_spinner_goal", "\"\\0◆\"", true}, {"prompt_spinner_goal", "\"\\0abcdefghijklmnop\"", true},
-        {"prompt_spinner_goal", "\"\\0abcdefghijklmnopq\"", false}, {"prompt_spinner_goal", "\"\"", false},
+        {"prompt_spinner_goal", "\"\\0abcdefghijklmnopq\"", true}, {"prompt_spinner_goal", "\"\"", false},
         {"prompt_spinner_goal", "unquoted", false}, {"prompt_spinner_goal", "\" aab\"", false},
         {"prompt_spinner_goal", "\"\\0" "\xcc\x81" "\"", false},
         {"prompt_spinner_goal", "\"\\0" "\xe2\x80\x8b" "\"", false},
@@ -941,6 +982,8 @@ main(void)
 
     test_layered_limits_and_secrets(path);
     test_many_config_secrets(path);
+    test_many_model_aliases(path);
+    test_spinner_frames(path);
     assert(unlink(path) == 0);
     free(temp);
     puts("test_config: ok");

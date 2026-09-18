@@ -2088,9 +2088,9 @@ Reload configuration with /config or start a new process to apply an edited
 list. Invalid lists reject the reload while preserving the active configuration.
 Existing turn/session effort preferences remain unchanged until selected again.
 .SS "model-alias PROVIDER/NAME"
-Up to 128 declarations are accepted. The local name uses the provider-name
-syntax. The required model key is a literal upstream model ID. These declarations
-define ordinary provider-local models with independent limits; several names
+The local name uses the provider-name syntax. The required model key is a
+literal upstream model ID. These declarations define ordinary provider-local
+models with independent limits; several names
 may route to the same upstream model. Targets never resolve recursively.
 Selection, sessions and limits use the local name; provider requests use the
 upstream ID. Upstream names do not add another limit-rule matching tier.
@@ -2243,8 +2243,9 @@ therefore reserves a stable column, while
 .B \(dq\e0\(dq
 removes a present field and
 .B \(dq\e0⚑\(dq
-appears only while active.  Zero through 16 remaining one-column items are
-active frames.  One active frame is static and schedules no periodic refresh;
+appears only while active.  The remaining one-column items are active frames,
+bounded only by the value's byte limit.  One active frame is static and
+schedules no periodic refresh;
 two or more animate.  Adjacent active frames must differ.  A blank active
 frame still occupies one column.  Omit a placeholder to remove it in one mode.
 Literal spaces are never trimmed, and numeric padding never restores an absent
