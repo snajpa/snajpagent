@@ -717,9 +717,8 @@ test_secret_snapshot_rotation(void)
     static const char body[] = "{\"text\":\"old-protected new-protected literal-protected\"}";
 
     snag_config_init(&config);
-    config.secret_count = 2u;
-    assert(snag_secret_source_parse(&config.secrets[0], "${SNAG_ROTATING_SECRET}", NULL, error, sizeof(error)) == 0);
-    assert(snag_secret_source_parse(&config.secrets[1], "\"literal-protected\"", NULL, error, sizeof(error)) == 0);
+    assert(snag_config_add_secret(&config, "${SNAG_ROTATING_SECRET}", NULL, error, sizeof(error)) == 0);
+    assert(snag_config_add_secret(&config, "\"literal-protected\"", NULL, error, sizeof(error)) == 0);
     assert(setenv("SNAG_ROTATING_SECRET", "old-protected", 1) == 0);
     assert(snag_secret_set_build(&secrets, &config, NULL, error, sizeof(error)) == 0);
     assert(setenv("SNAG_ROTATING_SECRET", "new-protected", 1) == 0);
@@ -749,8 +748,7 @@ test_secret_snapshot_rotation(void)
     snag_buf_free(&result);
     snag_secret_set_free(&secrets);
     snag_config_init(&config);
-    config.secret_count = 1u;
-    assert(snag_secret_source_parse(&config.secrets[0], "${SNAG_ROTATING_SECRET}", NULL, error, sizeof(error)) == 0);
+    assert(snag_config_add_secret(&config, "${SNAG_ROTATING_SECRET}", NULL, error, sizeof(error)) == 0);
     assert(snag_secret_set_build(&secrets, &config, NULL, error, sizeof(error)) < 0);
     snag_secret_set_free(&secrets);
     snag_config_free(&config);
@@ -948,6 +946,26 @@ test_command_argument_feedback(void)
     snag_config_free(&config);
 }
 
+static void
+test_many_secret_sources(void)
+{
+    struct snag_config config;
+    struct snag_secret_set secrets = {0};
+    char error[256] = {0};
+    char value[64];
+
+    snag_config_init(&config);
+    for (unsigned int i = 0u; i < 140u; ++i) {
+        (void)snprintf(value, sizeof(value), "\"many-secret-%u\"", i);
+        assert(snag_config_add_secret(&config, value, NULL, error, sizeof(error)) == 0);
+    }
+    assert(config.secret_count == 140u);
+    assert(snag_secret_set_build(&secrets, &config, NULL, error, sizeof(error)) == 0);
+    assert(secrets.wire.count >= 140u);
+    snag_secret_set_free(&secrets);
+    snag_config_free(&config);
+}
+
 int
 main(void)
 {
@@ -975,6 +993,7 @@ main(void)
     test_provider_secret_removed_from_environment();
     test_all_provider_secrets_removed_and_redacted();
     test_secret_snapshot_rotation();
+    test_many_secret_sources();
     test_apply_patch_rejects_null_result();
     test_provider_secret_redacted("printf secret-value-for-test");
     test_provider_secret_redacted("printf '%8190ssecret-value-for-test' ''");

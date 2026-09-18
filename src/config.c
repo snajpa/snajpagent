@@ -130,6 +130,31 @@ snag_config_init(struct snag_config *config)
     config->max_output_bytes = 0u;
 }
 
+int
+snag_config_add_secret(struct snag_config *config, const char *value, const char *source_path,
+                       char *error, size_t error_size)
+{
+    struct snag_secret_source *grown;
+
+    if (!config || !value) return snag_errno(EINVAL);
+    if (config->secret_count == config->secret_capacity) {
+        size_t capacity = config->secret_capacity ? config->secret_capacity * 2u : 8u;
+        if (capacity < config->secret_capacity) return snag_errno(EOVERFLOW);
+        grown = realloc(config->secrets, capacity * sizeof(*grown));
+        if (!grown) return snag_errno(ENOMEM);
+        config->secrets = grown;
+        config->secret_capacity = capacity;
+    }
+    memset(&config->secrets[config->secret_count], 0, sizeof(config->secrets[0]));
+    if (snag_secret_source_parse(&config->secrets[config->secret_count], value, source_path,
+                                 error, error_size) < 0) {
+        snag_secret_source_free(&config->secrets[config->secret_count]);
+        return -1;
+    }
+    ++config->secret_count;
+    return 0;
+}
+
 void
 snag_config_free(struct snag_config *config)
 {
@@ -142,6 +167,7 @@ snag_config_free(struct snag_config *config)
     for (size_t i = 0; i < config->model_limit_count; ++i)
         json_decref(config->model_limits[i].reasoning_efforts);
     for (size_t i = 0; i < config->secret_count; ++i) snag_secret_source_free(&config->secrets[i]);
+    free(config->secrets);
     memset(config, 0, sizeof(*config));
 }
 
@@ -738,10 +764,7 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
             return 0;
         }
         if (!strcmp(key, "secret")) {
-            if (config->secret_count >= SNAG_CONFIG_SECRET_MAX ||
-                snag_secret_source_parse(&config->secrets[config->secret_count], value,
-                                           config->source_path, NULL, 0) < 0) goto invalid;
-            ++config->secret_count;
+            if (snag_config_add_secret(config, value, config->source_path, NULL, 0u) < 0) goto invalid;
             return 0;
         }
         break;

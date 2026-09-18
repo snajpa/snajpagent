@@ -42,16 +42,18 @@ test_json(void)
     snag_buf_free(&out);
 }
 
+#define TEST_SECRET_COUNT 140u
+
 static void
 test_max_secret_count(void)
 {
-    char values[SNAG_WIRE_SECRET_COUNT_MAX][16];
-    const char *secrets_array[SNAG_WIRE_SECRET_COUNT_MAX];
-    struct snag_wire_secrets secrets = {secrets_array, SNAG_WIRE_SECRET_COUNT_MAX};
+    char values[TEST_SECRET_COUNT][16];
+    const char *secrets_array[TEST_SECRET_COUNT];
+    struct snag_wire_secrets secrets = {secrets_array, TEST_SECRET_COUNT};
     static const unsigned char body[] = "{\"text\":\"secret-80\"}";
     char error[256];
 
-    for (size_t i = 0; i < SNAG_WIRE_SECRET_COUNT_MAX; ++i) {
+    for (size_t i = 0; i < TEST_SECRET_COUNT; ++i) {
         assert(snprintf(values[i], sizeof(values[i]), "secret-%02zu", i) > 0);
         secrets_array[i] = values[i];
     }
