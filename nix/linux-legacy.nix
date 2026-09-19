@@ -128,6 +128,15 @@ let
     # without compiling the unusable POSIX async backend.
     openssl = previous.openssl.overrideAttrs (old: {
       configureFlags = (old.configureFlags or [ ]) ++ [ "no-async" ];
+      # On 32-bit Linux, OpenSSL's allocator regression deliberately requests
+      # exactly 2 GiB and expects an OOM result.  With host overcommit and no
+      # address-space limit, old static uClibc returns a virtual mapping, which
+      # invalidates the test's OOM/count contract and later segfaults.  Keep the
+      # complete check suite, but give it a virtual-memory limit one KiB below
+      # that test allocation so the target allocator sees the intended OOM.
+      preCheck = (old.preCheck or "") + ''
+        ulimit -v 2097151
+      '';
       # The four enabled TLS/DTLS client/server corpus tests supply a
       # deterministic time() shim. Static uClibc exports time from libc.a, so
       # wrap only these test-local references around their shims; retain every
