@@ -103,6 +103,9 @@ int snag_irc_configure(struct snag_irc *irc, const struct snag_config *config,
 /* Observed owner roles, including owners still connecting or retrying. */
 void snag_irc_roles(const struct snag_irc *irc, struct snag_config *config);
 uint64_t snag_irc_routing_revision(const struct snag_irc *irc);
+/* Monotonic count of destination-set mutations; advances when an owner view,
+ * room, target or endpoint changes, and when owners are added or removed. */
+uint64_t snag_irc_destinations_generation(const struct snag_irc *irc);
 int snag_irc_state(const struct snag_irc *irc, struct snag_buf *out, char *error, size_t error_size);
 int snag_irc_tick(struct snag_irc *irc, int timeout_ms, char *error, size_t error_size);
 int snag_irc_snapshot(const struct snag_irc *irc, struct snag_buf *out, char *error, size_t error_size);

@@ -640,6 +640,16 @@ The composer consumes admitted parts after journal commit, while later draft par
 remain unsent. Voice handoffs arm the existing queue through its durable
 `future_queue_state` event; the voice owner does not execute coding work.
 
+Voice resolves optional audio preferences against the selected provider. Native
+Codex subscriptions and codex-lb use call creation, WebRTC media and a call-bound
+sideband; public Realtime uses its API-key WebSocket session. `voice_rtc.c` wraps
+libdatachannel and Opus. Its encoded queue handles packet reordering; the device
+ring controls playback timing. Native delegations enter the coding queue only
+after their matching user turn has a finalized transcript. Captions use stable
+turn identities, and barge-in clears queued playback before new output is admitted.
+Provider credentials stay with the voice connection owner. Account, endpoint and
+billing route are fixed for that connection.
+
 `base64.c/h` encodes incrementally into a synchronous byte sink with no allocation,
 files, JSON, process or device dependency. It retains at most two pending input
 bytes and uses a 256-byte output block. Finalization supplies padding exactly

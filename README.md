@@ -150,12 +150,13 @@ Use `/attach PATH` to stage an image, inspect the staged list with
 Office or text documents, sample a video interval, or transcribe an audio file;
 accepted originals and prepared results stay with the saved session.
 
-With an audio provider configured, `/dictate` places a microphone transcript in
-your editable draft and `/play asset:ID` plays a retained audio asset.
-`/voice on` starts a realtime conversation alongside the coding queue,
-`/voice mute` pauses microphone forwarding, and `/voice off` stops voice;
-capture starts only through an explicit local command. Use a headset for duplex
-voice. The configured audio API receives speech and bills it separately; the
+`/dictate` inserts speech into your editable draft. `/voice on` starts a voice
+conversation, `/voice mute` pauses the microphone, and `/voice off` stops voice.
+These commands use the selected provider and its credentials: a Codex subscription,
+codex-lb, or a compatible BYOK provider. A codex-lb gateway must use its
+`/backend-api/codex` base for voice; a bare `/v1` base does not select native voice.
+Use a headset for duplex voice.
+`/play asset:ID` plays a saved audio asset. The
 [manual](https://agent.snajpa.net/manual.html) covers provider setup, selectors,
 data destinations and capture controls.
 
@@ -416,7 +417,7 @@ native pthread ABIs; see the [platform notes](DEPENDENCIES.md). Plain `make`
 builds only the host platform.
 
 Without configuration or credentials, the first interactive launch offers
-ChatGPT/Codex subscription, OpenRouter, OpenAI or custom-provider setup;
+ChatGPT/Codex or Meta subscription, OpenRouter, OpenAI or custom-provider setup;
 authenticate and choose a [supported model](#supported-providers). `snajpagent login status`
 reports local credential sources without contacting a provider, and the manual
 explains login methods and logout.
@@ -471,7 +472,7 @@ implementation. GPL-2.0-only; see [COPYING](COPYING).
 
 ## Supported providers
 
-Supported connections: OpenAI, ChatGPT/Codex subscription, OpenRouter, and custom
+Supported connections: OpenAI, ChatGPT/Codex and Meta subscriptions, OpenRouter, and custom
 providers with an OpenAI-compatible Responses API.
 
 - **OpenAI GPT-5+:** recommended; the only model family thoroughly tested with

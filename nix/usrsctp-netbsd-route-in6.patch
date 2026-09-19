@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# usrsctp: NetBSD 2.x userland defines struct route_in6 (netinet6/in6.h);
+# exclude the shim definition for that class (10.1 lacks it and keeps the shim).
+--- a/usrsctplib/user_ip6_var.h
++++ b/usrsctplib/user_ip6_var.h
+@@ -93,7 +93,12 @@
+ #define s6_addr32 __u6_addr.__u6_addr32
+ #endif
+ 
+-#if !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__DragonFly__)
++#if defined(__NetBSD__)
++#include <sys/param.h>	/* __NetBSD_Version__ */
++#endif
++/* NetBSD 2.x userland provides struct route_in6; do not redefine it. */
++#if !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__DragonFly__) && \
++    !(defined(__NetBSD__) && __NetBSD_Version__ < 300000000)
+ struct route_in6 {
+ 	struct	rtentry *ro_rt;
+ 	struct	llentry *ro_lle;

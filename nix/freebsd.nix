@@ -11,6 +11,12 @@ let
   compiler = if legacy then "${oldCompiler}/bin/clang" else "${llvm.clang-unwrapped}/bin/clang";
   cxxCompiler = if legacy then "${oldCompiler}/bin/clang++" else "${llvm.clang-unwrapped}/bin/clang++";
   tools = "${llvm.llvm}/bin";
+  legacyRt = pkgs.runCommand "legacyrt-freebsd-${osVersion}" {} ''
+    mkdir -p $out/lib
+    ${compiler} --target=${target} --sysroot=${sdk} -Os -fno-stack-protector \
+      -c ${./legacy-rt-shim.c} -o legacyrt.o
+    ${tools}/llvm-ar rcs $out/lib/liblegacyrt.a legacyrt.o
+  '';
   sdk = pkgs.stdenvNoCC.mkDerivation {
     pname = "freebsd-amd64-sysroot";
     version = osVersion;
@@ -167,6 +173,16 @@ let
     inherit pkgs autotoolsLibrary cflags llvm osVersion;
     os = "freebsd";
   };
+  voiceRtc = import ./voice-rtc-cross.nix {
+    inherit pkgs cmakeLibrary tls; sourcePkgs = sourcePkgs;
+    # Both FreeBSD SDKs' net/if.h need struct sockaddr complete first.
+    rtcPatches = [ ./libdatachannel-bsd-sockaddr.patch ] ++ lib.optional legacy ./libdatachannel-legacy-round.patch;
+    # Both FreeBSD SDKs predate the libc timingsafe_bcmp; 5.1 also lacks
+    # TAILQ_FOREACH_SAFE.
+    sctpPatches = [ ./usrsctp-legacy-timingsafe.patch ./usrsctp-legacy-arc4random.patch ./usrsctp-bsd-tailq-safe.patch ];
+    cxxFlags = "${cflags} -stdlib=libstdc++ -pthread${lib.optionalString early " -fno-use-cxa-atexit"}${lib.optionalString legacy " -fno-builtin-pow -fno-builtin-powf"} -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}";
+    cxxLibraries = "--ld-path=${llvm.lld}/bin/ld.lld -L${cxx}/lib";
+  };
   jansson = cmakeLibrary sourcePkgs.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF" "-DJANSSON_BUILD_DOCS=OFF"
     "-DJANSSON_WITHOUT_TESTS=ON" "-DJANSSON_EXAMPLES=OFF"
@@ -178,6 +194,8 @@ let
     postPatch = ''
       perl scripts/config.pl set MBEDTLS_THREADING_C
       perl scripts/config.pl set MBEDTLS_THREADING_PTHREAD
+      # libdatachannel uses the DTLS-SRTP API; enable it (PROTO_DTLS is on).
+      perl scripts/config.pl set MBEDTLS_SSL_DTLS_SRTP
       substituteInPlace library/net_sockets.c \
         --replace-fail 'fd >= FD_SETSIZE' '(unsigned int) fd >= FD_SETSIZE'
     '';
@@ -391,7 +409,7 @@ in {
       src = source;
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
-      buildInputs = [ jansson curl av xml archive ] ++ networkLibraries ++ lib.optional early regex
+      buildInputs = [ jansson curl av xml archive ] ++ voiceRtc.dependencies ++ networkLibraries ++ lib.optional early regex
         ++ [ pdf cxx png freetype expat fontconfig jpeg openjpeg ];
       enableParallelBuilding = true;
       dontConfigure = true;
@@ -420,6 +438,8 @@ in {
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson)${lib.optionalString early " -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"}"
           "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"
           "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale | sed -E 's/-l?(-l?)?pthread//g')"
+          "RTC_CFLAGS=${voiceRtc.cflags}"
+          "RTC_LIBS=${voiceRtc.libs} ${cxx}/lib/libstdc++.a -Wl,-Bdynamic -lm${lib.optionalString (!legacy) " -lgcc_s"} -Wl,-Bstatic"
           'MINIAUDIO_CFLAGS=-isystem ${miniaudio}'
           'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'
           'CXXFLAGS=-std=c++20 ${cflags}${lib.optionalString legacy " -U_XOPEN_SOURCE"}${lib.optionalString early " -fno-use-cxa-atexit"} -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
@@ -427,7 +447,7 @@ in {
           # The explicit archive bypasses Clang's reserved -lstdc++ rewriting.
           "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') ${cxx}/lib/libstdc++.a -Wl,-Bdynamic -lm${lib.optionalString (!legacy) " -lgcc_s"} -Wl,-Bstatic"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
-          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil${lib.optionalString early " ${compilerBuiltins}/lib/libclang_rt.builtins.a"} -Wl,-Bdynamic -l${threads}"
+          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil${lib.optionalString early " ${compilerBuiltins}/lib/libclang_rt.builtins.a"} -Wl,-Bdynamic -l${threads}${lib.optionalString legacy " ${legacyRt}/lib/liblegacyrt.a"}"
         )
       '';
       installPhase = ''

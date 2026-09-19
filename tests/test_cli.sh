@@ -781,6 +781,50 @@ assert len(turns()) == before
 print("CLI selectors and refresh ordering: ok")
 PYSELECTOR
 
+# -m accepts a catalogue row index (#N form too); out-of-range is a clean error.
+python3 - "$bin" "$root" <<'PYINDEX'
+import json, subprocess, sys
+from pathlib import Path
+binary, root = sys.argv[1], Path(sys.argv[2])
+state = root / "index-state"
+state.mkdir(mode=0o700)
+(state / "config.ini").write_text("[provider first]\n")
+(state / "models.json").write_text('{"providers": [{"base_url": "https://api.openai.com", "models": [{"count_capability": "unsupported", "default_effort": "low", "efforts": ["low"], "id": "m1", "limits": {"auto_compact_input_tokens": null, "context_window_tokens": null, "effective_context_window_percent": null, "input_context_window_tokens": null, "max_context_window_tokens": null, "max_input_tokens": null, "max_output_tokens": null}, "observed_hard_input_tokens": 0, "observed_input_tokens": 0, "observed_input_bytes": 0}, {"count_capability": "unsupported", "default_effort": "low", "efforts": ["low"], "id": "m2", "limits": {"auto_compact_input_tokens": null, "context_window_tokens": null, "effective_context_window_percent": null, "input_context_window_tokens": null, "max_context_window_tokens": null, "max_input_tokens": null, "max_output_tokens": null}, "observed_hard_input_tokens": 0, "observed_input_tokens": 0, "observed_input_bytes": 0}], "name": "first", "protocol": "openai"}], "schema_version": 1, "updated_at_ms": 1}')
+(state / "models.json").chmod(0o600)
+def run(*args, ok=True):
+    result = subprocess.run([binary, "--dotdir", str(state), *args],
+                            text=True, capture_output=True)
+    assert (result.returncode == 0) == ok, (args, result.returncode, result.stderr[-400:])
+    return result
+def new_triples(before):
+    out = []
+    for p in (state / "sessions").glob("*/events.jsonl"):
+        for line in p.read_text().splitlines():
+            e = json.loads(line)
+            if e["type"] == "turn_started" and e["data"]["turn_id"] not in before:
+                out.append(tuple(e["data"]["config"][k] for k in ("provider", "model", "effort")))
+    return out
+def known_turns():
+    ids = set()
+    for p in (state / "sessions").glob("*/events.jsonl"):
+        for line in p.read_text().splitlines():
+            e = json.loads(line)
+            if e["type"] == "turn_started":
+                ids.add(e["data"]["turn_id"])
+    return ids
+def check(spec, triple):
+    before = known_turns()
+    run("-m", spec, "-e", "--", "ping")
+    got = new_triples(before)
+    assert len(got) == 1, (spec, got)
+    assert got[0] == triple, (spec, got)
+check("2", ("first", "m2", "low"))
+check("#1", ("first", "m1", "low"))
+result = run("-m", "999", "-e", "--", "ping", ok=False)
+assert "not in the catalogue" in result.stderr, result.stderr[-400:]
+print("CLI model index selection: ok")
+PYINDEX
+
 # Resume command-line settings persist from the next turn onward.
 override_state="$root/override-state"
 mkdir -m 700 "$override_state"
@@ -797,6 +841,19 @@ turns = [event["data"]["config"] for event in events
 assert [turn["effort"] for turn in turns] == ["medium", "low", "low"]
 assert len([event for event in events if event["type"] == "model_selection_changed"]) == 1
 PY
+
+# Resume accepts options after the session id; bare follow-up still requires --.
+resume_opt_state="$root/resume-opt-state"
+mkdir -m 700 "$resume_opt_state"
+$bin --dotdir "$resume_opt_state" -e -- ping >/dev/null 2>"$root/resume-opt-seed.err"
+resume_opt_id=$(find "$resume_opt_state/sessions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
+out=$($bin --dotdir "$resume_opt_state" -e --resume "$resume_opt_id" --effort low -- ping 2>"$root/resume-opt.err")
+[ "$out" = pong ]
+expect_exit 2 $bin --dotdir "$resume_opt_state" -e --resume "$resume_opt_id" ping >"$root/resume-opt-bare.out" 2>"$root/resume-opt-bare.err"
+[ ! -s "$root/resume-opt-bare.out" ]
+grep -q 'resume follow-up must follow --' "$root/resume-opt-bare.err"
+out=$($bin --dotdir "$resume_opt_state" -e --resume "$resume_opt_id" -C "$root/work2" -- ping 2>"$root/resume-opt-relocate.err")
+[ "$out" = pong ]
 
 # Automatic compaction is threshold-gated and durable.
 auto_state="$root/auto-compact-state"

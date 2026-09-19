@@ -63,6 +63,19 @@ let
         done
       '';
     });
+  voiceRtc = import ./voice-rtc-cross.nix {
+    inherit pkgs cmakeLibrary tls; sourcePkgs = windows;
+    # mingw-aarch64 has no RTCD arm; presume NEON (mandatory on aarch64).
+    opusFlags = pkgs.lib.optional windows.stdenv.hostPlatform.isAarch64 "-DOPUS_MAY_HAVE_NEON=OFF";
+    # The presumed path needs the may-have prototypes/includes; RTCD stays out.
+    opusCflags = pkgs.lib.optionalString windows.stdenv.hostPlatform.isAarch64 "-DOPUS_ARM_MAY_HAVE_NEON -DOPUS_ARM_MAY_HAVE_NEON_INTR";
+    # usrsctp.h's _WIN32 fallback (no _MSC_VER) defines uint{8,16,32,64}_t
+    # macros; have it include "stdint.h" instead so libc++ sees real types.
+    # The escaped quotes survive CMake's cache and the ninja build lines that
+    # /bin/sh runs, so the compiler sees -DSCTP_STDINT_INCLUDE="stdint.h".
+    rtcFlags = [ "-DCMAKE_CXX_FLAGS=${"-DJUICE_STATIC "}-DSCTP_STDINT_INCLUDE=\\\"stdint.h\\\"${pkgs.lib.optionalString (pty != null) " -D_WIN32_WINNT=${winver} -DWINVER=${winver} -nostdinc++ -isystem ${pkgs.lib.getDev pty.cxx}/include/c++/v1"}" ];
+    rtcPatches = pkgs.lib.optional legacy ./libdatachannel-legacy-ai-flags.patch;
+  };
   jansson = cmakeLibrary windows.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF"
     "-DJANSSON_BUILD_DOCS=OFF"
@@ -80,6 +93,8 @@ let
     postPatch = ''
       perl scripts/config.pl set MBEDTLS_THREADING_C
       perl scripts/config.pl set MBEDTLS_THREADING_PTHREAD
+      # libdatachannel uses the DTLS-SRTP API; enable it (PROTO_DTLS is on).
+      perl scripts/config.pl set MBEDTLS_SSL_DTLS_SRTP
     '' + pkgs.lib.optionalString legacy ''
       substituteInPlace library/CMakeLists.txt \
         --replace-fail 'ws2_32 bcrypt' 'ws2_32 advapi32'
@@ -256,7 +271,7 @@ in {
     src = source;
     outputs = [ "out" "debug" ];
     nativeBuildInputs = [ windows.buildPackages.pkg-config ];
-    buildInputs = [ threads jansson curl regex av png pdf freetype jpeg openjpeg archive xml ] ++ networkLibraries
+    buildInputs = [ threads jansson curl regex av png pdf freetype jpeg openjpeg archive xml ] ++ voiceRtc.dependencies ++ networkLibraries
       ++ pkgs.lib.optionals (pty != null) [ pty.collector pty.cxx pty.unwind ];
     enableParallelBuilding = true;
     dontConfigure = true;
@@ -278,7 +293,7 @@ in {
         'WITH_OFFICE=0' 'WITH_OFFICE_COMMANDS=1'
         "CC=$CC" "CXX=$CXX" "STRIP=$STRIP" "OBJCOPY=$OBJCOPY"
         'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
-        'CPPFLAGS=-D_WIN32_WINNT=${winver} -DWINVER=${winver} -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"${pkgs.lib.optionalString (pty != null) " -DSNAG_LEGACY_PTY"}'
+        'CPPFLAGS=-D_WIN32_WINNT=${winver} -DWINVER=${winver} -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"${pkgs.lib.optionalString (pty != null) " -DSNAG_LEGACY_PTY -nostdinc++ -isystem ${pkgs.lib.getDev pty.cxx}/include/c++/v1"}'
         'CFLAGS=-std=c11 ${if debug then "-Og -g -fno-omit-frame-pointer" else "-Os -g -flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
         'LDFLAGS=-static -municode ${pkgs.lib.optionalString (!debug) "-flto"} -Wl,--gc-sections${pkgs.lib.optionalString legacy ",--major-os-version,5,--minor-os-version,${if arch == "x86_64" then "2" else "0"},--major-subsystem-version,5,--minor-subsystem-version,${if arch == "x86_64" then "2" else "0"}"}'
         "JANSSON_CFLAGS=$($PKG_CONFIG --cflags jansson)"
@@ -289,6 +304,8 @@ in {
         "AV_LIBS=$($PKG_CONFIG --static --libs libavformat libavcodec libavutil libswresample libswscale)"
         "PDF_CFLAGS=$($PKG_CONFIG --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')${pkgs.lib.optionalString (pty != null) " -nostdinc++ -isystem ${pkgs.lib.getDev pty.cxx}/include/c++/v1"}"
         "PDF_LIBS=$($PKG_CONFIG --static --libs poppler libpng)${if pty != null then " -L${pty.cxx}/lib -lc++ -L${pty.unwind}/lib -lunwind" else if windows.stdenv.cc.isClang then " -lc++" else " -lstdc++"}"
+        "RTC_CFLAGS=${voiceRtc.cflags}"
+        "RTC_LIBS=${voiceRtc.libs} ${if pty != null then "-L${pty.cxx}/lib -lc++ -L${pty.unwind}/lib -lunwind" else if windows.stdenv.cc.isClang then "-lc++" else "-lstdc++"}"
         'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}'
       )
     '';

@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# usrsctp: provide the TAILQ_FOREACH_SAFE/LIST_FOREACH_SAFE userspace
+# fallbacks wherever the SDK lacks them (FreeBSD 5.1, NetBSD 2.0, ...);
+# the inner #ifndefs keep this a no-op where the SDK provides them.
+--- a/usrsctplib/netinet/sctp_os_userspace.h
++++ b/usrsctplib/netinet/sctp_os_userspace.h
+@@ -1104,7 +1104,6 @@
+ 	} while (0)
+ #endif
+ 
+-#if defined(__linux__)
+ #if !defined(TAILQ_FOREACH_SAFE)
+ #define TAILQ_FOREACH_SAFE(var, head, field, tvar)             \
+          for ((var) = ((head)->tqh_first);                     \
+@@ -1117,7 +1116,6 @@
+               (var) && ((tvar) = LIST_NEXT((var), field), 1);  \
+               (var) = (tvar))
+ #endif
+-#endif
+ #if defined(__DragonFly__)
+ #define TAILQ_FOREACH_SAFE TAILQ_FOREACH_MUTABLE
+ #define LIST_FOREACH_SAFE LIST_FOREACH_MUTABLE

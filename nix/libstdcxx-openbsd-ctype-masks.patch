@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: GPL-3.0-or-later WITH GCC-exception-3.1
+# OpenBSD 7.x renamed the ctype mask macros to _CTYPE_*; the 7.9 SDK no longer
+# defines the historical spellings. Accept either SDK generation in the shared
+# header (the mask values are identical).
+--- a/config/os/bsd/openbsd/ctype_base.h
++++ b/config/os/bsd/openbsd/ctype_base.h
+@@ -28,6 +28,33 @@
+ 
+ // Information as gleaned from /usr/include/ctype.h on OpenBSD.
+ 
++// OpenBSD 7.x renamed the ctype mask macros to _CTYPE_*; the 7.9 SDK no longer
++// defines the historical spellings. Accept either SDK generation.
++#ifndef _U
++#define _U _CTYPE_U
++#endif
++#ifndef _L
++#define _L _CTYPE_L
++#endif
++#ifndef _N
++#define _N _CTYPE_N
++#endif
++#ifndef _S
++#define _S _CTYPE_S
++#endif
++#ifndef _P
++#define _P _CTYPE_P
++#endif
++#ifndef _C
++#define _C _CTYPE_C
++#endif
++#ifndef _X
++#define _X _CTYPE_X
++#endif
++#ifndef _B
++#define _B _CTYPE_B
++#endif
++
+ namespace std _GLIBCXX_VISIBILITY(default)
+ {
+ _GLIBCXX_BEGIN_NAMESPACE_VERSION

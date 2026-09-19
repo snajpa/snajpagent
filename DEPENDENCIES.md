@@ -119,6 +119,10 @@ freetype-config shell helper is disabled while font and compression support rema
 
 Default native builds additionally use FFmpeg (libavformat, libavcodec,
 libavutil, libswresample, libswscale), Poppler, libpng, and miniaudio 0.11.23.
+Native subscription voice links libdatachannel 0.24.1 and Opus
+through their C APIs. `RTC_CFLAGS`/`RTC_LIBS` select nonstandard installations.
+Portable builds use libjuice for ICE, plus DTLS and SRTP. BYOK uses libcurl
+WebSockets. `WITH_AUDIO_DEVICE=0` disables audio devices and native voice media.
 FFmpeg and Poppler are reached through narrow file-only adapters in `src/av.c`
 and `src/pdf.cpp`; PDF requires C++20. Miniaudio is compiled once in
 `src/miniaudio.c` from its dependency header. The low-level device callback

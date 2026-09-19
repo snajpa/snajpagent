@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# usrsctp: OpenBSD 3.5 sys/socket.h needs sys/types.h first (the shim
+# included only the former at :285).
+--- a/usrsctplib/netinet/sctp_os_userspace.h
++++ b/usrsctplib/netinet/sctp_os_userspace.h
+@@ -282,6 +282,8 @@
+ #endif
+ 
+ #else /* !defined(Userspace_os_Windows) */
++/* OpenBSD 3.5's sys/socket.h needs sys/types.h first. */
++#include <sys/types.h>
+ #include <sys/socket.h>
+ #if defined(__DragonFly__) || defined(__FreeBSD__) || defined(__linux__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__native_client__) || defined(__Fuchsia__) || defined(__EMSCRIPTEN_PTHREADS__)
+ #include <pthread.h>

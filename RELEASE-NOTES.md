@@ -77,7 +77,7 @@ Development builds use latest-dev, retain debug information and default to updat
   through their own recipes, and no other artifact inherits them.
 - macOS: experimental Intel, Apple Silicon and universal builds, macOS 11+. ARM64 is ad-hoc signed;
   Intel is unsigned. Developer ID signing and notarization are absent, and execution is unqualified.
-- Windows: experimental x64 and ARM64 builds using OS DLLs; ARM64 needs UCRT.
+- Windows: experimental x64 and ARM64 builds using OS DLLs; ARM64 needs UCRT. Execution is unqualified.
 - FreeBSD: standard libc.so.7 ABI, including 8.4 and 14.4; the separate legacy libc.so.5/libc_r.so.5
   build supports 5.1 and 5.5.
 - OpenBSD: experimental amd64 builds for 7.9, 5.9 and early 3.5, separately.

@@ -12,6 +12,12 @@ let
   target = "x86_64-unknown-openbsd${osVersion}";
   llvm = pkgs.llvmPackages_21;
   tools = "${llvm.llvm}/bin";
+  legacyRt = pkgs.runCommand "legacyrt-openbsd-${osVersion}" {} ''
+    mkdir -p $out/lib
+    ${compiler} --target=${target} --sysroot=${sdk} -Os -fno-stack-protector \
+      -c ${./legacy-rt-shim.c} -o legacyrt.o
+    ${tools}/llvm-ar rcs $out/lib/liblegacyrt.a legacyrt.o
+  '';
   mirrors = (lib.optionals (!legacy) [
     "https://cdn.openbsd.org/pub/OpenBSD"
     "https://ftp.hostserver.de/pub/OpenBSD"
@@ -188,6 +194,23 @@ let
     inherit pkgs autotoolsLibrary cflags llvm osVersion;
     os = "openbsd";
   };
+  voiceRtc = import ./voice-rtc-cross.nix {
+    inherit pkgs cmakeLibrary tls; sourcePkgs = sourcePkgs;
+    # OpenBSD 3.5's inttypes.h omits the C99 format macros (PRIx64).
+    srtpPatches = lib.optional early ./libsrtp-openbsd35-inttypes.patch;
+    # 3.5's netinet/in.h needs sys/types.h first; seed the checked header.
+    srtpFlags = lib.optional early "-DHAVE_NETINET_IN_H=1";
+    # OpenBSD 7.x dropped struct route_in6 from the userland headers; the
+    # legacy SDKs still provide it, so only the modern targets take the patch.
+    sctpPatches = [ ./usrsctp-bsd-tailq-safe.patch ] ++ lib.optional early ./usrsctp-openbsd35-systypes.patch ++ lib.optional early ./usrsctp-legacy-arc4random.patch ++ lib.optional early ./usrsctp-legacy-compat.patch ++ lib.optional early ./usrsctp-legacy-timingsafe.patch ++ lib.optional (!legacy) ./usrsctp-openbsd-route-in6.patch;
+    # OpenBSD 5.9/3.5 net/if.h needs struct sockaddr complete first (7.9 does not).
+    rtcPatches = lib.optional legacy ./libdatachannel-bsd-sockaddr.patch ++ lib.optional early ./libdatachannel-legacy-ai-flags.patch ++ lib.optional early ./libdatachannel-legacy-round.patch;
+    # Keep the C++ runtime consistent with the variant's application flags and
+    # the RTC link line: legacy/early use the built libstdc++, non-legacy the
+    # SDK's libc++ (forcing libstdc++ here pulls the unbuilt 7.9 runtime).
+    cxxFlags = "${cflags} ${if legacy then "-stdlib=libstdc++" else "-stdlib=libc++"} -pthread${lib.optionalString early " -fno-use-cxa-atexit -fno-builtin-pow -fno-builtin-powf -include ${./bsd-legacy-cxx.h}"}${lib.optionalString legacy " -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}"}";
+    cxxLibraries = "${ldflags}${lib.optionalString legacy " -L${cxx}/lib"}";
+  };
   jansson = (cmakeLibrary sourcePkgs.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF" "-DJANSSON_BUILD_DOCS=OFF"
     "-DJANSSON_WITHOUT_TESTS=ON" "-DJANSSON_EXAMPLES=OFF"
@@ -210,6 +233,8 @@ let
     postPatch = ''
       perl scripts/config.pl set MBEDTLS_THREADING_C
       perl scripts/config.pl set MBEDTLS_THREADING_PTHREAD
+      # libdatachannel uses the DTLS-SRTP API; enable it (PROTO_DTLS is on).
+      perl scripts/config.pl set MBEDTLS_SSL_DTLS_SRTP
       substituteInPlace library/net_sockets.c \
         --replace-fail 'fd >= FD_SETSIZE' '(unsigned int) fd >= FD_SETSIZE'
     '' + lib.optionalString early ''
@@ -520,7 +545,7 @@ in {
       src = source;
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
-      buildInputs = [ jansson curl av xml archive ] ++ networkLibraries ++ [ regex ]
+      buildInputs = [ jansson curl av xml archive ] ++ voiceRtc.dependencies ++ networkLibraries ++ [ regex ]
         ++ [ pdf png freetype expat fontconfig jpeg openjpeg ] ++ lib.optional legacy cxx;
       enableParallelBuilding = true;
       dontConfigure = true;
@@ -547,13 +572,15 @@ in {
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson) -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"
           "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"
           "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale | sed -E 's/-l?(-l?)?pthread//g')"
+          "RTC_CFLAGS=${voiceRtc.cflags}"
+          "RTC_LIBS=${voiceRtc.libs} ${if legacy then "${cxx}/lib/libstdc++.a -Wl,-Bdynamic" else "-Wl,-Bdynamic -lc++ -lc++abi"} -lm -Wl,-Bstatic"
           'MINIAUDIO_CFLAGS=-isystem ${miniaudio}'
           'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'
           'CXXFLAGS=-std=c++20 ${cflags} ${if legacy then "-nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}" else "-stdlib=libc++"}${lib.optionalString early " -fno-use-cxa-atexit -include ${./bsd-legacy-cxx.h}"} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           "PDF_CFLAGS=$(pkg-config --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')"
           "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') ${if legacy then "${cxx}/lib/libstdc++.a -Wl,-Bdynamic" else "-Wl,-Bdynamic -lc++ -lc++abi"} -lm -Wl,-Bstatic"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
-          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil -Wl,-Bdynamic ${if legacy then "-l:libpthread.so.${threadVersion}" else "-lpthread"}"
+          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil -Wl,-Bdynamic ${if legacy then "-l:libpthread.so.${threadVersion}" else "-lpthread"}${lib.optionalString early " ${legacyRt}/lib/liblegacyrt.a"}"
         )
       '';
       installPhase = ''

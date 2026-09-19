@@ -314,6 +314,10 @@ fixture_response(const char *prompt, const json_t *steering, const char *workspa
         if (cycle == 1u) return add_timer_call(graph, cycle, 0u, 25u, "timer fired");
         return final_answer(&out, "msg_fixture_timer_scheduled", "timer scheduled");
     }
+    if (strcmp(prompt, "timer_slow_test") == 0) {
+        if (cycle == 1u) return add_timer_call(graph, cycle, 0u, 6000u, "timer fired");
+        return final_answer(&out, "msg_fixture_timer_slow_scheduled", "timer slow scheduled");
+    }
     if (strcmp(prompt, "timer fired") == 0)
         return final_answer(&out, "msg_fixture_timer_fired", "timer reminder handled");
     if (strcmp(prompt, "timer_replace_test") == 0) {

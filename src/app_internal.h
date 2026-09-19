@@ -65,6 +65,7 @@ struct app_state {
     size_t irc_urgent_reply_offsets[SNAG_IRC_DESTINATIONS_MAX];
     struct snag_irc_route irc_turn_replies;
     bool irc_destinations_ready;
+    uint64_t irc_destinations_generation;
     struct snag_buf irc_urgent;
     struct snag_buf irc_urgent_refs, irc_background_refs;
     struct snag_buf irc_background;

@@ -145,7 +145,8 @@ parse_auth_command(struct snag_cli *cli, int argc, char **argv, int first, char 
         ++first;
     }
     for (int i = first + 1; i < argc; ++i) {
-        if (strcmp(argv[i], "--device-auth") == 0 && !cli->device_auth) cli->device_auth = true;
+        if (strcmp(argv[i], "--openai-device-auth") == 0 && !cli->openai_device_auth) cli->openai_device_auth = true;
+        else if (strcmp(argv[i], "--meta-device-auth") == 0 && !cli->meta_device_auth) cli->meta_device_auth = true;
         else if (strcmp(argv[i], "--with-api-key") == 0 && !cli->with_api_key) cli->with_api_key = true;
         else if (argv[i][0] != '-' && !cli->auth_provider) {
             if (strlen(argv[i]) > SNAG_CONFIG_PROVIDER_NAME_MAX) {
@@ -158,8 +159,9 @@ parse_auth_command(struct snag_cli *cli, int argc, char **argv, int first, char 
     if (cli->update_model_cache || cli->list || cli->last || cli->all || cli->provider || cli->irc_listen || cli->irc_client_count ||
         cli->doc_instructions.count || cli->irc_no_listen || cli->irc_no_client ||
         cli->irc_model_nick || cli->irc_operator_nick || cli->irc_room_name ||
-        (cli->device_auth && cli->with_api_key) ||
-        (cli->auth_command != SNAG_CLI_LOGIN && (cli->device_auth || cli->with_api_key || cli->model || cli->effort)))
+        ((cli->openai_device_auth || cli->meta_device_auth) && cli->with_api_key) ||
+        (cli->openai_device_auth && cli->meta_device_auth) ||
+        (cli->auth_command != SNAG_CLI_LOGIN && (cli->openai_device_auth || cli->meta_device_auth || cli->with_api_key || cli->model || cli->effort)))
         goto invalid;
     return 0;
 invalid:
@@ -277,6 +279,28 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t 
         }
         if (parse_options(cli, argc, argv, &i, error, error_size) < 0) return -1;
     }
+    if (cli->resume && positional >= 0 && !dashdash && !cli->last) {
+        if (strlen(argv[positional]) > SNAG_ID_HEX_LEN)
+            return snag_fail(error, error_size, EOVERFLOW, "session id is too long or unavailable");
+        cli->resume_id = argv[positional];
+        ++positional;
+        while (positional < argc) {
+            const char *tail = argv[positional];
+            if (strcmp(tail, "--") == 0) {
+                dashdash = true;
+                ++positional;
+                break;
+            }
+            if (tail[0] != '-' || tail[1] == '\0')
+                break;
+            int tail_index = positional;
+            if (parse_options(cli, argc, argv, &tail_index, error, error_size) < 0)
+                return -1;
+            positional = tail_index + 1;
+        }
+        if (positional < argc && !dashdash)
+            return snag_errorf(error, error_size, "resume follow-up must follow --");
+    }
     if ((cli->help || cli->version) && (argc != 2 ||
          (strcmp(argv[1], "-h") != 0 && strcmp(argv[1], "--help") != 0 && strcmp(argv[1], "-V") != 0)))
         return snag_errorf(error, error_size, "-h, --help and -V must stand alone");
@@ -309,7 +333,7 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t 
     if (cli->effort && !snag_text_valid(cli->effort, 1u, SNAG_CONFIG_EFFORT_MAX - 1u))
         return snag_errorf(error, error_size, "reasoning effort exceeds the supported structural bounds");
     if (cli->resume) {
-        if (positional >= 0 && !dashdash && !cli->last) {
+        if (!cli->resume_id && positional >= 0 && !dashdash && !cli->last) {
             if (strlen(argv[positional]) > SNAG_ID_HEX_LEN)
                 return snag_fail(error, error_size, EOVERFLOW, "session id is too long or unavailable");
             cli->resume_id = argv[positional];
@@ -347,9 +371,9 @@ void
 snag_cli_usage(int fd)
 {
     static const char text[] = "usage: " SNAJPAGENT_NAME " [OPTIONS] [--] [INITIAL PROMPT...]\n"
-        "       " SNAJPAGENT_NAME " --resume [OPTIONS] [SESSION_ID|--last] [-- FOLLOW-UP...]\n"
+        "       " SNAJPAGENT_NAME " --resume [OPTIONS] [SESSION_ID|--last] [OPTIONS] [-- FOLLOW-UP...]\n"
         "       " SNAJPAGENT_NAME " -e [OPTIONS] [-- PROMPT...]\n" "       " SNAJPAGENT_NAME " -l [OPTIONS]\n"
-        "       " SNAJPAGENT_NAME " [OPTIONS] login [PROVIDER] [--device-auth|--with-api-key]\n"
+        "       " SNAJPAGENT_NAME " [OPTIONS] login [PROVIDER] [--openai-device-auth|--meta-device-auth|--with-api-key]\n"
         "       " SNAJPAGENT_NAME " [OPTIONS] login status [PROVIDER]\n"
         "       " SNAJPAGENT_NAME " [OPTIONS] logout [PROVIDER]\n"
         "  -s, --listen[=ENDPOINT]      host the IRC server on ENDPOINT\n"

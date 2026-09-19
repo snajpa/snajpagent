@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# OpenBSD 7.x removed struct route_in6 from the userland headers; keep the
+# userspace definition available there (sctp_output.c stores a route entry by
+# value and only ever casts it to sctp_route_t *).
+--- a/usrsctplib/user_ip6_var.h
++++ b/usrsctplib/user_ip6_var.h
+@@ -93,7 +93,10 @@
+ #define s6_addr32 __u6_addr.__u6_addr32
+ #endif
+ 
+-#if !defined(__FreeBSD__) && !defined(__OpenBSD__) && !defined(__DragonFly__)
++/* OpenBSD 7.x removed struct route_in6 from the userland headers; keep the
++   userspace definition available there (sctp_output.c stores a route entry
++   by value and only ever casts it to sctp_route_t *). */
++#if !defined(__FreeBSD__) && !defined(__DragonFly__)
+ struct route_in6 {
+ 	struct	rtentry *ro_rt;
+ 	struct	llentry *ro_lle;

@@ -47,6 +47,46 @@ expect_invalid(const char *path)
 }
 
 static void
+test_model_steering(const char *path)
+{
+    struct snag_config config;
+    const struct snag_model_limit_config *entry;
+    char error[256] = {0};
+    const char *valid = "[provider p]\n"
+        "[model-limit p/m]\nsteering = all\n"
+        "[model-limit p/other]\nsteering=mentions\n"
+        "[model-limit p]\ncontext_window_tokens=1000\n"
+        "[model-limit p/m*]\nmax_input_tokens=500\n";
+    const char *invalid[] = {"sometimes", "ALL", "Mentions"};
+
+    write_bytes(path, valid, strlen(valid));
+    load_config(&config, path, NULL);
+    entry = snag_config_model_limit_exact(&config, "p", "m");
+    assert(entry && !strcmp(entry->steering, "all"));
+    entry = snag_config_model_limit_exact(&config, "p", "other");
+    assert(entry && !strcmp(entry->steering, "mentions"));
+    /* Exact-entry only: provider-wide and pattern entries do not contribute. */
+    assert(!snag_config_model_limit_exact(&config, "p", "third"));
+    assert(!snag_config_model_limit_exact(&config, "p", "match"));
+    assert(!snag_config_model_limit_exact(&config, "other", "m"));
+    snag_config_free(&config);
+    /* The save path preserves the field through the file text. */
+    assert(snag_config_save_model(path, false, "p", "m", "max", error, sizeof(error)) == 0);
+    load_config(&config, path, NULL);
+    entry = snag_config_model_limit_exact(&config, "p", "m");
+    assert(entry && !strcmp(entry->steering, "all"));
+    snag_config_free(&config);
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        char text[512];
+        int n = snprintf(text, sizeof(text),
+            "[provider p]\n[model-limit p/m]\nsteering=%s\n", invalid[i]);
+        assert(n > 0 && (size_t)n < sizeof(text));
+        write_bytes(path, text, (size_t)n);
+        expect_invalid(path);
+    }
+}
+
+static void
 test_configured_efforts(const char *path)
 {
     struct snag_config config;
@@ -217,6 +257,27 @@ test_auth_settings(const char *path)
     assert(config.providers[0].auth == SNAG_AUTH_CHATGPT);
     assert(strcmp(config.provider, "openrouter") == 0);
     assert(strcmp(config.model, "chosen/model") == 0);
+    snag_config_free(&config);
+
+    /* Meta subscription accepts the versioned and bare API bases. */
+    static const char meta_bad[] = "[provider default]\nauth=meta\nbase_url=https://other.test\n";
+    static const char meta_bare[] = "[provider default]\nauth=meta\nbase_url=https://api.meta.ai\n";
+    write_bytes(path, meta_bad, sizeof(meta_bad) - 1u);
+    expect_invalid(path);
+    write_bytes(path, meta_bare, sizeof(meta_bare) - 1u);
+    load_config(&config, path, NULL);
+    assert(config.provider_count == 1u);
+    assert(config.providers[0].auth == SNAG_AUTH_META);
+    snag_config_free(&config);
+    provider.auth = SNAG_AUTH_META;
+    strcpy(provider.base_url, SNAG_META_BASE);
+    assert(snag_config_validate_provider(&provider, error, sizeof(error)) == 0);
+    strcpy(provider.base_url, SNAG_META_BASE_BARE);
+    assert(snag_config_validate_provider(&provider, error, sizeof(error)) == 0);
+    assert(snag_config_save_provider(path, false, &provider, NULL, NULL, error, sizeof(error)) == 0);
+    load_config(&config, path, NULL);
+    assert(config.providers[0].auth == SNAG_AUTH_META);
+    assert(strcmp(config.providers[0].base_url, SNAG_META_BASE_BARE) == 0);
     snag_config_free(&config);
 
     /* Model edits preserve original bytes, including comments and line endings. */
@@ -792,6 +853,7 @@ main(void)
             values, 0xfdu, expanded, sizeof(expanded)) < 0);
     }
 
+    test_model_steering(path);
     test_configured_efforts(path);
     test_numeric_settings(path);
     test_io_rules(path);

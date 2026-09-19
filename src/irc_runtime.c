@@ -67,6 +67,7 @@ struct snag_irc {
     size_t head, count;
     uint64_t published, admitted;
     uint64_t routing_revision;
+    uint64_t destinations_generation;
     snag_wake_fd wake[2];
     bool stopping;
     bool identity_changed; /* Mailbox-locked; retained across command drains. */
@@ -305,6 +306,7 @@ drain(struct snag_irc *irc, int timeout_ms)
             }
             owner->view = record->view;
             owner->target.revision = record->view.revision;
+            ++irc->destinations_generation;
         }
         pthread_mutex_unlock(&irc->mutex);
         if (record->kind == IRC_EVENT) {
@@ -438,6 +440,7 @@ snag_irc_add(struct snag_irc *irc, const struct snag_config *config,
     }
     ++irc->owner_count;
     ++irc->routing_revision;
+    ++irc->destinations_generation;
     irc->identity_changed = true;
     return 0;
 fail: free_owner(owner);
@@ -494,6 +497,7 @@ snag_irc_remove(struct snag_irc *irc, bool hosting, const char *endpoint, char *
     memmove(irc->owners + index, irc->owners + index + 1u,
             (--irc->owner_count - index) * sizeof(*irc->owners));
     ++irc->routing_revision;
+    ++irc->destinations_generation;
     irc->identity_changed = true;
     snag_irc_core_remember(irc->history, &event);
     return irc->event_fn ? irc->event_fn(irc->opaque, &event) : 0;
@@ -535,6 +539,12 @@ uint64_t
 snag_irc_routing_revision(const struct snag_irc *irc)
 {
     return irc ? irc->routing_revision : 0u;
+}
+
+uint64_t
+snag_irc_destinations_generation(const struct snag_irc *irc)
+{
+    return irc ? irc->destinations_generation : 0u;
 }
 
 static bool
@@ -745,7 +755,8 @@ snag_irc_send_route(struct snag_irc *irc, const struct snag_irc_route *route,
     }
     frozen = *route;
     route = &frozen;
-    if (kind != SNAG_IRC_TOPIC && kind != SNAG_IRC_MESSAGE && (kind != SNAG_IRC_NOTICE || !model))
+    if (kind != SNAG_IRC_TOPIC && kind != SNAG_IRC_MESSAGE && (kind != SNAG_IRC_NOTICE || !model) &&
+        (kind != SNAG_IRC_NICK || !model))
         return snag_errno(EINVAL);
     for (size_t i = 0u; i < route->count; ++i)
         for (size_t j = 0u; j < i; ++j)
@@ -762,6 +773,18 @@ snag_irc_send_route(struct snag_irc *irc, const struct snag_irc_route *route,
         for (size_t j = 0u; irc && j < irc->owner_count; ++j)
             if (irc->owners[j]->target.id == route->targets[i].id &&
                 irc->owners[j]->target.revision == route->targets[i].revision) owner = irc->owners[j];
+        if (!owner && irc)
+            for (size_t j = 0u; j < irc->owner_count; ++j)
+                if (irc->owners[j]->target.id == route->targets[i].id &&
+                    route->targets[i].revision < irc->owners[j]->target.revision) {
+                    /* A number names the endpoint, not one published revision
+                     * of it: a stored route gone stale across a reconnect still
+                     * reaches the same destination. A claimed future revision
+                     * still fails below, keeping the wrong-revision guard. */
+                    request.revision = irc->owners[j]->target.revision;
+                    owner = irc->owners[j];
+                    break;
+                }
         if (owner) rc = request_owner(owner, &request);
         if (rc == 0) ++accepted;
         if (rc != 0) {

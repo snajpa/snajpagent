@@ -36,10 +36,14 @@ struct snag_provider_connection {
 };
 
 enum snag_audio_operation { SNAG_AUDIO_LISTEN, SNAG_AUDIO_TRANSCRIBE, SNAG_AUDIO_SPEAK };
+/* Resolve optional audio preferences against the selected coding provider. */
+const struct snag_provider_config *snag_provider_audio_config(const struct snag_config *,
+    const char *selected, struct snag_audio_config *);
+bool snag_provider_native_audio(const struct snag_provider_config *);
 /* One paid request only: no automatic retry, body diagnostics or coding history.
  * Listen takes {model,question} metadata and streams WAV as base64. Both input
  * operations borrow WAV bytes for the duration of the call. Output rolls
- * back on failure. ChatGPT subscription credentials are never accepted. */
+ * back on failure. Native subscription transcription uses its own endpoint. */
 int snag_provider_audio(enum snag_audio_operation operation, const json_t *request,
                          const struct snag_buf *wav, const struct snag_config *config,
                          const struct snag_provider_config *provider,
@@ -52,6 +56,11 @@ int snag_provider_audio(enum snag_audio_operation operation, const json_t *reque
  * receive: 1 whole text message, 0 incomplete/would-block, -1 stopped/error.
  * Clear the receive buffer after each whole message; preserve it otherwise. */
 struct snag_voice_socket;
+int snag_provider_voice_call(const struct snag_config *,const struct snag_provider_config *,
+    const struct snag_credential *,const char *sdp,const json_t *session,
+    snag_provider_pump_fn,void *,struct snag_buf *answer,char call[257],char *,size_t);
+int snag_provider_voice_attach(const struct snag_provider_config *,const struct snag_credential *,
+    const char *call,snag_provider_pump_fn,void *,struct snag_voice_socket **,char *,size_t);
 int snag_provider_voice_open(const struct snag_provider_config *,const struct snag_credential *,
     const char *model,snag_provider_pump_fn,void *,struct snag_voice_socket **,char *,size_t);
 int snag_provider_voice_send(struct snag_voice_socket *,const void *,size_t,size_t *,char *,size_t);

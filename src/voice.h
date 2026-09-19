@@ -20,6 +20,9 @@ struct snag_voice *snag_voice_new(const struct snag_voice_io *,void *,const char
                                  const char *transcribe_model,const char *voice);
 void snag_voice_free(struct snag_voice *);
 int snag_voice_begin(struct snag_voice *,char *,size_t);
+/* Select native call semantics before begin; caller owns the returned session. */
+json_t *snag_voice_native_session(struct snag_voice *);
+int snag_voice_native_output(struct snag_voice *,const int16_t *,uint32_t);
 /* Replace textual session context; never requests speech or coding work. */
 int snag_voice_context(struct snag_voice *,const json_t *,char *,size_t);
 int snag_voice_event(struct snag_voice *,const json_t *,char *,size_t);

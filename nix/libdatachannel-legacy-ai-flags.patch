@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: MPL-2.0
+# libdatachannel: netbsd-2.0 netdb.h lacks AI_ADDRCONFIG/AI_NUMERICSERV;
+# presence-gated defaults (same shape as the libjuice guard).
+--- a/src/candidate.cpp
++++ b/src/candidate.cpp
+@@ -27,6 +27,14 @@
+ 
+ #include <sys/types.h>
+ 
++/* Legacy NetBSD SDKs lack these getaddrinfo flags; use the defaults. */
++#ifndef AI_ADDRCONFIG
++#define AI_ADDRCONFIG 0
++#endif
++#ifndef AI_NUMERICSERV
++#define AI_NUMERICSERV 0
++#endif
++
+ using std::array;
+ using std::string;
+ 

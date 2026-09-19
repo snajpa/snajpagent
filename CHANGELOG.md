@@ -45,12 +45,48 @@
   `/model "openrouter/openai/gpt-4.1-mini"`). A quoted vendor/model designator
   still honours a configured provider prefix, and mismatched quotes are
   rejected with a dedicated error.
+- Keep `irc_send` destination numbers working across reconnects: a send with a
+  stale revision follows the number to the endpoint's current revision, while a
+  claimed future revision still fails. Terminal chat input already followed the
+  number; frozen model requests now do the same.
+- Tolerate Responses stream records whose JSON omits `type` when the SSE event
+  name is a bare token: the event name stands in for the missing type. Records
+  with no event name, non-token names, or non-object payloads still fail with
+  the recorded diagnostic.
+
+- Lead/IRC session set: `/nick` renames the agent nick over regular IRC,
+  `/steering` admits mentions or every message per session, `/banner` keeps a
+  short work cursor restated in later requests across compaction.
+
+
+- Add `/state`: session state including the goal and its actions. `/goal` is
+  an alias for `/state goal`; all previous `/goal` forms work unchanged
+  through the alias.
+
+
+- Stop turn recovery after a repeated identical definitive provider rejection
+  instead of replaying it through the whole retry budget (e.g. five identical
+  HTTP 400s). Single failures, transient errors, policy/capacity paths, goals
+  and output corrections keep existing retry behavior.
 
 - Omit `tool_choice` from the compaction summary request. The request declares no
   tools, so the choice was inert, but a provider that accepts only `"auto"` (Meta
   Model API) rejected `"none"` with HTTP 400 and failed the whole turn, including
   its derived input-token count request. Tool-less requests never send a tool
   choice now, and the terminal suite fails if one does.
+- Ship experimental `windows-x86_64` builds: the Windows legacy path (0x0502)
+  gains a `select()`-based `poll()` shim, an `AI_NUMERICSERV` fallback,
+  `SystemFunction036` randomness and pty/libc++ header alignment
+  (build-validated; Windows execution is unqualified and the runtime
+  behavior is not yet exercised).
+
+- Announce an accepted empty-draft chat/rollout switch (`/chat`, `/rollout` or
+  Tab) with a durable `switching to chat`/`switching to rollout` line before the
+  repaint, so the keystroke is visibly accepted; a repeat switch is ignored while
+  one is in flight (until the target view becomes current, or the 500 ms bound
+  expires), and switching to the view already shown stays silent.
+- Add Codex subscription and codex-lb voice support. Dictation and voice use the
+  selected provider's credentials and defaults; `[audio]` supplies optional overrides.
 
 - Finish all requests and reap the local server in the session-header transport
   test, allowing test runners to close their output pipes after completion.
@@ -114,6 +150,13 @@
   the endpoint, and the selection adopts the fresh target whenever the endpoint
   republishes its topology; frozen model requests still fail individually
   against their own revision.
+- Add a Meta subscription provider next to the paid Meta API-key regime. `login --meta-device-auth`
+  (mirrored by `--openai-device-auth` for the direct Codex provider) runs the native OAuth2 device
+  flow against either Meta API base (`https://api.meta.ai`, with or without `/v1`) and stores
+  endpoint-bound credentials with automatic refresh
+  while the issuer honors it, and serves the Muse subscription over the same Responses path as
+  an API key. Authentication error bodies with a machine-readable code are now parsed, so a
+  device-grant denial or expiry surfaces instead of a bare HTTP status.
 - Send a stable prompt cache key on every request, derived once from the session, provider, model
   and profile, so a provider can reuse a session's cached prefix; the compaction request, the
   largest request a session sends, carried no key at all before this.
