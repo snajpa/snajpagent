@@ -523,6 +523,27 @@ main(void)
     assert(capacity.hard_input_tokens == 922000u);
 
     test_local_models(&store, &cache);
+    {
+        /* Provider catalogs are bounded by the cache file, not a fixed count. */
+        json_t *many = json_array();
+        struct snag_model_cache loaded = {0};
+
+        assert(many);
+        for (unsigned int i = 0u; i < 20u; ++i) {
+            json_t *entry = json_deep_copy(json_array_get(providers, 0));
+            char name[16];
+
+            assert(entry);
+            (void)snprintf(name, sizeof(name), "p%u", i);
+            assert(json_object_set_new(entry, "name", json_string(name)) == 0);
+            assert(json_array_append_new(many, entry) == 0);
+        }
+        assert(snag_model_cache_replace(&store, many, 456789u, &cache, error, sizeof(error)) == 0);
+        assert(snag_model_cache_load(&store, &loaded, error, sizeof(error)) == 0);
+        assert(json_array_size(loaded.providers) == 20u);
+        snag_model_cache_free(&loaded);
+        json_decref(many);
+    }
     json_decref(providers);
     snag_config_free(&config);
     snag_model_cache_free(&cache);

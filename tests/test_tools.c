@@ -717,9 +717,8 @@ test_secret_snapshot_rotation(void)
     static const char body[] = "{\"text\":\"old-protected new-protected literal-protected\"}";
 
     snag_config_init(&config);
-    config.secret_count = 2u;
-    assert(snag_secret_source_parse(&config.secrets[0], "${SNAG_ROTATING_SECRET}", NULL, error, sizeof(error)) == 0);
-    assert(snag_secret_source_parse(&config.secrets[1], "\"literal-protected\"", NULL, error, sizeof(error)) == 0);
+    assert(snag_config_add_secret(&config, "${SNAG_ROTATING_SECRET}", NULL, error, sizeof(error)) == 0);
+    assert(snag_config_add_secret(&config, "\"literal-protected\"", NULL, error, sizeof(error)) == 0);
     assert(setenv("SNAG_ROTATING_SECRET", "old-protected", 1) == 0);
     assert(snag_secret_set_build(&secrets, &config, NULL, error, sizeof(error)) == 0);
     assert(setenv("SNAG_ROTATING_SECRET", "new-protected", 1) == 0);
@@ -749,8 +748,7 @@ test_secret_snapshot_rotation(void)
     snag_buf_free(&result);
     snag_secret_set_free(&secrets);
     snag_config_init(&config);
-    config.secret_count = 1u;
-    assert(snag_secret_source_parse(&config.secrets[0], "${SNAG_ROTATING_SECRET}", NULL, error, sizeof(error)) == 0);
+    assert(snag_config_add_secret(&config, "${SNAG_ROTATING_SECRET}", NULL, error, sizeof(error)) == 0);
     assert(snag_secret_set_build(&secrets, &config, NULL, error, sizeof(error)) < 0);
     snag_secret_set_free(&secrets);
     snag_config_free(&config);
@@ -759,31 +757,32 @@ test_secret_snapshot_rotation(void)
 static void
 test_process_capacity_and_ready_collection(void)
 {
+    enum { slots = 40u };
     struct snag_config config;
     struct snag_credential credential;
     struct snag_response_graph graph;
-    char cwd[4096], error[256] = {0}, handles[SNAG_MAX_PROCESSES][SNAG_ID_HEX_LEN + 1u];
+    char cwd[4096], error[256] = {0}, handles[slots][SNAG_ID_HEX_LEN + 1u];
     snag_config_init(&config);
-    config.max_parallel_commands = SNAG_MAX_PROCESSES;
+    config.max_parallel_commands = slots;
     config.default_timeout_ms = 0;
     snag_credential_clear(&credential);
     assert(getcwd(cwd, sizeof(cwd)));
-    for (size_t i = 0u; i < SNAG_MAX_PROCESSES; ++i) {
+    for (size_t i = 0u; i < slots; ++i) {
         uint32_t yield;
         json_t *result = NULL;
         make_call(&graph, "printf slot", cwd, -1, NULL);
         struct snag_response_item call = snag_response_graph_item(&graph, 0u);
         /* Reloaded defaults do not replace the admitted turn's slot limit. */
         config.max_parallel_commands = 1u;
-        assert(snag_tools_prepare(&call, &config, cwd, SNAG_MAX_PROCESSES, handles[i], &yield, &result) == 0);
+        assert(snag_tools_prepare(&call, &config, cwd, slots, handles[i], &yield, &result) == 0);
         assert(snag_tools_start(&call, &config, &credential, cwd, &result, error, sizeof(error)) == 0);
         assert(!result);
         snag_response_graph_free(&graph);
     }
-    /* All 32 shell loaders share a single CPU on some targets. Budget the
+    /* All 40 shell loaders share a single CPU on some targets. Budget the
      * existing per-child allowance across the batch; this tests slot ownership,
      * not command timeout enforcement. Keep all children started concurrently. */
-    uint64_t deadline = snag_monotonic_ms() + 3000u * SNAG_MAX_PROCESSES;
+    uint64_t deadline = snag_monotonic_ms() + 3000u * slots;
     while (snag_tools_busy()) {
         assert(snag_monotonic_ms() < deadline);
         assert(snag_tools_service(10, -1, error, sizeof(error)) == 0);
@@ -798,7 +797,7 @@ test_process_capacity_and_ready_collection(void)
     assert(!strcmp(snag_json_string(result, "reason"), "process_limit"));
     json_decref(result);
     snag_response_graph_free(&graph);
-    for (size_t i = SNAG_MAX_PROCESSES; i > 0u; --i) {
+    for (size_t i = slots; i > 0u; --i) {
         result = NULL;
         assert(snag_tools_collect(handles[i - 1u], NULL, &result, error, sizeof(error)) == 0);
         assert(snag_tool_result_valid(result) == 0);
@@ -948,6 +947,26 @@ test_command_argument_feedback(void)
     snag_config_free(&config);
 }
 
+static void
+test_many_secret_sources(void)
+{
+    struct snag_config config;
+    struct snag_secret_set secrets = {0};
+    char error[256] = {0};
+    char value[64];
+
+    snag_config_init(&config);
+    for (unsigned int i = 0u; i < 140u; ++i) {
+        (void)snprintf(value, sizeof(value), "\"many-secret-%u\"", i);
+        assert(snag_config_add_secret(&config, value, NULL, error, sizeof(error)) == 0);
+    }
+    assert(config.secret_count == 140u);
+    assert(snag_secret_set_build(&secrets, &config, NULL, error, sizeof(error)) == 0);
+    assert(secrets.wire.count >= 140u);
+    snag_secret_set_free(&secrets);
+    snag_config_free(&config);
+}
+
 int
 main(void)
 {
@@ -975,6 +994,7 @@ main(void)
     test_provider_secret_removed_from_environment();
     test_all_provider_secrets_removed_and_redacted();
     test_secret_snapshot_rotation();
+    test_many_secret_sources();
     test_apply_patch_rejects_null_result();
     test_provider_secret_redacted("printf secret-value-for-test");
     test_provider_secret_redacted("printf '%8190ssecret-value-for-test' ''");

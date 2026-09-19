@@ -387,7 +387,7 @@ test_prompt_history(void)
     assert(snprintf(path, sizeof(path), "%s/prompt_history", subdir) > 0);
     fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
     assert(fd >= 0);
-    assert(ftruncate(fd, (off_t)(SNAG_HISTORY_BYTES * 4u + SNAG_HISTORY_COUNT + 1u)) == 0);
+    assert(ftruncate(fd, (off_t)(SNAG_HISTORY_BYTES * 5u + 1u)) == 0);
     assert(close(fd) == 0);
     memset(&term, 0, sizeof(term));
     assert(snag_history_open(&term, subdir) == 0);
@@ -395,6 +395,28 @@ test_prompt_history(void)
     assert(snag_history_merge(&term) == 0);
     snag_history_free(&term);
     assert(unlink(path) == 0 && rmdir(subdir) == 0);
+    assert(rmdir(temp) == 0);
+}
+
+static void
+test_history_hold_count_uncapped(void)
+{
+    char temp[] = "/tmp/snajpagent-history-hold-XXXXXX";
+    char path[256], entry[64];
+    struct snag_history history = {0};
+
+    assert(mkdtemp(temp));
+    assert(snprintf(path, sizeof(path), "%s/prompt_history", temp) > 0);
+    assert(snag_history_open(&history, temp) == 0);
+    /* Unbound entries stay in memory; past the former 100-entry ceiling. */
+    for (unsigned int i = 0u; i < 150u; ++i) {
+        (void)snprintf(entry, sizeof(entry), "held-%03u", i);
+        assert(snag_history_add(&history, entry) == 0);
+    }
+    assert(history.snapshot.count == 150u);
+    assert(!snag_history_take_warning(&history));
+    snag_history_free(&history);
+    assert(unlink(path) == 0);
     assert(rmdir(temp) == 0);
 }
 
@@ -523,6 +545,16 @@ test_prompt_spinners(void)
     oversized[sizeof(oversized) - 2u] = '\0';
     assert(snag_term_set_prompt_template(&term, false, oversized, wide, 8u, 0u) < 0);
     assert(memcmp(saved, term.label, sizeof(saved)) == 0);
+    {
+        /* Frame capacity follows the spinner string; the former 16-frame cap
+         * is gone, so a longer sequence is accepted and fully retained. */
+        const char *many[SNAG_TERM_SPINNER_COUNT] = {"\\0abcdefghijklmnopqrstuvwxyz0123", " ", "\\0"};
+
+        assert(snag_term_set_prompt_template(&term, false, prompt, many, 8u, 0u) == 0);
+        assert(term.spinner[SNAG_TERM_SPINNER_GOAL].frame_count == 30u);
+        assert(snag_term_set_spinner_states(&term, 1u << SNAG_TERM_SPINNER_GOAL) == 0);
+        assert(strcmp(term.label, "xa >") == 0);
+    }
     {
         const char padded[] = "\xfd\xfe  9%> ";
         const char *stable[] = {" ⚑", " P", " ⠋"};
@@ -2730,6 +2762,24 @@ test_hosted_search_rows(void)
     assert(snag_render_prepare_hosted_finish(&block, "ws_2", "failed", NULL, 1u, 0u) == 0);
     assert(block.role == SNAG_ROLE_ERROR);
     snag_render_block_free(&block);
+    /* Any number of retained sources is counted and rendered. */
+    {
+        json_t *many = json_array();
+        assert(many);
+        for (size_t i = 0u; i < 40u; ++i) {
+            char url[64];
+            (void)snprintf(url, sizeof(url), "https://example.test/%zu", i);
+            assert(json_array_append_new(many, json_string(url)) == 0);
+        }
+        assert(snag_render_prepare_hosted_finish(&block, "ws_many", "completed", many, 2u, 0u) == 0);
+        assert(block.role == SNAG_ROLE_SUCCESS);
+        assert(snag_buf_terminate(&block.text) == 0);
+        assert(strstr((char *)block.text.data, "completed · 40 sources") != NULL);
+        assert(snag_buf_terminate(&block.body) == 0);
+        assert(strstr((char *)block.body.data, "https://example.test/0") != NULL);
+        snag_render_block_free(&block);
+        json_decref(many);
+    }
     json_decref(action);
     json_decref(sources);
 }
@@ -2843,6 +2893,7 @@ main(void)
     test_prompt_history();
     test_session_prompt_history();
     test_history_reader_boundaries();
+    test_history_hold_count_uncapped();
     test_prompt_clock();
     test_prompt_spinners();
     test_retained_prompt();

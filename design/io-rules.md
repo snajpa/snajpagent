@@ -137,7 +137,8 @@ message = "Patches may not escape the workspace with .. paths."
 
 ## 3. Semantics and limits
 
-- **Bounded.** At most 256 rules and 63-byte names; one linear scan per call.
+- **Bounded.** Rule count is bounded by the configuration file; 63-byte names
+  and 64 KiB per message; one linear scan per call.
 - **Deterministic.** Validation happens at configuration load; there is no
   runtime rule-generation path and no hidden default action.
 - **Not stateful.** A rule behaves identically on every evaluation.

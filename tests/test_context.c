@@ -3225,6 +3225,82 @@ test_request_prefix_stability(struct snag_store *store, const char *workspace)
     json_decref(empty);
 }
 
+static void
+test_many_pending_steers(struct snag_store *store, const char *workspace)
+{
+    static const char turn[] = "d1000000000000000000000000000000";
+    static const char response[] = "d2000000000000000000000000000000";
+    struct snag_session session;
+
+    create_session(store, &session, workspace, "medium");
+    commit_event(&session, "turn_started", turn_started(turn, 1, "steer batch", workspace, NULL));
+    commit_event(&session, "response_started", response_started(turn, response, NULL));
+    for (unsigned int i = 0; i < 40u; ++i) {
+        char id[SNAG_ID_HEX_LEN + 1u], text[32];
+        (void)snprintf(id, sizeof(id), "%032x", 0x500000u + i);
+        (void)snprintf(text, sizeof(text), "steer %u", i);
+        commit_event(&session, "steering_added", steering_added(turn, id, text));
+    }
+    assert(session.pending_steering_count == 40u);
+    assert(session.pending_steering_bytes > 0u);
+    assert(strcmp(session.pending_steering[39].text, "steer 39") == 0);
+    snag_session_close(&session);
+}
+
+static void
+test_compact_output_many_items(void)
+{
+    json_t *output = json_array();
+    char hash[SNAG_SHA256_HEX_LEN + 1u], error[256];
+    size_t bytes = 0u;
+
+    assert(output);
+    for (unsigned int i = 0u; i < 200u; ++i)
+        assert(json_array_append_new(output, json_pack("{s:s}", "type", "compaction")) == 0);
+    assert(snag_context_compact_output_valid(output, hash, &bytes, error, sizeof(error)) == 0);
+    assert(bytes > 0u);
+    json_decref(output);
+}
+
+static void
+test_media_many_parts_accepted(void)
+{
+    json_t *content = json_array();
+
+    assert(content);
+    for (unsigned int i = 0u; i < 40u; ++i)
+        assert(json_array_append_new(content, json_pack("{s:s,s:s}", "type", "input_text", "text", "x")) == 0);
+    assert(snag_media_content_valid(content));
+    json_decref(content);
+}
+
+static void
+test_hosted_search_many_sources(struct snag_store *store, const char *workspace)
+{
+    static const char turn[] = "e1000000000000000000000000000000";
+    static const char response[] = "e2000000000000000000000000000000";
+    struct snag_session session;
+    json_t *sources = json_array();
+
+    assert(sources);
+    for (unsigned int i = 0u; i < 20u; ++i) {
+        char url[64];
+        (void)snprintf(url, sizeof(url), "https://example.test/%u", i);
+        assert(json_array_append_new(sources, json_string(url)) == 0);
+    }
+    create_session(store, &session, workspace, "medium");
+    commit_event(&session, "turn_started", turn_started(turn, 1, "hosted sources", workspace, NULL));
+    commit_event(&session, "response_started", response_started(turn, response, NULL));
+    json_t *event = json_object();
+    assert(event);
+    assert(json_object_set_new(event, "item_id", json_string("ws_many")) == 0);
+    assert(json_object_set_new(event, "sources", sources) == 0);
+    assert(json_object_set_new(event, "status", json_string("completed")) == 0);
+    assert(json_object_set_new(event, "turn_id", json_string(turn)) == 0);
+    commit_event(&session, "hosted_search_finished", event);
+    snag_session_close(&session);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -3352,6 +3428,8 @@ main(int argc, char **argv)
     test_image_normalization();
     test_office_import();
     test_document_conversion();
+    test_compact_output_many_items();
+    test_media_many_parts_accepted();
     assert(mkdtemp(temp));
     assert(snprintf(state, sizeof(state), "%s/state", temp) > 0);
     assert(snprintf(workspace, sizeof(workspace), "%s/work", temp) > 0);
@@ -3384,6 +3462,8 @@ main(int argc, char **argv)
     test_large_compact_prefix(&store, workspace);
     test_voice_completed_result(&store, workspace);
     test_parallel_journal_recovery(&store, workspace);
+    test_many_pending_steers(&store, workspace);
+    test_hosted_search_many_sources(&store, workspace);
     test_refused_file_call_after_start(&store, workspace);
     test_accounting_lineage(&store, workspace);
     create_session(&store, &session, workspace, "default");

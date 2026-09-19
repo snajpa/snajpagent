@@ -8,16 +8,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define SNAG_MAX_RESPONSE_ITEMS 96u
 /* Parse only local prompt syntax; never apply this to model or IRC messages. */
 const char *snag_prompt_parse(const char *text, bool *read_only);
 bool snag_prompt_command(const char *text);
 bool snag_read_only_tool(const char *name);
 /* Provider item/call identity: UTF-8 text without control or C1 bytes. */
 bool snag_provider_id_valid(const char *s);
-#define SNAG_MAX_CALLS_PER_RESPONSE 32u
-#define SNAG_MAX_PROCESSES 32u
-
 /* Durable identity/output counters plus engine-owned observations, never PIDs. */
 struct snag_process_state {
     char handle[SNAG_ID_HEX_LEN + 1u];
@@ -35,7 +31,6 @@ struct snag_process_state {
 #define SNAG_MAX_PROVIDER_ID 512u
 /* Provider-hosted web-search evidence retained for display only. */
 #define SNAG_MAX_HOSTED_ACTION (16u * 1024u)
-#define SNAG_MAX_HOSTED_SOURCES 16u
 #define SNAG_MAX_HOSTED_SOURCE_URL 2048u
 #define SNAG_MAX_TOOL_ARGUMENTS (2u * 1024u * 1024u)
 #define SNAG_MAX_RESPONSE_GRAPH (8u * 1024u * 1024u)

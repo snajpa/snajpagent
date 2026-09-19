@@ -631,9 +631,11 @@ test_protocol_conflicts_fail_closed(void)
 static void
 test_interleaved_content_bound(void)
 {
-    for (unsigned int count = 96u; count <= 97u; ++count) {
-        struct snag_buf wire = {.max = 32768u};
-        struct parsed_stream emitted = parsed_new(128u);
+    /* Interleaved parts stay attributed per item; the former 96-part ceiling
+     * no longer rejects a later part. */
+    for (unsigned int count = 96u; count <= 120u; count += 24u) {
+        struct snag_buf wire = {.max = 65536u};
+        struct parsed_stream emitted = parsed_new(256u);
         assert(snag_buf_printf(&wire,
             "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\",\"output\":[]}}\n\n") == 0);
         for (unsigned int item = 0; item < 2u; ++item) assert(snag_buf_printf(&wire,
@@ -649,17 +651,12 @@ test_interleaved_content_bound(void)
         assert(snag_buf_printf(&wire, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\","
             "\"status\":\"completed\",\"output\":[]}}\n\n") == 0);
         int rc = parse_stream((char *)wire.data, 7u, &emitted);
-        assert(emitted.calls == 96u && emitted.text.len == 96u);
+        assert(rc == 0 && emitted.graph.count == 2u);
+        assert(emitted.calls == count && emitted.text.len == count);
         for (size_t i = 0; i < emitted.text.len; ++i) assert(emitted.text.data[i] == (i % 2u ? 'b' : 'a'));
-        if (count == 96u) {
-            assert(rc == 0 && emitted.graph.count == 2u);
-            for (size_t item = 0; item < 2u; ++item) {
-                const char *text = snag_response_graph_item(&emitted.graph, item).text;
-                assert(strlen(text) == 48u && strspn(text, item ? "b" : "a") == 48u);
-            }
-        } else {
-            assert(rc < 0 && emitted.graph.count == 0u);
-            assert(!strcmp(emitted.error, "message content part was not announced"));
+        for (size_t item = 0; item < 2u; ++item) {
+            const char *text = snag_response_graph_item(&emitted.graph, item).text;
+            assert(strlen(text) == count / 2u && strspn(text, item ? "b" : "a") == count / 2u);
         }
         snag_buf_free(&wire);
         parsed_free(&emitted);
@@ -847,7 +844,7 @@ test_reasoning_content_parts(void)
         "{\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"item_id\":\"rs\",\"delta\":\"{}\"}",
         "{\"type\":\"response.content_part.added\",\"output_index\":1,\"item_id\":\"rs\",\"content_index\":0,\"part\":{\"type\":\"reasoning_text\"}}",
         "{\"type\":\"response.content_part.added\",\"output_index\":-1,\"content_index\":0,\"part\":{\"type\":\"reasoning_text\"}}",
-        "{\"type\":\"response.content_part.added\",\"output_index\":0,\"content_index\":96,\"part\":{\"type\":\"reasoning_text\"}}",
+        "{\"type\":\"response.content_part.added\",\"output_index\":0,\"content_index\":-1,\"part\":{\"type\":\"reasoning_text\"}}",
         "{\"type\":\"response.content_part.added\",\"output_index\":0,\"content_index\":0,\"part\":{}}",
         "{\"type\":\"response.content_part.done\",\"output_index\":0,\"content_index\":0,\"part\":null}",
         "{\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"f\",\"call_id\":\"c\",\"name\":\"exec_command\",\"arguments\":\"{}\",\"status\":\"completed\"}}",
@@ -1229,6 +1226,109 @@ test_event_name_fallback_for_typeless_records(void)
     snag_responses_stream_free(&stream);
 }
 
+static void
+test_stream_accepts_many_items(void)
+{
+    struct snag_buf wire = {.max = 1024u * 1024u};
+    struct parsed_stream emitted = parsed_new(1024u * 1024u);
+
+    assert(snag_buf_printf(&wire,
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r_wide\",\"status\":\"in_progress\",\"output\":[]}}\n\n") == 0);
+    for (size_t i = 0u; i < 120u; ++i) {
+        assert(snag_buf_printf(&wire,
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":%zu,\"item\":{\"type\":\"function_call\",\"id\":\"f_%zu\",\"call_id\":\"c_%zu\",\"name\":\"exec_command\",\"arguments\":\"\",\"status\":\"in_progress\"}}\n\n",
+            i, i, i) == 0);
+        assert(snag_buf_printf(&wire,
+            "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":%zu,\"item_id\":\"f_%zu\",\"delta\":\"{\\\"command\\\":\\\"true\\\"}\"}\n\n",
+            i, i) == 0);
+        assert(snag_buf_printf(&wire,
+            "data: {\"type\":\"response.function_call_arguments.done\",\"output_index\":%zu,\"item_id\":\"f_%zu\",\"arguments\":\"{\\\"command\\\":\\\"true\\\"}\"}\n\n",
+            i, i) == 0);
+        assert(snag_buf_printf(&wire,
+            "data: {\"type\":\"response.output_item.done\",\"output_index\":%zu,\"item\":{\"type\":\"function_call\",\"id\":\"f_%zu\",\"call_id\":\"c_%zu\",\"name\":\"exec_command\",\"arguments\":\"{\\\"command\\\":\\\"true\\\"}\",\"status\":\"completed\"}}\n\n",
+            i, i, i) == 0);
+    }
+    assert(snag_buf_printf(&wire,
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r_wide\",\"status\":\"completed\",\"output\":[]}}\n\n") == 0);
+    assert(snag_buf_terminate(&wire) == 0);
+    if (parse_stream((const char *)wire.data, 4093u, &emitted) != 0) {
+        (void)fprintf(stderr, "wide item stream: %s\n", emitted.error);
+        assert(0);
+    }
+    assert(emitted.graph.count == 120u);
+    assert(emitted.calls == 0u && emitted.text.len == 0u);
+    assert(snag_response_graph_item(&emitted.graph, 119u).kind == SNAG_ITEM_TOOL_CALL);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 119u).name, "exec_command") == 0);
+    parsed_free(&emitted);
+    snag_buf_free(&wire);
+}
+
+static void
+test_stream_accepts_many_parts(void)
+{
+    struct snag_buf wire = {.max = 1024u * 1024u};
+    struct parsed_stream emitted = parsed_new(1024u * 1024u);
+
+    assert(snag_buf_printf(&wire,
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r_parts\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"m_wide\",\"role\":\"assistant\",\"status\":\"in_progress\",\"content\":[]}}\n\n") == 0);
+    for (size_t i = 0u; i < 120u; ++i) {
+        assert(snag_buf_printf(&wire,
+            "data: {\"type\":\"response.content_part.added\",\"item_id\":\"m_wide\",\"output_index\":0,\"content_index\":%zu,\"part\":{\"type\":\"output_text\",\"text\":\"x\",\"annotations\":[]}}\n\n", i) == 0);
+        assert(snag_buf_printf(&wire,
+            "data: {\"type\":\"response.content_part.done\",\"item_id\":\"m_wide\",\"output_index\":0,\"content_index\":%zu,\"part\":{\"type\":\"output_text\",\"text\":\"x\",\"annotations\":[]}}\n\n", i) == 0);
+    }
+    assert(snag_buf_printf(&wire,
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r_parts\",\"status\":\"completed\",\"output\":[]}}\n\n") == 0);
+    assert(snag_buf_terminate(&wire) == 0);
+    if (parse_stream((const char *)wire.data, 2048u, &emitted) != 0) {
+        (void)fprintf(stderr, "wide part stream: %s\n", emitted.error);
+        assert(0);
+    }
+    assert(emitted.graph.count == 1u);
+    {
+        const char *text = snag_response_graph_item(&emitted.graph, 0u).text;
+        assert(text && strlen(text) == 120u);
+    }
+    parsed_free(&emitted);
+    snag_buf_free(&wire);
+}
+
+static void
+test_hosted_search_many_sources(void)
+{
+    struct snag_buf wire = {.max = 256u * 1024u};
+    struct snag_buf sources = {.max = 128u * 1024u};
+    struct parsed_stream parsed = parsed_new(1024u);
+    struct hosted_capture hosted = {0};
+
+    assert(snag_buf_printf(&sources, "[") == 0);
+    for (unsigned int i = 0u; i < 20u; ++i)
+        assert(snag_buf_printf(&sources, "%s{\"type\":\"url\",\"url\":\"https://example.test/%u\"}",
+                               i ? "," : "", i) == 0);
+    assert(snag_buf_printf(&sources, "]") == 0);
+    assert(snag_buf_terminate(&sources) == 0);
+    assert(snag_buf_printf(&wire,
+        "event: response.created\n"
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_many\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "event: response.output_item.added\n"
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"ws_many\",\"type\":\"web_search_call\",\"status\":\"in_progress\",\"action\":{\"type\":\"search\",\"query\":\"many\"}}}\n\n"
+        "event: response.output_item.done\n"
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"ws_many\",\"type\":\"web_search_call\",\"status\":\"completed\",\"action\":{\"type\":\"search\",\"query\":\"many\"},\"sources\":") == 0);
+    assert(snag_buf_append(&wire, sources.data, sources.len) == 0);
+    assert(snag_buf_printf(&wire,
+        "}}\n\n"
+        "event: response.completed\n"
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_many\",\"status\":\"completed\",\"output\":[]}}\n\n") == 0);
+    assert(snag_buf_terminate(&wire) == 0);
+    assert(parse_hosted((const char *)wire.data, &parsed, &hosted) == 0);
+    assert(hosted.calls == 2u);
+    assert(!hosted.started[1] && strcmp(hosted.status[1], "completed") == 0 && hosted.sources[1] == 20u);
+    parsed_free(&parsed);
+    snag_buf_free(&sources);
+    snag_buf_free(&wire);
+}
+
 int
 main(void)
 {
@@ -1254,6 +1354,7 @@ main(void)
     test_public_stream(5u);
     test_inert_only_response_has_empty_graph();
     test_hosted_search_activity();
+    test_hosted_search_many_sources();
     test_function_call_arguments();
     test_refusal();
     test_invalid_call_after_public_item();
@@ -1263,6 +1364,8 @@ main(void)
     test_structured_capacity_failure();
     test_interleaved_content_bound();
     test_provider_context_formats();
+    test_stream_accepts_many_items();
+    test_stream_accepts_many_parts();
     puts("test_responses: ok");
     return 0;
 }

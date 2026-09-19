@@ -23,6 +23,42 @@
   DeepSeek's documentation) now gets a conservative bound instead of failing
   with no qualified image token bound.
 
+- Remove the 32-call per-response ceiling. A response may carry any number of
+  tool calls within the existing response-shape bounds; each result's
+  context-safety share is divided by the response's actual call count.
+
+- Remove the per-response item and content-part ceilings. The response decoder
+  grows its item storage on demand and allocates content parts individually;
+  the response-graph and wire byte limits still bound every response.
+
+- Remove the fixed pending-steering (32) and queued-turn (128) count ceilings.
+  Both lists grow on demand; per-item text and total byte bounds still apply.
+
+- Remove the compact-output item, hosted-source, and media part/image count
+  ceilings. Compact output stays bounded by its 12 MiB document limit, hosted
+  source lists and rows size themselves from their entries, and media content
+  stays bounded by its byte budgets.
+
+- Remove the sixteen-source instruction discovery ceiling. Any number of
+  canonical instruction files is retained; each path keeps its existing
+  bound and the projected entry-point list sizes itself from the set.
+
+- Remove the sixty-four secret-source and one-hundred-twenty-eight
+  secret-value ceilings. Additional protected values are retained on demand;
+  source syntax, length, and resolution rules are unchanged.
+
+- Remove the model-alias (128), reasoning-effort (32), and spinner-frame (16)
+  ceilings. Configuration parsing and prompt rendering accept any count
+  bounded by the existing file, text, and per-entry limits.
+
+- Remove the provider-section (16) and model-limit rule (128) collection
+  ceilings. Both lists grow on demand; the configuration file bound and the
+  per-entry field limits still apply.
+
+- Remove the 32-slot managed-command ceiling. The process table grows on
+  demand, so `[tool] max_parallel_commands` is the only concurrency bound
+  (default 4); its configuration range is now 1 through 4294967295.
+
 - Show provider-hosted web searches as private rollout tool rows. A `web_search`
   item records a start row carrying the search action and query, then a finish
   row carrying the provider's terminal status and retained source URLs, at the

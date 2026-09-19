@@ -1214,8 +1214,10 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
 int
 snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count)
 {
+    /* One response's public text plus one separator per fragment, under the
+     * response-public byte bound. */
     struct history_replay history = {.total = session->turn_count,
-        .response = {.max = SNAG_MAX_RESPONSE_GRAPH + 2u * SNAG_MAX_RESPONSE_ITEMS}};
+        .response = {.max = 3u * SNAG_MAX_RESPONSE_GRAPH}};
     int rc = snag_session_each_event(session, history_event, &history, NULL, 0u);
     history.ui = ui;
     if (rc == 0 && count && history.total) {

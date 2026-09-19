@@ -13,7 +13,7 @@ static int
 secrets_valid(const struct snag_wire_secrets *secrets)
 {
     if (!secrets) return 0;
-    if (secrets->count > SNAG_WIRE_SECRET_COUNT_MAX || (secrets->count && !secrets->values))
+    if (secrets->count && !secrets->values)
         return snag_errno(EINVAL);
     for (size_t i = 0; i < secrets->count; ++i) {
         size_t len;

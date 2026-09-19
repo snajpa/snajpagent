@@ -16,7 +16,36 @@ void
 snag_instructions_free(struct snag_instruction_set *set)
 {
     for (size_t i = 0; i < set->count; ++i) free(set->paths[i]);
+    free(set->paths);
     *set = (struct snag_instruction_set){0};
+}
+
+int
+snag_instructions_add_owned(struct snag_instruction_set *set, char *path,
+                            char *error, size_t error_size)
+{
+    char **grown;
+
+    if (!set || !path) {
+        free(path);
+        return snag_fail(error, error_size, EINVAL, "invalid instruction path");
+    }
+    if (set->count == set->capacity) {
+        size_t capacity = set->capacity ? set->capacity * 2u : 8u;
+        if (capacity < set->capacity) {
+            free(path);
+            return snag_fail(error, error_size, EOVERFLOW, "instruction path capacity overflow");
+        }
+        grown = realloc(set->paths, capacity * sizeof(*grown));
+        if (!grown) {
+            free(path);
+            return snag_fail(error, error_size, ENOMEM, "cannot retain instruction path");
+        }
+        set->paths = grown;
+        set->capacity = capacity;
+    }
+    set->paths[set->count++] = path;
+    return 0;
 }
 
 static int
@@ -46,13 +75,7 @@ try_candidate(struct snag_instruction_set *set, const char *path, bool *added, c
             return 0;
         }
     }
-    if (set->count == SNAG_MAX_INSTRUCTION_SOURCES) {
-        free(canonical);
-        return snag_fail(error, error_size, EOVERFLOW, "instruction discovery exceeds %u files",
-                    SNAG_MAX_INSTRUCTION_SOURCES);
-    }
-    set->paths[set->count++] = canonical;
-    return 0;
+    return snag_instructions_add_owned(set, canonical, error, error_size);
 }
 
 int
@@ -276,8 +299,8 @@ snag_instructions_metadata_valid(const json_t *array, char *error, size_t error_
 {
     size_t count;
 
-    if (!json_is_array(array) || (count = json_array_size(array)) > SNAG_MAX_INSTRUCTION_SOURCES)
-        goto invalid;
+    if (!json_is_array(array)) goto invalid;
+    count = json_array_size(array);
     for (size_t i = 0; i < count; ++i) {
         const json_t *value = json_array_get(array, i);
         const char *path = json_string_value(value);

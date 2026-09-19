@@ -26,6 +26,7 @@ struct context_builder {
     json_t *tools;
     json_t *request_input;
     json_t *tool_feedback;
+    size_t tool_result_bytes; /* Projected tool-result bytes in this request. */
     json_t *deferred_input;
     json_t *input_timing;
     size_t recovery_index;
@@ -207,9 +208,15 @@ append_tool_result(struct context_builder *builder, const char *call_id, const j
     char digest[SNAG_SHA256_HEX_LEN + 1u];
     int rc = -1;
 
-    if (limit > SNAG_CONTEXT_MAX_REQUEST / (16u * SNAG_MAX_CALLS_PER_RESPONSE)) {
+    /* Tool results share one sixteenth of the request budget; each result is
+     * clamped so the running total stays inside it. */
+    size_t budget = SNAG_CONTEXT_MAX_REQUEST / 16u;
+    uint32_t share = (uint32_t)(budget - (builder->tool_result_bytes < budget ?
+                                          builder->tool_result_bytes : budget));
+    if (!share) share = 1u;
+    if (limit > share) {
         uint32_t selected = limit;
-        limit = SNAG_CONTEXT_MAX_REQUEST / (16u * SNAG_MAX_CALLS_PER_RESPONSE);
+        limit = share;
         char feedback[192];
         (void)snprintf(feedback, sizeof(feedback),
             "Result max_output_bytes=%u reduced to %u UTF-8 bytes by the host context-safety maximum.",
@@ -253,6 +260,11 @@ append_tool_result(struct context_builder *builder, const char *call_id, const j
             snag_json_string(result, "status"), len, digest, builder->session->dir_path) < 0 ||
             snag_buf_terminate(&notice) < 0) goto out;
         output_text = (const char *)notice.data;
+    }
+    if (builder->tool_result_bytes < SNAG_CONTEXT_MAX_REQUEST / 16u) {
+        size_t remaining = SNAG_CONTEXT_MAX_REQUEST / 16u - builder->tool_result_bytes;
+        size_t projected = strlen(output_text);
+        builder->tool_result_bytes += projected < remaining ? projected : remaining;
     }
 
     json_t *output = snag_media_message_content(builder->session->dir_fd, output_text,
@@ -502,11 +514,14 @@ append_instruction_messages(struct context_builder *builder)
 {
     struct snag_buf text;
     json_t *paths;
+    size_t per_path = SNAG_PATH_MAX_BYTES * 6u + 4u, budget;
     int rc = -1;
 
     if (!builder->instructions || !builder->instructions->count) return 0;
+    if (builder->instructions->count > (SIZE_MAX - 1024u) / per_path) return snag_errno(EOVERFLOW);
+    budget = builder->instructions->count * per_path + 1024u;
     paths = snag_instructions_metadata_json(builder->instructions);
-    snag_buf_init(&text, SNAG_MAX_INSTRUCTION_SOURCES * (SNAG_PATH_MAX_BYTES * 6u + 4u) + 1024u);
+    snag_buf_init(&text, budget);
     if (paths && snag_buf_printf(&text,
             "Working-document entry points (JSON paths, not file contents):\n") == 0 &&
         snag_json_canonical(paths, &text) == 0 && snag_buf_printf(&text,
@@ -1339,8 +1354,7 @@ snag_context_compact_output_valid(const json_t *output, char output_hash[SNAG_SH
 {
     if (output_hash) output_hash[0] = '\0';
     if (output_bytes) *output_bytes = 0u;
-    if (!json_is_array(output) || json_array_size(output) == 0u ||
-        json_array_size(output) > SNAG_CONTEXT_MAX_COMPACT_ITEMS) {
+    if (!json_is_array(output) || json_array_size(output) == 0u) {
         return snag_fail(error, error_size, EINVAL, "compact output must be a nonempty bounded array");
     }
     for (size_t i = 0; i < json_array_size(output); ++i) {

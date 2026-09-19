@@ -15,7 +15,6 @@
  * Matching is filtering, never containment; containment belongs to bindings
  * and native dispatch. */
 
-#define SNAG_RULES_MAX 256u
 #define SNAG_RULE_NAME_MAX 63u
 #define SNAG_RULE_TEXT_MAX (64u * 1024u)
 #define SNAG_RULE_ENVELOPE_MAX (4u * 1024u * 1024u)

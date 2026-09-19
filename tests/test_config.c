@@ -125,17 +125,16 @@ test_configured_efforts(const char *path)
         write_bytes(path, text, (size_t)n);
         expect_invalid(path);
     }
-    for (size_t count = SNAG_CONFIG_EFFORTS_MAX; count <= SNAG_CONFIG_EFFORTS_MAX + 1u; ++count) {
+    for (size_t count = 32u; count <= 64u; count += 32u) {
         char text[4096];
         size_t used = (size_t)snprintf(text, sizeof(text), "[provider p]\n[model-limit p/m]\nreasoning_efforts=[");
         for (size_t i = 0; i < count; ++i)
             used += (size_t)snprintf(text + used, sizeof(text) - used, "%s\"effort-%zu\"", i ? "," : "", i);
         used += (size_t)snprintf(text + used, sizeof(text) - used, "]\n");
         write_bytes(path, text, used);
-        if (count == SNAG_CONFIG_EFFORTS_MAX) {
-            load_config(&config, path, NULL);
-            snag_config_free(&config);
-        } else expect_invalid(path);
+        load_config(&config, path, NULL);
+        assert(json_array_size(config.model_limits[0].reasoning_efforts) == count);
+        snag_config_free(&config);
     }
     for (size_t len = SNAG_CONFIG_EFFORT_MAX - 1u; len <= SNAG_CONFIG_EFFORT_MAX; ++len) {
         char text[512], effort[SNAG_CONFIG_EFFORT_MAX + 1u];
@@ -164,43 +163,56 @@ expect_ui(const char *path, const char *key, const char *value, bool valid)
     snag_config_free(&config);
 }
 
+static uint32_t *
+numeric_target(struct snag_config *config, unsigned int target)
+{
+    if (target == 0u) return &config->providers[0].auto_compact_input_tokens;
+    if (target == 1u) return &config->max_parallel_commands;
+    if (target == 2u) return &config->max_wait_ms;
+    return &config->max_turn_retries;
+}
+
 static void
 test_numeric_settings(const char *path)
 {
     struct snag_config config;
     const struct {
         const char *format, *duplicate, *values[11];
-        uint32_t *value, initial;
+        unsigned int target;
+        uint32_t initial;
         size_t first, end, count, capacity;
     } cases[] = {
         {"[provider first]\nauto_compact_input_tokens=%s\n[provider second]\n", NULL,
          {"auto", "0", "1", "120000", "4000000", "4000001", "4294967295", "-1",
           "90%", "automatic", "auto\nauto_compact_input_tokens=1"},
-         &config.providers[0].auto_compact_input_tokens, SNAG_CONFIG_COMPACT_AUTO, 0u, 5u, 11u, 256u},
+         0u, SNAG_CONFIG_COMPACT_AUTO, 0u, 5u, 11u, 256u},
         {"[tool]\nmax_parallel_commands=%s\n[provider openai]\nparallel_tool_calls=false\n",
          "[tool]\nmax_parallel_commands=4\nmax_parallel_commands=2\n",
-         {"0", "1", "4", "32", "33", "-1", "no"}, &config.max_parallel_commands, 4u, 1u, 4u, 7u, 128u},
+         {"0", "1", "4", "32", "33", "4294967295", "4294967296", "-1", "no"},
+         1u, 4u, 1u, 6u, 9u, 128u},
         {"[tool]\nmax_wait_ms=%s\n", "[tool]\nmax_wait_ms=1\nmax_wait_ms=2\n",
          {"1", "60000", "4294967295", "0", "-1", "4294967296", "never"},
-         &config.max_wait_ms, 60000u, 0u, 3u, 7u, 96u},
+         2u, 60000u, 0u, 3u, 7u, 96u},
         {"[agent]\nmax_turn_retries=%s\n", "[agent]\nmax_turn_retries=3\nmax_turn_retries=0\n",
          {"0", "1", "3", "17", "4294967295", "4294967296", "-1", "3.5", "never"},
-         &config.max_turn_retries, 5u, 0u, 5u, 9u, 96u}
+         3u, 5u, 0u, 5u, 9u, 96u}
     };
     for (size_t c = 0u; c < sizeof(cases) / sizeof(cases[0]); ++c) {
         for (size_t i = 0u; i < cases[c].count; ++i) {
             char text[256], error[256] = {0};
+            uint32_t *value;
             size_t capacity = cases[c].capacity;
             int n = snprintf(text, capacity, cases[c].format, cases[c].values[i]);
             assert(n > 0 && (size_t)n < capacity);
             write_bytes(path, text, (size_t)n);
             snag_config_init(&config);
-            assert(*cases[c].value == cases[c].initial);
+            value = numeric_target(&config, cases[c].target);
+            assert(*value == cases[c].initial);
             bool valid = i >= cases[c].first && i < cases[c].end;
             assert((snag_config_load(&config, path, c == 3u ? (getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp") : NULL,
                                     error, sizeof(error)) == 0) == valid);
             if (valid) {
-                assert(*cases[c].value == (!strcmp(cases[c].values[i], "auto") ?
+                assert(*value == (!strcmp(cases[c].values[i], "auto") ?
                     SNAG_CONFIG_COMPACT_AUTO : (uint32_t)strtoul(cases[c].values[i], NULL, 10)));
                 if (c == 0u)
                     assert(config.providers[1].auto_compact_input_tokens == SNAG_CONFIG_COMPACT_AUTO);
@@ -544,6 +556,90 @@ test_io_rules(const char *path)
     expect_invalid(path);
 }
 
+static void
+test_many_model_aliases(const char *path)
+{
+    struct snag_config config;
+    char text[16384];
+    size_t used = 0u;
+
+    used += (size_t)snprintf(text + used, sizeof(text) - used, "[provider p]\n");
+    for (unsigned int i = 0u; i < 140u; ++i)
+        used += (size_t)snprintf(text + used, sizeof(text) - used,
+                                 "[model-alias p/m%u]\nmodel=upstream-%u\n", i, i);
+    write_bytes(path, text, used);
+    load_config(&config, path, NULL);
+    assert(config.provider_count == 1u);
+    assert(config.providers[0].model_count == 140u);
+    snag_config_free(&config);
+}
+
+static void
+test_spinner_frames(const char *path)
+{
+    char value[128];
+    size_t used;
+
+    /* The frame count follows the value's byte bound; the former 16-frame
+     * ceiling is gone, so a longer sequence must load. */
+    used = (size_t)snprintf(value, sizeof(value), "\"\\0");
+    for (unsigned int i = 0u; i < 40u; ++i)
+        used += (size_t)snprintf(value + used, sizeof(value) - used, "%c", (char)('a' + i % 26u));
+    used += (size_t)snprintf(value + used, sizeof(value) - used, "\"");
+    assert(used < sizeof(value));
+    expect_ui(path, "prompt_spinner_goal", value, true);
+
+    /* The per-entry string bound still rejects an over-long sequence. */
+    used = (size_t)snprintf(value, sizeof(value), "\"\\0");
+    for (unsigned int i = 0u; i < 67u; ++i)
+        used += (size_t)snprintf(value + used, sizeof(value) - used, "%c", (char)('a' + i % 26u));
+    used += (size_t)snprintf(value + used, sizeof(value) - used, "\"");
+    assert(used < sizeof(value));
+    expect_ui(path, "prompt_spinner_goal", value, false);
+}
+
+static void
+test_many_providers_and_limits(const char *path)
+{
+    struct snag_config config;
+    struct snag_model_limit_config resolved;
+    char text[16384];
+    size_t used = 0u;
+
+    for (unsigned int i = 0u; i < 20u; ++i)
+        used += (size_t)snprintf(text + used, sizeof(text) - used, "[provider p%u]\n", i);
+    for (unsigned int i = 0u; i < 140u; ++i)
+        used += (size_t)snprintf(text + used, sizeof(text) - used,
+                                 "[model-limit p0/m%u]\ncontext_window_tokens = %u\n", i, 1000u + i);
+    assert(used < sizeof(text));
+    write_bytes(path, text, used);
+    load_config(&config, path, NULL);
+    assert(config.provider_count == 20u);
+    assert(config.model_limit_count == 140u);
+    assert(snag_config_provider(&config, "p19") != NULL);
+    assert(snag_config_resolve_limits(&config, "p0", "m139", &resolved, NULL));
+    assert(resolved.context_window_tokens == 1139u);
+    snag_config_free(&config);
+}
+
+static void
+test_many_config_secrets(const char *path)
+{
+    struct snag_config config;
+    char text[4096];
+    size_t used = 0u;
+
+    used += (size_t)snprintf(text + used, sizeof(text) - used,
+                             "[provider openai]\napi_key = ${OPENAI_API_KEY}\n[tool]\n");
+    for (unsigned int i = 0u; i < 70u; ++i)
+        used += (size_t)snprintf(text + used, sizeof(text) - used, "secret = \"many-%u\"\n", i);
+    write_bytes(path, text, used);
+    load_config(&config, path, NULL);
+    assert(config.secret_count == 70u);
+    assert(config.secrets[69].kind == SNAG_SECRET_LITERAL);
+    snag_config_free(&config);
+}
+
 int
 main(void)
 {
@@ -796,7 +892,7 @@ main(void)
     } ui_cases[] = {
         {"prompt_spinner_goal", "\"\\0\"", true}, {"prompt_spinner_goal", "\" \"", true},
         {"prompt_spinner_goal", "\"\\0◆\"", true}, {"prompt_spinner_goal", "\"\\0abcdefghijklmnop\"", true},
-        {"prompt_spinner_goal", "\"\\0abcdefghijklmnopq\"", false}, {"prompt_spinner_goal", "\"\"", false},
+        {"prompt_spinner_goal", "\"\\0abcdefghijklmnopq\"", true}, {"prompt_spinner_goal", "\"\"", false},
         {"prompt_spinner_goal", "unquoted", false}, {"prompt_spinner_goal", "\" aab\"", false},
         {"prompt_spinner_goal", "\"\\0" "\xcc\x81" "\"", false},
         {"prompt_spinner_goal", "\"\\0" "\xe2\x80\x8b" "\"", false},
@@ -996,6 +1092,10 @@ main(void)
     }
 
     test_layered_limits_and_secrets(path);
+    test_many_config_secrets(path);
+    test_many_model_aliases(path);
+    test_spinner_frames(path);
+    test_many_providers_and_limits(path);
     assert(unlink(path) == 0);
     free(temp);
     puts("test_config: ok");

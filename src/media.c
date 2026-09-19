@@ -355,7 +355,7 @@ media_base64(int session_fd, const json_t *asset, struct snag_buf *out,
 bool
 snag_media_content_valid(const json_t *content)
 {
-    if (!json_is_array(content) || !json_array_size(content) || json_array_size(content) > 32u)
+    if (!json_is_array(content) || !json_array_size(content))
         return false;
     uint64_t bytes = 0;
     for (size_t i = 0; i < json_array_size(content); ++i) {

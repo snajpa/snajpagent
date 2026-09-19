@@ -797,9 +797,10 @@ test_session_identity_header(void)
     /* Set before the server forks: the fixture child inherits this expectation. */
     expected_session_header = "session_id: 0123456789abcdef0123456789abcdef";
     start_server(&server, MODEL_OPENAI, true, "");
-    struct snag_provider_connection connection = {
-        &config, &config.providers[1], &credential, NULL, NULL, NULL, session_id};
+    struct snag_provider_connection connection;
     snag_config_init(&config);
+    connection = (struct snag_provider_connection){
+        &config, &config.providers[1], &credential, NULL, NULL, NULL, session_id};
     snag_config_provider_init(&config.providers[1], "second");
     config.provider_count = 2u;
     assert(snprintf(config.providers[1].name, sizeof(config.providers[1].name), "transport") > 0);
@@ -853,9 +854,10 @@ test_local_provider_transport(void)
     char error[256] = {0};
 
     start_server(&server, MODEL_OPENAI, true, "");
-    struct snag_provider_connection connection = {
-        &config, &config.providers[1], &credential, NULL, NULL, NULL, NULL};
+    struct snag_provider_connection connection;
     snag_config_init(&config);
+    connection = (struct snag_provider_connection){
+        &config, &config.providers[1], &credential, NULL, NULL, NULL, NULL};
     snag_config_provider_init(&config.providers[1], "second");
     config.provider_count = 2u;
     assert(snprintf(config.providers[1].name, sizeof(config.providers[1].name), "transport") > 0);
@@ -944,10 +946,11 @@ test_codex_path_selection(void)
     struct snag_config config;
     struct snag_credential credential;
     char error[256] = {0};
-    struct snag_provider_connection connection = {
-        &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL};
+    struct snag_provider_connection connection;
 
     snag_config_init(&config);
+    connection = (struct snag_provider_connection){
+        &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL};
     transport_settings(&config.providers[0], &credential);
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         json_t *models = NULL;
