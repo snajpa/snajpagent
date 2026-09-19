@@ -1080,7 +1080,7 @@ def run_markdown_case(binary, root):
                 last_model = "> final quoted boundary"
             submitted = f"{DEFAULT_IDLE_PROMPT} terminal_markdown"
             waiting = "snajpagent: waiting for provider response (model gpt-5.5-2026-04-23)"
-            first_output = f"{waiting}\n{first_model}" if waiting in screen else first_model
+            first_output = f"{waiting}\n\n{first_model}" if waiting in screen else first_model
             if f"{submitted}\n\n{first_output}" not in screen:
                 raise AssertionError(
                     f"submitted input and model output lack one empty row:\n{screen}"
@@ -1250,11 +1250,15 @@ def run_render_case(binary, root):
         terminal.send_key("Enter")
         steered_screen = terminal.wait("steered: change course")
         submitted_steer = f"{DEFAULT_ACTIVE_PROMPT} change course"
-        if f"{submitted_steer}\n\n• steered: change course" not in steered_screen:
+        waiting = "snajpagent: waiting for provider response (model gpt-5.5-2026-04-23)"
+        model_start = "• steered: change course"
+        first_output = (f"{waiting}\n\n{model_start}"
+                        if waiting in steered_screen.rsplit(submitted_steer, 1)[-1] else model_start)
+        if f"{submitted_steer}\n\n{first_output}" not in steered_screen:
             raise AssertionError(
                 f"submitted steer and model output lack one empty row:\n{steered_screen}"
             )
-        if f"{submitted_steer}\n\n\n• steered: change course" in steered_screen:
+        if f"{submitted_steer}\n\n\n{first_output}" in steered_screen:
             raise AssertionError(
                 f"submitted steer and model output have an extra empty row:\n{steered_screen}"
             )
@@ -7630,7 +7634,10 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
                 send(handler, 200, provider.function_body(sequence, "counted-read", "exec_command", {
                     "command": "cat input.txt", "workdir": str(case), "pty": False,
                     "stdin": None, "timeout_ms": None, "yield_ms": 1000, "max_output_tokens": 1000}), True)
-            elif (mode == "sized" and len(json.dumps(request["input"])) > 6500):
+            # The simulated history budget is independent of fixed policy wording.
+            elif (mode == "sized" and len(json.dumps([
+                    item for item in request["input"]
+                    if item.get("role") not in ("system", "developer")])) > 6500):
                 overflow(handler, sequence)
             elif ((mode == "scope-switch" and not rebuilt[0]) or
                   (mode not in ("exact", "count-overflow", "proactive", "sized") and not failed[0])):

@@ -1590,6 +1590,20 @@ test_spacing_classes(void)
     assert(strcmp(output, "input › one\ninput › two\n\n" "• Goal set\n• Goal updated\n"
         "• Goal resumed\n• Goal blocked by model\n• Goal cleared\n• Goal cleared\n"
         "• Compacted\n\nheading\n\ninput › three\n") == 0);
+
+    /* A provider wait notice must not consume the literal model paragraph's gap. */
+    capture = capture_open(true, true);
+    snag_render_init(&render, 0u);
+    render.stdout_terminal = render.stderr_terminal = true;
+    render.markdown = false;
+    snag_render_set_color(&render, SNAG_COLOR_NEVER);
+    assert(snag_render_warning_ctx(&render, "waiting") == 0);
+    assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
+    assert(snag_render_public(&render, "model text", 10u, NULL) == 0);
+    assert(snag_render_public_end(&render) == 0);
+    snag_render_free(&render);
+    (void)capture_close(&capture, output, sizeof(output), 0u);
+    assert(strstr(output, "snajpagent: waiting\n\nmodel text"));
 }
 
 static void

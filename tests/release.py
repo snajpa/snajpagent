@@ -454,12 +454,12 @@ assert ('linux-armv6 = (linux pkgs.pkgsCross.muslpi).application '
 assert "linux-armv7" not in release.targets()
 print("PASS: shared 32-bit ARM target retains its ARMv6 toolchain and identity")
 
-# Deferred targets retain callable recipes without joining a release matrix.
-assert "linux-riscv64" not in release.targets()
-assert "linux-riscv64" in release.deferred()
+# Restored RISC-V dependency fixes keep this shipped target in the matrix.
+assert "linux-riscv64" in release.targets()
+assert "linux-riscv64" not in release.deferred()
 assert ('linux-riscv64 = (linux pkgs.pkgsCross.riscv64-musl).application '
         '(args "linux-riscv64");') in portable
-print("PASS: deferred RISC-V target retains its static musl recipe and own identity")
+print("PASS: RISC-V production target retains its static musl recipe and own identity")
 
 assert "linux-ppc64le" in release.targets()
 assert ('linux-ppc64le = (linux pkgs.pkgsCross.musl-power).application '
@@ -642,13 +642,13 @@ print("PASS: PDF system include paths preserve unrelated compiler flags")
 # retain the host Fontconfig configuration and host font directory fallback.
 assert 'pkgs.lib.hasPrefix "--with-default-fonts=" flag' in linux
 assert '"--with-default-fonts=/usr/share/fonts,/usr/local/share/fonts"' in linux
-pdf_recipe = linux.split("pdf = (static.poppler.override {", 1)[1].split("}).overrideAttrs", 1)[0]
+pdf_recipe = linux.split("pdf = (staticFixed.poppler.override {", 1)[1].split("}).overrideAttrs", 1)[0]
 assert "inherit fontconfig;" in pdf_recipe
 print("PASS: portable PDF font fallback uses host directories")
 
 # Nixpkgs curlMinimal disables WebSockets unless explicitly requested. Realtime
 # voice uses the linked library, covered at runtime by test_provider_transport.
-curl_recipe = linux.split("curl = (static.curlMinimal.override {", 1)[1].split("}).overrideAttrs", 1)[0]
+curl_recipe = linux.split("curl = (staticFixed.curlMinimal.override {", 1)[1].split("}).overrideAttrs", 1)[0]
 assert "websocketSupport = true;" in curl_recipe
 print("PASS: portable Linux curl enables realtime WebSockets")
 
@@ -657,7 +657,7 @@ for flag in ("MA_NO_RUNTIME_LINKING", "MA_ENABLE_ONLY_SPECIFIC_BACKENDS",
              "MA_ENABLE_ALSA", "MA_ENABLE_PULSEAUDIO"):
     assert "-D" + flag in linux
 assert '"AUDIO_DEVICE_LIBS=$($PKG_CONFIG --static --libs alsa libpulse)"' in linux
-assert 'propagatedBuildInputs = [ static.libsndfile ];' in linux
+assert 'propagatedBuildInputs = [ staticFixed.libsndfile ];' in linux
 assert 'Requires.private: sndfile' in linux
 assert '#define ALSA_CONFIG_DIR "/usr/share/alsa"' in linux
 assert 'substituteInPlace include/config.h' in linux
