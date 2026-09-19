@@ -2002,6 +2002,7 @@ test_irc_steering_mode(void)
     struct snag_config config = {0};
     struct app_state app = {0};
     char error[256] = {0};
+    snag_config_init(&config);
     snag_session_init(&app.session);
     assert(snag_ui_init(&app.ui) == 0);
     app.config = &config;
@@ -2026,6 +2027,7 @@ test_irc_steering_mode(void)
     snag_buf_free(&app.irc_background);
     snag_ui_free(&app.ui);
     snag_session_close(&app.session);
+    snag_config_free(&config);
 }
 
 static void

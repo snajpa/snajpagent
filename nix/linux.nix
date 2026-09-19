@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: GPL-2.0-only
 { pkgs, musl, static ? musl.pkgsStatic }:
 let
-  staticFixed = static.extend (final: prev: {
+  staticFixed = if musl.stdenv.hostPlatform.isRiscV then static.extend (final: prev: {
     libjpeg_turbo = prev.libjpeg_turbo.overrideAttrs (old: {
       postPatch = (old.postPatch or "") + pkgs.lib.optionalString musl.stdenv.hostPlatform.isRiscV ''
         sed -i -e '/add_executable(simdcoverage/d' -e '/target_link_libraries(simdcoverage/d' simd/CMakeLists.txt
       '';
     });
     libjpeg = final.libjpeg_turbo;
-  });
+  }) else static;
   clockFallback = musl.stdenv.hostPlatform.isx86_64;
   atomicFallback = musl.stdenv.hostPlatform.isPower && musl.stdenv.hostPlatform.is32bit;
   # File decoding uses built-in codecs. Device I/O belongs to miniaudio;
