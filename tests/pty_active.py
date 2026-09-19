@@ -1290,6 +1290,34 @@ def test_interrupt():
     assert turn["data"]["reason"] == "cancelled"
 
 
+def test_cancel_defers_timer_until_next_input():
+    # Post-cancel deferral: ^C ends the turn with no new turn from
+    # timer/queue/goal sources. The 6s timer becomes due during the ~10s
+    # slow turn; cancelling after it is due must not start the timer turn.
+    # The next direct input ends deferral and the due timer follows that
+    # turn. IRC traffic still wakes via its own path.
+    child = Child([], PROMPT.rstrip())
+    child.send_wait(b"timer_slow_test\r", b"timer slow scheduled")
+    child.send_wait(b"queue_slow\r", b"working slowly")
+    # Timer (6s) becomes due during the slow turn (~10s); cancel after it.
+    child.drain(7.0)
+    child.send_wait(b"\x03", b"turn interrupted")
+    # A spurious timer auto-start would appear here; nothing new may start.
+    child.drain(0.5)
+    log = events(child.session_id())
+    starts = [e for e in log if e["type"] == "turn_started"]
+    assert len(starts) == 2, starts
+    assert b"timer reminder handled" not in child.buf
+    # Next direct input ends deferral; the due timer follows that turn.
+    ping_end = child.send_wait(b"ping\r", b"pong")
+    timer_end = child.wait(b"timer reminder handled", start=ping_end)
+    child.exit_cleanly(timer_end)
+    log = events(child.session_id())
+    starts = [e for e in log if e["type"] == "turn_started"]
+    assert [s["data"]["text"] for s in starts] == ["timer_slow_test", "queue_slow", "ping", "timer fired"]
+    assert one(log, "turn_interrupted")
+
+
 def test_active_ctrl_c_clears_draft():
     child = Child([], PROMPT.rstrip())
     child.send_wait(b"queue_slow\r", b"working slowly")
@@ -2041,6 +2069,8 @@ def test_dynamic_irc_lifecycle_and_refusal():
             with Child(client_args, PROMPT.rstrip()) as client:
                 watch_start = len(watcher.buf)
                 connected_end = client.send_wait(f"irc_connect_test {endpoint}\r".encode(), b"IRC connected")
+                # The next prompt must be a fresh turn: a mid-turn submission becomes steering.
+                client.wait_idle_prompt(start=connected_end)
                 watcher.wait(b":connectbot!", start=watch_start)
                 disconnect_start = len(watcher.buf)
                 disconnected_end = client.send_wait(f"irc_disconnect_test {endpoint}\r".encode(),

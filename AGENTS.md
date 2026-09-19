@@ -157,3 +157,10 @@ preserve the full reference, and derive web contents from its headings. Check
 reading hierarchy, code/definition layout and keyboard navigation, not only
 page overflow. Screenshots must be real program captures with
 correct status fields and current rendering, never synthesized or recolored.
+
+## Code style
+
+New and changed code follows [design/code-style.md](design/code-style.md); the existing tree is
+hybrid and converts opportunistically, without a whole-tree reflow inside a behavior change.
+`make stylecheck` enforces the policy's mechanical subset, and
+`tools/check_style.sh --changed <base>` checks lines added since an explicit base revision.

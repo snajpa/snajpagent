@@ -19,6 +19,8 @@
 #define RO_SCAN (128u * 1024u * 1024u)
 #define RO_ENTRIES 100000u
 #define RO_DEPTH 32u
+/* Service the app pump on a cadence; per-line pumping dominated scans. */
+#define RO_PUMP_MS 25u
 
 struct read_query {
     struct snag_buf output;
@@ -30,6 +32,7 @@ struct read_query {
     size_t bytes, entries, seen, emitted, offset, limit;
     size_t skipped;
     uint64_t start, end;
+    uint64_t pump_at;
     bool grep, read, recursive, literal, ignore_case, compiled, more;
     int interrupted;
 };
@@ -37,7 +40,13 @@ struct read_query {
 static int
 checkpoint(struct read_query *q)
 {
-    if (q->pump && (q->interrupted = q->pump(q->opaque, 0u)) != 0) {
+    uint64_t now;
+
+    if (!q->pump) return 0;
+    now = snag_monotonic_ms();
+    if (now < q->pump_at) return 0;
+    q->pump_at = now + RO_PUMP_MS;
+    if ((q->interrupted = q->pump(q->opaque, 0u)) != 0) {
         q->problem = "Inspection interrupted; results are incomplete.";
         return -1;
     }

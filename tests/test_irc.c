@@ -344,6 +344,7 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     struct snag_irc_route route = {0}, frozen;
     uint32_t removed_id;
 
+    assert(snag_irc_destinations_generation(NULL) == 0u);
     init_server_config(&upstream_config, upstream_port);
     upstream = open_server(&upstream_config, &upstream_capture);
     tick(upstream, 1u);
@@ -378,14 +379,17 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     assert(strcmp(snag_irc_model_nick(runtime), "agent1") == 0);
     joins = upstream_capture.events[SNAG_IRC_JOIN];
     revision = snag_irc_routing_revision(runtime);
+    uint64_t destination_generation = snag_irc_destinations_generation(runtime);
     assert(snag_irc_configure(runtime, &config, "/private-workspace", error, sizeof(error)) == 0);
     assert(snag_irc_routing_revision(runtime) == revision);
+    assert(snag_irc_destinations_generation(runtime) == destination_generation);
 
     /* A failed listener addition leaves the existing client connected. */
     assert(snag_irc_add(runtime, &config, "/private-workspace", true, other, error, sizeof(error)) < 0);
     tick(upstream, 2u);
     assert(upstream_capture.events[SNAG_IRC_JOIN] == joins);
     assert(snag_irc_routing_revision(runtime) == revision);
+    assert(snag_irc_destinations_generation(runtime) == destination_generation);
 
     config.irc.listen_explicit = true;
     assert(snag_irc_configure(runtime, &config, "/private-workspace", error, sizeof(error)) == 0);
@@ -437,6 +441,17 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     ++route.targets[0].revision;
     assert(snag_irc_send_route(runtime, &route, true, SNAG_IRC_MESSAGE,
         "wrong-revision", NULL, error, sizeof(error)) == 1);
+    /* A stored route gone stale across a reconnect still names the same
+     * destination by id: it rebinds instead of failing like a future revision. */
+    snag_irc_destinations(runtime, &destinations);
+    for (size_t i = 0u; i < destinations.count; ++i)
+        if (destinations.items[i].target.id == route.targets[0].id &&
+            destinations.items[i].target.revision > 0u) {
+            route.targets[0] = destinations.items[i].target;
+            --route.targets[0].revision;
+        }
+    assert(snag_irc_send_route(runtime, &route, true, SNAG_IRC_MESSAGE,
+        "stale-revision", NULL, error, sizeof(error)) == 0);
     snag_irc_capture_route(runtime, &frozen);
     assert(frozen.count == 2u);
 
@@ -772,8 +787,11 @@ static void __attribute__((noinline)) test_server(void)
     send_text(human, "MODE #lab -o agent\r\n");
     wait_wire(server, human, wire, sizeof(wire), "MODE #lab -o agent");
     error[0] = '\0';
-    assert(send_all(server, true, SNAG_IRC_TOPIC, "denied", error, sizeof(error)) == 1);
-    assert(errno == EACCES);
+    /* Session-hosted room: the model link sets the topic even while un-opped. */
+    assert(send_all(server, true, SNAG_IRC_TOPIC, "hosted agent topic", error, sizeof(error)) == 0);
+    tick(server, 5u);
+    drain_ready(server, human, wire, sizeof(wire));
+    assert(strstr(wire, "TOPIC #lab :hosted agent topic") != NULL);
     ping_without_engine(human);
     assert(snag_socket_close(human) == 0);
     tick(server, 5u);
@@ -789,6 +807,35 @@ static void __attribute__((noinline)) test_server(void)
         assert(strstr(wire, "PONG") && strstr(wire, "capacity"));
         assert(snag_socket_close(capacity[i]) == 0);
     }
+    snag_irc_close(server);
+    snag_config_free(&config);
+}
+
+static void __attribute__((noinline)) test_nick_rename(void)
+{
+    struct snag_config config;
+    struct capture capture = {0};
+    struct snag_irc *server;
+    unsigned short port = free_port();
+    char error[256] = {0};
+    unsigned int nicks_before;
+
+    init_server_config(&config, port);
+    server = open_server(&config, &capture);
+    assert(strcmp(snag_irc_model_nick(server), "agent") == 0);
+    nicks_before = capture.events[SNAG_IRC_NICK];
+    /* Session-hosted rename shares the new agent nick via a NICK event. */
+    assert(send_all(server, true, SNAG_IRC_NICK, "lead", error, sizeof(error)) == 0);
+    assert(strcmp(snag_irc_model_nick(server), "lead") == 0);
+    assert(capture.events[SNAG_IRC_NICK] == nicks_before + 1u);
+    assert(strcmp(capture.last_nick.nick, "agent") == 0);
+    assert(strcmp(capture.last_nick.text, "lead") == 0);
+    /* Invalid nicks are rejected and leave the identity alone. */
+    assert(send_all(server, true, SNAG_IRC_NICK, "9bad nick", error, sizeof(error)) != 0);
+    assert(strcmp(snag_irc_model_nick(server), "lead") == 0);
+    assert(capture.events[SNAG_IRC_NICK] == nicks_before + 1u);
+    /* The operator identity is untouched by the agent rename. */
+    assert(strcmp(snag_irc_operator_nick(server), "operator") == 0);
     snag_irc_close(server);
     snag_config_free(&config);
 }
@@ -987,6 +1034,7 @@ static void __attribute__((noinline)) test_client_reconnect(void)
     assert(strstr((const char *)snapshot.data, "]: /workspace") != NULL);
     snag_buf_free(&snapshot);
     assert(snag_irc_routing_revision(client) == revision);
+    uint64_t destination_generation = snag_irc_destinations_generation(client);
 
     /* Same endpoint can advertise a different room on reconnect. */
     snag_irc_close(next_server);
@@ -995,11 +1043,18 @@ static void __attribute__((noinline)) test_client_reconnect(void)
     next_server = open_server(&server_config, &next_capture);
     wait_pair_state(next_server, client, "joined #other");
     assert(snag_irc_routing_revision(client) > revision);
+    assert(snag_irc_destinations_generation(client) > destination_generation);
     snag_buf_init(&snapshot, SNAG_MAX_IRC_SNAPSHOT);
     assert(snag_irc_state(client, &snapshot, error, sizeof(error)) == 0);
     assert(snag_buf_terminate(&snapshot) == 0);
     assert(strstr((const char *)snapshot.data, "joined #other"));
     snag_buf_free(&snapshot);
+
+    pump_pair(next_server, client, 1u);
+    uint64_t steady_generation = snag_irc_destinations_generation(client);
+    tick(client, 2u);
+    tick(client, 2u);
+    assert(snag_irc_destinations_generation(client) == steady_generation);
 
     snag_irc_close(client);
     snag_irc_close(next_server);
@@ -1300,6 +1355,14 @@ static void __attribute__((noinline)) test_client_events(void)
         wait_pair_event(NULL, client, &capture, SNAG_IRC_MODE, modes + 2u);
         assert(send_all(client, false, SNAG_IRC_TOPIC, "not op", error, sizeof(error)) == 1);
         assert(send_all(client, true, SNAG_IRC_TOPIC, "agent op", error, sizeof(error)) == 0);
+        /* External rooms keep the joined+opped rule for the model link too. */
+        send_text(agent_fd, ":friend!u@fake MODE #lab -o agent7\r\n");
+        tick(client, 5u);
+        error[0] = '\0';
+        assert(send_all(client, true, SNAG_IRC_TOPIC, "external", error, sizeof(error)) == 1);
+        assert(errno == EACCES);
+        send_text(agent_fd, ":friend!u@fake MODE #lab +o agent7\r\n");
+        tick(client, 5u);
         send_text(operator_fd, ":remoteagent!u@fake JOIN #lab\r\n"
             ":remoteagent!u@fake PRIVMSG #lab :old nick is someone else\r\n"
             ":friend!u@fake PART #lab :bye\r\n");
@@ -1408,6 +1471,7 @@ main(int argc, char **argv)
     test_listener_collision();
     test_runtime_roles();
     test_server();
+    test_nick_rename();
     test_client_reconnect();
     test_default_nick_sequence();
     test_client_nick_collision(true);

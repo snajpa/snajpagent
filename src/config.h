@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include "secret_source.h"
 #include "snag_jansson.h"
 
@@ -23,6 +24,7 @@
 #define SNAG_CONFIG_PROVIDER_MAX 16u
 #define SNAG_CONFIG_PROVIDER_NAME_MAX 63u
 #define SNAG_CONFIG_MODEL_LIMIT_MAX 128u
+#define SNAG_CONFIG_STEERING_MAX 8u
 #define SNAG_CONFIG_MODEL_ALIAS_MAX 128u
 #define SNAG_CONFIG_TOKEN_LIMIT_MAX UINT64_C(4000000000)
 /* Outside the numeric compaction range; zero continues to mean disabled. */
@@ -45,7 +47,17 @@ enum snag_token_count_mode {
     SNAG_TOKEN_COUNT_AUTO, SNAG_TOKEN_COUNT_OFF, SNAG_TOKEN_COUNT_STRICT };
 
 enum snag_auth_kind {
-    SNAG_AUTH_API_KEY, SNAG_AUTH_CHATGPT };
+    SNAG_AUTH_API_KEY, SNAG_AUTH_CHATGPT, SNAG_AUTH_META };
+
+#define SNAG_META_BASE "https://api.meta.ai/v1"
+#define SNAG_META_BASE_BARE "https://api.meta.ai"
+
+static inline bool
+snag_is_meta_base(const char *url)
+{
+    return url && (strcmp(url, SNAG_META_BASE) == 0 ||
+            strcmp(url, SNAG_META_BASE_BARE) == 0);
+}
 
 #define SNAG_CHATGPT_BASE "https://chatgpt.com/backend-api/codex"
 
@@ -90,6 +102,7 @@ struct snag_provider_config {
 struct snag_model_limit_config {
     char provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
     char model[SNAG_CONFIG_MODEL_MAX];
+    char steering[SNAG_CONFIG_STEERING_MAX + 1u];
     uint64_t context_window_tokens;
     uint64_t max_input_tokens;
     uint64_t max_output_tokens;
@@ -172,5 +185,10 @@ const char *snag_config_model_upstream(const struct snag_provider_config *provid
 bool snag_config_resolve_limits(const struct snag_config *config, const char *provider, const char *model,
                                struct snag_model_limit_config *out,
                                const struct snag_model_limit_config *sources[3]);
+
+/* Exact provider+model entry for per-model IRC steering; NULL when absent. */
+const struct snag_model_limit_config *
+snag_config_model_limit_exact(const struct snag_config *config,
+    const char *provider, const char *model);
 
 #endif

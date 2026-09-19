@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# usrsctp: keep the userspace timingsafe_bcmp for pre-12 FreeBSD releases and
+# for OpenBSD (the 3.5 SDK lacks it); guarded <sys/param.h> supplies
+# __FreeBSD_version. OpenBSD wiring is early-only (5.9/7.9 have libc).
+--- a/usrsctplib/netinet/sctp_os_userspace.h
++++ b/usrsctplib/netinet/sctp_os_userspace.h
+@@ -1132,7 +1132,10 @@
+ 
+ #define SCTP_IS_LISTENING(inp) ((inp->sctp_flags & SCTP_PCB_FLAGS_ACCEPTING) != 0)
+ 
+-#if defined(__APPLE__) || defined(__DragonFly__) || defined(__linux__) || defined(__native_client__) || defined(__NetBSD__) || defined(_WIN32) || defined(__Fuchsia__) || defined(__EMSCRIPTEN__)
++#if defined(__FreeBSD__)
++#include <sys/param.h>	/* __FreeBSD_version */
++#endif
++#if defined(__APPLE__) || defined(__DragonFly__) || defined(__linux__) || defined(__native_client__) || defined(__NetBSD__) || defined(_WIN32) || defined(__Fuchsia__) || defined(__EMSCRIPTEN__) || (defined(__FreeBSD__) && __FreeBSD_version < 1200000) || defined(__OpenBSD__)
+ int
+ timingsafe_bcmp(const void *, const void *, size_t);
+ #endif
+--- a/usrsctplib/netinet/sctp_userspace.c
++++ b/usrsctplib/netinet/sctp_userspace.c
+@@ -126,7 +126,10 @@
+ }
+ #endif
+ 
+-#if defined(__APPLE__) || defined(__DragonFly__) || defined(__linux__) || defined(__native_client__) || defined(__NetBSD__) || defined(_WIN32) || defined(__Fuchsia__) || defined(__EMSCRIPTEN__)
++#if defined(__FreeBSD__)
++#include <sys/param.h>	/* __FreeBSD_version */
++#endif
++#if defined(__APPLE__) || defined(__DragonFly__) || defined(__linux__) || defined(__native_client__) || defined(__NetBSD__) || defined(_WIN32) || defined(__Fuchsia__) || defined(__EMSCRIPTEN__) || (defined(__FreeBSD__) && __FreeBSD_version < 1200000) || defined(__OpenBSD__)
+ int
+ timingsafe_bcmp(const void *b1, const void *b2, size_t n)
+ {

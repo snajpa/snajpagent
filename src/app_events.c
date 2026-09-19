@@ -25,7 +25,6 @@ append_pending(struct snag_buf *pending, const char *text, size_t len)
 static char *
 pending_batch(const struct snag_buf *pending, size_t *used)
 {
-
     *used = 0u;
     struct snag_buf batch = {.max = SNAG_MAX_STEERING_TEXT + 1u};
     while (*used < pending->len) {
@@ -163,15 +162,26 @@ int
 snag_app_sync_destinations(struct app_state *app)
 {
     struct snag_irc_destinations current;
+    uint64_t generation = snag_irc_destinations_generation(app->irc);
 
-    snag_irc_destinations(app->irc, &current);
-    if (app->irc_destinations_ready && memcmp(&current, &app->irc_destinations, sizeof(current)) == 0)
+    /* Rebuilding and comparing the whole destination set only means something
+     * after the runtime mutated one; the pump runs inside read-tool walk
+     * checkpoints, where the rebuild costs more than the walk it serves. */
+    if (app->irc_destinations_ready &&
+        generation == app->irc_destinations_generation)
         return 0;
+    snag_irc_destinations(app->irc, &current);
+    if (app->irc_destinations_ready &&
+        memcmp(&current, &app->irc_destinations, sizeof(current)) == 0) {
+        app->irc_destinations_generation = generation;
+        return 0;
+    }
     if (snag_ui_send(&app->ui, (struct snag_ui_command){
         .kind = SNAG_UI_DESTINATIONS, .data.destinations = &current}) < 0) return -1;
     prune_replies(&app->irc_urgent_replies, &current, app->irc_urgent_reply_offsets);
     prune_replies(&app->irc_turn_replies, &current, NULL);
     app->irc_destinations = current;
+    app->irc_destinations_generation = generation;
     app->irc_destinations_ready = true;
     return 0;
 }
@@ -326,15 +336,38 @@ snag_app_irc_flush_urgent(struct app_state *app, char *error, size_t error_size)
     size_t used;
     char *text;
     int rc;
+    const struct snag_model_limit_config *limit;
+    bool admit_all;
 
-    if (!app || !app->session.active_turn || !app->irc_urgent.len) return 0;
-    if (snag_random_id(steering_id) < 0 || !(text = pending_batch(&app->irc_urgent, &used))) return -1;
-    rc = admit_irc_input(app, &app->irc_urgent_refs, used, "steering_added",
-            snag_app_steering_added_data(app->session.active_turn_id, steering_id, text), error, error_size);
-    free(text);
-    if (rc < 0) return -1;
-    consume_pending(&app->irc_urgent, used);
-    admit_replies(app, used);
+    if (!app || !app->session.active_turn) return 0;
+    limit = snag_config_model_limit_exact(app->config, app->session.active_turn_provider,
+        app->config->model);
+    admit_all = (app->session.steering_override && *app->session.steering_override) ?
+        strcmp(app->session.steering_override, "all") == 0 :
+        (limit && strcmp(limit->steering, "all") == 0);
+    if (!app->irc_urgent.len && !(admit_all && app->irc_background.len)) return 0;
+    if (app->irc_urgent.len) {
+        if (snag_random_id(steering_id) < 0 || !(text = pending_batch(&app->irc_urgent, &used)))
+            return -1;
+        rc = admit_irc_input(app, &app->irc_urgent_refs, used, "steering_added",
+                snag_app_steering_added_data(app->session.active_turn_id, steering_id, text),
+                error, error_size);
+        free(text);
+        if (rc < 0) return -1;
+        consume_pending(&app->irc_urgent, used);
+        admit_replies(app, used);
+    }
+    if (admit_all && app->irc_background.len) {
+        if (snag_random_id(steering_id) < 0 ||
+            !(text = pending_batch(&app->irc_background, &used))) return -1;
+        rc = admit_irc_input(app, &app->irc_background_refs, used, "steering_added",
+                snag_app_steering_added_data(app->session.active_turn_id, steering_id, text),
+                error, error_size);
+        free(text);
+        if (rc < 0) return -1;
+        consume_pending(&app->irc_background, used);
+        if (!app->irc_background.len) app->irc_background_since_ms = 0u;
+    }
     return 0;
 }
 

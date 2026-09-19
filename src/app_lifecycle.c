@@ -482,7 +482,7 @@ snag_app_goal_command(struct app_state *app, const char *line, bool active)
         while (isspace((unsigned char)*rest)) ++rest;
         if (*rest) return goal_error(app, "reserved /goal command has extra text; use /goal set or quotes");
         if (strcmp(command, "status") == 0) return render_goal(app);
-        if (strcmp(command, "help") == 0) return snag_app_help(app, "/goal");
+        if (strcmp(command, "help") == 0) return snag_app_help(app, "/state goal");
         return goal_simple_command(app, command);
     }
     return set_goal_prompt(app, argument);

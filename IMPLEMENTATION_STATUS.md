@@ -2,6 +2,10 @@
 
 # Implementation status
 
+Voice supports native Codex subscription calls and public Realtime BYOK.
+The selected provider supplies credentials and defaults. Native media uses
+libdatachannel/libjuice and Opus; coding handoffs wait for finalized transcripts.
+
 Context-capacity recovery survives new-input handoff and replay, reducing further
 complete prefixes after repeated rejection. Prefix measurement is incremental;
 request/summary preparation checks cancellation and the local prompt shows pending

@@ -18,6 +18,12 @@ let
     "${mirror}/NetBSD-${osVersion}/amd64/binary/sets/${set}.${setSuffix}") mirrors;
   llvm = pkgs.llvmPackages_21;
   tools = "${llvm.llvm}/bin";
+  legacyRt = pkgs.runCommand "legacyrt-netbsd-${osVersion}" {} ''
+    mkdir -p $out/lib
+    ${compiler} --target=${target} --sysroot=${sdk} -Os -fno-stack-protector \
+      -c ${./legacy-rt-shim.c} -o legacyrt.o
+    ${tools}/llvm-ar rcs $out/lib/liblegacyrt.a legacyrt.o
+  '';
   sdk = pkgs.stdenvNoCC.mkDerivation {
     pname = "netbsd-amd64-sysroot";
     version = osVersion;
@@ -168,6 +174,15 @@ let
     inherit pkgs autotoolsLibrary cflags llvm osVersion;
     os = "netbsd";
   };
+  voiceRtc = import ./voice-rtc-cross.nix {
+    inherit pkgs cmakeLibrary tls; sourcePkgs = sourcePkgs;
+    # NetBSD 2.0's sys/queue.h lacks TAILQ_FOREACH_SAFE.
+    sctpPatches = [ ./usrsctp-bsd-tailq-safe.patch ./usrsctp-netbsd-route-in6.patch ./usrsctp-legacy-arc4random.patch ] ++ lib.optional legacy ./usrsctp-legacy-compat.patch;
+    # NetBSD 2.0 lacks AI_ADDRCONFIG/AI_NUMERICSERV for getaddrinfo.
+    rtcPatches = [ ./libdatachannel-legacy-ai-flags.patch ];
+    cxxFlags = "${cflags} -stdlib=libstdc++ -pthread -fno-builtin-pow -fno-builtin-powf -nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}${lib.optionalString early " -include ${./bsd-legacy-cxx.h}"}";
+    cxxLibraries = "${ldflags} -L${cxx}/lib";
+  };
   jansson = cmakeLibrary sourcePkgs.jansson [
     "-DJANSSON_BUILD_SHARED_LIBS=OFF" "-DJANSSON_BUILD_DOCS=OFF"
     "-DJANSSON_WITHOUT_TESTS=ON" "-DJANSSON_EXAMPLES=OFF"
@@ -179,6 +194,8 @@ let
     postPatch = ''
       perl scripts/config.pl set MBEDTLS_THREADING_C
       perl scripts/config.pl set MBEDTLS_THREADING_PTHREAD
+      # libdatachannel uses the DTLS-SRTP API; enable it (PROTO_DTLS is on).
+      perl scripts/config.pl set MBEDTLS_SSL_DTLS_SRTP
       # NetBSD 5 exposes native monotonic clocks but advertises POSIX 1990.
       substituteInPlace library/platform_util.c \
         --replace-fail '|| defined(__HAIKU__)' '|| defined(__HAIKU__) || defined(__NetBSD__)'
@@ -392,7 +409,7 @@ in {
       src = source;
       outputs = [ "out" "debug" ];
       nativeBuildInputs = [ pkgs.pkg-config ];
-      buildInputs = [ jansson curl av xml archive ] ++ networkLibraries ++ [ regex ]
+      buildInputs = [ jansson curl av xml archive ] ++ voiceRtc.dependencies ++ networkLibraries ++ [ regex ]
         ++ [ pdf png freetype expat fontconfig jpeg openjpeg ] ++ lib.optional legacy cxx;
       enableParallelBuilding = true;
       dontConfigure = true;
@@ -420,13 +437,15 @@ in {
           "LDLIBS=-Wl,-Bstatic $(pkg-config --static --libs jansson) -L${regex}/lib -lsnagregex -L${unistring}/lib -lunistring"
           "AV_CFLAGS=$(pkg-config --cflags libavformat libavcodec libavutil libswresample libswscale)"
           "AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale | sed -E 's/-l?(-l?)?pthread//g')"
+          "RTC_CFLAGS=${voiceRtc.cflags}"
+          "RTC_LIBS=${voiceRtc.libs} ${cxx}/lib/libstdc++.a -Wl,-Bdynamic${lib.optionalString (!legacy) " -lstdc++"} -lm -lgcc_s -Wl,-Bstatic"
           'MINIAUDIO_CFLAGS=-isystem ${miniaudio}'
           'CXX=${cxxCompiler} --target=${target} --sysroot=${sdk}'
           'CXXFLAGS=-std=c++20 ${cflags} ${if legacy then "-nostdinc++ -isystem ${cxx}/include/c++ -isystem ${cxx}/include/c++/${target}" else "-stdlib=libstdc++"}${lib.optionalString early " -include ${./bsd-legacy-cxx.h}"} ${if debug then "-Og -fno-omit-frame-pointer" else "-flto -ffunction-sections -fdata-sections"} -Wall -Wextra -Wpedantic -Werror'
           "PDF_CFLAGS=$(pkg-config --cflags poppler libpng | sed -E 's/(^| )-I/\1-isystem /g')"
-          "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') ${if legacy then "${cxx}/lib/libstdc++.a -Wl,-Bdynamic" else "-Wl,-Bdynamic -lstdc++"} -lm -lgcc_s -Wl,-Bstatic"
+          "PDF_LIBS=$(pkg-config --static --libs poppler libpng | sed -E 's/-l?(-l?)?pthread//g') ${cxx}/lib/libstdc++.a -Wl,-Bdynamic${lib.optionalString (!legacy) " -lstdc++"} -lm -lgcc_s -Wl,-Bstatic"
           "CURL_CFLAGS=$(pkg-config --cflags libcurl)"
-          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil -Wl,-Bdynamic -lpthread"
+          "CURL_LIBS=$(pkg-config --static --libs libcurl | sed -E 's/-l?(-l?)?pthread//g') -lutil -Wl,-Bdynamic -lpthread${lib.optionalString legacy " ${legacyRt}/lib/liblegacyrt.a"}"
         )
       '';
       installPhase = ''

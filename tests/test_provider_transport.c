@@ -15,6 +15,10 @@
 #include "turn.h"
 #include "voice.h"
 #include "audio_device.h"
+#include "voice_rtc.h"
+#if SNAJPAGENT_AUDIO_DEVICE
+#include <rtc/rtc.h>
+#endif
 
 #include <assert.h>
 #include <errno.h>
@@ -22,6 +26,7 @@
 #include <netinet/in.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -101,13 +106,22 @@ enum model_fixture {
     MODEL_AUDIO_TRANSCRIBE,
     MODEL_AUDIO_SPEAK,
     MODEL_AUDIO_FAILURE,
+    MODEL_NATIVE_TRANSCRIBE,
+    MODEL_NATIVE_CALL,
+    MODEL_NATIVE_CALL_NO_ID,
+    MODEL_NATIVE_CALL_DENIED,
     MODEL_AUTH_DEVICE,
     MODEL_AUTH_CANCEL,
     MODEL_AUTH_EXPIRED,
     MODEL_AUTH_REFRESH,
     MODEL_AUTH_REFRESH_FAILURE,
     MODEL_AUTH_401,
-    MODEL_AUTH_401_TWICE
+    MODEL_AUTH_401_TWICE,
+    MODEL_META_DEVICE,
+    MODEL_META_DENIED,
+    MODEL_META_EXPIRED,
+    MODEL_META_REFRESH,
+    MODEL_META_REFRESH_FAILURE
 };
 
 static bool authentication_fixture;
@@ -273,8 +287,80 @@ serve_one(int listen_fd, unsigned int status, const char *method, const char *pa
 }
 
 static void
+meta_auth_server_child(int listen_fd, enum model_fixture fixture)
+{
+    struct http_request request;
+    int fd;
+
+    authentication_fixture = true;
+    (void)alarm(15u);
+    if (fixture == MODEL_META_REFRESH || fixture == MODEL_META_REFRESH_FAILURE) {
+        fd = accept(listen_fd, NULL, NULL);
+        if (fd < 0) server_fail("meta accept failed");
+        read_request(fd, &request);
+        if (strcmp(request.method, "POST") || strcmp(request.path, "/oidc/device/token/") ||
+            !strstr(request.body, "grant_type=refresh_token") ||
+            !strstr(request.body, "meta-old-refresh")) server_fail("wrong Meta refresh request");
+        if (fixture == MODEL_META_REFRESH_FAILURE)
+            send_response(fd, 401u, "application/json", "{\"error\":\"revoked\"}");
+        else
+            send_response(fd, 200u, "application/json",
+                          "{\"access_token\":\"meta-new-access\",\"refresh_token\":\"meta-new-refresh\",\"expires_in\":3600}");
+        if (close(fd) < 0) server_fail("close Meta refresh socket failed");
+        _exit(0);
+    }
+fd = accept(listen_fd, NULL, NULL);
+    if (fd < 0) server_fail("meta accept failed");
+    read_request(fd, &request);
+    if (strcmp(request.method, "POST") || strcmp(request.path, "/oidc/device/authorization/") ||
+        !strstr(request.body, "client_id=")) server_fail("wrong Meta authorization request");
+    send_response(fd, 200u, "application/json",
+                  "{\"device_code\":\"meta-device\",\"user_code\":\"ABCD-1234\","
+                  "\"verification_uri\":\"https://auth.meta.com/oidc/device/\","
+                  "\"verification_uri_complete\":\"https://auth.meta.com/oidc/device/?code=ABCD-1234\","
+                  "\"expires_in\":900,\"interval\":1}");
+    if (close(fd) < 0) server_fail("close Meta authorization socket failed");
+    if (fixture == MODEL_META_DENIED || fixture == MODEL_META_EXPIRED) {
+        fd = accept(listen_fd, NULL, NULL);
+        if (fd < 0) server_fail("meta accept failed");
+        read_request(fd, &request);
+        if (strcmp(request.method, "POST") || strcmp(request.path, "/oidc/device/token/") ||
+            !strstr(request.body, "device_code=meta-device"))
+            server_fail("wrong Meta token request");
+        if (fixture == MODEL_META_DENIED)
+            send_response(fd, 400u, "application/json", "{\"error\":\"access_denied\"}");
+        else
+            send_response(fd, 400u, "application/json", "{\"error\":\"expired_token\"}");
+        if (close(fd) < 0) server_fail("close Meta token socket failed");
+        _exit(0);
+    }
+    fd = accept(listen_fd, NULL, NULL);
+    if (fd < 0) server_fail("meta accept failed");
+    read_request(fd, &request);
+    if (strcmp(request.method, "POST") || strcmp(request.path, "/oidc/device/token/") ||
+        !strstr(request.body, "device_code=meta-device"))
+        server_fail("wrong Meta token request");
+    send_response(fd, 400u, "application/json", "{\"error\":\"authorization_pending\"}");
+    if (close(fd) < 0) server_fail("close Meta token socket failed");
+    fd = accept(listen_fd, NULL, NULL);
+    if (fd < 0) server_fail("meta accept failed");
+    read_request(fd, &request);
+    if (strcmp(request.method, "POST") || strcmp(request.path, "/oidc/device/token/") ||
+        !strstr(request.body, "device_code=meta-device"))
+        server_fail("wrong Meta token request");
+    send_response(fd, 200u, "application/json",
+                  "{\"access_token\":\"meta-access\",\"refresh_token\":\"meta-refresh\",\"expires_in\":3600}");
+    if (close(fd) < 0) server_fail("close Meta token socket failed");
+    _exit(0);
+}
+
+static void
 auth_server_child(int listen_fd, enum model_fixture fixture)
 {
+    if (fixture >= MODEL_META_DEVICE) {
+        meta_auth_server_child(listen_fd, fixture);
+        return;
+    }
     static const char tokens[] =
         "{\"access_token\":\"new-access\",\"refresh_token\":\"new-refresh\",\"expires_in\":3600,"
         "\"id_token\":\"e30.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC10ZXN0In19.sig\"}";
@@ -414,6 +500,37 @@ audio_server_child(int listen_fd, enum model_fixture mode)
 static void
 server_child(int listen_fd, enum model_fixture models, bool transport)
 {
+    if (models>=MODEL_NATIVE_TRANSCRIBE && models<=MODEL_NATIVE_CALL_DENIED) {
+        struct http_request request;int fd=accept(listen_fd,NULL,NULL);
+        if (fd<0)server_fail("native voice accept failed");
+        read_request(fd,&request);
+        if (strcmp(request.method,"POST"))server_fail("native voice method");
+        if (models==MODEL_NATIVE_TRANSCRIBE) {
+            if (strcmp(request.path,"/backend-api/transcribe") ||
+                !strstr(request.body,"name=\"file\""))
+                server_fail("native transcription endpoint");
+            send_response(fd,200u,"application/json","{\"text\":\"native transcript\"}");
+        } else {
+            if (strcmp(request.path,
+                "/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas") ||
+                !strstr(request.headers,"openai-alpha: quicksilver=v2") ||
+                !strstr(request.body,"\"sdp\"") ||
+                !strstr(request.body,"\"session\""))server_fail("native call request");
+            if (models==MODEL_NATIVE_CALL_DENIED)
+                send_response(fd,403u,"application/json",
+                    "{\"error\":{\"message\":\"access denied\"}}");
+            else {
+                static const char answer[]="v=0\r\ns=native fixture\r\n";
+                char header[256];int n=snprintf(header,sizeof(header),
+                    "HTTP/1.1 201 Created\r\nContent-Type: application/sdp\r\n"
+                    "Content-Length: %zu\r\n%sConnection: close\r\n\r\n",
+                    sizeof(answer)-1u,
+                    models==MODEL_NATIVE_CALL?"Location: /v1/realtime/calls/rtc_native\r\n":"");
+                write_all_or_die(fd,header,(size_t)n);write_all_or_die(fd,answer,sizeof(answer)-1u);
+            }
+        }
+        close(fd);close(listen_fd);_exit(0);
+    }
     if (models >= MODEL_AUDIO_LISTEN && models <= MODEL_AUDIO_FAILURE)
         audio_server_child(listen_fd, models);
     if (models >= MODEL_AUTH_DEVICE)
@@ -1761,6 +1878,87 @@ test_provider_auth(void)
         stop_server(&server);
     }
     assert(unsetenv("SNAJPAGENT_TEST_AUTH_BASE") == 0);
+    /* Meta subscription: token responses keep prior refresh and account. */
+    config.providers[1].auth = SNAG_AUTH_META;
+    strcpy(config.providers[1].base_url, SNAG_META_BASE);
+    {
+        json_t *response = json_object();
+        snag_auth_clear(&tokens);
+        assert(snag_auth_token_response_meta(response, &tokens, error, sizeof(error)) < 0);
+        assert(tokens.credential.len == 0u);
+        assert(snag_auth_key(&tokens, "old-access", error, sizeof(error)) == 0);
+        strcpy(tokens.refresh_token, "meta-old-refresh");
+        strcpy(tokens.credential.account_id, "meta-user");
+        assert(json_object_set_new(response, "access_token", json_string("rotated-access")) == 0);
+        assert(json_object_set_new(response, "expires_in", json_integer(3600)) == 0);
+        assert(snag_auth_token_response_meta(response, &tokens, error, sizeof(error)) == 0);
+        assert(!strcmp(tokens.credential.value, "rotated-access"));
+        assert(!strcmp(tokens.refresh_token, "meta-old-refresh"));
+        assert(!strcmp(tokens.credential.account_id, "meta-user"));
+        assert(tokens.expires_at_ms > snag_time_ms());
+        snag_auth_json_free(response);
+    }
+    {
+        json_t *jwt = json_object();
+        snag_auth_clear(&tokens);
+        assert(json_object_set_new(jwt, "access_token", json_string("h.eyJzdWIiOiJtZXRhLXVzZXIiLCJleHAiOjk5OTk5OTk5OTl9.sig")) == 0);
+        assert(snag_auth_token_response_meta(jwt, &tokens, error, sizeof(error)) == 0);
+        assert(!strcmp(tokens.credential.account_id, "meta-user"));
+        assert(tokens.expires_at_ms == 9999999999u * 1000u);
+        assert(!tokens.refresh_token[0]);
+        assert(json_object_set_new(jwt, "access_token", json_string("h.eyJzdWIiOiJzb21lb25lLWVsc2UiLCJleHAiOjk5OTk5OTk5OTl9.sig")) == 0);
+        assert(json_object_set_new(jwt, "expires_in", json_integer(3600)) == 0);
+        assert(snag_auth_token_response_meta(jwt, &tokens, error, sizeof(error)) < 0);
+        snag_auth_json_free(jwt);
+    }
+    for (int mode = MODEL_META_DEVICE; mode <= MODEL_META_EXPIRED; ++mode) {
+        start_server(&server, (enum model_fixture)mode, false, "");
+        assert(setenv("SNAJPAGENT_TEST_META_AUTH_BASE", server.endpoint, 1) == 0);
+        memset(error, 0, sizeof(error));
+        int rc = snag_auth_device_meta(&tokens, NULL, NULL, error, sizeof(error));
+        if (mode == MODEL_META_DEVICE) {
+            assert(rc == 0);
+            assert(!strcmp(tokens.credential.value, "meta-access"));
+            assert(!strcmp(tokens.refresh_token, "meta-refresh"));
+            assert(tokens.expires_at_ms > snag_time_ms());
+        } else {
+            assert(rc < 0);
+            assert(tokens.credential.len == 0u);
+        }
+        stop_server(&server);
+    }
+
+    for (int mode = MODEL_META_REFRESH; mode <= MODEL_META_REFRESH_FAILURE; ++mode) {
+        assert(snag_auth_key(&tokens, "old-access", error, sizeof(error)) == 0);
+        strcpy(tokens.refresh_token, "meta-old-refresh");
+        tokens.expires_at_ms = 1u;
+        assert(snag_auth_save(store.root_fd, &config.providers[1], &tokens, NULL,
+                              NULL, NULL, error, sizeof(error)) == 0);
+        start_server(&server, (enum model_fixture)mode, false, "");
+        assert(setenv("SNAJPAGENT_TEST_META_AUTH_BASE", server.endpoint, 1) == 0);
+        memset(error, 0, sizeof(error));
+        if (mode == MODEL_META_REFRESH) {
+            assert(snag_auth_read(store.root_fd, &config.providers[1], false, NULL,
+                &credential, NULL, NULL, error, sizeof(error)) == 0);
+            assert(!strcmp(credential.value, "meta-new-access"));
+            assert(snag_auth_load(store.root_fd, &config.providers[1], &loaded, error, sizeof(error)) == 0);
+            assert(!strcmp(loaded.refresh_token, "meta-new-refresh"));
+        } else {
+            assert(snag_auth_read(store.root_fd, &config.providers[1], false, NULL,
+                &credential, NULL, NULL, error, sizeof(error)) < 0);
+            assert(snag_auth_load(store.root_fd, &config.providers[1], &loaded, error, sizeof(error)) == 0);
+            assert(!strcmp(loaded.refresh_token, "meta-old-refresh"));
+        }
+        stop_server(&server);
+    }
+    assert(unsetenv("SNAJPAGENT_TEST_META_AUTH_BASE") == 0);
+    strcpy(config.providers[1].base_url, "https://different.test");
+    assert(snag_auth_load(store.root_fd, &config.providers[1], &loaded, error, sizeof(error)) < 0);
+    strcpy(config.providers[1].base_url, SNAG_META_BASE);
+    assert(snag_auth_load(store.root_fd, &config.providers[1], &loaded, error, sizeof(error)) == 0);
+    assert(!strcmp(loaded.credential.value, "old-access"));
+    assert(snag_auth_logout(store.root_fd, &config.providers[1], NULL, NULL, error, sizeof(error)) == 0);
+    assert(unlinkat(store.root_fd, "auth/other.lock", 0) == 0);
     for (unsigned int pass = 0u; pass < 3u; ++pass) {
         json_t *request = request_with_marker("transport-compact");
         struct snag_json_document output = {0};
@@ -1793,6 +1991,38 @@ test_provider_auth(void)
     snag_auth_clear(&previous);
     snag_auth_clear(&loaded);
     snag_credential_clear(&credential);
+}
+
+static void
+test_irc_steering_mode(void)
+{
+    struct snag_config config = {0};
+    struct app_state app = {0};
+    char error[256] = {0};
+    snag_session_init(&app.session);
+    assert(snag_ui_init(&app.ui) == 0);
+    app.config = &config;
+    app.irc_urgent.max = 128u;
+    app.irc_background.max = 128u;
+    assert(snag_buf_append(&app.irc_background, "room", sizeof("room")) == 0);
+    app.session.active_turn = true;
+    strcpy(config.model, "m");
+    strcpy(app.session.active_turn_provider, "p");
+    /* Default `mentions`: mid-turn, background room traffic is not admitted. */
+    assert(snag_app_irc_flush_urgent(&app, error, sizeof(error)) == 0);
+    assert(app.irc_background.len == sizeof("room"));
+    /* `all`: the background projection is attempted; invalid UTF-8 fails it
+     * without consuming the projection. */
+    config.model_limit_count = 1u;
+    strcpy(config.model_limits[0].provider, "p");
+    strcpy(config.model_limits[0].model, "m");
+    strcpy(config.model_limits[0].steering, "all");
+    app.irc_background.data[0] = 0xff;
+    assert(snag_app_irc_flush_urgent(&app, error, sizeof(error)) < 0);
+    assert(app.irc_background.len == sizeof("room"));
+    snag_buf_free(&app.irc_background);
+    snag_ui_free(&app.ui);
+    snag_session_close(&app.session);
 }
 
 static void
@@ -2212,6 +2442,10 @@ test_voice_socket(void)
     struct snag_voice_socket *voice=NULL;char error[256];
     strcpy(provider.base_url,"http://remote.invalid");
     assert(snag_provider_voice_open(&provider,&credential,"fixture",NULL,NULL,&voice,error,sizeof(error))<0 && !voice);
+    strcpy(provider.base_url,"http://127.0.0.1:1/v1/");
+    assert(snag_provider_voice_open(&provider,&credential,"fixture",NULL,NULL,
+        &voice,error,sizeof(error))<0 && !voice);
+    assert(strstr(error,"/backend-api/codex"));
     for(unsigned int mode=0;mode<6u;++mode) {
         fprintf(stderr,"WebSocket fixture mode %u\n",mode);
         struct local_server server;
@@ -2319,6 +2553,178 @@ static void voice_end(struct snag_voice *voice,struct voice_fixture *f)
 {
     snag_voice_free(voice);json_decref(f->sent);json_decref(f->notices);
 }
+
+static size_t voice_notice_count(const struct voice_fixture *,const char *);
+
+static void test_audio_provider_selection(void)
+{
+    struct snag_config config;snag_config_init(&config);
+    struct snag_audio_config resolved;
+    const struct snag_provider_config *provider=snag_provider_audio_config(&config,NULL,&resolved);
+    assert(provider && !strcmp(resolved.provider,provider->name));
+    assert(!strcmp(resolved.realtime_model,"gpt-realtime") && !strcmp(resolved.voice,"marin"));
+    assert(!config.audio.provider[0] && !config.audio.realtime_model[0]);
+    strcpy(config.providers[0].base_url,SNAG_CHATGPT_BASE);
+    config.providers[0].auth=SNAG_AUTH_CHATGPT;
+    provider=snag_provider_audio_config(&config,NULL,&resolved);
+    assert(provider && snag_provider_native_audio(provider));
+    assert(!strcmp(resolved.realtime_model,"gpt-live-1-codex") && !strcmp(resolved.voice,"cove"));
+    assert(!strcmp(resolved.transcribe_model,"gpt-4o-transcribe"));
+    config.providers[0].auth=SNAG_AUTH_API_KEY;
+    strcpy(config.providers[0].base_url,"http://127.0.0.1:2455/backend-api/codex/");
+    assert(snag_provider_native_audio(snag_provider_audio_config(&config,NULL,&resolved)));
+    config.provider_count=2u;snag_config_provider_init(&config.providers[1],"byok");
+    strcpy(config.audio.provider,"byok");strcpy(config.audio.realtime_model,"custom-voice-model");
+    strcpy(config.audio.voice,"custom-voice");
+    provider=snag_provider_audio_config(&config,config.providers[0].name,&resolved);
+    assert(provider==&config.providers[1] && !snag_provider_native_audio(provider));
+    assert(!strcmp(resolved.realtime_model,"custom-voice-model") &&
+        !strcmp(resolved.voice,"custom-voice"));
+    snag_config_free(&config);
+}
+
+static void test_native_voice_protocol(void)
+{
+    struct voice_fixture f={.sent=json_array(),.notices=json_array()};char error[256];
+    struct snag_voice_io io={voice_send,voice_notice,voice_play,voice_interrupt};
+    struct snag_voice *v=snag_voice_new(&io,&f,"gpt-live-1-codex","gpt-4o-transcribe","cove");
+    json_t *session=snag_voice_native_session(v);
+    assert(session &&
+        !strcmp(snag_json_string(json_object_get(session,"delegation"),"type"),"client"));
+    json_decref(session);
+    assert(snag_voice_begin(v,error,sizeof(error))==0 && snag_voice_ready(v));
+    assert(json_array_size(f.sent)==0u); /* Existing native call, no public session.update. */
+    json_t *created=json_pack("{s:s,s:{s:s,s:s}}","type","turn.created",
+        "turn","id","native-input","role","user");
+    assert(voice_deliver(v,created)==0 && f.interrupts==1u);
+    json_t *delegation=json_pack("{s:s,s:{s:s,s:s,s:s,s:s,s:[{s:s,s:s}]}}",
+        "type","delegation.created",
+        "item","id","native-call","type","delegation","target","client",
+        "user_bidi_turn_id","native-input",
+        "content","type","input_text","text","inspect the worktree");
+    assert(voice_deliver(v,json_incref(delegation))==0);
+    assert(voice_notice_count(&f,"voice_handoff")==0u); /* Wait for final user transcript. */
+    assert(voice_deliver(v,json_pack("{s:s,s:{s:s,s:s,s:s}}","type","turn.done","turn",
+        "id","native-input","role","user","transcript","please inspect the worktree"))==0);
+    assert(voice_notice_count(&f,"voice_handoff")==1u &&
+        voice_notice_count(&f,"voice_transcript")==1u);
+    assert(voice_deliver(v,json_incref(delegation))==0 &&
+        voice_notice_count(&f,"voice_handoff")==1u);
+    assert(snag_voice_result(v,"wrong-call","result",error,sizeof(error))<0);
+    voice_end(v,&f);json_decref(delegation);
+
+    memset(&f,0,sizeof(f));f.sent=json_array();f.notices=json_array();
+    v=snag_voice_new(&io,&f,"gpt-live-1-codex","gpt-4o-transcribe","cove");
+    json_decref(snag_voice_native_session(v));assert(snag_voice_begin(v,error,sizeof(error))==0);
+    assert(voice_deliver(v,json_pack("{s:s,s:{s:s,s:s,s:s}}","type","turn.done","turn",
+        "id","native-input","role","user","transcript","please inspect the worktree"))==0);
+    assert(voice_deliver(v,json_pack("{s:s,s:{s:s,s:s,s:s,s:[{s:s,s:s}]}}",
+        "type","delegation.created",
+        "item","id","native-call","target","client","user_bidi_turn_id","native-input",
+        "content","type","input_text","text","inspect the worktree"))==0);
+    assert(voice_notice_count(&f,"voice_handoff")==1u);
+    assert(snag_voice_result(v,"native-call","inspection complete",error,sizeof(error))==0);
+    assert(!strcmp(snag_json_string(voice_last(f.sent),"type"),"delegation.context.append"));
+    assert(!strcmp(snag_json_string(voice_last(f.sent),"channel"),"speakable"));
+    assert(snag_voice_mute(v,true,error,sizeof(error))==0);
+    size_t sent=json_array_size(f.sent);
+    assert(snag_voice_respond(v,true,error,sizeof(error))==0 && json_array_size(f.sent)==sent);
+    voice_end(v,&f);
+}
+
+static void test_native_voice_transport(void)
+{
+    for (unsigned int direct=0;direct<2u;++direct)
+        for (int mode=MODEL_NATIVE_TRANSCRIBE;mode<=MODEL_NATIVE_CALL_DENIED;++mode) {
+        struct local_server server;struct snag_config config;struct snag_credential credential;
+        char error[256]={0},call[257]={0};struct snag_buf output={.max=65536u};
+        start_server(&server,(enum model_fixture)mode,false,"/backend-api/codex");
+        struct snag_provider_connection conn=transport_connection(&config,&credential,
+            direct?SNAG_CHATGPT_BASE:server.endpoint);
+        config.providers[0].auth=direct?SNAG_AUTH_CHATGPT:SNAG_AUTH_API_KEY;
+        if (direct)strcpy(credential.account_id,"acct-test");
+        assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE",server.endpoint,1)==0);
+        int rc;
+        if (mode==MODEL_NATIVE_TRANSCRIBE) {
+            make_fixture_wav();
+            struct snag_buf wav={.data=fixture_wav,.len=sizeof(fixture_wav),
+                .max=sizeof(fixture_wav)};
+            json_t *request=json_pack("{s:s}","model","gpt-4o-transcribe");
+            rc=snag_provider_audio(SNAG_AUDIO_TRANSCRIBE,request,&wav,&config,
+                conn.provider,&credential,
+                NULL,NULL,&output,error,sizeof(error));json_decref(request);
+            assert(!rc && output.len && !memcmp(output.data,"{\"text\":",8u));
+        } else {
+            json_t *session=json_pack("{s:s}","model","gpt-live-1-codex");
+            rc=snag_provider_voice_call(&config,conn.provider,&credential,
+                "v=0\r\n",session,NULL,NULL,
+                &output,call,error,sizeof(error));json_decref(session);
+            if (mode==MODEL_NATIVE_CALL)assert(!rc && !strcmp(call,"rtc_native") && output.len);
+            else assert(rc<0 && !call[0] && error[0]);
+        }
+        snag_buf_free(&output);
+        snag_config_free(&config);
+        snag_credential_clear(&credential);stop_server(&server);
+    }
+    assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE")==0);
+}
+
+#if SNAJPAGENT_AUDIO_DEVICE
+static void native_echo(int id,const char *data,int length,void *opaque)
+{
+    (void)opaque;
+    if (length<12 || length>2048 || (((const unsigned char *)data)[1]&127u)!=111u)return;
+    unsigned char packet[2048];memcpy(packet,data,(size_t)length);
+    packet[8]=packet[9]=packet[10]=0;packet[11]=88;
+    (void)rtcSendMessage(id,(const char *)packet,length);
+}
+static void native_gathered(int id,rtcGatheringState state,void *opaque)
+{(void)id;if (state==RTC_GATHERING_COMPLETE)atomic_store((atomic_bool *)opaque,true);}
+static void test_native_media(void)
+{
+    struct snag_voice_rtc *media=NULL;char error[256]={0},answer[32768];
+    struct snag_buf offer={.max=32768u};atomic_bool gathered;atomic_init(&gathered,false);
+    assert(snag_voice_rtc_open(&media,error,sizeof(error))==0);
+    uint64_t deadline=snag_monotonic_ms()+10000u;int rc=0;
+    while (!rc && snag_monotonic_ms()<deadline) {
+            rc=snag_voice_rtc_offer(media,&offer);snag_sleep_ms(5u);}
+    assert(rc==1);
+    rtcConfiguration configuration={.disableAutoNegotiation=true,.forceMediaTransport=true};
+    int pc=rtcCreatePeerConnection(&configuration);assert(pc>=0);rtcSetUserPointer(pc,&gathered);
+    assert(rtcSetGatheringStateChangeCallback(pc,native_gathered)==0);
+    rtcTrackInit init={.direction=RTC_DIRECTION_SENDRECV,
+        .codec=RTC_CODEC_OPUS,.payloadType=111,.ssrc=88,.mid="0"};
+    int track=rtcAddTrackEx(pc,&init);assert(track>=0);rtcSetUserPointer(track,&gathered);
+    assert(rtcSetMessageCallback(track,native_echo)==0);
+    assert(rtcSetRemoteDescription(pc,(char *)offer.data,"offer")==0 &&
+        rtcSetLocalDescription(pc,"answer")==0);
+    while (!atomic_load(&gathered) && snag_monotonic_ms()<deadline)snag_sleep_ms(5u);
+    assert(atomic_load(&gathered) && rtcGetLocalDescription(pc,answer,sizeof(answer))>0);
+    assert(snag_voice_rtc_answer(media,answer)==0);
+    while (!snag_voice_rtc_ready(media) && snag_monotonic_ms()<deadline)snag_sleep_ms(5u);
+    assert(snag_voice_rtc_ready(media));
+    int16_t input[480],output[2880];for (unsigned int i=0;i<480u;++i)input[i]=(i/24u)%2u?8000:-8000;
+    unsigned int samples=0,peak=0;uint64_t next=snag_monotonic_ms();deadline=next+1200u;
+    while (snag_monotonic_ms()<deadline) {
+        if (snag_monotonic_ms()>=next) {
+            assert(snag_voice_rtc_input(media,input,480u)==0);next+=20u;}
+        int n=snag_voice_rtc_output(media,output,2880u);assert(n>=0);
+        samples+=(unsigned int)n;
+        for (int i = 0; i < n; ++i) {
+            unsigned int v = output[i] < 0 ? -output[i] : output[i];
+            if (v > peak) {
+                peak = v;
+            }
+        }
+        snag_sleep_ms(2u);
+    }
+    assert(samples>12000u && peak>1000u);
+    assert(snag_voice_rtc_input(media,input,200u)==0 && snag_voice_rtc_input(media,NULL,0u)==0);
+    snag_voice_rtc_flush(media);snag_voice_rtc_close(media);
+    rtcSetMessageCallback(track,NULL);rtcDeleteTrack(track);
+    rtcDeletePeerConnection(pc);snag_buf_free(&offer);
+}
+#endif
 static void voice_commit(struct snag_voice *voice,const char *id,const char *transcript)
 {
     assert(voice_deliver(voice,json_pack("{s:s,s:s}","type","input_audio_buffer.committed","item_id",id))==0);
@@ -2572,6 +2978,13 @@ static void test_voice_captions(void)
 int
 main(void)
 {
+    test_audio_provider_selection();
+    test_native_voice_protocol();
+    test_native_voice_transport();
+#if SNAJPAGENT_AUDIO_DEVICE
+    test_native_media();
+#endif
+    test_irc_steering_mode();
     test_irc_failed_intent_retains_pending();
 #if SNAJPAGENT_AUDIO_DEVICE && defined(MA_NO_RUNTIME_LINKING) && defined(MA_ENABLE_ALSA)
     test_static_alsa_config();

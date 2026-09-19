@@ -3,6 +3,7 @@
 #include "turn.h"
 #include "tools.h"
 #include "fs.h"
+#include "base.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -121,6 +122,127 @@ test_native_read_results(void)
         false, "interrupted", cancel_read);
     assert(snag_unlink_at(dir, "a ; echo nope", false) == 0);
     assert(snag_unlink_at(dir, "text", false) == 0 && close(dir) == 0);
+    assert(snag_unlink_at(-1, root, true) == 0);
+    free(root);
+}
+
+static unsigned int cadence_pump_calls;
+
+static int
+counting_pump(void *opaque, unsigned int timeout_ms)
+{
+    (void)opaque;
+    (void)timeout_ms;
+    ++cadence_pump_calls;
+    return 0;
+}
+
+static int
+cancel_first_pump(void *opaque, unsigned int timeout_ms)
+{
+    (void)opaque;
+    (void)timeout_ms;
+    ++cadence_pump_calls;
+    return 2;
+}
+
+static int
+slow_then_cancel_pump(void *opaque, unsigned int timeout_ms)
+{
+    (void)opaque;
+    (void)timeout_ms;
+    ++cadence_pump_calls;
+    if (cadence_pump_calls == 1u) {
+        assert(snag_sleep_ms(60u) == 0);
+        return 0;
+    }
+    return 2;
+}
+
+static json_t *
+run_grep_pump(const char *workspace, const char *arguments,
+              snag_tool_pump_fn pump, int *status)
+{
+    struct snag_response_item call = {
+        .kind = SNAG_ITEM_TOOL_CALL, .name = (char *)"grep"};
+    json_t *result = NULL;
+    char error[128];
+
+    call.arguments = snag_json_load_strict((const unsigned char *)arguments,
+                                           strlen(arguments), 8192u,
+                                           error, sizeof(error));
+    assert(call.arguments);
+    *status = snag_tools_read_only(&call, workspace, pump, NULL, &result);
+    assert(snag_tool_result_valid(result) == 0);
+    json_decref(call.arguments);
+    return result;
+}
+
+static void
+test_read_pump_cadence(void)
+{
+    const unsigned int lines = 8000u;
+    const char *arguments = "{\"path\":\"many.txt\",\"pattern\":\"line 7999\","
+                            "\"recursive\":false,\"ignore_case\":false,"
+                            "\"literal\":true,\"offset\":null,\"limit\":null}";
+#ifdef _WIN32
+    const char *scratch = getenv("TMP");
+#else
+    const char *scratch = getenv("TMPDIR");
+#endif
+    char id[SNAG_ID_HEX_LEN + 1u];
+    uint64_t started, elapsed;
+    int status = 0;
+    json_t *result;
+    FILE *out;
+
+    if (!scratch) scratch = ".";
+    assert(snag_random_id(id) == 0);
+    char *path = snag_path_join(scratch, id);
+    assert(path && snag_mkdir_private(path) == 0);
+    char *root = snag_realpath(path);
+    free(path);
+    int dir = snag_open_read(root, true);
+    int file = snag_create_private_at(dir, "many.txt", true);
+    assert(root && dir >= 0 && file >= 0);
+    out = fdopen(file, "w");
+    assert(out);
+    for (unsigned int i = 0u; i < lines; ++i)
+        assert(fprintf(out, "line %u\n", i) > 0);
+    assert(fclose(out) == 0);
+
+    /* The first checkpoint pumps before any line is scanned, so a cancel
+       stops the scan immediately. */
+    cadence_pump_calls = 0u;
+    result = run_grep_pump(root, arguments, cancel_first_pump, &status);
+    assert(status == 2 && cadence_pump_calls == 1u);
+    assert(strstr(snag_json_string(result, "model_text"), "interrupted"));
+    json_decref(result);
+
+    /* A whole scan services the app on a cadence: a handful of pump calls
+       for many lines, never more than one per cadence window. */
+    cadence_pump_calls = 0u;
+    started = snag_monotonic_ms();
+    result = run_grep_pump(root, arguments, counting_pump, &status);
+    elapsed = snag_monotonic_ms() - started;
+    assert(status == 0);
+    assert(strstr(snag_json_string(result, "model_text"),
+                  "many.txt:8000:line 7999"));
+    assert(strstr(snag_json_string(result, "model_text"), "Complete;"));
+    assert(cadence_pump_calls >= 1u);
+    assert(cadence_pump_calls <= lines / 16u + 8u);
+    assert(cadence_pump_calls <= elapsed / 20u + 4u);
+    json_decref(result);
+
+    /* A service call that outlives the window is followed by another pump
+       call; the cancel it returns stops the scan. */
+    cadence_pump_calls = 0u;
+    result = run_grep_pump(root, arguments, slow_then_cancel_pump, &status);
+    assert(status == 2 && cadence_pump_calls == 2u);
+    assert(strstr(snag_json_string(result, "model_text"), "interrupted"));
+    json_decref(result);
+
+    assert(snag_unlink_at(dir, "many.txt", false) == 0 && close(dir) == 0);
     assert(snag_unlink_at(-1, root, true) == 0);
     free(root);
 }
@@ -316,6 +438,7 @@ main(void)
     }
 
     test_native_read_results();
+    test_read_pump_cadence();
     puts("test_turn: ok");
     return 0;
 }
