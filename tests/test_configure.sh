@@ -67,13 +67,14 @@ fi
 check 'unknown triple is rejected' 1 unchanged --host=zzz-unknown-triple
 
 check 'all-off run' 0 changed \
-	--without-av --without-pdf --without-audio-device --without-office
+	--without-av --without-pdf --without-audio-device \
+	--without-office --without-office-commands
 keys=$(diff "$tmp/pristine.mk" "$tmp/config.mk" | grep -c '^[<>]')
 [ "$keys" = 8 ] || fail "all-off run changed $keys lines, expected 8 (four WITH_* keys)"
 
 cp "$tmp/config.mk" "$tmp/once.mk"
 (cd "$tmp" && sh ./configure --without-av --without-pdf --without-audio-device \
-	--without-office >"$tmp/out2" 2>&1)
+	--without-office --without-office-commands >"$tmp/out2" 2>&1)
 cmp -s "$tmp/once.mk" "$tmp/config.mk" || fail 'all-off run is not idempotent'
 
 if [ "$fails" -ne 0 ]; then
