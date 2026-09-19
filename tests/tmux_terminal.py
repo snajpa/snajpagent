@@ -6431,6 +6431,8 @@ def run_manual_compaction_cases(binary, root, modes=("after-cancel", "native-can
                 assert not event_list(log, "steering_added")
             if mode in ("after-cancel", "native-cancel", "count-cancel", "active", "steer", "cancel-active", "no-prefix", "no-prefix-resume"):
                 assert summaries, (mode, log)
+            if mode == "native-cancel":
+                assert summaries[0].get("instructions") == "", summaries[0]
             if mode == "count-cancel":
                 assert counts
             if mode == "progress":
