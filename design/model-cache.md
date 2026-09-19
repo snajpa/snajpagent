@@ -192,8 +192,9 @@ when a nonempty selector precedes it.
 
 An existing `[model-limit PROVIDER/MODEL]` rule can provide
 `reasoning_efforts = ["max", "high", "low", "none"]`. The value is an ordered
-JSON array with 1–32 distinct names, each 1–63 UTF-8 bytes; ASCII whitespace,
-controls and slash are invalid. The catalog and configuration share structural
+JSON array with one or more distinct names, each 1–63 UTF-8 bytes; ASCII
+whitespace, controls and slash are invalid. The catalog and configuration share
+structural
 validation. Provider-defined names have no membership whitelist or wire mapping.
 
 Resolution uses the existing per-field provider defaults, matching patterns in

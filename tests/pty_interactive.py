@@ -37,6 +37,13 @@ child.send(("/attach " + str(image) + "\r").encode())
 child.wait_text(b"1 unsent attachment(s)")
 child.send(b"/detach all\r")
 child.wait_text(b"0 unsent attachment(s)")
+# Staging is bounded by the prepared-image budget, not a file count.
+buf.clear()
+for staged in range(1, 10):
+    child.send(("/attach " + str(image) + "\r").encode())
+    child.wait_text(("%d unsent attachment(s)" % staged).encode())
+child.send(b"/detach all\r")
+child.wait_text(b"0 unsent attachment(s)")
 buf.clear()
 child.send(("/attach " + str(image) + "\r").encode())
 child.wait_text(b"1 unsent attachment(s)")

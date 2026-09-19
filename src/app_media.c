@@ -78,10 +78,6 @@ snag_app_media_command(struct app_state *app, const char *line, bool *handled)
             return snag_ui_text(&app->ui, SNAG_UI_ERROR, "Attachment number is not in /attachments.");
         }
     } else {
-        if (json_array_size(next) >= 8u) {
-            json_decref(next);
-            return snag_ui_text(&app->ui, SNAG_UI_ERROR, "At most eight files may be attached to one input.");
-        }
         char error[256] = "Could not prepare attachment.";
         json_t *asset = NULL, *part = NULL;
         if(snag_session_persist(&app->store,&app->session,error,sizeof(error))<0) {

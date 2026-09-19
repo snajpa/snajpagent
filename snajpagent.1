@@ -1452,8 +1452,8 @@ submission to change the selection; unsent drafts are not restored on restart.
 The configured model/provider receives image bytes only when that input is sent.
 Other file types carry a retained reference, not their bytes, until explicitly
 inspected.  A recognized extension is routing metadata, not proof the file is
-valid or supported by a decoder.  At most eight attachments may be staged;
-non-image source files are limited to 256 MiB each.
+valid or supported by a decoder.  Prepared image content is limited to 12 MiB
+per input; non-image source files are limited to 256 MiB each.
 Current image bounds and provider requirements are listed under Image inspection.
 .SS Read-only queries
 .TP
@@ -2071,7 +2071,7 @@ reasoning_efforts = ["max", "high", "low", "none"]
 The list overrides the provider's advertised efforts, including when discovery
 supplies none. It uses the same provider/pattern/exact precedence as the numeric
 fields and may be the only setting in a rule. Aliases match their local names.
-Lists contain 1 through 32 distinct, nonempty UTF-8 strings of at most 63 bytes;
+Lists contain one or more distinct, nonempty UTF-8 strings of at most 63 bytes;
 ASCII whitespace, control characters and slash are rejected. Names are
 provider-defined. The program forwards selected names without provider-specific
 translation; the existing effort shorthand default still means medium.
@@ -2952,7 +2952,7 @@ input. Missing or corrupt retained source/prepared assets fail explicitly.
 Copy the entire session directory when moving a session. Archive retains media;
 confirmed session deletion removes it.
 .PP
-Requests accept up to eight images and 12 MiB of prepared image data in total.
+Requests accept up to 12 MiB of prepared image data in total.
 Provider/request ceilings may be lower. Retained media accumulates on disk until
 session deletion; there is no fixed session-wide byte or file-count cap.
 A custom WITH_AV=0 build forwards PNG/JPEG up to 12 MiB without normalization;

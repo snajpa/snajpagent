@@ -40,6 +40,9 @@
   demand, so `[tool] max_parallel_commands` is the only concurrency bound
   (default 4); its configuration range is now 1 through 4294967295.
 
+- Remove the eight-attachment staging ceiling. Staged content is bounded by
+  the 12 MiB prepared-image budget and the per-file source bound.
+
 - Show provider-hosted web searches as private rollout tool rows. A `web_search`
   item records a start row carrying the search action and query, then a finish
   row carrying the provider's terminal status and retained source URLs, at the
