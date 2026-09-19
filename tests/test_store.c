@@ -917,6 +917,7 @@ main(void)
         assert(legacy_session.goal_blocker &&
                strcmp(legacy_session.goal_blocker, "written before the rule") == 0);
         snag_session_close(&legacy_session);
+        snag_store_close(&legacy_store);
     }
 
     assert(snag_session_archive(&session, NULL, error, sizeof(error)) == 0);

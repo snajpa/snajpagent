@@ -70,13 +70,33 @@ struct managed_process {
     const char *handoff;
 };
 
-static struct managed_process *processes[SNAG_MAX_PROCESSES];
+static struct managed_process **processes;
+static size_t process_capacity;
 static snag_tool_output_fn journal_write;
 static snag_tool_read_fn journal_read;
 static void *journal_opaque;
 static size_t next_fd;
 static bool managed_cleanup_registered;
 static int flush_capture(struct managed_process *, unsigned int);
+
+static int
+process_slots_reserve(size_t needed)
+{
+    struct managed_process **grown;
+    size_t capacity = process_capacity;
+
+    if (capacity >= needed) return 0;
+    while (capacity < needed) {
+        if (capacity > SIZE_MAX / 2u) return -1;
+        capacity = capacity ? capacity * 2u : 8u;
+    }
+    grown = realloc(processes, capacity * sizeof(*grown));
+    if (!grown) return -1;
+    memset(grown + process_capacity, 0, (capacity - process_capacity) * sizeof(*grown));
+    processes = grown;
+    process_capacity = capacity;
+    return 0;
+}
 
 static bool
 json_u32_member(const json_t *object, const char *key, uint32_t fallback,
@@ -334,7 +354,7 @@ saturating_deadline(uint64_t start, uint32_t delta_ms)
 static struct managed_process *
 find_process(const char *handle)
 {
-    for (size_t i = 0u; i < SNAG_MAX_PROCESSES; ++i)
+    for (size_t i = 0u; i < process_capacity; ++i)
         if (processes[i] && handle && !strcmp(processes[i]->handle, handle)) return processes[i];
     return NULL;
 }
@@ -364,7 +384,7 @@ managed_release(struct managed_process *proc)
         snag_buf_free(&proc->output[s].data);
     }
     snag_buf_free(&proc->input);
-    for (size_t i = 0u; i < SNAG_MAX_PROCESSES; ++i)
+    for (size_t i = 0u; i < process_capacity; ++i)
         if (processes[i] == proc) processes[i] = NULL;
     snag_secret_set_free(&proc->secrets);
     free(proc);
@@ -373,7 +393,7 @@ managed_release(struct managed_process *proc)
 static void
 managed_cleanup_at_exit(void)
 {
-    for (size_t i = 0u; i < SNAG_MAX_PROCESSES; ++i) managed_release(processes[i]);
+    for (size_t i = 0u; i < process_capacity; ++i) managed_release(processes[i]);
 }
 
 void
@@ -405,7 +425,7 @@ snag_tools_ready(const char *handle)
 bool
 snag_tools_busy(void)
 {
-    for (size_t i = 0u; i < SNAG_MAX_PROCESSES; ++i)
+    for (size_t i = 0u; i < process_capacity; ++i)
         if (processes[i] && !process_ready(processes[i])) return true;
     return false;
 }
@@ -445,7 +465,7 @@ begin_close(struct managed_process *proc, bool user_interrupt)
 void
 snag_tools_close_all(bool user_interrupt)
 {
-    for (size_t i = 0u; i < SNAG_MAX_PROCESSES; ++i)
+    for (size_t i = 0u; i < process_capacity; ++i)
         if (processes[i]) begin_close(processes[i], user_interrupt);
 }
 
@@ -537,13 +557,23 @@ process_write(struct managed_process *proc)
 int
 snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t error_size)
 {
-    struct snag_child_event fds[SNAG_MAX_PROCESSES * 3u];
-    struct { struct managed_process *proc; unsigned int stream; } map[SNAG_MAX_PROCESSES * 3u + 1u];
-    size_t count = 0u;
+    struct snag_child_event *fds;
+    struct { struct managed_process *proc; unsigned int stream; } *map;
+    size_t count = 0u, live = 0u, slots;
     uint64_t now = snag_monotonic_ms();
-    int rc;
+    int rc, saved;
     if (timeout_ms > (int)SNAG_TOOL_POLL_MS) timeout_ms = (int)SNAG_TOOL_POLL_MS;
-    for (size_t i = 0u; i < SNAG_MAX_PROCESSES; ++i) {
+    for (size_t i = 0u; i < process_capacity; ++i) live += processes[i] != NULL;
+    if (live > SIZE_MAX / 3u) return snag_errno(EOVERFLOW);
+    slots = live ? live * 3u : 1u;
+    fds = malloc(slots * sizeof(*fds));
+    map = malloc((slots + 1u) * sizeof(*map));
+    if (!fds || !map) {
+        free(fds);
+        free(map);
+        return snag_errno(ENOMEM);
+    }
+    for (size_t i = 0u; i < process_capacity; ++i) {
         struct managed_process *proc = processes[i];
         if (!proc) continue;
         if (!proc->child_done) {
@@ -605,7 +635,7 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
         next_fd = (i + 1u) % streams;
     }
     now = snag_monotonic_ms();
-    for (size_t i = 0u; i < SNAG_MAX_PROCESSES; ++i) {
+    for (size_t i = 0u; i < process_capacity; ++i) {
         struct managed_process *proc = processes[i];
         if (!proc || !proc->child_done || now < proc->drain_deadline_ms) continue;
         /* A separate server can retain a passed writer after the child exits.
@@ -617,8 +647,15 @@ snag_tools_service(int timeout_ms, snag_wake_fd wake_fd, char *error, size_t err
             if (close_output(proc, s) < 0) goto fail;
         }
     }
+    free(fds);
+    free(map);
     return 0;
-fail: return snag_errorf(error, error_size, "command I/O or output journal failed: %s", strerror(errno));
+fail:
+    saved = errno;
+    free(fds);
+    free(map);
+    errno = saved;
+    return snag_errorf(error, error_size, "command I/O or output journal failed: %s", strerror(errno));
 }
 
 int
@@ -714,8 +751,14 @@ start_command(const char *handle, const char *command, const char *workdir,
     size_t slot;
     size_t stdin_len = stdin_text ? strlen(stdin_text) : 0u;
 
-    for (slot = 0u; slot < SNAG_MAX_PROCESSES && processes[slot]; ++slot) ;
-    if (slot == SNAG_MAX_PROCESSES || !(proc = calloc(1u, sizeof(*proc)))) return -1;
+    for (slot = 0u; slot < process_capacity && processes[slot]; ++slot) ;
+    if (slot == process_capacity) {
+        size_t previous = process_capacity;
+
+        if (process_slots_reserve(previous + 1u) < 0) return -1;
+        slot = previous;
+    }
+    if (!(proc = calloc(1u, sizeof(*proc)))) return -1;
     snag_child_init(&proc->child);
     processes[slot] = proc;
     managed_register_cleanup();
@@ -829,7 +872,7 @@ snag_tools_prepare(const struct snag_response_item *call, const struct snag_conf
     } else {
         *yield_ms = args.yield;
         proc = find_process(args.handle);
-        for (size_t i = 0u; i < SNAG_MAX_PROCESSES; ++i) used += processes[i] != NULL;
+        for (size_t i = 0u; i < process_capacity; ++i) used += processes[i] != NULL;
         if (args.exec && used >= max_parallel) reason = "process_limit";
         else if (args.exec && proc) reason = "process_busy";
         else if (!args.exec && !proc) reason = "managed_process_handle_mismatch";

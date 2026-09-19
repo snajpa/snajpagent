@@ -340,7 +340,7 @@ machine-representation failure.
 Per-response argument, output, and wire-size bounds remain in force.
 
 `[tool] max_parallel_commands` bounds unsettled commands (default 4, range
-1–32). The launching call's existing opaque local ID is also its process
+1–4294967295). The launching call's existing opaque local ID is also its process
 handle: no second ID allocator or lookup registry. Native batches contain
 independent calls, not a dependency graph. One engine poller starts a bounded
 wave and services all stdout/stderr/stdin while provider work continues.
