@@ -21,10 +21,9 @@ import tmux_terminal as harness  # noqa: E402
 SECRET = "irc-ui-secret"
 DENY_WRITE = (
     "[rule deny-write]\n"
-    "chain = out\n"
     'match = {"/tool":"^(write_file|edit_file)$"}\n'
-    "action = reject\n"
-    'text = "File modification is disabled here."\n'
+    "action = deny\n"
+    'message = "File modification is disabled here."\n'
 )
 
 

@@ -763,18 +763,12 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         json_t *rule = state->rules ? json_array_get(state->rules, state->rule_index) : NULL;
         json_t *text;
         if (!rule) goto invalid;
-        if (!strcmp(key, "chain") || !strcmp(key, "action") || !strcmp(key, "text") ||
-            !strcmp(key, "target") || !strcmp(key, "log") || !strcmp(key, "to") || !strcmp(key, "command")) {
-            /* Only the model tool-call boundary is evaluated in this build;
-             * in/event hosts are not wired, so refuse them instead of accepting
-             * rules that could never fire. */
-            if (!strcmp(key, "chain") && (!strcmp(value, "in") || !strcmp(value, "event"))) goto invalid;
-            /* Only insert-to-model is wired; program and IRC hosts do not exist
-             * at this boundary yet. */
-            if (!strcmp(key, "to") && (!strcmp(value, "program") || !strcmp(value, "irc"))) goto invalid;
+        if (!strcmp(key, "action") || !strcmp(key, "message")) {
             /* Rule messages may be JSON-quoted strings so escapes and newlines
-             * survive; chain/action/target stay plain identifiers. */
-            if ((!strcmp(key, "text") || !strcmp(key, "log")) && value[0] == '"') {
+             * survive; match/action stay plain values. Anything else (chains,
+             * jumps, thresholds, templates, helper verbs) was removed in 0.99.8
+             * and fails load loudly instead of becoming silent policy. */
+            if (!strcmp(key, "message") && value[0] == '"') {
                 char message_error[128];
                 text = snag_json_load_strict((const unsigned char *)value, strlen(value),
                                              SNAG_MAX_EVENT_LINE, message_error, sizeof(message_error));
@@ -788,18 +782,11 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
             if (!text || json_object_set_new(rule, key, text) < 0) return -1;
             return 0;
         }
-        if (!strcmp(key, "timeout_ms")) {
-            uint32_t ms;
-            if (parse_u32(value, 1u, 60000u, &ms) < 0) goto invalid;
-            return json_object_set_new(rule, key, json_integer((json_int_t)ms)) < 0 ? -1 : 0;
-        }
-        if (!strcmp(key, "match") || !strcmp(key, "at_least") || !strcmp(key, "value")) {
+        if (!strcmp(key, "match")) {
             char json_error[128];
             json_t *parsed = snag_json_load_strict((const unsigned char *)value,
                 strlen(value), SNAG_MAX_EVENT_LINE, json_error, sizeof(json_error));
-            bool value_key = !strcmp(key, "value");
-            if (!parsed || !(json_is_object(parsed) || (value_key && json_is_string(parsed))) ||
-                (json_is_object(parsed) && json_object_size(parsed) == 0u)) {
+            if (!parsed || !json_is_object(parsed) || json_object_size(parsed) == 0u) {
                 json_decref(parsed);
                 goto invalid;
             }

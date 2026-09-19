@@ -55,7 +55,13 @@ class Snapshot final : public BaseSeekInputStream {
 public:
     Snapshot(std::shared_ptr<Input> in, Goffset at, bool bounded, Goffset length, Object &&dict)
         : BaseSeekInputStream(at, bounded, length, std::move(dict)), input(std::move(in)) { }
+#if HAVE_POPPLER_NEW_API
+    std::unique_ptr<BaseStream> copy() override {
+        return std::make_unique<Snapshot>(input, start, limited, length, dict.copy());
+    }
+#else
     BaseStream *copy() override { return new Snapshot(input, start, limited, length, dict.copy()); }
+#endif
     std::unique_ptr<Stream> makeSubStream(Goffset at, bool bounded, Goffset size, Object &&dict) override {
         if (at < 0 || size < 0 || at > input->size || (bounded && size > input->size - at)) {
             input->stopped = -1; at = 0; bounded = true; size = 0;
@@ -130,7 +136,11 @@ snag_pdf_open(const char *path, int (*pump)(void *, unsigned int), void *opaque,
         if (in.fd < 0 || snag_fstat(in.fd, &st) < 0 || !S_ISREG(st.st_mode) ||
             st.st_size <= 0 || st.st_size > 256 * 1024 * 1024) throw 0;
         in.size = st.st_size;
+#if HAVE_POPPLER_NEW_API
+        pdf->doc = std::make_unique<PDFDoc>(std::make_unique<Snapshot>(pdf->input, 0, false, in.size, Object::null()));
+#else
         pdf->doc = std::make_unique<PDFDoc>(new Snapshot(pdf->input, 0, false, in.size, Object::null()));
+#endif
         if (in.stop()) { snag_errorf(error, size, "PDF loading interrupted or bounded input exhausted"); return in.stopped == 2 ? 2 : -1; }
         if (!pdf->doc->isOk() || pdf->doc->isEncrypted() || pdf->doc->getNumPages() < 1 || pdf->doc->getNumPages() > 100000) throw 0;
         *pages = static_cast<unsigned int>(pdf->doc->getNumPages()); *out = pdf.release();
@@ -154,7 +164,11 @@ snag_pdf_page(struct snag_pdf *pdf, unsigned int page, struct snag_buf *text,
         if (in.stop() || (text->len != text_start && !snag_utf8_valid(text->data + text_start, text->len - text_start, true))) throw 0;
         double dpi = 72.0 * 1600.0 / std::max(width, height);
         SplashColor white = {255, 255, 255};
+#if HAVE_POPPLER_NEW_API
+        Render render(splashModeRGB8, 4, white, true);
+#else
         Render render(splashModeRGB8, 4, false, white, true);
+#endif
         render.startDoc(pdf->doc.get());
         pdf->doc->displayPage(&render, page, dpi, dpi, 0, false, true, false, abort_page, &in);
         missing_font = render.missing_font;

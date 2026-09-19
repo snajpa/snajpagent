@@ -73,6 +73,21 @@
 - Add a `defer_steering` model tool: the model switches steering off for the
   remainder of the turn; steering messages queue and run after the turn ends.
   New turns start with steers on.
+- Build the PDF modality against system Poppler 26: `HAVE_POPPLER_NEW_API=1`
+  selects the reshaped stream/renderer C++ APIs, default 0 keeps the Poppler
+  to 25.x shape. Verified by a Poppler 26 host link plus a syntax check of the
+  default branch against Poppler 25.10 headers.
+- Simplify model tool-call rules to first-match-wins allow/deny. Each
+  `[rule NAME]` section now takes only `match` (JSON-pointer regex pairs),
+  `action` (`allow` or `deny`) and `message` (deny text); the first matching
+  rule decides and every match is journaled as a fixed `rule=<name>
+  decision=<allow|deny> tool=<tool>` audit line. Chains, jumps, thresholds,
+  log templates and the insert/command/confirm/value verbs are refused at
+  load: 0.99.7 rule files need renames (`reject`→`deny`, `accept`→`allow`,
+  `text`→`message`, delete `chain` lines, paste jump targets inline).
+  Ready-made policies live in `examples/io-rules/`; `design/io-rules.md`
+  carries the migration table. Verified by the rewritten `tests/test_rules.c`
+  and `tests/rules_e2e.py` (`make rulescheck`).
 - Omit `tool_choice` from the compaction summary request. The request declares no
   tools, so the choice was inert, but a provider that accepts only `"auto"` (Meta
   Model API) rejected `"none"` with HTTP 400 and failed the whole turn, including

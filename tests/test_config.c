@@ -530,10 +530,10 @@ test_io_rules(const char *path)
 {
     struct snag_config config;
     static const char valid[] = "[provider openai]\n" "api_key = ${OPENAI_API_KEY}\n" "[rule deny-exec]\n"
-        "chain = out\n" "match = {\"/kind\":\"^tool_call$\",\"/tool\":\"^exec_command$\"}\n"
-        "action = reject\n" "text = \"Commands are disabled in this workspace.\"\n";
-    static const char invalid[] = "[provider openai]\n" "api_key = ${OPENAI_API_KEY}\n" "[rule bad-jump]\n"
-        "chain = out\n" "action = jump\n" "target = nowhere\n";
+        "match = {\"/kind\":\"^tool_call$\",\"/tool\":\"^exec_command$\"}\n"
+        "action = deny\n" "message = \"Commands are disabled in this workspace.\"\n";
+    static const char invalid[] = "[provider openai]\n" "api_key = ${OPENAI_API_KEY}\n" "[rule old-chain]\n"
+        "chain = out\n" "action = deny\n" "message = \"removed\"\n";
 
     write_bytes(path, valid, sizeof(valid) - 1u);
     load_config(&config, path, NULL);
