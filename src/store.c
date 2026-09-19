@@ -160,6 +160,7 @@ free_session_state(struct snag_session *session)
     free(session->pending_calls);
     free(session->pending_steering);
     free(session->pending_queue);
+    free(session->processes);
     json_decref(session->strings);
     json_decref(session->compact_output);
     json_decref(session->pending_input);
@@ -1171,7 +1172,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             snag_json_integer_u64(data, "turn_number", &n) < 0 || n != session->turn_count + 1u ||
             !(kind = snag_json_string(data, "input_kind")) || !json_is_object(config) ||
             snag_json_integer_u64(config, "max_parallel_commands", &max_parallel) < 0 ||
-            max_parallel < 1u || max_parallel > SNAG_MAX_PROCESSES ||
+            max_parallel < 1u ||
             !json_is_boolean(json_object_get(config, "parallel_tool_calls")) ||
             !(model = snag_json_string(config, "model")) || !*model ||
             !(provider = snag_json_string(config, "provider")) || !*provider ||
@@ -1716,9 +1717,20 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (session->active_read_only && !snag_read_only_tool(call->tool_name)) goto invalid;
         if (!strcmp(call->tool_name, "exec_command")) {
             struct snag_process_state *process;
-            if (session->process_count >= SNAG_MAX_PROCESSES ||
-                session->process_count >= session->max_parallel_commands ||
+            if (session->process_count >= session->max_parallel_commands ||
                 snag_session_process(session, call->process_handle)) goto invalid;
+            if (session->process_count == session->process_capacity) {
+                size_t capacity = session->process_capacity ? session->process_capacity * 2u : 8u;
+                struct snag_process_state *grown;
+
+                if (capacity < session->process_capacity) return snag_errno(EOVERFLOW);
+                grown = realloc(session->processes, capacity * sizeof(*grown));
+                if (!grown) return snag_errno(ENOMEM);
+                memset(grown + session->process_capacity, 0,
+                       (capacity - session->process_capacity) * sizeof(*grown));
+                session->processes = grown;
+                session->process_capacity = capacity;
+            }
             process = &session->processes[session->process_count++];
             memset(process, 0, sizeof(*process));
             memcpy(process->handle, call->process_handle, sizeof(process->handle));
@@ -2156,6 +2168,17 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
         staged->pending_queue_count = source->pending_queue_count;
         for(size_t i=0;i<staged->pending_queue_count;++i)
             staged->pending_queue[i].content=json_incref(source->pending_queue[i].content);
+    }
+    staged->processes = NULL;
+    staged->process_count = 0u;
+    staged->process_capacity = 0u;
+    if (source->process_capacity) {
+        staged->processes = malloc(source->process_capacity * sizeof(*staged->processes));
+        if (!staged->processes) return -1;
+        memcpy(staged->processes, source->processes,
+               source->process_capacity * sizeof(*staged->processes));
+        staged->process_capacity = source->process_capacity;
+        staged->process_count = source->process_count;
     }
     return source->strings && !staged->strings ? -1 : 0;
 }

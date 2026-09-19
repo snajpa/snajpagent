@@ -2308,8 +2308,9 @@ existing shutdown behavior.
 .TP
 .B max_parallel_commands
 Maximum unsettled command handles, including yielded and ready-but-uncollected
-jobs.  Range: 1 through 32.  Default: 4.  One runs commands serially without
-restoring the former tool-catalog lock.  This is not a subprocess or CPU limit.
+jobs.  Range: 1 through 4294967295.  Default: 4.  One runs commands serially
+without restoring the former tool-catalog lock.  This is not a subprocess or
+CPU limit.
 .TP
 .B default_timeout_ms
 Foreground handoff deadline when the model supplies none, 0 through 4294967295.

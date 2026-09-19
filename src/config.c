@@ -717,7 +717,7 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         {SECTION_IRC, "history_lines", SET_U32, &irc->history_lines, 1, 1000},
         {SECTION_TOOL, "default_yield_ms", SET_U32, &config->default_yield_ms, 0, 600000},
         {SECTION_TOOL, "max_wait_ms", SET_U32, &config->max_wait_ms, 1, UINT32_MAX},
-        {SECTION_TOOL, "max_parallel_commands", SET_U32, &config->max_parallel_commands, 1, 32},
+        {SECTION_TOOL, "max_parallel_commands", SET_U32, &config->max_parallel_commands, 1, UINT32_MAX},
         {SECTION_TOOL, "default_timeout_ms", SET_U32, &config->default_timeout_ms, 0, UINT32_MAX},
         {SECTION_TOOL, "max_timeout_ms", SET_U32, &config->max_timeout_ms, 1, UINT32_MAX},
         {SECTION_TOOL, "max_output_bytes", SET_U32, &config->max_output_bytes, 0, UINT32_MAX},
