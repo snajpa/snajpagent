@@ -209,6 +209,78 @@ test_empty_and_boundary_rules(void)
     snag_rules_free(rules);
 }
 
+static void
+test_many_rules_and_deep_chains(void)
+{
+    static const char envelope_in[] = "{\"boundary\":\"in\",\"tool\":\"x\"}";
+    static const char envelope_jump[] = "{\"boundary\":\"in\"}";
+    struct host_log log = {.veto_at = (size_t)-1};
+    struct snag_rule_frame frame;
+    struct snag_rule_verdict verdict;
+    struct snag_buf text;
+    struct snag_rules *rules;
+    json_t *definition_value;
+    json_t *envelope;
+    char error[128] = {0};
+
+    /* 300 rules in one chain: past the former 256-rule ceiling. */
+    snag_buf_init(&text, 1u << 18);
+    assert(snag_buf_append(&text, "{\"rules\":[", 10u) >= 0);
+    for (unsigned int i = 0u; i < 300u; ++i)
+        assert(snag_buf_printf(&text,
+            "%s{\"name\":\"r%u\",\"chain\":\"in\",\"match\":{\"/tool\":\"^x$\"},\"action\":\"pass\"}",
+            i ? "," : "", i) >= 0);
+    assert(snag_buf_append(&text, "]}", 2u) >= 0);
+    assert(snag_buf_terminate(&text) >= 0);
+    definition_value = snag_json_load_strict((const unsigned char *)text.data,
+        strlen((const char *)text.data), 1u << 20, error, sizeof(error));
+    assert(definition_value);
+    rules = snag_rules_compile(definition_value, error, sizeof(error));
+    assert(rules);
+    json_decref(definition_value);
+    envelope = snag_json_load_strict((const unsigned char *)envelope_in, strlen(envelope_in),
+        1024u, error, sizeof(error));
+    assert(envelope);
+    frame.envelope = envelope;
+    assert(snag_rules_eval(rules, &frame, host_effect, &log, &verdict, error, sizeof(error)) == 0);
+    assert(verdict.visits == 300u && verdict.matches == 300u && log.calls == 300u);
+    json_decref(envelope);
+    snag_rules_free(rules);
+    snag_buf_free(&text);
+
+    /* A 70-chain jump ladder: past the former 64-chain and depth ceilings. */
+    log = (struct host_log){.veto_at = (size_t)-1};
+    snag_buf_init(&text, 1u << 18);
+    assert(snag_buf_append(&text, "{\"chains\":[", 11u) >= 0);
+    for (unsigned int i = 0u; i < 70u; ++i)
+        assert(snag_buf_printf(&text, "%s\"chain%u\"", i ? "," : "", i) >= 0);
+    assert(snag_buf_append(&text, "],\"rules\":[", 11u) >= 0);
+    assert(snag_buf_printf(&text,
+        "{\"name\":\"j0\",\"chain\":\"in\",\"action\":\"jump\",\"target\":\"chain0\"}") >= 0);
+    for (unsigned int i = 0u; i < 69u; ++i)
+        assert(snag_buf_printf(&text,
+            ",{\"name\":\"j%u\",\"chain\":\"chain%u\",\"action\":\"jump\",\"target\":\"chain%u\"}",
+            i + 1u, i, i + 1u) >= 0);
+    assert(snag_buf_printf(&text,
+        ",{\"name\":\"done\",\"chain\":\"chain69\",\"action\":\"pass\"}]}") >= 0);
+    assert(snag_buf_terminate(&text) >= 0);
+    definition_value = snag_json_load_strict((const unsigned char *)text.data,
+        strlen((const char *)text.data), 1u << 20, error, sizeof(error));
+    assert(definition_value);
+    rules = snag_rules_compile(definition_value, error, sizeof(error));
+    assert(rules);
+    json_decref(definition_value);
+    envelope = snag_json_load_strict((const unsigned char *)envelope_jump, strlen(envelope_jump),
+        1024u, error, sizeof(error));
+    assert(envelope);
+    frame.envelope = envelope;
+    assert(snag_rules_eval(rules, &frame, host_effect, &log, &verdict, error, sizeof(error)) == 0);
+    assert(verdict.visits == 71u && log.calls == 71u);
+    json_decref(envelope);
+    snag_rules_free(rules);
+    snag_buf_free(&text);
+}
+
 int
 main(void)
 {
@@ -216,6 +288,7 @@ main(void)
     test_log_and_template();
     test_threshold_matching();
     test_jump_and_return();
+    test_many_rules_and_deep_chains();
     test_veto_is_sticky();
     test_invalid_definitions_rejected();
     test_empty_and_boundary_rules();

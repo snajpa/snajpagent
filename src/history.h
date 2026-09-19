@@ -4,12 +4,11 @@
 
 #include "base.h"
 
-#define SNAG_HISTORY_COUNT 100u
 #define SNAG_HISTORY_BYTES (4u * 1024u * 1024u)
 
 struct snag_history_snapshot {
-    char *items[SNAG_HISTORY_COUNT];
-    size_t count;
+    char **items;
+    size_t count, capacity, head;
     size_t bytes;
     char *local_path, *global_path;
     int64_t local_end;

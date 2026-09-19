@@ -579,7 +579,6 @@ set_rule_section(struct parse_state *state, const char *name)
         state->rules = json_array();
         if (!state->rules) return -1;
     }
-    if (json_array_size(state->rules) >= SNAG_RULES_MAX) goto invalid;
     rule = json_object();
     if (!rule) return -1;
     if (json_object_set_new(rule, "name", json_string(name)) < 0 ||

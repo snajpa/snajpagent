@@ -2519,8 +2519,9 @@ action = reject
 text   = "Recursive force-delete is disabled; delete explicit paths."
 .fi
 .PP
-At most 256 rules, 64 chains, 4096 visited rules per evaluation, 63-byte names
-and 64 KiB per text template.  The engine is stateless: no rule fires once,
+Rule and chain counts are bounded only by the configuration file; 4096 visited
+rules per evaluation, 63-byte names and 64 KiB per text template.  The engine
+is stateless: no rule fires once,
 rate-limits or counts across evaluations.
 
 .SH "Scripting and tools"
