@@ -11,6 +11,11 @@ let
         UCLIBC_HAS_LINUXTHREADS y
         UCLIBC_HAS_TLS n
         UCLIBC_HAS_STDIO_FUTEXES n
+        # libjuice voice needs <ifaddrs.h>; uClibc strips it unless
+        # AI_ADDRCONFIG (which needs netlink) is enabled. Netlink device
+        # queries exist since 2.4.17; legacy target is 2.4.27.
+        UCLIBC_USE_NETLINK y
+        UCLIBC_SUPPORT_AI_ADDRCONFIG y
       '';
     };
     overlays = pkgs.overlays ++ [ (_: previous: {
