@@ -1079,11 +1079,13 @@ def run_markdown_case(binary, root):
                 first_model = "# Stream **ready**"
                 last_model = "> final quoted boundary"
             submitted = f"{DEFAULT_IDLE_PROMPT} terminal_markdown"
-            if f"{submitted}\n\n{first_model}" not in screen:
+            waiting = "snajpagent: waiting for provider response (model gpt-5.5-2026-04-23)"
+            first_output = f"{waiting}\n{first_model}" if waiting in screen else first_model
+            if f"{submitted}\n\n{first_output}" not in screen:
                 raise AssertionError(
                     f"submitted input and model output lack one empty row:\n{screen}"
                 )
-            if f"{submitted}\n\n\n{first_model}" in screen:
+            if f"{submitted}\n\n\n{first_output}" in screen:
                 raise AssertionError(
                     f"submitted input and model output have an extra empty row:\n{screen}"
                 )
