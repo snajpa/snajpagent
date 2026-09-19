@@ -108,6 +108,14 @@ let
       preInstall = "";
       outputs = [ "out" "dev" ];
     });
+    # GMP cannot run this cross probe.  The target header and libc.a both
+    # provide nl_langinfo, so retain the real result rather than compiling
+    # GMP's duplicate C++ test fallback.
+    gmp = previous.gmp.overrideAttrs (old: {
+      preConfigure = (old.preConfigure or "") + ''
+        export ac_cv_func_nl_langinfo=yes
+      '';
+    });
     # Font consumers use pkg-config; the optional config script pulls target Bash.
     freetype = (previous.freetype.override { makeWrapper = null; }).overrideAttrs (old: {
       configureFlags = builtins.filter (flag: flag != "--enable-freetype-config")
