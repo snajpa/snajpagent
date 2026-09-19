@@ -95,8 +95,10 @@ Implemented:
   binding change can rebuild an earlier complete prefix while retaining later
   history and preserving the previous output on interruption.
   Prompt-cache projection keeps timing, steering, recovery/correction and
-  closure facts in conversation order, with current goal/display/process and
-  work-note/banner snapshots at the tail. Fixed execution policy is invariant
+  closure facts in conversation order. Each sent goal/display/process and
+  work-note/banner snapshot is durably retained before its response; unchanged
+  snapshots are deduplicated and the latest snapshot supersedes older facts.
+  Fixed execution policy is invariant
   across ordinary continuations and IRC topology changes, including through
   instruction-hoisting gateways. Completed history retains its projection
   across turn boundaries until compaction.

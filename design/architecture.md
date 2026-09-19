@@ -58,8 +58,10 @@ apply on subsequent request snapshots without changing an in-flight request.
 
 Input timing, steering boundaries, recovery/correction notices and process
 closure records travel as labelled host conversation data. Current process,
-goal, display, banner and work-note snapshots occupy the replaceable request
-tail. Fixed system policy defines their interpretation, goal authority,
+goal, display, banner and work-note facts form a labelled snapshot at the
+request tail. When a request is sent, that exact snapshot is frozen before its
+response in durable history; an unchanged snapshot is reused instead of copied.
+The latest snapshot supersedes older facts. Fixed system policy defines their interpretation, goal authority,
 settlement and presentation rules. Read-only restrictions remain system policy.
 IRC policy is invariant across connections and nick changes; room snapshots
 supply current identities. Instruction-hoisting gateways therefore retain the
@@ -70,8 +72,9 @@ Completed assistant text and tool results retain their projected bytes across
 turn boundaries. Existing result byte budgets apply at first projection and on
 replay; history is replaced at explicit compaction, not simply because its turn
 has ended. Model/provider binding, actual instruction or tool-schema changes,
-and compaction can legitimately change the reusable prefix. Provider cache
-availability remains external to this representation.
+and compaction can legitimately change the reusable prefix. A changed snapshot
+may require one new cache write; subsequent requests extend that snapshot's
+prefix. Provider cache availability remains external to this representation.
 
 Each accepted user turn is projected into an OpenAI-compatible Responses API
 request. Streaming events update the terminal as they arrive. A final answer,

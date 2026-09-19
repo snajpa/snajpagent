@@ -2974,7 +2974,7 @@ run_call_batch(struct app_state *app, const char *turn_id, const struct snag_cre
             app->tool_active = true;
             if (snag_ui_send(&app->ui, (struct snag_ui_command){
                 .kind = SNAG_UI_SPINNERS, .data.value = prompt_spinner_states(app)}) < 0) return -1;
-            if (app->ui.opened &&
+            if (app->ui.opened && snag_ui_verbosity(&app->ui) >= 1u &&
                 app_textf(app, SNAG_UI_WARNING, "tool %s running (wait cap %llus)",
                     call->name, (unsigned long long)(app->config->max_wait_ms / 1000u)) < 0) return -1;
             int rc = calls[i].process ?
@@ -3459,7 +3459,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             report_message = "response runtime facts could not be rendered";
             goto output_fail;
         }
-        if (app->ui.opened &&
+        if (app->ui.opened && snag_ui_verbosity(&app->ui) >= 1u &&
             app_textf(app, SNAG_UI_WARNING, "waiting for provider response (model %s)",
                 app->turn_model) < 0) {
             report_message = "provider wait notice could not be rendered";

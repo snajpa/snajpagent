@@ -410,7 +410,7 @@ class FakeResponses:
         outputs = {item["call_id"]: item["output"] for item in request["input"]
                    if item.get("type") == "function_call_output"}
         jobs = []
-        for item in request["input"]:
+        for item in current_host_context(request):
             text = item.get("content", "")
             if isinstance(text, str) and "The preceding JSON describes unsettled commands" in text:
                 text = text.removeprefix("[snajpagent host continuation — not a new user message]\n")
@@ -4189,7 +4189,7 @@ def run_operator_visibility_cases(binary, root):
             config.write_text(config.read_text().replace("[agent]\n", "[agent]\nmax_turn_retries=0\n", 1))
 
             def respond(handler, request, sequence):
-                hints = [i["content"] for i in request["input"] if i.get("role") == "user"
+                hints = [i["content"] for i in current_host_context(request) if i.get("role") == "user"
                          and isinstance(i.get("content"), str)
                          and "Local operator display snapshot:" in i["content"]]
                 assert len(hints) == 1, "current operator visibility missing from model request"
@@ -4211,6 +4211,41 @@ def run_operator_visibility_cases(binary, root):
                 raise provider.failure
             assert run.returncode == 0 and "VISIBILITY_OK" in run.stdout, (run.stdout, run.stderr)
             print(f"operator visibility one-shot {level}: ok", flush=True)
+        # Interactive notices use the same networked response/tool path as a
+        # normal provider.  Level zero stays quiet; level one shows both waits.
+        for level in (0, 1):
+            case = root / f"wait-notices-{level}"
+            case.mkdir()
+            config, state = case / "config.ini", case / "state"
+            write_irc_config(config, provider.port, "host-model")
+            seen = []
+
+            def respond(handler, request, sequence):
+                seen.append(request)
+                if len(seen) == 1:
+                    body = provider.function_body(sequence, "call_wait_notice", "exec_command", {
+                        "command": "printf network-wait", "workdir": str(case),
+                    })
+                else:
+                    assert len(seen) == 2 and "network-wait" in json.dumps(request)
+                    body = provider.response_body(sequence, "WAIT_NOTICES_DONE")
+                provider.reply(handler, body.encode())
+
+            provider.runtime_handler = respond
+            flags = ("-v",) if level else ()
+            with TmuxTerminal(case / "terminal", binary, case, state, config, 120, 24,
+                              args=flags, environment=environment) as terminal:
+                terminal.wait("host-model/medium")
+                terminal.submit("check wait notices")
+                screen = terminal.wait("WAIT_NOTICES_DONE")
+                if provider.failure:
+                    raise provider.failure
+                provider_notice = "snajpagent: waiting for provider response (model host-model)"
+                tool_notice = "snajpagent: tool exec_command running (wait cap 60s)"
+                assert (provider_notice in screen) == (level >= 1), screen
+                assert (tool_notice in screen) == (level >= 1), screen
+                terminal.exit()
+            print(f"networked wait notices {level}: ok", flush=True)
         # Change presentation during a live tool wait; the follow-up request
         # must use the new UI state, not startup flags or the previous snapshot.
         for mode in ("downgrade", "chat"):
@@ -4223,7 +4258,7 @@ def run_operator_visibility_cases(binary, root):
             seen = []
 
             def respond(handler, request, sequence):
-                hints = [i["content"] for i in request["input"] if i.get("role") == "user"
+                hints = [i["content"] for i in current_host_context(request) if i.get("role") == "user"
                          and isinstance(i.get("content"), str)
                          and "Local operator display snapshot:" in i["content"]]
                 assert len(hints) == 1
@@ -4269,7 +4304,7 @@ def run_operator_visibility_cases(binary, root):
 
             # Resume with new flags: old in-memory verbosity/view is not authority.
             def resumed(handler, request, sequence):
-                hints = [i["content"] for i in request["input"] if i.get("role") == "user"
+                hints = [i["content"] for i in current_host_context(request) if i.get("role") == "user"
                          and isinstance(i.get("content"), str)
                          and "Local operator display snapshot:" in i["content"]]
                 assert len(hints) == 1 and "verbosity=2 " in hints[0] and "view=rollout" in hints[0]
@@ -5783,6 +5818,17 @@ def gateway_conversation(request):
         i.get("role") in ("developer", "system") and isinstance(i.get("content"), str))]
 
 
+def current_host_context(request):
+    items = request.get("input", [])
+    begin = "[snajpagent host continuation — not a new user message]\nHost state snapshot:"
+    end = "[snajpagent host continuation — not a new user message]\nEnd host state snapshot."
+    for index in range(len(items) - 1, -1, -1):
+        if str(items[index].get("content", "")).startswith(begin):
+            stop = next(i for i in range(index + 1, len(items)) if items[i].get("content") == end)
+            return items[index + 1:stop]
+    return items
+
+
 def run_host_cache_prefix_case(binary, root):
     """Volatile host facts must not change an instruction-hoisting gateway's policy prefix."""
     workspace = root / "w"
@@ -5824,7 +5870,14 @@ def run_host_cache_prefix_case(binary, root):
         again = subprocess.run(command + ["-v", "-v", "--resume", sid, "--", "new timed input"],
                                cwd=workspace, env=environment, capture_output=True, text=True, timeout=20)
         assert again.returncode == 0 and again.stdout.strip() == "cache complete", again.stderr
-        assert len(requests) == 4, len(requests)
+        unchanged = subprocess.run(command + ["-v", "-v", "--resume", sid, "--", "unchanged host state"],
+                                   cwd=workspace, env=environment, capture_output=True, text=True, timeout=20)
+        assert unchanged.returncode == 0 and unchanged.stdout.strip() == "cache complete", unchanged.stderr
+        assert len(requests) == 5, len(requests)
+        _, events = read_events(state)
+        starts = event_list(events, "response_started")
+        assert all("host_context" in e["data"] for e in starts[:4])
+        assert "host_context" not in starts[4]["data"], "unchanged snapshot duplicated"
         (root / "requests.json").write_text(json.dumps(requests))
         policies = [[i["content"] for i in request["input"] if i.get("role") in ("system", "developer")
                      and isinstance(i.get("content"), str)] for request in requests]
@@ -5832,21 +5885,23 @@ def run_host_cache_prefix_case(binary, root):
         assert not changed, f"volatile facts changed the hoisted policy prefix in requests {changed}"
         assert any("No final answer or goal completion until every handle is settled." in text for text in policies[0])
         assert len({r["prompt_cache_key"] for r in requests}) == 1
-        marker = "[snajpagent host continuation — not a new user message]\n"
         previous = []
+        previous_wire = []
         for request in requests:
             conversation = gateway_conversation(request)
-            history = [i for i in conversation if not str(i.get("content", "")).startswith(marker)]
-            assert history[:len(previous)] == previous, "retained conversation prefix changed"
-            previous = history
+            assert conversation[:len(previous)] == previous, "sent host context disappeared from the prefix"
+            previous = conversation
+            wire = request["input"][:-1]  # The final continuation directive remains at the end.
+            assert wire[:len(previous_wire)] == previous_wire, "raw request prefix changed"
+            previous_wire = wire
             for item in request["input"]:
                 text = str(item.get("content", ""))
                 if text.startswith("[snajpagent input metadata") or "The preceding JSON describes unsettled commands" in text or "Host tool feedback for the latest batch" in text:
                     assert item.get("role") == "user", item.get("role")
-        running = "\n".join(str(i.get("content", "")) for i in gateway_conversation(requests[1]))
+        running = "\n".join(str(i.get("content", "")) for i in current_host_context(requests[1]))
         assert "The preceding JSON describes unsettled commands" in running
         assert "Host tool feedback for the latest batch" in running and "8000" in running and "6000" in running
-        settled = "\n".join(str(i.get("content", "")) for i in gateway_conversation(requests[2]))
+        settled = "\n".join(str(i.get("content", "")) for i in current_host_context(requests[2]))
         assert "The preceding JSON describes unsettled commands" not in settled
         assert "cache-result" in json.dumps(gateway_conversation(requests[2]))
         print("host cache prefix running/collected/timed-input/feedback: ok", flush=True)
@@ -5872,7 +5927,7 @@ def run_goal_request_boundary_cases(binary, root, modes=("next", "recovery", "re
             requests.append(request)
             active = any(i.get("role") == "user" and
                 "Persistent goal " in i.get("content", "") and
-                " is active " in i["content"] for i in request["input"])
+                " is active " in i["content"] for i in current_host_context(request))
             if not active:
                 text = "goal request boundary done" if counts else "retained historical reply"
                 body = provider.response_body(sequence, text)
@@ -6035,7 +6090,7 @@ def run_goal_recovery_cases(binary, root, provider, environment):
             assert metadata[0] and all(m[0] == metadata[0][0] for m in metadata)
             assert "unavailable" not in metadata[0][0]
             for request in requests[3:]:
-                notes = [i for i in request["input"] if i.get("role") == "user" and
+                notes = [i for i in current_host_context(request) if i.get("role") == "user" and
                          i.get("content", "").startswith("snajpagent recovery")]
                 assert len(notes) <= 1, "recovery spammed model context"
                 assert "retained-result" in json.dumps(request)
@@ -6523,7 +6578,7 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
                         "retained-summary: preserve the active goal and prior tool effects."))
                 return
             requests.append(request)
-            goal = next((i.get("content", "") for i in request["input"]
+            goal = next((i.get("content", "") for i in current_host_context(request)
                          if i.get("role") == "user" and
                          "Persistent goal " in i.get("content", "")), "")
             if " is active " not in goal:
@@ -6589,7 +6644,7 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
             marker = "[snajpagent host continuation — not a new user message]"
             goal_requests = [r for r in requests if any(
                 " is active " in i.get("content", "") and
-                "Persistent goal " in i.get("content", "") for i in r["input"])]
+                "Persistent goal " in i.get("content", "") for i in current_host_context(r))]
             assert goal_requests
             for request in goal_requests:
                 markers = [i for i in request["input"] if i.get("content", "").startswith(marker) and
@@ -6802,7 +6857,8 @@ def run_automatic_turn_retry_cases(binary, root, provider, environment):
             assert all(m[0] == metadata[0][0] for m in metadata)
             for request in requests[2:]:
                 assert sum(i.get("role") == "user" and i.get("content") == original for i in request["input"]) == 1
-                assert sum(i.get("content", "").startswith("snajpagent recovery") for i in request["input"]) <= 2
+                assert sum(i.get("content", "").startswith("snajpagent recovery")
+                           for i in current_host_context(request)) <= 1
             if mode == "running": assert "survived" in json.dumps(requests[-1])
             if mode == "exhaust":
                 # Explicit manual continuation receives a fresh budget and never repeats tools.

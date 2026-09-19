@@ -40,6 +40,20 @@ assert_string(const json_t *object, const char *key, const char *expected)
     assert(strcmp(snag_json_string(object, key), expected) == 0);
 }
 
+static json_t *
+message_matching(json_t *items, const char *needle)
+{
+    size_t index;
+
+    assert(json_is_array(items));
+    for (index = json_array_size(items); index-- > 0u;) {
+        json_t *item = json_array_get(items, index);
+        const char *content = snag_json_string(item, "content");
+        if (content && strstr(content, needle)) return item;
+    }
+    return NULL;
+}
+
 static void
 commit_event(struct snag_session *session, const char *type, json_t *data)
 {
@@ -968,7 +982,9 @@ test_parallel_journal_recovery(struct snag_store *store, const char *workspace)
         }
     }
     assert(user == 1u && steering == 1u && session.process_count == 2u);
-    const char *summary = snag_json_string(json_array_get(input, json_array_size(input) - 2u), "content");
+    const char *summary = snag_json_string(
+        message_matching(input, "The preceding JSON describes unsettled commands"),
+        "content");
     assert(strstr(summary, a) && strstr(summary, b));
     snag_context_projection_free(&projection);
     snag_instructions_free(&instructions);
@@ -1021,20 +1037,6 @@ item_by_field(json_t *items, const char *key, const char *value)
         item = json_array_get(items, index);
         const char *field = snag_json_string(item, key);
         if (field && strcmp(field, value) == 0) return item;
-    }
-    return NULL;
-}
-
-static json_t *
-message_matching(json_t *items, const char *needle)
-{
-    size_t index;
-
-    assert(json_is_array(items));
-    for (index = 0u; index < json_array_size(items); ++index) {
-        json_t *item = json_array_get(items, index);
-        const char *content = snag_json_string(item, "content");
-        if (content && strstr(content, needle)) return item;
     }
     return NULL;
 }
@@ -3307,6 +3309,86 @@ test_hosted_search_many_sources(struct snag_store *store, const char *workspace)
     snag_session_close(&session);
 }
 
+static void
+test_host_snapshot_replay(struct snag_store *store, const char *workspace)
+{
+    struct snag_session session;
+    struct snag_context_projection first = {0}, next = {0}, replay = {0}, compact = {0};
+    json_t *empty = json_array();
+    const char *turn = "cb000000000000000000000000000001";
+    const char *response = "cb000000000000000000000000000002";
+    const char *turn2 = "cb000000000000000000000000000003";
+    const char *compact_id = "cb000000000000000000000000000004";
+    char error[256], id[SNAG_ID_HEX_LEN + 1u];
+    create_session(store, &session, workspace, "medium");
+    memcpy(id, session.id, sizeof(id));
+    commit_event(&session, "turn_started",
+                 turn_started(turn, 1u, "snapshot first", workspace, NULL));
+    build_context(&session, 1u, empty, NULL, &first);
+    assert(first.host_context && json_array_size(first.host_context) >= 3u);
+    int64_t before = session.log_end;
+    for (unsigned int bad = 0u; bad < 7u; ++bad) {
+        json_t *data = response_started(turn, response, NULL);
+        json_t *snapshot = bad == 0u ? json_null() : bad == 1u ? json_array() :
+                           json_deep_copy(first.host_context);
+        if (bad == 2u) assert(json_object_set_new(json_array_get(snapshot, 0u),
+                                    "content", json_string("not a snapshot boundary")) == 0);
+        if (bad == 3u) assert(json_object_set_new(json_array_get(snapshot, 1u),
+                                    "role", json_string("system")) == 0);
+        if (bad == 4u) assert(json_object_set_new(json_array_get(snapshot, 1u),
+                                    "content", json_array()) == 0);
+        if (bad == 5u) assert(json_object_set_new(json_array_get(snapshot, 1u),
+                                    "type", json_string("function_call")) == 0);
+        if (bad == 6u)
+            assert(json_array_remove(snapshot, json_array_size(snapshot) - 1u) == 0);
+        assert(json_object_set_new(data, "host_context", snapshot) == 0);
+        assert(snag_session_commit(&session, "response_started", data, NULL,
+                                   error, sizeof(error)) < 0);
+        assert(session.log_end == before && !session.response_open);
+    }
+    json_t *data = response_started(turn, response, NULL);
+    assert(json_object_set(data, "host_context", first.host_context) == 0);
+    commit_event(&session, "response_started", data);
+    commit_event(&session, "response_completed",
+                 response_completed(turn, response, "snapshot answer"));
+    commit_event(&session, "turn_completed", turn_completed(turn, response));
+    commit_event(&session, "turn_started",
+                 turn_started(turn2, 2u, "snapshot next", workspace, NULL));
+    build_context(&session, 1u, empty, NULL, &next);
+    assert(!next.host_context); /* The current facts are already in the retained prefix. */
+    json_t *a = json_object_get(first.create_request.value, "input");
+    json_t *b = json_object_get(next.create_request.value, "input");
+    for (size_t i = 0u; i + 1u < json_array_size(a); ++i)
+        assert(json_equal(json_array_get(a, i), json_array_get(b, i)));
+    snag_session_close(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    build_context(&session, 1u, empty, NULL, &replay);
+    assert(!replay.host_context &&
+           json_equal(next.create_request.value, replay.create_request.value));
+    assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium",
+        true, 0u, false, NULL, &compact, error, sizeof(error), NULL) == 0);
+    json_t *output = compact_output_fixture();
+    commit_counted_compaction(&session, compact_id, "hard_budget",
+                              SNAJPAGENT_MODEL, &compact, output);
+    json_decref(output);
+    build_context(&session, 1u, empty, NULL, &replay);
+    assert(replay.host_context && json_equal(replay.host_context, first.host_context));
+    size_t snapshots = 0u;
+    b = json_object_get(replay.create_request.value, "input");
+    for (size_t i = 0u; i < json_array_size(b); ++i) {
+        const char *text = snag_json_string(json_array_get(b, i), "content");
+        snapshots += text && !strcmp(text, SNAG_HOST_CONTEXT_BEGIN);
+    }
+    /* Compaction removed the old copy; current state was supplied again. */
+    assert(snapshots == 1u);
+    snag_context_projection_free(&first);
+    snag_context_projection_free(&next);
+    snag_context_projection_free(&replay);
+    snag_context_projection_free(&compact);
+    snag_session_close(&session);
+    json_decref(empty);
+}
+
 /* Compare both ordinary Responses history and instruction-hoisting gateways. */
 static json_t *
 cache_policy(const struct snag_context_projection *projection)
@@ -3554,6 +3636,7 @@ main(int argc, char **argv)
     struct snag_context_projection projection = {0};
     struct snag_instruction_set instructions = {0};
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
+    test_host_snapshot_replay(&store, workspace);
     test_host_fact_cache_prefix(&store, workspace);
     test_office_commands_export(&store, workspace);
     test_input_time_and_recovery(&store, workspace);
@@ -3704,18 +3787,22 @@ main(int argc, char **argv)
         assert(active.active_turn);
         assert(strcmp(active.compact_id, active_compact) == 0);
         build_context(&active, 1, active_steering, &no_instructions, &active_projection);
-        assert(active_projection.request_controller_count == 2u);
+        assert(active_projection.host_context);
+        assert(active_projection.request_controller_count ==
+               json_array_size(active_projection.host_context) + 1u);
         input = json_object_get(active_projection.create_request.value, "input");
         assert(json_is_array(input));
-        assert(json_array_size(input) == 6u);
+        /* The old single controller item is now bracketed inside the snapshot. */
+        assert(json_array_size(input) == 5u + json_array_size(active_projection.host_context));
         assert(active.dir_path[0] == '/');
         assert_string(json_array_get(input, 1), "type", "compaction");
         assert_string(json_array_get(input, 2), "role", "system");
         assert(strstr(snag_json_string(json_array_get(input, 2), "content"), active.dir_path) != NULL);
         assert(strstr(snag_json_string(json_array_get(input, 2), "content"), "/events.jsonl") != NULL);
         assert_string(json_array_get(input, 3), "content", "new");
-        assert_string(json_array_get(input, 4), "role", "user");
-        assert(strstr(snag_json_string(json_array_get(input, 4), "content"), "create_goal") != NULL);
+        json_t *controller = message_matching(input, "create_goal");
+        assert(controller);
+        assert_string(controller, "role", "user");
         snag_context_projection_free(&compact);
         json_decref(compact_output);
         json_decref(active_steering);
@@ -3806,7 +3893,8 @@ main(int argc, char **argv)
         assert_string(json_array_get(input, 6), "content", "stop or wait");
         assert_string(json_array_get(input, 7), "role", "user");
         assert_string(json_array_get(input, 7), "content", "hosted: localhost:6667");
-        assert(strstr(snag_json_string(json_array_get(input, json_array_size(input) - 2u), "content"),
+        assert(strstr(snag_json_string(message_matching(input,
+                      "The preceding JSON describes unsettled commands"), "content"),
                       command_handle) != NULL);
         json_decref(snapshot);
         snag_context_projection_free(&steered_projection);
@@ -3863,7 +3951,8 @@ main(int argc, char **argv)
                                  &instructions, NULL, &bounded_projection, error, sizeof(error), NULL) == 0);
         input = json_object_get(bounded_projection.create_request.value, "input");
         assert(json_is_array(input));
-        assert(json_array_size(input) == 8u);
+        assert(bounded_projection.host_context);
+        assert(json_array_size(input) == 7u + json_array_size(bounded_projection.host_context));
         assert_string(json_array_get(input, 1u), "type", "compaction");
         assert_string(json_array_get(input, 1u), "encrypted_content", "test-native-compact");
         assert_string(json_array_get(input, 3u), "content", "second");
@@ -3914,9 +4003,10 @@ main(int argc, char **argv)
     items = json_object_get(projection.model_input.value, "items");
     request_input = json_object_get(projection.create_request.value, "input");
     assert(json_is_array(items));
-    assert(json_array_size(items) == 7);
+    assert(projection.host_context);
+    assert(json_array_size(items) == 6u + json_array_size(projection.host_context));
     assert(json_is_array(request_input));
-    assert(json_array_size(request_input) == 7);
+    assert(json_array_size(request_input) == 6u + json_array_size(projection.host_context));
     assert_string(json_array_get(request_input, 2), "type", "compaction");
     assert(session.dir_path[0] == '/');
     assert_string(json_array_get(request_input, 3), "role", "system");
@@ -3924,7 +4014,7 @@ main(int argc, char **argv)
     assert(strstr(snag_json_string(json_array_get(request_input, 3), "content"), "/events.jsonl") != NULL);
     request_input = json_object_get(projection.count_request.value, "input");
     assert(json_is_array(request_input));
-    assert(json_array_size(request_input) == 7);
+    assert(json_array_size(request_input) == 6u + json_array_size(projection.host_context));
     assert_string(json_array_get(request_input, 2), "type", "compaction");
     assert(strstr(snag_json_string(json_array_get(items, 1), "content"), "context guidance") == NULL);
     assert(strstr(snag_json_string(json_array_get(items, 1), "content"), agents) != NULL);
@@ -4003,10 +4093,12 @@ main(int argc, char **argv)
         assert(strstr(snag_json_string(tool_output, "output"), "full-model-tail") != NULL);
         assert(snag_utf8_valid((const unsigned char *)snag_json_string( tool_output, "output"),
                json_string_length(json_object_get(tool_output, "output")), true));
-        gate = json_array_get(input, json_array_size(input) - 2u);
+        gate = message_matching(input, "The preceding JSON describes unsettled commands");
         gate_text = snag_json_string(gate, "content");
         assert(gate_text != NULL);
-        assert_string(json_array_get(input, json_array_size(input) - 2u), "role", "user");
+        assert_string(message_matching(input,
+                      "The preceding JSON describes unsettled commands"),
+                      "role", "user");
         json_t *policy = message_matching(input, "Unsettled-command snapshots");
         assert_string(policy, "role", "system");
         assert(strstr(snag_json_string(policy, "content"), "independent work") != NULL);
@@ -4039,9 +4131,12 @@ main(int argc, char **argv)
         assert_context_tool_schemas(tools, NULL, network_config.max_timeout_ms, 777u);
         assert(strstr(snag_json_string(item_by_field(input, "type", "function_call_output"), "output"),
                "max_output_bytes=4000") != NULL);
-        gate_text = snag_json_string( json_array_get(input, json_array_size(input) - 2u), "content");
+        gate_text = snag_json_string(message_matching(input,
+            "The preceding JSON describes unsettled commands"), "content");
         assert(gate_text != NULL);
-        assert_string(json_array_get(input, json_array_size(input) - 2u), "role", "user");
+        assert_string(message_matching(input,
+                      "The preceding JSON describes unsettled commands"),
+                      "role", "user");
         json_t *policy = message_matching(input, "Unsettled-command snapshots");
         assert_string(policy, "role", "system");
         assert(strstr(snag_json_string(policy, "content"), "independent work") != NULL);
