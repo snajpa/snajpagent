@@ -1587,43 +1587,57 @@ apply_network(struct app_state *app, struct snag_config *candidate, char *error,
                         original, rollback[0] ? rollback : strerror(errno));
         else snag_errorf(error, error_size, "%s; previous roles restored", original);
         rc = 1;
-    } else {
-        app->config->irc = candidate->irc;
+    } else if (snag_irc_config_clone(&app->config->irc, &candidate->irc) < 0) {
+        return -1;
     }
     snag_irc_roles(app->irc, app->config);
-    candidate->irc = app->config->irc;
+    if (snag_irc_config_clone(&candidate->irc, &app->config->irc) < 0) return -1;
     app->networked = snag_irc_enabled(app->config);
     if (snag_app_irc_snapshot(app, "topology", NULL, 0u) < 0 || tick_irc(app, NULL, 0u) < 0) return -1;
     return rc;
 }
 
-static void
+/* Effective IRC preferences start from the live config; a file edit overrides
+ * only the fields it changed relative to the previous file snapshot. */
+static int
 merge_file_network(struct app_state *app, struct snag_config *candidate)
 {
     const struct snag_irc_config *old = &app->irc_file_config;
-    struct snag_irc_config file = candidate->irc;
+    struct snag_irc_config file = candidate->irc; /* borrows the candidate's list */
+    struct snag_irc_config merged = {0};
 
-    candidate->irc = app->config->irc;
+    if (snag_irc_config_clone(&merged, &app->config->irc) < 0) return -1;
     if (file.listen_explicit != old->listen_explicit || strcmp(file.listen, old->listen) != 0) {
-        candidate->irc.listen_explicit = file.listen_explicit;
-        memcpy(candidate->irc.listen, file.listen, sizeof(file.listen));
+        merged.listen_explicit = file.listen_explicit;
+        memcpy(merged.listen, file.listen, sizeof(merged.listen));
     }
-    if (file.client_count != old->client_count ||
-        memcmp(file.clients, old->clients, sizeof(file.clients)) != 0) {
-        candidate->irc.client_count = file.client_count;
-        memcpy(candidate->irc.clients, file.clients, sizeof(file.clients));
+    if (!snag_irc_config_clients_equal(&file, old)) {
+        snag_irc_config_clients_clear(&merged);
+        for (size_t i = 0; i < file.client_count; ++i)
+            if (snag_irc_config_add_client(&merged, file.clients[i], NULL, 0u) < 0) {
+                snag_irc_config_clients_clear(&merged);
+                return -1;
+            }
     }
     if (strcmp(file.model_nick, old->model_nick) != 0) {
-        memcpy(candidate->irc.model_nick, file.model_nick, sizeof(file.model_nick));
-        candidate->irc.model_nick_implicit = file.model_nick_implicit;
+        memcpy(merged.model_nick, file.model_nick, sizeof(merged.model_nick));
+        merged.model_nick_implicit = file.model_nick_implicit;
     }
     if (strcmp(file.operator_nick, old->operator_nick) != 0) {
-        memcpy(candidate->irc.operator_nick, file.operator_nick, sizeof(file.operator_nick));
-        candidate->irc.operator_nick_implicit = file.operator_nick_implicit;
+        memcpy(merged.operator_nick, file.operator_nick, sizeof(merged.operator_nick));
+        merged.operator_nick_implicit = file.operator_nick_implicit;
     }
     if (strcmp(file.room_name, old->room_name) != 0)
-        memcpy(candidate->irc.room_name, file.room_name, sizeof(file.room_name));
-    if (file.history_lines != old->history_lines) candidate->irc.history_lines = file.history_lines;
+        memcpy(merged.room_name, file.room_name, sizeof(merged.room_name));
+    if (file.history_lines != old->history_lines) merged.history_lines = file.history_lines;
+    /* Store the new file snapshot before the candidate's list is released. */
+    if (snag_irc_config_clone(&app->irc_file_config, &file) < 0) {
+        snag_irc_config_clients_clear(&merged);
+        return -1;
+    }
+    snag_irc_config_clients_clear(&candidate->irc);
+    candidate->irc = merged;
+    return 0;
 }
 
 static int
@@ -1632,7 +1646,6 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     struct snag_config candidate;
     struct snag_config previous;
     const char *selected_provider = app->session.default_provider[0] ? app->session.default_provider : NULL;
-    struct snag_irc_config file_network;
     int rc = 1;
 
     snag_config_init(&candidate);
@@ -1642,8 +1655,7 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     }
     if (snag_config_load(&candidate, app->config_allow_create ? NULL : app->config_path,
             app->store.root_path, error, error_size) < 0) goto out;
-    file_network = candidate.irc;
-    merge_file_network(app, &candidate);
+    if (merge_file_network(app, &candidate) < 0) goto out;
     if (snag_irc_normalize(&candidate, error, error_size) < 0) goto out;
     if (!snag_config_provider(&candidate, selected_provider) ||
         (app->session.active_turn && !snag_config_provider(&candidate, app->session.active_turn_provider)) ||
@@ -1663,7 +1675,6 @@ reload_config(struct app_state *app, char *error, size_t error_size)
     previous = *app->config;
     *app->config = candidate;
     memset(&candidate, 0, sizeof(candidate));
-    app->irc_file_config = file_network;
     app->turn_provider = snag_config_provider(app->config, app->session.active_turn ?
         app->session.active_turn_provider : selected_provider);
     if (!app->session.active_turn) {
@@ -1804,11 +1815,18 @@ toggle_view(struct app_state *app)
     view = app->ui.view == SNAG_RENDER_CHAT ? SNAG_RENDER_ROLLOUT : SNAG_RENDER_CHAT;
     return user_switch_view(app, view, app->session.active_turn);
 }
-static int
-network_command(struct app_state *app, const char *line, bool *handled)
+static bool
+network_line(const char *line)
 {
-    struct snag_config candidate = *app->config;
-    struct snag_irc_config *config = &candidate.irc;
+    return (strncmp(line, "/server", 7u) == 0 && (!line[7] || isspace((unsigned char)line[7]))) ||
+        (strncmp(line, "/connect", 8u) == 0 && (!line[8] || isspace((unsigned char)line[8]))) ||
+        (strncmp(line, "/disconnect", 11u) == 0 && (!line[11] || isspace((unsigned char)line[11])));
+}
+
+static int
+network_command_apply(struct app_state *app, const char *line, struct snag_config *candidate)
+{
+    struct snag_irc_config *config = &candidate->irc;
     char copy[SNAG_CONFIG_IRC_ENDPOINT_MAX + 32u], error[512] = {0};
     char *words[4], *save = NULL, *word;
     size_t count = 0u;
@@ -1819,8 +1837,6 @@ network_command(struct app_state *app, const char *line, bool *handled)
     server = strncmp(line, "/server", 7u) == 0 && (!line[7] || isspace((unsigned char)line[7]));
     connect = strncmp(line, "/connect", 8u) == 0 && (!line[8] || isspace((unsigned char)line[8]));
     disconnect = strncmp(line, "/disconnect", 11u) == 0 && (!line[11] || isspace((unsigned char)line[11]));
-    *handled = server || connect || disconnect;
-    if (!*handled) return 0;
     if (!snag_strcpy(copy, sizeof(copy), line)) return app_error(app, "network command is too long");
     for (word = strtok_r(copy, " \t", &save); word && count < 4u;
          word = strtok_r(NULL, " \t", &save)) words[count++] = word;
@@ -1853,30 +1869,26 @@ network_command(struct app_state *app, const char *line, bool *handled)
         for (size_t i = 0u; i < config->client_count; ++i)
             if (snag_irc_endpoint_equal(config->clients[i], endpoint))
                 return app_textf(app, SNAG_UI_HOST, "outgoing connection already configured: %s", endpoint);
-        if (config->client_count == SNAG_CONFIG_IRC_CLIENT_MAX)
-            return app_error(app, "at most 16 outgoing connections are supported");
-        if (!snag_strcpy(config->clients[config->client_count], sizeof(config->clients[0]), endpoint))
-            return app_error(app, "IRC endpoint is too long");
-        ++config->client_count;
+        if (snag_irc_config_add_client(config, endpoint, error, sizeof(error)) < 0)
+            return app_error(app, error[0] ? error : "IRC endpoint is too long");
     } else {
         size_t index;
 
         if (!config->client_count)
             return app_textf(app, SNAG_UI_HOST, "no outgoing connections; hosting unchanged");
         if (count == 1u) {
-            config->client_count = 0u;
-            memset(config->clients, 0, sizeof(config->clients));
+            snag_irc_config_clients_clear(config);
         } else {
             for (index = 0u; index < config->client_count; ++index)
                 if (snag_irc_endpoint_equal(config->clients[index], words[1])) break;
             if (index == config->client_count)
                 return app_textf(app, SNAG_UI_HOST, "outgoing endpoint is not configured: %s", words[1]);
+            free(config->clients[index]);
             memmove(config->clients + index, config->clients + index + 1u,
                     (--config->client_count - index) * sizeof(config->clients[0]));
-            memset(config->clients[config->client_count], 0, sizeof(config->clients[0]));
         }
     }
-    rc = apply_network(app, &candidate, error, sizeof(error));
+    rc = apply_network(app, candidate, error, sizeof(error));
     if (rc != 0) return rc < 0 ? -1 : app_error(app, error);
     if (connect)
         return app_textf(app, SNAG_UI_HOST, "outgoing connection added; /status shows connection state; /chat opens public chat");
@@ -1885,6 +1897,23 @@ network_command(struct app_state *app, const char *line, bool *handled)
     return app_textf(app, SNAG_UI_HOST, config->listen_explicit ?
         "hosting started on %s; /chat opens public chat" :
         "hosting stopped; outgoing connections unchanged", config->listen);
+}
+
+static int
+network_command(struct app_state *app, const char *line, bool *handled)
+{
+    struct snag_config candidate = *app->config;
+    int rc;
+
+    *handled = network_line(line);
+    if (!*handled) return 0;
+    /* Editing the desired seat list must not touch the live config. */
+    candidate.irc.clients = NULL;
+    candidate.irc.client_count = candidate.irc.client_capacity = 0u;
+    if (snag_irc_config_clone(&candidate.irc, &app->config->irc) < 0) return -1;
+    rc = network_command_apply(app, line, &candidate);
+    snag_irc_config_clients_clear(&candidate.irc);
+    return rc;
 }
 
 static int
@@ -4551,7 +4580,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     if (snag_store_open(&app.store, dotdir, error, sizeof(error)) < 0) goto fail;
     if (cli->update_model_cache && refresh_model_cache(&app, error, sizeof(error)) < 0) goto fail;
     app.config_path = config_path;
-    app.irc_file_config = config.irc;
+    if (snag_irc_config_clone(&app.irc_file_config, &config.irc) < 0) goto fail;
     snag_ui_send(&app.ui, (struct snag_ui_command){
         .kind = SNAG_UI_COLOR, .data.value = snag_cli_color(cli, config.color)});
     snag_ui_send(&app.ui, (struct snag_ui_command){
@@ -4734,6 +4763,12 @@ out:
     snag_tools_journal(NULL, NULL, NULL);
     snag_ui_free(&app.ui);
     (void)snag_app_shutdown(&app);
+    snag_irc_config_clients_clear(&app.irc_file_config);
+    free(app.irc_urgent_reply_offsets);
+    snag_irc_destinations_free(&app.irc_destinations);
+    snag_irc_route_clear(&app.irc_request_route);
+    snag_irc_route_clear(&app.irc_urgent_replies);
+    snag_irc_route_clear(&app.irc_turn_replies);
     snag_buf_free(&app.irc_urgent);
     snag_buf_free(&app.irc_urgent_refs);
     snag_buf_free(&app.irc_background_refs);

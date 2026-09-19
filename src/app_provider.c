@@ -326,7 +326,7 @@ tool_input_pump(void *opaque, unsigned int timeout_ms)
 }
 #endif
 
-static bool
+static int
 irc_tool_route(const struct app_state *app, const json_t *destination, struct snag_irc_route *route)
 {
     const char *text = json_is_string(destination) ? json_string_value(destination) : NULL;
@@ -337,18 +337,16 @@ irc_tool_route(const struct app_state *app, const json_t *destination, struct sn
     memset(route, 0, sizeof(*route));
     if (((!destination || json_is_null(destination)) && app->irc_request_route.count == 1u) ||
         (text && strcmp(text, "all") == 0)) {
-        *route = app->irc_request_route;
+        if (snag_irc_route_copy(route, &app->irc_request_route) < 0) return -1;
         return route->count != 0u;
     }
-    if (!text || strlen(text) > 10u) return false;
+    if (!text || strlen(text) > 10u) return 0;
     (void)snprintf(selector, sizeof(selector), "/%s", text);
-    if (snag_irc_target_parse(selector, strlen(selector), &id, &body) != SNAG_IRC_TARGET_SELECT) return false;
+    if (snag_irc_target_parse(selector, strlen(selector), &id, &body) != SNAG_IRC_TARGET_SELECT) return 0;
     for (size_t i = 0u; i < app->irc_request_route.count; ++i)
-        if (app->irc_request_route.targets[i].id == id) {
-            route->targets[route->count++] = app->irc_request_route.targets[i];
-            return true;
-        }
-    return false;
+        if (app->irc_request_route.targets[i].id == id)
+            return snag_irc_route_add(route, app->irc_request_route.targets[i]) < 0 ? -1 : 1;
+    return 0;
 }
 
 static int
@@ -468,8 +466,8 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
     if (call && call->name && (snag_string_in(call->name, "irc_send irc_topic"))) {
         bool topic = strcmp(call->name, "irc_topic") == 0;
         const char *text = snag_json_string(call->arguments, topic ? "topic" : "text");
-        struct snag_irc_route route;
-        int rc;
+        struct snag_irc_route route = {0};
+        int rc, route_rc;
 
         *result = NULL;
         bool notice = false;
@@ -486,8 +484,11 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
                 "IRC runtime is not connected or hosted; use irc_connect or irc_host first.");
             return *result ? 0 : -1;
         }
-        if (!irc_tool_route(app, json_object_get(call->arguments, "destination"), &route)) {
-            *result = snag_tool_result_terminal(false,
+        route_rc = irc_tool_route(app, json_object_get(call->arguments, "destination"), &route);
+        if (route_rc <= 0) {
+            snag_irc_route_clear(&route);
+            *result = snag_tool_result_terminal(false, route_rc < 0 ?
+                "Cannot allocate the IRC route." :
                 "Select a destination number string from irc_state, or all to broadcast. "
                 "Null is valid only for a sole destination. No message was sent.");
             return *result ? 0 : -1;
@@ -499,6 +500,7 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         if (rc >= 0 && snag_buf_terminate(&report) == 0)
             *result = snag_tool_result_terminal(rc == 0, report.len > 1u ? (const char *)report.data : error);
         snag_buf_free(&report);
+        snag_irc_route_clear(&route);
         return rc < 0 || !*result ? -1 : 0;
     }
 #ifdef SNAJPAGENT_TEST_FIXTURE

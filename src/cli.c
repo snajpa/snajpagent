@@ -42,20 +42,29 @@ snag_cli_free(struct snag_cli *cli)
 {
     snag_instructions_free(&cli->doc_instructions);
     free(cli->prompt);
+    free(cli->irc_clients);
     snag_cli_init(cli);
 }
 
 static int
 add_client(struct snag_cli *cli, const char *value, char *error, size_t error_size)
 {
-    if (cli->irc_client_count >= SNAG_CLI_IRC_CLIENT_MAX)
-        return snag_fail(error, error_size, E2BIG, "at most %u -c options are supported",
-                         SNAG_CLI_IRC_CLIENT_MAX);
+    const char **grown;
+
     if (strlen(value) > SNAG_CONFIG_URL_MAX)
         return snag_fail(error, error_size, EOVERFLOW, "-c endpoint is too long or unavailable");
     for (size_t i = 0; i < cli->irc_client_count; ++i)
         if (strcmp(cli->irc_clients[i], value) == 0)
             return snag_fail(error, error_size, EINVAL, "duplicate -c endpoint");
+    if (cli->irc_client_count == cli->irc_client_capacity) {
+        size_t capacity = cli->irc_client_capacity ? cli->irc_client_capacity * 2u : 8u;
+
+        if (capacity < cli->irc_client_capacity) return snag_errno(EOVERFLOW);
+        grown = realloc(cli->irc_clients, capacity * sizeof(*grown));
+        if (!grown) return snag_errno(ENOMEM);
+        cli->irc_clients = grown;
+        cli->irc_client_capacity = capacity;
+    }
     cli->irc_clients[cli->irc_client_count++] = value;
     return 0;
 }

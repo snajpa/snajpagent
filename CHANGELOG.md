@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Remove the sixteen-seat IRC representation. The configured outgoing-endpoint
+  list, the runtime seat and record tables, destination and route lists, the
+  composer route, and the render fence cache all grow on demand; endpoint
+  syntax, length, and byte bounds are unchanged.
+
 - Remove the 32-call per-response ceiling. A response may carry any number of
   tool calls within the existing response-shape bounds; each result's
   context-safety share is divided by the response's actual call count.

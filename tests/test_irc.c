@@ -282,8 +282,7 @@ init_client_config(struct snag_config *config, const char *address, const char *
     char error[256] = {0};
 
     snag_config_init(config);
-    config->irc.client_count = 1u;
-    assert(snag_strcpy(config->irc.clients[0], sizeof(config->irc.clients[0]), address));
+    assert(snag_irc_config_add_client(&config->irc, address, NULL, 0u) == 0);
     assert(snag_strcpy(config->irc.model_nick, sizeof(config->irc.model_nick), model));
     assert(snag_strcpy(config->irc.operator_nick, sizeof(config->irc.operator_nick), operator));
     assert(snag_irc_apply_cli(config, &cli, error, sizeof(error)) == 0);
@@ -293,10 +292,13 @@ static int
 send_all(struct snag_irc *irc, bool model, enum snag_irc_event_kind kind,
          const char *text, char *error, size_t error_size)
 {
-    struct snag_irc_route route;
+    struct snag_irc_route route = {0};
+    int rc;
 
-    snag_irc_capture_route(irc, &route);
-    return snag_irc_send_route(irc, &route, model, kind, text, NULL, error, error_size);
+    if (snag_irc_capture_route(irc, &route) < 0) return -1;
+    rc = snag_irc_send_route(irc, &route, model, kind, text, NULL, error, error_size);
+    snag_irc_route_clear(&route);
+    return rc;
 }
 
 /* Keep large scenario frames separate from main on small legacy stacks. */
@@ -340,8 +342,8 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     unsigned short host_port = free_port();
     unsigned short upstream_port = free_port();
     snag_socket human;
-    struct snag_irc_destinations destinations;
-    struct snag_irc_route route = {0}, frozen;
+    struct snag_irc_destinations destinations = {0};
+    struct snag_irc_route route = {0}, frozen = {0};
     uint32_t removed_id;
 
     init_server_config(&upstream_config, upstream_port);
@@ -361,8 +363,8 @@ static void __attribute__((noinline)) test_runtime_roles(void)
 
     endpoint(host, host_port);
     endpoint(other, upstream_port);
-    config.irc.client_count = 1u;
-    assert(snag_strcpy(config.irc.clients[0], sizeof(config.irc.clients[0]), other));
+    snag_irc_config_clients_clear(&config.irc);
+    assert(snag_irc_config_add_client(&config.irc, other, NULL, 0u) == 0);
     joins = upstream_capture.events[SNAG_IRC_JOIN];
     assert(snag_irc_configure(runtime, &config, "/private-workspace", error, sizeof(error)) == 0);
     /* Registration includes both clients and catch-up, even on slow CPUs. */
@@ -402,14 +404,13 @@ static void __attribute__((noinline)) test_runtime_roles(void)
         tick(runtime, 1u);
     }
     assert(capture.events[SNAG_IRC_MESSAGE] == 2u);
-    snag_irc_destinations(runtime, &destinations);
+    assert(snag_irc_destinations(runtime, &destinations) == 0);
     assert(destinations.count == 2u);
     assert(destinations.items[0].target.id < destinations.items[1].target.id);
     assert(strcmp(destinations.items[0].endpoint, other) == 0);
     assert(strcmp(destinations.items[1].endpoint, host) == 0);
     assert(strcmp(destinations.items[0].model, "agent1") == 0);
-    route.count = 1u;
-    route.targets[0] = destinations.items[1].target;
+    assert(snag_irc_route_add(&route, destinations.items[1].target) == 0);
     removed_id = route.targets[0].id;
     snag_buf_reset(&state);
     assert(snag_irc_send_route(runtime, &route, false, SNAG_IRC_MESSAGE,
@@ -437,7 +438,7 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     ++route.targets[0].revision;
     assert(snag_irc_send_route(runtime, &route, true, SNAG_IRC_MESSAGE,
         "wrong-revision", NULL, error, sizeof(error)) == 1);
-    snag_irc_capture_route(runtime, &frozen);
+    assert(snag_irc_capture_route(runtime, &frozen) == 0);
     assert(frozen.count == 2u);
 
     /* The owner receives this before removal; admission happens during stop. */
@@ -473,7 +474,7 @@ static void __attribute__((noinline)) test_runtime_roles(void)
            snag_monotonic_ms() < route_deadline) tick(upstream, 1u);
     assert(strstr(upstream_capture.message_text, "partial-to-survivor"));
 
-    config.irc.client_count = 0u;
+    snag_irc_config_clients_clear(&config.irc);
     assert(snag_irc_configure(runtime, &config, "/private-workspace", error, sizeof(error)) == 0);
     assert(!snag_irc_mentions_agent(runtime, other, "agent1: no destination"));
     snag_buf_reset(&state);
@@ -489,7 +490,8 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     assert(snag_irc_configure(runtime, &config, "/private-workspace", error, sizeof(error)) == 0);
     human = connect_local(host_port, false);
     register_peer(runtime, human, "newhuman", false, wire, sizeof(wire));
-    snag_irc_destinations(runtime, &destinations);
+    snag_irc_destinations_free(&destinations);
+    assert(snag_irc_destinations(runtime, &destinations) == 0);
     assert(destinations.count == 1u && destinations.items[0].target.id > removed_id);
     assert(snag_irc_send_route(runtime, &frozen, false, SNAG_IRC_MESSAGE,
         "not-to-replacement", NULL, error, sizeof(error)) == 1);
@@ -498,6 +500,9 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     assert(!strstr(wire, "not queued"));
     snag_socket_close(human);
     snag_buf_free(&state);
+    snag_irc_destinations_free(&destinations);
+    snag_irc_route_clear(&route);
+    snag_irc_route_clear(&frozen);
     snag_irc_close(runtime);
     snag_irc_close(upstream);
     snag_config_free(&config);
@@ -531,9 +536,8 @@ static void __attribute__((noinline)) test_validation(void)
     set_user("root");
 
     snag_config_init(&config);
-    config.irc.client_count = 2u;
-    memcpy(config.irc.clients[0], "localhost", 10u);
-    memcpy(config.irc.clients[1], "localhost:6667", 15u);
+    assert(snag_irc_config_add_client(&config.irc, "localhost", NULL, 0u) == 0);
+    assert(snag_irc_config_add_client(&config.irc, "localhost:6667", NULL, 0u) == 0);
     memcpy(config.irc.model_nick, "worker", 7u);
     error[0] = '\0';
     assert(snag_irc_apply_cli(&config, &cli, error, sizeof(error)) < 0);
@@ -541,8 +545,7 @@ static void __attribute__((noinline)) test_validation(void)
     snag_config_free(&config);
 
     snag_config_init(&config);
-    config.irc.client_count = 1u;
-    memcpy(config.irc.clients[0], "bad\xc3\x28", 6u);
+    assert(snag_irc_config_add_client(&config.irc, "bad\xc3\x28", NULL, 0u) == 0);
     memcpy(config.irc.model_nick, "worker", 7u);
     error[0] = '\0';
     assert(snag_irc_apply_cli(&config, &cli, error, sizeof(error)) < 0);
@@ -597,7 +600,11 @@ static void __attribute__((noinline)) test_cli_network_roles(void)
 
     memset(&cli, 0, sizeof(cli));
     cli.irc_listen = "127.0.0.1:7667";
-    cli.irc_clients[0] = "upstream.example:6667";
+    {
+        static const char *cli_clients[] = {"upstream.example:6667"};
+
+        cli.irc_clients = cli_clients;
+    }
     cli.irc_client_count = 1u;
     cli.irc_model_nick = "worker";
     cli.irc_operator_nick = "operator";
@@ -628,8 +635,7 @@ static void __attribute__((noinline)) test_server(void)
     snag_socket slow;
 
     init_server_config(&config, port);
-    config.irc.client_count = 1u;
-    assert(snprintf(config.irc.clients[0], sizeof(config.irc.clients[0]), "%s", config.irc.listen) > 0);
+    assert(snag_irc_config_add_client(&config.irc, config.irc.listen, NULL, 0u) == 0);
     server = open_server(&config, &capture);
     assert(snag_irc_mentions_agent(server, config.irc.listen, "AGENT: please"));
     assert(!snag_irc_mentions_agent(server, config.irc.listen, "otheragent: no"));
@@ -1227,31 +1233,35 @@ static void __attribute__((noinline)) test_client_events(void)
     wait_pair_event(NULL, client, &capture, SNAG_IRC_HISTORY_READY, 1u);
     assert(operator_fd != SNAG_SOCKET_INVALID);
     {
-        struct snag_irc_destinations first, next;
+        struct snag_irc_destinations first = {0}, next = {0};
 
-        snag_irc_destinations(client, &first);
+        assert(snag_irc_destinations(client, &first) == 0);
         assert(first.count == 1u);
         assert(strstr(first.items[0].nicks, "remoteop\n"));
         assert(strstr(first.items[0].nicks, "remoteagent\n"));
         assert(strstr(first.items[0].nicks, "peer\n"));
-        snag_irc_destinations(client, &next);
-        assert(!memcmp(&first, &next, sizeof(first)));
+        assert(snag_irc_destinations(client, &next) == 0);
+        assert(snag_irc_destinations_equal(&first, &next));
         unsigned int nicks = capture.events[SNAG_IRC_NICK];
         send_text(operator_fd, ":peer!u@fake NICK :renamed\r\n");
         wait_pair_event(NULL, client, &capture, SNAG_IRC_NICK, nicks + 1u);
-        snag_irc_destinations(client, &next);
+        snag_irc_destinations_free(&next);
+        assert(snag_irc_destinations(client, &next) == 0);
         assert(next.count == 1u);
         assert(!strstr(next.items[0].nicks, "peer\n"));
         assert(strstr(next.items[0].nicks, "renamed\n"));
         unsigned int parts = capture.events[SNAG_IRC_PART];
         send_text(operator_fd, ":renamed!u@fake PART #lab :bye\r\n");
         wait_pair_event(NULL, client, &capture, SNAG_IRC_PART, parts + 1u);
-        snag_irc_destinations(client, &next);
+        snag_irc_destinations_free(&next);
+        assert(snag_irc_destinations(client, &next) == 0);
         assert(next.count == 1u);
         assert(!strstr(next.items[0].nicks, "renamed\n"));
         unsigned int joins = capture.events[SNAG_IRC_JOIN];
         send_text(operator_fd, ":peer!u@fake JOIN #lab\r\n");
         wait_pair_event(NULL, client, &capture, SNAG_IRC_JOIN, joins + 1u);
+        snag_irc_destinations_free(&next);
+        snag_irc_destinations_free(&first);
     }
     {
         unsigned int before = capture.events[SNAG_IRC_MESSAGE];
@@ -1330,13 +1340,12 @@ static void __attribute__((noinline)) test_independent_owners(void)
     uint64_t started;
 
     init_server_config(&config, port);
-    config.irc.client_count = 2u;
     for (size_t i = 0u; i < 2u; ++i) {
         unsigned short remote;
 
         listeners[i] = listen_local(&remote);
         endpoint(address, remote);
-        assert(snag_strcpy(config.irc.clients[i], sizeof(config.irc.clients[i]), address));
+        assert(snag_irc_config_add_client(&config.irc, address, NULL, 0u) == 0);
     }
     assert(snag_irc_open(&irc, &config, "/workspace", capture_event,
                         capture_trace, &capture, error, sizeof(error)) == 0);
@@ -1382,6 +1391,41 @@ static void __attribute__((noinline)) test_callback_failure(void)
     snag_config_free(&config);
 }
 
+static void
+test_many_clients(void)
+{
+    struct snag_config config;
+    struct snag_irc_config copy = {0};
+    struct snag_irc_route route = {0}, route_copy = {0};
+    char error[256] = {0}, address[64u];
+
+    /* The seat list is not capped: more endpoints than the old sixteen-seat
+     * table are accepted, validated, cloned, and reported. */
+    snag_config_init(&config);
+    for (size_t i = 0u; i < 24u; ++i) {
+        (void)snprintf(address, sizeof(address), "client%zu.example:6667", i);
+        assert(snag_irc_config_add_client(&config.irc, address, error, sizeof(error)) == 0);
+    }
+    assert(config.irc.client_count == 24u);
+    assert(snag_strcpy(config.irc.model_nick, sizeof(config.irc.model_nick), "agent"));
+    assert(snag_strcpy(config.irc.operator_nick, sizeof(config.irc.operator_nick), "operator"));
+    assert(snag_irc_normalize(&config, error, sizeof(error)) == 0);
+    assert(snag_irc_config_clone(&copy, &config.irc) == 0);
+    assert(copy.client_count == 24u && snag_irc_config_clients_equal(&copy, &config.irc));
+    assert(strcmp(copy.clients[23], "client23.example:6667") == 0);
+    snag_irc_config_clients_clear(&copy);
+    /* Routes grow past the old sixteen-seat destination bound. */
+    for (uint32_t i = 0u; i < 40u; ++i)
+        assert(snag_irc_route_add(&route, (struct snag_irc_target){i + 1u, 1u}) == 0);
+    assert(route.count == 40u && route.targets[39].id == 40u);
+    assert(snag_irc_route_copy(&route_copy, &route) == 0);
+    assert(route_copy.count == 40u && route_copy.targets[39].id == 40u);
+    snag_irc_route_clear(&route_copy);
+    snag_irc_route_clear(&route);
+    snag_config_free(&config);
+    puts("test_irc many-clients: ok");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1415,6 +1459,7 @@ main(int argc, char **argv)
     test_client_events();
     test_independent_owners();
     test_callback_failure();
+    test_many_clients();
     snag_network_free();
     puts("test_irc: ok");
     return 0;

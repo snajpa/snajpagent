@@ -10,8 +10,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define SNAG_RENDER_IRC_MARKDOWN_STATES (SNAG_CONFIG_IRC_CLIENT_MAX + 1u)
-
 enum snag_render_view {
     SNAG_RENDER_CHAT, SNAG_RENDER_ROLLOUT, SNAG_RENDER_VIEW_COUNT };
 
@@ -133,7 +131,9 @@ struct snag_render {
     size_t utf8_pending_len;
     struct snag_cite_state cite;
     struct snag_markdown_state markdown_state;
-    struct snag_irc_markdown_state irc_markdown[SNAG_RENDER_IRC_MARKDOWN_STATES];
+    /* Growable fence cache keyed by endpoint and nick. */
+    struct snag_irc_markdown_state *irc_markdown;
+    size_t irc_markdown_capacity;
 };
 
 void snag_render_init(struct snag_render *render, unsigned int verbosity);

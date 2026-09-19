@@ -421,6 +421,9 @@ snag_render_free(struct snag_render *render)
         while (render->view_head[view]) pop_record(render, (enum snag_render_view)view);
     render->rollout_open = NULL;
     snag_buf_free(&render->cite.pending);
+    free(render->irc_markdown);
+    render->irc_markdown = NULL;
+    render->irc_markdown_capacity = 0u;
     if (render->history_fd >= 0) (void)close(render->history_fd);
     render->history_fd = -1;
 }
@@ -2636,7 +2639,7 @@ irc_markdown_state(struct snag_render *render, const struct snag_irc_event *even
 {
     struct snag_irc_markdown_state *empty = NULL;
 
-    for (size_t i = 0u; i < SNAG_RENDER_IRC_MARKDOWN_STATES; ++i) {
+    for (size_t i = 0u; i < render->irc_markdown_capacity; ++i) {
         struct snag_irc_markdown_state *state = &render->irc_markdown[i];
         if (!state->fence) {
             if (!empty) empty = state;
@@ -2645,7 +2648,21 @@ irc_markdown_state(struct snag_render *render, const struct snag_irc_event *even
         if (strcmp(state->endpoint, event->endpoint) == 0 && strcmp(state->nick, event->nick) == 0)
             return state;
     }
-    return allocate ? empty : NULL;
+    if (!allocate) return NULL;
+    if (empty) return empty;
+    {
+        size_t previous = render->irc_markdown_capacity;
+        size_t capacity = previous ? previous * 2u : 8u;
+        struct snag_irc_markdown_state *grown;
+
+        if (capacity < previous) return NULL;
+        grown = realloc(render->irc_markdown, capacity * sizeof(*grown));
+        if (!grown) return NULL;
+        memset(grown + previous, 0, (capacity - previous) * sizeof(*grown));
+        render->irc_markdown = grown;
+        render->irc_markdown_capacity = capacity;
+        return &render->irc_markdown[previous];
+    }
 }
 
 static void
@@ -2656,7 +2673,7 @@ irc_markdown_lifecycle(struct snag_render *render, const struct snag_irc_event *
                       event->kind == SNAG_IRC_NICK;
 
     if (!endpoint_reset && !nick_reset) return;
-    for (size_t i = 0u; i < SNAG_RENDER_IRC_MARKDOWN_STATES; ++i) {
+    for (size_t i = 0u; i < render->irc_markdown_capacity; ++i) {
         struct snag_irc_markdown_state *state = &render->irc_markdown[i];
         if (state->fence && strcmp(state->endpoint, event->endpoint) == 0 &&
             (endpoint_reset || strcmp(state->nick, event->nick) == 0)) memset(state, 0, sizeof(*state));

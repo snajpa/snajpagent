@@ -166,6 +166,82 @@ snag_config_add_secret(struct snag_config *config, const char *value, const char
     return 0;
 }
 
+int
+snag_irc_config_add_client(struct snag_irc_config *config, const char *value,
+                          char *error, size_t error_size)
+{
+    char **grown;
+    char *copy;
+
+    if (!config || !value || !*value || strlen(value) > SNAG_CONFIG_IRC_ENDPOINT_MAX)
+        return snag_fail(error, error_size, EINVAL, "IRC client endpoint is invalid");
+    for (size_t i = 0; i < config->client_count; ++i)
+        if (!strcmp(config->clients[i], value))
+            return snag_fail(error, error_size, EINVAL, "duplicate IRC client endpoint");
+    if (config->client_count == config->client_capacity) {
+        size_t capacity = config->client_capacity ? config->client_capacity * 2u : 8u;
+
+        if (capacity < config->client_capacity) return snag_errno(EOVERFLOW);
+        grown = realloc(config->clients, capacity * sizeof(*grown));
+        if (!grown) return snag_errno(ENOMEM);
+        config->clients = grown;
+        config->client_capacity = capacity;
+    }
+    copy = snag_strdup_checked(value, SNAG_CONFIG_IRC_ENDPOINT_MAX);
+    if (!copy) return snag_errno(ENOMEM);
+    config->clients[config->client_count++] = copy;
+    return 0;
+}
+
+void
+snag_irc_config_clients_clear(struct snag_irc_config *config)
+{
+    for (size_t i = 0; i < config->client_count; ++i) free(config->clients[i]);
+    free(config->clients);
+    config->clients = NULL;
+    config->client_count = config->client_capacity = 0u;
+}
+
+bool
+snag_irc_config_clients_equal(const struct snag_irc_config *left, const struct snag_irc_config *right)
+{
+    if (left->client_count != right->client_count) return false;
+    for (size_t i = 0; i < left->client_count; ++i)
+        if (strcmp(left->clients[i], right->clients[i]) != 0) return false;
+    return true;
+}
+
+int
+snag_irc_config_clone(struct snag_irc_config *dst, const struct snag_irc_config *src)
+{
+    char **grown;
+
+    if (dst == src) return 0;
+    snag_irc_config_clients_clear(dst);
+    *dst = *src;
+    dst->clients = NULL;
+    dst->client_count = dst->client_capacity = 0u;
+    if (!src->client_count) return 0;
+    grown = calloc(src->client_count, sizeof(*grown));
+    if (!grown) return snag_errno(ENOMEM);
+    dst->clients = grown;
+    dst->client_capacity = src->client_count;
+    for (size_t i = 0; i < src->client_count; ++i) {
+        int saved;
+
+        dst->clients[i] = snag_strdup_checked(src->clients[i], SNAG_CONFIG_IRC_ENDPOINT_MAX);
+        if (dst->clients[i]) {
+            dst->client_count = i + 1u;
+            continue;
+        }
+        saved = errno;
+        snag_irc_config_clients_clear(dst);
+        errno = saved;
+        return -1;
+    }
+    return 0;
+}
+
 void
 snag_config_free(struct snag_config *config)
 {
@@ -181,6 +257,7 @@ snag_config_free(struct snag_config *config)
     free(config->model_limits);
     for (size_t i = 0; i < config->secret_count; ++i) snag_secret_source_free(&config->secrets[i]);
     free(config->secrets);
+    snag_irc_config_clients_clear(&config->irc);
     memset(config, 0, sizeof(*config));
 }
 
@@ -788,11 +865,7 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         break;
     case SECTION_IRC:
         if (!strcmp(key, "client")) {
-            if (irc->client_count >= SNAG_CONFIG_IRC_CLIENT_MAX) goto invalid;
-            for (size_t i = 0; i < irc->client_count; ++i)
-                if (!strcmp(irc->clients[i], value)) goto invalid;
-            if (copy_value(irc->clients[irc->client_count], sizeof(irc->clients[0]), value) < 0) return -1;
-            ++irc->client_count;
+            if (snag_irc_config_add_client(irc, value, NULL, 0u) < 0) goto invalid;
             return 0;
         }
         if (!strcmp(key, "listen")) {

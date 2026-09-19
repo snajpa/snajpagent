@@ -42,7 +42,7 @@ The model can read and edit files and run commands.  The program runs in the
 foreground and keeps resumable local sessions; there is no resident service.
 .PP
 An interactive session can independently host one single-room IRC server and
-maintain up to 16 outgoing
+maintain any number of outgoing
 IRC connections.  Agents and channel operators share the room; the runtime
 owns joining, history, and reconnection.  Startup flags and runtime slash
 commands control this native networking without changing session identity.
@@ -606,7 +606,7 @@ An address already in use is a startup error, visible without verbosity flags.
 It does not try another address or increment the port after that collision.
 .TP
 .BR \-c " [" endpoint "]", " \-\-client" [= endpoint ]
-Add an outgoing IRC connection.  Repeat for up to 16 distinct endpoints.  A
+Add an outgoing IRC connection.  Repeat for each distinct endpoint.  A
 missing endpoint means
 .BR localhost:6667 .
 .TP
@@ -1600,7 +1600,7 @@ session and unrelated endpoints usable.  Hosting publishes only matching public
 room history, never private rollout or another room's history.
 .TP
 .BR /connect " " [ENDPOINT]
-Add an outgoing connection, up to 16.  A duplicate is a no-op, including while
+Add an outgoing connection.  A duplicate is a no-op, including while
 reconnecting.  Connecting is asynchronous and is not reported as a completed join.
 .TP
 .BR /disconnect " " [ENDPOINT]
@@ -2356,7 +2356,7 @@ uses
 .BR localhost:6667 .
 .TP
 .B client
-Outgoing endpoint.  Repeat up to 16 distinct endpoints.  Command-line
+Outgoing endpoint.  Repeat for each distinct endpoint.  Command-line
 .B \-c
 occurrences replace this entire list, preserving their order.
 .TP

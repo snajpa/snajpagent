@@ -8,8 +8,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define SNAG_CLI_IRC_CLIENT_MAX 16u
-
 enum snag_cli_auth_command {
     SNAG_CLI_AUTH_NONE, SNAG_CLI_LOGIN, SNAG_CLI_LOGIN_STATUS, SNAG_CLI_LOGOUT };
 
@@ -41,8 +39,9 @@ struct snag_cli {
     const char *irc_listen;
     bool irc_no_listen;
     bool irc_no_client;
-    const char *irc_clients[SNAG_CLI_IRC_CLIENT_MAX];
-    size_t irc_client_count;
+    /* Growable -c endpoint list; entries borrow argv. */
+    const char **irc_clients;
+    size_t irc_client_count, irc_client_capacity;
     const char *irc_model_nick;
     const char *irc_operator_nick;
     const char *irc_room_name;

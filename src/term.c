@@ -238,12 +238,13 @@ snag_term_set_typing_pause(struct snag_term *term, uint32_t pause_ms)
 int
 snag_term_set_destinations(struct snag_term *term, const struct snag_irc_destinations *destinations)
 {
-    if (!destinations || destinations->count > SNAG_IRC_DESTINATIONS_MAX) return snag_errno(EINVAL);
+    if (!destinations) return snag_errno(EINVAL);
     if (!term->destinations) {
         term->destinations = malloc(sizeof(*destinations));
         if (!term->destinations) return -1;
+        memset(term->destinations, 0, sizeof(*term->destinations));
     }
-    *term->destinations = *destinations;
+    if (snag_irc_destinations_assign(term->destinations, destinations) < 0) return -1;
     if (term->destination.id) {
         /* A number names the same endpoint across topology changes; adopt its
          * fresh revision so ordinary chat keeps targeting the selection. */
@@ -289,23 +290,26 @@ snag_term_destination_prefix(const struct snag_term *term, char *out, size_t siz
             selected->joined ? selected->room : "connecting");
 }
 
-void
+int
 snag_term_destination_route(const struct snag_term *term, const char *text, struct snag_irc_route *route)
 {
     uint32_t id;
     size_t body;
     enum snag_irc_target_command command = snag_irc_target_parse( text, text ? strlen(text) : 0u, &id, &body);
 
-    memset(route, 0, sizeof(*route));
-    if (command == SNAG_IRC_TARGET_INVALID) return;
+    snag_irc_route_clear(route);
+    if (command == SNAG_IRC_TARGET_INVALID) return 0;
     if (command == SNAG_IRC_TARGET_NONE) {
-        if (term->destination.id) route->targets[route->count++] = term->destination;
-        return;
+        if (term->destination.id) return snag_irc_route_add(route, term->destination);
+        return 0;
     }
     for (size_t i = 0u; term->destinations && i < term->destinations->count; ++i) {
         const struct snag_irc_target *target = &term->destinations->items[i].target;
-        if (command == SNAG_IRC_TARGET_ALL || target->id == id) route->targets[route->count++] = *target;
+
+        if (command == SNAG_IRC_TARGET_ALL || target->id == id)
+            if (snag_irc_route_add(route, *target) < 0) return -1;
     }
+    return 0;
 }
 
 void
@@ -2515,7 +2519,10 @@ snag_term_close(struct snag_term *term)
     history_reset_navigation(term);
     snag_history_snapshot_free(&term->history);
     free(term->search_original);
-    free(term->destinations);
+    if (term->destinations) {
+        snag_irc_destinations_free(term->destinations);
+        free(term->destinations);
+    }
     snag_buf_free(&term->search_label);
     snag_buf_free(&term->search_query);
     snag_buf_free(&term->draft);

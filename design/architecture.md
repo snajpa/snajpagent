@@ -462,7 +462,7 @@ corruption cannot execute this path.
 ## IRC Runtime
 
 The integrated nonblocking IRC runtime can own one bounded single-room server,
-up to 16 outgoing endpoints, and distinct local agent/operator connections.
+any number of outgoing endpoints, and distinct local agent/operator connections.
 The server advertises its sole room, grants ordinary operator clients `+o`,
 keeps bounded timestamped history, and supports the registration, room,
 liveness, topic, mode, and chat subset needed by normal clients. Outgoing

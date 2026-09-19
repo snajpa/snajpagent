@@ -17,8 +17,6 @@
 #define IRC_DEFAULT_PORT "6667"
 #define IRC_SERVER_PEERS 64u
 #define IRC_MEMBERS_MAX 128u
-#define IRC_REPLAY_MEMBERS_MAX \
-    (IRC_MEMBERS_MAX * (SNAG_CONFIG_IRC_CLIENT_MAX + 1u))
 #define IRC_OUTPUT_MAX (6u * 1024u * 1024u)
 #define IRC_PENDING_MAX (2u * 1024u * 1024u + 64u * 1024u)
 #define IRC_LINE_MAX (SNAG_IRC_LINE_MAX - 2u)
@@ -131,6 +129,7 @@ struct snag_irc_core {
     struct snag_irc_event *history;
     struct irc_replay_member *replay_members;
     size_t replay_member_count;
+    size_t replay_member_capacity;
     size_t history_limit;
     size_t history_start;
     size_t history_count;
@@ -383,21 +382,15 @@ snag_irc_apply_cli(struct snag_config *config, const struct snag_cli *cli, char 
     if ((cli->irc_no_listen && cli->irc_listen) || (cli->irc_no_client && cli->irc_client_count))
         return snag_fail(error, error_size, EINVAL, "conflicting positive and negative IRC role options");
     if (cli->irc_no_listen) config->irc.listen_explicit = false;
-    if (cli->irc_no_client) {
-        config->irc.client_count = 0u;
-        memset(config->irc.clients, 0, sizeof(config->irc.clients));
-    }
+    if (cli->irc_no_client) snag_irc_config_clients_clear(&config->irc);
     if (cli->irc_listen && config_copy(config->irc.listen, sizeof(config->irc.listen),
                     cli->irc_listen, "IRC listen endpoint", error, error_size) < 0) return -1;
     if (cli->irc_listen) config->irc.listen_explicit = true;
     if (cli->irc_client_count) {
-        memset(config->irc.clients, 0, sizeof(config->irc.clients));
-        config->irc.client_count = 0u;
-        for (size_t i = 0; i < cli->irc_client_count; ++i) {
-            if (config_copy(config->irc.clients[i], sizeof(config->irc.clients[i]),
-                            cli->irc_clients[i], "IRC client endpoint", error, error_size) < 0) return -1;
-            ++config->irc.client_count;
-        }
+        snag_irc_config_clients_clear(&config->irc);
+        for (size_t i = 0; i < cli->irc_client_count; ++i)
+            if (snag_irc_config_add_client(&config->irc, cli->irc_clients[i], error, error_size) < 0)
+                return -1;
     }
     if (cli->irc_model_nick) {
         if (config_copy(config->irc.model_nick, sizeof(config->irc.model_nick), cli->irc_model_nick,
@@ -421,8 +414,7 @@ snag_irc_normalize(struct snag_config *config, char *error, size_t error_size)
 {
     const char *login;
 
-    if (!config || config->irc.client_count > SNAG_CONFIG_IRC_CLIENT_MAX)
-        return snag_fail(error, error_size, EINVAL, "invalid IRC configuration");
+    if (!config) return snag_fail(error, error_size, EINVAL, "invalid IRC configuration");
     if (!config->irc.model_nick[0]) {
         if (numbered_nick(config->irc.model_nick, "agent", 0u, false) < 0) return -1;
         config->irc.model_nick_implicit = true;
@@ -1899,13 +1891,15 @@ derive_room(char out[SNAG_CONFIG_IRC_ROOM_MAX + 2u])
 
 int
 snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
-             const char *workspace, bool network, snag_irc_event_fn event_fn,
-             snag_irc_trace_fn trace_fn, void *event_opaque, char *error, size_t error_size)
+             const char *workspace, bool network, const char *endpoint, size_t seats,
+             snag_irc_event_fn event_fn, snag_irc_trace_fn trace_fn, void *event_opaque,
+             char *error, size_t error_size)
 {
     struct snag_irc_core *irc;
 
-    if (!out || !config || !workspace || (network &&
-        (config->irc.listen_explicit ? config->irc.client_count != 0u : config->irc.client_count != 1u))) {
+    if (!out || !config || !workspace || !seats || seats > SIZE_MAX / IRC_MEMBERS_MAX ||
+        (network && (config->irc.listen_explicit ? config->irc.client_count != 0u :
+         (config->irc.client_count != 1u || !endpoint)))) {
         errno = EINVAL;
         return snag_errorf(error, error_size, "invalid IRC startup state");
     }
@@ -1931,7 +1925,8 @@ snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
     irc->history = calloc(irc->history_limit, sizeof(*irc->history));
     irc->conn_count = network && irc->hosting ? IRC_SERVER_PEERS + 2u : 2u;
     irc->conns = calloc(irc->conn_count, sizeof(*irc->conns));
-    irc->replay_members = calloc(IRC_REPLAY_MEMBERS_MAX, sizeof(*irc->replay_members));
+    irc->replay_member_capacity = IRC_MEMBERS_MAX * seats;
+    irc->replay_members = calloc(irc->replay_member_capacity, sizeof(*irc->replay_members));
     if (!irc->conns) goto fail;
     for (size_t i = 0; i < irc->conn_count; ++i) conn_init(&irc->conns[i], irc);
     if ((irc->history_limit && !irc->history) || !irc->replay_members ||
@@ -1952,7 +1947,7 @@ snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
         memcpy(identity->accepted_nick, identity->nick, sizeof(identity->nick));
         (void)snag_strcpy(identity->user, sizeof(identity->user), role == LINK_AGENT ? "agent" : "operator");
         if (identity->outgoing)
-            (void)snag_strcpy(identity->endpoint, sizeof(identity->endpoint), config->irc.clients[0]);
+            (void)snag_strcpy(identity->endpoint, sizeof(identity->endpoint), endpoint);
     }
     derive_server_name(irc->server_name);
     if (config->irc.room_name[0]) {
@@ -2033,6 +2028,14 @@ snag_irc_core_copy_history(struct snag_irc_core *dst, const struct snag_irc_core
         if (!hosted_only || hosted_history_event(dst, event)) snag_irc_core_remember(dst, event);
     }
     if (!hosted_only) {
+        if (src->replay_member_count > dst->replay_member_capacity) {
+            struct irc_replay_member *grown = realloc(dst->replay_members,
+                src->replay_member_count * sizeof(*grown));
+
+            if (!grown) return -1;
+            dst->replay_members = grown;
+            dst->replay_member_capacity = src->replay_member_count;
+        }
         dst->replay_member_count = src->replay_member_count;
         memcpy(dst->replay_members, src->replay_members,
                 src->replay_member_count * sizeof(*src->replay_members));
@@ -2398,7 +2401,7 @@ replay_member_set(struct snag_irc_core *irc, const struct snag_irc_event *event,
     struct irc_replay_member *member = replay_member_find( irc, event->endpoint, event->room, nick);
 
     if (!member) {
-        if (irc->replay_member_count == IRC_REPLAY_MEMBERS_MAX) irc->replay_member_count = 0u;
+        if (irc->replay_member_count == irc->replay_member_capacity) irc->replay_member_count = 0u;
         member = &irc->replay_members[irc->replay_member_count++];
         memset(member, 0, sizeof(*member));
         (void)snprintf(member->endpoint, sizeof(member->endpoint), "%s", event->endpoint);

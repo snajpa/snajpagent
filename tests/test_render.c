@@ -806,7 +806,8 @@ test_mention_completion(void)
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         for (unsigned int active = 0u; active < 2u; ++active) {
             struct snag_term term;
-            struct snag_irc_destinations destinations = {.count = 1u};
+            struct snag_irc_destination items[1] = {0};
+            struct snag_irc_destinations destinations = {.count = 1u, .items = items, .capacity = 1u};
 
             snag_term_init(&term);
             term.chat = true;
@@ -845,9 +846,10 @@ test_completion_choices(void)
         for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
             struct snag_term term;
             char output[4096];
-            struct snag_irc_destinations destinations = {.count = 2u, .items = {
+            struct snag_irc_destination items[2] = {
                 {.target = {.id = 12u}, .joined = true, .nicks = "agent1\nagent2\nčenda\nčerven\n"},
-                {.target = {.id = 17u}, .joined = true, .nicks = "Agent1\nagent2\n"}, }};
+                {.target = {.id = 17u}, .joined = true, .nicks = "Agent1\nagent2\n"} };
+            struct snag_irc_destinations destinations = {.count = 2u, .items = items, .capacity = 2u};
             snag_term_init(&term);
             term.chat = true;
             term.active = (flags & 1u) != 0u;
@@ -986,11 +988,11 @@ test_destination_editor(void)
         {"/17 @ag", "/17 @agent17 ", false}, {"/all @ag", "/all @agent", true},
         {"/9 @ag", "/9 @ag", true}, {"/2oops @ag", "/2oops @ag", true}, {"/1", "/17 ", true}
     };
-    struct snag_irc_destinations destinations = {0};
-    struct snag_irc_route route, frozen;
+    struct snag_irc_destination items[2] = {0};
+    struct snag_irc_destinations destinations = {.count = 2u, .items = items, .capacity = 2u};
+    struct snag_irc_route route = {0}, frozen = {0};
     struct snag_term term;
 
-    destinations.count = 2u;
     destinations.items[0].target = (struct snag_irc_target){2u, 1u};
     destinations.items[1].target = (struct snag_irc_target){17u, 1u};
     destinations.items[0].joined = destinations.items[1].joined = true;
@@ -1059,6 +1061,8 @@ test_destination_editor(void)
     editor_input(&term, "\r");
     assert(term.draft.len == 3u);
     snag_term_close(&term);
+    snag_irc_route_clear(&frozen);
+    snag_irc_route_clear(&route);
 }
 
 static size_t
@@ -1741,6 +1745,7 @@ capture_static_markdown(unsigned int verbosity, char *out, size_t out_size)
     assert(snag_render_history(&render, &(struct snag_history_turn){
         .assistant = "## Literal assistant"}, 1u, 2u, 3u) == 0);
     assert(snag_render_history(&render, NULL, 1u, 2u, 3u) == 0);
+    snag_render_free(&render);
     return capture_close(&capture, out, out_size, 0u);
 }
 
@@ -2125,11 +2130,12 @@ test_local_mention_highlight(void)
         for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
             struct snag_render render;
             struct snag_term term;
-            struct snag_irc_destinations destinations = {.count = 2u, .items = {
+            struct snag_irc_destination items[2] = {
                 {.endpoint = "server", .room = "#room", .operator = "local-other",
                  .model = "local-other", .target = {.id = 1u}},
                 {.endpoint = "other", .room = "#room", .operator = "bob",
-                 .model = "bob", .target = {.id = 2u}}, }};
+                 .model = "bob", .target = {.id = 2u}} };
+            struct snag_irc_destinations destinations = {.count = 2u, .items = items, .capacity = 2u};
             struct snag_irc_event event = {.endpoint = "server", .nick = "peer"};
             char output[8192] = {0};
             struct output_capture capture = capture_terminal(&render, &term, 40u, false, true);
@@ -2596,6 +2602,7 @@ capture_citations(const char **chunks, size_t count, char *out, size_t out_size)
         used = drain_available(capture.fd, out, out_size, used);
     }
     assert(snag_render_public_end(&render) == 0);
+    snag_render_free(&render);
     used = capture_close(&capture, out, out_size, used);
     return used;
 }

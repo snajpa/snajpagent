@@ -255,8 +255,7 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     case SNAG_UI_SELECT:
         if (snag_term_select_destination(term, command->data.value) < 0) return -1;
         return display->prompt.source ? apply_prompt(display) : 0;
-    case SNAG_UI_ROUTE: snag_term_destination_route(term, command->text, command->data.route);
-        return 0;
+    case SNAG_UI_ROUTE: return snag_term_destination_route(term, command->text, command->data.route);
     case SNAG_UI_COMMANDS: snag_term_set_commands(term, command->data.commands.items,
                              command->data.commands.count);
         return 0;
@@ -386,7 +385,7 @@ read_input(struct snag_ui_display *display, int timeout_ms)
     term->history_reader.warning = false;
     if (item->text) item->received_ms = snag_time_ms();
     take_snapshot(display, &item->snapshot);
-    if (item->text) snag_term_destination_route(term, item->text, &item->route);
+    if (item->text && snag_term_destination_route(term, item->text, &item->route) < 0) goto fail;
     if (item->action == SNAG_TERM_INTERRUPT) term->interrupt_pending = true;
     if (item->action == SNAG_TERM_CANCEL || item->action == SNAG_TERM_INTERRUPT ||
         item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE) {
@@ -462,12 +461,14 @@ read_input(struct snag_ui_display *display, int timeout_ms)
     }
     {
         bool notify = item->action != SNAG_TERM_NONE || item->error;
+        snag_irc_route_clear(&item->route);
         free(item->text);
         free(item);
         if (notify) snag_wakeup_send(runtime->actions.wake[1]);
     }
     return 0;
-fail: free(item->text);
+fail: snag_irc_route_clear(&item->route);
+    free(item->text);
     free(item);
     return -1;
 }
@@ -487,6 +488,7 @@ local_feedback(struct snag_ui_display *display)
         display->local_acknowledged = true;
     }
     if (snag_text_blank(item->text)) {
+        snag_irc_route_clear(&item->route);
         free(item->text);
         free(item);
         display->local = NULL;
@@ -705,9 +707,11 @@ snag_ui_free(struct snag_ui *ui)
     (void)send_message(ui, &message, NULL);
     (void)pthread_join(runtime->thread, NULL);
     while ((action = queue_pop(&runtime->actions))) {
+        snag_irc_route_clear(&action->route);
         free(action->text);
         free(action);
     }
+    snag_irc_route_clear(&ui->input_route);
     snag_wakeup_close(runtime->actions.wake);
     snag_wakeup_close(runtime->commands);
     (void)snag_term_signals_restore(&runtime->saved_mask);
@@ -943,7 +947,9 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
     ui->input_received_ms = item->received_ms;
     ui->input_view = item->snapshot.view;
     ui->input_active = item->snapshot.active;
+    snag_irc_route_clear(&ui->input_route);
     ui->input_route = item->route;
+    item->route = (struct snag_irc_route){0};
     ui->selection = item->snapshot.selection;
     memcpy(ui->submitted_label, item->snapshot.label, sizeof(ui->submitted_label));
     if (item->local) {
@@ -960,6 +966,7 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
     }
     {
         int error = item->error;
+        snag_irc_route_clear(&item->route);
         free(item);
         if (error) {
             errno = error;

@@ -131,7 +131,7 @@ out: snag_buf_free(&line);
     return rc;
 }
 
-static void
+static int
 reply_target(struct snag_irc_route *route, struct snag_irc_target target, bool add)
 {
     for (size_t i = 0u; i < route->count; ++i)
@@ -140,9 +140,9 @@ reply_target(struct snag_irc_route *route, struct snag_irc_target target, bool a
                 memmove(route->targets + i, route->targets + i + 1u,
                          (--route->count - i) * sizeof(route->targets[0]));
             }
-            return;
+            return 0;
         }
-    if (add && route->count < SNAG_IRC_DESTINATIONS_MAX) route->targets[route->count++] = target;
+    return add ? snag_irc_route_add(route, target) : 0;
 }
 
 static void
@@ -159,18 +159,41 @@ prune_replies(struct snag_irc_route *route, const struct snag_irc_destinations *
     route->count = kept;
 }
 
+static int
+urgent_offsets_reserve(struct app_state *app, size_t needed)
+{
+    size_t capacity = app->irc_urgent_reply_offset_capacity, *grown;
+
+    if (capacity >= needed) return 0;
+    while (capacity < needed) {
+        if (capacity > SIZE_MAX / 2u) return snag_errno(EOVERFLOW);
+        capacity = capacity ? capacity * 2u : 8u;
+    }
+    grown = realloc(app->irc_urgent_reply_offsets, capacity * sizeof(*grown));
+    if (!grown) return snag_errno(ENOMEM);
+    app->irc_urgent_reply_offsets = grown;
+    app->irc_urgent_reply_offset_capacity = capacity;
+    return 0;
+}
+
 int
 snag_app_sync_destinations(struct app_state *app)
 {
     struct snag_irc_destinations current;
 
-    snag_irc_destinations(app->irc, &current);
-    if (app->irc_destinations_ready && memcmp(&current, &app->irc_destinations, sizeof(current)) == 0)
+    if (snag_irc_destinations(app->irc, &current) < 0) return -1;
+    if (app->irc_destinations_ready && snag_irc_destinations_equal(&current, &app->irc_destinations)) {
+        snag_irc_destinations_free(&current);
         return 0;
+    }
     if (snag_ui_send(&app->ui, (struct snag_ui_command){
-        .kind = SNAG_UI_DESTINATIONS, .data.destinations = &current}) < 0) return -1;
+        .kind = SNAG_UI_DESTINATIONS, .data.destinations = &current}) < 0) {
+        snag_irc_destinations_free(&current);
+        return -1;
+    }
     prune_replies(&app->irc_urgent_replies, &current, app->irc_urgent_reply_offsets);
     prune_replies(&app->irc_turn_replies, &current, NULL);
+    snag_irc_destinations_free(&app->irc_destinations);
     app->irc_destinations = current;
     app->irc_destinations_ready = true;
     return 0;
@@ -233,7 +256,7 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     if (own_agent) {
         if (app->session.active_turn && event->kind == SNAG_IRC_MESSAGE &&
             snag_irc_event_target(app->irc, event, &target))
-            reply_target(&app->irc_turn_replies, target, false);
+            (void)reply_target(&app->irc_turn_replies, target, false);
         return 0;
     }
     if (event->kind == SNAG_IRC_HISTORY_READY) {
@@ -256,7 +279,10 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     }
     if (urgent && local_operator && snag_irc_event_target(app->irc, event, &target)) {
         size_t before = app->irc_urgent_replies.count;
-        reply_target(&app->irc_urgent_replies, target, true);
+
+        if (reply_target(&app->irc_urgent_replies, target, true) < 0 ||
+            (app->irc_urgent_replies.count > before &&
+             urgent_offsets_reserve(app, app->irc_urgent_replies.count) < 0)) return -1;
         if (app->irc_urgent_replies.count > before) app->irc_urgent_reply_offsets[before] = reply_offset;
     }
     if (!urgent && !app->irc_background_since_ms) app->irc_background_since_ms = snag_time_ms();
@@ -310,7 +336,11 @@ admit_replies(struct app_state *app, size_t used)
     size_t kept = 0u;
     for (size_t i = 0u; i < app->irc_urgent_replies.count; ++i) {
         if (app->irc_urgent_reply_offsets[i] < used) {
-            reply_target(&app->irc_turn_replies, app->irc_urgent_replies.targets[i], true);
+            /* On allocation failure keep the entry so a later flush retries. */
+            if (reply_target(&app->irc_turn_replies, app->irc_urgent_replies.targets[i], true) < 0) {
+                app->irc_urgent_replies.targets[kept] = app->irc_urgent_replies.targets[i];
+                app->irc_urgent_reply_offsets[kept++] = app->irc_urgent_reply_offsets[i];
+            }
         } else {
             app->irc_urgent_replies.targets[kept] = app->irc_urgent_replies.targets[i];
             app->irc_urgent_reply_offsets[kept++] = app->irc_urgent_reply_offsets[i] - used;
@@ -406,8 +436,8 @@ restore_irc_event(void *opaque, const struct snag_session *state,
                     !strcmp(state->active_turn_id, app->session.active_turn_id)) ||
                     (state->pending_input && (app->session.pending_input || app->session.active_turn));
                 struct snag_irc_target target;
-                if (current && event.reply && snag_irc_event_target(app->irc, &event, &target))
-                    reply_target(&app->irc_turn_replies, target, true);
+                if (current && event.reply && snag_irc_event_target(app->irc, &event, &target) &&
+                    reply_target(&app->irc_turn_replies, target, true) < 0) return -1;
                 if (json_array_remove(restore->pending, i) < 0) return -1;
                 break;
             }
@@ -442,8 +472,12 @@ snag_app_irc_restore(struct app_state *app, char *error, size_t error_size)
         struct snag_irc_target target;
         if (urgent && event.reply && snag_irc_event_target(app->irc, &event, &target)) {
             size_t before = app->irc_urgent_replies.count;
-            reply_target(&app->irc_urgent_replies, target, true);
-            if (before != app->irc_urgent_replies.count) app->irc_urgent_reply_offsets[before] = offset;
+
+            if (reply_target(&app->irc_urgent_replies, target, true) < 0) rc = -1;
+            if (rc == 0 && before != app->irc_urgent_replies.count) {
+                if (urgent_offsets_reserve(app, app->irc_urgent_replies.count) < 0) rc = -1;
+                else app->irc_urgent_reply_offsets[before] = offset;
+            }
         }
     }
     if (app->irc_background.len) app->irc_background_since_ms = snag_time_ms();
@@ -533,7 +567,8 @@ snag_app_request_build(struct app_state *app, const json_t *steering, unsigned i
     const struct snag_context_control control = {snag_app_context_cancelled, app};
 
     app->request_networked = app->networked && !app->session.active_read_only;
-    snag_irc_capture_route(app->irc, &app->irc_request_route);
+    if (snag_irc_capture_route(app->irc, &app->irc_request_route) < 0)
+        return snag_errorf(error, error_size, "cannot capture IRC destinations");
     char visibility[2048];
     if (operator_visibility(app, visibility, sizeof(visibility)) < 0)
         return snag_errorf(error, error_size, "cannot describe operator visibility");

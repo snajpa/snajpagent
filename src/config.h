@@ -22,7 +22,6 @@
 /* Outside the numeric compaction range; zero continues to mean disabled. */
 #define SNAG_CONFIG_COMPACT_AUTO UINT32_MAX
 #define SNAG_DEFAULT_TOOL_OUTPUT_TOKENS 6000u
-#define SNAG_CONFIG_IRC_CLIENT_MAX 16u
 #define SNAG_CONFIG_IRC_ENDPOINT_MAX 255u
 #define SNAG_CONFIG_IRC_NICK_MAX 30u
 #define SNAG_CONFIG_IRC_ROOM_MAX 50u
@@ -43,12 +42,13 @@ enum snag_auth_kind {
 
 #define SNAG_CHATGPT_BASE "https://chatgpt.com/backend-api/codex"
 
-/* Bounded desired networking state; socket health belongs to the IRC owners. */
+/* Desired networking state; socket health belongs to the IRC owners. */
 struct snag_irc_config {
     bool listen_explicit;
     char listen[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
-    char clients[SNAG_CONFIG_IRC_CLIENT_MAX][SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
-    size_t client_count;
+    /* Growable outgoing-endpoint list owned by this config. */
+    char **clients;
+    size_t client_count, client_capacity;
     char model_nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
     char operator_nick[SNAG_CONFIG_IRC_NICK_MAX + 1u];
     bool model_nick_implicit;
@@ -56,6 +56,15 @@ struct snag_irc_config {
     char room_name[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
     uint32_t history_lines;
 };
+
+/* Growable IRC client endpoints: add validates and copies, clear releases. */
+int snag_irc_config_add_client(struct snag_irc_config *config, const char *value,
+                              char *error, size_t error_size);
+void snag_irc_config_clients_clear(struct snag_irc_config *config);
+bool snag_irc_config_clients_equal(const struct snag_irc_config *left,
+                                  const struct snag_irc_config *right);
+/* Deep copy of every field, including clients; dst is cleared first. */
+int snag_irc_config_clone(struct snag_irc_config *dst, const struct snag_irc_config *src);
 
 struct snag_provider_model {
     char name[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];

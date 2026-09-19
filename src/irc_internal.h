@@ -18,7 +18,7 @@ struct snag_irc_view {
 
 struct snag_irc_core;
 int snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
-                      const char *workspace, bool network,
+                      const char *workspace, bool network, const char *endpoint, size_t seats,
                       snag_irc_event_fn event_fn, snag_irc_trace_fn trace_fn,
                       void *opaque, char *error, size_t error_size);
 void snag_irc_core_close(struct snag_irc_core *irc);

@@ -132,8 +132,8 @@ prompt_spinner_tool = " ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 prompt_spinner_per_second = 8
 ```
 
-`client` is the one intentionally repeatable configuration key. There may be
-at most 16 distinct outgoing endpoints. Command-line `-c` occurrences replace
+`client` is the one intentionally repeatable configuration key. Any number of
+distinct outgoing endpoints may be listed. Command-line `-c` occurrences replace
 the configured client list and retain their order. `-s` overrides the
 configured listener, while `listen` in configuration enables the built-in
 server directly. Other command-line scalar values override configured values.

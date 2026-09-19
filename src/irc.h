@@ -13,7 +13,6 @@
 
 #define SNAG_IRC_TEXT_MAX 4096u
 #define SNAG_IRC_LINE_MAX 8192u /* Includes CRLF. */
-#define SNAG_IRC_DESTINATIONS_MAX (SNAG_CONFIG_IRC_CLIENT_MAX + 1u)
 
 /* Process-local handles; frozen routes never retain owner pointers. */
 struct snag_irc_target {
@@ -22,8 +21,8 @@ struct snag_irc_target {
 };
 
 struct snag_irc_route {
-    struct snag_irc_target targets[SNAG_IRC_DESTINATIONS_MAX];
-    size_t count;
+    struct snag_irc_target *targets;
+    size_t count, capacity;
 };
 
 struct snag_irc_destination {
@@ -37,8 +36,8 @@ struct snag_irc_destination {
 };
 
 struct snag_irc_destinations {
-    struct snag_irc_destination items[SNAG_IRC_DESTINATIONS_MAX];
-    size_t count;
+    struct snag_irc_destination *items;
+    size_t count, capacity;
 };
 
 enum snag_irc_event_kind {
@@ -74,8 +73,16 @@ typedef int (*snag_irc_trace_fn)(void *opaque, unsigned int level, char directio
 
 struct snag_irc;
 
-void snag_irc_destinations(const struct snag_irc *irc, struct snag_irc_destinations *out);
-void snag_irc_capture_route(const struct snag_irc *irc, struct snag_irc_route *out);
+int snag_irc_destinations(const struct snag_irc *irc, struct snag_irc_destinations *out);
+void snag_irc_destinations_free(struct snag_irc_destinations *destinations);
+bool snag_irc_destinations_equal(const struct snag_irc_destinations *left,
+                                const struct snag_irc_destinations *right);
+int snag_irc_destinations_assign(struct snag_irc_destinations *dst,
+                                const struct snag_irc_destinations *src);
+int snag_irc_capture_route(const struct snag_irc *irc, struct snag_irc_route *out);
+int snag_irc_route_add(struct snag_irc_route *route, struct snag_irc_target target);
+void snag_irc_route_clear(struct snag_irc_route *route);
+int snag_irc_route_copy(struct snag_irc_route *dst, const struct snag_irc_route *src);
 bool snag_irc_event_target(const struct snag_irc *irc, const struct snag_irc_event *event,
                             struct snag_irc_target *target);
 bool snag_irc_local_identity(const struct snag_irc *irc, const struct snag_irc_event *event, bool model);
