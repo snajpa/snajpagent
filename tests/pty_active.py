@@ -2655,7 +2655,7 @@ def test_help_plain_terminal():
             child.wait(b"clear=cancel", start=start)
             child.drain(0.1)
             text = bytes(child.buf[start:])
-            assert b"[optional]" in text and b"/goal [set] TEXT" in text
+            assert b"[optional]" in text and b"/state goal [set] TEXT" in text
             assert b"\x1b" not in text
         child.exit_now(expect_resume=False)
         assert session_ids() == child.sessions_before
@@ -2681,7 +2681,8 @@ def test_command_name_completion():
     child.wait(PROMPT.rstrip(), start=alias_end)
 
     for prefix, command in (
-        (b"/sta", b"/status"),
+        (b"/statu", b"/status"),
+        (b"/state", b"/state"),
         (b"/hi", b"/history"),
         (b"/mo", b"/model"),
         (b"/ef", b"/effort"),
@@ -2701,7 +2702,8 @@ def test_command_name_completion():
         end = child.send_wait(prefix + b"\t", command + b" ", start=start)
         clear_draft_incrementally(child)
 
-    for prefix, choices in ((b"/h", (b"/help", b"/history")),
+    for prefix, choices in ((b"/sta", (b"/state", b"/status")),
+                            (b"/h", (b"/help", b"/history")),
                             (b"/c", (b"/compact", b"/config")),
                             (b"/v", (b"/verbose", b"/voice")),
                             (b"/de", (b"/delete", b"/detach"))):
@@ -2747,7 +2749,7 @@ def test_command_name_completion():
     child.wait("»".encode(), start=alias_end)
 
     start = len(child.buf)
-    end = child.send_wait(b"/sta\t", b"tus", start=start)
+    end = child.send_wait(b"/statu\t", b"s ", start=start)
     status_end = child.send_wait(b"\r", b"state: active", start=end)
     child.wait("»".encode(), start=status_end)
     config_end = child.send_wait(b"/config\r",
