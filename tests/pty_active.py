@@ -1317,6 +1317,39 @@ def test_cancel_defers_timer_until_next_input():
     assert [s["data"]["text"] for s in starts] == ["timer_slow_test", "queue_slow", "ping", "timer fired"]
     assert one(log, "turn_interrupted")
 
+def test_deferred_steering_queues_to_turn_end():
+    # Steer-deferral tool: the model switches steers off, steering inputs
+    # queue without interrupting and join as context (admitted); no auto-turn
+    # is started for them. Steers are back on for new turns.
+    child = Child([], PROMPT.rstrip())
+    child.send_wait(b"defer_slow_test\r", b"working slowly")
+    child.send(b"ping\r")
+    # A non-deferred steer would interrupt here; the turn must continue.
+    child.drain(0.5)
+    assert b"steered:" not in child.buf
+    slow_end = child.wait(b"defer slow complete")
+    # The completion text renders before the turn fully closes; wait for
+    # idle so the next input starts a new turn instead of steering this one.
+    slow_end = child.wait_idle_prompt(start=slow_end)
+    log = events(child.session_id())
+    starts = [e for e in log if e["type"] == "turn_started"]
+    assert [s["data"]["text"] for s in starts] == ["defer_slow_test"]
+    slow_id = starts[0]["data"]["turn_id"]
+    assert not turn_events(log, "response_interrupted", slow_id)
+    ping_ids = [s["data"]["steering_id"] for s in log
+                if s["type"] == "steering_added" and s["data"].get("text") == "ping"]
+    assert ping_ids
+    # Steers are on again: steering the next slow turn interrupts it.
+    child.send_wait(b"slow\r", b"working slowly", start=slow_end)
+    steer_end = child.send_wait(b"again\r", b"steered: again")
+    child.exit_cleanly(steer_end)
+    log = events(child.session_id())
+    starts = [e for e in log if e["type"] == "turn_started"]
+    assert [s["data"]["text"] for s in starts] == ["defer_slow_test", "slow"]
+    # The deferred steering was admitted as context once a next turn began.
+    assert any(pid in e["data"].get("steering_ids", [])
+               for e in log if e["type"] == "input_admitted" for pid in ping_ids)
+
 
 def test_active_ctrl_c_clears_draft():
     child = Child([], PROMPT.rstrip())
