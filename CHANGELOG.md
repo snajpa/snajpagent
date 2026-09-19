@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Send `instructions` on native compaction requests for every provider. Codex
+  style compact endpoints (such as codex-lb) require the field and reject a
+  body without it as an invalid request; an API-key provider with
+  `native_compaction = true` previously failed compaction instead of using its
+  native endpoint. The instruction text stays empty because the compact
+  projection carries no caller instruction.
+
 - Show provider/tool wait notices only at verbosity 1 and higher. Verbosity 0
   remains conversation-only in ordinary and networked terminal modes.
 

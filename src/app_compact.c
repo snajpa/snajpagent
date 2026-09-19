@@ -262,7 +262,9 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             json_decref(projection.count_request.value);
             projection.count_request.value = responses_compact_count_request(projection.create_request.value);
         }
-        if (projection.create_request.value && app->turn_provider->auth == SNAG_AUTH_CHATGPT && native &&
+        /* Codex-style compact endpoints require the field even when the caller
+         * supplies no summary instruction; omission is rejected as invalid. */
+        if (projection.create_request.value && native &&
             snag_json_set_new(projection.create_request.value, "instructions", json_string("")) < 0) goto out;
         if (projection.create_request.value && !native && app->turn_provider->auth == SNAG_AUTH_CHATGPT &&
             snag_context_codex_request(projection.create_request.value) < 0) goto out;
