@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep a blank row between terminal wait/warning notices and following model
+  output, including literal rendering with Markdown disabled.
+
 - Keep prompt-cache policy stable through steering, recovery, interruption,
   display and goal state changes, IRC connection/nick changes, and work-note
   updates. Runtime facts remain labelled conversation data; current snapshots

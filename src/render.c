@@ -2534,7 +2534,7 @@ render_message(struct snag_render *render, const char *message, const char *colo
 
     struct snag_buf line = {.max = 16384u};
     rc = snag_buf_printf(&line, SNAJPAGENT_NAME ": %s\n", message);
-    if (rc == 0) rc = write_role_block(render, BOUNDARY_CONTENT, STDERR_FILENO, color,
+    if (rc == 0) rc = write_role_block(render, BOUNDARY_UPDATE, STDERR_FILENO, color,
                               (char *)line.data, line.len, line.len, render->stderr_terminal, true);
     snag_buf_free(&line);
     return rc;
