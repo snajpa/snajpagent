@@ -128,18 +128,23 @@ let
     # without compiling the unusable POSIX async backend.
     openssl = previous.openssl.overrideAttrs (old: {
       configureFlags = (old.configureFlags or [ ]) ++ [ "no-async" ];
-      # The enabled client corpus test supplies a deterministic time() shim.
-      # Static uClibc exports time from libc.a, so wrap only this test's time
-      # references around that shim; keep the corpus test and package checks.
+      # The four enabled TLS/DTLS client/server corpus tests supply a
+      # deterministic time() shim. Static uClibc exports time from libc.a, so
+      # wrap only these test-local references around their shims; retain every
+      # corpus test and the normal package checks.
       postPatch = (old.postPatch or "") + ''
-        substituteInPlace fuzz/client.c \
-          --replace-fail 'time_t time(time_t *t) TIME_IMPL(t)' \
-            'time_t __wrap_time(time_t *t) TIME_IMPL(t)'
+        for fuzz in client dtlsclient server dtlsserver; do
+          substituteInPlace "fuzz/$fuzz.c" \
+            --replace-fail 'time_t time(time_t *t) TIME_IMPL(t)' \
+              'time_t __wrap_time(time_t *t) TIME_IMPL(t)'
+        done
       '';
       postConfigure = (old.postConfigure or "") + ''
-        substituteInPlace Makefile \
-          --replace-fail '-o fuzz/client-test \' \
-            '-Wl,--wrap=time -o fuzz/client-test \'
+        for fuzz in client dtlsclient server dtlsserver; do
+          substituteInPlace Makefile \
+            --replace-fail "-o fuzz/$fuzz-test \\" \
+              "-Wl,--wrap=time -o fuzz/$fuzz-test \\"
+        done
       '';
     });
     # GMP cannot run this cross probe.  The target header and libc.a both
