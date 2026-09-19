@@ -13,8 +13,6 @@
  * applied by the host through one callback. Matching is filtering, never
  * containment; containment belongs to bindings and native dispatch. */
 
-#define SNAG_RULES_MAX 256u
-#define SNAG_CHAINS_MAX 64u
 #define SNAG_RULE_NAME_MAX 63u
 #define SNAG_RULE_VISITS_MAX 4096u
 #define SNAG_RULE_TEXT_MAX (64u * 1024u)

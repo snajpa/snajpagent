@@ -201,8 +201,8 @@ text   = "Writes over 1 MiB are disabled here."
 
 ## 3. Semantics and limits
 
-- **Bounded.** At most 256 rules, 64 chains, 4096 visited rules per evaluation,
-  63-byte names, 64 KiB per text template.
+- **Bounded.** Rule and chain counts are bounded by the configuration file;
+  4096 visited rules per evaluation, 63-byte names, 64 KiB per text template.
 - **Deterministic.** Validation happens at configuration load; there is no
   runtime rule-generation path and no hidden default action.
 - **Not stateful.** There is no `once`, rate limit, or per-session counter in the

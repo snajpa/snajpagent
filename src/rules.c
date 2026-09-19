@@ -2,6 +2,7 @@
 #include "rules.h"
 
 #include <regex.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,9 +37,9 @@ struct snag_rule {
 
 struct snag_rules {
     char (*chains)[SNAG_RULE_NAME_MAX + 1u];
-    size_t chain_count;
+    size_t chain_count, chain_capacity;
     struct snag_rule *rules;
-    size_t rule_count;
+    size_t rule_count, rule_capacity;
     char digest[SNAG_SHA256_HEX_LEN + 1u];
 };
 
@@ -74,10 +75,47 @@ chain_index(const struct snag_rules *rules, const char *name)
 }
 
 static int
+chain_reserve(struct snag_rules *rules, size_t needed)
+{
+    char (*grown)[SNAG_RULE_NAME_MAX + 1u];
+    size_t capacity = rules->chain_capacity;
+
+    if (capacity >= needed) return 0;
+    while (capacity < needed) {
+        if (capacity > SIZE_MAX / 2u) return -1;
+        capacity = capacity ? capacity * 2u : 8u;
+    }
+    grown = realloc(rules->chains, capacity * sizeof(*grown));
+    if (!grown) return -1;
+    rules->chains = grown;
+    rules->chain_capacity = capacity;
+    return 0;
+}
+
+static int
+rules_reserve(struct snag_rules *rules, size_t needed)
+{
+    struct snag_rule *grown;
+    size_t capacity = rules->rule_capacity;
+
+    if (capacity >= needed) return 0;
+    while (capacity < needed) {
+        if (capacity > SIZE_MAX / 2u) return -1;
+        capacity = capacity ? capacity * 2u : 8u;
+    }
+    grown = realloc(rules->rules, capacity * sizeof(*grown));
+    if (!grown) return -1;
+    memset(grown + rules->rule_capacity, 0, (capacity - rules->rule_capacity) * sizeof(*grown));
+    rules->rules = grown;
+    rules->rule_capacity = capacity;
+    return 0;
+}
+
+static int
 chain_add(struct snag_rules *rules, const char *name)
 {
     if (!name_valid(name) || chain_index(rules, name) != rules->chain_count) return -1;
-    if (rules->chain_count >= SNAG_CHAINS_MAX) return -1;
+    if (chain_reserve(rules, rules->chain_count + 1u) < 0) return -1;
     (void)snprintf(rules->chains[rules->chain_count], SNAG_RULE_NAME_MAX + 1u, "%s", name);
     ++rules->chain_count;
     return 0;
@@ -342,12 +380,21 @@ snag_rules_compile(const json_t *definition, char *error, size_t size)
     const json_t *list;
 
     if (!definition || json_is_null(definition)) {
+        json_t *empty;
+
         rules = calloc(1u, sizeof(*rules));
         if (!rules) return NULL;
-        if (snag_json_digest(json_object(), rules->digest) < 0) {
+        empty = json_object();
+        if (!empty) {
             free(rules);
             return NULL;
         }
+        if (snag_json_digest(empty, rules->digest) < 0) {
+            json_decref(empty);
+            free(rules);
+            return NULL;
+        }
+        json_decref(empty);
         return rules;
     }
     if (!json_is_object(definition)) {
@@ -365,16 +412,13 @@ snag_rules_compile(const json_t *definition, char *error, size_t size)
         }
     }
     list = json_object_get(definition, "rules");
-    if (list && (!json_is_array(list) || json_array_size(list) > SNAG_RULES_MAX)) {
-        invalid(error, size, "rules must be a bounded array");
+    if (list && !json_is_array(list)) {
+        invalid(error, size, "rules must be an array");
         return NULL;
     }
     rules = calloc(1u, sizeof(*rules));
     if (!rules) return NULL;
     if (snag_json_digest(definition, rules->digest) < 0) goto fail;
-    rules->chains = calloc(SNAG_CHAINS_MAX, sizeof(*rules->chains));
-    rules->rules = calloc(SNAG_RULES_MAX, sizeof(*rules->rules));
-    if (!rules->chains || !rules->rules) goto fail;
     if (chain_add(rules, "in") < 0 || chain_add(rules, "out") < 0 || chain_add(rules, "event") < 0) goto fail;
     declared = json_object_get(definition, "chains");
     if (declared && !json_is_null(declared)) {
@@ -385,6 +429,7 @@ snag_rules_compile(const json_t *definition, char *error, size_t size)
         }
     }
     rules->rule_count = list ? json_array_size(list) : 0u;
+    if (rules_reserve(rules, rules->rule_count) < 0) goto fail;
     for (size_t i = 0u; i < rules->rule_count; ++i)
         if (compile_rule(rules, json_array_get(list, i), i, error, size) < 0) goto fail;
     for (size_t i = 0u; i < rules->rule_count; ++i)
@@ -464,23 +509,34 @@ done: snag_buf_free(&bytes);
     return result;
 }
 
+struct snag_rule_position {
+    size_t chain, next;
+};
+
 int
 snag_rules_eval(const struct snag_rules *rules, struct snag_rule_frame *frame,
                 snag_rule_effect_fn effect, void *opaque,
                 struct snag_rule_verdict *verdict, char *error, size_t size)
 {
-    struct { size_t chain, next; } stack[SNAG_CHAINS_MAX];
+    struct snag_rule_position *stack;
     const char *boundary;
-    size_t depth = 0u;
+    size_t capacity, depth = 0u;
+    int result = -1;
 
     if (!rules || !frame || !verdict || !json_is_object(frame->envelope))
         return invalid(error, size, "invalid evaluation envelope");
     boundary = snag_json_string(frame->envelope, "boundary");
     if (!snag_rules_boundary(boundary)) return invalid(error, size, "invalid evaluation boundary");
     memset(verdict, 0, sizeof(*verdict));
+    capacity = rules->chain_count < 8u ? 8u : rules->chain_count;
+    stack = malloc(capacity * sizeof(*stack));
+    if (!stack) return snag_errno(ENOMEM);
     stack[0].chain = chain_index(rules, boundary);
     stack[0].next = 0u;
-    if (stack[0].chain == rules->chain_count) return 0;
+    if (stack[0].chain == rules->chain_count) {
+        result = 0;
+        goto out;
+    }
     for (;;) {
         const struct snag_rule *rule = NULL;
         while (stack[depth].next < rules->rule_count) {
@@ -491,33 +547,62 @@ snag_rules_eval(const struct snag_rules *rules, struct snag_rule_frame *frame,
             }
         }
         if (!rule) {
-            if (!depth) return 0;
+            if (!depth) break;
             --depth;
             continue;
         }
-        if (++verdict->visits > SNAG_RULE_VISITS_MAX) return invalid(error, size, "evaluation visit limit");
+        if (++verdict->visits > SNAG_RULE_VISITS_MAX) {
+            (void)invalid(error, size, "evaluation visit limit");
+            goto out;
+        }
         int matched = rule_matches(rule, frame->envelope);
-        if (matched < 0) return invalid(error, size, "rule matching failed");
+        if (matched < 0) {
+            (void)invalid(error, size, "rule matching failed");
+            goto out;
+        }
         if (!matched) continue;
         ++verdict->matches;
         bool needs_host = rule->log || rule->value || rule->verb == SNAG_RULE_INSERT ||
             rule->verb == SNAG_RULE_COMMAND || rule->verb == SNAG_RULE_CONFIRM;
-        if (!effect && needs_host) return invalid(error, size, "rule effect needs a host handler");
+        if (!effect && needs_host) {
+            (void)invalid(error, size, "rule effect needs a host handler");
+            goto out;
+        }
         int rc = effect ? effect(opaque, rule, frame, error, size) : 0;
-        if (rc < 0) return -1;
+        if (rc < 0) goto out;
         if (rc > 0) verdict->rejected = true;
         if (rule->verb == SNAG_RULE_REJECT) verdict->rejected = true;
-        if (rule->verb == SNAG_RULE_ACCEPT) return 0;
+        if (rule->verb == SNAG_RULE_ACCEPT) break;
         if (rule->verb == SNAG_RULE_JUMP) {
             size_t target = chain_index(rules, rule->target);
-            if (target == rules->chain_count || depth + 1u >= SNAG_CHAINS_MAX)
-                return invalid(error, size, "invalid jump target");
+            struct snag_rule_position *grown;
+            size_t grown_capacity;
+
+            if (target == rules->chain_count) {
+                (void)invalid(error, size, "invalid jump target");
+                goto out;
+            }
+            if (depth + 1u == capacity) {
+                grown_capacity = capacity * 2u;
+                if (grown_capacity < capacity) {
+                    result = snag_errno(EOVERFLOW);
+                    goto out;
+                }
+                grown = realloc(stack, grown_capacity * sizeof(*grown));
+                if (!grown) goto out;
+                stack = grown;
+                capacity = grown_capacity;
+            }
             ++depth;
             stack[depth].chain = target;
             stack[depth].next = 0u;
         } else if (rule->verb == SNAG_RULE_RETURN) {
-            if (!depth) return 0;
+            if (!depth) break;
             --depth;
         }
     }
+    result = 0;
+out:
+    free(stack);
+    return result;
 }

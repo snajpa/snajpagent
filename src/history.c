@@ -8,13 +8,22 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define HISTORY_FILE_BYTES (SNAG_HISTORY_BYTES * 4u + SNAG_HISTORY_COUNT)
+#define HISTORY_FILE_BYTES (SNAG_HISTORY_BYTES * 5u)
+
+/* Entries are held head-first: items[head] is the oldest retained entry. */
+static char *
+history_item(const struct snag_history_snapshot *snapshot, size_t index)
+{
+    return snapshot->items[snapshot->head + index];
+}
 
 static void
 history_memory_clear(struct snag_history_snapshot *snapshot)
 {
-    for (size_t i = 0u; i < snapshot->count; ++i) free(snapshot->items[i]);
-    snapshot->count = snapshot->bytes = 0u;
+    for (size_t i = 0u; i < snapshot->count; ++i) free(history_item(snapshot, i));
+    free(snapshot->items);
+    snapshot->items = NULL;
+    snapshot->count = snapshot->capacity = snapshot->head = snapshot->bytes = 0u;
 }
 
 void
@@ -30,8 +39,13 @@ int
 snag_history_snapshot_copy(struct snag_history_snapshot *out, const struct snag_history_snapshot *source)
 {
     memset(out, 0, sizeof(*out));
+    if (source->count) {
+        out->items = calloc(source->count, sizeof(*out->items));
+        if (!out->items) return -1;
+        out->capacity = source->count;
+    }
     for (size_t i = 0u; i < source->count; ++i) {
-        out->items[i] = snag_strdup_checked(source->items[i], SNAG_HISTORY_BYTES);
+        out->items[i] = snag_strdup_checked(history_item(source, i), SNAG_HISTORY_BYTES);
         if (!out->items[i]) {
             snag_history_snapshot_free(out);
             return -1;
@@ -84,15 +98,39 @@ history_memory_add(struct snag_history_snapshot *snapshot, const char *text, boo
     if (!len || len > SNAG_HISTORY_BYTES) return 0;
     copy = snag_strdup_checked(text, SNAG_HISTORY_BYTES);
     if (!copy) return -1;
-    while (snapshot->count == SNAG_HISTORY_COUNT || snapshot->bytes > SNAG_HISTORY_BYTES - len) {
-        size_t old = strlen(snapshot->items[0]);
+    while (snapshot->count && snapshot->bytes > SNAG_HISTORY_BYTES - len) {
+        size_t old = strlen(history_item(snapshot, 0));
         if (dropped) *dropped = true;
-        free(snapshot->items[0]);
-        memmove(snapshot->items, snapshot->items + 1u, (snapshot->count - 1u) * sizeof(snapshot->items[0]));
+        free(snapshot->items[snapshot->head]);
+        ++snapshot->head;
         --snapshot->count;
         snapshot->bytes -= old;
     }
-    snapshot->items[snapshot->count++] = copy;
+    if (snapshot->head + snapshot->count == snapshot->capacity) {
+        if (snapshot->head) {
+            memmove(snapshot->items, snapshot->items + snapshot->head,
+                    snapshot->count * sizeof(*snapshot->items));
+            snapshot->head = 0;
+        }
+        if (snapshot->count == snapshot->capacity) {
+            char **grown;
+            size_t capacity = snapshot->capacity ? snapshot->capacity * 2u : 8u;
+
+            if (capacity <= snapshot->capacity) {
+                free(copy);
+                return snag_errno(EOVERFLOW);
+            }
+            grown = realloc(snapshot->items, capacity * sizeof(*grown));
+            if (!grown) {
+                free(copy);
+                return -1;
+            }
+            snapshot->items = grown;
+            snapshot->capacity = capacity;
+        }
+    }
+    snapshot->items[snapshot->head + snapshot->count] = copy;
+    ++snapshot->count;
     snapshot->bytes += len;
     return 0;
 }
@@ -257,7 +295,7 @@ snag_history_read(struct snag_history_reader *reader,
                 int64_t i = newer ? from.offset : from.offset - 1;
                 *start = (struct snag_history_cursor){0u, i};
                 *end = (struct snag_history_cursor){0u, i + 1};
-                *text = snapshot->items[i];
+                *text = history_item(snapshot, (size_t)i);
                 return 1;
             }
             if (newer) return 0;
@@ -361,7 +399,7 @@ history_append(int fd, const struct snag_history_snapshot *snapshot, int64_t *en
     int rc = -1;
     if (original < 0 || snag_truncate(fd, original) < 0) return -1;
     for (size_t i = 0u; i < snapshot->count; ++i)
-        if (history_encode(&encoded, snapshot->items[i]) < 0 || snag_buf_putc(&encoded, '\n') < 0 ||
+        if (history_encode(&encoded, history_item(snapshot, i)) < 0 || snag_buf_putc(&encoded, '\n') < 0 ||
             snag_write_full(fd, encoded.data, encoded.len) < 0) goto out;
     if (snag_sync_file(fd) < 0 || (*end = snag_seek(fd, 0, SEEK_END)) < 0) goto out;
     rc = 0;

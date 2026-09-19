@@ -387,7 +387,7 @@ test_prompt_history(void)
     assert(snprintf(path, sizeof(path), "%s/prompt_history", subdir) > 0);
     fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
     assert(fd >= 0);
-    assert(ftruncate(fd, (off_t)(SNAG_HISTORY_BYTES * 4u + SNAG_HISTORY_COUNT + 1u)) == 0);
+    assert(ftruncate(fd, (off_t)(SNAG_HISTORY_BYTES * 5u + 1u)) == 0);
     assert(close(fd) == 0);
     memset(&term, 0, sizeof(term));
     assert(snag_history_open(&term, subdir) == 0);
@@ -395,6 +395,28 @@ test_prompt_history(void)
     assert(snag_history_merge(&term) == 0);
     snag_history_free(&term);
     assert(unlink(path) == 0 && rmdir(subdir) == 0);
+    assert(rmdir(temp) == 0);
+}
+
+static void
+test_history_hold_count_uncapped(void)
+{
+    char temp[] = "/tmp/snajpagent-history-hold-XXXXXX";
+    char path[256], entry[64];
+    struct snag_history history = {0};
+
+    assert(mkdtemp(temp));
+    assert(snprintf(path, sizeof(path), "%s/prompt_history", temp) > 0);
+    assert(snag_history_open(&history, temp) == 0);
+    /* Unbound entries stay in memory; past the former 100-entry ceiling. */
+    for (unsigned int i = 0u; i < 150u; ++i) {
+        (void)snprintf(entry, sizeof(entry), "held-%03u", i);
+        assert(snag_history_add(&history, entry) == 0);
+    }
+    assert(history.snapshot.count == 150u);
+    assert(!snag_history_take_warning(&history));
+    snag_history_free(&history);
+    assert(unlink(path) == 0);
     assert(rmdir(temp) == 0);
 }
 
@@ -2874,6 +2896,7 @@ main(void)
     test_prompt_history();
     test_session_prompt_history();
     test_history_reader_boundaries();
+    test_history_hold_count_uncapped();
     test_prompt_clock();
     test_prompt_spinners();
     test_retained_prompt();
