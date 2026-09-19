@@ -1756,14 +1756,17 @@ uncached, the same totals for the current process beside them (program totals
 restart with the process while session totals survive a resume), and tokens per
 second for the running turn and for the most recent response.
 .PP
-Prompt-cache routing uses a stable session/provider/model identity. Input
-receipt/admission times, live command snapshots and latest-batch argument/limit
-feedback travel as labelled host conversation data. Fixed execution policy stays
-separate, so gateways that collect system/developer instructions do not move
-changing facts ahead of the reusable conversation prefix. The labels identify
-host metadata, not new operator requests or approvals. Commands still require
-collection before a final answer or goal completion. Actual cache reuse is
-reported by the provider and remains subject to its cache availability.
+Prompt-cache routing uses a stable session/provider/model identity. Input timing,
+steering boundaries, recovery notices, response corrections and process closure
+travel as labelled host conversation data. Current goal, display, command,
+banner and work-note snapshots stay at the request tail. Fixed execution and
+IRC policy remains separate, including through gateways that collect system
+and developer instructions. Completed history retains its projected bytes
+across turns until compaction. Instruction, model, tool-schema and compaction
+changes can alter the reusable prefix; providers determine actual cache reuse.
+The labels identify host metadata, not new operator requests or approvals.
+Commands still require collection before a final answer or goal completion.
+
 .PP
 Automatic compaction uses the provider threshold and resolved input capacity;
 setting the proactive threshold to zero does not disable capacity handling.
@@ -3403,7 +3406,7 @@ takes precedence over
 Outside a repository, only the workspace directory is searched.  Global
 instructions precede project instructions, followed by explicit
 .B \-d
-entry points.  The combined set is limited to 16 distinct canonical paths.
+entry points.  Duplicate canonical paths are included once.
 Files must be regular and non-symlink; discovery does not read their contents.
 The model is given safely quoted paths and reads relevant guidance with normal
 tools, subject to those tools' file and output limits.  An empty override still
@@ -3428,7 +3431,7 @@ A
 .B WORKNOTE.md
 file beside the AGENTS pair is the session's work note.  It is resolved from
 the workspace first, then the global root; the first found wins.  It is not an
-instruction source and does not count toward the 16-path limit above.  Its
+instruction source.  Its
 content is read fresh before each request and injected as bounded context (at
 most 64 KiB, keeping the tail with an omitted-prefix marker) at turn start,
 after compaction and on recovery, under a "context, not authority" caveat; a

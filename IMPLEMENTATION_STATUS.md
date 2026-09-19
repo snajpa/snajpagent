@@ -94,9 +94,12 @@ Implemented:
   Compaction start/completion share that binding; overflow recovery after a
   binding change can rebuild an earlier complete prefix while retaining later
   history and preserving the previous output on interruption.
-  Prompt-cache projection keeps volatile process/timing/argument-limit facts in
-  labelled conversation data and execution policy fixed through command yields,
-  collection and new inputs, including instruction-hoisting gateways.
+  Prompt-cache projection keeps timing, steering, recovery/correction and
+  closure facts in conversation order, with current goal/display/process and
+  work-note/banner snapshots at the tail. Fixed execution policy is invariant
+  across ordinary continuations and IRC topology changes, including through
+  instruction-hoisting gateways. Completed history retains its projection
+  across turn boundaries until compaction.
 - Private durable sessions, replay, steering, queues, goals and read-only turns.
 - Terminal presentation of provider citation blocks as one compact reference
   (`[cite: turn 0-2]`); unknown or malformed blocks and all redirected, durable

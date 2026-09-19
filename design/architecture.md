@@ -56,14 +56,22 @@ apply on subsequent request snapshots without changing an in-flight request.
 
 ## Runtime Loop
 
-Input receipt/admission metadata, unsettled-command snapshots and latest-batch
-tool feedback are labelled user-slot host data. Their values and journal
-provenance are unchanged. Fixed system policy retains command-settlement rules;
-goal controls, permission restrictions and operator presentation policy keep
-their instruction roles. Instruction-hoisting gateways therefore see a stable
-policy prefix as command handles appear, change and settle. Changing facts stay
-with the conversation, preserving its earlier cacheable prefix. The user slot
-does not represent a new operator request or authorize a goal transition.
+Input timing, steering boundaries, recovery/correction notices and process
+closure records travel as labelled host conversation data. Current process,
+goal, display, banner and work-note snapshots occupy the replaceable request
+tail. Fixed system policy defines their interpretation, goal authority,
+settlement and presentation rules. Read-only restrictions remain system policy.
+IRC policy is invariant across connections and nick changes; room snapshots
+supply current identities. Instruction-hoisting gateways therefore retain the
+same policy prefix as runtime facts change. Host metadata neither introduces a
+new operator request nor authorizes a goal transition.
+
+Completed assistant text and tool results retain their projected bytes across
+turn boundaries. Existing result byte budgets apply at first projection and on
+replay; history is replaced at explicit compaction, not simply because its turn
+has ended. Model/provider binding, actual instruction or tool-schema changes,
+and compaction can legitimately change the reusable prefix. Provider cache
+availability remains external to this representation.
 
 Each accepted user turn is projected into an OpenAI-compatible Responses API
 request. Streaming events update the terminal as they arrive. A final answer,

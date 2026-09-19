@@ -56,7 +56,8 @@ Every matched rule records one fixed audit line,
 `rule=<name> decision=<allow|deny> tool=<tool>`, as a durable `rule_log`
 event — including rules after the deciding one, so a trailing match-all rule
 audits the whole session without changing any verdict. Logging never changes
-the verdict. At most 256 rules, 63-byte names, 64 KiB per message.
+the verdict. Rule count is bounded by the configuration file; names use at most
+63 bytes and messages at most 64 KiB.
 
 ## 2. Worked examples
 
@@ -161,11 +162,11 @@ See `src/rules.c` (engine), `src/config.c` (`[rule NAME]` parsing),
 ## 5. Migration from 0.99.7
 
 0.99.7 shipped chains, jump/return flow, thresholds, log templates and the
-insert/command/confirm/value verbs. 0.99.8 keeps only `match`, `action`
+insert/command/confirm/value verbs. The current development build keeps only `match`, `action`
 (`allow`/`deny`) and `message`; any other rule key fails startup with a
 pointer here. Rewrite guide:
 
-| 0.99.7 | 0.99.8 |
+| Previous syntax | Current development syntax |
 | --- | --- |
 | `chain = out` | delete the line; all rules form one list |
 | `action = reject` + `text` | `action = deny` + `message` (same text) |

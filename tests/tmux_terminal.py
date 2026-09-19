@@ -163,7 +163,9 @@ class FakeResponses:
         for item in reversed(request.get("input", [])):
             if item.get("role") == "user" and isinstance(item.get("content"), str):
                 content = item["content"]
-                if content.startswith(("[IRC room snapshot;", "[snajpagent host continuation —")):
+                if content.startswith(("[IRC room snapshot;", "[snajpagent host continuation —",
+                                       "snajpagent recovery (host-generated):", "Previous snajpagent turn:",
+                                       "The provider rejected the preceding", "The preceding response")):
                     continue  # Host context/continuation is not new operator input.
                 if content.startswith("[IRC endpoint=") and " id=" in content:
                     continue  # Supplemental durable event, not a new scheduler turn.
@@ -180,7 +182,7 @@ class FakeResponses:
     @staticmethod
     def has_output_correction(request):
         return any(
-            item.get("role") == "system" and
+            item.get("role") == "user" and
             item.get("content") == EMPTY_OUTPUT_CORRECTION
             for item in request.get("input", [])
         )
@@ -4181,9 +4183,9 @@ def run_operator_visibility_cases(binary, root):
             config.write_text(config.read_text().replace("[agent]\n", "[agent]\nmax_turn_retries=0\n", 1))
 
             def respond(handler, request, sequence):
-                hints = [i["content"] for i in request["input"] if i.get("role") == "system"
+                hints = [i["content"] for i in request["input"] if i.get("role") == "user"
                          and isinstance(i.get("content"), str)
-                         and i["content"].startswith("Local operator display snapshot:")]
+                         and "Local operator display snapshot:" in i["content"]]
                 assert len(hints) == 1, "current operator visibility missing from model request"
                 hint = hints[0]
                 assert f"verbosity={level} " in hint and "view=rollout" in hint
@@ -4215,9 +4217,9 @@ def run_operator_visibility_cases(binary, root):
             seen = []
 
             def respond(handler, request, sequence):
-                hints = [i["content"] for i in request["input"] if i.get("role") == "system"
+                hints = [i["content"] for i in request["input"] if i.get("role") == "user"
                          and isinstance(i.get("content"), str)
-                         and i["content"].startswith("Local operator display snapshot:")]
+                         and "Local operator display snapshot:" in i["content"]]
                 assert len(hints) == 1
                 hint = hints[0]
                 seen.append(hint)
@@ -4261,9 +4263,9 @@ def run_operator_visibility_cases(binary, root):
 
             # Resume with new flags: old in-memory verbosity/view is not authority.
             def resumed(handler, request, sequence):
-                hints = [i["content"] for i in request["input"] if i.get("role") == "system"
+                hints = [i["content"] for i in request["input"] if i.get("role") == "user"
                          and isinstance(i.get("content"), str)
-                         and i["content"].startswith("Local operator display snapshot:")]
+                         and "Local operator display snapshot:" in i["content"]]
                 assert len(hints) == 1 and "verbosity=2 " in hints[0] and "view=rollout" in hints[0]
                 assert "arguments=preview" in hints[0] and "one-shot" in hints[0]
                 provider.reply(handler, provider.response_body(sequence, "VISIBILITY_RESUMED").encode())
@@ -5243,7 +5245,7 @@ def run_provider_clarification_cases(binary, root, provider, environment):
                     assert any(item.get("role") == "user" and item.get("content") == original
                                for item in request["input"]), "original task was rewritten"
                     notes = [item["content"] for item in request["input"]
-                             if item.get("role") == "system" and
+                             if item.get("role") == "user" and
                              item.get("content", "").startswith("The provider rejected the preceding")]
                     assert len(notes) == min(attempt, 5), (mode, attempt, notes)
                     assert all("preserving its purpose, actions, targets, and authorization" in note and
@@ -5496,7 +5498,7 @@ def run_policy_partial_goal_cases(binary, root, provider, environment,
             assert "provider clarification 6/5" not in screen
             for attempt, request in enumerate(attempts):
                 assert original in json.dumps(request["input"]), mode
-                notes = [i["content"] for i in request["input"] if i.get("role") == "system" and
+                notes = [i["content"] for i in request["input"] if i.get("role") == "user" and
                          i.get("content", "").startswith("The provider rejected the preceding")]
                 assert len(notes) == attempt, (mode, attempt, notes)
                 assert all("Do not conceal security-relevant details or bypass restrictions" in n for n in notes)
@@ -5812,7 +5814,8 @@ def run_host_cache_prefix_case(binary, root):
         journal, events = read_events(state)
         sid = journal.parent.name
         assert [e["data"]["result"]["status"] for e in event_list(events, "tool_finished")] == ["running", "succeeded"]
-        again = subprocess.run(command + ["--resume", sid, "--", "new timed input"],
+        (workspace / "WORKNOTE.md").write_text("Updated self-authored progress after the first turn.\n")
+        again = subprocess.run(command + ["-v", "-v", "--resume", sid, "--", "new timed input"],
                                cwd=workspace, env=environment, capture_output=True, text=True, timeout=20)
         assert again.returncode == 0 and again.stdout.strip() == "cache complete", again.stderr
         assert len(requests) == 4, len(requests)
@@ -5861,8 +5864,8 @@ def run_goal_request_boundary_cases(binary, root, modes=("next", "recovery", "re
 
         def respond(handler, request, sequence):
             requests.append(request)
-            active = any(i.get("role") == "system" and
-                i.get("content", "").startswith("Persistent goal ") and
+            active = any(i.get("role") == "user" and
+                "Persistent goal " in i.get("content", "") and
                 " is active " in i["content"] for i in request["input"])
             if not active:
                 text = "goal request boundary done" if counts else "retained historical reply"
@@ -5880,7 +5883,9 @@ def run_goal_request_boundary_cases(binary, root, modes=("next", "recovery", "re
                 if goal_index <= assistant_index:
                     missing.append(request)
                 counts.append(sum(i.get("role") == "user" and
-                    i.get("content", "").startswith(marker) for i in conversation))
+                    i.get("content", "").startswith(marker) and
+                    i["content"].endswith("Continue the active goal from its durable state.")
+                    for i in conversation))
                 attempt = len(counts)
                 if attempt == 1:
                     # Retained assistant text must not become the next request.
@@ -6024,7 +6029,7 @@ def run_goal_recovery_cases(binary, root, provider, environment):
             assert metadata[0] and all(m[0] == metadata[0][0] for m in metadata)
             assert "unavailable" not in metadata[0][0]
             for request in requests[3:]:
-                notes = [i for i in request["input"] if i.get("role") == "system" and
+                notes = [i for i in request["input"] if i.get("role") == "user" and
                          i.get("content", "").startswith("snajpagent recovery")]
                 assert len(notes) <= 1, "recovery spammed model context"
                 assert "retained-result" in json.dumps(request)
@@ -6513,8 +6518,8 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
                 return
             requests.append(request)
             goal = next((i.get("content", "") for i in request["input"]
-                         if i.get("role") == "system" and
-                         i.get("content", "").startswith("Persistent goal ")), "")
+                         if i.get("role") == "user" and
+                         "Persistent goal " in i.get("content", "")), "")
             if " is active " not in goal:
                 latest = provider.latest_user(request)
                 send(handler, provider.response_body(sequence,
@@ -6578,10 +6583,12 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
             marker = "[snajpagent host continuation — not a new user message]"
             goal_requests = [r for r in requests if any(
                 " is active " in i.get("content", "") and
-                i.get("content", "").startswith("Persistent goal ") for i in r["input"])]
+                "Persistent goal " in i.get("content", "") for i in r["input"])]
             assert goal_requests
             for request in goal_requests:
-                markers = [i for i in request["input"] if i.get("content", "").startswith(marker)]
+                markers = [i for i in request["input"] if i.get("content", "").startswith(marker) and
+                           ("Continue the active goal" in i["content"] or
+                            "Continue from the existing instructions" in i["content"])]
                 assert len(markers) == 1, "current goal request missing or duplicated across retries"
                 assert markers[0]["role"] == "user"
                 fallbacks = [i for i in markers if "Continue from the existing instructions" in i["content"]]
