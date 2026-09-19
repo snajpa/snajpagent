@@ -5390,6 +5390,8 @@ if __name__ == "__main__":
     test_incremental_wrapped_long_prompt_multiline_indent()
     test_steering()
     test_repeated_steering_rearms_composer()
+    test_deferred_steering_queues_to_turn_end()
+    test_cancel_defers_timer_until_next_input()
     test_public_index_gap()
     test_public_index_diagnostic()
     test_split_utf8_steering()

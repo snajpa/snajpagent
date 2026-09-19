@@ -58,7 +58,7 @@ NATIVE_FUNCTION_NAMES = {
     "view_image", "read_document", "view_video", "listen_audio", "transcribe_audio",
     "speak_text", "exec_command", "write_stdin", "apply_patch", "list_files", "read_file",
     "grep", "write_file", "edit_file", "irc_send", "irc_state", "irc_topic", "irc_connect",
-    "irc_host", "irc_disconnect", "create_goal", "update_goal", "timer",
+    "irc_host", "irc_disconnect", "create_goal", "update_goal", "timer", "defer_steering",
 }
 
 
@@ -4087,7 +4087,7 @@ def run_wrapped_table_cases(binary, root, table_text=None):
         table_text = table_text[table_text.index("| Time | Evidence |") :]
     text = table_text + "\nTABLE_WRAP_DONE\n"
     provider = FakeResponses()
-    environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret")
+    environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret", PAGER="")
     config, state = root / "config.ini", root / "state"
     write_irc_config(config, provider.port, "host-model")
     ready, release = threading.Event(), threading.Event()
@@ -4179,7 +4179,7 @@ def run_wrapped_table_cases(binary, root, table_text=None):
 def run_operator_visibility_cases(binary, root):
     root.mkdir(parents=True)
     provider = FakeResponses()
-    environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret")
+    environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret", PAGER="")
     try:
         for level in range(7):
             case = root / str(level)
@@ -5791,7 +5791,7 @@ def run_host_cache_prefix_case(binary, root):
     provider = FakeResponses()
     write_irc_config(config, provider.port, "host-model")
     config.chmod(0o600)
-    environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret")
+    environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret", PAGER="")
     requests = []
 
     def respond(handler, request, sequence):
@@ -5863,7 +5863,7 @@ def run_goal_request_boundary_cases(binary, root, modes=("next", "recovery", "re
         state, config = case / "s", case / "c.ini"
         provider = FakeResponses()
         write_irc_config(config, provider.port, "host-model")
-        environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret")
+        environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret", PAGER="")
         requests, counts, missing = [], [], []
         held, release = threading.Event(), threading.Event()
         terminal = None
@@ -7740,7 +7740,7 @@ def run_capacity_handoff_cases(binary, root, modes=("queue", "chat", "cancel")):
         write_irc_config(config, provider.port, "host-model")
         ready, release, summarizing = threading.Event(), threading.Event(), threading.Event()
         requests, summaries = [], []
-        environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret")
+        environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret", PAGER="")
         terminal, peer = None, None
         endpoint = f"127.0.0.1:{free_loopback_port()}"
 
@@ -8085,7 +8085,7 @@ def run_session_process_recovery_case(binary, root, emit_output=True):
     provider = FakeResponses()
     workspace, config = irc_workspace(case / "w", provider.port, "host-model")
     state = case / "state"
-    environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret")
+    environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret", PAGER="")
     seen = []
     marker = workspace / "effects"
     output = "recovery-output:" + "x" * 20000
@@ -8234,7 +8234,7 @@ def run_irc_case(binary, root):
     run_punctuation_case(binary, root)
     provider = FakeResponses()
     # One-shot subprocess cases need the same locale/PATH as terminal cases.
-    environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret")
+    environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret", PAGER="")
     try:
         run_token_accounting_cases(binary, root / "token-accounting")
         run_capacity_handoff_cases(binary, root / "capacity-handoff")
