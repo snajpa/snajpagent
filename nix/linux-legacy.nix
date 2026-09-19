@@ -113,12 +113,86 @@ let
       preInstall = "";
       outputs = [ "out" "dev" ];
     });
+    # Coreutils' Linux boot-time helper calls gettimeofday through uClibc's
+    # old-glibc fallback, but omits the owning header. Keep this package-local:
+    # uClibc declares the function in <sys/time.h>; application ABI is unchanged.
+    coreutils = previous.coreutils.overrideAttrs (old: {
+      postPatch = (old.postPatch or "") + ''
+        substituteInPlace lib/boot-time-aux.h \
+          --replace-fail '#if defined __linux__ || defined __ANDROID__' '#if defined __linux__ || defined __ANDROID__
+# include <sys/time.h>'
+      '';
+    });
+    # This uClibc target has no context-switching API or symbols. OpenSSL's
+    # supported no-async configuration keeps its TLS implementation intact
+    # without compiling the unusable POSIX async backend.
+    openssl = previous.openssl.overrideAttrs (old: {
+      configureFlags = (old.configureFlags or [ ]) ++ [ "no-async" ];
+      # The enabled client corpus test supplies a deterministic time() shim.
+      # Static uClibc exports time from libc.a, so wrap only this test's time
+      # references around that shim; keep the corpus test and package checks.
+      postPatch = (old.postPatch or "") + ''
+        substituteInPlace fuzz/client.c \
+          --replace-fail 'time_t time(time_t *t) TIME_IMPL(t)' \
+            'time_t __wrap_time(time_t *t) TIME_IMPL(t)'
+      '';
+      postConfigure = (old.postConfigure or "") + ''
+        substituteInPlace Makefile \
+          --replace-fail '-o fuzz/client-test \' \
+            '-Wl,--wrap=time -o fuzz/client-test \'
+      '';
+    });
     # GMP cannot run this cross probe.  The target header and libc.a both
     # provide nl_langinfo, so retain the real result rather than compiling
     # GMP's duplicate C++ test fallback.
     gmp = previous.gmp.overrideAttrs (old: {
       preConfigure = (old.preConfigure or "") + ''
         export ac_cv_func_nl_langinfo=yes
+      '';
+      # GMP's C++ locale test needs to replace nl_langinfo.  In a static libc
+      # link its strong test definition clashes with the libc archive member.
+      # Route this test's references through ld's wrapper name instead, leaving
+      # the test shim strong while the normal libc symbol remains available.
+      postPatch = (old.postPatch or "") + ''
+        substituteInPlace tests/cxx/clocale.c \
+          --replace-fail 'char *
+nl_langinfo (nl_item n)' 'char *
+__wrap_nl_langinfo (nl_item n)'
+      '';
+      postConfigure = (old.postConfigure or "") + ''
+        substituteInPlace tests/cxx/Makefile \
+          --replace-fail '$(AM_V_CXXLD)$(CXXLINK) $(t_locale_OBJECTS)' \
+            '$(AM_V_CXXLD)$(CXXLINK) -Wl,--wrap=nl_langinfo $(t_locale_OBJECTS)'
+      '';
+    });
+    # uClibc has no fmemopen, so libjpeg-turbo correctly omits this test
+    # executable. Its CMake file must not register an absent target as a test.
+    libjpeg_turbo = previous.libjpeg_turbo.overrideAttrs (old: {
+      postPatch = (old.postPatch or "") + ''
+        substituteInPlace CMakeLists.txt \
+          --replace-fail 'if(UNIX)
+    add_test(NAME bmpsizetest-''${libtype} COMMAND bmpsizetest''${suffix})
+  endif()' 'if(TARGET bmpsizetest''${suffix})
+    add_test(NAME bmpsizetest-''${libtype} COMMAND bmpsizetest''${suffix})
+  endif()'
+      '';
+    });
+    # uClibc declares in6addr_any but does not provide the object. Use its
+    # standard initializer and unspecified-address predicate in usrsctp.
+    usrsctp = previous.usrsctp.overrideAttrs (old: {
+      postPatch = (old.postPatch or "") + ''
+        substituteInPlace usrsctplib/user_recv_thread.c \
+          --replace-fail 'addr_ipv6.sin6_addr        = in6addr_any;' \
+            'addr_ipv6.sin6_addr        = (struct in6_addr) IN6ADDR_ANY_INIT;'
+        substituteInPlace usrsctplib/user_socket.c \
+          --replace-fail 'ip6->ip6_src.s6_addr == in6addr_any.s6_addr' \
+            'IN6_IS_ADDR_UNSPECIFIED(&ip6->ip6_src)'
+        for file in programs/*.c; do
+          if grep -q 'in6addr_any' "$file"; then
+            substituteInPlace "$file" \
+              --replace-fail 'in6addr_any' '(struct in6_addr) IN6ADDR_ANY_INIT'
+          fi
+        done
       '';
     });
     # Font consumers use pkg-config; the optional config script pulls target Bash.
