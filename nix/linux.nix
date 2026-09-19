@@ -1,11 +1,19 @@
 # SPDX-License-Identifier: GPL-2.0-only
 { pkgs, musl, static ? musl.pkgsStatic }:
 let
+  staticFixed = static.extend (final: prev: {
+    libjpeg_turbo = prev.libjpeg_turbo.overrideAttrs (old: {
+      postPatch = (old.postPatch or "") + pkgs.lib.optionalString musl.stdenv.hostPlatform.isRiscV ''
+        sed -i -e '/add_executable(simdcoverage/d' -e '/target_link_libraries(simdcoverage/d' simd/CMakeLists.txt
+      '';
+    });
+    libjpeg = final.libjpeg_turbo;
+  });
   clockFallback = musl.stdenv.hostPlatform.isx86_64;
   atomicFallback = musl.stdenv.hostPlatform.isPower && musl.stdenv.hostPlatform.is32bit;
   # File decoding uses built-in codecs. Device I/O belongs to miniaudio;
   # FFmpeg receives private descriptors and has no network backend.
-  av = (static.ffmpeg_8.override {
+  av = (staticFixed.ffmpeg_8.override {
     ffmpegVariant = "headless";
     withHeadlessDeps = false;
     withSmallDeps = false;
@@ -49,13 +57,13 @@ let
     '';
   });
   # The standalone binary must use host fonts, not a build-host store path.
-  fontconfig = static.fontconfig.overrideAttrs (old: {
+  fontconfig = staticFixed.fontconfig.overrideAttrs (old: {
     configureFlags = builtins.filter
       (flag: !(pkgs.lib.hasPrefix "--with-default-fonts=" flag)) old.configureFlags ++ [
       "--with-default-fonts=/usr/share/fonts,/usr/local/share/fonts"
     ];
   });
-  pdf = (static.poppler.override {
+  pdf = (staticFixed.poppler.override {
     inherit fontconfig;
     # Intl is used by the disabled pdfsig utility, not the rendering library.
     libintl = null;
@@ -67,9 +75,9 @@ let
   }).overrideAttrs (old: {
     patches = (old.patches or []) ++ [ ./poppler-static-fonts.patch ];
   });
-  office = import ./office-linux.nix { inherit pkgs musl static; };
+  office = import ./office-linux.nix { inherit pkgs musl; static = staticFixed; };
   # Static musl cannot load miniaudio's usual shared backend libraries.
-  alsa = static.alsa-lib.overrideAttrs (old: {
+  alsa = staticFixed.alsa-lib.overrideAttrs (old: {
     # Change the runtime default only; installation stays inside the Nix output.
     postConfigure = (old.postConfigure or "") + ''
       substituteInPlace include/config.h \
@@ -77,12 +85,12 @@ let
                        '#define ALSA_CONFIG_DIR "/usr/share/alsa"'
     '';
   });
-  pulse = static.libpulseaudio.overrideAttrs (old: {
+  pulse = staticFixed.libpulseaudio.overrideAttrs (old: {
     # Upstream forces shared client libraries. Build only the client statically.
     meta = old.meta // { badPlatforms = []; };
     nativeBuildInputs = [ pkgs.meson pkgs.ninja pkgs.pkg-config pkgs.gettext pkgs.perl pkgs.m4 ];
-    buildInputs = [ static.check ];
-    propagatedBuildInputs = [ static.libsndfile ];
+    buildInputs = [ staticFixed.check ];
+    propagatedBuildInputs = [ staticFixed.libsndfile ];
     postPatch = (old.postPatch or "") + ''
       substituteInPlace src/meson.build src/pulse/meson.build \
         --replace-fail 'shared_library(' 'library('
@@ -104,8 +112,8 @@ let
     '';
     preFixup = "";
   });
-  tls = static.mbedtls;
-  curl = (static.curlMinimal.override {
+  tls = staticFixed.mbedtls;
+  curl = (staticFixed.curlMinimal.override {
     opensslSupport = false;
     scpSupport = false;
     gssSupport = false;
@@ -127,9 +135,10 @@ let
       "--without-ca-path"
     ];
   });
-  voice = import ./voice-rtc.nix { inherit pkgs; target = static; };
+  voice = import ./voice-rtc.nix { inherit pkgs; target = staticFixed; };
 in {
-  inherit static tls curl av pdf office fontconfig alsa pulse;
+  static = staticFixed;
+  inherit tls curl av pdf office fontconfig alsa pulse;
   application = { source, packageName, version, revision, debug ? false,
                   updateBase ? "", updateTarget ? "" }: musl.stdenv.mkDerivation {
     pname = packageName;
@@ -137,8 +146,8 @@ in {
     src = source;
     outputs = [ "out" "debug" ];
     nativeBuildInputs = [ musl.buildPackages.pkg-config ];
-    buildInputs = [ static.jansson curl av pdf static.libpng static.libarchive static.libxml2 alsa pulse
-      voice.rtc voice.juice voice.opus static.srtp static.usrsctp static.openssl ];
+    buildInputs = [ staticFixed.jansson curl av pdf staticFixed.libpng staticFixed.libarchive staticFixed.libxml2 alsa pulse
+      voice.rtc voice.juice voice.opus staticFixed.srtp staticFixed.usrsctp staticFixed.openssl ];
     enableParallelBuilding = true;
     dontConfigure = true;
     dontStrip = true;

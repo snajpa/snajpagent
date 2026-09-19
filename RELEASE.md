@@ -87,7 +87,7 @@ The current required outputs are:
 | `linux-x86_64` | `snajpagent` | Self-contained static PIE |
 | `linux-aarch64` | `snajpagent` | Self-contained static PIE |
 | `linux-armv6` | `snajpagent` | Shared ARMv6/ARMv7 hard-float static PIE; ARMv6KZ/VFPv2 baseline; experimental |
-| `linux-riscv64` | `snajpagent` | RV64GC/LP64D static PIE with embedded application libraries and trust roots; experimental; **not built for 0.99.6**: its pinned closure fails one wall past the fixed FFmpeg syscall constant (libjpeg-turbo's static-SIMD coverage tool does not compile); `make prod-linux-riscv64` stays buildable |
+| `linux-riscv64` | `snajpagent` | RV64GC/LP64D static PIE with embedded application libraries and trust roots; experimental |
 | `linux-ppc64le` | `snajpagent` | POWER8 little-endian ELFv2 static PIE with embedded application libraries and trust roots; experimental |
 | `linux-ppc32` | `snajpagent` | 32-bit big-endian PowerPC hard-float static PIE; needs secure OS entropy; experimental; **not built for 0.99.6**: its pinned musl closure cannot link coreutils 9.8's `libstdbuf.so` (`__stack_chk_fail_local` is undefined outside glibc, and the trigger is specific to that package's own link line with no remedy identified yet); `make prod-linux-ppc32` stays buildable |
 | `linux-i686` | `snajpagent` | 32-bit self-contained static, linked non-PIE: the pinned FFmpeg's CELT SIMD object carries absolute relocations that a static-PIE link refuses; not Linux 2.4 qualification |
@@ -124,6 +124,7 @@ isolated development build is not yet a release target. Do not wait for all
 planned ports before releasing the implemented matrix, or silently drop a
 target to work around a build failure. Removing an implemented release target
 requires an explicit scope decision, recorded in the release notes.
+Once a target has shipped it stays in the matrix; removal needs root0, no silent deferrals.
 
 ## Assets and identity
 
