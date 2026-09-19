@@ -25,6 +25,12 @@
 #define SNAG_BANNER_MAX (4u * 1024u)
 #define SNAG_MAX_GOAL_BLOCKER (64u * 1024u)
 #define SNAG_GOAL_CONTINUATION_TEXT "Continue the active goal from its durable state."
+#define SNAG_HOST_CONTEXT_BEGIN \
+    "[snajpagent host continuation — not a new user message]\n" \
+    "Host state snapshot: the following facts replace earlier snapshots."
+#define SNAG_HOST_CONTEXT_END \
+    "[snajpagent host continuation — not a new user message]\n" \
+    "End host state snapshot."
 
 enum snag_policy_stop {
     SNAG_POLICY_STOP_NONE, SNAG_POLICY_STOP_PROVIDER, SNAG_POLICY_STOP_REFUSAL };

@@ -648,6 +648,11 @@ snag_app_response_started_data(const struct app_state *app, const char *turn_id,
         "request_sha256", projection->create_request.sha256,
         "response_id", response_id, "source_bound", capacity->source_bound,
         "steering_ids", ids, "turn_id", turn_id);
+    if (data && projection->host_context &&
+        json_object_set(data, "host_context", projection->host_context) < 0) {
+        json_decref(data);
+        data = NULL;
+    }
 out: json_decref(ids);
     return data;
 }

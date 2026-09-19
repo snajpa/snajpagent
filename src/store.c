@@ -543,6 +543,24 @@ snag_goal_unfinished(enum snag_goal_status status)
     return status == SNAG_GOAL_ACTIVE || status == SNAG_GOAL_PAUSED || status == SNAG_GOAL_BLOCKED;
 }
 
+/* Sent host snapshots contain data, never instruction or tool items. */
+static bool
+host_context_valid(const json_t *snapshot)
+{
+    size_t count = json_array_size(snapshot);
+    if (!json_is_array(snapshot) || count < 2u) return false;
+    for (size_t i = 0u; i < count; ++i) {
+        const json_t *item = json_array_get(snapshot, i);
+        const char *role = snag_json_string(item, "role");
+        const char *text = snag_json_string(item, "content");
+        if (!snag_json_exact_keys(item, "role content") || !role || strcmp(role, "user") ||
+            !snag_text_valid(text, 1u, SNAG_MAX_EVENT_LINE)) return false;
+        if ((!i && strcmp(text, SNAG_HOST_CONTEXT_BEGIN)) ||
+            (i == count - 1u && strcmp(text, SNAG_HOST_CONTEXT_END))) return false;
+    }
+    return true;
+}
+
 /* Typed parts extend the original text/timing event fields. */
 static bool
 input_fields_valid(const json_t *data,const char *keys)
@@ -1339,6 +1357,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *capacity_source = snag_json_string(data, "capacity_source");
         const char *profile = snag_json_string(data, "profile_id");
         const char *count_hash = snag_json_string(data, "count_request_sha256");
+        const json_t *host_context = json_object_get(data, "host_context");
         json_t *steering_ids = json_object_get(data, "steering_ids");
         struct snag_input_observation value = {.valid = true};
         uint64_t cycle;
@@ -1354,7 +1373,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         bool has_irc_seq = json_object_get(data, "irc_seq") != NULL;
         /* Pre-watermark journals contain the same request facts without irc_seq. */
         session->response_irc_seq = 0u;
-        if (!snag_json_exact_keys(data, keys + (has_irc_seq ? 0u : sizeof("irc_seq ") - 1u)) ||
+        if (!snag_json_arg_keys(data, keys + (has_irc_seq ? 0u : sizeof("irc_seq ") - 1u),
+                               "host_context", NULL, 0u) ||
+            (host_context && !host_context_valid(host_context)) ||
             (has_irc_seq && snag_json_integer_u64(data, "irc_seq", &session->response_irc_seq) < 0) ||
             session->response_irc_seq > session->irc_received_seq || !current_turn ||
             !state_allows_start || !response_id ||

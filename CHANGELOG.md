@@ -4,14 +4,19 @@
 
 ## Unreleased
 
+- Show provider/tool wait notices only at verbosity 1 and higher. Verbosity 0
+  remains conversation-only in ordinary and networked terminal modes.
+
 - Keep a blank row between terminal wait/warning notices and following model
   output, including literal rendering with Markdown disabled.
 
 - Keep prompt-cache policy stable through steering, recovery, interruption,
   display and goal state changes, IRC connection/nick changes, and work-note
-  updates. Runtime facts remain labelled conversation data; current snapshots
-  follow retained history. Completed assistant text and tool results retain
-  their projected bytes across turns until compaction.
+  updates. Each sent host-state snapshot is retained before its response, so a
+  later request appends to the exact preceding prefix; unchanged snapshots are
+  not duplicated. Runtime facts remain labelled conversation data and the
+  latest snapshot supersedes older facts. Completed assistant text, encrypted
+  reasoning and tool results retain their projected bytes until compaction.
 
 - Accept `media_upper_bound` as a valid count method in the pre-response and
   post-turn compaction guards. A request that includes an image on a route

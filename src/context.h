@@ -27,6 +27,7 @@ struct snag_context_control {
 
 struct snag_context_projection {
     struct snag_json_document model_input, create_request, count_request;
+    json_t *host_context; /* Newly emitted snapshot; NULL when unchanged. */
     char continuation_scope[SNAG_SHA256_HEX_LEN + 1u];
     size_t request_input_bytes;
     size_t request_input_count;

@@ -1019,9 +1019,10 @@ does not animate it. The active marker still identifies an unfinished, cancellab
 turn, including one parked after a policy stop. Empty-draft Ctrl-C cancels that
 turn; Ctrl-C with a draft clears the draft first.
 Unused context digits also remain spaces. Indicators stop when their work unwinds;
-there is no separate interruption glyph. Terminals also print one-shot wait
-lines naming the wait and its bound: managed commands report the tool and
-wait cap, provider responses report the model. Wait and warning notices are
+there is no separate interruption glyph. At verbosity 1 and higher, terminals
+also print one-shot wait lines naming the wait and its bound: managed commands
+report the tool and wait cap, provider responses report the model. Verbosity 0
+and one-shot execution omit these status lines. Wait and warning notices are
 separated from following model output by one empty row, including literal
 rendering with Markdown disabled. The template and spinners are configurable under
 .BR [ui] .
@@ -1761,11 +1762,15 @@ second for the running turn and for the most recent response.
 Prompt-cache routing uses a stable session/provider/model identity. Input timing,
 steering boundaries, recovery notices, response corrections and process closure
 travel as labelled host conversation data. Current goal, display, command,
-banner and work-note snapshots stay at the request tail. Fixed execution and
+banner and work-note facts form a labelled snapshot at the request tail. Once
+sent, that exact snapshot remains before its response in later requests;
+unchanged snapshots are not duplicated and the latest snapshot supersedes
+older facts. Fixed execution and
 IRC policy remains separate, including through gateways that collect system
 and developer instructions. Completed history retains its projected bytes
 across turns until compaction. Instruction, model, tool-schema and compaction
-changes can alter the reusable prefix; providers determine actual cache reuse.
+changes can alter the reusable prefix. A changed snapshot can require one new
+cache write; later requests extend that new prefix. Providers determine actual cache reuse.
 The labels identify host metadata, not new operator requests or approvals.
 Commands still require collection before a final answer or goal completion.
 
