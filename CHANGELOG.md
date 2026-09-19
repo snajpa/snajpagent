@@ -32,6 +32,10 @@
   ceilings. Configuration parsing and prompt rendering accept any count
   bounded by the existing file, text, and per-entry limits.
 
+- Remove the provider-section (16) and model-limit rule (128) collection
+  ceilings. Both lists grow on demand; the configuration file bound and the
+  per-entry field limits still apply.
+
 - Show provider-hosted web searches as private rollout tool rows. A `web_search`
   item records a start row carrying the search action and query, then a finish
   row carrying the provider's terminal status and retained source URLs, at the

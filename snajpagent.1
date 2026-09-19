@@ -1883,7 +1883,7 @@ while the agent is stopped.  Recovery uses the same lock as installation.
 Do not delete it while another instance is using it.  There is no session-format
 rollback promise: keeping an older executable does not undo newer session data.
 .SS "provider NAME"
-Up to 16 ordered named sections are accepted.  The spelling
+Ordered named sections may be repeated with distinct names.  The spelling
 .B [provider]
 is not accepted. Names contain 1 through 63 ASCII letters, digits, dots,
 underscores or hyphens. Names have no privileged meaning. New sessions use the
@@ -2039,7 +2039,7 @@ A failed or
 interrupted request is not automatically retried; a request already sent may
 have been billed. Media contents cannot receive textual secret redaction.
 .SS "model-limit PROVIDER/MODEL"
-Up to 128 rules are accepted.
+Rules may be repeated with distinct provider and model selectors.
 Set provider-wide defaults with [model-limit PROVIDER], patterned rules with
 [model-limit PROVIDER/PATTERN], and exact rules with [model-limit PROVIDER/MODEL].
 The first slash separates the provider; remaining slashes belong to the model.

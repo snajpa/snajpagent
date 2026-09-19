@@ -96,6 +96,17 @@ snag_config_init(struct snag_config *config)
     memset(config, 0, sizeof(*config));
     memcpy(config->model, "default", 8u);
     memcpy(config->reasoning_effort, "default", 8u);
+    config->providers = calloc(8u, sizeof(*config->providers));
+    config->model_limits = calloc(8u, sizeof(*config->model_limits));
+    if (!config->providers || !config->model_limits) {
+        free(config->providers);
+        free(config->model_limits);
+        config->providers = NULL;
+        config->model_limits = NULL;
+        return;
+    }
+    config->provider_capacity = 8u;
+    config->model_limit_capacity = 8u;
     snag_config_provider_init(&config->providers[0], "openai");
     if (snag_secret_source_parse(&config->providers[0].api_key, "${OPENAI_API_KEY}", NULL, NULL, 0u) < 0)
         return;
@@ -166,6 +177,8 @@ snag_config_free(struct snag_config *config)
     }
     for (size_t i = 0; i < config->model_limit_count; ++i)
         json_decref(config->model_limits[i].reasoning_efforts);
+    free(config->providers);
+    free(config->model_limits);
     for (size_t i = 0; i < config->secret_count; ++i) snag_secret_source_free(&config->secrets[i]);
     free(config->secrets);
     memset(config, 0, sizeof(*config));
@@ -437,6 +450,38 @@ invalid: return snag_errno(EINVAL);
 }
 
 static int
+grow_providers(struct snag_config *config)
+{
+    struct snag_provider_config *grown;
+    size_t capacity;
+
+    if (config->provider_count < config->provider_capacity) return 0;
+    capacity = config->provider_capacity ? config->provider_capacity * 2u : 8u;
+    if (capacity < config->provider_capacity) return snag_errno(EOVERFLOW);
+    grown = realloc(config->providers, capacity * sizeof(*grown));
+    if (!grown) return -1;
+    config->providers = grown;
+    config->provider_capacity = capacity;
+    return 0;
+}
+
+static int
+grow_model_limits(struct snag_config *config)
+{
+    struct snag_model_limit_config *grown;
+    size_t capacity;
+
+    if (config->model_limit_count < config->model_limit_capacity) return 0;
+    capacity = config->model_limit_capacity ? config->model_limit_capacity * 2u : 8u;
+    if (capacity < config->model_limit_capacity) return snag_errno(EOVERFLOW);
+    grown = realloc(config->model_limits, capacity * sizeof(*grown));
+    if (!grown) return -1;
+    config->model_limits = grown;
+    config->model_limit_capacity = capacity;
+    return 0;
+}
+
+static int
 set_provider_section(struct parse_state *state, const char *name)
 {
     struct snag_config *config = state->config;
@@ -444,7 +489,7 @@ set_provider_section(struct parse_state *state, const char *name)
     if (!snag_config_name_valid(name)) goto invalid;
     for (size_t i = 0; i < config->provider_count; ++i)
         if (strcmp(config->providers[i].name, name) == 0) goto invalid;
-    if (config->provider_count >= SNAG_CONFIG_PROVIDER_MAX) goto invalid;
+    if (grow_providers(config) < 0) return -1;
     state->provider_index = config->provider_count++;
     snag_config_provider_init(&config->providers[state->provider_index], name);
     state->section = SECTION_PROVIDER;
@@ -472,13 +517,14 @@ set_model_limit_section(struct parse_state *state, char *name)
     char *slash = strchr(name, '/');
     const char *model = slash ? slash + 1u : "";
 
-    if ((slash && (slash == name || !slash[1])) || !snag_text_valid(model, 0u, SNAG_CONFIG_MODEL_MAX - 1u) ||
-        config->model_limit_count >= SNAG_CONFIG_MODEL_LIMIT_MAX) goto invalid;
+    if ((slash && (slash == name || !slash[1])) ||
+        !snag_text_valid(model, 0u, SNAG_CONFIG_MODEL_MAX - 1u)) goto invalid;
     if (slash) *slash = '\0';
     if (!snag_config_name_valid(name)) goto invalid;
     for (size_t i = 0; i < config->model_limit_count; ++i)
         if (strcmp(config->model_limits[i].provider, name) == 0 &&
             strcmp(config->model_limits[i].model, model) == 0) goto invalid;
+    if (grow_model_limits(config) < 0) return -1;
     state->model_limit_index = config->model_limit_count++;
     limit = &config->model_limits[state->model_limit_index];
     memset(limit, 0, sizeof(*limit));
@@ -859,7 +905,8 @@ parse_file(struct snag_config *config, char *text, char *error, size_t error_siz
         snag_secret_source_free(&config->providers[i].api_key);
         free(config->providers[i].models);
     }
-    memset(config->providers, 0, sizeof(config->providers));
+    if (config->providers)
+        memset(config->providers, 0, config->provider_capacity * sizeof(*config->providers));
     config->provider_count = 0u;
     for (;;) {
         char *next = strchr(line, '\n');
@@ -1119,7 +1166,7 @@ snag_config_load(struct snag_config *config, const char *explicit_path, const ch
     int read_rc;
     int rc = -1;
 
-    if (!config->shell)
+    if (!config->shell || !config->providers || !config->model_limits)
         return snag_fail(error, error_size, ENOMEM, "cannot initialize configuration defaults");
     owned_path = snag_config_path(explicit_path, dotdir, error, error_size);
     if (!owned_path) return -1;
@@ -1160,7 +1207,7 @@ validate_config_text(const struct snag_buf *text, const char *path, bool private
     copy[text->len] = '\0';
     snag_config_init(&candidate);
     (void)snag_strcpy(candidate.source_path, sizeof(candidate.source_path), path);
-    if (!candidate.shell) {
+    if (!candidate.shell || !candidate.providers || !candidate.model_limits) {
         snag_errorf(error, error_size, "cannot initialize configuration defaults");
         goto out;
     }

@@ -110,9 +110,12 @@ providers_valid(const json_t *providers, bool cached)
 {
     size_t total_models = 0u;
     size_t total_entries = 0u;
+    /* Names as a set: a catalog is bounded by the cache file, not a count cap. */
+    json_t *names = json_object();
+    bool valid = false;
 
-    if (!json_is_array(providers) || json_array_size(providers) == 0u ||
-        json_array_size(providers) > SNAG_CONFIG_PROVIDER_MAX) return false;
+    if (!names) return false;
+    if (!json_is_array(providers) || json_array_size(providers) == 0u) goto out;
     for (size_t i = 0; i < json_array_size(providers); ++i) {
         json_t *provider = json_array_get(providers, i);
         json_t *models;
@@ -126,26 +129,29 @@ providers_valid(const json_t *providers, bool cached)
             !(protocol = snag_json_string(provider, "protocol")) ||
             (!snag_string_in(protocol, "codex openai")) || !(name = snag_json_string(provider, "name")) ||
             !json_is_array((models = json_object_get(provider, "models"))) || json_array_size(models) >
-                SNAG_MODEL_CACHE_MODELS_MAX - total_models) return false;
-        for (size_t j = 0; j < i; ++j)
-            if (strcmp(snag_json_string(json_array_get(providers, j), "name"), name) == 0) return false;
+                SNAG_MODEL_CACHE_MODELS_MAX - total_models) goto out;
+        if (json_object_get(names, name) ||
+            json_object_set_new(names, name, json_integer(0)) < 0) goto out;
         total_models += json_array_size(models);
         for (size_t j = 0; j < json_array_size(models); ++j) {
             json_t *model = json_array_get(models, j);
             json_t *efforts;
             size_t variants;
             const char *id;
-            if (!model_valid(model, cached) || !(id = snag_json_string(model, "id"))) return false;
+            if (!model_valid(model, cached) || !(id = snag_json_string(model, "id"))) goto out;
             efforts = json_object_get(model, "efforts");
             variants = json_array_size(efforts);
             if (variants == 0u) variants = 1u;
-            if (variants > SNAG_MODEL_CACHE_ENTRIES_MAX - total_entries) return false;
+            if (variants > SNAG_MODEL_CACHE_ENTRIES_MAX - total_entries) goto out;
             total_entries += variants;
             for (size_t k = 0; k < j; ++k)
-                if (strcmp(snag_json_string(json_array_get(models, k), "id"), id) == 0) return false;
+                if (strcmp(snag_json_string(json_array_get(models, k), "id"), id) == 0) goto out;
         }
     }
-    return true;
+    valid = true;
+out:
+    json_decref(names);
+    return valid;
 }
 
 static const json_t *

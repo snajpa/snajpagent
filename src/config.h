@@ -17,9 +17,7 @@
 #define SNAG_CONFIG_FILE_MAX (64u * 1024u)
 #define SNAG_CONFIG_URL_MAX 2048u
 #define SNAG_CONFIG_ENV_NAME_MAX 255u
-#define SNAG_CONFIG_PROVIDER_MAX 16u
 #define SNAG_CONFIG_PROVIDER_NAME_MAX 63u
-#define SNAG_CONFIG_MODEL_LIMIT_MAX 128u
 #define SNAG_CONFIG_TOKEN_LIMIT_MAX UINT64_C(4000000000)
 /* Outside the numeric compaction range; zero continues to mean disabled. */
 #define SNAG_CONFIG_COMPACT_AUTO UINT32_MAX
@@ -113,10 +111,10 @@ struct snag_config {
     bool read_agents_md;
     bool auto_update;
     char update_url[SNAG_CONFIG_URL_MAX];
-    struct snag_provider_config providers[SNAG_CONFIG_PROVIDER_MAX];
-    size_t provider_count;
-    struct snag_model_limit_config model_limits[SNAG_CONFIG_MODEL_LIMIT_MAX];
-    size_t model_limit_count;
+    struct snag_provider_config *providers;
+    size_t provider_count, provider_capacity;
+    struct snag_model_limit_config *model_limits;
+    size_t model_limit_count, model_limit_capacity;
     enum snag_color_mode color;
     bool markdown;
     uint64_t resume_history_turns;
