@@ -1261,6 +1261,7 @@ TERM=dumb "$(dirname "$bin")/pty_interactive.py" "$bin" "$root/work"
 TERM=xterm python3 "$(dirname "$bin")/pty_terminal_matrix.py" "$bin" "$root/work"
 TERM=xterm "$(dirname "$bin")/pty_active.py" "$bin" "$root/work"
 TERM=xterm "$(dirname "$bin")/pty_wait_notices.py" "$bin" "$root/work"
+TERM=xterm "$(dirname "$bin")/pty_idle_notice.py" "$bin" "$root/work"
 # Give PTY child teardown a short settle window before the EXIT cleanup removes
 # the shared temporary state/workspace tree.
 sleep 0.1

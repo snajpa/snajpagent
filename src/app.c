@@ -3953,6 +3953,15 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 report_message = "turn runtime facts could not be rendered";
                 goto output_fail;
             }
+            if (app->ui.opened && !app->execute &&
+                (app->session.goal_status == SNAG_GOAL_PAUSED ||
+                 app->session.goal_status == SNAG_GOAL_BLOCKED) &&
+                app->session.pending_queue_count == 0u && !app->session.pending_steering_count &&
+                app_textf(app, SNAG_UI_WARNING, "idle: goal %s, awaiting operator",
+                    app->session.goal_status == SNAG_GOAL_PAUSED ? "paused" : "blocked") < 0) {
+                report_message = "idle-state notice could not be rendered";
+                goto output_fail;
+            }
             if (app->execute && snag_ui_send(&app->ui, (struct snag_ui_command){
                     .kind = SNAG_UI_RAW, .data.value = (unsigned int)(STDOUT_FILENO), .text = final->text, .len = strlen(final->text)}) < 0) {
                 report_message = "final answer could not be written to stdout";

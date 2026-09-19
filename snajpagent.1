@@ -448,6 +448,9 @@ shows session state including the goal and its actions;
 .B /goal
 is an alias for
 .BR /state " goal" .
+When a turn leaves a paused or blocked goal with nothing pending, the
+terminal prints an idle line naming the state, so paused no longer reads
+as stuck.
 Armed waiting prompts continue after recovered active work.  Paused prompts
 need
 .B /next
