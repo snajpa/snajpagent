@@ -144,7 +144,7 @@ main(void)
         assert(snprintf(deep, sizeof(deep), "%s", level) > 0);
     }
     assert(snag_instructions_discover(&set, deep, error, sizeof(error)) == 0);
-    assert(set.count == 16u); /* the cap is reached exactly, note present but uncounted */
+    assert(set.count == 16u); /* the work note is separate from discovered instructions */
     assert(snprintf(path, sizeof(path), "%s/WORKNOTE.md", deep) > 0);
     write_file(path, "deep note\n");
     assert(snag_instructions_worknote(deep, &note, error, sizeof(error)) == 0);
@@ -157,8 +157,8 @@ main(void)
     assert(snprintf(path, sizeof(path), "%s/AGENTS.md", level) > 0);
     write_file(path, "over\n");
     assert(snprintf(deep, sizeof(deep), "%s", level) > 0);
-    assert(snag_instructions_discover(&set, deep, error, sizeof(error)) < 0);
-    assert(errno == EOVERFLOW); /* one source too many still fails on its own */
+    assert(snag_instructions_discover(&set, deep, error, sizeof(error)) == 0);
+    assert(set.count == 17u); /* discovery has no instruction-count ceiling */
     assert(snag_instructions_worknote(deep, &note, error, sizeof(error)) == 0);
     assert(note && strstr(note, "/snajpagent/WORKNOTE.md") != NULL);
     free(note);

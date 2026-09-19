@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Keep prompt-cache policy stable through steering, recovery, interruption,
+  display and goal state changes, IRC connection/nick changes, and work-note
+  updates. Runtime facts remain labelled conversation data; current snapshots
+  follow retained history. Completed assistant text and tool results retain
+  their projected bytes across turns until compaction.
+
 - Accept `media_upper_bound` as a valid count method in the pre-response and
   post-turn compaction guards. A request that includes an image on a route
   without exact counting reports the conservative media bound; the stale guard

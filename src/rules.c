@@ -114,7 +114,7 @@ static int
 compile_rule(struct snag_rules *rules, json_t *definition, size_t index, char *error, size_t size)
 {
     static const char *const removed =
-        " (rule chains, jumps, thresholds, templates and helper verbs were removed in 0.99.8;"
+        " (rule chains, jumps, thresholds, templates and helper verbs are unsupported by this build;"
         " see design/io-rules.md for the migration)";
     struct snag_rule *rule = &rules->rules[index];
     const char *name = snag_json_string(definition, "name");
