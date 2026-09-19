@@ -2498,109 +2498,31 @@ recovered from the client's session until a model response consumes it.
 .SS "rule NAME"
 Filter model tool calls before they run.  Each
 .B [rule NAME]
-section declares one rule in an ordered chain.  Rules are validated when the
-configuration loads: unknown keys, invalid regular expressions, duplicate
-names, unreachable jump targets and non-evaluated entry chains fail startup
-instead of becoming silent policy.
-.TP
-.B chain
-The chain this rule belongs to.  The entry chain
-.B out
-inspects model tool calls before dispatch; any other valid name is a jump target.
+section declares one rule in a single ordered list; the first matching rule
+decides.  Rules are validated when the configuration loads: unknown keys,
+invalid regular expressions and duplicate names fail startup instead of
+becoming silent policy.  Keys from the 0.99.7 chains, jumps, thresholds,
+templates and helper verbs are refused at load; see the migration table below.
 .TP
 .B action
-One of
-.BR pass ,
-.BR accept ,
-.BR reject ,
-.BR jump ,
-.BR insert ,
-.BR command ,
-.BR confirm
+.B allow
 or
-.BR return .
-.B pass
-only continues; use
-.B accept
-to stop evaluation and allow the operation ahead of a catch-all
-.BR reject .
+.BR deny .
+Put allowed tools first and a match-all
+.B deny
+last to build an allowlist.
 .TP
 .B match
 A JSON object mapping each
 .I /json/pointer
 to a POSIX extended regular expression; every pair must match.
 .TP
-.B at_least
-A JSON object mapping each
-.I /json/pointer
-to an inclusive integer lower bound.  A missing or non-integer value never
-matches.
-.TP
-.B text
+.B message
 The message shown to the model for
-.BR reject .
-.I %{/pointer}
-substitutes envelope data and
-.I %%
-is a literal percent.
+.BR deny .
 A value that starts with a double quote is decoded as a JSON string.
-.TP
-.B target
-The chain entered by
-.BR jump .
-.TP
-.B log
-A template recorded when the rule matches.  Logging never changes the verdict.
-.TP
-.B value
-A JSON payload applied only with
-.BR pass :
-the call's arguments are replaced by it (fields the replacement omits are
-removed), and the change is recorded as a
-.B rule_transform
-projection linking the original and effective action digests, so replay
-reconstructs the same state and the original proposal stays in the journal.
-.TP
-.B to
-The target of
-.BR insert .
-Only
-.B model
-is accepted: the rendered
-.B text
-is attached to that call's model-visible result as a labelled
-.B [policy]
-block.  Program and IRC targets do not exist at this boundary.
-.TP
-.B command
-A trusted host-user helper path for
-.BR command .
-The canonical envelope is written to the helper's stdin; an empty successful
-stdout means pass, otherwise stdout must be one strict JSON effect:
-.B pass
-with an optional
-.BR value ,
-.B reject
-or
-.B insert
-with
-.BR text .
-Invalid JSON, a nonzero exit, a signal, a deadline overrun, or more than 64 KiB
-on either output stream denies the pending call.  A helper is trusted host-user
-code, not a sandbox, and its own side effects are outside consent.
-.TP
-.B timeout_ms
-Helper deadline for
-.BR command ,
-1 through 60000, default 10000.
-.TP
-.B confirm
-Require fresh local consent before the call runs.  The rendered
-.B text
-is shown with a generated challenge, and the challenge must be typed back at
-the local terminal.  A cancelled, mismatched or unanswerable confirmation (for
-example a one-shot or otherwise non-interactive run) denies the call; model,
-IRC and helper output can never answer it.
+Refused on
+.BR allow .
 .PP
 The envelope exposes the immutable facts
 .BR boundary ,
@@ -2618,15 +2540,49 @@ sandbox, so use read-only turns and separate accounts for real isolation.
 .PP
 .nf
 [rule deny-recursive-delete]
-chain  = out
-match  = {"/tool":"^exec_command$","/text":"rm[[:space:]]+-[^[:space:]]*[rf]"}
-action = reject
-text   = "Recursive force-delete is disabled; delete explicit paths."
+match   = {"/tool":"^exec_command$","/text":"rm[[:space:]]+-[^[:space:]]*[rf]"}
+action  = deny
+message = "Recursive force-delete is disabled; delete explicit paths."
+
+[rule allow-commands]
+match  = {"/tool":"^exec_command$"}
+action = allow
+
+[rule deny-everything-else]
+action  = deny
+message = "Only the audited command tool is permitted."
 .fi
 .PP
-At most 256 rules, 64 chains, 4096 visited rules per evaluation, 63-byte names
-and 64 KiB per text template.  The engine is stateless: no rule fires once,
-rate-limits or counts across evaluations.
+At most 256 rules, 63-byte names and 64 KiB per message.  The engine is
+stateless: no rule fires once, rate-limits or counts across evaluations.
+Every matched rule records one fixed audit line,
+.IR "rule=<name> decision=<allow|deny> tool=<tool>" ,
+as a durable
+.B rule_log
+event, including rules after the deciding one, so a trailing match-all
+.B allow
+audits the whole session without changing any verdict.
+.PP
+0.99.7 rule files need three renames:
+.B chain
+lines are deleted,
+.B reject
+becomes
+.BR deny ,
+.B accept
+becomes
+.BR allow ,
+and
+.B text
+becomes
+.BR message .
+Jump chains are pasted inline in order,
+.B return
+is deleted,
+and thresholds, log templates and the insert, command, confirm and value
+verbs have no replacement: configurations using them fail startup with a
+pointer to
+.IR design/io-rules.md .
 
 .SH "Scripting and tools"
 .SS Automation and integration
