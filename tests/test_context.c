@@ -1640,12 +1640,32 @@ test_image_tool_replay(void)
             json_t *many = json_deep_copy(projection.create_request.value);
             json_t *all = json_object_get(many, "input");
             json_t *image_result = item_by_field(all,"type", "function_call_output");
-            for (unsigned int extra = 0; extra < 7u; ++extra)
+            /* The image count is not capped; only the prepared-media byte
+             * budget is (16 images here still fit well under it). */
+            for (unsigned int extra = 0; extra < 15u; ++extra)
                 assert(json_array_append(all, image_result) == 0);
             assert(snag_media_request_check(many, error, sizeof(error)) == 0);
-            assert(json_array_append(all, image_result) == 0);
-            assert(snag_media_request_check(many, error, sizeof(error)) < 0);
             json_decref(many);
+            {
+                /* Same rule at the content layer: many small images pass, an
+                 * over-budget one does not. */
+                static const char *const hash =
+                    "0000000000000000000000000000000000000000000000000000000000000000";
+                json_t *content = json_array();
+                for (unsigned int extra = 0; extra < 16u; ++extra) {
+                    json_t *part = json_pack("{s:s,s:{s:s,s:s,s:s,s:I}}", "type", "input_image",
+                        "asset", "id", "00000000000000000000000000000000", "mime_type", "image/png",
+                        "sha256", hash, "bytes", (json_int_t)1024);
+                    assert(json_array_append_new(content, part) == 0);
+                }
+                assert(snag_media_content_valid(content));
+                json_t *big = json_pack("{s:s,s:{s:s,s:s,s:s,s:I}}", "type", "input_image",
+                    "asset", "id", "00000000000000000000000000000000", "mime_type", "image/png",
+                    "sha256", hash, "bytes", (json_int_t)(13 * 1024 * 1024));
+                assert(json_array_append_new(content, big) == 0);
+                assert(!snag_media_content_valid(content));
+                json_decref(content);
+            }
         }
         if (replay) assert(!strcmp(expected_hash, projection.create_request.sha256));
         else memcpy(expected_hash, projection.create_request.sha256, sizeof(expected_hash));

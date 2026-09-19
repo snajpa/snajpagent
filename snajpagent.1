@@ -2963,7 +2963,7 @@ input. Missing or corrupt retained source/prepared assets fail explicitly.
 Copy the entire session directory when moving a session. Archive retains media;
 confirmed session deletion removes it.
 .PP
-Requests accept up to eight images and 12 MiB of prepared image data in total.
+Requests accept prepared image data up to 12 MiB in total, at any image count.
 Provider/request ceilings may be lower. Retained media accumulates on disk until
 session deletion; there is no fixed session-wide byte or file-count cap.
 A custom WITH_AV=0 build forwards PNG/JPEG up to 12 MiB without normalization;
