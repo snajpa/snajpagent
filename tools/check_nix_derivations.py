@@ -78,10 +78,36 @@ def check_riscv64_matrix() -> None:
             "nix/linux.nix lacks set-wide jpeg fix")
     print("nixcheck: ok (riscv64 in PROD with pin fix)")
 
+def check_ppc32_ssp() -> None:
+    """linux-ppc32 must keep its musl ssp alias and release-matrix membership."""
+    overlay = ROOT / "nix" / "ppc32-ssp.nix"
+    require(overlay.is_file(), "nix/ppc32-ssp.nix is missing")
+    overlay_text = overlay.read_text(encoding="utf-8")
+    require("__stack_chk_fail_local" in overlay_text,
+            "nix/ppc32-ssp.nix must supply __stack_chk_fail_local")
+    portable = (ROOT / "nix" / "portable.nix").read_text(encoding="utf-8")
+    require("ppc32-ssp.nix" in portable,
+            "nix/portable.nix must apply the ppc32-ssp overlay to linux-ppc32")
+    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+    require("prod-linux-ppc32" in makefile, "Makefile must list prod-linux-ppc32")
+    prod = re.search(r"^PROD_TARGETS\s*=\s*(.*)$", makefile, re.MULTILINE)
+    deferred = re.search(r"^DEFERRED_TARGETS\s*=\s*(.*)$", makefile, re.MULTILINE)
+    require(prod is not None and "prod-linux-ppc32" in prod.group(1),
+            "PROD_TARGETS must contain prod-linux-ppc32")
+    require(deferred is None or "prod-linux-ppc32" not in deferred.group(1),
+            "DEFERRED_TARGETS must not contain prod-linux-ppc32")
+    release = (ROOT / "RELEASE.md").read_text(encoding="utf-8")
+    row = next((line for line in release.splitlines() if "`linux-ppc32`" in line), "")
+    require(row != "", "RELEASE.md must contain a linux-ppc32 row")
+    require("not built" not in row, "RELEASE.md linux-ppc32 row must not say not built")
+    print("nixcheck: ok (linux-ppc32 ssp alias + matrix membership)")
+
 
 def main() -> int:
     check_derivations()
     check_riscv64_matrix()
+
+    check_ppc32_ssp()
     return 0
 
 
