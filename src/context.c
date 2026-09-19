@@ -1226,6 +1226,10 @@ tool_schemas(bool goal_active,
                     "description", "Milliseconds before the reminder turn; 0 cancels the current timer.",
                 "text", "type", "string", "null", "description", "Nonblank UTF-8 reminder text for a positive delay; null is valid only when delay_ms is 0."))) < 0)
         goto fail;
+    if (json_array_append_new(tools, tool_schema("defer_steering", "",
+            "Switch steering off for the remainder of the turn. Steering messages queue and are delivered after the turn ends instead of interrupting.",
+            json_pack("{}"))) < 0)
+        goto fail;
     return tools;
 fail: json_decref(tools);
     return NULL;
