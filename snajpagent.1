@@ -803,7 +803,8 @@ List sessions and exit.  Only
 color options, Markdown presentation options, and
 .B \-\-update-model-cache
 may accompany it.  Markdown
-presentation has no useful effect on session-list output.
+presentation has no useful effect on session-list output.  Rows mark sessions
+held open by a live process as live, others idle.
 .TP
 .BR \-h
 Print short help and exit.  It must stand alone.
@@ -1015,7 +1016,9 @@ does not animate it. The active marker still identifies an unfinished, cancellab
 turn, including one parked after a policy stop. Empty-draft Ctrl-C cancels that
 turn; Ctrl-C with a draft clears the draft first.
 Unused context digits also remain spaces. Indicators stop when their work unwinds;
-there is no separate interruption glyph. The template and spinners are configurable under
+there is no separate interruption glyph. Terminals also print one-shot wait
+lines naming the wait and its bound: managed commands report the tool and
+wait cap, provider responses report the model. The template and spinners are configurable under
 .BR [ui] .
 .PP
 Startup/resume headers, history headings and counts, and installed-update notices
