@@ -452,11 +452,9 @@ help:
 # line. That is a chain inside the pin rather than a defect in this tree, and the target
 # stays buildable for anyone working the pin: it is kept in DEFERRED_TARGETS below so
 # `make prod-linux-i686-legacy` still resolves.
-# prod-linux-riscv64 is deferred for the same class of reason in its own pinned closure:
-# FFmpeg's libavutil/riscv/cpu.c needs __NR_riscv_hwprobe, which this toolchain's headers do
-# not declare (fixed in nix/linux.nix, and that derivation then builds), and the next wall is
-# libjpeg-turbo's static-SIMD coverage tool failing to compile. Both live in the pin, not in
-# this tree; the recipe stays buildable by name and the target returns once that chain clears.
+# prod-linux-riscv64 returned to the matrix: the pinned libjpeg-turbo static-SIMD
+# coverage tool (unshipped test program) failed on implicit jsimd_can_* decls;
+# nix/linux.nix drops its build on riscv64, library SIMD stays enabled.
 # prod-linux-ppc32 is deferred on reproduced evidence with the remedy still open: its dependency
 # coreutils-static-powerpc-unknown-linux-musl fails to link src/libstdbuf.so with an undefined
 # __stack_chk_fail_local (a glibc-only local alias this musl toolchain does not provide). The failure
@@ -467,8 +465,8 @@ help:
 # Targets that are buildable by name but outside this release's matrix. The rules for
 # every entry of both lists are generated together (see below), so this keeps the command
 # working without putting the target back into prod-matrix or into staging.
-DEFERRED_TARGETS = prod-linux-i686-legacy prod-linux-riscv64 prod-linux-ppc32
-PROD_TARGETS = prod-linux-x86_64 prod-linux-aarch64 prod-linux-armv6 prod-linux-ppc64le prod-macos-arm64 prod-macos-x86_64 prod-macos-universal prod-windows-x86_64 prod-windows-arm64 prod-linux-i686 prod-freebsd-amd64 prod-freebsd-amd64-legacy prod-openbsd-amd64 prod-openbsd-amd64-legacy prod-openbsd-amd64-early prod-netbsd-amd64-legacy prod-netbsd-amd64
+DEFERRED_TARGETS = prod-linux-i686-legacy prod-linux-ppc32
+PROD_TARGETS = prod-linux-x86_64 prod-linux-aarch64 prod-linux-armv6 prod-linux-riscv64 prod-linux-ppc64le prod-macos-arm64 prod-macos-x86_64 prod-macos-universal prod-windows-x86_64 prod-windows-arm64 prod-linux-i686 prod-freebsd-amd64 prod-freebsd-amd64-legacy prod-openbsd-amd64 prod-openbsd-amd64-legacy prod-openbsd-amd64-early prod-netbsd-amd64-legacy prod-netbsd-amd64
 
 prod-matrix: $(PROD_TARGETS)
 	@printf '%s\n' 'Production matrix built: $(PROD_TARGETS:prod-%=%)' \
