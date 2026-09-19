@@ -10,6 +10,7 @@ void
 snag_secret_set_free(struct snag_secret_set *set)
 {
     for (size_t i = 0; i < set->wire.count; ++i) snag_secret_bytes_free((char *)set->values[i]);
+    free(set->values);
     memset(set, 0, sizeof(*set));
 }
 
@@ -23,9 +24,21 @@ append_secret(struct snag_secret_set *set, char *value)
             snag_secret_bytes_free(value);
             return 0;
         }
-    if (set->wire.count >= SNAG_SECRET_VALUES_MAX) {
-        snag_secret_bytes_free(value);
-        return -1;
+    if (set->wire.count == set->capacity) {
+        size_t capacity = set->capacity ? set->capacity * 2u : 16u;
+        const char **grown;
+        if (capacity < set->capacity) {
+            snag_secret_bytes_free(value);
+            return -1;
+        }
+        grown = realloc(set->values, capacity * sizeof(*grown));
+        if (!grown) {
+            snag_secret_bytes_free(value);
+            return -1;
+        }
+        set->values = grown;
+        set->capacity = capacity;
+        set->wire.values = set->values;
     }
     set->values[set->wire.count++] = value;
     return 0;

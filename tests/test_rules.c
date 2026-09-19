@@ -182,12 +182,42 @@ test_empty_and_boundary_rules(void)
     snag_rules_free(rules);
 }
 
+static void
+test_many_rules(void)
+{
+    json_t *list = json_array();
+    json_t *def, *envelope;
+    struct snag_rules *rules;
+    struct host_log log = {0};
+    struct snag_rule_verdict verdict;
+    for (unsigned int i = 0u; i < 300u; ++i) {
+        char name[32];
+        snprintf(name, sizeof(name), "rule%u", i);
+        assert(json_array_append_new(list, json_pack("{s:s,s:s,s:{s:s},s:s}",
+            "name", name, "action", "deny", "match", "/tool", "^absent$",
+            "message", "denied")) == 0);
+    }
+    assert(json_array_append_new(list, json_pack("{s:s,s:s,s:s}",
+        "name", "last", "action", "deny", "message", "last rule reached")) == 0);
+    def = json_pack("{s:o}", "rules", list);
+    rules = snag_rules_compile(def, NULL, 0u);
+    assert(rules);
+    envelope = json_pack("{s:s,s:s}", "boundary", "out", "tool", "exec_command");
+    assert(evaluate(rules, envelope, &log, &verdict) == 0);
+    assert(verdict.rejected && verdict.visits == 301u && verdict.matches == 1u);
+    assert(log.calls == 1u && !strcmp(log.last, "last:1"));
+    json_decref(envelope);
+    snag_rules_free(rules);
+    json_decref(def);
+}
+
 int
 main(void)
 {
     test_deny_and_default_allow();
     test_first_match_wins();
     test_order_decides();
+    test_many_rules();
     test_invalid_definitions_rejected();
     test_empty_and_boundary_rules();
     puts("test_rules: ok");

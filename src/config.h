@@ -11,21 +11,15 @@
 
 #define SNAG_CONFIG_MODEL_MAX 256u
 #define SNAG_CONFIG_EFFORT_MAX 64u
-#define SNAG_CONFIG_EFFORTS_MAX 32u
 #define SNAG_CONFIG_PROMPT_MAX 1024u
 #define SNAG_CONFIG_PAGER_MAX 256u
 #define SNAG_CONFIG_SPINNER_MAX 69u
-#define SNAG_CONFIG_SPINNER_FRAMES_MAX 16u
 #define SNAG_CONFIG_PATH_MAX (16u * 1024u)
 #define SNAG_CONFIG_FILE_MAX (64u * 1024u)
 #define SNAG_CONFIG_URL_MAX 2048u
-#define SNAG_CONFIG_SECRET_MAX 64u
 #define SNAG_CONFIG_ENV_NAME_MAX 255u
-#define SNAG_CONFIG_PROVIDER_MAX 16u
 #define SNAG_CONFIG_PROVIDER_NAME_MAX 63u
-#define SNAG_CONFIG_MODEL_LIMIT_MAX 128u
 #define SNAG_CONFIG_STEERING_MAX 8u
-#define SNAG_CONFIG_MODEL_ALIAS_MAX 128u
 #define SNAG_CONFIG_TOKEN_LIMIT_MAX UINT64_C(4000000000)
 /* Outside the numeric compaction range; zero continues to mean disabled. */
 #define SNAG_CONFIG_COMPACT_AUTO UINT32_MAX
@@ -131,10 +125,10 @@ struct snag_config {
     bool read_agents_md;
     bool auto_update;
     char update_url[SNAG_CONFIG_URL_MAX];
-    struct snag_provider_config providers[SNAG_CONFIG_PROVIDER_MAX];
-    size_t provider_count;
-    struct snag_model_limit_config model_limits[SNAG_CONFIG_MODEL_LIMIT_MAX];
-    size_t model_limit_count;
+    struct snag_provider_config *providers;
+    size_t provider_count, provider_capacity;
+    struct snag_model_limit_config *model_limits;
+    size_t model_limit_count, model_limit_capacity;
     enum snag_color_mode color;
     bool markdown;
     uint64_t resume_history_turns;
@@ -155,12 +149,15 @@ struct snag_config {
     uint32_t max_output_tokens;
     uint32_t max_output_bytes;
     struct snag_rules *rules;
-    struct snag_secret_source secrets[SNAG_CONFIG_SECRET_MAX];
-    size_t secret_count;
+    struct snag_secret_source *secrets;
+    size_t secret_count, secret_capacity;
     char source_path[SNAG_CONFIG_PATH_MAX + 1u];
 };
 
 void snag_config_init(struct snag_config *config);
+/* Growable protected-value list; parses and retains one additional source. */
+int snag_config_add_secret(struct snag_config *config, const char *value, const char *source_path,
+                           char *error, size_t error_size);
 void snag_config_provider_init(struct snag_provider_config *provider, const char *name);
 bool snag_config_name_valid(const char *name);
 void snag_config_free(struct snag_config *config);

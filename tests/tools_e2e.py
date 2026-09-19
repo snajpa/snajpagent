@@ -144,11 +144,38 @@ def case_rule_denies_write(binary, provider, root):
     print("tools e2e rule-denies-write: ok", flush=True)
 
 
+def case_wide_call_batch(binary, provider, root):
+    calls = [("read_file", {"path": "probe.txt"}) for _ in range(120)]
+    seen = []
+
+    def respond(handler, request, sequence):
+        outs = [i for i in request["input"] if i.get("type") == "function_call_output"]
+        if not outs:
+            provider.reply(handler, provider.functions_body(
+                sequence, [(f"wide-{i}", name, arguments)
+                           for i, (name, arguments) in enumerate(calls)]).encode())
+            return
+        seen.append(len(outs))
+        provider.reply(handler, provider.response_body(sequence, "wide batch done").encode())
+
+    case, result, events = run_case(
+        binary, provider, root, "wide-batch", "read the probe many times", respond,
+        prepare=lambda case: (case / "probe.txt").write_text("hello world\n"))
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    entries = finished(events)
+    assert len(entries) == len(calls), len(entries)
+    results = [entry["data"]["result"] for entry in entries]
+    assert all(item["status"] == "succeeded" for item in results), results
+    assert seen == [len(calls)], seen
+    print("tools e2e wide-call-batch: ok", flush=True)
+
+
 CASES = (
     case_exploration,
     case_write_and_edit,
     case_read_only_refuses_writes,
     case_rule_denies_write,
+    case_wide_call_batch,
 )
 
 

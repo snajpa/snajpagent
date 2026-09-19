@@ -2,6 +2,7 @@
 #include "rules.h"
 
 #include <regex.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -184,12 +185,21 @@ snag_rules_compile(const json_t *definition, char *error, size_t size)
     const json_t *list;
 
     if (!definition || json_is_null(definition)) {
+        json_t *empty;
+
         rules = calloc(1u, sizeof(*rules));
         if (!rules) return NULL;
-        if (snag_json_digest(json_object(), rules->digest) < 0) {
+        empty = json_object();
+        if (!empty) {
             free(rules);
             return NULL;
         }
+        if (snag_json_digest(empty, rules->digest) < 0) {
+            json_decref(empty);
+            free(rules);
+            return NULL;
+        }
+        json_decref(empty);
         return rules;
     }
     if (!json_is_object(definition)) {
@@ -207,16 +217,17 @@ snag_rules_compile(const json_t *definition, char *error, size_t size)
         }
     }
     list = json_object_get(definition, "rules");
-    if (list && (!json_is_array(list) || json_array_size(list) > SNAG_RULES_MAX)) {
-        invalid(error, size, "rules must be a bounded array");
+    if (list && !json_is_array(list)) {
+        invalid(error, size, "rules must be an array");
         return NULL;
     }
     rules = calloc(1u, sizeof(*rules));
     if (!rules) return NULL;
     if (snag_json_digest(definition, rules->digest) < 0) goto fail;
-    rules->rules = calloc(SNAG_RULES_MAX, sizeof(*rules->rules));
+    size_t count = list ? json_array_size(list) : 0u;
+    rules->rules = calloc(count ? count : 1u, sizeof(*rules->rules));
     if (!rules->rules) goto fail;
-    rules->rule_count = list ? json_array_size(list) : 0u;
+    rules->rule_count = count;
     for (size_t i = 0u; i < rules->rule_count; ++i)
         if (compile_rule(rules, json_array_get(list, i), i, error, size) < 0) goto fail;
     return rules;
@@ -283,6 +294,10 @@ rule_matches(const struct snag_rule *rule, const json_t *envelope)
 done: snag_buf_free(&bytes);
     return result;
 }
+
+struct snag_rule_position {
+    size_t chain, next;
+};
 
 int
 snag_rules_eval(const struct snag_rules *rules, struct snag_rule_frame *frame,

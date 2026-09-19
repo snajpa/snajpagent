@@ -82,8 +82,8 @@ struct app_state {
     const char *turn_model;
     const char *turn_effort;
     const struct snag_provider_config *turn_provider;
-    struct partial_public_item partial[SNAG_MAX_RESPONSE_ITEMS];
-    size_t partial_count;
+    struct partial_public_item *partial;
+    size_t partial_count, partial_capacity;
     size_t partial_bytes;
     uint64_t public_flush_ms;
     bool public_flushing;

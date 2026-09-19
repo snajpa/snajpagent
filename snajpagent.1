@@ -964,8 +964,8 @@ Visible output resumes after
 of inactivity.  Bracketed paste inserts pasted newlines without submitting.
 .PP
 Direct prompts accept up to 1 MiB of valid UTF-8; steering and queued turns
-accept up to 256 KiB.  The queue holds up to 128 pending turns within 16 MiB;
-up to 32 steering items may be pending in a turn.  Interactive EOF interrupts
+accept up to 256 KiB.  The queue holds pending turns within 16 MiB; pending
+steering text is bounded to 8 MiB in a turn.  Interactive EOF interrupts
 active work and exits, preserving the saved goal and queue arming state.
 The session remains resumable.
 .SS Views and prompt
@@ -1957,7 +1957,7 @@ while the agent is stopped.  Recovery uses the same lock as installation.
 Do not delete it while another instance is using it.  There is no session-format
 rollback promise: keeping an older executable does not undo newer session data.
 .SS "provider NAME"
-Up to 16 ordered named sections are accepted.  The spelling
+Ordered named sections may be repeated with distinct names.  The spelling
 .B [provider]
 is not accepted. Names contain 1 through 63 ASCII letters, digits, dots,
 underscores or hyphens. Names have no privileged meaning. New sessions use the
@@ -2120,7 +2120,7 @@ A failed or
 interrupted request is not automatically retried; a request already sent may
 have been billed. Media contents cannot receive textual secret redaction.
 .SS "model-limit PROVIDER/MODEL"
-Up to 128 rules are accepted.
+Rules may be repeated with distinct provider and model selectors.
 Set provider-wide defaults with [model-limit PROVIDER], patterned rules with
 [model-limit PROVIDER/PATTERN], and exact rules with [model-limit PROVIDER/MODEL].
 The first slash separates the provider; remaining slashes belong to the model.
@@ -2194,9 +2194,9 @@ Reload configuration with /config or start a new process to apply an edited
 list. Invalid lists reject the reload while preserving the active configuration.
 Existing turn/session effort preferences remain unchanged until selected again.
 .SS "model-alias PROVIDER/NAME"
-Up to 128 declarations are accepted. The local name uses the provider-name
-syntax. The required model key is a literal upstream model ID. These declarations
-define ordinary provider-local models with independent limits; several names
+The local name uses the provider-name syntax. The required model key is a
+literal upstream model ID. These declarations define ordinary provider-local
+models with independent limits; several names
 may route to the same upstream model. Targets never resolve recursively.
 Selection, sessions and limits use the local name; provider requests use the
 upstream ID. Upstream names do not add another limit-rule matching tier.
@@ -2349,8 +2349,9 @@ therefore reserves a stable column, while
 .B \(dq\e0\(dq
 removes a present field and
 .B \(dq\e0⚑\(dq
-appears only while active.  Zero through 16 remaining one-column items are
-active frames.  One active frame is static and schedules no periodic refresh;
+appears only while active.  The remaining one-column items are active frames,
+bounded only by the value's byte limit.  One active frame is static and
+schedules no periodic refresh;
 two or more animate.  Adjacent active frames must differ.  A blank active
 frame still occupies one column.  Omit a placeholder to remove it in one mode.
 Literal spaces are never trimmed, and numeric padding never restores an absent
@@ -2413,8 +2414,9 @@ existing shutdown behavior.
 .TP
 .B max_parallel_commands
 Maximum unsettled command handles, including yielded and ready-but-uncollected
-jobs.  Range: 1 through 32.  Default: 4.  One runs commands serially without
-restoring the former tool-catalog lock.  This is not a subprocess or CPU limit.
+jobs.  Range: 1 through 4294967295.  Default: 4.  One runs commands serially
+without restoring the former tool-catalog lock.  This is not a subprocess or
+CPU limit.
 .TP
 .B default_timeout_ms
 Foreground handoff deadline when the model supplies none, 0 through 4294967295.
@@ -2448,7 +2450,7 @@ tool-call bound.  Default: 0.
 .TP
 .B secret
 Repeatable additional value to protect, using the same source syntax as api_key.
-Up to 64 sources. Environment references are removed from child environments;
+Environment references are removed from child environments;
 files/literals are not exported. Missing required sources fail before protected
 work. The obsolete secret_env key is rejected.
 .SS irc
@@ -2553,7 +2555,7 @@ action  = deny
 message = "Only the audited command tool is permitted."
 .fi
 .PP
-At most 256 rules, 63-byte names and 64 KiB per message.  The engine is
+Rule count is bounded by the configuration file; 63-byte names and 64 KiB per message.  The engine is
 stateless: no rule fires once, rate-limits or counts across evaluations.
 Every matched rule records one fixed audit line,
 .IR "rule=<name> decision=<allow|deny> tool=<tool>" ,

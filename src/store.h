@@ -13,9 +13,8 @@
 #define SNAG_MODEL_MAX_BYTES 256u
 #define SNAG_EFFORT_MAX_BYTES 64u
 #define SNAG_MAX_STEERING_TEXT (256u * 1024u)
-#define SNAG_MAX_STEERING_PER_TURN 32u
+#define SNAG_MAX_PENDING_STEERING_BYTES (8u * 1024u * 1024u)
 #define SNAG_MAX_QUEUED_TEXT (256u * 1024u)
-#define SNAG_MAX_PENDING_TURNS 128u
 #define SNAG_MAX_PENDING_QUEUE_TEXT (16u * 1024u * 1024u)
 #define SNAG_MAX_IRC_SNAPSHOT (8u * 1024u * 1024u)
 #define SNAG_MAX_TIMER_TEXT (256u * 1024u)
@@ -121,8 +120,8 @@ struct snag_session {
     char final_response_id[SNAG_ID_HEX_LEN + 1u];
     struct snag_input_observation active_accounting, usage_anchor, context_meter, capacity_rejection;
     struct snag_usage_totals usage_totals;
-    struct snag_process_state processes[SNAG_MAX_PROCESSES];
-    size_t process_count;
+    struct snag_process_state *processes;
+    size_t process_count, process_capacity;
     uint64_t irc_received_seq, irc_consumed_seq, response_irc_seq;
     uint32_t max_parallel_commands;
     bool parallel_tool_calls;
@@ -182,12 +181,12 @@ struct snag_session {
     uint64_t turn_retry_attempts;
     uint32_t turn_retry_limit;
     enum snag_graph_outcome response_outcome;
-    struct snag_pending_call pending_calls[SNAG_MAX_CALLS_PER_RESPONSE];
-    struct snag_pending_steering pending_steering[SNAG_MAX_STEERING_PER_TURN];
-    struct snag_queued_turn pending_queue[SNAG_MAX_PENDING_TURNS];
-    size_t pending_call_count;
-    size_t pending_steering_count;
-    size_t pending_queue_count;
+    struct snag_pending_call *pending_calls;
+    struct snag_pending_steering *pending_steering;
+    struct snag_queued_turn *pending_queue;
+    size_t pending_call_count, pending_call_capacity;
+    size_t pending_steering_count, pending_steering_capacity;
+    size_t pending_queue_count, pending_queue_capacity;
     uint64_t write_failures; /* Process-local, includes every event writer. */
     bool append_rollback_pending;
     int64_t append_rollback_end;

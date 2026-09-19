@@ -284,7 +284,8 @@ selected value supplied to the provider remains byte-for-byte unchanged.
 `prompt_spinner_goal`, `prompt_spinner_provider`, and `prompt_spinner_tool`
 are quoted inactive-state plus active-frame strings. The first item is either a
 safe one-column inactive code point or the leading `\0` zero-width sentinel;
-the remaining zero through 16 safe one-column code points are active frames.
+the remaining safe one-column code points are active frames, bounded only by
+the value's byte limit.
 The defaults are `" ⚑"`, `" ◴◷◶◵"`, and `" ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"`, reserving
 two columns: an independent goal flag and one shared activity slot. Tool
 activity takes priority over provider activity in that same cell, even when
