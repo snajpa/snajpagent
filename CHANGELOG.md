@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+### Arbitrary-limit removals (target: 0.99.9)
+
 - Remove the sixteen-seat IRC representation. The configured outgoing-endpoint
   list, the runtime seat and record tables, destination and route lists, the
   composer route, and the render fence cache all grow on demand; endpoint
@@ -47,6 +49,8 @@
 
 - Remove the eight-attachment staging ceiling. Staged content is bounded by
   the 12 MiB prepared-image budget and the per-file source bound.
+
+### Other changes
 
 - Show provider-hosted web searches as private rollout tool rows. A `web_search`
   item records a start row carrying the search action and query, then a finish
