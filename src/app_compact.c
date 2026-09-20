@@ -599,6 +599,13 @@ snag_app_compact_before_response(struct app_state *app, const struct snag_creden
         bool known_bound = strcmp(count_method, "exact") == 0 ||
             strcmp(count_method, "media_upper_bound") == 0;
         bool measured_known = strcmp(count_method, "exact") == 0 || snag_app_measured_input(app, &measured);
+        /* A session that is already over its window never produces a successful
+         * usage figure, so the proactive path could never fire for it. Let a
+         * known bound (exact or media) drive the same threshold check. */
+        if (!measured_known && known_bound) {
+            measured = input_tokens_bound;
+            measured_known = true;
+        }
         /* The window can shrink when the model or provider changes, and a route
          * without exact counting reports no bound at all: an input the session
          * already measured above the hard window must compact in stages rather
