@@ -520,6 +520,41 @@ snag_app_compact_before_response(struct app_state *app, const struct snag_creden
     if (compacted) *compacted = false;
     if (!app || !app->config || !app->turn_provider || !compacted || !count_method_valid(count_method))
         return snag_fail(error, error_size, EINVAL, "invalid pre-response compaction state");
+    /* A model or provider switch continues with context produced by the
+     * previous binding: compact through that binding's route first. The
+     * compaction endpoint belongs to the provider that produced the context,
+     * and a smaller new window cannot send that context as it stands. */
+    if (app->session.context_meter.valid && app->session.context_meter.provider[0] &&
+        app->session.context_meter.model[0] &&
+        (strcmp(app->session.context_meter.provider, app->turn_provider->name) != 0 ||
+         !app->turn_model || strcmp(app->session.context_meter.model, app->turn_model) != 0)) {
+        const struct snag_provider_config *previous =
+            snag_config_provider(app->config, app->session.context_meter.provider);
+        if (previous && app->turn_capacity.hard_input_known &&
+            app->session.context_meter.input_tokens > app->turn_capacity.hard_input_tokens) {
+            const struct snag_provider_config *saved_provider = app->turn_provider;
+            const char *saved_model = app->turn_model, *saved_effort = app->turn_effort;
+            struct snag_model_capacity saved_capacity = app->turn_capacity;
+            bool switched = false;
+            int switch_rc;
+            app->turn_provider = previous;
+            app->turn_model = app->session.context_meter.model;
+            app->turn_effort = app->session.context_meter.effort[0] ?
+                app->session.context_meter.effort : saved_effort;
+            switch_rc = snag_app_capacity_resolve(app, previous, app->turn_model, &app->turn_capacity,
+                                                  error, error_size) == 0 ?
+                run_compaction(app, "model_switch", true, NULL, &switched, error, error_size) : -1;
+            app->turn_provider = saved_provider;
+            app->turn_model = saved_model;
+            app->turn_effort = saved_effort;
+            app->turn_capacity = saved_capacity;
+            if (switch_rc != 0) return switch_rc;
+            if (switched) {
+                *compacted = true;
+                return 0;
+            }
+        }
+    }
     {
         uint64_t threshold = snag_model_compact_threshold(app->turn_provider, &app->turn_capacity);
         uint64_t measured = input_tokens_bound;
