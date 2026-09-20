@@ -22,6 +22,9 @@ typedef int (*snag_provider_pump_fn)(void *opaque, unsigned int timeout_ms);
 #define SNAG_PROVIDER_UNSUPPORTED 4
 /* Typed context overflow from a count or native compaction operation. */
 #define SNAG_PROVIDER_CONTEXT_OVERFLOW 5
+/* The provider answered with an error status: the request reached it and was
+ * rejected, so shrinking the source would only re-send the same call. */
+#define SNAG_PROVIDER_REJECTED 6
 
 /* Borrowed for one synchronous call; refreshed credentials remain private. */
 struct snag_provider_connection {
