@@ -605,46 +605,6 @@ prune_dangling_calls(json_t *array)
 }
 
 static int
-install_portable_text(struct context_builder *builder, const json_t *output, char *error, size_t error_size)
-{
-    struct snag_buf text = {0};
-    json_t *message = NULL;
-    size_t count = output ? json_array_size(output) : 0u;
-    int rc = -1;
-
-    snag_buf_init(&text, SNAG_CONTEXT_MAX_COMPACT);
-    for (size_t i = 0u; i < count; ++i) {
-        json_t *item = json_array_get(output, i);
-        json_t *parts = json_object_get(item, "content");
-        const char *plain = snag_json_string(item, "text");
-        const char *inline_text = snag_json_string(item, "content");
-        if (plain && plain[0]) {
-            if (snag_buf_printf(&text, "%s\n", plain) < 0) goto out;
-        } else if (inline_text && inline_text[0]) {
-            if (snag_buf_printf(&text, "%s\n", inline_text) < 0) goto out;
-        } else {
-            for (size_t p = 0u; p < json_array_size(parts); ++p) {
-                const char *part = snag_json_string(json_array_get(parts, p), "text");
-                if (part && part[0] && snag_buf_printf(&text, "%s\n", part) < 0) goto out;
-            }
-        }
-    }
-    if (!text.len) { rc = 1; goto out; }
-    if (snag_buf_printf(&text,
-            "[earlier conversation summary carried across a model or provider switch]\n") < 0 ||
-        snag_buf_terminate(&text) < 0) goto out;
-    message = json_pack("{s:s,s:s}", "role", "user", "content", (const char *)text.data);
-    if (!message || json_array_append_new(builder->request_input, message) < 0) goto out;
-    message = NULL;
-    rc = 0;
-out:
-    json_decref(message);
-    snag_buf_free(&text);
-    if (rc < 0) snag_errorf(error, error_size, "cannot install the portable summary text");
-    return rc;
-}
-
-static int
 install_compact_output(struct context_builder *builder, const json_t *output, char *error, size_t error_size)
 {
     char output_hash[SNAG_SHA256_HEX_LEN + 1u];
@@ -1593,13 +1553,8 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
     builder.session = session;
     builder.control = control;
     builder.continuation_scope = continuation_scope;
-    /* A summary from another binding cannot be replayed as items, but its text
-     * is portable: keep the coverage and lead this source with that text so a
-     * switch costs the uncovered tail instead of the whole archive. Tiny budgets
-     * (tests, degenerate sources) keep the historical replay instead. */
-    bool compact_scope_portable = !session || !session->compact_scope[0] ||
-        (continuation_scope && !strcmp(session->compact_scope, continuation_scope));
-    builder.compact_seq = session && (compact_scope_portable || source_budget >= SNAG_CONTEXT_COMPACT_FLOOR) ?
+    builder.compact_seq = session && (!session->compact_scope[0] ||
+        (continuation_scope && !strcmp(session->compact_scope, continuation_scope))) ?
         session->compact_seq : 0u;
     builder.compact_walk_seq = builder.compact_seq > SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS ?
         builder.compact_seq - SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS : 0u;
@@ -1621,16 +1576,8 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
                   "compaction requires an idle session");
         goto out;
     }
-    if (builder.compact_seq) {
-        int install_rc = compact_scope_portable ?
-            install_compact_output(&builder, session->compact_output, error, error_size) :
-            install_portable_text(&builder, session->compact_output, error, error_size);
-        if (install_rc < 0) goto out;
-        if (install_rc == 1) {   /* nothing portable: this attempt cannot claim coverage */
-            builder.compact_seq = 0u;
-            builder.compact_walk_seq = 0u;
-        }
-    }
+    if (builder.compact_seq && install_compact_output(&builder, session->compact_output,
+                               error, error_size) < 0) goto out;
     if (snag_session_each_event(session, compact_event, &builder, error, error_size) < 0) goto out;
     if (prune_dangling_calls(builder.request_input) < 0) goto out;
     if (append_deferred_input(&builder) < 0) goto out;
