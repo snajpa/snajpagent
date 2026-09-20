@@ -321,7 +321,7 @@ fd = accept(listen_fd, NULL, NULL);
                   "{\"device_code\":\"meta-device\",\"user_code\":\"ABCD-1234\","
                   "\"verification_uri\":\"https://auth.meta.com/oidc/device/\","
                   "\"verification_uri_complete\":\"https://auth.meta.com/oidc/device/?code=ABCD-1234\","
-                  "\"expires_in\":900,\"interval\":1}");
+                  "\"expires_in\":60,\"interval\":1}");
     if (close(fd) < 0) server_fail("close Meta authorization socket failed");
     if (fixture == MODEL_META_DENIED || fixture == MODEL_META_EXPIRED) {
         fd = accept(listen_fd, NULL, NULL);
