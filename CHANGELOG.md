@@ -635,6 +635,11 @@
   the shrink loop still halves it after a rejection. No usable observation
   keeps the protocol maximum.
 
+- Compact through the previous binding when a model or provider switch leaves
+  more context than the new model's hard input holds: the compaction runs with
+  the provider and model that produced the context (its compaction endpoint),
+  and only then does the turn run on the new model.
+
 ## 0.99.5 — September 10, 2026
 
 - Traverse prompt history locally first, then globally, using bounded-memory

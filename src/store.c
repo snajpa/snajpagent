@@ -881,7 +881,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         static const char methods[] =
             "exact media_upper_bound unknown anchored_upper_bound statistical_upper_estimate qualified_upper_bound";
         static const char reasons[] =
-            "manual proactive hard_budget provider_rejection";
+            "manual proactive hard_budget provider_rejection model_switch";
         const char *compact_id = snag_json_string(data, "compact_id");
         const char *predecessor = snag_json_string(data, "predecessor_compact_id");
         const char *reason = snag_json_string(data, "reason");
