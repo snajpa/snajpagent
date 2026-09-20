@@ -570,8 +570,13 @@ snag_app_compact_before_response(struct app_state *app, const struct snag_creden
         bool known_bound = strcmp(count_method, "exact") == 0 ||
             strcmp(count_method, "media_upper_bound") == 0;
         bool measured_known = strcmp(count_method, "exact") == 0 || snag_app_measured_input(app, &measured);
-        bool over_hard = known_bound && app->turn_capacity.hard_input_known &&
-            input_tokens_bound > app->turn_capacity.hard_input_tokens;
+        /* The window can shrink when the model or provider changes, and a route
+         * without exact counting reports no bound at all: an input the session
+         * already measured above the hard window must compact in stages rather
+         * than be sent whole (the resume failure fed 8.3 MB to a 258k window). */
+        bool over_hard = app->turn_capacity.hard_input_known &&
+            ((known_bound && input_tokens_bound > app->turn_capacity.hard_input_tokens) ||
+             (measured_known && measured > app->turn_capacity.hard_input_tokens));
         bool over_proactive = measured_known && threshold && measured >= threshold;
         int rc;
 

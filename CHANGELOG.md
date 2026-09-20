@@ -646,6 +646,12 @@
   goes down and one connect when it comes back, and the model context sees the
   same single pair.
 
+- Fire the pre-response compaction guard from the session's measured input as
+  well as a counted bound, so a window that shrank under the session (model or
+  provider switch) or a route without exact counting still compacts in stages
+  instead of sending an input the session already measured as over the window
+  (the resume failure handed 8.3 MB to a 258k-token model).
+
 - Truncate an oversized compaction source as a last resort instead of failing
   the turn. A single complete history group (one huge tool output, or media)
   can exceed the model window on its own, and the shrink walker cannot split a
