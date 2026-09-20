@@ -59,6 +59,11 @@ int snag_context_compact_request_build(struct snag_session *session, const char 
 int snag_context_compact_output_count_request_build(const json_t *output, const char *model,
                                       struct snag_json_document *count_request,
                                       char *error, size_t error_size);
+/* Smallest compaction source considered meaningful: a budget below this
+ * cannot carry even one small history group, so the shrink loop floors
+ * here and the builder cuts the group instead of collapsing further. */
+#define SNAG_CONTEXT_COMPACT_FLOOR (64u * 1024u)
+
 int snag_context_compact_output_valid(const json_t *output, char output_hash[SNAG_SHA256_HEX_LEN + 1u],
                                      size_t *output_bytes, char *error, size_t error_size);
 /* Consumes a compact result and retains its validated canonical measurement. */
