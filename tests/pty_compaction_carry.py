@@ -19,6 +19,7 @@ Usage: pty_compaction_carry.py <binary> <workspace> with SNAJPAGENT_DOTDIR and
 SNAJPAGENT_TEST_ROOT in the environment (same convention as test_cli.sh).
 """
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -30,11 +31,19 @@ def run_turn(config, session=None):
     args = ["--config", str(config)]
     if session:
         args += ["--resume", session]
-    with H.Child(args, ready=H.DEFAULT_IDLE_PROMPT, term="xterm") as child:
-        end = child.send_wait(b"ping\r", b"pong")
+    # A proactive threshold compacts on the first prompt, so the idle-prompt
+    # ready condition never settles; the banner is the stable signal.
+    with H.Child(args, ready=b"snajpagent 0.99", term="xterm") as child:
+        child.send_wait(b"ping\r", b"pong")
         if session is None:
             session = child.session_id()
-        child.exit_cleanly(end)
+        # A proactive threshold compacts every turn; let that finish so the next
+        # run does not start while the previous one is still compacting.
+        try:
+            child.wait_text(b"Compacted", timeout=120.0)
+        except AssertionError:
+            pass
+        child.exit_cleanly(len(child.buf))
     return session
 
 
