@@ -1372,8 +1372,21 @@ test_leading_instructions_boundary(struct snag_store *store, const char *temp)
                                error, sizeof(error)) == 0);
     commit_event(&session, "turn_started",
                  turn_started("03030303030303030303030303030303", 1u, "inspect", temp, NULL));
-    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u, false,
-                              &config, NULL, NULL, NULL, &projection, error, sizeof(error), NULL) == 0);
+    commit_event(&session, "response_started",
+                 response_started("03030303030303030303030303030303",
+                                  "04040404040404040404040404040404", NULL));
+    commit_event(&session, "response_completed",
+                 response_completed("03030303030303030303030303030303",
+                                    "04040404040404040404040404040404", "pong"));
+    commit_event(&session, "turn_completed",
+                 turn_completed("03030303030303030303030303030303",
+                                "04040404040404040404040404040404"));
+    commit_event(&session, "turn_started",
+                 turn_started("05050505050505050505050505050505", 2u, "inspect again", temp, NULL));
+    int build_rc = snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u, false,
+                                      &config, NULL, NULL, NULL, &projection, error, sizeof(error), NULL);
+    if (build_rc != 0) fprintf(stderr, "leading_instructions build: %s\n", error);
+    assert(build_rc == 0);
     json_t *input = json_object_get(projection.create_request.value, "input");
     json_t *last = json_array_get(input, json_array_size(input) - 1u);
     assert_string(last, "role", "user");
@@ -1381,16 +1394,28 @@ test_leading_instructions_boundary(struct snag_store *store, const char *temp)
     assert(content && strncmp(content, "[snajpagent host continuation — not a new user message]\n",
                               sizeof("[snajpagent host continuation — not a new user message]\n") - 1u) == 0);
     assert(strstr(content, "Host continuation:") != NULL);
-    bool seen_user = false;
+    bool seen_user = false, seen_assistant = false;
     for (size_t i = 0u; i < json_array_size(input); ++i) {
-        const char *role = snag_json_string(json_array_get(input, i), "role");
+        json_t *item = json_array_get(input, i);
+        const char *role = snag_json_string(item, "role");
+        const char *type = snag_json_string(item, "type");
         if (!role) continue;
         if (!strcmp(role, "user")) seen_user = true;
         else if (seen_user && (!strcmp(role, "system") || !strcmp(role, "developer"))) {
             fprintf(stderr, "instruction role %s after the first user item\n", role);
             assert(0);
         }
+        if (strcmp(role, "assistant") != 0) continue;
+        /* llama.cpp rejects a role-only assistant item; it must be an explicit
+         * typed message with typed content parts. */
+        assert(type && strcmp(type, "message") == 0);
+        json_t *parts = json_object_get(item, "content");
+        assert(json_is_array(parts) && json_array_size(parts) == 1u);
+        assert_string(json_array_get(parts, 0u), "type", "output_text");
+        assert(strcmp(snag_json_string(json_array_get(parts, 0u), "text"), "pong") == 0);
+        seen_assistant = true;
     }
+    assert(seen_assistant);
     snag_context_projection_free(&projection);
     snag_session_close(&session);
     snag_config_free(&config);

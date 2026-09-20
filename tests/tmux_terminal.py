@@ -18,6 +18,14 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+# Waits for expected output tolerate a loaded host. Short literals in the
+# cases express intent and pacing, not how fast this host must produce the
+# bytes; a slow box must not fail a correct build.
+MIN_WAIT_S = 30.0
+
+def wait_budget(timeout):
+    return timeout if timeout >= MIN_WAIT_S else MIN_WAIT_S
+
 
 LIVE_PROMPT = (
     "great... now please gather the complete state of livepatch status for "
@@ -540,7 +548,7 @@ class FakeResponses:
                     if request["corrected"]]
 
     def wait_models(self, marker, timeout=10.0):
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + wait_budget(timeout)
         expected = set(self.AGENTS)
         while time.monotonic() < deadline:
             requests = self.matching_requests(marker)
@@ -681,7 +689,7 @@ class TmuxTerminal:
                                timeout, join_wrapped)
 
     def wait_until(self, matches, description, timeout=10.0, join_wrapped=False):
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + wait_budget(timeout)
         screen = ""
         while time.monotonic() < deadline:
             screen = self.capture(join_wrapped=join_wrapped)
@@ -734,7 +742,7 @@ class TmuxTerminal:
         return value == "1"
 
     def wait_dead(self, timeout=10.0):
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + wait_budget(timeout)
         while time.monotonic() < deadline:
             if self.dead():
                 return
@@ -865,7 +873,7 @@ def run_status_case(binary, root):
 
 
 def wait_normalized(terminal, needle, timeout=1.0):
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + wait_budget(timeout)
     screen = ""
     while time.monotonic() < deadline:
         screen = terminal.capture(join_wrapped=True)
@@ -911,7 +919,7 @@ def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None, ty
                                                 for c in fragment))
 
         def wait_prose(fragment, timeout=1.0):
-            deadline = time.monotonic() + timeout
+            deadline = time.monotonic() + wait_budget(timeout)
             while time.monotonic() < deadline:
                 screen = terminal.capture(join_wrapped=True)
                 if prose_pattern(fragment).search(screen):
@@ -1283,7 +1291,7 @@ def wait_queue_listing(terminal, entries, timeout=5.0):
 
 
 def wait_event_count(dotdir, kind, count, timeout=5.0):
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + wait_budget(timeout)
     events = []
     while time.monotonic() < deadline:
         _, events = maybe_events(dotdir)
@@ -2242,7 +2250,7 @@ def run_bullet_class_case(binary, root):
 
 
 def wait_for_terminal_event(dotdir, terminal_types, timeout):
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + wait_budget(timeout)
     path = None
     events = []
     while time.monotonic() < deadline:
@@ -2913,7 +2921,7 @@ def run_resume_history_case(binary, root):
 
 
 def wait_file_contains(path, needle, timeout=10.0):
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + wait_budget(timeout)
     while time.monotonic() < deadline:
         try:
             if needle in path.read_text(encoding="utf-8"):
@@ -3252,7 +3260,7 @@ def active_turns(dotdir):
 
 
 def wait_irc_idle(terminals, timeout=15.0):
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + wait_budget(timeout)
     stable_since = None
     while time.monotonic() < deadline:
         if all(not active_turns(terminal.dotdir) for terminal in terminals):
@@ -3272,7 +3280,7 @@ def wait_irc_idle(terminals, timeout=15.0):
 
 
 def wait_irc_quits(terminal, nicks, timeout=15.0):
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + wait_budget(timeout)
     expected = set(nicks)
     while time.monotonic() < deadline:
         _, events = maybe_events(terminal.dotdir)

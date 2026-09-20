@@ -86,9 +86,11 @@ append_host_input(json_t *input, const char *text)
 
 /* Endpoints that only accept one instruction block at the very start
  * (llama.cpp chat templates) get every system/developer input item merged into
- * a single leading system message; the remaining items keep their order. */
+ * a single leading system message, and assistant history as an explicit typed
+ * message with typed content parts — a role-only assistant item is rejected as
+ * "Cannot determine type of 'item'". The remaining items keep their order. */
 static int
-merge_instruction_items(json_t *input)
+normalize_leading_instruction_items(json_t *input)
 {
     json_t *merged = json_array();
     struct snag_buf text = {.max = SNAG_CONTEXT_MAX_REQUEST};
@@ -98,10 +100,24 @@ merge_instruction_items(json_t *input)
     for (size_t i = 0; i < json_array_size(input); ++i) {
         json_t *item = json_array_get(input, i);
         const char *role = snag_json_string(item, "role");
+        const char *type = snag_json_string(item, "type");
         const char *content = snag_json_string(item, "content");
         if (role && content && (!strcmp(role, "system") || !strcmp(role, "developer"))) {
             if (snag_buf_printf(&text, "%s%s", text.len ? "\n\n" : "", content) < 0) goto out;
-        } else if (json_array_append(merged, item) < 0) {
+            continue;
+        }
+        if (role && content && !type && !strcmp(role, "assistant")) {
+            json_t *parts = json_pack("[{s:s,s:s}]", "type", "output_text", "text", content);
+            json_t *message = parts ? json_pack("{s:s,s:s,s:O}", "type", "message", "role", "assistant",
+                                                "content", parts) : NULL;
+            json_decref(parts);
+            if (!message || json_array_append_new(merged, message) < 0) {
+                json_decref(message);
+                goto out;
+            }
+            continue;
+        }
+        if (json_array_append(merged, item) < 0) {
             goto out;
         }
     }
@@ -1733,8 +1749,8 @@ snag_context_build(struct snag_session *session, const char *model, const char *
                 append_host_input(builder.request_input, host_boundary) < 0 :
                 append_message(&builder, "developer", host_boundary) < 0) goto out;
     }
-    if (provider && provider->leading_instructions && merge_instruction_items(builder.request_input) < 0) {
-        snag_errorf(error, error_size, "instruction items could not be merged for this endpoint");
+    if (provider && provider->leading_instructions && normalize_leading_instruction_items(builder.request_input) < 0) {
+        snag_errorf(error, error_size, "instruction items could not be prepared for this endpoint");
         goto out;
     }
     const char *upstream_model = snag_config_model_upstream(provider, model);

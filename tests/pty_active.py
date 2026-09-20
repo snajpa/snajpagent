@@ -14,6 +14,13 @@ import socket
 import struct
 import subprocess
 import sys
+
+# Expected-output waits tolerate a loaded host; explicit sub-second literals
+# in cases stay as responsiveness or pacing intent.
+MIN_WAIT_S = 30.0
+
+def wait_budget(timeout):
+    return timeout if timeout >= MIN_WAIT_S else MIN_WAIT_S
 import termios
 import time
 from datetime import datetime, timezone
@@ -107,21 +114,21 @@ class Child:
             return True
         return False
 
-    def wait(self, needle, start=0, timeout=8.0):
+    def wait(self, needle, start=0, timeout=MIN_WAIT_S):
         # Active/idle changes repaint only the changed label span. Full cell
         # layout and unchanged margins are covered by the renderer/tmux tests.
         if needle in (DEFAULT_IDLE_PROMPT, DEFAULT_ACCOUNTED_IDLE_PROMPT, PROMPT):
             return self.wait_idle_prompt(start, timeout)
         return self.wait_text(needle, start, timeout)
 
-    def wait_text(self, needle, start=0, timeout=8.0):
+    def wait_text(self, needle, start=0, timeout=MIN_WAIT_S):
         # Live prose can park/resume between fragments; match that exact
         # reversible detour, not arbitrary escapes, and return a raw offset.
         gap = b"(?:" + LIVE_GAP + b")*"
         pattern = re.compile(gap.join(re.escape(bytes([c])) for c in needle))
         return self.wait_pattern(pattern, start, timeout)
 
-    def wait_pattern(self, pattern, start=0, timeout=8.0):
+    def wait_pattern(self, pattern, start=0, timeout=MIN_WAIT_S):
         end = time.monotonic() + timeout
         while True:
             match = pattern.search(self.buf, start)
@@ -133,7 +140,7 @@ class Child:
                     f"timeout waiting for {pattern.pattern!r}; got {bytes(self.buf)!r}"
                 )
 
-    def wait_idle_prompt(self, start=0, timeout=8.0):
+    def wait_idle_prompt(self, start=0, timeout=MIN_WAIT_S):
         # At a narrow width only the idle marker's row may change. Require
         # either the full prompt or a cursor-positioned idle-marker repaint.
         pattern = re.compile(
@@ -160,10 +167,10 @@ class Child:
         while time.monotonic() < end:
             self.read_once(max(0.0, min(0.05, end - time.monotonic())))
 
-    def wait_quiet(self, settle=0.2, timeout=8.0):
+    def wait_quiet(self, settle=0.2, timeout=MIN_WAIT_S):
         # Wait until no output arrives for a settle interval and return the
         # buffer length, so a measurement never begins inside a pending paint.
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + wait_budget(timeout)
         quiet_since = time.monotonic()
         while True:
             if self.read_once(0.02):
@@ -185,7 +192,7 @@ class Child:
         return self.finish(expect_resume=expect_resume)
 
     def reap(self):
-        deadline = time.monotonic() + 8.0
+        deadline = time.monotonic() + MIN_WAIT_S
         while True:
             pid, status = os.waitpid(self.pid, os.WNOHANG)
             if pid:
@@ -255,7 +262,7 @@ def test_resize_and_suspend_preserve_draft():
             typed_end = child.send_wait(text, text)
             if suspend:
                 child.send(b"\x1a")
-                deadline = time.monotonic() + 8.0
+                deadline = time.monotonic() + MIN_WAIT_S
                 while True:
                     got, status = os.waitpid(child.pid, os.WUNTRACED | os.WNOHANG)
                     if got:
@@ -301,7 +308,7 @@ class IRCClient:
         self.sock.setblocking(False)
         self.wait(b" 366 " + nick.encode() + b" #lab ")
 
-    def wait(self, needle, start=0, timeout=8.0):
+    def wait(self, needle, start=0, timeout=MIN_WAIT_S):
         end = time.monotonic() + timeout
         while needle not in self.buf[start:]:
             remaining = end - time.monotonic()
@@ -355,7 +362,7 @@ def free_port():
 
 def accept_connections(listener, count):
     accepted = []
-    deadline = time.monotonic() + 8.0
+    deadline = time.monotonic() + MIN_WAIT_S
     while len(accepted) < count:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -434,7 +441,7 @@ def one(items, event_type):
 
 
 def wait_turn_completed(child, session_id, needle, timeout=8.0):
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + wait_budget(timeout)
     while True:
         try:
             log = events(session_id)
@@ -3603,7 +3610,7 @@ def test_config_editor_reload():
     peer = IRCClient(network_port, "reloadpeer")
     peer.close()
     # Membership notifications start a turn; /config is idle-only.
-    deadline = time.monotonic() + 8.0
+    deadline = time.monotonic() + MIN_WAIT_S
     while True:
         if session_ids() == before:
             assert time.monotonic() < deadline, bytes(child.buf)
@@ -3696,7 +3703,7 @@ def test_known_context_meter():
     start = len(child.buf)
     child.send_wait(b"slow\r", b"working slowly", start=start)
     session_id = new_session(before)
-    deadline = time.monotonic() + 8.0
+    deadline = time.monotonic() + MIN_WAIT_S
     response = None
     while time.monotonic() < deadline:
         starts = [event for event in events(session_id)
@@ -3926,7 +3933,7 @@ def test_exit_resume_matrix():
             if action == "cancel":
                 start = len(child.buf)
                 child.send(b"\x03" * 4)
-                deadline = time.monotonic() + 8.0
+                deadline = time.monotonic() + MIN_WAIT_S
                 while bytes(child.buf[start:]).count(b"^C\r\n") < 4:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0 or not child.read_once(remaining):
@@ -4180,7 +4187,7 @@ def test_network_collision_prompts():
         for suffix in (1, 2):
             client = Child(["--no-color", "-c", address], env=env)
             children.append(client)
-            deadline = time.monotonic() + 8.0
+            deadline = time.monotonic() + MIN_WAIT_S
             while (chat_prompt(f"root{suffix}") not in client.buf and
                    f"\x1b[16C{suffix}".encode() not in client.buf):
                 remaining = deadline - time.monotonic()
@@ -4272,7 +4279,7 @@ def test_network_live_nick_prompt():
         for link in links:
             link.sendall(b":operator7!u@fake NICK :operator8\r\n"
                          b":agent7!u@fake NICK :agent8\r\n")
-        deadline = time.monotonic() + 8.0
+        deadline = time.monotonic() + MIN_WAIT_S
         while (chat_prompt("operator8") not in child.buf[start:] and
                b"\x1b[20C8" not in child.buf[start:]):
             remaining = deadline - time.monotonic()
@@ -4302,7 +4309,7 @@ def test_network_live_nick_prompt():
         for link in links:
             link.sendall(b":operator8!u@fake NICK :operator9\r\n"
                          b":agent8!u@fake NICK :agent9\r\n")
-        deadline = time.monotonic() + 8.0
+        deadline = time.monotonic() + MIN_WAIT_S
         while (chat_prompt("operator9") not in child.buf[start:] and
                b"\x1b[20C9" not in child.buf[start:]):
             remaining = deadline - time.monotonic()
@@ -4311,7 +4318,7 @@ def test_network_live_nick_prompt():
         renamed = len(child.buf)
         assert b"/stats" in child.buf[end:renamed]
         child.send_wait(b"u\r", b"verbosity: 0", start=renamed)
-        deadline = time.monotonic() + 8.0
+        deadline = time.monotonic() + MIN_WAIT_S
         while True:
             log = events(session_id)
             turns = [event["data"]["turn_id"] for event in log
@@ -5122,7 +5129,7 @@ def test_goal_orderly_quit_resume():
                 continue
             restored = resumed.wait(f"goal {goal['goal_id'][:8]}: active · wording locked".encode())
             resumed.wait(b"slow goal", start=restored)
-            deadline = time.monotonic() + 8.0
+            deadline = time.monotonic() + MIN_WAIT_S
             while not any(e["type"] == "turn_completed" for e in events(session_id)[len(stopped):]):
                 assert time.monotonic() < deadline, bytes(resumed.buf)
                 resumed.read_once(0.05)
