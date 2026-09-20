@@ -207,6 +207,31 @@ __wrap_nl_langinfo (nl_item n)'
           $'if(TARGET bmpsizetest''${suffix})\n    add_test(NAME bmpsizetest-''${libtype} COMMAND bmpsizetest''${suffix})\n  endif()'
       '';
     });
+    # uClibc 1.0.55 does not expose a usleep declaration here.  libout123's
+    # clock-backed test output uses it only for its regular microsecond delay;
+    # nanosleep is declared and linked by this target under the same feature
+    # macros.  Keep the replacement local and retain its ignored-EINTR behavior.
+    mpg123 = previous.mpg123.overrideAttrs (old: {
+      postPatch = (old.postPatch or "") + ''
+        substituteInPlace src/libout123/libout123.c \
+          --replace-fail '#include "../version.h"' '#ifdef SLEEP_CLOCK
+static void
+out123_sleep(unsigned long useconds)
+{
+  struct timespec delay = {
+    .tv_sec = useconds / 1000000,
+    .tv_nsec = (useconds % 1000000) * 1000
+  };
+  nanosleep(&delay, NULL);
+}
+#endif
+
+#include "../version.h"'
+        substituteInPlace src/libout123/libout123.c \
+          --replace-fail 'usleep(' 'out123_sleep('
+        test "$(grep -c 'out123_sleep' src/libout123/libout123.c)" -eq 3
+      '';
+    });
     # uClibc declares in6addr_any but does not provide the object. Use its
     # standard initializer and unspecified-address predicate in usrsctp.
     usrsctp = previous.usrsctp.overrideAttrs (old: {
