@@ -646,6 +646,13 @@
   goes down and one connect when it comes back, and the model context sees the
   same single pair.
 
+- Floor the compaction source budget and send a fitting repeated request. The
+  shrink loop halved the budget below any group's size (244 bytes on the
+  782e7a68 resume) and, once floored, rebuilt the same request and refused to
+  send a source that had finally become sendable; the budget now floors at
+  64 KiB and a repeated request is only irreducible while it still exceeds the
+  budget.
+
 - Fire the pre-response compaction guard from the session's measured input as
   well as a counted bound, so a window that shrank under the session (model or
   provider switch) or a route without exact counting still compacts in stages
