@@ -817,9 +817,8 @@ compact_complete_boundary(struct context_builder *builder, uint64_t seq, char *e
         return snag_errorf(error, error_size, "cannot encode complete compaction group within 12 MiB");
     }
     if (source_bytes <= builder->compact_budget ||
-         (!builder->compact_best_known &&
-          (builder->compact_allow_oversized_first ||
-           snag_media_request_has_images(builder->request_input))) ||
+         (!builder->compact_best_known && builder->compact_allow_oversized_first &&
+          (true || snag_media_request_has_images(builder->request_input))) ||
          (builder->compact_allow_oversized_first && builder->compact_best_known &&
           json_array_size(builder->request_input) == builder->compact_best_request_count)) {
         builder->compact_best_known = true;
