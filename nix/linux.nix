@@ -56,8 +56,19 @@ let
       runHook postCheck
     '';
   });
+  # Fontconfig asks pkg-config for FreeType without --static. Its decoder
+  # dependency therefore needs to carry Brotli common through normal metadata:
+  # libbrotlidec.a refers to symbols from libbrotlicommon.a.
+  brotli = staticFixed.brotli.overrideAttrs (old: {
+    postFixup = (old.postFixup or "") + ''
+      substituteInPlace "$dev/lib/pkgconfig/libbrotlidec.pc" \
+        --replace-fail 'Requires.private: libbrotlicommon >= 1.1.0' \
+                       'Requires: libbrotlicommon >= 1.1.0'
+    '';
+  });
+  freetype = staticFixed.freetype.override { inherit brotli; };
   # The standalone binary must use host fonts, not a build-host store path.
-  fontconfig = staticFixed.fontconfig.overrideAttrs (old: {
+  fontconfig = (staticFixed.fontconfig.override { inherit freetype; }).overrideAttrs (old: {
     configureFlags = builtins.filter
       (flag: !(pkgs.lib.hasPrefix "--with-default-fonts=" flag)) old.configureFlags ++ [
       "--with-default-fonts=/usr/share/fonts,/usr/local/share/fonts"

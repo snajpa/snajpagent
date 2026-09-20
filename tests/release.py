@@ -2051,6 +2051,33 @@ with tempfile.TemporaryDirectory(prefix="openbsd-static-fonts-", dir=root / "bui
 print("PASS: OpenBSD PDF retains target headers, native C++ and ordered private font dependencies")
 
 
+# Static Fontconfig obtains FreeType through normal pkg-config metadata. Brotli's
+# decoder archive needs its common archive after it, so the owner promotes only
+# that decoder edge; the encoder is not on this dependency path.
+linux = (root / "nix/linux.nix").read_text()
+linux_brotli = linux.split("  brotli = ", 1)[1].split("  freetype = ", 1)[0]
+assert 'staticFixed.brotli.overrideAttrs' in linux_brotli
+assert 'substituteInPlace "$dev/lib/pkgconfig/libbrotlidec.pc"' in linux_brotli
+assert "'Requires.private: libbrotlicommon >= 1.1.0'" in linux_brotli
+assert "'Requires: libbrotlicommon >= 1.1.0'" in linux_brotli
+assert "libbrotlienc.pc" not in linux_brotli
+assert "freetype = staticFixed.freetype.override { inherit brotli; };" in linux
+assert "(staticFixed.fontconfig.override { inherit freetype; }).overrideAttrs" in linux
+with tempfile.TemporaryDirectory(prefix="linux-static-brotli-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    (tmp / "libbrotlicommon.pc").write_text(
+        "Name: libbrotlicommon\nDescription: fixture shared Brotli tables\n"
+        "Version: 1.1.0\nLibs: -lbrotlicommon\n")
+    (tmp / "libbrotlidec.pc").write_text(
+        "Name: libbrotlidec\nDescription: fixture Brotli decoder\nVersion: 1\n"
+        "Libs: -lbrotlidec\nRequires: libbrotlicommon >= 1.1.0\n")
+    environment = dict(os.environ, PKG_CONFIG_PATH="", PKG_CONFIG_LIBDIR=str(tmp))
+    flags = subprocess.check_output(["pkg-config", "--libs", "libbrotlidec"],
+                                    env=environment, text=True)
+    assert flags.split() == ["-lbrotlidec", "-lbrotlicommon"], flags
+print("PASS: static Brotli decoder exports its common archive through normal pkg-config")
+
+
 # Keep libarchive's signed NTFS conversion identical without a missing lldiv ABI.
 time_patch = archive_patch.split("+++ b/libarchive/archive_time.c", 1)[1]
 time_source = "\n".join(line[1:] for line in time_patch.splitlines()
