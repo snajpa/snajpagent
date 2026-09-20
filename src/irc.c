@@ -77,6 +77,9 @@ struct irc_conn {
     bool outgoing;
     bool connecting;
     bool registered;
+    /* One notice per outage: repeated retries must not fill the model context
+     * or stdout while the server stays down. */
+    bool outage_reported;
     bool cap_active;
     bool cap_end;
     bool cap_batch;
@@ -1559,6 +1562,7 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
         (void)snag_strcpy(link->nick, sizeof(link->nick), message.params[0]);
         (void)snag_strcpy(link->accepted_nick, sizeof(link->accepted_nick), link->nick);
         link->registered = true;
+        link->outage_reported = false;
         return link_emit(irc, link, SNAG_IRC_CONNECTED, "", link->nick, "", false, timestamp_ms);
     }
     if (strcmp(message.command, "005") == 0) {
@@ -1754,7 +1758,8 @@ link_disconnect(struct snag_irc_core *irc, struct irc_conn *link, const char *re
     link->output_offset = 0u;
     link->pending_inflight = 0u;
     link->retry_at_ms = snag_monotonic_ms() + IRC_RETRY_MS;
-    if (link_emit_enabled(link)) {
+    if (link_emit_enabled(link) && !link->outage_reported) {
+        link->outage_reported = true;
         event_init(irc, &event, SNAG_IRC_DISCONNECTED, link->endpoint,
                    link->room, link->accepted_nick, reason, link->op, false, false);
         (void)emit_event(irc, &event, false);

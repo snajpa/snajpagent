@@ -640,6 +640,12 @@
   the provider and model that produced the context (its compaction endpoint),
   and only then does the turn run on the new model.
 
+- Report an IRC outage once instead of once per retry. A server that stays down
+  emitted a disconnected event on every reconnect attempt, filling the model
+  context and stdout with repeats; the link now reports one disconnect when it
+  goes down and one connect when it comes back, and the model context sees the
+  same single pair.
+
 ## 0.99.5 — September 10, 2026
 
 - Traverse prompt history locally first, then globally, using bounded-memory

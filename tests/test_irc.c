@@ -1015,15 +1015,23 @@ static void __attribute__((noinline)) test_client_reconnect(void)
     for (unsigned int i = 0u;
          i < 50u && !client_capture.events[SNAG_IRC_DISCONNECTED]; ++i) tick(client, 1u);
     assert(client_capture.events[SNAG_IRC_DISCONNECTED] != 0u);
+    /* A server that stays down reports one disconnect, not one per retry: the
+     * outage must not crowd the model context or stdout. */
+    unsigned int disconnected_once = client_capture.events[SNAG_IRC_DISCONNECTED];
+    tick(client, 1500u);
+    assert(client_capture.events[SNAG_IRC_DISCONNECTED] == disconnected_once);
     assert(send_all(client, true, SNAG_IRC_MESSAGE, "retained while disconnected",
                               error, sizeof(error)) == 0);
     assert(strcmp(client_capture.last_message.room, "#lab") == 0);
     next_server = open_server(&server_config, &next_capture);
+    unsigned int connected_before = client_capture.events[SNAG_IRC_CONNECTED];
     uint64_t reconnect_deadline = snag_monotonic_ms() + 10000u;
     while (strcmp(next_capture.last_message.text, "retained while disconnected") != 0 &&
            snag_monotonic_ms() < reconnect_deadline) pump_pair(next_server, client, 1u);
     assert(strcmp(next_capture.last_message.nick, "remoteagent") == 0);
     assert(strcmp(next_capture.last_message.text, "retained while disconnected") == 0);
+    /* Recovery reports itself once, after the single outage notice. */
+    assert(client_capture.events[SNAG_IRC_CONNECTED] > connected_before);
     wait_pair_state(next_server, client, "joined #lab");
     snag_buf_init(&snapshot, SNAG_MAX_IRC_SNAPSHOT);
     assert(snag_irc_snapshot(client, &snapshot, error, sizeof(error)) == 0);
