@@ -2108,19 +2108,20 @@ def test_dynamic_irc_lifecycle_and_refusal():
         try:
             with Child(client_args, PROMPT.rstrip()) as client:
                 watch_start = len(watcher.buf)
-                connected_end = client.send_wait(f"irc_connect_test {endpoint}\r".encode(), b"IRC connected")
+                connected_end = client.send_wait(f"irc_connect_test {endpoint}\r".encode(), b"IRC connected",
+                                                 timeout=MIN_WAIT_S)
                 # The next prompt must be a fresh turn: a mid-turn submission becomes steering.
                 client.wait_idle_prompt(start=connected_end)
                 watcher.wait(b":connectbot!", start=watch_start)
                 disconnect_start = len(watcher.buf)
                 disconnected_end = client.send_wait(f"irc_disconnect_test {endpoint}\r".encode(),
-                                                    b"IRC disconnected", start=connected_end)
+                                                    b"IRC disconnected", start=connected_end, timeout=MIN_WAIT_S)
                 watcher.wait(b" QUIT :", start=disconnect_start)
                 client.exit_cleanly(disconnected_end)
         finally:
             watcher.close()
         stopped_end = host.send_wait(f"irc_host_disconnect_test {endpoint}\r".encode(),
-                                     b"IRC host disconnected", start=hosted_end)
+                                     b"IRC host disconnected", start=hosted_end, timeout=MIN_WAIT_S)
         host.exit_cleanly(stopped_end)
 
     refusal = Child(["--no-listen", "--no-client"], PROMPT.rstrip())
