@@ -139,6 +139,11 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
         app->session.id, app->turn_provider->request_timeout_ms},
         create_request, NULL, NULL, NULL, NULL, &graph, &failure, error, error_size, NULL);
     if (rc != 0 && snag_provider_failure_is_capacity(&failure)) rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
+    /* A provider that answered with an error status rejected this request; only
+     * a lost body (no provider facts) is worth retrying with a smaller source. */
+    if (rc != 0 && !snag_provider_failure_is_capacity(&failure) &&
+        (failure.code[0] || failure.type[0] || failure.message[0]))
+        rc = SNAG_PROVIDER_REJECTED;
     if (rc != 0 && !failure.new_input && snag_provider_failure_is_policy(&failure))
         app->turn_policy_stopped = SNAG_POLICY_STOP_PROVIDER;
     if (rc != 0) goto out;
@@ -387,10 +392,12 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                 generated = true;
                 break;
             }
-            if (stage_rc == SNAG_PROVIDER_UNSUPPORTED || stage_rc == SNAG_PROVIDER_CONTEXT_OVERFLOW) {
+            if (stage_rc == SNAG_PROVIDER_UNSUPPORTED || stage_rc == SNAG_PROVIDER_CONTEXT_OVERFLOW ||
+                stage_rc == SNAG_PROVIDER_REJECTED) {
                 if (commit_rendered(app, "compaction_interrupted", compaction_interrupted_data(compact_id,
                             stage_rc == SNAG_PROVIDER_UNSUPPORTED ?
-                            "endpoint_unavailable" : "context_rejected"), error, error_size) < 0) goto out;
+                            "endpoint_unavailable" : stage_rc == SNAG_PROVIDER_CONTEXT_OVERFLOW ?
+                            "context_rejected" : "error"), error, error_size) < 0) goto out;
                 started = false;
             }
             /* A transport or provider failure on a large source (a gateway
