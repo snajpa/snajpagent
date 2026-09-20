@@ -135,7 +135,8 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
 
     struct snag_response_graph graph = {0};
     rc = snag_provider_responses_create((struct snag_provider_connection){
-        app->config, app->turn_provider, credential, &app->ui, snag_app_provider_input_pump, app, app->session.id},
+        app->config, app->turn_provider, credential, &app->ui, snag_app_provider_input_pump, app,
+        app->session.id, app->turn_provider->request_timeout_ms},
         create_request, NULL, NULL, NULL, NULL, &graph, &failure, error, error_size, NULL);
     if (rc != 0 && snag_provider_failure_is_capacity(&failure)) rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
     if (rc != 0 && !failure.new_input && snag_provider_failure_is_policy(&failure))
@@ -310,7 +311,14 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             }
             if (stage_rc == SNAG_APP_COUNT_SKIPPED) use_exact = false;
         }
-        if (stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW && !(strcmp(count_method, "exact") == 0 &&
+        /* A known bound over the model's hard input means this request cannot
+         * be sent: shrink the source first. Only an unknown count leaves the
+         * attempt as built, and the provider answer decides from there.
+         * A media upper bound counts as known here: the turn guard already
+         * treats it that way, and sending an 11M-token compaction request to a
+         * 258k-token route stalls the provider and re-runs on every resume. */
+        if (stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW &&
+            !(strcmp(count_method, "unknown") != 0 &&
               app->turn_capacity.hard_input_known &&
               input_tokens_bound > app->turn_capacity.hard_input_tokens)) {
             if (snag_random_id(compact_id) < 0) {

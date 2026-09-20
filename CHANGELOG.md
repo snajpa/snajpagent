@@ -610,6 +610,23 @@
 - Show rejected/unexecuted attempts at verbosity 1 in live and history rollout,
   with compact status reasons and higher-detail arguments/output kept private.
 
+- Detect the native compaction endpoint at login: a probe request records
+  `native_compaction = true/false` into the provider's configuration, so a
+  route that never serves `/v1/responses/compact` (a local gateway answering
+  502, for example) is not attempted on every compaction afterwards.
+
+- Shrink a compaction source whose measured bound exceeds the model's hard
+  input even when the bound is not exact. A media upper bound now takes the
+  same reduce-first path as an exact count; previously the client sent the
+  request as built, so a large media-bearing session sent an 11M-token
+  compaction request to a 258k-token route, timed out, and re-compacted on
+  every resume and first message.
+
+- Bound compaction requests (native and the Responses summary fallback) by the
+  provider request timeout instead of the idle timeout: a summary may stay
+  silent for minutes while the provider ingests a large source, and aborting
+  at the idle bound made every attempt fail and re-run.
+
 ## 0.99.5 — September 10, 2026
 
 - Traverse prompt history locally first, then globally, using bounded-memory

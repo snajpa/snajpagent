@@ -258,7 +258,7 @@ choose_model(const struct snag_cli *cli, const struct snag_config *config,
     if (!*answer || snag_string_in(answer, "y Y")) {
         tokens->credential.root_fd = -1; /* Uncommitted credentials. */
         if (snag_provider_models_list((struct snag_provider_connection){
-            config, provider, &tokens->credential, NULL, login_pump, NULL, NULL}, &models, error, error_size) < 0) {
+            config, provider, &tokens->credential, NULL, login_pump, NULL, NULL, 0}, &models, error, error_size) < 0) {
             if (cancelled) goto out;
             (void)fprintf(stderr, "Model discovery failed: %s\nYou can enter a model ID manually.\n", error);
             error[0] = '\0';
@@ -404,6 +404,22 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
         if (snag_auth_save(store.root_fd, &provider, &tokens, &previous,
                           login_pump, NULL, error, sizeof(error)) < 0) goto out;
         credentials_written = true;
+    }
+    if ((provider.auth == SNAG_AUTH_API_KEY || provider.auth == SNAG_AUTH_CHATGPT) &&
+        (provider.auth == SNAG_AUTH_CHATGPT || tokens.credential.value[0] != '\0')) {
+        const char *probe_model = model[0] ? model :
+            (provider.models && provider.model_count ? provider.models[0].upstream : NULL);
+        if (probe_model) {
+            char probe_error[256] = {0};
+            int probe = snag_provider_native_compaction_probe((struct snag_provider_connection){
+                    &config, &provider, &tokens.credential, NULL, NULL, NULL, NULL, 0},
+                probe_model, probe_error, sizeof(probe_error));
+            if (probe >= 0) provider.native_compaction = probe == 1;
+            (void)fprintf(stderr, "%s: native compaction endpoint %s\n", provider.name,
+                          probe == 1 ? "detected" :
+                          probe == 0 ? "unavailable; compaction uses Responses summarization" :
+                          "did not answer; the configured native_compaction setting is kept");
+        }
     }
     if (snag_config_save_provider(path, cli->config_path == NULL, &provider,
                                   first ? model : NULL, cli->effort ? cli->effort : effort[0] ? effort : NULL,

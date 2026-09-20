@@ -33,6 +33,10 @@ struct snag_provider_connection {
     void *pump_opaque;
     /* Stable per-conversation identity, sent to the proxy as its cache-affinity key; NULL omits it. */
     const char *session_id;
+    /* A request that legitimately runs long without sending a byte (a compaction
+     * summary) is bounded by the provider request timeout, not the idle timeout.
+     * Zero keeps the idle timeout. */
+    uint32_t low_speed_override_ms;
 };
 
 enum snag_audio_operation { SNAG_AUDIO_LISTEN, SNAG_AUDIO_TRANSCRIBE, SNAG_AUDIO_SPEAK };
@@ -82,6 +86,11 @@ int snag_provider_responses_count(struct snag_provider_connection connection,
 int snag_provider_responses_compact(struct snag_provider_connection connection,
                                    const json_t *request, struct snag_json_document *output,
                                    char *error, size_t error_size, unsigned int *retry_count);
+
+/* Detect the provider's native compaction endpoint after a login: 1 answers,
+ * 0 is absent or gateway-unreachable, -1 is inconclusive (no response). */
+int snag_provider_native_compaction_probe(struct snag_provider_connection connection, const char *model,
+                                          char *error, size_t error_size);
 
 int snag_provider_responses_create(struct snag_provider_connection connection,
                                   const json_t *request, snag_responses_emit_fn emit,
