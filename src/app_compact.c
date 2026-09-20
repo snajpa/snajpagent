@@ -148,11 +148,17 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
         app->turn_policy_stopped = SNAG_POLICY_STOP_PROVIDER;
     if (rc != 0) goto out;
     rc = -1;
-    if (snag_response_graph_classify(&graph, &decision, error, error_size) < 0) goto out;
+    if (snag_response_graph_classify(&graph, &decision, error, error_size) < 0) {
+        /* The provider answered: a summary we cannot use is a rejection for this
+         * command, not a lost body worth retrying with a smaller source. */
+        rc = SNAG_PROVIDER_REJECTED;
+        goto out;
+    }
     if (decision.outcome == SNAG_GRAPH_REFUSAL) app->turn_policy_stopped = SNAG_POLICY_STOP_REFUSAL;
     struct snag_response_item final = snag_response_graph_item(&graph, decision.final_index);
     if (decision.outcome != SNAG_GRAPH_FINAL || decision.final_index >= graph.count || !final.text) {
         (void)snag_fail(error, error_size, EPROTO, "Responses compaction did not return a final summary");
+        rc = SNAG_PROVIDER_REJECTED;
         goto out;
     }
     rc = snag_context_compact_output_set(output, json_pack("[{s:s,s:s,s:s}]",
@@ -403,11 +409,16 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             /* A transport or provider failure on a large source (a gateway
              * dropping the body as "Failure when receiving data from the peer")
              * shrinks the source and retries inside this bounded loop instead of
-             * failing the turn; the floor stops the budget collapsing. */
-            bool retry_smaller = stage_rc < 0 && stage_rc != SNAG_PROVIDER_UNSUPPORTED &&
+             * failing the turn; the floor stops the budget collapsing. Only the
+             * native compact route needs this: a responses-style compaction that
+             * answered at all is a rejection, not a lost body. */
+            bool retry_smaller = native && stage_rc < 0 && stage_rc != SNAG_PROVIDER_UNSUPPORTED &&
                 source_budget > SNAG_CONTEXT_COMPACT_FLOOR;
             if (stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW && !retry_smaller) {
-                rc = stage_rc;
+                /* A rejected request fails the command: the interruption is already
+                 * recorded, and the caller must report the failure (not a silent
+                 * success) with the provider's own message. */
+                rc = stage_rc == SNAG_PROVIDER_REJECTED ? -1 : stage_rc;
                 goto out;
             }
             if (retry_smaller) {
