@@ -20,6 +20,9 @@ struct context_builder {
     const struct snag_session *session;
     const char *continuation_scope;
     uint64_t compact_seq;
+    /* Content decisions use this floor: the compaction path lowers it by the
+     * seam overlap so chunks join, while the projection boundary stays exact. */
+    uint64_t compact_walk_seq;
     json_t *call_ids;
     const struct snag_instruction_set *instructions;
     const json_t *steering;
@@ -957,7 +960,7 @@ context_event(void *opaque, const struct snag_session *state,
         builder->control->cancelled(builder->control->opaque))
         return snag_fail(error, error_size, ECANCELED, "context preparation cancelled");
     const char *text = snag_json_string(data, "text");
-    bool summarized = seq <= builder->compact_seq;
+    bool summarized = seq <= builder->compact_walk_seq;
     bool current = !strcmp(state->active_turn_id, builder->target_turn_id);
 
     /* Borrow already-validated facts, never interpret turn transitions twice. */
@@ -974,13 +977,13 @@ context_event(void *opaque, const struct snag_session *state,
     }
     if (!strcmp(type, "input_admitted")) return admit_context_input(builder, data);
     if (!strcmp(type, "turn_recovery")) {
-        if (builder->session && seq <= builder->compact_seq) return 0;
+        if (builder->session && seq <= builder->compact_walk_seq) return 0;
         const char *class_name = snag_json_string(data, "class");
         return class_name ? append_host_failed(builder, class_name) : -1;
     }
     if (!strcmp(type, "response_failed")) {
         json_t *partial = json_object_get(data, "partial_public");
-        if (builder->session && seq <= builder->compact_seq) return 0;
+        if (builder->session && seq <= builder->compact_walk_seq) return 0;
         if (json_array_size(partial)) builder->recovery_count = 0u;
         return append_interrupted_prefix(builder, data, error, error_size);
     }
@@ -1518,6 +1521,8 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
     builder.compact_seq = session && (!session->compact_scope[0] ||
         (continuation_scope && !strcmp(session->compact_scope, continuation_scope))) ?
         session->compact_seq : 0u;
+    builder.compact_walk_seq = builder.compact_seq > SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS ?
+        builder.compact_seq - SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS : 0u;
     builder.request_input = json_array();
     builder.deferred_input = json_array();
     builder.input_timing = json_array();
@@ -1702,6 +1707,7 @@ snag_context_build(struct snag_session *session, const char *model, const char *
     builder.compact_seq = session && (!session->compact_scope[0] ||
         (continuation_scope && !strcmp(session->compact_scope, continuation_scope))) ?
         session->compact_seq : 0u;
+    builder.compact_walk_seq = builder.compact_seq;
     builder.networked = config && session && !session->active_read_only &&
         (config->irc.listen_explicit || config->irc.client_count != 0u);
     if (session && session->active_turn_id[0]) memcpy(builder.target_turn_id, session->active_turn_id,
