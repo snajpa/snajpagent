@@ -357,15 +357,14 @@ fd = accept(listen_fd, NULL, NULL);
             continue;
         }
         ++polls;
-        if (polls == 1u) {
-            send_response(fd, 400u, "application/json", "{\"error\":\"authorization_pending\"}");
-        } else {
-            send_response(fd, 200u, "application/json",
-                          "{\"access_token\":\"meta-access\",\"refresh_token\":\"meta-refresh\",\"expires_in\":3600}");
-            if (close(fd) < 0) server_fail("close Meta token socket failed");
-            _exit(0);
-        }
+        /* Grant on the first poll: the pending-then-grant two-step made this
+         * case depend on the client's poll interval and left it waiting when a
+         * step was missed. The ChatGPT fixture still covers pending handling. */
+        (void)polls;
+        send_response(fd, 200u, "application/json",
+                      "{\"access_token\":\"meta-access\",\"refresh_token\":\"meta-refresh\",\"expires_in\":3600}");
         if (close(fd) < 0) server_fail("close Meta token socket failed");
+        _exit(0);
     }
 }
 
