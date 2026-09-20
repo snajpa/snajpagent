@@ -386,9 +386,25 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                             "endpoint_unavailable" : "context_rejected"), error, error_size) < 0) goto out;
                 started = false;
             }
-            if (stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW) {
+            /* A transport or provider failure on a large source (a gateway
+             * dropping the body as "Failure when receiving data from the peer")
+             * shrinks the source and retries inside this bounded loop instead of
+             * failing the turn; the floor stops the budget collapsing. */
+            bool retry_smaller = stage_rc < 0 && stage_rc != SNAG_PROVIDER_UNSUPPORTED &&
+                source_budget > SNAG_CONTEXT_COMPACT_FLOOR;
+            if (stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW && !retry_smaller) {
                 rc = stage_rc;
                 goto out;
+            }
+            if (retry_smaller) {
+                if (started) {
+                    if (commit_rendered(app, "compaction_interrupted",
+                            compaction_interrupted_data(compact_id, "error"), error, error_size) < 0) goto out;
+                    started = false;
+                }
+                if (snag_ui_text(&app->ui, SNAG_UI_HOST,
+                        "compaction request failed; retrying with a smaller source (Ctrl-C interrupts)") < 0)
+                    goto out;
             }
         }
         /* Shrink bytes only after a measured rejection/count: no token conversion.

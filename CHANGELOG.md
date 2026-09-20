@@ -653,6 +653,12 @@
   64 KiB and a repeated request is only irreducible while it still exceeds the
   budget.
 
+- Shrink and retry a failed compaction attempt inside its bounded loop. A
+  gateway that drops a large compact body ("Failure when receiving data from
+  the peer") aborted the attempt and the turn cycled; the attempt now halves
+  the source and retries (floor 64 KiB, eight iterations) with a progress
+  notice, instead of failing the turn.
+
 - Fire the pre-response compaction guard from the session's measured input as
   well as a counted bound, so a window that shrank under the session (model or
   provider switch) or a route without exact counting still compacts in stages
