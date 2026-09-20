@@ -420,8 +420,14 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         reduced = true;
         source_budget = projection.model_input.bytes / 2u;
         /* Floor the halving: below this the builder cannot fit any group and
-         * reports the source as irreducible instead of cutting it. */
-        if (source_budget < SNAG_CONTEXT_COMPACT_FLOOR) source_budget = SNAG_CONTEXT_COMPACT_FLOOR;
+         * reports the source as irreducible instead of cutting it. The floor
+         * must never raise the budget above the source that was just rejected:
+         * a source already below the floor still has to shrink, or every retry
+         * repeats the identical request until the loop gives up and the turn
+         * ends without a compaction. */
+        if (source_budget < SNAG_CONTEXT_COMPACT_FLOOR &&
+            projection.model_input.bytes > SNAG_CONTEXT_COMPACT_FLOOR)
+            source_budget = SNAG_CONTEXT_COMPACT_FLOOR;
         snag_context_projection_free(&projection);
     }
     if (!generated) {
