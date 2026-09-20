@@ -113,6 +113,12 @@ let
       preInstall = "";
       outputs = [ "out" "dev" ];
     });
+    # xz's automatic .xz encoder parallelism enters static LinuxThreads and
+    # corrupts execution state on this target. Its single-threaded encoder
+    # passes the full suffix/container checks, so disable only xz threading.
+    xz = previous.xz.overrideAttrs (old: {
+      configureFlags = (old.configureFlags or [ ]) ++ [ "--disable-threads" ];
+    });
     # Coreutils' Linux boot-time helper calls gettimeofday through uClibc's
     # old-glibc fallback, but omits the owning header. Keep this package-local:
     # uClibc declares the function in <sys/time.h>; application ABI is unchanged.
