@@ -147,7 +147,7 @@ media_count(struct app_state *app, const json_t *request, uint64_t *tokens,
 {
     struct snag_model_limit_config limits;
     (void)snag_config_resolve_limits(app->config, app->turn_provider->name, app->turn_model, &limits, NULL);
-    if (snag_media_token_bound(request, app->turn_provider, limits.image_tokens, tokens, error, size) < 0) return -1;
+    if (snag_media_token_bound(request, limits.image_tokens, tokens, error, size) < 0) return -1;
     *method = "media_upper_bound";
     if (size) *error = '\0';
     return SNAG_APP_COUNT_SKIPPED;
