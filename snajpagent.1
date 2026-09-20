@@ -1855,6 +1855,15 @@ Remove only the selected provider's stored login.  If omitted, select the
 configured default provider.  Environment variables and the Codex or Meta CLI credentials
 are not modified; other provider logins remain intact.
 .PP
+Configuring a provider probes the native compaction endpoint once and records
+the answer as
+.B native_compaction
+in that provider's section: a route that does not serve
+.BR /responses/compact
+(for example a local gateway answering 502) is saved as disabled instead of
+being attempted on every later compaction.  An endpoint that does not answer
+at all leaves the existing setting unchanged.
+.PP
 Automatic setup never consumes piped task input or runs for execution, resume,
 session listing, or a missing explicitly specified configuration.  Invalid
 existing configuration produces an error and remains on disk for correction.

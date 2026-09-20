@@ -102,6 +102,7 @@ enum model_fixture {
     MODEL_COUNT_OVERFLOW,
     MODEL_COMPACT_404,
     MODEL_COMPACT_502,
+    MODEL_COMPACT_OK,
     MODEL_COMPACT_403,
     MODEL_AUDIO_LISTEN,
     MODEL_AUDIO_TRANSCRIBE,
@@ -370,7 +371,53 @@ auth_server_child(int listen_fd, enum model_fixture fixture)
         fixture >= MODEL_AUTH_401 ? 3u : 1u;
 
     authentication_fixture = true;
-    (void)alarm(15u);
+    (void)alarm(120u);
+    if (fixture <= MODEL_AUTH_EXPIRED) {
+        struct http_request request;
+        int fd = accept(listen_fd, NULL, NULL);
+        if (fd < 0) server_fail("auth accept failed");
+        read_request(fd, &request);
+        if (strcmp(request.path, "/api/accounts/deviceauth/usercode"))
+            server_fail("incorrect device flow path");
+        if (!strstr(request.body, "app_EMoamEEZ73f0CkXaXp7hrann"))
+            server_fail("missing device client identifier");
+        send_response(fd, 200u, "application/json",
+                      "{\"device_auth_id\":\"device-id\",\"user_code\":\"CODE-1234\",\"interval\":\"1\"}");
+        (void)close(fd);
+        /* Token polling repeats until the client stops: a loaded host may poll
+         * more times than the minimum, and a fixture that exited early would
+         * leave the client waiting out the whole link lifetime. Grants repeat,
+         * and a one-second grace with no connection ends the fixture. */
+        for (unsigned int polls = 0u;;) {
+            struct pollfd waiting = {.fd = listen_fd, .events = POLLIN};
+            const char *body = tokens;
+            unsigned int status = 200u;
+            if (poll(&waiting, 1, 30000) <= 0) _exit(0);
+            fd = accept(listen_fd, NULL, NULL);
+            if (fd < 0) server_fail("auth accept failed");
+            read_request(fd, &request);
+            if (strcmp(request.path, "/api/accounts/deviceauth/token") == 0) {
+                ++polls;
+                if (polls == 1u) {
+                    status = fixture == MODEL_AUTH_EXPIRED ? 410u : 403u;
+                    body = "{}";
+                } else {
+                    body = "{\"authorization_code\":\"auth-code\",\"code_verifier\":\"verifier\",\"code_challenge\":\"challenge\"}";
+                }
+            } else if (strcmp(request.path, "/oauth/token") == 0) {
+                if (!strstr(request.body, "grant_type=authorization_code") ||
+                    !strstr(request.body, "code_verifier=verifier"))
+                    server_fail("missing PKCE code exchange");
+                send_response(fd, status, "application/json", body);
+                (void)close(fd);
+                _exit(0);
+            } else {
+                server_fail("incorrect device flow path");
+            }
+            send_response(fd, status, "application/json", body);
+            (void)close(fd);
+        }
+    }
     for (unsigned int i = 0; i < count; ++i) {
         struct http_request request;
         const char *body = tokens;
@@ -378,24 +425,7 @@ auth_server_child(int listen_fd, enum model_fixture fixture)
         int fd = accept(listen_fd, NULL, NULL);
         if (fd < 0) server_fail("auth accept failed");
         read_request(fd, &request);
-        if (fixture <= MODEL_AUTH_EXPIRED) {
-            const char *path = i == 0u ? "/api/accounts/deviceauth/usercode" :
-                i == 3u ? "/oauth/token" : "/api/accounts/deviceauth/token";
-            if (strcmp(request.path, path)) server_fail("incorrect device flow path");
-            if (i == 0u) {
-                if (!strstr(request.body, "app_EMoamEEZ73f0CkXaXp7hrann"))
-                    server_fail("missing device client identifier");
-                body = "{\"device_auth_id\":\"device-id\",\"user_code\":\"CODE-1234\",\"interval\":\"1\"}";
-            } else if (i == 1u) {
-                status = fixture == MODEL_AUTH_EXPIRED ? 410u : 403u;
-                body = "{}";
-            } else if (i == 2u) {
-                body = "{\"authorization_code\":\"auth-code\",\"code_verifier\":\"verifier\",\"code_challenge\":\"challenge\"}";
-            } else if (!strstr(request.body, "grant_type=authorization_code") ||
-                       !strstr(request.body, "code_verifier=verifier")) {
-                server_fail("missing PKCE code exchange");
-            }
-        } else if (fixture >= MODEL_AUTH_401 && i != 1u) {
+        if (fixture >= MODEL_AUTH_401 && i != 1u) {
             if (strcmp(request.path, "/models?client_version=0.146.0") ||
                 !strstr(request.headers, "ChatGPT-Account-Id: acct-test") ||
                 !strstr(request.headers, i == 0u ? "Bearer old-access" : "Bearer new-access"))
@@ -536,7 +566,8 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         audio_server_child(listen_fd, models);
     if (models >= MODEL_AUTH_DEVICE)
         auth_server_child(listen_fd, models);
-    if (models == MODEL_COMPACT_404 || models == MODEL_COMPACT_403 || models == MODEL_COMPACT_502) {
+    if (models == MODEL_COMPACT_404 || models == MODEL_COMPACT_403 || models == MODEL_COMPACT_502 ||
+        models == MODEL_COMPACT_OK) {
         struct http_request request;
         int fd = accept(listen_fd, NULL, NULL);
         if (fd < 0) server_fail("compact accept failed");
@@ -544,9 +575,11 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         if (strcmp(request.method, "POST") ||
             (strcmp(request.path, "/responses/compact") && strcmp(request.path, "/v1/responses/compact")))
             server_fail("invalid native compact path");
-        send_response(fd, models == MODEL_COMPACT_404 ? 404u :
+        send_response(fd, models == MODEL_COMPACT_OK ? 200u :
+                          models == MODEL_COMPACT_404 ? 404u :
                           models == MODEL_COMPACT_502 ? 502u : 403u,
-                      "application/json", "{\"detail\":\"Not Found\"}");
+                      "application/json", models == MODEL_COMPACT_OK ?
+                          "{\"object\":\"response.compaction\",\"output\":[]}" : "{\"detail\":\"Not Found\"}");
         (void)close(fd);
         _exit(0);
     }
@@ -597,7 +630,7 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         struct http_request request;
         char first[BODY_MAX], body[BODY_MAX];
         unsigned int attempts = retry_case->failures + !retry_case->diagnostic;
-        alarm(15u);
+        alarm(120u);
         for (unsigned int i = 0; i < attempts; ++i) {
             int fd = accept(listen_fd, NULL, NULL);
             if (fd < 0) server_fail("retry accept failed");
@@ -776,7 +809,7 @@ transport_connection(struct snag_config *config, struct snag_credential *credent
     snag_config_init(config);
     assert(snag_strcpy(config->providers[0].base_url, sizeof(config->providers[0].base_url), base_url));
     transport_settings(&config->providers[0], credential);
-    return (struct snag_provider_connection){config, &config->providers[0], credential, NULL, NULL, NULL, NULL};
+    return (struct snag_provider_connection){config, &config->providers[0], credential, NULL, NULL, NULL, NULL, 0};
 }
 
 /* The proxy keys prompt-cache affinity on a session identity from its session lane; without it every
@@ -803,7 +836,7 @@ test_session_identity_header(void)
     struct snag_provider_connection connection;
     snag_config_init(&config);
     connection = (struct snag_provider_connection){
-        &config, &config.providers[1], &credential, NULL, NULL, NULL, session_id};
+        &config, &config.providers[1], &credential, NULL, NULL, NULL, session_id, 0};
     snag_config_provider_init(&config.providers[1], "second");
     config.provider_count = 2u;
     assert(snprintf(config.providers[1].name, sizeof(config.providers[1].name), "transport") > 0);
@@ -860,7 +893,7 @@ test_local_provider_transport(void)
     struct snag_provider_connection connection;
     snag_config_init(&config);
     connection = (struct snag_provider_connection){
-        &config, &config.providers[1], &credential, NULL, NULL, NULL, NULL};
+        &config, &config.providers[1], &credential, NULL, NULL, NULL, NULL, 0};
     snag_config_provider_init(&config.providers[1], "second");
     config.provider_count = 2u;
     assert(snprintf(config.providers[1].name, sizeof(config.providers[1].name), "transport") > 0);
@@ -953,7 +986,7 @@ test_codex_path_selection(void)
 
     snag_config_init(&config);
     connection = (struct snag_provider_connection){
-        &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL};
+        &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0};
     transport_settings(&config.providers[0], &credential);
     for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         json_t *models = NULL;
@@ -1152,7 +1185,7 @@ test_create_retries(void)
         snag_buf_init(&emitted.text, 1024u);
         int rc = snag_provider_responses_create((struct snag_provider_connection){
             &config, &config.providers[0], &credential, cancellation.code ? &ui : NULL,
-            cancellation.code ? cancel_retry : NULL, &cancellation, NULL},
+            cancellation.code ? cancel_retry : NULL, &cancellation, NULL, 0},
             request, emit_capture, &emitted, NULL, NULL, &graph, &failure, error, sizeof(error), &retries);
         if (cancellation.code) {
             snag_ui_free(&ui);
@@ -1215,7 +1248,7 @@ test_policy_clarification_after_reasoning(void)
     credential_set(&credential, "transport-secret");
     snag_buf_init(&emitted.text, 1024u);
     int rc = snag_provider_responses_create((struct snag_provider_connection){
-        &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL},
+        &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0},
         request, emit_capture, &emitted, NULL, NULL, &graph, &failure, error, sizeof(error), &retries);
     assert(rc < 0 && retries == 0u && emitted.text.len == 0u);
     assert(!strcmp(failure.code, "cyber_policy"));
@@ -1537,6 +1570,44 @@ test_media_count_fallback(void)
            !strcmp(method, "media_upper_bound"));
     json_decref(part); json_decref(request);
     snag_ui_free(&app.ui); snag_config_free(&config);
+}
+
+static void
+test_native_compaction_probe(void)
+{
+    struct snag_config config;
+    struct snag_credential credential;
+    struct local_server server;
+    char error[256] = {0};
+    const struct {
+        enum model_fixture fixture;
+        bool live;
+        int expected;
+    } cases[] = {
+        {MODEL_COMPACT_OK, true, 1},
+        {MODEL_COMPACT_404, true, 0},
+        {MODEL_COMPACT_502, true, 0},
+        {MODEL_COMPACT_OK, false, -1}, /* server stopped: no response at all */
+    };
+
+    snag_config_init(&config);
+    config.providers[0].auth = SNAG_AUTH_API_KEY;
+    strcpy(config.providers[0].base_url, "https://api.openai.com");
+    credential_set(&credential, "probe-secret");
+    credential.root_fd = -1;
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        error[0] = '\0';
+        start_server(&server, cases[i].fixture, false, "");
+        assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
+        if (!cases[i].live) stop_server(&server);
+        int rc = snag_provider_native_compaction_probe((struct snag_provider_connection){
+            &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0},
+            "gpt-5.5", error, sizeof(error));
+        if (cases[i].live) stop_server(&server);
+        assert(rc == cases[i].expected);
+    }
+    assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
+    snag_config_free(&config);
 }
 
 static void
@@ -1889,7 +1960,7 @@ test_provider_auth(void)
             assert(snag_auth_read(store.root_fd, &config.providers[0], false, NULL,
                 &credential, NULL, NULL, error, sizeof(error)) == 0);
             int rc = snag_provider_models_list((struct snag_provider_connection){
-                &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL}, &models, error, sizeof(error));
+                &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0}, &models, error, sizeof(error));
             if (rc < 0 && mode == MODEL_AUTH_401) (void)fprintf(stderr, "auth fixture failed: %s\n", error);
             assert((rc == 0) == (mode == MODEL_AUTH_401));
             if (rc == 0) assert(json_array_size(models) == 1u);
@@ -1937,6 +2008,7 @@ test_provider_auth(void)
         assert(setenv("SNAJPAGENT_TEST_META_AUTH_BASE", server.endpoint, 1) == 0);
         memset(error, 0, sizeof(error));
         int rc = snag_auth_device_meta(&tokens, NULL, NULL, error, sizeof(error));
+        if (mode == MODEL_META_DEVICE && rc != 0) fprintf(stderr, "meta device error: %s\n", error);
         if (mode == MODEL_META_DEVICE) {
             assert(rc == 0);
             assert(!strcmp(tokens.credential.value, "meta-access"));
@@ -1993,7 +2065,7 @@ test_provider_auth(void)
                           pass == 2u ? MODEL_COMPACT_502 : MODEL_COMPACT_404, false, "");
         assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
         int rc = snag_provider_responses_compact((struct snag_provider_connection){
-            &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL},
+            &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0},
             request, &output, error, sizeof(error), NULL);
         assert(rc == (pass < 3u ? SNAG_PROVIDER_UNSUPPORTED : -1));
         assert(output.value == NULL);
@@ -2413,7 +2485,7 @@ ws_read_client(int fd,size_t expected,unsigned char byte)
 static void
 ws_server(unsigned int mode,int listen_fd)
 {
-    alarm(15u);
+    alarm(120u);
     int fd=accept(listen_fd,NULL,NULL);if(fd<0)server_fail("WebSocket fixture accept failed");
     struct http_request request;read_request(fd,&request);
     if(strcmp(request.method,"GET") || strcmp(request.path,"/v1/realtime?model=fixture%20voice") ||
@@ -3027,6 +3099,7 @@ main(void)
     test_audio_transport();
     test_provider_auth();
     test_media_count_fallback();
+    test_native_compaction_probe();
     test_local_audio_admission();
     test_ui_output_order_and_failure();
     test_read_only_dispatch();

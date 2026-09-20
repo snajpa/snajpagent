@@ -53,6 +53,9 @@ struct provider_ctx {
      * attempts: a retried attempt that only fails to connect must not erase
      * the earlier gateway status that marks an endpoint unavailable. */
     long last_http_status;
+    /* Overrides the provider idle timeout for the low-speed abort; a compaction
+     * summary is bounded by the request timeout instead. Zero keeps idle. */
+    uint32_t low_speed_ms;
     int cancel_code;
     uint32_t retry_after_ms;
     bool retry_after_present;
@@ -1068,6 +1071,7 @@ provider_ctx_init(struct provider_ctx *ctx, struct snag_provider_connection conn
     ctx->render = connection.render;
     ctx->pump = connection.pump;
     ctx->pump_opaque = connection.pump_opaque;
+    ctx->low_speed_ms = connection.low_speed_override_ms;
     ctx->credential = *connection.credential;
     snag_buf_init(&ctx->body, body_max);
     snag_buf_init(&ctx->error_body, response_max);
@@ -1189,7 +1193,7 @@ provider_request_setup(struct provider_ctx *ctx, const struct snag_credential *c
                          (long)ctx->provider->request_timeout_ms) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_LOW_SPEED_LIMIT, 1L) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_LOW_SPEED_TIME, (long)low_speed_seconds(
-                             ctx->provider->idle_timeout_ms)) != CURLE_OK ||
+                             ctx->low_speed_ms ? ctx->low_speed_ms : ctx->provider->idle_timeout_ms)) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_USERAGENT, SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION) != CURLE_OK ||
         curl_easy_setopt(ctx->curl, CURLOPT_FOLLOWLOCATION, 0L) != CURLE_OK) {
         return snag_fail(error, error_size, EIO, "libcurl option setup failed");
@@ -1313,6 +1317,9 @@ snag_provider_responses_compact(struct snag_provider_connection connection, cons
     if (!connection_valid(connection) || !compact_request || !output)
         return snag_fail(error, error_size, EINVAL, "invalid compact request");
     provider_ctx_init(&ctx, connection, SNAG_CONTEXT_MAX_COMPACT, SNAG_CONTEXT_MAX_COMPACT);
+    /* A summary can stay silent for minutes while the provider ingests a large
+     * source; the request timeout bounds it, not the provider idle timeout. */
+    ctx.low_speed_ms = connection.provider->request_timeout_ms;
     if (provider_request_setup(&ctx, connection.credential, "/v1/responses/compact",
             "application/json", compact_request,
             "compact request exceeds the bounded body limit", count_write_cb, error, error_size) == 0)
@@ -1327,6 +1334,38 @@ snag_provider_responses_compact(struct snag_provider_connection connection, cons
             rc = SNAG_PROVIDER_UNSUPPORTED;
     }
     return provider_ctx_finish(&ctx, rc, error, error_size);
+}
+
+int
+snag_provider_native_compaction_probe(struct snag_provider_connection connection, const char *model,
+                                      char *error, size_t error_size)
+{
+    struct provider_ctx ctx;
+    struct snag_json_document probe = {0};
+    long status;
+    int rc = -1;
+
+    if (error && error_size) error[0] = '\0';
+    if (!connection_valid(connection) || !model || !model[0]) return -1;
+    probe.value = json_pack("{s:s,s:[{s:s,s:s}]}", "model", model, "input", "role", "user",
+                            "content", "ping");
+    if (!probe.value) return -1;
+    provider_ctx_init(&ctx, connection, SNAG_CONTEXT_MAX_COMPACT, SNAG_CONTEXT_MAX_COMPACT);
+    if (provider_request_setup(&ctx, connection.credential, "/v1/responses/compact",
+            "application/json", probe.value,
+            "native compaction probe exceeds the bounded body limit",
+            count_write_cb, error, error_size) == 0)
+        rc = provider_request_perform(&ctx, "native compaction probe failed", error, error_size, NULL);
+    status = ctx.http_status ? ctx.http_status : ctx.last_http_status;
+    snag_json_document_free(&probe);
+    (void)provider_ctx_finish(&ctx, 0, error, error_size);
+    /* An absent or gateway-unreachable route (404/405/501/502/503) means the
+     * provider has no native compaction; any other answer, including a
+     * request-shape rejection, proves the endpoint exists. No status at all
+     * (transport or auth failure) leaves the configured value unchanged. */
+    if (status == 404 || status == 405 || status == 501 || status == 502 || status == 503) return 0;
+    if (status) return 1;
+    return rc == 0 ? 1 : -1;
 }
 
 int
@@ -1519,7 +1558,7 @@ snag_provider_audio(enum snag_audio_operation operation, const json_t *request,
     if (snag_provider_native_audio(provider) && operation != SNAG_AUDIO_TRANSCRIBE)
         return snag_fail(error, error_size, ENOTSUP,
             "Selected provider supports dictation and live voice, not this audio API operation");
-    provider_ctx_init(&ctx, (struct snag_provider_connection){config,provider,credential,NULL,pump,opaque,NULL},
+    provider_ctx_init(&ctx, (struct snag_provider_connection){config,provider,credential,NULL,pump,opaque,NULL, 0},
                        20u * 1024u * 1024u, 65536u);
     ctx.audio_output = output;
     ctx.multipart = operation == SNAG_AUDIO_TRANSCRIBE;
@@ -1584,7 +1623,7 @@ snag_provider_voice_call(const struct snag_config *config,
     if (!snag_provider_native_audio(provider) || !sdp || !json_is_object(session))return -1;
     provider_ctx_init(&ctx,
         (struct snag_provider_connection){config,provider,credential,NULL,
-            pump,opaque,NULL},
+            pump,opaque,NULL, 0},
         65536u,65536u);
     ctx.audio_output=answer;ctx.location=location;ctx.location_size=sizeof(location);
     json_t *body=json_pack("{s:s,s:O}","sdp",sdp,"session",session);
