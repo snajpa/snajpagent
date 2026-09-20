@@ -123,6 +123,12 @@ let
     # detecting that this uClibc target lacks it. memmove has the same overlap
     # behavior and is declared unconditionally by the target's <string.h>.
     bash = previous.bash.overrideAttrs (old: {
+      # Bash defaults this run-time strchrnul probe to no while cross compiling.
+      # The legacy target exposes the GNU declaration and provides the matching
+      # libc symbol, so select it instead of linking Bash's duplicate fallback.
+      preConfigure = (old.preConfigure or "") + ''
+        export bash_cv_func_strchrnul_works=yes
+      '';
       postPatch = (old.postPatch or "") + ''
         substituteInPlace lib/glob/sm_loop.c \
           --replace-fail 'bcopy (p + 1, ccname, (close - p - 1) * sizeof (CHAR));' \
