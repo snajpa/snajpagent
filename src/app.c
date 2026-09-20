@@ -3432,7 +3432,17 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 goto out;
             }
             if (compacted) {
-                if (over_hard) ++hard_compaction_attempts;
+                if (over_hard) {
+                    ++hard_compaction_attempts;
+                    /* The operator sees how many chunks this turn already
+                     * compacted, so a long sequence does not look stuck. */
+                    char notice[192];
+                    (void)snprintf(notice, sizeof(notice),
+                        "context still over the model window after %u compaction%s; "
+                        "compacting further (Ctrl-C interrupts)",
+                        hard_compaction_attempts, hard_compaction_attempts == 1u ? "" : "s");
+                    (void)snag_ui_text(&app->ui, SNAG_UI_HOST, notice);
+                }
                 goto rebuild_request;
             }
         }

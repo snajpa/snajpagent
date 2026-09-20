@@ -903,7 +903,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (!snag_json_arg_keys(data,
             "capability_version compact_id count_method count_request_sha256 input_tokens_bound model "
             "predecessor_compact_id profile_id reason request_sha256 source_seq source_sha256",
-            "continuation_scope", error, error_size) ||
+            "continuation_scope compaction_model", error, error_size) ||
+            (json_object_get(data, "compaction_model") &&
+             (!snag_json_string(data, "compaction_model") ||
+              !snag_json_string(data, "compaction_model")[0])) ||
             (json_object_get(data, "continuation_scope") &&
              (!scope || !snag_hex_is_lower(scope, SNAG_SHA256_HEX_LEN))) ||
             (session->active_turn && !active_prefix) || session->response_open ||
