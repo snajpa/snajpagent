@@ -84,6 +84,46 @@ append_host_input(json_t *input, const char *text)
     return rc;
 }
 
+/* Endpoints that only accept one instruction block at the very start
+ * (llama.cpp chat templates) get every system/developer input item merged into
+ * a single leading system message; the remaining items keep their order. */
+static int
+merge_instruction_items(json_t *input)
+{
+    json_t *merged = json_array();
+    struct snag_buf text = {.max = SNAG_CONTEXT_MAX_REQUEST};
+    int rc = -1;
+
+    if (!merged || snag_buf_terminate(&text) < 0) goto out;
+    for (size_t i = 0; i < json_array_size(input); ++i) {
+        json_t *item = json_array_get(input, i);
+        const char *role = snag_json_string(item, "role");
+        const char *content = snag_json_string(item, "content");
+        if (role && content && (!strcmp(role, "system") || !strcmp(role, "developer"))) {
+            if (snag_buf_printf(&text, "%s%s", text.len ? "\n\n" : "", content) < 0) goto out;
+        } else if (json_array_append(merged, item) < 0) {
+            goto out;
+        }
+    }
+    if (text.len) {
+        if (snag_buf_terminate(&text) < 0) goto out;
+        json_t *leading = json_pack("{s:s,s:s}", "role", "system", "content", (const char *)text.data);
+        if (!leading || json_array_insert_new(merged, 0, leading) < 0) {
+            json_decref(leading);
+            goto out;
+        }
+    }
+    if (json_array_clear(input) < 0) goto out;
+    for (size_t i = 0; i < json_array_size(merged); ++i) {
+        if (json_array_append(input, json_array_get(merged, i)) < 0) goto out;
+    }
+    rc = 0;
+out:
+    snag_buf_free(&text);
+    json_decref(merged);
+    return rc;
+}
+
 static int
 append_messagef(struct context_builder *builder, const char *role, size_t max, const char *format, ...)
 {
@@ -1692,6 +1732,10 @@ snag_context_build(struct snag_session *session, const char *model, const char *
         if (provider && provider->leading_instructions ?
                 append_host_input(builder.request_input, host_boundary) < 0 :
                 append_message(&builder, "developer", host_boundary) < 0) goto out;
+    }
+    if (provider && provider->leading_instructions && merge_instruction_items(builder.request_input) < 0) {
+        snag_errorf(error, error_size, "instruction items could not be merged for this endpoint");
+        goto out;
     }
     const char *upstream_model = snag_config_model_upstream(provider, model);
     json_t *metadata = snag_instructions_metadata_json(instructions);
