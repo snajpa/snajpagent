@@ -203,11 +203,8 @@ __wrap_nl_langinfo (nl_item n)'
     libjpeg_turbo = previous.libjpeg_turbo.overrideAttrs (old: {
       postPatch = (old.postPatch or "") + ''
         substituteInPlace CMakeLists.txt \
-          --replace-fail 'if(UNIX)
-    add_test(NAME bmpsizetest-''${libtype} COMMAND bmpsizetest''${suffix})
-  endif()' 'if(TARGET bmpsizetest''${suffix})
-    add_test(NAME bmpsizetest-''${libtype} COMMAND bmpsizetest''${suffix})
-  endif()'
+          --replace-fail $'if(UNIX)\n    add_test(NAME bmpsizetest-''${libtype} COMMAND bmpsizetest''${suffix})\n  endif()' \
+          $'if(TARGET bmpsizetest''${suffix})\n    add_test(NAME bmpsizetest-''${libtype} COMMAND bmpsizetest''${suffix})\n  endif()'
       '';
     });
     # uClibc declares in6addr_any but does not provide the object. Use its
