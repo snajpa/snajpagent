@@ -24,7 +24,7 @@ count_method_valid(const char *method)
 static bool
 active_reason(const char *reason)
 {
-    return snag_string_in(reason, "proactive hard_budget provider_rejection");
+    return snag_string_in(reason, "proactive hard_budget provider_rejection model_switch");
 }
 
 static json_t *
@@ -341,11 +341,17 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
                 goto out;
             }
             if (commit_rendered(app, "compaction_started",
-                    json_pack("{s:s,s:s,s:s,s:s,s:I,s:s,s:s?,s:s,s:s,s:s,s:I,s:s,s:s}",
+                    json_pack("{s:s,s:s,s:s,s:s,s:I,s:s,s:s,s:s?,s:s,s:s,s:s,s:I,s:s,s:s}",
                         "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
                         "compact_id", compact_id, "count_method", count_method,
                         "count_request_sha256", projection.count_request.sha256,
-                        "input_tokens_bound", (json_int_t)input_tokens_bound, "model", model,
+                        "input_tokens_bound", (json_int_t)input_tokens_bound,
+                        /* The bound model keeps the durable replay contract; the
+                         * request model names the binding that actually ran the
+                         * compaction (the previous one on a model switch). */
+                        "model", app->session.active_turn_model[0] ?
+                            app->session.active_turn_model : model,
+                        "compaction_model", model,
                         "predecessor_compact_id", app->session.compact_id[0] ? app->session.compact_id : NULL,
                         "profile_id", SNAJPAGENT_PROFILE_ID, "reason", reason,
                         "request_sha256", projection.create_request.sha256,
