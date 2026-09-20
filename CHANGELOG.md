@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- Keep terminal input alive after an input-shaped public-output failure. The
+  presenter closed its composer for any `read_input`/`apply_display` error,
+  including the recoverable `EOVERFLOW`/`EILSEQ` conditions the engine reports
+  once and then keeps running; the closed composer echoed nothing and consumed
+  no keystroke, including Ctrl-C, while the engine kept polling, so the session
+  could only be stopped by signal. Only a real terminal failure closes input
+  now, and the engine and presenter share one predicate for the condition.
+
 - Budget image input with one provider-generic resized-image figure instead of
   a per-model ceiling table restricted to direct OpenAI and ChatGPT-auth
   routes. The first-party client already budgets provider-resized images this

@@ -316,6 +316,32 @@ fixture_response(const char *prompt, const json_t *steering, const char *workspa
     if (strcmp(prompt, "citation_markers") == 0) return final_answer(&out, "msg_fixture_citations",
             "citations: " "\xee\x88\x80" "cite" "\xee\x88\x82" "turn2view0"
             "\xee\x88\x82" "turn0view3" "\xee\x88\x81" " tail");
+    /* The block carries more turn references than the presenter rewrites
+     * (SNAG_CITE_MAX_TURNS), so the presenter keeps it verbatim, and the
+     * fixture's two-fragment emission splits it across public deliveries:
+     * the second delivery must fold the held prefix back in. That made the
+     * per-delivery render bound fail with EOVERFLOW, the input-shaped
+     * condition covered by tests/pty_delivery_recovery.py. */
+    if (strcmp(prompt, "cite_split") == 0) {
+        char text[1600];
+        size_t at = 0u;
+
+        memset(text, 'x', 400u);
+        at = 400u;
+        memcpy(text + at, "\xee\x88\x80" "cite", 7u);
+        at += 7u;
+        for (unsigned int i = 0u; i < 40u; ++i) {
+            int written = snprintf(text + at, sizeof(text) - at, "\xee\x88\x82" "turn%usearch0", i);
+            if (written < 0 || (size_t)written >= sizeof(text) - at) goto allocation;
+            at += (size_t)written;
+        }
+        memcpy(text + at, "\xee\x88\x81", 3u);
+        at += 3u;
+        memset(text + at, 'y', 300u);
+        at += 300u;
+        text[at] = '\0';
+        return final_answer(&out, "msg_fixture_cite_split", text);
+    }
     if (strcmp(prompt, "timer_test") == 0) {
         if (cycle == 1u) return add_timer_call(graph, cycle, 0u, 25u, "timer fired");
         return final_answer(&out, "msg_fixture_timer_scheduled", "timer scheduled");

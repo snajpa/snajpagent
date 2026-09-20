@@ -550,6 +550,17 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
     return 0;
 }
 
+/* An input-shaped error describes the data that just arrived, not a broken
+ * terminal. The engine reports it once and keeps reading keystrokes, so the
+ * presenter must not close terminal input for it: a latched close left the
+ * composer echoing nothing and consuming no keystroke, including Ctrl-C, while
+ * the engine kept running. Only a real terminal failure closes input. */
+static bool
+input_condition(int error)
+{
+    return error == EOVERFLOW || error == EILSEQ;
+}
+
 static void *
 presentation_main(void *opaque)
 {
@@ -570,8 +581,9 @@ presentation_main(void *opaque)
         const char *banner = display.suspended ? NULL : snag_update_take(display.update);
         if (banner) (void)snag_render_update(&display.render, banner);
         if (read_input(&display, message || banner ? 0 : -1) < 0) {
-            atomic_store(&runtime->fatal, errno ? errno : EIO);
-            display.input_closed = true;
+            int error = errno ? errno : EIO;
+            atomic_store(&runtime->fatal, error);
+            if (!input_condition(error)) display.input_closed = true;
             snag_wakeup_send(runtime->actions.wake[1]);
         }
         if (local_feedback(&display) < 0) atomic_store(&runtime->fatal, errno ? errno : EIO);
@@ -580,8 +592,9 @@ presentation_main(void *opaque)
         message->result = apply_display(&display, message);
         message->saved_errno = errno;
         if (message->result < 0 && message->command.kind != SNAG_UI_VALIDATE) {
-            atomic_store(&runtime->fatal, errno ? errno : EIO);
-            display.input_closed = true;
+            int error = errno ? errno : EIO;
+            atomic_store(&runtime->fatal, error);
+            if (!input_condition(error)) display.input_closed = true;
         }
         take_snapshot(&display, &message->snapshot);
         atomic_store(&runtime->view, (unsigned int)display.render.view);
@@ -904,7 +917,7 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
             /* An oversized draft or an invalid byte is an input condition, not a broken runtime.
              * Report it once and let the loop read input again; keeping it latched starved the
              * session of all keystrokes, which is how a full draft made a session unreachable. */
-            if (fatal == EOVERFLOW || fatal == EILSEQ) atomic_store(&runtime->fatal, 0);
+            if (input_condition(fatal)) atomic_store(&runtime->fatal, 0);
             return -1;
         }
         if (atomic_load(&runtime->exit_requested)) {
