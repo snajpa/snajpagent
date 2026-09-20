@@ -4,6 +4,22 @@
 
 ## Unreleased
 
+- Compact an over-window session before the request is built even when the
+  budget is only known as a bound. Routes without a provider
+  `auto_compact_input_tokens` figure, and sessions whose usage is already past
+  the window when they start, now reach the proactive compaction path instead
+  of discovering the overflow only after a rejected request.
+
+- Size the compaction source from the provider's reported usage when it is
+  available. The chunk budget prefers the reported input anchor over the local
+  meter, so a session that reports a larger count than the metered estimate
+  compacts against the number the provider will actually charge.
+
+- Keep compaction coverage across a provider or model switch. When the binding
+  changes, the retained summary's text now leads the new source as a plain
+  user message instead of dropping the covered range, so a switch cannot make
+  the engine re-walk history it had already summarized.
+
 - Keep terminal input alive after an input-shaped public-output failure. The
   presenter closed its composer for any `read_input`/`apply_display` error,
   including the recoverable `EOVERFLOW`/`EILSEQ` conditions the engine reports
