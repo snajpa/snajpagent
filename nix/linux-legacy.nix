@@ -119,6 +119,18 @@ let
     xz = previous.xz.overrideAttrs (old: {
       configureFlags = (old.configureFlags or [ ]) ++ [ "--disable-threads" ];
     });
+    # Static libpcap retains its nl80211 references. Its pkg-config metadata
+    # hides libnl behind Requires.private, but Meson's normal query for the
+    # static archive then omits it. Propagate libnl and expose this exact
+    # static-link requirement so libpcap consumers keep their tests enabled.
+    libpcap = previous.libpcap.overrideAttrs (old: {
+      propagatedBuildInputs = (old.propagatedBuildInputs or [ ]) ++ [ previous.libnl ];
+      postInstall = (old.postInstall or "") + ''
+        substituteInPlace "$out/lib/pkgconfig/libpcap.pc" \
+          --replace-fail 'Requires.private: libnl-genl-3.0' \
+            'Requires: libnl-genl-3.0'
+      '';
+    });
     # Bash's glob matcher calls the BSD-only bcopy directly despite configure
     # detecting that this uClibc target lacks it. memmove has the same overlap
     # behavior and is declared unconditionally by the target's <string.h>.
