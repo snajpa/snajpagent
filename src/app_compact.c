@@ -500,8 +500,13 @@ snag_app_compact_before_response(struct app_state *app, const struct snag_creden
     {
         uint64_t threshold = snag_model_compact_threshold(app->turn_provider, &app->turn_capacity);
         uint64_t measured = input_tokens_bound;
+        /* A local media upper bound is a known figure for the hard guard: the
+         * request either fits the model window or the provider rejects it, so
+         * compacting before sending is the only safe order. */
+        bool known_bound = strcmp(count_method, "exact") == 0 ||
+            strcmp(count_method, "media_upper_bound") == 0;
         bool measured_known = strcmp(count_method, "exact") == 0 || snag_app_measured_input(app, &measured);
-        bool over_hard = strcmp(count_method, "exact") == 0 && app->turn_capacity.hard_input_known &&
+        bool over_hard = known_bound && app->turn_capacity.hard_input_known &&
             input_tokens_bound > app->turn_capacity.hard_input_tokens;
         bool over_proactive = measured_known && threshold && measured >= threshold;
         int rc;

@@ -49,6 +49,10 @@ struct provider_ctx {
     char *location;
     size_t location_size;
     long http_status;
+    /* The last response status seen in this request, kept across retry
+     * attempts: a retried attempt that only fails to connect must not erase
+     * the earlier gateway status that marks an endpoint unavailable. */
+    long last_http_status;
     int cancel_code;
     uint32_t retry_after_ms;
     bool retry_after_present;
@@ -190,6 +194,7 @@ header_cb(char *buffer, size_t size, size_t nmemb, void *opaque)
     status_line = clean_len >= 5u && memcmp(line, "HTTP/", 5u) == 0;
     if (status_line && curl_easy_getinfo(ctx->curl, CURLINFO_RESPONSE_CODE, &ctx->http_status) != CURLE_OK)
         return 0;
+    if (status_line && ctx->http_status) ctx->last_http_status = ctx->http_status;
     if (clean_len > 12u && strncasecmp((const char *)line, "retry-after:", 12u) == 0) {
         uint32_t delay_ms;
         if (snag_provider_retry_after_parse(line + 12u, clean_len - 12u, &delay_ms) == 0) {
@@ -1284,8 +1289,11 @@ snag_provider_responses_count(struct snag_provider_connection connection,
             "input-token count request exceeds the bounded body limit",
             count_write_cb, error, error_size) == 0)
         rc = provider_request_perform(&ctx, "input-token count failed", error, error_size, retry_count);
-    if (rc != 0 && endpoint_unsupported && (ctx.http_status == 405 || ctx.http_status == 501 ||
-         (ctx.http_status == 404 && !ctx.provider_failure.code[0]))) *endpoint_unsupported = true;
+    if (rc != 0 && endpoint_unsupported) {
+        long status = ctx.http_status ? ctx.http_status : ctx.last_http_status;
+        if (status == 405 || status == 501 || status == 502 || status == 503 ||
+            (status == 404 && !ctx.provider_failure.code[0])) *endpoint_unsupported = true;
+    }
     if (rc < 0 && snag_provider_failure_is_capacity(&ctx.provider_failure))
         rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
     if (rc == 0) rc = parse_count_body(&ctx, input_tokens, error, error_size);
@@ -1312,8 +1320,12 @@ snag_provider_responses_compact(struct snag_provider_connection connection, cons
     if (rc < 0 && snag_provider_failure_is_capacity(&ctx.provider_failure))
         rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
     if (rc == 0) rc = parse_compact_body(&ctx, output, error, error_size);
-    if (rc < 0 && (ctx.http_status == 404 || ctx.http_status == 405 || ctx.http_status == 501))
-        rc = SNAG_PROVIDER_UNSUPPORTED;
+    {
+        long status = ctx.http_status ? ctx.http_status : ctx.last_http_status;
+        if (rc < 0 && (status == 404 || status == 405 || status == 501 ||
+                       status == 502 || status == 503))
+            rc = SNAG_PROVIDER_UNSUPPORTED;
+    }
     return provider_ctx_finish(&ctx, rc, error, error_size);
 }
 

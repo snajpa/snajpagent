@@ -101,6 +101,7 @@ enum model_fixture {
     MODEL_COUNT_MODEL_404,
     MODEL_COUNT_OVERFLOW,
     MODEL_COMPACT_404,
+    MODEL_COMPACT_502,
     MODEL_COMPACT_403,
     MODEL_AUDIO_LISTEN,
     MODEL_AUDIO_TRANSCRIBE,
@@ -535,7 +536,7 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         audio_server_child(listen_fd, models);
     if (models >= MODEL_AUTH_DEVICE)
         auth_server_child(listen_fd, models);
-    if (models == MODEL_COMPACT_404 || models == MODEL_COMPACT_403) {
+    if (models == MODEL_COMPACT_404 || models == MODEL_COMPACT_403 || models == MODEL_COMPACT_502) {
         struct http_request request;
         int fd = accept(listen_fd, NULL, NULL);
         if (fd < 0) server_fail("compact accept failed");
@@ -543,7 +544,9 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         if (strcmp(request.method, "POST") ||
             (strcmp(request.path, "/responses/compact") && strcmp(request.path, "/v1/responses/compact")))
             server_fail("invalid native compact path");
-        send_response(fd, models == MODEL_COMPACT_404 ? 404u : 403u, "application/json", "{\"detail\":\"Not Found\"}");
+        send_response(fd, models == MODEL_COMPACT_404 ? 404u :
+                          models == MODEL_COMPACT_502 ? 502u : 403u,
+                      "application/json", "{\"detail\":\"Not Found\"}");
         (void)close(fd);
         _exit(0);
     }
@@ -1502,6 +1505,19 @@ test_media_count_fallback(void)
         assert(!compacted);
         assert(snag_app_compact_after_turn(&app, tokens, method, error, sizeof(error)) == 0);
     }
+    /* A media bound over the hard budget compacts before the request is sent,
+     * instead of sending it and waiting for the provider to reject it. */
+    app.turn_capacity.hard_input_known = true;
+    app.turn_capacity.hard_input_tokens = 1u;
+    {
+        bool compacted = false;
+        char guard_error[256] = {0};
+        int guard_rc = snag_app_compact_before_response(&app, &credential, tokens, method,
+                                                        &compacted, guard_error, sizeof(guard_error));
+        assert(guard_rc != 0);
+        assert(!compacted);
+    }
+    app.turn_capacity.hard_input_known = false;
     strcpy(config.providers[0].base_url, "https://api.openai.com");
     config.model_limit_count = 0u;
     config.providers[0].exact_token_count = SNAG_TOKEN_COUNT_AUTO;
@@ -1964,7 +1980,7 @@ test_provider_auth(void)
     assert(!strcmp(loaded.credential.value, "old-access"));
     assert(snag_auth_logout(store.root_fd, &config.providers[1], NULL, NULL, error, sizeof(error)) == 0);
     assert(unlinkat(store.root_fd, "auth/other.lock", 0) == 0);
-    for (unsigned int pass = 0u; pass < 3u; ++pass) {
+    for (unsigned int pass = 0u; pass < 4u; ++pass) {
         json_t *request = request_with_marker("transport-compact");
         struct snag_json_document output = {0};
         credential_set(&credential, "transport-secret");
@@ -1973,12 +1989,13 @@ test_provider_auth(void)
         strcpy(config.providers[0].base_url, pass == 0u ? "https://api.openai.com" : SNAG_CHATGPT_BASE);
         strcpy(config.providers[0].openrouter_referer, "https://github.com/snajpa/snajpagent");
         strcpy(config.providers[0].openrouter_title, "snajpagent");
-        start_server(&server, pass == 2u ? MODEL_COMPACT_403 : MODEL_COMPACT_404, false, "");
+        start_server(&server, pass == 3u ? MODEL_COMPACT_403 :
+                          pass == 2u ? MODEL_COMPACT_502 : MODEL_COMPACT_404, false, "");
         assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", server.endpoint, 1) == 0);
         int rc = snag_provider_responses_compact((struct snag_provider_connection){
             &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL},
             request, &output, error, sizeof(error), NULL);
-        assert(rc == (pass < 2u ? SNAG_PROVIDER_UNSUPPORTED : -1));
+        assert(rc == (pass < 3u ? SNAG_PROVIDER_UNSUPPORTED : -1));
         assert(output.value == NULL);
         stop_server(&server);
         json_decref(request);
