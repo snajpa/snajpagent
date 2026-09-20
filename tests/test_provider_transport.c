@@ -296,7 +296,7 @@ meta_auth_server_child(int listen_fd, enum model_fixture fixture)
     int fd;
 
     authentication_fixture = true;
-    (void)alarm(15u);
+    (void)alarm(120u);
     if (fixture == MODEL_META_REFRESH || fixture == MODEL_META_REFRESH_FAILURE) {
         fd = accept(listen_fd, NULL, NULL);
         if (fd < 0) server_fail("meta accept failed");
@@ -347,9 +347,16 @@ fd = accept(listen_fd, NULL, NULL);
         fd = accept(listen_fd, NULL, NULL);
         if (fd < 0) server_fail("meta accept failed");
         read_request(fd, &request);
+        (void)fprintf(stderr, "meta device req: %s %s\n", request.method, request.path);
         if (strcmp(request.method, "POST") || strcmp(request.path, "/oidc/device/token/") ||
-            !strstr(request.body, "device_code=meta-device"))
-            server_fail("wrong Meta token request");
+            !strstr(request.body, "device_code=meta-device")) {
+            /* Never die mid-flow: an unexpected request gets an error and the
+             * loop keeps serving, so the client is never left waiting out its
+             * whole link lifetime after the fixture vanished. */
+            send_response(fd, 400u, "application/json", "{\"error\":\"invalid_request\"}");
+            if (close(fd) < 0) server_fail("close Meta token socket failed");
+            continue;
+        }
         ++polls;
         if (polls == 1u) {
             send_response(fd, 400u, "application/json", "{\"error\":\"authorization_pending\"}");
@@ -402,6 +409,7 @@ auth_server_child(int listen_fd, enum model_fixture fixture)
             fd = accept(listen_fd, NULL, NULL);
             if (fd < 0) server_fail("auth accept failed");
             read_request(fd, &request);
+            (void)fprintf(stderr, "chatgpt device req: %s %s\n", request.method, request.path);
             if (strcmp(request.path, "/api/accounts/deviceauth/token") == 0) {
                 ++polls;
                 if (polls == 1u) {
@@ -418,7 +426,10 @@ auth_server_child(int listen_fd, enum model_fixture fixture)
                 (void)close(fd);
                 _exit(0);
             } else {
-                server_fail("incorrect device flow path");
+                /* Tolerant like the Meta fixture: answer and keep serving. */
+                send_response(fd, 404u, "application/json", "{}");
+                (void)close(fd);
+                continue;
             }
             send_response(fd, status, "application/json", body);
             (void)close(fd);

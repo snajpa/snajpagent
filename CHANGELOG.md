@@ -652,6 +652,12 @@
   instead of sending an input the session already measured as over the window
   (the resume failure handed 8.3 MB to a 258k-token model).
 
+- Also gate the media exception on that first-attempt flag. A media-bearing
+  session (the IRC host) allowed an oversized first group on every retry, so the
+  halved budget rebuilt the identical request and the loop still reported
+  "irreducible complete history group exceeds provider context" after the
+  attempt fix; the group is now cut and marked instead.
+
 - Apply the oversized-first exception to the first compaction attempt only.
   After a rejection shrank the budget the builder must cut the oversized group
   (marking the omission) instead of rebuilding the identical request, which the
