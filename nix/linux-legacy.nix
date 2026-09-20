@@ -119,6 +119,18 @@ let
     xz = previous.xz.overrideAttrs (old: {
       configureFlags = (old.configureFlags or [ ]) ++ [ "--disable-threads" ];
     });
+    # Boost.Process v2's POSIX shell parser uses wordexp, which this uClibc
+    # target does not provide. Select Boost's existing ENOTSUP fallback, as it
+    # already does on OpenBSD, rather than adding a partial shell-expansion shim.
+    boost = previous.boost.overrideAttrs (old: {
+      postPatch = (old.postPatch or "") + ''
+        test "$(grep -Fc '#elif !defined(__OpenBSD__)' libs/process/src/shell.cpp)" -eq 3
+        substituteInPlace libs/process/src/shell.cpp \
+          --replace-fail '#elif !defined(__OpenBSD__)' \
+            '#elif !defined(__OpenBSD__) && !defined(__UCLIBC__)'
+        test "$(grep -Fc '#elif !defined(__OpenBSD__) && !defined(__UCLIBC__)' libs/process/src/shell.cpp)" -eq 3
+      '';
+    });
     # Static libpcap retains its nl80211 references. Its pkg-config metadata
     # hides libnl behind Requires.private, but Meson's normal query for the
     # static archive then omits it. Propagate libnl and expose this exact

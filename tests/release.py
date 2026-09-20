@@ -2078,6 +2078,31 @@ with tempfile.TemporaryDirectory(prefix="linux-static-brotli-", dir=root / "buil
 print("PASS: static Brotli decoder exports its common archive through normal pkg-config")
 
 
+# Legacy uClibc lacks wordexp. Boost.Process already has an ENOTSUP fallback for
+# platforms without it; route all three source guards to that existing fallback.
+legacy_linux = (root / "nix/linux-legacy.nix").read_text()
+legacy_boost = legacy_linux.split("    boost = ", 1)[1].split("    # Static libpcap", 1)[0]
+assert "previous.boost.overrideAttrs" in legacy_boost
+assert "libs/process/src/shell.cpp" in legacy_boost
+assert "grep -Fc '#elif !defined(__OpenBSD__)'" in legacy_boost
+assert "-eq 3" in legacy_boost
+assert "#elif !defined(__OpenBSD__) && !defined(__UCLIBC__)" in legacy_boost
+with tempfile.TemporaryDirectory(prefix="legacy-boost-process-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    source = tmp / "fallback.cpp"
+    source.write_text(r'''#if !defined(__OpenBSD__) && !defined(__UCLIBC__)
+# include "wordexp-unavailable.h"
+int wordexp_path;
+#else
+int enotsup_path;
+#endif
+int main() { return enotsup_path; }
+''')
+    subprocess.run(["cc", "-x", "c++", "-std=c++11", "-D__UCLIBC__", str(source),
+                    "-o", str(tmp / "fallback")], check=True)
+print("PASS: legacy Boost.Process selects its existing no-wordexp fallback")
+
+
 # Keep libarchive's signed NTFS conversion identical without a missing lldiv ABI.
 time_patch = archive_patch.split("+++ b/libarchive/archive_time.c", 1)[1]
 time_source = "\n".join(line[1:] for line in time_patch.splitlines()
