@@ -238,6 +238,9 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             uint64_t window_bytes = (uint64_t)app->turn_capacity.hard_input_tokens * per_token;
             window_bytes -= window_bytes / 8u; /* summary instruction and JSON framing */
             if (window_bytes && window_bytes < source_budget) source_budget = window_bytes;
+            /* A distorted observation must not shrink the budget below the
+             * smallest meaningful source. */
+            if (source_budget < SNAG_CONTEXT_COMPACT_FLOOR) source_budget = SNAG_CONTEXT_COMPACT_FLOOR;
         }
     }
     const struct snag_context_control control = {snag_app_context_cancelled, app};
@@ -311,7 +314,11 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             snprintf(error, error_size, "compaction provider request exceeds 12 MiB");
             goto out;
         }
-        if (reduced && !strcmp(prior_request, projection.create_request.sha256)) {
+        /* A repeated request is only irreducible when it still exceeds the
+         * budget: once the cut source fits, it is sendable and the loop must
+         * try it instead of declaring the group irreducible. */
+        if (reduced && !strcmp(prior_request, projection.create_request.sha256) &&
+            projection.model_input.bytes > source_budget) {
             snprintf(error, error_size, "irreducible complete history group exceeds provider context");
             goto out;
         }
@@ -389,7 +396,9 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         memcpy(prior_request, projection.create_request.sha256, sizeof(prior_request));
         reduced = true;
         source_budget = projection.model_input.bytes / 2u;
-        if (!source_budget) source_budget = 1u;
+        /* Floor the halving: below this the builder cannot fit any group and
+         * reports the source as irreducible instead of cutting it. */
+        if (source_budget < SNAG_CONTEXT_COMPACT_FLOOR) source_budget = SNAG_CONTEXT_COMPACT_FLOOR;
         snag_context_projection_free(&projection);
     }
     if (!generated) {
