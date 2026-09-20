@@ -364,7 +364,12 @@ fd = accept(listen_fd, NULL, NULL);
         send_response(fd, 200u, "application/json",
                       "{\"access_token\":\"meta-access\",\"refresh_token\":\"meta-refresh\",\"expires_in\":3600}");
         if (close(fd) < 0) server_fail("close Meta token socket failed");
-        if (polls >= 8u) _exit(0);
+        /* Exit shortly after the grant: the client proceeds on the first grant,
+         * and lingering here would make stop_server's waitpid block the test. */
+        {
+            struct pollfd quiet = {.fd = listen_fd, .events = POLLIN};
+            if (poll(&quiet, 1, 1500) <= 0) _exit(0);
+        }
     }
 }
 
