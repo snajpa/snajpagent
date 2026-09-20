@@ -310,7 +310,28 @@ meta_auth_server_child(int listen_fd, enum model_fixture fixture)
             send_response(fd, 200u, "application/json",
                           "{\"access_token\":\"meta-new-access\",\"refresh_token\":\"meta-new-refresh\",\"expires_in\":3600}");
         if (close(fd) < 0) server_fail("close Meta refresh socket failed");
-        _exit(0);
+        /* The client falls back to a device login when the refresh does not
+         * succeed; serve those legs too so the test never waits out the link. */
+        for (;;) {
+            struct pollfd waiting = {.fd = listen_fd, .events = POLLIN};
+            if (poll(&waiting, 1, 2000) <= 0) _exit(0);
+            fd = accept(listen_fd, NULL, NULL);
+            if (fd < 0) server_fail("meta accept failed");
+            read_request(fd, &request);
+            if (strstr(request.path, "/oidc/device/authorization/")) {
+                send_response(fd, 200u, "application/json",
+                              "{\"device_code\":\"meta-device\",\"user_code\":\"ABCD-1234\","
+                              "\"verification_uri\":\"https://auth.meta.com/oidc/device/\","
+                              "\"verification_uri_complete\":\"https://auth.meta.com/oidc/device/?code=ABCD-1234\","
+                              "\"expires_in\":60,\"interval\":1}");
+            } else if (strstr(request.path, "/oidc/device/token/")) {
+                send_response(fd, 200u, "application/json",
+                              "{\"access_token\":\"meta-access\",\"refresh_token\":\"meta-refresh\",\"expires_in\":3600}");
+            } else {
+                send_response(fd, 404u, "application/json", "{}");
+            }
+            if (close(fd) < 0) server_fail("close Meta socket failed");
+        }
     }
 fd = accept(listen_fd, NULL, NULL);
     if (fd < 0) server_fail("meta accept failed");
