@@ -572,6 +572,38 @@ out: free(quoted_path);
 /* A summary from another binding cannot be replayed as items, but its text is
  * portable: lead the new source with it so a switch costs the uncovered tail
  * instead of the whole archive. Returns 1 when the output carries no text. */
+/* A seam re-read can start between a function_call and its output, which the
+ * provider rejects ("No tool output found for function call ..."). Drop any call
+ * or output whose counterpart is not in the request. */
+static int
+prune_dangling_calls(json_t *array)
+{
+    size_t count = json_array_size(array);
+
+    for (size_t i = 0u; i < count; ++i) {
+        json_t *item = json_array_get(array, i);
+        const char *type = snag_json_string(item, "type");
+        const char *id = snag_json_string(item, "call_id");
+        bool peer = false;
+
+        if (!type || !id ||
+            (strcmp(type, "function_call") && strcmp(type, "function_call_output")))
+            continue;
+        for (size_t j = 0u; j < count && !peer; ++j) {
+            json_t *other = json_array_get(array, j);
+            const char *other_type = snag_json_string(other, "type");
+            const char *other_id = snag_json_string(other, "call_id");
+            if (other_type && other_id && !strcmp(other_id, id) &&
+                ((!strcmp(type, "function_call") && !strcmp(other_type, "function_call_output")) ||
+                 (!strcmp(type, "function_call_output") && !strcmp(other_type, "function_call"))))
+                peer = true;
+        }
+        if (!peer && json_array_remove(array, i) < 0) return -1;
+        if (!peer) { --i; --count; }
+    }
+    return 0;
+}
+
 static int
 install_portable_text(struct context_builder *builder, const json_t *output, char *error, size_t error_size)
 {
@@ -1600,6 +1632,7 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
         }
     }
     if (snag_session_each_event(session, compact_event, &builder, error, error_size) < 0) goto out;
+    if (prune_dangling_calls(builder.request_input) < 0) goto out;
     if (append_deferred_input(&builder) < 0) goto out;
     if (builder.compact_current && !builder.compact_stopped) {
         if (!builder.compact_best_known) {
