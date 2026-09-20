@@ -2103,6 +2103,37 @@ int main() { return enotsup_path; }
 print("PASS: legacy Boost.Process selects its existing no-wordexp fallback")
 
 
+# uClibc declares the POSIX transfer-size names but returns -1 without errno,
+# which libarchive otherwise mistakes for a statfs failure. Retain its original
+# libxml2 XAR parser, but disable libxml2 threading on LinuxThreads. uClibc iconv
+# reports lossy substitutions as successful counts, and its ctype table can make
+# MTree's raw UTF-8 bytes printable, so keep both libarchive error paths strict.
+legacy_xml = legacy_linux.split("    libxml2 = ", 1)[1].split("    # uClibc advertises", 1)[0]
+assert "previous.libxml2.overrideAttrs" in legacy_xml
+assert "--with-threads=no" in legacy_xml
+legacy_archive = legacy_linux.split("    libarchive = ", 1)[1].split("    # Static libpcap", 1)[0]
+assert "previous.libarchive.overrideAttrs" in legacy_archive
+assert "libarchive/archive_read_disk_posix.c" in legacy_archive
+assert "#if !defined(__UCLIBC__) && defined(_PC_REC_INCR_XFER_SIZE)" in legacy_archive
+assert "libarchive/archive_string.c" in legacy_archive
+assert "result != 0 && result != (size_t)-1" in legacy_archive
+assert "libarchive/archive_read_support_format_mtree.c" in legacy_archive
+assert "(unsigned char)*s > 0x7f" in legacy_archive
+with tempfile.TemporaryDirectory(prefix="legacy-libarchive-xfer-", dir=root / "build") as tmp:
+    tmp = Path(tmp)
+    source = tmp / "fallback.c"
+    source.write_text(r'''#if !defined(__UCLIBC__) && defined(_PC_REC_INCR_XFER_SIZE)
+int use_fpathconf;
+#else
+int use_statvfs_fallback;
+#endif
+int main(void) { return use_statvfs_fallback; }
+''')
+    subprocess.run(["cc", "-std=c11", "-D__UCLIBC__", str(source),
+                    "-o", str(tmp / "fallback")], check=True)
+print("PASS: legacy libarchive retains XAR and rejects uClibc lossy locale conversions")
+
+
 # Keep libarchive's signed NTFS conversion identical without a missing lldiv ABI.
 time_patch = archive_patch.split("+++ b/libarchive/archive_time.c", 1)[1]
 time_source = "\n".join(line[1:] for line in time_patch.splitlines()

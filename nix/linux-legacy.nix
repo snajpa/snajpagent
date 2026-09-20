@@ -131,6 +131,37 @@ let
         test "$(grep -Fc '#elif !defined(__OpenBSD__) && !defined(__UCLIBC__)' libs/process/src/shell.cpp)" -eq 3
       '';
     });
+    # libxml2's threaded global-state cleanup enters LinuxThreads mutexes and
+    # corrupts the static target heap. Its supported nonthreaded mode retains
+    # the XML/XAR parser without that unusable concurrency path.
+    libxml2 = previous.libxml2.overrideAttrs (old: {
+      configureFlags = (old.configureFlags or [ ]) ++ [ "--with-threads=no" ];
+    });
+    # uClibc advertises _PC_REC_* transfer-size names but leaves their
+    # fpathconf values indeterminate (-1 without errno). Let libarchive use
+    # its existing statvfs transfer-size fallback instead of treating that as
+    # a filesystem error.
+    libarchive = previous.libarchive.overrideAttrs (old: {
+      postPatch = (old.postPatch or "") + ''
+        substituteInPlace libarchive/archive_read_disk_posix.c \
+          --replace-fail '#if defined(_PC_REC_INCR_XFER_SIZE)' \
+            '#if !defined(__UCLIBC__) && defined(_PC_REC_INCR_XFER_SIZE)'
+        test "$(grep -Fc '#if !defined(__UCLIBC__) && defined(_PC_REC_INCR_XFER_SIZE)' libarchive/archive_read_disk_posix.c)" -eq 1
+        # uClibc iconv returns a positive count for lossy substitutions. Keep
+        # libarchive's existing failure result instead of accepting those bytes
+        # as an exact native-locale conversion.
+        substituteInPlace libarchive/archive_string.c \
+          --replace-fail 'if (result != (size_t)-1)' \
+            $'#if defined(__UCLIBC__)\n\t\t\tif (result != 0 && result != (size_t)-1)\n\t\t\t\treturn_value = -1;\n#endif\n\t\t\tif (result != (size_t)-1)'
+        test "$(grep -Fc 'result != 0 && result != (size_t)-1' libarchive/archive_string.c)" -eq 1
+        # The MTree parser is byte-oriented. uClibc's extended ctype table can
+        # classify UTF-8 input bytes as printable after other locale users run.
+        substituteInPlace libarchive/archive_read_support_format_mtree.c \
+          --replace-fail "if (!isprint((unsigned char)*s) && *s != '\\t') {" \
+            $'if (\n#if defined(__UCLIBC__)\n    (unsigned char)*s > 0x7f ||\n#endif\n    (!isprint((unsigned char)*s) && *s != 0x09)) {'
+        test "$(grep -Fc '(unsigned char)*s > 0x7f' libarchive/archive_read_support_format_mtree.c)" -eq 1
+      '';
+    });
     # Static libpcap retains its nl80211 references. Its pkg-config metadata
     # hides libnl behind Requires.private, but Meson's normal query for the
     # static archive then omits it. Propagate libnl and expose this exact
