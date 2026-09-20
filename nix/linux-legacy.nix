@@ -119,6 +119,19 @@ let
     xz = previous.xz.overrideAttrs (old: {
       configureFlags = (old.configureFlags or [ ]) ++ [ "--disable-threads" ];
     });
+    # Bash's glob matcher calls the BSD-only bcopy directly despite configure
+    # detecting that this uClibc target lacks it. memmove has the same overlap
+    # behavior and is declared unconditionally by the target's <string.h>.
+    bash = previous.bash.overrideAttrs (old: {
+      postPatch = (old.postPatch or "") + ''
+        substituteInPlace lib/glob/sm_loop.c \
+          --replace-fail 'bcopy (p + 1, ccname, (close - p - 1) * sizeof (CHAR));' \
+            'memmove (ccname, p + 1, (close - p - 1) * sizeof (CHAR));'
+        substituteInPlace lib/glob/smatch.c \
+          --replace-fail 'bcopy (p, cc, p1 - p);' \
+            'memmove (cc, p, p1 - p);'
+      '';
+    });
     # Coreutils' Linux boot-time helper calls gettimeofday through uClibc's
     # old-glibc fallback, but omits the owning header. Keep this package-local:
     # uClibc declares the function in <sys/time.h>; application ABI is unchanged.
