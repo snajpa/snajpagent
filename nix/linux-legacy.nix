@@ -126,7 +126,7 @@ let
     libpcap = previous.libpcap.overrideAttrs (old: {
       propagatedBuildInputs = (old.propagatedBuildInputs or [ ]) ++ [ previous.libnl ];
       postInstall = (old.postInstall or "") + ''
-        substituteInPlace "$out/lib/pkgconfig/libpcap.pc" \
+        substituteInPlace "$lib/lib/pkgconfig/libpcap.pc" \
           --replace-fail 'Requires.private: libnl-genl-3.0' \
             'Requires: libnl-genl-3.0'
       '';
