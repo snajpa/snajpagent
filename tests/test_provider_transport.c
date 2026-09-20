@@ -130,6 +130,10 @@ enum model_fixture {
 static bool authentication_fixture;
 /* When set, the transport fixture requires this exact header line. */
 static const char *expected_session_header;
+/* When set, the transport fixture requires this exact Authorization line. */
+static const char *expected_authorization_header = "Authorization: Bearer transport-secret";
+/* Scoped off for fixtures whose requests deliberately carry no OpenRouter headers. */
+static bool fixture_requires_openrouter = true;
 
 static const struct retry_case {
     const char *prefix;
@@ -228,13 +232,14 @@ read_request(int fd, struct http_request *request)
     request->headers[header_end] = '\0';
     matched = sscanf(request->headers, "%7s %127s HTTP/1", request->method, request->path);
     if (matched != 2) server_fail("unexpected request line");
-    if (!authentication_fixture &&
-        !header_contains(request->headers, "Authorization: Bearer transport-secret"))
+    if (!authentication_fixture && expected_authorization_header &&
+        !header_contains(request->headers, expected_authorization_header))
         server_fail("authorization header missing or unredacted differently");
-    if (!authentication_fixture && !header_contains(request->headers,
+    if (!authentication_fixture && fixture_requires_openrouter && !header_contains(request->headers,
                          "HTTP-Referer: https://github.com/snajpa/snajpagent"))
         server_fail("OpenRouter referer header missing");
-    if (!authentication_fixture && !header_contains(request->headers, "X-OpenRouter-Title: snajpagent"))
+    if (!authentication_fixture && fixture_requires_openrouter &&
+        !header_contains(request->headers, "X-OpenRouter-Title: snajpagent"))
         server_fail("OpenRouter title header missing");
     if (!header_contains(request->headers, "User-Agent: " SNAJPAGENT_NAME "/"
                          SNAJPAGENT_VERSION)) server_fail("product user agent missing or stale");
@@ -287,6 +292,13 @@ serve_one(int listen_fd, unsigned int status, const char *method, const char *pa
     if (marker && !strstr(request.body, marker)) server_fail("request body marker missing");
     send_response(fd, status, content_type, body);
     if (close(fd) < 0) server_fail("close accepted socket failed");
+}
+
+static void
+fixture_stop(int signal_number)
+{
+    (void)signal_number;
+    _exit(0);
 }
 
 static void
@@ -385,12 +397,10 @@ fd = accept(listen_fd, NULL, NULL);
         send_response(fd, 200u, "application/json",
                       "{\"access_token\":\"meta-access\",\"refresh_token\":\"meta-refresh\",\"expires_in\":3600}");
         if (close(fd) < 0) server_fail("close Meta token socket failed");
-        /* Exit shortly after the grant: the client proceeds on the first grant,
-         * and lingering here would make stop_server's waitpid block the test. */
-        {
-            struct pollfd quiet = {.fd = listen_fd, .events = POLLIN};
-            if (poll(&quiet, 1, 1500) <= 0) _exit(0);
-        }
+        /* Keep serving until the test stops us. Exiting on a short grace after
+         * the grant used to leave a client that polled again holding a
+         * connection the dead fixture never accepted; the suite then parked
+         * forever, because the test keeps its copy of the listener open. */
     }
 }
 
@@ -579,6 +589,7 @@ audio_server_child(int listen_fd, enum model_fixture mode)
 static void
 server_child(int listen_fd, enum model_fixture models, bool transport)
 {
+    (void)signal(SIGTERM, fixture_stop);
     if (models>=MODEL_NATIVE_TRANSCRIBE && models<=MODEL_NATIVE_CALL_DENIED) {
         struct http_request request;int fd=accept(listen_fd,NULL,NULL);
         if (fd<0)server_fail("native voice accept failed");
@@ -616,20 +627,29 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         auth_server_child(listen_fd, models);
     if (models == MODEL_COMPACT_404 || models == MODEL_COMPACT_403 || models == MODEL_COMPACT_502 ||
         models == MODEL_COMPACT_OK) {
-        struct http_request request;
-        int fd = accept(listen_fd, NULL, NULL);
-        if (fd < 0) server_fail("compact accept failed");
-        read_request(fd, &request);
-        if (strcmp(request.method, "POST") ||
-            (strcmp(request.path, "/responses/compact") && strcmp(request.path, "/v1/responses/compact")))
-            server_fail("invalid native compact path");
-        send_response(fd, models == MODEL_COMPACT_OK ? 200u :
-                          models == MODEL_COMPACT_404 ? 404u :
-                          models == MODEL_COMPACT_502 ? 502u : 403u,
-                      "application/json", models == MODEL_COMPACT_OK ?
-                          "{\"object\":\"response.compaction\",\"output\":[]}" : "{\"detail\":\"Not Found\"}");
-        (void)close(fd);
-        _exit(0);
+        /* The native compaction probe authenticates with its own credential and
+         * sends no OpenRouter headers, so those transport checks do not apply. */
+        expected_authorization_header = NULL;
+        fixture_requires_openrouter = false;
+        /* Keep answering until the test stops us: the client retries a failed
+         * compact request, and a fixture that exited after the first answer
+         * left the retry in the queue of a listener nobody accepts on, which
+         * parked the suite in poll until it was killed. */
+        for (;;) {
+            struct http_request request;
+            int fd = accept(listen_fd, NULL, NULL);
+            if (fd < 0) server_fail("compact accept failed");
+            read_request(fd, &request);
+            if (strcmp(request.method, "POST") ||
+                (strcmp(request.path, "/responses/compact") && strcmp(request.path, "/v1/responses/compact")))
+                server_fail("invalid native compact path");
+            send_response(fd, models == MODEL_COMPACT_OK ? 200u :
+                              models == MODEL_COMPACT_404 ? 404u :
+                              models == MODEL_COMPACT_502 ? 502u : 403u,
+                          "application/json", models == MODEL_COMPACT_OK ?
+                              "{\"object\":\"response.compaction\",\"output\":[]}" : "{\"detail\":\"Not Found\"}");
+            (void)close(fd);
+        }
     }
     if (models == MODEL_CREATE_TYPELESS) {
         serve_one(listen_fd, 200u, "POST", "/v1/responses", NULL, "text/event-stream",
@@ -792,10 +812,11 @@ start_server(struct local_server *server, enum model_fixture models, bool transp
     server->pid = fork();
     assert(server->pid >= 0);
     if (server->pid == 0) server_child(server->fd, models, transport);
-    if (models == MODEL_CREATE_RETRY) {
-        assert(close(server->fd) == 0);
-        server->fd = -1;
-    }
+    /* The fixture owns the listener. Closing the parent's copy means a fixture
+     * that dies cannot leave a client waiting on a queued connection nobody
+     * accepts on: the peer sees a reset and the test fails instead of parking. */
+    assert(close(server->fd) == 0);
+    server->fd = -1;
 }
 
 static void
@@ -804,6 +825,9 @@ stop_server(struct local_server *server)
     int status;
 
     if (server->fd >= 0) assert(close(server->fd) == 0);
+    /* Fixtures keep serving until told, so ask this one to stop; the handler
+     * exits with status 0, which keeps the assertions below meaningful. */
+    (void)kill(server->pid, SIGTERM);
     assert(waitpid(server->pid, &status, 0) == server->pid);
     assert(WIFEXITED(status));
     assert(WEXITSTATUS(status) == 0);
@@ -3121,6 +3145,10 @@ static void test_voice_captions(void)
 int
 main(void)
 {
+    /* Every fixture is a forked copy of this process and is stopped with
+     * SIGTERM: install the handler before the first fork so all of them
+     * inherit it, whatever path starts them, and exit with status 0. */
+    (void)signal(SIGTERM, fixture_stop);
     test_audio_provider_selection();
     test_native_voice_protocol();
     test_native_voice_transport();
