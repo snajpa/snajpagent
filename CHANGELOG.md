@@ -735,6 +735,9 @@
   large-allocation OOM path on uClibc, including the normal and custom
   allocator cases.
 
+- Build Coreutils on legacy i686 uClibc when its defined-zero `ut_host`
+  capability disables pinky's optional host column.
+
 ## 0.99.5 — September 10, 2026
 
 - Traverse prompt history locally first, then globally, using bounded-memory

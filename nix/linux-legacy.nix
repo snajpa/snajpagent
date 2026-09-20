@@ -121,6 +121,13 @@ let
         substituteInPlace lib/boot-time-aux.h \
           --replace-fail '#if defined __linux__ || defined __ANDROID__' '#if defined __linux__ || defined __ANDROID__
 # include <sys/time.h>'
+        # uClibc's configure result defines HAVE_STRUCT_XTMP_UT_HOST as 0.
+        # Coreutils 9.8 declares include_where with #if but tests it with
+        # #ifdef, leaving uses without a declaration. Keep the package-local
+        # fix value-based, so pinky's host column remains enabled where the
+        # target actually has ut_host.
+        substituteInPlace src/pinky.c \
+          --replace-fail '#ifdef HAVE_STRUCT_XTMP_UT_HOST' '#if HAVE_STRUCT_XTMP_UT_HOST'
       '';
     });
     # This uClibc target has no context-switching API or symbols. OpenSSL's
