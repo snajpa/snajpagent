@@ -731,6 +731,10 @@
   items that fit the model window, marks the omitted count in-band, and leaves
   the live history untouched.
 
+- Keep the legacy i686 static OpenSSL allocator check active through its
+  large-allocation OOM path on uClibc, including the normal and custom
+  allocator cases.
+
 ## 0.99.5 — September 10, 2026
 
 - Traverse prompt history locally first, then globally, using bounded-memory
