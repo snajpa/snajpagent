@@ -225,6 +225,21 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
     if (strcmp(reason, "manual") && snag_ui_text(&app->ui, SNAG_UI_HOST,
             "Compacting context; Ctrl-C interrupts") < 0) goto out;
     source_budget = SNAG_CONTEXT_MAX_COMPACT - 4096u;
+    /* The compact source must fit the model that summarises it. When the route
+     * cannot count exactly, derive a byte bound from this session's own last
+     * observation (bytes per input token) instead of a constant, so a large
+     * context does not send a request far over the model window only to stall
+     * there. No usable observation keeps the protocol maximum. */
+    if (app->turn_capacity.hard_input_known && app->session.context_meter.valid &&
+        app->session.context_meter.input_tokens && app->session.context_meter.model_input_bytes) {
+        uint64_t per_token = app->session.context_meter.model_input_bytes /
+            app->session.context_meter.input_tokens;
+        if (per_token) {
+            uint64_t window_bytes = (uint64_t)app->turn_capacity.hard_input_tokens * per_token;
+            window_bytes -= window_bytes / 8u; /* summary instruction and JSON framing */
+            if (window_bytes && window_bytes < source_budget) source_budget = window_bytes;
+        }
+    }
     const struct snag_context_control control = {snag_app_context_cancelled, app};
     for (unsigned int selection = 0u; selection < 8u; ++selection) {
         if (snag_app_provider_activity(app, true) < 0) goto out;
