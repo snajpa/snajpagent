@@ -243,8 +243,12 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
     const struct snag_context_control control = {snag_app_context_cancelled, app};
     for (unsigned int selection = 0u; selection < 8u; ++selection) {
         if (snag_app_provider_activity(app, true) < 0) goto out;
+        /* The oversized-first exception belongs to the first attempt only: once
+         * a rejection has forced a smaller budget, an oversized group must be
+         * cut (the builder marks the omission) instead of being re-sent
+         * unchanged, which the shrink loop reported as irreducible. */
         build_rc = snag_context_compact_request_build(&app->session, model, effort, active_prefix,
-                                            source_budget, true, continuation_scope,
+                                            source_budget, !reduced, continuation_scope,
                                             &projection, error, error_size, &control);
         bool cancelled = build_rc < 0 && errno == ECANCELED;
         if (snag_app_provider_activity(app, false) < 0) goto out;

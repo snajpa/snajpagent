@@ -652,6 +652,12 @@
   instead of sending an input the session already measured as over the window
   (the resume failure handed 8.3 MB to a 258k-token model).
 
+- Apply the oversized-first exception to the first compaction attempt only.
+  After a rejection shrank the budget the builder must cut the oversized group
+  (marking the omission) instead of rebuilding the identical request, which the
+  shrink loop reported as "irreducible complete history group exceeds provider
+  context" and retried four times on a resumed session.
+
 - Truncate an oversized compaction source as a last resort instead of failing
   the turn. A single complete history group (one huge tool output, or media)
   can exceed the model window on its own, and the shrink walker cannot split a
