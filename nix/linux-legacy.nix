@@ -130,6 +130,10 @@ let
         substituteInPlace lib/glob/smatch.c \
           --replace-fail 'bcopy (p, cc, p1 - p);' \
             'memmove (cc, p, p1 - p);'
+        # This uClibc has mkstemp but no mktemp. Keep Bash's getrandom-backed
+        # name generator so sh_mktmpfd retains its later O_EXCL create.
+        substituteInPlace config-top.h \
+          --replace-fail '#define USE_MKTEMP' '#undef USE_MKTEMP'
       '';
     });
     # Coreutils' Linux boot-time helper calls gettimeofday through uClibc's
