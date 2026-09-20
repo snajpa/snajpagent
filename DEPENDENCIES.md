@@ -94,21 +94,22 @@ boundaries fails instead of assigning guessed coordinates.
 
 ## Image token bounds
 
-The OpenAI vision sizing/multiplier table at
-`https://developers.openai.com/api/docs/guides/images-vision` was checked on
-2026-09-07. The implementation fixes `detail=high` and uses maximum processed
-size rather than parsing untrusted compressed-image dimensions for accounting.
-GPT-5.6 Sol/Terra/Luna, 5.5 and 5.4/mini/nano permit 2,500 patches at 1.2×;
-5.2 permits 6,144 at 1.2×; 4.1-mini permits 6,144 at 1.62×. Ceilings round
-up and add one token for the documented floating-point rounding discrepancy.
-Tile models fit within 2048×2048: budgeting all sixteen 512×512 tiles is
-conservative even before the additional shortest-side resize. Token ceilings
-include the documented base and tile costs. The manual lists each exact model
-name accepted; other variants do not inherit an unverified family estimate.
-The text bound excludes image URLs, uses canonical request bytes, and adds
-1,024 request plus 32 per input-item tokens for framing. Request hashes still
-cover the original data URLs. No input is downsampled or silently discarded by
-the accounting fallback. Billing/capacity responses remain provider authority.
+Image input is budgeted with one provider-generic nominal resized-image figure,
+not a per-model table: the first-party client's own
+`RESIZED_IMAGE_BYTES_ESTIMATE` of 7,373 bytes for every image that is not sent
+at original detail (`codex-rs/core/src/context_manager/history.rs`). This
+client fixes `detail=high` for prepared images, so provider-side resizing
+bounds every image and the same figure applies on any provider, endpoint or
+model without an operator rule. Canonical request bytes are counted one token
+per byte here, so the nominal figure stays in the same byte domain and is
+conservative relative to the provider client's 4-bytes/token conversion
+(about 1,844 tokens). A `[model-limit] image_tokens` value declares a
+provider-documented per-image ceiling and supersedes the generic figure. The
+text bound excludes image URLs, uses canonical request bytes, and adds 1,024
+request plus 32 per input-item tokens for framing. Request hashes still cover
+the original data URLs. No input is downsampled or silently discarded by the
+accounting fallback. The provider's reported input count remains authoritative
+after each response, and billing/capacity responses remain provider authority.
 
 ## Linked multimodal dependencies (feature branch)
 

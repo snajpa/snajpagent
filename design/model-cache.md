@@ -289,10 +289,10 @@ Configuration facts are never written into `models.json`.
 `image_tokens` is not a capacity field. It declares the provider-documented
 per-image token ceiling for the matched local model; local media bounding uses
 it on any provider route when exact counting is unavailable, superseding the
-built-in OpenAI image sizing table. A route whose documentation gives a
-per-image ceiling, such as DeepSeek's `deepseek-flash` with 1,024 tokens per
-image, therefore gets a conservative local bound instead of failing with no
-qualified image token bound.
+provider-generic resized-image budget it otherwise applies. The rule is
+optional: an image-capable provider, endpoint or model needs no configuration.
+A route whose documentation gives a per-image ceiling, such as DeepSeek's
+`deepseek-flash` with 1,024 tokens per image, can declare it.
 
 `[model-alias PROVIDER/NAME] model = UPSTREAM` defines an ordinary model exposed by
 that provider. Targets are literal upstream IDs; no recursive aliases or alias

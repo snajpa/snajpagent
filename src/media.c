@@ -466,50 +466,29 @@ snag_media_request_has_images(const json_t *request)
     return false;
 }
 
-/* OpenAI images/vision sizing table, checked 2026-09-07. Deliberately budget
- * maximum processed dimensions, not compressed bytes. +1 covers the documented
- * rounding discrepancy. See DEPENDENCIES.md. Unknown/specialized models need
- * exact counting or a configured image_tokens ceiling. No inferred
- * model-family prefixes or future snapshots. */
-static uint64_t
-image_token_ceiling(const struct snag_provider_config *provider, const char *model, uint64_t configured)
-{
-    static const struct { const char *model; uint32_t tokens; } bounds[] = {
-        {"gpt-5.6-sol", 3001}, {"gpt-5.6-terra", 3001}, {"gpt-5.6-luna", 3001},
-        {"gpt-5.5", 3001}, {"gpt-5.5-2026-04-23", 3001},
-        {"gpt-5.4", 3001}, {"gpt-5.4-mini", 3001}, {"gpt-5.4-nano", 3001},
-        {"gpt-5.2", 7374}, {"gpt-4.1-mini", 9955}, {"gpt-4.1-mini-2025-04-14", 9955},
-        {"gpt-5.1", 2311}, {"gpt-4.1", 2806}, {"gpt-4o", 2806}, {"gpt-4o-mini", 93506}
-    };
-    /* A [model-limit] image_tokens value declares the documented per-image
-     * ceiling for the selected local model and applies on any route. */
-    if (configured) return configured;
-    if (!provider || !model) return 0;
-    bool direct = !strcmp(provider->base_url, "https://api.openai.com") ||
-        !strcmp(provider->base_url, "https://api.openai.com/") ||
-        !strcmp(provider->base_url, "https://api.openai.com/v1") ||
-        !strcmp(provider->base_url, "https://api.openai.com/v1/");
-    bool codex = provider->auth == SNAG_AUTH_CHATGPT && !strcmp(provider->base_url, SNAG_CHATGPT_BASE);
-    if (!direct && !codex) return 0;
-    for (size_t i = 0; i < sizeof(bounds) / sizeof(bounds[0]); ++i)
-        if (!strcmp(model, bounds[i].model)) return bounds[i].tokens;
-    return 0;
-}
+/* Provider-generic image input budget for locally bounded media requests.
+ *
+ * This client prepares every image at high detail, so the provider resizes it
+ * to its own processed-image bound before tokenizing it. The first-party
+ * client budgets such an image with one nominal resized-image size instead of
+ * a per-model table; it derives a size from the image itself only for
+ * original detail, which this client never sends. Apply the same generic
+ * budget on every route, so an image-capable provider, endpoint or model
+ * needs no operator rule and no per-model constant. A configured
+ * image_tokens model-limit still declares a provider-documented per-image
+ * ceiling and wins. The provider's own reported input count remains
+ * authoritative after each response; see snag_app_measured_input(). */
+#define SNAG_MEDIA_RESIZED_IMAGE_BUDGET 7373u
 
 int
-snag_media_token_bound(const json_t *request, const struct snag_provider_config *provider,
-                       uint64_t configured_image_tokens, uint64_t *tokens, char *error, size_t size)
+snag_media_token_bound(const json_t *request, uint64_t configured_image_tokens,
+                       uint64_t *tokens, char *error, size_t size)
 {
-    uint64_t ceiling = image_token_ceiling(provider, snag_json_string(request, "model"),
-                                           configured_image_tokens);
+    uint64_t ceiling = configured_image_tokens ? configured_image_tokens : SNAG_MEDIA_RESIZED_IMAGE_BUDGET;
     json_t *copy = NULL, *input = NULL;
     uint64_t images = 0;
     size_t bytes = 0;
     int rc = -1;
-    if (!ceiling) {
-        snag_errorf(error, size, "No qualified image token bound for this model/route; use exact counting, a documented supported model, or an image_tokens model-limit rule.");
-        return -1;
-    }
     if (snag_media_request_check(request, error, size) < 0) return -1;
     copy = json_copy((json_t *)request); input = json_array();
     if (!copy || !input || json_object_set(copy, "input", input) < 0) goto out;

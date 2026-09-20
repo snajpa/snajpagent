@@ -2148,8 +2148,8 @@ Maximum output tokens, 1 through 4000000000.
 .B image_tokens
 Provider-documented per-image input ceiling in tokens, 1 through 4000000000,
 for the matched local model.  Local image-request bounding uses it on any
-provider route when exact counting is unavailable, in place of the built-in
-OpenAI image sizing table.
+provider route when exact counting is unavailable, superseding the
+provider-generic resized-image budget it otherwise applies.
 .PP
 For example, DeepSeek documents a 1,024-token ceiling per image for
 deepseek-flash:
@@ -3032,22 +3032,25 @@ other formats and non-default frame/crop selections require linked decoding.
 The configured provider receives the image bytes.  Its selected model must
 support image input in function results. Requests use explicit high detail.
 Exact token counting is preferred; strict mode still requires it. With counting
-off or a definitively unsupported endpoint, known OpenAI models on the direct
-API or Codex route use media_upper_bound: canonical textual request bytes
-without image URLs, plus per-image maximum processed patch/tile budgets and
-framing reserve. Base64 length and text-only learned ratios never estimate
-vision tokens. The same rule applies to compaction.
+off or a definitively unsupported endpoint, image requests use
+media_upper_bound on every provider route: canonical textual request bytes
+without image URLs, plus one provider-generic nominal resized-image budget per
+image and framing reserve.  The budget follows the first-party client's
+resized-image size, because provider-resized high-detail images are tokenized
+from their processed size rather than their compressed bytes.  Base64 length
+and text-only learned ratios never estimate vision tokens.  The same rule
+applies to compaction, and the provider's own reported input count remains
+authoritative after each response.
 .PP
-Conservative per-image ceilings are 3,001 tokens for gpt-5.6-sol/terra/luna,
-gpt-5.5 (including 2026-04-23), and gpt-5.4/mini/nano; 7,374 for gpt-5.2;
-9,955 for gpt-4.1-mini (including 2025-04-14); 2,311 for gpt-5.1;
-2,806 for gpt-4.1 and gpt-4o; and 93,506 for gpt-4o-mini.
-These are deliberately maximum-size bounds, not exact counts or billing quotes.
-Other names, specialized variants, custom base URLs and proxy routes require
-exact counting unless the applicable [model-limit] rule declares an
-image_tokens per-image ceiling, which enables the same local bound on any
-route. An unbudgetable image request fails without dropping images
-or disabling text-only requests.
+A
+.B [model-limit]
+rule may declare a provider-documented
+.B image_tokens
+ceiling for the matched local model, which supersedes the generic budget;
+DeepSeek documents 1,024 tokens per image for deepseek-flash.  The generic
+budget is deliberately conservative, not an exact count or a billing quote,
+and no model name, specialized variant, custom base URL or proxy route is
+refused for image input.
 .PP
 Protocol display omits media-bearing request bodies rather than printing data
 URLs.  No microphone capture, automatic upload, or remote image fetch is implied.

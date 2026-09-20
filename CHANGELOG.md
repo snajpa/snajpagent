@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- Budget image input with one provider-generic resized-image figure instead of
+  a per-model ceiling table restricted to direct OpenAI and ChatGPT-auth
+  routes. The first-party client already budgets provider-resized images this
+  way. Image requests on any provider, endpoint or model therefore get a local
+  media bound without an `image_tokens` rule; exact counting and the
+  provider's reported input count keep their existing precedence, and a
+  configured `image_tokens` rule still supersedes the generic figure.
+
 - Send `instructions` on native compaction requests for every provider. Codex
   style compact endpoints (such as codex-lb) require the field and reject a
   body without it as an invalid request; an API-key provider with
@@ -39,7 +47,7 @@
 
 - Add `image_tokens` to `[model-limit]` rules: a provider-documented per-image
   token ceiling that local media bounding uses on any provider route when exact
-  counting is unavailable, in place of the built-in OpenAI image sizing table.
+  counting is unavailable, in place of the generic resized-image budget.
   Image input on routes such as `deepseek-flash` (1,024 tokens per image per
   DeepSeek's documentation) now gets a conservative bound instead of failing
   with no qualified image token bound.
