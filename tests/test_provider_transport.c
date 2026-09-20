@@ -347,7 +347,6 @@ fd = accept(listen_fd, NULL, NULL);
         fd = accept(listen_fd, NULL, NULL);
         if (fd < 0) server_fail("meta accept failed");
         read_request(fd, &request);
-        (void)fprintf(stderr, "meta device req: %s %s\n", request.method, request.path);
         if (strcmp(request.method, "POST") || strcmp(request.path, "/oidc/device/token/") ||
             !strstr(request.body, "device_code=meta-device")) {
             /* Never die mid-flow: an unexpected request gets an error and the
@@ -409,7 +408,6 @@ auth_server_child(int listen_fd, enum model_fixture fixture)
             fd = accept(listen_fd, NULL, NULL);
             if (fd < 0) server_fail("auth accept failed");
             read_request(fd, &request);
-            (void)fprintf(stderr, "chatgpt device req: %s %s\n", request.method, request.path);
             if (strcmp(request.path, "/api/accounts/deviceauth/token") == 0) {
                 ++polls;
                 if (polls == 1u) {
