@@ -64,6 +64,10 @@ int snag_context_compact_output_count_request_build(const json_t *output, const 
  * here and the builder cuts the group instead of collapsing further. */
 #define SNAG_CONTEXT_COMPACT_FLOOR (64u * 1024u)
 
+/* Seam overlap: a compaction source re-reads this many already-covered events so
+ * a chunk boundary cannot lose the joint between summaries. */
+#define SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS 128u
+
 int snag_context_compact_output_valid(const json_t *output, char output_hash[SNAG_SHA256_HEX_LEN + 1u],
                                      size_t *output_bytes, char *error, size_t error_size);
 /* Consumes a compact result and retains its validated canonical measurement. */
