@@ -48,6 +48,14 @@
   consecutive failures the attempt stops and reports once; a completed
   compaction, fresh operator input or a manual `/compact` clears the count.
 
+- Treat a gateway-unavailable native compaction endpoint (HTTP 502/503) like an
+  absent one, so the one-shot Responses summary fallback runs instead of
+  failing and retrying the same broken route; the last response status survives
+  retry attempts for that decision. A local media upper bound now also counts
+  as a known figure for the pre-response hard-budget guard, so an image request
+  over the model window compacts before it is sent instead of failing at the
+  provider.
+
 - Keep a blank row between terminal wait/warning notices and following model
   output, including literal rendering with Markdown disabled.
 
