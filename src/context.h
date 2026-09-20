@@ -66,7 +66,10 @@ int snag_context_compact_output_count_request_build(const json_t *output, const 
 
 /* Seam overlap: a compaction source re-reads this many already-covered events so
  * a chunk boundary cannot lose the joint between summaries. */
-#define SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS 128u
+/* 0 disables the seam re-read: a raw event offset can split a function_call
+ * from its output, which the provider rejects as "No tool output found". A
+ * pair-aware overlap must replace this before the value is raised again. */
+#define SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS 0u
 
 int snag_context_compact_output_valid(const json_t *output, char output_hash[SNAG_SHA256_HEX_LEN + 1u],
                                      size_t *output_bytes, char *error, size_t error_size);
