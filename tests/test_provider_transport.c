@@ -409,8 +409,16 @@ auth_server_child(int listen_fd, enum model_fixture fixture)
             read_request(fd, &request);
             if (strcmp(request.path, "/api/accounts/deviceauth/token") == 0) {
                 ++polls;
-                if (polls == 1u) {
-                    status = fixture == MODEL_AUTH_EXPIRED ? 410u : 403u;
+                (void)polls;
+                /* The success case grants on the first poll so it cannot depend
+                 * on the client's poll interval; the expired mode always
+                 * answers 410 and the cancel mode keeps answering pending so
+                 * the client keeps polling until its own cancel fires. */
+                if (fixture == MODEL_AUTH_EXPIRED) {
+                    status = 410u;
+                    body = "{}";
+                } else if (fixture == MODEL_AUTH_CANCEL) {
+                    status = 403u;
                     body = "{}";
                 } else {
                     body = "{\"authorization_code\":\"auth-code\",\"code_verifier\":\"verifier\",\"code_challenge\":\"challenge\"}";
