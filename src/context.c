@@ -769,6 +769,38 @@ compact_source_bytes(struct context_builder *builder, size_t *bytes)
     return 0;
 }
 
+/* Largest item prefix of the pending group that fits the compact budget. A
+ * trailing function_call without its output (or vice versa) would be rejected
+ * by the provider, so the cut walks back off one. A zero result means nothing
+ * fits and the caller keeps its own error. */
+static int
+compact_fit_prefix(struct context_builder *builder, size_t *count_out)
+{
+    size_t count = json_array_size(builder->request_input);
+    size_t low = 0u, high = count, best = 0u;
+
+    while (low < high) {
+        size_t mid = low + (high - low + 1u) / 2u, bytes = 2u;
+        bool fits = true;
+        for (size_t i = 0u; i < mid && fits; ++i) {
+            size_t item_bytes;
+            if (snag_json_digest_bounded(json_array_get(builder->request_input, i),
+                    SNAG_CONTEXT_MAX_COMPACT, NULL, &item_bytes) < 0 ||
+                bytes + item_bytes + (i != 0u) > builder->compact_budget) fits = false;
+            else bytes += item_bytes + (i != 0u);
+        }
+        if (fits) { best = mid; low = mid; }
+        else high = mid - 1u;
+    }
+    while (best) {
+        const char *type = snag_json_string(json_array_get(builder->request_input, best - 1u), "type");
+        if (!type || strcmp(type, "function_call") != 0) break;
+        --best;
+    }
+    *count_out = best;
+    return 0;
+}
+
 static int
 compact_complete_boundary(struct context_builder *builder, uint64_t seq, char *error, size_t error_size)
 {
@@ -795,9 +827,32 @@ compact_complete_boundary(struct context_builder *builder, uint64_t seq, char *e
         builder->compact_best_request_count = json_array_size(builder->request_input);
         return 0;
     }
-    if (!builder->compact_best_known) return snag_fail(error, error_size, EOVERFLOW,
+    if (!builder->compact_best_known) {
+        /* Last resort: a single complete group can be larger than the model
+         * window (one huge tool output, or media). Cut the group to the items
+         * that fit and mark the omission in the compaction source, so the
+         * history can still be summarised instead of failing the turn every
+         * time. Only the compaction source is truncated; the live history
+         * keeps every byte. */
+        size_t total = json_array_size(builder->request_input), keep = 0u;
+        if (compact_fit_prefix(builder, &keep) == 0 && keep) {
+            char marker[192];
+            (void)snprintf(marker, sizeof(marker),
+                "[compaction source truncated: %zu item%s of one oversized history group omitted "
+                "to fit the model context]",
+                total - keep, total - keep == 1u ? "" : "s");
+            if (truncate_array(builder->request_input, keep) < 0 ||
+                json_array_append_new(builder->request_input,
+                    json_pack("{s:s,s:s}", "role", "user", "content", marker)) < 0) return -1;
+            builder->compact_best_known = true;
+            builder->compact_best_seq = seq;
+            builder->compact_best_request_count = json_array_size(builder->request_input);
+            goto trim;
+        }
+        return snag_fail(error, error_size, EOVERFLOW,
             "oldest complete response/tool group through event %llu is %zu bytes, above compaction source budget %llu bytes; use exact counting/a larger model or reduce irreducible input",
             (unsigned long long)seq, source_bytes, (unsigned long long)builder->compact_budget);
+    }
 trim:
     if (truncate_array(builder->request_input, builder->compact_best_request_count) < 0) return -1;
     count = json_array_size(builder->request_input);

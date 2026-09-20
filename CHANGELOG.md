@@ -646,6 +646,14 @@
   goes down and one connect when it comes back, and the model context sees the
   same single pair.
 
+- Truncate an oversized compaction source as a last resort instead of failing
+  the turn. A single complete history group (one huge tool output, or media)
+  can exceed the model window on its own, and the shrink walker cannot split a
+  group, so compaction reported "irreducible complete history group exceeds
+  provider context" and the turn failed every time. The source now keeps the
+  items that fit the model window, marks the omitted count in-band, and leaves
+  the live history untouched.
+
 ## 0.99.5 — September 10, 2026
 
 - Traverse prompt history locally first, then globally, using bounded-memory
