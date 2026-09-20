@@ -1678,13 +1678,21 @@ snag_context_build(struct snag_session *session, const char *model, const char *
         config, session->active_turn_provider, session->active_read_only);
     if (builder.deferred_irc_seq && projection->irc_seq >= builder.deferred_irc_seq)
         projection->irc_seq = builder.deferred_irc_seq - 1u;
-    /* State and system policy do not themselves start a continuation request. */
-    if (append_message(&builder, "developer",
-            "Host continuation: continue the current request using the conversation, "
-            "completed tool results and host state above. This is not a new operator "
-            "instruction or approval.") < 0) goto out;
+    /* State and system policy do not themselves start a continuation request.
+     * Endpoints that only accept instruction roles at the start (llama.cpp
+     * chat templates) get the boundary in the user transport slot, labelled as
+     * host text; every other provider keeps the developer-level boundary. */
     const struct snag_provider_config *provider = snag_config_provider(
         config, session->active_turn_provider);
+    {
+        static const char host_boundary[] =
+            "Host continuation: continue the current request using the conversation, "
+            "completed tool results and host state above. This is not a new operator "
+            "instruction or approval.";
+        if (provider && provider->leading_instructions ?
+                append_host_input(builder.request_input, host_boundary) < 0 :
+                append_message(&builder, "developer", host_boundary) < 0) goto out;
+    }
     const char *upstream_model = snag_config_model_upstream(provider, model);
     json_t *metadata = snag_instructions_metadata_json(instructions);
     projection->model_input.value = json_pack("{s:s,s:I,s:s,s:O,s:O,s:s,s:s,s:i,s:O}",

@@ -1079,8 +1079,7 @@ def run_markdown_case(binary, root):
                 first_model = "# Stream **ready**"
                 last_model = "> final quoted boundary"
             submitted = f"{DEFAULT_IDLE_PROMPT} terminal_markdown"
-            waiting = "snajpagent: waiting for provider response (model gpt-5.5-2026-04-23)"
-            first_output = f"{waiting}\n\n{first_model}" if waiting in screen else first_model
+            first_output = first_model
             if f"{submitted}\n\n{first_output}" not in screen:
                 raise AssertionError(
                     f"submitted input and model output lack one empty row:\n{screen}"
@@ -1250,10 +1249,8 @@ def run_render_case(binary, root):
         terminal.send_key("Enter")
         steered_screen = terminal.wait("steered: change course")
         submitted_steer = f"{DEFAULT_ACTIVE_PROMPT} change course"
-        waiting = "snajpagent: waiting for provider response (model gpt-5.5-2026-04-23)"
         model_start = "• steered: change course"
-        first_output = (f"{waiting}\n\n{model_start}"
-                        if waiting in steered_screen.rsplit(submitted_steer, 1)[-1] else model_start)
+        first_output = model_start
         if f"{submitted_steer}\n\n{first_output}" not in steered_screen:
             raise AssertionError(
                 f"submitted steer and model output lack one empty row:\n{steered_screen}"
@@ -4242,10 +4239,10 @@ def run_operator_visibility_cases(binary, root):
                     raise provider.failure
                 provider_notice = "snajpagent: waiting for provider response (model host-model)"
                 tool_notice = "snajpagent: tool exec_command running (wait cap 60s)"
-                assert (provider_notice in screen) == (level >= 1), screen
-                assert (tool_notice in screen) == (level >= 1), screen
+                assert provider_notice not in screen, screen
+                assert tool_notice not in screen, screen
                 terminal.exit()
-            print(f"networked wait notices {level}: ok", flush=True)
+            print(f"networked wait notices removed {level}: ok", flush=True)
         # Change presentation during a live tool wait; the follow-up request
         # must use the new UI state, not startup flags or the previous snapshot.
         for mode in ("downgrade", "chat"):

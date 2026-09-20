@@ -709,6 +709,7 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         {SECTION_PROVIDER, "idle_timeout_ms", SET_U32, &provider->idle_timeout_ms, 1000, 600000},
         {SECTION_PROVIDER, "request_timeout_ms", SET_U32, &provider->request_timeout_ms, 1000, 3600000},
         {SECTION_PROVIDER, "native_compaction", SET_BOOL, &provider->native_compaction, 0, 0},
+        {SECTION_PROVIDER, "leading_instructions", SET_BOOL, &provider->leading_instructions, 0, 0},
         {SECTION_PROVIDER, "openrouter_referer", SET_HEADER, provider->openrouter_referer, 0, sizeof(provider->openrouter_referer)},
         {SECTION_PROVIDER, "openrouter_title", SET_HEADER, provider->openrouter_title, 0, sizeof(provider->openrouter_title)},
         {SECTION_MODEL_LIMIT, "context_window_tokens", SET_U64, &limit->context_window_tokens, 1, SNAG_CONFIG_TOKEN_LIMIT_MAX},
@@ -1295,7 +1296,7 @@ replace_settings(const struct snag_buf *input, struct snag_buf *output,
                 s = trim(s);
                 if (provider) {
                     replaced = snag_string_in(s,
-                        "auth base_url api_key native_compaction parallel_tool_calls");
+                        "auth base_url api_key native_compaction parallel_tool_calls leading_instructions");
                 } else {
                     size_t ending = newline ? 1u + (content && line[content - 1u] == '\r') : 0u;
                     for (size_t i = 0u; i < 3u; ++i) {

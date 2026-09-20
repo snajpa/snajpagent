@@ -420,14 +420,32 @@ static int
 run_compaction(struct app_state *app, const char *reason, bool active_prefix,
                const struct snag_credential *credential, bool *compacted, char *error, size_t error_size)
 {
+    /* A provider that keeps aborting the summary request used to hold the
+     * session: every turn retry re-ran the same compaction (13 attempts over
+     * 1.5 hours in one report). Bound consecutive failures; a completed
+     * compaction, new operator input or a manual /compact resets the count. */
+    if (app->compaction_failures >= 8u) {
+        app->compaction_bounded = true;
+        return snag_fail(error, error_size, EPROTO,
+            "compaction failed %u times in a row; previous context retained; "
+            "new input or /compact can retry", app->compaction_failures);
+    }
     int rc = run_compaction_attempt(app, reason, active_prefix, true,
                                     credential, compacted, error, error_size);
-    if (rc != SNAG_PROVIDER_UNSUPPORTED) return rc;
-    if (snag_ui_text(&app->ui, SNAG_UI_WARNING,
-        "native compaction unavailable; compacting through Responses") < 0) return -1;
-    if (error_size) error[0] = '\0';
-    return run_compaction_attempt(app, reason, active_prefix, false,
-                                  credential, compacted, error, error_size);
+    if (rc == SNAG_PROVIDER_UNSUPPORTED) {
+        if (snag_ui_text(&app->ui, SNAG_UI_WARNING,
+            "native compaction unavailable; compacting through Responses") < 0) return -1;
+        if (error_size) error[0] = '\0';
+        rc = run_compaction_attempt(app, reason, active_prefix, false,
+                                    credential, compacted, error, error_size);
+    }
+    if (rc == 0 && compacted && *compacted) {
+        app->compaction_failures = 0u;
+        app->compaction_bounded = false;
+    } else if (rc < 0) {
+        ++app->compaction_failures;
+    }
+    return rc;
 }
 
 int
@@ -443,6 +461,10 @@ snag_app_compact_requested(struct app_state *app, char *error, size_t error_size
         app->steering_requested = false;
     }
     if (snag_ui_text(&app->ui, SNAG_UI_HOST, "Compacting context; Ctrl-C interrupts") < 0) return -1;
+    /* An explicit /compact is a fresh operator decision: clear the consecutive
+     * failure bound so the attempt runs. */
+    app->compaction_failures = 0u;
+    app->compaction_bounded = false;
     rc = run_compaction(app, "manual", active, NULL, &compacted, error, error_size);
     app->turn_policy_stopped = policy;
     if (rc < 0 && snag_ui_text(&app->ui, SNAG_UI_WARNING,

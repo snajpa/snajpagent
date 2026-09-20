@@ -27,8 +27,26 @@
   native endpoint. The instruction text stays empty because the compact
   projection carries no caller instruction.
 
-- Show provider/tool wait notices only at verbosity 1 and higher. Verbosity 0
-  remains conversation-only in ordinary and networked terminal modes.
+- Remove the provider/tool wait notices entirely ("waiting for provider
+  response (model ...)", "tool ... running (wait cap ...)") at every verbosity,
+  including networked terminal modes. Runtime facts and tool rows already carry
+  what is running.
+
+- Accept Responses streams whose items and deltas omit `output_index` or
+  `content_index` (llama.cpp). The client resolves the index from the item id
+  it already knows and keeps validating an explicit index, instead of rejecting
+  the stream as `invalid output_index`.
+
+- New `[provider NAME] leading_instructions` capability for endpoints whose chat
+  templates only accept instruction roles at the start (llama.cpp): the trailing
+  host continuation moves into the labelled user transport slot. The default
+  developer-level boundary for OpenAI-family providers is unchanged.
+
+- Bound consecutive failed compactions at eight. A provider that keeps aborting
+  the summary request used to hold the session: every turn retry re-ran the
+  same compaction (one report recorded 13 attempts over 1.5 hours). After eight
+  consecutive failures the attempt stops and reports once; a completed
+  compaction, fresh operator input or a manual `/compact` clears the count.
 
 - Keep a blank row between terminal wait/warning notices and following model
   output, including literal rendering with Markdown disabled.
