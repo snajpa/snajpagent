@@ -66,11 +66,17 @@ int snag_context_compact_output_count_request_build(const json_t *output, const 
 
 /* Seam overlap: a compaction source re-reads this many already-covered events so
  * a chunk boundary cannot lose the joint between summaries. */
-/* Seam overlap: 0 disables the re-read. Raising it re-reads that many
- * already-covered events so a chunk boundary cannot lose the joint between
+/* Seam overlap: 0 disables the re-read. Otherwise that many already-covered
+ * events are re-read so a chunk boundary cannot lose the joint between
  * summaries; the pruner in context.c keeps the request valid by dropping any
- * call or output whose counterpart fell outside the re-read. Leave at 0 until a
- * full make check has verified the pairing end to end. */
+ * call or output whose counterpart fell outside the re-read.
+ *
+ * Back at 0 on purpose: with 16 the tmux terminal matrix's count-overflow mode
+ * stopped producing compaction_completed ("AssertionError: count-overflow"),
+ * so the overlap is not yet safe to carry. Next step is to check whether the
+ * covered boundary is advanced to the overlap floor instead of the covered end;
+ * the boundary must advance past everything the chunk actually covered while
+ * only the request source re-reads behind it. */
 #define SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS 0u
 
 int snag_context_compact_output_valid(const json_t *output, char output_hash[SNAG_SHA256_HEX_LEN + 1u],
