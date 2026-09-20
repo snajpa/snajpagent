@@ -65,6 +65,7 @@ struct turn_retry {
     uint32_t limit;
     enum snag_goal_status goal_status;
     bool pending, new_input;
+    bool compaction_bounded;
     char last_failure_code[64];
     char last_failure_type[64];
     char last_failure_message[256];
@@ -73,7 +74,8 @@ struct turn_retry {
 static bool
 turn_retry_available(const struct app_state *app, const struct turn_retry *retry)
 {
-    return !app->turn_policy_stopped && !app->interrupt_requested && !app->input_closed &&
+    return !retry->compaction_bounded && !app->turn_policy_stopped && !app->interrupt_requested &&
+        !app->input_closed &&
         (app->session.goal_status == SNAG_GOAL_ACTIVE || (app->session.goal_status == retry->goal_status &&
           retry->attempts < retry->limit));
 }
@@ -2974,9 +2976,6 @@ run_call_batch(struct app_state *app, const char *turn_id, const struct snag_cre
             app->tool_active = true;
             if (snag_ui_send(&app->ui, (struct snag_ui_command){
                 .kind = SNAG_UI_SPINNERS, .data.value = prompt_spinner_states(app)}) < 0) return -1;
-            if (app->ui.opened && snag_ui_verbosity(&app->ui) >= 1u &&
-                app_textf(app, SNAG_UI_WARNING, "tool %s running (wait cap %llus)",
-                    call->name, (unsigned long long)(app->config->max_wait_ms / 1000u)) < 0) return -1;
             int rc = calls[i].process ?
                 snag_tools_start(call, app->config, credential, app->session.workspace, &result, error, error_size) :
                 snag_app_tool_run(app, call, credential, &result, error, error_size);
@@ -3425,6 +3424,9 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             if (compact_rc == 1 && app->steering_requested) goto steered_before_response;
             if (compact_rc == 2 && app->interrupt_requested) goto user_interrupted;
             if (compact_rc != 0) {
+                /* The consecutive-failure bound is terminal for this turn:
+                 * retrying would only fail again until new input clears it. */
+                if (app->compaction_bounded) retry->compaction_bounded = true;
                 result = finish_turn_failure(app, retry, turn_id, NULL, over_hard ? "context" : "provider",
                     error[0] ? error : "pre-response compaction failed", error, sizeof(error));
                 goto out;
@@ -3457,12 +3459,6 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 "response › %s started · turn=%s · cycle=%u · model=%s · profile=%s",
                 response_id, turn_id, cycle, app->turn_model, SNAJPAGENT_PROFILE_ID) < 0) {
             report_message = "response runtime facts could not be rendered";
-            goto output_fail;
-        }
-        if (app->ui.opened && snag_ui_verbosity(&app->ui) >= 1u &&
-            app_textf(app, SNAG_UI_WARNING, "waiting for provider response (model %s)",
-                app->turn_model) < 0) {
-            report_message = "provider wait notice could not be rendered";
             goto output_fail;
         }
         if (request_body.len && snag_ui_send(&app->ui, (struct snag_ui_command){
@@ -3922,6 +3918,10 @@ run_tracked_turn(struct app_state *app, const char *prompt,
                 (void)app_error(app, error);
                 return 3;
             }
+            /* New operator input clears the consecutive compaction-failure
+             * bound, so a retry can attempt the summary request again. */
+            app->compaction_failures = 0u;
+            app->compaction_bounded = false;
         } else if (strcmp(prompt, snag_json_string(app->session.pending_input, "text"))) {
             struct snag_buf queued_text = {.max = SNAG_MAX_DIRECT_PROMPT + 8u};
             int rc = snag_buf_printf(&queued_text, "%s%s", read_only ? "/ro " :

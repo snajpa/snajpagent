@@ -200,6 +200,42 @@ json_index(struct snag_responses_stream *stream, const json_t *object,
     return 0;
 }
 
+static bool
+find_item_index(const struct snag_responses_stream *stream, const char *id, size_t *out)
+{
+    if (!id) return false;
+    for (size_t i = 0; i < stream->item_count; ++i) {
+        const struct snag_wire_item *item = &stream->items[i];
+        if (item->id && strcmp(item->id, id) == 0) {
+            *out = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Some Responses providers (llama.cpp) stream output items and deltas without
+ * output_index/content_index. The item id is always present, so resolve the
+ * index from it; an explicit index stays strict about its value. */
+static int
+event_output_index(struct snag_responses_stream *stream, const json_t *root,
+                   const char *item_id, size_t *out)
+{
+    if (json_object_get(root, "output_index")) return json_index(stream, root, "output_index", out);
+    if (find_item_index(stream, item_id, out)) return 0;
+    *out = stream->item_count;
+    return 0;
+}
+
+static int
+event_content_index(struct snag_responses_stream *stream, const json_t *root,
+                    const struct snag_wire_item *item, bool announced, size_t *out)
+{
+    if (json_object_get(root, "content_index")) return json_index(stream, root, "content_index", out);
+    *out = announced ? item->part_count : 0u;
+    return 0;
+}
+
 static int
 account_bytes(struct snag_responses_stream *stream, size_t extra)
 {
@@ -532,7 +568,7 @@ function_snapshot(struct snag_responses_stream *stream, size_t output_index,
 }
 
 static int
-inert_snapshot(struct snag_responses_stream *stream, size_t output_index)
+inert_snapshot(struct snag_responses_stream *stream, size_t output_index, const char *id)
 {
     struct snag_wire_item *item;
 
@@ -540,9 +576,11 @@ inert_snapshot(struct snag_responses_stream *stream, size_t output_index)
         item = &stream->items[output_index];
         if (item->kind != SNAG_WIRE_ITEM_INERT) return stream_fail(stream, EPROTO,
                                "response item kind or order conflict");
+        if (id && !item->id &&
+            copy_once(stream, &item->id, id, SNAG_MAX_PROVIDER_ID, "provider item id") < 0) return -1;
         return 0;
     }
-    return new_item(stream, output_index, SNAG_WIRE_ITEM_INERT, NULL) ? 0 : -1;
+    return new_item(stream, output_index, SNAG_WIRE_ITEM_INERT, id) ? 0 : -1;
 }
 
 /* Provider-hosted search items are executed remotely: retain bounded evidence
@@ -655,7 +693,7 @@ item_snapshot(struct snag_responses_stream *stream, size_t output_index,
     if (strcmp(type, "function_call") == 0)
         return function_snapshot(stream, output_index, snapshot, complete);
     if (hosted_search_type(type)) return hosted_snapshot(stream, output_index, snapshot, complete);
-    if (inert_snapshot(stream, output_index) < 0) return -1;
+    if (inert_snapshot(stream, output_index, snag_json_string(snapshot, "id")) < 0) return -1;
     struct snag_wire_item *item = &stream->items[output_index];
     if (strcmp(type, "reasoning") != 0) return item->reasoning_seen ? stream_fail(stream, EPROTO,
             "reasoning item changed type") : 0;
@@ -709,8 +747,9 @@ handle_output_item(struct snag_responses_stream *stream, const json_t *root, boo
 {
     size_t output_index;
     json_t *item = json_object_get(root, "item");
+    const char *item_id = json_is_object(item) ? snag_json_string(item, "id") : NULL;
 
-    if (!stream->created || json_index(stream, root, "output_index", &output_index) < 0) return -1;
+    if (!stream->created || event_output_index(stream, root, item_id, &output_index) < 0) return -1;
     return item_snapshot(stream, output_index, item, complete);
 }
 
@@ -720,11 +759,14 @@ handle_content_part(struct snag_responses_stream *stream, const json_t *root,
 {
     const char *item_id = snag_json_string(root, "item_id");
     size_t output_index;
-    size_t content_index;
+    size_t content_index = 0u;
+    bool content_index_given = json_object_get(root, "content_index") != NULL;
     struct snag_wire_item *item;
 
-    if (json_index(stream, root, "output_index", &output_index) < 0 ||
-        json_index(stream, root, "content_index", &content_index) < 0) return -1;
+    if (event_output_index(stream, root, item_id, &output_index) < 0) return -1;
+    /* An explicit content index is validated before ignored parts are dropped,
+     * so a malformed index cannot hide behind an inert item. */
+    if (content_index_given && json_index(stream, root, "content_index", &content_index) < 0) return -1;
     /* Reasoning and other ignored items may also emit content-part events.
      * Discard only non-public parts of an already registered inert item;
      * text/refusal events still require the exact message identity below. */
@@ -735,6 +777,9 @@ handle_content_part(struct snag_responses_stream *stream, const json_t *root,
     }
     item = find_item(stream, output_index, item_id, SNAG_WIRE_ITEM_MESSAGE);
     if (!item) return -1;
+    if (!content_index_given &&
+        event_content_index(stream, root, item, kind == SNAG_WIRE_PART_NONE && !complete,
+                            &content_index) < 0) return -1;
     if (kind == SNAG_WIRE_PART_NONE) return part_snapshot(stream, output_index, item, content_index,
                              json_object_get(root, "part"), complete);
     const char *text = snag_json_string(root, !complete ? "delta" :
@@ -750,7 +795,7 @@ handle_arguments(struct snag_responses_stream *stream, const json_t *root, bool 
     size_t output_index;
     struct snag_wire_item *item;
 
-    if (json_index(stream, root, "output_index", &output_index) < 0) return -1;
+    if (event_output_index(stream, root, item_id, &output_index) < 0) return -1;
     item = find_item(stream, output_index, item_id, SNAG_WIRE_ITEM_FUNCTION_CALL);
     if (!item) return -1;
     return reconcile_arguments(stream, item, arguments, !complete, complete);

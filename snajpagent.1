@@ -2081,6 +2081,13 @@ Request native multiple function calls from this provider.  Default: true.
 Set false for a provider/model that cannot batch calls.  This does not disable
 local yielded-command concurrency or change provider/account selection.
 .TP
+.B leading_instructions
+Set for an endpoint whose chat template only accepts instruction roles at the
+start of the conversation, as llama.cpp templates do.  The trailing host
+continuation is then sent in the labelled user transport slot instead of a
+developer message.  Default:
+.BR false .
+.TP
 .B openrouter_referer
 Optional printable ASCII
 .B HTTP-Referer

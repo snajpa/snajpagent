@@ -117,6 +117,38 @@ test_deltas_survive_empty_terminal_output(void)
 }
 
 static void
+test_llamacpp_stream_without_indexes(void)
+{
+    /* llama.cpp streams output items and deltas without output_index or
+     * content_index; the item id is the only identity it provides, so the
+     * client must resolve indexes from it instead of rejecting the stream. */
+    static const char wire[] =
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_llama\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\",\"summary\":[],\"content\":[]}}\n\n"
+        "data: {\"type\":\"response.reasoning_text.delta\",\"item_id\":\"rs_1\",\"delta\":\"think\"}\n\n"
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\",\"summary\":[],\"content\":[]}}\n\n"
+        "data: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n"
+        "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_1\",\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n"
+        "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"delta\":\"hi\"}\n\n"
+        "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_1\",\"text\":\"hi\"}\n\n"
+        "data: {\"type\":\"response.content_part.done\",\"item_id\":\"msg_1\",\"part\":{\"type\":\"output_text\",\"text\":\"hi\"}}\n\n"
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\"}]}}\n\n"
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_llama\",\"status\":\"completed\",\"usage\":{\"input_tokens\":3,\"output_tokens\":1,\"total_tokens\":4},\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"summary\":[],\"content\":[]},{\"id\":\"msg_1\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"hi\"}]}]}}\n\n"
+        "data: [DONE]\n\n";
+    struct parsed_stream emitted = parsed_new(1024u);
+
+    if (parse_stream(wire, 7u, &emitted) != 0) {
+        fprintf(stderr, "llama.cpp shape: %s\n", emitted.error);
+        assert(0);
+    }
+    assert(emitted.graph.count == 1u);
+    assert(snag_response_graph_item(&emitted.graph, 0).kind == SNAG_ITEM_ASSISTANT);
+    assert(strcmp(snag_response_graph_item(&emitted.graph, 0).text, "hi") == 0);
+    assert(emitted.text.len == 2u && memcmp(emitted.text.data, "hi", 2u) == 0);
+    parsed_free(&emitted);
+}
+
+static void
 test_terminal_snapshot_can_supply_unseen_items(void)
 {
     static const char wire[] =
@@ -853,7 +885,9 @@ test_reasoning_content_parts(void)
         struct snag_buf wire = {.max = 32768u};
         struct parsed_stream parsed = parsed_new(1024u);
         assert(snag_buf_printf(&wire, "%sdata: %s\n\n%s", created, invalid[i], finish) == 0);
-        assert(parse_stream((char *)wire.data, 1u, &parsed) < 0);
+        int parse_rc = parse_stream((char *)wire.data, 1u, &parsed);
+        if (parse_rc >= 0) fprintf(stderr, "invalid[%zu] accepted: %s\n", i, invalid[i]);
+        assert(parse_rc < 0);
         assert(parsed.calls == 0u && parsed.graph.count == 0u);
         parsed_free(&parsed);
         snag_buf_free(&wire);
@@ -1335,6 +1369,7 @@ main(void)
     test_message_completion_finalizes_phase();
     test_failed_function_clarification_boundaries();
     test_deltas_survive_empty_terminal_output();
+    test_llamacpp_stream_without_indexes();
     test_reasoning_content_parts();
     test_reasoning_terminal_and_validation();
     test_reasoning_part_cannot_complete_response();

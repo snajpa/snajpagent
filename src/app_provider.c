@@ -242,6 +242,10 @@ snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
         json_decref(fixture_output);
         return SNAG_PROVIDER_UNSUPPORTED;
     }
+    if (app->session.last_user && strcmp(app->session.last_user, "compact_fail") == 0) {
+        json_decref(fixture_output);
+        return snag_errorf(error, error_size, "fixture compaction failed");
+    }
     if (app && app->session.last_user &&
         (snag_string_in(app->session.last_user, "compaction_steer capacity_recovery_steer")))
         for (unsigned int i = 0u; i < 100u; ++i) {

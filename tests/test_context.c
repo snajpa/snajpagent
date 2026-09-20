@@ -1354,6 +1354,50 @@ test_provider_model_projection(struct snag_store *store, const char *temp)
 }
 
 static void
+test_leading_instructions_boundary(struct snag_store *store, const char *temp)
+{
+    char error[256] = {0};
+    struct snag_config config;
+    struct snag_session session;
+    json_t *empty = json_array();
+    struct snag_context_projection projection = {0};
+
+    snag_config_init(&config);
+    snag_config_provider_init(&config.providers[0], "default");
+    /* llama.cpp-style endpoint: instruction roles must lead, so the trailing
+     * host boundary moves to the labelled user transport slot. */
+    config.providers[0].leading_instructions = true;
+    snag_session_init(&session);
+    assert(snag_session_create(store, &session, temp, "default", SNAJPAGENT_MODEL, "medium",
+                               error, sizeof(error)) == 0);
+    commit_event(&session, "turn_started",
+                 turn_started("03030303030303030303030303030303", 1u, "inspect", temp, NULL));
+    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u, false,
+                              &config, NULL, NULL, NULL, &projection, error, sizeof(error), NULL) == 0);
+    json_t *input = json_object_get(projection.create_request.value, "input");
+    json_t *last = json_array_get(input, json_array_size(input) - 1u);
+    assert_string(last, "role", "user");
+    const char *content = snag_json_string(last, "content");
+    assert(content && strncmp(content, "[snajpagent host continuation — not a new user message]\n",
+                              sizeof("[snajpagent host continuation — not a new user message]\n") - 1u) == 0);
+    assert(strstr(content, "Host continuation:") != NULL);
+    bool seen_user = false;
+    for (size_t i = 0u; i < json_array_size(input); ++i) {
+        const char *role = snag_json_string(json_array_get(input, i), "role");
+        if (!role) continue;
+        if (!strcmp(role, "user")) seen_user = true;
+        else if (seen_user && (!strcmp(role, "system") || !strcmp(role, "developer"))) {
+            fprintf(stderr, "instruction role %s after the first user item\n", role);
+            assert(0);
+        }
+    }
+    snag_context_projection_free(&projection);
+    snag_session_close(&session);
+    snag_config_free(&config);
+    json_decref(empty);
+}
+
+static void
 test_durable_irc_input_watermark(struct snag_store *store, const char *path)
 {
     char error[256], id[SNAG_ID_HEX_LEN + 1u];
@@ -3639,6 +3683,7 @@ main(int argc, char **argv)
     test_request_prefix_stability(&store, workspace);
     test_read_only_and_queue_controllers(&store, workspace);
     test_provider_model_projection(&store, workspace);
+    test_leading_instructions_boundary(&store, workspace);
     test_reasoning_continuation(&store, workspace);
     test_durable_irc_input_watermark(&store, workspace);
     test_admitted_room_event_stays_out_of_tool_exchange(&store, workspace);

@@ -112,6 +112,11 @@ struct app_state {
     enum snag_policy_stop turn_policy_stopped;
     uint64_t input_received_ms;
     unsigned int recovery_delay_ms;
+    /* Consecutive failed compaction attempts; bounded so a provider that keeps
+     * aborting the summary request cannot hold the session. Reset by a
+     * completed compaction, new operator input or a manual /compact. */
+    unsigned int compaction_failures;
+    bool compaction_bounded;
     uint64_t recovery_notice_ms, recovery_status_ms;
     char recovery_error[256];
     bool queue_edit_was_armed;

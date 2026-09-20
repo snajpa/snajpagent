@@ -84,6 +84,10 @@ struct snag_provider_config {
     enum snag_token_count_mode exact_token_count;
     bool native_compaction;
     bool parallel_tool_calls;
+    /* Endpoints whose chat templates reject instruction roles after the first
+     * message (llama.cpp) receive the trailing host boundary in the user
+     * transport slot instead of a developer item. */
+    bool leading_instructions;
     char base_url[SNAG_CONFIG_URL_MAX];
     struct snag_secret_source api_key;
     char openrouter_referer[SNAG_CONFIG_URL_MAX];
