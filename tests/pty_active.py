@@ -18,9 +18,9 @@ import sys
 # Expected-output waits tolerate a loaded host; explicit sub-second literals
 # in cases stay as responsiveness or pacing intent.
 MIN_WAIT_S = 30.0
-/* The IRC lifecycle cases are two provider turns plus a hosted-endpoint
- * disconnect and a reconnect; the full gate runs them beside a 64-way build and
- * the terminal matrix, where the file's usual floor is not enough. */
+# The IRC lifecycle cases are two provider turns plus a hosted-endpoint
+# disconnect and a reconnect; the full gate runs them beside a 64-way build and
+# the terminal matrix, where the file's usual floor is not enough.
 IRC_WAIT_S = 120.0
 
 def wait_budget(timeout):
