@@ -24,6 +24,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdatomic.h>
@@ -336,24 +337,30 @@ fd = accept(listen_fd, NULL, NULL);
         if (close(fd) < 0) server_fail("close Meta token socket failed");
         _exit(0);
     }
-    fd = accept(listen_fd, NULL, NULL);
-    if (fd < 0) server_fail("meta accept failed");
-    read_request(fd, &request);
-    if (strcmp(request.method, "POST") || strcmp(request.path, "/oidc/device/token/") ||
-        !strstr(request.body, "device_code=meta-device"))
-        server_fail("wrong Meta token request");
-    send_response(fd, 400u, "application/json", "{\"error\":\"authorization_pending\"}");
-    if (close(fd) < 0) server_fail("close Meta token socket failed");
-    fd = accept(listen_fd, NULL, NULL);
-    if (fd < 0) server_fail("meta accept failed");
-    read_request(fd, &request);
-    if (strcmp(request.method, "POST") || strcmp(request.path, "/oidc/device/token/") ||
-        !strstr(request.body, "device_code=meta-device"))
-        server_fail("wrong Meta token request");
-    send_response(fd, 200u, "application/json",
-                  "{\"access_token\":\"meta-access\",\"refresh_token\":\"meta-refresh\",\"expires_in\":3600}");
-    if (close(fd) < 0) server_fail("close Meta token socket failed");
-    _exit(0);
+    /* Token polling repeats until the client stops: a loaded host may poll more
+     * times than the two-step minimum, and a fixture that exited after a fixed
+     * count would leave the client waiting out its whole link lifetime. The
+     * grant repeats; the fixture exits after it or after a 30 s quiet grace. */
+    for (unsigned int polls = 0u;;) {
+        struct pollfd waiting = {.fd = listen_fd, .events = POLLIN};
+        if (poll(&waiting, 1, 30000) <= 0) _exit(0);
+        fd = accept(listen_fd, NULL, NULL);
+        if (fd < 0) server_fail("meta accept failed");
+        read_request(fd, &request);
+        if (strcmp(request.method, "POST") || strcmp(request.path, "/oidc/device/token/") ||
+            !strstr(request.body, "device_code=meta-device"))
+            server_fail("wrong Meta token request");
+        ++polls;
+        if (polls == 1u) {
+            send_response(fd, 400u, "application/json", "{\"error\":\"authorization_pending\"}");
+        } else {
+            send_response(fd, 200u, "application/json",
+                          "{\"access_token\":\"meta-access\",\"refresh_token\":\"meta-refresh\",\"expires_in\":3600}");
+            if (close(fd) < 0) server_fail("close Meta token socket failed");
+            _exit(0);
+        }
+        if (close(fd) < 0) server_fail("close Meta token socket failed");
+    }
 }
 
 static void
@@ -371,32 +378,60 @@ auth_server_child(int listen_fd, enum model_fixture fixture)
         fixture >= MODEL_AUTH_401 ? 3u : 1u;
 
     authentication_fixture = true;
-    (void)alarm(15u);
-    for (unsigned int i = 0; i < count; ++i) {
+    (void)alarm(120u);
+    if (fixture <= MODEL_AUTH_EXPIRED) {
+        struct http_request request;
+        int fd = accept(listen_fd, NULL, NULL);
+        if (fd < 0) server_fail("auth accept failed");
+        read_request(fd, &request);
+        if (strcmp(request.path, "/api/accounts/deviceauth/usercode"))
+            server_fail("incorrect device flow path");
+        if (!strstr(request.body, "app_EMoamEEZ73f0CkXaXp7hrann"))
+            server_fail("missing device client identifier");
+        send_response(fd, 200u, "application/json",
+                      "{\"device_auth_id\":\"device-id\",\"user_code\":\"CODE-1234\",\"interval\":\"1\"}");
+        (void)close(fd);
+        /* Token polling repeats until the client stops: a loaded host may poll
+         * more times than the minimum, and a fixture that exited after a fixed
+         * count would leave the client waiting out its whole link lifetime. */
+        for (unsigned int polls = 0u;;) {
+            struct pollfd waiting = {.fd = listen_fd, .events = POLLIN};
+            const char *body = tokens;
+            unsigned int status = 200u;
+            if (poll(&waiting, 1, 30000) <= 0) _exit(0);
+            fd = accept(listen_fd, NULL, NULL);
+            if (fd < 0) server_fail("auth accept failed");
+            read_request(fd, &request);
+            if (strcmp(request.path, "/api/accounts/deviceauth/token") == 0) {
+                ++polls;
+                if (polls == 1u) {
+                    status = fixture == MODEL_AUTH_EXPIRED ? 410u : 403u;
+                    body = "{}";
+                } else {
+                    body = "{\"authorization_code\":\"auth-code\",\"code_verifier\":\"verifier\",\"code_challenge\":\"challenge\"}";
+                }
+            } else if (strcmp(request.path, "/oauth/token") == 0) {
+                if (!strstr(request.body, "grant_type=authorization_code") ||
+                    !strstr(request.body, "code_verifier=verifier"))
+                    server_fail("missing PKCE code exchange");
+                send_response(fd, status, "application/json", body);
+                (void)close(fd);
+                _exit(0);
+            } else {
+                server_fail("incorrect device flow path");
+            }
+            send_response(fd, status, "application/json", body);
+            (void)close(fd);
+        }
+    }
+    for (unsigned int i = 0; fixture > MODEL_AUTH_EXPIRED && i < count; ++i) {
         struct http_request request;
         const char *body = tokens;
         unsigned int status = 200u;
         int fd = accept(listen_fd, NULL, NULL);
         if (fd < 0) server_fail("auth accept failed");
         read_request(fd, &request);
-        if (fixture <= MODEL_AUTH_EXPIRED) {
-            const char *path = i == 0u ? "/api/accounts/deviceauth/usercode" :
-                i == 3u ? "/oauth/token" : "/api/accounts/deviceauth/token";
-            if (strcmp(request.path, path)) server_fail("incorrect device flow path");
-            if (i == 0u) {
-                if (!strstr(request.body, "app_EMoamEEZ73f0CkXaXp7hrann"))
-                    server_fail("missing device client identifier");
-                body = "{\"device_auth_id\":\"device-id\",\"user_code\":\"CODE-1234\",\"interval\":\"1\"}";
-            } else if (i == 1u) {
-                status = fixture == MODEL_AUTH_EXPIRED ? 410u : 403u;
-                body = "{}";
-            } else if (i == 2u) {
-                body = "{\"authorization_code\":\"auth-code\",\"code_verifier\":\"verifier\",\"code_challenge\":\"challenge\"}";
-            } else if (!strstr(request.body, "grant_type=authorization_code") ||
-                       !strstr(request.body, "code_verifier=verifier")) {
-                server_fail("missing PKCE code exchange");
-            }
-        } else if (fixture >= MODEL_AUTH_401 && i != 1u) {
+        if (fixture >= MODEL_AUTH_401 && i != 1u) {
             if (strcmp(request.path, "/models?client_version=0.146.0") ||
                 !strstr(request.headers, "ChatGPT-Account-Id: acct-test") ||
                 !strstr(request.headers, i == 0u ? "Bearer old-access" : "Bearer new-access"))

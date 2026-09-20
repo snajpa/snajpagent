@@ -627,6 +627,14 @@
   silent for minutes while the provider ingests a large source, and aborting
   at the idle bound made every attempt fail and re-run.
 
+- Size the first compaction source against the model's own hard input window,
+  using this session's observed bytes-per-input-token ratio, instead of the
+  protocol maximum. A large media-bearing session (16.3 MB projected against a
+  258k-token model) sent a 3.1 MB compaction request that the provider stalled
+  on and never rejected; the bound follows the window (about 670 KB there) and
+  the shrink loop still halves it after a rejection. No usable observation
+  keeps the protocol maximum.
+
 ## 0.99.5 — September 10, 2026
 
 - Traverse prompt history locally first, then globally, using bounded-memory
