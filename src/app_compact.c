@@ -230,10 +230,17 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
      * observation (bytes per input token) instead of a constant, so a large
      * context does not send a request far over the model window only to stall
      * there. No usable observation keeps the protocol maximum. */
-    if (app->turn_capacity.hard_input_known && app->session.context_meter.valid &&
-        app->session.context_meter.input_tokens && app->session.context_meter.model_input_bytes) {
-        uint64_t per_token = app->session.context_meter.model_input_bytes /
-            app->session.context_meter.input_tokens;
+    /* Prefer the provider-reported usage anchor: it is a real count, while the
+     * context meter may hold a media upper bound that would collapse the ratio. */
+    const struct snag_input_observation *ratio_source = NULL;
+    if (app->session.usage_anchor.valid && app->session.usage_anchor.input_tokens &&
+        app->session.usage_anchor.model_input_bytes)
+        ratio_source = &app->session.usage_anchor;
+    else if (app->session.context_meter.valid && app->session.context_meter.input_tokens &&
+             app->session.context_meter.model_input_bytes)
+        ratio_source = &app->session.context_meter;
+    if (app->turn_capacity.hard_input_known && ratio_source) {
+        uint64_t per_token = ratio_source->model_input_bytes / ratio_source->input_tokens;
         if (per_token) {
             uint64_t window_bytes = (uint64_t)app->turn_capacity.hard_input_tokens * per_token;
             window_bytes -= window_bytes / 8u; /* summary instruction and JSON framing */
