@@ -1027,7 +1027,11 @@ static void __attribute__((noinline)) test_client_reconnect(void)
     next_server = open_server(&server_config, &next_capture);
     unsigned int connected_before = client_capture.events[SNAG_IRC_CONNECTED];
     uint64_t reconnect_deadline = snag_monotonic_ms() + 10000u;
-    while (strcmp(next_capture.last_message.text, "retained while disconnected") != 0 &&
+    /* The retained message can reach the new server before the client's own
+     * connected counter is updated: pump until both facts hold (or the deadline
+     * passes) instead of stopping at the message and racing the counter. */
+    while ((strcmp(next_capture.last_message.text, "retained while disconnected") != 0 ||
+            client_capture.events[SNAG_IRC_CONNECTED] <= connected_before) &&
            snag_monotonic_ms() < reconnect_deadline) pump_pair(next_server, client, 1u);
     assert(strcmp(next_capture.last_message.nick, "remoteagent") == 0);
     assert(strcmp(next_capture.last_message.text, "retained while disconnected") == 0);
