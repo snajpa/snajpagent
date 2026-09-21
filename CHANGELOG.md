@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+- Condense a merged compaction summary once it has grown past about a quarter of
+  the window. Chunked compaction appends each chunk's summary to what came
+  before, and the merged text is now folded together with the provider once it
+  crosses that share of the limit ("merge these summaries of overlapping chunks,
+  deduplicating anything that appears twice") under the same binding, before it
+  is recorded. The covered boundary and the predecessor chain are unchanged by
+  that pass, and a reduce that fails leaves the un-reduced merge in place.
+
 - Keep the seam between compaction chunks without paying for it on a retry. A
   compaction source now re-reads the last few already-covered events on its
   first attempt, so a group split across the boundary (a call and its output)
