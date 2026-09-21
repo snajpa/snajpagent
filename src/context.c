@@ -604,6 +604,50 @@ prune_dangling_calls(json_t *array)
     return 0;
 }
 
+/* A summary produced under another binding cannot be replayed as provider
+ * items, but its text is portable: lead the new source with it so a switch
+ * costs the uncovered tail instead of the whole archive. Returns 1 when the
+ * output carries no text at all. */
+static int
+install_portable_text(struct context_builder *builder, const json_t *output, char *error, size_t error_size)
+{
+    struct snag_buf text = {0};
+    json_t *message = NULL;
+    size_t count = output ? json_array_size(output) : 0u;
+    int rc = -1;
+
+    snag_buf_init(&text, SNAG_CONTEXT_MAX_COMPACT);
+    for (size_t i = 0u; i < count; ++i) {
+        json_t *item = json_array_get(output, i);
+        json_t *parts = json_object_get(item, "content");
+        const char *plain = snag_json_string(item, "text");
+        const char *inline_text = snag_json_string(item, "content");
+        if (plain && plain[0]) {
+            if (snag_buf_printf(&text, "%s\n", plain) < 0) goto out;
+        } else if (inline_text && inline_text[0]) {
+            if (snag_buf_printf(&text, "%s\n", inline_text) < 0) goto out;
+        } else {
+            for (size_t p = 0u; p < json_array_size(parts); ++p) {
+                const char *part = snag_json_string(json_array_get(parts, p), "text");
+                if (part && part[0] && snag_buf_printf(&text, "%s\n", part) < 0) goto out;
+            }
+        }
+    }
+    if (!text.len) { rc = 1; goto out; }
+    if (snag_buf_printf(&text,
+            "[earlier conversation summary carried across a model or provider switch]\n") < 0 ||
+        snag_buf_terminate(&text) < 0) goto out;
+    message = json_pack("{s:s,s:s}", "role", "user", "content", (const char *)text.data);
+    if (!message || json_array_append_new(builder->request_input, message) < 0) goto out;
+    message = NULL;
+    rc = 0;
+out:
+    json_decref(message);
+    snag_buf_free(&text);
+    if (rc < 0) snag_errorf(error, error_size, "cannot install the portable summary text");
+    return rc;
+}
+
 static int
 install_compact_output(struct context_builder *builder, const json_t *output, char *error, size_t error_size)
 {
@@ -1617,9 +1661,12 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
     builder.session = session;
     builder.control = control;
     builder.continuation_scope = continuation_scope;
-    builder.compact_seq = session && (!session->compact_scope[0] ||
-        (continuation_scope && !strcmp(session->compact_scope, continuation_scope))) ?
-        session->compact_seq : 0u;
+    /* Keep the covered boundary across a binding change: the summary is carried
+     * as text below, and dropping coverage here is what made two bindings
+     * invalidate each other and re-walk the whole archive forever. */
+    bool compact_scope_portable = !session || !session->compact_scope[0] ||
+        (continuation_scope && !strcmp(session->compact_scope, continuation_scope));
+    builder.compact_seq = session ? session->compact_seq : 0u;
     /* Try the seam on the first attempt only: once a rejection has forced a
      * smaller source, re-adding already-covered events would keep the request
      * over the provider's limit and turn a compaction into a turn recovery. */
@@ -1644,8 +1691,16 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
                   "compaction requires an idle session");
         goto out;
     }
-    if (builder.compact_seq && install_compact_output(&builder, session->compact_output,
-                               error, error_size) < 0) goto out;
+    if (builder.compact_seq) {
+        int install_rc = compact_scope_portable ?
+            install_compact_output(&builder, session->compact_output, error, error_size) :
+            install_portable_text(&builder, session->compact_output, error, error_size);
+        if (install_rc < 0) goto out;
+        if (install_rc == 1) {   /* no portable text: this attempt cannot claim coverage */
+            builder.compact_seq = 0u;
+            builder.compact_walk_seq = 0u;
+        }
+    }
     if (snag_session_each_event(session, compact_event, &builder, error, error_size) < 0) goto out;
     if (prune_dangling_calls(builder.request_input) < 0) goto out;
     if (append_deferred_input(&builder) < 0) goto out;
@@ -1808,9 +1863,12 @@ snag_context_build(struct snag_session *session, const char *model, const char *
     builder.control = control;
     builder.instructions = instructions;
     builder.continuation_scope = continuation_scope;
-    builder.compact_seq = session && (!session->compact_scope[0] ||
-        (continuation_scope && !strcmp(session->compact_scope, continuation_scope))) ?
-        session->compact_seq : 0u;
+    /* Same rule as the compaction builder: a summary from another binding is
+     * carried as text, so a turn under the new binding keeps the context it was
+     * summarized into instead of dropping it and overflowing again. */
+    bool compact_scope_portable = !session || !session->compact_scope[0] ||
+        (continuation_scope && !strcmp(session->compact_scope, continuation_scope));
+    builder.compact_seq = session ? session->compact_seq : 0u;
     builder.compact_walk_seq = builder.compact_seq;
     builder.networked = config && session && !session->active_read_only &&
         (config->irc.listen_explicit || config->irc.client_count != 0u);
@@ -1852,8 +1910,13 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             "files, contact IRC, or change goals. These restrictions persist "
             "through steering and compaction and end with this turn.") < 0) goto out;
     builder.base_request_count = json_array_size(builder.request_input);
-    if (builder.compact_seq && install_compact_output(&builder, session->compact_output,
-                               error, error_size) < 0) goto out;
+    if (builder.compact_seq) {
+        int install_rc = compact_scope_portable ?
+            install_compact_output(&builder, session->compact_output, error, error_size) :
+            install_portable_text(&builder, session->compact_output, error, error_size);
+        if (install_rc < 0) goto out;
+        if (install_rc == 1) builder.compact_seq = 0u;
+    }
     if (snag_session_each_event(session, context_event, &builder, error, error_size) < 0) goto out;
     if (!builder.active_turn || builder.steering_seen != json_array_size(steering) ||
         builder.steering_seen != session->pending_steering_count) {

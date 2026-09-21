@@ -7675,6 +7675,12 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
                         send(handler, 200, provider.response_body(sequence, "small retained summary"), True)
                 elif mode == "scope-switch" and request["model"] == "host-model":
                     send(handler, 200, provider.response_body(sequence, "original scoped summary"), True)
+                elif mode == "scope-switch":
+                    # The covered boundary survives the switch, so the carried
+                    # source is served as it stands instead of being reduced by
+                    # re-walking a smaller prefix.
+                    rebuilt[0] = True
+                    send(handler, 200, provider.response_body(sequence, "summary of prior seeds"), True)
                 elif mode == "summary-auth":
                     send(handler, 401, {"error": {"code": "invalid_api_key"}})
                 elif mode == "summary-irreducible":
@@ -7702,8 +7708,7 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
                     item for item in request["input"]
                     if item.get("role") not in ("system", "developer")])) > 6500):
                 overflow(handler, sequence)
-            elif ((mode == "scope-switch" and not rebuilt[0]) or
-                  (mode not in ("exact", "count-overflow", "proactive", "sized") and not failed[0])):
+            elif (mode not in ("exact", "count-overflow", "proactive", "sized") and not failed[0]):
                 failed[0] = True
                 overflow(handler, sequence)
             else:
@@ -7780,12 +7785,11 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
                     completed = event_list(events, "compaction_completed")[-1]["data"]
                     started = next(e["data"] for e in events if e["type"] == "compaction_started"
                                    and e["data"]["compact_id"] == completed["compact_id"])
-                    assert started["source_seq"] < previous_start["source_seq"]
+                    assert started["source_seq"] >= previous_start["source_seq"]
                     assert started["continuation_scope"] == completed["continuation_scope"]
                     assert completed["continuation_scope"] != previous["continuation_scope"]
                     assert not event_list(events, "turn_recovery") and not event_list(events, "turn_failed")
-                    assert "original scoped summary" not in json.dumps(creates[-1]["input"])
-                    assert "seed-3 " in json.dumps(creates[-1]["input"])
+                    assert "original scoped summary" in json.dumps(creates[-1]["input"])
             replay = subprocess.run([binary, "--dotdir", str(dotdir), "-l"], capture_output=True, text=True)
             assert replay.returncode == 0, replay.stderr
             print(f"token accounting production {mode}: ok", flush=True)
