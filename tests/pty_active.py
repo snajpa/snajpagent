@@ -5038,7 +5038,7 @@ def test_ctrl_d_exit():
                 attrs[3] |= termios.ICANON
                 termios.tcsetattr(child.fd, termios.TCSANOW, attrs)
             child.send_wait(b"\x04", RESUME_HEADER if prompt else b"\x1b[?2004l",
-                       timeout=4.0 if prompt == b"engine_blocked"
+                       timeout=MIN_WAIT_S if prompt == b"engine_blocked"
                        else 1.0)
             flags = termios.tcgetattr(child.fd)[3]
             assert flags & termios.ICANON and flags & termios.ECHO
