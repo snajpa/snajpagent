@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Keep the seam between compaction chunks without paying for it on a retry. A
+  compaction source now re-reads the last few already-covered events on its
+  first attempt, so a group split across the boundary (a call and its output)
+  stays whole in the summary; an attempt that a provider rejection has forced
+  smaller drops that re-read, which is exactly when the request has to shrink.
+
 - Compact an over-window session before the request is built even when the
   budget is only known as a bound. Routes without a provider
   `auto_compact_input_tokens` figure, and sessions whose usage is already past
