@@ -4,6 +4,20 @@
 
 ## Unreleased
 
+- Keep the conversation summary across a model or provider switch. The covered
+  boundary now survives a binding change and the retained summary leads the new
+  binding's compaction source as plain text, instead of the boundary being
+  reset and the archive re-walked from an earlier point. Two bindings can no
+  longer invalidate each other's coverage, which re-summarized the same history
+  in an endless loop (each chunk's summary replacing the other binding's scope
+  and wiping its progress).
+
+- Reduce a completed summary when a provider rejects a request for capacity and
+  no uncovered events remain. The merged summary is condensed with the provider
+  under the same binding and the turn is retried, instead of failing the turn
+  with "context capacity rejection could not be reduced". The covered boundary
+  and the predecessor chain are unchanged by that pass.
+
 - Condense a merged compaction summary once it has grown past about a quarter of
   the window. Chunked compaction appends each chunk's summary to what came
   before, and the merged text is now folded together with the provider once it

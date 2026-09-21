@@ -168,6 +168,77 @@ out: snag_response_graph_free(&graph);
 #endif
 }
 
+/* Nothing uncovered: the history is already summarized in full, so no chunk can
+ * be compacted and a capacity rejection can only be reduced by condensing the
+ * merged summary itself (the merge step) under the same binding. Returns 1 when
+ * a reduce ran and committed, 0 when there was nothing to condense, <0 on a
+ * real failure. */
+static int
+run_reduce_attempt(struct app_state *app, const char *reason, const struct snag_credential *credential,
+                   bool native, const char *model, const char *continuation_scope,
+                   char *error, size_t error_size)
+{
+    static const char instruction[] =
+        "merge these summaries of overlapping chunks, deduplicating anything that appears twice";
+    struct snag_json_document request = {0}, output = {0};
+    char compact_id[SNAG_ID_HEX_LEN + 1u];
+    char source_hash[SNAG_SHA256_HEX_LEN + 1u];
+    bool started = false;
+    int rc = 0, stage_rc;
+
+    if (!app->session.compact_output || !app->session.compact_id[0]) return 0;
+    if (snag_context_compact_reduce_request_build(&app->session, app->turn_provider, model,
+            app->turn_effort, app->session.compact_output, instruction, &request, error, error_size) != 0)
+        return 0;   /* no portable text: nothing to condense */
+    rc = -1;
+    if (snag_context_compact_output_valid(app->session.compact_output, source_hash, NULL, error, error_size) < 0 ||
+        snag_random_id(compact_id) < 0) goto out;
+    if (strcmp(reason, "manual") && snag_ui_text(&app->ui, SNAG_UI_HOST,
+            "Condensing the merged summary; Ctrl-C interrupts") < 0) goto out;
+    if (commit_rendered(app, "compaction_started",
+            json_pack("{s:s,s:s,s:s,s:s,s:I,s:s,s:s,s:s,s:s,s:s,s:s,s:I,s:s,s:s}",
+                "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
+                "compact_id", compact_id, "count_method", "unknown",
+                "count_request_sha256", request.sha256,
+                "input_tokens_bound", (json_int_t)0,
+                "model", app->session.active_turn_model[0] ? app->session.active_turn_model : model,
+                "compaction_model", model,
+                "predecessor_compact_id", app->session.compact_id,
+                "profile_id", SNAJPAGENT_PROFILE_ID, "reason", reason,
+                "request_sha256", request.sha256,
+                "source_seq", (json_int_t)app->session.compact_seq,
+                "source_sha256", source_hash,
+                "continuation_scope", continuation_scope), error, error_size) < 0) goto out;
+    started = true;
+    if (snag_app_provider_activity(app, true) < 0) goto out;
+    stage_rc = native ? snag_app_provider_compact(app, request.value, credential, &output, error, error_size) :
+        run_responses_compaction(app, request.value, credential, &output, error, error_size);
+    if (snag_app_provider_activity(app, false) < 0) goto out;
+    if (stage_rc != 0) goto out;
+    if (commit_rendered(app, "compaction_completed",
+            json_pack("{s:s,s:s,s:I,s:O,s:s,s:s,s:s,s:I,s:s,s:s}",
+                "compact_id", compact_id, "count_method", "unknown",
+                "input_tokens_bound", (json_int_t)0, "output", json_incref(output.value),
+                "output_count_method", "unknown",
+                "output_count_request_sha256", request.sha256, "output_sha256", output.sha256,
+                "output_tokens_bound", (json_int_t)0,
+                "source_sha256", source_hash, "continuation_scope", continuation_scope),
+            error, error_size) < 0) goto out;
+    if (app->networked && snag_app_irc_snapshot(app, "compaction", error, error_size) < 0) goto out;
+    started = false;
+    rc = 1;
+out:
+    if (rc < 0 && started) {
+        if (commit_rendered(app, "compaction_interrupted",
+                compaction_interrupted_data(compact_id, "error"), error, error_size) < 0) {
+            /* the interruption failure is the one worth reporting */
+        }
+    }
+    snag_json_document_free(&request);
+    snag_json_document_free(&output);
+    return rc;
+}
+
 static int
 run_compaction_attempt(struct app_state *app, const char *reason, bool active_prefix, bool allow_native,
                const struct snag_credential *provided_credential,
@@ -282,6 +353,20 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             if (selection != 0u) {
                 (void)snag_fail(error, error_size, EOVERFLOW,
                          "no complete history prefix fits the hard context budget");
+                goto out;
+            }
+            /* The history is summarized in full, so no chunk is left to compact:
+             * a capacity rejection can then only be reduced by condensing the
+             * merged summary itself under this same binding. */
+            /* Only a capacity rejection justifies condensing an already
+             * complete summary; routine "nothing new" checks must stay quiet. */
+            int reduce_rc = strcmp(reason, "provider_rejection") == 0 ?
+                run_reduce_attempt(app, reason, credential, native, model, continuation_scope,
+                                   error, error_size) : 0;
+            if (reduce_rc < 0) goto out;
+            if (reduce_rc == 1) {
+                if (compacted) *compacted = true;
+                rc = 0;
                 goto out;
             }
             if (strcmp(reason, "manual") == 0 && snag_ui_text(&app->ui, SNAG_UI_HOST, active_prefix ?

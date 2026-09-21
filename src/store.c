@@ -881,7 +881,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         static const char methods[] =
             "exact media_upper_bound unknown anchored_upper_bound statistical_upper_estimate qualified_upper_bound";
         static const char reasons[] =
-            "manual proactive hard_budget provider_rejection model_switch";
+            "manual proactive hard_budget provider_rejection model_switch reduce";
         const char *compact_id = snag_json_string(data, "compact_id");
         const char *predecessor = snag_json_string(data, "predecessor_compact_id");
         const char *reason = snag_json_string(data, "reason");
@@ -923,7 +923,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             strcmp(capability, SNAJPAGENT_CAPABILITY_VERSION) != 0 ||
             snag_json_integer_u64(data, "source_seq", &source_seq) < 0 ||
             source_seq == 0u || source_seq >= seq ||
-            (source_seq <= session->compact_seq &&
+            /* A reduce keeps the covered boundary and only shrinks the merged
+             * summary, so the replay guard does not apply to it. */
+            (source_seq <= session->compact_seq && strcmp(reason, "reduce") != 0 &&
              (!scope || !session->compact_scope[0] || !strcmp(scope, session->compact_scope))) ||
             snag_json_integer_u64(data, "input_tokens_bound", &tokens) < 0 ||
             (strcmp(method, "unknown") == 0 ? tokens != 0u : tokens == 0u)) goto invalid;
