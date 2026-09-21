@@ -1789,6 +1789,14 @@ waits for a complete context boundary, finishes, or is interrupted.  An idle
 request with no new context reports that it was skipped.  Whitespace after the
 command is accepted; additional arguments are rejected.
 .PP
+A summary survives a model, provider, effort or account change.  The covered
+boundary is kept and the retained summary leads the new binding's source as
+plain text, so a switch compacts only the uncovered tail instead of re-walking
+the archive from an earlier boundary.  When a provider rejects a request for
+capacity and no uncovered events remain, the merged summary is condensed once
+with the provider under the same binding and the turn is retried; the covered
+boundary and the predecessor chain are unchanged by that pass.
+.PP
 Automatic and manual compaction announce that context is being compacted.
 During compaction, Ctrl-C with an empty draft interrupts preparation or the provider request; a
 nonempty draft is cleared first.  Cancelling a turn does not cancel a later
