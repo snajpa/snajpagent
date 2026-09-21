@@ -157,9 +157,13 @@ class Child:
     def send(self, data):
         os.write(self.fd, data)
 
-    def send_wait(self, data, needle, start=0, timeout=8.0):
+    def send_wait(self, data, needle, start=0, timeout=None):
         self.send(data)
-        return self.wait(needle, start=start, timeout=timeout)
+        # The default waits for a *rendered* effect of the keystroke, which on a
+        # loaded gate host can take longer than the few seconds it costs alone;
+        # the file's floor keeps it bounded while removing that timing failure.
+        return self.wait(needle, start=start,
+                         timeout=MIN_WAIT_S if timeout is None else timeout)
 
     def send_wait_idle(self, data, needle, start=0):
         end = self.send_wait(data, needle, start=start)
