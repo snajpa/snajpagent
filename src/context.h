@@ -84,5 +84,13 @@ int snag_context_compact_output_valid(const json_t *output, char output_hash[SNA
 /* Consumes a compact result and retains its validated canonical measurement. */
 int snag_context_compact_output_set(struct snag_json_document *document, json_t *value,
                                     char *error, size_t error_size);
+/* Builds the one-shot condense request for a merged summary that has grown past
+ * the window fraction: its input is the merged text plus the dedupe
+ * instruction and nothing else, so no event re-enters the source. */
+int snag_context_compact_reduce_request_build(struct snag_session *session,
+                                     const struct snag_provider_config *provider, const char *model,
+                                     const char *effort, const json_t *output, const char *instruction,
+                                     struct snag_json_document *create_request,
+                                     char *error, size_t error_size);
 
 #endif

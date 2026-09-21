@@ -1538,6 +1538,70 @@ snag_context_compact_output_set(struct snag_json_document *document, json_t *val
 }
 
 int
+snag_context_compact_reduce_request_build(struct snag_session *session,
+        const struct snag_provider_config *provider, const char *model, const char *effort,
+        const json_t *output, const char *instruction,
+        struct snag_json_document *create_request, char *error, size_t error_size)
+{
+    struct snag_buf text = {0};
+    json_t *input = NULL;
+    json_t *request = NULL;
+    char cache_key[SNAG_CACHE_KEY_LEN + 1u];
+    const char *upstream_model = snag_config_model_upstream(provider, model);
+    size_t count = output ? json_array_size(output) : 0u;
+    int rc = -1;
+
+    snag_buf_init(&text, SNAG_CONTEXT_MAX_COMPACT);
+    if (snag_buf_printf(&text, "%s\n\n", instruction) < 0) goto out;
+    for (size_t i = 0u; i < count; ++i) {
+        json_t *item = json_array_get(output, i);
+        json_t *parts = json_object_get(item, "content");
+        const char *plain = snag_json_string(item, "text");
+        const char *inline_text = snag_json_string(item, "content");
+        if (plain && plain[0]) {
+            if (snag_buf_printf(&text, "%s\n", plain) < 0) goto out;
+        } else if (inline_text && inline_text[0]) {
+            if (snag_buf_printf(&text, "%s\n", inline_text) < 0) goto out;
+        } else {
+            for (size_t p = 0u; p < json_array_size(parts); ++p) {
+                const char *part = snag_json_string(json_array_get(parts, p), "text");
+                if (part && part[0] && snag_buf_printf(&text, "%s\n", part) < 0) goto out;
+            }
+        }
+    }
+    if (snag_buf_terminate(&text) < 0) goto out;
+    if (!text.len) {
+        snag_errorf(error, error_size, "compaction reduce has no text to condense");
+        goto out;
+    }
+    input = json_pack("[{s:s,s:s}]", "role", "user", "content", (const char *)text.data);
+    if (!input) goto out;
+    snag_context_cache_key(session, provider ? provider->name : NULL, upstream_model, cache_key);
+    if (!cache_key[0]) goto out;
+    request = json_pack("{s:O,s:s,s:b,s:{s:s},s:b,s:b,s:s,s:s}",
+        "input", input, "model", upstream_model,
+        "parallel_tool_calls", session->parallel_tool_calls, "reasoning", "effort", effort,
+        "store", 0, "stream", 1, "tool_choice", "auto", "truncation", "disabled");
+    if (!request) goto out;
+    input = NULL; /* owned by the request now */
+    if (snag_json_set_new(request, "prompt_cache_key", json_string(cache_key)) < 0 ||
+        snag_json_set_new(request, "include", json_pack("[s]", "reasoning.encrypted_content")) < 0 ||
+        (provider && provider->auth == SNAG_AUTH_CHATGPT && snag_context_codex_request(request) < 0))
+        goto out;
+    if (snag_json_document_set(create_request, request, SNAG_CONTEXT_MAX_REQUEST) < 0) {
+        snag_errorf(error, error_size, "compaction reduce request exceeds 32 MiB");
+        goto out;
+    }
+    request = NULL;
+    rc = 0;
+out:
+    json_decref(input);
+    json_decref(request);
+    snag_buf_free(&text);
+    return rc;
+}
+
+int
 snag_context_compact_request_build(struct snag_session *session, const char *model, const char *effort,
                       bool active_prefix, uint64_t source_budget,
                       bool allow_oversized_first, const char *continuation_scope,

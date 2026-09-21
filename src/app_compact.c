@@ -452,6 +452,47 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
         snprintf(error, error_size, "compaction input still exceeds context after eight attempts");
         goto out;
     }
+    /* Design step 3: a merged summary that has grown past a quarter of the window
+     * is condensed once, under the same binding, before it is measured and
+     * committed. The reduce carries only the merged text and the dedupe
+     * instruction, so no event re-enters the source and the covered boundary
+     * never moves; a failed reduce keeps the un-reduced merge. */
+    if (app->turn_capacity.hard_input_known) {
+        const struct snag_input_observation *ratio = NULL;
+        if (app->session.usage_anchor.valid && app->session.usage_anchor.input_tokens &&
+            app->session.usage_anchor.model_input_bytes)
+            ratio = &app->session.usage_anchor;
+        else if (app->session.context_meter.valid && app->session.context_meter.input_tokens &&
+                 app->session.context_meter.model_input_bytes)
+            ratio = &app->session.context_meter;
+        uint64_t per_token = ratio ? ratio->model_input_bytes / ratio->input_tokens : 0u;
+        uint64_t window_bytes = per_token && app->turn_capacity.hard_input_tokens <= UINT64_MAX / per_token ?
+            (uint64_t)app->turn_capacity.hard_input_tokens * per_token : 0u;
+        if (window_bytes && output.bytes > window_bytes / 4u) {
+            struct snag_json_document reduce_request = {0};
+            struct snag_json_document reduced = {0};
+            char reduce_error[256] = {0};
+            int reduce_rc = snag_context_compact_reduce_request_build(&app->session, app->turn_provider,
+                model, effort, output.value,
+                "merge these summaries of overlapping chunks, deduplicating anything that appears twice",
+                &reduce_request, reduce_error, sizeof(reduce_error));
+            if (reduce_rc == 0) {
+                if (snag_app_provider_activity(app, true) < 0) goto out;
+                reduce_rc = native ? snag_app_provider_compact(app, reduce_request.value, credential,
+                        &reduced, reduce_error, sizeof(reduce_error)) :
+                    run_responses_compaction(app, reduce_request.value, credential,
+                        &reduced, reduce_error, sizeof(reduce_error));
+                if (snag_app_provider_activity(app, false) < 0) goto out;
+                if (reduce_rc == 0 && reduced.value) {
+                    snag_json_document_free(&output);
+                    output = reduced;
+                    memset(&reduced, 0, sizeof(reduced));
+                }
+            }
+            snag_json_document_free(&reduce_request);
+            snag_json_document_free(&reduced);
+        }
+    }
     output_tokens_bound = 0u;
     if (snag_context_compact_output_count_request_build(output.value,
             snag_config_model_upstream(app->turn_provider, model), &output_count, error, error_size) < 0 ||
