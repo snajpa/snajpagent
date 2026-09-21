@@ -192,7 +192,7 @@ class Child:
                 )
 
     def exit_cleanly(self, after):
-        self.wait_idle_prompt(start=after, timeout=8.0)
+        self.wait_idle_prompt(start=after, timeout=MIN_WAIT_S)
         self.exit_now()
 
     def exit_now(self, expect_resume=True):
