@@ -1556,8 +1556,12 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
     builder.compact_seq = session && (!session->compact_scope[0] ||
         (continuation_scope && !strcmp(session->compact_scope, continuation_scope))) ?
         session->compact_seq : 0u;
-    builder.compact_walk_seq = builder.compact_seq > SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS ?
-        builder.compact_seq - SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS : 0u;
+    /* Try the seam on the first attempt only: once a rejection has forced a
+     * smaller source, re-adding already-covered events would keep the request
+     * over the provider's limit and turn a compaction into a turn recovery. */
+    builder.compact_walk_seq = allow_oversized_first &&
+        builder.compact_seq > SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS ?
+        builder.compact_seq - SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS : builder.compact_seq;
     builder.request_input = json_array();
     builder.deferred_input = json_array();
     builder.input_timing = json_array();
