@@ -1768,21 +1768,37 @@ test_reasoning_continuation(struct snag_store *store, const char *workspace)
     assert(item_by_field(json_object_get(projection.create_request.value, "input"), "type", "compaction_summary"));
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2, empty,
         0, false, &config, different, NULL, NULL, &projection, error, sizeof(error), NULL) == 0);
-    assert(!item_by_field(json_object_get(projection.create_request.value, "input"), "type", "compaction_summary"));
-    assert(!item_by_field(json_object_get(projection.create_request.value, "input"), "type", "reasoning"));
-    assert(item_by_field(json_object_get(projection.create_request.value, "input"), "type", "function_call"));
-    /* A new scope may need to summarize a smaller prefix than the old scope did.
-     * Keep the paired call/result together and replay the remaining history. */
-    assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium",
-        true, 1u, true, different, &compact, error, sizeof(error), NULL) == 0);
+    /* A different scope no longer re-walks the archive: the covered boundary is
+     * kept and the summary travels as plain text, so the provider items behind
+     * the boundary (and the summary item itself) are gone while its content
+     * stays in the request. */
+    {
+        json_t *input = json_object_get(projection.create_request.value, "input");
+        assert(!item_by_field(input, "type", "compaction_summary"));
+        assert(!item_by_field(input, "type", "reasoning"));
+        assert(!item_by_field(input, "type", "function_call"));
+        bool carried = false;
+        for (size_t item = 0u; item < json_array_size(input); ++item) {
+            const char *content = json_string_value(json_object_get(json_array_get(input, item), "content"));
+            if (content && strstr(content, "carried across a model or provider switch") &&
+                strstr(content, "summary"))
+                carried = true;
+        }
+        assert(carried);
+    }
+    /* With the boundary kept, this scope has nothing new to compact: the build
+     * says so instead of rebuilding the archive from an earlier boundary. The
+     * scope-matched projection above stays valid for the store checks below. */
+    {
+        struct snag_context_projection carry = {0};
+        int carry_rc = snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium",
+            true, 1000000u, true, different, &carry, error, sizeof(error), NULL);
+        if (carry_rc != 0) fprintf(stderr, "carry build rc=%d: %s\n", carry_rc, error);
+        assert(carry_rc == 1);
+        snag_context_projection_free(&carry);
+    }
     uint64_t rebuilt_seq = compact.source_seq;
-    assert(rebuilt_seq < session.compact_seq);
-    json_t *rebuilt = json_object_get(compact.create_request.value, "input");
-    assert(!item_by_field(rebuilt, "type", "compaction_summary"));
-    assert(!item_by_field(rebuilt, "type", "reasoning"));
-    assert_string(item_by_field(rebuilt, "type", "function_call"), "call_id", "call_exec");
-    assert_string(item_by_field(rebuilt, "type", "function_call_output"), "call_id", "call_exec");
-    uint64_t previous_seq = session.compact_seq, next_seq = session.next_seq;
+    json_t *rebuilt = NULL;    uint64_t previous_seq = session.compact_seq, next_seq = session.next_seq;
     for (unsigned int invalid = 0u; invalid < 5u; ++invalid) {
         data = compaction_started_data(&session, "78000000000000000000000000000000",
             "provider_rejection", rebuilt_seq, compact.model_input.sha256,
@@ -1817,8 +1833,18 @@ test_reasoning_continuation(struct snag_store *store, const char *workspace)
         "compact_id", session.active_compact_id, "reason", "context_rejected"));
     assert(!session.active_compact_scope[0] && session.compact_seq == previous_seq);
     assert(!strcmp(session.compact_scope, scope));
-    commit_counted_compaction(&session, "77000000000000000000000000000000",
-        "provider_rejection", SNAJPAGENT_MODEL, &compact, summary);
+    /* A commit that keeps the covered boundary is valid only when it carries a
+     * different scope - the carried case. Use the scope-matched projection's
+     * hashes with the carried scope, which is what the re-walk used to fake. */
+    data = compaction_started_data(&session, "77000000000000000000000000000000",
+        "provider_rejection", rebuilt_seq, compact.model_input.sha256,
+        compact.create_request.sha256, compact.model_input.bytes);
+    assert(json_object_set_new(data, "continuation_scope", json_string(different)) == 0);
+    commit_event(&session, "compaction_started", data);
+    data = compaction_completed_data(session.active_compact_id, compact.model_input.sha256,
+        summary_hash, compact.create_request.sha256, compact.model_input.bytes, 1u, summary);
+    assert(json_object_set_new(data, "continuation_scope", json_string(different)) == 0);
+    commit_event(&session, "compaction_completed", data);
     assert(session.compact_seq == rebuilt_seq && !strcmp(session.compact_scope, different));
     snag_session_close(&session);
     assert(snag_session_open(store, &session, saved, error, sizeof(error)) == 0);
@@ -1827,7 +1853,10 @@ test_reasoning_continuation(struct snag_store *store, const char *workspace)
         0, false, &config, different, NULL, NULL, &projection, error, sizeof(error), NULL) == 0);
     rebuilt = json_object_get(projection.create_request.value, "input");
     assert(item_by_field(rebuilt, "type", "compaction_summary"));
-    assert(item_by_field(rebuilt, "content", "done"));
+    /* Everything behind the covered boundary stays summarized: the replayed
+     * summary stands in for it instead of the raw history. */
+    assert(!item_by_field(rebuilt, "content", "done"));
+    assert(!item_by_field(rebuilt, "type", "function_call"));
     assert(!item_by_field(rebuilt, "type", "function_call"));
     json_decref(summary);
     snag_context_projection_free(&compact);
