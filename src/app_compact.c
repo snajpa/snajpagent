@@ -204,7 +204,10 @@ run_reduce_attempt(struct app_state *app, const char *reason, const struct snag_
                 "model", app->session.active_turn_model[0] ? app->session.active_turn_model : model,
                 "compaction_model", model,
                 "predecessor_compact_id", app->session.compact_id,
-                "profile_id", SNAJPAGENT_PROFILE_ID, "reason", reason,
+                /* The store accepts an unchanged boundary only for this
+                 * reason; emitting the caller's reason here made the commit
+                 * fail and the reduce retry until the turn gave up. */
+                "profile_id", SNAJPAGENT_PROFILE_ID, "reason", "reduce",
                 "request_sha256", request.sha256,
                 "source_seq", (json_int_t)app->session.compact_seq,
                 "source_sha256", source_hash,

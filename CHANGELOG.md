@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Record a summary-condensing pass under its own reason. The reduce that follows
+  a capacity rejection with nothing left to compact was committed with the
+  caller's reason, so the store rejected its unchanged boundary and the turn
+  retried the condense until it failed. It is now durable as `reduce`.
+
 - Keep the conversation summary across a model or provider switch. The covered
   boundary now survives a binding change and the retained summary leads the new
   binding's compaction source as plain text, instead of the boundary being
