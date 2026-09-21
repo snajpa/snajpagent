@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Send the summary-condensing pass the same request shape as every other
+  compaction. The reduce that follows a capacity rejection with nothing left to
+  compact was posted as a plain request (no empty tools array, a tool_choice
+  set), so providers that classify tool-less requests - and the compaction
+  instruction itself - did not see it as a compaction request.
+
 - Record a summary-condensing pass under its own reason. The reduce that follows
   a capacity rejection with nothing left to compact was committed with the
   caller's reason, so the store rejected its unchanged boundary and the turn

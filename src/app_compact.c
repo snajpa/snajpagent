@@ -214,8 +214,18 @@ run_reduce_attempt(struct app_state *app, const char *reason, const struct snag_
                 "continuation_scope", continuation_scope), error, error_size) < 0) goto out;
     started = true;
     if (snag_app_provider_activity(app, true) < 0) goto out;
-    stage_rc = native ? snag_app_provider_compact(app, request.value, credential, &output, error, error_size) :
-        run_responses_compaction(app, request.value, credential, &output, error, error_size);
+    if (native) {
+        stage_rc = snag_app_provider_compact(app, request.value, credential, &output, error, error_size);
+    } else {
+        /* Every other compaction request goes through this wrapper: an empty
+         * tools array, no tool_choice, the compaction instruction and the
+         * capacity output limit. The reduce must not diverge from it. */
+        json_t *wire = responses_compact_create_request(request.value, model, app->turn_effort,
+                                                        &app->turn_capacity);
+        if (!wire) { snag_errorf(error, error_size, "cannot build the reduce wire request"); goto out; }
+        stage_rc = run_responses_compaction(app, wire, credential, &output, error, error_size);
+        json_decref(wire);
+    }
     if (snag_app_provider_activity(app, false) < 0) goto out;
     if (stage_rc != 0) goto out;
     if (commit_rendered(app, "compaction_completed",
