@@ -77,7 +77,7 @@ int snag_context_compact_output_count_request_build(const json_t *output, const 
  * covered boundary is advanced to the overlap floor instead of the covered end;
  * the boundary must advance past everything the chunk actually covered while
  * only the request source re-reads behind it. */
-#define SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS 0u
+#define SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS 16u
 
 int snag_context_compact_output_valid(const json_t *output, char output_hash[SNAG_SHA256_HEX_LEN + 1u],
                                      size_t *output_bytes, char *error, size_t error_size);
