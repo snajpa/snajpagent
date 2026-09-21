@@ -15,13 +15,14 @@
   caller's reason, so the store rejected its unchanged boundary and the turn
   retried the condense until it failed. It is now durable as `reduce`.
 
-- Keep the conversation summary across a model or provider switch. The covered
-  boundary now survives a binding change and the retained summary leads the new
-  binding's compaction source as plain text, instead of the boundary being
-  reset and the archive re-walked from an earlier point. Two bindings can no
-  longer invalidate each other's coverage, which re-summarized the same history
-  in an endless loop (each chunk's summary replacing the other binding's scope
-  and wiping its progress).
+- Keep model-switch recovery on the selected binding. A same-window switch no
+  longer compacts merely because the previous usage observation names another
+  model. When the selected model needs a smaller context, every chunk and
+  summary reduction runs through that target model while the covered boundary
+  and retained summary carry forward. Model selection, failed and cancelled
+  turns, and completed tool results remain durable across exit and resume.
+  This removes the previous-binding detour that alternated continuation scopes
+  and repeatedly re-summarized the same archive.
 
 - Reduce a completed summary when a provider rejects a request for capacity and
   no uncovered events remain. The merged summary is condensed with the provider
@@ -53,11 +54,6 @@
   available. The chunk budget prefers the reported input anchor over the local
   meter, so a session that reports a larger count than the metered estimate
   compacts against the number the provider will actually charge.
-
-- Keep compaction coverage across a provider or model switch. When the binding
-  changes, the retained summary's text now leads the new source as a plain
-  user message instead of dropping the covered range, so a switch cannot make
-  the engine re-walk history it had already summarized.
 
 - Keep terminal input alive after an input-shaped public-output failure. The
   presenter closed its composer for any `read_input`/`apply_display` error,
@@ -689,11 +685,6 @@
   on and never rejected; the bound follows the window (about 670 KB there) and
   the shrink loop still halves it after a rejection. No usable observation
   keeps the protocol maximum.
-
-- Compact through the previous binding when a model or provider switch leaves
-  more context than the new model's hard input holds: the compaction runs with
-  the provider and model that produced the context (its compaction endpoint),
-  and only then does the turn run on the new model.
 
 - Report an IRC outage once instead of once per retry. A server that stays down
   emitted a disconnected event on every reconnect attempt, filling the model

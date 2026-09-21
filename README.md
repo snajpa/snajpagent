@@ -237,7 +237,11 @@ and slash-command exceptions.
 `/model` lists the locally cached catalog and `/model cache` refreshes
 providers; select a row by number or with `/model PROVIDER/MODEL/EFFORT`. Both
 `/model` and `-m` select from the next full turn onward, including across
-resume; add `save` to write the selection into the configuration file.
+resume; add `save` to write the selection into the configuration file. A model
+change alone does not compact. If the selected model needs a smaller context,
+compaction runs through that model in bounded chunks. Exiting immediately after
+the selection, or after a failed or cancelled turn, keeps both the selection
+and completed tool results for resume.
 Model-limit rules can supply `reasoning_efforts = ["max", "high", "low", "none"]`
 when a provider omits effort choices, or an optional `image_tokens` value for a
 provider-documented per-image ceiling that differs from the built-in

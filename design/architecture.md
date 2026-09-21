@@ -197,17 +197,18 @@ when the account ID is unchanged. Scope mismatches omit private provider state
 while ordinary conversation and local tool/result pairing remain usable.
 Legacy events have no continuation to recover. Compatible compaction requests
 include reasoning in the selected complete history groups; normal compaction
-then replaces that prefix. Bound compact output stays with its scope; a mismatch
-rebuilds ordinary history instead of forwarding opaque compact state.
-`compaction_started` records the new continuation scope, and completion must
-match it. Source boundaries advance within one scope; an explicitly different
-scope may compact an earlier complete prefix when overflow recovery shrinks
-the rebuilt history. The predecessor compact ID still identifies the previous
-output, which remains intact until successful completion. Interruption clears
-only the active attempt. Historical starts without a scope retain their
-monotonic-boundary validation, and legacy unbound compact records retain their
-existing behavior. The private 0600 journal retains plaintext reasoning
-when supplied by the provider. Display/history and redacted protocol traces
+then replaces that prefix. Bound compact output stays with its scope. Across a
+scope change, its plain summary text and covered boundary remain portable while
+opaque provider state is omitted. The selected target binding performs any
+required tail compaction or summary reduction against its own capacity; request
+preparation never switches back to the previous binding.
+`compaction_started` records that target continuation scope, and completion must
+match it. Every completed chunk advances the saved source boundary; interruption
+clears only the active attempt and retains earlier progress. The predecessor
+compact ID identifies the previous output until successful completion.
+Historical starts without a scope retain their monotonic-boundary validation,
+and legacy unbound compact records retain their existing behavior. The private
+0600 journal retains plaintext reasoning when supplied by the provider. Display/history and redacted protocol traces
 omit reasoning payloads, while token usage remains available.
 
 Structured non-2xx and SSE failures retain their bounded provider code/type,

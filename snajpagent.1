@@ -1789,13 +1789,16 @@ waits for a complete context boundary, finishes, or is interrupted.  An idle
 request with no new context reports that it was skipped.  Whitespace after the
 command is accepted; additional arguments are rejected.
 .PP
-A summary survives a model, provider, effort or account change.  The covered
-boundary is kept and the retained summary leads the new binding's source as
-plain text, so a switch compacts only the uncovered tail instead of re-walking
-the archive from an earlier boundary.  When a provider rejects a request for
-capacity and no uncovered events remain, the merged summary is condensed once
-with the provider under the same binding and the turn is retried; the covered
-boundary and the predecessor chain are unchanged by that pass.
+A summary survives a model, provider, effort or account change.  A switch by
+itself does not start compaction.  When the selected binding needs a smaller
+context, that binding keeps the covered boundary, leads its source with the
+retained summary as plain text, and compacts only the uncovered tail.  The
+previous binding is not selected again to prepare the new binding's request.
+Failed or cancelled turns and process exit retain the selection and compaction
+progress; resume continues from that durable state without replaying completed
+tools.  When a provider rejects a request for capacity and no uncovered events
+remain, the merged summary is condensed once under the selected binding and the
+turn is retried; the covered boundary and predecessor chain stay unchanged.
 .PP
 Automatic and manual compaction announce that context is being compacted.
 During compaction, Ctrl-C with an empty draft interrupts preparation or the provider request; a
@@ -2080,9 +2083,11 @@ An unchanged rejected request or irreducible group remains an error.
 Summary requests shrink to smaller complete
 history groups only after exact counts or actual context rejections, not estimates.
 An irreducible prompt/group fails clearly; the durable history is retained.
-After a provider/model/account change, recovery may rebuild a smaller prefix
-than the previous binding compacted. Later conversation remains available, and
-interrupted recovery retains the previous compact output.
+After a provider/model/account change, recovery carries the saved covered
+boundary and portable summary text. If the selected binding still rejects the
+request, it compacts only complete uncovered prefixes or reduces the retained
+summary under its own capacity. Later conversation remains available, and
+interrupted recovery retains every previously completed compact output.
 .TP
 .B native_compaction
 Use the provider's native compaction endpoint.  When false, use an ordinary
@@ -3698,15 +3703,15 @@ remain failures; reasoning alone cannot complete a turn or execute a tool.
 Resume preserves retained continuation. Changing provider, endpoint, upstream
 model or API key omits incompatible private state from subsequent requests;
 OAuth token refresh retains continuity when the account ID is unchanged.
-Ordinary messages and tool results remain available across model switches.
-Compaction sends compatible reasoning with the selected history, then replaces
-that prefix normally. A provider/account switch rebuilds ordinary history when
-the saved compact output has a different continuation binding; private compact
-state is not forwarded to the new provider. Older sessions cannot recover reasoning discarded by
-an earlier executable. If the rebuilt history exceeds the new model's context,
-recovery reduces the summary request to smaller complete history groups. This
-can start before the previous model's compacted boundary without discarding
-later conversation or replaying completed tools.
+Ordinary messages, summary text and paired tool results remain available across
+model switches.  The covered compaction boundary remains durable while opaque
+private compact items from another binding are omitted.  The selected binding
+performs any required tail compaction or summary reduction against its own
+capacity; the previous binding is not restored for request preparation.  A
+smaller target context may require several bounded chunks, each advancing the
+saved boundary.  Failed and cancelled turns retain that progress and the
+selected model across resume, and completed tools are never re-executed.
+Older sessions cannot recover reasoning discarded by an earlier executable.
 Plaintext provider reasoning is sensitive journal data:
 protect the session directory and its backups as you would the conversation.
 .SS Provider failures

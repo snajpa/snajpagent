@@ -2352,6 +2352,218 @@ def run_persistent_model_recovery_case(binary, root):
     print("persistent model HTTP recovery/queue/resume PASS", flush=True)
 
 
+def run_long_model_resume_recovery_case(binary, root):
+    """Long tool history survives model changes, failures, exits and compaction."""
+    binary = os.path.abspath(binary)
+    root = Path(root).resolve()
+    case = root / "long-model-resume"
+    workspace, state = case / "work", case / "state"
+    workspace.mkdir(parents=True)
+    config = case / "config.ini"
+    provider = FakeResponses()
+    provider.AGENTS = {**provider.AGENTS, "same-a": "same-a", "same-b": "same-b",
+                       "small-c": "small-c"}
+    write_irc_config(config, provider.port, "same-a")
+    with config.open("a", encoding="utf-8") as out:
+        out.write(
+            "[model-limit fake/same-a]\nmax_input_tokens = 100000\n"
+            "[model-limit fake/same-b]\nmax_input_tokens = 100000\n"
+            "[model-limit fake/small-c]\nmax_input_tokens = 20000\n"
+        )
+    environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret", PAGER="")
+    summaries = []
+    cancel_arrived, cancel_release = threading.Event(), threading.Event()
+    failure_requests = [0]
+
+    def with_usage(body, input_tokens):
+        old = '\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}'
+        new = (f'\"usage\":{{\"input_tokens\":{input_tokens},\"output_tokens\":1,'
+               f'\"total_tokens\":{input_tokens + 1}}}')
+        assert old in body
+        return body.replace(old, new)
+
+    def capacity_failure(handler):
+        body = provider.event("response.failed", {"type": "response.failed", "response": {
+            "error": {"code": "context_length_exceeded",
+                      "message": "the target model needs a smaller context"}}}).encode()
+        provider.reply(handler, body, close_header=True)
+
+    def runtime_failure(handler):
+        body = provider.event("response.failed", {"type": "response.failed", "response": {
+            "error": {"code": "server_error", "message": "random fixture failure"}}}).encode()
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/event-stream")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.send_header("Retry-After", "0")
+        handler.send_header("Connection", "close")
+        handler.end_headers()
+        handler.wfile.write(body)
+
+    def respond(handler, request, sequence):
+        model = request["model"]
+        if is_summary_request(request):
+            summaries.append((model, request))
+            text = f"summary-by-{model}-{len(summaries)}"
+            provider.reply(handler, with_usage(provider.response_body(sequence, text), 1000).encode(),
+                           close_header=True)
+            return
+
+        latest = provider.latest_user(request)
+        if latest == "post-switch-failure":
+            failure_requests[0] += 1
+            runtime_failure(handler)
+            return
+        if latest == "post-switch-cancel":
+            body = with_usage(provider.response_body(sequence, "cancel should not finish"), 70000).encode()
+            cut = body.index(b"event: response.output_text.done")
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.send_header("Content-Length", str(len(body)))
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            handler.wfile.write(body[:cut])
+            handler.wfile.flush()
+            cancel_arrived.set()
+            cancel_release.wait(10.0)
+            try:
+                handler.wfile.write(body[cut:])
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+        if latest == "small-window-recover":
+            encoded = json.dumps(request["input"])
+            raw_turns = encoded.count("bulk-history-")
+            if "summary-by-small-c" not in encoded or raw_turns > 4:
+                capacity_failure(handler)
+                return
+
+        tool_turn = (latest.startswith("bulk-history-") or
+                     latest in ("post-switch-recovered", "post-small-resume"))
+        if tool_turn:
+            marker = latest.split()[0]
+            calls = {item.get("call_id") for item in request["input"]
+                     if item.get("type") == "function_call_output"}
+            wanted = [f"call_{marker}_a", f"call_{marker}_b"]
+            if not all(call_id in calls for call_id in wanted):
+                body = provider.functions_body(sequence, [(call_id, "exec_command", {
+                    "command": f"printf {call_id}", "workdir": str(workspace),
+                    "stdin": None, "pty": False, "timeout_ms": 10000,
+                    "yield_ms": 0, "max_output_tokens": 1000,
+                }) for call_id in wanted])
+                provider.reply(handler, with_usage(body, 70000).encode(), close_header=True)
+                return
+        tokens = 10000 if model == "small-c" else 70000
+        provider.reply(handler, with_usage(provider.response_body(sequence, "long recovery complete"),
+                                           tokens).encode(), close_header=True)
+
+    def run_turn(text, sid=None, model=None, timeout=45):
+        command = [binary, "--dotdir", str(state), "--config", str(config), "-e"]
+        if model:
+            command += ["-m", model]
+        if sid:
+            command += ["--resume", sid]
+        return subprocess.run(command + ["--", text], cwd=workspace, capture_output=True,
+                              text=True, timeout=timeout, env=environment)
+
+    provider.runtime_handler = respond
+    terminal = None
+    try:
+        sid = None
+        for number in range(40):
+            payload = f"bulk-history-{number:02d} " + (chr(ord("a") + number % 26) * 4096)
+            result = run_turn(payload, sid)
+            assert result.returncode == 0, (number, result.stderr)
+            sid = read_events(state)[0].parent.name
+
+        _, before_switch = read_events(state)
+        assert len(event_list(before_switch, "turn_completed")) == 40
+        assert len(event_list(before_switch, "tool_started")) == 80
+        assert not event_list(before_switch, "compaction_started")
+
+        # A durable selection made after substantial history must survive an
+        # immediate exit before the selected model starts a turn.
+        terminal = TmuxTerminal(case / "select-b", binary, workspace, state, config, 120, 28,
+            args=("--no-listen", "--no-client", "--resume", sid), environment=environment)
+        terminal.wait("same-a/medium")
+        terminal.submit_wait("/model fake/same-b/medium", "until changed")
+        terminal.exit()
+        terminal.close(); terminal = None
+
+        # Under the new selection, exhaust a random provider failure, cancel a
+        # later in-flight response, and leave without a successful turn.
+        terminal = TmuxTerminal(case / "fail-cancel-b", binary, workspace, state, config, 120, 28,
+            args=("--no-listen", "--no-client", "--resume", sid), environment=environment)
+        terminal.wait("same-b/medium")
+        terminal.submit("post-switch-failure")
+        terminal.wait("turn failed; try /retry", timeout=30)
+        terminal.submit("post-switch-cancel")
+        assert cancel_arrived.wait(10.0), "cancel response did not start"
+        terminal.send_key("C-c")
+        wait_event_count(state, "turn_cancel_requested", 1)
+        wait_event_count(state, "turn_interrupted", 1)
+        cancel_release.set()
+        terminal.exit()
+        terminal.close(); terminal = None
+
+        # Reopen after both failures and complete a tool-heavy turn under the
+        # selected same-window model. No compaction was needed for this switch.
+        result = run_turn("post-switch-recovered", sid)
+        assert result.returncode == 0, result.stderr
+        _, after_same_window = read_events(state)
+        assert failure_requests[0] >= 2
+        assert len(event_list(after_same_window, "turn_failed")) == 1
+        assert len(event_list(after_same_window, "turn_cancel_requested")) == 1
+        assert len(event_list(after_same_window, "turn_interrupted")) == 1
+        assert len(event_list(after_same_window, "turn_completed")) == 41
+        assert len(event_list(after_same_window, "tool_started")) == 82
+        assert not event_list(after_same_window, "compaction_started")
+        recovery_before_small = len(event_list(after_same_window, "turn_recovery"))
+        assert all(e["data"]["config"]["model"] == "same-b"
+                   for e in event_list(after_same_window, "turn_started")[-3:])
+
+        # Select a genuinely smaller target, exit before its first turn, then
+        # force several bounded chunks. Every summary must run through the
+        # target binding; returning to the old binding recreates the real loop.
+        terminal = TmuxTerminal(case / "select-c", binary, workspace, state, config, 120, 28,
+            args=("--no-listen", "--no-client", "--resume", sid), environment=environment)
+        terminal.wait("same-b/medium")
+        terminal.submit_wait("/model fake/small-c/medium", "until changed")
+        terminal.exit()
+        terminal.close(); terminal = None
+
+        result = run_turn("small-window-recover", sid, timeout=90)
+        assert result.returncode == 0, result.stderr
+        result = run_turn("post-small-resume", sid)
+        assert result.returncode == 0, result.stderr
+        _, log = read_events(state)
+
+        started = event_list(log, "compaction_started")
+        completed = event_list(log, "compaction_completed")
+        assert 2 <= len(started) <= 8, len(started)
+        assert len(completed) == len(started)
+        assert summaries and all(model == "small-c" for model, _ in summaries), [m for m, _ in summaries]
+        assert all(e["data"].get("compaction_model") == "small-c" for e in started)
+        assert {e["data"]["reason"] for e in started} == {"provider_rejection", "hard_budget"}
+        boundaries = [e["data"]["source_seq"] for e in started]
+        assert boundaries == sorted(boundaries) and len(set(boundaries)) == len(boundaries), boundaries
+
+        tools = event_list(log, "tool_started")
+        finished = event_list(log, "tool_finished")
+        assert len(tools) == len(finished) == 84, (len(tools), len(finished))
+        call_ids = [e["data"]["call_id"] for e in tools]
+        assert len(set(call_ids)) == len(call_ids), "a completed tool was replayed"
+        assert len(event_list(log, "turn_completed")) == 43
+        assert event_list(log, "turn_started")[-1]["data"]["config"]["model"] == "small-c"
+        assert len(event_list(log, "turn_recovery")) == recovery_before_small, \
+            "target-bound compaction entered the outer turn-recovery loop"
+        print("long model switch/failure/cancel/resume recovery PASS", flush=True)
+    finally:
+        cancel_release.set()
+        if terminal is not None:
+            terminal.close()
+        provider.close()
+
+
 def run_goal_interrupt_prompt_case(binary, root, chat=False, burst=False, width=80):
     case = root / f"goal-interrupt-{chat}-{burst}-{width}"
     prompt = "{goal_spinner}{chat:C>}{rollout-idle:I>}{rollout-active:A>}"
@@ -8331,6 +8543,7 @@ def run_irc_case(binary, root):
                                              (True, False, 28, 0), (True, True, 100, 2)):
             run_history_length_case(binary, root, active, chat, width, verbosity)
         run_persistent_model_recovery_case(binary, root)
+        run_long_model_resume_recovery_case(binary, root)
         for chat in (False, True):
             run_goal_interrupt_http_case(binary, root, chat)
         run_blank_enter_stream_case(binary, root)
