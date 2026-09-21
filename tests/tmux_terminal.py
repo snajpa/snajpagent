@@ -7796,6 +7796,14 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
                     assert started["continuation_scope"] == completed["continuation_scope"]
                     assert completed["continuation_scope"] != previous["continuation_scope"]
                     assert not event_list(events, "turn_recovery") and not event_list(events, "turn_failed")
+                    # The carry is visible in the turn request under the new
+                    # binding: it leads with the previous scope's summary text.
+                    # A build that resets coverage re-walks the raw history
+                    # instead and never contains that text.
+                    recover_requests = [r for r in creates if provider.latest_user(r) == "recover"]
+                    assert recover_requests, "no request under the new binding"
+                    assert "original scoped summary" in json.dumps(recover_requests[0]), \
+                        "the carried summary did not reach the new binding's request"
                     # The carried text travels in the new binding's compaction
                     # source (pinned by tests/test_context.c); by the time the
                     # turn runs, its own summary has replaced it.
