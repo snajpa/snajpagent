@@ -221,6 +221,10 @@ existing rebase instead of recording a second checkpoint. A newly completed
 model response after that boundary supplies fresh history; if it later exceeds
 the limit, the same turn can advance to another checkpoint rather than being
 treated as an unchanged minimal request.
+An active IRC update prompt contains durable room-event references. Minimal
+recovery resolves only the references named by that current prompt and supplies
+their message text, not unrelated old room traffic; the journal remains the
+authority for original receipt, sender and room metadata.
 Failed compaction attempts record `compaction_interrupted` with reason `error`
 before retry or exit. Replay also clears an unfinished compaction at a recorded
 turn recovery/termination boundary for journals written by older versions that

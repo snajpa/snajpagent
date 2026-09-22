@@ -2107,6 +2107,9 @@ and
 .B read_tool_output
 tools to recover a needed fact without replaying those calls. This recovery
 survives interruption and resume, including a turn without an active goal.
+For a current IRC update, the request also retains the referenced room
+messages from the durable journal; unrelated historical room traffic stays
+available through history tools rather than being replayed.
 A rejection of the minimal recovery request fails that attempt rather than
 starting another compaction loop. Known hard-budget overflow may compact one
 tractable prefix first; if the active turn remains too large, it takes the same

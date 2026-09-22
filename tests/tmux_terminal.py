@@ -2554,9 +2554,9 @@ def run_long_model_resume_recovery_case(binary, root):
         assert all(e["data"]["config"]["model"] == "same-b"
                    for e in event_list(after_same_window, "turn_started")[-3:])
 
-        # Select a genuinely smaller target, exit before its first turn, then
-        # force several bounded chunks. Every summary must run through the
-        # target binding; returning to the old binding recreates the real loop.
+        # Select a genuinely smaller target and exit before its first turn.
+        # Its rejected history request rebases without repeated compaction;
+        # later growth can still compact one complete uncovered prefix.
         terminal = TmuxTerminal(case / "select-c", binary, workspace, state, config, 120, 28,
             args=("--no-listen", "--no-client", "--resume", sid), environment=environment)
         terminal.wait("same-b/medium")
@@ -2572,11 +2572,13 @@ def run_long_model_resume_recovery_case(binary, root):
 
         started = event_list(log, "compaction_started")
         completed = event_list(log, "compaction_completed")
-        assert 2 <= len(started) <= 8, len(started)
+        assert len(started) == 1, len(started)
         assert len(completed) == len(started)
         assert summaries and all(model == "small-c" for model, _ in summaries), [m for m, _ in summaries]
         assert all(e["data"].get("compaction_model") == "small-c" for e in started)
-        assert {e["data"]["reason"] for e in started} == {"provider_rejection", "hard_budget"}
+        assert {e["data"]["reason"] for e in started} == {"hard_budget"}
+        assert len(event_list(log, "response_capacity_rejected")) == 1
+        assert len(event_list(log, "context_rebased")) == 1
         boundaries = [e["data"]["source_seq"] for e in started]
         assert boundaries == sorted(boundaries) and len(set(boundaries)) == len(boundaries), boundaries
 
@@ -8152,36 +8154,22 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
 
 
 def run_capacity_handoff_cases(binary, root, modes=("queue", "chat", "cancel")):
-    """Recovery survives fresh input and reopen; pending compaction remains cancellable."""
+    """Rejected-turn recovery preserves fresh input, cancellation and reopen."""
     for mode in modes:
         case = root / mode
         case.mkdir(parents=True)
         state, config = case / "s", case / "c.ini"
         provider = FakeResponses()
         write_irc_config(config, provider.port, "host-model")
-        ready, release, summarizing = threading.Event(), threading.Event(), threading.Event()
-        requests, summaries = [], []
+        ready, release, recovery_waiting = threading.Event(), threading.Event(), threading.Event()
+        requests = []
         environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret", PAGER="")
         terminal, peer = None, None
         endpoint = f"127.0.0.1:{free_loopback_port()}"
 
         def respond(handler, request, sequence):
             if is_summary_request(request):
-                summaries.append(request)
-                summarizing.set()
-                if mode == "cancel":
-                    release.wait(10)
-                response = {"id": f"resp_{sequence}", "status": "in_progress", "output": []}
-                item = {"id": f"msg_{sequence}", "type": "message", "status": "completed",
-                        "role": "assistant", "phase": "final_answer",
-                        "content": [{"type": "output_text", "text": "retained setup summary"}]}
-                empty = {"id": f"empty_{sequence}", "type": "message", "status": "completed",
-                         "role": "assistant", "phase": "commentary", "content": []}
-                body = provider.event("response.created", {"response": response})
-                body += provider.event("response.output_item.added", {"output_index": 0, "item": empty})
-                body += provider.event("response.output_item.added", {"output_index": 1, "item": item})
-                body += provider.event("response.completed", {"response": {
-                    **response, "status": "completed", "output": [empty, item]}})
+                raise AssertionError("rejected turn unexpectedly re-compacted its history")
             else:
                 requests.append(request)
                 if provider.latest_user(request) == "overflow" and not ready.is_set():
@@ -8191,7 +8179,10 @@ def run_capacity_handoff_cases(binary, root, modes=("queue", "chat", "cancel")):
                     body = provider.event("response.failed", {"response": {"error": {
                         "code": "context_length_exceeded", "message": "context too large"}}})
                 else:
-                    body = provider.response_body(sequence, "handoff recovered" if summaries else "seed complete")
+                    if mode == "cancel" and ready.is_set():
+                        recovery_waiting.set()
+                        release.wait(10)
+                    body = provider.response_body(sequence, "handoff recovered" if ready.is_set() else "seed complete")
             try:
                 provider.reply(handler, body.encode(), close_header=True)
             except (BrokenPipeError, ConnectionResetError):
@@ -8224,12 +8215,11 @@ def run_capacity_handoff_cases(binary, root, modes=("queue", "chat", "cancel")):
                     assert time.monotonic() < deadline, "chat was not admitted"
                     time.sleep(0.02)
             else:
-                assert summarizing.wait(5)
-                terminal.wait("Compacting context; Ctrl-C interrupts")
+                assert recovery_waiting.wait(5)
                 terminal.send_key("C-c")
                 log = wait_event_count(state, "turn_interrupted", 1, timeout=2)
-                assert event_list(log, "compaction_interrupted")[-1]["data"]["reason"] == "user"
-                assert not event_list(log, "compaction_completed")
+                assert len(event_list(log, "context_rebased")) == 1
+                assert not event_list(log, "compaction_started")
                 release.set()
                 terminal.exit()
                 print("capacity handoff cancel ok", flush=True)
@@ -8238,20 +8228,21 @@ def run_capacity_handoff_cases(binary, root, modes=("queue", "chat", "cancel")):
             terminal.wait("handoff recovered", timeout=15)
             path, log = read_events(state)
             failed = next(e for e in event_list(log, "response_failed") if e["data"].get("new_input"))
-            assert event_list(log, "compaction_completed")
+            assert event_list(log, "context_rebased")
+            assert not event_list(log, "compaction_started")
             assert not event_list(log, "response_output_correction")
             assert "fresh-capacity-input" in json.dumps(requests[-1])
             terminal.exit()
             if mode == "queue":
                 terminal.close()
-                # Reopen the genuine handoff boundary, before a summary exists.
+                # Reopen the genuine handoff boundary, before the queued turn.
                 path.write_bytes(b"".join(path.read_bytes().splitlines(keepends=True)[:failed["seq"]]))
-                summaries.clear()
                 terminal = TmuxTerminal(case / "r", binary, case, state, config, 130, 28,
                     args=("--no-listen", "--no-client", "--resume", path.parent.name),
                     environment=environment)
                 terminal.wait("handoff recovered", timeout=15)
-                assert summaries and "fresh-capacity-input" in json.dumps(requests[-1])
+                assert "fresh-capacity-input" in json.dumps(requests[-1])
+                assert not event_list(read_events(state)[1], "compaction_started")
                 terminal.exit()
             assert provider.failure is None, provider.failure
         finally:
@@ -8524,13 +8515,12 @@ def run_session_process_recovery_case(binary, root, emit_output=True):
             evidence = json.dumps(request, ensure_ascii=False)
             calls = [i for i in request["input"] if i.get("type") == "function_call"]
             results = [i for i in request["input"] if i.get("type") == "function_call_output"]
-            assert len(calls) == len(results) == 1
-            assert json.loads(calls[0]["arguments"])["command"] == command, "lost original command"
-            assert results[0]["call_id"] == calls[0]["call_id"]
-            assert "unknown" in results[0]["output"].lower(), "missing result presented as a known outcome"
-            assert "owner_lost" in evidence, evidence
-            if emit_output:
-                assert "recovery-output:" in evidence and "output_ref" in evidence, evidence
+            assert not calls and not results, "crash recovery replayed old tool effects"
+            assert "recover this command" in evidence
+            assert "Pure durable-turn continuation" in evidence
+            tools = json.dumps(request["tools"])
+            assert "read_session_history" in tools and "read_tool_output" in tools
+            assert "recovery-output:" not in evidence, "large output replayed automatically"
             assert request["input"][-1]["role"] == "developer"
             body = provider.response_body(sequence, "recovered without repeating effects")
         provider.reply(handler, body.encode(), close_header=True)

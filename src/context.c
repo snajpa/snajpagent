@@ -1065,6 +1065,37 @@ pending_steering_at_seq(const struct snag_session *session, uint64_t seq)
     return NULL;
 }
 
+static int defer_room_event(struct context_builder *builder, const json_t *data);
+
+struct recovery_room_input {
+    struct context_builder *builder;
+    size_t matched;
+};
+
+static int
+recovery_room_event(void *opaque, const struct snag_session *state, uint64_t seq,
+                    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct recovery_room_input *input = opaque;
+    struct snag_irc_event event;
+    char reference[SNAG_ID_HEX_LEN + 48u];
+
+    (void)state;
+    (void)seq;
+    if (strcmp(type, "irc_event")) return 0;
+    if (input->builder->control && input->builder->control->cancelled &&
+        input->builder->control->cancelled(input->builder->control->opaque))
+        return snag_fail(error, error_size, ECANCELED, "room recovery cancelled");
+    if (snag_irc_event_read(data, &event) < 0) return -1;
+    if (!event.input) return 0;
+    (void)snprintf(reference, sizeof(reference), "[IRC update id=%s:%llu ",
+        event.stream, (unsigned long long)event.sequence);
+    if (!strstr(input->builder->session->active_prompt, reference)) return 0;
+    if (defer_room_event(input->builder, data) < 0) return -1;
+    ++input->matched;
+    return 0;
+}
+
 static int
 prepare_history_recovery_orientation(struct context_builder *builder,
                                   char *error, size_t error_size)
@@ -1099,6 +1130,24 @@ prepare_history_recovery_orientation(struct context_builder *builder,
      * turn. Without this user-side boundary a resumed provider sees only
      * controller metadata and can treat the retry as an unsolicited reply. */
     if (append_host_input(builder->request_input, session->active_prompt) < 0) return -1;
+    /* Room admissions carry compact journal references rather than the
+     * message text. Keep the current input intact without replaying the old
+     * conversation: only resolve references present in this active prompt. */
+    if (strstr(session->active_prompt, "[IRC update id=")) {
+        struct recovery_room_input room = { .builder = builder };
+        const char *part = session->active_prompt;
+        size_t expected = 0u;
+
+        while ((part = strstr(part, "[IRC update id=")) != NULL) {
+            ++expected;
+            part += sizeof("[IRC update id=") - 1u;
+        }
+        if (snag_session_each_event((struct snag_session *)session, recovery_room_event,
+                &room, error, error_size) < 0) return -1;
+        if (room.matched != expected)
+            return snag_fail(error, error_size, EPROTO,
+                "current room input cannot be recovered from the durable journal");
+    }
     return append_host_input(builder->request_input,
         "Pure durable-turn continuation after process resume or context recovery: no prior "
         "provider transcript, compacted conversation, completed tool call, tool output, or "
