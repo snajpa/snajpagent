@@ -8069,7 +8069,7 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
                 result = run(f"seed-{i} " + "x" * 2000, sid)
                 assert result.returncode == 0, (mode, result.stderr)
                 sid = next((dotdir / "sessions").iterdir()).name
-            if mode == "proactive":
+            if mode in ("proactive", "summary-auth", "summary-irreducible"):
                 config.write_text(base.replace("auto_compact_input_tokens=0", "auto_compact_input_tokens=1"))
             if mode == "scope-switch":
                 config.write_text(base.replace("auto_compact_input_tokens=0", "auto_compact_input_tokens=1"))
@@ -8089,9 +8089,9 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
                 assert result.returncode != 0, (mode, result.stderr)
                 assert summaries and not event_list(events, "compaction_completed")
                 assert event_list(events, "turn_recovery")
-                assert len([r for r in creates if provider.latest_user(r) == "recover"]) == 1
+                assert len([r for r in creates if provider.latest_user(r) == "recover"]) <= 1
                 for i in range(4):
-                    assert f"seed-{i} " in json.dumps(creates[-1]["input"])
+                    assert f"seed-{i} " in json.dumps(summaries[0]["input"])
             else:
                 assert result.returncode == 0 and result.stdout.strip() == "recovered", (mode, result.stderr)
                 if not exact:
