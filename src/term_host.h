@@ -52,6 +52,9 @@ struct snag_term_host {
     struct snag_console_state output_state[2];
     struct snag_console_writer *writer;
     struct snag_output_broker *broker;
+    int (*input_redirect_status)(void *);
+    ssize_t (*input_redirect_read)(void *, void *, size_t);
+    void *input_redirect_opaque;
 };
 #else
 #include <signal.h>
@@ -68,6 +71,9 @@ struct snag_term_host {
     struct termios input_mode;
     struct sigaction sigint;
     struct sigaction sigwinch;
+    int (*input_redirect_status)(void *);
+    ssize_t (*input_redirect_read)(void *, void *, size_t);
+    void *input_redirect_opaque;
 };
 #endif
 
@@ -91,11 +97,19 @@ int snag_term_input_restore(struct snag_term_host *host, bool flush);
 int snag_term_input_flush(struct snag_term_host *host);
 /* Buffer capacity is at least four bytes; incomplete UTF-16 returns EAGAIN. */
 ssize_t snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size);
+/* Native input is reserved for the runtime input worker while redirected
+ * input lets the presentation owner keep the existing editor/poll path. */
+ssize_t snag_term_input_native_read(struct snag_term_host *host, void *buffer, size_t size);
 bool snag_term_input_resized(struct snag_term_host *host);
 enum {
     SNAG_TERM_WAIT_INPUT = 1, SNAG_TERM_WAIT_WAKE = 2, SNAG_TERM_WAIT_END = 4 };
 /* Bitmask above, zero timeout, or -1 error; wake-only does not consume input. */
 int snag_term_input_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout_ms);
+int snag_term_input_native_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout_ms);
+void snag_term_input_redirect(struct snag_term_host *host,
+                              int (*status)(void *),
+                              ssize_t (*read_input)(void *, void *, size_t),
+                              void *opaque);
 int snag_term_output_open(struct snag_term_host *host, int fd);
 int snag_term_output_mode(struct snag_term_host *host, bool active);
 int snag_term_output_write(struct snag_term_host *host, int fd, const void *text, size_t len, bool input,

@@ -50,7 +50,7 @@ enum snag_session_control {
 struct snag_pending_call {
     char call_id[SNAG_ID_HEX_LEN + 1u];
     char action_sha256[SNAG_SHA256_HEX_LEN + 1u];
-    char tool_name[16];
+    char tool_name[64];
     char process_handle[SNAG_ID_HEX_LEN + 1u];
     char command[257], workdir[257];
     bool started;
@@ -130,6 +130,9 @@ struct snag_session {
     size_t process_count, process_capacity;
     uint64_t irc_received_seq, irc_consumed_seq, response_irc_seq;
     uint32_t max_parallel_commands;
+    uint32_t default_yield_ms, max_wait_ms;
+    uint32_t default_timeout_ms, max_timeout_ms;
+    uint32_t tool_output_bytes, output_cache_bytes;
     bool parallel_tool_calls;
     char compact_id[SNAG_ID_HEX_LEN + 1u];
     char active_compact_id[SNAG_ID_HEX_LEN + 1u];
@@ -137,6 +140,7 @@ struct snag_session {
     char active_compact_scope[SNAG_SHA256_HEX_LEN + 1u];
     char default_provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
     char goal_id[SNAG_ID_HEX_LEN + 1u];
+    char goal_parent_id[SNAG_ID_HEX_LEN + 1u];
     char timer_id[SNAG_ID_HEX_LEN + 1u];
     char default_model[SNAG_MODEL_MAX_BYTES];
     char active_turn_model[SNAG_MODEL_MAX_BYTES];
@@ -146,6 +150,9 @@ struct snag_session {
     char capacity_ceiling_model[SNAG_MODEL_MAX_BYTES];
     char capacity_ceiling_source_sha256[SNAG_SHA256_HEX_LEN + 1u];
     char default_effort[SNAG_EFFORT_MAX_BYTES];
+    /* Empty means the process configuration's validated shell. A model-selected
+     * absolute shell path is replayed from command_shell_changed. */
+    char command_shell[SNAG_CONFIG_PATH_MAX + 1u];
     const char *workspace;
     char trash_name[SNAG_ID_HEX_LEN + 1u + SNAG_ID_HEX_LEN + 1u];
     char *dir_path;
@@ -174,6 +181,9 @@ struct snag_session {
     uint64_t turn_count;
     uint64_t last_time_ms;
     uint64_t compact_seq;
+    /* Events at or below this durable recovery boundary are available through
+     * read_session_history but never re-enter automatic provider context. */
+    uint64_t context_rebase_seq;
     uint64_t active_compact_source_seq;
     uint64_t capacity_ceiling_input_tokens;
     uint64_t input_received_ms, input_first_context_ms;
@@ -214,6 +224,9 @@ struct snag_session {
     bool response_complete;
     bool irc_reply_reminded;
     bool output_correction_used;
+    /* A model-requested per-turn input boundary. Pending steers remain
+     * journaled but do not acquire first_context_ms until a later turn. */
+    bool steering_deferred;
     enum snag_response_terminal response_terminal;
     enum snag_goal_status goal_status;
     bool goal_locked;
@@ -274,6 +287,7 @@ typedef int (*snag_session_event_fn)(void *opaque, const struct snag_session *st
 int snag_session_each_event(struct snag_session *session, snag_session_event_fn fn, void *opaque,
                            char *error, size_t error_size);
 struct snag_process_state *snag_session_process(struct snag_session *, const char *handle);
+bool snag_session_pending_steering_unadmitted(const struct snag_session *);
 int snag_process_output_decode(const json_t *data, struct snag_buf *bytes);
 int snag_session_each_event_since(struct snag_session *, const struct snag_process_state *,
                                   snag_session_event_fn, void *, char *, size_t);

@@ -139,6 +139,7 @@ snag_config_init(struct snag_config *config)
     config->max_timeout_ms = 86400000u;
     config->max_output_tokens = SNAG_DEFAULT_TOOL_OUTPUT_TOKENS;
     config->max_output_bytes = 0u;
+    config->output_cache_bytes = 1024u * 1024u;
 }
 
 int
@@ -689,6 +690,34 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
     struct snag_provider_config *provider = &config->providers[state->provider_index];
     struct snag_model_limit_config *limit = &config->model_limits[state->model_limit_index];
     struct snag_irc_config *irc = &config->irc;
+    if (state->section == SECTION_MODEL_LIMIT) {
+        const struct {
+            const char *key;
+            uint32_t *target, min, max, present;
+        } execution[] = {
+            {"default_yield_ms", &limit->default_yield_ms, 0u, UINT32_MAX,
+             SNAG_MODEL_EXEC_DEFAULT_YIELD},
+            {"max_wait_ms", &limit->max_wait_ms, 1u, UINT32_MAX, SNAG_MODEL_EXEC_MAX_WAIT},
+            {"max_parallel_commands", &limit->max_parallel_commands, 1u, UINT32_MAX,
+             SNAG_MODEL_EXEC_MAX_PARALLEL},
+            {"default_timeout_ms", &limit->default_timeout_ms, 0u, UINT32_MAX,
+             SNAG_MODEL_EXEC_DEFAULT_TIMEOUT},
+            {"max_timeout_ms", &limit->max_timeout_ms, 1u, UINT32_MAX,
+             SNAG_MODEL_EXEC_MAX_TIMEOUT},
+            {"tool_output_bytes", &limit->tool_output_bytes, 1u,
+             SNAG_CONFIG_TOKEN_LIMIT_MAX, SNAG_MODEL_EXEC_TOOL_OUTPUT},
+            {"output_cache_bytes", &limit->output_cache_bytes, 0u,
+             SNAG_CONFIG_OUTPUT_CACHE_MAX, SNAG_MODEL_EXEC_OUTPUT_CACHE}
+        };
+        for (size_t i = 0u; i < sizeof(execution) / sizeof(execution[0]); ++i) {
+            if (strcmp(key, execution[i].key) != 0) continue;
+            if (claim_key(state, key) < 0 ||
+                parse_u32(value, execution[i].min, execution[i].max, execution[i].target) < 0)
+                goto invalid;
+            limit->execution_present |= execution[i].present;
+            return 0;
+        }
+    }
     const struct {
         enum section section;
         const char *key;
@@ -729,12 +758,13 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         {SECTION_UI, "prompt_spinner_per_second", SET_U32, &config->prompt_spinner_per_second, 1, 60},
         {SECTION_IRC, "room_name", SET_TEXT, irc->room_name, 0, sizeof(irc->room_name)},
         {SECTION_IRC, "history_lines", SET_U32, &irc->history_lines, 1, 1000},
-        {SECTION_TOOL, "default_yield_ms", SET_U32, &config->default_yield_ms, 0, 600000},
+        {SECTION_TOOL, "default_yield_ms", SET_U32, &config->default_yield_ms, 0, UINT32_MAX},
         {SECTION_TOOL, "max_wait_ms", SET_U32, &config->max_wait_ms, 1, UINT32_MAX},
         {SECTION_TOOL, "max_parallel_commands", SET_U32, &config->max_parallel_commands, 1, UINT32_MAX},
         {SECTION_TOOL, "default_timeout_ms", SET_U32, &config->default_timeout_ms, 0, UINT32_MAX},
         {SECTION_TOOL, "max_timeout_ms", SET_U32, &config->max_timeout_ms, 1, UINT32_MAX},
         {SECTION_TOOL, "max_output_bytes", SET_U32, &config->max_output_bytes, 0, UINT32_MAX},
+        {SECTION_TOOL, "output_cache_bytes", SET_U32, &config->output_cache_bytes, 0, SNAG_CONFIG_OUTPUT_CACHE_MAX},
         {SECTION_TOOL, "max_output_tokens", SET_U32, &config->max_output_tokens, 1, SNAG_CONFIG_TOKEN_LIMIT_MAX}
     };
 
@@ -1080,13 +1110,13 @@ out:
     return rc;
 }
 
-static int
-validate_shell(struct snag_config *config, char *error, size_t error_size)
+int
+snag_config_shell_validate(const char *shell, char *error, size_t error_size)
 {
     char *resolved;
     snag_file_info st;
-    if (!snag_path_root_len(config->shell)) goto invalid;
-    resolved = snag_realpath(config->shell);
+    if (!shell || !snag_path_root_len(shell)) goto invalid;
+    resolved = snag_realpath(shell);
     if (!resolved) goto invalid;
     if (strlen(resolved) > SNAG_CONFIG_PATH_MAX || snag_stat(resolved, &st) < 0 ||
         !S_ISREG(st.st_mode) || snag_file_executable(resolved) < 0) {
@@ -1098,6 +1128,12 @@ validate_shell(struct snag_config *config, char *error, size_t error_size)
     return 0;
 invalid: return snag_fail(error, error_size, EINVAL,
               "configured shell must resolve to an executable regular file");
+}
+
+static int
+validate_shell(struct snag_config *config, char *error, size_t error_size)
+{
+    return snag_config_shell_validate(config->shell, error, error_size);
 }
 
 static bool
@@ -1133,7 +1169,8 @@ validate_config(struct snag_config *config, bool private_file, char *error, size
         const struct snag_model_limit_config *limit = &config->model_limits[i];
         if (!snag_config_provider(config, limit->provider) ||
             (!limit->context_window_tokens && !limit->max_input_tokens && !limit->max_output_tokens &&
-             !limit->image_tokens && !limit->reasoning_efforts && !limit->steering[0]) ||
+             !limit->image_tokens && !limit->reasoning_efforts && !limit->steering[0] &&
+             !limit->execution_present) ||
             (limit->context_window_tokens && limit->max_output_tokens &&
              limit->max_output_tokens >= limit->context_window_tokens)) {
             return snag_fail(error, error_size, EINVAL, "invalid model-limit section for %s/%s",
@@ -1142,6 +1179,15 @@ validate_config(struct snag_config *config, bool private_file, char *error, size
         if (limit->steering[0] && strcmp(limit->steering, "mentions") != 0 &&
             strcmp(limit->steering, "all") != 0) {
             return snag_fail(error, error_size, EINVAL, "invalid model-limit steering for %s/%s",
+                      limit->provider, limit->model);
+        }
+        if (((limit->execution_present & (SNAG_MODEL_EXEC_DEFAULT_YIELD | SNAG_MODEL_EXEC_MAX_WAIT)) ==
+                (SNAG_MODEL_EXEC_DEFAULT_YIELD | SNAG_MODEL_EXEC_MAX_WAIT) &&
+             limit->default_yield_ms > limit->max_wait_ms) ||
+            ((limit->execution_present & (SNAG_MODEL_EXEC_DEFAULT_TIMEOUT | SNAG_MODEL_EXEC_MAX_TIMEOUT)) ==
+                (SNAG_MODEL_EXEC_DEFAULT_TIMEOUT | SNAG_MODEL_EXEC_MAX_TIMEOUT) &&
+             limit->default_timeout_ms > limit->max_timeout_ms)) {
+            return snag_fail(error, error_size, EINVAL, "invalid model-limit execution range for %s/%s",
                       limit->provider, limit->model);
         }
     }
@@ -1596,9 +1642,50 @@ snag_config_resolve_limits(const struct snag_config *config, const char *provide
             }
             if (rule->image_tokens) out->image_tokens = rule->image_tokens;
             if (rule->reasoning_efforts) out->reasoning_efforts = rule->reasoning_efforts;
+#define MERGE_EXEC(field, bit) do { if (rule->execution_present & (bit)) { \
+                out->field = rule->field; out->execution_present |= (bit); } } while (0)
+            MERGE_EXEC(default_yield_ms, SNAG_MODEL_EXEC_DEFAULT_YIELD);
+            MERGE_EXEC(max_wait_ms, SNAG_MODEL_EXEC_MAX_WAIT);
+            MERGE_EXEC(max_parallel_commands, SNAG_MODEL_EXEC_MAX_PARALLEL);
+            MERGE_EXEC(default_timeout_ms, SNAG_MODEL_EXEC_DEFAULT_TIMEOUT);
+            MERGE_EXEC(max_timeout_ms, SNAG_MODEL_EXEC_MAX_TIMEOUT);
+            MERGE_EXEC(tool_output_bytes, SNAG_MODEL_EXEC_TOOL_OUTPUT);
+            MERGE_EXEC(output_cache_bytes, SNAG_MODEL_EXEC_OUTPUT_CACHE);
+#undef MERGE_EXEC
         }
     }
-    /* Capacity presence only; reasoning_efforts and image_tokens merge
-     * independently of the capacity callers' source selection. */
+    /* Capacity presence only; reasoning_efforts, image_tokens and execution
+     * settings merge independently of the capacity callers' source selection. */
     return out->context_window_tokens || out->max_input_tokens || out->max_output_tokens;
+}
+
+int
+snag_config_resolve_execution(const struct snag_config *config, const char *provider,
+                              const char *model, struct snag_execution_config *out,
+                              char *error, size_t error_size)
+{
+    struct snag_model_limit_config resolved;
+
+    if (!config || !provider || !model || !out) return snag_errno(EINVAL);
+    *out = (struct snag_execution_config){
+        config->default_yield_ms, config->max_wait_ms, config->max_parallel_commands,
+        config->default_timeout_ms, config->max_timeout_ms,
+        config->max_output_tokens, config->output_cache_bytes};
+    (void)snag_config_resolve_limits(config, provider, model, &resolved, NULL);
+#define APPLY_EXEC(field, bit) do { if (resolved.execution_present & (bit)) out->field = resolved.field; } while (0)
+    APPLY_EXEC(default_yield_ms, SNAG_MODEL_EXEC_DEFAULT_YIELD);
+    APPLY_EXEC(max_wait_ms, SNAG_MODEL_EXEC_MAX_WAIT);
+    APPLY_EXEC(max_parallel_commands, SNAG_MODEL_EXEC_MAX_PARALLEL);
+    APPLY_EXEC(default_timeout_ms, SNAG_MODEL_EXEC_DEFAULT_TIMEOUT);
+    APPLY_EXEC(max_timeout_ms, SNAG_MODEL_EXEC_MAX_TIMEOUT);
+    APPLY_EXEC(tool_output_bytes, SNAG_MODEL_EXEC_TOOL_OUTPUT);
+    APPLY_EXEC(output_cache_bytes, SNAG_MODEL_EXEC_OUTPUT_CACHE);
+#undef APPLY_EXEC
+    if (out->default_yield_ms > out->max_wait_ms)
+        return snag_fail(error, error_size, EINVAL,
+                         "effective default_yield_ms exceeds max_wait_ms for %s/%s", provider, model);
+    if (out->default_timeout_ms > out->max_timeout_ms)
+        return snag_fail(error, error_size, EINVAL,
+                         "effective default_timeout_ms exceeds max_timeout_ms for %s/%s", provider, model);
+    return 0;
 }

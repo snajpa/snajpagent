@@ -149,6 +149,72 @@ test_configured_efforts(const char *path)
 }
 
 static void
+test_model_execution(const char *path)
+{
+    struct snag_config config;
+    struct snag_execution_config execution;
+    char error[256] = {0};
+    static const char valid[] =
+        "[tool]\n"
+        "default_yield_ms=10\nmax_wait_ms=100\nmax_parallel_commands=1\n"
+        "default_timeout_ms=20\nmax_timeout_ms=200\nmax_output_tokens=300\n"
+        "output_cache_bytes=400\n"
+        "[provider p]\n"
+        "[model-limit p]\n"
+        "default_yield_ms=100\nmax_wait_ms=1000\nmax_parallel_commands=2\n"
+        "default_timeout_ms=2000\nmax_timeout_ms=5000\n"
+        "tool_output_bytes=700\noutput_cache_bytes=800\n"
+        "[model-limit p/m*]\n"
+        "default_yield_ms=200\nmax_wait_ms=2000\nmax_parallel_commands=3\n"
+        "max_timeout_ms=6000\ntool_output_bytes=900\n"
+        "[model-limit p/model]\n"
+        "default_yield_ms=300\nmax_parallel_commands=4\n"
+        "default_timeout_ms=3000\noutput_cache_bytes=1000\n";
+    static const char *const invalid[] = {
+        "[provider p]\n[model-limit p/m]\ndefault_yield_ms=2\nmax_wait_ms=1\n",
+        "[provider p]\n[model-limit p/m]\ndefault_timeout_ms=2\nmax_timeout_ms=1\n",
+        "[provider p]\n[model-limit p/m]\ntool_output_bytes=0\n",
+        "[provider p]\n[model-limit p/m]\noutput_cache_bytes=67108865\n"
+    };
+
+    write_bytes(path, valid, sizeof(valid) - 1u);
+    load_config(&config, path, NULL);
+    assert(snag_config_resolve_execution(&config, "p", "other", &execution,
+                                         error, sizeof(error)) == 0);
+    assert(execution.default_yield_ms == 100u && execution.max_wait_ms == 1000u);
+    assert(execution.max_parallel_commands == 2u);
+    assert(execution.default_timeout_ms == 2000u && execution.max_timeout_ms == 5000u);
+    assert(execution.tool_output_bytes == 700u && execution.output_cache_bytes == 800u);
+
+    assert(snag_config_resolve_execution(&config, "p", "match", &execution,
+                                         error, sizeof(error)) == 0);
+    assert(execution.default_yield_ms == 200u && execution.max_wait_ms == 2000u);
+    assert(execution.max_parallel_commands == 3u);
+    assert(execution.default_timeout_ms == 2000u && execution.max_timeout_ms == 6000u);
+    assert(execution.tool_output_bytes == 900u && execution.output_cache_bytes == 800u);
+
+    assert(snag_config_resolve_execution(&config, "p", "model", &execution,
+                                         error, sizeof(error)) == 0);
+    assert(execution.default_yield_ms == 300u && execution.max_wait_ms == 2000u);
+    assert(execution.max_parallel_commands == 4u);
+    assert(execution.default_timeout_ms == 3000u && execution.max_timeout_ms == 6000u);
+    assert(execution.tool_output_bytes == 900u && execution.output_cache_bytes == 1000u);
+
+    assert(snag_config_resolve_execution(&config, "other", "model", &execution,
+                                         error, sizeof(error)) == 0);
+    assert(execution.default_yield_ms == 10u && execution.max_wait_ms == 100u);
+    assert(execution.max_parallel_commands == 1u);
+    assert(execution.default_timeout_ms == 20u && execution.max_timeout_ms == 200u);
+    assert(execution.tool_output_bytes == 300u && execution.output_cache_bytes == 400u);
+    snag_config_free(&config);
+
+    for (size_t i = 0u; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        write_bytes(path, invalid[i], strlen(invalid[i]));
+        expect_invalid(path);
+    }
+}
+
+static void
 expect_ui(const char *path, const char *key, const char *value, bool valid)
 {
     struct snag_config config;
@@ -169,7 +235,9 @@ numeric_target(struct snag_config *config, unsigned int target)
     if (target == 0u) return &config->providers[0].auto_compact_input_tokens;
     if (target == 1u) return &config->max_parallel_commands;
     if (target == 2u) return &config->max_wait_ms;
-    return &config->max_turn_retries;
+    if (target == 3u) return &config->max_turn_retries;
+    if (target == 4u) return &config->default_yield_ms;
+    return &config->output_cache_bytes;
 }
 
 static void
@@ -195,7 +263,13 @@ test_numeric_settings(const char *path)
          2u, 60000u, 0u, 3u, 7u, 96u},
         {"[agent]\nmax_turn_retries=%s\n", "[agent]\nmax_turn_retries=3\nmax_turn_retries=0\n",
          {"0", "1", "3", "17", "4294967295", "4294967296", "-1", "3.5", "never"},
-         3u, 5u, 0u, 5u, 9u, 96u}
+         3u, 5u, 0u, 5u, 9u, 96u},
+        {"[tool]\nmax_wait_ms=4294967295\ndefault_yield_ms=%s\n", NULL,
+         {"0", "1000", "600000", "4294967295", "4294967296", "-1", "never"},
+         4u, 10000u, 0u, 4u, 7u, 128u},
+        {"[tool]\noutput_cache_bytes=%s\n", NULL,
+         {"0", "1", "1048576", "67108864", "67108865", "4294967295", "-1", "never"},
+         5u, 1048576u, 0u, 4u, 8u, 96u}
     };
     for (size_t c = 0u; c < sizeof(cases) / sizeof(cases[0]); ++c) {
         for (size_t i = 0u; i < cases[c].count; ++i) {
@@ -951,6 +1025,7 @@ main(void)
 
     test_model_steering(path);
     test_configured_efforts(path);
+    test_model_execution(path);
     test_numeric_settings(path);
     test_io_rules(path);
     test_auth_settings(path);

@@ -29,7 +29,6 @@
 #define SNAG_TOOL_COMMAND_MAX (256u * 1024u)
 #define SNAG_TOOL_STDIN_MAX (1024u * 1024u)
 #define SNAG_TOOL_POLL_MS 50u
-#define SNAG_TOOL_YIELD_MAX_MS 600000u
 #define SNAG_TOOL_CLOSE_GRACE_MS 2000u
 #define SNAG_TOOL_DRAIN_GRACE_MS 2000u
 #define SNAG_TOOL_REDACTOR_MAX (8192u + SNAG_WIRE_SECRET_MAX)
@@ -821,8 +820,10 @@ command_args(const struct snag_response_item *call, const struct snag_config *co
         !snag_json_arg_keys(call->arguments, command,
             args->exec ? "command cmd workdir stdin pty yield_ms yield_time_ms timeout_ms max_output_bytes max_output_tokens" :
                          "data eof terminate yield_ms yield_time_ms max_output_bytes max_output_tokens", error, size) ||
-        !json_u32_member(call->arguments, yield, config->default_yield_ms,
-                          0u, SNAG_TOOL_YIELD_MAX_MS, &args->yield, error, size) ||
+        !json_u32_member(call->arguments, yield,
+                          config->default_yield_ms < config->max_wait_ms ?
+                              config->default_yield_ms : config->max_wait_ms,
+                          0u, config->max_wait_ms, &args->yield, error, size) ||
         !command_output_limit(call->arguments, config->max_output_tokens, &args->limit, error, size))
         return -1;
     if (args->exec) {
@@ -980,7 +981,16 @@ wait_process(const char *handle, uint32_t yield_ms, snag_tool_pump_fn pump,
             reason = "steering_handoff";
             break;
         }
-        if (!cancelled && (snag_tools_handoff(handle) || snag_monotonic_ms() >= end)) break;
+        if (!cancelled && snag_tools_handoff(handle)) break;
+        if (!cancelled && snag_monotonic_ms() >= end) {
+            /* Refresh deadline state at the exact local-yield boundary.  The
+             * preceding bounded poll may have consumed the remainder of both
+             * yield_ms and max_wait_ms after snag_tools_service captured its
+             * timestamp, so otherwise an enforced wait limit can be reported
+             * as an unclassified ordinary yield. */
+            if (snag_tools_service(0, wake_fd, error, error_size) < 0) return -1;
+            break;
+        }
         if (snag_tools_service(10, wake_fd, error, error_size) < 0) return -1;
     }
     if (snag_tools_collect(handle, reason, result, error, error_size) < 0) return -1;

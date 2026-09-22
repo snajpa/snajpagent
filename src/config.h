@@ -21,6 +21,7 @@
 #define SNAG_CONFIG_PROVIDER_NAME_MAX 63u
 #define SNAG_CONFIG_STEERING_MAX 8u
 #define SNAG_CONFIG_TOKEN_LIMIT_MAX UINT64_C(4000000000)
+#define SNAG_CONFIG_OUTPUT_CACHE_MAX (64u * 1024u * 1024u)
 /* Outside the numeric compaction range; zero continues to mean disabled. */
 #define SNAG_CONFIG_COMPACT_AUTO UINT32_MAX
 #define SNAG_DEFAULT_TOOL_OUTPUT_TOKENS 6000u
@@ -96,6 +97,22 @@ struct snag_provider_config {
     size_t model_count;
 };
 
+enum snag_model_execution_field {
+    SNAG_MODEL_EXEC_DEFAULT_YIELD = 1u << 0,
+    SNAG_MODEL_EXEC_MAX_WAIT = 1u << 1,
+    SNAG_MODEL_EXEC_MAX_PARALLEL = 1u << 2,
+    SNAG_MODEL_EXEC_DEFAULT_TIMEOUT = 1u << 3,
+    SNAG_MODEL_EXEC_MAX_TIMEOUT = 1u << 4,
+    SNAG_MODEL_EXEC_TOOL_OUTPUT = 1u << 5,
+    SNAG_MODEL_EXEC_OUTPUT_CACHE = 1u << 6
+};
+
+struct snag_execution_config {
+    uint32_t default_yield_ms, max_wait_ms, max_parallel_commands;
+    uint32_t default_timeout_ms, max_timeout_ms;
+    uint32_t tool_output_bytes, output_cache_bytes;
+};
+
 /* Configured/advertised limits use zero for unknown; positive values are known. */
 struct snag_model_limit_config {
     char provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];
@@ -105,6 +122,10 @@ struct snag_model_limit_config {
     uint64_t max_input_tokens;
     uint64_t max_output_tokens;
     uint64_t image_tokens; /* Per-image ceiling for local image-request bounding. */
+    uint32_t execution_present;
+    uint32_t default_yield_ms, max_wait_ms, max_parallel_commands;
+    uint32_t default_timeout_ms, max_timeout_ms;
+    uint32_t tool_output_bytes, output_cache_bytes;
     json_t *reasoning_efforts; /* Owned by config; resolved rules borrow it. */
 };
 
@@ -152,6 +173,7 @@ struct snag_config {
     uint32_t max_timeout_ms;
     uint32_t max_output_tokens;
     uint32_t max_output_bytes;
+    uint32_t output_cache_bytes;
     struct snag_rules *rules;
     struct snag_secret_source *secrets;
     size_t secret_count, secret_capacity;
@@ -168,6 +190,7 @@ void snag_config_free(struct snag_config *config);
 bool snag_config_efforts_valid(const json_t *efforts);
 int snag_config_load(struct snag_config *config, const char *explicit_path, const char *dotdir,
                           char *error, size_t error_size);
+int snag_config_shell_validate(const char *shell, char *error, size_t error_size);
 char *snag_config_path(const char *explicit_path, const char *dotdir, char *error, size_t error_size);
 int snag_config_save_model(const char *path, bool allow_create, const char *provider, const char *model,
                           const char *effort, char *error, size_t error_size);
@@ -186,6 +209,9 @@ const char *snag_config_model_upstream(const struct snag_provider_config *provid
 bool snag_config_resolve_limits(const struct snag_config *config, const char *provider, const char *model,
                                struct snag_model_limit_config *out,
                                const struct snag_model_limit_config *sources[3]);
+int snag_config_resolve_execution(const struct snag_config *config, const char *provider,
+                                  const char *model, struct snag_execution_config *out,
+                                  char *error, size_t error_size);
 
 /* Exact provider+model entry for per-model IRC steering; NULL when absent. */
 const struct snag_model_limit_config *

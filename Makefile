@@ -337,15 +337,15 @@ tmuxcheck: $(BIN) $(FIXTURE_BIN)
 		*) printf '%s\n' 'tmuxcheck: TMUX_TEST_ROOT must be below build/' >&2; \
 		   exit 2 ;; \
 	esac
-	rm -rf "$(TMUX_TEST_ROOT)"
-	mkdir -p -m 700 "$(TMUX_TEST_ROOT)/home" "$(TMUX_TEST_ROOT)/work"
-	HOME="$(TMUX_TEST_ROOT)/home" LC_ALL=C.utf8 \
+	rm -rf "$(abspath $(TMUX_TEST_ROOT))"
+	mkdir -p -m 700 "$(abspath $(TMUX_TEST_ROOT))/home" "$(abspath $(TMUX_TEST_ROOT))/work"
+	HOME="$(abspath $(TMUX_TEST_ROOT))/home" LC_ALL=C.utf8 \
 		python3 ./tests/tmux_terminal.py fixture \
-		./$(FIXTURE_BIN) "$(TMUX_TEST_ROOT)/work" \
-		"$(TMUX_TEST_ROOT)/run"
-	HOME="$(TMUX_TEST_ROOT)/home" LC_ALL=C.utf8 \
+		./$(FIXTURE_BIN) "$(abspath $(TMUX_TEST_ROOT))/work" \
+		"$(abspath $(TMUX_TEST_ROOT))/run"
+	HOME="$(abspath $(TMUX_TEST_ROOT))/home" LC_ALL=C.utf8 \
 		python3 ./tests/tmux_terminal.py irc ./$(BIN) \
-		"$(TMUX_TEST_ROOT)/irc"
+		"$(abspath $(TMUX_TEST_ROOT))/irc"
 
 terminallivecheck: $(BIN)
 	@test -n "$(LIVE_RESULT_ROOT)" || { \

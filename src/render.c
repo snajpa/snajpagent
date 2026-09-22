@@ -2,10 +2,12 @@
 #include "render.h"
 #include "base.h"
 #include "fs.h"
+#include "wake.h"
 #include "snajpagent.h"
 
 #include <errno.h>
 #include <limits.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,6 +31,7 @@
 #define COLOR_HOST "\033[34m"
 #define COLOR_UPDATE "\033[1;30;46m"
 #define MARKDOWN_TABLE_COLUMNS 16u
+#define SNAG_RENDER_SWITCH_BATCH 8u
 
 enum { BOUNDARY_NONE, BOUNDARY_CONTENT, BOUNDARY_PROMPT, BOUNDARY_BULLET, BOUNDARY_UPDATE };
 
@@ -72,20 +75,55 @@ struct snag_render_record {
     bool physical_open;
     bool label_displayed;
     struct snag_render_source source, response;
+    struct snag_buf source_data, response_data;
+    unsigned char source_state, response_state;
+    int source_error, response_error;
     uint32_t timeout_ms, max_output_bytes;
     bool tool_start;
     bool hosted_start;
     bool omitted;
 };
 
+enum { BACKFILL_EMPTY, BACKFILL_QUEUED, BACKFILL_READY, BACKFILL_FAILED };
+#define SNAG_RENDER_BACKFILL_MAX 64u
+
+struct render_backfill_job {
+    struct render_backfill_job *next;
+    struct snag_render_record *record;
+    struct snag_render_source source;
+    struct snag_buf data;
+    int error;
+    bool response;
+};
+
+struct render_backfill {
+    pthread_t thread;
+    pthread_mutex_t mutex;
+    pthread_cond_t changed;
+    struct render_backfill_job *pending_head, *pending_tail;
+    struct render_backfill_job *done_head, *done_tail;
+    struct snag_render *render;
+    snag_wake_fd notify;
+    size_t count;
+    bool stopping, started;
+};
+
+struct render_room_queue {
+    struct render_room_queue *next;
+    struct snag_render_record *head, *tail;
+    char endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
+    char room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
+};
+
 static int render_irc_event_now(struct snag_render *render, const struct snag_irc_event *event);
-static int flush_view(struct snag_render *render, enum snag_render_view view);
+static int flush_view(struct snag_render *render, enum snag_render_view view, size_t records);
 static int close_public_output(struct snag_render *render);
 static int markdown_gap(struct snag_render *render);
 static int flush_wrap_pending(struct snag_render *render);
 static int render_tool_record(struct snag_render *render, const struct snag_render_record *record);
 static int render_hosted_record(struct snag_render *render, const struct snag_render_record *record);
 static json_t *source_event(struct snag_render *render, struct snag_render_source source);
+static json_t *record_event(struct snag_render *render, struct snag_render_record *record, bool response);
 
 const char *
 snag_verbosity_name(unsigned int level)
@@ -272,6 +310,8 @@ free_record(struct snag_render_record *record)
 {
     if (!record) return;
     snag_buf_free(&record->text);
+    snag_buf_free(&record->source_data);
+    snag_buf_free(&record->response_data);
     snag_buf_free(&record->cite.pending);
     free(record->irc);
     free(record->label);
@@ -329,6 +369,74 @@ queue_record(struct snag_render *render, enum snag_render_view view, struct snag
     render->view_tail[view] = record;
 }
 
+static struct render_room_queue *
+room_queue(struct snag_render *render, const char *endpoint, const char *room, bool create)
+{
+    struct render_room_queue *queue = render->chat_rooms;
+
+    endpoint = endpoint ? endpoint : "";
+    room = room ? room : "";
+    for (; queue; queue = queue->next)
+        if (!strcmp(queue->endpoint, endpoint) && !strcmp(queue->room, room)) return queue;
+    if (!create) return NULL;
+    queue = calloc(1u, sizeof(*queue));
+    if (!queue || !snag_strcpy(queue->endpoint, sizeof(queue->endpoint), endpoint) ||
+        !snag_strcpy(queue->room, sizeof(queue->room), room)) {
+        free(queue);
+        return NULL;
+    }
+    queue->next = render->chat_rooms;
+    render->chat_rooms = queue;
+    return queue;
+}
+
+static void
+append_room_record(struct render_room_queue *queue, struct snag_render_record *record)
+{
+    if (queue->tail) queue->tail->next = record;
+    else queue->head = record;
+    queue->tail = record;
+}
+
+static int
+select_room_queue(struct snag_render *render, const char *endpoint, const char *room)
+{
+    struct render_room_queue *previous = room_queue(render, render->chat_endpoint,
+                                                     render->chat_room, true);
+    struct render_room_queue *next;
+
+    if (!previous) return -1;
+    if (previous->tail) previous->tail->next = render->view_head[SNAG_RENDER_CHAT];
+    else previous->head = render->view_head[SNAG_RENDER_CHAT];
+    if (render->view_tail[SNAG_RENDER_CHAT]) previous->tail = render->view_tail[SNAG_RENDER_CHAT];
+    render->view_head[SNAG_RENDER_CHAT] = render->view_tail[SNAG_RENDER_CHAT] = NULL;
+
+    next = room_queue(render, endpoint, room, true);
+    if (!next) return -1;
+    render->view_head[SNAG_RENDER_CHAT] = next->head;
+    render->view_tail[SNAG_RENDER_CHAT] = next->tail;
+    next->head = next->tail = NULL;
+    if (!snag_strcpy(render->chat_endpoint, sizeof(render->chat_endpoint), endpoint ? endpoint : "") ||
+        !snag_strcpy(render->chat_room, sizeof(render->chat_room), room ? room : "")) return -1;
+    return 0;
+}
+
+static int
+queue_chat_record(struct snag_render *render, struct snag_render_record *record,
+                  const char *endpoint, const char *room)
+{
+    bool unscoped = !room || !room[0];
+    if ((unscoped && !render->chat_endpoint[0] && !render->chat_room[0]) ||
+        (!strcmp(render->chat_endpoint, endpoint) && !strcmp(render->chat_room, room))) {
+        queue_record(render, SNAG_RENDER_CHAT, record);
+        return 0;
+    }
+    struct render_room_queue *queue = room_queue(render, endpoint, room, true);
+    if (!queue) return -1;
+    append_room_record(queue, record);
+    return 0;
+}
+
 static void
 pop_record(struct snag_render *render, enum snag_render_view view)
 {
@@ -366,7 +474,7 @@ view_block(struct snag_render *render, unsigned int boundary, enum snag_render_v
         return -1;
     }
     queue_record(render, view, record);
-    return render->view == view ? flush_view(render, view) : 0;
+    return 0;
 }
 
 static int
@@ -397,6 +505,186 @@ write_block(struct snag_render *render, int fd, const char *text, size_t len,
     return write_role_block(render, BOUNDARY_CONTENT, fd, "", text, len, 0u, terminal_safe, persistent);
 }
 
+static int
+backfill_load(struct render_backfill *backfill, struct render_backfill_job *job)
+{
+    struct snag_render *render = backfill->render;
+
+    if (render->history_fd < 0 || job->source.offset < 0 || !job->source.len ||
+        job->source.len > SNAG_MAX_EVENT_LINE) return snag_errno(EINVAL);
+    snag_buf_init(&job->data, job->source.len);
+    if (snag_buf_reserve(&job->data, job->source.len) < 0) return -1;
+    while (job->data.len < job->source.len) {
+        size_t want = job->source.len - job->data.len;
+        if (want > 8192u) want = 8192u;
+        ssize_t n = snag_pread(render->history_fd, job->data.data + job->data.len, want,
+                               job->source.offset + (int64_t)job->data.len);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return n < 0 ? -1 : snag_errno(EPROTO);
+        job->data.len += (size_t)n;
+    }
+    return 0;
+}
+
+static void *
+backfill_main(void *opaque)
+{
+    struct render_backfill *backfill = opaque;
+
+    for (;;) {
+        struct render_backfill_job *job;
+        pthread_mutex_lock(&backfill->mutex);
+        while (!backfill->pending_head && !backfill->stopping)
+            pthread_cond_wait(&backfill->changed, &backfill->mutex);
+        if (backfill->stopping) {
+            pthread_mutex_unlock(&backfill->mutex);
+            break;
+        }
+        job = backfill->pending_head;
+        backfill->pending_head = job->next;
+        if (!backfill->pending_head) backfill->pending_tail = NULL;
+        job->next = NULL;
+        pthread_mutex_unlock(&backfill->mutex);
+
+        if (backfill_load(backfill, job) < 0) job->error = errno ? errno : EIO;
+
+        pthread_mutex_lock(&backfill->mutex);
+        if (backfill->done_tail) backfill->done_tail->next = job;
+        else backfill->done_head = job;
+        backfill->done_tail = job;
+        pthread_mutex_unlock(&backfill->mutex);
+        snag_wakeup_send(backfill->notify);
+    }
+    return NULL;
+}
+
+int
+snag_render_backfill_start(struct snag_render *render, snag_wake_fd notify)
+{
+    struct render_backfill *backfill;
+    int rc;
+
+    if (!render || render->backfill) return snag_errno(EINVAL);
+    backfill = calloc(1u, sizeof(*backfill));
+    if (!backfill) return -1;
+    backfill->render = render;
+    backfill->notify = notify;
+    rc = pthread_mutex_init(&backfill->mutex, NULL);
+    if (rc) {
+        free(backfill);
+        return snag_errno(rc);
+    }
+    rc = pthread_cond_init(&backfill->changed, NULL);
+    if (rc) {
+        pthread_mutex_destroy(&backfill->mutex);
+        free(backfill);
+        return snag_errno(rc);
+    }
+    rc = pthread_create(&backfill->thread, NULL, backfill_main, backfill);
+    if (rc) {
+        pthread_cond_destroy(&backfill->changed);
+        pthread_mutex_destroy(&backfill->mutex);
+        free(backfill);
+        return snag_errno(rc);
+    }
+    backfill->started = true;
+    render->backfill = backfill;
+    return 0;
+}
+
+static void
+backfill_stop(struct snag_render *render)
+{
+    struct render_backfill *backfill = render ? render->backfill : NULL;
+    struct render_backfill_job *job;
+
+    if (!backfill) return;
+    pthread_mutex_lock(&backfill->mutex);
+    backfill->stopping = true;
+    pthread_cond_broadcast(&backfill->changed);
+    pthread_mutex_unlock(&backfill->mutex);
+    if (backfill->started) (void)pthread_join(backfill->thread, NULL);
+    while ((job = backfill->pending_head)) {
+        backfill->pending_head = job->next;
+        snag_buf_free(&job->data);
+        free(job);
+    }
+    while ((job = backfill->done_head)) {
+        backfill->done_head = job->next;
+        snag_buf_free(&job->data);
+        free(job);
+    }
+    pthread_cond_destroy(&backfill->changed);
+    pthread_mutex_destroy(&backfill->mutex);
+    free(backfill);
+    render->backfill = NULL;
+}
+
+int
+snag_render_backfill_collect(struct snag_render *render)
+{
+    struct render_backfill *backfill = render ? render->backfill : NULL;
+    struct render_backfill_job *jobs;
+
+    if (!backfill) return 0;
+    pthread_mutex_lock(&backfill->mutex);
+    jobs = backfill->done_head;
+    backfill->done_head = backfill->done_tail = NULL;
+    pthread_mutex_unlock(&backfill->mutex);
+    while (jobs) {
+        struct render_backfill_job *job = jobs;
+        struct snag_buf *data = job->response ? &job->record->response_data : &job->record->source_data;
+        unsigned char *state = job->response ? &job->record->response_state : &job->record->source_state;
+        int *error = job->response ? &job->record->response_error : &job->record->source_error;
+        jobs = job->next;
+        if (job->error) {
+            *state = BACKFILL_FAILED;
+            *error = job->error;
+            snag_buf_free(&job->data);
+        } else {
+            snag_buf_free(data);
+            *data = job->data;
+            memset(&job->data, 0, sizeof(job->data));
+            *state = BACKFILL_READY;
+        }
+        pthread_mutex_lock(&backfill->mutex);
+        --backfill->count;
+        pthread_mutex_unlock(&backfill->mutex);
+        free(job);
+    }
+    return 0;
+}
+
+static int
+backfill_queue(struct snag_render *render, struct snag_render_record *record, bool response)
+{
+    struct render_backfill *backfill = render->backfill;
+    struct render_backfill_job *job;
+    struct snag_render_source source = response ? record->response : record->source;
+    unsigned char *state = response ? &record->response_state : &record->source_state;
+
+    if (!backfill) return 0;
+    job = calloc(1u, sizeof(*job));
+    if (!job) return -1;
+    job->record = record;
+    job->source = source;
+    job->response = response;
+    pthread_mutex_lock(&backfill->mutex);
+    if (backfill->stopping || backfill->count == SNAG_RENDER_BACKFILL_MAX) {
+        pthread_mutex_unlock(&backfill->mutex);
+        free(job);
+        return snag_errno(EAGAIN);
+    }
+    if (backfill->pending_tail) backfill->pending_tail->next = job;
+    else backfill->pending_head = job;
+    backfill->pending_tail = job;
+    ++backfill->count;
+    *state = BACKFILL_QUEUED;
+    pthread_cond_signal(&backfill->changed);
+    pthread_mutex_unlock(&backfill->mutex);
+    return 1;
+}
+
 void
 snag_render_init(struct snag_render *render, unsigned int verbosity)
 {
@@ -416,9 +704,20 @@ void
 snag_render_free(struct snag_render *render)
 {
     if (!render) return;
+    backfill_stop(render);
     if (render->public_item_open) (void)snag_render_public_abort(render);
     for (unsigned int view = 0u; view < SNAG_RENDER_VIEW_COUNT; ++view)
         while (render->view_head[view]) pop_record(render, (enum snag_render_view)view);
+    while (render->chat_rooms) {
+        struct render_room_queue *queue = render->chat_rooms;
+        render->chat_rooms = queue->next;
+        while (queue->head) {
+            struct snag_render_record *record = queue->head;
+            queue->head = record->next;
+            free_record(record);
+        }
+        free(queue);
+    }
     render->rollout_open = NULL;
     snag_buf_free(&render->cite.pending);
     if (render->history_fd >= 0) (void)close(render->history_fd);
@@ -2458,7 +2757,8 @@ snag_render_rollout(struct snag_render *render, const char *text, size_t len, st
         if (snag_buf_reserve(&record->text, filtered.len) < 0 ||
             (delivered && snag_buf_reserve(delivered, filtered.len) < 0) ||
             snag_buf_append(&record->text, filtered.data, filtered.len) < 0) goto out;
-        if (render->view == SNAG_RENDER_ROLLOUT && rollout_physical_append(render, record,
+        if (render->view == SNAG_RENDER_ROLLOUT &&
+            render->view_head[SNAG_RENDER_ROLLOUT] == record && rollout_physical_append(render, record,
                                     (const char *)filtered.data, filtered.len) < 0) goto out;
         if (delivered && snag_buf_append(delivered, filtered.data, filtered.len) < 0) goto out;
     }
@@ -2491,7 +2791,9 @@ close_rollout_record(struct snag_render *render, bool abort)
             if (snag_buf_reserve(&record->text, tail.len) < 0 ||
                 snag_buf_append(&record->text, tail.data, tail.len) < 0) {
                 rc = -1;
-            } else if (render->view == SNAG_RENDER_ROLLOUT && rollout_physical_append(render, record,
+            } else if (render->view == SNAG_RENDER_ROLLOUT &&
+                       render->view_head[SNAG_RENDER_ROLLOUT] == record &&
+                       rollout_physical_append(render, record,
                                                (const char *)tail.data, tail.len) < 0) {
                 rc = -1;
             }
@@ -2507,11 +2809,8 @@ close_rollout_record(struct snag_render *render, bool abort)
         record->physical_open = false;
     }
     render->rollout_open = NULL;
-    if (was_head && record->displayed == record->text.len) {
+    if (was_head && record->displayed == record->text.len)
         pop_record(render, SNAG_RENDER_ROLLOUT);
-        if (render->view == SNAG_RENDER_ROLLOUT && flush_view(render, SNAG_RENDER_ROLLOUT) < 0 && rc == 0)
-            rc = -1;
-    }
     return rc;
 }
 
@@ -2811,22 +3110,25 @@ snag_render_irc_event(struct snag_render *render, const struct snag_irc_event *e
     struct snag_render_record *record;
 
     if (!render || !event) return snag_errno(EINVAL);
-    struct snag_render_source source = render->irc_source;
     render->irc_source = (struct snag_render_source){0};
-    if (render->view == SNAG_RENDER_CHAT) return render_irc_event_now(render, event);
+    bool unscoped = !event->room[0];
+    bool selected = (unscoped && !render->chat_endpoint[0] && !render->chat_room[0]) ||
+        (!strcmp(render->chat_endpoint, event->endpoint) && !strcmp(render->chat_room, event->room));
+    if (selected && render->view == SNAG_RENDER_CHAT && !render->view_head[SNAG_RENDER_CHAT])
+        return render_irc_event_now(render, event);
     record = calloc(1u, sizeof(*record));
     if (!record) return -1;
     record->kind = SNAG_RENDER_RECORD_IRC;
-    record->source = source;
-    if (!source.len) {
-        record->irc = malloc(sizeof(*record->irc));
-        if (!record->irc) {
-            free_record(record);
-            return -1;
-        }
-        *record->irc = *event;
+    record->irc = malloc(sizeof(*record->irc));
+    if (!record->irc) {
+        free_record(record);
+        return -1;
     }
-    queue_record(render, SNAG_RENDER_CHAT, record);
+    *record->irc = *event;
+    if (queue_chat_record(render, record, event->endpoint, event->room) < 0) {
+        free_record(record);
+        return -1;
+    }
     return 0;
 }
 
@@ -2845,9 +3147,11 @@ out: json_decref(event);
 }
 
 static int
-flush_view(struct snag_render *render, enum snag_render_view view)
+flush_view(struct snag_render *render, enum snag_render_view view, size_t records)
 {
-    while (render->view_head[view]) {
+    size_t completed = 0u;
+
+    while (render->view == view && render->view_head[view] && completed < records) {
         struct snag_render_record *record = render->view_head[view];
         int rc;
 
@@ -2864,7 +3168,8 @@ flush_view(struct snag_render *render, enum snag_render_view view)
         } else {
             rc = 0;
             if (record->source.len && !record->text.data) {
-                json_t *event = source_event(render, record->source);
+                json_t *event = record_event(render, record, false);
+                if (!event) return errno == EAGAIN ? 0 : -1;
                 json_t *data = json_object_get(event, "data");
                 json_t *items = json_object_get(data, "items");
                 if (!items) items = json_object_get(data, "partial_public");
@@ -2884,12 +3189,14 @@ flush_view(struct snag_render *render, enum snag_render_view view)
                 rc = record->aborted ? snag_render_public_abort(render) : snag_render_public_end(render);
                 record->physical_open = false;
             }
-            if (rc < 0) return -1;
+            if (rc < 0) return errno == EAGAIN ? 0 : -1;
             if (!record->complete) return 0;
         }
-        if (rc < 0) return -1;
+        if (rc < 0) return errno == EAGAIN ? 0 : -1;
         pop_record(render, view);
-        if (render->view_head[view] && render_checkpoint(render) < 0) return -1;
+        ++completed;
+        if (render->view == view && render->view_head[view] && render_checkpoint(render) < 0)
+            return -1;
     }
     return 0;
 }
@@ -2900,18 +3207,81 @@ snag_render_view(const struct snag_render *render)
     return render ? render->view : SNAG_RENDER_ROLLOUT;
 }
 
+static int
+render_view_banner(struct snag_render *render, enum snag_render_view view)
+{
+    struct snag_buf banner = {.max = SNAG_CONFIG_IRC_ENDPOINT_MAX + SNAG_CONFIG_IRC_ROOM_MAX + 64u};
+    int rc;
+
+    if (view == SNAG_RENDER_ROLLOUT) return render_banner(render, "── rollout ──\n");
+    if (!render->chat_endpoint[0] && !render->chat_room[0])
+        return render_banner(render, "── chat ──\n");
+    rc = snag_buf_printf(&banner, "── chat %s%s%s ──\n", render->chat_endpoint,
+                         render->chat_endpoint[0] && render->chat_room[0] ? " " : "",
+                         render->chat_room);
+    if (rc == 0) rc = snag_buf_terminate(&banner);
+    if (rc == 0) rc = render_banner(render, (const char *)banner.data);
+    snag_buf_free(&banner);
+    return rc;
+}
+
+int
+snag_render_set_chat_room(struct snag_render *render, const char *endpoint, const char *room,
+                          bool announce)
+{
+    if (!render || !endpoint || !room) return snag_errno(EINVAL);
+    if (!strcmp(render->chat_endpoint, endpoint) && !strcmp(render->chat_room, room)) return 0;
+    if (render->view == SNAG_RENDER_CHAT && pause_rollout(render) < 0) return -1;
+    if (select_room_queue(render, endpoint, room) < 0) return -1;
+    if (render->view != SNAG_RENDER_CHAT || !announce) return 0;
+    if (render_view_banner(render, SNAG_RENDER_CHAT) < 0) return -1;
+    return flush_view(render, SNAG_RENDER_CHAT, SNAG_RENDER_SWITCH_BATCH);
+}
+
 int
 snag_render_set_view(struct snag_render *render, enum snag_render_view view)
 {
-    static const char *const boundaries[SNAG_RENDER_VIEW_COUNT] = {
-        "── chat ──\n", "── rollout ──\n" };
-
     if (!render || (view != SNAG_RENDER_CHAT && view != SNAG_RENDER_ROLLOUT)) return snag_errno(EINVAL);
     if (render->view == view) return 0;
     if (pause_rollout(render) < 0) return -1;
     render->view = view;
-    if (render_banner(render, boundaries[view]) < 0 || flush_view(render, view) < 0) return -1;
-    return 0;
+    if (render_view_banner(render, view) < 0) return -1;
+    return flush_view(render, view, SNAG_RENDER_SWITCH_BATCH);
+}
+
+bool
+snag_render_view_pending(const struct snag_render *render)
+{
+    const struct snag_render_record *record;
+
+    if (!render || render->view >= SNAG_RENDER_VIEW_COUNT ||
+        !(record = render->view_head[render->view])) return false;
+    /* An open streamed record remains the ordering head, but once all bytes
+     * currently materialized in it have been painted there is no repaint work
+     * to wait for.  Future fragments append live, and records queued behind it
+     * remain retained until the stream closes.  Treating the mere open record
+     * as pending kept the composer deferred—and delayed submitted input—until
+     * the provider completed. */
+    return record->kind != SNAG_RENDER_RECORD_PUBLIC || record->complete ||
+           record->displayed < record->text.len;
+}
+
+bool
+snag_render_view_runnable(const struct snag_render *render)
+{
+    const struct snag_render_record *record;
+
+    if (!snag_render_view_pending(render) ||
+        !(record = render->view_head[render->view])) return false;
+    return record->source_state != BACKFILL_QUEUED &&
+           record->response_state != BACKFILL_QUEUED;
+}
+
+int
+snag_render_flush_pending(struct snag_render *render, size_t records)
+{
+    if (!render || !records) return snag_errno(EINVAL);
+    return flush_view(render, render->view, records);
 }
 
 static int
@@ -2990,12 +3360,45 @@ source_event(struct snag_render *render, struct snag_render_source source)
         ssize_t n = snag_pread(render->history_fd, text.data + text.len, want,
                           source.offset + (int64_t)text.len);
         if (n < 0 && errno == EINTR) continue;
-        if (n <= 0 || render_checkpoint(render) < 0) goto out;
+        if (n <= 0) goto out;
         text.len += (size_t)n;
+        /* Check input between durable read chunks, not after the complete
+         * record is already materialized. Otherwise an orderly exit can turn
+         * a committed one-line control event into a presentation failure
+         * before its required notice is rendered. */
+        if (text.len < source.len && render_checkpoint(render) < 0) goto out;
     }
     event = snag_json_load_strict(text.data, text.len, text.max, error, sizeof(error));
 out: snag_buf_free(&text);
     return event;
+}
+
+static json_t *
+record_event(struct snag_render *render, struct snag_render_record *record, bool response)
+{
+    struct snag_render_source source = response ? record->response : record->source;
+    struct snag_buf *data = response ? &record->response_data : &record->source_data;
+    unsigned char state = response ? record->response_state : record->source_state;
+    int error = response ? record->response_error : record->source_error;
+    char message[128];
+
+    if (state == BACKFILL_FAILED) {
+        errno = error ? error : EIO;
+        return NULL;
+    }
+    if (state == BACKFILL_READY)
+        return snag_json_load_strict(data->data, data->len, data->max, message, sizeof(message));
+    if (state == BACKFILL_QUEUED) {
+        errno = EAGAIN;
+        return NULL;
+    }
+    int queued = backfill_queue(render, record, response);
+    if (queued > 0) {
+        errno = EAGAIN;
+        return NULL;
+    }
+    if (queued < 0) return NULL;
+    return source_event(render, source);
 }
 
 static int
@@ -3092,8 +3495,8 @@ render_tool_record(struct snag_render *render, const struct snag_render_record *
     int rc = -1;
 
     if (!snag_render_enabled(render, SNAG_PRESENT_TOOL)) return 0;
-    event = source_event(render, record->source);
-    response = source_event(render, record->response);
+    event = record_event(render, (struct snag_render_record *)record, false);
+    response = record_event(render, (struct snag_render_record *)record, true);
     if (!event || !response) goto out;
     data = json_object_get(event, "data");
     items = json_object_get(json_object_get(response, "data"), "items");
@@ -3139,7 +3542,7 @@ render_hosted_record(struct snag_render *render, const struct snag_render_record
     int rc = -1;
 
     if (!snag_render_enabled(render, SNAG_PRESENT_TOOL)) return 0;
-    event = source_event(render, record->source);
+    event = record_event(render, (struct snag_render_record *)record, false);
     if (!event) goto out;
     json_t *data = json_object_get(event, "data");
     item_id = snag_json_string(data, "item_id");
@@ -3229,7 +3632,7 @@ snag_render_durable(struct snag_render *render, int fd, struct snag_render_sourc
         hosted->source = source;
         hosted->hosted_start = strcmp(type, "hosted_search_started") == 0;
         queue_record(render, SNAG_RENDER_ROLLOUT, hosted);
-        return render->view == SNAG_RENDER_ROLLOUT ? flush_view(render, render->view) : 0;
+        return 0;
     }
     bool start = strcmp(type, "tool_started") == 0;
     if ((!start && strcmp(type, "tool_finished") != 0) || !render->response_source.len) return 0;
@@ -3242,7 +3645,7 @@ snag_render_durable(struct snag_render *render, int fd, struct snag_render_sourc
     record->timeout_ms = timeout_ms;
     record->max_output_bytes = max_output_bytes;
     queue_record(render, SNAG_RENDER_ROLLOUT, record);
-    return render->view == SNAG_RENDER_ROLLOUT ? flush_view(render, render->view) : 0;
+    return 0;
 }
 
 int
@@ -3253,7 +3656,7 @@ snag_render_event(struct snag_render *render, uint64_t seq, const char *type)
 
     if (strcmp(type, "compaction_completed") == 0) notice = "Compacted";
     else if (strcmp(type, "goal_started") == 0) notice = "Goal set";
-    else if (strcmp(type, "goal_reworded") == 0) notice = "Goal updated";
+    else if (snag_string_in(type, "goal_reworded goal_replaced")) notice = "Goal updated";
     else if (strcmp(type, "goal_resumed") == 0) notice = "Goal resumed";
     else if (strcmp(type, "goal_blocked") == 0) notice = "Goal blocked by model";
     else if (snag_string_in(type, "goal_completed goal_cancelled")) notice = "Goal cleared";

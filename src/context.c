@@ -484,9 +484,13 @@ append_goal_controller(struct context_builder *builder)
             "Do not infer a goal from ordinary work.");
     }
     bool active = builder->session->goal_status == SNAG_GOAL_ACTIVE;
-    return append_messagef(builder, "user", SNAG_MAX_GOAL_PROMPT + SNAG_MAX_GOAL_BLOCKER + 2048u,
-        "Persistent goal %.8s is %s (revision %llu, wording %s). %s\n\nCurrent goal wording:\n%s%s%s",
-        builder->session->goal_id, snag_goal_status_name(builder->session->goal_status),
+    return append_messagef(builder, "user", SNAG_MAX_GOAL_PROMPT + SNAG_MAX_GOAL_BLOCKER + 2304u,
+        "Persistent goal %s%s%s%s is %s (revision %llu, wording %s). %s\n\nCurrent goal wording:\n%s%s%s",
+        builder->session->goal_id,
+        builder->session->goal_parent_id[0] ? " (parent " : "",
+        builder->session->goal_parent_id[0] ? builder->session->goal_parent_id : "",
+        builder->session->goal_parent_id[0] ? ")" : "",
+        snag_goal_status_name(builder->session->goal_status),
         (unsigned long long)builder->session->goal_revision,
         builder->session->goal_locked ? "locked" : "unlocked",
         active ? "Keep working across turns until it is complete or genuinely blocked. "
@@ -494,13 +498,38 @@ append_goal_controller(struct context_builder *builder)
         "goal turn. Use update_goal action=complete with text=null only when the "
         "goal is finished. Use action=block with a specific reason only when no "
         "dependency-ready work remains. You may use action=rewrite to improve the "
-        "wording only when it is unlocked." :
+        "wording only when it is unlocked. A rewrite creates a new goal ID with "
+        "explicit parent lineage; use list_goals to inspect prior goals." :
         "This saved goal remains part of the session, but automatic continuation "
         "is stopped. Retain its wording and status as context for the user's "
         "request; do not treat it as a new goal or ask the user to restate it. "
-        "Restoring this context does not resume or change the goal.", builder->session->goal_prompt,
+        "Restoring this context does not resume or change the goal. Use list_goals "
+        "to inspect prior goal identities and lineage.", builder->session->goal_prompt,
         builder->session->goal_blocker ? "\n\nRecorded blocker:\n" : "",
         builder->session->goal_blocker ? builder->session->goal_blocker : "");
+}
+
+static int
+append_history_orientation(struct context_builder *builder)
+{
+    enum snag_history_orientation orientation = builder->control ?
+        builder->control->history_orientation : SNAG_HISTORY_ORIENTATION_NONE;
+
+    if (orientation == SNAG_HISTORY_ORIENTATION_NONE) return 0;
+    if (orientation == SNAG_HISTORY_ORIENTATION_COMPACT)
+        return append_host_input(builder->request_input,
+            "Context was compacted. Bounded durable session history remains available through "
+            "read_session_history; page backward with next_before_seq only when the compacted "
+            "summary lacks a needed fact. This reminder does not create a new request or recap.");
+    if (orientation != SNAG_HISTORY_ORIENTATION_RECOVERY) return -1;
+    return append_host_input(builder->request_input,
+        "Full history orientation after process resume or context-capacity recovery: this is a pure "
+        "durable-goal continuation, not a new request, and prior provider transcript/tool/media "
+        "content is not replayed. Use read_session_history "
+        "for bounded newest-first event pages and continue with next_before_seq when older detail is "
+        "needed. Use list_goals for prior goal identities, status and replacement lineage; the full "
+        "current goal is restated separately. Inspect unsettled command handles before acting, retain "
+        "completed results, and never replay completed tools merely to reconstruct history.");
 }
 
 static int
@@ -1012,6 +1041,66 @@ steering_matches_snapshot(struct context_builder *builder, const char *id,
     return 1;
 }
 
+static size_t
+admitted_steering_count(const struct snag_session *session)
+{
+    size_t count = 0u;
+
+    for (size_t i = 0u; i < session->pending_steering_count; ++i)
+        if (session->pending_steering[i].first_context_ms) ++count;
+    return count;
+}
+
+static const struct snag_pending_steering *
+pending_steering_at_seq(const struct snag_session *session, uint64_t seq)
+{
+    for (size_t i = 0u; i < session->pending_steering_count; ++i)
+        if (session->pending_steering[i].seq == seq) return &session->pending_steering[i];
+    return NULL;
+}
+
+static int
+prepare_goal_recovery_orientation(struct context_builder *builder,
+                                  char *error, size_t error_size)
+{
+    const struct snag_session *session = builder->session;
+
+    if (!session || !session->active_turn || !session->active_turn_id[0] ||
+        !session->active_goal || strcmp(session->active_prompt,
+                                        SNAG_GOAL_CONTINUATION_TEXT) != 0)
+        return snag_fail(error, error_size, EINVAL,
+            "goal recovery orientation requires an active automatic goal turn");
+    if (snag_instructions_match_metadata(builder->instructions,
+            session->active_instructions, error, error_size) < 0) return -1;
+    if (json_array_size(builder->steering) != admitted_steering_count(session))
+        return snag_fail(error, error_size, EINVAL,
+            "goal recovery steering count differs from durable state");
+
+    builder->active_turn = true;
+    memcpy(builder->active_turn_id, session->active_turn_id,
+           sizeof(builder->active_turn_id));
+    builder->event_time_ms = session->last_time_ms;
+    for (size_t i = 0u; i < session->pending_steering_count; ++i) {
+        const struct snag_pending_steering *pending = &session->pending_steering[i];
+        if (!pending->first_context_ms) continue;
+        if (!steering_matches_snapshot(builder, pending->steering_id,
+                pending->text, pending->content))
+            return snag_fail(error, error_size, EINVAL,
+                "goal recovery steering differs from durable state");
+        if (defer_input(builder, pending->text, pending->steering_id,
+                pending->received_ms, pending->content) < 0) return -1;
+    }
+    /* Rebase provider/tool bulk, never the request that makes this an active
+     * turn. Without this user-side boundary a resumed provider sees only
+     * controller metadata and can treat the retry as an unsolicited reply. */
+    if (append_host_input(builder->request_input, session->active_prompt) < 0) return -1;
+    return append_host_input(builder->request_input,
+        "Pure durable-goal continuation after process resume or context recovery: no prior "
+        "provider transcript, compacted conversation, completed tool call, tool output, or "
+        "retained image is replayed into this request. Continue from the full goal/controller "
+        "orientation below and inspect bounded durable history only when a concrete fact is needed.");
+}
+
 /* An admitted room event is user input, so it waits for the same safe boundary
  * as steering and topology snapshots. Appending it where the admission was
  * recorded splits a tool exchange whenever room traffic arrives while a call is
@@ -1133,9 +1222,10 @@ context_event(void *opaque, const struct snag_session *state,
     if (snag_string_in(type, "steering_added irc_reply_reminder response_output_correction")) {
         bool correction = !strcmp(type, "response_output_correction");
         const char *id = snag_json_string(data, correction ? "correction_id" : "steering_id");
-        bool pending = builder->steering && builder->steering_seen <
-            builder->session->pending_steering_count &&
-            builder->session->pending_steering[builder->steering_seen].seq == seq;
+        const struct snag_pending_steering *durable =
+            pending_steering_at_seq(builder->session, seq);
+        bool pending = durable && durable->first_context_ms;
+        if (durable && !durable->first_context_ms) return 0;
         if (pending && !steering_matches_snapshot(builder, id, text,json_object_get(data,"content")))
             return snag_fail(error, error_size, EINVAL, "steering context differs from snapshot");
         if (correction && append_interrupted_prefix(builder, data, error, error_size) < 0)
@@ -1183,7 +1273,7 @@ out: json_decref(properties);
 }
 
 static json_t *
-exec_tool_schema(uint32_t max_timeout_ms, uint32_t max_output_tokens)
+exec_tool_schema(uint32_t max_wait_ms, uint32_t max_timeout_ms, uint32_t max_output_tokens)
 {
     char description[512];
     (void)snprintf(description, sizeof(description),
@@ -1193,12 +1283,12 @@ exec_tool_schema(uint32_t max_timeout_ms, uint32_t max_output_tokens)
         "Invalid fields or ranges reject the call before execution.", max_output_tokens);
     return tool_schema("exec_command", "command", description, json_pack(
         "{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},"
-         "s:{s:[s,s],s:i,s:i,s:s},s:{s:[s,s],s:i,s:I,s:s},s:{s:[s,s],s:i,s:I,s:s}}",
+         "s:{s:[s,s],s:i,s:I,s:s},s:{s:[s,s],s:i,s:I,s:s},s:{s:[s,s],s:i,s:I,s:s}}",
         "command", "type", "string", "description", "Source for the configured shell, at most 262144 UTF-8 bytes. Legacy cmd is accepted; supply only one spelling.",
         "workdir", "type", "string", "null", "description", "Existing absolute working directory; omission uses the session workspace.",
         "stdin", "type", "string", "null", "description", "Initial input, at most 1048576 UTF-8 bytes. Null keeps input open; a string sends its bytes then closes input (empty string closes immediately).",
         "pty", "type", "boolean", "null", "description", "True allocates a pseudo-terminal; false/null uses pipes. PTY merges stdout and stderr.",
-        "yield_ms", "type", "integer", "null", "minimum", 0, "maximum", 600000,
+        "yield_ms", "type", "integer", "null", "minimum", 0, "maximum", (json_int_t)max_wait_ms,
             "description", "Maximum wait for this invocation, in milliseconds; 0 returns promptly, null uses default_yield_ms. Does not kill the command. Legacy yield_time_ms is accepted; supply only one spelling. Host max_wait_ms or /yield can return earlier.",
         "timeout_ms", "type", "integer", "null", "minimum", 1, "maximum", (json_int_t)max_timeout_ms,
             "description", "One-shot foreground handoff deadline in milliseconds, measured from command start. It returns a running handle without killing the command. Null uses default_timeout_ms (0 in host configuration disables this handoff). Values above the maximum are rejected, not clamped.",
@@ -1207,7 +1297,7 @@ exec_tool_schema(uint32_t max_timeout_ms, uint32_t max_output_tokens)
 }
 
 static json_t *
-stdin_tool_schema(uint32_t max_output_tokens)
+stdin_tool_schema(uint32_t max_wait_ms, uint32_t max_output_tokens)
 {
     char description[384];
     (void)snprintf(description, sizeof(description),
@@ -1217,12 +1307,12 @@ stdin_tool_schema(uint32_t max_output_tokens)
         max_output_tokens);
     return tool_schema("write_stdin", "handle", description, json_pack(
         "{s:{s:s,s:s},s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},"
-         "s:{s:[s,s],s:i,s:i,s:s},s:{s:[s,s],s:i,s:I,s:s}}",
+         "s:{s:[s,s],s:i,s:I,s:s},s:{s:[s,s],s:i,s:I,s:s}}",
         "handle", "type", "string", "description", "Exact 32-character lowercase hex handle from a running result. A terminal result settles it; do not reuse a settled handle.",
         "data", "type", "string", "description", "Input bytes (at most 1048576 UTF-8 bytes); omission or empty string polls without sending input. Supplied data must be a string, not null.",
         "eof", "type", "boolean", "null", "description", "True closes input after pending bytes are written; false/null leaves it open. Closing input is separate from terminating the process.",
         "terminate", "type", "boolean", "null", "description", "True requests termination and requires data=\"\" and eof=false/null; false/null does not terminate. A returned running handle must still be collected.",
-        "yield_ms", "type", "integer", "null", "minimum", 0, "maximum", 600000,
+        "yield_ms", "type", "integer", "null", "minimum", 0, "maximum", (json_int_t)max_wait_ms,
             "description", "Maximum wait for this invocation in milliseconds; 0 returns promptly, null uses default_yield_ms. Host max_wait_ms or /yield can return earlier. Does not reset the initial one-shot timeout_ms handoff deadline.",
         "max_output_bytes", "type", "integer", "null", "minimum", 1, "maximum", (json_int_t)SNAG_CONFIG_TOKEN_LIMIT_MAX,
             "description", "Model-facing UTF-8 byte limit. Legacy max_output_tokens is accepted; supply only one spelling. Null uses the configured ceiling; smaller positive requests reduce the excerpt, larger positive requests up to 4000000000 are capped and reported. Does not limit durable capture."));
@@ -1311,8 +1401,8 @@ image_tool_schema(void)
 static json_t *
 tool_schemas(bool goal_active,
              bool goal_create_allowed, bool networked,
-             const struct snag_config *config, const char *provider_name,
-             bool read_only)
+             const struct snag_config *config, const struct snag_session *session,
+             const char *provider_name, bool read_only)
 {
     json_t *tools = json_array();
     const char *search_type = snag_config_provider_is_openrouter(
@@ -1375,10 +1465,47 @@ tool_schemas(bool goal_active,
         json_array_append_new(tools, read_only_schema("read_file")) < 0 ||
         json_array_append_new(tools, read_only_schema("grep")) < 0 ||
         json_array_append_new(tools, json_pack("{s:s}", "type", search_type)) < 0) goto fail;
-    if (json_array_append_new(tools, exec_tool_schema(config ? config->max_timeout_ms : UINT32_MAX,
-                config ? config->max_output_tokens : SNAG_DEFAULT_TOOL_OUTPUT_TOKENS)) < 0 ||
-        json_array_append_new(tools, stdin_tool_schema(config ? config->max_output_tokens :
-                         SNAG_DEFAULT_TOOL_OUTPUT_TOKENS)) < 0 ||
+    uint32_t max_wait_ms = session ? session->max_wait_ms : config ? config->max_wait_ms : UINT32_MAX;
+    uint32_t max_timeout_ms = session ? session->max_timeout_ms :
+        config ? config->max_timeout_ms : UINT32_MAX;
+    uint32_t tool_output_bytes = session ? session->tool_output_bytes :
+        config ? config->max_output_tokens : SNAG_DEFAULT_TOOL_OUTPUT_TOKENS;
+    if (json_array_append_new(tools, exec_tool_schema(max_wait_ms, max_timeout_ms,
+                tool_output_bytes)) < 0 ||
+        json_array_append_new(tools, stdin_tool_schema(max_wait_ms, tool_output_bytes)) < 0 ||
+        json_array_append_new(tools, tool_schema("read_tool_output", "handle stream",
+            "Read a bounded page of complete redacted command output retained in this session. "
+            "Use output_ref.handle with stdout or stderr and advance offset to next_offset; settled commands remain readable after resume. "
+            "The model-facing page remains under the configured common output ceiling.",
+            json_pack("{s:{s:s,s:s},s:{s:s,s:s,s:[s,s]},s:{s:[s,s],s:i,s:s},s:{s:[s,s],s:i,s:I,s:s}}",
+                "handle", "type", "string", "description", "32-character lowercase output_ref handle from this session.",
+                "stream", "type", "string", "description", "Output stream to read.", "enum", "stdout", "stderr",
+                "offset", "type", "integer", "null", "minimum", 0, "description", "Zero-based redacted byte offset; omission/null selects 0.",
+                "max_output_bytes", "type", "integer", "null", "minimum", 512, "maximum", (json_int_t)SNAG_CONFIG_TOKEN_LIMIT_MAX,
+                    "description", "Total model-facing page ceiling in bytes. Null uses the configured common output ceiling; larger requests are capped."))) < 0 ||
+        json_array_append_new(tools, tool_schema("read_session_history", "",
+            "Read a bounded newest-first page of this session's verified durable event history. "
+            "Use next_before_seq as the next exclusive cursor to walk older history after resume, compaction or recovery.",
+            json_pack("{s:{s:[s,s],s:i,s:s},s:{s:[s,s],s:i,s:i,s:s},s:{s:[s,s],s:i,s:i,s:s}}",
+                "before_seq", "type", "integer", "null", "minimum", 1,
+                    "description", "Exclusive event sequence upper bound; omission/null selects the newest events.",
+                "limit", "type", "integer", "null", "minimum", 1, "maximum", 50,
+                    "description", "Maximum complete events to return; omission/null selects 20.",
+                "detail_bytes", "type", "integer", "null", "minimum", 128, "maximum", 2048,
+                    "description", "Maximum compact JSON bytes retained per event; omission/null selects 512."))) < 0 ||
+        json_array_append_new(tools, tool_schema("list_goals", "",
+            "List bounded durable goal identities, final/current statuses and copy-on-write parent/replacement lineage. "
+            "Use next_before_seq to walk older goals without changing the current goal.",
+            json_pack("{s:{s:[s,s],s:i,s:s},s:{s:[s,s],s:i,s:i,s:s}}",
+                "before_seq", "type", "integer", "null", "minimum", 1,
+                    "description", "Exclusive goal-creation event sequence upper bound; omission/null selects newest goals.",
+                "limit", "type", "integer", "null", "minimum", 1, "maximum", 50,
+                    "description", "Maximum goal identities to return; omission/null selects 20."))) < 0 ||
+        json_array_append_new(tools, tool_schema("set_command_shell", "path",
+            "Select the executable shell used by later exec_command calls in this session. "
+            "The absolute path must resolve to an executable regular file; selection is durable across resume and does not alter already-running commands.",
+            json_pack("{s:{s:s,s:s}}", "path", "type", "string", "description",
+                "Absolute executable shell path, preserving the selected symlink personality."))) < 0 ||
         json_array_append_new(tools, tool_schema("apply_patch", "patch",
             "Apply a patch using *** Begin Patch and *** End Patch delimiters. "
             "Operations are *** Add File: path (every content line starts +), "
@@ -1400,10 +1527,15 @@ tool_schemas(bool goal_active,
         json_array_append_new(tools, tool_schema("irc_state", "",
             "Read the already-maintained room, topic, endpoint, membership, and operator state without polling or changing connections.", json_object())) < 0 ||
         json_array_append_new(tools, tool_schema("irc_topic", "topic",
-            "Change the room topic as the agent identity; execution checks connection and operator privilege at runtime.",
+            "Change the room topic as the agent identity; execution checks the room's live topic policy at runtime.",
             json_pack("{s:{s:[s,s],s:s},s:{s:s,s:s}}",
                 "destination", "type", "string", "null", "description", "Number string from irc_state, all for broadcast, or null for a sole destination.",
                 "topic", "type", "string", "description", "UTF-8 channel topic (at most 2097152 bytes); empty string clears it."))) < 0 ||
+        json_array_append_new(tools, tool_schema("irc_nick", "nick",
+            "Change the agent's live IRC nickname on one endpoint or all endpoints.",
+            json_pack("{s:{s:[s,s],s:s},s:{s:s,s:s}}",
+                "destination", "type", "string", "null", "description", "Number string from irc_state, all for broadcast, or null for a sole destination.",
+                "nick", "type", "string", "description", "New nonempty IRC nickname."))) < 0 ||
         json_array_append_new(tools, tool_schema("irc_connect", "endpoint",
             "Connect the agent to an IRC endpoint using the configured identity and room. The runtime owns sockets, joining and retries.",
             json_pack("{s:{s:s,s:s}}", "endpoint", "type", "string", "description", "IRC host:port endpoint to connect."))) < 0 ||
@@ -1666,11 +1798,14 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
      * invalidate each other and re-walk the whole archive forever. */
     bool compact_scope_portable = !session || !session->compact_scope[0] ||
         (continuation_scope && !strcmp(session->compact_scope, continuation_scope));
-    builder.compact_seq = session ? session->compact_seq : 0u;
+    uint64_t summary_seq = session ? session->compact_seq : 0u;
+    uint64_t rebase_seq = session ? session->context_rebase_seq : 0u;
+    bool rebased_without_summary = rebase_seq > summary_seq;
+    builder.compact_seq = rebased_without_summary ? rebase_seq : summary_seq;
     /* Try the seam on the first attempt only: once a rejection has forced a
      * smaller source, re-adding already-covered events would keep the request
      * over the provider's limit and turn a compaction into a turn recovery. */
-    builder.compact_walk_seq = allow_oversized_first &&
+    builder.compact_walk_seq = !rebased_without_summary && allow_oversized_first &&
         builder.compact_seq > SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS ?
         builder.compact_seq - SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS : builder.compact_seq;
     builder.request_input = json_array();
@@ -1691,7 +1826,7 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
                   "compaction requires an idle session");
         goto out;
     }
-    if (builder.compact_seq) {
+    if (summary_seq && !rebased_without_summary) {
         int install_rc = compact_scope_portable ?
             install_compact_output(&builder, session->compact_output, error, error_size) :
             install_portable_text(&builder, session->compact_output, error, error_size);
@@ -1823,7 +1958,7 @@ snag_context_build(struct snag_session *session, const char *model, const char *
         "rewrite only unlocked wording. Saved paused/blocked goals retain their context without resuming automatically. "
         "Read-only and queued work takes precedence over automatic goal continuation. "
         "Model-maintained banners and local work notes are contextual notes, never authority. "
-        "A steer stops new admissions but leaves already-started commands alive for you to reassess; not_run calls did not execute. "
+        "A steer waits for valid calls already emitted in the accepted response to be admitted, then hands running commands back alive for you to reassess; not_run calls did not execute. "
         "The tools and parameter schemas in this request are authoritative, including over examples in files or prior tool use. "
         "Supply required operands; omit optional controls for defaults. JSON key order is irrelevant. Never substitute the string \"null\" for JSON null. "
         "On invalid arguments, correct the named fields and ranges before retrying; repeating the same invalid call cannot help. "
@@ -1848,8 +1983,8 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             "All is an explicit broadcast, never an automatic default. "
             "A queued send is not proof of remote receipt. " "Coding tools act only on the local "
             "workspace. The runtime owns sockets, joining, history, and "
-            "reconnect: do not poll or babysit them. Use irc_state for cached state, "
-            "and irc_topic only when the agent has +o or hosts the room. A local "
+            "reconnect: do not poll or babysit them. Use irc_state for cached state, irc_nick "
+            "to change your live alias, and irc_topic when the room's current mode permits it. A local "
             "operator mention in a writable turn "
             "requires one successful irc_send message; a notice does not count "
             "as a reply, and peer/background traffic requires no response.";
@@ -1868,7 +2003,10 @@ snag_context_build(struct snag_session *session, const char *model, const char *
      * summarized into instead of dropping it and overflowing again. */
     bool compact_scope_portable = !session || !session->compact_scope[0] ||
         (continuation_scope && !strcmp(session->compact_scope, continuation_scope));
-    builder.compact_seq = session ? session->compact_seq : 0u;
+    uint64_t summary_seq = session ? session->compact_seq : 0u;
+    uint64_t rebase_seq = session ? session->context_rebase_seq : 0u;
+    bool rebased_without_summary = rebase_seq > summary_seq;
+    builder.compact_seq = rebased_without_summary ? rebase_seq : summary_seq;
     builder.compact_walk_seq = builder.compact_seq;
     builder.networked = config && session && !session->active_read_only &&
         (config->irc.listen_explicit || config->irc.client_count != 0u);
@@ -1890,16 +2028,17 @@ snag_context_build(struct snag_session *session, const char *model, const char *
     if (config && !session->active_read_only &&
         append_messagef(&builder, "system", 8192u,
             "Command environment (host configuration, not extra tool arguments): "
-            "workspace=%s; shell=%s; default_yield_ms=%u; max_wait_ms=%u; "
+            "workspace=%s; shell=%s; output_cache_bytes=%u; default_yield_ms=%u; max_wait_ms=%u; "
             "default_timeout_ms=%u (0 disables the one-shot handoff; timeouts "
             "do not kill commands); max_timeout_ms=%u; "
             "max_parallel_commands=%u; output ceiling=%u UTF-8 bytes; "
             "goal wording limit=%u bytes; goal blocker limit=%u bytes. "
             "exec_command may use another existing absolute workdir; apply_patch "
-            "workdir must equal workspace.", session->workspace, config->shell,
-            config->default_yield_ms, config->max_wait_ms, config->default_timeout_ms,
-            config->max_timeout_ms, session->max_parallel_commands,
-            config->max_output_tokens, config->max_goal_prompt_bytes,
+            "workdir must equal workspace.", session->workspace,
+            session->command_shell[0] ? session->command_shell : config->shell,
+            session->output_cache_bytes, session->default_yield_ms, session->max_wait_ms,
+            session->default_timeout_ms, session->max_timeout_ms, session->max_parallel_commands,
+            session->tool_output_bytes, config->max_goal_prompt_bytes,
             SNAG_MAX_GOAL_BLOCKER) < 0) goto out;
     if (session->active_read_only && append_message(&builder, "system",
             "This turn is a read-only query. Answer only this query using the "
@@ -1910,16 +2049,32 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             "files, contact IRC, or change goals. These restrictions persist "
             "through steering and compaction and end with this turn.") < 0) goto out;
     builder.base_request_count = json_array_size(builder.request_input);
-    if (builder.compact_seq) {
-        int install_rc = compact_scope_portable ?
-            install_compact_output(&builder, session->compact_output, error, error_size) :
-            install_portable_text(&builder, session->compact_output, error, error_size);
-        if (install_rc < 0) goto out;
-        if (install_rc == 1) builder.compact_seq = 0u;
+    bool usable_summary = summary_seq && !rebased_without_summary;
+    bool goal_recovery_only = control &&
+        control->history_orientation == SNAG_HISTORY_ORIENTATION_RECOVERY &&
+        control->goal_recovery_rebase &&
+        session->goal_status == SNAG_GOAL_ACTIVE && session->active_goal &&
+        !usable_summary;
+    if (goal_recovery_only) {
+        if (prepare_goal_recovery_orientation(&builder, error, error_size) < 0) goto out;
+    } else {
+        /* context_rebased covers the earlier journal without a compacted
+         * summary. Reinstall the active automatic request on every later
+         * response cycle; response_started host snapshots deliberately carry
+         * controller state, not this conversation boundary. */
+        if (rebased_without_summary && session->active_goal &&
+            append_host_input(builder.request_input, session->active_prompt) < 0) goto out;
+        if (summary_seq && !rebased_without_summary) {
+            int install_rc = compact_scope_portable ?
+                install_compact_output(&builder, session->compact_output, error, error_size) :
+                install_portable_text(&builder, session->compact_output, error, error_size);
+            if (install_rc < 0) goto out;
+            if (install_rc == 1) builder.compact_seq = 0u;
+        }
+        if (snag_session_each_event(session, context_event, &builder, error, error_size) < 0) goto out;
     }
-    if (snag_session_each_event(session, context_event, &builder, error, error_size) < 0) goto out;
     if (!builder.active_turn || builder.steering_seen != json_array_size(steering) ||
-        builder.steering_seen != session->pending_steering_count) {
+        builder.steering_seen != admitted_steering_count(session)) {
         (void)snag_fail(error, error_size, EINVAL, "response projection does not end at an active turn");
         goto out;
     }
@@ -1950,15 +2105,15 @@ snag_context_build(struct snag_session *session, const char *model, const char *
         free(feedback);
         if (appended < 0) goto out;
     }
-    if (append_goal_controller(&builder) < 0 || append_banner(&builder) < 0 ||
-        append_process_state(&builder) < 0) {
+    if (append_goal_controller(&builder) < 0 || append_history_orientation(&builder) < 0 ||
+        append_banner(&builder) < 0 || append_process_state(&builder) < 0) {
         snag_errorf(error, error_size, "cannot append active controller state");
         goto out;
     }
     if (freeze_host_context(&builder, controller_start, projection) < 0) goto out;
     builder.tools = tool_schemas( session->goal_status == SNAG_GOAL_ACTIVE,
         !snag_goal_unfinished(session->goal_status), builder.networked,
-        config, session->active_turn_provider, session->active_read_only);
+        config, session, session->active_turn_provider, session->active_read_only);
     if (builder.deferred_irc_seq && projection->irc_seq >= builder.deferred_irc_seq)
         projection->irc_seq = builder.deferred_irc_seq - 1u;
     /* State and system policy do not themselves start a continuation request.

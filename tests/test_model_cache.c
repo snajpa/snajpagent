@@ -379,9 +379,13 @@ main(void)
     assert(capacity.max_context_window_tokens == 872000u);
     assert(capacity.effective_context_window_derived);
     assert(capacity.effective_context_window_percent == 95u);
-    assert(capacity.hard_input_tokens == 258400u);
+    assert(capacity.hard_input_tokens == 828400u);
     config.providers[1].auto_compact_input_tokens = SNAG_CONFIG_COMPACT_AUTO;
-    assert(snag_model_compact_threshold(&config.providers[1], &capacity) == 232560u);
+    assert(snag_model_compact_threshold(&config.providers[1], &capacity) == 745560u);
+    /* The September 21 journals accepted 559,848 input tokens on this
+     * source; 232,591 must not compact merely for crossing the 272k normal
+     * working-window policy after its 95%/90% reductions. */
+    assert(UINT64_C(559848) < snag_model_compact_threshold(&config.providers[1], &capacity));
     {
         struct snag_model_capacity bigger;
         struct snag_model_limit_config *limit = &config.model_limits[0];
@@ -389,10 +393,10 @@ main(void)
         config.model_limit_count = 1u;
         strcpy(limit->provider, "codex");
         strcpy(limit->model, "codex-context-only");
-        limit->context_window_tokens = 872000u;
+        limit->context_window_tokens = 500000u;
         bigger = resolve_capacity(&cache, &config, 1, "codex-context-only", "codex");
-        assert(bigger.hard_input_tokens == 828400u);
-        assert(snag_model_compact_threshold(&config.providers[1], &bigger) == 745560u);
+        assert(bigger.hard_input_tokens == 475000u);
+        assert(snag_model_compact_threshold(&config.providers[1], &bigger) == 427500u);
         config.providers[1].auto_compact_input_tokens = 120000u;
         assert(snag_model_compact_threshold(&config.providers[1], &bigger) == 120000u);
         config.providers[1].auto_compact_input_tokens = 0u;

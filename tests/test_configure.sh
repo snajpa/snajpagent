@@ -34,7 +34,7 @@ fails=0
 fail() { printf 'test_configure: FAIL %s\n' "$1"; fails=$((fails + 1)); }
 note() { printf 'test_configure: skip %s\n' "$1"; }
 
-# check DESCRIPTION EXPECTED_RC unchanged|changed [options...]
+# check DESCRIPTION EXPECTED_RC unchanged|changed|either [options...]
 check() {
 	desc=$1
 	want_rc=$2
@@ -45,7 +45,8 @@ check() {
 	rc=$?
 	cmp -s "$tmp/pristine.mk" "$tmp/config.mk" && file=unchanged || file=changed
 	[ "$rc" = "$want_rc" ] || fail "$desc: exit $rc, expected $want_rc"
-	[ "$file" = "$want_file" ] || fail "$desc: config.mk $file, expected $want_file"
+	[ "$want_file" = either ] || [ "$file" = "$want_file" ] ||
+		fail "$desc: config.mk $file, expected $want_file"
 }
 
 check 'unknown option is rejected' 2 unchanged --frobnicate
@@ -60,7 +61,10 @@ grep -q '^MANPREFIX = /usr/share/man$' "$tmp/config.mk" ||
 
 triple=$(cc -dumpmachine 2>/dev/null) || triple=
 if [ -n "$triple" ]; then
-	check "native --host=$triple is accepted" 0 changed --host="$triple"
+	# A native --host deliberately keeps the native compiler. Whether probes
+	# rewrite config.mk depends on the shipped defaults and installed optional
+	# dependencies, so acceptance—not an incidental byte change—is the contract.
+	check "native --host=$triple is accepted" 0 either --host="$triple"
 else
 	note 'cc -dumpmachine unavailable, native --host case'
 fi

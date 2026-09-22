@@ -1015,7 +1015,7 @@ snag_term_input_resized(struct snag_term_host *host)
 }
 
 int
-snag_term_input_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout_ms)
+snag_term_input_native_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout_ms)
 {
     HANDLE handles[3] = {(HANDLE)_get_osfhandle(0), NULL, NULL};
     DWORD count = 1;
@@ -1052,7 +1052,7 @@ snag_term_input_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout
 }
 
 ssize_t
-snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
+snag_term_input_native_read(struct snag_term_host *host, void *buffer, size_t size)
 {
     HANDLE input = (HANDLE)_get_osfhandle(0);
     DWORD mode, got;
@@ -1388,7 +1388,7 @@ snag_term_input_hidden(struct snag_term_host *host)
 }
 
 ssize_t
-snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
+snag_term_input_native_read(struct snag_term_host *host, void *buffer, size_t size)
 {
     (void)host;
     return read(STDIN_FILENO, buffer, size);
@@ -1402,7 +1402,7 @@ snag_term_input_resized(struct snag_term_host *host)
 }
 
 int
-snag_term_input_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout_ms)
+snag_term_input_native_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout_ms)
 {
     struct pollfd fds[2] = {{STDIN_FILENO, POLLIN, 0}, {wake, POLLIN, 0}};
     (void)host;
@@ -1459,3 +1459,36 @@ snag_term_signals_unblock(void)
     return mask_signals(SIG_UNBLOCK, &signals, NULL);
 }
 #endif
+
+void
+snag_term_input_redirect(struct snag_term_host *host,
+                         int (*status)(void *),
+                         ssize_t (*read_input)(void *, void *, size_t),
+                         void *opaque)
+{
+    host->input_redirect_status = status;
+    host->input_redirect_read = read_input;
+    host->input_redirect_opaque = opaque;
+}
+
+ssize_t
+snag_term_input_read(struct snag_term_host *host, void *buffer, size_t size)
+{
+    if (host->input_redirect_read)
+        return host->input_redirect_read(host->input_redirect_opaque, buffer, size);
+    return snag_term_input_native_read(host, buffer, size);
+}
+
+int
+snag_term_input_wait(struct snag_term_host *host, snag_wake_fd wake, int timeout_ms)
+{
+    int status;
+    if (!host->input_redirect_status)
+        return snag_term_input_native_wait(host, wake, timeout_ms);
+    status = host->input_redirect_status(host->input_redirect_opaque);
+    if (status) return status;
+    int rc = snag_wakeup_wait(wake, timeout_ms);
+    if (rc <= 0) return rc;
+    status = host->input_redirect_status(host->input_redirect_opaque);
+    return status | SNAG_TERM_WAIT_WAKE;
+}

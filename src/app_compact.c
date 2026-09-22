@@ -345,7 +345,10 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             if (source_budget < SNAG_CONTEXT_COMPACT_FLOOR) source_budget = SNAG_CONTEXT_COMPACT_FLOOR;
         }
     }
-    const struct snag_context_control control = {snag_app_context_cancelled, app};
+    const struct snag_context_control control = {
+        .cancelled = snag_app_context_cancelled,
+        .opaque = app
+    };
     for (unsigned int selection = 0u; selection < 8u; ++selection) {
         if (snag_app_provider_activity(app, true) < 0) goto out;
         /* The oversized-first exception belongs to the first attempt only: once
@@ -652,6 +655,8 @@ run_compaction(struct app_state *app, const char *reason, bool active_prefix,
      * session: every turn retry re-ran the same compaction (13 attempts over
      * 1.5 hours in one report). Bound consecutive failures; a completed
      * compaction, new operator input or a manual /compact resets the count. */
+    if (app->history_orientation < SNAG_HISTORY_ORIENTATION_COMPACT)
+        app->history_orientation = SNAG_HISTORY_ORIENTATION_COMPACT;
     if (app->compaction_failures >= 8u) {
         app->compaction_bounded = true;
         return snag_fail(error, error_size, EPROTO,

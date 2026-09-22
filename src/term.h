@@ -167,6 +167,9 @@ void snag_term_capture_prompt_clock(struct snag_term *term, time_t seconds);
 void snag_term_set_commands(struct snag_term *term, const struct snag_term_command *commands, size_t count);
 int snag_term_open(struct snag_term *term, char *error, size_t error_size);
 void snag_term_close(struct snag_term *term);
+/* Emergency close: restore input immediately and skip terminal output that may
+ * be blocked behind a full writer. */
+void snag_term_abort(struct snag_term *term);
 int snag_term_external_begin(struct snag_term *term, char *error, size_t error_size);
 int snag_term_external_end(struct snag_term *term, char *error, size_t error_size);
 /* Optional content-free composer trace; empty unless SNAJPAGENT_TERM_TRACE names a path. */

@@ -386,6 +386,12 @@ snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool forc
     if (app->irc_urgent.len) {
         source = &app->irc_urgent;
         if (local_operator) *local_operator = app->irc_urgent_replies.count != 0u;
+    /* A paused or blocked persistent goal is an explicit idle boundary. Keep
+     * ordinary room traffic pending until the operator resumes or submits new
+     * work; direct mentions remain urgent and may still start a turn. */
+    } else if (app->session.goal_status == SNAG_GOAL_PAUSED ||
+               app->session.goal_status == SNAG_GOAL_BLOCKED) {
+        return NULL;
     /* Startup/history alone must not turn an unused session into saved work. */
     } else if (app->session.log_fd >= 0 && app->irc_background.len && (force_background ||
                 snag_time_ms() - app->irc_background_since_ms >= 100u)) {
@@ -491,6 +497,7 @@ snag_app_steering_snapshot(const struct snag_session *session)
 
     if (!array) return NULL;
     for (size_t i = 0; i < session->pending_steering_count; ++i) {
+        if (!session->pending_steering[i].first_context_ms) continue;
         json_t *item = json_pack("{s:s,s:s}", "id", session->pending_steering[i].steering_id,
             "text", session->pending_steering[i].text);
         json_t *content = session->pending_steering[i].content;
@@ -563,7 +570,12 @@ snag_app_request_build(struct app_state *app, const json_t *steering, unsigned i
                        char *error, size_t error_size)
 {
     int rc;
-    const struct snag_context_control control = {snag_app_context_cancelled, app};
+    const struct snag_context_control control = {
+        .cancelled = snag_app_context_cancelled,
+        .opaque = app,
+        .history_orientation = app->history_orientation,
+        .goal_recovery_rebase = app->history_recovery_rebase
+    };
 
     app->request_networked = app->networked && !app->session.active_read_only;
     snag_irc_capture_route(app->irc, &app->irc_request_route);
@@ -716,6 +728,8 @@ snag_app_tool_output(void *opaque, const char *handle, unsigned int stream,
     int rc = -1;
     struct snag_buf encoded = {.max = 32768u};
     if (!utf8 && snag_base64_append(&encoded, bytes, len) < 0) goto out;
+    if (app->output_cache.valid && !strcmp(app->output_cache.handle, handle) &&
+        app->output_cache.stream == stream) app->output_cache.valid = false;
     event = json_pack("{s:s,s:s,s:i,s:I,s:s,s:s%}", "turn_id", app->session.active_turn_id, "handle", handle,
         "stream", (int)stream, "offset", (json_int_t)offset, "encoding", utf8 ? "utf8" : "base64",
         "data", (const char *)(utf8 ? bytes : (const void *)encoded.data), utf8 ? len : encoded.len);
@@ -783,6 +797,497 @@ snag_app_tool_read(void *opaque, const char *handle, unsigned int stream,
     if (!process || from > to || snag_session_each_event_since(&app->session, process, read_process_chunk,
                                       &read, error, sizeof(error)) < 0) return -1;
     return read.seen == to - from ? 0 : -1;
+}
+
+struct process_output_scan {
+    const char *handle;
+    unsigned int stream;
+    uint64_t from, retain, total;
+    bool known;
+    struct snag_buf *out;
+};
+
+static int
+scan_process_output(void *opaque, const struct snag_session *state, uint64_t seq, const char *type,
+                    const json_t *data, char *error, size_t error_size)
+{
+    struct process_output_scan *scan = opaque;
+    const json_t *result = NULL, *ref = NULL;
+    const char *handle;
+    uint64_t stream, offset;
+    (void)state;
+    (void)seq;
+    (void)error;
+    (void)error_size;
+
+    if (!strcmp(type, "tool_finished") || !strcmp(type, "process_closed"))
+        result = json_object_get(data, "result");
+    if (result) ref = json_object_get(result, "output_ref");
+    if (ref && (handle = snag_json_string(ref, "handle")) && !strcmp(handle, scan->handle)) {
+        uint64_t end;
+        scan->known = true;
+        if (snag_json_integer_u64(ref, scan->stream ? "stderr_end" : "stdout_end", &end) < 0)
+            return -1;
+        if (end > scan->total) scan->total = end;
+    }
+    if (strcmp(type, "process_output") || !(handle = snag_json_string(data, "handle")) ||
+        strcmp(handle, scan->handle)) return 0;
+    if (snag_json_integer_u64(data, "stream", &stream) < 0 ||
+        snag_json_integer_u64(data, "offset", &offset) < 0) return -1;
+    if (stream != scan->stream) return 0;
+    struct snag_buf bytes = {.max = 16384u};
+    int rc = -1;
+    if (snag_process_output_decode(data, &bytes) < 0 || offset > UINT64_MAX - bytes.len) goto out;
+    uint64_t end = offset + bytes.len;
+    scan->known = true;
+    if (end > scan->total) scan->total = end;
+    uint64_t window_end = scan->retain > UINT64_MAX - scan->from ?
+        UINT64_MAX : scan->from + scan->retain;
+    if (scan->retain && scan->from < end && offset < window_end) {
+        uint64_t from = offset > scan->from ? offset : scan->from;
+        uint64_t to = end < window_end ? end : window_end;
+        if (from < to && snag_buf_append(scan->out, bytes.data + (size_t)(from - offset),
+                                         (size_t)(to - from)) < 0) goto out;
+    }
+    rc = 0;
+out:
+    snag_buf_free(&bytes);
+    return rc;
+}
+
+#define APP_HISTORY_LIMIT_MAX 50u
+#define APP_HISTORY_DETAIL_MAX 2048u
+
+struct app_history_record {
+    uint64_t seq;
+    char *type;
+    char *data;
+};
+
+struct app_history_scan {
+    struct app_history_record records[APP_HISTORY_LIMIT_MAX];
+    uint64_t before_seq;
+    size_t limit, detail_bytes, count, total;
+};
+
+static char *
+history_excerpt(const char *text, size_t limit)
+{
+    size_t len = text ? strlen(text) : 0u;
+    bool clipped = len > limit;
+    size_t use = clipped ? limit : len;
+    while (use && !snag_utf8_valid((const unsigned char *)text, use, true)) --use;
+    char *copy = malloc(use + (clipped ? 4u : 1u));
+    if (!copy) return NULL;
+    if (use) memcpy(copy, text, use);
+    if (clipped) memcpy(copy + use, "...", 4u);
+    else copy[use] = '\0';
+    return copy;
+}
+
+static int
+history_event(void *opaque, const struct snag_session *state, uint64_t seq,
+              const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct app_history_scan *scan = opaque;
+    char *encoded, *detail, *name;
+    (void)state;
+    (void)error;
+    (void)error_size;
+    if (scan->before_seq && seq >= scan->before_seq) return 0;
+    encoded = json_dumps(data, JSON_COMPACT | JSON_SORT_KEYS | JSON_ENCODE_ANY);
+    if (!encoded) return -1;
+    detail = history_excerpt(encoded, scan->detail_bytes);
+    free(encoded);
+    name = snag_strdup_checked(type, 128u);
+    if (!detail || !name) {
+        free(detail);
+        free(name);
+        return -1;
+    }
+    ++scan->total;
+    if (scan->count == scan->limit) {
+        free(scan->records[0].type);
+        free(scan->records[0].data);
+        memmove(scan->records, scan->records + 1u,
+                (scan->limit - 1u) * sizeof(scan->records[0]));
+        --scan->count;
+    }
+    scan->records[scan->count++] = (struct app_history_record){
+        .seq = seq, .type = name, .data = detail};
+    return 0;
+}
+
+static void
+history_scan_free(struct app_history_scan *scan)
+{
+    for (size_t i = 0u; i < scan->count; ++i) {
+        free(scan->records[i].type);
+        free(scan->records[i].data);
+    }
+}
+
+int
+snag_app_history_page(struct app_state *app, const struct snag_response_item *call, json_t **result,
+                      char *error, size_t error_size)
+{
+    uint64_t before = 0u, limit = 20u, detail = 512u;
+    struct app_history_scan scan = {0};
+    struct snag_buf text = {.max = app->session.tool_output_bytes + 1u};
+    struct snag_buf body = {.max = app->session.tool_output_bytes};
+    int rc = -1;
+
+    *result = NULL;
+    if (!snag_json_arg_keys(call->arguments, "", "before_seq limit detail_bytes", error, error_size) ||
+        !snag_json_arg_uint(call->arguments, "before_seq", 0u, 1u, UINT64_MAX,
+                            &before, error, error_size) ||
+        !snag_json_arg_uint(call->arguments, "limit", 20u, 1u, APP_HISTORY_LIMIT_MAX,
+                            &limit, error, error_size) ||
+        !snag_json_arg_uint(call->arguments, "detail_bytes", 512u, 128u, APP_HISTORY_DETAIL_MAX,
+                            &detail, error, error_size))
+        goto invalid;
+    scan.before_seq = before;
+    scan.limit = (size_t)limit;
+    scan.detail_bytes = (size_t)detail;
+    if (snag_session_each_event(&app->session, history_event, &scan, error, error_size) < 0) goto out;
+    uint64_t latest = app->session.next_seq ? app->session.next_seq - 1u : 0u;
+    size_t returned = 0u;
+    uint64_t oldest_returned = 0u;
+    for (size_t i = scan.count; i > 0u; --i) {
+        struct app_history_record *record = &scan.records[i - 1u];
+        struct snag_buf line = {.max = strlen(record->data) + strlen(record->type) + 64u};
+        int line_rc = snag_buf_printf(&line, "%llu %s %s\n", (unsigned long long)record->seq,
+                                      record->type, record->data);
+        if (line_rc < 0 || body.len > app->session.tool_output_bytes ||
+            line.len > app->session.tool_output_bytes - body.len ||
+            body.len + line.len + 512u > app->session.tool_output_bytes) {
+            snag_buf_free(&line);
+            break;
+        }
+        if (snag_buf_append(&body, line.data, line.len) < 0) {
+            snag_buf_free(&line);
+            goto out;
+        }
+        snag_buf_free(&line);
+        ++returned;
+        oldest_returned = record->seq;
+    }
+    uint64_t next_before = scan.total > returned ? oldest_returned : 0u;
+    if (snag_buf_printf(&text,
+            "[session history id=%s latest_seq=%llu before_seq=%llu matched=%zu returned=%zu order=newest-first next_before_seq=%llu]\n",
+            app->session.id, (unsigned long long)latest, (unsigned long long)before,
+            scan.total, returned, (unsigned long long)next_before) < 0 ||
+        snag_buf_append(&text, body.data, body.len) < 0) goto out;
+    if (snag_buf_terminate(&text) < 0) goto out;
+    *result = snag_tool_result_terminal(true, (const char *)text.data);
+    rc = *result ? 0 : -1;
+    goto out;
+invalid:
+    *result = snag_tool_result_terminal(false, error[0] ? error : "Invalid read_session_history arguments.");
+    rc = *result ? 0 : -1;
+out:
+    history_scan_free(&scan);
+    snag_buf_free(&body);
+    snag_buf_free(&text);
+    return rc;
+}
+
+struct app_goal_record {
+    uint64_t created_seq, last_seq;
+    char id[SNAG_ID_HEX_LEN + 1u];
+    char parent[SNAG_ID_HEX_LEN + 1u];
+    char replaced_by[SNAG_ID_HEX_LEN + 1u];
+    char status[16];
+    char *prompt;
+    bool locked;
+};
+
+struct app_goal_scan {
+    struct app_goal_record records[APP_HISTORY_LIMIT_MAX];
+    uint64_t before_seq;
+    size_t limit, count, total;
+};
+
+static struct app_goal_record *
+goal_record_find(struct app_goal_scan *scan, const char *id)
+{
+    if (!id) return NULL;
+    for (size_t i = 0u; i < scan->count; ++i)
+        if (!strcmp(scan->records[i].id, id)) return &scan->records[i];
+    return NULL;
+}
+
+static int
+goal_record_add(struct app_goal_scan *scan, uint64_t seq, const char *id,
+                const char *parent, const char *prompt, const char *status, bool locked)
+{
+    char *copy = history_excerpt(prompt, 512u);
+    if (!copy) return -1;
+    ++scan->total;
+    if (scan->count == scan->limit) {
+        free(scan->records[0].prompt);
+        memmove(scan->records, scan->records + 1u,
+                (scan->limit - 1u) * sizeof(scan->records[0]));
+        --scan->count;
+    }
+    struct app_goal_record *record = &scan->records[scan->count++];
+    memset(record, 0, sizeof(*record));
+    record->created_seq = record->last_seq = seq;
+    record->locked = locked;
+    if (!snag_strcpy(record->id, sizeof(record->id), id) ||
+        (parent && !snag_strcpy(record->parent, sizeof(record->parent), parent)) ||
+        !snag_strcpy(record->status, sizeof(record->status), status)) {
+        free(copy);
+        --scan->count;
+        return -1;
+    }
+    record->prompt = copy;
+    return 0;
+}
+
+static int
+goal_list_event(void *opaque, const struct snag_session *state, uint64_t seq,
+                const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct app_goal_scan *scan = opaque;
+    const char *id = snag_json_string(data, "goal_id");
+    struct app_goal_record *record;
+    (void)error;
+    (void)error_size;
+
+    if (!strcmp(type, "goal_started")) {
+        if (!scan->before_seq || seq < scan->before_seq)
+            return goal_record_add(scan, seq, id, NULL, snag_json_string(data, "prompt"),
+                                   "active", false);
+        return 0;
+    }
+    if (!strcmp(type, "goal_replaced")) {
+        const char *new_id = snag_json_string(data, "new_goal_id");
+        record = goal_record_find(scan, id);
+        if (record) {
+            (void)snag_strcpy(record->status, sizeof(record->status), "replaced");
+            (void)snag_strcpy(record->replaced_by, sizeof(record->replaced_by), new_id);
+            record->last_seq = seq;
+        }
+        if (!scan->before_seq || seq < scan->before_seq)
+            return goal_record_add(scan, seq, new_id, id, snag_json_string(data, "prompt"),
+                                   snag_goal_status_name(state->goal_status), state->goal_locked);
+        return 0;
+    }
+    if (strncmp(type, "goal_", 5u) || !(record = goal_record_find(scan, id))) return 0;
+    record->last_seq = seq;
+    if (!strcmp(type, "goal_reworded")) {
+        char *copy = history_excerpt(snag_json_string(data, "prompt"), 512u);
+        if (!copy) return -1;
+        free(record->prompt);
+        record->prompt = copy;
+    } else if (!strcmp(type, "goal_lock_changed")) {
+        record->locked = json_is_true(json_object_get(data, "locked"));
+    } else if (!strcmp(type, "goal_paused")) {
+        (void)snag_strcpy(record->status, sizeof(record->status), "paused");
+    } else if (!strcmp(type, "goal_blocked")) {
+        (void)snag_strcpy(record->status, sizeof(record->status), "blocked");
+    } else if (!strcmp(type, "goal_resumed")) {
+        (void)snag_strcpy(record->status, sizeof(record->status), "active");
+    } else if (!strcmp(type, "goal_completed")) {
+        (void)snag_strcpy(record->status, sizeof(record->status), "completed");
+    } else if (!strcmp(type, "goal_cancelled")) {
+        (void)snag_strcpy(record->status, sizeof(record->status), "cancelled");
+    }
+    return 0;
+}
+
+int
+snag_app_goal_list(struct app_state *app, const struct snag_response_item *call, json_t **result,
+                   char *error, size_t error_size)
+{
+    uint64_t before = 0u, limit = 20u;
+    struct app_goal_scan scan = {0};
+    struct snag_buf text = {.max = app->session.tool_output_bytes + 1u};
+    struct snag_buf body = {.max = app->session.tool_output_bytes};
+    int rc = -1;
+
+    *result = NULL;
+    if (!snag_json_arg_keys(call->arguments, "", "before_seq limit", error, error_size) ||
+        !snag_json_arg_uint(call->arguments, "before_seq", 0u, 1u, UINT64_MAX,
+                            &before, error, error_size) ||
+        !snag_json_arg_uint(call->arguments, "limit", 20u, 1u, APP_HISTORY_LIMIT_MAX,
+                            &limit, error, error_size))
+        goto invalid;
+    scan.before_seq = before;
+    scan.limit = (size_t)limit;
+    if (snag_session_each_event(&app->session, goal_list_event, &scan, error, error_size) < 0) goto out;
+    size_t returned = 0u;
+    uint64_t oldest_returned = 0u;
+    for (size_t i = scan.count; i > 0u; --i) {
+        struct app_goal_record *record = &scan.records[i - 1u];
+        struct snag_buf entry = {.max = (record->prompt ? strlen(record->prompt) : 0u) + 384u};
+        int entry_rc = snag_buf_printf(&entry,
+            "created=%llu last=%llu id=%s status=%s locked=%s%s%s%s%s\nprompt: %s\n",
+            (unsigned long long)record->created_seq, (unsigned long long)record->last_seq,
+            record->id, record->status, record->locked ? "true" : "false",
+            record->parent[0] ? " parent=" : "", record->parent,
+            record->replaced_by[0] ? " replaced_by=" : "", record->replaced_by,
+            record->prompt ? record->prompt : "");
+        if (entry_rc < 0 || body.len > app->session.tool_output_bytes ||
+            entry.len > app->session.tool_output_bytes - body.len ||
+            body.len + entry.len + 512u > app->session.tool_output_bytes) {
+            snag_buf_free(&entry);
+            break;
+        }
+        if (snag_buf_append(&body, entry.data, entry.len) < 0) {
+            snag_buf_free(&entry);
+            goto out;
+        }
+        snag_buf_free(&entry);
+        ++returned;
+        oldest_returned = record->created_seq;
+    }
+    uint64_t next_before = scan.total > returned ? oldest_returned : 0u;
+    if (snag_buf_printf(&text,
+            "[goals session=%s current=%s status=%s matched=%zu returned=%zu order=newest-first next_before_seq=%llu]\n",
+            app->session.id, app->session.goal_id[0] ? app->session.goal_id : "none",
+            snag_goal_status_name(app->session.goal_status), scan.total, returned,
+            (unsigned long long)next_before) < 0 ||
+        snag_buf_append(&text, body.data, body.len) < 0) goto out;
+    if (snag_buf_terminate(&text) < 0) goto out;
+    *result = snag_tool_result_terminal(true, (const char *)text.data);
+    rc = *result ? 0 : -1;
+    goto out;
+invalid:
+    *result = snag_tool_result_terminal(false, error[0] ? error : "Invalid list_goals arguments.");
+    rc = *result ? 0 : -1;
+out:
+    for (size_t i = 0u; i < scan.count; ++i) free(scan.records[i].prompt);
+    snag_buf_free(&body);
+    snag_buf_free(&text);
+    return rc;
+}
+
+static int
+load_output_window(struct app_state *app, const char *handle, unsigned int stream,
+                   uint64_t offset, size_t retain, struct snag_buf *out, uint64_t *total)
+{
+    struct process_output_scan scan = {
+        .handle = handle, .stream = stream, .from = offset, .retain = retain, .out = out};
+    char error[256] = {0};
+    if (snag_session_each_event(&app->session, scan_process_output, &scan, error, sizeof(error)) < 0)
+        return -1;
+    if (!scan.known || offset > scan.total) return snag_errno(ENOENT);
+    *total = scan.total;
+    return 0;
+}
+
+int
+snag_app_output_page(struct app_state *app, const struct snag_response_item *call, json_t **result,
+                     char *error, size_t error_size)
+{
+    const char *handle = NULL, *stream_name = NULL;
+    uint64_t offset = 0u, requested = app->session.tool_output_bytes;
+    uint32_t applied;
+    unsigned int stream;
+    size_t retain, raw_limit, available, use;
+    const unsigned char *bytes;
+    uint64_t total;
+    bool cached = false;
+    struct snag_buf direct = {0}, encoded = {.max = SNAG_CONFIG_TOKEN_LIMIT_MAX};
+    char header[256];
+
+    *result = NULL;
+    if (!snag_json_arg_keys(call->arguments, "handle stream", "offset max_output_bytes", error, error_size) ||
+        !snag_json_arg_text(call->arguments, "handle", SNAG_ID_HEX_LEN, SNAG_ID_HEX_LEN,
+                            false, &handle, error, error_size) ||
+        !snag_json_arg_text(call->arguments, "stream", 6u, 6u, false,
+                            &stream_name, error, error_size) ||
+        !snag_json_arg_uint(call->arguments, "offset", 0u, 0u, UINT64_MAX,
+                            &offset, error, error_size) ||
+        !snag_json_arg_uint(call->arguments, "max_output_bytes", app->session.tool_output_bytes,
+                            512u, SNAG_CONFIG_TOKEN_LIMIT_MAX, &requested, error, error_size))
+        goto invalid;
+    if (!snag_hex_is_lower(handle, SNAG_ID_HEX_LEN) ||
+        (strcmp(stream_name, "stdout") && strcmp(stream_name, "stderr"))) {
+        (void)snag_errorf(error, error_size,
+            "handle must be 32 lowercase hex characters and stream must be stdout or stderr");
+        goto invalid;
+    }
+    stream = strcmp(stream_name, "stderr") == 0;
+    applied = requested > app->session.tool_output_bytes ?
+        app->session.tool_output_bytes : (uint32_t)requested;
+    raw_limit = applied > sizeof(header) ? (applied - sizeof(header)) * 3u / 4u : 1u;
+    retain = app->session.output_cache_bytes ? app->session.output_cache_bytes : raw_limit;
+
+    uint64_t cache_end = app->output_cache.data.len > UINT64_MAX - app->output_cache.offset ?
+        UINT64_MAX : app->output_cache.offset + app->output_cache.data.len;
+    bool cache_contains = app->output_cache.valid &&
+        app->output_cache.stream == stream && !strcmp(app->output_cache.handle, handle) &&
+        offset >= app->output_cache.offset &&
+        (offset < cache_end || (offset == cache_end && offset == app->output_cache.total));
+    if (!snag_session_process(&app->session, handle) && cache_contains) {
+        size_t at = (size_t)(offset - app->output_cache.offset);
+        bytes = app->output_cache.data.data ? app->output_cache.data.data + at :
+            (const unsigned char *)"";
+        available = app->output_cache.data.len - at;
+        total = app->output_cache.total;
+        cached = true;
+    } else if (app->session.output_cache_bytes) {
+        snag_buf_free(&app->output_cache.data);
+        snag_buf_init(&app->output_cache.data, retain);
+        if (load_output_window(app, handle, stream, offset, retain,
+                               &app->output_cache.data, &total) < 0) goto unavailable;
+        memcpy(app->output_cache.handle, handle, SNAG_ID_HEX_LEN + 1u);
+        app->output_cache.stream = stream;
+        app->output_cache.offset = offset;
+        app->output_cache.total = total;
+        app->output_cache.valid = true;
+        bytes = app->output_cache.data.data ? app->output_cache.data.data :
+            (const unsigned char *)"";
+        available = app->output_cache.data.len;
+    } else {
+        snag_buf_init(&direct, retain);
+        if (load_output_window(app, handle, stream, offset, retain, &direct, &total) < 0)
+            goto unavailable;
+        bytes = direct.data ? direct.data : (const unsigned char *)"";
+        available = direct.len;
+    }
+    use = available < raw_limit ? available : raw_limit;
+    while (use && use > raw_limit - 4u && !snag_utf8_valid(bytes, use, true)) --use;
+    bool utf8 = snag_utf8_valid(bytes, use, true);
+    if (!utf8 && snag_base64_append(&encoded, bytes, use) < 0) goto fail;
+    const char *payload = utf8 ? (const char *)bytes : (const char *)encoded.data;
+    size_t payload_len = utf8 ? use : encoded.len;
+    uint64_t next = offset + use;
+    int n = snprintf(header, sizeof(header),
+        "[tool output handle=%s stream=%s offset=%llu next_offset=%llu total_bytes=%llu eof=%s encoding=%s cache=%s]\n",
+        handle, stream_name, (unsigned long long)offset, (unsigned long long)next,
+        (unsigned long long)total, next >= total ? "true" : "false", utf8 ? "utf8" : "base64",
+        cached ? "hit" : app->session.output_cache_bytes ? "fill" : "disabled");
+    if (n < 0 || (size_t)n >= sizeof(header)) goto fail;
+    struct snag_buf text = {.max = (size_t)applied + 1u};
+    int rc = snag_buf_append(&text, header, (size_t)n) < 0 ||
+             snag_buf_append(&text, payload, payload_len) < 0 || snag_buf_terminate(&text) < 0 ? -1 : 0;
+    if (rc == 0) *result = snag_tool_result_terminal(true, (const char *)text.data);
+    if (rc == 0 && *result)
+        rc = snag_json_set_new(*result, "max_output_tokens", json_integer(applied));
+    snag_buf_free(&text);
+    snag_buf_free(&direct);
+    snag_buf_free(&encoded);
+    if (rc < 0 || !*result) return -1;
+    return 0;
+
+unavailable:
+    (void)snag_errorf(error, error_size,
+        "No durable %s output exists for handle %s at offset %llu in this session.",
+        stream_name ? stream_name : "tool", handle ? handle : "(invalid)",
+        (unsigned long long)offset);
+invalid:
+    *result = snag_tool_result_terminal(false, error[0] ? error : "Invalid read_tool_output arguments.");
+    snag_buf_free(&direct);
+    snag_buf_free(&encoded);
+    return *result ? 0 : -1;
+fail:
+    snag_buf_free(&direct);
+    snag_buf_free(&encoded);
+    return -1;
 }
 
 /* Owner loss invalidates the OS handle, not the bytes already in the journal. */

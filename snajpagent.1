@@ -897,6 +897,8 @@ Cancelling a queue edit restores the active prompt and leaves the turn interrupt
 Context preparation checks cancellation between journal events. The next idle prompt
 reflects the settled goal state; its active goal flag is cleared before the pause
 notice redraws it. Empty Enter afterwards stays local and leaves the goal paused.
+Ordinary queued IRC updates remain pending across this boundary and session
+resume; only a direct mention remains eligible for urgent automatic admission.
 Five consecutive presses within two seconds exit;
 other input resets the sequence.  Ctrl-D on an empty draft or
 .B /exit
@@ -1008,6 +1010,14 @@ space separates them from the clock in every activity state.
 Submitted command lines remain in scrollback with their output below them.
 This applies in both views, during active work and at idle, including invalid
 commands.  Each line retains the prompt label visible at submission.
+Every nonblank prompt, command, chat message, steering instruction or queued
+submission is painted at this submission boundary, before engine admission can
+wait.  The ready composer stays hidden until the engine acknowledges the action,
+while later input remains live as retained type-ahead and appears in the next
+real composer.  Empty or whitespace-only ordinary Enter is presentation-only:
+it creates no turn, command, queue item, chat message, goal event or provider
+request.  Modal confirmations and queue editing keep their documented blank
+answer behavior.
 .PP
 The timestamp is local time captured once per composer.  Editing, view changes,
 and status redraws retain it; submission or Ctrl-C cancellation ends that capture.
@@ -1670,8 +1680,9 @@ Add an outgoing connection, up to 16.  A duplicate is a no-op, including while
 reconnecting.  Connecting is asynchronous and is not reported as a completed join.
 .TP
 .BR /disconnect " " [ENDPOINT]
-Remove the named outgoing endpoint, or all outgoing endpoints when omitted.
-Hosting is unchanged.  Stop reconnect attempts and report discarded unsent bytes;
+Remove the named outgoing endpoint, or all outgoing endpoints when omitted,
+including connections created by model IRC tools. Hosting is unchanged. Stop
+reconnect attempts and report discarded unsent bytes;
 do not transfer them to another endpoint.  Already accepted model input remains
 eligible after final disconnection.  Old model sends are not redirected into
 replacement rooms; they receive normal not-performed tool results.
@@ -1683,8 +1694,10 @@ Select the public chat transcript, including when offline.
 Select local model activity.
 .TP
 .BR /topic " [" text "]"
-Show the IRC snapshot, or change the topic in the selected room where the local
-operator has op status.  Text is at most 280 bytes, without newlines.
+Show the IRC snapshot, or change the topic in the selected room. Live room
+policy decides authorization: mode +t requires the local operator to have op
+status; without +t any joined member may change it. Text is at most 280 bytes,
+without newlines.
 .TP
 .B /names
 Show numbered destinations, selection, endpoints, members, and channel-operator flags.
@@ -2042,8 +2055,13 @@ Proactive input threshold.  Default:
 .BR auto .
 Auto uses 90% of the selected model's effective hard input budget, rounded
 down with a minimum of one token, after output reservation and safety limits.
-It follows model/context changes and learned lower ceilings.  If capacity is
-unknown, it uses a labelled 120000-token fallback.
+When one source advertises both a normal working window and a larger maximum
+context, the maximum supplies that hard budget; the normal value remains visible
+as provider policy.  An explicit
+.B context_window_tokens
+rule selects another context instead.  The threshold follows model/context
+changes and learned lower ceilings.  If capacity is unknown, it uses a labelled
+120000-token fallback.
 An integer from 1 through 4000000 selects a fixed threshold; zero disables
 proactive policy, not the hard capacity guard.  Existing explicit numbers
 remain fixed: remove the setting or use
@@ -2166,7 +2184,9 @@ The first slash separates the provider; remaining slashes belong to the model.
 Set at least one numeric field below, reasoning_efforts, or steering:
 .TP
 .B context_window_tokens
-Total context tokens, 1 through 4000000000.
+Total context tokens, 1 through 4000000000.  This explicit rule overrides a
+catalog's larger maximum-context selection as well as its normal working-window
+value.
 .TP
 .B max_input_tokens
 Maximum input tokens, 1 through 4000000000.
@@ -2187,6 +2207,24 @@ deepseek-flash:
 [model-limit deepseek/deepseek-flash]
 image_tokens = 1024
 .fi
+.PP
+Execution fields may also override the corresponding
+.B [tool]
+defaults for a matched model:
+.BR default_yield_ms ,
+.BR max_wait_ms ,
+.BR max_parallel_commands ,
+.BR default_timeout_ms ,
+.BR max_timeout_ms ,
+.BR tool_output_bytes ,
+and
+.BR output_cache_bytes .
+Their ranges and meanings match the tool settings below, except
+.B tool_output_bytes
+is the per-model name for the model-context result ceiling configured globally
+as
+.BR max_output_tokens .
+The effective set is frozen with each admitted turn and shown to the model.
 .TP
 .B steering
 IRC mid-turn admission, honored only in an exact
@@ -2202,8 +2240,10 @@ entries do not contribute to a model's steering, and there is no global setting.
 Rules merge per field: provider-wide, matching patterns in file order, then
 exact model. The star matches zero or more characters over the whole local
 model name. Duplicate targets/keys are errors. Unspecified fields inherit
-catalog metadata. Explicit values supersede the catalog, but output headroom
-and learned backend ceilings still constrain usable input.
+catalog metadata or the global tool settings. Explicit values supersede the
+catalog, but output headroom and learned backend ceilings still constrain usable
+input.  A default yield must not exceed its effective maximum wait, and a
+default timeout must not exceed its effective maximum timeout.
 .PP
 .B reasoning_efforts
 sets an ordered JSON array of effort names for the model picker, for example:
@@ -2481,6 +2521,14 @@ unchanged. Host argument corrections and applied-limit feedback are supplied
 separately from the bounded command-output body, including with very small
 output budgets.
 .TP
+.B output_cache_bytes
+Maximum command-output bytes kept in the in-memory paging cache, 0 through
+67108864.  Default: 1048576 (1 MiB).  Zero disables the cache.  Complete
+redacted stdout and stderr remain in the durable session journal independently;
+cache misses reload bounded ranges for
+.BR read_tool_output
+without rerunning the command.
+.TP
 .B max_output_bytes
 Maximum result bytes displayed per tool call, 0 through 4294967295.  Zero
 means unlimited.  The
@@ -2725,10 +2773,30 @@ provenance; complete redacted output remains in journal chunks.  Polls return
 only newly collected output, with exact stream-range references.  Multiple
 independent command calls may overlap; emission order does not establish a
 dependency.  A batch shares the smallest positive yield interval.  Steering
-hands back started commands and skips unstarted calls; it does not kill them.
+does not discard valid calls already emitted in an accepted response: those
+calls cross their durable admission boundary, then running commands are handed
+back alive immediately.  Capacity-blocked calls retain that factual reason.
 Invalid or repeated same-handle interactions are not run.  All handles must
 be settled before a final answer or goal completion.  Existing commands keep
 their tool catalog; unrelated work does not require an immediate poll.
+.PP
+Each command result identifies its durable output handle and exact stdout and
+stderr byte ranges.
+.B read_tool_output
+accepts that 32-character handle, one stream, a zero-based byte offset and an
+optional model-facing page ceiling.  It reports total and next offsets, EOF,
+cache disposition and either UTF-8 text or base64 for binary bytes.  Pages are
+bounded by the effective common result ceiling; settled output remains readable
+after compaction, cache eviction and session resume.  Unknown handles, streams
+or offsets fail without running a replacement command.
+.PP
+.B set_command_shell
+selects an absolute executable regular file for later
+.B exec_command
+calls in this session.  The event survives resume and preserves a symlink path
+whose name selects shell behavior.  It does not translate command text, alter
+already-running commands, expand authorization, expose secrets or replace the
+existing workdir and environment rules.
 Hosted web search is a provider tool.  When the active provider URL has the
 exact hostname
 .BR openrouter.ai ,
@@ -2747,11 +2815,15 @@ normal and read-only turns.  OpenRouter chooses the search engine by default;
 search incurs provider charges in addition to model usage.
 .PP
 Networked mode adds
-.BR irc_send ,
 .BR irc_state ,
-and privilege-checked
-.BR irc_topic .
-Sending and topic changes require a nullable string
+.BR irc_send ,
+.BR irc_nick ,
+.BR irc_topic ,
+.BR irc_connect ,
+.BR irc_host ,
+and
+.BR irc_disconnect .
+Sending, live nick changes and topic changes require a nullable string
 .B destination
 argument: a number from
 .BR irc_state ,
@@ -3280,9 +3352,14 @@ state; it does not open connections.
 .B irc_send
 accepts destination, notice and text. Null/false notice sends a normal message;
 true sends an informational notice, which does not satisfy a required reply.
+.B irc_nick
+accepts destination and nick and changes the agent identity on one endpoint or
+all explicitly selected endpoints. Successful changes update later state and
+slash-command control of those live connections.
 .B irc_topic
-accepts destination and topic and requires the model's current channel-op status,
-except on a room this session hosts, where the model link may set the topic.
+accepts destination and topic. Runtime authorization follows the room's live
+policy: mode +t requires channel-operator status; without +t any joined member
+may change the topic.
 .PP
 Destination is a numeric string from irc_state, all for an explicit broadcast,
 or null only when exactly one destination exists. The model never implicitly

@@ -257,7 +257,8 @@ invalid:
 #else
 int snag_office_sheet_html(const char *h,const struct snag_sheet_range *r,struct snag_buf *b)
 {(void)h;(void)r;(void)b;return -1;}
-int snag_office_sheet(struct _LibreOfficeKit *o,struct _LibreOfficeKitDocument *d,const struct snag_sheet_range *r,
+int snag_office_sheet(struct LibreOfficeKitStruct *o,struct LibreOfficeKitDocumentStruct *d,
+                       const struct snag_sheet_range *r,
                        struct snag_buf *b,json_t **m,char *e,size_t n)
 {(void)o;(void)d;(void)r;(void)b;*m=NULL;snag_errorf(e,n,"This custom build excludes Office sheets");return -1;}
 #endif

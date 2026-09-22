@@ -12,6 +12,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 struct ui_snapshot {
     enum snag_render_view view;
@@ -31,6 +34,9 @@ struct ui_message {
 };
 
 #define UI_QUEUE_CAPACITY 32u
+#define UI_RENDER_BATCH 8u
+#define UI_INPUT_CAPACITY (SNAG_MAX_DIRECT_PROMPT + 4096u)
+#define UI_HARD_EXIT_GRACE_MS 500u
 
 struct ui_queue {
     _Atomic size_t head, tail;
@@ -38,11 +44,29 @@ struct ui_queue {
     snag_wake_fd wake[2];
 };
 
+struct ui_input {
+    pthread_mutex_t lock;
+    pthread_t thread;
+    snag_wake_fd control[2];
+    struct snag_term_host *host;
+    unsigned char *bytes;
+    size_t head, len;
+    uint64_t ctrl_c_since_ms, hard_exit_deadline_ms;
+    unsigned int ctrl_c_count;
+    bool running, stop, ended, overflow;
+};
+
+struct ui_hard_exit_watchdog {
+    struct snag_term_host host;
+    uint64_t deadline_ms;
+};
+
 struct ui_action {
     uint64_t received_ms;
     enum snag_term_action action;
     char *text;
     int error;
+    bool submission_echoed, view_applied;
     bool history_refresh, history_warning, steering, local;
     struct ui_snapshot snapshot;
     struct snag_irc_route route;
@@ -50,12 +74,13 @@ struct ui_action {
 
 struct snag_ui_runtime {
     struct ui_queue actions;
+    struct ui_input input;
     snag_wake_fd commands[2];
     _Atomic(struct ui_message *) request; /* One synchronous engine call. */
     pthread_t thread, engine;
     struct snag_signal_mask saved_mask;
     atomic_int fatal;
-    atomic_bool exit_requested, cancel;
+    atomic_bool exit_requested, cancel, hard_exit_acknowledged;
     atomic_uint steering_pending, dictation_control;
     atomic_uint level, view;
     _Atomic uint64_t interrupt;
@@ -70,7 +95,7 @@ struct snag_ui_display {
     struct snag_ui_runtime *runtime;
     uint64_t turn_generation;
     bool suspended;
-    bool input_closed, backlog_warned;
+    bool input_closed, backlog_warned, view_repainting;
     char feedback[192];
     struct ui_action *local;
     bool local_acknowledged, painting_feedback;
@@ -140,6 +165,244 @@ queue_pop(struct ui_queue *queue)
     item = queue->items[tail % UI_QUEUE_CAPACITY];
     atomic_store_explicit(&queue->tail, tail + 1u, memory_order_release);
     return item;
+}
+
+static int
+input_status(void *opaque)
+{
+    struct ui_input *input = opaque;
+    int status = 0;
+    (void)pthread_mutex_lock(&input->lock);
+    if (input->overflow || input->len) status |= SNAG_TERM_WAIT_INPUT;
+    if (input->ended && !input->len && !input->overflow) status |= SNAG_TERM_WAIT_END;
+    (void)pthread_mutex_unlock(&input->lock);
+    return status;
+}
+
+static ssize_t
+input_read(void *opaque, void *buffer, size_t size)
+{
+    struct ui_input *input = opaque;
+    size_t first, take;
+    (void)pthread_mutex_lock(&input->lock);
+    if (input->overflow) {
+        input->overflow = false;
+        (void)pthread_mutex_unlock(&input->lock);
+        return snag_errno(EOVERFLOW);
+    }
+    take = input->len < size ? input->len : size;
+    first = UI_INPUT_CAPACITY - input->head;
+    if (first > take) first = take;
+    memcpy(buffer, input->bytes + input->head, first);
+    memcpy((unsigned char *)buffer + first, input->bytes, take - first);
+    input->head = (input->head + take) % UI_INPUT_CAPACITY;
+    input->len -= take;
+    (void)pthread_mutex_unlock(&input->lock);
+    return (ssize_t)take;
+}
+
+static void
+input_hard_exit_host(struct snag_term_host *host)
+{
+    /* The emergency path must not wait for a full terminal output queue: on
+     * POSIX TCSAFLUSH has drain semantics and can deadlock behind the stalled
+     * presentation writer this fallback exists to escape. Restore immediately;
+     * process exit discards any unread input. */
+    (void)snag_term_input_restore(host, false);
+#ifdef _WIN32
+    ExitProcess(0u);
+#else
+    _exit(0);
+#endif
+}
+
+static void
+input_hard_exit(struct snag_ui_runtime *runtime)
+{
+    input_hard_exit_host(runtime->input.host);
+}
+
+static void *
+input_hard_exit_watchdog(void *opaque)
+{
+    struct ui_hard_exit_watchdog *watchdog = opaque;
+    for (;;) {
+        uint64_t now = snag_monotonic_ms();
+        if (now >= watchdog->deadline_ms) break;
+        uint64_t remaining = watchdog->deadline_ms - now;
+        (void)snag_sleep_ms((unsigned int)remaining);
+    }
+    input_hard_exit_host(&watchdog->host);
+    return NULL;
+}
+
+static void
+input_note_controls(struct snag_ui_runtime *runtime, const unsigned char *bytes, size_t len)
+{
+    struct ui_input *input = &runtime->input;
+    struct snag_term_host emergency_host;
+    uint64_t deadline_ms = 0u;
+    bool exit = false;
+
+    (void)pthread_mutex_lock(&input->lock);
+    for (size_t i = 0u; i < len; ++i) {
+        uint64_t now = snag_monotonic_ms();
+        if (bytes[i] != 0x03u) {
+            input->ctrl_c_count = 0u;
+            continue;
+        }
+        if (!input->ctrl_c_count || now - input->ctrl_c_since_ms > 2000u) {
+            input->ctrl_c_since_ms = now;
+            input->ctrl_c_count = 0u;
+        }
+        if (++input->ctrl_c_count == 5u) {
+            deadline_ms = input->hard_exit_deadline_ms = now + UI_HARD_EXIT_GRACE_MS;
+            emergency_host = *input->host;
+            exit = true;
+        }
+    }
+    (void)pthread_mutex_unlock(&input->lock);
+    if (exit) {
+        struct ui_hard_exit_watchdog *watchdog = malloc(sizeof(*watchdog));
+        pthread_t thread;
+        int rc = watchdog ? 0 : ENOMEM;
+        if (watchdog) {
+            watchdog->host = emergency_host;
+            watchdog->deadline_ms = deadline_ms;
+            rc = pthread_create(&thread, NULL, input_hard_exit_watchdog, watchdog);
+            if (rc == 0) (void)pthread_detach(thread);
+            else free(watchdog);
+        }
+        atomic_store(&runtime->exit_requested, true);
+        snag_wakeup_send(runtime->actions.wake[1]);
+        snag_wakeup_send(runtime->commands[1]);
+        /* Resource exhaustion must not turn the hard escape into an ordinary
+         * drain-dependent shutdown. */
+        if (rc != 0) input_hard_exit_host(&emergency_host);
+    }
+}
+
+static void
+input_enqueue(struct snag_ui_runtime *runtime, const unsigned char *bytes, size_t len)
+{
+    struct ui_input *input = &runtime->input;
+    size_t at, first;
+    (void)pthread_mutex_lock(&input->lock);
+    if (len > UI_INPUT_CAPACITY - input->len) {
+        input->head = input->len = 0u;
+        input->overflow = true;
+    } else {
+        at = (input->head + input->len) % UI_INPUT_CAPACITY;
+        first = UI_INPUT_CAPACITY - at;
+        if (first > len) first = len;
+        memcpy(input->bytes + at, bytes, first);
+        memcpy(input->bytes, bytes + first, len - first);
+        input->len += len;
+    }
+    (void)pthread_mutex_unlock(&input->lock);
+    snag_wakeup_send(runtime->commands[1]);
+}
+
+static void *
+input_main(void *opaque)
+{
+    struct snag_ui_runtime *runtime = opaque;
+    struct ui_input *input = &runtime->input;
+    unsigned char bytes[4096];
+    for (;;) {
+        int timeout = -1;
+        (void)pthread_mutex_lock(&input->lock);
+        bool stop = input->stop;
+        uint64_t deadline = input->hard_exit_deadline_ms;
+        (void)pthread_mutex_unlock(&input->lock);
+        if (stop) break;
+        if (deadline && !atomic_load(&runtime->hard_exit_acknowledged)) {
+            uint64_t now = snag_monotonic_ms();
+            if (now >= deadline) input_hard_exit(runtime);
+            timeout = (int)(deadline - now);
+        }
+        int rc = snag_term_input_native_wait(input->host, input->control[0], timeout);
+        if (rc < 0) {
+            if (errno == EINTR) continue;
+            atomic_store(&runtime->fatal, errno ? errno : EIO);
+            snag_wakeup_send(runtime->actions.wake[1]);
+            snag_wakeup_send(runtime->commands[1]);
+            break;
+        }
+        if (rc == 0) continue;
+        if (rc & SNAG_TERM_WAIT_WAKE) snag_wakeup_drain(input->control[0]);
+        (void)pthread_mutex_lock(&input->lock);
+        stop = input->stop;
+        (void)pthread_mutex_unlock(&input->lock);
+        if (stop) break;
+        if (rc & SNAG_TERM_WAIT_END) {
+            (void)pthread_mutex_lock(&input->lock);
+            input->ended = true;
+            (void)pthread_mutex_unlock(&input->lock);
+            snag_wakeup_send(runtime->commands[1]);
+            break;
+        }
+        if (!(rc & SNAG_TERM_WAIT_INPUT)) continue;
+        ssize_t count = snag_term_input_native_read(input->host, bytes, sizeof(bytes));
+        if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) continue;
+        if (count < 0) {
+            atomic_store(&runtime->fatal, errno ? errno : EIO);
+            snag_wakeup_send(runtime->actions.wake[1]);
+            snag_wakeup_send(runtime->commands[1]);
+            break;
+        }
+        if (!count) {
+            (void)pthread_mutex_lock(&input->lock);
+            input->ended = true;
+            (void)pthread_mutex_unlock(&input->lock);
+            snag_wakeup_send(runtime->commands[1]);
+            break;
+        }
+        input_note_controls(runtime, bytes, (size_t)count);
+        input_enqueue(runtime, bytes, (size_t)count);
+    }
+    return NULL;
+}
+
+static int
+input_start(struct snag_ui_display *display)
+{
+    struct snag_ui_runtime *runtime = display->runtime;
+    struct ui_input *input = &runtime->input;
+    int rc;
+    (void)pthread_mutex_lock(&input->lock);
+    input->host = &display->term.host;
+    input->head = input->len = 0u;
+    input->ctrl_c_since_ms = input->hard_exit_deadline_ms = 0u;
+    input->ctrl_c_count = 0u;
+    input->stop = input->ended = input->overflow = false;
+    (void)pthread_mutex_unlock(&input->lock);
+    atomic_store(&runtime->hard_exit_acknowledged, false);
+    snag_term_input_redirect(input->host, input_status, input_read, input);
+    rc = pthread_create(&input->thread, NULL, input_main, runtime);
+    if (rc != 0) {
+        snag_term_input_redirect(input->host, NULL, NULL, NULL);
+        input->host = NULL;
+        return snag_errno(rc);
+    }
+    input->running = true;
+    return 0;
+}
+
+static void
+input_stop(struct snag_ui_display *display)
+{
+    struct ui_input *input = &display->runtime->input;
+    if (!input->running) return;
+    atomic_store(&display->runtime->hard_exit_acknowledged, true);
+    (void)pthread_mutex_lock(&input->lock);
+    input->stop = true;
+    (void)pthread_mutex_unlock(&input->lock);
+    snag_wakeup_send(input->control[1]);
+    (void)pthread_join(input->thread, NULL);
+    snag_term_input_redirect(input->host, NULL, NULL, NULL);
+    input->host = NULL;
+    input->running = false;
 }
 
 static void
@@ -223,6 +486,87 @@ apply_prompt(struct snag_ui_display *display)
     return configure_prompt(display, &display->prompt, &display->term);
 }
 
+static const struct snag_irc_destination *
+selected_destination(const struct snag_term *term)
+{
+    if (!term->destinations) return NULL;
+    for (size_t i = 0u; i < term->destinations->count; ++i)
+        if (term->destinations->items[i].target.id == term->destination.id)
+            return &term->destinations->items[i];
+    return NULL;
+}
+
+static int
+display_set_chat_room(struct snag_ui_display *display,
+                      const struct snag_irc_destination *destination, bool announce)
+{
+    const char *endpoint = destination ? destination->endpoint : "";
+    const char *room = destination ? destination->room : "";
+
+    if (snag_render_set_chat_room(&display->render, endpoint, room, announce) < 0) return -1;
+    display->view_repainting = display->render.view == SNAG_RENDER_CHAT &&
+        snag_render_view_pending(&display->render);
+    if (display->view_repainting) display->term.defer_redraw = true;
+    return 0;
+}
+
+static int
+display_set_view(struct snag_ui_display *display, enum snag_render_view view, bool announce,
+                 bool prompt_ready)
+{
+    struct snag_term *term = &display->term;
+    bool changed = display->render.view != view;
+
+    if (view != SNAG_RENDER_CHAT && view != SNAG_RENDER_ROLLOUT) return snag_errno(EINVAL);
+    if (announce && changed && snag_render_host(&display->render,
+            view == SNAG_RENDER_CHAT ? "switching to chat" : "switching to rollout") < 0) return -1;
+    term->defer_redraw = true;
+    term->chat = view == SNAG_RENDER_CHAT;
+    if (snag_render_set_view(&display->render, view) < 0) return -1;
+    display->view_repainting = snag_render_view_pending(&display->render);
+    if (display->prompt.source) {
+        display->prompt.mode = view == SNAG_RENDER_CHAT ? 0u : display->prompt.active ? 2u : 1u;
+        if (!display->view_repainting && prompt_ready) {
+            term->defer_redraw = false;
+            if (apply_prompt(display) < 0) return -1;
+        }
+    } else if (!display->view_repainting && prompt_ready) {
+        term->defer_redraw = false;
+    }
+    atomic_store(&display->runtime->view, (unsigned int)view);
+    return 0;
+}
+
+static int
+display_cycle_view(struct snag_ui_display *display)
+{
+    struct snag_term *term = &display->term;
+    size_t current = SIZE_MAX;
+
+    if (display->render.view == SNAG_RENDER_ROLLOUT) {
+        if (term->destinations && term->destinations->count) {
+            const struct snag_irc_destination *first = &term->destinations->items[0];
+            if (snag_term_select_destination(term, first->target.id) < 0 ||
+                display_set_chat_room(display, first, false) < 0) return -1;
+        } else if (display_set_chat_room(display, NULL, false) < 0) return -1;
+        return display_set_view(display, SNAG_RENDER_CHAT, true, true);
+    }
+    if (term->destinations)
+        for (size_t i = 0u; i < term->destinations->count; ++i)
+            if (term->destinations->items[i].target.id == term->destination.id) {
+                current = i;
+                break;
+            }
+    if (current != SIZE_MAX && current + 1u < term->destinations->count) {
+        const struct snag_irc_destination *next = &term->destinations->items[current + 1u];
+        if (snag_term_select_destination(term, next->target.id) < 0 ||
+            display_set_chat_room(display, next, true) < 0) return -1;
+        if (display->prompt.source && !display->view_repainting) return apply_prompt(display);
+        return 0;
+    }
+    return display_set_view(display, SNAG_RENDER_ROLLOUT, true, true);
+}
+
 static int
 apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
               char *error, size_t error_size)
@@ -240,6 +584,7 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     case SNAG_UI_ROLLOUT_END: return snag_render_rollout_end(render);
     case SNAG_UI_ROLLOUT_ABORT: return snag_render_rollout_abort(render);
     case SNAG_UI_CLOSE: snag_render_attach_term(render, NULL);
+        input_stop(display);
         snag_term_close(term);
         return 0;
     case SNAG_UI_COLOR: {
@@ -251,10 +596,16 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         return 0;
     case SNAG_UI_DESTINATIONS:
         if (snag_term_set_destinations(term, command->data.destinations) < 0) return -1;
-        return display->prompt.source ? apply_prompt(display) : 0;
+        if (render->view == SNAG_RENDER_CHAT) {
+            const struct snag_irc_destination *destination = selected_destination(term);
+            if (destination && display_set_chat_room(display, destination, false) < 0) return -1;
+        }
+        return display->prompt.source && !display->view_repainting ? apply_prompt(display) : 0;
     case SNAG_UI_SELECT:
         if (snag_term_select_destination(term, command->data.value) < 0) return -1;
-        return display->prompt.source ? apply_prompt(display) : 0;
+        if (render->view == SNAG_RENDER_CHAT &&
+            display_set_chat_room(display, selected_destination(term), true) < 0) return -1;
+        return display->prompt.source && !display->view_repainting ? apply_prompt(display) : 0;
     case SNAG_UI_ROUTE: snag_term_destination_route(term, command->text, command->data.route);
         return 0;
     case SNAG_UI_COMMANDS: snag_term_set_commands(term, command->data.commands.items,
@@ -265,11 +616,27 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         return 0;
     case SNAG_UI_OPEN:
         if (snag_term_open(term, error, error_size) < 0) return -1;
+        if (input_start(display) < 0) {
+            (void)snprintf(error, error_size, "cannot start terminal input worker: %s", strerror(errno));
+            snag_term_close(term);
+            return -1;
+        }
         snag_render_attach_term(render, term);
         return 0;
-    case SNAG_UI_EXTERNAL: display->suspended = command->data.value != 0u;
-        return command->data.value ? snag_term_external_begin(term, error, error_size) :
-            snag_term_external_end(term, error, error_size);
+    case SNAG_UI_EXTERNAL: {
+        int rc;
+        if (command->data.value) {
+            input_stop(display);
+            rc = snag_term_external_begin(term, error, error_size);
+            if (rc < 0) (void)input_start(display);
+        } else {
+            rc = snag_term_external_end(term, error, error_size);
+            if (rc == 0 && input_start(display) < 0)
+                rc = snag_errorf(error, error_size, "cannot restart terminal input worker: %s", strerror(errno));
+        }
+        if (rc == 0) display->suspended = command->data.value != 0u;
+        return rc;
+    }
     case SNAG_UI_PROMPT: {
         if (command->label) {
             /* Dispatch gets a fresh label without replacing a live draft/clock. */
@@ -293,6 +660,10 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         prompt_free(&display->prompt);
         display->prompt = command->data.prompt;
         memset(&command->data.prompt, 0, sizeof(command->data.prompt));
+        if (display->view_repainting) {
+            term->defer_redraw = true;
+            return 0;
+        }
         return apply_prompt(display);
     }
     case SNAG_UI_VALIDATE: {
@@ -321,13 +692,13 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     }
     case SNAG_UI_CAPTION: return snag_term_caption(term,command->data.value,command->text);
     case SNAG_UI_VIEW:
-        term->defer_redraw = true;
-        term->chat = command->data.value == SNAG_RENDER_CHAT;
         if (!term->opened) {
             render->view = (enum snag_render_view)command->data.value;
+            term->chat = render->view == SNAG_RENDER_CHAT;
+            atomic_store(&display->runtime->view, command->data.value);
             return 0;
         }
-        return snag_render_set_view(render, (enum snag_render_view)command->data.value);
+        return display_set_view(display, (enum snag_render_view)command->data.value, false, true);
     case SNAG_UI_SUBMITTED: return command->data.value ?
             snag_render_input_submitted(render, command->label, command->text) :
             snag_render_submitted(render, command->label, command->text);
@@ -385,6 +756,10 @@ read_input(struct snag_ui_display *display, int timeout_ms)
     item->history_warning = term->history_reader.warning;
     term->history_reader.warning = false;
     if (item->text) item->received_ms = snag_time_ms();
+    if (item->action == SNAG_TERM_VIEW) {
+        if (display_cycle_view(display) < 0) goto fail;
+        item->action = SNAG_TERM_NONE;
+    }
     take_snapshot(display, &item->snapshot);
     if (item->text) snag_term_destination_route(term, item->text, &item->route);
     if (item->action == SNAG_TERM_INTERRUPT) term->interrupt_pending = true;
@@ -392,7 +767,8 @@ read_input(struct snag_ui_display *display, int timeout_ms)
         item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE) {
         bool deferred = term->defer_redraw;
         term->defer_redraw = deferred || item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE;
-        if (!term->input_only && display->prompt.source && apply_prompt(display) < 0) goto fail;
+        if (!term->input_only && display->prompt.source && !display->view_repainting &&
+            apply_prompt(display) < 0) goto fail;
         term->defer_redraw = deferred;
     }
     atomic_store(&runtime->pause_until,
@@ -411,13 +787,40 @@ read_input(struct snag_ui_display *display, int timeout_ms)
             display->feedback[0] = '\0';
             item->local = true;
         } else if (command == SNAG_IRC_TARGET_SELECT) {
-            if (snag_term_select_destination(term, id) == 0)
+            if (snag_term_select_destination(term, id) == 0) {
                 (void)snprintf(display->feedback, sizeof(display->feedback), "destination: %u", id);
-            else (void)snprintf(display->feedback, sizeof(display->feedback),
+                if (display->render.view == SNAG_RENDER_CHAT &&
+                    display_set_chat_room(display, selected_destination(term), true) < 0) goto fail;
+            } else (void)snprintf(display->feedback, sizeof(display->feedback),
                                "destination %u is unavailable; use /names", id);
-            if (!term->input_only && display->prompt.source && apply_prompt(display) < 0) goto fail;
+            if (!term->input_only && display->prompt.source && !display->view_repainting &&
+                apply_prompt(display) < 0) goto fail;
             take_snapshot(display, &item->snapshot);
             item->local = true;
+        } else if (!strcmp(item->text, "/chat") || !strcmp(item->text, "/rollout")) {
+            enum snag_render_view view = !strcmp(item->text, "/chat") ?
+                SNAG_RENDER_CHAT : SNAG_RENDER_ROLLOUT;
+            /* The presentation owner acknowledges the view immediately. Echo
+             * the submitted command in the old view first, or the engine's
+             * later durable echo can appear after the new-view banner. */
+            if (snag_render_input_submitted(&display->render, item->snapshot.label,
+                                            item->text) < 0) goto fail;
+            item->submission_echoed = true;
+            if (view == SNAG_RENDER_CHAT) {
+                const struct snag_irc_destination *destination = selected_destination(term);
+                if (!destination && term->destinations && term->destinations->count) {
+                    destination = &term->destinations->items[0];
+                    if (snag_term_select_destination(term, destination->target.id) < 0) goto fail;
+                }
+                if (display_set_chat_room(display, destination, false) < 0) goto fail;
+            }
+            /* Switch immediately in the presentation owner, but leave the
+             * submitted command for the engine. It owns command semantics
+             * such as the offline status and will acknowledge readiness with
+             * SNAG_UI_VIEW plus a fresh prompt. */
+            if (display_set_view(display, view, true, false) < 0) goto fail;
+            item->view_applied = true;
+            take_snapshot(display, &item->snapshot);
         } else if (snag_verbosity_command(item->text, strlen(item->text))) {
             verbosity_command(display, item->text);
             item->local = true;
@@ -497,7 +900,10 @@ local_feedback(struct snag_ui_display *display)
 static int
 output_input_checkpoint(void *opaque)
 {
-    return read_input(opaque, 0);
+    struct snag_ui_display *display = opaque;
+    int rc = read_input(display, 0);
+    if (rc < 0) return -1;
+    return atomic_load(&display->runtime->exit_requested) ? snag_errno(ECANCELED) : 0;
 }
 
 static int
@@ -507,7 +913,9 @@ render_input_checkpoint(void *opaque)
     int rc = read_input(display, 0);
     display->render.suppress_optional = atomic_load(&display->runtime->exit_requested) ||
         atomic_load(&display->runtime->interrupt) || atomic_load(&display->runtime->steering_pending);
-    return rc < 0 ? -1 : local_feedback(display);
+    if (rc < 0) return -1;
+    if (atomic_load(&display->runtime->exit_requested)) return snag_errno(ECANCELED);
+    return local_feedback(display);
 }
 
 static bool
@@ -536,6 +944,7 @@ apply_display(struct snag_ui_display *display, struct ui_message *message)
                 --boundary;
             if (boundary) amount = boundary;
         }
+        if (!raw && public_stopped(runtime)) return 0;
         if (render_input_checkpoint(display) < 0) return -1;
         while (!raw && !public_stopped(runtime) &&
                snag_term_typing_pause_remaining(&display->term, snag_monotonic_ms()))
@@ -573,38 +982,63 @@ presentation_main(void *opaque)
     snag_render_init(&display.render, 0u);
     display.render.checkpoint = render_input_checkpoint;
     display.render.checkpoint_opaque = &display;
+    (void)snag_render_backfill_start(&display.render, runtime->commands[1]);
     (void)snag_term_signals_unblock();
     for (;;) {
         struct ui_message *message;
         snag_wakeup_drain(runtime->commands[0]);
+        if (snag_render_backfill_collect(&display.render) < 0)
+            atomic_store(&runtime->fatal, errno ? errno : EIO);
         message = atomic_exchange_explicit(&runtime->request, NULL, memory_order_acquire);
         const char *banner = display.suspended ? NULL : snag_update_take(display.update);
+        bool runnable = snag_render_view_runnable(&display.render);
         if (banner) (void)snag_render_update(&display.render, banner);
-        if (read_input(&display, message || banner ? 0 : -1) < 0) {
+        if (read_input(&display, message || banner || runnable ? 0 : -1) < 0) {
             int error = errno ? errno : EIO;
             atomic_store(&runtime->fatal, error);
             if (!input_condition(error)) display.input_closed = true;
             snag_wakeup_send(runtime->actions.wake[1]);
         }
         if (local_feedback(&display) < 0) atomic_store(&runtime->fatal, errno ? errno : EIO);
-        if (!message) continue;
-        snag_buf_init(&message->delivered, message->command.len + 4u);
-        message->result = apply_display(&display, message);
-        message->saved_errno = errno;
-        if (message->result < 0 && message->command.kind != SNAG_UI_VALIDATE) {
-            int error = errno ? errno : EIO;
-            atomic_store(&runtime->fatal, error);
-            if (!input_condition(error)) display.input_closed = true;
+        if (message) {
+            snag_buf_init(&message->delivered, message->command.len + 4u);
+            message->result = apply_display(&display, message);
+            message->saved_errno = errno;
+            if (message->result < 0 && message->command.kind != SNAG_UI_VALIDATE &&
+                !(message->saved_errno == ECANCELED && atomic_load(&runtime->exit_requested))) {
+                int error = errno ? errno : EIO;
+                atomic_store(&runtime->fatal, error);
+                if (!input_condition(error)) display.input_closed = true;
+            }
+            take_snapshot(&display, &message->snapshot);
+            atomic_store(&runtime->view, (unsigned int)display.render.view);
+            {
+                bool stop = message->command.kind == SNAG_UI_STOP;
+                atomic_store_explicit(&message->done, true, memory_order_release);
+                snag_wakeup_send(runtime->actions.wake[1]);
+                if (stop) break;
+            }
         }
-        take_snapshot(&display, &message->snapshot);
-        atomic_store(&runtime->view, (unsigned int)display.render.view);
-        {
-            bool stop = message->command.kind == SNAG_UI_STOP;
-            atomic_store_explicit(&message->done, true, memory_order_release);
+        if (snag_render_view_pending(&display.render) &&
+            snag_render_flush_pending(&display.render, UI_RENDER_BATCH) < 0) {
+            atomic_store(&runtime->fatal, errno ? errno : EIO);
+            display.input_closed = true;
             snag_wakeup_send(runtime->actions.wake[1]);
-            if (stop) break;
+        }
+        if (display.view_repainting && !snag_render_view_pending(&display.render)) {
+            display.view_repainting = false;
+            display.term.defer_redraw = false;
+            if (display.prompt.source && apply_prompt(&display) < 0) {
+                atomic_store(&runtime->fatal, errno ? errno : EIO);
+                display.input_closed = true;
+                snag_wakeup_send(runtime->actions.wake[1]);
+            }
         }
     }
+    bool hard_exit;
+    (void)pthread_mutex_lock(&runtime->input.lock);
+    hard_exit = runtime->input.hard_exit_deadline_ms != 0u;
+    (void)pthread_mutex_unlock(&runtime->input.lock);
     char *banner = snag_update_stop(display.update);
     if (banner) {
         (void)snag_render_update(&display.render, banner);
@@ -615,7 +1049,9 @@ presentation_main(void *opaque)
         free(display.local->text);
         free(display.local);
     }
-    snag_term_close(&display.term);
+    input_stop(&display);
+    if (hard_exit) snag_term_abort(&display.term);
+    else snag_term_close(&display.term);
     prompt_free(&display.prompt);
     return NULL;
 }
@@ -684,13 +1120,19 @@ snag_ui_init(struct snag_ui *ui)
     atomic_init(&runtime->interrupt, 0u);
     atomic_init(&runtime->exit_requested, false);
     atomic_init(&runtime->cancel, false);
+    atomic_init(&runtime->hard_exit_acknowledged, false);
     atomic_init(&runtime->steering_pending, 0u);
     atomic_init(&runtime->dictation_control, 0u);
     atomic_init(&runtime->pause_until, 0u);
     atomic_init(&runtime->level, 0u);
     atomic_init(&runtime->view, SNAG_RENDER_ROLLOUT);
     atomic_init(&runtime->request, NULL);
-    if (snag_wakeup_create(runtime->commands) < 0) goto fail;
+    runtime->input.bytes = malloc(UI_INPUT_CAPACITY);
+    if (!runtime->input.bytes) goto fail;
+    rc = pthread_mutex_init(&runtime->input.lock, NULL);
+    if (rc != 0) { errno = rc; goto input_buffer; }
+    if (snag_wakeup_create(runtime->input.control) < 0) goto input_mutex;
+    if (snag_wakeup_create(runtime->commands) < 0) goto input_control;
     if (queue_open(&runtime->actions) < 0) goto commands;
     if (snag_term_signals_block(&runtime->saved_mask) < 0) goto actions;
     rc = pthread_create(&runtime->thread, NULL, presentation_main, runtime);
@@ -704,6 +1146,9 @@ snag_ui_init(struct snag_ui *ui)
     return 0;
 actions: snag_wakeup_close(runtime->actions.wake);
 commands: snag_wakeup_close(runtime->commands);
+input_control: snag_wakeup_close(runtime->input.control);
+input_mutex: (void)pthread_mutex_destroy(&runtime->input.lock);
+input_buffer: free(runtime->input.bytes);
 fail: free(runtime);
     return -1;
 }
@@ -723,6 +1168,9 @@ snag_ui_free(struct snag_ui *ui)
     }
     snag_wakeup_close(runtime->actions.wake);
     snag_wakeup_close(runtime->commands);
+    snag_wakeup_close(runtime->input.control);
+    (void)pthread_mutex_destroy(&runtime->input.lock);
+    free(runtime->input.bytes);
     (void)snag_term_signals_restore(&runtime->saved_mask);
     free(runtime);
     ui->runtime = NULL;
@@ -909,6 +1357,7 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
     assert(pthread_equal(pthread_self(), runtime->engine));
     *action = SNAG_TERM_NONE;
     *text = NULL;
+    ui->input_echoed = false;
     for (;;) {
         snag_wakeup_drain(runtime->actions.wake[0]);
         int fatal = atomic_load(&runtime->fatal);
@@ -957,6 +1406,8 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
     ui->input_view = item->snapshot.view;
     ui->input_active = item->snapshot.active;
     ui->input_route = item->route;
+    ui->input_echoed = item->submission_echoed;
+    ui->input_view_applied = item->view_applied;
     ui->selection = item->snapshot.selection;
     memcpy(ui->submitted_label, item->snapshot.label, sizeof(ui->submitted_label));
     if (item->local) {
@@ -1032,6 +1483,7 @@ struct history_replay {
     struct history_irc_payload *payloads;
     size_t payload_count;
     uint64_t completed, skip, shown, total;
+    bool counting;
 };
 
 /* Turn prompts name IRC updates by durable id and keep the room event itself
@@ -1185,12 +1637,13 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
     struct snag_history_turn *turn = &history->turn;
     bool completed = snag_string_in(type, "turn_completed turn_completed_silent");
     (void)state; (void)seq; (void)error; (void)error_size;
-    if (history->ui && !strcmp(type, "irc_event") && history_note_irc_event(history, data) < 0)
-        return -1;
-    if (!history->ui) {
+    if (history->ui && snag_ui_leaving(history->ui)) return snag_errno(ECANCELED);
+    if (history->counting) {
         history->completed += completed;
         return 0;
     }
+    if (history->ui && !strcmp(type, "irc_event") && history_note_irc_event(history, data) < 0)
+        return -1;
     if (!strcmp(type, "turn_started")) {
         if (history_finish(history) < 0) return -1;
         if (history->skip) { --history->skip; return 0; }
@@ -1229,10 +1682,10 @@ snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count
 {
     /* One response's public text plus one separator per fragment, under the
      * response-public byte bound. */
-    struct history_replay history = {.total = session->turn_count,
+    struct history_replay history = {.ui = ui, .counting = true, .total = session->turn_count,
         .response = {.max = 3u * SNAG_MAX_RESPONSE_GRAPH}};
     int rc = snag_session_each_event(session, history_event, &history, NULL, 0u);
-    history.ui = ui;
+    history.counting = false;
     if (rc == 0 && count && history.total) {
         history.skip = history.total > count ? history.total - count : 0u;
         rc = snag_session_each_event(session, history_event, &history, NULL, 0u);

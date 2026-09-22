@@ -36,6 +36,13 @@ struct partial_public_item {
 
 struct app_audio;
 struct app_voice;
+struct snag_output_cache {
+    char handle[SNAG_ID_HEX_LEN + 1u];
+    unsigned int stream;
+    uint64_t offset, total;
+    struct snag_buf data;
+    bool valid;
+};
 struct app_state {
     /* A user-requested view switch is "in flight" while its target view has not become current;
      * further switch requests are ignored until then, with a deadline so the block cannot stick
@@ -48,6 +55,7 @@ struct app_state {
     json_t *draft_content;
     bool attaching;
     struct snag_session session;
+    struct snag_output_cache output_cache;
 
     /* Program-scope usage: this process only, so after a resume it differs from session scope. */
     struct snag_usage_totals program_usage;
@@ -97,16 +105,15 @@ struct app_state {
     int stream_errno;
     char stream_error[256];
     bool steering_requested;
-    /* Model-switched steer deferral: while set for the current turn,
-     * steering inputs are recorded (steering_added) but do not interrupt;
-     * they are admitted at turn end for the next turn. Cleared at each new
-     * turn start (steers on by default). */
-    bool steering_deferred;
     bool control_requested, applying_controls;
     bool tool_waiting, yield_requested;
     uint64_t input_generation;
     bool interrupt_requested;
     bool goal_armed;
+    /* Process-local delivery latch. Compaction/resume/capacity recovery only
+     * adds orientation to the next real provider request; it never starts one. */
+    enum snag_history_orientation history_orientation;
+    bool history_recovery_rebase;
     bool recovery_wait;
     bool provider_active;
     enum snag_policy_stop turn_policy_stopped;
@@ -152,6 +159,12 @@ int snag_app_media_command(struct app_state *app, const char *line, bool *handle
 int snag_app_tool_output(void *, const char *, unsigned int, uint64_t, const void *, size_t);
 int snag_app_tool_read(void *, const char *, unsigned int, uint64_t, uint64_t, struct snag_buf *);
 int snag_app_recovered_output(struct app_state *, const char *, json_t *);
+int snag_app_output_page(struct app_state *, const struct snag_response_item *, json_t **,
+                         char *, size_t);
+int snag_app_history_page(struct app_state *, const struct snag_response_item *, json_t **,
+                          char *, size_t);
+int snag_app_goal_list(struct app_state *, const struct snag_response_item *, json_t **,
+                       char *, size_t);
 
 enum {
     /* Provider pump results already use 1 and 2. */

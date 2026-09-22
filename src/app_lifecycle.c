@@ -271,17 +271,25 @@ goal_actor_data(const struct snag_session *session, const char *actor)
     return json_pack("{s:s,s:s}", "goal_id", session->goal_id, "actor", actor);
 }
 
-static json_t *
-goal_text_data(const struct snag_session *session, const char *actor, const char *prompt)
-{
-    return json_pack("{s:s,s:s,s:s}", "goal_id", session->goal_id, "actor", actor, "prompt", prompt);
-}
-
 static int
 commit_goal_event(struct app_state *app, const char *type, json_t *data, char *error, size_t error_size)
 {
     if (!data) return snag_errorf(error, error_size, "cannot allocate %s event", type);
     return snag_app_commit_event(app, type, data, error, error_size);
+}
+
+static int
+replace_goal(struct app_state *app, const char *actor, const char *prompt,
+             char old_goal_id[SNAG_ID_HEX_LEN + 1u], char *error, size_t error_size)
+{
+    char new_goal_id[SNAG_ID_HEX_LEN + 1u];
+
+    memcpy(old_goal_id, app->session.goal_id, sizeof(new_goal_id));
+    if (snag_random_id(new_goal_id) < 0)
+        return snag_errorf(error, error_size, "cryptographic goal id generation failed");
+    return commit_goal_event(app, "goal_replaced", json_pack("{s:s,s:s,s:s,s:s}",
+        "goal_id", old_goal_id, "new_goal_id", new_goal_id, "actor", actor, "prompt", prompt),
+        error, error_size);
 }
 
 static int
@@ -292,13 +300,15 @@ render_goal(struct app_state *app)
     if (app->session.goal_status == SNAG_GOAL_NONE)
         return snag_ui_text(&app->ui, SNAG_UI_WARNING, "no goal has been set");
     struct snag_buf text = {.max = SNAG_MAX_GOAL_PROMPT + SNAG_MAX_GOAL_BLOCKER + 512u};
-    rc = snag_buf_printf(&text, "goal %.8s: %s%s\n"
+    rc = snag_buf_printf(&text, "goal %s: %s%s\n"
         "turns: %llu · revision: %llu · prompt: %zu/%u bytes\n" "%s",
         app->session.goal_id, snag_goal_status_name(app->session.goal_status),
         app->session.goal_locked ? " · wording locked" : " · wording unlocked",
         (unsigned long long)app->session.goal_turn_count, (unsigned long long)app->session.goal_revision,
         app->session.goal_prompt ? strlen(app->session.goal_prompt) : 0u, app->config->max_goal_prompt_bytes,
         app->session.goal_prompt ? app->session.goal_prompt : "");
+    if (rc == 0 && app->session.goal_parent_id[0])
+        rc = snag_buf_printf(&text, "\nparent goal: %s", app->session.goal_parent_id);
     if (rc == 0 && app->session.goal_blocker)
         rc = snag_buf_printf(&text, "\nblocker: %s", app->session.goal_blocker);
     if (rc == 0 && snag_buf_terminate(&text) < 0) rc = -1;
@@ -372,6 +382,7 @@ static int
 set_goal_prompt(struct app_state *app, const char *argument)
 {
     char error[256] = {0};
+    char old_goal_id[SNAG_ID_HEX_LEN + 1u];
     char *prompt = copy_goal_argument(argument, app->config->max_goal_prompt_bytes, error, sizeof(error));
     int rc;
 
@@ -381,8 +392,7 @@ set_goal_prompt(struct app_state *app, const char *argument)
             free(prompt);
             return snag_ui_text(&app->ui, SNAG_UI_WARNING, "goal wording is unchanged");
         }
-        rc = commit_goal_event(app, "goal_reworded", goal_text_data(&app->session, "user", prompt),
-                               error, sizeof(error));
+        rc = replace_goal(app, "user", prompt, old_goal_id, error, sizeof(error));
     } else {
         rc = start_goal(app, prompt, error, sizeof(error));
     }
@@ -547,15 +557,18 @@ snag_app_goal_tool(struct app_state *app, const struct snag_response_item *call,
     if (!snag_goal_unfinished(app->session.goal_status))
         return tool_result(false, "there is no unfinished goal to update", result);
     if (strcmp(action, "rewrite") == 0) {
+        char old_goal_id[SNAG_ID_HEX_LEN + 1u];
+        char message[160];
         if (!snag_json_arg_text(call->arguments, "text", 1u, prompt_limit, false, &text, error, error_size))
             return tool_result(false, error, result);
         if (!goal_text_valid(text, prompt_limit)) return tool_result(false,
                 "new goal wording is blank, invalid, or exceeds the configured limit", result);
         if (strcmp(text, app->session.goal_prompt) == 0)
             return tool_result(true, "goal wording is unchanged", result);
-        if (commit_goal_event(app, "goal_reworded", goal_text_data(&app->session, "model", text),
-                              error, error_size) < 0) return -1;
-        return tool_result(true, "goal wording updated", result);
+        if (replace_goal(app, "model", text, old_goal_id, error, error_size) < 0) return -1;
+        (void)snprintf(message, sizeof(message), "goal %.8s replaced by %.8s with explicit lineage",
+                       old_goal_id, app->session.goal_id);
+        return tool_result(true, message, result);
     }
     if (strcmp(action, "complete") == 0) {
         if (app->session.process_count)

@@ -38,6 +38,7 @@ struct capture {
     char message_text[2u * SNAG_IRC_TEXT_MAX + 1u];
     struct snag_irc_event last_nick;
     struct snag_irc_event last_connected;
+    struct snag_irc_event last_history_ready;
     bool slow_quit;
     bool fail_message;
 };
@@ -63,6 +64,7 @@ capture_event(void *opaque, const struct snag_irc_event *event)
     if (event->kind == SNAG_IRC_NOTICE) capture->last_notice = *event;
     if (event->kind == SNAG_IRC_NICK) capture->last_nick = *event;
     if (event->kind == SNAG_IRC_CONNECTED) capture->last_connected = *event;
+    if (event->kind == SNAG_IRC_HISTORY_READY) capture->last_history_ready = *event;
     if (event->kind == SNAG_IRC_QUIT && strcmp(event->nick, "slow") == 0) capture->slow_quit = true;
     return capture->fail_message && event->kind == SNAG_IRC_MESSAGE ? -1 : 0;
 }
@@ -930,6 +932,8 @@ static void __attribute__((noinline)) test_client_reconnect(void)
         assert(snag_irc_replay_hosted_history(server, capture_event, &replay) == 0);
         assert(replay.events[SNAG_IRC_MESSAGE] == 1000u);
         assert(replay.events[SNAG_IRC_HISTORY_READY] == 1u);
+        assert(strcmp(replay.last_history_ready.endpoint, server_config.irc.listen) == 0);
+        assert(strcmp(replay.last_history_ready.room, server_config.irc.room_name) == 0);
         assert(replay.last_message.historical);
         assert(strcmp(replay.last_message.text, payload) == 0);
         assert(!server_capture.last_message.historical);
@@ -1368,14 +1372,16 @@ static void __attribute__((noinline)) test_client_events(void)
             ":friend!u@fake MODE #lab +o agent7\r\n");
         send_text(agent_fd, ":friend!u@fake MODE #lab +o agent7\r\n");
         wait_pair_event(NULL, client, &capture, SNAG_IRC_MODE, modes + 2u);
-        assert(send_all(client, false, SNAG_IRC_TOPIC, "not op", error, sizeof(error)) == 1);
+        /* External room policy belongs to the server: -t permits this joined
+         * non-op identity, while +t would reject the same queued TOPIC. */
+        assert(send_all(client, false, SNAG_IRC_TOPIC, "not op", error, sizeof(error)) == 0);
+        wait_wire(client, operator_fd, wire, sizeof(wire), "TOPIC #lab :not op\r\n");
         assert(send_all(client, true, SNAG_IRC_TOPIC, "agent op", error, sizeof(error)) == 0);
-        /* External rooms keep the joined+opped rule for the model link too. */
         send_text(agent_fd, ":friend!u@fake MODE #lab -o agent7\r\n");
         tick(client, 5u);
         error[0] = '\0';
-        assert(send_all(client, true, SNAG_IRC_TOPIC, "external", error, sizeof(error)) == 1);
-        assert(errno == EACCES);
+        assert(send_all(client, true, SNAG_IRC_TOPIC, "external", error, sizeof(error)) == 0);
+        wait_wire(client, agent_fd, wire, sizeof(wire), "TOPIC #lab :external\r\n");
         send_text(agent_fd, ":friend!u@fake MODE #lab +o agent7\r\n");
         tick(client, 5u);
         send_text(operator_fd, ":remoteagent!u@fake JOIN #lab\r\n"

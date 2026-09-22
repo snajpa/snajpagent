@@ -147,6 +147,17 @@ add_stdin_call(struct snag_response_graph *graph, unsigned int cycle,
 }
 
 static int
+add_stdin_poll_call(struct snag_response_graph *graph, unsigned int cycle,
+                    unsigned int index, const char *handle)
+{
+    /* Omitted data is a factual no-input poll. A nonzero fixture wait keeps
+     * it distinct from the legacy rejected-interaction coverage below. */
+    return indexed_call(graph, cycle, index, "write_stdin",
+        json_pack("{s:s,s:n,s:b,s:i,s:n}", "handle", handle, "eof",
+                  "terminate", 0, "yield_ms", 1, "max_output_tokens"));
+}
+
+static int
 add_terminate_call(struct snag_response_graph *graph, unsigned int cycle,
                    unsigned int index, const char *handle)
 {
@@ -169,6 +180,27 @@ steering_contains(const json_t *steering, const char *needle)
         const char *text = snag_json_string(json_array_get(steering, i), "text");
 
         if (text && strstr(text, needle)) return true;
+    }
+    return false;
+}
+
+static bool
+steering_command(const json_t *steering, const char *prefix,
+                 const char **id, const char **argument)
+{
+    size_t prefix_len = strlen(prefix);
+
+    if (!json_is_array(steering)) return false;
+    for (size_t i = 0u; i < json_array_size(steering); ++i) {
+        json_t *item = json_array_get(steering, i);
+        const char *text = snag_json_string(item, "text");
+        const char *item_id = snag_json_string(item, "id");
+
+        if (text && item_id && strncmp(text, prefix, prefix_len) == 0 && text[prefix_len]) {
+            *id = item_id;
+            *argument = text + prefix_len;
+            return true;
+        }
     }
     return false;
 }
@@ -237,6 +269,83 @@ add_irc_lifecycle_call(struct snag_response_graph *graph, unsigned int cycle, co
 }
 
 static int
+add_irc_nick_call(struct snag_response_graph *graph, unsigned int cycle, const char *nick)
+{
+    return indexed_call(graph, cycle, 0u, "irc_nick",
+                        json_pack("{s:n,s:s}", "destination", "nick", nick));
+}
+
+static int
+steered_irc_lifecycle(struct fixture_output *out, const json_t *steering,
+                      unsigned int cycle, struct snag_response_graph *graph,
+                      bool *handled)
+{
+    static char steering_id[SNAG_ID_HEX_LEN + 1u];
+    static unsigned int call_cycle;
+    static const char *pending_final_id, *pending_final_text;
+    const char *id = NULL, *argument = NULL;
+    const char *tool = NULL, *final_id = NULL, *final_text = NULL;
+    bool hosting = false, nick = false;
+
+    if (steering_command(steering, "irc_connect_test ", &id, &argument)) {
+        tool = "irc_connect";
+        final_id = "msg_fixture_irc_connected_steer";
+        final_text = "IRC connected";
+    } else if (steering_command(steering, "irc_disconnect_test ", &id, &argument)) {
+        tool = "irc_disconnect";
+        final_id = "msg_fixture_irc_disconnected_steer";
+        final_text = "IRC disconnected";
+    } else if (steering_command(steering, "irc_host_test ", &id, &argument)) {
+        tool = "irc_host";
+        hosting = true;
+        final_id = "msg_fixture_irc_hosted_steer";
+        final_text = "IRC hosted";
+    } else if (steering_command(steering, "irc_host_disconnect_test ", &id, &argument)) {
+        tool = "irc_disconnect";
+        hosting = true;
+        final_id = "msg_fixture_irc_host_disconnected_steer";
+        final_text = "IRC host disconnected";
+    } else if (steering_command(steering, "irc_nick_test ", &id, &argument)) {
+        nick = true;
+        final_id = "msg_fixture_irc_nick_steer";
+        final_text = "IRC nick changed";
+    } else if (steering_id[0] && cycle > call_cycle) {
+        int rc;
+
+        *handled = true;
+        rc = final_answer(out, pending_final_id, pending_final_text);
+        steering_id[0] = '\0';
+        pending_final_id = pending_final_text = NULL;
+        return rc;
+    } else {
+        *handled = false;
+        return 0;
+    }
+
+    *handled = true;
+    /* A lifecycle prompt can race with a background IRC turn and therefore
+     * arrive as steering. Model that accepted steer exactly once: retries of
+     * its first context cycle reproduce the same call, while the single
+     * post-tool cycle remembers its completion after admission consumes the
+     * steering item. */
+    if (strcmp(steering_id, id) != 0) {
+        if (snprintf(steering_id, sizeof(steering_id), "%s", id) < 0) return -1;
+        call_cycle = cycle;
+        pending_final_id = final_id;
+        pending_final_text = final_text;
+    }
+    if (cycle == call_cycle)
+        return nick ? add_irc_nick_call(graph, cycle, argument) :
+                      add_irc_lifecycle_call(graph, cycle, tool, argument, hosting);
+    {
+        int rc = final_answer(out, pending_final_id, pending_final_text);
+        steering_id[0] = '\0';
+        pending_final_id = pending_final_text = NULL;
+        return rc;
+    }
+}
+
+static int
 add_block_and_timer_call(struct snag_response_graph *graph, unsigned int cycle)
 {
     if (add_goal_call(graph, cycle, false, "block", "waiting for timer") < 0) return -1;
@@ -272,6 +381,11 @@ fixture_response(const char *prompt, const json_t *steering, const char *workspa
         return snag_errorf(error, error_size, "%s", SNAG_OVERSIZED_OUTPUT_CORRECTION);
     }
     if (set_response_id(graph, cycle, "complete") < 0) goto allocation;
+    {
+        bool handled;
+        int rc = steered_irc_lifecycle(&out, steering, cycle, graph, &handled);
+        if (handled) return rc;
+    }
     if (strcmp(prompt, "empty_message_recovery") == 0) {
         if (!steering_contains(steering, SNAG_EMPTY_OUTPUT_CORRECTION))
             return snag_errorf(error, error_size, "fixture did not receive empty correction");
@@ -352,10 +466,12 @@ fixture_response(const char *prompt, const json_t *steering, const char *workspa
     }
     if (strcmp(prompt, "defer_slow_test") == 0) {
         if (cycle == 1u) return add_defer_steering_call(graph, cycle, 0u);
-        if (emit_public(&out, SNAG_ITEM_ASSISTANT,
+        if (cycle == 2u && emit_public(&out, SNAG_ITEM_ASSISTANT,
                 SNAG_PHASE_COMMENTARY, "msg_fixture_defer_slow_commentary", "working slowly\n", 0) < 0)
             goto allocation;
-        if ((control = wait_ticks(&out, 150u)) != 0) return control;
+        if (cycle == 2u && (control = wait_ticks(&out, 150u)) != 0) return control;
+        if (cycle == 2u)
+            return add_call(graph, workspace, cycle, 0u, "fixture deferred intermediate command");
         return final_answer(&out, "msg_fixture_defer_slow_final", "defer slow complete");
     }
     if (strcmp(prompt, "timer fired") == 0)
@@ -393,6 +509,12 @@ fixture_response(const char *prompt, const json_t *steering, const char *workspa
 
         if (cycle == 1u) return add_irc_lifecycle_call(graph, cycle, "irc_disconnect", endpoint, false);
         return final_answer(&out, "msg_fixture_irc_disconnected", "IRC disconnected");
+    }
+    if (strncmp(prompt, "irc_nick_test ", sizeof("irc_nick_test ") - 1u) == 0) {
+        const char *nick = prompt + sizeof("irc_nick_test ") - 1u;
+
+        if (cycle == 1u) return add_irc_nick_call(graph, cycle, nick);
+        return final_answer(&out, "msg_fixture_irc_nick", "IRC nick changed");
     }
     if (strcmp(prompt, "irc_refusal_test") == 0) {
         if (cycle == 1u) return add_irc_send_call(graph, cycle, 0u, "no destination");
@@ -466,7 +588,7 @@ fixture_response(const char *prompt, const json_t *steering, const char *workspa
     }
     if (strcmp(prompt, "ro_denied") == 0) {
         static const char *const names[] = {"exec_command", "apply_patch", "write_stdin",
-            "create_goal", "update_goal", "irc_send", "irc_topic", "irc_state"};
+            "create_goal", "update_goal", "irc_send", "irc_topic", "irc_nick", "irc_state"};
         if (cycle <= sizeof(names) / sizeof(names[0]))
             return snag_response_graph_add_call(graph, "item_denied", "call_denied",
                                                names[cycle - 1u], json_object());
@@ -534,7 +656,7 @@ fixture_response(const char *prompt, const json_t *steering, const char *workspa
         if (cycle == 1u) return add_call(graph, workspace, cycle, 0u, "fixture managed start");
         if (cycle == 2u) {
             if ((control = wait_ticks(&out, 100u)) != 0) return control;
-            return add_stdin_call(graph, cycle, 0u, managed_handle, false);
+            return add_stdin_poll_call(graph, cycle, 0u, managed_handle);
         }
         if (cycle == 3u) {
             if (!steering_contains(steering, "network managed mention")) return snag_errorf(error, error_size,
@@ -739,7 +861,7 @@ flood_done: snag_buf_free(&text);
         }
         return final_answer(&out, "msg_fixture_one_shot_signal_final", "shutdown was not requested");
     }
-    if (snag_string_in(prompt, "slow slow_utf8 queue_slow slow_resteer")) {
+    if (snag_string_in(prompt, "slow slow_utf8 queue_slow queue_prompt_slow slow_resteer")) {
         if (cycle == 1u) {
             if (strcmp(prompt, "slow_utf8") == 0) {
                 static const char euro[] = "€";
@@ -751,7 +873,8 @@ flood_done: snag_buf_free(&text);
                 SNAG_PHASE_COMMENTARY, "msg_fixture_slow_commentary", "working slowly\n", 0) < 0) {
                 goto allocation;
             }
-            unsigned int waits = strcmp(prompt, "queue_slow") == 0 ? 500u : 100u;
+            unsigned int waits = strcmp(prompt, "queue_prompt_slow") == 0 ? 1500u :
+                strcmp(prompt, "queue_slow") == 0 ? 500u : 100u;
 
             if ((control = wait_ticks(&out, waits)) != 0) return control;
             if (strcmp(prompt, "slow_utf8") == 0) {
@@ -849,7 +972,10 @@ snag_fixture_tool(const struct snag_response_item *call, snag_provider_pump_fn p
         if (!handle || strcmp(handle, managed_handle) != 0) {
             *result = snag_tool_result_terminal(false, "fixture rejected wrong handle");
         } else if (!snag_json_string(call->arguments, "data")) {
-            *result = running_result( "Process is still running; interaction was rejected.");
+            json_t *wait = json_object_get(call->arguments, "yield_ms");
+            *result = running_result(json_integer_value(wait) == 1 ?
+                "fixture process is still running" :
+                "Process is still running; interaction was rejected.");
         } else {
             *result = snag_tool_result_terminal(true, "fixture process completed");
         }

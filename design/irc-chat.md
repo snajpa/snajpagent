@@ -102,6 +102,10 @@ interactive sessions offer these commands during idle or active model/tool work:
   it never stops hosting.
 - `/status` includes desired roles and actual connection health.
 
+The slash commands synchronize from live runtime roles before changing them, so
+connections created by model tools remain visible to `/disconnect ENDPOINT` and
+to bare `/disconnect`.
+
 Omitted endpoints mean `localhost:6667`. Validation, lexical endpoint equality,
 the 16-client bound and preferences are shared with startup. Duplicate additions
 and absent removals are informative no-ops. Adding a listener fails visibly on
@@ -503,9 +507,14 @@ Admission priority is:
 2. other chat (including local operator and `+o` messages) and room notifications
    are coalesced into a bounded user-role room update when active work finishes.
 
-Background traffic is drained before an automatic goal continuation. While
-idle it is briefly coalesced so ordinary chat does not create one provider
-request per IRC line. During a response or tool call, the existing active
+Background traffic is drained before an armed automatic goal continuation.
+Once Ctrl-C interrupts the turn and pauses that goal, ordinary background
+traffic remains pending across the idle boundary and session resume; it cannot
+create a replacement turn or preparation/compaction cycle. An explicit goal
+resume or new operator turn reopens ordinary scheduling, while a direct mention
+retains urgent admission. While otherwise idle, background traffic is briefly
+coalesced so ordinary chat does not create one provider request per IRC line.
+During a response or tool call, the existing active
 input pump services sockets as well as terminal input. Urgent entries do not
 truncate an in-flight model stream or cancel a running tool: they accumulate
 in complete message batches and are admitted through the steering
@@ -597,11 +606,14 @@ coding tools. Endpoint state controls results rather than catalog visibility:
 - `irc_disconnect` removes the named outgoing or hosted endpoint, selected by
   its required `hosting` flag;
 - `irc_send` sends a room message or notice as the agent identity;
+- `irc_nick` changes that live identity on one endpoint or an explicit
+  broadcast set;
 - `irc_state` returns the current endpoints, joins, room, topic, accepted local
   aliases, member nicks, and operator flags from already-maintained runtime
   state; and
-- `irc_topic` requests a topic change as the agent identity and succeeds only
-  where that identity currently has the required channel mode.
+- `irc_topic` requests a topic change as the agent identity. Live room policy
+  decides authorization: `+t` requires channel-op status, while an unrestricted
+  room permits any joined member.
 
 Connect, host and disconnect report their local endpoint transition. A following
 `irc_state` reports the current topology. Sends and topic tools accept optional

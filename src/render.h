@@ -122,6 +122,10 @@ struct snag_render {
     struct snag_render_record *view_head[SNAG_RENDER_VIEW_COUNT];
     struct snag_render_record *view_tail[SNAG_RENDER_VIEW_COUNT];
     struct snag_render_record *rollout_open;
+    void *chat_rooms;
+    char chat_endpoint[SNAG_CONFIG_IRC_ENDPOINT_MAX + 1u];
+    char chat_room[SNAG_CONFIG_IRC_ROOM_MAX + 2u];
+    void *backfill;
     struct snag_buf wrap_pending;
     struct snag_buf wrap_styles;
     size_t wrap_width;
@@ -144,6 +148,13 @@ void snag_render_set_markdown(struct snag_render *render, bool enabled);
 void snag_render_attach_term(struct snag_render *render, struct snag_term *term);
 enum snag_render_view snag_render_view(const struct snag_render *render);
 int snag_render_set_view(struct snag_render *render, enum snag_render_view view);
+int snag_render_set_chat_room(struct snag_render *render, const char *endpoint, const char *room,
+                              bool announce);
+bool snag_render_view_pending(const struct snag_render *render);
+bool snag_render_view_runnable(const struct snag_render *render);
+int snag_render_flush_pending(struct snag_render *render, size_t records);
+int snag_render_backfill_start(struct snag_render *render, snag_wake_fd notify);
+int snag_render_backfill_collect(struct snag_render *render);
 int snag_render_orientation(struct snag_render *render, const char *workspace, const char *id,
                            uint64_t turns, size_t queued, bool resumed, bool queue_armed);
 int snag_render_history(struct snag_render *render, const struct snag_history_turn *turn, uint64_t shown,

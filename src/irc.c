@@ -992,8 +992,12 @@ snag_irc_core_replay_hosted_history(const struct snag_irc_core *irc, snag_irc_ev
         if (render(opaque, &event) < 0) return -1;
         replayed = true;
     }
-    /* This callback is display-only: do not append or broadcast the boundary. */
+    /* This callback is display-only: do not append or broadcast the boundary.
+     * Keep it scoped to the replayed room so per-room presentation queues
+     * cannot strand the completion marker in the unselected empty room. */
     struct snag_irc_event ready = {.kind = SNAG_IRC_HISTORY_READY, .text = "replayed"};
+    if (!snag_strcpy(ready.endpoint, sizeof(ready.endpoint), irc->listen) ||
+        !snag_strcpy(ready.room, sizeof(ready.room), irc->room)) return snag_errno(EOVERFLOW);
     return replayed ? render(opaque, &ready) : 0;
 }
 
@@ -2230,7 +2234,14 @@ set_topic_as(struct snag_irc_core *irc, const char *topic, enum link_role role,
         return snag_errorf(error, error_size, "IRC topic is invalid or too long");
     identity = &irc->conns[role];
     bool hosted_agent = irc->hosting && role == LINK_AGENT;
-    if (!identity->joined || (!identity->op && !hosted_agent))
+    if (!identity->joined)
+        return snag_fail(error, error_size, EACCES,
+                      role == LINK_AGENT ? "agent identity is not in any joined room" :
+                      "operator identity is not in any joined room");
+    /* External servers own channel policy: a non-op member may set the topic
+     * when -t is active, while a +t server will reject the queued command.
+     * The embedded room is deliberately +t and can enforce that synchronously. */
+    if (irc->hosting && !identity->op && !hosted_agent)
         return snag_fail(error, error_size, EACCES,
                       role == LINK_AGENT ? "agent identity is not an operator in any joined room" :
                       "operator identity is not an operator in any joined room");

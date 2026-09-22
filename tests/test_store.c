@@ -116,6 +116,14 @@ goal_reworded_data(const char *goal_id, const char *actor, const char *prompt)
 }
 
 static json_t *
+goal_replaced_data(const char *goal_id, const char *new_goal_id, const char *actor,
+                   const char *prompt)
+{
+    return checked_json(json_pack("{s:s,s:s,s:s,s:s}", "actor", actor,
+        "goal_id", goal_id, "new_goal_id", new_goal_id, "prompt", prompt));
+}
+
+static json_t *
 goal_lock_data(const char *goal_id, bool locked)
 {
     return checked_json(json_pack("{s:s,s:b}", "goal_id", goal_id, "locked", locked));
@@ -839,6 +847,8 @@ main(void)
     {
         const char *goal1 = "11111111111111111111111111111111";
         const char *goal2 = "22222222222222222222222222222222";
+        const char *goal3 = "33333333333333333333333333333333";
+        const char *goal4 = "44444444444444444444444444444444";
 
         commit_event(&session, "goal_started", goal_started_data(goal1, "finish the release"));
         assert(session.goal_status == SNAG_GOAL_ACTIVE);
@@ -883,12 +893,24 @@ main(void)
             error, sizeof(error)) < 0);
         commit_event(&session, "goal_started", goal_started_data(goal2, "next goal"));
         commit_event(&session, "goal_cancelled", checked_json(json_pack("{s:s}", "goal_id", goal2)));
+        commit_event(&session, "goal_started", goal_started_data(goal3, "copy-on-write goal"));
+        session.goal_turn_count = 9u; /* replacement must establish a fresh identity counter */
+        commit_event(&session, "goal_replaced",
+                     goal_replaced_data(goal3, goal4, "user", "replacement goal"));
+        assert(strcmp(session.goal_parent_id, goal3) == 0);
+        assert(strcmp(session.goal_id, goal4) == 0);
+        assert(strcmp(session.goal_prompt, "replacement goal") == 0);
+        assert(session.goal_status == SNAG_GOAL_ACTIVE);
+        assert(session.goal_revision == 1u);
+        assert(session.goal_turn_count == 0u);
+        commit_event(&session, "goal_completed", goal_actor_data(goal4, "user"));
         snag_session_close(&session);
         snag_session_init(&session);
         assert(snag_session_open(&store, &session, id, error, sizeof(error)) == 0);
-        assert(session.goal_status == SNAG_GOAL_CANCELLED);
-        assert(strcmp(session.goal_id, goal2) == 0);
-        assert(strcmp(session.goal_prompt, "next goal") == 0);
+        assert(session.goal_status == SNAG_GOAL_COMPLETED);
+        assert(strcmp(session.goal_id, goal4) == 0);
+        assert(strcmp(session.goal_parent_id, goal3) == 0);
+        assert(strcmp(session.goal_prompt, "replacement goal") == 0);
         assert(session.goal_turn_count == 0u);
     }
 

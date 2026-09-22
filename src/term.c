@@ -2531,6 +2531,19 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
 }
 
 void
+snag_term_abort(struct snag_term *term)
+{
+    if (!term) return;
+    /* Five-Ctrl-C is the last-resort path for a blocked presentation owner.
+     * Do not emit hide/bracketed-paste control bytes or use TCSAFLUSH here:
+     * either can wait behind the full output queue. */
+    if (term->opened && term->raw) (void)snag_term_input_restore(&term->host, false);
+    term->opened = false;
+    term->raw = false;
+    snag_term_close(term);
+}
+
+void
 snag_term_close(struct snag_term *term)
 {
     if (!term) return;

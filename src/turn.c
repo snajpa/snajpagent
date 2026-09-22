@@ -35,7 +35,7 @@ snag_prompt_command(const char *text)
 bool
 snag_read_only_tool(const char *name)
 {
-    return snag_string_in(name, "list_files read_file grep view_image view_video read_document listen_audio transcribe_audio");
+    return snag_string_in(name, "list_files read_file grep view_image view_video read_document listen_audio transcribe_audio read_tool_output read_session_history list_goals");
 }
 
 const char *
@@ -248,7 +248,7 @@ tool_name_valid(const char *name)
 {
     return snag_read_only_tool(name) || snag_string_in(name,
         "exec_command write_stdin speak_text apply_patch write_file edit_file create_goal update_goal irc_send irc_state "
-        "irc_topic irc_connect irc_host irc_disconnect timer defer_steering");
+        "irc_topic irc_nick irc_connect irc_host irc_disconnect timer defer_steering set_command_shell");
 }
 
 static bool

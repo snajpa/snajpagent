@@ -23,6 +23,15 @@ int snag_context_provider_model(const struct snag_provider_config *provider,
 struct snag_context_control {
     bool (*cancelled)(void *opaque);
     void *opaque;
+    enum snag_history_orientation {
+        SNAG_HISTORY_ORIENTATION_NONE = 0,
+        SNAG_HISTORY_ORIENTATION_COMPACT,
+        SNAG_HISTORY_ORIENTATION_RECOVERY
+    } history_orientation;
+    /* True only when the current active automatic-goal turn itself crossed a
+     * process/capacity recovery boundary. An idle resume followed by a new
+     * goal may still need orientation, but must retain ordinary history. */
+    bool goal_recovery_rebase;
 };
 
 struct snag_context_projection {

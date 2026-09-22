@@ -1527,7 +1527,7 @@ test_read_only_dispatch(void)
 {
     static const char *const denied[] = {
         "exec_command", "write_stdin", "apply_patch", "create_goal",
-        "update_goal", "irc_send", "irc_topic", "irc_state", "unknown",
+        "update_goal", "irc_send", "irc_topic", "irc_nick", "irc_state", "unknown",
         "web_search", "openrouter:web_search", "speak_text", "write_file", "edit_file"
     };
     struct app_state app = {0};
@@ -1823,6 +1823,100 @@ test_goal_tool_manipulates_unfinished_goals(void)
 }
 
 static void
+test_history_and_goal_list_tools(void)
+{
+    char path[4096], error[256] = {0};
+    const char *tmp = getenv("TMPDIR");
+    const char *old_goal = "61000000000000000000000000000000";
+    const char *new_goal = "62000000000000000000000000000000";
+    struct app_state app = {0};
+    struct snag_response_item call = {.kind = SNAG_ITEM_TOOL_CALL};
+    json_t *result = NULL;
+
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-history-tools-XXXXXX",
+                    tmp ? tmp : "/tmp") > 0);
+    assert(mkdtemp(path));
+    snag_store_init(&app.store);
+    snag_session_init(&app.session);
+    assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
+    assert(snag_session_create(&app.store, &app.session, path, "default", "fixture", "medium",
+                               error, sizeof(error)) == 0);
+    app.session.tool_output_bytes = 2048u;
+
+    uint64_t started_seq = app.session.next_seq;
+    assert(snag_session_commit(&app.session, "goal_started",
+        json_pack("{s:s,s:s}", "goal_id", old_goal, "prompt", "original objective"),
+        NULL, error, sizeof(error)) == 0);
+    uint64_t replaced_seq = app.session.next_seq;
+    assert(snag_session_commit(&app.session, "goal_replaced",
+        json_pack("{s:s,s:s,s:s,s:s}", "actor", "user", "goal_id", old_goal,
+                  "new_goal_id", new_goal, "prompt", "replacement objective"),
+        NULL, error, sizeof(error)) == 0);
+    uint64_t completed_seq = app.session.next_seq;
+    assert(snag_session_commit(&app.session, "goal_completed",
+        json_pack("{s:s,s:s}", "actor", "user", "goal_id", new_goal),
+        NULL, error, sizeof(error)) == 0);
+
+    call.name = "read_session_history";
+    call.arguments = json_pack("{s:i,s:i}", "limit", 2, "detail_bytes", 256);
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    const char *text = snag_json_string(result, "model_text");
+    assert(text && strstr(text, "returned=2") && strstr(text, "order=newest-first"));
+    char completed[64], replaced[64], cursor[64];
+    assert(snprintf(completed, sizeof(completed), "%llu goal_completed",
+                    (unsigned long long)completed_seq) > 0);
+    assert(snprintf(replaced, sizeof(replaced), "%llu goal_replaced",
+                    (unsigned long long)replaced_seq) > 0);
+    assert(snprintf(cursor, sizeof(cursor), "next_before_seq=%llu",
+                    (unsigned long long)replaced_seq) > 0);
+    assert(strstr(text, completed) < strstr(text, replaced));
+    assert(strstr(text, cursor));
+    json_decref(result);
+    json_decref(call.arguments);
+
+    call.arguments = json_pack("{s:I,s:i}", "before_seq", (json_int_t)replaced_seq, "limit", 50);
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    text = snag_json_string(result, "model_text");
+    char started[64];
+    assert(snprintf(started, sizeof(started), "%llu goal_started",
+                    (unsigned long long)started_seq) > 0);
+    assert(text && strstr(text, started) && !strstr(text, "goal_replaced"));
+    json_decref(result);
+    json_decref(call.arguments);
+
+    call.name = "list_goals";
+    call.arguments = json_pack("{s:i}", "limit", 1);
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    text = snag_json_string(result, "model_text");
+    assert(text && strstr(text, new_goal) && strstr(text, "status=completed") &&
+           strstr(text, "parent=61000000000000000000000000000000") &&
+           !strstr(text, "id=61000000000000000000000000000000 status=replaced"));
+    assert(snprintf(cursor, sizeof(cursor), "next_before_seq=%llu",
+                    (unsigned long long)replaced_seq) > 0);
+    assert(strstr(text, cursor));
+    json_decref(result);
+    json_decref(call.arguments);
+
+    call.arguments = json_pack("{s:I,s:i}", "before_seq", (json_int_t)replaced_seq, "limit", 1);
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    text = snag_json_string(result, "model_text");
+    assert(text && strstr(text, old_goal) && strstr(text, "status=replaced") &&
+           strstr(text, "replaced_by=62000000000000000000000000000000") &&
+           !strstr(text, "id=62000000000000000000000000000000"));
+    json_decref(result);
+    json_decref(call.arguments);
+
+    call.arguments = json_pack("{s:i}", "limit", 51);
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), "failed"));
+    json_decref(result);
+    json_decref(call.arguments);
+
+    snag_session_close(&app.session);
+    snag_store_close(&app.store);
+}
+
+static void
 test_ui_output_order_and_failure(void)
 {
     struct snag_ui ui;
@@ -2009,9 +2103,15 @@ test_provider_auth(void)
                 children[i] = fork();
                 assert(children[i] >= 0);
                 if (children[i] == 0) {
+                    error[0] = '\0';
                     int rc = snag_auth_read(store.root_fd, &config.providers[0], false,
                         NULL, &credential, NULL, NULL, error, sizeof(error));
-                    _exit(rc == 0 && strcmp(credential.value, "new-access") == 0 ? 0 : 1);
+                    bool matched = rc == 0 && strcmp(credential.value, "new-access") == 0;
+                    if (!matched)
+                        (void)fprintf(stderr,
+                            "concurrent auth refresh child failed: rc=%d matched=%d error=%s\n",
+                            rc, matched ? 1 : 0, error[0] ? error : "(none)");
+                    _exit(matched ? 0 : 1);
                 }
             }
             for (size_t i = 0; i < 2u; ++i) {
@@ -3179,6 +3279,7 @@ main(void)
     test_ui_output_order_and_failure();
     test_read_only_dispatch();
     test_goal_tool_manipulates_unfinished_goals();
+    test_history_and_goal_list_tools();
     test_local_provider_transport();
     test_session_identity_header();
     test_openrouter_search_transport();

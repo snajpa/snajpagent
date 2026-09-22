@@ -33,6 +33,7 @@ endif
 override CPPFLAGS += -DSNAJPAGENT_AV=$(WITH_AV) $(AV_CFLAGS)
 override LDLIBS += $(AV_LIBS)
 WITH_PDF ?= 1
+HAVE_POPPLER_NEW_API ?= 1
 ifeq ($(WITH_PDF),1)
 CXX ?= c++
 CXXFLAGS ?= $(filter-out -std=c11,$(CFLAGS)) -std=c++20
@@ -48,13 +49,13 @@ $(error WITH_PDF must be 1 (linked PDF) or 0 (custom lean build))
 endif
 override CPPFLAGS += -DSNAJPAGENT_PDF=$(WITH_PDF)
 override LDLIBS += $(PDF_LIBS)
-WITH_AUDIO_DEVICE ?= 1
+WITH_AUDIO_DEVICE ?= 0
 ifeq ($(WITH_AUDIO_DEVICE),1)
 RTC_CFLAGS ?=
 RTC_LIBS ?= -ldatachannel -lopus
 override CPPFLAGS += $(RTC_CFLAGS)
 override LDLIBS += $(RTC_LIBS)
-MINIAUDIO_CFLAGS ?= $(shell pkg-config --cflags miniaudio)
+MINIAUDIO_CFLAGS ?= $(shell pkg-config --cflags miniaudio 2>/dev/null)
 AUDIO_DEVICE_LIBS ?= $(if $(filter Windows Windows_NT,$(TARGET_OS)),-lole32 -lwinmm,$(if $(filter Darwin,$(TARGET_OS)),-framework CoreFoundation -framework CoreAudio -framework AudioToolbox,$(if $(filter FreeBSD OpenBSD NetBSD,$(TARGET_OS)),-lm,-ldl -lm)))
 AUDIO_DEVICE_OBJ = src/miniaudio.o
 else ifeq ($(WITH_AUDIO_DEVICE),0)
@@ -67,8 +68,8 @@ endif
 override CPPFLAGS += -DSNAJPAGENT_AUDIO_DEVICE=$(WITH_AUDIO_DEVICE) $(MINIAUDIO_CFLAGS)
 override LDLIBS += $(AUDIO_DEVICE_LIBS)
 
-WITH_OFFICE ?= 1
-WITH_OFFICE_COMMANDS ?= 0
+WITH_OFFICE ?= 0
+WITH_OFFICE_COMMANDS ?= 1
 ifeq ($(WITH_OFFICE),1)
 ifeq ($(WITH_OFFICE_COMMANDS),1)
 $(error WITH_OFFICE=1 and WITH_OFFICE_COMMANDS=1 are mutually exclusive Office states)

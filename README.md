@@ -43,6 +43,11 @@ Your request and the work through its final answer make up a **turn**, which
 appears in **rollout**. You can type while it runs; typing alone does not
 interrupt it.
 
+Each nonblank submission appears in scrollback immediately. Until the engine
+acknowledges it, the editor keeps accepting type-ahead without displaying a
+second ready prompt; the retained text becomes the next real composer. Blank or
+whitespace-only Enter stays local and starts no turn, command or provider call.
+
 **Enter sends a correction now**: “Use the existing parser; don't add a
 dependency.” It interrupts the model's response and continues from the text
 already delivered; running commands stay alive while the model waits for or
@@ -86,6 +91,11 @@ same native tool catalog. A read-only turn runs its permitted inspection calls
 and returns a refusal for a state-changing call. `/yield` returns an active tool
 wait to the model while leaving the process and its handle alive.
 
+Command results include durable stdout/stderr references. The model can page
+older bytes from the saved session without rerunning a command, including after
+resume. It can also select an absolute executable shell for later commands in
+that session; commands keep their exact bytes and must use that shell's syntax.
+
 `/compact` reduces model context while retaining the full local log, reporting
 progress, completion, waiting or interruption. Empty-draft Ctrl-C interrupts it,
 text entered during idle compaction becomes future queued work, and a provider
@@ -113,7 +123,10 @@ live command handles.
 
 Ctrl-C clears a nonempty draft; with an empty draft it interrupts the turn and
 pauses goal continuation. The next idle prompt clears the active goal flag, and
-empty Enter leaves the goal paused (use `/goal resume`). Ctrl-D on an empty
+empty Enter leaves the goal paused (use `/goal resume`). Ordinary IRC updates
+that were already pending stay pending at that boundary, including after exit
+and resume; a direct mention remains eligible for urgent handling. Ctrl-D on an
+empty
 draft exits; no work continues after exit. Tools require operands and default
 optional controls. Verbosity 1 shows rejected attempts as compact outcome rows;
 argument errors identify corrections, and capped output reports requested and
@@ -241,7 +254,11 @@ resume; add `save` to write the selection into the configuration file. A model
 change alone does not compact. If the selected model needs a smaller context,
 compaction runs through that model in bounded chunks. Exiting immediately after
 the selection, or after a failed or cancelled turn, keeps both the selection
-and completed tool results for resume.
+and completed tool results for resume. When a catalog advertises both a normal
+working window and a larger maximum context, the maximum is the hard-capacity
+basis; an explicit model-limit context can choose another value. This keeps
+normal provider policy from causing premature compaction on a route that
+advertises and accepts the larger window.
 Model-limit rules can supply `reasoning_efforts = ["max", "high", "low", "none"]`
 when a provider omits effort choices, or an optional `image_tokens` value for a
 provider-documented per-image ceiling that differs from the built-in

@@ -796,6 +796,7 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache, const struct s
     const json_t *cached_model = NULL;
     const json_t *limits = NULL;
     bool catalog_used = false;
+    uint64_t selected_context;
 
     if (!config || !provider || !model || !*model || !protocol || !capacity ||
         (!snag_string_in(protocol, "codex openai"))) {
@@ -831,12 +832,19 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache, const struct s
     if (capacity->max_input_tokens) capacity->input_context_window_tokens = 0u;
     if (configured.max_output_tokens) capacity->max_output_tokens = configured.max_output_tokens;
     if (override) capacity->source = SNAG_CAPACITY_CONFIG;
-    if (capacity->context_window_tokens && capacity->max_output_tokens >= capacity->context_window_tokens) {
+    /* A provider's ordinary working window is policy guidance, not a second
+     * hard ceiling below its advertised maximum. Explicit operator context
+     * still wins; otherwise use the largest source-bound context the provider
+     * says this client may select. */
+    selected_context = configured.context_window_tokens ? capacity->context_window_tokens :
+        capacity->max_context_window_tokens ? capacity->max_context_window_tokens :
+        capacity->context_window_tokens;
+    if (selected_context && capacity->max_output_tokens >= selected_context) {
         return snag_fail(error, error_size, EINVAL,
                   "output reservation %llu (rule %s) leaves no input in context %llu (rule %s) for %s/%s",
                   (unsigned long long)capacity->max_output_tokens,
                   sources[2] ? (sources[2]->model[0] ? sources[2]->model : "provider-wide") : "catalog",
-                  (unsigned long long)capacity->context_window_tokens,
+                  (unsigned long long)selected_context,
                   sources[0] ? (sources[0]->model[0] ? sources[0]->model : "provider-wide") : "catalog",
                   provider->name, model);
     }
@@ -845,8 +853,8 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache, const struct s
                        &capacity->hard_input_known);
     if (capacity->input_context_window_tokens) minimum_budget(capacity->input_context_window_tokens,
                        &capacity->hard_input_tokens, &capacity->hard_input_known);
-    if (capacity->context_window_tokens) {
-        uint64_t context_budget = capacity->context_window_tokens;
+    if (selected_context) {
+        uint64_t context_budget = selected_context;
 
         if (capacity->max_output_tokens) context_budget -= capacity->max_output_tokens;
         minimum_budget(context_budget, &capacity->hard_input_tokens, &capacity->hard_input_known);
@@ -860,15 +868,12 @@ snag_model_capacity_resolve(const struct snag_model_cache *cache, const struct s
             }
         }
         if (capacity->effective_context_window_percent) {
-            uint64_t effective_budget = capacity->context_window_tokens *
+            uint64_t effective_budget = selected_context *
                 capacity->effective_context_window_percent / 100u;
 
             minimum_budget(effective_budget, &capacity->hard_input_tokens, &capacity->hard_input_known);
         }
     }
-    if (!configured.context_window_tokens && capacity->max_context_window_tokens)
-        minimum_budget(capacity->max_context_window_tokens,
-                       &capacity->hard_input_tokens, &capacity->hard_input_known);
     if (cached_model) {
         const char *state = snag_json_string(cached_model, "count_capability");
         uint64_t observed_hard;

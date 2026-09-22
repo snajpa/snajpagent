@@ -28,7 +28,10 @@ shapes while runtime state determines the factual execution result. A one-shot
 timer replaces any prior timer in the durable session, and its due event admits a
 fresh ordinary turn without changing paused or blocked goal state. IRC lifecycle
 calls add or remove endpoints through the engine; the normal IRC event loop then
-owns connection, joining, history and reconnect work.
+owns connection, joining, history and reconnect work. Ctrl-C interruption makes
+a paused goal an idle admission boundary: ordinary queued IRC input survives but
+cannot start another turn or preparation cycle until explicit work resumes;
+direct mentions retain urgent admission.
 
 Command-output ceilings retain their existing clamping semantics. Requested and
 applied limits are reported in durable results; the context projection also
@@ -138,6 +141,13 @@ receives the immediate-steer boundary and input timing metadata. Live requests,
 durable replay and compaction use this same ordering, including journals whose
 snapshots were recorded between a tool start and finish. Journal order remains
 unchanged; replay preserves the recorded result and its matching call identity.
+
+Capacity resolution keeps an advertised normal working window distinct from a
+larger maximum context on the same source. The maximum is the usable hard
+context unless explicit model-limit context selects another value; explicit
+input/output limits and learned lower ceilings still constrain it. Proactive
+compaction derives from that effective hard budget rather than treating the
+normal recommendation as a backend rejection boundary.
 
 An over-budget request is not sent. Native Codex compaction or the existing
 Responses summary path runs first, and the rebuilt request must be recounted
@@ -553,9 +563,14 @@ The first-party tool surface is deliberately small:
 - `exec_command` for shell commands, including yielded long-running processes.
 - `write_stdin` for waiting on, interacting with, or explicitly terminating a
   yielded process.
+- `read_tool_output` for bounded paging over a command's journaled stdout or
+  stderr without rerunning it.
+- `set_command_shell` for durable session selection of the executable used by
+  later commands.
 - `apply_patch` for strict file edits using the patch grammar.
 - `update_goal` while a persistent goal is active.
-- `irc_send`, `irc_state`, and privilege-checked `irc_topic` in networked mode.
+- `irc_send`, `irc_state`, `irc_nick`, `irc_topic`, `irc_connect`, `irc_host`
+  and `irc_disconnect` in networked mode.
 
 Provider credentials and configured secret environment variables are removed
 from child tool environments or redacted before output is persisted or shown.
@@ -569,14 +584,17 @@ timeouts; the same value is advertised in the model-facing tool schema and
 enforced by the runtime instead of a separate fixed policy ceiling.
 
 Every command uses the managed-process path even when it normally completes
-in the first tool call. If its timeout expires, or urgent local steering or an
-IRC mention arrives, that same path returns a live handle and continues the
-command in the background. The next model cycle receives the elapsed-timeout
-notice or coalesced urgent input plus the exact `write_stdin` continuation; it
-may react immediately, wait for completion, interact, or explicitly terminate
-the process. Timeout expiry and steering handoff never signal or kill the
-command. Explicit user interruption and required turn/session closure retain
-their existing cancellation behavior.
+in the first tool call. If its timeout expires, or urgent interactive steering or an
+IRC mention arrives, valid calls already emitted in the accepted provider
+response still cross their durable admission boundary. The admission wave then
+returns live command handles immediately and continues those commands in the
+background; short adapters retain their actual result. The next model cycle
+receives the elapsed-timeout notice or coalesced urgent input plus the exact
+`write_stdin` continuation; it may react immediately, wait for completion,
+interact, or explicitly terminate the process. Steering never changes an
+otherwise admissible call to `not_run`, and timeout/steering handoff never
+signals or kills a command. Explicit user interruption and required turn/session
+closure retain their existing cancellation behavior.
 
 Tool stdout and stderr are redacted and retained as bounded `process_output`
 chunks in the existing session journal, without a capture cutoff. Results
@@ -602,6 +620,18 @@ output bytes shown for each tool call. At level 3 and above, `0`
 The renderer streams the referenced journal chunks rather than retaining the
 whole body in memory. Display limits never truncate the durable journal or change
 the independently bounded model-context projection.
+`read_tool_output` uses the result's durable handle, stream and byte offset to
+read bounded pages from those same chunks. A per-session cache holds at most the
+effective `output_cache_bytes`; eviction and resume reload from the journal.
+Binary pages are base64-encoded, UTF-8 pages retain exact redacted bytes, and
+unknown ranges fail without synthesizing or rerunning work.
+
+The effective execution policy combines `[tool]` defaults with per-model-limit
+overrides for yield, wait, timeout, parallelism, result size and output-cache
+size. It is frozen into turn state and projected with the full tool catalog even
+while commands are live. The schema and runtime share the same configured
+32-bit wait/timeout maxima. Input service, steering and process collection stay
+responsive during long waits.
 
 ## Rendering
 

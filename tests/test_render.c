@@ -1539,7 +1539,7 @@ static void
 test_spacing_classes(void)
 {
     const char *frames[SNAG_TERM_SPINNER_COUNT] = {" ", " ", " "};
-    const char *events[] = {"goal_started", "goal_reworded",
+    const char *events[] = {"goal_started", "goal_reworded", "goal_replaced",
         "goal_resumed", "goal_blocked", "goal_completed", "goal_cancelled", "compaction_completed"};
     char output[8192];
     struct snag_render render;
@@ -1588,7 +1588,7 @@ test_spacing_classes(void)
     snag_render_free(&render);
     (void)capture_close(&capture, output, sizeof(output), 0u);
     assert(strcmp(output, "input › one\ninput › two\n\n" "• Goal set\n• Goal updated\n"
-        "• Goal resumed\n• Goal blocked by model\n• Goal cleared\n• Goal cleared\n"
+        "• Goal updated\n• Goal resumed\n• Goal blocked by model\n• Goal cleared\n• Goal cleared\n"
         "• Compacted\n\nheading\n\ninput › three\n") == 0);
 
     /* A provider wait notice must not consume the literal model paragraph's gap. */
@@ -2096,6 +2096,8 @@ capture_color(enum snag_color_mode mode, bool chat_view, unsigned int verbosity,
         assert(snag_render_irc_event(&render, &event) == 0);
     }
     assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
+    while (snag_render_view_pending(&render))
+        assert(snag_render_flush_pending(&render, 8u) == 0);
     if (chat_view) assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
     snag_render_free(&render);
     return capture_close(&capture, out, out_size, 0u);
@@ -2150,6 +2152,7 @@ test_local_mention_highlight(void)
             assert(snag_term_set_destinations(&term, &destinations) == 0);
             render.markdown = !(flags & 8u);
             snag_render_set_color(&render, color ? SNAG_COLOR_ALWAYS : SNAG_COLOR_NEVER);
+            assert(snag_render_set_chat_room(&render, "server", cases[i].room, false) == 0);
             if (flags & 2u) assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
             strcpy(event.room, cases[i].room);
             strcpy(event.nick, cases[i].sender);
@@ -2216,7 +2219,7 @@ static size_t
 capture_lifecycle(unsigned int verbosity, enum snag_color_mode color, char *out, size_t out_size)
 {
     static const char *const events[] = {
-        "compaction_completed", "goal_started", "goal_reworded",
+        "compaction_completed", "goal_started", "goal_reworded", "goal_replaced",
         "goal_completed", "goal_cancelled", "turn_completed" };
     struct snag_render render;
 
@@ -2355,6 +2358,8 @@ test_semantic_history(void)
         assert(snag_render_protocol(&render, "hidden", "hidden-protocol", 15u) == 0);
         render.verbosity = level;
         assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
+        while (snag_render_view_pending(&render))
+            assert(snag_render_flush_pending(&render, 8u) == 0);
         size_t used = drain_available(capture.fd, output, sizeof(output), 0u);
         assert((strstr(output, "future_tool") != NULL) == (level >= 1u));
         assert((strstr(output, "invalid_arguments") != NULL) == (rejected && level >= 1u));
@@ -2470,6 +2475,12 @@ test_append_only_views(unsigned int verbosity)
     assert(strstr(output, "queued-runtime") != NULL);
     assert(strstr(output, "chat-two") == NULL);
 
+    /* An open live record is still the ordering head, but after its available
+     * bytes are repainted it must not keep a view switch or input composer
+     * waiting for the provider to close the response. */
+    assert(!snag_render_view_pending(&render));
+    assert(!snag_render_view_runnable(&render));
+
     assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
     assert(snag_render_rollout(&render, "hidden-tail", 11u, &delivered) == 0);
     assert(snag_render_rollout_end(&render) == 0);
@@ -2568,6 +2579,116 @@ test_append_only_views(unsigned int verbosity)
     assert(strcmp((const char *)delivered.data, "hidden-prefix live-suffix hidden-tail") == 0);
     snag_buf_free(&delivered);
     snag_render_free(&render);
+    capture_restore(&capture);
+    close(capture.fd);
+}
+
+static void
+test_chat_room_views(void)
+{
+    struct snag_render render;
+    struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1000u};
+    char output[8192] = {0};
+    size_t used = 0u;
+    struct output_capture capture = capture_open(false, true);
+
+    assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
+    snag_render_init(&render, 1u);
+    snag_render_set_color(&render, SNAG_COLOR_NEVER);
+    strcpy(event.endpoint, "irc-a");
+    strcpy(event.nick, "peer");
+    strcpy(event.room, "#one");
+    strcpy(event.text, "one-before");
+    assert(snag_render_irc_event(&render, &event) == 0);
+    strcpy(event.room, "#two");
+    strcpy(event.text, "two-before");
+    assert(snag_render_irc_event(&render, &event) == 0);
+
+    assert(snag_render_set_chat_room(&render, "irc-a", "#one", false) == 0);
+    assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
+    used = drain_available(capture.fd, output, sizeof(output), used);
+    assert(strstr(output, "── chat irc-a #one ──\n"));
+    assert(strstr(output, "one-before"));
+    assert(!strstr(output, "two-before"));
+
+    strcpy(event.room, "#one");
+    strcpy(event.text, "one-live");
+    assert(snag_render_irc_event(&render, &event) == 0);
+    strcpy(event.room, "#two");
+    strcpy(event.text, "two-hidden");
+    assert(snag_render_irc_event(&render, &event) == 0);
+    used = drain_available(capture.fd, output, sizeof(output), used);
+    assert(strstr(output, "one-live"));
+    assert(!strstr(output, "two-hidden"));
+
+    assert(snag_render_set_chat_room(&render, "irc-a", "#two", true) == 0);
+    used = drain_available(capture.fd, output, sizeof(output), used);
+    assert(strstr(output, "── chat irc-a #two ──\n"));
+    assert(strstr(output, "two-before"));
+    assert(strstr(output, "two-hidden"));
+    assert(count_text(output, "one-before") == 1u);
+    assert(count_text(output, "one-live") == 1u);
+
+    strcpy(event.room, "#one");
+    strcpy(event.text, "one-later");
+    assert(snag_render_irc_event(&render, &event) == 0);
+    assert(snag_render_set_chat_room(&render, "irc-a", "#one", true) == 0);
+    used = drain_available(capture.fd, output, sizeof(output), used);
+    assert(strstr(output, "one-later"));
+    assert(count_text(output, "two-before") == 1u);
+    assert(count_text(output, "two-hidden") == 1u);
+
+    snag_render_free(&render);
+    capture_restore(&capture);
+    close(capture.fd);
+}
+
+static void
+test_async_render_backfill(void)
+{
+    struct snag_render render;
+    snag_wake_fd wake[2];
+    char path[] = "build/render-backfill-XXXXXX";
+    char output[32768] = {0};
+    struct output_capture capture = capture_open(false, true);
+    int fd = mkstemp(path);
+
+    assert(fd >= 0 && unlink(path) == 0);
+    FILE *file = fdopen(fd, "w+");
+    assert(file && fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
+    assert(snag_wakeup_create(wake) == 0);
+    snag_render_init(&render, 1u);
+    snag_render_set_color(&render, SNAG_COLOR_NEVER);
+    assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
+    assert(snag_render_backfill_start(&render, wake[1]) == 0);
+
+    struct snag_render_source response = append_event(file,
+        "{\"data\":{\"items\":[{\"name\":\"exec_command\",\"call_id\":\"one\","
+        "\"arguments\":{\"command\":\"printf async\"}}]}}\n");
+    assert(snag_render_durable(&render, fileno(file), response,
+                               "response_completed", 0u, 0u) == 0);
+    for (unsigned int i = 0u; i < 24u; ++i) {
+        struct snag_render_source source = append_event(file,
+            "{\"data\":{\"call_id\":\"one\",\"resolved_workdir\":\"/tmp\"}}\n");
+        assert(snag_render_durable(&render, fileno(file), source, "tool_started", 0u, 0u) == 0);
+    }
+    assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
+    for (unsigned int tries = 0u; snag_render_view_pending(&render) && tries < 200u; ++tries) {
+        assert(snag_render_backfill_collect(&render) == 0);
+        if (snag_render_view_runnable(&render))
+            assert(snag_render_flush_pending(&render, 8u) == 0);
+        else {
+            assert(snag_wakeup_wait(wake[0], 1000) >= 0);
+            snag_wakeup_drain(wake[0]);
+        }
+    }
+    assert(!snag_render_view_pending(&render));
+    (void)drain_available(capture.fd, output, sizeof(output), 0u);
+    assert(count_text(output, "exec_command") == 24u);
+
+    snag_render_free(&render);
+    snag_wakeup_close(wake);
+    assert(fclose(file) == 0);
     capture_restore(&capture);
     close(capture.fd);
 }
@@ -2929,17 +3050,19 @@ main(void)
     test_semantic_history();
     test_live_downgrade();
     for (unsigned int verbosity = 0u; verbosity <= 6u; ++verbosity) test_append_only_views(verbosity);
+    test_chat_room_views();
+    test_async_render_backfill();
 
     assert(capture_lifecycle(0u, SNAG_COLOR_NEVER, output, sizeof(output)) > 0u);
     assert(strcmp(output, "• Compacted\n" "• Goal set\n" "• Goal updated\n"
-        "• Goal cleared\n" "• Goal cleared\n") == 0);
+        "• Goal updated\n" "• Goal cleared\n" "• Goal cleared\n") == 0);
     assert(capture_lifecycle(4u, SNAG_COLOR_NEVER, output, sizeof(output)) > 0u);
     assert(strstr(output, "• Compacted\nevent › 1 compaction_completed synced\n"));
-    assert(strstr(output, "• Goal cleared\nevent › 5 goal_cancelled synced\n"));
-    assert(strstr(output, "event › 6 turn_completed synced\n"));
+    assert(strstr(output, "• Goal cleared\nevent › 6 goal_cancelled synced\n"));
+    assert(strstr(output, "event › 7 turn_completed synced\n"));
     assert(capture_lifecycle(0u, SNAG_COLOR_ALWAYS, output, sizeof(output)) > 0u);
-    assert(count_text(output, "\033[1;32m• ") == 5u);
-    assert(count_text(output, "\n\033[0m") == 5u);
+    assert(count_text(output, "\033[1;32m• ") == 6u);
+    assert(count_text(output, "\n\033[0m") == 6u);
     assert(capture_resume_hint(SNAG_COLOR_NEVER, output, sizeof(output)) > 0u);
     assert(strcmp(output, "• You can resume this session with the following command:\n"
         "'snajpagent' --resume '0123'\n") == 0);

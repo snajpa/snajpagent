@@ -6,6 +6,7 @@ import hashlib
 import http.server
 import json
 import os
+import queue
 import re
 import shlex
 import shutil
@@ -13,6 +14,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -65,7 +67,8 @@ EMPTY_OUTPUT_CORRECTION = (
 NATIVE_FUNCTION_NAMES = {
     "view_image", "read_document", "view_video", "listen_audio", "transcribe_audio",
     "speak_text", "exec_command", "write_stdin", "apply_patch", "list_files", "read_file",
-    "grep", "write_file", "edit_file", "irc_send", "irc_state", "irc_topic", "irc_connect",
+    "grep", "write_file", "edit_file", "read_tool_output", "read_session_history", "list_goals",
+    "set_command_shell", "irc_send", "irc_state", "irc_topic", "irc_nick", "irc_connect",
     "irc_host", "irc_disconnect", "create_goal", "update_goal", "timer", "defer_steering",
 }
 
@@ -436,7 +439,7 @@ class FakeResponses:
             if mode in ("steer", "cancel"):
                 commands = ["echo $$ > a.pid; sleep 10; printf first",
                             "echo $$ > b.pid; sleep 10; printf second",
-                            "touch must-not-run"]
+                            "touch " + ("steer-third-ran" if mode == "steer" else "must-not-run")]
             batch = [(f"call_multi_{i}", "exec_command", {
                 "command": command, "workdir": str(self.tool_workspace),
                 "stdin": None, "pty": False,
@@ -454,8 +457,8 @@ class FakeResponses:
                 "terminate": mode == "steer", "yield_ms": 1000, "max_output_tokens": None,
             }) for i, job in enumerate(jobs)])
         if mode == "steer":
-            assert len(outputs) == 5
-            assert "superseded_by_steering" in "".join(outputs.values())
+            assert all(f"call_multi_{i}" in outputs for i in range(3)), outputs
+            assert "superseded_by_steering" not in "".join(outputs.values())
             return self.response_body(sequence, "multi tools confirmed")
         assert "first" in "".join(outputs.values())
         assert ("failed-peer" if mode == "failure" else "second") in "".join(outputs.values())
@@ -592,13 +595,19 @@ class TmuxTerminal:
 
     def __init__(self, root, binary, workspace, dotdir, config, cols, rows,
                  args=(), environment=None):
+        self.socket_root = None
         self.root = root
         self.binary = os.path.abspath(binary)
         self.workspace = os.path.abspath(workspace)
         self.dotdir = dotdir
         self.cols = cols
         self.rows = rows
-        self.socket = root / "tmux.sock"
+        # Keep durable diagnostics beneath the caller's test root, but do not
+        # make the Unix-domain socket inherit long worktree and case names.
+        # Linux limits sockaddr_un paths to roughly 108 bytes, so even a
+        # one-letter build root can overflow for descriptive terminal cases.
+        self.socket_root = tempfile.TemporaryDirectory(prefix="snajpagent-tmux-")
+        self.socket = Path(self.socket_root.name) / "tmux.sock"
         self.session = "snajpagent-terminal"
         self.target = f"{self.session}:0.0"
         self.last_screen = ""
@@ -768,6 +777,9 @@ class TmuxTerminal:
                 self.socket.unlink()
             except FileNotFoundError:
                 pass
+            if self.socket_root is not None:
+                self.socket_root.cleanup()
+                self.socket_root = None
 
 
 @contextmanager
@@ -2226,7 +2238,7 @@ def run_bullet_class_case(binary, root):
         terminal.send_key("Tab")
         commands = (("/goal lock", "goal_lock_changed", 1),
                     ("/goal unlock", "goal_lock_changed", 2),
-                    ("/goal set changed while paused", "goal_reworded", 1),
+                    ("/goal set changed while paused", "goal_replaced", 1),
                     ("/goal complete", "goal_completed", 1),
                     ("/compact", "compaction_completed", 1))
         for command, kind, count in commands:
@@ -3720,7 +3732,7 @@ def run_destination_case(binary, root, provider, environment):
         deliveries("ambiguous-model", {})
 
         client.submit_wait(f"/disconnect {endpoints[1]}", "outgoing connection removed")
-        client.submit_wait("/chat", "[2 unavailable]")
+        client.submit_wait("/chat", f"── chat {endpoints[0]} #alpha ──")
         client.submit_wait("/1", "destination: 1")
         client.submit("/1 single-still-valid")
         deliveries("single-still-valid", {"a": 1, "c": 1})
@@ -4244,7 +4256,7 @@ def run_multi_tool_cases(binary, root, provider, environment):
             # The runtime must still handle a provider returning several calls.
             text = text.replace("[provider fake]\n", "[provider fake]\nparallel_tool_calls = false\n")
         config.write_text(text + "[tool]\nmax_parallel_commands = " +
-                          ("1" if mode in ("serial", "single-serial") else "2" if mode in ("steer", "cancel") else "4") + "\n", encoding="utf-8")
+                          ("1" if mode in ("serial", "single-serial") else "2" if mode == "cancel" else "3" if mode == "steer" else "4") + "\n", encoding="utf-8")
         with TmuxTerminal(case / "terminal", binary, workspace,
                                 case / "state", config, 120, 24,
                                 args=("-vvv" if mode == "full-output" else "-v",), environment=environment) as terminal:
@@ -4269,7 +4281,7 @@ def run_multi_tool_cases(binary, root, provider, environment):
             _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
             starts = event_list(events, "tool_started")
             finishes = event_list(events, "tool_finished")
-            assert len(finishes) == len(starts) + (1 if mode == "steer" else 0)
+            assert len(finishes) == len(starts)
             assert not event_list(events, "turn_failed")
             if mode not in ("serial", "single-serial"):
                 assert starts[1]["seq"] < finishes[0]["seq"]
@@ -4281,7 +4293,9 @@ def run_multi_tool_cases(binary, root, provider, environment):
                 assert any(event["data"]["result"]["status"] == "running" for event in finishes)
             chunks = event_list(events, "process_output")
             if mode == "steer":
-                assert not (workspace / "must-not-run").exists()
+                assert (workspace / "steer-third-ran").exists()
+                assert all(event["data"]["result"].get("reason") != "superseded_by_steering"
+                           for event in finishes)
                 assert len(event_list(events, "steering_added")) == 1
             elif mode == "full-output":
                 assert sum(len(event["data"]["data"]) for event in chunks) > 80000
@@ -4486,7 +4500,7 @@ def run_operator_visibility_cases(binary, root):
                     body = provider.function_body(sequence, "call_visibility_wait", "exec_command", {
                         "command": "while [ ! -f release ]; do sleep 0.05; done; printf visibility-release",
                         "workdir": str(case), "stdin": None, "pty": False,
-                        "timeout_ms": None, "yield_ms": 600000, "max_output_tokens": None,
+                        "timeout_ms": None, "yield_ms": 60000, "max_output_tokens": None,
                     })
                 else:
                     assert len(seen) == 2
@@ -6201,7 +6215,13 @@ def run_goal_request_boundary_cases(binary, root, modes=("next", "recovery", "re
             assert not missing, ("automatic goal request vanished from the gateway conversation",
                 [[(i.get("role"), i.get("type"), str(i.get("content", ""))[:180])
                   for i in gateway_conversation(r)[-5:]] for r in missing], counts)
-            assert counts == ([1, 2] if mode == "next" else [1, 2, 2]), counts
+            expected = [1, 2] if mode == "next" else \
+                [1, 2, 1] if mode == "resume" else [1, 2, 2]
+            # Process resume deliberately rebases old provider/tool bulk. The
+            # retried active turn must still retain exactly its current
+            # automatic goal request, rather than either losing it or replaying
+            # both historical requests.
+            assert counts == expected, counts
             _, events = read_events(state)
             assert len(event_list(events, "goal_completed")) == 1
             assert not event_list(events, "goal_paused")
@@ -6869,7 +6889,9 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
                 markers = [i for i in request["input"] if i.get("content", "").startswith(marker) and
                            ("Continue the active goal" in i["content"] or
                             "Continue from the existing instructions" in i["content"])]
-                assert len(markers) == 1, "current goal request missing or duplicated across retries"
+                assert len(markers) == 1, ("current goal request missing or duplicated across retries",
+                    mode, [(i.get("role"), i.get("content", "")[:500])
+                           for i in request["input"] if i.get("content", "").startswith(marker)])
                 assert markers[0]["role"] == "user"
                 fallbacks = [i for i in markers if "Continue from the existing instructions" in i["content"]]
                 original_inputs = [i for i in request["input"] if i.get("role") == "user" and
@@ -7203,27 +7225,28 @@ def run_tool_cases(binary, root, provider, environment):
     case = root / "patch"
     workspace, config = irc_workspace(case / "work", provider.port, "host-model")
     config.write_text(config.read_text() +
-                      "[tool]\ndefault_timeout_ms=0\nmax_timeout_ms=20000\n")
-    call_id, name, arguments = "", "", {}
+                      "[tool]\ndefault_timeout_ms=0\nmax_timeout_ms=20000\n"
+                      "output_cache_bytes=4096\n")
     number = 0
     prompt = "tool behavior cases"
-    ready = threading.Event()
+    supplied = queue.Queue()
 
     def respond(handler, request, sequence):
-        assert ready.wait(SUPPLY_TIMEOUT), "test did not supply the next tool call"
-        ready.clear()
+        try:
+            ordinal, call_id, name, arguments = supplied.get(timeout=SUPPLY_TIMEOUT)
+        except queue.Empty as exc:
+            raise AssertionError("test did not supply the next tool call") from exc
         outputs = sum(item.get("type") == "function_call_output" for item in request["input"])
-        assert outputs == (number - 1 if name else number), request
+        assert outputs == (ordinal - 1 if name else ordinal), request
         body = (provider.response_body(sequence, "tool cases done") if not name else
                 provider.function_body(sequence, call_id, name, arguments)).encode()
         provider.reply(handler, body)
         handler.close_connection = True
 
     def invoke(tool, args, status="succeeded"):
-        nonlocal call_id, name, arguments, number
+        nonlocal number
         number += 1
-        call_id, name, arguments = f"tool-{number}", tool, args
-        ready.set()
+        supplied.put((number, f"tool-{number}", tool, args))
         if number == 1:
             terminal.submit(prompt)
         wait_event_count(terminal.dotdir, "tool_finished", number)
@@ -7251,6 +7274,15 @@ def run_tool_cases(binary, root, provider, environment):
             "handle": handle, "data": text, "eof": eof, "yield_ms": yield_ms,
             "max_output_tokens": None, "terminate": False, **options}, status)
 
+    def output_page(handle, stream="stdout", offset=0, limit=1024, status="succeeded"):
+        result = invoke("read_tool_output", {
+            "handle": handle, "stream": stream, "offset": offset,
+            "max_output_bytes": limit}, status)
+        if status == "succeeded":
+            header, payload = result["model_text"].split("\n", 1)
+            return result, header, payload
+        return result, "", ""
+
     mask = os.umask(0o027)
     try:
         terminal = TmuxTerminal(case / "term", binary, workspace, case / "state",
@@ -7264,6 +7296,24 @@ def run_tool_cases(binary, root, provider, environment):
             (workspace / "a.txt").write_bytes(b"one\ntwo\n")
             (workspace / "a.txt").chmod(0o751)
             (workspace / "old.txt").write_bytes(b"bye\n")
+            shell_capture = workspace / "shell-command.bin"
+            shell_wrapper = workspace / "model-shell"
+            shell_wrapper.write_text(
+                "#!/bin/sh\nprintf %s \"$2\" > " + shlex.quote(str(shell_capture)) +
+                "\nexec /bin/sh \"$@\"\n", encoding="utf-8")
+            shell_wrapper.chmod(0o700)
+            rejected = invoke("set_command_shell", {"path": "model-shell"}, "failed")
+            assert "executable regular file" in rejected["model_text"], rejected
+            rejected = invoke("set_command_shell", {"path": str(workspace)}, "failed")
+            assert "executable regular file" in rejected["model_text"], rejected
+            selected = invoke("set_command_shell", {"path": str(shell_wrapper)})
+            assert selected["model_text"] == f"command shell: {shell_wrapper}"
+            selected = invoke("set_command_shell", {"path": str(shell_wrapper)})
+            assert selected["model_text"].endswith(" (already selected)")
+            exact_command = "printf 'shell-ok\\n'\n# exact trailing spaces follow   "
+            result = command(exact_command)
+            assert result["stdout"]["retained"] == "shell-ok\n", result
+            assert shell_capture.read_bytes() == exact_command.encode(), shell_capture.read_bytes()
             preview = apply("*** Begin Patch\n*** Add File: new.txt\n+alpha\n+beta\n"
                             "*** Update File: a.txt\n@@\n one\n-two\n+TWO\n"
                             "*** Delete File: old.txt\n*** End Patch\n")
@@ -7373,15 +7423,50 @@ def run_tool_cases(binary, root, provider, environment):
             assert all(c["encoding"] == "utf8" for c in chunks)
             assert "".join(c["data"] for c in chunks) == "x" * (1024 * 1024)
             assert len(result["model_text"].encode()) < 7000
+            large_handle = handle
+            page, header, payload = output_page(large_handle, limit=1024)
+            assert "offset=0" in header and "next_offset=576" in header and "cache=fill" in header, page
+            assert payload == "x" * 576
+            page, header, payload = output_page(large_handle, offset=576, limit=1024)
+            assert "offset=576" in header and "next_offset=1152" in header and "cache=hit" in header, page
+            assert payload == "x" * 576
+            # Offset 4096 is exactly the end of the configured cache window. It
+            # must refill from the durable journal rather than return an empty,
+            # non-progressing cache hit.
+            page, header, payload = output_page(large_handle, offset=4096, limit=1024)
+            assert "offset=4096" in header and "next_offset=4672" in header and "cache=fill" in header, page
+            assert payload == "x" * 576
+
             result = command("printf '\\377\\000\\n'; printf tail >&2")
+            binary_handle = result["output_ref"]["handle"]
             assert all(type(result["stdout"][k]) is int for k in ("original_bytes", "retained_bytes", "discarded_bytes"))
             assert result["stdout"] == {"encoding": "base64", "retained": "/wAK",
                                         "retained_bytes": 3, "original_bytes": 3, "discarded_bytes": 0}
             assert result["model_text"] == ("Process exited with code 0.\n\nstdout:\n"
                 "<3 binary bytes; base64 follows>\n/wAK\n\nstderr:\ntail\n")
+            page, header, payload = output_page(binary_handle, limit=512)
+            assert "encoding=base64" in header and "total_bytes=3" in header and "eof=true" in header, page
+            assert payload == "/wAK"
+            page, header, payload = output_page(binary_handle, stream="stderr", limit=512)
+            assert "encoding=utf8" in header and "total_bytes=4" in header and "eof=true" in header, page
+            assert payload == "tail"
+            # Reading another handle evicted the 4 KiB cache window; the settled
+            # large command remains reloadable without rerunning it.
+            page, header, payload = output_page(large_handle, limit=1024)
+            assert "cache=fill" in header and payload == "x" * 576, page
+            unavailable, _, _ = output_page(binary_handle, offset=4, limit=512, status="failed")
+            assert "No durable stdout output exists" in unavailable["model_text"]
             result = command("printf 'line\\n'")
             assert result["model_text"] == "Process exited with code 0.\n\nstdout:\nline\n"
             assert result["stderr"]["retained"] == "" and result["stderr"]["encoding"] == "utf8"
+            result = command("printf 'captured-prefix:irc-ui-secret'")
+            redacted_handle = result["output_ref"]["handle"]
+            assert "irc-ui-secret" not in result["model_text"]
+            assert "captured-prefix:<redacted:secret>" in result["model_text"]
+            page, header, payload = output_page(redacted_handle, limit=512)
+            assert "encoding=utf8" in header and "eof=true" in header, page
+            assert payload == "captured-prefix:<redacted:secret>"
+            assert "irc-ui-secret" not in payload
 
             result = command("printf out; printf err >&2")
             assert result["stdout"]["retained"] == "out"
@@ -7462,10 +7547,12 @@ def run_tool_cases(binary, root, provider, environment):
             interact(result["handle"])
             assert (workspace / "leaked.txt").exists()
             (workspace / "leaked.txt").unlink()
-            name = None
-            ready.set()
+            supplied.put((number, "", None, {}))
             terminal.wait("tool cases done")
             wait_irc_idle([terminal])
+            _, events = read_events(terminal.dotdir)
+            shell_events = event_list(events, "command_shell_changed")
+            assert len(shell_events) == 1 and shell_events[0]["data"]["shell"] == str(shell_wrapper)
             terminal.exit()
             print("tmux_terminal patch and command behavior: ok", flush=True)
         workspace = case / "read-work"
@@ -7520,8 +7607,7 @@ def run_tool_cases(binary, root, provider, environment):
                 result = invoke("read_file", {"path": "large", "start_line": start, "end_line": end},
                                 "succeeded" if success else "failed")
                 assert expected in result["model_text"], result
-            name = None
-            ready.set()
+            supplied.put((number, "", None, {}))
             terminal.wait("tool cases done")
             wait_irc_idle([terminal])
             terminal.exit()
@@ -7531,7 +7617,7 @@ def run_tool_cases(binary, root, provider, environment):
         (workspace / "sub").rmdir()
         workspace.rmdir()
     finally:
-        ready.set()
+        supplied.put((number, "", None, {}))
         provider.runtime_handler = None
 
 
@@ -8146,7 +8232,7 @@ def run_tool_yield_cases(binary, root, provider, environment):
         operator = mode.startswith("operator")
         closing = mode.endswith("close")
         with config.open("a") as out:
-            out.write(f"[tool]\nmax_wait_ms={60000 if operator else 200}\nmax_parallel_commands=1\n")
+            out.write(f"[tool]\ndefault_yield_ms=20\nmax_wait_ms={60000 if operator else 200}\nmax_parallel_commands=1\n")
         requests = []
 
         def respond(handler, request, sequence):
@@ -8589,6 +8675,18 @@ def run_irc_case(binary, root):
     run_interrupted_history_case(binary, root / "interrupted-catchup")
 
 
+def run_tools_only(binary, root):
+    binary = os.path.abspath(binary)
+    root = root.resolve()
+    root.mkdir(mode=0o700, parents=True)
+    provider = FakeResponses()
+    environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret", PAGER="")
+    try:
+        run_tool_cases(binary, root, provider, environment)
+    finally:
+        provider.close()
+
+
 def run_irc_chat_case(binary, root):
     root.mkdir(mode=0o700, parents=True)
     provider = FakeResponses()
@@ -8952,6 +9050,9 @@ def main():
     irc = subparsers.add_parser("irc")
     irc.add_argument("binary")
     irc.add_argument("root", type=Path)
+    tools = subparsers.add_parser("tools")
+    tools.add_argument("binary")
+    tools.add_argument("root", type=Path)
     live = subparsers.add_parser("live")
     live.add_argument("binary")
     live.add_argument("workspace")
@@ -8965,6 +9066,8 @@ def main():
         run_fixture(args.binary, args.workspace, args.root)
     elif args.mode == "irc":
         run_irc_case(args.binary, args.root)
+    elif args.mode == "tools":
+        run_tools_only(args.binary, args.root)
     else:
         run_live(args.binary, args.workspace, args.config, args.root)
 

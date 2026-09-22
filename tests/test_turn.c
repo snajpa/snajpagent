@@ -340,7 +340,7 @@ main(void)
     assert(snag_response_graph_set_provider_id(&graph, "resp_irc") == 0);
     {
         static const char *const names[] = {
-            "irc_send", "irc_state", "irc_topic" };
+            "irc_send", "irc_state", "irc_topic", "irc_nick" };
 
         for (size_t i = 0u; i < sizeof(names) / sizeof(names[0]); ++i) {
             json_t *arguments = json_object();
@@ -354,7 +354,7 @@ main(void)
         }
     }
     assert(snag_response_graph_classify(&graph, &decision, error, sizeof(error)) == 0);
-    assert(decision.outcome == SNAG_GRAPH_CALLS && decision.call_count == 3u);
+    assert(decision.outcome == SNAG_GRAPH_CALLS && decision.call_count == 4u);
     encoded = snag_response_graph_json(&graph);
     assert(encoded);
     copy = (struct snag_response_graph){0};
@@ -363,6 +363,7 @@ main(void)
     assert(strcmp(snag_response_graph_item(&copy, 0).name, "irc_send") == 0);
     assert(strcmp(snag_response_graph_item(&copy, 1).name, "irc_state") == 0);
     assert(strcmp(snag_response_graph_item(&copy, 2).name, "irc_topic") == 0);
+    assert(strcmp(snag_response_graph_item(&copy, 3).name, "irc_nick") == 0);
     json_decref(encoded);
     snag_response_graph_free(&copy);
     snag_response_graph_free(&graph);

@@ -579,10 +579,11 @@ test_wait_limit_and_pending_termination(void)
     json_decref(result);
     /* Repeated waits reset the budget and preserve the same process. */
     args = json_pack("{s:s,s:s,s:b,s:b,s:i}", "handle", handle, "data", "",
-                     "eof", 0, "terminate", 0, "yield_ms", 600000);
+                     "eof", 0, "terminate", 0, "yield_ms", 100);
     assert(snag_json_set_new(args, "max_output_tokens", json_null()) == 0);
     result = run_tool_with_wait("write_stdin", args, NULL, NULL, 100u);
-    assert(!strcmp(snag_json_string(result, "reason"), "wait_timeout"));
+    const char *reason = snag_json_string(result, "reason");
+    assert(reason && !strcmp(reason, "wait_timeout"));
     assert(!strcmp(snag_json_string(result, "handle"), handle));
     json_decref(result);
     args = json_pack("{s:s,s:s,s:b,s:b,s:i}", "handle", handle, "data", "",
@@ -592,7 +593,8 @@ test_wait_limit_and_pending_termination(void)
     result = run_tool_with_wait("write_stdin", args, NULL, NULL, 100u);
     assert(snag_monotonic_ms() - began < 1500u);
     assert(!strcmp(snag_json_string(result, "status"), "running"));
-    assert(!strcmp(snag_json_string(result, "reason"), "wait_timeout"));
+    reason = snag_json_string(result, "reason");
+    assert(reason && !strcmp(reason, "wait_timeout"));
     assert(!strcmp(snag_json_string(result, "handle"), handle));
     assert(strstr(snag_json_string(result, "model_text"), "Termination was already requested"));
     json_decref(result);
@@ -922,14 +924,15 @@ test_command_argument_feedback(void)
     assert(getcwd(cwd, sizeof(cwd)));
     snag_config_init(&config);
     config.max_timeout_ms = 2000u;
+    config.max_wait_ms = 700000u;
     const char *fields[] = {"yield_time_ms", "cmd", "timeout_ms", "yield_ms",
                            "max_output_tokens", "pty", "workdir"};
-    const char *expected[] = {"yield_ms", "command", "2000", "600000", "max_output_tokens", "pty", "workdir"};
+    const char *expected[] = {"yield_ms", "command", "2000", "700000", "max_output_tokens", "pty", "workdir"};
     for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
         make_call(&graph, "printf never-run", cwd, 1000, NULL);
         struct snag_response_item call = snag_response_graph_item(&graph, 0u);
         json_t *value = i < 2 ? json_null() : i == 2 ? json_integer(2001) :
-                        i == 3 ? json_integer(600001) : i == 4 ? json_integer(0) : json_string("invalid");
+                        i == 3 ? json_integer(700001) : i == 4 ? json_integer(0) : json_string("invalid");
         assert(json_object_set_new(call.arguments, fields[i], value) == 0);
         /* Supplying canonical and legacy names together is ambiguous, even null. */
         json_t *result = NULL;

@@ -4,6 +4,61 @@
 
 ## Unreleased
 
+## 0.99.8 — September 22, 2026
+
+- Show every nonblank interactive submission in scrollback immediately while
+  keeping stdin live for type-ahead. Hold the ready composer until the engine
+  acknowledges the submitted boundary, and keep whitespace-only Enter entirely
+  in the presentation layer without creating a turn, command, queue item or
+  provider request.
+
+- Add `read_tool_output` for bounded paging over complete redacted stdout or
+  stderr retained in the session journal. Results carry durable output
+  references; a configurable bounded RAM cache accelerates reads, while cache
+  misses reload the original bytes after resume or eviction without rerunning
+  the command.
+
+- Add `set_command_shell` for durable per-session selection of an executable
+  command shell. Preserve exact command bytes and the selected symlink
+  personality; existing workdir, environment, authorization and secret rules
+  continue to apply.
+
+- Advertise and enforce configured execution limits in every normal tool
+  catalog, including while commands remain live. Add coherent per-model
+  overrides for default yield, maximum wait, foreground timeout, parallel
+  handles, result bytes and retained-output cache; allow configured wait limits
+  through the full 32-bit millisecond range while keeping input and process
+  service responsive.
+
+- Keep input and all presentation writes on the UI owner in interactive and
+  one-shot modes. Repaint view changes immediately, backfill missing durable
+  records asynchronously without dropping the backlog, and maintain an ordered
+  rollout/room-tab cycle with separate per-room positions as IRC membership
+  changes.
+
+- Preserve valid tool calls from an accepted provider response when steering
+  arrives. Admit the response's valid call wave, hand running commands back
+  alive immediately, and then deliver the steer; do not relabel unrelated calls
+  `not_run/superseded_by_steering` merely to shorten the handoff.
+
+- Use a source-bound advertised maximum context as the hard-capacity basis when
+  the same model also publishes a smaller normal working window. Explicit
+  model-limit context, input/output limits and learned lower ceilings still win.
+  This prevents codex-lb's 272,000-token normal policy from forcing compaction at
+  232,560 when it advertises an 872,000-token maximum and has accepted larger
+  requests.
+
+- Keep ordinary IRC traffic pending after Ctrl-C interrupts a turn and pauses
+  its goal, including across exit and resume. A direct mention can still start
+  urgent work, but background updates no longer create an immediate replacement
+  turn or model-switch compaction behind the idle prompt.
+
+- Keep slash-command IRC state synchronized with model-created connections, so
+  `/disconnect` can remove one endpoint or every live client regardless of who
+  connected it. Expose `irc_nick` to models alongside live state, send, topic,
+  host, connect and disconnect; topic changes continue to follow the room's
+  actual `+t` policy.
+
 - Send the summary-condensing pass the same request shape as every other
   compaction. The reduce that follows a capacity rejection with nothing left to
   compact was posted as a plain request (no empty tools array, a tool_choice

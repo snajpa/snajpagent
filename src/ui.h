@@ -12,7 +12,7 @@ struct snag_ui {
     enum snag_render_view view;
     bool opened;
     bool prompt_wanted;
-    bool active, input_active;
+    bool active, input_active, input_echoed, input_view_applied;
     uint64_t turn_generation;
     uint64_t input_received_ms;
     char label[SNAG_TERM_LABEL_BYTES];
