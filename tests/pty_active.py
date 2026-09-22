@@ -1352,7 +1352,10 @@ def test_cancel_defers_timer_until_next_input():
     # The next direct input ends deferral and the due timer follows that
     # turn. IRC traffic still wakes via its own path.
     child = Child([], PROMPT.rstrip())
-    child.send_wait(b"timer_slow_test\r", b"timer slow scheduled")
+    scheduled = child.send_wait(b"timer_slow_test\r", b"timer slow scheduled")
+    # The streamed final answer can precede turn_completed; submitting now
+    # would steer that first turn rather than start the slow one under test.
+    child.wait_idle_prompt(start=scheduled)
     child.send_wait(b"queue_slow\r", b"working slowly")
     # Timer (6s) becomes due during the slow turn (~10s); cancel after it.
     child.drain(7.0)
