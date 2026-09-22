@@ -1034,6 +1034,10 @@ snag_tools_run(const struct snag_response_item *call, const struct snag_config *
     if (rc != 0) return rc < 0 ? -1 : 0;
     if (snag_tools_start(call, config, credential, session_workspace, result, error, error_size) < 0)
         return -1;
+    const json_t *requested_yield = json_object_get(call->arguments, "yield_ms");
+    if (!requested_yield) requested_yield = json_object_get(call->arguments, "yield_time_ms");
+    if (!yield_ms && !(json_is_integer(requested_yield) && json_integer_value(requested_yield) == 0))
+        yield_ms = config->max_wait_ms;
     if (!*result && wait_process(handle, yield_ms, pump, pump_opaque, wake_fd, result, error, error_size) < 0)
         return -1;
     snag_tools_collected(handle);

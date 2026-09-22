@@ -201,6 +201,13 @@ its own immutable code and manual, not all later source fixes.
 `turn_recovery` closes a failed response attempt without closing its turn or
 managed processes. Consecutive recovery notices are coalesced in model context;
 detailed diagnostics stay in the journal. Explicit interruption remains separate.
+An explicit zero-yield managed call returns after the accepted call wave is
+admitted; an omitted yield with a configured default of zero waits until a
+terminal result or max_wait_ms. A final reply while commands remain unsettled
+cannot complete that turn. On actual cancellation/failure, close only the
+owned processes and commit each terminal/unknown `process_closed` result before
+`turn_failed` or `turn_interrupted`; an owner-lost handle and its journaled
+bytes remain discoverable without claiming a successful command result.
 An oversized active turn is not an invitation to repeatedly summarize its entire
 tool transcript. Compaction is a *covered-prefix* checkpoint: a completed
 compaction retains its source event boundary and later compaction starts from

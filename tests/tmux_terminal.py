@@ -4004,6 +4004,17 @@ def run_reasoning_boundary_cases(binary, root, provider, environment,
             assert items[0]["role"] == "system", "fixed policy lost its authority"
             outputs = [i for i in items if i.get("type") == "function_call_output"]
             if not outputs:
+                if mode in ("resume", "readonly") and any(
+                        "Pure durable-turn continuation" in str(item.get("content", ""))
+                        for item in items):
+                    # The previous tool already finished. A recovered model
+                    # sees a bounded history pointer, not that call/output;
+                    # it must not run the effect again to answer.
+                    assert "read_session_history" in json.dumps(request["tools"])
+                    assert not [item for item in items if item.get("type") == "function_call"]
+                    provider.reply(handler, provider.response_body(sequence,
+                        "thinking boundary confirmed").encode())
+                    return
                 # A genuine completed non-thinking tool response: no private state
                 # was returned. It must never be invented during continuation.
                 provider.reply(handler, provider.function_body(sequence, "call_boundary", "read_file" if readonly else "exec_command",
@@ -8491,6 +8502,158 @@ def run_post_exit_drain_cases(binary, root, provider, environment):
         print("post-exit drain:", mode, "ok", flush=True)
 
 
+def run_unsettled_process_close_case(binary, root):
+    """A premature final must settle its owned command before closing the turn."""
+    case = root / "unsettled-process-close"
+    provider = FakeResponses()
+    workspace, config = irc_workspace(case / "work", provider.port, "host-model")
+    config.write_text(config.read_text().replace("[agent]\n", "[agent]\nmax_turn_retries=0\n", 1))
+    state = case / "state"
+    requests = []
+
+    def respond(handler, request, sequence):
+        requests.append(request)
+        if len(requests) == 1:
+            body = provider.function_body(sequence, "unsettled-command", "exec_command", {
+                "command": "exec python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(20)'",
+                "workdir": str(workspace), "yield_ms": 0,
+            })
+        else:
+            time.sleep(.2)  # Let the child install its TERM handler before finalization.
+            body = provider.response_body(sequence, "premature final")
+        provider.reply(handler, body.encode(), close_header=True)
+
+    provider.runtime_handler = respond
+    child = None
+    try:
+        child = subprocess.Popen([os.path.abspath(binary), "--dotdir", str(state),
+            "--config", str(config), "--no-listen", "--no-client", "-e", "--",
+            "finish with a running command"], cwd=workspace, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env={**os.environ, "SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"})
+        # Keep stdin open: an EOF would force cancellation and wait for the
+        # command to settle, hiding the live-turn close path under test.
+        rc = child.wait(timeout=15)
+        stdout, stderr = child.communicate(timeout=2)
+        assert rc == 4, stderr
+        _, log = read_events(state)
+        running = event_list(log, "tool_finished")
+        assert len(running) == 1 and running[0]["data"]["result"]["status"] == "running"
+        closed = event_list(log, "process_closed")
+        assert len(closed) == 1 and closed[0]["data"]["result"]["status"] != "running"
+        failed = event_list(log, "turn_failed")
+        assert len(failed) == 1 and failed[0]["data"]["class"] == "protocol"
+        assert len(requests) == 2 and "invalid process_closed transition" not in stderr
+        print("premature final settles owned command: ok", flush=True)
+    finally:
+        if child is not None and child.poll() is None:
+            child.terminate()
+            child.communicate(timeout=5)
+        provider.close()
+
+
+def run_unsettled_owner_lost_case(binary, root):
+    """A yielded command from a crashed process keeps its uncertain outcome."""
+    case = root / "unsettled-owner-lost"
+    provider = FakeResponses()
+    workspace, config = irc_workspace(case / "work", provider.port, "host-model")
+    state = case / "state"
+    ready, release = threading.Event(), threading.Event()
+    requests = []
+
+    def respond(handler, request, sequence):
+        requests.append(request)
+        if len(requests) == 1:
+            body = provider.function_body(sequence, "orphaned-command", "exec_command", {
+                "command": "sleep 5", "workdir": str(workspace), "yield_ms": 0,
+            })
+        elif len(requests) == 2:
+            ready.set()
+            release.wait(10)
+            body = provider.response_body(sequence, "old owner should not finish")
+        else:
+            body = provider.response_body(sequence, "recovered after owner loss")
+        try:
+            provider.reply(handler, body.encode(), close_header=True)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    provider.runtime_handler = respond
+    common = [os.path.abspath(binary), "--dotdir", str(state), "--config", str(config),
+              "--no-listen", "--no-client"]
+    environment = {**os.environ, "SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
+    child = None
+    try:
+        with (case / "first.out").open("wb") as out, (case / "first.err").open("wb") as err:
+            child = subprocess.Popen([*common, "-e", "--", "recover the command"],
+                cwd=workspace, env=environment, stdout=out, stderr=err)
+            deadline = time.monotonic() + 8
+            while True:
+                path, log = maybe_events(state)
+                running = [e for e in event_list(log, "tool_finished")
+                           if e["data"]["result"]["status"] == "running"]
+                if running and ready.is_set():
+                    break
+                assert child.poll() is None and time.monotonic() < deadline, (log[-4:], provider.failure)
+                time.sleep(.02)
+            child.kill()
+            child.wait(timeout=5)
+        release.set()
+        resumed = subprocess.run([*common, "-e", "--resume", path.parent.name],
+            cwd=workspace, env=environment, input="", capture_output=True, text=True, timeout=20)
+        assert resumed.returncode == 0 and "recovered after owner loss" in resumed.stdout, resumed.stderr
+        _, log = read_events(state)
+        closed = event_list(log, "process_closed")
+        assert len(closed) == 1 and closed[0]["data"]["result"]["status"] == "outcome_unknown"
+        assert len(event_list(log, "tool_started")) == 1
+        assert len(event_list(log, "turn_completed")) == 1
+        assert "invalid process_closed transition" not in resumed.stderr
+        print("crashed owner settles yielded command: ok", flush=True)
+    finally:
+        release.set()
+        if child is not None and child.poll() is None:
+            child.kill()
+            child.wait(timeout=5)
+        provider.close()
+
+
+def run_default_zero_wait_case(binary, root):
+    """Configured zero waits; only an explicit zero yields immediately."""
+    case = root / "default-zero-wait"
+    provider = FakeResponses()
+    workspace, config = irc_workspace(case / "work", provider.port, "host-model")
+    with config.open("a") as out:
+        out.write("[tool]\ndefault_yield_ms=0\nmax_wait_ms=1000\n")
+    state = case / "state"
+    requests = []
+
+    def respond(handler, request, sequence):
+        requests.append(request)
+        if len(requests) == 1:
+            body = provider.function_body(sequence, "default-zero", "exec_command", {
+                "command": "sleep .05; printf complete", "workdir": str(workspace),
+            })
+        else:
+            body = provider.response_body(sequence, "zero default completed")
+        provider.reply(handler, body.encode(), close_header=True)
+
+    provider.runtime_handler = respond
+    try:
+        result = subprocess.run([os.path.abspath(binary), "--dotdir", str(state),
+            "--config", str(config), "--no-listen", "--no-client", "-e", "--",
+            "wait for this command"], cwd=workspace, capture_output=True, text=True, timeout=12,
+            env={**os.environ, "SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"})
+        assert result.returncode == 0, result.stderr
+        _, log = read_events(state)
+        finished = event_list(log, "tool_finished")
+        assert len(finished) == 1 and finished[0]["data"]["result"]["status"] == "succeeded"
+        assert not event_list(log, "process_closed")
+        assert len(event_list(log, "turn_completed")) == 1
+        print("configured zero waits for command completion: ok", flush=True)
+    finally:
+        provider.close()
+
+
 def run_session_process_recovery_case(binary, root, emit_output=True):
     # Real local child, real provider transport, no duplicate side effects.
     case = root / "process-recovery"
@@ -8640,6 +8803,9 @@ def run_irc_peer_join_case(binary, root):
 def run_irc_case(binary, root):
     binary = os.path.abspath(binary)
     root.mkdir(mode=0o700, parents=True)
+    run_unsettled_process_close_case(binary, root)
+    run_unsettled_owner_lost_case(binary, root)
+    run_default_zero_wait_case(binary, root)
     run_session_process_recovery_case(binary, root)
     run_session_process_recovery_case(binary, root / "silent", emit_output=False)
     run_punctuation_case(binary, root)

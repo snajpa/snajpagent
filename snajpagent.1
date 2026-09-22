@@ -2959,6 +2959,8 @@ editing/echo rules may affect interactive input.
 .B yield_ms
 is 0 through 600000, or omitted/null for the configured default.  It bounds the
 foreground wait before returning a handle; it is not a process lifetime.
+An explicit 0 yields after the accepted call wave starts; a configured default
+of 0 waits for completion subject to max_wait_ms and operator input.
 .B timeout_ms
 is a positive foreground handoff deadline, bounded by the configured maximum,
 or omitted/null for the configured default.  The built-in default has no deadline.
@@ -2977,7 +2979,10 @@ Returned status distinguishes running, successful/failed exit, and termination
 by signal.  A running result means the invocation returned, not that the
 command completed.  Keep its handle and use
 .BR write_stdin ;
-do not start the same command again merely to wait for it.
+do not start the same command again merely to wait for it. The turn cannot
+complete with a running handle: collect its terminal result or close it through
+an authorized cancellation/failure transition. A rejected premature final
+does not erase the process or claim completion.
 .PP
 After command exit, output capture drains for at most two seconds. If another
 process still holds a writer open, remaining capture streams close and the

@@ -6,6 +6,11 @@
 
 ## 0.99.8 — September 22, 2026
 
+- Honor explicit zero-yield requests after admitted tool calls start, without
+  changing default-zero wait-through-completion behavior. Premature final
+  replies cannot silently finish turns with running commands; cancellation and
+  owner-lost recovery preserve truthful outcomes and captured output.
+
 - Stop repeated provider context-limit failures in mega-turns by rebasing the
   active request onto current input and bounded history access, without
   re-executing completed calls or repeatedly compacting old checkpoints.

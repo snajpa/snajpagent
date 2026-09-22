@@ -2970,7 +2970,15 @@ run_call_batch(struct app_state *app, const char *turn_id, const struct snag_cre
                 uint32_t yield_ms = 0u;
                 int rc = snag_tools_prepare(call, &process_config, app->session.workspace, app->session.max_parallel_commands, calls[i].handle, &yield_ms, &result);
                 if (rc < 0) return -1;
-                if (yield_ms && began + yield_ms < deadline) deadline = began + yield_ms;
+                /* An explicitly requested zero yields after this admission
+                 * wave. An omitted/null yield with default_yield_ms=0 waits
+                 * for the configured max_wait_ms instead. */
+                const json_t *requested_yield = json_object_get(call->arguments, "yield_ms");
+                if (!requested_yield) requested_yield = json_object_get(call->arguments, "yield_time_ms");
+                bool immediate = json_is_integer(requested_yield) && json_integer_value(requested_yield) == 0;
+                if ((yield_ms || immediate) && began <= UINT64_MAX - yield_ms &&
+                    began + yield_ms < deadline)
+                    deadline = began + yield_ms;
                 if (rc > 0) {
                     const char *reason = snag_json_string(result, "reason");
                     if (reason && !strcmp(reason, "process_limit")) {
