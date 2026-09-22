@@ -220,7 +220,7 @@ if [ "$WITH_PDF" = 0 ] && [ "$want_pdf" = require ]; then
 	die 'linked PDF was required but the Poppler or libpng development files were not found'
 fi
 HAVE_POPPLER_NEW_API=0
-if [ "$WITH_PDF" = 1 ] && pkg-config --atleast-version=26 poppler >/dev/null 2>&1; then
+if [ "$WITH_PDF" = 1 ] && "$PKG_CONFIG" --atleast-version=26 poppler >/dev/null 2>&1; then
 	HAVE_POPPLER_NEW_API=1
 fi
 
@@ -232,7 +232,7 @@ if [ "$want_audio" = off ]; then
 else
 	miniaudio_cflags=${MINIAUDIO_CFLAGS:-}
 	if [ -z "$miniaudio_cflags" ] && pc_exists miniaudio; then
-		miniaudio_cflags=$(pkg-config --cflags miniaudio 2>/dev/null)
+		miniaudio_cflags=$("$PKG_CONFIG" --cflags miniaudio 2>/dev/null)
 	fi
 	printf '#include <miniaudio.h>\n#include <rtc/rtc.h>\n#include <opus/opus.h>\nint main(void) { return rtcIsOpen(-1) || opus_get_version_string()==0; }\n' > "$tmpd/audio.c"
 	if $CC $miniaudio_cflags ${RTC_CFLAGS:-} -o "$tmpd/audio" "$tmpd/audio.c" ${RTC_LIBS:--ldatachannel -lopus} >/dev/null 2>&1; then
@@ -252,8 +252,8 @@ if [ -f "$OFFICE_ROOT/../../include/LibreOfficeKit/LibreOfficeKit.h" ] &&
 	{ [ -f "$OFFICE_ROOT/program/libsofficeapp.so" ] ||
 	  [ -f "$OFFICE_ROOT/program/soffice" ] ||
 	  [ -f "$OFFICE_ROOT/program/soffice.bin" ]; }; then
-	office_cflags=${OFFICE_CFLAGS:-$(pkg-config --cflags libarchive libxml-2.0 libpng 2>/dev/null) -I$OFFICE_ROOT/../../include}
-	office_libs=${OFFICE_LIBS:-$(pkg-config --libs libarchive libxml-2.0 libpng 2>/dev/null) -L$OFFICE_ROOT/program -Wl,-rpath,$OFFICE_ROOT/program -lsofficeapp}
+	office_cflags=${OFFICE_CFLAGS:-$("$PKG_CONFIG" --cflags libarchive libxml-2.0 libpng 2>/dev/null) -I$OFFICE_ROOT/../../include}
+	office_libs=${OFFICE_LIBS:-$("$PKG_CONFIG" --libs libarchive libxml-2.0 libpng 2>/dev/null) -L$OFFICE_ROOT/program -Wl,-rpath,$OFFICE_ROOT/program -lsofficeapp}
 	printf '#define LOK_USE_UNSTABLE_API\n#include <LibreOfficeKit/LibreOfficeKit.h>\nint main(int argc, char **argv) { return lok_init_2(argv[0], argc > 1 ? argv[1] : argv[0]) != 0; }\n' > "$tmpd/office.c"
 	if $CC $office_cflags -o "$tmpd/office" "$tmpd/office.c" $office_libs >/dev/null 2>&1; then
 		kit_found=yes

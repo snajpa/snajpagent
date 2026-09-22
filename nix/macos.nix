@@ -343,6 +343,7 @@ in {
         ${pkgs.lib.optionalString (updateBase != "") "'UPDATE_BASE_URL=${updateBase}' 'UPDATE_TARGET=${updateTarget}'"}
           'TARGET_OS=Darwin'
           'WITH_OFFICE=0' 'WITH_OFFICE_COMMANDS=1'
+          'HAVE_POPPLER_NEW_API=0'
           'CC=${compiler} --target=${target} -isysroot ${sdk}'
           'CXX=${llvm.clang-unwrapped}/bin/clang++ --target=${target} -isysroot ${sdk}'
           'STRIP=${if legacyLoader then builtins.dirOf linker + "/x86_64-apple-darwin-strip" else tools + "/llvm-strip"}'

@@ -183,6 +183,7 @@ in {
         # still imported below because the release tooling splits the pdf span
         # on it.
         'WITH_OFFICE=0' 'WITH_OFFICE_COMMANDS=1'
+        'HAVE_POPPLER_NEW_API=0'
         "CC=$CC" "CXX=$CXX" "STRIP=$STRIP" "OBJCOPY=$OBJCOPY"
         "GIT_HEAD=${revision}" "BUILD_VERSION=${version}"
         'CPPFLAGS=-D_POSIX_C_SOURCE=200809L -D_XOPEN_SOURCE=700 -D_FILE_OFFSET_BITS=64 -Ibuild -DSNAJPAGENT_CA_BUNDLE=\"ca_bundle.inc\"${pkgs.lib.optionalString clockFallback " -DSNAJPAGENT_LEGACY_LINUX_CLOCK"}'

@@ -50,16 +50,19 @@ override LDFLAGS += -pthread
 
 # Poppler 26 reshaped two C++ APIs src/pdf.cpp uses (BaseStream::copy now
 # returns unique_ptr, SplashOutputDev takes the paper color by pointer).
-# Default keeps the Poppler to 25.x shape the matrix pins; host builds against
-# Poppler 26 pass HAVE_POPPLER_NEW_API=1 on the make line.
-HAVE_POPPLER_NEW_API ?= 0
-ifeq ($(HAVE_POPPLER_NEW_API),0)
-override CPPFLAGS += -DHAVE_POPPLER_NEW_API=0
+# Detect through the selected pkg-config so cross builds inspect their target
+# Poppler, not the build host.  configure records a concrete 0 or 1.
+PKG_CONFIG ?= pkg-config
+ifeq ($(HAVE_POPPLER_NEW_API),auto)
+POPPLER_NEW_API := $(shell $(PKG_CONFIG) --atleast-version=26 poppler >/dev/null 2>&1 && printf 1 || printf 0)
+else ifeq ($(HAVE_POPPLER_NEW_API),0)
+POPPLER_NEW_API := 0
 else ifeq ($(HAVE_POPPLER_NEW_API),1)
-override CPPFLAGS += -DHAVE_POPPLER_NEW_API=1
+POPPLER_NEW_API := 1
 else
-$(error HAVE_POPPLER_NEW_API must be 0 (poppler to 25.x API) or 1 (poppler 26 API))
+$(error HAVE_POPPLER_NEW_API must be auto, 0 (poppler to 25.x API) or 1 (poppler 26 API))
 endif
+override CPPFLAGS += -DHAVE_POPPLER_NEW_API=$(POPPLER_NEW_API)
 
 BIN = $(NAME)
 TARGET_OS := $(shell uname -s)

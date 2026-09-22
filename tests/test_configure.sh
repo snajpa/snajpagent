@@ -8,7 +8,7 @@
 #      hard failure into a silently lean artifact;
 #   2. the GNU-standard packaging set a distro recipe passes is accepted, with
 #      --mandir mapping onto MANPREFIX, while the all-off run still rewrites
-#      exactly the four modality keys and stays idempotent.
+#      exactly its four detected build keys and stays idempotent.
 # Skips cleanly when ./configure is absent, like tools/check_portability.py.
 
 set -u
@@ -74,12 +74,41 @@ check 'all-off run' 0 changed \
 	--without-av --without-pdf --without-audio-device \
 	--without-office --without-office-commands
 keys=$(diff "$tmp/pristine.mk" "$tmp/config.mk" | grep -c '^[<>]')
-[ "$keys" = 8 ] || fail "all-off run changed $keys lines, expected 8 (four WITH_* keys)"
+[ "$keys" = 8 ] || fail "all-off run changed $keys lines, expected 8 (four detected keys)"
 
 cp "$tmp/config.mk" "$tmp/once.mk"
 (cd "$tmp" && sh ./configure --without-av --without-pdf --without-audio-device \
 	--without-office --without-office-commands >"$tmp/out2" 2>&1)
 cmp -s "$tmp/once.mk" "$tmp/config.mk" || fail 'all-off run is not idempotent'
+
+# Cross builds select a target pkg-config explicitly.  Every query, including
+# API-generation checks, must use it rather than an unrelated native command
+# found through PATH.
+mkdir "$tmp/native-bin"
+cat >"$tmp/native-bin/pkg-config" <<'EOF'
+#!/bin/sh
+case "$1" in
+	--atleast-version=26) exit 0 ;;
+	*) exit 1 ;;
+esac
+EOF
+cat >"$tmp/target-pkg-config" <<'EOF'
+#!/bin/sh
+case "$1" in
+	--exists) exit 0 ;;
+	--atleast-version=26) exit 1 ;;
+	*) exit 1 ;;
+esac
+EOF
+chmod +x "$tmp/native-bin/pkg-config" "$tmp/target-pkg-config"
+cp "$tmp/pristine.mk" "$tmp/config.mk"
+(cd "$tmp" && PATH="$tmp/native-bin:$PATH" PKG_CONFIG="$tmp/target-pkg-config" \
+	sh ./configure --without-av --with-pdf --without-audio-device \
+	--without-office --without-office-commands >"$tmp/out3" 2>&1)
+rc=$?
+[ "$rc" = 0 ] || fail "target pkg-config run exited $rc"
+grep -Fqx 'HAVE_POPPLER_NEW_API ?= 0' "$tmp/config.mk" ||
+	fail 'Poppler API detection did not use the selected target pkg-config'
 
 if [ "$fails" -ne 0 ]; then
 	printf 'test_configure: %s check(s) failed\n' "$fails"

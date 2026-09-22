@@ -428,6 +428,7 @@ in {
           ${pkgs.lib.optionalString (updateBase != "") "'UPDATE_BASE_URL=${updateBase}' 'UPDATE_TARGET=${updateTarget}'"}
           'TARGET_OS=FreeBSD'
           'WITH_OFFICE=0' 'WITH_OFFICE_COMMANDS=1'
+          'HAVE_POPPLER_NEW_API=0'
           'CC=${compiler} --target=${target} --sysroot=${sdk}'
           'STRIP=${tools}/llvm-strip' 'OBJCOPY=${tools}/llvm-objcopy'
           'GIT_HEAD=${revision}' 'BUILD_VERSION=${version}'
