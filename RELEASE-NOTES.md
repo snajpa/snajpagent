@@ -10,6 +10,11 @@ Later source changes are listed under Unreleased in CHANGELOG.md.
 
 ## Changes
 
+- Long open turns that accumulate more than 12 MiB of image input now recover
+  without replaying the same local projection error. The runtime retains every
+  completed result, closes the oversized turn once, durably compacts through
+  its terminal event, and omits already-presented historical pixels only from
+  compaction requests; durable media and normal request semantics remain intact.
 - Context capacity follows the selected binding's explicit limits and advertised
   maximum. A smaller normal working window remains a policy value and does not
   replace the hard ceiling. Compaction starts at the effective boundary or a

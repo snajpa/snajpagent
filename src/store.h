@@ -207,6 +207,8 @@ struct snag_session {
     bool append_rollback_pending;
     int64_t append_rollback_end;
     unsigned int pending_controls, started_controls;
+    bool compact_control_image_boundary;
+    uint64_t compact_control_source_seq;
     uint64_t control_seq[6];
     bool queue_armed;
     bool active_turn;

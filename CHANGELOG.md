@@ -6,6 +6,13 @@
 
 ## 0.99.8 — September 22, 2026
 
+- Recover long open turns whose accumulated image inputs exceed the local
+  12 MiB request bound instead of replaying the same deterministic failure.
+  Close the oversized turn once with completed results retained, durably target
+  its terminal event for compaction, omit already-presented historical pixels
+  before compaction budget accounting, and compact every required chunk before
+  a fresh turn may send a normal request. Durable session media remains intact.
+
 - Let cursor-capable terminals own model-text soft wrapping, so narrowing the
   terminal reflows existing prose cleanly and clipboard text no longer contains
   renderer-inserted newlines or two-space continuation prefixes. Preserve real

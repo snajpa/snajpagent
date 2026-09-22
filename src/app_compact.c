@@ -24,7 +24,7 @@ count_method_valid(const char *method)
 static bool
 active_reason(const char *reason)
 {
-    return snag_string_in(reason, "proactive hard_budget provider_rejection model_switch");
+    return snag_string_in(reason, "proactive hard_budget provider_rejection model_switch image_boundary");
 }
 
 static json_t *
@@ -705,6 +705,39 @@ snag_app_compact_requested(struct app_state *app, char *error, size_t error_size
     if (rc > 0 && snag_ui_text(&app->ui, SNAG_UI_WARNING,
             "compaction interrupted; previous context retained") < 0) return -1;
     if (rc == 0 && active && !compacted) return SNAG_APP_COMPACT_DEFERRED;
+    return rc;
+}
+
+int
+snag_app_compact_image_boundary(struct app_state *app, char *error, size_t error_size)
+{
+    uint64_t target = app->session.compact_control_source_seq;
+    enum snag_policy_stop policy = app->turn_policy_stopped;
+    int rc = 0;
+
+    if (app->session.active_turn || !target)
+        return snag_fail(error, error_size, EINVAL,
+            "image-boundary compaction requires a completed turn and durable boundary");
+    app->interrupt_requested = false;
+    app->steering_requested = false;
+    for (unsigned int chunk = 0u; app->session.compact_seq < target && chunk < 64u; ++chunk) {
+        uint64_t prior = app->session.compact_seq;
+        bool compacted = false;
+
+        rc = run_compaction(app, "image_boundary", false, NULL, &compacted, error, error_size);
+        if (rc != 0) break;
+        if (!compacted || app->session.compact_seq <= prior) {
+            rc = snag_fail(error, error_size, EPROTO,
+                "image-boundary compaction did not advance toward event %llu",
+                (unsigned long long)target);
+            break;
+        }
+    }
+    if (rc == 0 && app->session.compact_seq < target)
+        rc = snag_fail(error, error_size, ELOOP,
+            "image-boundary compaction did not reach event %llu after 64 chunks",
+            (unsigned long long)target);
+    app->turn_policy_stopped = policy;
     return rc;
 }
 

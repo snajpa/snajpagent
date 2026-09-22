@@ -923,6 +923,12 @@ compact_complete_boundary(struct context_builder *builder, uint64_t seq, char *e
         builder->compact_best_request_count = json_array_size(builder->request_input);
         return 0;
     }
+    /* Compaction summarizes history that already presented these pixels in
+     * their original response cycles. Remove the ephemeral image payloads
+     * before source-budget accounting, not only after prefix selection, so
+     * image bytes cannot force artificial multi-chunk cuts. */
+    if (snag_media_compaction_prepare(builder->request_input, NULL,
+                                      error, error_size) < 0) return -1;
     if (compact_source_bytes(builder, &source_bytes) < 0) {
         if (errno == EOVERFLOW && builder->compact_best_known) goto trim;
         return snag_errorf(error, error_size, "cannot encode complete compaction group within 12 MiB");
@@ -1867,6 +1873,8 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
         snag_errorf(error, error_size, "cannot build compact request");
         goto out;
     }
+    if (snag_media_compaction_prepare(projection->create_request.value, NULL,
+                                      error, error_size) < 0) goto out;
     if (snag_media_request_check(projection->create_request.value,error,error_size)<0)goto out;
     if (snag_json_document_set(&projection->model_input,
             json_incref(builder.request_input), SNAG_CONTEXT_MAX_COMPACT) < 0 ||

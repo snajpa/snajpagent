@@ -941,7 +941,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         static const char methods[] =
             "exact media_upper_bound unknown anchored_upper_bound statistical_upper_estimate qualified_upper_bound";
         static const char reasons[] =
-            "manual proactive hard_budget provider_rejection model_switch reduce";
+            "manual proactive hard_budget provider_rejection model_switch image_boundary reduce";
         const char *compact_id = snag_json_string(data, "compact_id");
         const char *predecessor = snag_json_string(data, "predecessor_compact_id");
         const char *reason = snag_json_string(data, "reason");
@@ -1057,13 +1057,28 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         clear_compaction_state(session);
     } else if (snag_string_in(type, "control_requested control_started control_finished")) {
         uint64_t control;
-        if (!snag_json_exact_keys(data, "control") || snag_json_integer_u64(data, "control", &control) < 0 ||
+        bool requested = !strcmp(type, "control_requested");
+        json_t *origin_value = requested ? json_object_get(data, "origin") : NULL;
+        json_t *source_value = requested ? json_object_get(data, "source_seq") : NULL;
+        const char *origin = requested ? snag_json_string(data, "origin") : NULL;
+        uint64_t source_seq = 0u;
+        if (!(requested ? snag_json_arg_keys(data, "control", "origin source_seq", error, error_size) :
+                          snag_json_exact_keys(data, "control")) ||
+            snag_json_integer_u64(data, "control", &control) < 0 ||
             !control || control > SNAG_CONTROL_RETRY || (control & (control - 1u))) goto invalid;
+        if ((origin_value && !origin) || (origin &&
+             (control != SNAG_CONTROL_COMPACT || strcmp(origin, "image_boundary") || !source_value ||
+              snag_json_integer_u64(data, "source_seq", &source_seq) < 0 || !source_seq || source_seq >= seq)) ||
+            (!origin && source_value)) goto invalid;
         unsigned int index = 0u;
         while ((UINT64_C(1) << index) != control) ++index;
-        if (!strcmp(type, "control_requested")) {
+        if (requested) {
             if (!(session->pending_controls & control)) session->control_seq[index] = seq;
             session->pending_controls |= (unsigned int)control;
+            if (control == SNAG_CONTROL_COMPACT && origin) {
+                session->compact_control_image_boundary = true;
+                session->compact_control_source_seq = source_seq;
+            }
         } else {
             if (!(session->pending_controls & control)) goto invalid;
             if (!strcmp(type, "control_started")) {
@@ -1073,6 +1088,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 session->pending_controls &= ~(unsigned int)control;
                 session->started_controls &= ~(unsigned int)control;
                 session->control_seq[index] = 0u;
+                if (control == SNAG_CONTROL_COMPACT) {
+                    session->compact_control_image_boundary = false;
+                    session->compact_control_source_seq = 0u;
+                }
             }
         }
     } else if (strcmp(type, "model_selection_changed") == 0) {

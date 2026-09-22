@@ -2144,7 +2144,9 @@ apply_controls(struct app_state *app)
             rc = change_model(app, "cache", false);
         } else if (bit == SNAG_CONTROL_COMPACT) {
             if (!app->execute && set_input_prompt(app, true) < 0) { result = -1; break; }
-            rc = snag_app_compact_requested(app, error, sizeof(error));
+            rc = app->session.compact_control_image_boundary ?
+                snag_app_compact_image_boundary(app, error, sizeof(error)) :
+                snag_app_compact_requested(app, error, sizeof(error));
             if (!app->execute && set_input_prompt(app, app->session.active_turn) < 0) {
                 result = -1; break;
             }
@@ -3136,6 +3138,37 @@ finish_turn_failure(struct app_state *app, struct turn_retry *retry, const char 
     return rc < 0 ? 3 : 4;
 }
 
+/* A deterministic local request-shape failure cannot improve by replaying the
+ * same open turn. Close it while retaining its completed journal results, so
+ * an active goal can compact that completed turn and continue in a fresh one. */
+static int
+finish_turn_for_compaction(struct app_state *app, const struct turn_retry *retry,
+                           const char *turn_id, const char *class_name,
+                           const char *message, char *error, size_t error_size)
+{
+    struct turn_retry terminal = *retry;
+    int rc;
+
+    terminal.compaction_bounded = true;
+    rc = finish_turn_failure(app, &terminal, turn_id, "context_compaction",
+                             class_name, message, error, error_size);
+    if (rc != 4) return rc;
+    if (!(app->session.pending_controls & SNAG_CONTROL_COMPACT) ||
+        !app->session.compact_control_image_boundary) {
+        if (commit_event(app, "control_requested",
+                json_pack("{s:i,s:s,s:I}", "control", (int)SNAG_CONTROL_COMPACT,
+                          "origin", "image_boundary", "source_seq",
+                          (json_int_t)(app->session.next_seq - 1u)),
+                error, error_size) < 0) {
+            (void)app_error(app, error);
+            return 3;
+        }
+    }
+    app->control_requested = true;
+    if (apply_controls(app) < 0) return 3;
+    return rc;
+}
+
 static int
 finish_user_interrupt(struct app_state *app, const char *turn_id, char *error, size_t error_size)
 {
@@ -3441,11 +3474,16 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             !usable_summary;
         if (snag_app_request_build(app, steering, cycle, &credential, &projection,
                                   &count_method, &request_body, error, sizeof(error)) < 0) {
+            bool image_boundary = errno == EFBIG &&
+                strstr(error, "Image request exceeds 12 MiB") != NULL;
             if (app->interrupt_requested) goto user_interrupted;
             if (app->session.goal_status == SNAG_GOAL_ACTIVE)
                 app->history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
-            result = finish_turn_failure(app, retry, turn_id, NULL, "context",
-                error[0] ? error : "response context projection failed", error, sizeof(error));
+            result = image_boundary ? finish_turn_for_compaction(app, retry, turn_id, "context",
+                "Open turn accumulated more than 12 MiB of image input; completed results were retained "
+                "and the turn was closed so its history can be compacted.", error, sizeof(error)) :
+                finish_turn_failure(app, retry, turn_id, NULL, "context",
+                    error[0] ? error : "response context projection failed", error, sizeof(error));
             goto out;
         }
         if (snag_app_provider_activity(app, true) < 0) goto fail;

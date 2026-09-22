@@ -2283,6 +2283,16 @@ test_image_tool_replay(void)
             for (unsigned int extra = 0; extra < 15u; ++extra)
                 assert(json_array_append(all, image_result) == 0);
             assert(snag_media_request_check(many, error, sizeof(error)) == 0);
+            json_t *compact_many = json_deep_copy(many);
+            uint64_t omitted = 0;
+            assert(compact_many);
+            assert(snag_media_compaction_prepare(compact_many, &omitted,
+                                                  error, sizeof(error)) == 0);
+            assert(omitted == 16u);
+            assert(!snag_media_request_has_images(compact_many));
+            assert(snag_media_request_check(compact_many, error, sizeof(error)) == 0);
+            assert(snag_media_request_has_images(many));
+            json_decref(compact_many);
             json_decref(many);
             {
                 /* Same rule at the content layer: many small images pass, an

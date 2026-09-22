@@ -50,6 +50,11 @@ int snag_media_token_bound(const json_t *, uint64_t configured_image_tokens,
 /* Accepts a request or its input array. */
 bool snag_media_request_has_images(const json_t *request);
 
+/* Compaction summarizes prior model-visible history. Omit already-consumed
+ * image bytes from that auxiliary request while retaining the surrounding
+ * text/tool transcript and the immutable journal assets. */
+int snag_media_compaction_prepare(json_t *request, uint64_t *omitted,
+                                  char *error, size_t error_size);
 int snag_media_request_check(const json_t *request, char *error, size_t error_size);
 int snag_media_remove(int session_fd, char *error, size_t error_size);
 

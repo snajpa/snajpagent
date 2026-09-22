@@ -689,6 +689,41 @@ test_many_queued_turns(struct snag_store *store, const char *workspace)
     snag_session_close(&session);
 }
 
+static void
+test_image_compaction_control(struct snag_store *store, const char *workspace)
+{
+    struct snag_session session;
+    char id[SNAG_ID_HEX_LEN + 1u], error[256] = {0};
+    uint64_t source_seq;
+
+    snag_session_init(&session);
+    assert(snag_session_create(store, &session, workspace, "default", "model", "high",
+                               error, sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+    source_seq = session.next_seq - 1u;
+    commit_event(&session, "control_requested", checked_json(json_pack("{s:i,s:s,s:I}",
+        "control", (int)SNAG_CONTROL_COMPACT, "origin", "image_boundary",
+        "source_seq", (json_int_t)source_seq)));
+    assert(session.pending_controls & SNAG_CONTROL_COMPACT);
+    assert(session.compact_control_image_boundary);
+    assert(session.compact_control_source_seq == source_seq);
+    snag_session_close(&session);
+
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(session.pending_controls & SNAG_CONTROL_COMPACT);
+    assert(session.compact_control_image_boundary);
+    assert(session.compact_control_source_seq == source_seq);
+    commit_event(&session, "control_started",
+                 checked_json(json_pack("{s:i}", "control", (int)SNAG_CONTROL_COMPACT)));
+    commit_event(&session, "control_finished",
+                 checked_json(json_pack("{s:i}", "control", (int)SNAG_CONTROL_COMPACT)));
+    assert(!(session.pending_controls & SNAG_CONTROL_COMPACT));
+    assert(!session.compact_control_image_boundary);
+    assert(session.compact_control_source_seq == 0u);
+    snag_session_close(&session);
+}
+
 int
 main(void)
 {
@@ -1197,6 +1232,7 @@ main(void)
     test_audio_usage(&store,workspace);
     test_voice_queue(&store,workspace);
     test_banner_steering(&store,workspace);
+    test_image_compaction_control(&store, workspace);
 
     test_many_queued_turns(&store,workspace);
     snag_store_close(&store);

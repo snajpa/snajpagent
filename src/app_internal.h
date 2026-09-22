@@ -218,6 +218,7 @@ json_t *snag_app_response_interrupted_data(const char *turn_id, const char *resp
                                           const char *reason, json_t *partial_public);
 json_t *snag_app_turn_failed_data(const char *turn_id, const char *class_name, const char *message);
 int snag_app_compact_requested(struct app_state *app, char *error, size_t error_size);
+int snag_app_compact_image_boundary(struct app_state *app, char *error, size_t error_size);
 int snag_app_compact_after_turn(struct app_state *app, uint64_t input_tokens_bound, const char *count_method,
                                char *error, size_t error_size);
 int snag_app_compact_before_response(struct app_state *app, const struct snag_credential *credential,

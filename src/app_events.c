@@ -591,10 +591,14 @@ snag_app_request_build(struct app_state *app, const json_t *steering, unsigned i
         cycle, steering, app->turn_capacity.max_output_tokens,
         app->turn_capacity.max_output_tokens, app->config, continuation_scope,
         &app->turn_instructions, visibility, projection, error, error_size, &control);
+    int context_errno = errno;
     bool cancelled = rc < 0 && errno == ECANCELED;
     if (snag_app_provider_activity(app, false) < 0) return -1;
     if (cancelled) (void)snag_app_active_input_pump(app, 0u);
-    if (rc < 0) return -1;
+    if (rc < 0) {
+        errno = context_errno;
+        return -1;
+    }
     memcpy(projection->continuation_scope, continuation_scope, sizeof(projection->continuation_scope));
     *count_method = "unknown";
     rc = 0;

@@ -538,6 +538,47 @@ out:
 }
 
 int
+snag_media_compaction_prepare(json_t *request, uint64_t *omitted,
+                              char *error, size_t error_size)
+{
+    static const char marker[] =
+        "Historical image bytes omitted from the compaction request. The image was already "
+        "presented in its original response cycle and remains in durable session media.";
+    json_t *input = json_is_array(request) ? request : json_object_get(request, "input");
+    uint64_t count = 0;
+
+    if (!json_is_array(input)) goto invalid;
+    for (size_t i = 0; i < json_array_size(input); ++i) {
+        json_t *item = json_array_get(input, i);
+        json_t *parts = json_object_get(item, "content");
+        if (!parts) parts = json_object_get(item, "output");
+        for (size_t j = 0; j < json_array_size(parts); ++j) {
+            json_t *part = json_array_get(parts, j);
+            const char *type = snag_json_string(part, "type");
+            if (!type || strcmp(type, "input_image")) continue;
+            const char *url = snag_json_string(part, "image_url");
+            const char *encoded = url ? strstr(url, ";base64,") : NULL;
+            if (!encoded || strncmp(url, "data:image/", 11u)) goto invalid;
+            encoded += 8u;
+            size_t len = strlen(encoded);
+            if (!len || len % 4u) goto invalid;
+            if (json_array_set_new(parts, j, json_pack("{s:s,s:s}",
+                    "type", "input_text", "text", marker)) < 0) goto failed;
+            ++count;
+        }
+    }
+    if (omitted) *omitted = count;
+    return 0;
+invalid:
+    snag_errorf(error, error_size, "Compaction input contains invalid image data");
+    errno = EINVAL;
+    return -1;
+failed:
+    snag_errorf(error, error_size, "Cannot prepare image history for compaction");
+    return -1;
+}
+
+int
 snag_media_request_check(const json_t *request, char *error, size_t error_size)
 {
     json_t *input = json_object_get(request, "input");
