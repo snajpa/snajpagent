@@ -1159,18 +1159,22 @@ inside a fence are displayed literally, including pipe tables.
 Top-level prose paragraphs are bulleted, with one empty row above and below,
 even while a paragraph is streaming.  Adjacent paragraphs share that row;
 headings, lists, code, tables and prompts use the same paragraph boundary.
-Streamed terminal text holds the unfinished word until whitespace or the end of
+Cursor-capable terminals receive streamed model prose as logical lines and own
+their native soft wrapping.  Existing rows therefore reflow after resize, and
+terminal copy does not include synthetic newlines or continuation spaces.  The
+dumb-terminal fallback holds an unfinished word until whitespace or the end of
 an item, keeping attached punctuation together across provider chunks and
-Markdown style changes.  Words that fit a row wrap as a unit; longer tokens
-stream in bounded pieces.  Intervening messages flush pending text in order.
+Markdown style changes.  Words that fit a fallback row wrap as a unit; longer
+tokens stream in bounded pieces.  Intervening messages flush pending text in order.
 The editable draft also wraps whole words when they fit a terminal row; longer
 words use terminal wrapping.  These displayed wraps do not insert submitted
 newlines.  Explicit newlines and leading whitespace remain part of the draft.
 Any prompt after non-prompt content has one empty row above it.  Consecutive
 submitted prompts may be adjacent.
 .PP
-Prose continuation lines, whether the renderer generated the wrap or the
-provider supplied the line break, align two spaces below the paragraph text.
+Provider-supplied prose continuation lines align two spaces below the paragraph
+text.  Generated dumb-terminal fallback continuations use the same alignment;
+native terminal soft wraps add no bytes to copied text.
 Code-block whitespace and the provider's original text are unchanged.  The live prompt is displayed
 immediately on cursor-capable terminals, without waiting for a quiet period.
 Before new output it is erased

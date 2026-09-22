@@ -5583,7 +5583,7 @@ def test_editor_during_blocked_engine(key=b"\r"):
             tsan = "libtsan" in Path(f"/proc/{child.pid}/maps").read_text()
             assert len(list(tasks.iterdir())) == 4 + int(tsan)
         child.drain(0.4)
-        child.wait(b"engine-block-start\r\r\n\r\r\n")
+        child.wait(b"engine-block-start \r\r\n\r\r\n")
         assert len(set(re.findall("[◴◷◶◵]", child.buf[after:].decode()))) > 1
         after = child.send_wait(b"/verbose 2" + key, b"verbosity: 2 (previews)", start=after, timeout=0.25)
         after = child.send_wait(b"/verbose 7" + key, b"/verbose expects one integer from 0 through 6",

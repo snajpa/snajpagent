@@ -871,14 +871,13 @@ def run_status_case(binary, root):
             raise AssertionError(f"prompt redraw erased streamed text:\n{middle}")
         if "working…" in middle:
             raise AssertionError(f"removed activity row reappeared:\n{middle}")
-        # A word that fits a row wraps as a unit, so the streamed paragraph
-        # continues on an indented line instead of breaking inside the word.
-        final = terminal.wait("\n  status-second-fragment", timeout=3.0,
-                              join_wrapped=True)
+        # Cursor-capable terminals own wrapping, so joined scrollback retains
+        # the logical model line without a renderer-added continuation prefix.
+        expected = "status-first-fragment status-second-fragment"
+        final = terminal.wait(expected, timeout=3.0, join_wrapped=True)
         assert_order(final, ["status-first-fragment", "status-second-fragment"])
         _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
         completed = event_list(events, "response_completed")
-        expected = "status-first-fragment status-second-fragment"
         if len(completed) != 1 or completed[0]["data"]["items"][0]["text"] != expected:
             raise AssertionError("status scenario changed durable assistant text")
         terminal.exit()
@@ -900,7 +899,7 @@ def wait_normalized(terminal, needle, timeout=1.0):
 
 
 def assert_live_paragraph_gap(terminal, first, last):
-    screen = terminal.capture()
+    screen = terminal.capture(join_wrapped=True)
     lines = screen.splitlines()
     starts = [i for i, line in enumerate(lines) if first in line]
     ends = [i for i, line in enumerate(lines) if last in line]
@@ -945,9 +944,8 @@ def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None, ty
         expected = split + " and finish finalword"
         wait_prose("Paced")
         wait_prose("Paced tokens")
-        pending, split_prefix_at = wait_prose("Paced tokens form")
-        assert not prose_pattern(prefix).search(pending), pending
-        assert_live_paragraph_gap(terminal, "• Paced", "form")
+        _, split_prefix_at = wait_prose(prefix)
+        assert_live_paragraph_gap(terminal, "• Paced", "inter")
         if typing:
             terminal.send_text("steer draft")
             wait_normalized(terminal, f"{DEFAULT_ACTIVE_PROMPT} steer draft")
@@ -966,7 +964,6 @@ def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None, ty
             terminal.send_text(" more")
             wait_normalized(terminal, f"{DEFAULT_ACTIVE_PROMPT} steer draft more")
         final_screen, final_at = wait_prose(split + " and finish", timeout=0.35)
-        assert not prose_pattern(expected).search(final_screen), final_screen
         if "working…" in final_screen:
             raise AssertionError(
                 "activity appeared while the paced public item was open"
@@ -976,7 +973,8 @@ def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None, ty
         held_screen = terminal.capture(join_wrapped=True)
         if not prose_pattern(split + " and finish").search(held_screen):
             raise AssertionError("completed words disappeared during the provider pause")
-        assert not prose_pattern(expected).search(held_screen), held_screen
+        if not prose_pattern(expected).search(held_screen):
+            raise AssertionError("native soft wrapping hid the final streamed fragment")
         assert_live_paragraph_gap(terminal, "• Paced", "finish")
         if typing:
             screen = terminal.capture(join_wrapped=True)
@@ -1155,13 +1153,14 @@ def run_render_case(binary, root):
     agents_text = "Fixture terminal instructions.\n"
     agents.write_text(agents_text, encoding="utf-8")
     config = case / "config.ini"
-    write_config(config, True, pause_ms=1500)
+    write_config(config, True, pause_ms=2000)
     dotdir = case / "state"
     with fixture_terminal(TmuxTerminal(
         case / "terminal", binary, workspace, dotdir, config, 32, 18
     ), case / "screen.txt") as terminal:
         terminal.wait(DEFAULT_IDLE_PROMPT, join_wrapped=True)
-        terminal.submit_wait("terminal_render", "delta-extraordinary")
+        terminal.submit_wait("terminal_render", "delta-extraordinary",
+                             join_wrapped=True)
         terminal.send_text("draft")
         first = wait_wrapped_fragment(
             terminal, f"{DEFAULT_ACTIVE_PROMPT} draft"
@@ -1172,14 +1171,14 @@ def run_render_case(binary, root):
         ])
         if re.search(r"(?m)^• alpha beta gamma", first) is None:
             raise AssertionError(f"model prose did not begin with a bullet:\n{first}")
-        if "• alpha beta gamma\n  delta-extraordinary" not in first:
+        if "• alpha beta gamma delta-extraordinary" not in first:
             raise AssertionError(
-                f"a word that fits a row did not wrap as a unit:\n{first}"
+                f"joined model prose contains a synthetic wrap boundary:\n{first}"
             )
 
         time.sleep(0.1)
-        pause_started = time.monotonic()
         terminal.send_text(" plus")
+        pause_started = time.monotonic()
         wait_wrapped_fragment(terminal, f"{DEFAULT_ACTIVE_PROMPT} draft plus")
         time.sleep(1.1)
         paused = terminal.capture(join_wrapped=True)
@@ -1189,7 +1188,7 @@ def run_render_case(binary, root):
             )
         second = terminal.wait("explicit café € line", timeout=4.0,
                                join_wrapped=True)
-        if time.monotonic() - pause_started < 1.2:
+        if time.monotonic() - pause_started < 1.7:
             raise AssertionError("model output resumed before the typing pause")
         assert_wrapped_order(second, [
             "explicit café € line", f"{DEFAULT_ACTIVE_PROMPT} draft plus",
@@ -1202,11 +1201,8 @@ def run_render_case(binary, root):
         if "extraordinary zeta eta theta" not in normalize_space(second):
             raise AssertionError(f"temporary prompt split the streamed paragraph:\n{second}")
 
-        repeat_pause_started = time.monotonic()
         terminal.send_text(" again with long resize text")
-        wait_wrapped_fragment(
-            terminal, f"{DEFAULT_ACTIVE_PROMPT} draft plus again"
-        )
+        repeat_pause_started = time.monotonic()
         exact_margin = (
             f"{DEFAULT_ACTIVE_PROMPT} draft plus again with long resize text"
         )
@@ -1214,15 +1210,16 @@ def run_render_case(binary, root):
         resized = terminal.wait(exact_margin, join_wrapped=True)
         if resized.count(exact_margin) != 1:
             raise AssertionError(f"resized composer was duplicated:\n{resized}")
-        time.sleep(0.75)
+        time.sleep(1.1)
         paused_again = terminal.capture(join_wrapped=True)
         if "supercalifragilisticexpialidocious" in paused_again:
             raise AssertionError(
                 f"repeated editing did not restart the typing pause:\n{paused_again}"
             )
 
-        final = terminal.wait("control:\\x1B[31m", timeout=5.0)
-        if time.monotonic() - repeat_pause_started < 1.2:
+        final = terminal.wait("control:\\x1B[31m", timeout=5.0,
+                              join_wrapped=True)
+        if time.monotonic() - repeat_pause_started < 1.7:
             raise AssertionError("repeated typing pause ended too early")
         # The turn completes here, so the composer may already carry the idle
         # marker; count the draft text itself, which must appear exactly once.
@@ -1245,8 +1242,8 @@ def run_render_case(binary, root):
                 "draft plus again with long resize text",
             ],
         )
-        if "alpha beta gamma delta-extraordinary" in final:
-            raise AssertionError("model output was hard-wrapped instead of word-wrapped")
+        if "alpha beta gamma delta-extraordinary" not in joined:
+            raise AssertionError("joined model output retained a synthetic wrap boundary")
         completed = event_list(events, "response_completed")
         if len(completed) != 1 or completed[0]["data"]["items"][0]["text"] != RENDER_TEXT:
             raise AssertionError("rendering changed durable assistant text")
@@ -1754,13 +1751,42 @@ def run_punctuation_case(binary, root):
         "changes and updating\n  the saved state.",
     )
     paragraphs = [sample[2:].replace("\n  ", " ") for sample in samples]
-    paragraphs.append(
+    paragraphs.extend((
+        "The per-slot run is progressing normally; early loss is already around 0.05–0.08 with "
+        "45.9 GB GPU memory used. While it trains, I’m recording the method changes and rejected "
+        "branches in the maintained Tuzing research note so the next paid decision remains grounded "
+        "in evidence rather than chat history.",
+        "The slot-choice adapter finished 96 updates and 593,877 tokens in 23.5 minutes; training "
+        "loss saturated near zero. I’m now evaluating steps 32/64/96 with bounded candidate scoring. "
+        "The only positive result is 82/82 choices and 13/13 reconstructed records.",
+        "The method cleared its exact gate: step 96 scored **82/82 slot choices and 13/13 "
+        "reconstructed records**, including **8/8 E5 and 5/5 E7**. This is the first learned "
+        "exact-maintenance result that generalizes across the sealed synthetic validation split. "
+        "The adapter remains diagnostic-only; I’m now landing the actual product boundary—externally "
+        "catalogued, per-slot choices compiled into canonical managed records—before admitting a "
+        "replay-anchored full-parameter candidate.",
         "That file already records session events and is replayed to reconstruct state. "
         "Its existing write ordering is WAL-like: persist the event before adopting the "
         "corresponding in-memory change. But the event log itself is the durable record, "
-        "not a temporary WAL feeding another database."
-    )
+        "not a temporary WAL feeding another database.",
+    ))
     text = "\n\n".join(paragraphs) + "\n\nI haven't changed this: punctuation, not breaks. café́界 wrap-done"
+
+    def assert_copy_safe(screen, markdown):
+        first = ("• " if markdown else "") + paragraphs[0]
+        start = screen.find(first)
+        end = screen.find("wrap-done", start)
+        if start < 0 or end < 0:
+            raise AssertionError(f"logical prose is missing after terminal reflow:\n{screen}")
+        logical = screen[start:end + len("wrap-done")]
+        for paragraph in text.split("\n\n"):
+            visible = paragraph.replace("**", "") if markdown else paragraph
+            expected = ("• " if markdown else "") + visible
+            if expected not in logical:
+                raise AssertionError(f"copied prose retained a synthetic wrap:\n{logical}")
+        if "\n  " in logical:
+            raise AssertionError(f"copied prose retained a continuation prefix:\n{logical}")
+
     provider = FakeResponses()
     paused, proceed = threading.Event(), threading.Event()
 
@@ -1821,32 +1847,24 @@ def run_punctuation_case(binary, root):
                     wait_normalized(terminal, "wrap-done", timeout=10.0)
                     wait_for_terminal_event(case / "s", {"turn_completed"}, 5.0)
                     screen = terminal.capture()
+                    joined = terminal.capture(join_wrapped=True)
                     (case / "screen.txt").write_text(screen)
                     rows = screen.splitlines()
                     first = next(i for i, row in enumerate(rows) if "I’ll fold" in row)
                     last = next(i for i, row in enumerate(rows) if "wrap-done" in row)
                     visible = "".join(rows[first:last + 1]).replace("• ", "")
-                    assert re.sub(r"\s", "", visible) == re.sub(r"\s", "", text), screen
-                    assert "WAL-like:" in screen, screen
-                    assert "record," in screen, screen
-                    assert not any(re.match(r"^\s*[:,.!?;]", row)
-                                   for row in rows[first:last + 1]), screen
+                    expected_visible = text.replace("**", "") if markdown else text
+                    assert re.sub(r"\s", "", visible) == re.sub(r"\s", "", expected_visible), screen
+                    assert "WAL-like:" in joined, joined
+                    assert "record," in joined, joined
                     assert not rows[first - 1].strip(), screen
                     assert not rows[last + 1].strip(), screen
                     assert sum("> draft" in row for row in rows) == 1, screen
-                    # No artificial paragraph boundaries, no punctuation-alone
-                    # early line breaks; all non-final rows fill the available row
-                    # except a fitting next word moved intact to its successor.
-                    for i in range(first, last):
-                        row, following = rows[i], rows[i + 1]
-                        if not row.strip() or not following.strip():
-                            continue
-                        if markdown:
-                            assert following.startswith("  "), (row, following, screen)
-                        tail = following.lstrip(" •")
-                        word = re.match(r"[^\s]+", tail).group()
-                        cells = sum(0 if c == "́" else 2 if c == "界" else 1 for c in row.rstrip())
-                        assert cells + 1 + len(word) > width, (row, following, screen)
+                    assert_copy_safe(joined, markdown)
+                    if width == 110 and markdown:
+                        terminal.resize(24, 20)
+                        time.sleep(0.1)
+                        assert_copy_safe(terminal.capture(join_wrapped=True), markdown)
                     _, events = read_events(case / "s")
                     response = event_list(events, "response_completed")[-1]
                     assert response["data"]["items"][0]["text"] == text

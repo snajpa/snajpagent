@@ -1118,6 +1118,24 @@ write_wrap_span(struct snag_render *render, const char *text, size_t len)
 }
 
 static int
+write_native_span(struct snag_render *render, const unsigned char *text, size_t len,
+                  unsigned char style)
+{
+    while (len) {
+        size_t n = 1u;
+
+        /* Terminal-safe writes expand a tab from their span's start column. */
+        if (*text != '\t')
+            while (n < len && text[n] != '\t') ++n;
+        if (public_write(render, (const char *)text, n, style) < 0) return -1;
+        text += n;
+        len -= n;
+    }
+    render->public_column = render->term->output_columns;
+    return 0;
+}
+
+static int
 flush_wrap_pending(struct snag_render *render)
 {
     const char *text = (const char *)render->wrap_pending.data;
@@ -1215,6 +1233,13 @@ write_wrapped(struct snag_render *render, const unsigned char *text, size_t len)
         if (len) memset(render->wrap_styles.data + render->wrap_styles.len, style, len);
         render->wrap_styles.len += len;
         return 0;
+    }
+    /* A capable terminal owns visual wrapping and can therefore reflow it on
+     * resize and omit it from clipboard text. Dumb terminals still use the
+     * bounded whole-word fallback below. */
+    if (render->term && render->term->capable && public_terminal(render)) {
+        if (flush_wrap_pending(render) < 0) return -1;
+        return write_native_span(render, text, len, style);
     }
     for (size_t i = 0u; i < len;) {
         size_t n = snag_utf8_size(text[i]);

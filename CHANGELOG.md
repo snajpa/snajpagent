@@ -6,6 +6,11 @@
 
 ## 0.99.8 — September 22, 2026
 
+- Let cursor-capable terminals own model-text soft wrapping, so narrowing the
+  terminal reflows existing prose cleanly and clipboard text no longer contains
+  renderer-inserted newlines or two-space continuation prefixes. Preserve real
+  model newlines and keep bounded whole-word wrapping for dumb terminals.
+
 - Show every nonblank interactive submission in scrollback immediately while
   keeping stdin live for type-ahead. Hold the ready composer until the engine
   acknowledges the submitted boundary, and keep whitespace-only Enter entirely

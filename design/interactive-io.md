@@ -84,23 +84,24 @@ and terminal state, and joins the presentation thread; no thread is detached.
 
 ## Streamed Output And Typing
 
-- Public model text is soft-wrapped at word boundaries to the current terminal
-  width. Explicit model newlines remain explicit, and a single word wider than
-  the terminal may hard-wrap. Trailing punctuation stays with the preceding
-  text. Whitespace-delimited words stay together, including hyphens, apostrophes
-  and attached punctuation; an overlong word can hard-wrap.
-  Generated Markdown prose soft-wrap continuation rows begin with two spaces,
-  aligned below the paragraph text after `• `. A separator space that would
-  otherwise be the first character printed after that wrap is omitted.
-- The renderer retains an unfinished fitting word across provider/style chunks
-  until whitespace or item completion establishes its boundary. Complete words
-  then wrap together. Overlong words and combining sequences flush at bounded
-  width/byte limits. Receipt, durable public text and terminal painting are
-  distinct; the presentation buffer never changes stored text.
+- Cursor-capable terminals receive one logical model line and own its native
+  soft wrapping. Resize can therefore reflow existing rows, and terminal copy
+  omits synthetic newlines and continuation spaces. Explicit model newlines
+  remain explicit. The dumb-terminal fallback wraps at word boundaries to the
+  current width, keeps trailing punctuation and whitespace-delimited words
+  together, and hard-wraps an overlong word when necessary. Generated fallback
+  prose continuations begin with two spaces below the text after `• `; a leading
+  separator space at such a wrap is omitted.
+- The dumb-terminal renderer retains an unfinished fitting word across
+  provider/style chunks until whitespace or item completion establishes its
+  boundary. Complete words then wrap together. Overlong words and combining
+  sequences flush at bounded width/byte limits. Receipt, durable public text
+  and terminal painting are distinct; the presentation buffer never changes
+  stored text.
 - Wrapping is a terminal presentation detail. Stored response text, partial
   response events, redirected output, and provider protocol data remain byte
   exact and do not gain presentation newlines. Markdown-enabled and literal
-  terminal output use this same wrapping implementation.
+  terminal output share the same native or fallback wrapping policy.
 - The live composer is displayed immediately, including during model output;
   on cursor-capable terminals there is no quiet-output delay. The plain-text
   fallback cannot erase a live composer and never splits output to repaint it. `»` (U+00BB RIGHT-POINTING DOUBLE ANGLE
@@ -501,8 +502,9 @@ non-steering behavior as `/queue TEXT`.
 
 ## Acceptance
 
-- Rendering coverage demonstrates word wrapping without changing delivered
-  text. PTY coverage demonstrates transient active-turn composers, pause
+- Rendering coverage demonstrates native soft wrapping across a resize and
+  fallback word wrapping without changing delivered text. PTY coverage
+  demonstrates transient active-turn composers, pause
   reset on continued typing, output resumption after the configured delay, and
   byte-exact persisted text. It also rejects whole-line erase and prompt replay
   during ordinary insertion, deletion, and cursor movement.

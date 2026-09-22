@@ -52,16 +52,17 @@ above and below, including while incomplete. Adjacent paragraphs share one row;
 headings, lists, quotations, fences, tables and prompts respect the same boundary.
 The renderer counts existing terminal newlines and adds only the missing ones.
 Repeated source blank lines at prose boundaries cannot multiply the gap; internal
-code whitespace is preserved. Every prose continuation line continues with two
-spaces aligned with the first paragraph character after `• `, whether the
-renderer generated the wrap or the provider supplied the line break, including
-margin wraps in words split across provider
-deltas. An unfinished fitting word is buffered across provider/style chunks
-until whitespace or item completion, so its punctuation stays attached.
-Overlong words hard-wrap through bounded output. Apostrophes are not special
-break markers. When that wrap would otherwise print a separator space as
-the first character on the new row, that one space is omitted. Explicit
-non-blank source line breaks within one paragraph remain unbulleted. Headings,
+code whitespace is preserved. Cursor-capable terminals receive each paragraph
+as one logical line, so their native soft wraps reflow on resize and copy without
+synthetic newlines or continuation spaces. Provider-supplied non-blank line
+breaks remain explicit and continue with two spaces below the paragraph text.
+The dumb-terminal fallback also aligns generated continuation lines there,
+buffers an unfinished fitting word across provider/style chunks until whitespace
+or item completion, and keeps its punctuation attached. Overlong fallback words
+hard-wrap through bounded output. Apostrophes are not special break markers.
+When a fallback wrap would otherwise print a separator space as the first
+character on the new row, that one space is omitted. Explicit non-blank source
+line breaks within one paragraph remain unbulleted. Headings,
 list items, block quotes, and fenced code keep their own structural markers
 instead of gaining a redundant paragraph bullet.
 
@@ -142,10 +143,10 @@ safe. Candidate text is replayed through the ordinary Markdown path if the
 required delimiter row does not validate.
 The renderer resets and reapplies active attributes around each terminal write
 so composer redraws, status transitions, errors, and later output cannot inherit
-model styling. Existing word wrapping, exact-margin handling, typing pauses,
-and stream abort behavior remain in force. Markdown text and literal terminal
-text share the same punctuation-aware wrapping path; Markdown does not carry a
-separate word-break implementation.
+model styling. Existing native/fallback wrapping, exact-margin handling, typing pauses, and
+stream abort behavior remain in force. Markdown text and literal terminal text
+share the same wrapping policy; Markdown does not carry a separate word-break
+implementation.
 
 Networked final answers remain local rollout content. Only `irc_send` publishes
 model-authored IRC text. When explicit local sends or remote non-operator
@@ -172,7 +173,8 @@ table.
 - Deterministic tmux coverage checks a genuinely paced Markdown response before
   completion, its byte-exact durable form, static Markdown in the IRC chat UI,
   rollout prose bullets, unbulleted IRC prose, genuine IRC list bullets,
-  two-space rollout continuation lines, discarded wrap-separator spaces,
+  native soft-wrap copy/resize behavior, fallback two-space rollout
+  continuation lines, discarded wrap-separator spaces,
   aligned and narrow tables, exact submitted/model and every-block-type/prompt
   boundaries, the disabled setting, width safety, and absence of raw escape
   leakage.
