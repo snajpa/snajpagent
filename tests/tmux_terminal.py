@@ -174,9 +174,12 @@ class FakeResponses:
         for item in reversed(request.get("input", [])):
             if item.get("role") == "user" and isinstance(item.get("content"), str):
                 content = item["content"]
+                if content.startswith("[snajpagent host continuation — not a new user message]\nrecover"):
+                    return "recover"
                 if content.startswith(("[IRC room snapshot;", "[snajpagent host continuation —",
                                        "snajpagent recovery (host-generated):", "Previous snajpagent turn:",
-                                       "The provider rejected the preceding", "The preceding response")):
+                                       "The provider rejected the preceding", "The preceding response",
+                                       "Pure durable-turn continuation after process resume")):
                     continue  # Host context/continuation is not new operator input.
                 if content.startswith("[IRC endpoint=") and " id=" in content:
                     continue  # Supplemental durable event, not a new scheduler turn.
@@ -7948,6 +7951,7 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
         failed = [False]
         tool_issued = [False]
         rebuilt = [False]
+        mega_calls = [0]
 
         def send(handler, status, payload, sse=False):
             body = payload.encode() if sse else json.dumps(payload).encode()
@@ -8014,6 +8018,14 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
             latest = provider.latest_user(request)
             if latest != "recover":
                 send(handler, 200, provider.response_body(sequence, "seed answer"), True)
+            elif mode == "sized" and mega_calls[0] < 12:
+                mega_calls[0] += 1
+                send(handler, 200, provider.function_body(sequence, f"mega-{mega_calls[0]}",
+                    "exec_command", {"command": "printf x >> effects; printf '%04096d' 0",
+                        "workdir": str(case), "yield_ms": 1000}), True)
+            elif mode == "sized" and not failed[0]:
+                failed[0] = True
+                overflow(handler, sequence)
             elif mode == "exact" and not tool_issued[0]:
                 tool_issued[0] = True
                 send(handler, 200, provider.function_body(sequence, "counted-read", "exec_command", {
@@ -8037,6 +8049,8 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
                 f"base_url=http://127.0.0.1:{provider.port}\napi_key=${{SNAJPAGENT_IRC_UI_KEY}}\n"
                 f"native_compaction=false\nexact_token_count={'true' if exact else 'false'}\n"
                 "auto_compact_input_tokens=0\n[model-limit local/host-model]\nmax_input_tokens=10000\n")
+        if mode == "sized":
+            base = base.replace("max_input_tokens=10000", "max_input_tokens=300000")
         config.write_text(base)
         config.chmod(0o600)
         def run(text, sid=None, model=None):
@@ -8089,19 +8103,29 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
                     for counted, created in zip(counts, creates):
                         assert counted["input"] == created["input"] and counted["tools"] == created["tools"]
                     assert "retained tool data" in json.dumps(creates[-1])
-                else:
-                    assert event_list(events, "compaction_completed"), mode
+                elif mode != "sized":
+                    if mode not in ("scope-switch", "proactive"):
+                        assert event_list(events, "context_rebased"), mode
+                        assert not event_list(events, "compaction_started"), mode
+                    else:
+                        assert event_list(events, "compaction_completed"), mode
                     if mode == "scope-switch":
                         # The carried compaction is served on its first attempt:
                         # the boundary is kept, so there is no re-walk to shrink.
                         # The engine-side checks are in the scope-switch block.
                         pass
-                    elif mode != "proactive":
+                    elif mode == "scope-switch":
                         assert 2 <= len(summaries) <= (64 if mode == "sized" else 8)
                         assert len(json.dumps(summaries[-1])) < len(json.dumps(summaries[0]))
                 if mode == "sized":
-                    assert len(event_list(events, "response_capacity_rejected")) >= 2
-                    assert len(event_list(events, "compaction_completed")) >= 2
+                    assert mega_calls[0] == 12
+                    assert (case / "effects").read_text() == "x" * 12
+                    assert len(event_list(events, "tool_finished")) == 12
+                    assert len(event_list(events, "response_capacity_rejected")) == 1
+                    assert not event_list(events, "compaction_started"), "rejected mega-turn re-compacted"
+                    assert len(event_list(events, "context_rebased")) == 1
+                    assert "mega-1" not in json.dumps(creates[-1]["input"])
+                    assert "read_session_history" in json.dumps(creates[-1]["tools"])
                     assert not event_list(events, "turn_recovery")
                     assert provider.latest_user(creates[-1]) == "recover"
                 if mode == "scope-switch":
@@ -8110,7 +8134,8 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
                                    and e["data"]["compact_id"] == completed["compact_id"])
                     assert started["source_seq"] >= previous_start["source_seq"]
                     assert started["continuation_scope"] == completed["continuation_scope"]
-                    assert completed["continuation_scope"] != previous["continuation_scope"]
+                    assert completed["compact_id"] == previous["compact_id"]
+                    assert event_list(events, "context_rebased")
                     assert not event_list(events, "turn_recovery") and not event_list(events, "turn_failed")
                     # The carry is visible in the turn request under the new
                     # binding: it leads with the previous scope's summary text.
@@ -8120,9 +8145,8 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
                     assert recover_requests, "no request under the new binding"
                     assert "original scoped summary" in json.dumps(recover_requests[0]), \
                         "the carried summary did not reach the new binding's request"
-                    # The carried text travels in the new binding's compaction
-                    # source (pinned by tests/test_context.c); by the time the
-                    # turn runs, its own summary has replaced it.
+                    assert "original scoped summary" not in json.dumps(recover_requests[-1]), \
+                        "recovery replayed the rejected summary"
             replay = subprocess.run([binary, "--dotdir", str(dotdir), "-l"], capture_output=True, text=True)
             assert replay.returncode == 0, replay.stderr
             print(f"token accounting production {mode}: ok", flush=True)

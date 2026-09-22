@@ -30,6 +30,15 @@ let
       check = previous.check.overrideAttrs (_: {
         makeFlags = [ "SUBDIRS=lib" ];
       });
+      # ALSA 1.2.14 uses the obsolete bzero spelling at one site. This uClibc
+      # intentionally hides that BSD declaration, while portable memset is
+      # already available and has identical zero-initialization semantics.
+      alsa-lib = previous.alsa-lib.overrideAttrs (old: {
+        postPatch = (old.postPatch or "") + ''
+          substituteInPlace src/pcm/pcm.c --replace-fail \
+            'bzero(&res, sizeof(res));' 'memset(&res, 0, sizeof(res));'
+        '';
+      });
       uclibc-ng = (previous.uclibc-ng.override {
         extraConfig = ''
           UCLIBC_HAS_LIBUTIL y
@@ -337,7 +346,13 @@ out123_sleep(unsigned long useconds)
     # Font consumers use pkg-config; the optional config script pulls target Bash.
     freetype = (previous.freetype.override { makeWrapper = null; }).overrideAttrs (old: {
       configureFlags = builtins.filter (flag: flag != "--enable-freetype-config")
-        old.configureFlags ++ [ "--disable-freetype-config" ];
+        old.configureFlags ++ [ "--disable-freetype-config" "--without-brotli" ];
+      # FreeType enables Brotli automatically when pkg-config finds it, but this
+      # target does not need compressed WOFF2 fonts. Keep Brotli out of the
+      # static legacy closure instead of carrying an unused decoder into fc-cache.
+      propagatedBuildInputs = builtins.filter
+        (dependency: (dependency.pname or dependency.name or "") != "brotli")
+        (old.propagatedBuildInputs or []);
       postInstall = "";
     });
   });

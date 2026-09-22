@@ -6,12 +6,15 @@
 
 ## 0.99.8 — September 22, 2026
 
+- Stop repeated provider context-limit failures in mega-turns by rebasing the
+  active request onto current input and bounded history access, without
+  re-executing completed calls or repeatedly compacting old checkpoints.
+  The same recovery works after restart and without an active goal.
+
 - Recover long open turns whose accumulated image inputs exceed the local
   12 MiB request bound instead of replaying the same deterministic failure.
-  Close the oversized turn once with completed results retained, durably target
-  its terminal event for compaction, omit already-presented historical pixels
-  before compaction budget accounting, and compact every required chunk before
-  a fresh turn may send a normal request. Durable session media remains intact.
+  Retain completed results, omit already-presented historical pixels before
+  compaction budget accounting, and keep durable session media intact.
 
 - Let cursor-capable terminals own model-text soft wrapping, so narrowing the
   terminal reflows existing prose cleanly and clipboard text no longer contains

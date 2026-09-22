@@ -204,7 +204,7 @@ test_history_orientation(struct snag_store *store, const char *workspace)
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, steering, 0u, false,
         NULL, NULL, &instructions, NULL, &projection, error, sizeof(error), &control) == 0);
     input = json_object_get(projection.create_request.value, "input");
-    assert(message_matching(input, "Pure durable-goal continuation after process resume"));
+    assert(message_matching(input, "Pure durable-turn continuation after process resume"));
     assert(message_matching(input, "Full history orientation after process resume"));
     assert(message_matching(input, "durable orientation objective"));
     assert(message_matching(input, SNAG_GOAL_CONTINUATION_TEXT));
@@ -222,7 +222,7 @@ test_history_orientation(struct snag_store *store, const char *workspace)
     input = json_object_get(projection.create_request.value, "input");
     assert(message_matching(input, SNAG_GOAL_CONTINUATION_TEXT));
     assert(!message_matching(input, "historical transcript sentinel"));
-    assert(!message_matching(input, "Pure durable-goal continuation after process resume"));
+    assert(!message_matching(input, "Pure durable-turn continuation after process resume"));
 
     snag_context_projection_free(&projection);
     json_decref(steering);

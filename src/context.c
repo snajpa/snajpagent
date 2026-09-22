@@ -1066,16 +1066,15 @@ pending_steering_at_seq(const struct snag_session *session, uint64_t seq)
 }
 
 static int
-prepare_goal_recovery_orientation(struct context_builder *builder,
+prepare_history_recovery_orientation(struct context_builder *builder,
                                   char *error, size_t error_size)
 {
     const struct snag_session *session = builder->session;
 
     if (!session || !session->active_turn || !session->active_turn_id[0] ||
-        !session->active_goal || strcmp(session->active_prompt,
-                                        SNAG_GOAL_CONTINUATION_TEXT) != 0)
+        !session->active_prompt || !*session->active_prompt)
         return snag_fail(error, error_size, EINVAL,
-            "goal recovery orientation requires an active automatic goal turn");
+            "history recovery orientation requires an active turn with input");
     if (snag_instructions_match_metadata(builder->instructions,
             session->active_instructions, error, error_size) < 0) return -1;
     if (json_array_size(builder->steering) != admitted_steering_count(session))
@@ -1101,10 +1100,11 @@ prepare_goal_recovery_orientation(struct context_builder *builder,
      * controller metadata and can treat the retry as an unsolicited reply. */
     if (append_host_input(builder->request_input, session->active_prompt) < 0) return -1;
     return append_host_input(builder->request_input,
-        "Pure durable-goal continuation after process resume or context recovery: no prior "
+        "Pure durable-turn continuation after process resume or context recovery: no prior "
         "provider transcript, compacted conversation, completed tool call, tool output, or "
-        "retained image is replayed into this request. Continue from the full goal/controller "
-        "orientation below and inspect bounded durable history only when a concrete fact is needed.");
+        "retained image is replayed into this request. Continue from the current input and "
+        "goal/controller orientation below; inspect bounded durable history when a concrete "
+        "fact or completed tool result is needed, without rerunning completed calls.");
 }
 
 /* An admitted room event is user input, so it waits for the same safe boundary
@@ -2057,20 +2057,17 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             "files, contact IRC, or change goals. These restrictions persist "
             "through steering and compaction and end with this turn.") < 0) goto out;
     builder.base_request_count = json_array_size(builder.request_input);
-    bool usable_summary = summary_seq && !rebased_without_summary;
-    bool goal_recovery_only = control &&
+    bool history_recovery_only = control &&
         control->history_orientation == SNAG_HISTORY_ORIENTATION_RECOVERY &&
-        control->goal_recovery_rebase &&
-        session->goal_status == SNAG_GOAL_ACTIVE && session->active_goal &&
-        !usable_summary;
-    if (goal_recovery_only) {
-        if (prepare_goal_recovery_orientation(&builder, error, error_size) < 0) goto out;
+        control->goal_recovery_rebase;
+    if (history_recovery_only) {
+        if (prepare_history_recovery_orientation(&builder, error, error_size) < 0) goto out;
     } else {
         /* context_rebased covers the earlier journal without a compacted
-         * summary. Reinstall the active automatic request on every later
+         * summary. Reinstall the active request on every later
          * response cycle; response_started host snapshots deliberately carry
          * controller state, not this conversation boundary. */
-        if (rebased_without_summary && session->active_goal &&
+        if (rebased_without_summary && session->active_prompt &&
             append_host_input(builder.request_input, session->active_prompt) < 0) goto out;
         if (summary_seq && !rebased_without_summary) {
             int install_rc = compact_scope_portable ?

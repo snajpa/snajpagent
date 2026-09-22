@@ -1467,7 +1467,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *reason = snag_json_string(data, "reason");
         if (!snag_json_exact_keys(data, "reason turn_id") || !current_turn ||
             session->response_open || !all_pending_finished(session) ||
-            !reason || strcmp(reason, "goal_recovery") != 0) goto invalid;
+            !snag_string_in(reason, "goal_recovery turn_recovery")) goto invalid;
         session->context_rebase_seq = seq;
     } else if (strcmp(type, "response_started") == 0) {
         static const char keys[] =

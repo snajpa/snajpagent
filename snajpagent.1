@@ -2095,21 +2095,25 @@ that endpoint continue using measured response usage and bounded overflow recove
 no local tokenizer or byte-to-token conversion is substituted.
 .PP
 Proactive compaction uses exact preflight or the last compatible measured input
-usage.  New uncounted additions may exceed the limit; a recognized context
-rejection before any output triggers compact-and-retry recovery without
-replaying completed tools. Rejection remains recorded across new chat or queued
-input, interruption and resume; the matching context is reduced before its next
-request. Further rejections can reduce additional complete prefixes, with up to
-eight reductions per turn attempt and eight source selections per summary.
-An unchanged rejected request or irreducible group remains an error.
-Summary requests shrink to smaller complete
-history groups only after exact counts or actual context rejections, not estimates.
-An irreducible prompt/group fails clearly; the durable history is retained.
-After a provider/model/account change, recovery carries the saved covered
-boundary and portable summary text. If the selected binding still rejects the
-request, it compacts only complete uncovered prefixes or reduces the retained
-summary under its own capacity. Later conversation remains available, and
-interrupted recovery retains every previously completed compact output.
+usage. Compaction covers complete older event prefixes; each completed summary
+records its covered boundary and later compactions start at that boundary, not
+at the beginning of the journal. Previously presented image payloads are omitted
+from summary requests. New uncounted additions may exceed the limit. If a
+provider rejects a request before any output, the next attempt retains the
+current turn and controls but omits the earlier provider transcript, compacted
+conversation, images and completed tool calls. The model can use bounded
+.B read_session_history
+and
+.B read_tool_output
+tools to recover a needed fact without replaying those calls. This recovery
+survives interruption and resume, including a turn without an active goal.
+A rejection of the minimal recovery request fails that attempt rather than
+starting another compaction loop. Known hard-budget overflow may compact one
+tractable prefix first; if the active turn remains too large, it takes the same
+history-oriented recovery path. Irreducible current input fails clearly; the
+durable history is retained. Normal same-model compaction remains available,
+and a provider/model/account switch retains the saved covered boundary and
+portable summary where it fits.
 .TP
 .B native_compaction
 Use the provider's native compaction endpoint.  When false, use an ordinary

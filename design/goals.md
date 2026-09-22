@@ -201,6 +201,22 @@ its own immutable code and manual, not all later source fixes.
 `turn_recovery` closes a failed response attempt without closing its turn or
 managed processes. Consecutive recovery notices are coalesced in model context;
 detailed diagnostics stay in the journal. Explicit interruption remains separate.
+An oversized active turn is not an invitation to repeatedly summarize its entire
+tool transcript. Compaction is a *covered-prefix* checkpoint: a completed
+compaction retains its source event boundary and later compaction starts from
+that boundary plus only the bounded seam needed for continuity. Earlier images,
+completed calls and tool results remain in the journal, not a new compaction
+source. Normal same-binding compaction of a tractable prefix remains useful.
+If the provider rejects a turn request or token count despite these checkpoints,
+the next attempt presents the current user input, admitted steering, current goal
+and host controls without automatic replay of the old transcript or compaction
+output. It points to bounded history/goal/output retrieval so the model can
+recover the specific facts it needs. A successful request records `context_rebased`
+before `response_started`; a rejected or interrupted attempt never claims that
+boundary. Completed tool effects are not re-executed. A second rejection of the
+already minimal request fails the turn rather than re-compacting the same
+checkpoint. Resume and model switching retain the same boundary semantics,
+including when there is no active goal.
 Failed compaction attempts record `compaction_interrupted` with reason `error`
 before retry or exit. Replay also clears an unfinished compaction at a recorded
 turn recovery/termination boundary for journals written by older versions that

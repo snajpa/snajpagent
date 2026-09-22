@@ -3138,37 +3138,6 @@ finish_turn_failure(struct app_state *app, struct turn_retry *retry, const char 
     return rc < 0 ? 3 : 4;
 }
 
-/* A deterministic local request-shape failure cannot improve by replaying the
- * same open turn. Close it while retaining its completed journal results, so
- * an active goal can compact that completed turn and continue in a fresh one. */
-static int
-finish_turn_for_compaction(struct app_state *app, const struct turn_retry *retry,
-                           const char *turn_id, const char *class_name,
-                           const char *message, char *error, size_t error_size)
-{
-    struct turn_retry terminal = *retry;
-    int rc;
-
-    terminal.compaction_bounded = true;
-    rc = finish_turn_failure(app, &terminal, turn_id, "context_compaction",
-                             class_name, message, error, error_size);
-    if (rc != 4) return rc;
-    if (!(app->session.pending_controls & SNAG_CONTROL_COMPACT) ||
-        !app->session.compact_control_image_boundary) {
-        if (commit_event(app, "control_requested",
-                json_pack("{s:i,s:s,s:I}", "control", (int)SNAG_CONTROL_COMPACT,
-                          "origin", "image_boundary", "source_seq",
-                          (json_int_t)(app->session.next_seq - 1u)),
-                error, error_size) < 0) {
-            (void)app_error(app, error);
-            return 3;
-        }
-    }
-    app->control_requested = true;
-    if (apply_controls(app) < 0) return 3;
-    return rc;
-}
-
 static int
 finish_user_interrupt(struct app_state *app, const char *turn_id, char *error, size_t error_size)
 {
@@ -3443,20 +3412,11 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         if (snag_input_observation_matches(&app->session.capacity_rejection,
                 app->turn_provider->name, app->turn_model, app->turn_effort,
                 provider_source_hash, app->session.compact_id)) {
-            bool compacted = false;
             app->history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
             app->history_recovery_rebase = true;
             apply_capacity_ceiling(app, app->turn_provider, app->turn_model, &app->turn_capacity);
-            int recovery = hard_compaction_attempts++ < 8u ?
-                snag_app_compact_after_capacity_rejection(app, &credential,
-                    &compacted, error, sizeof(error)) : -1;
-            if (recovery == 0 && compacted) goto rebuild_request;
-            if (recovery == 1 && (app->steering_requested || app->control_requested))
-                goto steered_before_response;
-            if (recovery == 2 && app->interrupt_requested) goto user_interrupted;
-            result = finish_turn_failure(app, retry, turn_id, NULL, "context",
-                error[0] ? error : "context capacity rejection could not be reduced", error, sizeof(error));
-            goto out;
+            /* A rejected provider request survives a restart. Project the
+             * durable current turn, not another pass over the same archive. */
         }
         steering = snag_app_steering_snapshot(&app->session);
         error[0] = '\0';
@@ -3466,23 +3426,21 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 error[0] ? error : "response context projection failed", error, sizeof(error));
             goto out;
         }
-        bool usable_summary = app->session.compact_seq &&
-            app->session.context_rebase_seq <= app->session.compact_seq;
-        bool pure_goal_recovery = app->history_orientation == SNAG_HISTORY_ORIENTATION_RECOVERY &&
-            app->history_recovery_rebase &&
-            app->session.goal_status == SNAG_GOAL_ACTIVE && app->session.active_goal &&
-            !usable_summary;
+        bool pure_history_recovery = app->history_orientation == SNAG_HISTORY_ORIENTATION_RECOVERY &&
+            app->history_recovery_rebase;
         if (snag_app_request_build(app, steering, cycle, &credential, &projection,
                                   &count_method, &request_body, error, sizeof(error)) < 0) {
             bool image_boundary = errno == EFBIG &&
                 strstr(error, "Image request exceeds 12 MiB") != NULL;
             if (app->interrupt_requested) goto user_interrupted;
+            if (image_boundary && !pure_history_recovery) {
+                app->history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
+                app->history_recovery_rebase = true;
+                goto rebuild_request;
+            }
             if (app->session.goal_status == SNAG_GOAL_ACTIVE)
                 app->history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
-            result = image_boundary ? finish_turn_for_compaction(app, retry, turn_id, "context",
-                "Open turn accumulated more than 12 MiB of image input; completed results were retained "
-                "and the turn was closed so its history can be compacted.", error, sizeof(error)) :
-                finish_turn_failure(app, retry, turn_id, NULL, "context",
+            result = finish_turn_failure(app, retry, turn_id, NULL, "context",
                     error[0] ? error : "response context projection failed", error, sizeof(error));
             goto out;
         }
@@ -3494,17 +3452,13 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             goto steered_before_response;
         if (provider_rc == 2 && app->interrupt_requested) goto user_interrupted;
         if (provider_rc == SNAG_PROVIDER_CONTEXT_OVERFLOW) {
-            bool compacted = false;
-            app->history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
-            app->history_recovery_rebase = true;
-            int recovery = hard_compaction_attempts++ < 8u ?
-                snag_app_compact_after_capacity_rejection(app, &credential,
-                    &compacted, error, sizeof(error)) : -1;
-            if (recovery == 0 && compacted) goto rebuild_request;
-            if (recovery == 1 && app->steering_requested) goto steered_before_response;
-            if (recovery == 2 && app->interrupt_requested) goto user_interrupted;
+            if (!pure_history_recovery) {
+                app->history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
+                app->history_recovery_rebase = true;
+                goto rebuild_request;
+            }
             result = finish_turn_failure(app, retry, turn_id, NULL, "context",
-                error[0] ? error : "input-token counter rejected irreducible context", error, sizeof(error));
+                "input-token counter rejected the minimal recovery request", error, sizeof(error));
             goto out;
         }
         if (provider_rc != 0 && provider_rc != SNAG_APP_COUNT_SKIPPED) {
@@ -3522,6 +3476,17 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             if (over_hard) {
                 app->history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
                 app->history_recovery_rebase = true;
+            }
+            if (over_hard && !pure_history_recovery && hard_compaction_attempts) {
+                /* One checkpoint can summarize an ordinary prefix. If the
+                 * active turn still exceeds the window, let the model fetch
+                 * needed history rather than walking every older tool group. */
+                goto rebuild_request;
+            }
+            if (over_hard && pure_history_recovery) {
+                result = finish_turn_failure(app, retry, turn_id, NULL, "context",
+                    "minimal recovery request exceeds the model input window", error, sizeof(error));
+                goto out;
             }
             if (over_hard && (hard_compaction_attempts >= 8u ||
                  strcmp(over_budget_request_hash, projection.create_request.sha256) == 0)) {
@@ -3573,8 +3538,9 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             goto out;
         }
         if (app->control_requested) goto rebuild_request;
-        if (pure_goal_recovery && commit_event(app, "context_rebased",
-                json_pack("{s:s,s:s}", "reason", "goal_recovery", "turn_id", turn_id),
+        if (pure_history_recovery && commit_event(app, "context_rebased",
+                json_pack("{s:s,s:s}", "reason", app->session.active_goal ? "goal_recovery" :
+                    "turn_recovery", "turn_id", turn_id),
                 error, sizeof(error)) < 0) {
             report_message = error[0] ? error : "recovery context boundary could not be persisted";
             goto fail;
@@ -3715,7 +3681,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                            (app->stream_error[0] ? app->stream_error :
                             "assistant output could not be delivered") :
                            (error[0] ? error : "provider response failed"));
-            if (replay_safe && hard_compaction_attempts < 8u &&
+            if (replay_safe && !pure_history_recovery &&
                 strcmp(rejected_request_hash, projection.create_request.sha256)) {
                 if (commit_event(app, "response_capacity_rejected",
                         snag_app_response_capacity_rejected_data(
