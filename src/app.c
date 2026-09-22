@@ -3407,13 +3407,16 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
          * durable pending steers have been admitted to this request, keeping
          * the edge set would spuriously interrupt or add an empty cycle. */
         if (!app->session.steering_deferred) app->steering_requested = false;
+        bool minimal_rebased_request = app->session.context_rebase_seq > app->session.compact_seq &&
+            !app->session.context_rebase_has_new_results &&
+            strcmp(app->session.context_rebase_turn_id, turn_id) == 0;
         /* A rejection survives fresh-input handoff, interruption and reopen. Only
          * the rejected binding and uncompacted lineage require preparation here. */
         if (snag_input_observation_matches(&app->session.capacity_rejection,
                 app->turn_provider->name, app->turn_model, app->turn_effort,
                 provider_source_hash, app->session.compact_id)) {
             app->history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
-            app->history_recovery_rebase = true;
+            app->history_recovery_rebase = !minimal_rebased_request;
             apply_capacity_ceiling(app, app->turn_provider, app->turn_model, &app->turn_capacity);
             /* A rejected provider request survives a restart. Project the
              * durable current turn, not another pass over the same archive. */
@@ -3426,8 +3429,9 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 error[0] ? error : "response context projection failed", error, sizeof(error));
             goto out;
         }
-        bool pure_history_recovery = app->history_orientation == SNAG_HISTORY_ORIENTATION_RECOVERY &&
-            app->history_recovery_rebase;
+        bool pure_history_recovery = minimal_rebased_request ||
+            (app->history_orientation == SNAG_HISTORY_ORIENTATION_RECOVERY &&
+             app->history_recovery_rebase);
         if (snag_app_request_build(app, steering, cycle, &credential, &projection,
                                   &count_method, &request_body, error, sizeof(error)) < 0) {
             bool image_boundary = errno == EFBIG &&
@@ -3484,8 +3488,13 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 goto rebuild_request;
             }
             if (over_hard && pure_history_recovery) {
+                char failure[256];
+                (void)snprintf(failure, sizeof(failure),
+                    "minimal recovery request input count %llu (%s) exceeds hard budget %llu",
+                    (unsigned long long)projection.input_tokens_bound, count_method,
+                    (unsigned long long)app->turn_capacity.hard_input_tokens);
                 result = finish_turn_failure(app, retry, turn_id, NULL, "context",
-                    "minimal recovery request exceeds the model input window", error, sizeof(error));
+                    failure, error, sizeof(error));
                 goto out;
             }
             if (over_hard && (hard_compaction_attempts >= 8u ||
@@ -3538,7 +3547,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             goto out;
         }
         if (app->control_requested) goto rebuild_request;
-        if (pure_history_recovery && commit_event(app, "context_rebased",
+        if (app->history_recovery_rebase && commit_event(app, "context_rebased",
                 json_pack("{s:s,s:s}", "reason", app->session.active_goal ? "goal_recovery" :
                     "turn_recovery", "turn_id", turn_id),
                 error, sizeof(error)) < 0) {

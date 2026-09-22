@@ -216,7 +216,11 @@ before `response_started`; a rejected or interrupted attempt never claims that
 boundary. Completed tool effects are not re-executed. A second rejection of the
 already minimal request fails the turn rather than re-compacting the same
 checkpoint. Resume and model switching retain the same boundary semantics,
-including when there is no active goal.
+including when there is no active goal. Steering within that turn retains the
+existing rebase instead of recording a second checkpoint. A newly completed
+model response after that boundary supplies fresh history; if it later exceeds
+the limit, the same turn can advance to another checkpoint rather than being
+treated as an unchanged minimal request.
 Failed compaction attempts record `compaction_interrupted` with reason `error`
 before retry or exit. Replay also clears an unfinished compaction at a recorded
 turn recovery/termination boundary for journals written by older versions that

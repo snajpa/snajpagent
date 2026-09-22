@@ -7937,7 +7937,8 @@ def run_interrupted_history_case(binary, root):
 
 
 def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "openrouter", "llama", "vllm",
-                                                  "summary-irreducible", "summary-auth", "proactive", "scope-switch", "sized")):
+                                                  "summary-irreducible", "summary-auth", "proactive",
+                                                  "scope-switch", "sized", "rebase-growth")):
     """Exercise production count/summary recovery using the existing local server."""
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     for mode in modes:
@@ -7952,6 +7953,7 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
         tool_issued = [False]
         rebuilt = [False]
         mega_calls = [0]
+        rejections = [0]
 
         def send(handler, status, payload, sse=False):
             body = payload.encode() if sse else json.dumps(payload).encode()
@@ -7959,7 +7961,7 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
                            "text/event-stream" if sse else "application/json", status)
 
         def overflow(handler, sequence):
-            if mode in ("scope-switch", "sized"):
+            if mode in ("scope-switch", "sized", "rebase-growth"):
                 send(handler, 200, provider.event("response.failed", {
                     "type": "response.failed", "response": {"error": {
                         "code": "context_length_exceeded", "message": "Your input exceeds the context window."}}}), True)
@@ -7988,7 +7990,7 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
             if is_summary_request(request):
                 summaries.append(request)
                 size = len(json.dumps(request["input"]))
-                if mode == "sized":
+                if mode in ("sized", "rebase-growth"):
                     if size > 6000:
                         overflow(handler, sequence)
                     else:
@@ -8018,25 +8020,27 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
             latest = provider.latest_user(request)
             if latest != "recover":
                 send(handler, 200, provider.response_body(sequence, "seed answer"), True)
-            elif mode == "sized" and mega_calls[0] < 12:
+            elif mode in ("sized", "rebase-growth") and mega_calls[0] in (6, 12) and \
+                    rejections[0] < mega_calls[0] // (6 if mode == "rebase-growth" else 12):
+                rejections[0] += 1
+                overflow(handler, sequence)
+            elif mode in ("sized", "rebase-growth") and mega_calls[0] < 12:
                 mega_calls[0] += 1
                 send(handler, 200, provider.function_body(sequence, f"mega-{mega_calls[0]}",
                     "exec_command", {"command": "printf x >> effects; printf '%04096d' 0",
                         "workdir": str(case), "yield_ms": 1000}), True)
-            elif mode == "sized" and not failed[0]:
-                failed[0] = True
-                overflow(handler, sequence)
             elif mode == "exact" and not tool_issued[0]:
                 tool_issued[0] = True
                 send(handler, 200, provider.function_body(sequence, "counted-read", "exec_command", {
                     "command": "cat input.txt", "workdir": str(case), "pty": False,
                     "stdin": None, "timeout_ms": None, "yield_ms": 1000, "max_output_tokens": 1000}), True)
             # The simulated history budget is independent of fixed policy wording.
-            elif (mode == "sized" and len(json.dumps([
+            elif (mode in ("sized", "rebase-growth") and len(json.dumps([
                     item for item in request["input"]
                     if item.get("role") not in ("system", "developer")])) > 6500):
                 overflow(handler, sequence)
-            elif (mode not in ("exact", "count-overflow", "proactive", "sized") and not failed[0]):
+            elif (mode not in ("exact", "count-overflow", "proactive", "sized", "rebase-growth")
+                  and not failed[0]):
                 failed[0] = True
                 overflow(handler, sequence)
             else:
@@ -8049,7 +8053,7 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
                 f"base_url=http://127.0.0.1:{provider.port}\napi_key=${{SNAJPAGENT_IRC_UI_KEY}}\n"
                 f"native_compaction=false\nexact_token_count={'true' if exact else 'false'}\n"
                 "auto_compact_input_tokens=0\n[model-limit local/host-model]\nmax_input_tokens=10000\n")
-        if mode == "sized":
+        if mode in ("sized", "rebase-growth"):
             base = base.replace("max_input_tokens=10000", "max_input_tokens=300000")
         config.write_text(base)
         config.chmod(0o600)
@@ -8103,27 +8107,20 @@ def run_token_accounting_cases(binary, root, modes=("exact", "count-overflow", "
                     for counted, created in zip(counts, creates):
                         assert counted["input"] == created["input"] and counted["tools"] == created["tools"]
                     assert "retained tool data" in json.dumps(creates[-1])
-                elif mode != "sized":
+                elif mode not in ("sized", "rebase-growth"):
                     if mode not in ("scope-switch", "proactive"):
                         assert event_list(events, "context_rebased"), mode
                         assert not event_list(events, "compaction_started"), mode
                     else:
                         assert event_list(events, "compaction_completed"), mode
-                    if mode == "scope-switch":
-                        # The carried compaction is served on its first attempt:
-                        # the boundary is kept, so there is no re-walk to shrink.
-                        # The engine-side checks are in the scope-switch block.
-                        pass
-                    elif mode == "scope-switch":
-                        assert 2 <= len(summaries) <= (64 if mode == "sized" else 8)
-                        assert len(json.dumps(summaries[-1])) < len(json.dumps(summaries[0]))
-                if mode == "sized":
+                if mode in ("sized", "rebase-growth"):
                     assert mega_calls[0] == 12
                     assert (case / "effects").read_text() == "x" * 12
                     assert len(event_list(events, "tool_finished")) == 12
-                    assert len(event_list(events, "response_capacity_rejected")) == 1
+                    expected = 2 if mode == "rebase-growth" else 1
+                    assert len(event_list(events, "response_capacity_rejected")) == expected
                     assert not event_list(events, "compaction_started"), "rejected mega-turn re-compacted"
-                    assert len(event_list(events, "context_rebased")) == 1
+                    assert len(event_list(events, "context_rebased")) == expected
                     assert "mega-1" not in json.dumps(creates[-1]["input"])
                     assert "read_session_history" in json.dumps(creates[-1]["tools"])
                     assert not event_list(events, "turn_recovery")

@@ -1469,6 +1469,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             session->response_open || !all_pending_finished(session) ||
             !snag_string_in(reason, "goal_recovery turn_recovery")) goto invalid;
         session->context_rebase_seq = seq;
+        memcpy(session->context_rebase_turn_id, session->active_turn_id,
+               sizeof(session->context_rebase_turn_id));
+        session->context_rebase_has_new_results = false;
     } else if (strcmp(type, "response_started") == 0) {
         static const char keys[] =
             "irc_seq baseline_sha256 capability_version compact_id capacity_source count_method "
@@ -1787,6 +1790,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             clause = "graph";
             goto invalid;
         }
+        if (session->context_rebase_seq && !strcmp(session->context_rebase_turn_id,
+                                                     session->active_turn_id))
+            session->context_rebase_has_new_results = true;
         if (snag_input_observation_matches(&session->capacity_rejection,
                 session->active_accounting.provider, session->active_accounting.model,
                 session->active_accounting.effort, session->active_accounting.provider_source_sha256,

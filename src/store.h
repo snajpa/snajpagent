@@ -184,6 +184,8 @@ struct snag_session {
     /* Events at or below this durable recovery boundary are available through
      * read_session_history but never re-enter automatic provider context. */
     uint64_t context_rebase_seq;
+    char context_rebase_turn_id[SNAG_ID_HEX_LEN + 1u];
+    bool context_rebase_has_new_results;
     uint64_t active_compact_source_seq;
     uint64_t capacity_ceiling_input_tokens;
     uint64_t input_received_ms, input_first_context_ms;

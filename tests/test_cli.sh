@@ -1146,8 +1146,8 @@ assert not any(event["type"] == "turn_failed" for event in events)
 assert len([event for event in events if event["type"] == "turn_completed"]) == 1
 PY
 
-# A typed capacity rejection before output closes the response, compacts one
-# complete prefix, and retries exactly one changed provider request.
+# A typed capacity rejection before output closes the response and retries
+# from the durable current turn without replaying old compaction checkpoints.
 recovery_state="$root/capacity-recovery-state"
 mkdir -m 700 "$recovery_state"
 $bin --dotdir "$recovery_state" -e -- ping >/dev/null 2>"$root/recovery-first.err"
@@ -1163,19 +1163,20 @@ starts = [event for event in events if event["type"] == "response_started"
           and event["data"]["turn_id"] == turn["data"]["turn_id"]]
 rejected = [event for event in events
             if event["type"] == "response_capacity_rejected"]
-compacted = [event for event in events if event["type"] == "compaction_started"
-             and event["data"]["reason"] == "provider_rejection"]
-assert len(starts) == 2 and len(rejected) == 1 and len(compacted) == 1
+rebased = [event for event in events if event["type"] == "context_rebased"
+           and event["data"]["turn_id"] == turn["data"]["turn_id"]]
+assert len(starts) == 2 and len(rejected) == 1 and len(rebased) == 1
+assert not any(event["type"] == "compaction_started" for event in events)
 assert starts[0]["data"]["request_sha256"] == rejected[0]["data"]["request_sha256"]
 assert starts[1]["data"]["request_sha256"] != starts[0]["data"]["request_sha256"]
 assert rejected[0]["data"]["observed_hard_input_tokens"] == 89999
 assert len(rejected[0]["data"]["provider_source_sha256"]) == 64
 assert starts[1]["data"]["capacity_source"] == "observed"
 assert starts[1]["data"]["hard_input_tokens"] == 89999
-assert starts[0]["seq"] < rejected[0]["seq"] < compacted[0]["seq"] < starts[1]["seq"]
+assert starts[0]["seq"] < rejected[0]["seq"] < rebased[0]["seq"] < starts[1]["seq"]
 PY
 
-# A second rejection with no remaining complete source is still terminal.
+# A second rejection of the minimal recovery request is terminal.
 second_state="$root/capacity-second-state"
 mkdir -m 700 "$second_state"
 printf '[agent]\nmax_turn_retries=0\n[provider openai]\n' > "$second_state/config.ini"
@@ -1194,7 +1195,11 @@ rejected = [event for event in events
             if event["type"] == "response_capacity_rejected"]
 failed = [event for event in events if event["type"] == "turn_failed"
           and event["data"]["turn_id"] == turn["data"]["turn_id"]]
-assert len(starts) == 2 and len(rejected) == 2 and len(failed) == 1
+assert len(starts) == 2 and len(rejected) == 1 and len(failed) == 1
+assert len([event for event in events if event["type"] == "context_rebased"
+            and event["data"]["turn_id"] == turn["data"]["turn_id"]]) == 1
+assert len([event for event in events if event["type"] == "response_failed"
+            and event["data"]["class"] == "context"]) == 1
 assert failed[0]["data"]["class"] == "context"
 PY
 

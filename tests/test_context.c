@@ -213,6 +213,8 @@ test_history_orientation(struct snag_store *store, const char *workspace)
 
     commit_event(&session, "context_rebased", checked_json(json_pack("{s:s,s:s}",
         "reason", "goal_recovery", "turn_id", session.active_turn_id)));
+    assert(!strcmp(session.context_rebase_turn_id, session.active_turn_id));
+    assert(!session.context_rebase_has_new_results);
     commit_event(&session, "turn_recovery", checked_json(json_pack("{s:s,s:s,s:s}",
         "class", "internal", "message", "resume retry", "turn_id", session.active_turn_id)));
     control.history_orientation = SNAG_HISTORY_ORIENTATION_NONE;
@@ -225,6 +227,11 @@ test_history_orientation(struct snag_store *store, const char *workspace)
     assert(!message_matching(input, "Pure durable-turn continuation after process resume"));
 
     snag_context_projection_free(&projection);
+    commit_event(&session, "response_started", response_started(session.active_turn_id,
+        "09000000000000000000000000000004", NULL));
+    commit_event(&session, "response_completed", response_completed(session.active_turn_id,
+        "09000000000000000000000000000004", "new work after rebase"));
+    assert(session.context_rebase_has_new_results);
     json_decref(steering);
     snag_session_close(&session);
 }

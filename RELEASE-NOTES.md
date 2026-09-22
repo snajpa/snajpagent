@@ -12,15 +12,17 @@ Later source changes are listed under Unreleased in CHANGELOG.md.
 
 - Long open turns that accumulate more than 12 MiB of image input now recover
   without replaying the same local projection error. The runtime retains every
-  completed result, closes the oversized turn once, durably compacts through
-  its terminal event, and omits already-presented historical pixels only from
-  compaction requests; durable media and normal request semantics remain intact.
+  completed result and omits already-presented historical pixels from
+  compaction requests. A rejected active request continues from the current
+  input with bounded history access instead of re-compacting the same turn;
+  durable media and completed tool effects remain intact.
 - Context capacity follows the selected binding's explicit limits and advertised
   maximum. A smaller normal working window remains a policy value and does not
   replace the hard ceiling. Compaction starts at the effective boundary or a
-  typed provider rejection, compacts complete call/result groups in overlapping
-  chunks, and retains the current goal and exact pending steering through
-  recovery.
+  typed provider rejection. Normal compaction covers complete call/result
+  groups in overlapping chunks; a rejected active turn rebases to current
+  input, current goal and exact pending steering, with the historical journal
+  reachable through bounded tools rather than replayed automatically.
 - Resume preserves completed tools, unfinished outcomes and the selected
   provider/model binding. Same-model, same-family and smaller-binding changes no
   longer replay completed calls, switch back to the previous model for summary

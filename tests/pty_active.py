@@ -1202,7 +1202,7 @@ def test_steering_during_pre_response_compaction():
     resumed.exit_now()
 
 
-def test_steering_during_capacity_recovery_compaction():
+def test_steering_during_capacity_recovery_rebase():
     child = Child([], DEFAULT_IDLE_PROMPT)
     answer_end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(answer_end)
@@ -1211,8 +1211,8 @@ def test_steering_during_capacity_recovery_compaction():
     child = Child(["--resume", session_id], DEFAULT_ACCOUNTED_IDLE_PROMPT)
     child.send(b"capacity_recovery_steer\r")
     deadline = time.monotonic() + 4.0
-    while not any(e["type"] == "compaction_started" and
-                  e["data"]["reason"] == "provider_rejection"
+    while not any(e["type"] == "response_started" and
+                  e["data"]["cycle"] == 2
                   for e in events(session_id)):
         assert time.monotonic() < deadline
         child.read_once(0.02)
@@ -1224,12 +1224,7 @@ def test_steering_during_capacity_recovery_compaction():
     turn = [item for item in log if item["type"] == "turn_started"][-1]
     turn_id = turn["data"]["turn_id"]
     rejected = turn_events(log, "response_capacity_rejected", turn_id)
-    interrupted = [item for item in log
-                   if item["type"] == "compaction_interrupted"]
-    compactions = [item for item in log
-                   if item["type"] == "compaction_started" and
-                   item["data"]["reason"] == "provider_rejection"]
-    completed = [item for item in log if item["type"] == "compaction_completed"]
+    rebased = turn_events(log, "context_rebased", turn_id)
     steering = turn_events(log, "steering_added", turn_id)
     starts = turn_events(log, "response_started", turn_id)
     assert len(rejected) == 1
@@ -1237,16 +1232,14 @@ def test_steering_during_capacity_recovery_compaction():
     assert re.fullmatch(
         r"[0-9a-f]{64}", rejected[0]["data"]["provider_source_sha256"]
     )
-    assert len(interrupted) == 1
-    assert interrupted[0]["data"]["reason"] == "steering"
-    assert len(compactions) == 2 and len(completed) == 1
-    assert len(steering) == 1 and len(starts) == 2
-    assert starts[1]["data"]["steering_ids"] == [
+    assert len(rebased) == 1 and rebased[0]["data"]["reason"] == "turn_recovery"
+    assert not [item for item in log if item["type"] == "compaction_started"]
+    assert len(steering) == 1 and len(starts) >= 3
+    assert starts[-1]["data"]["steering_ids"] == [
         steering[0]["data"]["steering_id"]
     ]
-    assert (rejected[0]["seq"] < compactions[0]["seq"] <
-            interrupted[0]["seq"] < compactions[1]["seq"] <
-            completed[0]["seq"] < starts[1]["seq"])
+    assert (rejected[0]["seq"] < rebased[0]["seq"] < starts[1]["seq"] <
+            steering[0]["seq"] < starts[-1]["seq"])
 
     resumed = Child(["--resume", session_id])
     prompt_end = resumed.wait(b"\xe2\x80\xba ")
@@ -5725,7 +5718,7 @@ if __name__ == "__main__":
     test_read_only_queue_replay_and_edit()
     test_managed_command_steering_and_tab_queue()
     test_steering_during_pre_response_compaction()
-    test_steering_during_capacity_recovery_compaction()
+    test_steering_during_capacity_recovery_rebase()
     test_agents_md_config()
     test_active_ctrl_c_clears_draft()
     test_ctrl_c_cancels_partial_editor_states()

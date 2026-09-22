@@ -291,6 +291,14 @@ snag_app_provider_run(struct app_state *app, const char *prompt, const json_t *s
         if (error_size) (void)snprintf(error, error_size, "fixture context rejected");
         return snag_errno(EOVERFLOW);
     }
+    /* Keep the rebased request in flight so the PTY fixture can steer at
+     * that exact boundary instead of relying on the old compact endpoint. */
+    if (strcmp(prompt, "capacity_recovery_steer") == 0 && cycle == 2u)
+        for (unsigned int i = 0u; i < 100u; ++i) {
+            int pump_rc = snag_app_active_input_pump(app, 20u);
+
+            if (pump_rc != 0) return pump_rc;
+        }
     {
         json_t *input = json_object_get(create_request, "input");
         bool read_only = app->session.active_read_only;
