@@ -369,12 +369,14 @@ class FakeResponses:
         if mode in ("exit-tool", "exit-managed") and not any(
                 item.get("type") == "function_call_output"
                 for item in request.get("input", [])):
-            body = self.function_body(sequence, "call_exit", "exec_command", {
+            args = {
                 "command": 'printf "%s" "$$" > command.pid; exec sleep 30',
                 "workdir": str(self.tool_workspace), "stdin": None,
                 "pty": False, "timeout_ms": None, "max_output_tokens": None,
-                "yield_ms": 1 if mode == "exit-managed" else 0,
-            }).encode()
+            }
+            if mode == "exit-managed":
+                args["yield_ms"] = 1
+            body = self.function_body(sequence, "call_exit", "exec_command", args).encode()
         else:
             if mode == "exit-stream":
                 body = self.response_body(sequence, "exit stream prefix\n")
@@ -447,7 +449,8 @@ class FakeResponses:
                 "command": command, "workdir": str(self.tool_workspace),
                 "stdin": None, "pty": False,
                 "timeout_ms": None if mode in ("steer", "cancel") else 3000,
-                "yield_ms": 1 if mode in ("yield", "single-request") else 0,
+                "yield_ms": 1 if mode in ("yield", "single-request") else
+                            0 if mode in ("steer", "cancel") else 1000,
                 "max_output_tokens": None,
             }) for i, command in enumerate(commands)]
             return self.functions_body(sequence, batch)
@@ -4811,6 +4814,9 @@ def run_ctrl_d_cases(binary, root, provider, environment):
         provider.exit_release.clear()
         config = case / "config.ini"
         write_irc_config(config, provider.port, "host-model")
+        if mode == "tool":
+            with config.open("a") as out:
+                out.write("[tool]\ndefault_yield_ms=0\nmax_wait_ms=60000\n")
         terminal = TmuxTerminal(case / "terminal", binary, workspace,
                                 case / "state", config, 120, 24,
                                 environment=environment)
