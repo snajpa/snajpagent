@@ -613,7 +613,11 @@ linux_legacy = (root / "nix/linux-legacy.nix").read_text()
 assert "previous.stdenv.hostPlatform.config == settings.crossSystem.config" in linux_legacy
 legacy_fonts = linux_legacy.split("    freetype = ", 1)[1].split("  });", 1)[0]
 assert "makeWrapper = null;" in legacy_fonts and '"--disable-freetype-config"' in legacy_fonts
-assert 'postInstall = "";' in legacy_fonts and "propagatedBuildInputs" not in legacy_fonts
+assert 'postInstall = "";' in legacy_fonts
+assert '"--without-brotli"' in legacy_fonts
+assert 'propagatedBuildInputs = builtins.filter' in legacy_fonts
+assert '(dependency: (dependency.pname or dependency.name or "") != "brotli")' in legacy_fonts
+assert '(old.propagatedBuildInputs or []);' in legacy_fonts
 assert "./poppler-static-fonts.patch" in linux
 fonts = (root / "nix/poppler-static-fonts.patch").read_text()
 assert "+  if(NOT BUILD_SHARED_LIBS)" in fonts
