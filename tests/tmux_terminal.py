@@ -413,7 +413,7 @@ class FakeResponses:
             return self.response_body(sequence, "tool cap confirmed")
         return self.function_body(sequence, "call_cap", "exec_command", {
             "command": "printf '%08000d' 0", "workdir": str(self.tool_workspace),
-            "stdin": None, "pty": False, "timeout_ms": None, "yield_ms": 0,
+            "stdin": None, "pty": False, "timeout_ms": None, "yield_ms": 1000,
             "max_output_tokens": selected,
         })
 
@@ -7296,14 +7296,14 @@ def run_tool_cases(binary, root, provider, environment):
     def apply(text, status="succeeded"):
         return invoke("apply_patch", {"patch": text, "workdir": str(workspace)}, status)["model_text"]
 
-    def command(text, timeout=1000, pty=False, status="succeeded", yield_ms=0):
+    def command(text, timeout=1000, pty=False, status="succeeded", yield_ms=10000):
         result = invoke("exec_command", {
             "command": text, "workdir": str(workspace), "timeout_ms": timeout,
             "yield_ms": yield_ms, "max_output_tokens": None, "stdin": None, "pty": pty}, status)
         assert result["max_output_tokens"] == 6000
         return result
 
-    def interact(handle, text="", eof=False, yield_ms=0, status="succeeded", **options):
+    def interact(handle, text="", eof=False, yield_ms=10000, status="succeeded", **options):
         return invoke("write_stdin", {
             "handle": handle, "data": text, "eof": eof, "yield_ms": yield_ms,
             "max_output_tokens": None, "terminate": False, **options}, status)
@@ -7429,7 +7429,7 @@ def run_tool_cases(binary, root, provider, environment):
             assert (workspace / "big.txt").read_bytes() == (payload + "\n").encode()
 
             exec_args = {"command": "printf should-not-run", "workdir": str(workspace),
-                         "timeout_ms": 1000, "yield_ms": 0, "max_output_tokens": None,
+                         "timeout_ms": 1000, "yield_ms": 10000, "max_output_tokens": None,
                          "stdin": None, "pty": False}
             for field, value in (("stdin", False), ("stdin", 0), ("stdin", []),
                                  ("stdin", {}), ("pty", "false"), ("pty", 0),
@@ -7438,6 +7438,7 @@ def run_tool_cases(binary, root, provider, environment):
                 assert rejected["reason"] == "invalid_arguments", (field, value, rejected)
             for value in (None, "", "input\n"):
                 result = invoke("exec_command", {**exec_args, "command": "cat", "stdin": value,
+                    "yield_ms": 100 if value is None else 10000,
                     "pty": None if value is None else False}, "running" if value is None else "succeeded")
                 if value is None:
                     result = interact(result["handle"], eof=True, yield_ms=5000)
@@ -8273,7 +8274,7 @@ def run_tool_yield_cases(binary, root, provider, environment):
         operator = mode.startswith("operator")
         closing = mode.endswith("close")
         with config.open("a") as out:
-            out.write(f"[tool]\ndefault_yield_ms=20\nmax_wait_ms={60000 if operator else 200}\nmax_parallel_commands=1\n")
+            out.write(f"[tool]\ndefault_yield_ms=0\nmax_wait_ms={60000 if operator else 200}\nmax_parallel_commands=1\n")
         requests = []
 
         def respond(handler, request, sequence):
@@ -8286,7 +8287,9 @@ def run_tool_yield_cases(binary, root, provider, environment):
                            "echo $$ > command.pid; printf ready; read line; printf 'continued:%s' \"$line\"")
                 args = {"command": command, "workdir": str(workspace), "pty": False,
                         "stdin": None, "timeout_ms": None,
-                        "yield_ms": 20 if closing else 0, "max_output_tokens": 2000}
+                        "max_output_tokens": 2000}
+                if closing:
+                    args["yield_ms"] = 20
                 calls = [("start", "exec_command", args)]
                 if mode == "operator":
                     calls.append(("unstarted", "exec_command", {**args,
@@ -8294,7 +8297,7 @@ def run_tool_yield_cases(binary, root, provider, environment):
                 body = provider.functions_body(sequence, calls)
             elif closing and len(requests) == 2:
                 args = {"handle": results[-1]["handle"], "data": "", "eof": False,
-                        "terminate": True, "yield_ms": 0, "max_output_tokens": 2000}
+                        "terminate": True, "max_output_tokens": 2000}
                 body = provider.function_body(sequence, "terminate", "write_stdin", args)
             elif len(requests) == (3 if closing else 2):
                 running = next(r for r in reversed(results) if r["status"] == "running")
