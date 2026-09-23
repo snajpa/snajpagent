@@ -1832,8 +1832,12 @@ def test_network_input_recovery_boundaries():
         matches = [e for e in log if e["type"] == "irc_admitted" and
                    received["seq"] in e["data"]["sequences"]]
         assert len(matches) == 1, matches
-        starts = [e for e in log if e["type"] == "turn_started"]
-        completed = [e for e in log if e["type"] == "turn_completed"]
+        # Peer JOIN/MODE traffic may start another background turn after the
+        # recovered message finishes. Count only the message under test.
+        starts = [e for e in log if e["type"] == "turn_started" and
+                  "recoveryagent: network_zero" in e["data"]["text"]]
+        completed = [e for e in log if e["type"] == "turn_completed" and
+                     starts and e["data"]["turn_id"] == starts[0]["data"]["turn_id"]]
         assert len(starts) == 1, starts
         assert len(completed) == 1, completed
 
