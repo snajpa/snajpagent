@@ -2061,7 +2061,10 @@ def test_resume_preserves_armed_fifo():
     session_id = child.session_id()
     child.kill()
 
-    resumed = Child(["--resume", session_id], b"1 queued armed")
+    # A long untagged build version can soft-wrap the banner between the
+    # count and "queued armed"; both layouts report the same durable queue.
+    resumed = Child(["--resume", session_id], b"queued armed")
+    assert re.search(rb"\b1[ \r\n]+queued armed\b", resumed.buf), bytes(resumed.buf)
     answer_end = resumed.wait(b"pong")
     resumed.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=answer_end)
     resumed.exit_cleanly(answer_end)
