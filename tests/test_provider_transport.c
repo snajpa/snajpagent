@@ -374,7 +374,7 @@ fd = accept(listen_fd, NULL, NULL);
      * times than the two-step minimum, and a fixture that exited after a fixed
      * count would leave the client waiting out its whole link lifetime. The
      * grant repeats; the fixture exits after it or after a 30 s quiet grace. */
-    for (unsigned int polls = 0u;;) {
+    for (;;) {
         struct pollfd waiting = {.fd = listen_fd, .events = POLLIN};
         if (poll(&waiting, 1, 30000) <= 0) _exit(0);
         fd = accept(listen_fd, NULL, NULL);
@@ -389,11 +389,10 @@ fd = accept(listen_fd, NULL, NULL);
             if (close(fd) < 0) server_fail("close Meta token socket failed");
             continue;
         }
-        ++polls;
         /* Grant on every poll and keep serving: exiting after the first grant
          * left a client that polled again with a dead listener, which then
-         * waited out its whole link lifetime. Bounded so the fixture still
-         * exits for the test's waitpid. */
+         * waited out its whole link lifetime. The test stops this fixture
+         * when its own client has finished. */
         send_response(fd, 200u, "application/json",
                       "{\"access_token\":\"meta-access\",\"refresh_token\":\"meta-refresh\",\"expires_in\":3600}");
         if (close(fd) < 0) server_fail("close Meta token socket failed");

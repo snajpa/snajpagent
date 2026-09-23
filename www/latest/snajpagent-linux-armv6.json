@@ -1,9 +1,9 @@
 {
   "name": "snajpagent",
   "target": "linux-armv6",
-  "version": "0.99.7",
-  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.7/snajpagent-0.99.7-linux-armv6",
-  "sha256": "a313f24ecb8b3449fc9a2365294f9bde91acf02fdd47c164655dbfc11fe853ba",
-  "size": 27816760,
+  "version": "0.99.8",
+  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-linux-armv6",
+  "sha256": "ca6f4938d16b98eab4049b93001bd29a276834a97a8969eb33daaaa8b817a858",
+  "size": 26534232,
   "changelog": "https://agent.snajpa.net/downloads.html#changelog"
 }
