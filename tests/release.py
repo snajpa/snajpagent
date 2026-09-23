@@ -512,13 +512,14 @@ assert ('linux-ppc64le = (linux pkgs.pkgsCross.musl-power).application '
         '(args "linux-ppc64le");') in portable
 print("PASS: POWER8 Linux matrix target uses static musl and its own identity")
 
-assert "linux-ppc32" in release.targets()
+assert len(release.targets()) == 18
+assert "linux-ppc32" not in release.targets()
 assert "linux-ppc32" not in release.deferred()
 assert 'linux-ppc32 = (linux (import pkgs.path {' in portable
 assert 'crossSystem.config = "powerpc-unknown-linux-musl";' in portable
 assert '})).application (args "linux-ppc32");' in portable
 assert '(import ./ppc32-ssp.nix)' in portable
-print("PASS: big-endian PowerPC32 target uses static musl, ssp alias and its own identity")
+print("PASS: optional PowerPC32 recipe retains its identity without joining the production matrix")
 
 
 

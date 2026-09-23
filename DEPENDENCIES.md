@@ -298,7 +298,9 @@ closure's static LibreOfficeKit instead would put its archives into the
 artifact, which is why the linked import stays a host-build choice, where
 `WITH_OFFICE=1` loads a separately installed runtime through `OFFICE_ROOT`.
 
-`make prod-linux-ppc32` uses the pinned big-endian PowerPC musl toolchain,
+The opt-in `make prod-linux-ppc32` recipe is outside the supported production
+matrix and has no stable binary or update channel. It uses the pinned
+big-endian PowerPC musl toolchain,
 32-bit hard-float ABI and static compiler atomics for 64-bit shared state.
 The static PIE embeds application libraries, TLS and trust roots and has no
 ELF interpreter or shared-library dependency. Existing base/configuration/SSE/

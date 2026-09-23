@@ -4168,8 +4168,8 @@ to the destination; Nix and third-party runtime libraries are not required
 there.  Optional matching symbols are in the adjacent
 .I .debug/
 directory. These target x86-64, ARMv8-A or i686 CPUs. The download page uses
-conservative libc/architecture kernel baselines: 2.6.39 for x86-64, i686,
-ARMv6 and PowerPC32; 3.7 for ARM64; 3.13 for PowerPC64 little-endian;
+conservative libc/architecture kernel baselines: 2.6.39 for x86-64, i686
+and ARMv6; 3.7 for ARM64; 3.13 for PowerPC64 little-endian;
 and 4.15 for RISC-V64. These are not experimentally established oldest-working
 kernels. Older kernels can work, as below.
 The x86-64 executable has also been exercised on Debian Sarge's
@@ -4237,14 +4237,17 @@ Existing QEMU POWER8 checks cover Alpine 3.22.5/Linux 6.12.94.  Big-endian,
 pre-POWER8 and earlier-kernel systems require separate qualification.
 .TP
 .B make prod-linux-ppc32
-Build a 32-bit big-endian PowerPC hard-float static PIE, with static compiler
+Opt-in unsupported build outside the production matrix.  It is not shipped as
+a 0.99.8 executable or update channel.  Build a 32-bit big-endian PowerPC
+hard-float static PIE, with static compiler
 atomics and embedded application libraries, TLS and trust roots.  Output is
 .IR build/matrix/linux-ppc32/bin/snajpagent .
 Existing QEMU PowerPC 750 checks cover Debian 8.11/Linux 3.16.0-6-powerpc.
 Soft-float systems and earlier kernels remain unqualified.  The target must
 provide secure OS entropy; old Linux /dev/random can block if depleted.
 .PP
-These four targets need no ELF interpreter or shared application libraries.
+These three production targets and the optional PPC32 build need no ELF
+interpreter or shared application libraries.
 Matching symbols are kept beside each matrix executable.  See DEPENDENCIES.md
 and QUALIFICATION.md for the scope of earlier tests; a documentation refresh
 or a new compilation does not establish additional runtime coverage.
@@ -4288,9 +4291,10 @@ Cross-compilation alone does not establish runtime support.
 .TP
 .B make prod-matrix
 Build all currently implemented standalone production targets: Linux
-x86-64/AArch64/ARMv6/RISC-V/PPC64LE/PPC32/i686, macOS ARM64/Intel/universal,
+x86-64/AArch64/ARMv6/RISC-V/PPC64LE/i686, macOS ARM64/Intel/universal,
 Windows x86-64/ARM64, and FreeBSD/NetBSD/OpenBSD with separate legacy ABI
-targets. The deferred Linux i686 legacy recipe remains available separately.
+targets. The deferred Linux i686 legacy and unsupported opt-in PPC32 recipes
+remain available separately.
 Targets use separate build/matrix outputs and shared immutable Nix inputs.
 Concurrency is selected from online CPUs, current host load and available
 memory, reserving 4 GiB for the host and 4 GiB per target; GNU make's load

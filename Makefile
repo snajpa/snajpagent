@@ -413,7 +413,7 @@ help:
 		'make prod-linux-armv6  Shared ARMv6/ARMv7 hard-float static PIE via pinned Nix' \
 		'make prod-linux-riscv64 RV64GC/LP64D static PIE via pinned Nix' \
 		'make prod-linux-ppc64le POWER8 ELFv2 static PIE via pinned Nix' \
-		'make prod-linux-ppc32  32-bit big-endian PowerPC static PIE via pinned Nix' \
+		'make prod-linux-ppc32  Opt-in unsupported PowerPC32 build; outside the release matrix' \
 		'make prod-linux-i686   Self-contained 32-bit Linux i686 via pinned Nix' \
 		'make prod-linux-i686-legacy Static non-PIE i686; exercised on Linux 2.4.27' \
 		'make prod-windows-x86_64 Native Windows x64 with static libraries and embedded roots via Nix' \
@@ -455,9 +455,10 @@ help:
 # line. That is a chain inside the pin rather than a defect in this tree, and the target
 # stays buildable for anyone working the pin: it is kept in DEFERRED_TARGETS below so
 # `make prod-linux-i686-legacy` still resolves.
-# RISC-V and PPC32 dependency fixes restore both implemented targets.
+# RISC-V ships; the operator removed PPC32 from the supported matrix for 0.99.8.
+# Keep its explicit opt-in recipe for development without scheduling or shipping it.
 DEFERRED_TARGETS = prod-linux-i686-legacy
-PROD_TARGETS = prod-linux-x86_64 prod-linux-aarch64 prod-linux-armv6 prod-linux-riscv64 prod-linux-ppc64le prod-linux-ppc32 prod-macos-arm64 prod-macos-x86_64 prod-macos-universal prod-windows-x86_64 prod-windows-arm64 prod-linux-i686 prod-freebsd-amd64 prod-freebsd-amd64-legacy prod-openbsd-amd64 prod-openbsd-amd64-legacy prod-openbsd-amd64-early prod-netbsd-amd64-legacy prod-netbsd-amd64
+PROD_TARGETS = prod-linux-x86_64 prod-linux-aarch64 prod-linux-armv6 prod-linux-riscv64 prod-linux-ppc64le prod-macos-arm64 prod-macos-x86_64 prod-macos-universal prod-windows-x86_64 prod-windows-arm64 prod-linux-i686 prod-freebsd-amd64 prod-freebsd-amd64-legacy prod-openbsd-amd64 prod-openbsd-amd64-legacy prod-openbsd-amd64-early prod-netbsd-amd64-legacy prod-netbsd-amd64
 # Reserve 4 GiB for the host and another 4 GiB per concurrent target. A host
 # without online CPU or available-memory data conservatively builds one target.
 # GNU make's load limit subsequently throttles new jobs as host load changes.
@@ -487,7 +488,7 @@ prod-nixpkgs:
 			--option download-attempts 2 "$$url" "$$hash" && exit 0; \
 	done; exit 1
 
-$(PROD_TARGETS) $(DEFERRED_TARGETS): | prod-nixpkgs
+$(PROD_TARGETS) $(DEFERRED_TARGETS) prod-linux-ppc32: | prod-nixpkgs
 	@mkdir -p build/matrix
 	nix-build nix/portable.nix -A $(patsubst prod-%,%,$@) \
 		--argstr buildVersion '$(BUILD_VERSION)' --argstr buildRevision '$(GIT_HEAD)' \
@@ -504,7 +505,7 @@ install: $(BIN) $(BIN).1
 
 FORCE:
 
-.PHONY: all check stylecheck rulescheck toolscheck depscheck configurecheck leancheck officecheck nixcheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install help prod-matrix $(PROD_TARGETS) $(DEFERRED_TARGETS) FORCE
+.PHONY: all check stylecheck rulescheck toolscheck depscheck configurecheck leancheck officecheck nixcheck portabilitycheck depclosurecheck evidencetoolcheck evidencematrixcheck sanitizercheck releasecheck livecheck tmuxcheck terminallivecheck evidencebundle evidencecheck releaseevidence sizecheck clean install help prod-matrix $(PROD_TARGETS) $(DEFERRED_TARGETS) prod-linux-ppc32 FORCE
 
 -include $(COMMON_OBJ:.o=.d) src/main.d
 

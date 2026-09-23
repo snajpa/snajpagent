@@ -133,7 +133,9 @@ toolchain resolves through the 32-bit powerpc CRT/spec, which introduces a refer
 provide. A remedy shape is identified for that last one — supplying the alias, which keeps stack protection;
 rebuilding without stack protection also links but drops it — and the fix is carried into the development
 build, where the next item to check is boost's `No best alternative for libs/mpi/build/boost_mpi` line.
-Prior platform evidence above retains its original scope.
+Prior platform evidence above retains its original scope. By operator decision
+on September 23, 2026, PPC32 is an unsupported opt-in recipe outside the 0.99.8
+production matrix; its earlier emulated checks do not imply shipment.
 
 ## Documentation and current-source coverage
 

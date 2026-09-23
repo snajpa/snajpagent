@@ -423,11 +423,14 @@ without installation or VMs; the
 1/Zero-class systems and ARMv7 with an ARMv6KZ/VFPv2 baseline;
 `make prod-linux-riscv64` a RISC-V RV64GC/LP64D static PIE;
 `make prod-linux-ppc64le` a little-endian POWER8 ELFv2 static PIE;
-`make prod-linux-ppc32` a 32-bit big-endian PowerPC static PIE;
 `make prod-linux-i686` a modern 32-bit Linux static executable, linked non-PIE; and
 `make prod-linux-i686-legacy` a static non-PIE executable for Linux 2.4.27 with
 embedded TLS, roots and locale data. The legacy build needs working procfs and
 secure OS entropy; see [platform limits](DEPENDENCIES.md).
+
+An opt-in `make prod-linux-ppc32` recipe remains for unsupported PowerPC 32-bit
+experiments; it is outside the production matrix and has no stable release
+download or update channel.
 
 For experimental Windows x64 or ARM64, use `make prod-windows-x86_64` or
 `make prod-windows-arm64` with pinned Nix dependencies, and copy the resulting

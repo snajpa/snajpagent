@@ -73,9 +73,13 @@ retain debug information and default to updates off.
 ## Platform requirements and scope
 
 The release includes every target in the source `PROD_TARGETS` matrix: Linux
-x86-64, AArch64, ARMv6, RISC-V 64, PowerPC 64 LE, PowerPC 32 and i686; macOS
+x86-64, AArch64, ARMv6, RISC-V 64, PowerPC 64 LE and i686; macOS
 Intel, Apple Silicon and universal; Windows x64 and ARM64; current and legacy
 FreeBSD, OpenBSD and NetBSD variants. Experimental labels and exact ABI/minimum
 requirements remain in the download table. `DEPENDENCIES.md` and
 `QUALIFICATION.md` describe runtime checks and platform limits; compilation does
 not establish additional runtime qualification.
+
+PowerPC 32-bit Linux is no longer a supported production target. Its opt-in
+source-build recipe remains, but this release has no PPC32 binary or update
+channel; 0.99.7 also had no PPC32 binary.

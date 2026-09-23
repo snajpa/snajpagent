@@ -6,6 +6,10 @@
 
 ## 0.99.8 — September 23, 2026
 
+- Remove Linux PowerPC32 from the supported production matrix by operator
+  decision. Keep its pinned build recipe available for opt-in experiments, but
+  do not ship a PPC32 binary or update channel; 0.99.7 shipped none.
+
 - Build the complete production matrix with host-load and available-memory
   bounded parallel target jobs. Limit new starts if load rises, retain each
   pinned Nix target's single-job build, and fall back to serial on hosts
