@@ -2761,7 +2761,8 @@ def test_queue_mutation_commands():
     assert child.reap() == 0
 
     session_id = child.session_id()
-    resumed = Child(["--resume", session_id], b"2 queued paused")
+    resumed = Child(["--resume", session_id], b"queued paused")
+    assert re.search(rb"\b2[ \r\n]+queued paused\b", resumed.buf), bytes(resumed.buf)
     resumed.wait(b"/medium   ?% (2) \xe2\x80\xba ")
     resumed.wait(PROMPT.rstrip())
     start = len(resumed.buf)
