@@ -8932,6 +8932,11 @@ def run_irc_chat_case(binary, root):
         for name, model, _agent, operator, args in specs:
             case = root / name
             workspace, config = irc_workspace(case / "workspace", provider.port, model)
+            # Three agents connect to one fake endpoint concurrently; the
+            # generic one-second connect budget can expire under host load.
+            # Keep the five-second request deadline for stalled responses.
+            config.write_text(config.read_text().replace(
+                "connect_timeout_ms = 1000\n", "connect_timeout_ms = 5000\n", 1))
             terminal = TmuxTerminal(
                 case / "terminal", binary, workspace, case / "state", config,
                 100, 24, args=args, environment=environment,
