@@ -415,8 +415,9 @@ This installs the binary and manual under `$HOME/.local`; the default prefix is
 `make DEBUG=1` builds for debugging; `make help` lists build options, and
 [dependency notes](DEPENDENCIES.md) cover platform scope.
 
-`make -jN prod-matrix` builds all implemented standalone targets into
-`build/matrix/`, without installation or VMs; the
+`make prod-matrix` builds all implemented standalone targets into
+`build/matrix/` with host-load and available-memory bounded parallelism,
+without installation or VMs; the
 [platform notes](DEPENDENCIES.md) cover target requirements.
 `make prod-linux-armv6` builds a hard-float static PIE for ARMv6 Raspberry Pi
 1/Zero-class systems and ARMv7 with an ARMv6KZ/VFPv2 baseline;

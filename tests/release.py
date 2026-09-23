@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 from pathlib import Path
 import subprocess
@@ -56,7 +57,52 @@ with tempfile.TemporaryDirectory(prefix="release-", dir=root / "build") as tmp:
         assert not rendered.stderr, rendered.stderr
         print("PASS: documented manual rendering preserves UTF-8 prompt glyphs")
     # Implemented standalone targets need a matching user-manual build entry.
-    matrix = re.search(r"^PROD_TARGETS = (.+)$", (root / "Makefile").read_text(), re.M)
+    makefile = (root / "Makefile").read_text()
+    matrix = re.search(r"^PROD_TARGETS = (.+)$", makefile, re.M)
+    scheduler = re.search(r"^MATRIX_RESOURCE_AWK = (.+)$", makefile, re.M)
+    assert scheduler, "production matrix lost load-aware scheduling"
+
+    def planned_jobs(cpu, load, available_kib, targets=19):
+        result = subprocess.check_output(["awk", "-v", f"cpu={cpu}", "-v", f"host_load={load}",
+            "-v", f"mem_kib={available_kib}", "-v", f"count={targets}", scheduler.group(1)],
+            text=True)
+        return tuple(map(int, result.split()))
+
+    gib_kib = 1024 * 1024
+    assert planned_jobs(64, 22.5, 40 * gib_kib) == (9, 64)
+    assert planned_jobs(8, 6.8, 40 * gib_kib) == (2, 8)
+    assert planned_jobs(8, 0, 12 * gib_kib) == (2, 8)
+    assert planned_jobs(8, 12, 100 * gib_kib) == (1, 8)
+    assert planned_jobs("", "", "") == (1, 1)
+    assert planned_jobs(64, 0, 100 * gib_kib, 3) == (3, 64)
+    matrix_recipe = makefile.split("prod-matrix:", 1)[1].split("\n\n", 1)[0]
+    assert '$(MAKE) -j"$$1" -l"$$2" $(PROD_TARGETS)' in matrix_recipe
+    assert "--max-jobs 1 --cores 1" in makefile
+    # Replace only the recursive make with a recorder. Exercise the real
+    # planner/recipe without starting or relabelling a production target.
+    trace = tmp / "matrix-args"
+    flags = tmp / "matrix-flags"
+    stub = tmp / "matrix-make"
+    stub.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shlex.quote(str(trace)) +
+                    "\nprintf '%s\\n' \"$MAKEFLAGS\" > " + shlex.quote(str(flags)) +
+                    "\nexit \"${MATRIX_TEST_RC:-0}\"\n")
+    stub.chmod(0o700)
+    smoke = subprocess.run(["make", "-s", f"MAKE={stub}", "BUILD_VERSION=0.99.8-test",
+        "UPDATE_BASE_URL=https://publisher.test", "prod-matrix"], cwd=root,
+        capture_output=True, text=True, timeout=30)
+    assert smoke.returncode == 0, smoke.stderr
+    concurrency = re.search(r"Production matrix: (\d+) target jobs; load ceiling (\d+)", smoke.stdout)
+    assert concurrency and 1 <= int(concurrency.group(1)) <= len(matrix.group(1).split())
+    assert int(concurrency.group(2)) >= 1
+    dispatched = trace.read_text().splitlines()
+    assert dispatched == [f"-j{concurrency.group(1)}", f"-l{concurrency.group(2)}",
+                          *matrix.group(1).split()], dispatched
+    assert "BUILD_VERSION=0.99.8-test" in flags.read_text()
+    assert "UPDATE_BASE_URL=https://publisher.test" in flags.read_text()
+    failed = subprocess.run(["make", "-s", f"MAKE={stub}", "prod-matrix"], cwd=root,
+        env={**os.environ, "MATRIX_TEST_RC": "7"}, capture_output=True, text=True, timeout=30)
+    assert failed.returncode != 0 and "Production matrix built:" not in failed.stdout
+    print("PASS: production matrix schedules within CPU, load, memory and target budgets")
     manual = (root / "snajpagent.1").read_text()
     for target in matrix.group(1).split():
         assert target in manual, "missing manual build entry: " + target

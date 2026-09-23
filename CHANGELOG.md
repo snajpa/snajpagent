@@ -6,6 +6,11 @@
 
 ## 0.99.8 — September 23, 2026
 
+- Build the complete production matrix with host-load and available-memory
+  bounded parallel target jobs. Limit new starts if load rises, retain each
+  pinned Nix target's single-job build, and fall back to serial on hosts
+  without resource readings.
+
 - Honor explicit zero-yield requests after admitted tool calls start, without
   changing default-zero wait-through-completion behavior. Premature final
   replies cannot silently finish turns with running commands; cancellation and

@@ -4286,14 +4286,19 @@ runtime-qualified on macOS.  No Developer ID signing or notarization is implied.
 ARM64 has a linker-generated ad-hoc signature; the Intel slice is unsigned.
 Cross-compilation alone does not establish runtime support.
 .TP
-.B make \-jN prod-matrix
+.B make prod-matrix
 Build all currently implemented standalone production targets: Linux
-x86-64/AArch64/i686 and legacy i686, macOS ARM64/Intel/universal, Windows
-x86-64/ARM64, and FreeBSD amd64 with a separate legacy ABI target.
-Targets use separate build/matrix outputs and shared immutable Nix inputs;
-each recipe permits one Nix job and core.  SDK availability does not silently
-remove targets.  Use make \-k \-jN prod-matrix to continue independent targets
-after a failure; the command still fails and preserves successful outputs.
+x86-64/AArch64/ARMv6/RISC-V/PPC64LE/PPC32/i686, macOS ARM64/Intel/universal,
+Windows x86-64/ARM64, and FreeBSD/NetBSD/OpenBSD with separate legacy ABI
+targets. The deferred Linux i686 legacy recipe remains available separately.
+Targets use separate build/matrix outputs and shared immutable Nix inputs.
+Concurrency is selected from online CPUs, current host load and available
+memory, reserving 4 GiB for the host and 4 GiB per target; GNU make's load
+limit delays new target starts if host load increases. Missing resource data
+defaults to one target. Each recipe permits one Nix job and core. SDK
+availability does not silently remove targets. Use make \-k prod-matrix to
+continue independent targets after a failure; the command still fails and
+preserves successful outputs.
 Reruns reuse completed Nix builds.  DEBUG=1 is rejected.
 This does not install, replace the native executable, boot VMs, or contact a
 model.  Cross-build success does not establish runtime qualification.

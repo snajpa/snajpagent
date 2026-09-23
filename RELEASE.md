@@ -50,7 +50,7 @@ set `APPROVED_VERSION` to that exact value; do not reuse an already published ta
 ```sh
 : "${APPROVED_VERSION:?set the operator-approved new release version}"
 git tag -a "$APPROVED_VERSION" -m "snajpagent $APPROVED_VERSION"
-make -j4 UPDATE_BASE_URL=https://agent.snajpa.net prod-matrix
+make UPDATE_BASE_URL=https://agent.snajpa.net prod-matrix
 python3 tools/release.py stage --revision "$APPROVED_VERSION" --output /path/to/new-stage
 ```
 
@@ -77,8 +77,13 @@ Changing prose or supplying an override does not create a release tag.
 ## Required matrix
 
 `PROD_TARGETS` in `Makefile` defines the implemented production matrix.
-`make -jN prod-matrix` builds it into isolated `build/matrix/<target>/` outputs;
-plain `make` remains host-only and does not build or publish a release.
+`make prod-matrix` chooses target concurrency from online CPUs, current host
+load and available memory, retaining 4 GiB for the host and 4 GiB per target.
+GNU make's load limit delays newly started jobs if host load rises. Missing
+resource readings conservatively select one target at a time. Each target
+still uses one Nix build job/core and isolated `build/matrix/<target>/` outputs;
+the load-aware scheduler does not omit implemented targets. Plain `make`
+remains host-only and does not build or publish a release.
 
 The current required outputs are:
 

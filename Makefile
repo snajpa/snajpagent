@@ -407,7 +407,7 @@ help:
 		'make DEBUG=1          Debug build: -Og, symbols, frame pointers, no stripping' \
 		'make -jN              Parallel host build; no cross-builds or VMs' \
 		'./configure           Probe the host and the four modalities; writes config.mk' \
-		'make -jN prod-matrix   All implemented production targets below; no installs or VMs' \
+		'make prod-matrix       Load-aware parallel build of all implemented targets; no installs or VMs' \
 		'make prod-linux-x86_64 Self-contained Linux x86-64 via pinned Nix; network/cache on first build' \
 		'make prod-linux-aarch64 Self-contained Linux ARM64 via pinned Nix' \
 		'make prod-linux-armv6  Shared ARMv6/ARMv7 hard-float static PIE via pinned Nix' \
@@ -458,10 +458,22 @@ help:
 # RISC-V and PPC32 dependency fixes restore both implemented targets.
 DEFERRED_TARGETS = prod-linux-i686-legacy
 PROD_TARGETS = prod-linux-x86_64 prod-linux-aarch64 prod-linux-armv6 prod-linux-riscv64 prod-linux-ppc64le prod-linux-ppc32 prod-macos-arm64 prod-macos-x86_64 prod-macos-universal prod-windows-x86_64 prod-windows-arm64 prod-linux-i686 prod-freebsd-amd64 prod-freebsd-amd64-legacy prod-openbsd-amd64 prod-openbsd-amd64-legacy prod-openbsd-amd64-early prod-netbsd-amd64-legacy prod-netbsd-amd64
+# Reserve 4 GiB for the host and another 4 GiB per concurrent target. A host
+# without online CPU or available-memory data conservatively builds one target.
+# GNU make's load limit subsequently throttles new jobs as host load changes.
+MATRIX_RESOURCE_AWK = BEGIN { cores=int(cpu); if (cores<1) cores=1; jobs=cores-int(host_load); if (jobs<1) jobs=1; memory_jobs=int((mem_kib-4194304)/4194304); if (memory_jobs<1) memory_jobs=1; if (jobs>memory_jobs) jobs=memory_jobs; if (jobs>count) jobs=count; printf "%d %d\n", jobs, cores }
 
-prod-matrix: $(PROD_TARGETS)
-	@printf '%s\n' 'Production matrix built: $(PROD_TARGETS:prod-%=%)' \
-		'Build success is not runtime qualification; other planned ports remain unfinished.'
+prod-matrix:
+	@cpu=$$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1'); \
+		host_load=$$(awk '{print $$1}' /proc/loadavg 2>/dev/null || printf '0'); \
+		mem_kib=$$(awk '/^MemAvailable:/ {print $$2; exit}' /proc/meminfo 2>/dev/null || printf '0'); \
+		plan=$$(awk -v cpu="$$cpu" -v host_load="$$host_load" -v mem_kib="$$mem_kib" \
+			-v count='$(words $(PROD_TARGETS))' '$(MATRIX_RESOURCE_AWK)' </dev/null) || exit $$?; \
+		set -- $$plan; \
+		printf 'Production matrix: %s target jobs; load ceiling %s\n' "$$1" "$$2"; \
+		$(MAKE) -j"$$1" -l"$$2" $(PROD_TARGETS) || exit $$?; \
+		printf '%s\n' 'Production matrix built: $(PROD_TARGETS:prod-%=%)' \
+			'Build success is not runtime qualification; other planned ports remain unfinished.'
 
 prod-macos-universal: prod-macos-arm64 prod-macos-x86_64
 
