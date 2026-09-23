@@ -4,7 +4,7 @@
 
 ## Unreleased
 
-## 0.99.8 — September 22, 2026
+## 0.99.8 — September 23, 2026
 
 - Honor explicit zero-yield requests after admitted tool calls start, without
   changing default-zero wait-through-completion behavior. Premature final

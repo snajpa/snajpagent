@@ -1,6 +1,6 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 
-# snajpagent 0.99.8 — September 22, 2026
+# snajpagent 0.99.8 — September 23, 2026
 
 Durable long-session recovery, truthful interactive input and complete tool and
 IRC control.

@@ -2481,7 +2481,7 @@ def run_long_model_resume_recovery_case(binary, root):
                 body = provider.functions_body(sequence, [(call_id, "exec_command", {
                     "command": f"printf {call_id}", "workdir": str(workspace),
                     "stdin": None, "pty": False, "timeout_ms": 10000,
-                    "yield_ms": 0, "max_output_tokens": 1000,
+                    "yield_ms": 1000, "max_output_tokens": 1000,
                 }) for call_id in wanted])
                 provider.reply(handler, with_usage(body, 70000).encode(), close_header=True)
                 return
@@ -8438,7 +8438,7 @@ def run_post_exit_drain_cases(binary, root, provider, environment):
             if len(requests) == 1:
                 args = {"command": "exec " + shlex.join([sys.executable, str(script), mode, path]),
                         "workdir": str(workspace), "pty": False, "stdin": None,
-                        "timeout_ms": None, "yield_ms": 100 if mode == "terminate" else 0,
+                        "timeout_ms": None, "yield_ms": 100 if mode == "terminate" else 5000,
                         "max_output_tokens": 2000}
                 body = provider.function_body(sequence, "start", "exec_command", args)
             elif mode == "terminate" and len(requests) == 2:
@@ -8446,7 +8446,7 @@ def run_post_exit_drain_cases(binary, root, provider, environment):
                 result = event_list(log, "tool_finished")[-1]["data"]["result"]
                 assert result["status"] == "running", result
                 args = {"handle": result["handle"], "data": "", "eof": False,
-                        "terminate": True, "yield_ms": 0, "max_output_tokens": 2000}
+                        "terminate": True, "yield_ms": 5000, "max_output_tokens": 2000}
                 body = provider.function_body(sequence, "stop", "write_stdin", args)
             else:
                 _, log = read_events(terminal.dotdir)
