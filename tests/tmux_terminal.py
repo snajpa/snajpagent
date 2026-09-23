@@ -3994,7 +3994,7 @@ def run_reasoning_boundary_cases(binary, root, provider, environment,
         readonly = mode == "readonly"
         if readonly:
             (case / "marker").write_text("x")
-        interrupted, rejected = [], []
+        interrupted, rejected, retried = [], [], []
         received = []
         terminal = None
 
@@ -4004,6 +4004,18 @@ def run_reasoning_boundary_cases(binary, root, provider, environment,
             assert items[0]["role"] == "system", "fixed policy lost its authority"
             outputs = [i for i in items if i.get("type") == "function_call_output"]
             if not outputs:
+                if mode == "unstarted" and interrupted:
+                    # Recovery rebases away the old proposal/result pair. The
+                    # model must inspect the durable not_run result before it
+                    # explicitly chooses whether to issue a new command.
+                    assert not (case / "marker").exists(), "replayed an unstarted proposal"
+                    assert "read_session_history" in json.dumps(request["tools"])
+                    assert any("Full history orientation after process resume" in
+                               str(item.get("content", "")) for item in items)
+                    provider.reply(handler, provider.function_body(sequence,
+                        "inspect-unstarted", "read_session_history",
+                        {"limit": 10, "detail_bytes": 1024}).encode())
+                    return
                 if mode in ("resume", "readonly") and any(
                         "Pure durable-turn continuation" in str(item.get("content", ""))
                         for item in items):
@@ -4040,11 +4052,13 @@ def run_reasoning_boundary_cases(binary, root, provider, environment,
             assert [i["call_id"] for i in outputs] == [i["call_id"] for i in calls]
             if readonly:
                 assert {t["name"] for t in request["tools"] if t.get("type") == "function"} == NATIVE_FUNCTION_NAMES
-            if mode == "unstarted" and len(outputs) == 1:
+            if mode == "unstarted" and len(outputs) == 1 and not retried:
                 _, events = read_events(state)
                 assert event_list(events, "tool_finished")[0]["data"]["result"]["status"] == "not_run"
                 assert not (case / "marker").exists(), "automatically replayed an unstarted proposal"
-                assert json.loads(calls[0]["arguments"])["command"] == "printf x >> marker"
+                assert len(calls) == 1 and calls[0]["name"] == "read_session_history"
+                assert "recovery_unstarted" in outputs[0]["output"], outputs[0]["output"]
+                retried.append(True)
                 provider.reply(handler, provider.function_body(sequence, "call_boundary_retry", "exec_command",
                                {"command": "printf x >> marker"}).encode())
                 return
@@ -4097,9 +4111,11 @@ def run_reasoning_boundary_cases(binary, root, provider, environment,
             assert not rejected, message
             _, events = read_events(state)
             if not readonly:
-                assert len(event_list(events, "tool_started")) == 1, "replayed an executed command"
+                started = event_list(events, "tool_started")
+                assert len(started) == (2 if mode == "unstarted" else 1), (
+                    "replayed an executed command or skipped history inspection", started)
             assert (case / "marker").read_text() == "x"
-            assert len(received) == (2 if mode == "followup" else 4 if mode == "unstarted" else 3)
+            assert len(received) == (2 if mode == "followup" else 5 if mode == "unstarted" else 3)
             assert len(event_list(events, "input_received")) == 1, "invented fresh operator input"
             print("reasoning request boundary", mode, "PASS", flush=True)
         finally:
@@ -5093,6 +5109,9 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
     for boundary in ("tool", "steer", "queue", "goal"):
         case = root / f"boundary-{boundary}"
         workspace, config = irc_workspace(case / "work", provider.port, "host-model")
+        if boundary == "tool":
+            with config.open("a") as out:
+                out.write("[tool]\ndefault_yield_ms=0\nmax_wait_ms=60000\n")
         endpoint = f"127.0.0.1:{free_loopback_port()}"
         arrived, release = threading.Event(), threading.Event()
         requests = []
@@ -5106,7 +5125,7 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
                     "command": 'printf "%s" "$$" > command.pid; IFS= read -r line; '
                                'printf "same-process:%s:%s\\n" "$$" "$line"',
                     "workdir": str(workspace), "stdin": None, "pty": False,
-                    "timeout_ms": None, "max_output_tokens": None, "yield_ms": 0,
+                    "timeout_ms": None, "max_output_tokens": None,
                 }).encode()
             elif boundary == "tool" and number == 2:
                 arrived.set()
