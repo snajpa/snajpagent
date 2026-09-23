@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Keep interactive input live after a transient empty read from an open raw
+  terminal, including while output is backpressured. Actual hangup, canonical
+  EOF and pipe EOF still end input.
+
 ## 0.99.8 — September 23, 2026
 
 - Remove Linux PowerPC32 from the supported production matrix by operator

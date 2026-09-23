@@ -1391,7 +1391,23 @@ ssize_t
 snag_term_input_native_read(struct snag_term_host *host, void *buffer, size_t size)
 {
     (void)host;
-    return read(STDIN_FILENO, buffer, size);
+    ssize_t count = read(STDIN_FILENO, buffer, size);
+    if (count == 0) {
+        struct termios mode;
+        struct pollfd state = {.fd = STDIN_FILENO, .events = 0};
+        /* VMIN=0/VTIME=0 can return zero when a concurrent mode change
+         * flushes bytes after poll reported input. The master is still open:
+         * retry instead of ending the input worker and losing later Ctrl-C.
+         * Canonical VEOF and a disconnected PTY remain real EOF. */
+        if (tcgetattr(STDIN_FILENO, &mode) == 0 && !(mode.c_lflag & ICANON) &&
+            mode.c_cc[VMIN] == 0 && mode.c_cc[VTIME] == 0) {
+            int ready = poll(&state, 1u, 0);
+            if ((ready < 0 && errno == EINTR) ||
+                (ready >= 0 && !(state.revents & (POLLHUP | POLLERR | POLLNVAL))))
+                return snag_errno(EAGAIN);
+        }
+    }
+    return count;
 }
 
 bool

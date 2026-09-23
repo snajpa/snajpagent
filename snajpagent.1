@@ -899,8 +899,10 @@ reflects the settled goal state; its active goal flag is cleared before the paus
 notice redraws it. Empty Enter afterwards stays local and leaves the goal paused.
 Ordinary queued IRC updates remain pending across this boundary and session
 resume; only a direct mention remains eligible for urgent automatic admission.
-Five consecutive presses within two seconds exit;
-other input resets the sequence.  Ctrl-D on an empty draft or
+Five consecutive presses within two seconds exit, including when terminal
+output is stalled; other input resets the sequence.  A transient empty read
+from an open raw terminal does not end input; an actual terminal hangup or
+end-of-file still does.  Ctrl-D on an empty draft or
 .B /exit
 while idle also exits.
 .TP

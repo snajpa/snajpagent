@@ -2091,6 +2091,47 @@ test_console_keys(struct snag_term_host *host)
 }
 #endif
 
+#if defined(__linux__) && !defined(_WIN32)
+static void
+test_raw_pty_empty_read(void)
+{
+    int saved = dup(STDIN_FILENO);
+    int master = posix_openpt(O_RDWR | O_NOCTTY);
+    assert(saved >= 0 && master >= 0);
+    assert(grantpt(master) == 0 && unlockpt(master) == 0);
+    const char *name = ptsname(master);
+    assert(name);
+    int slave = open(name, O_RDWR | O_NOCTTY);
+    assert(slave >= 0 && dup2(slave, STDIN_FILENO) == STDIN_FILENO);
+    struct snag_term_host host = {0};
+    assert(snag_term_input_capture(&host) == 0 && snag_term_input_raw(&host) == 0);
+    char received[8];
+    assert(write(master, "x", 1u) == 1);
+    assert(snag_term_input_native_wait(&host, SNAG_WAKE_INVALID, 1000) & SNAG_TERM_WAIT_INPUT);
+    /* Raw VMIN=0 can return zero after readiness if input was flushed;
+     * the live master can still deliver the emergency Ctrl-C chord. */
+    assert(snag_term_input_flush(&host) == 0);
+    assert(snag_term_input_native_read(&host, received, sizeof(received)) < 0 && errno == EAGAIN);
+    assert(write(master, "\x03\x03\x03\x03\x03", 5u) == 5);
+    assert(snag_term_input_native_wait(&host, SNAG_WAKE_INVALID, 1000) & SNAG_TERM_WAIT_INPUT);
+    assert(snag_term_input_native_read(&host, received, sizeof(received)) == 5);
+    assert(!memcmp(received, "\x03\x03\x03\x03\x03", 5u));
+    assert(snag_term_input_restore(&host, true) == 0);
+    assert(write(master, "\x04", 1u) == 1);
+    assert(snag_term_input_native_wait(&host, SNAG_WAKE_INVALID, 1000) & SNAG_TERM_WAIT_INPUT);
+    assert(snag_term_input_native_read(&host, received, sizeof(received)) == 0);
+    assert(close(master) == 0);
+    assert(snag_term_input_native_wait(&host, SNAG_WAKE_INVALID, 1000) & SNAG_TERM_WAIT_END);
+    int pipefd[2];
+    assert(pipe(pipefd) == 0 && close(pipefd[1]) == 0);
+    assert(dup2(pipefd[0], STDIN_FILENO) == STDIN_FILENO);
+    assert(snag_term_input_native_wait(&host, SNAG_WAKE_INVALID, 1000) & SNAG_TERM_WAIT_END);
+    assert(snag_term_input_native_read(&host, received, sizeof(received)) == 0);
+    assert(dup2(saved, STDIN_FILENO) == STDIN_FILENO);
+    assert(close(saved) == 0 && close(slave) == 0 && close(pipefd[0]) == 0);
+}
+#endif
+
 static atomic_uint console_interrupts;
 static void
 test_control_signal(int number)
@@ -3258,6 +3299,9 @@ run_base(int argc, char **argv)
     test_memory_primitives();
     test_thread_local();
     test_sockets();
+#if defined(__linux__) && !defined(_WIN32)
+    test_raw_pty_empty_read();
+#endif
     test_input_mode();
 #ifdef _WIN32
     test_windows_privacy();

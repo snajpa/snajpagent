@@ -5435,12 +5435,20 @@ def test_five_ctrl_c_exit_during_stalled_output():
                         os.O_RDWR | os.O_NOCTTY)
         child.send_wait(b"render_flood\r", b"row-0000")
 
-        # Do not drain the master: fill the terminal's output queue until the
-        # presentation owner blocks in write(2), then prove the independent
-        # native-input owner still observes the emergency chord. No output is
-        # read while waiting for exit, so a repaint or resume banner cannot be
-        # what frees the writer.
-        time.sleep(0.2)
+        # Do not drain the master. On Linux its full PTY read buffer holds
+        # 4095 bytes; wait for that backlog instead of guessing when the
+        # presentation owner has reached poll(POLLOUT). Input remains native.
+        def pending_output():
+            return struct.unpack("I", fcntl.ioctl(child.fd, termios.FIONREAD,
+                                                 struct.pack("I", 0)))[0]
+        backlog_deadline = time.monotonic() + MIN_WAIT_S
+        while pending_output() < 4095:
+            assert time.monotonic() < backlog_deadline, "terminal output did not stall"
+            time.sleep(0.01)
+        # No output is read while waiting for exit: a repaint or resume banner
+        # must not be what frees the writer.
+        mode = termios.tcgetattr(slave)[3]
+        assert not mode & (termios.ECHO | termios.ICANON | termios.ISIG), mode
         started = time.monotonic()
         child.send(b"\x03" * 5)
         deadline = started + 2.0

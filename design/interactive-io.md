@@ -162,6 +162,14 @@ priority exit control, interrupting active work and preserving the session;
 active composer is armed immediately, before provider cancellation or the next
 response cycle completes, so another steer can be entered at once.
 
+On POSIX, the native input worker distinguishes a real EOF from a zero-byte
+read in open noncanonical VMIN=0/VTIME=0 mode. A flush can remove bytes after
+poll reported readiness; if the PTY has no hangup, the worker retries and
+keeps accepting later controls. Canonical VEOF, a disconnected PTY and pipe
+EOF still end input. The stalled-output PTY case waits for a full master
+backlog before timing the five-Ctrl-C escape; no output is drained to release
+the blocked presentation writer.
+
 When Enter interrupts visible model output, `response_interrupted` retains its
 byte-exact public prefix. The next request places that prefix in assistant role,
 then an explicit developer steering-boundary notice, then the exact steer in
