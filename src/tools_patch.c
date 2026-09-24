@@ -51,6 +51,7 @@ struct patch_hunk {
 struct patch_op {
     enum patch_op_type type;
     const char *path;
+    char *absolute_path;
     char **add_lines;
     struct patch_hunk *hunks;
     size_t hunk_count;
@@ -75,6 +76,7 @@ static void
 op_free(struct patch_op *op)
 {
     if (!op) return;
+    free(op->absolute_path);
     snag_buf_free(&op->old_bytes);
     snag_permissions_free(&op->permissions);
     snag_buf_free(&op->new_bytes);
@@ -98,6 +100,16 @@ starts_with(const char *s, const char *prefix)
 }
 
 static bool
+file_path_separator(char c)
+{
+#ifdef _WIN32
+    return c == '/' || c == '\\';
+#else
+    return c == '/';
+#endif
+}
+
+static bool
 is_file_header(const char *line)
 {
     return starts_with(line, "*** Add File: ") || starts_with(line, "*** Update File: ") ||
@@ -114,28 +126,33 @@ int
 snag_file_path_valid(const char *path, char *error, size_t error_size)
 {
     size_t len = strlen(path);
-    const char *p = path;
-    const char *component = path;
+    size_t root_len = snag_path_root_len(path);
+    const char *p;
+    const char *component;
 
-    if (!len || len > PATCH_PATH_MAX || path[0] == '/' ||
+    if (!len || len > PATCH_PATH_MAX ||
         !snag_utf8_valid((const unsigned char *)path, len, true)) {
-        return snag_fail(error, error_size, EINVAL, "patch paths must be bounded relative UTF-8 paths inside workdir (no absolute paths or .. components)");
+        return snag_fail(error, error_size, EINVAL, "file path must be bounded UTF-8");
     }
-    if (len >= 2u && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) &&
-        path[1] == ':') {
-        return snag_fail(error, error_size, EINVAL, "patch path uses a drive-prefix form");
+    if (!root_len && len >= 2u &&
+        ((path[0] >= 'A' && path[0] <= 'Z') ||
+         (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':') {
+        return snag_fail(error, error_size, EINVAL, "file path uses a drive-prefix form");
     }
-    if (starts_with(path, "//"))
-        return snag_fail(error, error_size, EINVAL, "patch path uses a UNC-like form");
+    path += root_len;
+    if (!root_len && starts_with(path, "./")) path += 2u;
+    if (!*path) return snag_fail(error, error_size, EINVAL, "file path has no final component");
+    p = component = path;
     while (*p) {
         if ((unsigned char)*p < 0x20u || (unsigned char)*p == 0x7fu ||
-            *p == '\\') {
-            return snag_fail(error, error_size, EINVAL, "patch path contains a rejected byte");
+            (*p == '\\' && !file_path_separator(*p))) {
+            return snag_fail(error, error_size, EINVAL, "file path contains a rejected byte");
         }
-        if (*p == '/') {
+        if (file_path_separator(*p)) {
             if (p == component || (p - component == 1 && component[0] == '.') ||
                 (p - component == 2 && component[0] == '.' && component[1] == '.')) {
-                return snag_fail(error, error_size, EINVAL, "patch path contains an invalid component");
+                return snag_fail(error, error_size, EINVAL,
+                                 "file path contains an invalid component");
             }
             component = p + 1;
         }
@@ -143,9 +160,35 @@ snag_file_path_valid(const char *path, char *error, size_t error_size)
     }
     if (p == component || (p - component == 1 && component[0] == '.') ||
         (p - component == 2 && component[0] == '.' && component[1] == '.')) {
-        return snag_fail(error, error_size, EINVAL, "patch path contains an invalid final component");
+        return snag_fail(error, error_size, EINVAL,
+                         "file path contains an invalid final component");
     }
     return 0;
+}
+
+int
+snag_file_root_open(const char *cwd, const char *path, char *error, size_t error_size)
+{
+    size_t root_len;
+    char *root;
+    int fd;
+
+    if (snag_file_path_valid(path, error, error_size) < 0) return -1;
+    root_len = snag_path_root_len(path);
+    if (root_len) {
+        root = malloc(root_len + 1u);
+        if (root) {
+            memcpy(root, path, root_len);
+            root[root_len] = '\0';
+        }
+    } else {
+        root = strdup(cwd);
+    }
+    if (!root) return -1;
+    fd = snag_open_read(root, true);
+    free(root);
+    if (fd < 0) (void)snag_errorf(error, error_size, "cannot open path root: %s", strerror(errno));
+    return fd;
 }
 
 static int
@@ -205,7 +248,7 @@ static int
 check_duplicate_path(const struct patch_set *set, const char *path, char *error, size_t error_size)
 {
     for (size_t i = 0; i < set->count; ++i) {
-        if (strcmp(set->ops[i].path, path) == 0) {
+        if (strcmp(set->ops[i].absolute_path, path) == 0) {
             return snag_fail(error, error_size, EINVAL, "patch contains duplicate target path");
         }
     }
@@ -225,7 +268,8 @@ parse_hunk_header(const char *line, enum hunk_type *type, char *error, size_t er
 }
 
 static int
-parse_patch_lines(char **lines, size_t line_count, struct patch_set *set, char *error, size_t error_size)
+parse_patch_lines(char **lines, size_t line_count, const char *workdir,
+                  struct patch_set *set, char *error, size_t error_size)
 {
     size_t i = 1, ops = 0u, hunks = 0u;
 
@@ -243,6 +287,7 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set, char *
     while (i + 1u < line_count) {
         struct patch_op *op;
         const char *path;
+        char *absolute_path;
         enum patch_op_type type;
 
         if (starts_with(lines[i], "*** Add File: ")) {
@@ -257,10 +302,22 @@ parse_patch_lines(char **lines, size_t line_count, struct patch_set *set, char *
         } else {
             return snag_fail(error, error_size, EINVAL, "expected a file operation header");
         }
-        if (snag_file_path_valid(path, error, error_size) < 0 || check_duplicate_path(set, path, error, error_size) < 0)
+        if (snag_file_path_valid(path, error, error_size) < 0) return -1;
+        const char *relative = starts_with(path, "./") ? path + 2u : path;
+        absolute_path = snag_path_root_len(path) ? strdup(path) : snag_path_join(workdir, relative);
+        if (!absolute_path) return snag_fail(error, error_size, EOVERFLOW,
+            "patch path cannot be resolved within the path limit");
+        snag_path_slashes(absolute_path);
+        if (check_duplicate_path(set, absolute_path, error, error_size) < 0) {
+            free(absolute_path);
             return -1;
-        if (set->count >= PATCH_OP_MAX) return snag_errno(EOVERFLOW);
+        }
+        if (set->count >= PATCH_OP_MAX) {
+            free(absolute_path);
+            return snag_errno(EOVERFLOW);
+        }
         op = &set->ops[set->count++];
+        op->absolute_path = absolute_path;
         op->old_bytes.max = PATCH_FILE_MAX + 1u;
         op->new_bytes.max = PATCH_FILE_MAX;
         op->hunks = set->hunks + set->hunk_total;
@@ -332,11 +389,18 @@ int
 snag_file_parent(int root_fd, const char *path, char leaf[SNAG_NAME_MAX_BYTES + 1u],
                 char *error, size_t error_size)
 {
-    int dir_fd = snag_dup_read(root_fd);
-    const char *p = path;
+    char normalized[PATCH_PATH_MAX + 1u];
+    size_t root_len = snag_path_root_len(path);
+    int dir_fd = root_len ? snag_file_root_open(NULL, path, error, error_size) :
+                            snag_dup_read(root_fd);
+    const char *p;
     const char *slash;
 
     if (dir_fd < 0) return -1;
+    memcpy(normalized, path, strlen(path) + 1u);
+    snag_path_slashes(normalized);
+    p = normalized + root_len;
+    if (!root_len && starts_with(p, "./")) p += 2u;
     for (;;) {
         size_t len;
         slash = strchr(p, '/');
@@ -825,24 +889,27 @@ append_summary(struct snag_buf *out, const struct patch_set *set)
 }
 
 static int
-workdir_valid(const char *workdir, size_t len, const char *session_workspace, char *error, size_t error_size)
+workdir_valid(const char *workdir, size_t len, const char *session_cwd,
+              char *error, size_t error_size)
 {
     snag_file_info st;
-    if (!len || len > SNAG_PATH_MAX_BYTES || workdir[0] != '/' || strcmp(workdir, session_workspace) != 0 ||
+    (void)session_cwd;
+    if (!len || len > SNAG_PATH_MAX_BYTES || !snag_path_root_len(workdir) ||
         !snag_utf8_valid((const unsigned char *)workdir, len, true) ||
         snag_stat(workdir, &st) < 0 || !S_ISDIR(st.st_mode)) {
         return snag_fail(error, error_size, EINVAL,
-                  "apply_patch workdir must be the session workspace directory");
+                  "apply_patch workdir must name an existing absolute directory");
     }
     return 0;
 }
 
 int
-snag_tools_apply_patch(const struct snag_response_item *call, const char *session_workspace,
+snag_tools_apply_patch(const struct snag_response_item *call, const char *session_cwd,
                       json_t **result, char *error, size_t error_size)
 {
     const char *patch;
     const char *workdir;
+    char *owned_workdir = NULL;
     char *normalized = NULL;
     struct line_vec lines = {0};
     struct patch_set set = {0};
@@ -854,7 +921,7 @@ snag_tools_apply_patch(const struct snag_response_item *call, const char *sessio
     if (!result) return snag_fail(error, error_size, EINVAL, "invalid apply_patch result destination");
     *result = NULL;
     struct snag_buf summary = {.max = PATCH_MODEL_MAX};
-    if (!call || !session_workspace ||
+    if (!call || !session_cwd ||
         !snag_json_arg_keys(call->arguments, "patch", "workdir", error, error_size) ||
         !snag_json_arg_text(call->arguments, "patch", 0u, PATCH_TEXT_MAX, false, &patch, error, error_size) ||
         !snag_json_arg_text(call->arguments, "workdir", 1u, SNAG_PATH_MAX_BYTES,
@@ -863,11 +930,34 @@ snag_tools_apply_patch(const struct snag_response_item *call, const char *sessio
             goto out;
         goto result;
     }
-    if (!workdir) workdir = session_workspace;
-    if (workdir_valid(workdir, strlen(workdir), session_workspace, error, error_size) < 0 ||
-        normalize_patch_text(patch, strlen(patch), &normalized, error, error_size) < 0 ||
+    if (!workdir) workdir = session_cwd;
+    if (workdir[0] == '.' && workdir[1] == '/') {
+        char *joined = snag_path_join(session_cwd, workdir + 2u);
+        if (joined) owned_workdir = snag_realpath(joined);
+        free(joined);
+        if (!owned_workdir) {
+            (void)snag_errorf(error, error_size, "apply_patch workdir cannot be resolved");
+            if (snag_buf_printf(&summary, "Patch rejected: %s.\n", error) < 0) goto out;
+            goto result;
+        }
+        workdir = owned_workdir;
+    }
+    if (workdir_valid(workdir, strlen(workdir), session_cwd, error, error_size) < 0) {
+        if (snag_buf_printf(&summary, "Patch rejected: %s.\n", error) < 0) goto out;
+        goto result;
+    }
+    if (!owned_workdir) {
+        owned_workdir = snag_realpath(workdir);
+        if (!owned_workdir) {
+            (void)snag_errorf(error, error_size, "patch workdir cannot be resolved");
+            if (snag_buf_printf(&summary, "Patch rejected: %s.\n", error) < 0) goto out;
+            goto result;
+        }
+        workdir = owned_workdir;
+    }
+    if (normalize_patch_text(patch, strlen(patch), &normalized, error, error_size) < 0 ||
         split_lines(normalized, strlen(normalized), &lines) < 0 ||
-        parse_patch_lines(lines.v, lines.n, &set, error, error_size) < 0) {
+        parse_patch_lines(lines.v, lines.n, workdir, &set, error, error_size) < 0) {
         if (snag_buf_printf(&summary, "Patch rejected: %s.\n", error[0] ? error : "invalid patch") < 0)
             goto out;
         goto result;
@@ -896,6 +986,7 @@ result: *result = patch_result_buf(status, &summary, snag_time_ms() - started);
     rc = *result ? 0 : -1;
 out:
     if (root_fd >= 0) close(root_fd);
+    free(owned_workdir);
     patch_set_free(&set);
     free(lines.v);
     free(normalized);

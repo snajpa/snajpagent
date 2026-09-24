@@ -769,7 +769,7 @@ write_banner(struct snag_render *render, unsigned int boundary, const char *colo
 }
 
 int
-snag_render_orientation(struct snag_render *render, const char *workspace, const char *id,
+snag_render_orientation(struct snag_render *render, const char *cwd, const char *id,
                        uint64_t turns, size_t queued, bool resumed, bool queue_armed)
 {
     int rc;
@@ -777,10 +777,10 @@ snag_render_orientation(struct snag_render *render, const char *workspace, const
     struct snag_buf line = {.max = 32768u};
     if (resumed) {
         rc = snag_buf_printf(&line, SNAJPAGENT_IDENTITY " · resumed · %s · session id %.8s "
-            "· %llu turns · %zu queued%s\n", workspace, id, (unsigned long long)turns, queued,
+            "· %llu turns · %zu queued%s\n", cwd, id, (unsigned long long)turns, queued,
             queued ? (queue_armed ? " armed" : " paused") : "");
     } else {
-        rc = snag_buf_printf(&line, SNAJPAGENT_IDENTITY " · %s · session id %.8s\n", workspace, id);
+        rc = snag_buf_printf(&line, SNAJPAGENT_IDENTITY " · %s · session id %.8s\n", cwd, id);
     }
     if (rc == 0) rc = write_banner(render, BOUNDARY_CONTENT, COLOR_AGENT,
                           (char *)line.data, line.len, line.len);

@@ -40,7 +40,7 @@ fixture_model_limits(size_t index)
 }
 
 int snag_fixture_response(const char *prompt, const json_t *steering, const json_t *request,
-                         const char *workspace, unsigned int cycle,
+                         const char *cwd, unsigned int cycle,
                          const char *goal_prompt, uint64_t goal_turn_count,
                          snag_responses_emit_fn emit, snag_provider_pump_fn pump, void *opaque,
                          snag_responses_hosted_fn hosted, void *hosted_opaque,
@@ -291,14 +291,6 @@ snag_app_provider_run(struct app_state *app, const char *prompt, const json_t *s
         if (error_size) (void)snprintf(error, error_size, "fixture context rejected");
         return snag_errno(EOVERFLOW);
     }
-    /* Keep the rebased request in flight so the PTY fixture can steer at
-     * that exact boundary instead of relying on the old compact endpoint. */
-    if (strcmp(prompt, "capacity_recovery_steer") == 0 && cycle == 2u)
-        for (unsigned int i = 0u; i < 100u; ++i) {
-            int pump_rc = snag_app_active_input_pump(app, 20u);
-
-            if (pump_rc != 0) return pump_rc;
-        }
     {
         json_t *input = json_object_get(create_request, "input");
         bool read_only = app->session.active_read_only;
@@ -317,7 +309,15 @@ snag_app_provider_run(struct app_state *app, const char *prompt, const json_t *s
             }
         }
     }
-    return snag_fixture_response(prompt, steering, create_request, app->session.workspace, cycle,
+    if (snag_app_request_ready(app) < 0) return -1;
+    /* Keep the accepted rebased request in flight so typeahead can steer it. */
+    if (strcmp(prompt, "capacity_recovery_steer") == 0 && cycle == 2u)
+        for (unsigned int i = 0u; i < 100u; ++i) {
+            int pump_rc = snag_app_active_input_pump(app, 20u);
+
+            if (pump_rc != 0) return pump_rc;
+        }
+    return snag_fixture_response(prompt, steering, create_request, app->session.cwd, cycle,
                                 app->session.goal_prompt, app->session.goal_turn_count,
                                 snag_app_stream_public, snag_app_active_input_pump,
                                 app, hosted_search_activity, app, graph, failure, error, error_size);
@@ -327,8 +327,11 @@ snag_app_provider_run(struct app_state *app, const char *prompt, const json_t *s
     (void)cycle;
     if (retry_count) *retry_count = 0u;
     return snag_provider_responses_create((struct snag_provider_connection){
-        app->config, app->turn_provider, credential, &app->ui, snag_app_provider_input_pump, app, app->session.id, 0},
+        .config = app->config, .provider = app->turn_provider, .credential = credential,
+        .render = &app->ui, .pump = snag_app_provider_input_pump, .pump_opaque = app,
+        .session_id = app->session.id},
         create_request, snag_app_stream_public, app, hosted_search_activity, app,
+        snag_app_request_ready, app,
         graph, failure, error, error_size, retry_count);
 #endif
 }
@@ -416,7 +419,7 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
     if (call && call->name && snag_read_only_tool(call->name)) {
         struct snag_secret_set secrets = {0};
         int rc = snag_secret_set_build(&secrets, app->config, credential, error, error_size);
-        if (rc == 0) rc = snag_tools_read_only(call, app->session.workspace,
+        if (rc == 0) rc = snag_tools_read_only(call, app->session.cwd,
                                          snag_app_active_input_pump, app, result);
         if (rc == 0 && *result) rc = snag_secret_result(&secrets, *result, error, error_size);
         snag_secret_set_free(&secrets);
@@ -424,13 +427,48 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
     }
     if (app->session.active_read_only) {
         *result = snag_tool_result_terminal(false,
-            "Tool unavailable: this turn is read-only; use list_files, read_file, grep or view_image.");
+            "Tool unavailable: this turn is read-only; use get_cwd, list_files, "
+            "read_file, grep or view_image.");
         return *result ? 0 : -1;
     }
     if (call && call->name && strcmp(call->name, "write_file") == 0)
-        return snag_tools_write_file(call, app->session.workspace, result, error, error_size);
+        return snag_tools_write_file(call, app->session.cwd, result, error, error_size);
     if (call && call->name && strcmp(call->name, "edit_file") == 0)
-        return snag_tools_edit_file(call, app->session.workspace, result, error, error_size);
+        return snag_tools_edit_file(call, app->session.cwd, result, error, error_size);
+
+    if (call && call->name && !strcmp(call->name, "cd")) {
+        const char *path = NULL;
+        char *joined = NULL;
+        char *resolved = NULL;
+
+        *result = NULL;
+        if (!snag_json_arg_keys(call->arguments, "path", "", error, error_size) ||
+            !snag_json_arg_text(call->arguments, "path", 1u, SNAG_PATH_MAX_BYTES,
+                                false, &path, error, error_size)) {
+            *result = snag_tool_result_terminal(false, error);
+            return *result ? 0 : -1;
+        }
+        joined = snag_path_root_len(path) ? strdup(path) : snag_path_join(app->session.cwd, path);
+        if (joined) resolved = snag_cwd_resolve(joined, "requested", error, error_size);
+        free(joined);
+        if (!resolved) {
+            *result = snag_tool_result_terminal(false,
+                error[0] ? error : "cannot resolve directory");
+            return *result ? 0 : -1;
+        }
+        if (strcmp(resolved, app->session.cwd) != 0 &&
+            snag_app_commit_event(app, "cwd_changed", json_pack("{s:s,s:s}",
+                "old_cwd", app->session.cwd, "new_cwd", resolved), error, error_size) < 0) {
+            free(resolved);
+            return -1;
+        }
+        *result = snag_tool_result_terminal(true, app->session.cwd);
+        free(resolved);
+        return *result ? 0 : -1;
+    }
+
+    if (call && call->name && !strcmp(call->name, "select_model"))
+        return snag_app_select_model_tool(app, call, result, error, error_size);
 
     if (call && call->name && !strcmp(call->name, "set_command_shell")) {
         const char *path = NULL;
@@ -488,7 +526,7 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
                 !snag_json_arg_text(call->arguments, "endpoint", 1u, SNAG_CONFIG_IRC_ENDPOINT_MAX,
                                     false, &endpoint, error, error_size))
                 return (*result = snag_tool_result_terminal(false, error)) ? 0 : -1;
-            rc = snag_irc_add(app->irc, app->config, app->session.workspace, hosting,
+            rc = snag_irc_add(app->irc, app->config, app->session.cwd, hosting,
                               endpoint, error, error_size);
         }
         if (rc < 0)
@@ -569,7 +607,7 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
     (void)credential;
     return snag_fixture_tool(call, snag_app_active_input_pump, app, result, error, error_size);
 #else
-    return snag_tools_run(call, app->config, credential, app->session.workspace,
+    return snag_tools_run(call, app->config, credential, app->session.cwd,
                          tool_input_pump, app, snag_ui_wake_fd(&app->ui), result, error, error_size);
 #endif
 }

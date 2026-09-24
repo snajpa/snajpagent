@@ -23,7 +23,6 @@ struct snag_cli {
     bool execute;
     bool list;
     bool last;
-    bool all;
     bool prompt_after_dashdash;
     bool help;
     bool manual;
@@ -32,7 +31,6 @@ struct snag_cli {
     unsigned int verbosity;
     /* Immutable option values borrow argv for the lifetime of the CLI. */
     const char *color, *markdown; /* NULL means use configuration. */
-    const char *workspace;
     struct snag_instruction_set doc_instructions;
     const char *dotdir;
     const char *model;

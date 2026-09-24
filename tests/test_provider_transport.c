@@ -853,6 +853,14 @@ emit_capture(void *opaque, size_t item_index, enum snag_item_kind kind,
     return snag_buf_append(&emitted->text, text, len);
 }
 
+static int
+response_ready(void *opaque)
+{
+    unsigned int *count = opaque;
+    ++*count;
+    return 0;
+}
+
 static void
 credential_set(struct snag_credential *credential, const char *value)
 {
@@ -929,8 +937,11 @@ test_session_identity_header(void)
     memset(&emitted, 0, sizeof(emitted));
     snag_buf_init(&emitted.text, 128u);
     request = request_with_marker("transport-create");
-    assert(snag_provider_responses_create(connection, request, emit_capture, &emitted, NULL, NULL, &graph, NULL,
+    unsigned int ready_count = 0u;
+    assert(snag_provider_responses_create(connection, request, emit_capture, &emitted,
+        NULL, NULL, response_ready, &ready_count, &graph, NULL,
                                           error, sizeof(error), &retries) == 0);
+    assert(ready_count == 1u);
     json_decref(request);
     snag_buf_free(&emitted.text);
     snag_response_graph_free(&graph);
@@ -1009,7 +1020,8 @@ test_local_provider_transport(void)
     memset(&emitted, 0, sizeof(emitted));
     snag_buf_init(&emitted.text, 128u);
     assert(snag_provider_responses_create(connection,
-        request, emit_capture, &emitted, NULL, NULL, &graph, NULL, error, sizeof(error), &retries) == 0);
+        request, emit_capture, &emitted, NULL, NULL, NULL, NULL, &graph,
+        NULL, error, sizeof(error), &retries) == 0);
     assert(strcmp(graph.provider_response_id, "resp_transport") == 0);
     assert(graph.count == 1u);
     assert(strcmp(snag_response_graph_item(&graph, 0).text, "local transport") == 0);
@@ -1101,7 +1113,8 @@ test_structured_create_failures(void)
         struct snag_response_graph graph = {0};
         memset(&failure, 0, sizeof(failure));
         assert(snag_provider_responses_create(connection,
-            request, NULL, NULL, NULL, NULL, &graph, &failure, error, sizeof(error), NULL) < 0);
+            request, NULL, NULL, NULL, NULL, NULL, NULL, &graph,
+            &failure, error, sizeof(error), NULL) < 0);
         assert(snag_provider_failure_is_capacity(&failure));
         assert(!strstr(error, "transport-secret"));
         assert(!strstr(failure.message, "transport-secret"));
@@ -1129,7 +1142,7 @@ test_typeless_create_diagnostic(void)
 
     start_server(&server, MODEL_CREATE_TYPELESS, false, "/v1");
     assert(snag_provider_responses_create(transport_connection(&config, &credential, server.endpoint),
-        request, NULL, NULL, NULL, NULL, &graph, NULL, error, sizeof(error), NULL) < 0);
+        request, NULL, NULL, NULL, NULL, NULL, NULL, &graph, NULL, error, sizeof(error), NULL) < 0);
     assert(strstr(error, "Responses event has no type") != NULL);
     assert(strstr(error, "Responses record diagnostic: event=-") != NULL);
     assert(strstr(error, "json=object") != NULL);
@@ -1257,7 +1270,8 @@ test_create_retries(void)
         int rc = snag_provider_responses_create((struct snag_provider_connection){
             &config, &config.providers[0], &credential, cancellation.code ? &ui : NULL,
             cancellation.code ? cancel_retry : NULL, &cancellation, NULL, 0},
-            request, emit_capture, &emitted, NULL, NULL, &graph, &failure, error, sizeof(error), &retries);
+            request, emit_capture, &emitted, NULL, NULL, NULL, NULL, &graph,
+            &failure, error, sizeof(error), &retries);
         if (cancellation.code) {
             snag_ui_free(&ui);
             assert(dup2(saved_stderr, STDERR_FILENO) == STDERR_FILENO);
@@ -1320,7 +1334,8 @@ test_policy_clarification_after_reasoning(void)
     snag_buf_init(&emitted.text, 1024u);
     int rc = snag_provider_responses_create((struct snag_provider_connection){
         &config, &config.providers[0], &credential, NULL, NULL, NULL, NULL, 0},
-        request, emit_capture, &emitted, NULL, NULL, &graph, &failure, error, sizeof(error), &retries);
+        request, emit_capture, &emitted, NULL, NULL, NULL, NULL, &graph,
+            &failure, error, sizeof(error), &retries);
     assert(rc < 0 && retries == 0u && emitted.text.len == 0u);
     assert(!strcmp(failure.code, "cyber_policy"));
     assert(failure.output_correction == SNAG_OUTPUT_CORRECTION_CYBER_POLICY);
@@ -1487,7 +1502,8 @@ test_openrouter_search_transport(void)
     snag_buf_init(&emitted.text, 128u);
     struct snag_response_graph graph = {0};
     assert(snag_provider_responses_create(connection,
-        request, emit_capture, &emitted, NULL, NULL, &graph, NULL, error, sizeof(error), &retries) == 0);
+        request, emit_capture, &emitted, NULL, NULL, NULL, NULL, &graph,
+        NULL, error, sizeof(error), &retries) == 0);
     assert(!retries);
     assert(graph.count == 2u);
     assert(snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
@@ -1509,7 +1525,8 @@ test_openrouter_search_transport(void)
     snag_buf_reset(&emitted.text);
     emitted.calls = 0u;
     assert(snag_provider_responses_create(connection,
-        request, emit_capture, &emitted, NULL, NULL, &graph, NULL, error, sizeof(error), &retries) == 0);
+        request, emit_capture, &emitted, NULL, NULL, NULL, NULL, &graph,
+        NULL, error, sizeof(error), &retries) == 0);
     assert(graph.count == 1u && snag_response_graph_item(&graph, 0).kind == SNAG_ITEM_ASSISTANT);
     assert(strcmp(snag_response_graph_item(&graph, 0).text, "local transport") == 0);
     assert(emitted.calls == 1u && !retries);
@@ -1554,7 +1571,7 @@ test_read_only_dispatch(void)
         assert(snprintf(probe, sizeof(probe), "%s/probe.txt", root) > 0);
         out = fopen(probe, "w");
         assert(out && fputs("hello\n", out) >= 0 && fclose(out) == 0);
-        app.session.workspace = root;
+        app.session.cwd = root;
     }
     call.name = "read_file";
     json_decref(call.arguments);
@@ -2477,7 +2494,7 @@ test_audio_transport(void)
             "prompt_schema",1,"replay_schema",1,"tool_schema",1,"max_parallel_commands",4,"parallel_tool_calls",1,
             "input_kind","direct","read_only",0,"instructions",json_array(),"queue_id","queue_seq",
             "text","Inspect fixture sound","turn_id","01010101010101010101010101010101","turn_number",(json_int_t)1,
-            "workspace",session.workspace);
+            "cwd",session.cwd);
         assert(started && snag_session_commit(&session, "turn_started", started,
             NULL, error, sizeof(error)) == 0);
         struct snag_context_projection projection;

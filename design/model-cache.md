@@ -54,9 +54,11 @@ secret.
 ## Admission and refresh boundaries
 
 `/model`, `/model list` and selection run during active work. Listing reads local
-state; selection changes the session preference from the next full turn onward,
-remaining until changed and across resume, while preserving the active turn's
-provider/model/effort. `/model cache` is accepted immediately, then refreshes at a
+state; selection changes the next response in the active turn and all later
+turns, remaining until changed and across resume. A streaming response is
+interrupted at a safe boundary and rebuilt from durable conversation and tool
+results on the new model; running command handles are not lost. `/model cache`
+is accepted immediately, then refreshes at a
 safe request boundary. Once a session exists its control intent is durable and
 survives resume. Pre-work discovery alone preserves lazy session creation.
 
@@ -232,16 +234,19 @@ PROVIDER / MODEL / EFFORT
 - `PROVIDER / MODEL / EFFORT` uses the named configured provider and thinking
   level.
 
-The three forms change the durable session provider/model/effort preference from
-the next full turn onward. `/model`, CLI `-m` and `--effort` all retain their
-selection across later turns and resume until changed. Resume records explicit
-CLI selections through the existing `model_selection_changed` event, even if
-no new turn starts. Active-turn and already admitted input identities stay frozen.
+The three forms change the durable session provider/model/effort preference
+for the next response within an active turn, and later turns. CLI `-m` applies
+on start or resume; `--effort` and `/effort` select the subsequent effort at a
+safe request boundary. Session selection persists across resume until changed.
+Resume records explicit CLI selections through `model_selection_changed`, even
+if no new turn starts. Accepted input and completed tool identities remain
+durable; `turn_model_changed` records a switch within the active turn.
 There is no consumed one-turn override; `save` separately changes configuration.
 Provider names must resolve because snajpagent needs routing and credentials;
 model names are deliberately not checked against the cache. The provider API,
 not snajpagent, decides whether a user-supplied model or effort is usable.
-After the normal `model for next turn` confirmation, a typed selection whose
+After the `model for next response in this turn` confirmation (or `next turn`
+when idle), a typed selection whose
 provider/model pair is not present in the readable cache prints a warning that
 the model is unknown to the cache and the configured provider will still be used. The warning
 does not reject or revert the selection, contact a provider, or validate the

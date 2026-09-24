@@ -7,13 +7,13 @@
 #include "snag_jansson.h"
 #include <stddef.h>
 
-/* Whole-file create or replace (workspace-relative, atomic). */
-int snag_tools_write_file(const struct snag_response_item *call, const char *session_workspace,
+/* Whole-file create or replace (cwd-relative, atomic). */
+int snag_tools_write_file(const struct snag_response_item *call, const char *session_cwd,
                           json_t **result, char *error, size_t error_size);
 
 /* Targeted exact replacement in one file; ambiguous or missing matches fail
  * without changing the file. */
-int snag_tools_edit_file(const struct snag_response_item *call, const char *session_workspace,
+int snag_tools_edit_file(const struct snag_response_item *call, const char *session_cwd,
                          json_t **result, char *error, size_t error_size);
 
 #endif

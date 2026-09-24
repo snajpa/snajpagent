@@ -68,7 +68,7 @@ int snag_create_output_at(int dirfd, const char *path);
 int snag_open_read(const char *path, bool directory);
 /* No symlinks at any path component; only regular files and directories. */
 int snag_open_inspect_at(int parent, const char *name);
-int snag_open_inspect_path(const char *workspace, const char *path);
+int snag_open_inspect_path(const char *cwd, const char *path);
 int snag_open_secret_file(const char *path);
 int snag_dup_read(int fd);
 int snag_open_read_at(int dirfd, const char *path, bool directory);

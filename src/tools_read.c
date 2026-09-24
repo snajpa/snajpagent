@@ -253,7 +253,7 @@ out:
 }
 
 int
-snag_tools_read_only(const struct snag_response_item *call, const char *workspace,
+snag_tools_read_only(const struct snag_response_item *call, const char *cwd,
                     snag_tool_pump_fn pump, void *opaque, json_t **result)
 {
     struct read_query q = {0};
@@ -263,9 +263,15 @@ snag_tools_read_only(const struct snag_response_item *call, const char *workspac
     char failure[768] = "Invalid native inspection tool.";
     int fd, rc = -1;
 
-    if (!call || !call->name || !result || !workspace) return snag_errno(EINVAL);
+    if (!call || !call->name || !result || !cwd) return snag_errno(EINVAL);
     *result = NULL;
     args = call->arguments;
+    if (!strcmp(call->name, "get_cwd")) {
+        char failure[256] = {0};
+        bool valid = snag_json_arg_keys(args, "", "", failure, sizeof(failure));
+        *result = snag_tool_result_terminal(valid, valid ? cwd : failure);
+        return *result ? 0 : -1;
+    }
     path = snag_json_string(args, "path");
     q.read = strcmp(call->name, "read_file") == 0;
     q.grep = strcmp(call->name, "grep") == 0;
@@ -308,7 +314,7 @@ snag_tools_read_only(const struct snag_response_item *call, const char *workspac
         }
     }
     q.problem = NULL;
-    fd = snag_open_inspect_path(workspace, path);
+    fd = snag_open_inspect_path(cwd, path);
     if (fd < 0) {
         q.problem = "Cannot open path: missing, inaccessible, symlink, or non-regular special file.";
         goto out;

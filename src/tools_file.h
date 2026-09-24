@@ -8,14 +8,15 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/* Shared, workspace-scoped file primitives used by apply_patch and by the
- * write_file/edit_file verbs. Paths are bounded workspace-relative UTF-8 with
- * no absolute form, no "."/".." component and no drive/UNC/backslash/control
- * bytes; no step follows a symlink. */
+/* File paths are absolute or relative to cwd (an initial ./ is accepted).
+ * All remaining components are bounded UTF-8 without . or .., control bytes
+ * or symlink traversal. */
 int snag_file_path_valid(const char *path, char *error, size_t error_size);
+/* Open the appropriate filesystem root for a validated path. */
+int snag_file_root_open(const char *cwd, const char *path, char *error, size_t error_size);
 
-/* Open the parent directory of a validated relative path without following
- * symlinks; leaf receives the final component. */
+/* Open the parent directory of a validated path relative to root_fd without
+ * following symlinks; leaf receives the final component. */
 int snag_file_parent(int root_fd, const char *path, char leaf[SNAG_NAME_MAX_BYTES + 1u],
                      char *error, size_t error_size);
 

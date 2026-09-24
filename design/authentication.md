@@ -80,7 +80,7 @@ override the fixed OAuth issuer using fixture environment variables.
 
 `api_key = ${NAME}` reads an environment variable; `api_key = "literal"` decodes
 a JSON-escaped literal without interpolation; other values name files. Relative
-files bind to the active config directory, not the workspace. Only leading `~/`
+files bind to the active config directory, not the session cwd. Only leading `~/`
 expands. Source kind and expression survive config saving; saving never resolves
 a file into a literal. A literal-bearing config must be user-owned and private.
 Old `api_key_env`, `auth=env` and `secret_env` spellings are errors, not fallbacks.

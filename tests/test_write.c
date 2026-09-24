@@ -116,10 +116,29 @@ static void
 test_write_rejects_unsafe_paths(void)
 {
     json_t *result;
+    char outside[] = "/tmp/snajpagent-test-write-outside-XXXXXX";
+    char absolute[8192];
+    char linked[8192];
 
-    result = invoke("write_file", json_pack("{s:s,s:s}", "path", "/tmp/absolute.txt", "content", "x"));
+    assert(mkdtemp(outside));
+    (void)snprintf(absolute, sizeof(absolute), "%s/absolute.txt", outside);
+    result = invoke("write_file", json_pack("{s:s,s:s}", "path", absolute, "content", "outside\n"));
+    expect_status(result, "succeeded");
+    result = invoke("edit_file", json_pack("{s:s,s:s,s:s}", "path", absolute,
+        "old", "outside", "new", "changed"));
+    expect_status(result, "succeeded");
+    assert(access(absolute, F_OK) == 0);
+
+    result = invoke("write_file", json_pack("{s:s,s:s}", "path", "./explicit.txt",
+                                          "content", "cwd\n"));
+    expect_status(result, "succeeded");
+    assert(strcmp(read_file_bytes("explicit.txt"), "cwd\n") == 0);
+    (void)snprintf(linked, sizeof(linked), "%s/linked", workspace);
+    assert(symlink(outside, linked) == 0);
+    result = invoke("write_file", json_pack("{s:s,s:s}", "path", "./linked/no.txt",
+                                          "content", "x"));
     expect_status(result, "failed");
-    assert(access("/tmp/absolute.txt", F_OK) < 0);
+    assert(!exists("linked/no.txt"));
 
     result = invoke("write_file", json_pack("{s:s,s:s}", "path", "../escape.txt", "content", "x"));
     expect_status(result, "failed");

@@ -132,11 +132,9 @@ struct snag_term {
     bool paste;
     bool bracketed_paste;
     bool prompt_wanted;
-    /* A submission owns the composer until its turn reports activity: painting
-     * it earlier composes the spinner's inactive glyph, which reads as a ready
-     * prompt under the line just submitted. Bounded so it cannot hold input. */
+    /* A submitted action keeps the next prompt hidden until the engine
+     * explicitly acknowledges that another action can be accepted. */
     bool submit_awaiting_activity;
-    uint64_t submit_awaiting_since_ms;
     bool prompt_visible;
     bool active;
     bool capable;

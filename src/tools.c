@@ -803,13 +803,14 @@ out: managed_release(proc);
 
 struct command_args {
     const char *command, *workdir, *input, *handle;
+    char *owned_workdir;
     uint32_t timeout, yield, limit;
     bool pty, eof, terminate, exec;
 };
 
 static int
 command_args(const struct snag_response_item *call, const struct snag_config *config,
-              const char *workspace, struct command_args *args, char *error, size_t size)
+              const char *cwd, struct command_args *args, char *error, size_t size)
 {
     memset(args, 0, sizeof(*args));
     args->exec = !strcmp(call->name, "exec_command");
@@ -837,10 +838,20 @@ command_args(const struct snag_response_item *call, const struct snag_config *co
             !snag_json_arg_bool(call->arguments, "pty", false, &args->pty, error, size) ||
             !json_u32_member(call->arguments, "timeout_ms", config->default_timeout_ms,
                              1u, config->max_timeout_ms, &args->timeout, error, size)) return -1;
-        if (!args->workdir) args->workdir = workspace;
+        if (!args->workdir) args->workdir = cwd;
         args->eof = args->input != NULL;
+        if (args->workdir[0] == '.' && args->workdir[1] == '/') {
+            char *joined = snag_path_join(cwd, args->workdir + 2u);
+            if (!joined) return snag_errorf(error, size, "workdir cannot be resolved.");
+            args->owned_workdir = snag_realpath(joined);
+            free(joined);
+            if (!args->owned_workdir)
+                return snag_errorf(error, size, "workdir cannot be resolved.");
+            args->workdir = args->owned_workdir;
+        }
         if (!absolute_dir_arg_valid(args->workdir))
-            return snag_errorf(error, size, "workdir must name an existing absolute directory.");
+            return snag_errorf(error, size,
+                "workdir must name an existing absolute or ./ directory.");
     } else {
         if (!snag_json_arg_text(call->arguments, "handle", SNAG_ID_HEX_LEN, SNAG_ID_HEX_LEN,
                                 false, &args->handle, error, size) ||
@@ -859,7 +870,8 @@ command_args(const struct snag_response_item *call, const struct snag_config *co
 }
 
 int
-snag_tools_prepare(const struct snag_response_item *call, const struct snag_config *config, const char *workspace, uint32_t max_parallel,
+snag_tools_prepare(const struct snag_response_item *call, const struct snag_config *config,
+                    const char *cwd, uint32_t max_parallel,
                     char handle[SNAG_ID_HEX_LEN + 1u], uint32_t *yield_ms, json_t **rejected)
 {
     struct command_args args;
@@ -868,7 +880,7 @@ snag_tools_prepare(const struct snag_response_item *call, const struct snag_conf
     size_t used = 0u;
     char diagnostic[768] = {0};
     *rejected = NULL;
-    if (command_args(call, config, workspace, &args, diagnostic, sizeof(diagnostic)) < 0) {
+    if (command_args(call, config, cwd, &args, diagnostic, sizeof(diagnostic)) < 0) {
         reason = "invalid_arguments";
     } else {
         *yield_ms = args.yield;
@@ -882,6 +894,7 @@ snag_tools_prepare(const struct snag_response_item *call, const struct snag_conf
         else if (!args.exec && args.input[0] && !proc->stdin_open) reason = "stdin_closed";
     }
     if (reason) {
+        free(args.owned_workdir);
         if (*diagnostic) {
             char text[1024];
             (void)snprintf(text, sizeof(text),
@@ -893,6 +906,7 @@ snag_tools_prepare(const struct snag_response_item *call, const struct snag_conf
         }
         return *rejected && snag_tools_attach_output_limit(call, config, *rejected) == 0 ? 1 : -1;
     }
+    free(args.owned_workdir);
     if (!journal_write || !journal_read) return snag_errno(EINVAL);
     memcpy(handle, args.handle, SNAG_ID_HEX_LEN + 1u);
     *yield_ms = args.yield;
@@ -901,16 +915,22 @@ snag_tools_prepare(const struct snag_response_item *call, const struct snag_conf
 
 int
 snag_tools_start(const struct snag_response_item *call, const struct snag_config *config,
-                  const struct snag_credential *credential, const char *workspace, json_t **result,
+                  const struct snag_credential *credential, const char *cwd, json_t **result,
                   char *error, size_t error_size)
 {
     struct command_args args;
     struct managed_process *proc;
     *result = NULL;
-    if (command_args(call, config, workspace, &args, error, error_size) < 0) return -1;
+    if (command_args(call, config, cwd, &args, error, error_size) < 0) {
+        free(args.owned_workdir);
+        return -1;
+    }
     if (args.exec) {
-        if (start_command(args.handle, args.command, args.workdir, args.input,
-                           args.timeout, args.limit, args.pty, config, credential, error, error_size) < 0) {
+        int started = start_command(args.handle, args.command, args.workdir, args.input,
+                                    args.timeout, args.limit, args.pty, config, credential,
+                                    error, error_size);
+        free(args.owned_workdir);
+        if (started < 0) {
             *result = snag_tool_result_terminal(false, error[0] ? error : "Command could not start.");
             return *result ? 0 : -1;
         }
@@ -1013,7 +1033,7 @@ snag_tools_close_managed(const char *handle, bool user_interrupt,
 
 int
 snag_tools_run(const struct snag_response_item *call, const struct snag_config *config,
-              const struct snag_credential *credential, const char *session_workspace,
+              const struct snag_credential *credential, const char *session_cwd,
               snag_tool_pump_fn pump, void *pump_opaque, snag_wake_fd wake_fd,
               json_t **result, char *error, size_t error_size)
 {
@@ -1021,18 +1041,19 @@ snag_tools_run(const struct snag_response_item *call, const struct snag_config *
     uint32_t yield_ms;
     int rc;
     *result = NULL;
-    if (!call || call->kind != SNAG_ITEM_TOOL_CALL || !config || !session_workspace) return -1;
+    if (!call || call->kind != SNAG_ITEM_TOOL_CALL || !config || !session_cwd) return -1;
     if (!strcmp(call->name, "apply_patch")) {
         struct snag_secret_set secrets = {0};
         rc = snag_secret_set_build(&secrets, config, credential, error, error_size);
-        if (rc == 0) rc = snag_tools_apply_patch(call, session_workspace, result, error, error_size);
+        if (rc == 0) rc = snag_tools_apply_patch(call, session_cwd, result, error, error_size);
         if (rc == 0 && *result) rc = snag_secret_result(&secrets, *result, error, error_size);
         snag_secret_set_free(&secrets);
         return rc;
     }
-    rc = snag_tools_prepare(call, config, session_workspace, config->max_parallel_commands, handle, &yield_ms, result);
+    rc = snag_tools_prepare(call, config, session_cwd,
+        config->max_parallel_commands, handle, &yield_ms, result);
     if (rc != 0) return rc < 0 ? -1 : 0;
-    if (snag_tools_start(call, config, credential, session_workspace, result, error, error_size) < 0)
+    if (snag_tools_start(call, config, credential, session_cwd, result, error, error_size) < 0)
         return -1;
     const json_t *requested_yield = json_object_get(call->arguments, "yield_ms");
     if (!requested_yield) requested_yield = json_object_get(call->arguments, "yield_time_ms");

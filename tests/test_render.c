@@ -481,17 +481,22 @@ test_submit_holds_composer_until_activity(void)
     assert(strstr(output, "x >") == NULL);
     assert(strstr(output, "\u25f4") == NULL);
 
-    /* Activity releases the hold and the first composed frame carries the glyph. */
+    /* Spinner activity alone is not readiness. Only the engine's explicit
+     * prompt acknowledgement releases the hold. */
     capture = capture_open(false, true);
     assert(snag_term_set_spinner_states(&term, 1u << SNAG_TERM_SPINNER_PROVIDER) == 0);
-    /* The app re-arms the composer when the turn reports activity; that paint is
-     * the one the hold was waiting for, and it carries the activity glyph. */
+    assert(snag_term_set_prompt_template(&term, true, prompt, spinners, 8u,
+                                        1u << SNAG_TERM_SPINNER_PROVIDER) == 0);
+    (void)capture_close(&capture, output, sizeof(output), 0u);
+    assert(strstr(output, "\u25f4") == NULL);
+    term.submit_awaiting_activity = false;
+    capture = capture_open(false, true);
     assert(snag_term_set_prompt_template(&term, true, prompt, spinners, 8u,
                                         1u << SNAG_TERM_SPINNER_PROVIDER) == 0);
     (void)capture_close(&capture, output, sizeof(output), 0u);
     assert(strstr(output, "\u25f4") != NULL);
 
-    /* A hold whose turn never reports activity expires, so input cannot stick. */
+    /* Time and a later prompt configuration cannot release a held action. */
     assert(snag_term_set_spinner_states(&term, 0u) == 0);
     assert(snag_term_restore_draft(&term, "again") == 0);
     capture = capture_open(false, true);
@@ -505,6 +510,11 @@ test_submit_holds_composer_until_activity(void)
     assert(strstr(output, "x >") == NULL);
     struct timespec past = {.tv_sec = 0, .tv_nsec = 300000000L};
     assert(nanosleep(&past, NULL) == 0);
+    capture = capture_open(false, true);
+    assert(snag_term_set_prompt_template(&term, false, prompt, spinners, 8u, 0u) == 0);
+    (void)capture_close(&capture, output, sizeof(output), 0u);
+    assert(strstr(output, "x >") == NULL);
+    term.submit_awaiting_activity = false;
     capture = capture_open(false, true);
     assert(snag_term_set_prompt_template(&term, false, prompt, spinners, 8u, 0u) == 0);
     (void)capture_close(&capture, output, sizeof(output), 0u);

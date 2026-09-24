@@ -153,7 +153,7 @@ struct snag_session {
     /* Empty means the process configuration's validated shell. A model-selected
      * absolute shell path is replayed from command_shell_changed. */
     char command_shell[SNAG_CONFIG_PATH_MAX + 1u];
-    const char *workspace;
+    const char *cwd;
     char trash_name[SNAG_ID_HEX_LEN + 1u + SNAG_ID_HEX_LEN + 1u];
     char *dir_path;
     const char *first_user;
@@ -246,23 +246,23 @@ int snag_store_open(struct snag_store *store, const char *dotdir, char *error, s
 
 void snag_session_init(struct snag_session *session);
 void snag_session_close(struct snag_session *session);
-/* Resolve a workspace path and require an existing UTF-8 directory. label
- * names the workspace in diagnostics; NULL uses the bare "workspace" wording. */
-char *snag_workspace_resolve(const char *workspace, const char *label, char *error, size_t error_size);
-int snag_session_prepare(struct snag_session *session, const char *workspace,
+/* Resolve a cwd path and require an existing UTF-8 directory. label
+ * names the cwd in diagnostics; NULL uses the bare "cwd" wording. */
+char *snag_cwd_resolve(const char *cwd, const char *label, char *error, size_t error_size);
+int snag_session_prepare(struct snag_session *session, const char *cwd,
                          const char *provider, const char *model, const char *effort,
                          char *error, size_t error_size);
 int snag_session_persist(struct snag_store *store, struct snag_session *session,
                          char *error, size_t error_size);
 int snag_session_create(struct snag_store *store, struct snag_session *session,
-                       const char *workspace, const char *provider, const char *model,
+                       const char *cwd, const char *provider, const char *model,
                        const char *effort, char *error, size_t error_size);
 int snag_session_open(struct snag_store *store, struct snag_session *session,
                      const char *prefix, char *error, size_t error_size);
 int snag_session_open_last(struct snag_store *store, struct snag_session *session,
-                          const char *workspace, bool all, char *error, size_t error_size);
+                          char *error, size_t error_size);
 typedef int (*snag_store_emit_fn)(void *, const char *, size_t);
-int snag_store_list(struct snag_store *store, const char *workspace, bool all,
+int snag_store_list(struct snag_store *store,
                     bool include_archived, snag_store_emit_fn emit, void *opaque,
                     char *error, size_t error_size);
 int snag_session_archive(struct snag_session *session, uint64_t *written_seq, char *error, size_t error_size);

@@ -93,7 +93,7 @@ snag_app_media_command(struct app_state *app, const char *line, bool *handled)
         if (!mime) rc = snag_image_prepare(&app->session, arg, 0u, NULL, attachment_checkpoint, app,
                                            &part, error, sizeof(error));
         else {
-            rc = snag_media_snapshot(app->session.dir_fd, app->session.workspace, arg, mime,
+            rc = snag_media_snapshot(app->session.dir_fd, app->session.cwd, arg, mime,
                 SNAG_MEDIA_FILE_MAX, attachment_checkpoint, app, &asset, error, sizeof(error));
             if (!rc) part = json_pack("{s:s,s:O}", "type", "file", "asset", asset);
             json_decref(asset);

@@ -173,22 +173,21 @@ open_snapshot(struct snag_store *store, struct snag_session *session,
 /* On success the caller owns the snapshot; no selected-field copies. */
 static int
 matching_snapshot(struct snag_store *store, struct snag_session *snapshot,
-                   const char *id, const char *workspace, bool all, bool include_archived)
+                   const char *id, bool include_archived)
 {
     char error[128];
 
     snag_session_init(snapshot);
     if (strlen(id) == SNAG_ID_HEX_LEN && snag_hex_is_lower(id, SNAG_ID_HEX_LEN) &&
         open_snapshot(store, snapshot, id, error, sizeof(error)) == 0 &&
-        !snapshot->delete_requested && (include_archived || !snapshot->archived) &&
-        (all || strcmp(snapshot->workspace, workspace) == 0)) return 0;
+        !snapshot->delete_requested && (include_archived || !snapshot->archived)) return 0;
     snag_session_close(snapshot);
     return -1;
 }
 
 int
 snag_session_open_last(struct snag_store *store, struct snag_session *session,
-                      const char *workspace, bool all, char *error, size_t error_size)
+                      char *error, size_t error_size)
 {
     struct snag_directory *dir;
     const char *entry;
@@ -199,7 +198,7 @@ snag_session_open_last(struct snag_store *store, struct snag_session *session,
     if (!dir) return -1;
     while ((entry = snag_directory_next(dir)) != NULL) {
         struct snag_session snapshot;
-        if (matching_snapshot(store, &snapshot, entry, workspace, all, false) < 0) continue;
+        if (matching_snapshot(store, &snapshot, entry, false) < 0) continue;
         uint64_t last = snapshot.last_time_ms;
         if (!best[0] || last > best_time || (last == best_time && strcmp(entry, best) > 0)) {
             memcpy(best, entry, sizeof(best));
@@ -230,7 +229,7 @@ session_live(int dir_fd)
 }
 
 int
-snag_store_list(struct snag_store *store, const char *workspace, bool all,
+snag_store_list(struct snag_store *store,
                 bool include_archived, snag_store_emit_fn emit, void *opaque, char *error, size_t error_size)
 {
     struct snag_directory *dir;
@@ -241,14 +240,13 @@ snag_store_list(struct snag_store *store, const char *workspace, bool all,
     if (!dir) return -1;
     while ((entry = snag_directory_next(dir)) != NULL) {
         struct snag_session snapshot;
-        if (matching_snapshot(store, &snapshot, entry, workspace, all, include_archived) < 0) continue;
+        if (matching_snapshot(store, &snapshot, entry, include_archived) < 0) continue;
         struct snag_buf row = {.max = 8192u};
         bool live = session_live(snapshot.dir_fd);
-        if (snag_buf_printf(&row, "%.8s\t%s\t%llu\t%s\t%s\t%s%s%s\n", entry, snapshot.default_model,
+        if (snag_buf_printf(&row, "%.8s\t%s\t%llu\t%s\t%s\t%s\n", entry, snapshot.default_model,
                            (unsigned long long)snapshot.turn_count, snapshot.archived ? "archived" : "active",
                            live ? "live" : "idle",
-                           snapshot.first_user ? snapshot.first_user : "",
-                           all ? "\t" : "", all ? snapshot.workspace : "") < 0 ||
+                           snapshot.first_user ? snapshot.first_user : "") < 0 ||
             emit(opaque, (const char *)row.data, row.len) < 0) {
             snag_buf_free(&row);
             snag_session_close(&snapshot);

@@ -156,7 +156,8 @@ parse_auth_command(struct snag_cli *cli, int argc, char **argv, int first, char 
             cli->auth_provider = argv[i];
         } else goto invalid;
     }
-    if (cli->update_model_cache || cli->list || cli->last || cli->all || cli->provider || cli->irc_listen || cli->irc_client_count ||
+    if (cli->update_model_cache || cli->list || cli->last || cli->provider ||
+        cli->irc_listen || cli->irc_client_count ||
         cli->doc_instructions.count || cli->irc_no_listen || cli->irc_no_client ||
         cli->irc_model_nick || cli->irc_operator_nick || cli->irc_room_name ||
         ((cli->openai_device_auth || cli->meta_device_auth) && cli->with_api_key) ||
@@ -179,14 +180,14 @@ parse_options(struct snag_cli *cli, int argc, char **argv, int *index, char *err
         const char **slot;
         bool *toggle;
     } options[] = {
-        {NULL, 'C', true, &cli->workspace, NULL}, {NULL, 'm', true, &cli->model, NULL},
+        {NULL, 'm', true, &cli->model, NULL},
         {"--model-nick", 'n', true, &cli->irc_model_nick, NULL},
         {"--operator-nick", 'o', true, &cli->irc_operator_nick, NULL},
         {"--room-name", 'r', true, &cli->irc_room_name, NULL}, {"--dotdir", 0, true, &cli->dotdir, NULL},
         {"--provider", 0, true, &cli->provider, NULL}, {"--config", 0, true, &cli->config_path, NULL},
         {"--effort", 0, true, &cli->effort, NULL}, {"--listen", 's', true, &cli->irc_listen, NULL},
         {"--client", 'c', true, NULL, NULL}, {"--last", 0, false, NULL, &cli->last},
-        {"--all", 0, false, NULL, &cli->all}, {"--resume", 0, false, NULL, &cli->resume},
+        {"--resume", 0, false, NULL, &cli->resume},
         {"--no-listen", 0, false, NULL, &cli->irc_no_listen},
         {"--no-client", 0, false, NULL, &cli->irc_no_client}, {NULL, 'e', false, NULL, &cli->execute},
         {NULL, 'l', false, NULL, &cli->list}, {"--help", 'h', false, NULL, &cli->help},
@@ -310,21 +311,20 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t 
     if (!cli->execute && !cli->resume && !dashdash && positional >= 0 &&
         (strcmp(argv[positional], "login") == 0 || strcmp(argv[positional], "logout") == 0))
         return parse_auth_command(cli, argc, argv, positional, error, error_size);
-    if (cli->list && (cli->resume || cli->execute || cli->last || cli->workspace ||
+    if (cli->list && (cli->resume || cli->execute || cli->last ||
                       cli->doc_instructions.count ||
                       cli->model || cli->provider || cli->effort || cli->verbosity ||
                       cli->irc_listen || cli->irc_no_listen || cli->irc_no_client ||
                       cli->irc_client_count || cli->irc_model_nick ||
                       cli->irc_operator_nick || cli->irc_room_name)) return snag_errorf(error, error_size,
-                  "-l accepts only --config, --dotdir, --all, --update-model-cache, and presentation options");
+                  "-l accepts only --config, --dotdir, --update-model-cache, "
+                  "and presentation options");
     if (cli->execute && (cli->irc_listen || cli->irc_client_count || cli->irc_model_nick ||
                          cli->irc_operator_nick || cli->irc_room_name)) return snag_errorf(error, error_size,
                   "-e cannot be combined with network options");
     if ((cli->irc_listen || cli->irc_client_count) && positional >= 0 && !dashdash && !cli->resume)
         return snag_errorf(error, error_size, "networked initial chat text must follow --");
     if (cli->last && !cli->resume) return snag_errorf(error, error_size, "--last requires --resume");
-    if (cli->all && !cli->resume && !cli->list)
-        return snag_errorf(error, error_size, "--all requires --resume or -l");
     if (cli->model && !snag_text_valid(cli->model, 1u,
         SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_EFFORT_MAX + 1u))
         return snag_errorf(error, error_size, "model exceeds the supported structural bounds");
@@ -347,8 +347,6 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t 
         }
         if (cli->last && positional >= 0 && !dashdash)
             return snag_errorf(error, error_size, "--last cannot be combined with a session id");
-        if (cli->all && cli->resume_id)
-            return snag_errorf(error, error_size, "--all is invalid with an exact session id");
         if (positional >= 0 && positional < argc) {
             cli->prompt = snag_join_words(argv + positional, (size_t)(argc - positional),
                                          SNAG_MAX_DIRECT_PROMPT);
@@ -392,14 +390,12 @@ snag_cli_usage(int fd)
         "      --no-color               alias for --color=never\n"
         "      --markdown               render model Markdown (default)\n"
         "      --no-markdown            show model Markdown literally\n"
-        "  -C DIR                       workspace (or resume relocation)\n"
         "  -d DIR                       additional working docs with AGENTS.md; repeatable\n"
         "  -m [PROVIDER/]MODEL[/EFFORT]  model from next turn onward (start or resume)\n"
         "  -v                           exact detail level: repeat 1 through 6 times\n"
         "                               1 tools; 2 previews; 3 full tools;\n"
         "                               4 debug; 5 protocol; 6 wire (default 0)\n"
         "      --resume [ID|--last]      resume a durable session\n"
-        "      --all                    include sessions from all workspaces\n"
         "  -e                           one-shot execution (prompt/stdin, or saved work on resume)\n"
         "  -l                           list sessions\n" "  -h                           show short help\n"
         "      --help                   open the manual (short help if unavailable)\n"

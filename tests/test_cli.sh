@@ -413,22 +413,22 @@ strip_resume "$root/recovered.err"
 only_resume "$root/recovered.err"
 
 mkdir -m 700 "$root/work2"
-out=$($bin -e --resume -C "$root/work2" "$id" -- ping 2>"$root/relocate.err")
+out=$($bin -e --resume "$id" -- ping 2>"$root/resume-home.err")
 [ "$out" = pong ]
-strip_resume "$root/relocate.err"
-only_resume "$root/relocate.err"
-python3 - "$dotdir/sessions/$id/events.jsonl" "$root/work2" <<'PY'
+strip_resume "$root/resume-home.err"
+only_resume "$root/resume-home.err"
+python3 - "$dotdir/sessions/$id/events.jsonl" "$HOME" <<'PY'
 import json
 import sys
 events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-relocations = [event for event in events if event["type"] == "workspace_changed"]
-assert len(relocations) == 1
-assert relocations[0]["data"]["new_workspace"] == sys.argv[2]
+assert not any(event["type"] == "workspace_changed" for event in events)
 turns = [event for event in events if event["type"] == "turn_started"]
-assert turns[-1]["data"]["workspace"] == sys.argv[2]
+assert turns[-1]["data"]["cwd"] == sys.argv[2]
 PY
 (cd "$root/work2" && $bin -l >"$root/list2" 2>"$root/list2.err")
 grep -q "^$(printf %.8s "$id")" "$root/list2"
+expect_exit 2 $bin -C "$root/work2" -l >"$root/removed-c.out" 2>"$root/removed-c.err"
+expect_exit 2 $bin --all -l >"$root/removed-all.out" 2>"$root/removed-all.err"
 
 out=$($bin -e -- tool_only 2>"$root/tool.err")
 [ "$out" = "tool complete" ]
@@ -876,7 +876,7 @@ out=$($bin --dotdir "$resume_opt_state" -e --resume "$resume_opt_id" --effort lo
 expect_exit 2 $bin --dotdir "$resume_opt_state" -e --resume "$resume_opt_id" ping >"$root/resume-opt-bare.out" 2>"$root/resume-opt-bare.err"
 [ ! -s "$root/resume-opt-bare.out" ]
 grep -q 'resume follow-up must follow --' "$root/resume-opt-bare.err"
-out=$($bin --dotdir "$resume_opt_state" -e --resume "$resume_opt_id" -C "$root/work2" -- ping 2>"$root/resume-opt-relocate.err")
+out=$($bin --dotdir "$resume_opt_state" -e --resume "$resume_opt_id" -- ping 2>"$root/resume-opt-home.err")
 [ "$out" = pong ]
 
 # Automatic compaction is threshold-gated and durable.
@@ -1206,6 +1206,7 @@ PY
 # Document roots: CLI validation, quoting, launch-relative paths and resume hints.
 python3 - "$bin" "$root" <<'PY'
 import json
+import os
 import pathlib
 import shlex
 import subprocess
@@ -1213,10 +1214,10 @@ import sys
 
 binary, root = sys.argv[1], pathlib.Path(sys.argv[2])
 state = root / "docs-state"
-workspace = root / "docs-workspace"
-workspace.mkdir()
-agents = workspace / "AGENTS.md"
-agents.write_text("Workspace content must not be injected.\n")
+home = root / "docs-home"
+home.mkdir()
+agents = home / "AGENTS.md"
+agents.write_text("Home directory notes.\n")
 dirs = [root / 'docs "quoted"', root / "docs-second"]
 for directory in dirs:
     directory.mkdir()
@@ -1225,10 +1226,11 @@ config = root / "docs.ini"
 config.write_text("[provider openai]\n[agent]\nread_agents_md=true\n")
 common = [binary, "--dotdir", str(state), "--config", str(config)]
 launch = root / "work"
-options = ["-C", str(workspace), "-d", '../docs "quoted"',
+options = ["-d", '../docs "quoted"',
            "-d" + str(dirs[1]), "-d", str(dirs[0] / ".")]
 result = subprocess.run([*common, *options, "-e", "--", "ping"],
-                        cwd=launch, text=True, capture_output=True, timeout=15)
+                        cwd=launch, env={**os.environ, "HOME": str(home)},
+                        text=True, capture_output=True, timeout=15)
 assert result.returncode == 0, result.stderr
 session = next((state / "sessions").iterdir())
 def turns():
@@ -1238,7 +1240,8 @@ expected = [str(agents), *[str(d / "AGENTS.md") for d in dirs]]
 assert turns()[-1]["instructions"][-3:] == expected
 command = shlex.split(result.stderr.splitlines()[-1])
 assert [pathlib.Path(command[i + 1]) for i, arg in enumerate(command) if arg == "-d"] == dirs
-resumed = subprocess.run([command[0], "-e", *command[1:], "--", "ping"], cwd=workspace,
+resumed = subprocess.run([command[0], "-e", *command[1:], "--", "ping"], cwd=launch,
+                         env={**os.environ, "HOME": str(home)},
                          text=True, capture_output=True, timeout=15)
 assert resumed.returncode == 0, resumed.stderr
 assert turns()[-1]["instructions"][-3:] == expected

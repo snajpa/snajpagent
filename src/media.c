@@ -178,7 +178,7 @@ unchanged(const snag_file_info *a, const snag_file_info *b)
 }
 
 int
-snag_media_snapshot(int session_fd, const char *workspace, const char *path,
+snag_media_snapshot(int session_fd, const char *cwd, const char *path,
                     const char *mime, size_t max_bytes,
                     int (*pump)(void *, unsigned int), void *opaque,
                     json_t **asset, char *error, size_t error_size)
@@ -191,10 +191,10 @@ snag_media_snapshot(int session_fd, const char *workspace, const char *path,
     uint64_t copied = 0;
     bool created = false;
     *asset = NULL;
-    if (!workspace || !path || (mime && !mime_valid(mime)) || !max_bytes ||
+    if (!cwd || !path || (mime && !mime_valid(mime)) || !max_bytes ||
         max_bytes > SNAG_MEDIA_FILE_MAX) { errno = EINVAL; goto out; }
     if (pump && pump(opaque, 0u)) { errno = ECANCELED; goto out; }
-    input = snag_open_inspect_path(workspace, path);
+    input = snag_open_inspect_path(cwd, path);
     if (input < 0 || snag_fstat(input, &before) < 0) goto out;
     if (!S_ISREG(before.st_mode) || before.st_size <= 0) { errno = EINVAL; goto out; }
     if ((uint64_t)before.st_size > max_bytes) { errno = EFBIG; goto out; }

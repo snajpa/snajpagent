@@ -13,6 +13,8 @@
 struct snag_ui;
 
 typedef int (*snag_provider_pump_fn)(void *opaque, unsigned int timeout_ms);
+/* Called once after a response.created event has been validated. */
+typedef int (*snag_provider_ready_fn)(void *opaque);
 
 /* Pump: -1 failure, 0 continue, 1 steer, 2 cancel, 3 new non-steering input.
  * New input lets a healthy response finish but prevents further retries. */
@@ -98,7 +100,8 @@ int snag_provider_native_compaction_probe(struct snag_provider_connection connec
 int snag_provider_responses_create(struct snag_provider_connection connection,
                                   const json_t *request, snag_responses_emit_fn emit,
                                   void *emit_opaque, snag_responses_hosted_fn hosted,
-                                  void *hosted_opaque, struct snag_response_graph *graph,
+                                  void *hosted_opaque, snag_provider_ready_fn ready,
+                                  void *ready_opaque, struct snag_response_graph *graph,
                                   struct snag_provider_failure *failure, char *error, size_t error_size,
                                   unsigned int *retry_count);
 

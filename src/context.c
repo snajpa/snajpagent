@@ -720,7 +720,7 @@ append_instruction_messages(struct context_builder *builder)
  * an empty note, a read error or invalid text append nothing. Tail-kept truncation preserves the
  * newest state and replaces the omitted prefix with an explicit marker. */
 static int
-append_worknote(struct context_builder *builder, const char *workspace)
+append_worknote(struct context_builder *builder, const char *cwd)
 {
     struct snag_buf message = {0};
     snag_file_info st;
@@ -734,7 +734,7 @@ append_worknote(struct context_builder *builder, const char *workspace)
     int fd = -1;
     int rc = 0;
 
-    if (snag_instructions_worknote(workspace, &note, error, sizeof(error)) < 0 || !note) return 0;
+    if (snag_instructions_worknote(cwd, &note, error, sizeof(error)) < 0 || !note) return 0;
     fd = snag_open_read(note, false);
     if (fd < 0) goto out;
     if (snag_fstat(fd, &st) < 0 || st.st_size <= 0) goto out;
@@ -1250,6 +1250,11 @@ context_event(void *opaque, const struct snag_session *state,
         if (builder->steering && current && snag_instructions_match_metadata(builder->instructions,
                 json_object_get(data, "instructions"), error, error_size) < 0) return -1;
         if (append_deferred_input(builder) < 0) return -1;
+        /* A rebase already installed the current input before this journal walk.
+         * The summarized turn_started still checks metadata, but is not a
+         * second user request. */
+        if (summarized && current && builder->session &&
+            builder->session->context_rebase_seq > builder->session->compact_seq) return 0;
         const char *kind = snag_json_string(data, "input_kind");
         if (!strcmp(kind, "goal")) return !summarized && builder->recovery_count ? 0 :
                    append_host_input(builder->request_input, text);
@@ -1339,7 +1344,8 @@ exec_tool_schema(uint32_t max_wait_ms, uint32_t max_timeout_ms, uint32_t max_out
         "{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},"
          "s:{s:[s,s],s:i,s:I,s:s},s:{s:[s,s],s:i,s:I,s:s},s:{s:[s,s],s:i,s:I,s:s}}",
         "command", "type", "string", "description", "Source for the configured shell, at most 262144 UTF-8 bytes. Legacy cmd is accepted; supply only one spelling.",
-        "workdir", "type", "string", "null", "description", "Existing absolute working directory; omission uses the session workspace.",
+        "workdir", "type", "string", "null", "description", "Existing absolute or ./ working "
+            "directory; omission uses the session cwd.",
         "stdin", "type", "string", "null", "description", "Initial input, at most 1048576 UTF-8 bytes. Null keeps input open; a string sends its bytes then closes input (empty string closes immediately).",
         "pty", "type", "boolean", "null", "description", "True allocates a pseudo-terminal; false/null uses pipes. PTY merges stdout and stderr.",
         "yield_ms", "type", "integer", "null", "minimum", 0, "maximum", (json_int_t)max_wait_ms,
@@ -1380,14 +1386,16 @@ read_only_schema(const char *name)
     json_t *props;
 
     if (read) props = json_pack("{s:{s:s,s:s},s:{s:[s,s],s:i,s:i,s:s},s:{s:[s,s],s:i,s:i,s:s}}",
-            "path", "type", "string", "description", "Literal UTF-8 path (1..4096 bytes), absolute or relative to workspace. Regular file only; symlinks are rejected.",
+            "path", "type", "string", "description", "Literal UTF-8 path (1..4096 bytes), absolute "
+                "or relative to cwd. Regular file only; symlinks are rejected.",
             "start_line", "type", "integer", "null", "minimum", 1, "maximum", INT32_MAX,
                 "description", "Inclusive 1-based first line; null starts at line 1.",
             "end_line", "type", "integer", "null", "minimum", 1, "maximum", INT32_MAX,
                 "description", "Inclusive last line, at least start_line; null reads to end. Narrow the range if output is too large.");
     else if (grep) props = json_pack("{s:{s:s,s:s},s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},"
                            "s:{s:[s,s],s:s},s:{s:[s,s],s:i,s:i,s:s},s:{s:[s,s],s:i,s:i,s:s}}",
-            "path", "type", "string", "description", "Literal file/directory path (1..4096 UTF-8 bytes), absolute or workspace-relative. Symlinks are rejected.",
+            "path", "type", "string", "description", "Literal file/directory path (1..4096 UTF-8 "
+                "bytes), absolute or cwd-relative. Symlinks are rejected.",
             "pattern", "type", "string", "description", "POSIX extended regular expression (0..4096 UTF-8 bytes), or literal text when literal=true. Not a shell command.",
             "recursive", "type", "boolean", "null", "description", "Recurse into directories; null defaults to true.",
             "ignore_case", "type", "boolean", "null", "description", "Case-insensitive matching; false/null uses case-sensitive matching.",
@@ -1397,7 +1405,9 @@ read_only_schema(const char *name)
             "limit", "type", "integer", "null", "minimum", 1, "maximum", 1000,
                 "description", "Maximum matches to return; null means 200. Out-of-range values are rejected; incomplete scans are reported.");
     else props = json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:i,s:i,s:s},s:{s:[s,s],s:i,s:i,s:s}}",
-            "path", "type", "string", "description", "Literal directory path (1..4096 UTF-8 bytes), absolute or workspace-relative; symlinks are not followed.",
+            "path", "type", "string", "description", "Literal directory path (1..4096 UTF-8 "
+                "bytes), "
+                "absolute or cwd-relative; symlinks are not followed.",
             "recursive", "type", "boolean", "null", "description", "Recurse into directories; false/null lists only this directory.",
             "offset", "type", "integer", "null", "minimum", 0, "maximum", 1000000,
                 "description", "Entries to skip; null means 0. Use returned next_offset to continue.",
@@ -1417,17 +1427,21 @@ write_schema(const char *name)
     json_t *props;
 
     if (write) props = json_pack("{s:{s:s,s:s},s:{s:s,s:s}}",
-            "path", "type", "string", "description", "Workspace-relative UTF-8 path (1..4096 bytes). Parent directories must already exist; symlinks and .. are rejected.",
+            "path", "type", "string", "description", "Absolute or cwd-relative UTF-8 path (1..4096 "
+                "bytes); ./ names cwd. Parent directories must already exist; symlinks and .. are "
+                    "rejected.",
             "content", "type", "string", "description", "New file content, at most 16777216 UTF-8 bytes. Empty creates an empty file. Atomic: a failed write leaves the previous file untouched.");
     else props = json_pack("{s:{s:s,s:s},s:{s:s,s:s},s:{s:s,s:s},s:{s:[s,s],s:i,s:i,s:s}}",
-            "path", "type", "string", "description", "Workspace-relative UTF-8 path (1..4096 bytes).",
+            "path", "type", "string", "description", "Absolute or cwd-relative UTF-8 path (1..4096 "
+                "bytes); ./ names cwd.",
             "old", "type", "string", "description", "Exact text to replace (1..1048576 bytes). It must occur exactly count times; otherwise nothing changes.",
             "new", "type", "string", "description", "Replacement text, at most 16777216 bytes; empty deletes the matched text.",
             "count", "type", "integer", "null", "minimum", 1, "maximum", 1000000,
                 "description", "Exact number of occurrences to replace; null or omitted means exactly one.");
     return tool_schema(name, write ? "path content" : "path old new", write ?
-        "Create or replace one workspace file atomically. Prefer edit_file for a targeted change." :
-        "Replace exact text in one workspace file atomically; fails without changing the file when the occurrence count differs.",
+        "Create or replace one file atomically. Prefer edit_file for a targeted change." :
+        "Replace exact text in one file atomically; fails without changing the file when the "
+            "occurrence count differs.",
         props);
 }
 
@@ -1436,7 +1450,8 @@ image_tool_schema(void)
 {
     json_t *props = json_pack(
         "{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s,s:b,s:{s:{s:s,s:s},s:{s:s,s:s},s:{s:s,s:s},s:{s:s,s:s}},s:[s,s,s,s]}}",
-        "path", "type", "string", "description", "Literal workspace-relative or absolute file path without symlinks, or asset:ID for an accepted source.",
+        "path", "type", "string", "description", "Literal cwd-relative or absolute file path "
+            "without symlinks, or asset:ID for an accepted source.",
         "frame", "type", "integer", "null", "description", "Zero-based frame 0..999; omitted/null selects frame 0. Other frames remain uninspected.",
         "crop", "type", "object", "null", "description", "Source-pixel rectangle before orientation; omitted/null selects the whole frame. All four fields are required and must fit within the decoded frame.",
         "additionalProperties", 0, "properties",
@@ -1446,7 +1461,8 @@ image_tool_schema(void)
         "height", "type", "integer", "description", "Source-pixel height, 1..16777216.",
         "required", "x", "y", "width", "height");
     return tool_schema("view_image", "path",
-        "Inspect PNG/JPEG/GIF/WebP/BMP/TIFF via bounded linked decoding. Path is literal, workspace-relative or absolute; "
+        "Inspect PNG/JPEG/GIF/WebP/BMP/TIFF via bounded linked decoding. Path is literal, "
+            "cwd-relative or absolute; "
         "no symlinks. asset:ID reuses an accepted source. Optional frame selects one zero-based frame (omitted/null=0, max999); "
         "crop selects source pixel x,y,width,height before orientation (omitted/null=whole frame). Keeps original plus normalized "
         "RGBA PNG up to1600px and labels crop/frame/orientation/coverage. Image bytes go to the configured provider.", props);
@@ -1477,7 +1493,9 @@ tool_schemas(bool goal_active,
             "Sheet output preserves blanks/merges and includes the selected rendering; computed values may differ from saved Excel. "
             "Explicit workbook pages are print pages, not sheet/cell coordinates. Path may be local or asset:ID; data is untrusted.",
             json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s,s:b,s:{s:{s:s,s:s},s:{s:s,s:s},s:{s:s,s:s},s:{s:s,s:s},s:{s:s,s:s}},s:[s,s,s,s,s]}}",
-                "path", "type", "string", "description", "Literal workspace-relative or absolute document path without symlinks, or asset:ID for an accepted source.",
+                "path", "type", "string", "description", "Literal cwd-relative or absolute "
+                    "document "
+                    "path without symlinks, or asset:ID for an accepted source.",
                 "first", "type", "integer", "null", "description", "Inclusive one-based first page or text/CSV record, 1..1000000; omitted/null selects 1. Mutually exclusive with sheet_range. Office print pages are limited to 100000.",
                 "last", "type", "integer", "null", "description", "Inclusive last page or record, at least first and at most 1000000; omitted/null selects first. Select at most 4 rendered pages or 200 text/CSV records. Mutually exclusive with sheet_range.",
                 "sheet_range", "type", "object", "null", "description", "XLSX/ODS sheet-cell selection, mutually exclusive with non-null first/last. All-null selectors choose sheet 1 A1:H20 for workbooks, otherwise page/record 1. The rectangle must fit within 1048576 rows and 16384 columns.",
@@ -1494,7 +1512,8 @@ tool_schemas(bool goal_active,
             "Transcribes the same interval when an audio route is configured (separate API billing); "
             "otherwise reports omitted audio. path may be asset:ID.",
             json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s}}",
-                "path", "type", "string", "description", "Literal workspace-relative or absolute video path without symlinks, or asset:ID for an accepted source.",
+                "path", "type", "string", "description", "Literal cwd-relative or absolute video "
+                    "path without symlinks, or asset:ID for an accepted source.",
                 "start_s", "type", "integer", "null", "description", "Start in whole seconds, 0..86400; omitted/null selects 0.",
                 "end_s", "type", "integer", "null", "description", "Exclusive end in whole seconds, greater than start_s and at most 30 seconds later; omitted/null selects start_s+30, clipped to duration.",
                 "frames", "type", "integer", "null", "description", "Number of uniformly sampled frames, 1..8; omitted/null selects 8. Unsampled content remains uninspected."))) < 0) {
@@ -1503,18 +1522,39 @@ tool_schemas(bool goal_active,
     }
     if (json_array_append_new(tools, tool_schema("listen_audio", "path question", "Ask an audio model about speech or sounds in a retained file. Paid, separate configured API route; no coding history or tools. If no audio route is configured, execution returns a factual unavailable result.",
             json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s},s:{s:s,s:s}}",
-                "path", "type", "string", "description", "Literal workspace-relative or absolute audio/video path without symlinks, or asset:ID for an accepted source.",
+                "path", "type", "string", "description", "Literal cwd-relative or absolute "
+                    "audio/video path without symlinks, or asset:ID for an accepted source.",
                 "start_s", "type", "integer", "null", "description", "Start in whole seconds, 0..86400; omitted/null selects 0.",
                 "end_s", "type", "integer", "null", "description", "Exclusive end in whole seconds, greater than start_s and at most 60 seconds later; omitted/null selects start+60s.",
                 "question", "type", "string", "description", "Question about the selected speech or sounds, 1..16384 UTF-8 bytes. Sent to the configured audio model without coding history or tools."))) < 0 ||
         json_array_append_new(tools, tool_schema("transcribe_audio", "path", "Transcribe a selected audio/video interval via a paid audio API. If no audio route is configured, execution returns a factual unavailable result.",
             json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s}}",
-                "path", "type", "string", "description", "Literal workspace-relative or absolute audio/video path without symlinks, or asset:ID for an accepted source.",
+                "path", "type", "string", "description", "Literal cwd-relative or absolute "
+                    "audio/video path without symlinks, or asset:ID for an accepted source.",
                 "start_s", "type", "integer", "null", "description", "Start in whole seconds, 0..86400; omitted/null selects 0.",
                 "end_s", "type", "integer", "null", "description", "Exclusive end in whole seconds, greater than start_s and at most 60 seconds later; omitted/null selects start+60s."))) < 0 ||
         json_array_append_new(tools, tool_schema("speak_text", "text", "Generate AI speech via a paid API and retain a WAV asset. If no speech route is configured, execution returns a factual unavailable result.",
             json_pack("{s:{s:s,s:s}}", "text", "type", "string", "description",
                 "Text to synthesize, 1..4096 UTF-8 bytes. Uses the configured voice and retains a WAV without playback or capture."))) < 0 ||
+        json_array_append_new(tools, tool_schema("get_cwd", "",
+            "Return the default working directory used by relative file paths and command calls. "
+            "New sessions start in the user's home directory; cd changes it for later calls.",
+            json_object())) < 0 ||
+        json_array_append_new(tools, tool_schema("cd", "path",
+            "Change the session's current working directory for later file and command calls. "
+            "Paths may be absolute or start ./ relative to current cwd. Existing running commands "
+                "keep their workdir. "
+            "The directory is saved for resume.",
+            json_pack("{s:{s:s,s:s}}", "path", "type", "string", "description",
+                "Existing directory, absolute or relative to current cwd."))) < 0 ||
+        json_array_append_new(tools, tool_schema("select_model", "selector",
+            "Select the provider/model/effort for the next response, including within the current "
+                "turn. "
+            "A completed tool result is retained; ongoing command handles remain live. "
+            "Use [provider/]model[/effort] or a numbered row from the current model cache. "
+            "This changes the session selection, not the configuration file.",
+            json_pack("{s:{s:s,s:s}}", "selector", "type", "string", "description",
+                "Model selector, e.g. provider/model/effort or numbered cached row."))) < 0 ||
         json_array_append_new(tools, read_only_schema("list_files")) < 0 ||
         json_array_append_new(tools, read_only_schema("read_file")) < 0 ||
         json_array_append_new(tools, read_only_schema("grep")) < 0 ||
@@ -1565,11 +1605,14 @@ tool_schemas(bool goal_active,
             "Operations are *** Add File: path (every content line starts +), "
             "*** Delete File: path, or *** Update File: path with @@ hunks "
             "whose context/removal/addition lines start space/-/+. There is no move/rename operation. "
-            "Paths must be relative to the session workspace, without .. or symlink traversal. "
+            "Patch paths may be absolute or relative to the current cwd, including ./; no .. or "
+                "symlink traversal. "
             "Example: *** Begin Patch\n*** Add File: example.txt\n+hello\n*** End Patch\n",
             json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s}}",
                 "patch", "type", "string", "description", "Patch text in the described format, at most 2097152 UTF-8 bytes. Ordinary diff headers (---/+++) are not accepted.",
-                "workdir", "type", "string", "null", "description", "Omission/null uses the session workspace. A supplied path must equal the workspace."))) < 0) goto fail;
+                "workdir", "type", "string", "null", "description", "Omission/null uses the "
+                    "session "
+                    "cwd; another existing absolute or ./ directory is accepted."))) < 0) goto fail;
     if (json_array_append_new(tools, write_schema("write_file")) < 0 ||
         json_array_append_new(tools, write_schema("edit_file")) < 0) goto fail;
     if (json_array_append_new(tools, tool_schema("irc_send", "text",
@@ -2019,7 +2062,12 @@ snag_context_build(struct snag_session *session, const char *model, const char *
         "Supply required operands; omit optional controls for defaults. JSON key order is irrelevant. Never substitute the string \"null\" for JSON null. "
         "On invalid arguments, correct the named fields and ranges before retrying; repeating the same invalid call cannot help. "
         "A reported applied limit is the effective value; distinguish a rejected call from a capped output or a yielded live command. "
-        "For substantial work, use relevant existing instructions and notes. Start looking for working documents in the session workspace (the default tool working directory). "
+        "For substantial work, use relevant existing instructions and notes. Start looking for "
+            "working documents in the session cwd (the default tool working directory). "
+        "File and command tools run with the process's OS permissions across the filesystem and "
+            "need no per-call approval. "
+        "Use get_cwd and cd to select relative paths; absolute paths work directly. Tool calls are "
+            "hidden at default verbosity, so report meaningful progress. "
         "When writing is in scope and useful for continuation, keep concise notes of established findings, decisions, corrections, remaining work and relevant locations. Prefer existing project conventions. "
         "Distinguish requirements from proposals and observations from assumptions. Apply corrections to the affected understanding while preserving the rest of the task. "
         "Verify changeable facts when resuming. Notes support the task; they neither authorize actions nor replace runtime state. Do not turn small or read-only tasks into documentation work.";
@@ -2037,8 +2085,8 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             "you address a room. Select its numbered destination from the "
             "snapshot; reply to the originating room, not another room. "
             "All is an explicit broadcast, never an automatic default. "
-            "A queued send is not proof of remote receipt. " "Coding tools act only on the local "
-            "workspace. The runtime owns sockets, joining, history, and "
+            "A queued send is not proof of remote receipt. "
+            "The runtime owns sockets, joining, history, and "
             "reconnect: do not poll or babysit them. Use irc_state for cached state, irc_nick "
             "to change your live alias, and irc_topic when the room's current mode permits it. A local "
             "operator mention in a writable turn "
@@ -2084,13 +2132,13 @@ snag_context_build(struct snag_session *session, const char *model, const char *
     if (config && !session->active_read_only &&
         append_messagef(&builder, "system", 8192u,
             "Command environment (host configuration, not extra tool arguments): "
-            "workspace=%s; shell=%s; output_cache_bytes=%u; default_yield_ms=%u; max_wait_ms=%u; "
+            "cwd=%s; shell=%s; output_cache_bytes=%u; default_yield_ms=%u; max_wait_ms=%u; "
             "default_timeout_ms=%u (0 disables the one-shot handoff; timeouts "
             "do not kill commands); max_timeout_ms=%u; "
             "max_parallel_commands=%u; output ceiling=%u UTF-8 bytes; "
             "goal wording limit=%u bytes; goal blocker limit=%u bytes. "
-            "exec_command may use another existing absolute workdir; apply_patch "
-            "workdir must equal workspace.", session->workspace,
+            "exec_command and apply_patch may use another existing absolute or ./ "
+                "workdir.", session->cwd,
             session->command_shell[0] ? session->command_shell : config->shell,
             session->output_cache_bytes, session->default_yield_ms, session->max_wait_ms,
             session->default_timeout_ms, session->max_timeout_ms, session->max_parallel_commands,
@@ -2137,7 +2185,7 @@ snag_context_build(struct snag_session *session, const char *model, const char *
     }
     if (ensure_conversation_input(builder.request_input) < 0) goto out;
     controller_start = json_array_size(builder.request_input);
-    if (append_worknote(&builder, session->workspace) < 0) {
+    if (append_worknote(&builder, session->cwd) < 0) {
         snag_errorf(error, error_size, "cannot install the local work note");
         goto out;
     }

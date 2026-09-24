@@ -141,7 +141,7 @@ prepare(int root_fd, const char *path, char leaf[SNAG_NAME_MAX_BYTES + 1u], char
 }
 
 int
-snag_tools_write_file(const struct snag_response_item *call, const char *session_workspace,
+snag_tools_write_file(const struct snag_response_item *call, const char *session_cwd,
                       json_t **result, char *error, size_t error_size)
 {
     const char *path, *content;
@@ -151,7 +151,8 @@ snag_tools_write_file(const struct snag_response_item *call, const char *session
     snag_file_info info;
     int root_fd = -1, parent_fd = -1, fd = -1;
 
-    if (!result || !session_workspace) return snag_fail(error, error_size, EINVAL, "invalid write_file destination");
+    if (!result || !session_cwd)
+        return snag_fail(error, error_size, EINVAL, "invalid write_file destination");
     *result = NULL;
     snag_buf_init(&bytes, TOOL_FILE_MAX);
     memset(&permissions, 0, sizeof(permissions));
@@ -162,9 +163,9 @@ snag_tools_write_file(const struct snag_response_item *call, const char *session
         *result = rejected(*error ? error : "write_file requires bounded path and content strings.");
         goto out;
     }
-    root_fd = snag_open_read(session_workspace, true);
+    root_fd = snag_file_root_open(session_cwd, path, error, error_size);
     if (root_fd < 0 || prepare(root_fd, path, leaf, error, error_size) < 0) {
-        *result = failed(*error ? error : "workspace cannot be opened");
+        *result = failed(*error ? error : "file root cannot be opened");
         goto out;
     }
     parent_fd = snag_file_parent(root_fd, path, leaf, error, error_size);
@@ -212,7 +213,7 @@ out:
 }
 
 int
-snag_tools_edit_file(const struct snag_response_item *call, const char *session_workspace,
+snag_tools_edit_file(const struct snag_response_item *call, const char *session_cwd,
                      json_t **result, char *error, size_t error_size)
 {
     const char *path, *old, *replacement;
@@ -223,7 +224,8 @@ snag_tools_edit_file(const struct snag_response_item *call, const char *session_
     size_t old_len;
     int root_fd = -1, parent_fd = -1;
 
-    if (!result || !session_workspace) return snag_fail(error, error_size, EINVAL, "invalid edit_file destination");
+    if (!result || !session_cwd)
+        return snag_fail(error, error_size, EINVAL, "invalid edit_file destination");
     *result = NULL;
     snag_buf_init(&source, TOOL_FILE_MAX + 1u);
     snag_buf_init(&updated, TOOL_FILE_MAX);
@@ -237,9 +239,9 @@ snag_tools_edit_file(const struct snag_response_item *call, const char *session_
         goto out;
     }
     old_len = strlen(old);
-    root_fd = snag_open_read(session_workspace, true);
+    root_fd = snag_file_root_open(session_cwd, path, error, error_size);
     if (root_fd < 0 || prepare(root_fd, path, leaf, error, error_size) < 0) {
-        *result = failed(*error ? error : "workspace cannot be opened");
+        *result = failed(*error ? error : "file root cannot be opened");
         goto out;
     }
     parent_fd = snag_file_parent(root_fd, path, leaf, error, error_size);

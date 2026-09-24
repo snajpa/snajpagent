@@ -44,7 +44,7 @@ def run_case(binary, provider, root, name, prompt, respond, rules="", read_only=
         result = subprocess.run(
             [str(binary), "--config", str(config), "--dotdir", str(state),
              "-e", "--", ("/ro " if read_only else "") + prompt],
-            cwd=case, env={**os.environ, "SNAJPAGENT_IRC_UI_KEY": SECRET},
+            cwd=case, env={**os.environ, "HOME": str(case), "SNAJPAGENT_IRC_UI_KEY": SECRET},
             capture_output=True, text=True, timeout=60)
     finally:
         provider.runtime_handler = None
@@ -103,6 +103,104 @@ def case_write_and_edit(binary, provider, root):
     assert all(item["status"] == "succeeded" for item in results), results
     assert (case / "created.txt").read_text() == "bye\n"
     print("tools e2e write/edit: ok", flush=True)
+
+
+def case_explicit_file_paths(binary, provider, root):
+    outside = root / "outside-working-directory"
+    outside.mkdir()
+    outside_file = outside / "outside.txt"
+    patch_file = outside / "patched.txt"
+    case_path = root / "explicit-file-paths"
+    duplicate = case_path / "duplicate.txt"
+    calls = [
+        ("get_cwd", {}),
+        ("write_file", {"path": "./own.txt", "content": "inside\n"}),
+        ("write_file", {"path": str(outside_file), "content": "outside\n"}),
+        ("read_file", {"path": str(outside_file)}),
+        ("edit_file", {"path": str(outside_file), "old": "outside", "new": "changed"}),
+        ("apply_patch", {"patch": "*** Begin Patch\n*** Add File: " + str(patch_file) +
+                         "\n+patched\n*** End Patch\n", "workdir": "./subdir"}),
+        ("exec_command", {"command": "pwd", "workdir": "./subdir"}),
+        ("cd", {"path": "./subdir"}),
+        ("get_cwd", {}),
+        ("exec_command", {"command": "pwd"}),
+        ("apply_patch", {"patch": "*** Begin Patch\n*** Add File: ./duplicate.txt\n+first\n"
+                         "*** Add File: " + str(duplicate) + "\n+second\n*** End Patch\n",
+                         "workdir": str(case_path)}),
+    ]
+    case, result, events = run_case(binary, provider, root, "explicit-file-paths",
+                                     "use explicit local file paths",
+                                     responder(provider, calls, "file paths done"),
+                                     prepare=lambda case: (case / "subdir").mkdir())
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    entries = finished(events)
+    assert len(entries) == len(calls), entries
+    results = [entry["data"]["result"] for entry in entries]
+    assert all(item["status"] == "succeeded" for item in results[:-1]), results
+    assert results[-1]["status"] == "patch_rejected" and "duplicate" in results[-1]["model_text"]
+    assert str(case_path) in results[0]["model_text"]
+    assert (case / "own.txt").read_text() == "inside\n"
+    assert outside_file.read_text() == "changed\n"
+    assert patch_file.read_text() == "patched\n"
+    assert str(case / "subdir") in results[6]["model_text"]
+    assert results[8]["model_text"] == str(case / "subdir")
+    assert str(case / "subdir") in results[9]["model_text"]
+    assert not duplicate.exists()
+    assert any(entry["type"] == "cwd_changed" for entry in events)
+    print("tools e2e explicit paths + cwd: ok", flush=True)
+
+
+def case_home_default(binary, provider, root):
+    home = root / "home"
+    (home / "home-marker.txt").write_text("at home\n")
+    case = root / "home-default"
+    case.mkdir()
+    config = case / "config.ini"
+    harness.write_irc_config(config, provider.port, "host-model")
+    state = case / "state"
+    provider.runtime_handler = responder(provider, [
+        ("get_cwd", {}),
+        ("read_file", {"path": "./home-marker.txt"}),
+        ("exec_command", {"command": "pwd"}),
+    ], "home default done")
+    try:
+        run = subprocess.run([str(binary), "--config", str(config), "--dotdir", str(state),
+                              "-e", "--", "verify default cwd"], cwd=case,
+                             env={**os.environ, "SNAJPAGENT_IRC_UI_KEY": SECRET},
+                             capture_output=True, text=True, timeout=60)
+    finally:
+        provider.runtime_handler = None
+    assert run.returncode == 0, (run.stdout, run.stderr)
+    _, events = harness.read_events(state)
+    results = [entry["data"]["result"] for entry in finished(events)]
+    assert len(results) == 3, results
+    assert all(item["status"] == "succeeded" for item in results), results
+    assert results[0]["model_text"] == str(home), results[0]
+    assert "at home" in results[1]["model_text"], results[1]
+    assert str(home) in results[2]["model_text"], results[2]
+    print("tools e2e home default: ok", flush=True)
+
+
+def case_model_switch(binary, provider, root):
+    models = []
+
+    def observed(outs, request):
+        del outs
+        models.append(request["model"])
+
+    case, run, events = run_case(binary, provider, root, "model-switch",
+        "switch the model and retain results", responder(provider, [
+            ("select_model", {"selector": "one-model"}),
+            ("get_cwd", {}),
+        ], "model switch complete", inspect=observed))
+    assert run.returncode == 0, (run.stdout, run.stderr)
+    assert models[:3] == ["host-model", "one-model", "one-model"], models
+    assert sum(event["type"] == "turn_model_changed" for event in events) == 1
+    assert sum(event["type"] == "model_selection_changed" for event in events) == 1
+    results = [entry["data"]["result"] for entry in finished(events)]
+    assert len(results) == 2 and all(item["status"] == "succeeded" for item in results), results
+    assert str(case) in results[1]["model_text"]
+    print("tools e2e same-turn model switch: ok", flush=True)
 
 
 def case_read_only_refuses_writes(binary, provider, root):
@@ -171,8 +269,11 @@ def case_wide_call_batch(binary, provider, root):
 
 
 CASES = (
+    case_home_default,
+    case_model_switch,
     case_exploration,
     case_write_and_edit,
+    case_explicit_file_paths,
     case_read_only_refuses_writes,
     case_rule_denies_write,
     case_wide_call_batch,

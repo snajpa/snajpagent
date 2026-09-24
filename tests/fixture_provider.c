@@ -861,7 +861,8 @@ flood_done: snag_buf_free(&text);
         }
         return final_answer(&out, "msg_fixture_one_shot_signal_final", "shutdown was not requested");
     }
-    if (snag_string_in(prompt, "slow slow_utf8 queue_slow queue_prompt_slow slow_resteer")) {
+    if (snag_string_in(prompt,
+            "slow slow_utf8 queue_slow queue_prompt_slow slow_resteer compaction_steer")) {
         if (cycle == 1u) {
             if (strcmp(prompt, "slow_utf8") == 0) {
                 static const char euro[] = "€";

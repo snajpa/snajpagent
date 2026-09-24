@@ -70,6 +70,7 @@ NATIVE_FUNCTION_NAMES = {
     "grep", "write_file", "edit_file", "read_tool_output", "read_session_history", "list_goals",
     "set_command_shell", "irc_send", "irc_state", "irc_topic", "irc_nick", "irc_connect",
     "irc_host", "irc_disconnect", "create_goal", "update_goal", "timer", "defer_steering",
+    "get_cwd", "cd", "select_model",
 }
 
 
@@ -639,6 +640,7 @@ class TmuxTerminal:
         env.pop("TMUX", None)
         env["LC_ALL"] = "C.utf8"
         env["PAGER"] = ""
+        env["HOME"] = self.workspace
         if environment:
             env.update(environment)
         try:
@@ -1417,21 +1419,43 @@ def run_queue_dispatch_retry_case(binary, root):
     attempts = 0
     terminal = None
 
+    def announce_ready(handler, sequence):
+        created = provider.event("response.created", {"response": {
+            "id": f"resp_irc_ui_{sequence}", "status": "in_progress", "output": []}})
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/event-stream")
+        handler.send_header("Connection", "close")
+        handler.end_headers()
+        handler.wfile.write(created.encode())
+        handler.wfile.flush()
+        return created
+
     def respond(handler, request, sequence):
         nonlocal attempts
         latest = provider.latest_user(request)
         if latest == "hold first":
+            created = announce_ready(handler, sequence)
             first.set()
             assert release_first.wait(8)
             body = provider.response_body(sequence, "first response done")
+            assert body.startswith(created)
+            handler.wfile.write(body[len(created):].encode())
+            handler.wfile.flush()
+            handler.close_connection = True
+            return
         else:
             assert latest == "queued retry prompt", latest
             attempts += 1
             if attempts == 1:
+                announce_ready(handler, sequence)
                 second.set()
                 assert release_second.wait(8)
                 body = provider.event("response.failed", {"response": {
                     "error": {"code": "upstream_unavailable", "message": "retry this request"}}})
+                handler.wfile.write(body.encode())
+                handler.wfile.flush()
+                handler.close_connection = True
+                return
             else:
                 body = provider.response_body(sequence, "queued response done")
         provider.reply(handler, body.encode(), close_header=True)
@@ -2313,17 +2337,21 @@ def run_persistent_model_recovery_case(binary, root):
         out.write("prompt = {model}/{effort}{chat:C>}{rollout-idle:I>}{rollout-active:A>}\n")
     original_config = config.read_bytes()
     requests, ready, release = [], threading.Event(), threading.Event()
+    switched, release_switched = threading.Event(), threading.Event()
     def respond(handler, request, sequence):
         requests.append(request)
         body = provider.response_body(sequence, "model response").encode()
-        if len(requests) == 1:
+        if len(requests) in (1, 2):
             at = body.index(b"event: response.output_text.done")
             handler.send_response(200)
             handler.send_header("Content-Type", "text/event-stream")
             handler.send_header("Content-Length", str(len(body)))
             handler.end_headers()
             handler.wfile.write(body[:at]); handler.wfile.flush()
-            ready.set(); release.wait(12)
+            if len(requests) == 1:
+                ready.set(); release.wait(12)
+            else:
+                switched.set(); release_switched.wait(12)
             try: handler.wfile.write(body[at:])
             except (BrokenPipeError, ConnectionResetError): pass
         else:
@@ -2339,21 +2367,23 @@ def run_persistent_model_recovery_case(binary, root):
             assert ready.wait(SUPPLY_TIMEOUT)
             terminal.submit("/model next-model/low")
             terminal.wait("until changed")
+            assert switched.wait(SUPPLY_TIMEOUT)
             for text in ("queued one", "queued two"):
                 terminal.submit("/q " + text)
                 terminal.wait("queued (/next or /q c) › " + text)
             sid = read_events(state)[0].parent.name
-            assert len(requests) == 1 and requests[0]["model"] == "initial-model"
+            assert [r["model"] for r in requests] == ["initial-model", "next-model"]
             pid = int(terminal.run("display-message", "-p", "-t", terminal.target, "#{pane_pid}"))
             os.kill(pid, signal.SIGKILL)  # Exact child launched by this test.
-            terminal.wait_dead(); release.set()
+            terminal.wait_dead(); release.set(); release_switched.set()
         with TmuxTerminal(case / "resume", binary, case, state, config, 100, 32,
                 args=("--no-listen", "--no-client", "-m", "recovered-model/high", "--resume", sid),
                 environment=env) as terminal:
             log = wait_event_count(state, "turn_completed", 3)
             terminal.wait("recovered-model/highI>")
             assert [r["model"] for r in requests] == [
-                "initial-model", "initial-model", "recovered-model", "recovered-model"]
+                "initial-model", "next-model", "recovered-model", "recovered-model", "recovered-model"]
+            assert len(event_list(log, "turn_model_changed")) == 2
             turns = event_list(log, "turn_started")
             assert [t["data"]["config"]["model"] for t in turns] == [
                 "initial-model", "recovered-model", "recovered-model"]
@@ -2375,7 +2405,8 @@ def run_persistent_model_recovery_case(binary, root):
             terminal.submit("after restart")
             log = wait_event_count(state, "turn_completed", 8)
             terminal.exit()
-        assert [r["model"] for r in requests] == ["initial-model"] * 2 + ["recovered-model"] * 4 + ["final-model"] * 3
+        assert [r["model"] for r in requests] == ["initial-model", "next-model"] + \
+            ["recovered-model"] * 5 + ["final-model"] * 3
         turns = [t["data"]["config"] for t in event_list(log, "turn_started")]
         assert [(t["model"], t["effort"]) for t in turns] == [
             ("initial-model", "medium"), ("recovered-model", "high"),
@@ -2384,7 +2415,7 @@ def run_persistent_model_recovery_case(binary, root):
             ("final-model", "medium"), ("final-model", "medium")]
         assert config.read_bytes() == original_config
     finally:
-        release.set(); provider.close()
+        release.set(); release_switched.set(); provider.close()
     print("persistent model HTTP recovery/queue/resume PASS", flush=True)
 
 
@@ -2938,8 +2969,24 @@ def run_history_length_case(binary, root, active=False, chat=False, width=100, v
     terminal = None
     def respond(handler, request, sequence):
         if provider.latest_user(request) == "hold history check":
+            created = provider.event("response.created", {"response": {
+                "id": f"resp_irc_ui_{sequence}", "status": "in_progress", "output": []}})
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            handler.wfile.write(created.encode())
+            handler.wfile.flush()
             held.set()
             release.wait(8)
+            body = provider.response_body(sequence, "history answer retained")
+            assert body.startswith(created)
+            try:
+                handler.wfile.write(body[len(created):].encode())
+                handler.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError): pass
+            handler.close_connection = True
+            return
         body = provider.response_body(sequence, "history answer retained")
         try: provider.reply(handler, body.encode(), close_header=True)
         except (BrokenPipeError, ConnectionResetError): pass
@@ -3182,6 +3229,11 @@ def wait_file_contains(path, needle, timeout=10.0):
     raise AssertionError(f"{path} did not receive {needle!r}")
 
 
+def wait_pager_return(terminal):
+    terminal.wait_until(lambda screen: screen.rstrip().endswith("›"),
+                        "prompt after pager", join_wrapped=True)
+
+
 def run_pager_case(binary, root):
     """[ui] pager pages the catalogue through $PAGER, a template, or not at all."""
     case = root / "pager"
@@ -3199,6 +3251,8 @@ def run_pager_case(binary, root):
         with TmuxTerminal(case / "off" / "terminal", binary, workspace, case / "off" / "state", config,
                 100, 32, args=("--no-listen", "--no-client"), environment=env) as terminal:
             terminal.wait("host-model/medium", join_wrapped=True)
+            terminal.submit_wait("/cat absent.txt", "pager is off", join_wrapped=True)
+            terminal.submit_wait("/cat", "usage: /cat PATH", join_wrapped=True)
             terminal.submit_wait("/model cache", "cache updated:", join_wrapped=True)
             terminal.submit_wait("/model", "selected:", join_wrapped=True)
 
@@ -3210,21 +3264,56 @@ def run_pager_case(binary, root):
             terminal.submit_wait("/model cache", "cache updated:", join_wrapped=True)
             terminal.submit("/model")
             wait_file_contains(templated, "selected:")
-            time.sleep(0.5)
+            wait_pager_return(terminal)
             assert "selected:" not in terminal.capture(), "template pager left the catalogue on screen"
             assert "cache updated:" in templated.read_text(encoding="utf-8")
+            outside = case / "absolute file.txt"
+            outside.write_text("absolute /cat file\n", encoding="utf-8")
+            terminal.submit(f"/cat {outside}")
+            wait_file_contains(templated, "absolute /cat file")
+            wait_pager_return(terminal)
+            assert templated.read_bytes() == outside.read_bytes()
+            templated.unlink()
+            terminal.submit(f'/cat "{outside}"')
+            wait_file_contains(templated, "absolute /cat file")
+            wait_pager_return(terminal)
+            terminal.submit_wait("/cat .", "not a regular file", join_wrapped=True)
 
         workspace, config = irc_workspace(case / "default" / "work", provider.port, "host-model")
+        home = case / "home"
+        home.mkdir()
+        home_file = home / "home memo.txt"
+        home_file.write_text("home-relative /cat file\n", encoding="utf-8")
         with TmuxTerminal(case / "default" / "terminal", binary, workspace, case / "default" / "state",
                 config, 100, 32, args=("--no-listen", "--no-client"),
-                environment={**env, "PAGER": str(script)}) as terminal:
+                environment={**env, "PAGER": str(script), "HOME": str(home)}) as terminal:
             terminal.wait("host-model/medium", join_wrapped=True)
             terminal.submit_wait("/model cache", "cache updated:", join_wrapped=True)
             terminal.submit("/model")
             wait_file_contains(captured, "selected:")
-            time.sleep(0.5)
+            wait_pager_return(terminal)
             assert "selected:" not in terminal.capture(), "default pager left the catalogue on screen"
             assert "cache updated:" in captured.read_text(encoding="utf-8")
+            filename = "memo's ; touch PAGER_INJECTED.txt"
+            source = home / filename
+            source.write_text("relative /cat file with quoting\n", encoding="utf-8")
+            terminal.submit("/cat " + filename)
+            wait_file_contains(captured, "relative /cat file with quoting")
+            wait_pager_return(terminal)
+            assert captured.read_bytes() == source.read_bytes()
+            assert not (home / "PAGER_INJECTED.txt").exists()
+            terminal.submit("/cat ~/home memo.txt")
+            wait_file_contains(captured, "home-relative /cat file")
+            wait_pager_return(terminal)
+            assert captured.read_bytes() == home_file.read_bytes()
+            terminal.submit_wait("/cat absent.txt", "cannot open file", join_wrapped=True)
+
+        with TmuxTerminal(case / "no-env" / "terminal", binary, workspace,
+                case / "no-env" / "state", config, 100, 32,
+                args=("--no-listen", "--no-client"),
+                environment={**env, "PAGER": ""}) as terminal:
+            terminal.wait("host-model/medium", join_wrapped=True)
+            terminal.submit_wait("/cat absent.txt", "$PAGER is not set", join_wrapped=True)
     finally:
         provider.close()
     print("pager catalogue: ok", flush=True)
@@ -3869,6 +3958,7 @@ def run_resume_network_pairing_case(binary, root, provider, environment):
     state = case / "state"
     endpoint = f"127.0.0.1:{free_loopback_port()}"
     requests = []
+    waiting, release_waiting = threading.Event(), threading.Event()
     listener = connection = None
 
     def respond(handler, request, sequence):
@@ -3885,13 +3975,37 @@ def run_resume_network_pairing_case(binary, root, provider, environment):
             elif item.get("role") == "user":
                 assert not pending, f"user input splits tool exchange: {pending}"
         assert not pending, pending
-        if outputs:
-            body = provider.response_body(sequence, "network pairing verified")
-        else:
+        if not outputs:
             body = provider.function_body(sequence, "call_network_pair", "exec_command", {
                 "command": "printf once >> marker; while [ ! -f release ]; do sleep 0.05; done",
                 "workdir": str(workspace), "yield_ms": 60000, "timeout_ms": 60000})
-        provider.reply(handler, body.encode())
+        elif re.search(r'(?:status=running|"status"\s*:\s*"running")', outputs[-1]["output"]):
+            handle = re.search(r'"handle"\s*:\s*"([a-f0-9]{32})"', outputs[-1]["output"])[1]
+            body = provider.function_body(sequence, f"collect-{sequence}", "write_stdin", {
+                "handle": handle, "data": "", "eof": False, "terminate": False,
+                "yield_ms": 1000, "max_output_tokens": 1000})
+        else:
+            body = provider.response_body(sequence, "network pairing verified")
+        if outputs and not waiting.is_set() and \
+                re.search(r'(?:status=running|"status"\s*:\s*"running")', outputs[-1]["output"]):
+            created = provider.event("response.created", {"response": {
+                "id": f"resp_irc_ui_{sequence}", "status": "in_progress", "output": []}})
+            assert body.startswith(created)
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            handler.wfile.write(created.encode())
+            handler.wfile.flush()
+            waiting.set()
+            assert release_waiting.wait(15)
+            try:
+                handler.wfile.write(body[len(created):].encode())
+                handler.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError): pass
+            handler.close_connection = True
+        else:
+            provider.reply(handler, body.encode())
 
     provider.runtime_handler = respond
     try:
@@ -3900,16 +4014,21 @@ def run_resume_network_pairing_case(binary, root, provider, environment):
             terminal.wait("host-model/medium   0% ›")
             terminal.submit("check network pairing")
             wait_event_count(state, "tool_started", 1)
+            terminal.submit("/yield")
+            wait_event_count(state, "tool_finished", 1)
+            assert waiting.wait(5)
             terminal.submit_wait(f"/server start {endpoint}", f"hosting started on {endpoint}",
                                  join_wrapped=True)
             wait_event_count(state, "irc_snapshot", 1)
             (workspace / "release").touch()
+            release_waiting.set()
             wait_event_count(state, "turn_completed", 1)
             terminal.wait("network pairing verified")
             path, events = read_events(state)
             started = event_list(events, "tool_started")[0]["seq"]
             finished = event_list(events, "tool_finished")[0]["seq"]
-            assert any(started < e["seq"] < finished for e in event_list(events, "irc_snapshot"))
+            assert started < finished
+            assert any(finished < e["seq"] for e in event_list(events, "irc_snapshot"))
             assert not event_list(events, "response_failed"), events[-10:]
             sid = path.parent.name
             terminal.exit()
@@ -3973,6 +4092,7 @@ def run_resume_network_pairing_case(binary, root, provider, environment):
         assert not provider.failure, provider.failure
         print("resume network pairing: live tools, replay, role/nick/room overrides ok", flush=True)
     finally:
+        release_waiting.set()
         if connection:
             connection.close()
         if listener:
@@ -4071,7 +4191,8 @@ def run_reasoning_boundary_cases(binary, root, provider, environment,
         try:
             command = [str(binary), "--dotdir", str(state), "--config", str(config)]
             seed = subprocess.run([*command, "-e", "--", "/ro inspect marker" if readonly else "Execute one harmless marker command"],
-                                  cwd=case, env=environment, capture_output=True, text=True, timeout=20)
+                                  cwd=case, env={**environment, "HOME": str(case)},
+                                  capture_output=True, text=True, timeout=20)
             if provider.failure:
                 raise provider.failure
             if not (case / "marker").exists():
@@ -4100,7 +4221,8 @@ def run_reasoning_boundary_cases(binary, root, provider, environment,
                 # No new operator text: reproduce opening an unfinished session.
                 if mode == "resume":
                     terminal = TmuxTerminal(case / "term", binary, case, state, config, 150, 28,
-                                            args=("--resume", sid), environment=environment)
+                                            args=("--resume", sid),
+                                            environment={**environment, "HOME": str(case)})
                     terminal.wait_until(lambda text: "thinking boundary confirmed" in text or "reasoning_text" in text,
                                         "resumed reasoning boundary", timeout=10)
                     assert not rejected, message
@@ -4108,7 +4230,8 @@ def run_reasoning_boundary_cases(binary, root, provider, environment,
                     terminal.exit()
                 else:
                     resumed = subprocess.run([*command, "-e", "--resume", sid], input="",
-                                             cwd=case, env=environment, capture_output=True, text=True, timeout=20)
+                                             cwd=case, env={**environment, "HOME": str(case)},
+                                             capture_output=True, text=True, timeout=20)
                     assert resumed.returncode == 0, resumed.stderr
                     assert "thinking boundary confirmed" in resumed.stdout
             assert not rejected, message
@@ -4555,8 +4678,10 @@ def run_operator_visibility_cases(binary, root):
                         "workdir": str(case), "stdin": None, "pty": False,
                         "timeout_ms": None, "yield_ms": 60000, "max_output_tokens": None,
                     })
+                elif len(seen) == 2:
+                    body = provider.response_body(sequence, "VISIBILITY_WAIT_DONE")
                 else:
-                    assert len(seen) == 2
+                    assert len(seen) >= 3
                     if mode == "chat":
                         assert "verbosity=3 " in hint and "view=chat" in hint
                         assert "rollout text=hidden" in hint and "changing destinations" in hint
@@ -4568,20 +4693,29 @@ def run_operator_visibility_cases(binary, root):
 
             provider.runtime_handler = respond
             with TmuxTerminal(case / "terminal", binary, case, state, config, 120, 24,
-                              args=("-vvv",), environment=environment) as terminal:
+                              args=("-vvv", "-n", "visibilitybot", "-o", "operator", "-r", "lab"),
+                              environment=environment) as terminal:
                 try:
                     terminal.wait("host-model/medium")
                     terminal.submit("check live visibility")
                     wait_for_terminal_event(state, {"tool_started"}, 8.0)
-                    if mode == "chat":
-                        terminal.submit_wait("/chat", "chat is offline")
-                    else:
-                        terminal.submit_wait("/verbose 0", "verbosity: 0")
                     release.touch()
                     wait_for_terminal_event(state, {"turn_completed"}, 8.0)
+                    if mode == "chat":
+                        endpoint = f"127.0.0.1:{free_loopback_port()}"
+                        terminal.submit_wait(f"/server start {endpoint}", f"hosting started on {endpoint}")
+                        terminal.submit_wait("/chat", "── chat")
+                    else:
+                        terminal.submit_wait("/verbose 0", "verbosity: 0")
+                    terminal.submit("visibilitybot: check visibility after command" if mode == "chat"
+                                    else "check visibility after command")
+                    deadline = time.monotonic() + 8.0
+                    while len(seen) < (4 if mode == "chat" else 3):
+                        assert time.monotonic() < deadline, terminal.capture()
+                        time.sleep(0.02)
                     if provider.failure:
                         raise provider.failure
-                    assert len(seen) == 2
+                    assert len(seen) >= (4 if mode == "chat" else 3)
                     terminal.exit()
                 finally:
                     release.touch()
@@ -4647,7 +4781,7 @@ def run_tool_contract_cases(binary, root, provider, environment):
                                  and (i.get("role") == "system" or
                                       i["content"].startswith("[snajpagent host continuation —")))
             if mode != "read":
-                assert "default_timeout_ms=" in controls and "workspace=" in controls
+                assert "default_timeout_ms=" in controls and "cwd=" in controls
             else:
                 assert set(tools) == NATIVE_FUNCTION_NAMES
             step = len(outputs)
@@ -4685,10 +4819,12 @@ def run_tool_contract_cases(binary, root, provider, environment):
                         assert not (case / "marker").exists()
             elif mode == "patch":
                 name = "apply_patch"
-                path = str(case / "marker") if step == 0 else "marker"
-                args = {"patch": "*** Begin Patch\n*** Add File: " + path + "\n+x\n*** End Patch\n"}
+                patch = ("*** Begin Patch\n*** Add File: " + str(case / "marker") +
+                         "\n+x\n*** Add File: ./marker\n+y\n*** End Patch\n") if step == 0 else \
+                    "*** Begin Patch\n*** Add File: marker\n+x\n*** End Patch\n"
+                args = {"patch": patch}
                 if step == 1:
-                    assert "relative" in outputs[-1]["output"] and not (case / "marker").exists()
+                    assert "duplicate" in outputs[-1]["output"] and not (case / "marker").exists()
             elif mode in ("minimal", "aliases"):
                 args = {"command": "printf x >> marker"} if mode == "minimal" else {
                     "cmd": "printf x >> marker", "yield_time_ms": 1000, "max_output_bytes": 9000}
@@ -4733,7 +4869,8 @@ def run_tool_contract_cases(binary, root, provider, environment):
             prompt = "/ro inspect the marker" if mode == "read" else (
                 "Create a persistent test goal and then complete it" if mode == "goal" else "check tool contract")
             run = subprocess.run([str(binary), "--dotdir", str(state), "--config", str(config),
-                                  "-v", "-e", "--", prompt], cwd=case, env=environment,
+                                  "-v", "-e", "--", prompt], cwd=case,
+                                 env={**environment, "HOME": str(case)},
                                  capture_output=True, text=True, timeout=25)
             if provider.failure:
                 raise provider.failure
@@ -4744,7 +4881,8 @@ def run_tool_contract_cases(binary, root, provider, environment):
                 sid = next((state / "sessions").iterdir()).name
                 run = subprocess.run([str(binary), "--dotdir", str(state), "--config", str(config),
                                       "-v", "-e", "--resume", sid, "--", "continue the tool contract test"],
-                                     cwd=case, env=environment, capture_output=True, text=True, timeout=25)
+                                     cwd=case, env={**environment, "HOME": str(case)},
+                                     capture_output=True, text=True, timeout=25)
                 if provider.failure:
                     raise provider.failure
             attempt_stderr += run.stderr
@@ -4873,10 +5011,10 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 first = len(requests) == 1
                 body = provider.response_body(sequence,
                     prefix if first else f"runtime completion {len(requests)}").encode()
-                split = body.index(b"event: response.output_text.done")
-                streaming = first and level % 2 == 1
+                split = body.index(b"event: response.output_text.done" if level % 2 else
+                                   b"event: response.output_item.added")
                 handler.close_connection = True
-                if streaming:
+                if first:
                     handler.send_response(200)
                     handler.send_header("Content-Type", "text/event-stream")
                     handler.send_header("Connection", "close")
@@ -4886,8 +5024,9 @@ def run_runtime_networking_cases(binary, root, provider, environment):
                 if first:
                     arrived.set()
                     assert release.wait(15.0), "runtime commands did not finish during the request"
-                if streaming:
+                if first:
                     handler.wfile.write(body[split:])
+                    handler.wfile.flush()
                 else:
                     provider.reply(handler, body, close_header=True)
 
@@ -5009,6 +5148,16 @@ def run_runtime_routing_cases(binary, root, provider, environment):
 
         def respond(handler, request, sequence):
             requests.append(request)
+            accepted = len(requests) == 1 and phase == "response"
+            if accepted:
+                created = provider.event("response.created", {"response": {
+                    "id": f"resp_irc_ui_{sequence}", "status": "in_progress", "output": []}})
+                handler.send_response(200)
+                handler.send_header("Content-Type", "text/event-stream")
+                handler.send_header("Connection", "close")
+                handler.end_headers()
+                handler.wfile.write(created.encode())
+                handler.wfile.flush()
             if len(requests) == 1 and phase != "count":
                 arrived.set()
                 assert release.wait(15.0)
@@ -5025,7 +5174,14 @@ def run_runtime_routing_cases(binary, root, provider, environment):
                 body = provider.function_body(sequence, "runtime-route", tool, arguments).encode()
             else:
                 body = provider.response_body(sequence, "runtime routing complete").encode()
-            provider.reply(handler, body, close_header=True)
+            if accepted:
+                assert body.startswith(created.encode())
+                try:
+                    handler.wfile.write(body[len(created.encode()):])
+                    handler.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError): pass
+            else:
+                provider.reply(handler, body, close_header=True)
             handler.close_connection = True
 
         provider.runtime_handler = respond
@@ -5077,6 +5233,10 @@ def run_runtime_routing_cases(binary, root, provider, environment):
             assert len(outputs) == 1
             if tool == "irc_state":
                 assert "no active endpoints" in outputs[0] and "invalid" not in outputs[0]
+            elif phase in ("count", "retry"):
+                # Preparation/retry owns the foreground: a subsequent topology command
+                # cannot retroactively revoke a call admitted at that boundary.
+                assert "destination 1: queued" in outputs[0], outputs
             elif change != "noop":
                 assert "not performed" in outputs[0], outputs
             else:
@@ -5085,7 +5245,7 @@ def run_runtime_routing_cases(binary, root, provider, environment):
             assert not event_list(log, "turn_failed"), log
             public = [event["data"] for event in event_list(log, "irc_event")
                       if event["data"]["text"] == marker]
-            assert len(public) == (1 if change == "noop" else 0), public
+            assert len(public) == (1 if change == "noop" or phase in ("count", "retry") else 0), public
             if public:
                 assert public[0]["endpoint"] == endpoint
             if peer is not None:
@@ -5134,6 +5294,14 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
                     "timeout_ms": None, "max_output_tokens": None,
                 }).encode()
             elif boundary == "tool" and number == 2:
+                created = provider.event("response.created", {"response": {
+                    "id": f"resp_irc_ui_{sequence}", "status": "in_progress", "output": []}})
+                handler.send_response(200)
+                handler.send_header("Content-Type", "text/event-stream")
+                handler.send_header("Connection", "close")
+                handler.end_headers()
+                handler.wfile.write(created.encode())
+                handler.wfile.flush()
                 arrived.set()
                 assert release.wait(15.0)
                 _, log = read_events(case / "state")
@@ -5143,6 +5311,13 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
                         "handle": handle, "data": "continue-same-handle\n", "eof": False,
                         "terminate": False, "yield_ms": 1000, "max_output_tokens": None,
                     })]).encode()
+                assert body.startswith(created.encode())
+                try:
+                    handler.wfile.write(body[len(created.encode()):])
+                    handler.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError): pass
+                handler.close_connection = True
+                return
             elif number == 1:
                 body = provider.response_body(sequence, "boundary delivered prefix\n").encode()
                 split = body.index(b"event: response.output_text.done")
@@ -5185,19 +5360,23 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
                     time.sleep(0.02)
                 pid = int((workspace / "command.pid").read_text())
                 os.kill(pid, 0)
+                terminal.submit("/yield")
+                wait_event_count(terminal.dotdir, "turn_yield_requested", 1)
+                assert arrived.wait(5.0), terminal.capture()
+                peer = socket.create_connection(("127.0.0.1", int(endpoint.rsplit(":", 1)[1])))
+                peer.sendall(b"NICK boundarypeer\r\nUSER boundarypeer 0 * :human\r\nJOIN #lab\r\n"
+                             b"PRIVMSG #lab :boundary ordinary message\r\n")
                 terminal.submit_wait(f"/connect 127.0.0.1:{free_loopback_port()}", "outgoing connection added")
                 terminal.submit_wait("/disconnect", "outgoing connections removed; hosting unchanged", join_wrapped=True)
                 os.kill(pid, 0)
             else:
                 assert arrived.wait(5.0), terminal.capture()
-            peer = socket.create_connection(("127.0.0.1", int(endpoint.rsplit(":", 1)[1])))
-            peer.sendall(b"NICK boundarypeer\r\nUSER boundarypeer 0 * :human\r\nJOIN #lab\r\n"
-                         b"PRIVMSG #lab :boundary ordinary message\r\n")
+            if boundary != "tool":
+                peer = socket.create_connection(("127.0.0.1", int(endpoint.rsplit(":", 1)[1])))
+                peer.sendall(b"NICK boundarypeer\r\nUSER boundarypeer 0 * :human\r\nJOIN #lab\r\n"
+                             b"PRIVMSG #lab :boundary ordinary message\r\n")
             if boundary == "tool":
-                peer.sendall(b"NOTICE #lab :runtimeagent: boundary urgent message\r\n")
-                assert arrived.wait(5.0), terminal.capture()
                 second = json.dumps(requests[1])
-                assert "boundary urgent message" in second
                 assert "boundary ordinary message" not in second
                 os.kill(pid, 0)
             deadline = time.monotonic() + 5.0
@@ -5240,7 +5419,7 @@ def run_runtime_boundary_cases(binary, root, provider, environment):
                 assert not any(event["data"].get("text") == "stale-mixed-send"
                                for event in event_list(log, "irc_event"))
                 completed = event_list(log, "tool_finished")
-                assert completed[0]["data"]["result"]["reason"] == "steering_handoff"
+                assert completed[0]["data"]["result"]["reason"] == "operator_yield"
             elif boundary == "queue":
                 assert "boundary future input" in json.dumps(requests[1])
                 assert "boundary ordinary message" not in json.dumps(requests[1])
@@ -5267,10 +5446,25 @@ def run_runtime_history_case(binary, root, provider, environment):
     def respond(handler, request, sequence):
         requests.append(request)
         if len(requests) == 1:
+            created = provider.event("response.created", {"response": {
+                "id": f"resp_irc_ui_{sequence}", "status": "in_progress", "output": []}})
+            handler.send_response(200)
+            handler.send_header("Content-Type", "text/event-stream")
+            handler.send_header("Connection", "close")
+            handler.end_headers()
+            handler.wfile.write(created.encode())
+            handler.wfile.flush()
             arrived.set()
             assert release.wait(15.0)
         body = provider.response_body(sequence, f"history completion {len(requests)}").encode()
-        provider.reply(handler, body)
+        if len(requests) == 1:
+            assert body.startswith(created.encode())
+            try:
+                handler.wfile.write(body[len(created.encode()):])
+                handler.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError): pass
+        else:
+            provider.reply(handler, body)
         handler.close_connection = True
 
     provider.runtime_handler = respond
@@ -5369,12 +5563,31 @@ def run_provider_retry_input_cases(binary, root, provider, environment):
                     requests.append(request)
             fail = first and mode != "healthy"
             if first:
+                created = provider.event("response.created", {"response": {
+                    "id": f"resp_irc_ui_{sequence}", "status": "in_progress", "output": []}})
+                handler.send_response(200)
+                handler.send_header("Content-Type", "text/event-stream")
+                handler.send_header("Connection", "close")
+                handler.end_headers()
+                handler.wfile.write(created.encode())
+                handler.wfile.flush()
                 arrived.set()
                 assert release.wait(10.0), "retry input was not admitted"
             body = (provider.event("response.failed", {
                 "type": "response.failed", "response": {"error": {
                     "code": "server_error", "message": "temporary fixture failure"}}
-            }) if fail else provider.response_body(sequence, "retry input complete")).encode()
+            }) if fail else provider.response_body(sequence, "retry input complete"))
+            if first:
+                if not fail:
+                    assert body.startswith(created)
+                    body = body[len(created):]
+                try:
+                    handler.wfile.write(body.encode())
+                    handler.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError): pass
+                handler.close_connection = True
+                return
+            body = body.encode()
             handler.send_response(200)
             handler.send_header("Content-Type", "text/event-stream")
             handler.send_header("Retry-After", "0" if mode == "zero" else "2")
@@ -5491,6 +5704,14 @@ def run_provider_clarification_cases(binary, root, provider, environment):
             fail = active and not changed and (mode != "prior" or len(requests) > 1) and (
                 mode == "exhausted" or attempt <= 5)
             if fail and attempt == 2 and mode in ("steer", "chat", "queue"):
+                created = provider.event("response.created", {"response": {
+                    "id": f"resp_irc_ui_{sequence}", "status": "in_progress", "output": []}})
+                handler.send_response(200)
+                handler.send_header("Content-Type", "text/event-stream")
+                handler.send_header("Connection", "close")
+                handler.end_headers()
+                handler.wfile.write(created.encode())
+                handler.wfile.flush()
                 arrived.set()
                 assert release.wait(10.0), "new clarification input did not arrive"
             if mode == "prior" and active and len(requests) == 1:
@@ -5514,6 +5735,13 @@ def run_provider_clarification_cases(binary, root, provider, environment):
                     "response": {"error": {"code": "cyber_policy", "message": "fixture scope rejection"}}})
             else:
                 body = provider.response_body(sequence, "accurate scope clarified")
+            if fail and attempt == 2 and mode in ("steer", "chat", "queue"):
+                try:
+                    handler.wfile.write(body.encode())
+                    handler.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError): pass
+                handler.close_connection = True
+                return
             encoded = body.encode()
             handler.send_response(200)
             handler.send_header("Content-Type", "text/event-stream")
@@ -5883,6 +6111,14 @@ def run_policy_stop_cases(binary, root, provider, environment,
         def respond(handler, request, sequence):
             requests.append(request)
             if len(requests) == 1:
+                created = provider.event("response.created", {"response": {
+                    "id": f"resp_irc_ui_{sequence}", "status": "in_progress", "output": []}})
+                handler.send_response(200)
+                handler.send_header("Content-Type", "text/event-stream")
+                handler.send_header("Connection", "close")
+                handler.end_headers()
+                handler.wfile.write(created.encode())
+                handler.wfile.flush()
                 arrived.set()
                 assert release.wait(10), "provider activity observation timed out"
             calls = [i for i in request["input"] if i.get("type") == "function_call"]
@@ -5919,7 +6155,15 @@ def run_policy_stop_cases(binary, root, provider, environment,
                     "yield_ms": 1000, "max_output_tokens": 1000})
             else:
                 body = provider.response_body(sequence, "retained command collected")
-            provider.reply(handler, body.encode())
+            if len(requests) == 1:
+                if body.startswith(created): body = body[len(created):]
+                try:
+                    handler.wfile.write(body.encode())
+                    handler.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError): pass
+                handler.close_connection = True
+            else:
+                provider.reply(handler, body.encode())
 
         provider.runtime_handler = respond
         terminal = TmuxTerminal(case / "term", binary, case, state, config, 140, 28,
@@ -5938,6 +6182,22 @@ def run_policy_stop_cases(binary, root, provider, environment,
             time.sleep(1.2)
             assert len(requests) == before, (mode, before, len(requests))
             assert len(failures) == (1 if mode in ("content-filter", "refusal") else 6), mode
+            if running:
+                # The policy-stopped turn has no accepted response to steer.
+                # Its process survives while Ctrl-C leaves the held foreground.
+                assert "host-model/medium A>" not in terminal.capture().split(
+                    "Running commands retained")[-1]
+                terminal.send_key("C-c")
+                events = wait_event_count(state, "turn_interrupted", 1)
+                assert len(event_list(events, "goal_paused")) == int(goal)
+                assert not [e for e in event_list(events, "process_closed")
+                            if e["data"]["result"]["status"] != "succeeded"]
+                assert (case / "survived").read_text() == "survived", mode
+                assert (case / "once").read_text() == "x", mode
+                assert len(requests) == before
+                terminal.exit()
+                print("policy stop", mode, "PASS", flush=True)
+                continue
             terminal.wait_until(lambda screen: screen.rstrip().splitlines()[-1] in ("host-model/medium I>", "host-model/medium A>"),
                                 "parked prompt without provider/tool activity")
             _, events = read_events(state)
@@ -6265,7 +6525,8 @@ def run_goal_request_boundary_cases(binary, root, modes=("next", "recovery", "re
             if mode == "resume":
                 assert held.wait(10), terminal.capture()
                 sid = read_events(state)[0].parent.name
-                terminal.exit()
+                terminal.send_key("C-d")
+                terminal.wait_dead()
                 terminal.close()
                 release.set()
                 terminal = TmuxTerminal(case / "r", binary, workspace, state, config, 130, 28,
@@ -6274,13 +6535,20 @@ def run_goal_request_boundary_cases(binary, root, modes=("next", "recovery", "re
             assert not missing, ("automatic goal request vanished from the gateway conversation",
                 [[(i.get("role"), i.get("type"), str(i.get("content", ""))[:180])
                   for i in gateway_conversation(r)[-5:]] for r in missing], counts)
-            expected = [1, 2] if mode == "next" else \
-                [1, 2, 1] if mode == "resume" else [1, 2, 2]
-            # Process resume deliberately rebases old provider/tool bulk. The
-            # retried active turn must still retain exactly its current
-            # automatic goal request, rather than either losing it or replaying
-            # both historical requests.
-            assert counts == expected, counts
+            if mode == "resume":
+                # The held old request may retry before priority Ctrl-D exits;
+                # rebase must still send one current goal request afterward.
+                assert counts in ([1, 2, 1], [1, 2, 2, 1]), counts
+                resumed_input = gateway_conversation(requests[-2])
+                assert sum(i.get("role") == "user" and
+                           i.get("content", "").endswith(
+                               "Continue the active goal from its durable state.")
+                           for i in resumed_input) == 1
+                assert not any(i.get("role") == "assistant" and
+                               "Acknowledged the host metadata." in i.get("content", "")
+                               for i in resumed_input)
+            else:
+                assert counts == ([1, 2] if mode == "next" else [1, 2, 2]), counts
             _, events = read_events(state)
             assert len(event_list(events, "goal_completed")) == 1
             assert not event_list(events, "goal_paused")
@@ -6367,7 +6635,10 @@ def run_goal_recovery_cases(binary, root, provider, environment):
             if mode == "steer":
                 terminal.submit("fresh recovery steer")
             if mode == "cancel":
-                terminal.submit_wait("/goal pause", "Goal paused at the current turn boundary")
+                screen = terminal.capture().rsplit("Goal active; retrying", 1)[-1]
+                assert "»" not in screen, "retry advertised a steer prompt before response.created"
+                terminal.send_key("C-c")
+                terminal.wait("Goal paused at the current turn boundary")
                 before = len(requests)
                 time.sleep(0.7)
                 assert len(requests) == before
@@ -6427,9 +6698,24 @@ def run_nested_command_cases(binary, root, modes=("nested", "nested-resume", "po
                     body = provider.event("response.failed", {"response": {
                         "error": {"code": "content_filter", "message": "scope clarification needed"}}})
             elif provider.latest_user(request) == "hold" and len(seen) == 1:
+                created = provider.event("response.created", {"response": {
+                    "id": f"resp_irc_ui_{sequence}", "status": "in_progress", "output": []}})
+                handler.send_response(200)
+                handler.send_header("Content-Type", "text/event-stream")
+                handler.send_header("Connection", "close")
+                handler.end_headers()
+                handler.wfile.write(created.encode())
+                handler.wfile.flush()
                 ready.set()
                 release.wait(8)
                 body = provider.response_body(sequence, "held answer")
+                assert body.startswith(created)
+                try:
+                    handler.wfile.write(body[len(created):].encode())
+                    handler.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError): pass
+                handler.close_connection = True
+                return
             else:
                 body = provider.response_body(sequence, "fixture completed")
             try: provider.reply(handler, body.encode(), close_header=True)
@@ -6459,7 +6745,8 @@ def run_nested_command_cases(binary, root, modes=("nested", "nested-resume", "po
                     terminal.submit("/exit")
                     terminal.wait_dead()
                     log = read_events(state)[1]
-                    assert not any(e["data"]["control"] == 1 for e in event_list(log, "control_started"))
+                    assert [e["data"]["control"] for e in event_list(log, "control_finished")] == [2, 1]
+                    assert len(event_list(log, "turn_started")) == 1
                     print("active command", mode, "PASS", flush=True)
                     continue
                 if mode == "cache-cancel":
@@ -6479,11 +6766,8 @@ def run_nested_command_cases(binary, root, modes=("nested", "nested-resume", "po
                 terminal.submit("/compact")
                 assert ready.wait(5)
                 terminal.submit("/model cache")
-                terminal.wait("/model cache accepted")
                 terminal.submit("/model cache")
-                terminal.wait("/model cache already pending")
                 terminal.submit("/config")
-                terminal.wait("/config accepted")
                 if mode == "nested-resume":
                     log_path, _ = read_events(state)
                     sid = log_path.parent.name
@@ -6493,13 +6777,26 @@ def run_nested_command_cases(binary, root, modes=("nested", "nested-resume", "po
                     terminal = TmuxTerminal(case / "resumed", binary, case, state, config, 140, 32,
                         args=("--resume", sid), environment={"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret", "EDITOR": "true"})
                 release.set()
-                events = wait_event_count(state, "control_finished", 3)
-                assert [e["data"]["control"] for e in event_list(events, "control_finished")] == [4, 2, 1]
+                if mode == "nested-resume":
+                    events = wait_event_count(state, "control_finished", 1)
+                    assert [e["data"]["control"] for e in event_list(events, "control_finished")] == [4]
+                    terminal.wait("host-model/medium   ?% ›")
+                    terminal.submit_wait("/model cache", "cache updated:")
+                    terminal.submit_wait("/config", "configuration unchanged")
+                expected = [4, 2, 1]
+                events = wait_event_count(state, "control_finished", len(expected))
+                assert [e["data"]["control"] for e in event_list(events, "control_finished")] == expected
+                if mode == "nested":
+                    terminal.wait("/model cache already pending or applying")
                 assert len(seen) == 2
+                terminal.wait("configuration unchanged")
                 terminal.exit()
             elif mode == "policy":
                 terminal.submit("inspect local file")
                 terminal.wait("clarify the task to continue")
+                terminal.send_key("C-c")
+                wait_event_count(state, "turn_interrupted", 1)
+                terminal.wait("host-model/medium   ?% ›")
                 before = len(seen)
                 terminal.submit("/model cache")
                 wait_event_count(state, "control_finished", 1, timeout=2)
@@ -6570,9 +6867,9 @@ def run_nested_command_cases(binary, root, modes=("nested", "nested-resume", "po
                     assert not event_list(log, "session_delete_requested")
                     assert not any(e["data"]["control"] == 1 for e in event_list(log, "control_started"))
             else:
-                # One tty write captures both lines under the idle prompt.
+                # One tty burst defers follow-up input until the provider accepts a response.
                 keys = ["hold", "Enter"]
-                if mode == "backlog": keys += ["keep future input", "Enter"]
+                if mode == "backlog": keys += ["keep future input", "Tab"]
                 terminal.run("send-keys", "-t", terminal.target, *keys, "/status", "Enter")
                 assert ready.wait(5)
                 terminal.wait("session:", timeout=1)
@@ -6632,9 +6929,24 @@ def run_manual_compaction_cases(binary, root, modes=("after-cancel", "native-can
                 body = provider.response_body(sequence, "retained compact summary")
             elif provider.latest_user(request) == "hold this turn" and (not held.is_set() or
                     (mode == "no-prefix-resume" and not finish_turn.is_set())):
+                created = provider.event("response.created", {"response": {
+                    "id": f"resp_irc_ui_{sequence}", "status": "in_progress", "output": []}})
+                handler.send_response(200)
+                handler.send_header("Content-Type", "text/event-stream")
+                handler.send_header("Connection", "close")
+                handler.end_headers()
+                handler.wfile.write(created.encode())
+                handler.wfile.flush()
                 held.set()
                 finish_turn.wait(8)
                 body = provider.response_body(sequence, "held turn done")
+                assert body.startswith(created)
+                try:
+                    handler.wfile.write(body[len(created):].encode())
+                    handler.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError): pass
+                handler.close_connection = True
+                return
             else:
                 body = provider.response_body(sequence, "ordinary turn done")
             try:
@@ -6690,20 +7002,36 @@ def run_manual_compaction_cases(binary, root, modes=("after-cancel", "native-can
                 elif mode in ("steer", "cancel-active"):
                     if mode == "steer":
                         terminal.submit("change direction")
-                        wait_event_count(state, "steering_added", 1)
+                        assert not event_list(read_events(state)[1], "steering_added")
+                        release.set()
+                        finish_turn.set()
+                        wait_event_count(state, "compaction_completed", 1)
+                        deadline = time.monotonic() + 10
+                        while True:
+                            _, delivered = read_events(state)
+                            steering = [e for e in event_list(delivered, "steering_added")
+                                        if e["data"].get("text") == "change direction"]
+                            direct = [e for e in event_list(delivered, "turn_started")
+                                      if e["data"].get("text") == "change direction"]
+                            if steering or direct:
+                                assert not (steering and direct), delivered
+                                if direct: assert direct[0]["data"]["input_kind"] == "direct"
+                                break
+                            assert time.monotonic() < deadline, "compaction typeahead was lost"
+                            time.sleep(0.02)
+                        wait_event_count(state, "turn_completed", 2 if steering else 3)
                     else:
                         terminal.send_key("C-c")
                         wait_event_count(state, "turn_interrupted", 1)
-                    wait_event_count(state, "compaction_interrupted", 1)
-                    release.set()
-                    finish_turn.set()
-                    if mode == "steer":
-                        wait_event_count(state, "turn_completed", 2)
-                    terminal.submit("/compact")
+                        wait_event_count(state, "compaction_interrupted", 1)
+                        release.set()
+                        finish_turn.set()
+                        terminal.submit("/compact")
                 else:
                     terminal.submit("typed during compaction")
-                    queued = wait_event_count(state, "future_turn_queued", 1)
-                    assert event_list(queued, "future_turn_queued")[-1]["data"]["text"] == "typed during compaction"
+                    _, pending = read_events(state)
+                    assert not event_list(pending, "future_turn_queued")
+                    assert not event_list(pending, "steering_added")
                     release.set()
             if mode == "input-failure":
                 log = wait_event_count(state, "turn_completed", 2)
@@ -6793,8 +7121,9 @@ def run_compaction_text_cases(binary, root):
         environment = {"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
         try:
             seed = subprocess.run([binary, "--dotdir", str(state), "--config", str(config),
-                "-C", str(case), "-e", "--", "Retain the verified source changes " + "detail " * 100],
-                capture_output=True, text=True, env={**os.environ, **environment}, timeout=10)
+                "-e", "--", "Retain the verified source changes " + "detail " * 100],
+                capture_output=True, text=True,
+                env={**os.environ, **environment, "HOME": str(case)}, timeout=10)
             assert seed.returncode == 0, seed.stderr
             sid = next((state / "sessions").iterdir()).name
             terminal = TmuxTerminal(case / "term", binary, case, state, config, 140, 28,
@@ -6904,8 +7233,9 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
         try:
             # Establish genuine historical user input; then summarize it away.
             result = subprocess.run([str(binary), "--dotdir", str(state), "--config", str(config),
-                                     "-C", str(workspace), "-e", "--", "seed-user-café"],
-                                    env=environment, capture_output=True, text=True, timeout=10)
+                                     "-e", "--", "seed-user-café"],
+                                    env={**environment, "HOME": str(workspace)},
+                                    capture_output=True, text=True, timeout=10)
             assert result.returncode == 0, result.stderr
             sid = next((state / "sessions").iterdir()).name
             terminal = TmuxTerminal(case / "t", binary, workspace, state, config, 140, 28,
@@ -7004,7 +7334,7 @@ def run_compacted_goal_cases(binary, root, modes=("resume", "recover", "manual",
                     rewritten.append(line.replace(event["event_sha256"], previous))
                 log.write_text("\n".join(rewritten) + "\n")
             result = subprocess.run([str(binary), "--dotdir", str(state), "--config", str(config),
-                                     "-C", str(workspace), "-e", "--resume", sid, "--", "reopen check"],
+                                     "-e", "--resume", sid, "--", "reopen check"],
                                     env=environment, capture_output=True, text=True, timeout=10)
             assert result.returncode == 0, result.stderr
             assert result.stdout.strip() == "compacted goal done", result.stdout
@@ -7033,10 +7363,22 @@ def run_automatic_turn_retry_cases(binary, root, provider, environment):
         def respond(handler, request, sequence):
             if mode == "paused" and provider.latest_user(request) != original:
                 assert terminal is not None
-                terminal.submit_wait("/goal pause", "Goal paused at the current turn boundary")
-                body = provider.response_body(sequence, "paused seed").encode()
-                provider.reply(handler, body)
+                created = provider.event("response.created", {"response": {
+                    "id": f"resp_irc_ui_{sequence}", "status": "in_progress", "output": []}})
+                handler.send_response(200)
+                handler.send_header("Content-Type", "text/event-stream")
+                handler.send_header("Connection", "close")
+                handler.end_headers()
+                handler.wfile.write(created.encode())
                 handler.wfile.flush()
+                terminal.submit_wait("/goal pause", "Goal paused at the current turn boundary")
+                body = provider.response_body(sequence, "paused seed")
+                assert body.startswith(created)
+                try:
+                    handler.wfile.write(body[len(created):].encode())
+                    handler.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError): pass
+                handler.close_connection = True
                 return
             requests.append(request)
             n = len(requests)
@@ -7121,7 +7463,25 @@ def run_automatic_turn_retry_cases(binary, root, provider, environment):
                                   else "automatic retry finished", timeout=30 if mode == "renewed" else 20)
                 screen = terminal.capture()
             _, events = read_events(case / "s")
-            assert len(event_list(events, "turn_started")) == (2 if mode == "paused" else 1)
+            steer_direct = False
+            if mode == "steer":
+                deadline = time.monotonic() + 10
+                while True:
+                    steering = [e for e in event_list(events, "steering_added")
+                                if e["data"].get("text") == "fresh retry steer"]
+                    direct = [e for e in event_list(events, "turn_started")
+                              if e["data"].get("text") == "fresh retry steer"]
+                    if steering or direct:
+                        assert not (steering and direct), events
+                        steer_direct = bool(direct)
+                        break
+                    assert time.monotonic() < deadline, "retry typeahead was lost"
+                    time.sleep(0.02)
+                    _, events = read_events(case / "s")
+                if steer_direct:
+                    events = wait_event_count(case / "s", "turn_completed", 2)
+            assert len(event_list(events, "turn_started")) == (
+                2 if mode == "paused" or steer_direct else 1)
             exhausted = mode in ("exhaust", "zero", "one", "budget", "paused", "one-shot", "server")
             if exhausted:
                 assert len(failures) == limit + 1 + int(mode == "budget"), (mode, failures)
@@ -7154,8 +7514,13 @@ def run_automatic_turn_retry_cases(binary, root, provider, environment):
             else:
                 assert all(any(tool.get("name") == "exec_command" for tool in request["tools"])
                            for request in requests)
-            assert all(m[0] == metadata[0][0] for m in metadata)
+            prior_metadata = [m for request, m in zip(requests, metadata)
+                              if not (steer_direct and
+                                      provider.latest_user(request) == "fresh retry steer")]
+            assert all(m[0] == prior_metadata[0][0] for m in prior_metadata)
             for request in requests[2:]:
+                if steer_direct and provider.latest_user(request) == "fresh retry steer":
+                    continue
                 assert sum(i.get("role") == "user" and i.get("content") == original for i in request["input"]) == 1
                 assert sum(i.get("content", "").startswith("snajpagent recovery")
                            for i in current_host_context(request)) <= 1
@@ -7195,6 +7560,14 @@ def run_manual_retry_cases(binary, root, provider, environment):
             attempt = len(requests)
             if attempt in (1, 2):
                 if attempt == 1:
+                    created = provider.event("response.created", {"response": {
+                        "id": f"resp_irc_ui_{sequence}", "status": "in_progress", "output": []}})
+                    handler.send_response(200)
+                    handler.send_header("Content-Type", "text/event-stream")
+                    handler.send_header("Connection", "close")
+                    handler.end_headers()
+                    handler.wfile.write(created.encode())
+                    handler.wfile.flush()
                     arrived.set()
                     assert release.wait(10.0), "active retry command was not handled"
                 if mode == "read-only-resume":
@@ -7212,12 +7585,19 @@ def run_manual_retry_cases(binary, root, provider, environment):
             else:
                 body = provider.response_body(sequence, "manual retry complete")
             encoded = body.encode()
-            provider.reply(handler, encoded, close_header=True)
+            if attempt == 1:
+                assert body.startswith(created)
+                try:
+                    handler.wfile.write(encoded[len(created):])
+                    handler.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError): pass
+            else:
+                provider.reply(handler, encoded, close_header=True)
             handler.close_connection = True
 
         provider.runtime_handler = respond
         terminal = TmuxTerminal(case / "term", binary, workspace, case / "state", config,
-            140, 28, environment=environment)
+            140, 28, environment={**environment, "HOME": str(workspace)})
         try:
             terminal.wait("host-model/medium   0% ›")
             terminal.submit_wait("/retry", "no failed turn to retry")
@@ -7237,7 +7617,8 @@ def run_manual_retry_cases(binary, root, provider, environment):
                 terminal.exit()
                 terminal.close()
                 terminal = TmuxTerminal(case / "resume", binary, workspace, case / "state", config,
-                    140, 28, args=["--resume", log_path.parent.name], environment=environment)
+                    140, 28, args=["--resume", log_path.parent.name],
+                    environment={**environment, "HOME": str(workspace)})
                 terminal.wait("host-model/medium   ?% ›")
             if mode == "chat":
                 terminal.submit_wait("/chat", "chat is offline")
@@ -7345,7 +7726,8 @@ def run_tool_cases(binary, root, provider, environment):
     mask = os.umask(0o027)
     try:
         terminal = TmuxTerminal(case / "term", binary, workspace, case / "state",
-                                config, 120, 28, environment=environment)
+                                config, 120, 28,
+                                environment={**environment, "HOME": str(workspace)})
     finally:
         os.umask(mask)
     provider.runtime_handler = respond
@@ -7626,7 +8008,8 @@ def run_tool_cases(binary, root, provider, environment):
         number = 0
         prompt = "/ro read tool behavior cases"
         with TmuxTerminal(case / "read-term", binary, workspace, case / "read-state",
-                          config, 120, 28, environment=environment) as terminal:
+                          config, 120, 28,
+                          environment={**environment, "HOME": str(workspace)}) as terminal:
             terminal.wait("host-model/medium   0% ›")
             for path, start, end, success, expected in (
                 ("a ; echo nope", None, None, True, "1:Alpha\n2:βeta\n3:last"),
@@ -8243,7 +8626,7 @@ def run_capacity_handoff_cases(binary, root, modes=("queue", "chat", "cancel")):
             assert ready.wait(5)
             if mode == "queue":
                 terminal.submit("/queue fresh-capacity-input")
-                wait_event_count(state, "future_turn_queued", 1)
+                # Before response.created this is typeahead, not an admitted command.
             elif mode == "chat":
                 peer.sendall(b"PRIVMSG #lab :fresh-capacity-input\r\n")
                 deadline = time.monotonic() + 3
@@ -8263,21 +8646,33 @@ def run_capacity_handoff_cases(binary, root, modes=("queue", "chat", "cancel")):
                 continue
             release.set()
             terminal.wait("handoff recovered", timeout=15)
+            if mode == "queue":
+                wait_event_count(state, "future_turn_queued", 1)
             path, log = read_events(state)
-            failed = next(e for e in event_list(log, "response_failed") if e["data"].get("new_input"))
+            if mode == "queue":
+                assert event_list(log, "response_capacity_rejected")
+            else:
+                assert any(e["data"].get("new_input")
+                           for e in event_list(log, "response_failed"))
             assert event_list(log, "context_rebased")
             assert not event_list(log, "compaction_started")
             assert not event_list(log, "response_output_correction")
-            assert "fresh-capacity-input" in json.dumps(requests[-1])
+            if mode == "chat":
+                assert "fresh-capacity-input" in json.dumps(requests[-1])
             terminal.exit()
             if mode == "queue":
+                queued = event_list(log, "future_turn_queued")[-1]
+                assert queued["data"]["text"] == "fresh-capacity-input"
+                assert queued["seq"] > event_list(log, "turn_completed")[-1]["seq"]
                 terminal.close()
-                # Reopen the genuine handoff boundary, before the queued turn.
-                path.write_bytes(b"".join(path.read_bytes().splitlines(keepends=True)[:failed["seq"]]))
+                # Resume from the durable queue admission, before its next turn.
+                path.write_bytes(b"".join(path.read_bytes().splitlines(keepends=True)[:queued["seq"]]))
                 terminal = TmuxTerminal(case / "r", binary, case, state, config, 130, 28,
                     args=("--no-listen", "--no-client", "--resume", path.parent.name),
                     environment=environment)
-                terminal.wait("handoff recovered", timeout=15)
+                terminal.wait("queued future turns are paused", timeout=15)
+                terminal.submit("/next")
+                wait_event_count(state, "turn_completed", 3, timeout=15)
                 assert "fresh-capacity-input" in json.dumps(requests[-1])
                 assert not event_list(read_events(state)[1], "compaction_started")
                 terminal.exit()

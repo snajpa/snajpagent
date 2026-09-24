@@ -4,6 +4,23 @@
 
 ## Unreleased
 
+- Start new sessions in the home directory and expose get_cwd and cd to models.
+  Accept absolute and ./ paths in file, patch and command tools. Remove the
+  workspace selector and workspace-filtered session operations; earlier session
+  formats remain on disk but are not replayed by the new format.
+
+- Let models select the next response's model within an active turn; /model
+  also interrupts an in-progress response and restarts on the chosen model
+  with retained history, completed tool results and live process handles.
+
+- Show a new interactive prompt only after a foreground action finishes or
+  an accepted provider response can receive steering. Retain typeahead while
+  commands and request preparation own the foreground.
+
+- Add `/cat PATH` to view a local file in the configured pager without placing
+  its contents in the conversation; accept cwd-relative, absolute and
+  home-relative paths.
+
 - Keep interactive input live after a transient empty read from an open raw
   terminal, including while output is backpressured. Actual hangup, canonical
   EOF and pipe EOF still end input.

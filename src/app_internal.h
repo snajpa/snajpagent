@@ -105,6 +105,7 @@ struct app_state {
     int stream_errno;
     char stream_error[256];
     bool steering_requested;
+    bool model_switch_requested;
     bool control_requested, applying_controls;
     bool tool_waiting, yield_requested;
     uint64_t input_generation;
@@ -116,6 +117,7 @@ struct app_state {
     bool history_recovery_rebase;
     bool recovery_wait;
     bool provider_active;
+    bool provider_request_ready;
     enum snag_policy_stop turn_policy_stopped;
     uint64_t input_received_ms;
     unsigned int recovery_delay_ms;
@@ -152,6 +154,7 @@ int snag_app_voice_fixture(struct app_state *,const json_t *notices,bool done);
 int snag_app_voice_fixture_mute(struct app_state *);
 #endif
 bool snag_app_shutdown(struct app_state *);
+int snag_app_request_ready(void *opaque);
 int snag_app_queue_arm(struct app_state *, bool);
 
 int snag_app_media_command(struct app_state *app, const char *line, bool *handled);
@@ -165,6 +168,8 @@ int snag_app_history_page(struct app_state *, const struct snag_response_item *,
                           char *, size_t);
 int snag_app_goal_list(struct app_state *, const struct snag_response_item *, json_t **,
                        char *, size_t);
+int snag_app_select_model_tool(struct app_state *, const struct snag_response_item *,
+                               json_t **, char *, size_t);
 
 enum {
     /* Provider pump results already use 1 and 2. */

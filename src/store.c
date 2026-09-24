@@ -663,8 +663,8 @@ record_refusal(const struct snag_session *session, const char *detail)
     char *path;
     FILE *log;
 
-    if (!session || !session->workspace || !detail) return;
-    path = snag_path_join(session->workspace, "refusals.log");
+    if (!session || !session->cwd || !detail) return;
+    path = snag_path_join(session->cwd, "refusals.log");
     if (!path) return;
     log = fopen(path, "a");
     free(path);
@@ -694,17 +694,18 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *model = snag_json_string(data, "default_model");
         const char *provider = snag_json_string(data, "default_provider");
         const char *protocol = snag_json_string(data, "protocol");
-        const char *workspace = snag_json_string(data, "workspace");
+        const char *cwd = snag_json_string(data, "cwd");
 
         if (seq != 1 || snag_json_integer_u64(data, "format", &n) < 0 ||
-            n != 2u || !snag_json_exact_keys(data,
-                "default_effort default_model default_provider format protocol workspace") ||
+            n != 3u || !snag_json_exact_keys(data,
+                "default_effort default_model default_provider format protocol cwd") ||
             !protocol || strcmp(protocol, "responses") != 0 ||
             !snag_text_valid(effort, 1u, sizeof(session->default_effort) - 1u) ||
             !snag_text_valid(model, 1u, sizeof(session->default_model) - 1u) ||
-            !snag_text_valid(provider, 1u, SNAG_CONFIG_PROVIDER_NAME_MAX) || !snag_path_root_len(workspace) ||
-            !snag_text_valid(workspace, 0u, SNAG_PATH_MAX_BYTES)) goto invalid;
-        if (replace_text(session, &session->workspace, "workspace", workspace, SNAG_PATH_MAX_BYTES) < 0)
+            !snag_text_valid(provider, 1u, SNAG_CONFIG_PROVIDER_NAME_MAX) ||
+            !snag_path_root_len(cwd) || !snag_text_valid(cwd, 0u, SNAG_PATH_MAX_BYTES))
+            goto invalid;
+        if (replace_text(session, &session->cwd, "cwd", cwd, SNAG_PATH_MAX_BYTES) < 0)
             return -1;
         if (!snag_strcpy(session->default_effort, sizeof(session->default_effort), effort) ||
             !snag_strcpy(session->default_model, sizeof(session->default_model), model) ||
@@ -764,14 +765,13 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !snag_text_valid(text, 1u, SNAG_MAX_IRC_SNAPSHOT) ||
             snag_json_integer_u64(data, "timestamp_ms", &timestamp_ms) < 0 || timestamp_ms == 0u)
             goto invalid;
-    } else if (strcmp(type, "workspace_changed") == 0) {
-        const char *old_workspace = snag_json_string(data, "old_workspace");
-        const char *new_workspace = snag_json_string(data, "new_workspace");
-        if (session->active_turn || session->process_count != 0u ||
-            !snag_json_exact_keys(data, "new_workspace old_workspace") || !old_workspace || !new_workspace ||
-            strcmp(old_workspace, session->workspace) != 0 || strcmp(old_workspace, new_workspace) == 0 ||
-            !snag_path_root_len(new_workspace) || !snag_text_valid(new_workspace, 0u, SNAG_PATH_MAX_BYTES) ||
-            replace_text(session, &session->workspace, "workspace", new_workspace, SNAG_PATH_MAX_BYTES) < 0)
+    } else if (strcmp(type, "cwd_changed") == 0) {
+        const char *old_cwd = snag_json_string(data, "old_cwd");
+        const char *new_cwd = snag_json_string(data, "new_cwd");
+        if (!snag_json_exact_keys(data, "new_cwd old_cwd") || !old_cwd || !new_cwd ||
+            strcmp(old_cwd, session->cwd) != 0 || strcmp(old_cwd, new_cwd) == 0 ||
+            !snag_path_root_len(new_cwd) || !snag_text_valid(new_cwd, 0u, SNAG_PATH_MAX_BYTES) ||
+            replace_text(session, &session->cwd, "cwd", new_cwd, SNAG_PATH_MAX_BYTES) < 0)
             goto invalid;
     } else if (snag_string_in(type, "session_archived session_unarchived")) {
         const char *origin = snag_json_string(data, "origin");
@@ -1114,6 +1114,31 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                         sizeof(session->default_provider), new_provider) ||
             !snag_strcpy(session->default_model, sizeof(session->default_model), new_model) ||
             !snag_strcpy(session->default_effort, sizeof(session->default_effort), new_effort)) goto invalid;
+    } else if (strcmp(type, "turn_model_changed") == 0) {
+        const char *old_provider = snag_json_string(data, "old_provider");
+        const char *old_model = snag_json_string(data, "old_model");
+        const char *old_effort = snag_json_string(data, "old_effort");
+        const char *turn_id = snag_json_string(data, "turn_id");
+        const char *new_effort = snag_json_string(data, "new_effort");
+        const char *effective_effort = strcmp(session->default_effort, "default") == 0 ?
+            "medium" : session->default_effort;
+
+        if (!session->active_turn || session->response_open ||
+            !snag_json_exact_keys(data, "new_effort old_effort old_model old_provider turn_id") ||
+            !turn_id || strcmp(turn_id, session->active_turn_id) != 0 ||
+            !new_effort || strcmp(new_effort, effective_effort) != 0 ||
+            !old_provider || strcmp(old_provider, session->active_turn_provider) != 0 ||
+            !old_model || strcmp(old_model, session->active_turn_model) != 0 ||
+            !old_effort || strcmp(old_effort, session->active_turn_effort) != 0 ||
+            (strcmp(old_provider, session->default_provider) == 0 &&
+             strcmp(old_model, session->default_model) == 0 &&
+             strcmp(old_effort, new_effort) == 0) ||
+            !snag_strcpy(session->active_turn_provider, sizeof(session->active_turn_provider),
+                         session->default_provider) ||
+            !snag_strcpy(session->active_turn_model, sizeof(session->active_turn_model),
+                         session->default_model) ||
+            !snag_strcpy(session->active_turn_effort, sizeof(session->active_turn_effort),
+                         new_effort)) goto invalid;
     } else if (strcmp(type, "effort_changed") == 0) {
         const char *old_effort = snag_json_string(data, "old_effort");
         const char *new_effort = snag_json_string(data, "new_effort");
@@ -1284,7 +1309,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
     } else if (strcmp(type, "turn_started") == 0) {
         const char *turn_id;
         const char *text;
-        const char *workspace;
+        const char *cwd;
         const char *kind;
         const char *model;
         const char *provider;
@@ -1305,7 +1330,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (session->active_turn || session->process_count != 0u ||
             !snag_session_pending_steering_unadmitted(session) ||
             !input_fields_valid(data, json_object_get(data, "received_at_ms") ?
-                "config input_kind instructions queue_id queue_seq read_only text turn_id turn_number workspace received_at_ms" : "config input_kind instructions queue_id queue_seq read_only text turn_id turn_number workspace") ||
+                "config input_kind instructions queue_id queue_seq read_only text turn_id "
+                "turn_number cwd received_at_ms" :
+                "config input_kind instructions queue_id queue_seq read_only text turn_id "
+                "turn_number cwd") ||
             !json_is_boolean(json_object_get(data, "read_only")) ||
             !(turn_id = snag_json_string(data, "turn_id")) || !snag_hex_is_lower(turn_id, SNAG_ID_HEX_LEN) ||
             snag_json_integer_u64(data, "turn_number", &n) < 0 || n != session->turn_count + 1u ||
@@ -1321,8 +1349,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             strlen(model) >= sizeof(session->active_turn_model) ||
             !snag_utf8_valid((const unsigned char *)model, strlen(model), true) ||
             snag_instructions_metadata_valid(json_object_get(data, "instructions"), error, error_size) < 0 ||
-            !(workspace = snag_json_string(data, "workspace")) ||
-            strcmp(workspace, session->workspace) != 0 || !(text = snag_json_string(data, "text")) || !*text)
+            !(cwd = snag_json_string(data, "cwd")) ||
+            strcmp(cwd, session->cwd) != 0 || !(text = snag_json_string(data, "text")) || !*text)
             goto invalid;
 #define OPTIONAL_EXEC_U32(key, value) do { \
             if (json_object_get(config, (key)) && \
@@ -1882,7 +1910,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                     process_label(pending->command, snag_json_string(item->arguments, "command"));
                     process_label(pending->workdir, snag_json_string(item->arguments, "workdir"));
                 }
-                if (snag_tool_action_digest(item, session->workspace, pending->action_sha256) < 0) {
+                if (snag_tool_action_digest(item, session->cwd, pending->action_sha256) < 0) {
                     return -1;
                 }
             }
@@ -1896,12 +1924,12 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
     } else if (strcmp(type, "tool_started") == 0) {
         const char *action = snag_json_string(data, "action_sha256");
         const char *call_id = snag_json_string(data, "call_id");
-        const char *workspace = snag_json_string(data, "resolved_workdir");
+        const char *cwd = snag_json_string(data, "resolved_workdir");
         struct snag_pending_call *call;
         if (!snag_json_exact_keys(data, "action_sha256 call_id resolved_workdir turn_id") || !current_turn ||
             !session->response_complete || session->response_outcome != SNAG_GRAPH_CALLS ||
             !action || !snag_hex_is_lower(action, SNAG_SHA256_HEX_LEN) ||
-            !workspace || strcmp(workspace, session->workspace) != 0 ||
+            !cwd || strcmp(cwd, session->cwd) != 0 ||
             !call_id || !(call = find_pending_call(session, call_id)) ||
             strcmp(action, call->action_sha256) != 0 || call->started || call->finished) goto invalid;
         if (session->active_read_only && !snag_read_only_tool(call->tool_name)) goto invalid;
@@ -2596,21 +2624,22 @@ int snag_session_voice_context(struct snag_session *session,json_t **result,char
 }
 
 char *
-snag_workspace_resolve(const char *workspace, const char *label, char *error, size_t error_size)
+snag_cwd_resolve(const char *cwd, const char *label, char *error, size_t error_size)
 {
-    char *resolved = snag_realpath(workspace);
+    char *resolved = snag_realpath(cwd);
     snag_file_info st;
 
     if (!resolved) {
-        if (label) snag_errorf(error, error_size, "cannot resolve %s workspace %s: %s",
-                        label, workspace, strerror(errno));
-        else snag_errorf(error, error_size, "cannot resolve workspace %s: %s", workspace, strerror(errno));
+        if (label) snag_errorf(error, error_size, "cannot resolve %s cwd %s: %s",
+                        label, cwd, strerror(errno));
+        else snag_errorf(error, error_size, "cannot resolve cwd %s: %s", cwd, strerror(errno));
         return NULL;
     }
     if (!snag_text_valid(resolved, 0u, SNAG_PATH_MAX_BYTES) ||
         snag_stat(resolved, &st) < 0 || !S_ISDIR(st.st_mode)) {
-        if (label) snag_errorf(error, error_size, "%s workspace must be an existing UTF-8 directory", label);
-        else snag_errorf(error, error_size, "workspace must be an existing UTF-8 directory");
+        if (label) snag_errorf(error, error_size,
+            "%s cwd must be an existing UTF-8 directory", label);
+        else snag_errorf(error, error_size, "cwd must be an existing UTF-8 directory");
         free(resolved);
         errno = EINVAL;
         return NULL;
@@ -2619,11 +2648,11 @@ snag_workspace_resolve(const char *workspace, const char *label, char *error, si
 }
 
 int
-snag_session_prepare(struct snag_session *session, const char *workspace,
+snag_session_prepare(struct snag_session *session, const char *cwd,
                      const char *provider, const char *model, const char *effort,
                      char *error, size_t error_size)
 {
-    char *resolved = snag_workspace_resolve(workspace, NULL, error, error_size);
+    char *resolved = snag_cwd_resolve(cwd, NULL, error, error_size);
     int rc = -1;
 
     if (!resolved) return -1;
@@ -2636,7 +2665,7 @@ snag_session_prepare(struct snag_session *session, const char *workspace,
     snag_buf_init(session->pending_log, SNAG_LOG_HARD_LIMIT - SNAG_LOG_RESERVE);
     rc = snag_session_commit(session, "session_created", json_pack("{s:s,s:s,s:s,s:i,s:s,s:s}",
             "default_effort", effort, "default_model", model,
-            "default_provider", provider, "format", 2, "protocol", "responses", "workspace", resolved),
+            "default_provider", provider, "format", 3, "protocol", "responses", "cwd", resolved),
         NULL, error, error_size);
 out: free(resolved);
     return rc;
@@ -2691,10 +2720,11 @@ out:
 
 int
 snag_session_create(struct snag_store *store, struct snag_session *session,
-                   const char *workspace, const char *provider, const char *model, const char *effort,
+                   const char *cwd, const char *provider, const char *model, const char *effort,
                    char *error, size_t error_size)
 {
-    if (snag_session_prepare(session, workspace, provider, model, effort, error, error_size) < 0) return -1;
+    if (snag_session_prepare(session, cwd, provider, model, effort,
+            error, error_size) < 0) return -1;
     return snag_session_persist(store, session, error, error_size);
 }
 
@@ -2749,7 +2779,7 @@ snag_session_media(struct snag_session *session, const char *path, const char *m
         }
         if (!lookup.found) { snag_errorf(error, error_size, "No accepted asset with that ID in this session"); return -1; }
         *asset = lookup.found;
-    } else if (snag_media_snapshot(session->dir_fd, session->workspace, path, mime,
+    } else if (snag_media_snapshot(session->dir_fd, session->cwd, path, mime,
               SNAG_MEDIA_FILE_MAX, pump, opaque, asset, error, error_size) < 0) return -1;
     if (snag_media_verify(session->dir_fd, *asset, pump, opaque, error, error_size) < 0) {
         json_decref(*asset); *asset = NULL; return -1;

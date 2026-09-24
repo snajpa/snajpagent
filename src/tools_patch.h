@@ -7,7 +7,7 @@
 #include "snag_jansson.h"
 #include <stddef.h>
 
-int snag_tools_apply_patch(const struct snag_response_item *call, const char *session_workspace,
+int snag_tools_apply_patch(const struct snag_response_item *call, const char *session_cwd,
                           json_t **result, char *error, size_t error_size);
 
 #endif

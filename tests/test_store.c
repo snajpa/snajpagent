@@ -92,7 +92,7 @@ turn_started_data(const struct snag_session *session, const char *turn_id)
         "tool_schema", 1, "max_parallel_commands", 4, "parallel_tool_calls", 1,
         "input_kind", "direct", "read_only", 0, "instructions", metadata,
         "queue_id", "queue_seq", "text", "queue test", "turn_id", turn_id,
-        "turn_number", (int)session->turn_count + 1, "workspace", session->workspace));
+        "turn_number", (int)session->turn_count + 1, "cwd", session->cwd));
 }
 
 static json_t *
@@ -173,7 +173,7 @@ count_event(void *opaque, const struct snag_session *state,
 }
 
 static void
-test_pending_session(struct snag_store *store, const char *workspace)
+test_pending_session(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
     char id[SNAG_ID_HEX_LEN + 1u], error[256];
@@ -182,14 +182,16 @@ test_pending_session(struct snag_store *store, const char *workspace)
     int64_t end;
 
     snag_session_init(&session);
-    assert(snag_session_prepare(&session, workspace, "default", "model", "high", error, sizeof(error)) == 0);
+    assert(snag_session_prepare(&session, cwd, "default", "model", "high",
+        error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     assert(session.pending_log && session.log_fd == -1 && session.dir_fd == -1);
     assert(fstatat(store->sessions_fd, id, &st, 0) < 0 && errno == ENOENT);
     snag_session_close(&session);
     assert(fstatat(store->sessions_fd, id, &st, 0) < 0 && errno == ENOENT);
 
-    assert(snag_session_prepare(&session, workspace, "default", "model", "high", error, sizeof(error)) == 0);
+    assert(snag_session_prepare(&session, cwd, "default", "model", "high",
+        error, sizeof(error)) == 0);
     assert(snag_session_commit(&session, "model_selection_changed", json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
                   "old_provider", "default", "new_provider", "default",
                   "old_model", "model", "new_model", "selected",
@@ -221,13 +223,13 @@ test_pending_session(struct snag_store *store, const char *workspace)
 }
 
 static void
-test_failed_append_retry(struct snag_store *store, const char *workspace)
+test_failed_append_retry(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
     struct rlimit saved, limited;
     char error[256], id[SNAG_ID_HEX_LEN + 1u];
     snag_session_init(&session);
-    assert(snag_session_create(store, &session, workspace, "default", "test", "default",
+    assert(snag_session_create(store, &session, cwd, "default", "test", "default",
                                error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     int64_t end = session.log_end;
@@ -252,7 +254,7 @@ test_failed_append_retry(struct snag_store *store, const char *workspace)
 }
 
 static void
-test_pending_input_media(struct snag_store *store, const char *workspace)
+test_pending_input_media(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
     char id[SNAG_ID_HEX_LEN + 1u], error[256], reference[40];
@@ -260,7 +262,7 @@ test_pending_input_media(struct snag_store *store, const char *workspace)
     json_t *asset = NULL, *found = NULL;
     char *path = NULL;
     snag_session_init(&session);
-    assert(snag_session_create(store, &session, workspace, "default", "fixture", "medium",
+    assert(snag_session_create(store, &session, cwd, "default", "fixture", "medium",
                                error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     assert(snag_media_save(session.dir_fd, "attachment", 10u, "text/plain", &asset,
@@ -302,12 +304,12 @@ test_pending_input_media(struct snag_store *store, const char *workspace)
 }
 
 static void
-test_closure_reserve(struct snag_store *store, const char *workspace)
+test_closure_reserve(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
     char error[256];
     snag_session_init(&session);
-    assert(snag_session_create(store, &session, workspace, "default", "test", "default",
+    assert(snag_session_create(store, &session, cwd, "default", "test", "default",
                                error, sizeof(error)) == 0);
     uint64_t seq = session.next_seq;
     int64_t end = session.log_end;
@@ -342,11 +344,11 @@ check_audio_usage(void *opaque,const struct snag_session *state,uint64_t seq,con
 }
 
 static void
-test_audio_usage(struct snag_store *store,const char *workspace)
+test_audio_usage(struct snag_store *store,const char *cwd)
 {
     struct snag_session session;char id[33],error[256];
     snag_session_init(&session);
-    assert(snag_session_create(store,&session,workspace,"default",SNAJPAGENT_MODEL,"medium",error,sizeof(error))==0);
+    assert(snag_session_create(store,&session,cwd,"default",SNAJPAGENT_MODEL,"medium",error,sizeof(error))==0);
     memcpy(id,session.id,sizeof(id));
     json_t *event=json_pack("{s:s,s:s,s:s,s:s}","operation","dictation","provider","default",
         "model","fixture-transcribe","report","Provider-reported duration: 0.01 seconds");
@@ -380,12 +382,12 @@ static void voice_status(struct snag_session *session,const char *queue,const ch
 }
 
 static void
-test_banner_steering(struct snag_store *store,const char *workspace)
+test_banner_steering(struct snag_store *store,const char *cwd)
 {
     struct snag_session session;char id[33],error[256];
     uint64_t durable_seq;
     snag_session_init(&session);
-    assert(snag_session_create(store,&session,workspace,"default",SNAJPAGENT_MODEL,"medium",error,sizeof(error))==0);
+    assert(snag_session_create(store,&session,cwd,"default",SNAJPAGENT_MODEL,"medium",error,sizeof(error))==0);
     memcpy(id,session.id,sizeof(id));
     assert(!session.banner_text && !session.steering_override);
     commit_event(&session,"banner_updated",checked_json(json_pack("{s:s}","text","lead cursor: land r33")));
@@ -413,11 +415,11 @@ test_banner_steering(struct snag_store *store,const char *workspace)
 }
 
 static void
-test_voice_queue(struct snag_store *store,const char *workspace)
+test_voice_queue(struct snag_store *store,const char *cwd)
 {
     struct snag_session session;char id[33],queue[33],again[33],error[256];bool duplicate;
     snag_session_init(&session);
-    assert(snag_session_create(store,&session,workspace,"default",SNAJPAGENT_MODEL,"medium",error,sizeof(error))==0);
+    assert(snag_session_create(store,&session,cwd,"default",SNAJPAGENT_MODEL,"medium",error,sizeof(error))==0);
     memcpy(id,session.id,sizeof(id));
     json_t *source=json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s}",
         "connection_id","0123456789abcdef0123456789abcdef","input_id","utterance-1","response_id","response-1",
@@ -498,8 +500,8 @@ test_media(const struct snag_session *session)
 {
     const unsigned char data[] = {0, 1, 2, 0xff, 0x80, 7};
     char error[256];
-    char *source = snag_path_join(session->workspace, "input.png");
-    char *link = snag_path_join(session->workspace, "alias.png");
+    char *source = snag_path_join(session->cwd, "input.png");
+    char *link = snag_path_join(session->cwd, "alias.png");
     json_t *asset = NULL, *bad = NULL;
     struct snag_buf bytes;
     snag_file_info info;
@@ -509,7 +511,7 @@ test_media(const struct snag_session *session)
     fd = open(source, O_CREAT | O_EXCL | O_RDWR, 0600);
     assert(fd >= 0 && snag_write_full(fd, data, sizeof(data)) == 0);
     close(fd);
-    assert(snag_media_snapshot(session->dir_fd, session->workspace, "input.png",
+    assert(snag_media_snapshot(session->dir_fd, session->cwd, "input.png",
         "image/png", sizeof(data), NULL, NULL, &asset, error, sizeof(error)) == 0);
     assert(asset && snag_media_valid(asset));
     media_fd = snag_open_read_at(session->dir_fd, "media", true);
@@ -544,14 +546,14 @@ test_media(const struct snag_session *session)
     fd = open(source, O_CREAT | O_EXCL | O_RDWR, 0600);
     assert(fd >= 0 && snag_write_full(fd, data, sizeof(data)) == 0); close(fd);
     assert(symlink(source, link) == 0);
-    assert(snag_media_snapshot(session->dir_fd, session->workspace, "alias.png",
+    assert(snag_media_snapshot(session->dir_fd, session->cwd, "alias.png",
         "image/png", 32u, NULL, NULL, &bad, error, sizeof(error)) < 0 && !bad);
-    assert(snag_media_snapshot(session->dir_fd, session->workspace, "input.png",
+    assert(snag_media_snapshot(session->dir_fd, session->cwd, "input.png",
         "image/png", 2u, NULL, NULL, &bad, error, sizeof(error)) < 0 && !bad);
-    assert(snag_media_snapshot(session->dir_fd, session->workspace, "input.png",
+    assert(snag_media_snapshot(session->dir_fd, session->cwd, "input.png",
         "image/png", 32u, cancel_media, &calls, &bad, error, sizeof(error)) < 0 && !bad);
     assert(errno == ECANCELED && calls == 2u);
-    assert(snag_media_snapshot(session->dir_fd, session->workspace, "input.png",
+    assert(snag_media_snapshot(session->dir_fd, session->cwd, "input.png",
         "text/plain\ninvalid", 32u, NULL, NULL, &bad, error, sizeof(error)) < 0 && !bad);
     /* Reopened session directory reads retained assets, not the live source. */
     fd = snag_open_read(session->dir_path, true);
@@ -567,7 +569,7 @@ test_media(const struct snag_session *session)
     assert(snag_unlink_at(media_fd, snag_json_string(asset, "id"), false) == 0);
     assert(snag_media_read(session->dir_fd, asset, &bytes, error, sizeof(error)) < 0);
     assert(bytes.len == sizeof(data));
-    assert(snag_media_snapshot(session->dir_fd, session->workspace, "input.png",
+    assert(snag_media_snapshot(session->dir_fd, session->cwd, "input.png",
         "image/png", 32u, NULL, NULL, &bad, error, sizeof(error)) == 0);
     assert(unlink(source) == 0 && unlink(link) == 0);
     close(media_fd);
@@ -616,7 +618,7 @@ test_media(const struct snag_session *session)
     json_decref(accepted);accepted=NULL;
     fd=open(source,O_CREAT|O_EXCL|O_RDWR,0600);
     assert(fd>=0 && snag_write_full(fd,data,sizeof(data))==0);close(fd);
-    assert(snag_media_snapshot(session->dir_fd,session->workspace,"input.png","image/png",
+    assert(snag_media_snapshot(session->dir_fd,session->cwd,"input.png","image/png",
         sizeof(data),NULL,NULL,&accepted,error,sizeof(error))==0);
     json_decref(accepted);assert(unlink(source)==0);close(media_fd);
     assert(snag_media_remove(session->dir_fd,error,sizeof(error))==0);
@@ -631,7 +633,7 @@ test_media(const struct snag_session *session)
 }
 
 static void
-test_refusal_diagnostic(const char *workspace)
+test_refusal_diagnostic(const char *cwd)
 {
     struct snag_session session;
     char error[256] = {0};
@@ -639,7 +641,7 @@ test_refusal_diagnostic(const char *workspace)
     /* A refused transition must name the clause that failed and the call it
      * concerned, so a crash report is diagnostic without a debug build. */
     snag_session_init(&session);
-    assert(snag_session_prepare(&session, workspace, "default", "model", "high",
+    assert(snag_session_prepare(&session, cwd, "default", "model", "high",
                error, sizeof(error)) == 0);
     assert(snag_session_commit(&session, "tool_finished",
                json_pack("{s:s}", "call_id", "0123456789abcdef"), NULL, error,
@@ -654,7 +656,7 @@ test_refusal_diagnostic(const char *workspace)
         char content[4096];
         size_t got;
         FILE *log;
-        (void)snprintf(path, sizeof(path), "%s/refusals.log", session.workspace);
+        (void)snprintf(path, sizeof(path), "%s/refusals.log", session.cwd);
         log = fopen(path, "r");
         assert(log != NULL);
         got = fread(content, 1u, sizeof(content) - 1u, log);
@@ -667,14 +669,14 @@ test_refusal_diagnostic(const char *workspace)
 }
 
 static void
-test_many_queued_turns(struct snag_store *store, const char *workspace)
+test_many_queued_turns(struct snag_store *store, const char *cwd)
 {
     static const char turn_id[] = "55555555555555555555555555555555";
     struct snag_session session;
     char error[256] = {0};
 
     snag_session_init(&session);
-    assert(snag_session_create(store, &session, workspace, "default", "gpt-5.5-2026-04-23", "default",
+    assert(snag_session_create(store, &session, cwd, "default", "gpt-5.5-2026-04-23", "default",
                               error, sizeof(error)) == 0);
     commit_event(&session, "turn_started", turn_started_data(&session, turn_id));
     for (unsigned int i = 0; i < 130u; ++i) {
@@ -690,14 +692,14 @@ test_many_queued_turns(struct snag_store *store, const char *workspace)
 }
 
 static void
-test_image_compaction_control(struct snag_store *store, const char *workspace)
+test_image_compaction_control(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
     char id[SNAG_ID_HEX_LEN + 1u], error[256] = {0};
     uint64_t source_seq;
 
     snag_session_init(&session);
-    assert(snag_session_create(store, &session, workspace, "default", "model", "high",
+    assert(snag_session_create(store, &session, cwd, "default", "model", "high",
                                error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
     source_seq = session.next_seq - 1u;
@@ -730,8 +732,8 @@ main(void)
     char *temp = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
                                 "snajpagent-store-XXXXXX");
     char state[4096];
-    char workspace[4096];
-    char workspace2[4096];
+    char cwd[4096];
+    char cwd2[4096];
     char id[SNAG_ID_HEX_LEN + 1u];
     char id_prefix[9];
     char trash_name[SNAG_ID_HEX_LEN + 1u + SNAG_ID_HEX_LEN + 1u];
@@ -746,19 +748,20 @@ main(void)
 
     assert(temp && mkdtemp(temp));
     assert(snprintf(state, sizeof(state), "%s/state", temp) > 0);
-    assert(snprintf(workspace, sizeof(workspace), "%s/work", temp) > 0);
+    assert(snprintf(cwd, sizeof(cwd), "%s/work", temp) > 0);
     assert(mkdir(state, 0700) == 0);
-    assert(mkdir(workspace, 0700) == 0);
-    assert(snprintf(workspace2, sizeof(workspace2), "%s/work2", temp) > 0);
-    assert(mkdir(workspace2, 0700) == 0);
+    assert(mkdir(cwd, 0700) == 0);
+    assert(snprintf(cwd2, sizeof(cwd2), "%s/work2", temp) > 0);
+    assert(mkdir(cwd2, 0700) == 0);
     snag_store_init(&store);
     snag_session_init(&session);
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
-    test_pending_session(&store, workspace);
-    test_failed_append_retry(&store, workspace);
-    test_pending_input_media(&store, workspace);
-    test_closure_reserve(&store, workspace);
-    assert(snag_session_create(&store, &session, workspace, "default", "gpt-5.5-2026-04-23", "default",
+    test_pending_session(&store, cwd);
+    test_failed_append_retry(&store, cwd);
+    test_pending_input_media(&store, cwd);
+    test_closure_reserve(&store, cwd);
+    assert(snag_session_create(&store, &session, cwd, "default",
+            "gpt-5.5-2026-04-23", "default",
                               error, sizeof(error)) == 0);
     test_media(&session);
     memcpy(id, session.id, sizeof(id));
@@ -771,24 +774,24 @@ main(void)
     commit_event(&session, "effort_changed", change_data("old_effort", "default", "new_effort", "high"));
     assert(strcmp(session.default_model, "gpt-5.5-2026-04-23-alt") == 0);
     assert(strcmp(session.default_effort, "high") == 0);
-    commit_event(&session, "workspace_changed", change_data("old_workspace", workspace,
-                     "new_workspace", workspace2));
-    assert(strcmp(session.workspace, workspace2) == 0);
+    commit_event(&session, "cwd_changed", change_data("old_cwd", cwd,
+                     "new_cwd", cwd2));
+    assert(strcmp(session.cwd, cwd2) == 0);
     {
         int writable = session.log_fd;
         uint64_t written = UINT64_MAX;
-        json_t *change = change_data("old_workspace", workspace2, "new_workspace", workspace);
+        json_t *change = change_data("old_cwd", cwd2, "new_cwd", cwd);
 
         session.log_fd = openat(session.dir_fd, "events.jsonl", O_RDONLY);
         assert(session.log_fd >= 0);
         struct snag_session before = session;
-        assert(snag_session_commit(&session, "workspace_changed",
+        assert(snag_session_commit(&session, "cwd_changed",
             json_incref(change), &written, error, sizeof(error)) < 0);
         ++before.write_failures; /* Only the process-local error diagnostic advances. */
         assert(memcmp(&session, &before, sizeof(session)) == 0);
         assert(written == UINT64_MAX);
-        assert(strcmp(session.workspace, workspace2) == 0);
-        assert(strcmp(snag_json_string(change, "new_workspace"), workspace) == 0);
+        assert(strcmp(session.cwd, cwd2) == 0);
+        assert(strcmp(snag_json_string(change, "new_cwd"), cwd) == 0);
         json_decref(change);
         assert(close(session.log_fd) == 0);
         session.log_fd = writable;
@@ -819,7 +822,7 @@ main(void)
     assert(session.log_end == durable_end);
     assert(session.next_seq == 5u);
     assert(session.turn_count == 0u);
-    assert(strcmp(session.workspace, workspace2) == 0);
+    assert(strcmp(session.cwd, cwd2) == 0);
     assert(strcmp(session.default_model, "gpt-5.5-2026-04-23-alt") == 0);
     assert(strcmp(session.default_effort, "high") == 0);
 
@@ -1016,14 +1019,15 @@ main(void)
     {
         int fd = open(list_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
         assert(fd >= 0);
-        assert(snag_store_list(&store, workspace2, false, false, list_to_fd, &fd, error, sizeof(error)) == 0);
+        assert(snag_store_list(&store, false, list_to_fd, &fd, error, sizeof(error)) == 0);
         assert(close(fd) == 0);
-        assert(read_file(list_path, list_buf, sizeof(list_buf)) == 0u);
+        assert(read_file(list_path, list_buf, sizeof(list_buf)) > 0u);
+        assert(strstr(list_buf, id_prefix) == NULL);
     }
     {
         int fd = open(list_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
         assert(fd >= 0);
-        assert(snag_store_list(&store, workspace2, false, true, list_to_fd, &fd, error, sizeof(error)) == 0);
+        assert(snag_store_list(&store, true, list_to_fd, &fd, error, sizeof(error)) == 0);
         assert(close(fd) == 0);
         assert(read_file(list_path, list_buf, sizeof(list_buf)) > 0u);
         assert(strstr(list_buf, "\tarchived\t") != NULL);
@@ -1040,7 +1044,8 @@ main(void)
         static const char compact_id[] = "55555555555555555555555555555555";
 
         snag_session_init(&session);
-        assert(snag_session_create(&store, &session, workspace, "default", "gpt-5.5-2026-04-23", "default",
+        assert(snag_session_create(&store, &session, cwd, "default",
+            "gpt-5.5-2026-04-23", "default",
                                   error, sizeof(error)) == 0);
         memcpy(id, session.id, sizeof(id));
         static const char hash[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -1075,7 +1080,8 @@ main(void)
 
     for (unsigned int cut = 0u; cut < 4u; ++cut) {
         snag_session_init(&session);
-        assert(snag_session_create(&store, &session, workspace, "default", "gpt-5.5-2026-04-23", "default",
+        assert(snag_session_create(&store, &session, cwd, "default",
+            "gpt-5.5-2026-04-23", "default",
                                   error, sizeof(error)) == 0);
         memcpy(id, session.id, sizeof(id));
         memcpy(id_prefix, session.id, 8u);
@@ -1104,7 +1110,7 @@ main(void)
         snag_session_close(&session);
     }
     snag_session_init(&session);
-    assert(snag_session_create(&store, &session, workspace,
+    assert(snag_session_create(&store, &session, cwd,
                               "default", "gpt-5.5-2026-04-23", "default",
                               error, sizeof(error)) == 0);
     memcpy(id, session.id, sizeof(id));
@@ -1137,7 +1143,8 @@ main(void)
         uint64_t second_seq;
 
         snag_session_init(&session);
-        assert(snag_session_create(&store, &session, workspace, "default", "gpt-5.5-2026-04-23", "default",
+        assert(snag_session_create(&store, &session, cwd, "default",
+            "gpt-5.5-2026-04-23", "default",
                                   error, sizeof(error)) == 0);
         memcpy(id, session.id, sizeof(id));
         commit_event(&session, "turn_started", turn_started_data(&session, turn_id));
@@ -1228,13 +1235,13 @@ main(void)
         assert(!strcmp(session.pending_queue[0].text, "second edited"));
         snag_session_close(&session);
     }
-    test_refusal_diagnostic(workspace);
-    test_audio_usage(&store,workspace);
-    test_voice_queue(&store,workspace);
-    test_banner_steering(&store,workspace);
-    test_image_compaction_control(&store, workspace);
+    test_refusal_diagnostic(cwd);
+    test_audio_usage(&store,cwd);
+    test_voice_queue(&store,cwd);
+    test_banner_steering(&store,cwd);
+    test_image_compaction_control(&store, cwd);
 
-    test_many_queued_turns(&store,workspace);
+    test_many_queued_turns(&store,cwd);
     snag_store_close(&store);
     free(temp);
     puts("test_store: ok");

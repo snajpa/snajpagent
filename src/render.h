@@ -155,7 +155,7 @@ bool snag_render_view_runnable(const struct snag_render *render);
 int snag_render_flush_pending(struct snag_render *render, size_t records);
 int snag_render_backfill_start(struct snag_render *render, snag_wake_fd notify);
 int snag_render_backfill_collect(struct snag_render *render);
-int snag_render_orientation(struct snag_render *render, const char *workspace, const char *id,
+int snag_render_orientation(struct snag_render *render, const char *cwd, const char *id,
                            uint64_t turns, size_t queued, bool resumed, bool queue_armed);
 int snag_render_history(struct snag_render *render, const struct snag_history_turn *turn, uint64_t shown,
                        uint64_t completed, uint64_t total);

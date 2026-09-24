@@ -137,7 +137,8 @@ run_responses_compaction(struct app_state *app, const json_t *create_request,
     rc = snag_provider_responses_create((struct snag_provider_connection){
         app->config, app->turn_provider, credential, &app->ui, snag_app_provider_input_pump, app,
         app->session.id, app->turn_provider->request_timeout_ms},
-        create_request, NULL, NULL, NULL, NULL, &graph, &failure, error, error_size, NULL);
+        create_request, NULL, NULL, NULL, NULL, NULL, NULL,
+        &graph, &failure, error, error_size, NULL);
     if (rc != 0 && snag_provider_failure_is_capacity(&failure)) rc = SNAG_PROVIDER_CONTEXT_OVERFLOW;
     /* A provider that answered with an error status rejected this request; only
      * a lost body (no provider facts) is worth retrying with a smaller source. */

@@ -85,7 +85,7 @@ class RulesCase:
                 [str(self.binary), "--config", str(self.config),
                  "--dotdir", str(self.state), *args],
                 cwd=self.case,
-                env={**os.environ, "SNAJPAGENT_IRC_UI_KEY": SECRET},
+                env={**os.environ, "HOME": str(self.case), "SNAJPAGENT_IRC_UI_KEY": SECRET},
                 capture_output=True, text=True, timeout=60)
         finally:
             self.provider.runtime_handler = None

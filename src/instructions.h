@@ -23,9 +23,9 @@ int snag_instructions_add_file(struct snag_instruction_set *set, const char *pat
 /* Takes ownership of an already canonical path; grows the set as needed. */
 int snag_instructions_add_owned(struct snag_instruction_set *set, char *path,
                                char *error, size_t error_size);
-int snag_instructions_discover(struct snag_instruction_set *set, const char *workspace,
+int snag_instructions_discover(struct snag_instruction_set *set, const char *cwd,
                               char *error, size_t error_size);
-int snag_instructions_worknote(const char *workspace, char **note,
+int snag_instructions_worknote(const char *cwd, char **note,
                               char *error, size_t error_size);
 json_t *snag_instructions_metadata_json(const struct snag_instruction_set *set);
 int snag_instructions_metadata_valid(const json_t *array, char *error, size_t error_size);

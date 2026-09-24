@@ -80,8 +80,10 @@ class Child:
             if env is None:
                 env = dict(os.environ)
                 env["PAGER"] = ""
+                env["HOME"] = WORKSPACE
             else:
                 env = dict(env)
+                env.setdefault("HOME", WORKSPACE)
             if term is not None:
                 env["TERM"] = term
             if cols is not None:
@@ -158,7 +160,9 @@ class Child:
             re.escape(DEFAULT_IDLE_PROMPT.rstrip()) + b"|" +
             re.escape(DEFAULT_ACCOUNTED_IDLE_PROMPT.rstrip()) +
             rb"|(?:^|[\r\n])[^\r\n]*/[^\r\n]* \xe2\x80\xba"
-            rb"|\r(?:\x1b\[\d+C)?(?:[0-9? ]{0,3}% )?\xe2\x80\xba(?=\r)")
+            rb"|\r(?:\x1b\[\d+C)?(?:\x1b\[[0-9;]*m)?"
+            rb"(?:[0-9? ]{0,3}% )?\xe2\x80\xba"
+            rb"(?:\x1b\[[0-9;]*m)?(?=\r)")
         return self.wait_pattern(pattern, start, timeout)
 
     def wait_context_percent(self, percent, start=0, timeout=MIN_WAIT_S):
@@ -630,11 +634,13 @@ def test_prompt_clock_lifetime():
         child.drain(1.1)
         # Blank submission retains the frozen label and captures a fresh clock.
         start = len(child.buf)
+        before_blank = time.strftime("%H:%M:%S").encode()
         child.send(b"\r")
         child.wait("   0% › ".encode(), start=start)
         child.drain(0.1)
         clocks = re.findall(pattern, child.buf[start:])
-        assert len(clocks) >= 2 and clocks[0] == replacement and clocks[-1] != replacement, clocks
+        assert len(clocks) >= 2 and replacement in clocks, clocks
+        assert clocks[-1] in (before_blank, time.strftime("%H:%M:%S").encode()), clocks
         replacement = clocks[-1]
         child.drain(1.1)
         start = len(child.buf)
@@ -722,6 +728,25 @@ def test_steering():
     assert interrupted["data"]["partial_public"][0]["text"] == "working slowly\n"
     assert len(starts) == 2
     assert starts[1]["data"]["steering_ids"] == [steering["data"]["steering_id"]]
+
+
+def test_model_change_restarts_current_response():
+    child = Child([], DEFAULT_IDLE_PROMPT)
+    child.send_wait(b"slow\r", b"working slowly")
+    changed = child.send_wait(b"/model second-model\r",
+                              b"model for next response in this turn:")
+    complete = child.wait(b"fixture answer", start=changed)
+    child.exit_cleanly(complete)
+
+    log = events(child.session_id())
+    started = [event for event in log if event["type"] == "response_started"]
+    interrupted = [event for event in log if event["type"] == "response_interrupted"]
+    assert len(started) == 2, started
+    assert [event["data"]["model"] for event in started] == [DEFAULT_MODEL, "second-model"]
+    assert started[0]["data"]["turn_id"] == started[1]["data"]["turn_id"]
+    assert len(interrupted) == 1 and interrupted[0]["data"]["reason"] == "control"
+    assert [event["type"] for event in log].count("turn_model_changed") == 1
+    assert [event["type"] for event in log].count("turn_completed") == 1
 
 
 def test_repeated_steering_rearms_composer():
@@ -1116,7 +1141,7 @@ def test_read_only_queue_replay_and_edit():
     ]
 
 
-def test_managed_command_steering_and_tab_queue():
+def test_managed_command_typeahead_and_tab_queue():
     child = Child(["-v"], DEFAULT_IDLE_PROMPT)
     tool_start = child.send_wait(b"managed_command_steer\r", b"fixture managed steering wait")
     deadline = time.monotonic() + 1.0
@@ -1131,20 +1156,18 @@ def test_managed_command_steering_and_tab_queue():
 
     log = events(child.session_id())
     steering = one(log, "steering_added")
-    running = next(
-        item for item in log
-        if item["type"] == "tool_finished" and
-        item["data"]["result"]["status"] == "running"
-    )
-    assert running["data"]["result"]["reason"] == "steering_handoff"
-    assert running["seq"] > steering["seq"]
-    assert running["data"]["result"]["handle"] is not None
+    completed = one(log, "tool_finished")
+    assert completed["data"]["result"]["status"] == "succeeded"
+    # During a tool wait there is no accepted provider request to steer.
+    # Typeahead becomes steering after the tool settles and a new request starts.
+    assert completed["seq"] < steering["seq"]
+    assert one(log, "response_interrupted")["data"]["reason"] == "steered"
     assert not [item for item in log if item["type"] == "process_closed"]
 
     child = Child(["-v"], DEFAULT_IDLE_PROMPT)
     child.send_wait(b"managed_command_queue\r", b"fixture managed queue wait")
     child.send_wait(b"ping\t", b"queued (/next or /q c) " + PROMPT + b"ping")
-    command_end = child.wait(b"managed command queue complete")
+    command_end = child.wait(b"queue complete")
     answer_end = child.wait(b"pong", start=command_end)
     child.exit_cleanly(answer_end)
 
@@ -1176,30 +1199,51 @@ def test_steering_during_pre_response_compaction():
     session_id = child.session_id()
 
     child = Child(["--config", str(config), "--resume", session_id], DEFAULT_ACCOUNTED_IDLE_PROMPT)
-    child.send_wait(b"compaction_steer\r", "»".encode())
-    steer_end = child.send_wait(b"change plan\r", DEFAULT_ACTIVE_PROMPT + b"change plan")
-    child.wait("»".encode(), start=steer_end)
-    answer_end = child.wait(b"fixture answer", start=steer_end)
+    start = len(child.buf)
+    begin = child.send_wait(b"compaction_steer\r", b"Compacting context")
+    assert DEFAULT_ACTIVE_PROMPT not in bytes(child.buf[start:begin])
+    child.send(b"change plan\r")
+    completed = child.wait(COMPACTED, start=begin)
+    assert DEFAULT_ACTIVE_PROMPT not in bytes(child.buf[begin:completed])
+    answer_end = child.wait(b"steered: change plan", start=completed)
     child.exit_cleanly(answer_end)
 
     log = events(session_id)
-    interrupted = [item for item in log
-                   if item["type"] == "compaction_interrupted"]
-    assert len(interrupted) == 1
-    assert interrupted[0]["data"]["reason"] == "steering"
+    assert not [item for item in log if item["type"] == "compaction_interrupted"]
+    assert any(item["type"] == "compaction_completed" for item in log)
     steering = one([item for item in log
                     if item["type"] == "steering_added"],
                    "steering_added")
     turns = [item for item in log if item["type"] == "turn_started"]
     turn_id = turns[-1]["data"]["turn_id"]
     starts = turn_events(log, "response_started", turn_id)
-    assert len(starts) == 1
-    assert starts[0]["data"]["steering_ids"] == [
+    assert len(starts) >= 1
+    assert starts[-1]["data"]["steering_ids"] == [
         steering["data"]["steering_id"]
     ]
 
     resumed = Child(["--config", str(config), "--resume", session_id], PROMPT.rstrip())
     resumed.exit_now()
+
+
+def test_foreground_command_buffers_typeahead():
+    child = Child([], DEFAULT_IDLE_PROMPT)
+    start = child.send_wait(b"compaction_steer\r", b"slow complete")
+    child.wait_idle_prompt(start=start)
+
+    begin = len(child.buf)
+    child.send(b"/compact\r/status\r")
+    started = child.wait(b"Compacting context", start=begin)
+    finished = child.wait(COMPACTED, start=started)
+    assert b"/status" not in bytes(child.buf[begin:finished])
+    status = child.wait(b"context: source=", start=finished)
+    child.wait_idle_prompt(start=status)
+    assert bytes(child.buf[finished:status]).count(b"session:") == 1
+    child.exit_now()
+
+    log = events(child.session_id())
+    assert len([item for item in log if item["type"] == "compaction_completed"]) == 1
+    assert len([item for item in log if item["type"] == "turn_started"]) == 1
 
 
 def test_steering_during_capacity_recovery_rebase():
@@ -1216,8 +1260,13 @@ def test_steering_during_capacity_recovery_rebase():
                   for e in events(session_id)):
         assert time.monotonic() < deadline
         child.read_once(0.02)
-    steer_end = child.send_wait(b"change recovery plan\r", b"\xc2\xbb change recovery plan")
-    answer_end = child.wait(b"fixture answer", start=steer_end)
+    start = len(child.buf)
+    child.send(b"change recovery plan\r")
+    deadline = time.monotonic() + wait_budget(MIN_WAIT_S)
+    while not any(event["type"] == "steering_added" for event in events(session_id)):
+        assert time.monotonic() < deadline, "recovery typeahead was not admitted"
+        child.read_once(0.02)
+    answer_end = child.wait(b"fixture answer", start=start)
     child.exit_cleanly(answer_end)
 
     log = events(session_id)
@@ -1277,9 +1326,10 @@ def test_agents_md_config():
     agents = workspace / "AGENTS.md"
     contents = "Always answer fixture prompts normally.\n"
     agents.write_text(contents, encoding="utf-8")
+    home_env = {**os.environ, "HOME": str(workspace), "PAGER": ""}
 
     enabled_config = write_config("agents-enabled.ini", "[provider openai]\n[agent]\nread_agents_md = true\n")
-    child = Child(["--config", str(enabled_config), "-C", str(workspace)], PROMPT.rstrip())
+    child = Child(["--config", str(enabled_config)], PROMPT.rstrip(), env=home_env)
     answer_end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(answer_end)
     turn = one(events(child.session_id()), "turn_started")
@@ -1289,7 +1339,7 @@ def test_agents_md_config():
 
     disabled_config = write_config("agents-disabled.ini",
         "[provider openai]\n[agent]\nread_agents_md = false\n")
-    child = Child(["--config", str(disabled_config), "-C", str(workspace)], PROMPT.rstrip())
+    child = Child(["--config", str(disabled_config)], PROMPT.rstrip(), env=home_env)
     answer_end = child.send_wait(b"ping\r", b"pong")
     child.exit_cleanly(answer_end)
     turn = one(events(child.session_id()), "turn_started")
@@ -1301,9 +1351,9 @@ def test_agents_md_config():
     entry = docs / "AGENTS.md"
     entry.write_text("Private notes must not be injected.\n", encoding="utf-8")
     before = session_ids()
-    options = ["--config", str(disabled_config), "-C", str(workspace),
+    options = ["--config", str(disabled_config),
                "-d", str(docs), "-d" + str(docs / "."), "-d", str(workspace)]
-    child = Child(options, PROMPT.rstrip())
+    child = Child(options, PROMPT.rstrip(), env=home_env)
     end = child.send_wait_idle(b"ping\r", b"pong")
     end = child.send_wait_idle(b"/compact\r", COMPACTED, start=end)
     (workspace / "ro-input.txt").write_text("native docs check\n", encoding="utf-8")
@@ -1316,7 +1366,7 @@ def test_agents_md_config():
     for turn in [e for e in events(session) if e["type"] == "turn_started"]:
         assert turn["data"]["instructions"] == [str(entry), str(agents)]
     entry.write_text("Updated live notes.\n", encoding="utf-8")
-    child = Child([*options, "--resume", session, "--", "ping"])
+    child = Child([*options, "--resume", session, "--", "ping"], env=home_env)
     end = child.wait(b"pong")
     child.exit_cleanly(end)
     turns = [e for e in events(session) if e["type"] == "turn_started"]
@@ -2017,7 +2067,7 @@ def test_resume_keeps_original_instruction_paths():
     work.mkdir()
     entry = work / "AGENTS.md"
     entry.write_text("Original entry point.\n", encoding="utf-8")
-    with Child(["-C", str(work)], PROMPT.rstrip()) as child:
+    with Child([], PROMPT.rstrip(), env={**os.environ, "HOME": str(work), "PAGER": ""}) as child:
         child.send_wait(b"queue_slow\r", b"working slowly")
         sid = child.session_id()
         child.kill()
@@ -2392,9 +2442,11 @@ def test_goal_interrupt_blocks_background_irc_restart():
         child.send_wait_idle(b"/rollout\r", "── rollout ──".encode())
         child.send_wait(b"/goal slow goal\r", b"working on goal")
         session_id = child.session_id()
-        child.send_wait(b"/model gpt-5.6-luna/high\r", b"model for next turn:")
         peer = IRCClient(int(endpoint.rsplit(":", 1)[1]), "background")
         peer.message("ordinary background must wait after cancellation")
+        start = len(child.buf)
+        child.send(b"\x03")
+        paused = child.wait(b"Goal paused at the current turn boundary", start=start)
         deadline = time.monotonic() + IRC_WAIT_S
         background_seq = None
         while time.monotonic() < deadline:
@@ -2407,10 +2459,6 @@ def test_goal_interrupt_blocks_background_irc_restart():
                 break
             child.read_once(0.02)
         assert background_seq is not None
-
-        start = len(child.buf)
-        child.send(b"\x03")
-        paused = child.wait(b"Goal paused at the current turn boundary", start=start)
         child.drain(0.4)
         log = events(session_id)
         pause_seq = one(log, "goal_paused")["seq"]
@@ -2843,22 +2891,27 @@ def test_preferences_and_verbosity():
 
 
 def test_active_verbosity():
-    for key in (b"\r", b"\t"):
+    for key in (b"\r",):
         for initial, level in ((0, 3), (3, 0)):
             with Child(["-v"] * initial, ready=DEFAULT_IDLE_PROMPT) as child:
                 child.send_wait(b"managed_command_queue\r", "⠋".encode())
                 session = child.session_id()
                 start = len(child.buf)
                 after = child.send_wait(f"/verbose {level}".encode() + key, f"verbosity: {level} (".encode(),
-                                   start=start, timeout=0.25)
-                assert b"managed command queue complete" not in child.buf
-                end = child.wait(b"managed command queue complete", start=after)
-                child.exit_cleanly(end)
+                                        start=start)
+                # The final response and an immediate UI-only verbosity command
+                # may render in either order across the presentation boundary.
+                end = child.wait(b"queue complete", start=start)
+                query = child.send_wait_idle(b"/verbose\r", f"verbosity: {level} (".encode(),
+                                             start=max(after, end))
+                child.exit_cleanly(query)
                 output = b"fixture managed wait completed"
-                assert (output in child.buf[after:]) == (level == 3)
                 log = events(session)
                 assert one(log, "turn_started")["data"]["text"] == "managed_command_queue"
                 one(log, "turn_completed")
+                assert any(item.get("text") == "managed command queue complete"
+                           for event in log if event["type"] == "response_completed"
+                           for item in event["data"].get("items", []))
                 result = one(log, "tool_finished")["data"]["result"]
                 assert output.decode() in json.dumps(result)
                 assert not any(e["type"] in (
@@ -3196,21 +3249,18 @@ def test_idle_compaction_crash_recovery():
     one(log, "compaction_completed")
 
 
-def test_active_next_turn_settings():
-    # Defaults can change while the current turn retains its request identity.
+def test_active_model_handoff_and_effort_preferences():
+    # A model change restarts the active request; /effort selects later requests.
     with Child([], PROMPT.rstrip()) as child:
         child.send_wait(b"queue_slow\r", b"working slowly")
         session_id = child.session_id()
         initial = one(events(session_id), "turn_started")["data"]["config"]
         start = len(child.buf)
         child.send_wait(b"/model gpt-5.6-luna/high\r",
-                        b"model for next turn:", start=start)
+                        b"model for next response in this turn:", start=start)
         start = len(child.buf)
         child.send_wait(b"/effort medium\r", b"effort", start=start)
-        # Force another request in the *same* turn after both default changes.
-        end = child.send_wait(b"finish this turn\r", b"steered: finish this turn",
-                              start=len(child.buf))
-        child.wait_idle_prompt(start=end)
+        child.wait_idle_prompt(start=start)
         end = child.send_wait(b"ping\r", b"pong", start=len(child.buf))
         child.exit_cleanly(end)
     log = events(session_id)
@@ -3221,10 +3271,11 @@ def test_active_next_turn_settings():
     requests = [e["data"] for e in log if e["type"] == "response_started"
                 and e["data"]["turn_id"] == turns[0]["turn_id"]]
     assert len(requests) == 2, requests
-    for request in requests:
-        assert (request["model"], request["effort"]) == (
-            initial["model"], initial["effort"]), requests
-    # The deferred defaults must also survive a crash before the next turn.
+    assert (requests[0]["model"], requests[0]["effort"]) == (
+        initial["model"], initial["effort"]), requests
+    assert (requests[1]["model"], requests[1]["effort"]) == ("gpt-5.6-luna", "high"), requests
+    assert one(log, "turn_model_changed")["data"]["old_model"] == initial["model"]
+    # The effort preference survives a crash before the following turn.
     with Child(["--resume", session_id], PROMPT.rstrip()) as child:
         child.send_wait(b"queue_slow\r", b"working slowly")
         child.send_wait(b"/effort high\r", b"effort", start=len(child.buf))
@@ -4644,14 +4695,12 @@ def test_network_view_routing_and_atomic_catchup():
     before = session_ids()
     port = free_port()
     endpoint = f"127.0.0.1:{port}"
-    network_workspace = (
-        Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "network-routing-workspace"
-    )
-    network_workspace.mkdir()
+    network_home = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "network-routing-home"
+    network_home.mkdir()
     child = Child([
         "-s", endpoint, "-n", "agent", "-o", "localop",
-        "-r", "lab", "-C", str(network_workspace), "--no-color",
-    ])
+        "-r", "lab", "--no-color",
+    ], env={**os.environ, "HOME": str(network_home), "PAGER": ""})
     human = None
     peer_agent = None
     exited = False
@@ -4841,8 +4890,7 @@ def test_chat_mention_completion_and_steering():
         session_id = new_session(before, child)
         human = IRCClient(port, "remoteop")
         wait_turn_completed(child, session_id, "event=join sender=remoteop")
-        for prompt, marker in (("slow", b"working slowly"),
-                               ("managed_command_steer", b"fixture managed steering wait")):
+        for prompt, marker in (("slow", b"working slowly"),):
             start = len(child.buf)
             boundary = child.send_wait_idle(b"/rollout\r", "── rollout ──".encode(), start=start)
             child.send_wait(prompt.encode() + b"\r", marker, start=start)
@@ -4874,8 +4922,7 @@ def test_chat_mention_completion_and_steering():
                         if event["data"].get("turn_id") == turn_id and
                         event["type"] in ("steering_added", "response_interrupted",
                                           "turn_completed", "turn_interrupted")]
-            # Completing and submitting the local agent does steer. The managed
-            # fixture requires this exact instruction before terminating its handle.
+            # Completing and submitting the local agent steers the active request.
             child.send(b"@ag\tterminate it\r")
             human.wait(b"PRIVMSG #lab :@agent terminate it\r\n", start=wire_start)
             wait_turn_completed(child, session_id, prompt)
@@ -4905,12 +4952,12 @@ def test_network_chat_and_managed_mention():
     before = session_ids()
     port = free_port()
     endpoint = f"127.0.0.1:{port}"
-    network_workspace = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "network-workspace"
-    network_workspace.mkdir()
+    network_home = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "network-home"
+    network_home.mkdir()
     child = Child([
         "-s", endpoint, "-n", "agent", "-o", "localop",
-        "-r", "lab", "-C", str(network_workspace), "--no-color",
-    ])
+        "-r", "lab", "--no-color",
+    ], env={**os.environ, "HOME": str(network_home), "PAGER": ""})
     human = None
     peer_agent = None
     exited = False
@@ -4953,7 +5000,7 @@ def test_network_chat_and_managed_mention():
         child.send_wait(b"session setup\r", "localop › session setup".encode())
         session_id = new_session(before, child)
         human = IRCClient(port, "remoteop")
-        assert (b" 332 remoteop #lab :" + str(network_workspace).encode() +
+        assert (b" 332 remoteop #lab :" + str(network_home).encode() +
                 b"\r\n") in human.buf
         peer_agent = IRCClient(port, "peerbot", agent=True)
 
@@ -5492,23 +5539,21 @@ def test_ctrl_c_sequence_reset():
 
 
 def test_blank_enter_during_engine_stall():
-    # Fill the engine FIFO with ordinary controls. Local blank Enter must still
-    # paint immediately, without steering, history writes or fabricated work.
+    # A stalled provider can receive typeahead, but foreground submissions must
+    # settle in order. Blank Enter never fabricates steering or future work.
     for term in ("xterm", "dumb"):
         with Child([], ready=DEFAULT_IDLE_PROMPT, term=term) as child:
             child.send_wait(b"engine_blocked\r", b"engine-block-start")
-            child.send_wait(b"/status\r" * 32, b"input backlog is full", timeout=1.0)
-            child.drain(0.05)
             start = len(child.buf)
-            child.send(b"\r" * 40)
-            deadline = time.monotonic() + 0.8
-            while child.buf[start:].count(b"\n") < 40:
+            child.send(b"/status\r" * 4 + b"\r" * 4)
+            end = child.wait(b"engine-block-end", start=start)
+            deadline = time.monotonic() + wait_budget(MIN_WAIT_S)
+            while child.buf[start:].count(b"session:") < 4:
                 remaining = deadline - time.monotonic()
                 assert remaining > 0, bytes(child.buf[start:])
                 child.read_once(remaining)
             assert b"\a" not in child.buf[start:]
-            assert b"engine-block-end" not in child.buf
-            end = child.wait(b"engine-block-end", start=start)
+            assert b"input backlog is full" not in child.buf[start:]
             child.exit_cleanly(end)
         log = events(new_session(child.sessions_before))
         assert [e["data"]["text"] for e in log if e["type"] == "turn_started"] == ["engine_blocked"]
@@ -5727,6 +5772,7 @@ if __name__ == "__main__":
     test_incremental_multiline_delete_clears_old_tail()
     test_incremental_wrapped_long_prompt_multiline_indent()
     test_steering()
+    test_model_change_restarts_current_response()
     test_repeated_steering_rearms_composer()
     test_deferred_steering_queues_to_turn_end()
     test_cancel_defers_timer_until_next_input()
@@ -5740,8 +5786,9 @@ if __name__ == "__main__":
     test_read_only_multiline_compaction_and_chat()
     test_queue_edit_resume_at_acknowledgement()
     test_read_only_queue_replay_and_edit()
-    test_managed_command_steering_and_tab_queue()
+    test_managed_command_typeahead_and_tab_queue()
     test_steering_during_pre_response_compaction()
+    test_foreground_command_buffers_typeahead()
     test_steering_during_capacity_recovery_rebase()
     test_agents_md_config()
     test_active_ctrl_c_clears_draft()
@@ -5792,7 +5839,7 @@ if __name__ == "__main__":
     test_explicit_cancel_is_not_resumed()
     test_recovery_at_durable_tool_boundaries()
     test_idle_compaction_crash_recovery()
-    test_active_next_turn_settings()
+    test_active_model_handoff_and_effort_preferences()
     test_preferences_and_verbosity()
     test_runtime_verbosity_resume()
     test_help_plain_terminal()

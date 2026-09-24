@@ -15,16 +15,19 @@ a matching manual. Check `snajpagent -V` when behavior differs.
 ## 1. Work on a project
 
 After [installing and choosing a provider](#install-and-choose-a-provider),
-start in the project you want to change:
+start snajpagent:
 
 ```sh
-cd /path/to/your/project
 snajpagent
 ```
 
+New sessions start with their working directory at `~`. Ask the model to use
+`get_cwd` to inspect it and `cd` to change it, or give an absolute file path.
+File tools also accept explicit `./` paths relative to the current directory.
 Describe a task and press Enter: “Fix the empty-input bug, keep the public API
 unchanged, and run the tests.” The model can read and edit files and run
-commands. Empty Enter opens a fresh prompt, like a shell.
+commands across the filesystem with your OS permissions. Tool calls require
+no per-call approval. Empty Enter opens a fresh prompt, like a shell.
 
 Read its replies and scroll back normally. Tool details are hidden by default;
 `/verbose 1` shows compact activity and `/verbose 2` adds input/result previews,
@@ -43,15 +46,17 @@ Your request and the work through its final answer make up a **turn**, which
 appears in **rollout**. You can type while it runs; typing alone does not
 interrupt it.
 
-Each nonblank submission appears in scrollback immediately. Until the engine
-acknowledges it, the editor keeps accepting type-ahead without displaying a
-second ready prompt; the retained text becomes the next real composer. Blank or
+Each nonblank submission appears in scrollback immediately. The next prompt
+appears when its action finishes or a provider request is processing and can
+receive steering. Until then, typed input waits without displaying a second
+ready prompt. Blank or
 whitespace-only Enter stays local and starts no turn, command or provider call.
 
-**Enter sends a correction now**: “Use the existing parser; don't add a
-dependency.” It interrupts the model's response and continues from the text
-already delivered; running commands stay alive while the model waits for or
-stops them.
+**Enter sends a correction during a steerable provider request**: “Use the
+existing parser; don't add a dependency.” It interrupts that response and
+continues from the text already delivered; running commands stay alive while
+the model waits for or stops them. Input submitted before the provider is ready
+waits for the first safe boundary.
 
 **Tab at the end of an ordinary message queues a follow-up while work is
 active**, so “Then add regression coverage” waits for the current turn. Queued
@@ -72,18 +77,24 @@ print a duplicate submission.
 
 ### Commands, history and context
 
-Every command can be entered while a turn is active. Inspection and presentation
-commands act immediately; `/config`, `/model cache`, `/compact`, `/archive` and
-`/delete` acknowledge a safe boundary when they must wait. Accepted controls
-survive resume, model and effort selections apply to the next full turn, the
-external `$EDITOR` owns terminal input while open, and deletion always requires
-explicit confirmation.
+Commands can be entered while a turn is steerable. A foreground slash command
+finishes before the next app command is accepted; input typed during it waits.
+`/config`, `/model cache`, `/compact`, `/archive` and `/delete` acknowledge a
+safe boundary when they must wait. Accepted controls survive resume. `/model`
+and the model's `select_model` tool switch the next response in the current turn;
+an already streaming request is interrupted and rebuilt from durable history.
+The external `$EDITOR` owns terminal input while open, and deletion always
+requires explicit confirmation.
 
 Submitted slash commands remain in scrollback above their output. `/history`
 shows the last turn (including unfinished work), `/history 10` the last ten and
 `/history 0` only counts, while the header and footer report session and
 shown/completed totals. These are conversation turns, separate from the Up/Ctrl-R
 prompt-entry history.
+
+Use `/cat src/app.c` to open a local file in `$PAGER` (or the configured
+`[ui] pager` command). Relative paths use the current working directory; file contents
+stay in the pager rather than the conversation.
 
 Use `/ro QUERY` for a read-only query; during work it queues a separate read-only
 turn without changing the current turn's permissions. Every request declares the
@@ -249,8 +260,9 @@ and slash-command exceptions.
 
 `/model` lists the locally cached catalog and `/model cache` refreshes
 providers; select a row by number or with `/model PROVIDER/MODEL/EFFORT`. Both
-`/model` and `-m` select from the next full turn onward, including across
-resume; add `save` to write the selection into the configuration file. A model
+An active `/model` switches the next response in the same turn; an idle
+selection and CLI `-m` set the preference for subsequent requests. The choice
+persists across resume; add `save` to write it into the configuration file. A model
 change alone does not compact. If the selected model needs a smaller context,
 compaction runs through that model in bounded chunks. Exiting immediately after
 the selection, or after a failed or cancelled turn, keeps both the selection

@@ -103,11 +103,11 @@ build_context(struct snag_session *session, unsigned int cycle, const json_t *st
 
 static void
 create_session(struct snag_store *store, struct snag_session *session,
-               const char *workspace, const char *effort)
+               const char *cwd, const char *effort)
 {
     char error[512] = {0};
     snag_session_init(session);
-    int rc = snag_session_create(store, session, workspace, "default",
+    int rc = snag_session_create(store, session, cwd, "default",
                                  SNAJPAGENT_MODEL, effort, error, sizeof(error));
     if (rc != 0) fprintf(stderr, "session: %s\n", error);
     assert(rc == 0);
@@ -126,7 +126,7 @@ static const char worknote_header[] = "[snajpagent host continuation — not a n
 static const char worknote_marker[] = "[work-note truncated: earlier content omitted]\n";
 
 static json_t *turn_started(const char *turn_id, unsigned int number, const char *text,
-                            const char *workspace, json_t *instructions);
+                            const char *cwd, json_t *instructions);
 static json_t *response_started(const char *turn_id, const char *response_id,
                                 const char *compact_id);
 static json_t *response_completed(const char *turn_id, const char *response_id,
@@ -144,7 +144,7 @@ static json_t *compaction_completed_data(const char *compact_id, const char *sou
                                          uint64_t output_tokens_bound, const json_t *output);
 
 static void
-test_history_orientation(struct snag_store *store, const char *workspace)
+test_history_orientation(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
     struct snag_context_projection projection = {0};
@@ -155,9 +155,9 @@ test_history_orientation(struct snag_store *store, const char *workspace)
     char error[512] = {0};
 
     assert(steering);
-    create_session(store, &session, workspace, "medium");
+    create_session(store, &session, cwd, "medium");
     commit_event(&session, "turn_started", turn_started(turn, 1u,
-        "historical transcript sentinel", workspace, NULL));
+        "historical transcript sentinel", cwd, NULL));
 
     struct snag_context_control control = {
         .history_orientation = SNAG_HISTORY_ORIENTATION_COMPACT
@@ -196,7 +196,7 @@ test_history_orientation(struct snag_store *store, const char *workspace)
     commit_event(&session, "goal_started",
         goal_started_data(goal, "durable orientation objective"));
     json_t *goal_turn = turn_started("09000000000000000000000000000003", 2u,
-        SNAG_GOAL_CONTINUATION_TEXT, workspace, NULL);
+        SNAG_GOAL_CONTINUATION_TEXT, cwd, NULL);
     assert(json_object_set_new(goal_turn, "input_kind", json_string("goal")) == 0);
     commit_event(&session, "turn_started", goal_turn);
     control.history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
@@ -225,6 +225,16 @@ test_history_orientation(struct snag_store *store, const char *workspace)
     assert(message_matching(input, SNAG_GOAL_CONTINUATION_TEXT));
     assert(!message_matching(input, "historical transcript sentinel"));
     assert(!message_matching(input, "Pure durable-turn continuation after process resume"));
+    size_t goal_requests = 0u;
+    for (size_t i = 0u; i < json_array_size(input); ++i) {
+        const json_t *message = json_array_get(input, i);
+        const char *role = snag_json_string(message, "role");
+        const char *content = snag_json_string(message, "content");
+
+        if (role && content && strcmp(role, "user") == 0 &&
+            strstr(content, SNAG_GOAL_CONTINUATION_TEXT)) ++goal_requests;
+    }
+    assert(goal_requests == 1u); /* Recovery already reinstalled the active input. */
 
     snag_context_projection_free(&projection);
     commit_event(&session, "response_started", response_started(session.active_turn_id,
@@ -265,7 +275,7 @@ worknote_build(struct snag_session *session, const json_t *steering,
 }
 
 static void
-test_worknote(struct snag_store *store, const char *workspace)
+test_worknote(struct snag_store *store, const char *cwd)
 {
     struct snag_instruction_set instructions = {0};
     struct snag_context_projection projection = {0};
@@ -280,13 +290,13 @@ test_worknote(struct snag_store *store, const char *workspace)
 
     assert(empty);
     assert(previous == NULL || snprintf(saved, sizeof(saved), "%s", previous) > 0);
-    assert(snprintf(xdg, sizeof(xdg), "%s-xdg", workspace) > 0);
-    create_session(store, &session, workspace, "medium");
+    assert(snprintf(xdg, sizeof(xdg), "%s-xdg", cwd) > 0);
+    create_session(store, &session, cwd, "medium");
     assert(setenv("XDG_CONFIG_HOME", xdg, 1) == 0); /* no global-root note in this build */
-    assert(snprintf(path, sizeof(path), "%s/WORKNOTE.md", workspace) > 0);
+    assert(snprintf(path, sizeof(path), "%s/WORKNOTE.md", cwd) > 0);
     char turn[SNAG_ID_HEX_LEN + 1u];
     assert(snprintf(turn, sizeof(turn), "%032x", 1u) == SNAG_ID_HEX_LEN);
-    json_t *packed = turn_started(turn, 1u, "worknote probe", workspace, NULL);
+    json_t *packed = turn_started(turn, 1u, "worknote probe", cwd, NULL);
     commit_event(&session, "turn_started", packed);
 
     /* Absent note: nothing injected, and no instruction source is required. */
@@ -408,7 +418,7 @@ test_worknote(struct snag_store *store, const char *workspace)
 }
 
 static void
-test_worknote_moments(struct snag_store *store, const char *workspace)
+test_worknote_moments(struct snag_store *store, const char *cwd)
 {
     struct snag_context_projection projection = {0}, replay = {0};
     struct snag_instruction_set instructions = {0};
@@ -424,17 +434,17 @@ test_worknote_moments(struct snag_store *store, const char *workspace)
 
     assert(empty);
     assert(previous == NULL || snprintf(saved, sizeof(saved), "%s", previous) > 0);
-    assert(snprintf(xdg, sizeof(xdg), "%s-xdg", workspace) > 0);
-    assert(snprintf(path, sizeof(path), "%s/WORKNOTE.md", workspace) > 0);
+    assert(snprintf(xdg, sizeof(xdg), "%s-xdg", cwd) > 0);
+    assert(snprintf(path, sizeof(path), "%s/WORKNOTE.md", cwd) > 0);
     write_file(path, "first line\ncurrent tail state\n");
-    create_session(store, &session, workspace, "medium");
+    create_session(store, &session, cwd, "medium");
     assert(setenv("XDG_CONFIG_HOME", xdg, 1) == 0); /* no global-root note in this build */
     memcpy(session_id, session.id, sizeof(session_id));
 
     /* Moment 1: turn start — the note is read fresh and injected at the request build. */
     commit_event(&session, "input_received", input_received_data("worknote moments"));
     commit_event(&session, "turn_started",
-                 turn_started(turn, 1u, "worknote moments", workspace, NULL));
+                 turn_started(turn, 1u, "worknote moments", cwd, NULL));
     worknote_build(&session, empty, &instructions, &projection);
     json_t *item = worknote_item(json_object_get(projection.create_request.value, "input"));
     assert(item);
@@ -505,7 +515,7 @@ test_worknote_moments(struct snag_store *store, const char *workspace)
             commit_event(&session, "compaction_completed", completed);
             json_decref(output);
             commit_event(&session, "turn_started",
-                         turn_started(turn2, 2u, "worknote moments 2", workspace, NULL));
+                         turn_started(turn2, 2u, "worknote moments 2", cwd, NULL));
             worknote_build(&session, empty, &instructions, &post_compact);
             json_t *note =
                 worknote_item(json_object_get(post_compact.create_request.value, "input"));
@@ -531,7 +541,7 @@ test_worknote_moments(struct snag_store *store, const char *workspace)
 
         commit_event(&session, "input_received", input_received_data("worknote moments 3"));
         commit_event(&session, "turn_started",
-                     turn_started(turn3, 3u, "worknote moments 3", workspace, NULL));
+                     turn_started(turn3, 3u, "worknote moments 3", cwd, NULL));
     }
     worknote_build(&session, empty, &instructions, &replay);
     json_t *replayed = worknote_item(json_object_get(replay.create_request.value, "input"));
@@ -550,7 +560,7 @@ test_worknote_moments(struct snag_store *store, const char *workspace)
 
 static json_t *
 turn_started(const char *turn_id, unsigned int number, const char *text,
-             const char *workspace, json_t *instructions)
+             const char *cwd, json_t *instructions)
 {
     return checked_json(json_pack("{s:{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b},"
         "s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:I,s:s}",
@@ -559,14 +569,14 @@ turn_started(const char *turn_id, unsigned int number, const char *text,
         "profile_id", SNAJPAGENT_PROFILE_ID, "prompt_schema", 1, "replay_schema", 1, "tool_schema", 1,
         "max_parallel_commands", 4, "parallel_tool_calls", 1, "input_kind", "direct", "read_only", 0,
         "instructions", instructions ? instructions : json_array(), "queue_id", "queue_seq",
-        "text", text, "turn_id", turn_id, "turn_number", (json_int_t)number, "workspace", workspace));
+        "text", text, "turn_id", turn_id, "turn_number", (json_int_t)number, "cwd", cwd));
 }
 
 static json_t *
 turn_started_model(const char *turn_id, unsigned int number, const char *text,
-                   const char *workspace, const char *model)
+                   const char *cwd, const char *model)
 {
-    json_t *data = turn_started(turn_id, number, text, workspace, NULL);
+    json_t *data = turn_started(turn_id, number, text, cwd, NULL);
     json_t *config = json_object_get(data, "config");
 
     assert(json_object_set_new(config, "model", json_string(model)) == 0);
@@ -622,19 +632,19 @@ response_completed(const char *turn_id, const char *response_id, const char *tex
         "response_id", response_id, "status", "completed", "turn_id", turn_id, "usage", usage()));
 }
 
-static void test_voice_completed_result(struct snag_store *store,const char *workspace)
+static void test_voice_completed_result(struct snag_store *store,const char *cwd)
 {
     struct snag_session session;snag_session_init(&session);
     char id[33],queue[33],error[256];bool duplicate;json_t *result=NULL;
     const char *turn="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",*response="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    assert(snag_session_create(store,&session,workspace,"default",SNAJPAGENT_MODEL,"medium",error,sizeof(error))==0);
+    assert(snag_session_create(store,&session,cwd,"default",SNAJPAGENT_MODEL,"medium",error,sizeof(error))==0);
     strcpy(id,session.id);
     json_t *source=json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s}",
         "connection_id","0123456789abcdef0123456789abcdef","input_id","input-1","response_id","voice-1",
         "call_id","call-1","provider","default","model","voice-fixture","transcript","inspect","request","inspect");
     assert(snag_session_voice_queue(&session,source,queue,&duplicate,error,sizeof(error))==0 && !duplicate);
     json_decref(source);
-    json_t *started=turn_started(turn,1u,session.pending_queue[0].text,workspace,NULL);
+    json_t *started=turn_started(turn,1u,session.pending_queue[0].text,cwd,NULL);
     assert(json_object_set_new(started,"input_kind",json_string("queued"))==0);
     assert(json_object_set_new(started,"queue_id",json_string(queue))==0);
     assert(json_object_set_new(started,"queue_seq",json_integer((json_int_t)session.pending_queue[0].seq))==0);
@@ -645,7 +655,7 @@ static void test_voice_completed_result(struct snag_store *store,const char *wor
         "final_item_id",session.final_item_id,"final_response_id",session.final_response_id),NULL,error,sizeof(error))==0);
     /* A later keyboard response changes last_assistant, not the voice result. */
     const char *keyboard="cccccccccccccccccccccccccccccccc",*later="dddddddddddddddddddddddddddddddd";
-    assert(snag_session_commit(&session,"turn_started",turn_started(keyboard,2u,"keyboard",workspace,NULL),NULL,error,sizeof(error))==0);
+    assert(snag_session_commit(&session,"turn_started",turn_started(keyboard,2u,"keyboard",cwd,NULL),NULL,error,sizeof(error))==0);
     assert(snag_session_commit(&session,"response_started",response_started(keyboard,later,NULL),NULL,error,sizeof(error))==0);
     assert(snag_session_commit(&session,"response_completed",response_completed(keyboard,later,"unrelated later result"),NULL,error,sizeof(error))==0);
     for(unsigned int pass=0;pass<2u;++pass) {
@@ -689,11 +699,11 @@ turn_completed(const char *turn_id, const char *response_id)
 }
 
 static void
-commit_completed_turn(struct snag_session *session, const char *workspace,
+commit_completed_turn(struct snag_session *session, const char *cwd,
                       const char *turn, const char *response, unsigned int number,
                       const char *prompt, const char *answer)
 {
-    commit_event(session, "turn_started", turn_started(turn, number, prompt, workspace, NULL));
+    commit_event(session, "turn_started", turn_started(turn, number, prompt, cwd, NULL));
     commit_event(session, "response_started", response_started(turn, response, NULL));
     commit_event(session, "response_completed", response_completed(turn, response, answer));
     commit_event(session, "turn_completed", turn_completed(turn, response));
@@ -787,21 +797,21 @@ running_result_limit(const char *handle, const char *model_text, const char *rea
 }
 
 static json_t *
-tool_call_item(const char *call_id, const char *workspace)
+tool_call_item(const char *call_id, const char *cwd)
 {
     return checked_json(json_pack("{s:{s:s,s:b,s:n,s:i,s:s,s:i,s:n},s:s,s:s,s:s,s:s,s:s}",
         "arguments", "command", "cat", "pty", 0, "stdin", "timeout_ms", 3000,
-        "workdir", workspace, "yield_ms", 100, "max_output_tokens", "call_id", call_id,
+        "workdir", cwd, "yield_ms", 100, "max_output_tokens", "call_id", call_id,
         "kind", "tool_call", "name", "exec_command", "provider_call_id", "call_exec",
         "provider_item_id", "item_exec"));
 }
 
 static json_t *
 response_completed_call(const char *turn_id, const char *response_id,
-                        const char *call_id, const char *workspace)
+                        const char *call_id, const char *cwd)
 {
     return checked_json(json_pack("{s:i,s:[o],s:s,s:s,s:s,s:s,s:o}",
-        "cycle", 1, "items", tool_call_item(call_id, workspace), "provider_response_id", "resp_call",
+        "cycle", 1, "items", tool_call_item(call_id, cwd), "provider_response_id", "resp_call",
         "response_id", response_id, "status", "completed", "turn_id", turn_id, "usage", usage()));
 }
 
@@ -823,10 +833,11 @@ edit_file_response_completed(const char *turn_id, const char *response_id, const
 }
 
 static json_t *
-tool_started_data(const char *turn_id, const char *call_id, const char *action_sha256, const char *workspace)
+tool_started_data(const char *turn_id, const char *call_id,
+                  const char *action_sha256, const char *cwd)
 {
     return checked_json(json_pack("{s:s,s:s,s:s,s:s}",
-        "action_sha256", action_sha256, "call_id", call_id, "resolved_workdir", workspace,
+        "action_sha256", action_sha256, "call_id", call_id, "resolved_workdir", cwd,
         "turn_id", turn_id));
 }
 
@@ -839,7 +850,7 @@ tool_finished_data(const char *turn_id, const char *call_id, json_t *result)
 static json_t *message_matching(json_t *, const char *);
 
 static void
-test_public_phase_compaction(struct snag_store *store, const char *workspace)
+test_public_phase_compaction(struct snag_store *store, const char *cwd)
 {
     const char *turn = "ca100000000000000000000000000000";
     const char *response = "ca200000000000000000000000000000";
@@ -848,8 +859,8 @@ test_public_phase_compaction(struct snag_store *store, const char *workspace)
         struct snag_session session;
         struct snag_context_projection projection = {0};
         char error[256];
-        create_session(store, &session, workspace, "medium");
-        commit_event(&session, "turn_started", turn_started(turn, 1, "phase", workspace, NULL));
+        create_session(store, &session, cwd, "medium");
+        commit_event(&session, "turn_started", turn_started(turn, 1, "phase", cwd, NULL));
         commit_event(&session, "response_started", response_started(turn, response, NULL));
         json_t *data = response_completed(turn, response, "public progress");
         json_t *items = json_object_get(data, "items");
@@ -879,19 +890,19 @@ test_public_phase_compaction(struct snag_store *store, const char *workspace)
 }
 
 static void
-test_large_compact_prefix(struct snag_store *store, const char *workspace)
+test_large_compact_prefix(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
     struct snag_context_projection projection = {0};
     char text[8193], error[512] = {0};
     memset(text, 'x', sizeof(text) - 1u);
     text[sizeof(text) - 1u] = '\0';
-    create_session(store, &session, workspace, "medium");
+    create_session(store, &session, cwd, "medium");
     for (unsigned int i = 1u; i <= 512u; ++i) {
         char turn[33], response[33];
         snprintf(turn, sizeof(turn), "%032x", i);
         snprintf(response, sizeof(response), "%032x", i + 1024u);
-        commit_completed_turn(&session, workspace, turn, response, i, "retained task", text);
+        commit_completed_turn(&session, cwd, turn, response, i, "retained task", text);
     }
     uint64_t started = snag_monotonic_ms();
     assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium", false,
@@ -905,7 +916,7 @@ test_large_compact_prefix(struct snag_store *store, const char *workspace)
 }
 
 static void
-test_compact_groups(struct snag_store *store, const char *workspace)
+test_compact_groups(struct snag_store *store, const char *cwd)
 {
     const char *turn = "a1000000000000000000000000000000";
     const char *next_turn = "a2000000000000000000000000000000";
@@ -920,10 +931,10 @@ test_compact_groups(struct snag_store *store, const char *workspace)
     memset(text, 'x', sizeof(text) - 1u);
     text[sizeof(text) - 1u] = '\0';
     struct snag_instruction_set instructions = {0};
-    create_session(store, &session, workspace, "medium");
+    create_session(store, &session, cwd, "medium");
     memcpy(session_id, session.id, sizeof(session_id));
     commit_event(&session, "turn_started",
-                 turn_started(turn, 1u, "old user must not repeat", workspace, NULL));
+                 turn_started(turn, 1u, "old user must not repeat", cwd, NULL));
     for (unsigned int cycle = 1u; cycle <= 4u; ++cycle) {
         char response[SNAG_ID_HEX_LEN + 1u], call[SNAG_ID_HEX_LEN + 1u];
         json_t *data, *result;
@@ -934,7 +945,7 @@ test_compact_groups(struct snag_store *store, const char *workspace)
         if (cycle == 3u) assert(json_array_append_new(json_object_get(data, "steering_ids"),
                 json_string("a4000000000000000000000000000000")) == 0);
         commit_event(&session, "response_started", data);
-        data = response_completed_call(turn, response, call, workspace);
+        data = response_completed_call(turn, response, call, cwd);
         assert(json_object_set_new(data, "cycle", json_integer(cycle)) == 0);
         if (cycle == 3u) {
             json_t *item = json_array_get(json_object_get(data, "items"), 0u);
@@ -946,7 +957,7 @@ test_compact_groups(struct snag_store *store, const char *workspace)
         }
         commit_event(&session, "response_completed", data);
         commit_event(&session, "tool_started",
-                     tool_started_data(turn, call, session.pending_calls[0].action_sha256, workspace));
+                     tool_started_data(turn, call, session.pending_calls[0].action_sha256, cwd));
         commit_event(&session, "irc_snapshot", checked_json(json_pack("{s:s,s:s,s:i}",
             "reason", "topology", "text", "compact network update", "timestamp_ms", cycle)));
         if (cycle == 2u) {
@@ -973,7 +984,7 @@ test_compact_groups(struct snag_store *store, const char *workspace)
     assert(json_object_set_new(data, "cycle", json_integer(5)) == 0);
     commit_event(&session, "response_completed", data);
     commit_event(&session, "turn_completed", turn_completed(turn, last_response));
-    data = turn_started(next_turn, 2u, "active user stays verbatim", workspace, NULL);
+    data = turn_started(next_turn, 2u, "active user stays verbatim", cwd, NULL);
     assert(json_object_set_new(data, "received_at_ms", json_integer(1788739200000LL)) == 0);
     commit_event(&session, "turn_started", data);
     commit_event(&session, "input_admitted", json_pack("{s:[],s:I,s:s}", "steering_ids", "time_ms",
@@ -1044,7 +1055,7 @@ turn_interrupted_data(const char *turn_id)
 }
 
 static void
-test_parallel_journal_recovery(struct snag_store *store, const char *workspace)
+test_parallel_journal_recovery(struct snag_store *store, const char *cwd)
 {
     const char *turn = "c1000000000000000000000000000000";
     const char *response = "c2000000000000000000000000000000";
@@ -1052,18 +1063,19 @@ test_parallel_journal_recovery(struct snag_store *store, const char *workspace)
     const char *b = "c4000000000000000000000000000000";
     struct snag_session session;
     char error[256], id[SNAG_ID_HEX_LEN + 1u];
-    create_session(store, &session, workspace, "medium");
+    create_session(store, &session, cwd, "medium");
     memcpy(id, session.id, sizeof(id));
-    commit_event(&session, "turn_started", turn_started(turn, 1, "batch", workspace, NULL));
+    commit_event(&session, "turn_started", turn_started(turn, 1, "batch", cwd, NULL));
     commit_event(&session, "response_started", response_started(turn, response, NULL));
-    json_t *data = response_completed_call(turn, response, a, workspace);
-    json_t *second = tool_call_item(b, workspace);
+    json_t *data = response_completed_call(turn, response, a, cwd);
+    json_t *second = tool_call_item(b, cwd);
     assert(json_object_set_new(second, "provider_call_id", json_string("call_second")) == 0);
     assert(json_object_set_new(second, "provider_item_id", json_string("item_second")) == 0);
     assert(json_array_append_new(json_object_get(data, "items"), second) == 0);
     commit_event(&session, "response_completed", data);
     for (size_t i = 0u; i < 2u; ++i) commit_event(&session, "tool_started",
-                     tool_started_data(turn, i ? b : a, session.pending_calls[i].action_sha256, workspace));
+                     tool_started_data(turn, i ? b : a,
+                         session.pending_calls[i].action_sha256, cwd));
     assert(session.process_count == 2u);
     data = checked_json(json_pack("{s:s,s:s,s:i,s:i,s:s,s:s}",
         "turn_id", turn, "handle", b, "stream", 0, "offset", 0, "encoding", "utf8", "data", "B\n"));
@@ -1131,7 +1143,7 @@ test_parallel_journal_recovery(struct snag_store *store, const char *workspace)
 }
 
 static void
-test_accounting_lineage(struct snag_store *store, const char *workspace)
+test_accounting_lineage(struct snag_store *store, const char *cwd)
 {
     const char *turn = "01010101010101010101010101010101";
     const char *response = "02020202020202020202020202020202";
@@ -1141,10 +1153,10 @@ test_accounting_lineage(struct snag_store *store, const char *workspace)
     struct snag_session session;
     json_t *output = compact_output_fixture();
     assert(snag_json_digest(output, output_hash) == 0);
-    create_session(store, &session, workspace, "default");
+    create_session(store, &session, cwd, "default");
     commit_event(&session, "compaction_started",
                  compaction_started_data(&session, compact, "manual", 1u, source, source, 1u));
-    commit_event(&session, "turn_started", turn_started(turn, 1u, "lineage", workspace, NULL));
+    commit_event(&session, "turn_started", turn_started(turn, 1u, "lineage", cwd, NULL));
     commit_event(&session, "response_started", response_started(turn, response, NULL));
     commit_event(&session, "compaction_completed",
                  compaction_completed_data(compact, source, output_hash, source, 1u, 1u, output));
@@ -1187,6 +1199,9 @@ assert_optional_tool_contract(json_t *tool)
         {"irc_state", ""},
         {"irc_topic", "topic"},
         {"irc_nick", "nick"},
+        {"get_cwd", ""},
+        {"cd", "path"},
+        {"select_model", "selector"},
         {"list_files", "path"},
         {"read_file", "path"},
         {"grep", "path pattern"},
@@ -1435,10 +1450,10 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
             static const char *const unconditional[] = {
                 "view_image", "read_document", "view_video", "listen_audio", "transcribe_audio",
                 "speak_text", "exec_command", "write_stdin", "read_tool_output", "read_session_history", "list_goals", "set_command_shell",
-                "apply_patch", "list_files", "read_file",
+                "apply_patch", "get_cwd", "list_files", "read_file",
                 "grep", "write_file", "edit_file", "irc_send", "irc_state", "irc_topic", "irc_nick", "irc_connect",
                 "irc_host", "irc_disconnect", "create_goal", "update_goal", "timer", "defer_steering" };
-            assert(json_array_size(ts) == 30u);
+            assert(json_array_size(ts) == 33u);
             for (size_t k = 0u; k < sizeof(unconditional) / sizeof(unconditional[0]); ++k)
                 assert(item_by_field(ts, "name", unconditional[k]));
             for (size_t j = 0; j < json_array_size(ts); ++j) {
@@ -1650,7 +1665,7 @@ test_durable_irc_input_watermark(struct snag_store *store, const char *path)
 }
 
 static void
-test_admitted_room_event_stays_out_of_tool_exchange(struct snag_store *store, const char *workspace)
+test_admitted_room_event_stays_out_of_tool_exchange(struct snag_store *store, const char *cwd)
 {
     const char *turn = "e1000000000000000000000000000000";
     const char *response = "e2000000000000000000000000000000";
@@ -1661,12 +1676,13 @@ test_admitted_room_event_stays_out_of_tool_exchange(struct snag_store *store, co
     struct snag_instruction_set no_instructions = {0};
     json_t *steering = checked_json(json_pack("[{s:s,s:s}]", "id", steer, "text", "stop or wait"));
 
-    create_session(store, &session, workspace, "default");
-    commit_event(&session, "turn_started", turn_started(turn, 1, "run", workspace, NULL));
+    create_session(store, &session, cwd, "default");
+    commit_event(&session, "turn_started", turn_started(turn, 1, "run", cwd, NULL));
     commit_event(&session, "response_started", response_started(turn, response, NULL));
-    commit_event(&session, "response_completed", response_completed_call(turn, response, call, workspace));
+    commit_event(&session, "response_completed",
+        response_completed_call(turn, response, call, cwd));
     commit_event(&session, "tool_started", tool_started_data(turn, call,
-                     session.pending_calls[0].action_sha256, workspace));
+                     session.pending_calls[0].action_sha256, cwd));
     /* Room traffic admitted while the call is outstanding: the urgent-mention
      * path records the admission and a steering entry. Neither may split the
      * exchange, or the provider reads the call as unanswered. */
@@ -1753,7 +1769,7 @@ test_context_meter_usage(struct snag_store *store, const char *temp)
 }
 
 static void
-test_input_time_and_recovery(struct snag_store *store, const char *workspace)
+test_input_time_and_recovery(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
     struct snag_context_projection projection = {0}, replay = {0};
@@ -1763,9 +1779,9 @@ test_input_time_and_recovery(struct snag_store *store, const char *workspace)
     char error[256], session_id[SNAG_ID_HEX_LEN + 1u];
     json_t *snapshot = json_array(), *data, *input;
     instructions = (struct snag_instruction_set){0};
-    create_session(store, &session, workspace, "medium");
+    create_session(store, &session, cwd, "medium");
     memcpy(session_id, session.id, sizeof(session_id));
-    data = turn_started(turn, 1u, "unchanged prompt", workspace, NULL);
+    data = turn_started(turn, 1u, "unchanged prompt", cwd, NULL);
     assert(json_object_set_new(data, "received_at_ms", json_integer(1788739200000LL)) == 0);
     commit_event(&session, "turn_started", data);
     commit_event(&session, "steering_added", steering_added(turn, steer, "unchanged steer"));
@@ -1814,7 +1830,7 @@ test_input_time_and_recovery(struct snag_store *store, const char *workspace)
 }
 
 static void
-test_deferred_steering_replay(struct snag_store *store, const char *workspace)
+test_deferred_steering_replay(struct snag_store *store, const char *cwd)
 {
     const char *turn = "d3000000000000000000000000000000";
     const char *response1 = "d4000000000000000000000000000000";
@@ -1828,10 +1844,10 @@ test_deferred_steering_replay(struct snag_store *store, const char *workspace)
     json_t *data, *empty = json_array();
 
     assert(empty);
-    create_session(store, &session, workspace, "medium");
+    create_session(store, &session, cwd, "medium");
     memcpy(session_id, session.id, sizeof(session_id));
     commit_event(&session, "turn_started",
-                 turn_started(turn, 1u, "defer the next steer", workspace, NULL));
+                 turn_started(turn, 1u, "defer the next steer", cwd, NULL));
     commit_event(&session, "response_started", response_started(turn, response1, NULL));
     commit_event(&session, "response_completed",
                  response_completed(turn, response1, "deferral requested"));
@@ -1880,7 +1896,7 @@ test_deferred_steering_replay(struct snag_store *store, const char *workspace)
 }
 
 static void
-test_reasoning_continuation(struct snag_store *store, const char *workspace)
+test_reasoning_continuation(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
     struct snag_context_projection projection = {0};
@@ -1893,11 +1909,11 @@ test_reasoning_continuation(struct snag_store *store, const char *workspace)
     json_t *empty = json_array();
     snag_config_init(&config);
     assert(snag_context_continuation_scope(&config.providers[0], SNAJPAGENT_MODEL, &credential, scope) == 0);
-    create_session(store, &session, workspace, "medium");
+    create_session(store, &session, cwd, "medium");
     strcpy(saved, session.id);
-    commit_event(&session, "turn_started", turn_started(turn, 1, "probe", workspace, NULL));
+    commit_event(&session, "turn_started", turn_started(turn, 1, "probe", cwd, NULL));
     commit_event(&session, "response_started", response_started(turn, response, NULL));
-    json_t *data = response_completed_call(turn, response, call, workspace);
+    json_t *data = response_completed_call(turn, response, call, cwd);
     json_t *reasoning = json_pack("{s:s,s:s,s:[{s:s,s:s}],s:[],s:s}",
         "type", "reasoning", "id", "rs_probe", "content",
         "type", "reasoning_text", "text", "private planning state",
@@ -1908,7 +1924,7 @@ test_reasoning_continuation(struct snag_store *store, const char *workspace)
     assert(json_object_set_new(data, "continuation_scope", json_string(scope)) == 0);
     commit_event(&session, "response_completed", data);
     commit_event(&session, "tool_started", tool_started_data(turn, call,
-        session.pending_calls[0].action_sha256, workspace));
+        session.pending_calls[0].action_sha256, cwd));
     commit_event(&session, "irc_snapshot", checked_json(json_pack("{s:s,s:s,s:i}",
         "reason", "topology", "text", "network changed during call", "timestamp_ms", 1)));
     commit_event(&session, "tool_finished", tool_finished_data(turn, call,
@@ -1929,7 +1945,7 @@ test_reasoning_continuation(struct snag_store *store, const char *workspace)
             commit_event(&session, "response_completed", data);
             commit_event(&session, "turn_completed", turn_completed(turn, last));
             commit_event(&session, "turn_started", turn_started(
-                "75000000000000000000000000000000", 2, "next", workspace, NULL));
+                "75000000000000000000000000000000", 2, "next", cwd, NULL));
         }
         assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2, empty,
             0, false, &config, scope, NULL, NULL, &projection, error, sizeof(error), NULL) == 0);
@@ -2092,7 +2108,7 @@ test_reasoning_continuation(struct snag_store *store, const char *workspace)
  * after tool_started, first as an invalid tool_finished transition and then as an
  * invalid turn_recovery repair at the same sequence. */
 static void
-test_refused_file_call_after_start(struct snag_store *store, const char *workspace)
+test_refused_file_call_after_start(struct snag_store *store, const char *cwd)
 {
     const char *turn = "ab100000000000000000000000000000";
     const char *response = "ab200000000000000000000000000000";
@@ -2102,12 +2118,12 @@ test_refused_file_call_after_start(struct snag_store *store, const char *workspa
     struct snag_session session;
     char error[256] = {0};
 
-    create_session(store, &session, workspace, "default");
-    commit_event(&session, "turn_started", turn_started(turn, 1, "edit", workspace, NULL));
+    create_session(store, &session, cwd, "default");
+    commit_event(&session, "turn_started", turn_started(turn, 1, "edit", cwd, NULL));
     commit_event(&session, "response_started", response_started(turn, response, NULL));
     commit_event(&session, "response_completed", edit_file_response_completed(turn, response, call));
     commit_event(&session, "tool_started", tool_started_data(turn, call,
-                     session.pending_calls[0].action_sha256, workspace));
+                     session.pending_calls[0].action_sha256, cwd));
     commit_event(&session, "tool_finished", tool_finished_data(turn, call,
                      snag_tool_result("not_run", "invalid_arguments",
                          "Target doc.md contains 0 exact match(es); expected 1. Nothing changed.",
@@ -2118,12 +2134,13 @@ test_refused_file_call_after_start(struct snag_store *store, const char *workspa
     /* The strict rule still holds where the store can check it: a call that owns
      * a spawned process may not claim it never ran after it started. */
     struct snag_session process_session;
-    create_session(store, &process_session, workspace, "default");
-    commit_event(&process_session, "turn_started", turn_started(turn, 1, "run", workspace, NULL));
+    create_session(store, &process_session, cwd, "default");
+    commit_event(&process_session, "turn_started", turn_started(turn, 1, "run", cwd, NULL));
     commit_event(&process_session, "response_started", response_started(turn, second_response, NULL));
-    commit_event(&process_session, "response_completed", response_completed_call(turn, second_response, second, workspace));
+    commit_event(&process_session, "response_completed",
+        response_completed_call(turn, second_response, second, cwd));
     commit_event(&process_session, "tool_started", tool_started_data(turn, second,
-                     process_session.pending_calls[0].action_sha256, workspace));
+                     process_session.pending_calls[0].action_sha256, cwd));
     assert(snag_session_commit(&process_session, "tool_finished", tool_finished_data(turn, second,
                snag_tool_result("not_run", "invalid_arguments", "Nothing changed.", -1, 0u)),
                NULL, error, sizeof(error)) < 0);
@@ -3186,7 +3203,7 @@ static void test_office_import(void) {}
 
 #if SNAJPAGENT_OFFICE_COMMANDS && !defined(_WIN32)
 static void
-test_office_commands_export(struct snag_store *store, const char *workspace)
+test_office_commands_export(struct snag_store *store, const char *cwd)
 {
     /* The commands backend drives the target's own engine. Without one the run
      * is skipped rather than failed, so `make check` stays green on hosts with
@@ -3197,7 +3214,7 @@ test_office_commands_export(struct snag_store *store, const char *workspace)
     char *runtime=snag_office_runtime(NULL,SNAJPAGENT_OFFICE_ROOT);
     char *engine=snag_office_command(NULL,SNAJPAGENT_OFFICE_ROOT);
     struct snag_session session;
-    create_session(store,&session,workspace,"office-commands");
+    create_session(store,&session,cwd,"office-commands");
     /* Room for a converted PDF: the kit path allows up to 32 MiB. */
     struct snag_buf out; snag_buf_init(&out,32u*1024u*1024u);
     json_t *metadata=NULL;
@@ -3308,9 +3325,9 @@ test_office_commands_export(struct snag_store *store, const char *workspace)
 }
 #else
 static void
-test_office_commands_export(struct snag_store *store, const char *workspace)
+test_office_commands_export(struct snag_store *store, const char *cwd)
 {
-    (void)store;(void)workspace;
+    (void)store;(void)cwd;
 }
 #endif
 
@@ -3383,7 +3400,7 @@ response_completed_with_usage(const char *turn_id, const char *response_id, cons
 }
 
 static void
-test_cache_accounting(struct snag_store *store, const char *workspace)
+test_cache_accounting(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
     struct snag_response_usage parsed;
@@ -3391,8 +3408,8 @@ test_cache_accounting(struct snag_store *store, const char *workspace)
     const char *turn = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", *response = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const char *turn2 = "cccccccccccccccccccccccccccccccc", *response2 = "dddddddddddddddddddddddddddddddd";
 
-    create_session(store, &session, workspace, "medium");
-    commit_event(&session, "turn_started", turn_started(turn, 1, "cache probe", workspace, NULL));
+    create_session(store, &session, cwd, "medium");
+    commit_event(&session, "turn_started", turn_started(turn, 1, "cache probe", cwd, NULL));
     commit_event(&session, "response_started", response_started(turn, response, NULL));
     commit_event(&session, "response_completed", response_completed_with_usage(turn, response, "first",
         json_pack("{s:i,s:i,s:i,s:i,s:i}", "input_tokens", 1000, "output_tokens", 50,
@@ -3404,7 +3421,7 @@ test_cache_accounting(struct snag_store *store, const char *workspace)
 
     /* A provider that reports no cache detail must count every input token as uncached. */
     commit_event(&session, "turn_completed", turn_completed(turn, response));
-    commit_event(&session, "turn_started", turn_started(turn2, 2, "cache probe two", workspace, NULL));
+    commit_event(&session, "turn_started", turn_started(turn2, 2, "cache probe two", cwd, NULL));
     commit_event(&session, "response_started", response_started(turn2, response2, NULL));
     commit_event(&session, "response_completed",
                  response_completed_with_usage(turn2, response2, "second", usage()));
@@ -3435,7 +3452,7 @@ test_cache_accounting(struct snag_store *store, const char *workspace)
 }
 
 static void
-test_prompt_cache_key(struct snag_store *store, const char *workspace)
+test_prompt_cache_key(struct snag_store *store, const char *cwd)
 {
     struct snag_session session, other;
     struct snag_context_projection first = {0}, again = {0}, alien = {0};
@@ -3443,8 +3460,8 @@ test_prompt_cache_key(struct snag_store *store, const char *workspace)
     const char *turn = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", *key, *same, *different;
 
     assert(empty);
-    create_session(store, &session, workspace, "medium");
-    commit_event(&session, "turn_started", turn_started(turn, 1u, "cache key probe", workspace, NULL));
+    create_session(store, &session, cwd, "medium");
+    commit_event(&session, "turn_started", turn_started(turn, 1u, "cache key probe", cwd, NULL));
     build_context(&session, 1u, empty, NULL, &first);
     key = snag_json_string(first.create_request.value, "prompt_cache_key");
     assert(key && strlen(key) == 32u);
@@ -3465,8 +3482,8 @@ test_prompt_cache_key(struct snag_store *store, const char *workspace)
     assert(same && strcmp(key, same) == 0);
 
     /* A different session must not share another conversation's cache space. */
-    create_session(store, &other, workspace, "medium");
-    commit_event(&other, "turn_started", turn_started(turn, 1u, "cache key probe", workspace, NULL));
+    create_session(store, &other, cwd, "medium");
+    commit_event(&other, "turn_started", turn_started(turn, 1u, "cache key probe", cwd, NULL));
     build_context(&other, 1u, empty, NULL, &alien);
     different = snag_json_string(alien.create_request.value, "prompt_cache_key");
     assert(different && strcmp(key, different) != 0);
@@ -3483,7 +3500,7 @@ test_prompt_cache_key(struct snag_store *store, const char *workspace)
  * Trailing host-state notes may move (they describe the current request, not the history), but
  * nothing that varies per request may be placed among or before the conversation. */
 static void
-test_request_prefix_stability(struct snag_store *store, const char *workspace)
+test_request_prefix_stability(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
     struct snag_context_projection first = {0}, second = {0}, completed = {0};
@@ -3498,9 +3515,9 @@ test_request_prefix_stability(struct snag_store *store, const char *workspace)
     /* A config is present so the request carries the host-derived text a real session sends
      * (command environment, verbosity and visibility), which must not vary between requests. */
     snag_config_init(&config);
-    create_session(store, &session, workspace, "medium");
+    create_session(store, &session, cwd, "medium");
     /* A request is built at the start of each turn, so the first turn is open when it is built. */
-    commit_event(&session, "turn_started", turn_started(turn, 1u, "prefix probe one", workspace, NULL));
+    commit_event(&session, "turn_started", turn_started(turn, 1u, "prefix probe one", cwd, NULL));
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u, false, &config, NULL,
                               NULL, NULL, &first, error, sizeof(error), NULL) == 0);
     commit_event(&session, "response_started", response_started(turn, response, NULL));
@@ -3513,7 +3530,7 @@ test_request_prefix_stability(struct snag_store *store, const char *workspace)
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 2u, empty, 0u, false, &config, NULL,
                               NULL, NULL, &completed, error, sizeof(error), NULL) == 0);
     commit_event(&session, "turn_completed", turn_completed(turn, response));
-    commit_event(&session, "turn_started", turn_started(turn2, 2u, "prefix probe two", workspace, NULL));
+    commit_event(&session, "turn_started", turn_started(turn2, 2u, "prefix probe two", cwd, NULL));
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty, 0u, false, &config, NULL,
                               NULL, NULL, &second, error, sizeof(error), NULL) == 0);
 
@@ -3570,14 +3587,14 @@ test_request_prefix_stability(struct snag_store *store, const char *workspace)
 }
 
 static void
-test_many_pending_steers(struct snag_store *store, const char *workspace)
+test_many_pending_steers(struct snag_store *store, const char *cwd)
 {
     static const char turn[] = "d1000000000000000000000000000000";
     static const char response[] = "d2000000000000000000000000000000";
     struct snag_session session;
 
-    create_session(store, &session, workspace, "medium");
-    commit_event(&session, "turn_started", turn_started(turn, 1, "steer batch", workspace, NULL));
+    create_session(store, &session, cwd, "medium");
+    commit_event(&session, "turn_started", turn_started(turn, 1, "steer batch", cwd, NULL));
     commit_event(&session, "response_started", response_started(turn, response, NULL));
     for (unsigned int i = 0; i < 40u; ++i) {
         char id[SNAG_ID_HEX_LEN + 1u], text[32];
@@ -3619,7 +3636,7 @@ test_media_many_parts_accepted(void)
 }
 
 static void
-test_hosted_search_many_sources(struct snag_store *store, const char *workspace)
+test_hosted_search_many_sources(struct snag_store *store, const char *cwd)
 {
     static const char turn[] = "e1000000000000000000000000000000";
     static const char response[] = "e2000000000000000000000000000000";
@@ -3632,8 +3649,8 @@ test_hosted_search_many_sources(struct snag_store *store, const char *workspace)
         (void)snprintf(url, sizeof(url), "https://example.test/%u", i);
         assert(json_array_append_new(sources, json_string(url)) == 0);
     }
-    create_session(store, &session, workspace, "medium");
-    commit_event(&session, "turn_started", turn_started(turn, 1, "hosted sources", workspace, NULL));
+    create_session(store, &session, cwd, "medium");
+    commit_event(&session, "turn_started", turn_started(turn, 1, "hosted sources", cwd, NULL));
     commit_event(&session, "response_started", response_started(turn, response, NULL));
     json_t *event = json_object();
     assert(event);
@@ -3646,7 +3663,7 @@ test_hosted_search_many_sources(struct snag_store *store, const char *workspace)
 }
 
 static void
-test_host_snapshot_replay(struct snag_store *store, const char *workspace)
+test_host_snapshot_replay(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
     struct snag_context_projection first = {0}, next = {0}, replay = {0}, compact = {0};
@@ -3656,10 +3673,10 @@ test_host_snapshot_replay(struct snag_store *store, const char *workspace)
     const char *turn2 = "cb000000000000000000000000000003";
     const char *compact_id = "cb000000000000000000000000000004";
     char error[256], id[SNAG_ID_HEX_LEN + 1u];
-    create_session(store, &session, workspace, "medium");
+    create_session(store, &session, cwd, "medium");
     memcpy(id, session.id, sizeof(id));
     commit_event(&session, "turn_started",
-                 turn_started(turn, 1u, "snapshot first", workspace, NULL));
+                 turn_started(turn, 1u, "snapshot first", cwd, NULL));
     build_context(&session, 1u, empty, NULL, &first);
     assert(first.host_context && json_array_size(first.host_context) >= 3u);
     int64_t before = session.log_end;
@@ -3689,7 +3706,7 @@ test_host_snapshot_replay(struct snag_store *store, const char *workspace)
                  response_completed(turn, response, "snapshot answer"));
     commit_event(&session, "turn_completed", turn_completed(turn, response));
     commit_event(&session, "turn_started",
-                 turn_started(turn2, 2u, "snapshot next", workspace, NULL));
+                 turn_started(turn2, 2u, "snapshot next", cwd, NULL));
     build_context(&session, 1u, empty, NULL, &next);
     assert(!next.host_context); /* The current facts are already in the retained prefix. */
     json_t *a = json_object_get(first.create_request.value, "input");
@@ -3741,7 +3758,7 @@ cache_policy(const struct snag_context_projection *projection)
 }
 
 static void
-test_host_fact_cache_prefix(struct snag_store *store, const char *workspace)
+test_host_fact_cache_prefix(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
     struct snag_config config;
@@ -3752,11 +3769,11 @@ test_host_fact_cache_prefix(struct snag_store *store, const char *workspace)
                            "goal active", "goal blocked", "queued work", "IRC connect", "IRC nick", "IRC disconnect"};
     json_t *snapshot = json_array(), *policy;
     char error[512] = {0};
-    char *note = snag_path_join(workspace, "WORKNOTE.md");
+    char *note = snag_path_join(cwd, "WORKNOTE.md");
     unsigned int changed = 0u;
     snag_config_init(&config);
-    create_session(store, &session, workspace, "medium");
-    commit_event(&session, "turn_started", turn_started(turn, 1u, "retained history", workspace, NULL));
+    create_session(store, &session, cwd, "medium");
+    commit_event(&session, "turn_started", turn_started(turn, 1u, "retained history", cwd, NULL));
     assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, snapshot,
         0u, false, &config, NULL, NULL, "Local operator display snapshot: verbosity=0",
         &first, error, sizeof(error), NULL) == 0);
@@ -3934,7 +3951,7 @@ main(int argc, char **argv)
     char *temp = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
                                 "snajpagent-context-XXXXXX");
     char state[4096];
-    char workspace[4096];
+    char cwd[4096];
     char agents[4096];
     char error[256];
     const char *turn1 = "01010101010101010101010101010101";
@@ -3963,47 +3980,47 @@ main(int argc, char **argv)
     test_media_many_parts_accepted();
     assert(mkdtemp(temp));
     assert(snprintf(state, sizeof(state), "%s/state", temp) > 0);
-    assert(snprintf(workspace, sizeof(workspace), "%s/work", temp) > 0);
+    assert(snprintf(cwd, sizeof(cwd), "%s/work", temp) > 0);
     assert(mkdir(state, 0700) == 0);
-    assert(mkdir(workspace, 0700) == 0);
+    assert(mkdir(cwd, 0700) == 0);
     /* Isolate discovery even when TMPDIR is nested in a checkout. */
-    assert(snprintf(agents, sizeof(agents), "%s/.git", workspace) > 0);
+    assert(snprintf(agents, sizeof(agents), "%s/.git", cwd) > 0);
     assert(mkdir(agents, 0700) == 0);
-    assert(snprintf(agents, sizeof(agents), "%s/AGENTS.md", workspace) > 0);
+    assert(snprintf(agents, sizeof(agents), "%s/AGENTS.md", cwd) > 0);
     write_file(agents, "context guidance\n");
     snag_store_init(&store);
     struct snag_context_projection projection = {0};
     struct snag_instruction_set instructions = {0};
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
-    test_host_snapshot_replay(&store, workspace);
-    test_host_fact_cache_prefix(&store, workspace);
-    test_office_commands_export(&store, workspace);
-    test_input_time_and_recovery(&store, workspace);
-    test_deferred_steering_replay(&store, workspace);
-    test_public_phase_compaction(&store, workspace);
-    test_context_meter_usage(&store, workspace);
-    test_cache_accounting(&store, workspace);
-    test_prompt_cache_key(&store, workspace);
-    test_history_orientation(&store, workspace);
-    test_worknote(&store, workspace);
-    test_worknote_moments(&store, workspace);
-    test_request_prefix_stability(&store, workspace);
-    test_read_only_and_queue_controllers(&store, workspace);
-    test_provider_model_projection(&store, workspace);
-    test_leading_instructions_boundary(&store, workspace);
-    test_reasoning_continuation(&store, workspace);
-    test_durable_irc_input_watermark(&store, workspace);
-    test_admitted_room_event_stays_out_of_tool_exchange(&store, workspace);
-    test_compact_groups(&store, workspace);
-    test_large_compact_prefix(&store, workspace);
-    test_voice_completed_result(&store, workspace);
-    test_parallel_journal_recovery(&store, workspace);
-    test_many_pending_steers(&store, workspace);
-    test_hosted_search_many_sources(&store, workspace);
-    test_refused_file_call_after_start(&store, workspace);
-    test_accounting_lineage(&store, workspace);
-    create_session(&store, &session, workspace, "default");
-    commit_event(&session, "turn_started", turn_started(turn1, 1, "ping", workspace, NULL));
+    test_host_snapshot_replay(&store, cwd);
+    test_host_fact_cache_prefix(&store, cwd);
+    test_office_commands_export(&store, cwd);
+    test_input_time_and_recovery(&store, cwd);
+    test_deferred_steering_replay(&store, cwd);
+    test_public_phase_compaction(&store, cwd);
+    test_context_meter_usage(&store, cwd);
+    test_cache_accounting(&store, cwd);
+    test_prompt_cache_key(&store, cwd);
+    test_history_orientation(&store, cwd);
+    test_worknote(&store, cwd);
+    test_worknote_moments(&store, cwd);
+    test_request_prefix_stability(&store, cwd);
+    test_read_only_and_queue_controllers(&store, cwd);
+    test_provider_model_projection(&store, cwd);
+    test_leading_instructions_boundary(&store, cwd);
+    test_reasoning_continuation(&store, cwd);
+    test_durable_irc_input_watermark(&store, cwd);
+    test_admitted_room_event_stays_out_of_tool_exchange(&store, cwd);
+    test_compact_groups(&store, cwd);
+    test_large_compact_prefix(&store, cwd);
+    test_voice_completed_result(&store, cwd);
+    test_parallel_journal_recovery(&store, cwd);
+    test_many_pending_steers(&store, cwd);
+    test_hosted_search_many_sources(&store, cwd);
+    test_refused_file_call_after_start(&store, cwd);
+    test_accounting_lineage(&store, cwd);
+    create_session(&store, &session, cwd, "default");
+    commit_event(&session, "turn_started", turn_started(turn1, 1, "ping", cwd, NULL));
     {
         json_t *old_shape = response_started(turn1, resp1, NULL);
         assert(json_object_del(old_shape, "request_input_bytes") == 0);
@@ -4078,11 +4095,11 @@ main(int argc, char **argv)
         struct snag_context_projection active_projection = {0};
         struct snag_instruction_set no_instructions = {0};
         assert(active_steering);
-        create_session(&store, &active, workspace, "default");
-        commit_completed_turn(&active, workspace, active_turn1, active_resp1, 1, "old", "old answer");
+        create_session(&store, &active, cwd, "default");
+        commit_completed_turn(&active, cwd, active_turn1, active_resp1, 1, "old", "old answer");
         active_prefix_seq = active.next_seq - 1u;
         commit_event(&active, "turn_started", turn_started_model(active_turn2, 2, "new",
-                         workspace, active_model));
+                         cwd, active_model));
         json_t *started = response_started(active_turn2, active_resp1, NULL);
         assert(json_object_set_new(started, "model", json_string(active_model)) == 0);
         commit_event(&active, "response_started", started);
@@ -4167,8 +4184,8 @@ main(int argc, char **argv)
 
         struct snag_context_projection steered_projection = {0};
         struct snag_instruction_set no_instructions = {0};
-        create_session(&store, &steered, workspace, "default");
-        commit_event(&steered, "turn_started", turn_started(steer_turn, 1, "start", workspace, NULL));
+        create_session(&store, &steered, cwd, "default");
+        commit_event(&steered, "turn_started", turn_started(steer_turn, 1, "start", cwd, NULL));
         commit_event(&steered, "response_started", response_started(steer_turn, steer_response, NULL));
         commit_event(&steered, "steering_added", steering_added(steer_turn, steer_id, "change direction"));
         json_t *partial = assistant_item("visible prefix");
@@ -4216,13 +4233,13 @@ main(int argc, char **argv)
 
         struct snag_context_projection steered_projection = {0};
         struct snag_instruction_set no_instructions = {0};
-        create_session(&store, &steered, workspace, "default");
-        commit_event(&steered, "turn_started", turn_started(command_turn, 1, "run", workspace, NULL));
+        create_session(&store, &steered, cwd, "default");
+        commit_event(&steered, "turn_started", turn_started(command_turn, 1, "run", cwd, NULL));
         commit_event(&steered, "response_started", response_started(command_turn, command_response, NULL));
         commit_event(&steered, "response_completed", response_completed_call(command_turn,
-                         command_response, command_call, workspace));
+                         command_response, command_call, cwd));
         commit_event(&steered, "tool_started", tool_started_data(command_turn, command_call,
-                         steered.pending_calls[0].action_sha256, workspace));
+                         steered.pending_calls[0].action_sha256, cwd));
         commit_event(&steered, "irc_snapshot", checked_json(json_pack("{s:s,s:s,s:i}",
             "reason", "topology", "text", "hosted: no", "timestamp_ms", 1)));
         commit_event(&steered, "steering_added", steering_added(command_turn, command_steer, "stop or wait"));
@@ -4275,8 +4292,9 @@ main(int argc, char **argv)
         const char *bounded_resp1 = "13131313131313131313131313131313";
         const char *bounded_resp2 = "14141414141414141414141414141414";
 
-        create_session(&store, &bounded, workspace, "default");
-        commit_completed_turn(&bounded, workspace, bounded_turn1, bounded_resp1, 1, "first", "first answer");
+        create_session(&store, &bounded, cwd, "default");
+        commit_completed_turn(&bounded, cwd, bounded_turn1, bounded_resp1,
+            1, "first", "first answer");
         first_turn_end = bounded.next_seq - 1u;
         assert(snag_context_compact_request_build(&bounded,
                    bounded.default_model, bounded.default_effort, false, 0u, false, NULL,
@@ -4284,9 +4302,10 @@ main(int argc, char **argv)
         first_bytes = compact.model_input.bytes;
         assert(compact.source_seq == first_turn_end && first_bytes > 0u);
         snag_context_projection_free(&compact);
-        commit_completed_turn(&bounded, workspace, bounded_turn2, bounded_resp2,
+        commit_completed_turn(&bounded, cwd, bounded_turn2, bounded_resp2,
                               2, "second", "second answer");
-        commit_event(&bounded, "turn_started", turn_started(bounded_turn3, 3, "current", workspace, NULL));
+        commit_event(&bounded, "turn_started",
+            turn_started(bounded_turn3, 3, "current", cwd, NULL));
         assert(snag_context_compact_request_build(&bounded, bounded.default_model, bounded.default_effort,
                    true, (uint64_t)first_bytes, false, NULL, &compact, error, sizeof(error), NULL) == 0);
         assert(compact.source_seq == first_turn_end);
@@ -4327,10 +4346,11 @@ main(int argc, char **argv)
         snag_session_close(&bounded);
     }
 
-    assert(snag_instructions_discover(&instructions, workspace, error, sizeof(error)) == 0);
+    assert(snag_instructions_discover(&instructions, cwd, error, sizeof(error)) == 0);
     assert(instructions.count == 1u);
     commit_event(&session, "turn_started",
-                 turn_started(turn2, 2, "again", workspace, snag_instructions_metadata_json(&instructions)));
+                 turn_started(turn2, 2, "again", cwd,
+                     snag_instructions_metadata_json(&instructions)));
 
     empty_steering = json_array();
     assert(empty_steering);
@@ -4352,7 +4372,7 @@ main(int argc, char **argv)
     assert_string(projection.count_request.value, "model", SNAJPAGENT_MODEL);
     {
         json_t *tools = json_object_get(projection.create_request.value, "tools");
-        assert(json_array_size(tools) == 30u);
+        assert(json_array_size(tools) == 33u);
         assert_context_tool_schemas(tools, NULL, 60000u, 86400000u, 6000u);
         assert(item_by_field(tools, "name", "create_goal") != NULL);
         assert(item_by_field(tools, "name", "update_goal") != NULL);
@@ -4397,14 +4417,14 @@ main(int argc, char **argv)
     snag_context_projection_free(&projection);
 
     commit_event(&session, "response_started", response_started(turn2, resp2, compact1));
-    commit_event(&session, "response_completed", response_completed_call(turn2, resp2, call2, workspace));
+    commit_event(&session, "response_completed", response_completed_call(turn2, resp2, call2, cwd));
     assert(session.pending_call_count == 1u);
     assert(snag_session_commit(&session, "turn_recovery",
         json_pack("{s:s,s:s,s:s}", "class", "protocol", "message", "unsettled",
                   "turn_id", turn2), NULL, error, sizeof(error)) < 0);
     assert(session.pending_call_count == 1u);
     commit_event(&session, "tool_started", tool_started_data(turn2, call2,
-                     session.pending_calls[0].action_sha256, workspace));
+                     session.pending_calls[0].action_sha256, cwd));
     large_tool_output = malloc(1024u * 1024u + 1u);
     assert(large_tool_output != NULL);
     for (size_t i = 0u; i < 1024u * 1024u - 16u; i += 2u) {
@@ -4436,7 +4456,7 @@ main(int argc, char **argv)
         json_t *gate;
         const char *gate_text;
         assert(json_is_array(tools));
-        assert(json_array_size(tools) == 30);
+        assert(json_array_size(tools) == 33);
         assert(item_by_field(tools, "name", "create_goal") != NULL);
         assert(item_by_field(tools, "name", "update_goal") != NULL);
         assert(item_by_field(tools, "name", "exec_command") != NULL);
@@ -4478,7 +4498,7 @@ main(int argc, char **argv)
                                  &instructions, NULL, &projection, error, sizeof(error), NULL) == 0);
         tools = json_object_get(projection.create_request.value, "tools");
         input = json_object_get(projection.create_request.value, "input");
-        assert(json_array_size(tools) == 30u);
+        assert(json_array_size(tools) == 33u);
         assert(item_by_field(tools, "name", "irc_send"));
         assert(item_by_field(tools, "name", "irc_state"));
         assert(item_by_field(tools, "name", "irc_topic"));
@@ -4518,7 +4538,7 @@ main(int argc, char **argv)
     commit_event(&session, "goal_lock_changed", checked_json(json_pack("{s:s,s:b}",
         "goal_id", goal, "locked", true)));
     json_t *started = turn_started(goal_turn, 3, SNAG_GOAL_CONTINUATION_TEXT,
-        workspace, snag_instructions_metadata_json(&instructions));
+        cwd, snag_instructions_metadata_json(&instructions));
     assert(json_object_set_new(started, "input_kind", json_string("goal")) == 0);
     commit_event(&session, "turn_started", started);
     assert(session.goal_turn_count == 1u);
@@ -4533,7 +4553,7 @@ main(int argc, char **argv)
             json_object_get(projection.create_request.value, "input"), "type", "function_call_output");
         const char *historical_text;
 
-        assert(json_array_size(tools) == 30u);
+        assert(json_array_size(tools) == 33u);
         assert_context_tool_schemas(tools, NULL, 60000u, 86400000u, 6000u);
         assert(item_by_field(tools, "name", "create_goal") != NULL);
         assert(item_by_field(tools, "name", "update_goal") != NULL);
@@ -4587,7 +4607,7 @@ main(int argc, char **argv)
         tools = json_object_get(projection.create_request.value, "tools");
         semantic = json_object_get(projection.model_input.value, "items");
         harness = message_matching(semantic, "When IRC chat mode is active,");
-        assert(json_array_size(tools) == 30u);
+        assert(json_array_size(tools) == 33u);
         assert_context_tool_schemas(tools, NULL, network_config.max_wait_ms, 86400000u, 6000u);
         assert(item_by_field(tools, "name", "irc_send") != NULL);
         assert(item_by_field(tools, "name", "irc_state") != NULL);
@@ -4625,7 +4645,7 @@ main(int argc, char **argv)
         json_t *tools = json_object_get(projection.create_request.value, "tools");
         json_t *semantic = json_object_get(projection.model_input.value, "items");
 
-        assert(json_array_size(tools) == 30u);
+        assert(json_array_size(tools) == 33u);
         assert_context_tool_schemas(tools, NULL, 60000u, 86400000u, 6000u);
         assert(item_by_field(tools, "name", "create_goal") != NULL);
         assert(item_by_field(tools, "name", "update_goal") != NULL);

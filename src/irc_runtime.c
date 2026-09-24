@@ -395,7 +395,7 @@ host_owner(const struct snag_irc *irc)
 
 int
 snag_irc_add(struct snag_irc *irc, const struct snag_config *config,
-            const char *workspace, bool hosting, const char *endpoint, char *error, size_t error_size)
+            const char *cwd, bool hosting, const char *endpoint, char *error, size_t error_size)
 {
     struct irc_owner *owner;
     struct snag_config local = *config;
@@ -424,7 +424,7 @@ snag_irc_add(struct snag_irc *irc, const struct snag_config *config,
         !snag_strcpy(hosting ? local.irc.listen : local.irc.clients[0], sizeof(local.irc.listen), endpoint))
         goto fail;
     if (snag_wakeup_create(owner->wake) < 0) goto fail;
-    if (snag_irc_core_open(&owner->core, &local, workspace, true, receive_event,
+    if (snag_irc_core_open(&owner->core, &local, cwd, true, receive_event,
                            irc->trace_fn ? receive_trace : NULL, owner, error, error_size) < 0 ||
         snag_irc_core_copy_history(owner->core, irc->history, hosting) < 0 ||
         snag_irc_core_view(owner->core, &owner->view) < 0) goto fail;
@@ -505,11 +505,11 @@ snag_irc_remove(struct snag_irc *irc, bool hosting, const char *endpoint, char *
 
 int
 snag_irc_preferences(struct snag_irc *irc, const struct snag_config *config,
-                    const char *workspace, char *error, size_t error_size)
+                    const char *cwd, char *error, size_t error_size)
 {
     struct snag_irc_core *history = NULL;
 
-    if (snag_irc_core_open(&history, config, workspace, false, NULL, NULL, NULL, error, error_size) < 0)
+    if (snag_irc_core_open(&history, config, cwd, false, NULL, NULL, NULL, error, error_size) < 0)
         return -1;
     if (snag_irc_core_copy_history(history, irc->history, false) < 0) {
         snag_irc_core_close(history);
@@ -572,14 +572,14 @@ keep_owner(const struct irc_owner *owner, const struct snag_irc_config *config)
 
 int
 snag_irc_configure(struct snag_irc *irc, const struct snag_config *config,
-                  const char *workspace, char *error, size_t error_size)
+                  const char *cwd, char *error, size_t error_size)
 {
     size_t next;
-    char owned_workspace[SNAG_PATH_MAX_BYTES + 1u];
+    char owned_cwd[SNAG_PATH_MAX_BYTES + 1u];
 
     /* Removal callbacks commit session state and replace its borrowed strings. */
-    if (!snag_strcpy(owned_workspace, sizeof(owned_workspace), workspace)) return snag_errno(ENAMETOOLONG);
-    workspace = owned_workspace;
+    if (!snag_strcpy(owned_cwd, sizeof(owned_cwd), cwd)) return snag_errno(ENAMETOOLONG);
+    cwd = owned_cwd;
 
     for (size_t i = 0u; i < irc->owner_count; ) {
         struct irc_owner *owner = irc->owners[i];
@@ -590,13 +590,13 @@ snag_irc_configure(struct snag_irc *irc, const struct snag_config *config,
             return -1;
         }
     }
-    if (config->irc.listen_explicit && snag_irc_add(irc, config, workspace,
+    if (config->irc.listen_explicit && snag_irc_add(irc, config, cwd,
             true, config->irc.listen, error, error_size) < 0) return -1;
     next = host_owner(irc) ? 1u : 0u;
     for (size_t i = 0u; i < config->irc.client_count; ++i) {
         if (config->irc.listen_explicit &&
             snag_irc_endpoint_equal(config->irc.clients[i], config->irc.listen)) continue;
-        if (snag_irc_add(irc, config, workspace, false, config->irc.clients[i], error, error_size) < 0)
+        if (snag_irc_add(irc, config, cwd, false, config->irc.clients[i], error, error_size) < 0)
             return -1;
         /* Reorder pointers only; threads and pending records keep their owners. */
         for (size_t j = next; j < irc->owner_count; ++j)
@@ -609,7 +609,7 @@ snag_irc_configure(struct snag_irc *irc, const struct snag_config *config,
             }
     }
     irc->identity_changed = true;
-    return snag_irc_preferences(irc, config, workspace, error, error_size);
+    return snag_irc_preferences(irc, config, cwd, error, error_size);
 }
 
 static int
@@ -673,13 +673,13 @@ snag_irc_local_identity(const struct snag_irc *irc, const struct snag_irc_event 
 
 int
 snag_irc_open(struct snag_irc **out, const struct snag_config *config,
-             const char *workspace, snag_irc_event_fn event_fn, snag_irc_trace_fn trace_fn, void *opaque,
+             const char *cwd, snag_irc_event_fn event_fn, snag_irc_trace_fn trace_fn, void *opaque,
              char *error, size_t error_size)
 {
     struct snag_irc *irc;
     int rc;
 
-    if (!out || !config || !workspace) return snag_errno(EINVAL);
+    if (!out || !config || !cwd) return snag_errno(EINVAL);
     *out = NULL;
     irc = calloc(1u, sizeof(*irc));
     if (!irc) return -1;
@@ -701,12 +701,13 @@ snag_irc_open(struct snag_irc **out, const struct snag_config *config,
     irc->opaque = opaque;
     irc->wake[0] = irc->wake[1] = SNAG_WAKE_INVALID;
     if (snag_wakeup_create(irc->wake) < 0) goto fail;
-    if (snag_irc_core_open(&irc->history, config, workspace, false, NULL, NULL, NULL, error, error_size) < 0)
+    if (snag_irc_core_open(&irc->history, config, cwd, false, NULL, NULL, NULL,
+            error, error_size) < 0)
         goto fail;
-    if (config->irc.listen_explicit && snag_irc_add(irc, config, workspace,
+    if (config->irc.listen_explicit && snag_irc_add(irc, config, cwd,
             true, config->irc.listen, error, error_size) < 0) goto fail;
     for (size_t i = 0u; i < config->irc.client_count; ++i) {
-        if (snag_irc_add(irc, config, workspace, false, config->irc.clients[i], error, error_size) < 0)
+        if (snag_irc_add(irc, config, cwd, false, config->irc.clients[i], error, error_size) < 0)
             goto fail;
     }
     *out = irc;

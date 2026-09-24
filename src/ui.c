@@ -80,7 +80,7 @@ struct snag_ui_runtime {
     pthread_t thread, engine;
     struct snag_signal_mask saved_mask;
     atomic_int fatal;
-    atomic_bool exit_requested, cancel, hard_exit_acknowledged;
+    atomic_bool exit_requested, cancel, hard_exit_acknowledged, yield_requested;
     atomic_uint steering_pending, dictation_control;
     atomic_uint level, view;
     _Atomic uint64_t interrupt;
@@ -301,6 +301,44 @@ input_enqueue(struct snag_ui_runtime *runtime, const unsigned char *bytes, size_
     }
     (void)pthread_mutex_unlock(&input->lock);
     snag_wakeup_send(runtime->commands[1]);
+}
+
+enum held_control { HELD_NONE, HELD_INTERRUPT, HELD_EXIT, HELD_YIELD };
+
+static enum held_control
+input_take_held_control(struct ui_input *input, bool allow_yield)
+{
+    static const char yield_line[] = "/yield\r";
+    enum held_control action = HELD_NONE;
+
+    (void)pthread_mutex_lock(&input->lock);
+    for (size_t i = 0u; i < input->len; ++i) {
+        unsigned char byte = input->bytes[(input->head + i) % UI_INPUT_CAPACITY];
+        size_t used = 0u;
+
+        if (byte == 0x03u || byte == 0x04u) {
+            action = byte == 0x03u ? HELD_INTERRUPT : HELD_EXIT;
+            used = 1u;
+        } else if (allow_yield && byte == '/' &&
+                   (i == 0u || input->bytes[(input->head + i - 1u) % UI_INPUT_CAPACITY] == '\r') &&
+                   input->len - i >= sizeof(yield_line) - 1u) {
+            bool matches = true;
+
+            for (size_t j = 0u; j < sizeof(yield_line) - 1u; ++j)
+                if (input->bytes[(input->head + i + j) % UI_INPUT_CAPACITY] !=
+                    (unsigned char)yield_line[j]) matches = false;
+            if (matches) { action = HELD_YIELD; used = sizeof(yield_line) - 1u; }
+        }
+        if (!used) continue;
+        /* Cancel hidden typeahead before this priority control. Bytes typed
+         * afterward remain available at the next safe prompt. */
+        input->head = (input->head + i + used) % UI_INPUT_CAPACITY;
+        input->len -= i + used;
+        input->overflow = false;
+        break;
+    }
+    (void)pthread_mutex_unlock(&input->lock);
+    return action;
 }
 
 static void *
@@ -637,6 +675,12 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         if (rc == 0) display->suspended = command->data.value != 0u;
         return rc;
     }
+    case SNAG_UI_HOLD:
+        if (snag_term_hide(term) < 0) return -1;
+        if (command->data.value && !term->active) ++display->turn_generation;
+        term->active = command->data.value != 0u;
+        term->prompt_wanted = false;
+        return 0;
     case SNAG_UI_PROMPT: {
         if (command->label) {
             /* Dispatch gets a fresh label without replacing a live draft/clock. */
@@ -660,6 +704,7 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         prompt_free(&display->prompt);
         display->prompt = command->data.prompt;
         memset(&command->data.prompt, 0, sizeof(command->data.prompt));
+        term->submit_awaiting_activity = false;
         if (display->view_repainting) {
             term->defer_redraw = true;
             return 0;
@@ -738,7 +783,22 @@ read_input(struct snag_ui_display *display, int timeout_ms)
     struct ui_action *item;
     int rc;
 
-    if (!term->opened || display->suspended || display->input_closed) {
+    bool held = !term->prompt_wanted && !term->dictating && !term->input_only;
+    if (term->opened && !display->suspended && !display->input_closed && held) {
+        enum held_control control = input_take_held_control(&runtime->input,
+            (term->spinner_states & (1u << SNAG_TERM_SPINNER_TOOL)) != 0u);
+
+        if (control == HELD_EXIT) atomic_store(&runtime->exit_requested, true);
+        if (control == HELD_INTERRUPT)
+            atomic_store(&runtime->interrupt,
+                display->turn_generation ? display->turn_generation : UINT64_MAX);
+        if (control == HELD_YIELD) atomic_store(&runtime->yield_requested, true);
+        if (control != HELD_NONE) {
+            snag_wakeup_send(runtime->actions.wake[1]);
+            return 0;
+        }
+    }
+    if (!term->opened || display->suspended || display->input_closed || held) {
         rc = snag_wakeup_wait(runtime->commands[0], timeout_ms);
         return rc < 0 && errno != EINTR ? -1 : 0;
     }
@@ -763,8 +823,7 @@ read_input(struct snag_ui_display *display, int timeout_ms)
     take_snapshot(display, &item->snapshot);
     if (item->text) snag_term_destination_route(term, item->text, &item->route);
     if (item->action == SNAG_TERM_INTERRUPT) term->interrupt_pending = true;
-    if (item->action == SNAG_TERM_CANCEL || item->action == SNAG_TERM_INTERRUPT ||
-        item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE) {
+    if (item->action == SNAG_TERM_CANCEL || item->action == SNAG_TERM_INTERRUPT) {
         bool deferred = term->defer_redraw;
         term->defer_redraw = deferred || item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE;
         if (!term->input_only && display->prompt.source && !display->view_repainting &&
@@ -785,6 +844,8 @@ read_input(struct snag_ui_display *display, int timeout_ms)
             item->text, strlen(item->text), &id, &body);
         if (term->blank_local && snag_text_blank(item->text)) {
             display->feedback[0] = '\0';
+            if (!term->input_only && display->prompt.source && !display->view_repainting &&
+                apply_prompt(display) < 0) goto fail;
             item->local = true;
         } else if (command == SNAG_IRC_TARGET_SELECT) {
             if (snag_term_select_destination(term, id) == 0) {
@@ -851,8 +912,9 @@ read_input(struct snag_ui_display *display, int timeout_ms)
     } else if (item->action != SNAG_TERM_NONE || item->local ||
                item->history_refresh || item->history_warning || item->error) {
         if (item->action == SNAG_TERM_SUBMIT || item->action == SNAG_TERM_QUEUE) {
-            term->prompt_wanted = true;
-            snag_term_trace(term, "want-true", "read_input-submit");
+            /* The action is admitted to the engine, but it has not finished.
+             * Keep subsequent typeahead in the input ring until the engine
+             * sends an explicit readiness prompt. */
             if (item->action == SNAG_TERM_SUBMIT && item->snapshot.active &&
                 item->snapshot.view == SNAG_RENDER_ROLLOUT && item->text &&
                 (item->text[0] != '/' || item->text[1] == '/')) {
@@ -1248,6 +1310,13 @@ snag_ui_external(struct snag_ui *ui, bool begin, char *error, size_t error_size)
     return request(ui, &message, NULL, error, error_size);
 }
 
+int
+snag_ui_hold(struct snag_ui *ui, bool active)
+{
+    return snag_ui_send(ui, (struct snag_ui_command){
+        .kind = SNAG_UI_HOLD, .data.value = active});
+}
+
 static int
 send_prompt(struct snag_ui *ui, enum snag_ui_operation kind, bool active, const char *label,
               const char *const spinners[SNAG_TERM_SPINNER_COUNT], uint32_t per_second, unsigned int states,
@@ -1344,7 +1413,13 @@ bool
 snag_ui_interrupt_pending(const struct snag_ui *ui)
 {
     uint64_t pending = ui && ui->runtime ? atomic_load(&ui->runtime->interrupt) : 0u;
-    return pending && pending == ui->turn_generation;
+    return pending && (pending == ui->turn_generation || pending == UINT64_MAX);
+}
+
+bool
+snag_ui_yield_pending(const struct snag_ui *ui)
+{
+    return ui && ui->runtime && atomic_load(&ui->runtime->yield_requested);
 }
 
 int
@@ -1381,12 +1456,18 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
         unsigned int dictation = atomic_exchange(&runtime->dictation_control, 0u);
         if (dictation) { *action = (enum snag_term_action)dictation; return 1; }
         uint64_t interrupted = atomic_exchange(&runtime->interrupt, 0u);
-        if (interrupted && interrupted == ui->turn_generation) {
+        if (interrupted && (interrupted == ui->turn_generation || interrupted == UINT64_MAX)) {
             *action = SNAG_TERM_INTERRUPT;
             return 1;
         }
         if (atomic_exchange(&runtime->cancel, false)) {
             *action = SNAG_TERM_CANCEL;
+            return 1;
+        }
+        if (atomic_exchange(&runtime->yield_requested, false)) {
+            *text = snag_strdup_checked("/yield", 16u);
+            if (!*text) return -1;
+            *action = SNAG_TERM_SUBMIT;
             return 1;
         }
         item = queue_pop(&runtime->actions);
@@ -1473,7 +1554,7 @@ snag_ui_orientation(struct snag_ui *ui, const struct snag_session *session, bool
             .queued = session->pending_queue_count, .resumed = resumed, .queue_armed = session->queue_armed}
     }};
     message.command.label = session->id;
-    return send_message(ui, &message, session->workspace);
+    return send_message(ui, &message, session->cwd);
 }
 
 struct history_replay {

@@ -42,6 +42,9 @@ struct provider_ctx {
     struct snag_ui *render;
     snag_provider_pump_fn pump;
     void *pump_opaque;
+    snag_provider_ready_fn ready;
+    void *ready_opaque;
+    bool ready_announced;
     const char *accept;
     bool has_body;
     bool multipart;
@@ -480,14 +483,17 @@ begin_attempt(struct provider_ctx *ctx)
     if (ctx->sse.record) {
         snag_responses_emit_fn emit = ctx->stream.emit;
         snag_responses_hosted_fn hosted = ctx->stream.hosted;
+        snag_sse_record_fn record = ctx->sse.record;
+        void *record_opaque = ctx->sse.opaque;
         void *opaque = ctx->stream.opaque;
         void *hosted_opaque = ctx->stream.hosted_opaque;
         snag_sse_free(&ctx->sse);
         snag_responses_stream_free(&ctx->stream);
         snag_responses_stream_init(&ctx->stream, emit, opaque);
         snag_responses_stream_set_hosted(&ctx->stream, hosted, hosted_opaque);
-        snag_sse_init(&ctx->sse, snag_responses_sse_record, &ctx->stream);
+        snag_sse_init(&ctx->sse, record, record_opaque);
     }
+    ctx->ready_announced = false;
     ctx->http_status = 0;
     ctx->cancel_code = 0;
     ctx->retry_after_ms = 0u;
@@ -1368,10 +1374,27 @@ snag_provider_native_compaction_probe(struct snag_provider_connection connection
     return rc == 0 ? 1 : -1;
 }
 
+static int
+response_record(void *opaque, const struct snag_sse_record *record)
+{
+    struct provider_ctx *ctx = opaque;
+    int rc = snag_responses_sse_record(&ctx->stream, record);
+
+    if (rc == 0 && ctx->stream.created && !ctx->ready_announced) {
+        ctx->ready_announced = true;
+        if (ctx->ready && ctx->ready(ctx->ready_opaque) < 0) {
+            ctx_error(ctx, "cannot report provider request readiness");
+            return -1;
+        }
+    }
+    return rc;
+}
+
 int
 snag_provider_responses_create(struct snag_provider_connection connection, const json_t *create_request,
                               snag_responses_emit_fn emit, void *emit_opaque,
                               snag_responses_hosted_fn hosted, void *hosted_opaque,
+                              snag_provider_ready_fn ready, void *ready_opaque,
                               struct snag_response_graph *graph, struct snag_provider_failure *failure,
                               char *error, size_t error_size, unsigned int *retry_count)
 {
@@ -1384,9 +1407,11 @@ snag_provider_responses_create(struct snag_provider_connection connection, const
     if (!connection_valid(connection) || !create_request || !graph)
         return snag_fail(error, error_size, EINVAL, "invalid provider request");
     provider_ctx_init(&ctx, connection, SNAG_CONTEXT_MAX_REQUEST, SNAG_WIRE_BODY_MAX);
+    ctx.ready = ready;
+    ctx.ready_opaque = ready_opaque;
     snag_responses_stream_init(&ctx.stream, emit, emit_opaque);
     snag_responses_stream_set_hosted(&ctx.stream, hosted, hosted_opaque);
-    snag_sse_init(&ctx.sse, snag_responses_sse_record, &ctx.stream);
+    snag_sse_init(&ctx.sse, response_record, &ctx);
     if (provider_request_setup(&ctx, connection.credential, "/v1/responses",
             "text/event-stream", create_request, "provider request exceeds the bounded body limit", write_cb,
             error, error_size) == 0) rc = provider_request_perform(&ctx, "provider transport failed", error,

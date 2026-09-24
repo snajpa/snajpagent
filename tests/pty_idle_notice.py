@@ -26,7 +26,8 @@ def main():
     with H.Child([], ready=H.DEFAULT_IDLE_PROMPT, term="xterm") as child:
         child.send(b"\r")
         child.drain(0.4)
-        run_turn(child, b"/goal test goal", b"Goal set")
+        set_end = child.send_wait(b"/goal slow goal\r", b"Goal set")
+        child.wait(b"working on goal", start=set_end)
         run_turn(child, b"/goal pause", b"Goal paused")
         run_turn(child, b"ping", b"idle: goal paused, awaiting operator")
     print("idle notice: ok")

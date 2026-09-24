@@ -166,9 +166,9 @@ config_instruction_root(char *error, size_t error_size)
 }
 
 static int
-find_project_root(const char *workspace, char **root, char *error, size_t error_size)
+find_project_root(const char *cwd, char **root, char *error, size_t error_size)
 {
-    char *current = snag_strdup_checked(workspace, SNAG_PATH_MAX_BYTES);
+    char *current = snag_strdup_checked(cwd, SNAG_PATH_MAX_BYTES);
 
     *root = NULL;
     if (!current) return -1;
@@ -206,22 +206,22 @@ find_project_root(const char *workspace, char **root, char *error, size_t error_
         }
     }
     free(current);
-    *root = snag_strdup_checked(workspace, SNAG_PATH_MAX_BYTES);
+    *root = snag_strdup_checked(cwd, SNAG_PATH_MAX_BYTES);
     return *root ? 0 : -1;
 }
 
 static int
-walk_project_chain(struct snag_instruction_set *set, const char *root, const char *workspace,
+walk_project_chain(struct snag_instruction_set *set, const char *root, const char *cwd,
                    char *error, size_t error_size)
 {
-    char *current = snag_strdup_checked(workspace, SNAG_PATH_MAX_BYTES);
+    char *current = snag_strdup_checked(cwd, SNAG_PATH_MAX_BYTES);
     size_t end = strlen(root);
     int rc = -1;
 
     if (!current) return -1;
-    if (strncmp(root, workspace, end) != 0 ||
-        (strcmp(root, "/") && workspace[end] && workspace[end] != '/')) {
-        (void)snag_fail(error, error_size, EINVAL, "project root is not an ancestor of workspace");
+    if (strncmp(root, cwd, end) != 0 ||
+        (strcmp(root, "/") && cwd[end] && cwd[end] != '/')) {
+        (void)snag_fail(error, error_size, EINVAL, "project root is not an ancestor of cwd");
         goto out;
     }
     for (;;) {
@@ -239,17 +239,17 @@ out: free(current);
 }
 
 int
-snag_instructions_discover(struct snag_instruction_set *set, const char *workspace,
+snag_instructions_discover(struct snag_instruction_set *set, const char *cwd,
                           char *error, size_t error_size)
 {
     char *global = NULL;
-    char *canonical_workspace = NULL;
+    char *canonical_cwd = NULL;
     char *project_root = NULL;
     snag_file_info st;
     int rc = -1;
 
     snag_instructions_free(set);
-    if (!workspace) return snag_errno(EINVAL);
+    if (!cwd) return snag_errno(EINVAL);
     global = config_instruction_root(error, error_size);
     if (!global) goto out;
     if (snag_lstat(global, &st) == 0) {
@@ -262,18 +262,18 @@ snag_instructions_discover(struct snag_instruction_set *set, const char *workspa
         snag_errorf(error, error_size, "cannot inspect instruction config root: %s", strerror(errno));
         goto out;
     }
-    canonical_workspace = snag_realpath(workspace);
-    if (!snag_text_valid(canonical_workspace, 0u, SNAG_PATH_MAX_BYTES) ||
-        snag_stat(canonical_workspace, &st) < 0 || !S_ISDIR(st.st_mode)) {
+    canonical_cwd = snag_realpath(cwd);
+    if (!snag_text_valid(canonical_cwd, 0u, SNAG_PATH_MAX_BYTES) ||
+        snag_stat(canonical_cwd, &st) < 0 || !S_ISDIR(st.st_mode)) {
         (void)snag_fail(error, error_size, EINVAL,
-            "workspace must be an existing UTF-8 directory for instruction discovery");
+            "cwd must be an existing UTF-8 directory for instruction discovery");
         goto out;
     }
-    if (find_project_root(canonical_workspace, &project_root, error, error_size) < 0 ||
-        walk_project_chain(set, project_root, canonical_workspace, error, error_size) < 0) goto out;
+    if (find_project_root(canonical_cwd, &project_root, error, error_size) < 0 ||
+        walk_project_chain(set, project_root, canonical_cwd, error, error_size) < 0) goto out;
     rc = 0;
 out: free(global);
-    free(canonical_workspace);
+    free(canonical_cwd);
     free(project_root);
     if (rc < 0) snag_instructions_free(set);
     return rc;
@@ -331,11 +331,11 @@ mismatch: return snag_fail(error, error_size, EINVAL,
 }
 
 int
-snag_instructions_worknote(const char *workspace, char **note,
+snag_instructions_worknote(const char *cwd, char **note,
                            char *error, size_t error_size)
 {
     struct snag_instruction_set probe = {0};
-    char *canonical_workspace = NULL;
+    char *canonical_cwd = NULL;
     char *global = NULL;
     const char *dirs[2];
     size_t dir_count = 0u;
@@ -347,8 +347,8 @@ snag_instructions_worknote(const char *workspace, char **note,
     *note = NULL;
     /* Fail-soft by design: absence, invalid candidates and an unavailable global root all read
      * as "no note"; only allocation failure reports -1, and the caller treats it as no note. */
-    canonical_workspace = workspace && *workspace ? snag_realpath(workspace) : NULL;
-    if (canonical_workspace) dirs[dir_count++] = canonical_workspace;
+    canonical_cwd = cwd && *cwd ? snag_realpath(cwd) : NULL;
+    if (canonical_cwd) dirs[dir_count++] = canonical_cwd;
     global = config_instruction_root(scratch, sizeof(scratch));
     if (global) dirs[dir_count++] = global;
     for (size_t i = 0u; i < dir_count; ++i) {
@@ -373,6 +373,6 @@ snag_instructions_worknote(const char *workspace, char **note,
 out:
     snag_instructions_free(&probe);
     free(global);
-    free(canonical_workspace);
+    free(canonical_cwd);
     return rc;
 }

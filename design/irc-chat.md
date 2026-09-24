@@ -487,8 +487,8 @@ conversation explains:
   membership notifications are conversational context;
 - that assistant speech remains in the local rollout and `irc_send` is the
   only way for the model to address the room; and
-- that the declared coding tools still operate on the local workspace, not on
-  the IRC server or remote peers;
+- that coding tools run on the local host filesystem with the process's OS
+  permissions, not on IRC peers or their remote hosts;
 - that IRC connection health, joining, history synchronization, and reconnect
   are owned by the runtime and must not be polled or babysat by the model; and
 - that a quiet response to ordinary chatter is valid, while a local operator
@@ -711,7 +711,7 @@ outbound chat is bounded rather than allowed to grow without limit.
   servers. It gives one local agent and operator access to several endpoints.
 - IRC formatting/control codes from peers are stripped or rendered harmless;
   terminal escape bytes are never emitted as control sequences.
-- Network mode does not change tool authority, workspace selection, provider
+- Network mode does not change tool authority, current working directory, provider
   credentials, goal lifecycle, queue ordering, or the local-only nature of
   command execution.
 - Network support is integrated into the existing process lifecycle, active

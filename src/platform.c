@@ -523,40 +523,19 @@ out: free(command);
     return rc;
 }
 
-/* Run a pager over a private copy of text; see the POSIX implementation for
- * the %s convention and the *shown contract. */
-int
-snag_pager_show(const char *command, const char *text, size_t length, bool *shown,
-                void (*service)(void *), void *opaque)
+/* The same command template serves generated text and local files. */
+static int
+pager_run(const char *command, const wchar_t *file, bool *shown,
+          void (*service)(void *), void *opaque)
 {
-    wchar_t directory[32768], file[32768];
     wchar_t *template = NULL, *quoted = NULL, *line = NULL;
-    DWORD directory_length, written, status = 0, waited;
-    HANDLE handle = INVALID_HANDLE_VALUE;
+    DWORD status = 0, waited;
     PROCESS_INFORMATION child;
     STARTUPINFOW startup = {.cb = sizeof(startup)};
     size_t at, occurrences = 0u, quoted_size, line_size;
-    bool created = false;
     int rc = -1;
 
     *shown = false;
-    directory_length = GetTempPathW((DWORD)(sizeof(directory) / sizeof(directory[0])), directory);
-    if (!directory_length) return -1;
-    if (!GetTempFileNameW(directory, L"snp", 0, file)) return -1;
-    created = true;
-    handle = CreateFileW(file, GENERIC_WRITE, 0, NULL, TRUNCATE_EXISTING, FILE_ATTRIBUTE_TEMPORARY, NULL);
-    if (handle == INVALID_HANDLE_VALUE) goto out;
-    for (at = 0u; at < length;) {
-        size_t chunk = length - at > 0x40000000u ? 0x40000000u : length - at;
-        written = 0u;
-        if (!WriteFile(handle, text + at, (DWORD)chunk, &written, NULL) || !written) goto out;
-        at += (size_t)written;
-    }
-    if (!CloseHandle(handle)) {
-        handle = INVALID_HANDLE_VALUE;
-        goto out;
-    }
-    handle = INVALID_HANDLE_VALUE;
     if (!(template = snag_utf8_to_wide(command))) goto out;
     for (const wchar_t *p = template; (p = wcsstr(p, L"%s")) != NULL; p += 2) ++occurrences;
     quoted_size = wcslen(file) * 2u + 3u;
@@ -614,11 +593,60 @@ snag_pager_show(const char *command, const char *text, size_t length, bool *show
     *shown = true;
     rc = 0;
 out:
-    if (handle != INVALID_HANDLE_VALUE) (void)CloseHandle(handle);
-    if (created) (void)DeleteFileW(file);
     free(template);
     free(quoted);
     free(line);
+    return rc;
+}
+
+int
+snag_pager_file(const char *command, const char *path, bool *shown,
+                void (*service)(void *), void *opaque)
+{
+    wchar_t *wide = snag_utf8_to_wide(path);
+    int rc;
+
+    *shown = false;
+    if (!wide) return -1;
+    rc = pager_run(command, wide, shown, service, opaque);
+    free(wide);
+    return rc;
+}
+
+int
+snag_pager_show(const char *command, const char *text, size_t length, bool *shown,
+                void (*service)(void *), void *opaque)
+{
+    wchar_t directory[32768], file[32768];
+    DWORD directory_length, written;
+    HANDLE handle = INVALID_HANDLE_VALUE;
+    size_t at;
+    bool created = false;
+    int rc = -1;
+
+    *shown = false;
+    directory_length = GetTempPathW((DWORD)(sizeof(directory) / sizeof(directory[0])), directory);
+    if (!directory_length) return -1;
+    if (!GetTempFileNameW(directory, L"snp", 0, file)) return -1;
+    created = true;
+    handle = CreateFileW(file, GENERIC_WRITE, 0, NULL, TRUNCATE_EXISTING,
+                         FILE_ATTRIBUTE_TEMPORARY, NULL);
+    if (handle == INVALID_HANDLE_VALUE) goto out;
+    for (at = 0u; at < length;) {
+        size_t chunk = length - at > 0x40000000u ? 0x40000000u : length - at;
+        written = 0u;
+        if (!WriteFile(handle, text + at, (DWORD)chunk, &written, NULL) || !written) goto out;
+        at += (size_t)written;
+    }
+    if (!CloseHandle(handle)) {
+        handle = INVALID_HANDLE_VALUE;
+        goto out;
+    }
+    handle = INVALID_HANDLE_VALUE;
+    rc = pager_run(command, file, shown, service, opaque);
+out:
+    if (handle != INVALID_HANDLE_VALUE) (void)CloseHandle(handle);
+    if (created) (void)DeleteFileW(file);
     return rc;
 }
 
@@ -2144,36 +2172,18 @@ snag_editor_run(const char *path, bool *success, void (*service)(void *), void *
     return 0;
 }
 
-/* Run a pager over a private copy of text. The command may place %s where the
- * file path goes; without it the quoted path is appended. *shown is false when
- * the command could not start, so the caller can fall back to direct output. */
-int
-snag_pager_show(const char *command, const char *text, size_t length, bool *shown,
-                void (*service)(void *), void *opaque)
+/* A pager command may place %s where the quoted path goes; without it the path
+ * is appended. *shown is false when the command could not start. */
+static int
+pager_run(const char *command, const char *path, bool *shown,
+          void (*service)(void *), void *opaque)
 {
-    char *path = NULL, *quoted = NULL, *script = NULL;
-    const char *directory;
-    size_t path_size, quoted_length = 2u, script_length, at = 0u, occurrences = 0u;
-    int fd = -1, status, rc = -1;
+    char *quoted = NULL, *script = NULL;
+    size_t quoted_length = 2u, script_length, at = 0u, occurrences = 0u;
+    int status, rc = -1;
     pid_t child, got;
 
     *shown = false;
-    directory = getenv("TMPDIR");
-    if (!directory || !*directory) directory = "/tmp";
-    path_size = strlen(directory) + sizeof("/snajpagent-pager-XXXXXX");
-    if (!(path = malloc(path_size))) goto out;
-    (void)snprintf(path, path_size, "%s/snajpagent-pager-XXXXXX", directory);
-    if ((fd = mkstemp(path)) < 0) goto out;
-    while (at < length) {
-        ssize_t written = write(fd, text + at, length - at);
-        if (written < 0) {
-            if (errno == EINTR) continue;
-            goto out;
-        }
-        at += (size_t)written;
-    }
-    if (close(fd) < 0) goto out;
-    fd = -1;
     for (const char *p = path; *p; ++p) quoted_length += *p == '\'' ? 4u : 1u;
     if (!(quoted = malloc(quoted_length + 1u))) goto out;
     at = 0u;
@@ -2229,11 +2239,55 @@ snag_pager_show(const char *command, const char *text, size_t length, bool *show
 out:
     {
         int saved = errno;
+        free(quoted);
+        free(script);
+        errno = saved;
+    }
+    return rc;
+}
+
+int
+snag_pager_file(const char *command, const char *path, bool *shown,
+                void (*service)(void *), void *opaque)
+{
+    return pager_run(command, path, shown, service, opaque);
+}
+
+/* Show generated text through a private temporary file; file paging above
+ * passes the user's file directly, without an intermediate copy. */
+int
+snag_pager_show(const char *command, const char *text, size_t length, bool *shown,
+                void (*service)(void *), void *opaque)
+{
+    char *path = NULL;
+    const char *directory = getenv("TMPDIR");
+    size_t path_size, at = 0u;
+    int fd = -1, rc = -1;
+
+    *shown = false;
+    if (!directory || !*directory) directory = "/tmp";
+    path_size = strlen(directory) + sizeof("/snajpagent-pager-XXXXXX");
+    if (!(path = malloc(path_size))) goto out;
+    (void)snprintf(path, path_size, "%s/snajpagent-pager-XXXXXX", directory);
+    if ((fd = mkstemp(path)) < 0) goto out;
+    while (at < length) {
+        ssize_t written = write(fd, text + at, length - at);
+        if (written < 0 && errno == EINTR) continue;
+        if (written <= 0) {
+            if (!written) errno = EIO;
+            goto out;
+        }
+        at += (size_t)written;
+    }
+    if (close(fd) < 0) { fd = -1; goto out; }
+    fd = -1;
+    rc = pager_run(command, path, shown, service, opaque);
+out:
+    {
+        int saved = errno;
         if (fd >= 0) (void)close(fd);
         if (path) (void)unlink(path);
         free(path);
-        free(quoted);
-        free(script);
         errno = saved;
     }
     return rc;
@@ -3226,7 +3280,7 @@ snag_open_inspect_at(int parent, const char *name)
 }
 
 int
-snag_open_inspect_path(const char *workspace, const char *path)
+snag_open_inspect_path(const char *cwd, const char *path)
 {
     char *copy, *part, *save = NULL;
     struct snag_buf full;
@@ -3236,7 +3290,7 @@ snag_open_inspect_path(const char *workspace, const char *path)
     bool absolute = snag_path_root_len(path) != 0u;
 
     snag_buf_init(&full, 8192u);
-    if (snag_buf_printf(&full, "%s%s%s", absolute ? "" : workspace,
+    if (snag_buf_printf(&full, "%s%s%s", absolute ? "" : cwd,
                        absolute ? "" : "/", path) < 0 ||
         snag_buf_terminate(&full) < 0)
         goto out;

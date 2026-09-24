@@ -1908,12 +1908,12 @@ derive_room(char out[SNAG_CONFIG_IRC_ROOM_MAX + 2u])
 
 int
 snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
-             const char *workspace, bool network, snag_irc_event_fn event_fn,
+             const char *cwd, bool network, snag_irc_event_fn event_fn,
              snag_irc_trace_fn trace_fn, void *event_opaque, char *error, size_t error_size)
 {
     struct snag_irc_core *irc;
 
-    if (!out || !config || !workspace || (network &&
+    if (!out || !config || !cwd || (network &&
         (config->irc.listen_explicit ? config->irc.client_count != 0u : config->irc.client_count != 1u))) {
         errno = EINVAL;
         return snag_errorf(error, error_size, "invalid IRC startup state");
@@ -1969,7 +1969,7 @@ snag_irc_core_open(struct snag_irc_core **out, const struct snag_config *config,
     } else {
         derive_room(irc->room);
     }
-    if (strlen(workspace) > IRC_TOPIC_MAX || sanitize_text(irc->topic, sizeof(irc->topic), workspace) < 0) {
+    if (strlen(cwd) > IRC_TOPIC_MAX || sanitize_text(irc->topic, sizeof(irc->topic), cwd) < 0) {
         (void)snag_fail(error, error_size, ENAMETOOLONG, "IRC launch path is too long for a topic");
         goto fail;
     }

@@ -27,12 +27,14 @@
       sessions keep their original code.</p>
     <section id="rollout" aria-labelledby="rollout-heading">
       <h2 id="rollout-heading">Work on a project</h2>
-      <p>Start <code>snajpagent</code> in your project directory and ask for a change.
-        The model can read and edit files and run commands. Read its replies and
-        scroll back normally. Tool details are hidden by default; show them when
-        you need them. Each request tells the model which tool details your current view
-        displays, guiding its progress updates. Empty Enter leaves a prompt line and
-        opens a fresh prompt, like a shell.</p>
+      <p>Start <code>snajpagent</code> and ask for a change. Its initial working
+        directory is your home directory; the model can inspect it with
+        <code>get_cwd</code>, change it with <code>cd</code>, or use absolute paths.
+        Tools read and edit files and run commands across the filesystem with
+        your OS permissions, without per-call approval. Tool calls are hidden
+        at the default verbosity; show them when useful. Read replies and scroll
+        back normally. Empty Enter leaves a prompt line and opens a fresh
+        prompt, like a shell.</p>
       <figure>
         <a href="screenshots/ordinary.png">
           <img src="screenshots/ordinary.png" width="1122" height="221"
@@ -43,10 +45,14 @@
       <p>You can type while work continues. Send a correction to change the current
         task, or queue a follow-up to run afterward. Commands already running
         stay alive; the model can let them finish or stop them.</p>
-      <p>Enter commands while work runs. Inspection acts immediately; controls
+      <p>A new prompt appears when a submitted action can accept another one;
+        a provider request accepts steering once it is processing. A foreground
+        slash command finishes before another app command runs. Controls
         that need a safe boundary acknowledge when they will apply.
         <code>/history</code> shows the last turn and total history length;
-        <code>/history N</code> requests more. <code>/ro QUERY</code> queues a
+        <code>/history N</code> requests more. <code>/cat PATH</code> opens a
+        regular file in your pager without copying its contents into the
+        conversation. <code>/ro QUERY</code> queues a
         read-only query during work. <code>/compact</code> reduces model context
         while preserving the full local log and reporting its progress.</p>
       <p>Resume continues unfinished work without a new prompt. For scripts, use

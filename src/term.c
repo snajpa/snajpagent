@@ -15,8 +15,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#define SNAG_TERM_SUBMIT_ACTIVITY_MS 250u
-
 static atomic_uint sigint_pending;
 static volatile sig_atomic_t sigwinch_pending;
 static int redraw(struct snag_term *term);
@@ -791,7 +789,6 @@ set_spinner_states(struct snag_term *term, unsigned int states)
     if ((states & (1u << SNAG_TERM_SPINNER_TOOL)) || !term->tool_spinner_off_delay_ms)
         term->tool_spinner_off_at = 0u;
     term->spinner_states = states;
-    if (states) term->submit_awaiting_activity = false;
 }
 
 static int
@@ -1307,15 +1304,7 @@ redraw(struct snag_term *term)
     const char *label;
     int rc = -1;
 
-    if (term->submit_awaiting_activity) {
-        /* Only the idle-form paint is held: an active (busy) composer is itself
-         * evidence that the submitted turn is processing, and delaying it would
-         * delay steering, which the manual keeps immediate during output. */
-        if (term->active || visible_spinner_states(term) ||
-            snag_monotonic_ms() - term->submit_awaiting_since_ms > SNAG_TERM_SUBMIT_ACTIVITY_MS)
-            term->submit_awaiting_activity = false;
-        else return 0;
-    }
+    if (term->submit_awaiting_activity) return 0;
     if (term->input_only || !term->opened || !term->prompt_wanted || term->output_depth) {
         snag_term_trace(term, "skip", term->input_only ? "input_only" : !term->opened ? "closed" :
             !term->prompt_wanted ? "not-wanted" : "output_depth");
@@ -1994,11 +1983,8 @@ complete_action(struct snag_term *term, enum snag_term_action action, enum snag_
     bool local = action == SNAG_TERM_SUBMIT && (destination == SNAG_IRC_TARGET_SELECT || verbosity ||
                   (term->blank_local && snag_text_blank((char *)term->draft.data)));
     if (local ? term->local_backlog : term->input_backlog) return snag_term_write(STDERR_FILENO, "\a", 1u);
-    if (action == SNAG_TERM_SUBMIT && !local && term->draft.len &&
-        (term->draft.data[0] != '/' ||
-         (term->draft.len > 1u && term->draft.data[1] == '/'))) {
+    if (action == SNAG_TERM_SUBMIT && !local && term->draft.len) {
         term->submit_awaiting_activity = true;
-        term->submit_awaiting_since_ms = snag_monotonic_ms();
     }
     if (term->capable) {
         if (snag_term_hide(term) < 0) return -1;
@@ -2416,20 +2402,6 @@ consume_resize(struct snag_term *term)
     return redraw(term);
 }
 
-/* The submit hold keeps a ready-looking prompt off the screen until the submitted
- * turn reacts. That release has to be scheduled rather than discovered: a
- * submission whose outcome starts no turn (a local error, such as a mismatched
- * delete confirmation) never reaches set_spinner_states, and nothing calls redraw
- * afterwards, so the composer would stay unrepainted until the next keystroke. */
-static int
-release_expired_submit_hold(struct snag_term *term)
-{
-    if (!term->submit_awaiting_activity) return 0;
-    if (snag_monotonic_ms() - term->submit_awaiting_since_ms < SNAG_TERM_SUBMIT_ACTIVITY_MS) return 0;
-    term->submit_awaiting_activity = false;
-    return redraw(term);
-}
-
 int
 snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
               enum snag_term_action *action, char **text)
@@ -2448,7 +2420,6 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
     if (term->prompt_visible && term->capable && !term->searching &&
         !term->output_depth && animated_spinners(term) &&
         update_spinners(term, spinner_step(term, snag_monotonic_ms())) < 0) return -1;
-    if (release_expired_submit_hold(term) < 0) return -1;
     if (sigint_pending) {
         (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
         return feed_byte(term, 0x03u, action, text);
@@ -2460,14 +2431,6 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
             (timeout_ms < 0 || timeout_ms > 30))
             timeout_ms = 30;
         timeout_ms = term->history_pending ? 0 : spinner_timeout(term, timeout_ms);
-        if (term->submit_awaiting_activity) {
-            /* Wake at the hold's own deadline, so it can be released and repainted
-             * even when the submission's outcome had no turn to report activity. */
-            uint64_t elapsed = snag_monotonic_ms() - term->submit_awaiting_since_ms;
-            uint64_t remaining = elapsed < SNAG_TERM_SUBMIT_ACTIVITY_MS ?
-                SNAG_TERM_SUBMIT_ACTIVITY_MS - elapsed : 0u;
-            if (timeout_ms < 0 || (uint64_t)timeout_ms > remaining) timeout_ms = (int)remaining;
-        }
         rc = snag_term_input_wait(&term->host, wake_fd, timeout_ms);
         if (sigint_pending) {
             (void)atomic_fetch_sub_explicit(&sigint_pending, 1u, memory_order_relaxed);
@@ -2493,7 +2456,6 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
             if (term->history_pending == 2u) return history_down(term);
             return search_find(term, term->history_scan);
         }
-        if (rc == 0 && release_expired_submit_hold(term) < 0) return -1;
         if (rc <= 0) return rc;
         if (!(rc & SNAG_TERM_WAIT_INPUT)) {
             if (rc & SNAG_TERM_WAIT_END) {

@@ -78,8 +78,10 @@ uses owned memory snapshots while engine refresh/persistence is pending.
 Durable append-and-sync-before-adopt/ack remains unchanged. Display messages
 retain engine order; public deltas acknowledge their exact delivered prefix
 before the callback returns, including cancellation and failure paths. Editor
-handoff restores cooked mode before the engine starts the editor and reclaims
-the terminal only after it exits. Shutdown closes admission, restores output
+and pager handoff restores cooked mode before the external program starts and
+reclaims the terminal after it exits. `/cat` resolves cwd-relative paths
+and passes the file to the configured pager without copying its contents into
+the conversation. Shutdown closes admission, restores output
 and terminal state, and joins the presentation thread; no thread is detached.
 
 ## Streamed Output And Typing
@@ -140,9 +142,11 @@ The pause provides display focus, not a provider-generation guarantee. Input,
 interrupts, and local active-turn commands remain responsive while output is
 paused.
 
-Enter, Tab, and Ctrl-C have distinct active-turn meanings. In rollout, Enter durably
-submits the draft as immediate steering and interrupts the current provider
-response at the next input-pump boundary. In chat, Enter sends a room message;
+Enter, Tab, and Ctrl-C have distinct active-turn meanings. In rollout, the
+steer prompt appears after the provider acknowledges the request with a valid
+`response.created` event. Enter then durably submits the draft as steering and
+interrupts that response at the next input-pump boundary. Before the provider
+accepts a response, typeahead waits without a steer prompt. In chat, Enter sends a room message;
 only a mention of the local agent steers, while ordinary operator messages
 remain background context. Outside completion, Tab durably appends the draft to the
 future-turn FIFO and does not interrupt the response, yield a managed command,
@@ -158,9 +162,10 @@ interruption remains local and cannot resume the paused goal. Five consecutive C
 presses within two seconds request exit through normal durable cleanup. Other
 input or expiry resets the sequence. Empty Ctrl-D and terminal EOF use the same
 priority exit control, interrupting active work and preserving the session;
-`/exit` is available while idle. After every accepted Enter steer, an empty
-active composer is armed immediately, before provider cancellation or the next
-response cycle completes, so another steer can be entered at once.
+`/exit` is available while idle. After an accepted Enter steer, the submitted
+line remains visible while the old response is interrupted. The next active
+composer appears when the replacement provider request acknowledges
+`response.created`; typeahead waits until that boundary.
 
 On POSIX, the native input worker distinguishes a real EOF from a zero-byte
 read in open noncanonical VMIN=0/VTIME=0 mode. A flush can remove bytes after
@@ -401,9 +406,14 @@ records before being freed. Session-pending input survives final disconnection.
 
 The engine's shared command dispatcher accepts commands in both views during
 provider, count, catalog, compaction and managed-tool waits. Presentation and
-inspection run immediately; model/effort preferences affect the next full turn
-and remain until changed, including across resume. CLI `-m` and `--effort` use
-the same durable session preference; active turns retain their frozen settings.
+inspection run when the foreground owner permits it. `/model` changes the next
+request in the current turn and interrupts a streaming response at a safe
+boundary; effort changes apply on a subsequent request. Both preferences remain
+until changed, including across resume. CLI `-m` and `--effort` use the same
+durable session preferences. Accepted inputs and completed tool results remain
+bound to their durable identities.
+Ctrl-C, Ctrl-D and `/yield` during a managed-tool wait remain priority controls
+while the ordinary composer is held.
 Configuration, catalog refresh, compaction, retry and lifecycle controls retain
 accepted intent and run at their safe owner boundary. Commands captured under
 an idle prompt are not blocked behind an active turn: ordinary rollout text from
@@ -568,14 +578,14 @@ scenario covers:
 - enabled and disabled `AGENTS.md` discovery as recorded in the durable
   `turn_started` event.
 
-The tmux socket, session, workspace, configuration, and state directory are
+The tmux socket, session, test HOME, configuration, and state directory are
 unique to the test. The test never addresses or stops an unrelated tmux server
 or snajpagent process. Deterministic tmux coverage is a normal local test target;
 live provider coverage remains explicit because it consumes credentials and
 provider capacity.
 
 Live-provider qualification is an explicit, separately authorized operation.
-Use an isolated workspace and non-destructive representative task, with the
+Use an isolated home directory and non-destructive representative task, with the
 chosen provider/model recorded in its evidence. Compare normalized rendered
 text with durable public response data, verify advertised instruction paths,
 and close only test-owned processes. Existing host-specific live-run records
