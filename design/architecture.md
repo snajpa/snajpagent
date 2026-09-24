@@ -225,8 +225,11 @@ omit reasoning payloads, while token usage remains available.
 
 Structured non-2xx and SSE failures retain their bounded provider code/type,
 message, and integral capacity details. The shared provider request loop retries
-known transient failures at most twice, never policy/access/quota or unknown
-structured errors. Before replay it checks output/activity observations and
+known transient failures at most twice, never policy/denied-access/quota or unknown
+structured errors. An HTTP 5xx `upstream_error` with `server_error`, including
+temporary gateway access-verification failure, uses that same unchanged-request
+retry path; it does not use model-facing cyber-policy clarification. Before replay
+the transport checks output/activity observations and
 fresh input, resets the decoder, and keeps the request bytes unchanged. New
 live chat or queued input suppresses retries without steering healthy responses;
 direct steering retains its normal interruption path. A failed response yielding

@@ -1210,6 +1210,8 @@ test_create_retries(void)
         {"", "{\"error\":{\"type\":\"insufficient_quota\"}}", 429, 1, 0, false, "insufficient_quota", ""},
         {"", "{\"error\":{\"code\":\"cyber_policy\"}}", 500, 1, 0, false, "cyber_policy", ""},
         {"", "{\"error\":{\"code\":\"unknown\",\"type\":\"server_error\"}}", 503, 1, 0, false, "unknown", ""},
+        {"", "{\"error\":{\"code\":\"upstream_error\",\"type\":\"server_error\",\"message\":\"{\\\"detail\\\":\\\"Unable to verify provider access. Please try again.\\\"}\"}}",
+            503, 3, 2, false, "retried 2 times", ""},
         {"", "{\"error\":{\"code\":23,\"type\":\"server_error\"}}", 500, 1, 0, false, "HTTP 500", ""},
         {"", "{\"error\":{\"code\":\"server_error\"}}", 503, 3, 2, false, "retried 2 times", ""},
         {"", "temporarily unavailable", 503, 1, 1, false, NULL, "local transport"},

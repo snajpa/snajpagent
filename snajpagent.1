@@ -3926,8 +3926,15 @@ View/status controls alone do not veto retries.
 Stream retries stop once output or tool activity has been observed;
 malformed or ambiguous partial records are not automatically replayed.
 .PP
-Policy, access, quota and unknown structured failures skip the short transport
-retry loop. Access, quota and unknown failures retain paced turn recovery.
+Policy, denied access, quota and unknown structured failures skip the short
+transport retry loop. An HTTP 5xx
+.B upstream_error
+with
+.B server_error
+can include a temporary gateway access-verification failure; it receives the
+same bounded retry of the unchanged request as other transient server errors.
+It does not trigger model-facing policy clarification. Access, quota and unknown
+failures retain paced turn recovery.
 For an eligible
 .B cyber_policy
 rejection, the model receives a durable clarification instruction immediately,

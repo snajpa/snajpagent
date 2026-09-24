@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Retry a transient HTTP 5xx `upstream_error` with `server_error` using the
+  existing bounded transport backoff and unchanged request, including gateway
+  access-verification 503s. An actual access denial or provider policy rejection
+  still does not receive these retries or a misleading model clarification.
+
 - Default the hard input budget to a provider's normal working window. An
   advertised larger maximum context is a selectable client ceiling, not a
   default; requests above the normal window can move to a higher provider price

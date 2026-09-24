@@ -23,6 +23,11 @@ snag_provider_failure_retryable(long status, const char *code, const char *type)
 
     if (status && !snag_provider_http_status_retryable(status)) return false;
     if ((!code || !*code) && (!type || !*type)) return status != 0;
+    /* Some gateways wrap a temporary upstream access-verification failure
+     * as upstream_error/server_error. Retry only an HTTP server response,
+     * never an access denial or a streamed policy rejection. */
+    if (status >= 500 && code && type && strcmp(code, "upstream_error") == 0 &&
+        strcmp(type, "server_error") == 0) return true;
     for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); ++k) {
         size_t i;
         if (!kinds[k] || !*kinds[k]) continue;

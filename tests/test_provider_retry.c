@@ -45,6 +45,13 @@ test_structured_retry_classes(void)
     }
     assert(!snag_provider_failure_retryable(0, "", ""));
     assert(snag_provider_failure_retryable(503, "", ""));
+    /* Upstream access-verification failures carried as 503/server_error
+     * retry the unchanged request; an actual access denial remains terminal. */
+    assert(snag_provider_failure_retryable(503, "upstream_error", "server_error"));
+    assert(!snag_provider_failure_retryable(403, "upstream_error", "server_error"));
+    assert(!snag_provider_failure_retryable(0, "upstream_error", "server_error"));
+    assert(!snag_provider_failure_retryable(503, "upstream_error", "cyber_policy"));
+    assert(!snag_provider_failure_retryable(503, "upstream_error", "insufficient_quota"));
     assert(!snag_provider_failure_retryable(400, "server_error", ""));
     assert(!snag_provider_failure_retryable(401, "server_error", ""));
     assert(!snag_provider_failure_retryable(501, "server_error", ""));
