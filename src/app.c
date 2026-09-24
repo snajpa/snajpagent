@@ -604,6 +604,15 @@ set_input_prompt(struct app_state *app, bool active)
 }
 
 static int
+hold_response_prompt(struct app_state *app)
+{
+    /* Automatic response boundaries do not take away a composer once the
+     * provider has offered steering during this turn. */
+    return app->steer_prompt_seen && app->session.active_turn ? 0 :
+        snag_ui_hold(&app->ui, true);
+}
+
+static int
 validate_prompt_values(struct snag_ui *ui, const struct snag_config *config,
                        const struct snag_provider_config *provider, const char *model, const char *effort)
 {
@@ -675,8 +684,10 @@ snag_app_request_ready(void *opaque)
 
     if (!app->session.active_turn || !app->session.response_open) return 0;
     app->provider_request_ready = true;
-    return app->ui.opened && !app->execute && !app->input_closed ?
-        set_input_prompt(app, true) : 0;
+    if (!app->ui.opened || app->execute || app->input_closed) return 0;
+    if (set_input_prompt(app, true) < 0) return -1;
+    app->steer_prompt_seen = true;
+    return 0;
 }
 
 static int
@@ -2488,6 +2499,9 @@ apply_controls(struct app_state *app)
         if (rc < 0 && bit != SNAG_CONTROL_COMPACT) { result = -1; break; }
     }
     app->applying_controls = false;
+    if (result == 0 && !app->session.pending_controls && app->steer_prompt_seen &&
+        app->session.active_turn && app->ui.opened && !app->execute && !app->input_closed &&
+        set_input_prompt(app, true) < 0) result = -1;
     return result;
 }
 
@@ -2840,8 +2854,8 @@ again:;
         if (rc < 0) goto active_done;
         if (handled) {
             if (!app->queue_edit_id[0] && !prompt_ready) {
-                if (!app->provider_request_ready ||
-                    app->model_switch_requested || app->control_requested)
+                if (app->control_requested || (!app->steer_prompt_seen &&
+                    (!app->provider_request_ready || app->model_switch_requested)))
                     rc = snag_ui_hold(&app->ui, true);
                 else rc = set_input_prompt(app, true);
             }
@@ -2891,7 +2905,7 @@ again:;
                     if (!app->session.steering_deferred) app->steering_requested = true;
                     if (app->steering_requested) {
                         app->provider_request_ready = false;
-                        rc = snag_ui_hold(&app->ui, true);
+                        rc = set_input_prompt(app, true);
                     } else rc = set_input_prompt(app, true);
                 }
             }
@@ -3510,7 +3524,7 @@ turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
     app->recovery_delay_ms = delay < 30000u / 2u ? delay * 2u : 30000u;
     app->recovery_wait = true;
     /* A retry timer has not yet acquired a response that can accept steering. */
-    if (!app->execute) (void)snag_ui_hold(&app->ui, true);
+    if (!app->execute) (void)hold_response_prompt(app);
     app->steering_requested = false;
     if (policy) {
         (void)app_warning(app,
@@ -3667,7 +3681,11 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         report_message = "cryptographic turn id generation failed";
         goto fail;
     }
-    if (!continuing) { app->turn_started_ms = snag_monotonic_ms(); app->turn_output_tokens = 0u; }
+    if (!continuing) {
+        app->turn_started_ms = snag_monotonic_ms();
+        app->turn_output_tokens = 0u;
+        app->steer_prompt_seen = false;
+    }
     if (!continuing && commit_input(app, "turn_started",
                      json_pack("{s:{s:s,s:s,s:o,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:I,s:I,s:I,s:I,s:I,s:I,s:b,s:I},"
                          "s:s,s:o,s:I,s:b,s:s?,s:o,s:s,s:s,s:I,s:s}",
@@ -3718,7 +3736,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         report_message = "turn runtime facts could not be rendered";
         goto output_fail;
     }
-    if (!app->execute && snag_ui_hold(&app->ui, true) < 0) {
+    if (!app->execute && hold_response_prompt(app) < 0) {
         report_message = "active submission could not be held";
         goto output_fail;
     }
@@ -3737,7 +3755,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         if (app->input_closed) { result = 0; goto out; }
         if (app->interrupt_requested) goto user_interrupted;
         app->provider_request_ready = false;
-        if (!app->execute && snag_ui_hold(&app->ui, true) < 0) goto fail;
+        if (!app->execute && hold_response_prompt(app) < 0) goto fail;
         bool selected_new_model = app->session.active_turn &&
             (strcmp(app->session.active_turn_provider, app->session.default_provider) != 0 ||
              strcmp(app->session.active_turn_model, app->session.default_model) != 0 ||
@@ -3961,7 +3979,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                                    projection.create_request.value, &credential, &graph, &provider_failure,
                                    error, sizeof(error), &provider_retry_count);
         app->provider_request_ready = false;
-        if (!app->execute && snag_ui_hold(&app->ui, true) < 0) goto fail;
+        if (!app->execute && hold_response_prompt(app) < 0) goto fail;
         if (snag_app_provider_activity(app, false) < 0) goto fail;
         if (provider_rc < 0 && provider_failure.retry_after_ms > app->recovery_delay_ms)
             app->recovery_delay_ms = provider_failure.retry_after_ms;

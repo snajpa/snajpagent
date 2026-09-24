@@ -79,6 +79,12 @@ admitted. Typeahead is never submitted twice; prompts and slash-command
 bodies never become unintended steering. The external pager/editor takes
 exclusive terminal ownership until it exits.
 
+The first steer composer waits for an accepted response. Once shown, keep it
+visible and editable for the rest of the turn through unready response
+boundaries, even with an empty draft. Enter durably submits steering during a
+handoff, for admission at a safe turn boundary. A foreground operator command
+temporarily hides the composer until that command finishes.
+
 Model selection commits the default selection and the active turn selection
 at the same serialized boundary. The following response projection uses the
 new model, its resolved limits and provider configuration; prior completed

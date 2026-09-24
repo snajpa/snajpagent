@@ -1499,6 +1499,95 @@ def run_queue_dispatch_retry_case(binary, root):
         provider.close()
 
 
+def run_steer_draft_handoff_case(binary, root, with_draft=True):
+    case = root / ("steer-draft-handoff" if with_draft else "steer-empty-handoff")
+    case.mkdir(parents=True, exist_ok=True)
+    provider = FakeResponses()
+    state, config = case / "state", case / "config.ini"
+    workspace = case / "work"
+    workspace.mkdir(exist_ok=True)
+    (workspace / "input.txt").write_text("fixture\n")
+    write_irc_config(config, provider.port, "host-model")
+    with config.open("a") as out:
+        out.write("prompt = {model}/{effort}{chat: C›}{rollout-idle: ›}{rollout-active: »}\n")
+    first_created, first_finish = threading.Event(), threading.Event()
+    second_arrived = threading.Event()
+    second_start, second_finish = threading.Event(), threading.Event()
+    terminal = None
+
+    def respond(handler, request, sequence):
+        if sequence > 2:
+            provider.reply(handler, provider.response_body(sequence, "steer accepted").encode(),
+                           close_header=True)
+            return
+        if sequence == 1:
+            body = provider.function_body(sequence, "read", "read_file", {
+                "path": str(workspace / "input.txt"), "start_line": None, "end_line": None}).encode()
+        else:
+            second_arrived.set()
+            assert second_start.wait(30), "second response never released"
+            body = provider.response_body(sequence, "second response").encode()
+        head = body.index(b"\n\n") + 2
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/event-stream")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.send_header("Connection", "close")
+        handler.end_headers()
+        handler.wfile.write(body[:head])
+        handler.wfile.flush()
+        if sequence == 1:
+            first_created.set()
+        assert (first_finish if sequence == 1 else second_finish).wait(30)
+        try:
+            handler.wfile.write(body[head:])
+            handler.wfile.flush()
+        except OSError:
+            pass  # A submitted steer may close the earlier stream.
+
+    provider.runtime_handler = respond
+    try:
+        terminal = TmuxTerminal(case / "terminal", binary, workspace, state, config, 100, 24,
+                                environment={"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"})
+        terminal.wait("host-model/medium ›")
+        terminal.submit("start steer handoff")
+        assert first_created.wait(10), terminal.capture()
+        terminal.wait("host-model/medium »")
+        if with_draft:
+            terminal.send_text("unfinished steer")
+            terminal.wait("» unfinished steer")
+        first_finish.set()
+        assert second_arrived.wait(15), terminal.capture()
+        if with_draft:
+            terminal.send_text(" more")
+            screen = terminal.wait("» unfinished steer more")
+            assert screen.count("unfinished steer more") == 1, screen
+            expected = "unfinished steer more"
+        else:
+            screen = terminal.capture(join_wrapped=True)
+            assert "host-model/medium »" in screen, screen
+            terminal.send_text("late steer")
+            terminal.wait("» late steer")
+            expected = "late steer"
+        terminal.send_key("Enter")
+        second_start.set()
+        second_finish.set()
+        events = wait_event_count(state, "steering_added", 1)
+        steering = event_list(events, "steering_added")
+        assert len(steering) == 1 and steering[0]["data"]["text"] == expected, steering
+        terminal.wait("steer accepted", timeout=20)
+        terminal.exit()
+        print("tmux_terminal steer {} handoff: ok".format(
+            "draft" if with_draft else "empty"), flush=True)
+    finally:
+        first_finish.set()
+        second_start.set()
+        second_finish.set()
+        if terminal is not None:
+            (case / "screen.txt").write_text(terminal.capture(), encoding="utf-8")
+            terminal.close()
+        provider.close()
+
+
 def run_queue_case(binary, root):
     case = root / "queue"
     with TmuxTerminal.fixture(
@@ -9243,6 +9332,8 @@ def run_irc_case(binary, root):
         run_host_cache_prefix_case(binary, root / "host-cache-prefix")
         run_goal_recovery_cases(binary, root, provider, environment)
         run_queue_dispatch_retry_case(binary, root)
+        run_steer_draft_handoff_case(binary, root)
+        run_steer_draft_handoff_case(binary, root, with_draft=False)
         for active, chat, width, verbosity in ((False, False, 100, 0), (False, True, 28, 2),
                                              (True, False, 28, 0), (True, True, 100, 2)):
             run_history_length_case(binary, root, active, chat, width, verbosity)

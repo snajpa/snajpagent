@@ -118,6 +118,7 @@ struct app_state {
     bool recovery_wait;
     bool provider_active;
     bool provider_request_ready;
+    bool steer_prompt_seen; /* This turn has already displayed an accepted steer prompt. */
     enum snag_policy_stop turn_policy_stopped;
     uint64_t input_received_ms;
     unsigned int recovery_delay_ms;

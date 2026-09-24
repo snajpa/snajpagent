@@ -33,9 +33,11 @@
   also interrupts an in-progress response and restarts on the chosen model
   with retained history, completed tool results and live process handles.
 
-- Show a new interactive prompt only after a foreground action finishes or
-  an accepted provider response can receive steering. Retain typeahead while
-  commands and request preparation own the foreground.
+- Show the first steer prompt only after an accepted provider response can
+  receive steering. Once shown, keep it visible for the rest of that turn,
+  including empty drafts and unready response boundaries; hide it only while
+  a foreground command runs. Enter still submits a steer durably during a
+  response handoff.
 
 - Add `/cat PATH` to view a local file in the configured pager without placing
   its contents in the conversation; accept cwd-relative, absolute and

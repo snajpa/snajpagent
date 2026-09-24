@@ -324,6 +324,11 @@ ready, typed input waits without a steer prompt. After a foreground slash
 command, snajpagent waits for that command to finish before presenting or
 executing another app command. Ctrl-C and exit remain priority controls.
 .PP
+The first steer prompt waits for an accepted response. Once shown, it stays
+visible and editable throughout that turn, even when empty or while the next
+response is unready. A foreground command hides it until completion. Enter
+still submits a steer for admission at a safe turn boundary.
+.PP
 For a separate follow-up, type "Then add regression coverage" and press Tab
 at the end while work is active.  That message waits in the queue until the
 current turn ends.  Queued prompts run oldest first, one turn at a time in the

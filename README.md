@@ -46,10 +46,12 @@ Your request and the work through its final answer make up a **turn**, which
 appears in **rollout**. You can type while it runs; typing alone does not
 interrupt it.
 
-Each nonblank submission appears in scrollback immediately. The next prompt
-appears when its action finishes or a provider request is processing and can
-receive steering. Until then, typed input waits without displaying a second
-ready prompt. Blank or
+Each nonblank submission appears in scrollback immediately. The first steer
+prompt in a turn appears when the provider accepts a response; once shown, it
+stays visible and editable throughout that turn, including unready handoffs
+and empty drafts. A foreground command hides it until that command finishes.
+Enter still submits a steer during a handoff. Before the first accepted
+response, typeahead waits without a steer prompt. Blank or
 whitespace-only Enter stays local and starts no turn, command or provider call.
 
 **Enter sends a correction during a steerable provider request**: “Use the
