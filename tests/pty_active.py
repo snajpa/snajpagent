@@ -155,14 +155,15 @@ class Child:
 
     def wait_idle_prompt(self, start=0, timeout=MIN_WAIT_S):
         # At a narrow width only the idle marker's row may change. Require
-        # either the full prompt or a cursor-positioned idle-marker repaint.
+        # the full prompt or a cursor-positioned repaint of its final fields.
         pattern = re.compile(
             re.escape(DEFAULT_IDLE_PROMPT.rstrip()) + b"|" +
             re.escape(DEFAULT_ACCOUNTED_IDLE_PROMPT.rstrip()) +
             rb"|(?:^|[\r\n])[^\r\n]*/[^\r\n]* \xe2\x80\xba"
             rb"|\r(?:\x1b\[\d+C)?(?:\x1b\[[0-9;]*m)?"
             rb"(?:[0-9? ]{0,3}% )?\xe2\x80\xba"
-            rb"(?:\x1b\[[0-9;]*m)?(?=\r)")
+            rb"(?:\x1b\[[0-9;]*m)?(?=\r)"
+            rb"|\r\x1b\[\d+C[a-z]+ +[0-9?]{1,3}% \xe2\x80\xba(?=[ \r]|$)")
         return self.wait_pattern(pattern, start, timeout)
 
     def wait_context_percent(self, percent, start=0, timeout=MIN_WAIT_S):
@@ -5843,7 +5844,24 @@ def test_stalled_output_consumes_input():
         assert inputs == ["render_flood", "ping"], inputs
 
 
+def test_idle_prompt_after_partial_effort_repaint():
+    class Probe:
+        def __init__(self, buf):
+            self.buf = buf
+
+        def wait_pattern(self, pattern, start=0, timeout=MIN_WAIT_S):
+            return pattern.search(self.buf, start)
+
+    previous = DEFAULT_IDLE_PROMPT
+    cursor_suffix = b"\r\x1b[32Cmedium   ?% "
+    probe = Probe(previous + cursor_suffix + PROMPT)
+    assert Child.wait_idle_prompt(probe, start=len(previous)) is not None
+    probe.buf = previous + cursor_suffix + "» ".encode()
+    assert Child.wait_idle_prompt(probe, start=len(previous)) is None
+
+
 if __name__ == "__main__":
+    test_idle_prompt_after_partial_effort_repaint()
     test_empty_session_lifecycle()
     test_empty_network_session()
     test_resize_and_suspend_preserve_draft()
