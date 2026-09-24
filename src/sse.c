@@ -34,6 +34,26 @@ fail(struct snag_sse_parser *parser, char *error, size_t error_size, const char 
     return snag_fail(error, error_size, EPROTO, "%s", message);
 }
 
+/* Report only recognized protocol event names, never raw provider bytes. */
+static const char *
+oversized_line_kind(const struct snag_sse_parser *parser)
+{
+    static const char *const names[] = {
+        "response.created", "response.completed", "response.failed",
+        "response.output_item.added", "response.output_item.done",
+        "response.function_call_arguments.done", "response.output_text.delta",
+        "response.reasoning_summary_text.delta"
+    };
+    for (size_t i = 0u; i < sizeof(names) / sizeof(names[0]); ++i)
+        if (parser->event.len == strlen(names[i]) &&
+            memcmp(parser->event.data, names[i], parser->event.len) == 0)
+            return names[i];
+    if (parser->line.len >= 5u && memcmp(parser->line.data, "data:", 5u) == 0)
+        return "data";
+    if (parser->line.len && parser->line.data[0] == ':') return "comment";
+    return "unknown";
+}
+
 static int
 assign(struct snag_buf *target, const unsigned char *value, size_t len)
 {
@@ -170,7 +190,9 @@ snag_sse_feed(struct snag_sse_parser *parser, const void *data, size_t len, char
         } else if (c == '\n') {
             if (end_line(parser, error, error_size) < 0) return -1;
         } else if (snag_buf_putc(&parser->line, c) < 0) {
-            return fail(parser, error, error_size, "SSE line exceeds 1 MiB");
+            parser->failed = true;
+            return snag_fail(error, error_size, EPROTO, "SSE %s line exceeds 1 MiB",
+                             oversized_line_kind(parser));
         }
     }
     return 0;

@@ -3896,6 +3896,9 @@ or background chat input at a failed request keeps its normal next-turn handoff.
 Successful refusals and ordinary failed tool results retain their existing handling.
 The retry hint appears once when the ordinary budget is exhausted or disabled.
 .PP
+An oversized SSE line reports its recognized event type when present, without
+echoing provider content. The existing 1 MiB line bound still applies.
+.PP
 An active goal retries failed work indefinitely with paced, interruptible waits.
 Provider capacity exhaustion, protocol errors, context recovery failures and
 local prerequisites do not pause or block the goal.  Recovery preserves

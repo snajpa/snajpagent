@@ -39,6 +39,10 @@
   a foreground command runs. Enter still submits a steer durably during a
   response handoff.
 
+- Name recognized SSE event types when an incoming line exceeds the existing
+  1 MiB safety bound, without logging provider content or guessing the type
+  of earlier failures whose raw wire bytes were not retained.
+
 - Add `/cat PATH` to view a local file in the configured pager without placing
   its contents in the conversation; accept cwd-relative, absolute and
   home-relative paths.

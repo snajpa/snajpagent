@@ -127,6 +127,22 @@ test_bounds(void)
 
     memset(error, 0, sizeof(error));
     snag_sse_init(&parser, NULL, NULL);
+    assert(snag_sse_feed(&parser, "event: response.created\n", 24u, error, sizeof(error)) == 0);
+    assert(snag_sse_feed(&parser, input, SNAG_MAX_SSE_EVENT + 1u, error, sizeof(error)) < 0);
+    assert(strstr(error, "SSE response.created line exceeds 1 MiB"));
+    snag_sse_free(&parser);
+
+    memset(error, 0, sizeof(error));
+    snag_sse_init(&parser, NULL, NULL);
+    assert(snag_sse_feed(&parser, "event: private_request_text\n", 28u,
+                         error, sizeof(error)) == 0);
+    assert(snag_sse_feed(&parser, input, SNAG_MAX_SSE_EVENT + 1u, error, sizeof(error)) < 0);
+    assert(strstr(error, "SSE unknown line exceeds 1 MiB"));
+    assert(!strstr(error, "private_request_text"));
+    snag_sse_free(&parser);
+
+    memset(error, 0, sizeof(error));
+    snag_sse_init(&parser, NULL, NULL);
     memcpy(input, "data: ", 6u);
     memset(input + 6u, 'x', SNAG_MAX_SSE_EVENT - 6u);
     input[SNAG_MAX_SSE_EVENT] = '\n';
