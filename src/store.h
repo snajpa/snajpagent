@@ -190,6 +190,10 @@ struct snag_session {
     uint64_t context_rebase_seq;
     char context_rebase_turn_id[SNAG_ID_HEX_LEN + 1u];
     bool context_rebase_has_new_results;
+    /* Set while replaying a format-2 journal (the workspace-era schema): such
+     * records use the small compatibility rules in the store and carry no
+     * workspace semantics. New journals never set it. */
+    bool legacy_journal;
     uint64_t active_compact_source_seq;
     uint64_t capacity_ceiling_input_tokens;
     uint64_t input_received_ms, input_first_context_ms;

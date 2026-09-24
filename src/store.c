@@ -546,6 +546,35 @@ add_pending_steering(struct snag_session *session, const char *id, const char *t
     session->pending_steering_bytes += len;
     return 0;
 }
+
+/* Workspace-era journals recorded a still-running process inline in the tool
+ * result instead of a process state of its own. Replay gives the call back the
+ * handle it referenced; the collected counters restart at zero. */
+static int
+replay_process_add(struct snag_session *session, const char *handle, const char *command,
+                   const char *workdir)
+{
+    struct snag_process_state *process;
+
+    if (session->process_count == session->process_capacity) {
+        size_t capacity = session->process_capacity ? session->process_capacity * 2u : 8u;
+        struct snag_process_state *grown;
+
+        if (capacity < session->process_capacity) return -1;
+        grown = realloc(session->processes, capacity * sizeof(*grown));
+        if (!grown) return -1;
+        memset(grown + session->process_capacity, 0,
+               (capacity - session->process_capacity) * sizeof(*grown));
+        session->processes = grown;
+        session->process_capacity = capacity;
+    }
+    process = &session->processes[session->process_count++];
+    memset(process, 0, sizeof(*process));
+    memcpy(process->handle, handle, sizeof(process->handle));
+    memcpy(process->command, command, sizeof(process->command));
+    memcpy(process->workdir, workdir, sizeof(process->workdir));
+    return 0;
+}
 static int
 consume_oldest_queue(struct snag_session *session)
 {
@@ -615,6 +644,47 @@ input_fields_valid(const json_t *data,const char *keys)
         keys=fields;
     }
     return snag_json_exact_keys(data,keys);
+}
+
+/* Current journals record instruction paths as an array of strings.
+ * Workspace-era turns recorded objects with bytes/path/sha256; both shapes are
+ * accepted here, and the recorded paths stay duplicate-free. */
+static int
+legacy_instructions_metadata_valid(const json_t *array, char *error, size_t error_size)
+{
+    size_t count;
+
+    if (!json_is_array(array)) goto invalid;
+    count = json_array_size(array);
+    for (size_t i = 0; i < count; ++i) {
+        const json_t *value = json_array_get(array, i);
+        const char *path;
+
+        if (json_is_object(value)) {
+            uint64_t bytes;
+            const char *sha256;
+            if (!snag_json_exact_keys(value, "bytes path sha256") ||
+                snag_json_integer_u64(value, "bytes", &bytes) < 0 ||
+                !(sha256 = snag_json_string(value, "sha256")) ||
+                !snag_hex_is_lower(sha256, SNAG_SHA256_HEX_LEN)) goto invalid;
+            path = snag_json_string(value, "path");
+        } else if (json_is_string(value)) {
+            path = json_string_value(value);
+        } else {
+            goto invalid;
+        }
+        if (!path || !snag_path_root_len(path) || strlen(path) > SNAG_PATH_MAX_BYTES ||
+            !snag_utf8_valid((const unsigned char *)path, strlen(path), true)) goto invalid;
+        for (size_t j = 0; j < i; ++j) {
+            const json_t *other = json_array_get(array, j);
+            const char *other_path = json_is_object(other) ? snag_json_string(other, "path") :
+                (json_is_string(other) ? json_string_value(other) : NULL);
+            if (other_path && strcmp(other_path, path) == 0) goto invalid;
+        }
+    }
+    return 0;
+invalid:
+    return snag_fail(error, error_size, EINVAL, "invalid or duplicate instruction path metadata");
 }
 
 /* Host-supplied voice provenance accompanies the existing queued input. It
@@ -731,10 +801,21 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         const char *protocol = snag_json_string(data, "protocol");
         const char *cwd = snag_json_string(data, "cwd");
 
-        if (seq != 1 || snag_json_integer_u64(data, "format", &n) < 0 ||
-            n != 3u || !snag_json_exact_keys(data,
-                "default_effort default_model default_provider format protocol cwd") ||
-            !protocol || strcmp(protocol, "responses") != 0 ||
+        /* Format 2 stored the session's working directory as `workspace`. The
+         * workspace feature is gone, so that value maps onto the current cwd
+         * and has no other role; the record stays replayable. */
+        if (seq != 1 || snag_json_integer_u64(data, "format", &n) < 0) goto invalid;
+        if (n == 2u) {
+            if (!snag_json_exact_keys(data,
+                    "default_effort default_model default_provider format protocol workspace"))
+                goto invalid;
+            cwd = snag_json_string(data, "workspace");
+            session->legacy_journal = true;
+        } else if (n != 3u || !snag_json_exact_keys(data,
+                "default_effort default_model default_provider format protocol cwd")) {
+            goto invalid;
+        }
+        if (!protocol || strcmp(protocol, "responses") != 0 ||
             !snag_text_valid(effort, 1u, sizeof(session->default_effort) - 1u) ||
             !snag_text_valid(model, 1u, sizeof(session->default_model) - 1u) ||
             !snag_text_valid(provider, 1u, SNAG_CONFIG_PROVIDER_NAME_MAX) ||
@@ -1370,29 +1451,54 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         bool queued;
         bool goal;
         uint64_t queue_seq = 0;
-        uint64_t max_parallel;
+        uint64_t max_parallel = 4u;
         uint64_t default_yield = 10000u, max_wait = 60000u;
         uint64_t default_timeout = 0u, max_timeout = 86400000u;
         uint64_t tool_output = SNAG_DEFAULT_TOOL_OUTPUT_TOKENS, output_cache = 1024u * 1024u;
+        char fields[192];
+        const char *cwd_key;
+        int fields_len;
+        json_t *instructions = json_object_get(data, "instructions");
+        bool read_only_ok;
+        bool legacy_instruction_metadata;
 
+        /* Format 2 stored a turn's working directory as `workspace`. The
+         * workspace feature is gone, so it maps onto the current cwd. */
+        cwd_key = json_object_get(data, "cwd") ? "cwd" : "workspace";
+        fields_len = snprintf(fields, sizeof(fields),
+            "config input_kind instructions queue_id queue_seq%s text turn_id "
+            "turn_number %s%s",
+            json_object_get(data, "read_only") ? " read_only" : "", cwd_key,
+            json_object_get(data, "received_at_ms") ? " received_at_ms" : "");
+        if (fields_len < 0 || (size_t)fields_len >= sizeof(fields)) goto invalid;
+        /* Workspace-era turns predate the per-turn execution settings; their
+         * absence uses the current defaults instead of refusing the record. */
+        if (session->legacy_journal && json_is_object(config)) {
+            if (json_object_get(config, "max_parallel_commands") &&
+                (snag_json_integer_u64(config, "max_parallel_commands", &max_parallel) < 0 ||
+                 max_parallel < 1u)) goto invalid;
+            if (json_object_get(config, "parallel_tool_calls") &&
+                !json_is_boolean(json_object_get(config, "parallel_tool_calls"))) goto invalid;
+        }
+        legacy_instruction_metadata = session->legacy_journal && json_is_array(instructions) &&
+            json_array_size(instructions) > 0u && json_is_object(json_array_get(instructions, 0u));
+        read_only_ok = json_object_get(data, "read_only") ?
+            json_is_boolean(json_object_get(data, "read_only")) : session->legacy_journal;
         /* Steering submitted after the previous turn's final request is
          * durable but has no model context yet. Carry exactly that state into
          * the next explicit/queued/goal turn; admitted steering may never
          * cross a turn boundary. */
         if (session->active_turn || session->process_count != 0u ||
             !snag_session_pending_steering_unadmitted(session) ||
-            !input_fields_valid(data, json_object_get(data, "received_at_ms") ?
-                "config input_kind instructions queue_id queue_seq read_only text turn_id "
-                "turn_number cwd received_at_ms" :
-                "config input_kind instructions queue_id queue_seq read_only text turn_id "
-                "turn_number cwd") ||
-            !json_is_boolean(json_object_get(data, "read_only")) ||
+            !input_fields_valid(data, fields) ||
+            !read_only_ok ||
             !(turn_id = snag_json_string(data, "turn_id")) || !snag_hex_is_lower(turn_id, SNAG_ID_HEX_LEN) ||
             snag_json_integer_u64(data, "turn_number", &n) < 0 || n != session->turn_count + 1u ||
             !(kind = snag_json_string(data, "input_kind")) || !json_is_object(config) ||
-            snag_json_integer_u64(config, "max_parallel_commands", &max_parallel) < 0 ||
-            max_parallel < 1u ||
-            !json_is_boolean(json_object_get(config, "parallel_tool_calls")) ||
+            (!session->legacy_journal &&
+             (snag_json_integer_u64(config, "max_parallel_commands", &max_parallel) < 0 ||
+              max_parallel < 1u ||
+              !json_is_boolean(json_object_get(config, "parallel_tool_calls")))) ||
             !(model = snag_json_string(config, "model")) || !*model ||
             !(provider = snag_json_string(config, "provider")) || !*provider ||
             strlen(provider) > SNAG_CONFIG_PROVIDER_NAME_MAX ||
@@ -1400,8 +1506,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             strlen(effort) >= sizeof(session->active_turn_effort) ||
             strlen(model) >= sizeof(session->active_turn_model) ||
             !snag_utf8_valid((const unsigned char *)model, strlen(model), true) ||
-            snag_instructions_metadata_valid(json_object_get(data, "instructions"), error, error_size) < 0 ||
-            !(cwd = snag_json_string(data, "cwd")) ||
+            (legacy_instruction_metadata ?
+                legacy_instructions_metadata_valid(instructions, error, error_size) < 0 :
+                snag_instructions_metadata_valid(instructions, error, error_size) < 0) ||
+            !(cwd = snag_json_string(data, cwd_key)) ||
             strcmp(cwd, session->cwd) != 0 || !(text = snag_json_string(data, "text")) || !*text)
             goto invalid;
 #define OPTIONAL_EXEC_U32(key, value) do { \
@@ -1480,7 +1588,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->max_timeout_ms = (uint32_t)max_timeout;
         session->tool_output_bytes = (uint32_t)tool_output;
         session->output_cache_bytes = (uint32_t)output_cache;
-        session->parallel_tool_calls = json_is_true(json_object_get(config, "parallel_tool_calls"));
+        session->parallel_tool_calls = json_object_get(config, "parallel_tool_calls") ?
+            json_is_true(json_object_get(config, "parallel_tool_calls")) : true;
         session->active_read_only = json_is_true(json_object_get(data, "read_only"));
         session->active_queued = queued;
         session->active_goal = goal;
@@ -1559,19 +1668,58 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             "model_input_bytes model_input_sha256 profile_id provider provider_source_sha256 "
             "request_input_bytes request_input_count request_input_sha256 request_sha256 "
             "requested_output_tokens response_id source_bound steering_ids turn_id";
-        const char *response_id = snag_json_string(data, "response_id");
-        const char *method = snag_json_string(data, "count_method");
-        const char *compact_id = snag_json_string(data, "compact_id");
-        const char *capability = snag_json_string(data, "capability_version");
-        const char *capacity_source = snag_json_string(data, "capacity_source");
-        const char *profile = snag_json_string(data, "profile_id");
-        const char *count_hash = snag_json_string(data, "count_request_sha256");
-        const json_t *host_context = json_object_get(data, "host_context");
-        json_t *steering_ids = json_object_get(data, "steering_ids");
+        static const char legacy_keys[] =
+            "baseline_sha256 capability_version compact_id count_method count_request_sha256 "
+            "cycle input_tokens_bound model model_input_sha256 profile_id request_sha256 "
+            "response_id steering_ids turn_id";
+        const char *response_id;
+        const char *method;
+        const char *compact_id;
+        const char *capability;
+        const char *capacity_source;
+        const char *profile;
+        const char *count_hash;
+        const json_t *host_context;
+        json_t *steering_ids;
         struct snag_input_observation value = {.valid = true};
         uint64_t cycle;
         bool state_allows_start;
+        json_t *filled = NULL;
+        bool has_full_accounting = true;
 
+        /* The pre-accounting response record carried identity only; fill the
+         * current fields with the values that schema implied and replay the
+         * same validation for both shapes. */
+        if (session->legacy_journal && snag_json_arg_keys(data, legacy_keys, "irc_seq", NULL, 0u)) {
+            json_t *copy = json_deep_copy(data);
+            if (!copy) return -1;
+            if (json_object_set_new(copy, "capacity_source", json_string("unknown")) < 0 ||
+                json_object_set_new(copy, "source_bound", json_false()) < 0 ||
+                json_object_set_new(copy, "hard_input_tokens", json_null()) < 0 ||
+                json_object_set_new(copy, "requested_output_tokens", json_null()) < 0 ||
+                json_object_set_new(copy, "model_input_bytes", json_integer(0)) < 0 ||
+                json_object_set_new(copy, "request_input_bytes", json_integer(0)) < 0 ||
+                json_object_set_new(copy, "request_input_count", json_integer(0)) < 0 ||
+                json_object_set_new(copy, "request_input_sha256", json_string("")) < 0 ||
+                json_object_set_new(copy, "provider_source_sha256", json_string("")) < 0 ||
+                json_object_set_new(copy, "provider", json_string(session->active_turn_provider)) < 0 ||
+                json_object_set_new(copy, "effort", json_string(session->active_turn_effort)) < 0) {
+                json_decref(copy);
+                return -1;
+            }
+            filled = copy;
+            data = filled;
+            has_full_accounting = false;
+        }
+        response_id = snag_json_string(data, "response_id");
+        method = snag_json_string(data, "count_method");
+        compact_id = snag_json_string(data, "compact_id");
+        capability = snag_json_string(data, "capability_version");
+        capacity_source = snag_json_string(data, "capacity_source");
+        profile = snag_json_string(data, "profile_id");
+        count_hash = snag_json_string(data, "count_request_sha256");
+        host_context = json_object_get(data, "host_context");
+        steering_ids = json_object_get(data, "steering_ids");
         state_allows_start = !session->response_open &&
             session->response_terminal != SNAG_RESPONSE_TERMINAL_FAILED &&
             session->response_terminal != SNAG_RESPONSE_TERMINAL_INTERRUPTED &&
@@ -1582,6 +1730,20 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         bool has_irc_seq = json_object_get(data, "irc_seq") != NULL;
         /* Pre-watermark journals contain the same request facts without irc_seq. */
         session->response_irc_seq = 0u;
+        /* Workspace-era journals admitted steering at the response boundary and
+         * wrote no input_admitted record for it. */
+        if (session->legacy_journal && json_is_array(steering_ids)) {
+            for (size_t i = 0; i < json_array_size(steering_ids); ++i) {
+                const char *id = json_string_value(json_array_get(steering_ids, i));
+                for (size_t j = 0; id && j < session->pending_steering_count; ++j) {
+                    struct snag_pending_steering *pending = &session->pending_steering[j];
+                    if (!strcmp(pending->steering_id, id) && !pending->first_context_ms) {
+                        pending->first_context_ms = session->last_time_ms;
+                        break;
+                    }
+                }
+            }
+        }
         if (!snag_json_arg_keys(data, keys + (has_irc_seq ? 0u : sizeof("irc_seq ") - 1u),
                                "host_context", NULL, 0u) ||
             (host_context && !host_context_valid(host_context)) ||
@@ -1597,7 +1759,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             strcmp(value.provider, session->active_turn_provider) != 0 ||
             !snag_strcpy(value.provider_source_sha256, sizeof(value.provider_source_sha256),
                          snag_json_string(data, "provider_source_sha256")) ||
-            !snag_hex_is_lower(value.provider_source_sha256, SNAG_SHA256_HEX_LEN) ||
+            (has_full_accounting &&
+             !snag_hex_is_lower(value.provider_source_sha256, SNAG_SHA256_HEX_LEN)) ||
             !snag_strcpy(value.effort, sizeof(value.effort), snag_json_string(data, "effort")) ||
             strcmp(value.effort, session->active_turn_effort) != 0 || (!capacity_source ||
              (!snag_string_in(capacity_source, "unknown advertised configured observed stale-catalog-ignored"))) ||
@@ -1624,7 +1787,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !snag_hex_is_lower(value.model_input_sha256, SNAG_SHA256_HEX_LEN) ||
             !snag_strcpy(value.request_input_sha256, sizeof(value.request_input_sha256),
                          snag_json_string(data, "request_input_sha256")) ||
-            !snag_hex_is_lower(value.request_input_sha256, SNAG_SHA256_HEX_LEN) ||
+            (has_full_accounting &&
+             !snag_hex_is_lower(value.request_input_sha256, SNAG_SHA256_HEX_LEN)) ||
             !snag_strcpy(value.request_sha256, sizeof(value.request_sha256),
                          snag_json_string(data, "request_sha256")) ||
             !snag_hex_is_lower(value.request_sha256, SNAG_SHA256_HEX_LEN) ||
@@ -1634,8 +1798,9 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             (strcmp(method, "anchored_upper_bound") == 0 &&
              value.input_tokens < session->usage_anchor.input_tokens) ||
             snag_json_integer_u64(data, "model_input_bytes", &value.model_input_bytes) < 0 ||
-            value.model_input_bytes == 0u || snag_json_integer_u64(data, "request_input_bytes",
-                                 &value.request_input_bytes) < 0 || value.request_input_bytes == 0u ||
+            (has_full_accounting && value.model_input_bytes == 0u) ||
+            snag_json_integer_u64(data, "request_input_bytes", &value.request_input_bytes) < 0 ||
+            (has_full_accounting && value.request_input_bytes == 0u) ||
             snag_json_integer_u64(data, "request_input_count", &value.request_input_count) < 0 ||
             value.request_input_count > SNAG_EVENT_LIMIT || (strcmp(method, "anchored_upper_bound") == 0 &&
              (value.request_input_bytes < session->usage_anchor.request_input_bytes ||
@@ -1656,6 +1821,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (strcmp(method, "exact") == 0) context_meter_set(session, value.input_tokens);
         session->active_cycle = (unsigned int)cycle;
         session->response_open = true;
+        json_decref(filled);
     } else if (strcmp(type, "response_capacity_rejected") == 0) {
         const char *code = snag_json_string(data, "code");
         const char *message = snag_json_string(data, "message");
@@ -2007,7 +2173,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             memcpy(process->command, call->command, sizeof(process->command));
             memcpy(process->workdir, call->workdir, sizeof(process->workdir));
         } else if (!strcmp(call->tool_name, "write_stdin")) {
-            if (!snag_session_process(session, call->process_handle)) goto invalid;
+            if (!snag_session_process(session, call->process_handle) &&
+                (!session->legacy_journal ||
+                 replay_process_add(session, call->process_handle, call->command, call->workdir) < 0))
+                goto invalid;
             for (size_t i = 0u; i < session->pending_call_count; ++i)
                 if (session->pending_calls[i].started &&
                     !strcmp(session->pending_calls[i].process_handle, call->process_handle)) goto invalid;
@@ -2046,7 +2215,12 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         }
         struct snag_process_state *process = snag_session_process(session, call->process_handle);
         if (call->started && call->process_handle[0]) {
-            if (!process) { clause = "process"; goto invalid; }
+            /* Workspace-era journals recorded a still-running process inline in
+             * the result and wrote no process_started event; there is no state
+             * to keep, so the call is taken as finished. */
+            if (!process) {
+                if (!session->legacy_journal) { clause = "process"; goto invalid; }
+            } else {
             json_t *ref = json_object_get(result, "output_ref");
             if (ref) {
                 const char *ref_handle = snag_json_string(ref, "handle");
@@ -2072,12 +2246,17 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 goto invalid;
             }
             if (!strcmp(status, "running")) {
-                if (!handle || strcmp(handle, process->handle)) goto invalid;
+                if (!handle || strcmp(handle, process->handle)) {
+                    /* Workspace-era journals minted the result's process id
+                     * apart from the replayed call state; the call still ends. */
+                    if (!session->legacy_journal) { clause = "running-handle"; goto invalid; }
+                }
             } else if (strcmp(status, "outcome_unknown")) {
                 remove_process(session, process);
             }
+            }
         } else if (!strcmp(status, "running")) {
-            goto invalid;
+            if (!session->legacy_journal) goto invalid;
         }
         call->finished = true;
         if (all_pending_finished(session) && session->response_outcome == SNAG_GRAPH_CALLS) {
@@ -2241,6 +2420,14 @@ invalid:
             (void)snprintf(detail, sizeof(detail), "invalid %s transition at sequence %llu", type,
                 (unsigned long long)seq);
         record_refusal(session, detail);
+        if (!live && session->legacy_journal) {
+            /* A format-2 journal predates the current record contract. Its
+             * records stay in the durable history, but a record whose shape is
+             * no longer reconstructible contributes no state instead of making
+             * the session unloadable; new journals and live appends keep the
+             * strict error. */
+            return 0;
+        }
         return snag_fail(error, error_size, EINVAL, "%s", detail);
     }
 }

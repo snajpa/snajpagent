@@ -47,8 +47,24 @@ int
 snag_irc_event_read(const json_t *data, struct snag_irc_event *event)
 {
     const char *kind = snag_json_string(data, "kind");
+    json_t *filled = NULL;
 
     memset(event, 0, sizeof(*event));
+    /* Workspace-era journals recorded the room event without the stream
+     * watermark, its sequence and the input flag; fill those defaults before
+     * the current field validation runs. */
+    if (!json_object_get(data, "stream") && !json_object_get(data, "sequence") &&
+        !json_object_get(data, "input")) {
+        filled = json_deep_copy(data);
+        if (!filled ||
+            json_object_set_new(filled, "stream", json_string("")) < 0 ||
+            json_object_set_new(filled, "sequence", json_integer(0)) < 0 ||
+            json_object_set_new(filled, "input", json_false()) < 0) {
+            json_decref(filled);
+            return snag_errno(ENOMEM);
+        }
+        data = filled;
+    }
     event->classified = json_object_get(data, "urgent") != NULL;
     event->urgent = json_is_true(json_object_get(data, "urgent"));
     event->reply = json_is_true(json_object_get(data, "reply"));
@@ -76,9 +92,12 @@ snag_irc_event_read(const json_t *data, struct snag_irc_event *event)
         event->input = json_is_true(json_object_get(data, "input"));
         event->local = json_is_true(json_object_get(data, "local"));
         event->op = json_is_true(json_object_get(data, "op"));
+        json_decref(filled);
         return 0;
     }
-invalid: return snag_errno(EINVAL);
+invalid:
+    json_decref(filled);
+    return snag_errno(EINVAL);
 }
 
 int

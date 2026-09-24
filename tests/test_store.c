@@ -173,6 +173,93 @@ count_event(void *opaque, const struct snag_session *state,
 }
 
 static void
+legacy_event(int fd, const char *session_id, uint64_t seq, char hash[SNAG_SHA256_HEX_LEN + 1u],
+             const char *type, json_t *data)
+{
+    char digest[SNAG_SHA256_HEX_LEN + 1u];
+    struct snag_buf line;
+    json_t *event;
+
+    snag_buf_init(&line, SNAG_MAX_EVENT_LINE);
+    event = checked_json(json_pack("{s:O,s:s,s:I,s:s,s:I,s:s,s:i}", "data", data,
+        "prev_sha256", hash, "seq", (json_int_t)seq, "session_id", session_id,
+        "time_ms", (json_int_t)(1700000000000 + (json_int_t)seq), "type", type, "v", 1));
+    assert(snag_json_digest(event, digest) == 0);
+    assert(snag_json_set_new(event, "event_sha256", json_string(digest)) == 0);
+    assert(snag_json_canonical(event, &line) == 0);
+    assert(snag_buf_putc(&line, '\n') == 0);
+    assert(write(fd, line.data, line.len) == (ssize_t)line.len);
+    snag_buf_free(&line);
+    json_decref(event);
+    json_decref(data);
+    memcpy(hash, digest, sizeof(digest));
+}
+
+static void
+test_legacy_journal(struct snag_store *store, const char *cwd)
+{
+    char error[256], id[SNAG_ID_HEX_LEN + 1u], hash[SNAG_SHA256_HEX_LEN + 1u];
+    char agent_path[4096], sha[SNAG_SHA256_HEX_LEN + 1u];
+    const char *turn_id = "0123456789abcdef0123456789abcdef";
+    struct snag_session session;
+    int dir, fd;
+
+    memset(sha, 'a', SNAG_SHA256_HEX_LEN);
+    sha[SNAG_SHA256_HEX_LEN] = '\0';
+    /* Instruction metadata is paths and digests only: no file has to exist. */
+    assert(snprintf(agent_path, sizeof(agent_path), "%s/AGENTS.md", cwd) > 0);
+
+    snag_session_init(&session);
+    assert(snag_session_create(store, &session, cwd, "default", "model", "high",
+                               error, sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+    snag_session_close(&session);
+
+    dir = openat(store->sessions_fd, id, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    assert(dir >= 0);
+    fd = openat(dir, "events.jsonl", O_WRONLY | O_TRUNC | O_CLOEXEC);
+    assert(fd >= 0);
+    memset(hash, '0', SNAG_SHA256_HEX_LEN);
+    hash[SNAG_SHA256_HEX_LEN] = '\0';
+    /* Format 2: the removed workspace field is the session's directory. */
+    legacy_event(fd, id, 1u, hash, "session_created",
+        checked_json(json_pack("{s:s,s:s,s:s,s:i,s:s,s:s}",
+            "default_effort", "high", "default_model", "model", "default_provider", "default",
+            "format", 2, "protocol", "responses", "workspace", cwd)));
+    /* Workspace-era turn: no read_only, no per-turn execution limits and
+       object-shaped instruction metadata. */
+    legacy_event(fd, id, 2u, hash, "turn_started",
+        checked_json(json_pack(
+            "{s:{s:s,s:s,s:s,s:s,s:s,s:i,s:i,s:i},s:s,s:[{s:i,s:s,s:s}],s:n,s:n,s:s,s:s,s:i,s:s}",
+            "config", "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
+            "effort", "high", "model", "model", "provider", "default",
+            "profile_id", SNAJPAGENT_PROFILE_ID, "prompt_schema", 1, "replay_schema", 1,
+            "tool_schema", 1, "input_kind", "direct",
+            "instructions", "bytes", 16298, "path", agent_path, "sha256", sha,
+            "queue_id", "queue_seq", "text", "legacy", "turn_id", turn_id,
+            "turn_number", 1, "workspace", cwd)));
+    /* A record whose historical shape is no longer reconstructible contributes
+       no state instead of making the session unloadable. */
+    legacy_event(fd, id, 3u, hash, "tool_finished",
+        checked_json(json_pack("{s:s,s:{s:s,s:s},s:s}",
+            "call_id", "fedcba9876543210fedcba9876543210",
+            "result", "status", "running", "handle", turn_id, "turn_id", turn_id)));
+    assert(close(fd) == 0);
+    assert(close(dir) == 0);
+
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(session.legacy_journal);
+    assert(strcmp(session.cwd, cwd) == 0);
+    assert(strcmp(session.default_model, "model") == 0);
+    assert(strcmp(session.default_effort, "high") == 0);
+    assert(session.active_turn && session.turn_count == 1u);
+    assert(session.max_parallel_commands == 4u && session.parallel_tool_calls);
+    assert(!session.active_read_only);
+    snag_session_close(&session);
+}
+
+static void
 test_pending_session(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
@@ -1240,6 +1327,7 @@ main(void)
     test_voice_queue(&store,cwd);
     test_banner_steering(&store,cwd);
     test_image_compaction_control(&store, cwd);
+    test_legacy_journal(&store, cwd);
 
     test_many_queued_turns(&store,cwd);
     snag_store_close(&store);

@@ -18,8 +18,16 @@
 
 - Start new sessions in the home directory and expose get_cwd and cd to models.
   Accept absolute and ./ paths in file, patch and command tools. Remove the
-  workspace selector and workspace-filtered session operations; earlier session
-  formats remain on disk but are not replayed by the new format.
+  workspace selector and workspace-filtered session operations.
+
+- Keep workspace-era sessions loadable. A format-2 journal replays with its
+  stored `workspace` mapped onto the session's working directory, and its older
+  record shapes are translated where the recorded meaning is clear (per-turn
+  execution defaults, instruction metadata, steering admission, pre-accounting
+  response facts, IRC events, inline process results). A historical record whose
+  shape is no longer reconstructible stays in the durable history but
+  contributes no state, so an old session still resumes; new journals and live
+  appends keep strict validation.
 
 - Let models select the next response's model within an active turn; /model
   also interrupts an in-progress response and restarts on the chosen model

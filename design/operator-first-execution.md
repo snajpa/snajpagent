@@ -12,8 +12,11 @@ not a new process gate, version decision or release plan.
 - New sessions start with the home directory as their default working directory,
   regardless of the shell directory from which the binary was launched. `get_cwd`
   returns it. `cd` changes it for subsequent tool calls and persists the change
-  for resume. Existing logs retain their bytes but old workspace fields have no
-  semantic role: sessions in the old format are not migrated or replayed.
+  for resume. Existing logs retain their bytes and stay resumable: a format-2
+  journal maps its stored `workspace` onto the session's working directory and
+  replays its older record shapes where the recorded meaning is clear. A record
+  that cannot be reconstructed contributes no state instead of blocking the
+  load; new journals and live appends keep strict validation.
 - There is no workspace selection or filesystem workspace boundary. Remove `-C`,
   relocation, workspace-filtered list/last, `--all`, and old workspace events,
   prompts and references. Bare relative paths and explicit `./` use the
