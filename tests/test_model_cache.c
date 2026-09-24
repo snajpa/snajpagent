@@ -34,15 +34,23 @@ write_file_at(int dirfd, const char *name, const char *text)
 }
 
 static struct snag_model_capacity
-resolve_capacity(const struct snag_model_cache *cache, const struct snag_config *config,
-                 size_t provider, const char *model, const char *protocol)
+resolve_capacity_choice(const struct snag_model_cache *cache, const struct snag_config *config,
+                        size_t provider, const char *model, const char *protocol,
+                        const struct snag_context_choice *choice)
 {
     struct snag_model_capacity capacity;
     char error[256] = {0};
 
     assert(snag_model_capacity_resolve(cache, config, &config->providers[provider],
-                                      model, protocol, &capacity, error, sizeof(error)) == 0);
+                                      model, protocol, choice, &capacity, error, sizeof(error)) == 0);
     return capacity;
+}
+
+static struct snag_model_capacity
+resolve_capacity(const struct snag_model_cache *cache, const struct snag_config *config,
+                 size_t provider, const char *model, const char *protocol)
+{
+    return resolve_capacity_choice(cache, config, provider, model, protocol, NULL);
 }
 
 static void
@@ -132,7 +140,7 @@ test_local_models(struct snag_store *store, struct snag_model_cache *cache)
     assert(!capacity.max_output_tokens); /* No inheritance from a different local name. */
     config.model_limits[1].max_output_tokens = 128000u;
     assert(snag_model_capacity_resolve(cache, &config, provider, "small", "codex",
-                                      &capacity, error, sizeof(error)) < 0);
+                                      NULL, &capacity, error, sizeof(error)) < 0);
     assert(strstr(error, "rule small"));
     config.model_limits[1].max_output_tokens = 0u;
     capacity = resolve_capacity(cache, &config, 0, "large", "codex");
@@ -379,13 +387,45 @@ main(void)
     assert(capacity.max_context_window_tokens == 872000u);
     assert(capacity.effective_context_window_derived);
     assert(capacity.effective_context_window_percent == 95u);
-    assert(capacity.hard_input_tokens == 828400u);
+    /* The normal working window is the default budget. The 872,000 maximum is
+     * permission to select more, not a default: crossing the normal window can
+     * move requests into a provider's higher price tier. */
+    assert(capacity.hard_input_tokens == 258400u);
     config.providers[1].auto_compact_input_tokens = SNAG_CONFIG_COMPACT_AUTO;
-    assert(snag_model_compact_threshold(&config.providers[1], &capacity) == 745560u);
-    /* The September 21 journals accepted 559,848 input tokens on this
-     * source; 232,591 must not compact merely for crossing the 272k normal
-     * working-window policy after its 95%/90% reductions. */
-    assert(UINT64_C(559848) < snag_model_compact_threshold(&config.providers[1], &capacity));
+    assert(snag_model_compact_threshold(&config.providers[1], &capacity) == 232560u);
+    /* The September 21 journals accepted 559,848 input tokens on this source.
+     * That shows the advertised maximum is not an enforcement boundary; it does
+     * not make the larger window the default budget. */
+    assert(UINT64_C(559848) > snag_model_compact_threshold(&config.providers[1], &capacity));
+    {
+        const struct snag_context_choice max_choice = {SNAG_CONTEXT_MODE_MAX, 0u};
+        const struct snag_context_choice token_choice = {SNAG_CONTEXT_MODE_TOKENS, 500000u};
+        const struct snag_context_choice over_choice = {SNAG_CONTEXT_MODE_TOKENS, 900000u};
+        const struct snag_context_choice reserve_choice = {SNAG_CONTEXT_MODE_TOKENS, 100000u};
+        struct snag_model_capacity chosen;
+        char choice_error[256] = {0};
+
+        /* An explicit operator selection reconciles the chosen window with the
+         * output reservation, the client percentage and the compaction budget. */
+        chosen = resolve_capacity_choice(&cache, &config, 1, "codex-context-only", "codex", &max_choice);
+        assert(chosen.context_window_tokens == 272000u);
+        assert(chosen.hard_input_tokens == 828400u);
+        assert(snag_model_compact_threshold(&config.providers[1], &chosen) == 745560u);
+        chosen = resolve_capacity_choice(&cache, &config, 1, "codex-context-only", "codex", &token_choice);
+        assert(chosen.hard_input_tokens == 475000u);
+        assert(snag_model_compact_threshold(&config.providers[1], &chosen) == 427500u);
+        /* Above the advertised maximum, absent a maximum, and smaller than the
+         * output reservation all fail before a request is built. */
+        assert(snag_model_capacity_resolve(&cache, &config, &config.providers[1],
+                "codex-context-only", "codex", &over_choice, &chosen,
+                choice_error, sizeof(choice_error)) < 0);
+        assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
+                "context-only", "openai", &max_choice, &chosen,
+                choice_error, sizeof(choice_error)) < 0);
+        assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
+                "org/model", "openai", &reserve_choice, &chosen,
+                choice_error, sizeof(choice_error)) < 0);
+    }
     {
         struct snag_model_capacity bigger;
         struct snag_model_limit_config *limit = &config.model_limits[0];
@@ -440,7 +480,7 @@ main(void)
     assert(snag_model_compact_threshold(&config.providers[0], &capacity) == 1u);
     config.model_limits[0].max_output_tokens = 100u;
     assert(snag_model_capacity_resolve(&cache, &config, &config.providers[0],
-               "org/model", "openai", &capacity, error, sizeof(error)) < 0);
+               "org/model", "openai", NULL, &capacity, error, sizeof(error)) < 0);
 
     config.model_limit_count = 0u;
     {

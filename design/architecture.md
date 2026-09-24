@@ -143,11 +143,13 @@ snapshots were recorded between a tool start and finish. Journal order remains
 unchanged; replay preserves the recorded result and its matching call identity.
 
 Capacity resolution keeps an advertised normal working window distinct from a
-larger maximum context on the same source. The maximum is the usable hard
-context unless explicit model-limit context selects another value; explicit
-input/output limits and learned lower ceilings still constrain it. Proactive
-compaction derives from that effective hard budget rather than treating the
-normal recommendation as a backend rejection boundary.
+larger maximum context on the same source. The normal window is the usable hard
+context unless explicit model-limit context selects another value, including the
+advertised maximum; explicit input/output limits and learned lower ceilings
+still constrain it. A maximum published without a normal window remains the
+fallback budget. Proactive compaction derives from that effective hard budget;
+the maximum stays selectable because exceeding the normal window is a
+price-tier change, not a backend rejection boundary.
 
 An over-budget request is not sent. Native Codex compaction or the existing
 Responses summary path runs first, and the rebuilt request must be recounted

@@ -267,10 +267,16 @@ change alone does not compact. If the selected model needs a smaller context,
 compaction runs through that model in bounded chunks. Exiting immediately after
 the selection, or after a failed or cancelled turn, keeps both the selection
 and completed tool results for resume. When a catalog advertises both a normal
-working window and a larger maximum context, the maximum is the hard-capacity
-basis; an explicit model-limit context can choose another value. This keeps
-normal provider policy from causing premature compaction on a route that
-advertises and accepts the larger window.
+working window and a larger maximum context, the normal window is the
+hard-capacity basis; an explicit model-limit context selects a larger value when
+wanted. A source that publishes only a maximum still uses it. The normal window
+is the provider's default, and requests above it can move to a higher price tier
+on routes that bill large input separately.
+`/context` sets the window for the session: `default` uses the advertised
+normal window, `max` the advertised maximum, and a number an explicit token
+count; the output reservation and compaction budget stay derived. The choice is
+recorded in the session log and restored on resume; during active work it ends
+the current response and rebuilds the turn under the new window.
 Model-limit rules can supply `reasoning_efforts = ["max", "high", "low", "none"]`
 when a provider omits effort choices, or an optional `image_tokens` value for a
 provider-documented per-image ceiling that differs from the built-in

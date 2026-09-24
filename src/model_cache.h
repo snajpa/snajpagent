@@ -92,7 +92,8 @@ const char *snag_model_best_effort(const struct snag_config *config, const char 
 
 int snag_model_capacity_resolve( const struct snag_model_cache *cache, const struct snag_config *config,
     const struct snag_provider_config *provider, const char *model,
-    const char *protocol, struct snag_model_capacity *capacity, char *error, size_t error_size);
+    const char *protocol, const struct snag_context_choice *choice,
+    struct snag_model_capacity *capacity, char *error, size_t error_size);
 const char *snag_capacity_source_name(enum snag_capacity_source source);
 uint64_t snag_model_compact_threshold( const struct snag_provider_config *provider,
     const struct snag_model_capacity *capacity);

@@ -162,6 +162,10 @@ static const struct snag_term_command commands[] = {
     {"/model PROVIDER/MODEL/EFFORT [save|s]", "select explicit provider/model/effort"},
     {"/config", "edit/reload configuration at a safe boundary"},
     {"/effort [LEVEL]", "show/set provider-defined effort (default means medium)"},
+    {"/context", "show the context window, its reserve and compaction budget"},
+    {"/context default", "use the provider's normal working window"},
+    {"/context max", "use the advertised maximum context"},
+    {"/context N", "use an explicit token window (N tokens)"},
     {"/state", "session state including goal and its actions"},
     {"/state goal [status|help]", "show goal section or this usage"},
     {"/state goal [set] TEXT", "start/reword goal; set accepts reserved first words"},
@@ -291,13 +295,13 @@ snag_app_record_model_accounting(struct app_state *app, enum snag_count_capabili
 }
 
 int
-snag_app_capacity_resolve(struct app_state *app, const struct snag_provider_config *provider,
-                         const char *model, struct snag_model_capacity *capacity,
-                         char *error, size_t error_size)
+snag_app_context_preview(struct app_state *app, const struct snag_provider_config *provider,
+                         const char *model, const struct snag_context_choice *choice,
+                         struct snag_model_capacity *capacity, char *error, size_t error_size)
 {
     int cache_rc;
 
-    if (!app || !provider || !model || !capacity)
+    if (!app || !provider || !model || !choice || !capacity)
         return snag_fail(error, error_size, EINVAL, "invalid model capacity selection");
     snag_model_cache_free(&app->model_cache);
     app->capacity_cache_error[0] = '\0';
@@ -305,9 +309,22 @@ snag_app_capacity_resolve(struct app_state *app, const struct snag_provider_conf
                                     sizeof(app->capacity_cache_error));
     if (cache_rc == 1) app->capacity_cache_error[0] = '\0';
     cache_rc = snag_model_capacity_resolve(&app->model_cache, app->config,
-        provider, model, snag_provider_catalog_protocol(provider), capacity, error, error_size);
+        provider, model, snag_provider_catalog_protocol(provider), choice, capacity, error, error_size);
     if (cache_rc == 0) apply_capacity_ceiling(app, provider, model, capacity);
     return cache_rc;
+}
+
+int
+snag_app_capacity_resolve(struct app_state *app, const struct snag_provider_config *provider,
+                         const char *model, struct snag_model_capacity *capacity,
+                         char *error, size_t error_size)
+{
+    struct snag_context_choice choice = {SNAG_CONTEXT_MODE_DEFAULT, 0u};
+
+    if (!app) return snag_fail(error, error_size, EINVAL, "invalid model capacity selection");
+    choice.mode = app->session.context_mode;
+    choice.tokens = app->session.context_tokens;
+    return snag_app_context_preview(app, provider, model, &choice, capacity, error, error_size);
 }
 
 static int
@@ -962,6 +979,11 @@ render_status(struct app_state *app)
         append_capacity_value(&text, "requested-output", capacity.max_output_tokens,
                               capacity.max_output_tokens) < 0 ||
         append_compact_threshold(&text, provider, &capacity) < 0) goto out;
+    if (app->session.context_mode == SNAG_CONTEXT_MODE_TOKENS) {
+        if (snag_buf_printf(&text, " · selection=tokens:%llu",
+                (unsigned long long)app->session.context_tokens) < 0) goto out;
+    } else if (app->session.context_mode == SNAG_CONTEXT_MODE_MAX &&
+               snag_buf_printf(&text, " · selection=max") < 0) goto out;
     if (capacity.effective_context_window_percent && snag_buf_printf(&text, " · effective=%u%%%s",
                        capacity.effective_context_window_percent, capacity.effective_context_window_derived ?
                            " (derived client policy)" : " (advertised)") < 0) goto out;
@@ -1946,6 +1968,137 @@ change_effort(struct app_state *app, const char *value, bool active)
     free(copy);
     return show_setting(app, "effort", app->session.default_effort);
 }
+
+static int
+report_context(struct app_state *app, const struct snag_provider_config *provider,
+               const struct snag_context_choice *choice)
+{
+    struct snag_model_capacity capacity;
+    struct snag_model_limit_config rule;
+    const struct snag_model_limit_config *rule_sources[3];
+    struct snag_buf text = {.max = 4096u};
+    char error[256] = {0};
+    uint64_t selected;
+    bool over_budget;
+    int rc = -1;
+
+    if (snag_app_context_preview(app, provider, app->session.default_model, choice, &capacity,
+                                 error, sizeof(error)) < 0)
+        return app_error(app, error[0] ? error : "context capacity could not be resolved");
+    selected = choice->mode == SNAG_CONTEXT_MODE_MAX ? capacity.max_context_window_tokens :
+        choice->mode == SNAG_CONTEXT_MODE_TOKENS ? choice->tokens : capacity.context_window_tokens;
+    if (snag_buf_printf(&text, "context for %s: %s (until changed)",
+            app->session.active_turn ? "next response in this turn" : "next turn",
+            choice->mode == SNAG_CONTEXT_MODE_MAX ? "max (advertised maximum)" :
+            choice->mode == SNAG_CONTEXT_MODE_TOKENS ? "explicit token window" :
+            "default (advertised working window)") < 0) goto out;
+    if (snag_buf_append(&text, "\nselected=", strlen("\nselected=")) < 0) goto out;
+    if (selected) {
+        if (snag_buf_printf(&text, "%llu", (unsigned long long)selected) < 0) goto out;
+    } else if (snag_buf_append(&text, "unknown", strlen("unknown")) < 0) {
+        goto out;
+    }
+    if (snag_buf_printf(&text, " tokens · reserve=%llu · effective=%u%%",
+            (unsigned long long)capacity.max_output_tokens,
+            capacity.effective_context_window_percent) < 0 ||
+        append_capacity_value(&text, "input-budget", capacity.hard_input_known,
+                              capacity.hard_input_tokens) < 0 ||
+        append_compact_threshold(&text, provider, &capacity) < 0) goto out;
+    if (choice->mode != SNAG_CONTEXT_MODE_DEFAULT &&
+        snag_config_resolve_limits(app->config, provider->name, app->session.default_model,
+                                   &rule, rule_sources) && rule.context_window_tokens &&
+        snag_buf_append(&text, "\nconfigured context rule is ignored by the session selection",
+                        strlen("\nconfigured context rule is ignored by the session selection")) < 0) goto out;
+    over_budget = capacity.hard_input_known && app->session.context_meter.valid &&
+        strcmp(app->session.context_meter.provider, provider->name) == 0 &&
+        strcmp(app->session.context_meter.model, app->session.default_model) == 0 &&
+        app->session.context_meter.input_tokens >= snag_model_compact_threshold(provider, &capacity);
+    if (over_budget && snag_buf_append(&text,
+            "\nthe next request compacts first: the measured input is over this budget",
+            strlen("\nthe next request compacts first: the measured input is over this budget")) < 0) goto out;
+    if (snag_buf_terminate(&text) < 0) goto out;
+    rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
+out: snag_buf_free(&text);
+    return rc;
+}
+
+static int
+change_context(struct app_state *app, const char *value, bool active)
+{
+    const struct snag_provider_config *provider = next_provider(app);
+    struct snag_context_choice choice = {SNAG_CONTEXT_MODE_DEFAULT, 0u};
+    struct snag_model_capacity capacity;
+    char error[256] = {0};
+    char *copy = NULL;
+    char *word = NULL;
+    char *end = NULL;
+    uint64_t tokens;
+
+    (void)active;
+    if (!provider)
+        return app_error(app, "selected provider is not present in the current configuration");
+    choice.mode = app->session.context_mode;
+    choice.tokens = app->session.context_tokens;
+    if (!value) return report_context(app, provider, &choice);
+    copy = snag_strdup_checked(value, SNAG_CONFIG_PATH_MAX);
+    if (!copy) return app_error(app, "context selector is too long");
+    word = copy;
+    while (*word && isspace((unsigned char)*word)) ++word;
+    end = word + strlen(word);
+    while (end > word && isspace((unsigned char)end[-1])) --end;
+    *end = '\0';
+    if (!*word) {
+        free(copy);
+        return report_context(app, provider, &choice);
+    }
+    if (strcmp(word, "default") == 0) {
+        choice = (struct snag_context_choice){SNAG_CONTEXT_MODE_DEFAULT, 0u};
+    } else if (strcmp(word, "max") == 0) {
+        choice = (struct snag_context_choice){SNAG_CONTEXT_MODE_MAX, 0u};
+    } else {
+        errno = 0;
+        tokens = strtoull(word, &end, 10);
+        if (errno != 0 || end == word || *end) {
+            free(copy);
+            return app_error(app, "context accepts default, max, or a token count");
+        }
+        choice = (struct snag_context_choice){SNAG_CONTEXT_MODE_TOKENS, tokens};
+        if (!snag_context_choice_valid(choice.mode, choice.tokens)) {
+            free(copy);
+            return app_error(app, "context token count must be between 1 and 4000000000");
+        }
+    }
+    free(copy);
+    /* Resolve the candidate before recording it: an impossible choice must not
+     * reach the session log, and the operator sees the reconciled reserve and
+     * compaction budget for the choice they made. */
+    if (snag_app_context_preview(app, provider, app->session.default_model, &choice, &capacity,
+                                 error, sizeof(error)) < 0)
+        return app_error(app, error[0] ? error : "context capacity could not be resolved");
+    if (choice.mode != app->session.context_mode || choice.tokens != app->session.context_tokens) {
+        if (commit_event(app, "context_selection_changed", json_pack("{s:s,s:I,s:s,s:I}",
+                "new_mode", snag_context_mode_name(choice.mode),
+                "new_tokens", (json_int_t)choice.tokens,
+                "old_mode", snag_context_mode_name(app->session.context_mode),
+                "old_tokens", (json_int_t)app->session.context_tokens), error, sizeof(error)) < 0)
+            return app_error(app, error[0] ? error : "context selection could not be saved");
+        app->session.context_mode = choice.mode;
+        app->session.context_tokens = choice.tokens;
+        /* A running turn keeps its own capacity copy. Refresh it first, then
+         * reuse the model-switch restart: the active response ends at a safe
+         * boundary and the turn is rebuilt under the new window with retained
+         * history and completed tool results. */
+        if (app->session.active_turn) {
+            if (app->turn_provider && app->turn_model &&
+                snag_app_capacity_resolve(app, app->turn_provider, app->turn_model,
+                                          &app->turn_capacity, error, sizeof(error)) < 0)
+                (void)app_warning(app, error[0] ? error : "turn context capacity could not be refreshed");
+            app->model_switch_requested = true;
+        }
+    }
+    return report_context(app, provider, &choice);
+}
+
 static int
 select_view(struct app_state *app, enum snag_render_view view, bool active)
 {
@@ -2464,6 +2617,10 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         return change_effort(app, NULL, active);
     if (strncmp(line, "/effort ", 8u) == 0)
         return change_effort(app, line + 8u, active);
+    if (strcmp(line, "/context") == 0)
+        return change_context(app, NULL, active);
+    if (strncmp(line, "/context ", 9u) == 0)
+        return change_context(app, line + 9u, active);
     if (strcmp(line, "/state") == 0 || strncmp(line, "/state ", 7u) == 0)
         return state_command(app, line, active);
     if (strncmp(line, "/goal", 5u) == 0 &&

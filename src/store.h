@@ -150,6 +150,10 @@ struct snag_session {
     char capacity_ceiling_model[SNAG_MODEL_MAX_BYTES];
     char capacity_ceiling_source_sha256[SNAG_SHA256_HEX_LEN + 1u];
     char default_effort[SNAG_EFFORT_MAX_BYTES];
+    /* Context-window selection for the selected model; durable through
+     * context_selection_changed and restored on resume. */
+    enum snag_context_mode context_mode;
+    uint64_t context_tokens;
     /* Empty means the process configuration's validated shell. A model-selected
      * absolute shell path is replayed from command_shell_changed. */
     char command_shell[SNAG_CONFIG_PATH_MAX + 1u];
@@ -302,5 +306,12 @@ int snag_session_commit(struct snag_session *session, const char *type, json_t *
 int snag_session_media(struct snag_session *session, const char *path, const char *mime,
                        int (*pump)(void *, unsigned int), void *opaque,
                        json_t **asset, char **retained_path, char *error, size_t error_size);
+
+/* Context-selection mode names are durable session-log values; the session
+ * store owns their parsing so replay and the application agree. */
+const char *snag_context_mode_name(enum snag_context_mode mode);
+/* 0 for a known mode name, -1 otherwise. */
+int snag_context_mode_parse(const char *name, enum snag_context_mode *mode);
+bool snag_context_choice_valid(enum snag_context_mode mode, uint64_t tokens);
 
 #endif

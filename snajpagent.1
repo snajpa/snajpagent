@@ -1360,6 +1360,25 @@ resolves to
 .B medium
 when used for a turn.
 .TP
+.BR /context " [default|max|N]"
+Show or set the context window for the selected model.  A bare
+.B /context
+reports the selection with the window, its output reservation, the effective
+client percentage and the auto-compaction budget.
+.B default
+uses the provider's advertised normal working window,
+.B max
+uses the advertised maximum, and an integer
+.I N
+selects an explicit total window of N tokens; it is refused above the
+advertised maximum or when the output reservation leaves no input.  The
+selection overrides a configured model-limit context for the session, is
+recorded in the session log, and is restored on resume.  The output
+reservation, client percentage and proactive compaction stay derived from the
+selected window, so shrinking it compacts before the next request.  During
+active work the command ends the current response and rebuilds the turn under
+the new window, retaining conversation and completed tool results.
+.TP
 .BR /nick " [" NICK "]"
 Show the agent and operator nicks, or rename the agent nick. The new nick is
 shared through IRC so other clients see lead/worker renames; the config file
@@ -2080,8 +2099,9 @@ Proactive input threshold.  Default:
 Auto uses 90% of the selected model's effective hard input budget, rounded
 down with a minimum of one token, after output reservation and safety limits.
 When one source advertises both a normal working window and a larger maximum
-context, the maximum supplies that hard budget; the normal value remains visible
-as provider policy.  An explicit
+context, the normal window supplies that hard budget; the maximum remains
+visible as a client ceiling that can be selected explicitly.  A source that
+publishes only a maximum still uses it.  An explicit
 .B context_window_tokens
 rule selects another context instead.  The threshold follows model/context
 changes and learned lower ceilings.  If capacity is unknown, it uses a labelled

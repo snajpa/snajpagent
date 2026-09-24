@@ -188,6 +188,11 @@ bool snag_app_measured_input(struct app_state *app, uint64_t *tokens);
 int snag_app_capacity_resolve(struct app_state *app, const struct snag_provider_config *provider,
                              const char *model, struct snag_model_capacity *capacity,
                              char *error, size_t error_size);
+/* Resolve one candidate context selection without recording it; /context uses
+ * this before the choice enters the session log. */
+int snag_app_context_preview(struct app_state *app, const struct snag_provider_config *provider,
+                             const char *model, const struct snag_context_choice *choice,
+                             struct snag_model_capacity *capacity, char *error, size_t error_size);
 void snag_app_record_model_accounting(struct app_state *app, enum snag_count_capability capability,
                                      uint64_t hard_input_tokens);
 int snag_app_help(struct app_state *app, const char *command);

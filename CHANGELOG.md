@@ -4,6 +4,18 @@
 
 ## Unreleased
 
+- Default the hard input budget to a provider's normal working window. An
+  advertised larger maximum context is a selectable client ceiling, not a
+  default; requests above the normal window can move to a higher provider price
+  tier. An explicit model-limit context still selects another value, and a
+  source that publishes only a maximum keeps using it.
+
+- Add `/context default|max|N`: select the context window for the session (the
+  provider's normal working window, its advertised maximum, or an explicit token
+  count) while the output reservation, client percentage and auto-compaction
+  budget stay derived from it. The selection is durable in the session log and
+  is restored on resume.
+
 - Start new sessions in the home directory and expose get_cwd and cd to models.
   Accept absolute and ./ paths in file, patch and command tools. Remove the
   workspace selector and workspace-filtered session operations; earlier session

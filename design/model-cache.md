@@ -308,18 +308,27 @@ Requests resolve their wire model before hashing; source bindings change when
 routing changes. Learned backend ceilings remain source/upstream-bound and may
 constrain several local models, but user-configured rules never leak between them.
 
-For Codex catalogs, the ordinary `context_window` remains visible as the
-provider's default working-window recommendation. When the same source also
-advertises `max_context_window`, that larger client ceiling supplies the hard
-context budget unless an explicit `model-limit` context selects another value;
-typed learned lower ceilings and explicit input/output limits still intersect
-it. This prevents ordinary policy guidance from masquerading as a route limit:
-a 272,000 normal window beside an 872,000 maximum no longer forces compaction
-at 232,560 after the route has accepted a larger request. An absent effective
-percentage derives a 95-percent Codex client policy at runtime. A generic
-provider that supplies only total context derives 90-percent headroom. Derived
-policy is visible but is not cached or described as a provider promise. Unknown
-output capacity omits `max_output_tokens` from Responses requests.
+For Codex catalogs, the ordinary `context_window` is the provider's default
+working window and the hard context budget. When the same source also advertises
+a larger `max_context_window`, that value is a client ceiling the operator may
+select explicitly with a `model-limit` context; it is not selected
+automatically, because a request above the normal window can move to a higher
+provider price tier. A source that publishes only a maximum still uses it as the
+fallback budget. Explicit input/output limits and typed learned lower ceilings
+still intersect the budget. An absent effective percentage derives a 95-percent
+Codex client policy at runtime. A generic provider that supplies only total
+context derives 90-percent headroom. Derived policy is visible but is not cached
+or described as a provider promise. Unknown output capacity omits
+`max_output_tokens` from Responses requests.
+
+A session may select its own basis with `/context default|max|N`. The choice is
+durable (`context_selection_changed` in the session log, restored on resume) and
+wins over a configured `model-limit` context for that session; explicit
+input/output limits, typed learned ceilings and the output reservation still
+intersect the selected window. `default` returns to the advertised normal
+window, `max` selects the advertised maximum, and a number selects an explicit
+token count that must fit the advertised maximum. Reserve, client percentage and
+proactive compaction stay derived from the selection.
 
 The provider setting `auto_compact_input_tokens` defaults to `auto`: proactive
 compaction uses 90% of the resolved hard input budget (rounded down, minimum

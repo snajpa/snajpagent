@@ -113,6 +113,19 @@ struct snag_execution_config {
     uint32_t tool_output_bytes, output_cache_bytes;
 };
 
+/* Session context-window selection for the selected model. Mode names are
+ * durable session-log values and must stay stable. */
+enum snag_context_mode {
+    SNAG_CONTEXT_MODE_DEFAULT = 0, /* the provider's normal working window */
+    SNAG_CONTEXT_MODE_MAX,         /* the advertised maximum client ceiling */
+    SNAG_CONTEXT_MODE_TOKENS       /* explicit operator token count */
+};
+
+struct snag_context_choice {
+    enum snag_context_mode mode;
+    uint64_t tokens; /* SNAG_CONTEXT_MODE_TOKENS only */
+};
+
 /* Configured/advertised limits use zero for unknown; positive values are known. */
 struct snag_model_limit_config {
     char provider[SNAG_CONFIG_PROVIDER_NAME_MAX + 1u];

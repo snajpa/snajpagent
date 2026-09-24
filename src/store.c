@@ -673,6 +673,41 @@ record_refusal(const struct snag_session *session, const char *detail)
     (void)fclose(log);
 }
 
+const char *
+snag_context_mode_name(enum snag_context_mode mode)
+{
+    switch (mode) {
+    case SNAG_CONTEXT_MODE_DEFAULT: return "default";
+    case SNAG_CONTEXT_MODE_MAX: return "max";
+    case SNAG_CONTEXT_MODE_TOKENS: return "tokens";
+    }
+    return "default";
+}
+
+int
+snag_context_mode_parse(const char *name, enum snag_context_mode *mode)
+{
+    if (!name || !mode) return -1;
+    if (strcmp(name, "default") == 0) *mode = SNAG_CONTEXT_MODE_DEFAULT;
+    else if (strcmp(name, "max") == 0) *mode = SNAG_CONTEXT_MODE_MAX;
+    else if (strcmp(name, "tokens") == 0) *mode = SNAG_CONTEXT_MODE_TOKENS;
+    else return -1;
+    return 0;
+}
+
+bool
+snag_context_choice_valid(enum snag_context_mode mode, uint64_t tokens)
+{
+    switch (mode) {
+    case SNAG_CONTEXT_MODE_DEFAULT:
+    case SNAG_CONTEXT_MODE_MAX:
+        return tokens == 0u;
+    case SNAG_CONTEXT_MODE_TOKENS:
+        return tokens > 0u && tokens <= SNAG_CONFIG_TOKEN_LIMIT_MAX;
+    }
+    return false;
+}
+
 static int
 apply_event(struct snag_session *session, const char *type, const json_t *data,
             uint64_t seq, bool live, char *error, size_t error_size)
@@ -1147,6 +1182,23 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !snag_text_valid(new_effort, 1u, sizeof(session->default_effort) - 1u) ||
             strcmp(old_effort, session->default_effort) != 0 || strcmp(old_effort, new_effort) == 0 ||
             !snag_strcpy(session->default_effort, sizeof(session->default_effort), new_effort)) goto invalid;
+    } else if (strcmp(type, "context_selection_changed") == 0) {
+        const char *old_mode = snag_json_string(data, "old_mode");
+        const char *new_mode = snag_json_string(data, "new_mode");
+        enum snag_context_mode parsed;
+        uint64_t old_tokens = 0u, new_tokens = 0u;
+
+        if (!snag_json_exact_keys(data, "new_mode new_tokens old_mode old_tokens") ||
+            snag_json_integer_u64(data, "old_tokens", &old_tokens) < 0 ||
+            snag_json_integer_u64(data, "new_tokens", &new_tokens) < 0 ||
+            !old_mode || !new_mode ||
+            snag_context_mode_parse(old_mode, &parsed) < 0 || parsed != session->context_mode ||
+            old_tokens != session->context_tokens ||
+            snag_context_mode_parse(new_mode, &parsed) < 0 ||
+            !snag_context_choice_valid(parsed, new_tokens) ||
+            (parsed == session->context_mode && new_tokens == session->context_tokens)) goto invalid;
+        session->context_mode = parsed;
+        session->context_tokens = new_tokens;
     } else if (strcmp(type, "command_shell_changed") == 0) {
         const char *shell = snag_json_string(data, "shell");
         if (!snag_json_exact_keys(data, "shell") ||

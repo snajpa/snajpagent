@@ -3441,6 +3441,106 @@ def test_provider_login_and_first_run():
                 assert b"hidden-first-run-key" not in child.buf
 
 
+def test_context_change_restarts_active_turn():
+    cache_path = Path(DOTDIR) / "models.json"
+    old_cache = cache_path.read_bytes() if cache_path.exists() else None
+    config = write_config("context-restart.ini",
+        "[agent]\nmodel=gpt-5.6-luna\nreasoning_effort=high\n"
+        "[provider first]\nbase_url=https://example.test/backend-api/codex\n")
+    child = Child(["--config", str(config), "--no-color"])
+    try:
+        child.wait(PROMPT.rstrip())
+        end = child.send_wait(b"/model cache\r", b"cache updated:", start=len(child.buf))
+        child.wait(PROMPT.rstrip(), start=end)
+        child.send_wait(b"slow\r", b"working slowly")
+        changed = child.send_wait(b"/context max\r", b"context for next response in this turn:")
+        complete = child.wait(b"fixture answer", start=changed)
+        child.exit_cleanly(complete)
+        log = events(child.session_id())
+        starts = [item for item in log if item["type"] == "response_started"]
+        interrupted = [item for item in log if item["type"] == "response_interrupted"]
+        assert len(starts) == 2, starts
+        assert starts[0]["data"]["turn_id"] == starts[1]["data"]["turn_id"]
+        assert len(interrupted) == 1 and interrupted[0]["data"]["reason"] == "control"
+        assert [item["type"] for item in log].count("turn_completed") == 1
+        changes = [item for item in log if item["type"] == "context_selection_changed"]
+        assert changes and changes[-1]["data"]["new_mode"] == "max"
+    finally:
+        child.kill()
+        if old_cache is None:
+            cache_path.unlink(missing_ok=True)
+        else:
+            cache_path.write_bytes(old_cache)
+
+
+def test_context_selection_command_and_resume():
+    cache_path = Path(DOTDIR) / "models.json"
+    old_cache = cache_path.read_bytes() if cache_path.exists() else None
+    config = write_config("context-selection.ini",
+        "[agent]\nmodel=gpt-5.6-luna\nreasoning_effort=high\n"
+        "[provider first]\nbase_url=https://example.test/backend-api/codex\n")
+    child = Child(["--config", str(config), "--no-color"])
+    try:
+        child.wait(PROMPT.rstrip())
+        end = child.send_wait(b"/model cache\r", b"cache updated:", start=len(child.buf))
+        child.wait(PROMPT.rstrip(), start=end)
+        # A real turn makes the session durable; an empty session is discarded
+        # on exit and prints no resume command.
+        child.send_wait_idle(b"ping\r", b"pong")
+        # The normal working window is the default budget.
+        end = child.send_wait(b"/context\r", b"context for next turn: default", start=len(child.buf))
+        end = child.wait(b"selected=272000", start=end)
+        end = child.wait(b"input-budget=258400", start=end)
+        end = child.wait(b"compact=232560 (auto)", start=end)
+        child.wait(PROMPT.rstrip(), start=end)
+        # max selects the advertised maximum; reserve and compaction budget stay
+        # derived from the chosen window.
+        end = child.send_wait(b"/context max\r", b"context for next turn: max", start=len(child.buf))
+        end = child.wait(b"selected=872000", start=end)
+        end = child.wait(b"input-budget=828400", start=end)
+        end = child.wait(b"compact=745560 (auto)", start=end)
+        child.wait(PROMPT.rstrip(), start=end)
+        # An explicit number is the total window; the reserve stays reserved.
+        end = child.send_wait(b"/context 500000\r", b"explicit token window", start=len(child.buf))
+        end = child.wait(b"input-budget=475000", start=end)
+        end = child.wait(b"compact=427500 (auto)", start=end)
+        child.wait(PROMPT.rstrip(), start=end)
+        # A value above the advertised maximum is refused and changes nothing.
+        end = child.send_wait(b"/context 900000\r", b"exceeds the advertised maximum",
+                              start=len(child.buf))
+        child.wait(PROMPT.rstrip(), start=end)
+        end = child.send_wait(b"/context\r", b"explicit token window", start=len(child.buf))
+        end = child.wait(b"input-budget=475000", start=end)
+        child.wait(PROMPT.rstrip(), start=end)
+        # default clears the session selection; keep max for the resume check.
+        end = child.send_wait(b"/context default\r", b"input-budget=258400", start=len(child.buf))
+        child.wait(PROMPT.rstrip(), start=end)
+        end = child.send_wait(b"/context max\r", b"compact=745560 (auto)", start=len(child.buf))
+        child.exit_cleanly(end)
+        session_id = child.session_id()
+        changes = [item for item in events(session_id)
+                   if item["type"] == "context_selection_changed"]
+        assert changes and changes[-1]["data"]["new_mode"] == "max"
+        assert changes[-1]["data"]["new_tokens"] == 0
+        # The durable event is picked up on resume.
+        resumed = Child(["--config", str(config), "--resume", session_id], PROMPT.rstrip())
+        try:
+            end = resumed.send_wait(b"/context\r", b"context for next turn: max",
+                                    start=len(resumed.buf))
+            end = resumed.wait(b"selected=872000", start=end)
+            end = resumed.wait(b"compact=745560 (auto)", start=end)
+            end = resumed.send_wait(b"/status\r", b"selection=max", start=end)
+            resumed.exit_now()
+        finally:
+            resumed.kill()
+    finally:
+        child.kill()
+        if old_cache is None:
+            cache_path.unlink(missing_ok=True)
+        else:
+            cache_path.write_bytes(old_cache)
+
+
 def test_compaction_policy_selection():
     before = session_ids()
     cache_path = Path(DOTDIR) / "models.json"
@@ -5847,6 +5947,8 @@ if __name__ == "__main__":
     test_uncached_typed_model_selection()
     test_provider_login_and_first_run()
     test_compaction_policy_selection()
+    test_context_selection_command_and_resume()
+    test_context_change_restarts_active_turn()
     test_provider_local_models()
     test_provider_local_models(False)
     test_model_cache_and_selection()
