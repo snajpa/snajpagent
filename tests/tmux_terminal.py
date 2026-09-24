@@ -6836,7 +6836,11 @@ def run_nested_command_cases(binary, root, modes=("nested", "nested-resume", "po
                     terminal.submit("/exit")
                     terminal.wait_dead()
                     log = read_events(state)[1]
-                    assert [e["data"]["control"] for e in event_list(log, "control_finished")] == [2, 1]
+                    finished = [e["data"]["control"] for e in event_list(log, "control_finished")]
+                    assert finished in ([2], [2, 1]), finished
+                    # /exit may stop the process before the queued /config runs;
+                    # the accepted command still has a durable request record.
+                    assert [e["data"]["control"] for e in event_list(log, "control_requested")] == [2, 1]
                     assert len(event_list(log, "turn_started")) == 1
                     print("active command", mode, "PASS", flush=True)
                     continue
