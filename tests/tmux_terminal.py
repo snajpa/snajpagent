@@ -6725,7 +6725,9 @@ def run_goal_recovery_cases(binary, root, provider, environment):
                 terminal.submit("fresh recovery steer")
             if mode == "cancel":
                 screen = terminal.capture().rsplit("Goal active; retrying", 1)[-1]
-                assert "»" not in screen, "retry advertised a steer prompt before response.created"
+                # A prior response already offered steering; automatic recovery
+                # retains that composer even before the next response.created.
+                assert "»" in screen, "recovery dropped the offered steer composer"
                 terminal.send_key("C-c")
                 terminal.wait("Goal paused at the current turn boundary")
                 before = len(requests)
