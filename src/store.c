@@ -2476,25 +2476,30 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
             break;
         }
         read_off += got;
-        for (ssize_t i = 0; i < got; ++i) {
+        for (ssize_t i = 0; i < got;) {
             json_t *event;
             const char *type;
             json_t *data;
             char jerr[192];
 
-            if (chunk[i] != '\n') {
-                if (snag_buf_putc(&line, chunk[i]) < 0) {
-                    snag_errorf(error, error_size, "event line exceeds 16 MiB");
-                    goto out;
-                }
-                continue;
+            /* Parse whole records from the read chunk; only records crossing
+             * chunk boundaries need an owned buffer. */
+            const unsigned char *newline = memchr(chunk + i, '\n', (size_t)(got - i));
+            size_t span = newline ? (size_t)(newline - (chunk + i)) : (size_t)(got - i);
+            if (span && (!newline || line.len) && snag_buf_append(&line, chunk + i, span) < 0) {
+                snag_errorf(error, error_size, "event line exceeds 16 MiB");
+                goto out;
             }
-            if (!line.len) {
+            if (!newline) break;
+            const unsigned char *record = line.len ? line.data : chunk + i;
+            size_t record_len = line.len ? line.len : span;
+            i += (ssize_t)span;
+            if (!record_len) {
                 (void)snag_fail(error, error_size, EINVAL,
                     "blank event line at sequence %llu", (unsigned long long)seq);
                 goto out;
             }
-            event = snag_json_load_canonical(line.data, line.len, jerr, sizeof(jerr));
+            event = snag_json_load_canonical(record, record_len, jerr, sizeof(jerr));
             if (!event) {
                 snag_errorf(error, error_size, "corrupt event %llu: %s", (unsigned long long)seq, jerr);
                 goto out;
@@ -2516,6 +2521,7 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
             json_decref(event);
             ++seq;
             snag_buf_reset(&line);
+            ++i;
         }
     }
     if (line.len && (boundary >= 0 || tail_policy == SNAG_TAIL_REJECT)) {

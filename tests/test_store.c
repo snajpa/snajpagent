@@ -1330,6 +1330,33 @@ main(void)
     test_legacy_journal(&store, cwd);
 
     test_many_queued_turns(&store,cwd);
+    {
+        /* Replay a canonical line across several 8 KiB read boundaries,
+         * then reject a blank line just after its final newline. */
+        struct snag_session long_line;
+        char text[3u * 8192u + 67u];
+        size_t count = 0u;
+
+        memset(text, 'y', sizeof(text) - 1u);
+        text[sizeof(text) - 1u] = '\0';
+        snag_session_init(&long_line);
+        assert(snag_session_create(&store, &long_line, cwd, "default",
+            "gpt-5.5-2026-04-23", "default", error, sizeof(error)) == 0);
+        json_t *started = turn_started_data(&long_line, "55555555555555555555555555555555");
+        assert(snag_json_set_new(started, "text", json_string(text)) == 0);
+        commit_event(&long_line, "turn_started", started);
+        assert(long_line.log_end > (int64_t)(3u * 8192u));
+        assert(snag_session_each_event(&long_line, count_event, &count, error, sizeof(error)) == 0);
+        assert(count == 2u);
+        assert(lseek(long_line.log_fd, 0, SEEK_END) == long_line.log_end);
+        assert(write(long_line.log_fd, "\n", 1u) == 1);
+        ++long_line.log_end;
+        count = 0u;
+        assert(snag_session_each_event(&long_line, count_event, &count, error, sizeof(error)) < 0);
+        assert(count == 2u);
+        assert(strstr(error, "blank event line") != NULL);
+        snag_session_close(&long_line);
+    }
     snag_store_close(&store);
     free(temp);
     puts("test_store: ok");
