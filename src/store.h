@@ -182,6 +182,12 @@ struct snag_session {
     struct snag_buf *pending_log; /* New sessions stay in memory until input. */
     int64_t log_end;
     uint64_t next_seq;
+    /* An optional in-process consumer of newly committed events. The durable
+     * state remains authoritative; a failed consumer must invalidate itself,
+     * not turn a successfully synced commit into a failed write. */
+    void (*on_commit)(void *, const struct snag_session *, uint64_t, const char *, const json_t *);
+    void (*on_commit_free)(void *);
+    void *on_commit_opaque;
     uint64_t turn_count;
     uint64_t last_time_ms;
     uint64_t compact_seq;

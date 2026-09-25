@@ -5297,6 +5297,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
                                selected_provider->name, new_model, new_effort, error, sizeof(error)) < 0) {
             goto fail;
         }
+        snag_context_start_new(&app.session);
         app.turn_model = app.session.default_model;
         app.turn_effort = resolve_effort(app.session.default_effort);
         app.turn_provider = selected_provider;

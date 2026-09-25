@@ -3758,6 +3758,33 @@ cache_policy(const struct snag_context_projection *projection)
 }
 
 static void
+test_live_projection_without_journal_read(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session;
+    struct snag_context_projection first = {0}, next = {0};
+    json_t *steering = json_array();
+    const char *turn = "c1000000000000000000000000000001";
+    const char *response = "c1000000000000000000000000000002";
+    create_session(store, &session, cwd, "medium");
+    snag_context_start_new(&session);
+    commit_event(&session, "turn_started", turn_started(turn, 1u, "live context", cwd, NULL));
+    int journal = session.log_fd;
+    session.log_fd = -1; /* Even the first live projection must not replay. */
+    build_context(&session, 1u, steering, NULL, &first);
+    session.log_fd = journal;
+    assert(session.on_commit != NULL);
+    commit_event(&session, "response_started", response_started(turn, response, NULL));
+    session.log_fd = -1; /* A live projection must not consult the journal. */
+    build_context(&session, 2u, steering, NULL, &next);
+    session.log_fd = journal;
+    assert(next.create_request.value && next.model_input.value);
+    snag_context_projection_free(&first);
+    snag_context_projection_free(&next);
+    json_decref(steering);
+    snag_session_close(&session);
+}
+
+static void
 test_host_fact_cache_prefix(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
@@ -3992,6 +4019,7 @@ main(int argc, char **argv)
     struct snag_context_projection projection = {0};
     struct snag_instruction_set instructions = {0};
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
+    test_live_projection_without_journal_read(&store, cwd);
     test_host_snapshot_replay(&store, cwd);
     test_host_fact_cache_prefix(&store, cwd);
     test_office_commands_export(&store, cwd);

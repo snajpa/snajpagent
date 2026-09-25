@@ -57,6 +57,88 @@ struct context_builder {
     bool compact_allow_oversized_first;
 };
 
+/* The journal is a recovery record, not the live provider's read model.
+ * A resume constructs this view once; new committed events extend it. */
+struct context_cache {
+    struct context_builder view;
+    json_t *pending;
+    json_t *steering_snapshot;
+    uint64_t compact_seq, rebase_seq;
+    char scope[SNAG_SHA256_HEX_LEN + 1u];
+    bool invalid;
+};
+
+static void
+context_builder_release(struct context_builder *builder)
+{
+    json_decref(builder->call_ids);
+    json_decref(builder->tools);
+    json_decref(builder->request_input);
+    json_decref(builder->tool_feedback);
+    json_decref(builder->deferred_input);
+    json_decref(builder->deferred_irc);
+    json_decref(builder->input_timing);
+    json_decref(builder->last_host_context);
+}
+
+static void
+context_cache_free(void *opaque)
+{
+    struct context_cache *cache = opaque;
+    if (!cache) return;
+    context_builder_release(&cache->view);
+    json_decref(cache->pending);
+    json_decref(cache->steering_snapshot);
+    free(cache);
+}
+
+static void
+context_cache_commit(void *opaque, const struct snag_session *session, uint64_t seq,
+                     const char *type, const json_t *data)
+{
+    struct context_cache *cache = opaque;
+    if (cache->invalid) return;
+    json_t *entry = json_pack("{s:I,s:s,s:O,s:I,s:s,s:b}",
+        "seq", (json_int_t)seq, "type", type, "data", data,
+        "time", (json_int_t)session->last_time_ms, "turn", session->active_turn_id,
+        "active", session->active_turn);
+    if (!entry || json_array_append(cache->pending, entry) < 0)
+        cache->invalid = true; /* Never misreport a successful durable commit. */
+    json_decref(entry);
+}
+
+static struct context_cache *
+context_cache_new(void)
+{
+    struct context_cache *cache = calloc(1u, sizeof(*cache));
+    if (!cache) return NULL;
+    cache->pending = json_array();
+    cache->steering_snapshot = json_array();
+    cache->view.request_input = json_array();
+    cache->view.tool_feedback = json_array();
+    cache->view.deferred_input = json_array();
+    cache->view.input_timing = json_array();
+    if (!cache->pending || !cache->steering_snapshot || !cache->view.request_input ||
+        !cache->view.tool_feedback || !cache->view.deferred_input || !cache->view.input_timing) {
+        context_cache_free(cache);
+        return NULL;
+    }
+    return cache;
+}
+
+void
+snag_context_start_new(struct snag_session *session)
+{
+    /* session_created carries no provider conversation; subsequent committed
+     * events feed this view, so a new live session never reads the journal. */
+    if (!session || session->on_commit || session->next_seq != 2u) return;
+    struct context_cache *cache = context_cache_new();
+    if (!cache) return; /* Allocation failure retains the durable slow path. */
+    session->on_commit = context_cache_commit;
+    session->on_commit_free = context_cache_free;
+    session->on_commit_opaque = cache;
+}
+
 void
 snag_context_projection_free(struct snag_context_projection *projection)
 {
@@ -2027,6 +2109,117 @@ snag_context_cache_key(const struct snag_session *session, const char *provider,
     (void)snprintf(out, SNAG_CACHE_KEY_LEN + 1u, "%.32s", digest);
 }
 
+/* Copy the event-derived suffix into a fresh request. Input timing entries
+ * reference message objects in that suffix, so rebind those references to the
+ * copies rather than accidentally changing the cached message on admission. */
+static int
+context_copy_events(struct context_builder *dest, const struct context_builder *source, size_t start)
+{
+    dest->recovery_index = source->recovery_index;
+    dest->recovery_count = source->recovery_count;
+    dest->recovery_first_ms = source->recovery_first_ms;
+    dest->event_time_ms = source->event_time_ms;
+    dest->deferred_irc_seq = source->deferred_irc_seq;
+    dest->steering_seen = source->steering_seen;
+    dest->active_turn = source->active_turn;
+    dest->input_timed = source->input_timed;
+    dest->tool_result_bytes = source->tool_result_bytes;
+    memcpy(dest->active_turn_id, source->active_turn_id, sizeof(dest->active_turn_id));
+    if (source->call_ids && !(dest->call_ids = json_deep_copy(source->call_ids))) return -1;
+    if (source->deferred_irc && !(dest->deferred_irc = json_deep_copy(source->deferred_irc))) return -1;
+    if (source->last_host_context && !(dest->last_host_context = json_deep_copy(source->last_host_context))) return -1;
+    json_t *feedback = json_deep_copy(source->tool_feedback);
+    json_t *deferred = json_deep_copy(source->deferred_input);
+    if (!feedback || !deferred) { json_decref(feedback); json_decref(deferred); return -1; }
+    json_decref(dest->tool_feedback);
+    json_decref(dest->deferred_input);
+    dest->tool_feedback = feedback;
+    dest->deferred_input = deferred;
+    for (size_t i = start; i < json_array_size(source->request_input); ++i) {
+        if ((i - start) % 128u == 0u && dest->control && dest->control->cancelled &&
+            dest->control->cancelled(dest->control->opaque))
+            return snag_fail(NULL, 0u, ECANCELED, "context preparation cancelled");
+        json_t *item = json_deep_copy(json_array_get(source->request_input, i));
+        if (!item || json_array_append(dest->request_input, item) < 0) { json_decref(item); return -1; }
+        json_decref(item);
+    }
+    for (size_t i = 0u; i < json_array_size(source->input_timing); ++i) {
+        json_t *original = json_array_get(source->input_timing, i);
+        json_t *entry = json_deep_copy(original);
+        if (!entry) return -1;
+        json_t *message = json_object_get(original, "message");
+        for (size_t j = start; j < json_array_size(source->request_input); ++j) {
+            if (json_array_get(source->request_input, j) != message) continue;
+            json_t *copy = json_array_get(dest->request_input,
+                dest->base_request_count + j - start);
+            if (json_object_set(entry, "message", copy) < 0) { json_decref(entry); return -1; }
+            break;
+        }
+        if (json_array_append(dest->input_timing, entry) < 0) { json_decref(entry); return -1; }
+        json_decref(entry);
+    }
+    return 0;
+}
+
+static int
+context_cache_update(struct context_cache *cache, struct snag_session *session,
+                     const struct snag_instruction_set *instructions, const json_t *steering,
+                     const struct snag_context_control *control, bool networked,
+                     char *error, size_t error_size)
+{
+    struct context_builder *view = &cache->view;
+    view->session = session;
+    view->continuation_scope = cache->scope[0] ? cache->scope : NULL;
+    view->instructions = instructions;
+    view->steering = steering;
+    view->control = control;
+    view->networked = networked;
+    if (!strcmp(view->target_turn_id, session->active_turn_id) && cache->steering_snapshot) {
+        if (json_array_size(steering) < json_array_size(cache->steering_snapshot)) return -1;
+        for (size_t i = 0u; i < json_array_size(cache->steering_snapshot); ++i)
+            if (!json_equal(json_array_get(steering, i),
+                            json_array_get(cache->steering_snapshot, i))) return -1;
+    }
+    if (strcmp(view->target_turn_id, session->active_turn_id)) {
+        memcpy(view->target_turn_id, session->active_turn_id, sizeof(view->target_turn_id));
+        view->steering_seen = 0u;
+    }
+    for (size_t i = 0u; i < json_array_size(cache->pending); ++i) {
+        const json_t *entry = json_array_get(cache->pending, i);
+        struct snag_session state = {0};
+        size_t before = json_array_size(view->request_input);
+        const char *turn = snag_json_string(entry, "turn");
+        const char *type = snag_json_string(entry, "type");
+        if (!turn || !type || !snag_strcpy(state.active_turn_id, sizeof(state.active_turn_id), turn))
+            return -1;
+        state.active_turn = json_is_true(json_object_get(entry, "active"));
+        state.last_time_ms = (uint64_t)json_integer_value(json_object_get(entry, "time"));
+        if (context_event(view, &state, (uint64_t)json_integer_value(json_object_get(entry, "seq")),
+                          type, json_object_get(entry, "data"), error, error_size) < 0) return -1;
+        /* Images depend on a separate file that can disappear between turns.
+         * Check only new items, never rescan the accumulated conversation. */
+        for (size_t j = before; j < json_array_size(view->request_input); ++j) {
+            const json_t *item = json_array_get(view->request_input, j);
+            const json_t *parts = json_object_get(item, "content");
+            for (size_t k = 0u; k < json_array_size(parts); ++k) {
+                const char *part_type = snag_json_string(json_array_get(parts, k), "type");
+                if (part_type && !strcmp(part_type, "input_image")) {
+                    cache->invalid = true;
+                    return -1;
+                }
+            }
+        }
+    }
+    json_t *snapshot = json_deep_copy(steering);
+    if (!snapshot || json_array_clear(cache->pending) < 0) { json_decref(snapshot); return -1; }
+    json_decref(cache->steering_snapshot);
+    cache->steering_snapshot = snapshot;
+    view->instructions = NULL;
+    view->steering = NULL;
+    view->control = NULL;
+    return 0;
+}
+
 int
 snag_context_build(struct snag_session *session, const char *model, const char *effort, unsigned int cycle,
                   const json_t *steering, uint64_t max_output_tokens, bool max_output_known,
@@ -2172,7 +2365,67 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             if (install_rc < 0) goto out;
             if (install_rc == 1) builder.compact_seq = 0u;
         }
-        if (snag_session_each_event(session, context_event, &builder, error, error_size) < 0) goto out;
+        struct context_cache *cache = session->on_commit == context_cache_commit ?
+            session->on_commit_opaque : NULL;
+        if (cache && !cache->scope[0] && continuation_scope &&
+            !snag_strcpy(cache->scope, sizeof(cache->scope), continuation_scope)) cache->invalid = true;
+        if (cache && (cache->invalid || cache->compact_seq != session->compact_seq ||
+            cache->rebase_seq != session->context_rebase_seq ||
+            strcmp(cache->scope, continuation_scope ? continuation_scope : ""))) {
+            context_cache_free(cache);
+            session->on_commit = NULL;
+            session->on_commit_free = NULL;
+            session->on_commit_opaque = NULL;
+            cache = NULL;
+        }
+        if (control && control->cancelled && control->cancelled(control->opaque)) {
+            (void)snag_fail(error, error_size, ECANCELED, "context preparation cancelled");
+            goto out;
+        }
+        bool used_cache = false;
+        if (cache) {
+            errno = 0;
+            int update = context_cache_update(cache, session, instructions, steering,
+                                              control, builder.networked, error, error_size);
+            if (update < 0 && errno == ECANCELED) {
+                cache->invalid = true;
+                goto out;
+            }
+            if (update == 0) {
+                if (context_copy_events(&builder, &cache->view, 0u) < 0) goto out;
+                used_cache = true;
+            }
+        }
+        if (!used_cache) {
+            if (cache) {
+                context_cache_free(cache);
+                session->on_commit = NULL;
+                session->on_commit_free = NULL;
+                session->on_commit_opaque = NULL;
+            }
+            if (snag_session_each_event(session, context_event, &builder, error, error_size) < 0) goto out;
+            /* Retained images are resolved against separate media files on each
+             * request; a cached encoded image would mask a removed asset. */
+            cache = snag_media_request_has_images(builder.request_input) ? NULL : context_cache_new();
+            if (cache) {
+                json_decref(cache->steering_snapshot);
+                cache->steering_snapshot = json_deep_copy(steering);
+                cache->compact_seq = session->compact_seq;
+                cache->rebase_seq = session->context_rebase_seq;
+                if (cache->pending && cache->steering_snapshot && cache->view.request_input && cache->view.tool_feedback &&
+                    cache->view.deferred_input && cache->view.input_timing &&
+                    snag_strcpy(cache->scope, sizeof(cache->scope), continuation_scope ? continuation_scope : "") &&
+                    context_copy_events(&cache->view, &builder, builder.base_request_count) == 0) {
+                    cache->view.compact_seq = builder.compact_seq;
+                    cache->view.compact_walk_seq = builder.compact_walk_seq;
+                    memcpy(cache->view.target_turn_id, builder.target_turn_id,
+                           sizeof(cache->view.target_turn_id));
+                    session->on_commit = context_cache_commit;
+                    session->on_commit_free = context_cache_free;
+                    session->on_commit_opaque = cache;
+                } else context_cache_free(cache);
+            }
+        }
     }
     if (!builder.active_turn || builder.steering_seen != json_array_size(steering) ||
         builder.steering_seen != admitted_steering_count(session)) {

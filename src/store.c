@@ -211,6 +211,7 @@ free_session_state(struct snag_session *session)
 void
 snag_session_close(struct snag_session *session)
 {
+    if (session->on_commit_free) session->on_commit_free(session->on_commit_opaque);
     if (session->log_fd >= 0) (void)close(session->log_fd);
     if (session->lock_fd >= 0) (void)close(session->lock_fd);
     if (session->dir_fd >= 0) (void)close(session->dir_fd);
@@ -2684,7 +2685,6 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
         append_attempted = true;
         rc = snag_session_append(&staged, type, data, written_seq, error, error_size);
     }
-    json_decref(data);
     if (rc < 0) {
         if (append_attempted) ++session->write_failures;
         if (staged.append_rollback_pending) {
@@ -2695,7 +2695,10 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
     } else {
         free_session_state(session);
         *session = staged;
+        if (session->on_commit) session->on_commit(session->on_commit_opaque,
+            session, session->next_seq - 1u, type, data);
     }
+    json_decref(data);
     return rc;
 }
 
