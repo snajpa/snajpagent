@@ -168,6 +168,13 @@ continue after recovered work, while paused queues need `/next` and take priorit
 over goal work. Resume shows retained public history and continues unfinished
 turns from saved input and tool results; commands with uncertain outcomes are
 reported rather than restarted.
+The versioned session journal stores state and provider-context checkpoints
+inside `events.jsonl`. Resume validates the latest checkpoint and its recent
+suffix. Older long journals need one initial migration scan, while explicit requests
+for older history still read the relevant records. A corrupt checkpoint is
+reported instead of triggering an unnoticed full-journal rebuild. Successful
+compaction keeps its summary and uncovered continuation, not the covered
+conversation or completed tool results.
 
 ### Attach files and use voice
 

@@ -175,6 +175,9 @@ struct snag_session {
     json_t *pending_input; /* Accepted direct input awaiting turn preparation. */
     json_t *active_instructions; /* Original path metadata for same-turn recovery. */
     json_t *response_public; /* Reconstructed public prefix of the current response. */
+    /* The one-file journal checkpoint's persisted provider view is consumed
+     * once on resume. Live checkpoint encoding is supplied by context.c. */
+    json_t *checkpoint_context, *checkpoint_state;
     size_t response_public_bytes;
     int dir_fd;
     int log_fd;
@@ -182,12 +185,17 @@ struct snag_session {
     struct snag_buf *pending_log; /* New sessions stay in memory until input. */
     int64_t log_end;
     uint64_t next_seq;
+    int64_t checkpoint_offset;
+    uint64_t checkpoint_seq;
+    bool checkpoint_has_context;
+    unsigned int format_version;
     /* An optional in-process consumer of newly committed events. The durable
      * state remains authoritative; a failed consumer must invalidate itself,
      * not turn a successfully synced commit into a failed write. */
     void (*on_commit)(void *, const struct snag_session *, uint64_t, const char *, const json_t *);
     void (*on_commit_free)(void *);
     void *on_commit_opaque;
+    json_t *(*on_checkpoint)(void *, const struct snag_session *);
     uint64_t turn_count;
     uint64_t last_time_ms;
     uint64_t compact_seq;
@@ -309,9 +317,14 @@ bool snag_session_pending_steering_unadmitted(const struct snag_session *);
 int snag_process_output_decode(const json_t *data, struct snag_buf *bytes);
 int snag_session_each_event_since(struct snag_session *, const struct snag_process_state *,
                                   snag_session_event_fn, void *, char *, size_t);
+/* Replay only the suffix after an embedded checkpoint's pre-event state. */
+int snag_session_each_event_from_checkpoint(struct snag_session *, const json_t *,
+                                            snag_session_event_fn, void *, char *, size_t);
 
 int snag_session_commit(struct snag_session *session, const char *type, json_t *data, uint64_t *written_seq,
                        char *error, size_t error_size);
+/* One indexed checkpoint record in events.jsonl; never a second session file. */
+int snag_session_checkpoint(struct snag_session *, char *error, size_t error_size);
 
 int snag_session_media(struct snag_session *session, const char *path, const char *mime,
                        int (*pump)(void *, unsigned int), void *opaque,

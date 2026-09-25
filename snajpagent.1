@@ -1873,6 +1873,17 @@ leave the interactive session open; use
 to retry.  Accepted requests survive a process restart.  Compaction changes
 model context and preserves the append-only local log.
 .PP
+The versioned session checkpoint is a record in the same journal.  It stores
+both recoverable session state and the materialized provider conversation, with
+the summary and only the uncovered continuation after successful compaction.
+On resume, the final complete journal record locates the latest checkpoint;
+recovery validates that record and the recent suffix.  Format-2 and format-3
+sessions with a long history require one initial scan to gain an indexed checkpoint, without
+rewriting old history.  A damaged referenced checkpoint stops recovery with an
+error rather than silently starting a full-history replay.  Explicit requests
+for old history still read those older records.  The session lock, metadata and
+retained media are not alternate checkpoint files.
+.PP
 If compaction leaves only instructions, outgoing requests include a labelled
 host continuation so gateways can keep a nonempty conversation input.  It adds
 no user instruction or approval and does not change saved goal state.  Failed

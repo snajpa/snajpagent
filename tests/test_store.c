@@ -172,6 +172,21 @@ count_event(void *opaque, const struct snag_session *state,
     return 0;
 }
 
+static int
+count_cursor_event(void *opaque, const struct snag_session *state,
+                   uint64_t seq, const char *type, const json_t *data,
+                   char *error, size_t error_size)
+{
+    (void)state;
+    (void)seq;
+    (void)type;
+    (void)data;
+    (void)error;
+    (void)error_size;
+    ++*(size_t *)opaque;
+    return 0;
+}
+
 static void
 legacy_event(int fd, const char *session_id, uint64_t seq, char hash[SNAG_SHA256_HEX_LEN + 1u],
              const char *type, json_t *data)
@@ -306,6 +321,126 @@ test_pending_session(struct snag_store *store, const char *cwd)
     assert(close(history) == 0);
     id[8] = '\0';
     assert(snag_session_delete(store, &session, id, NULL, error, sizeof(error)) == 0);
+    snag_session_close(&session);
+}
+
+static void
+test_one_file_checkpoint(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session;
+    char error[256], id[SNAG_ID_HEX_LEN + 1u];
+    snag_session_init(&session);
+    assert(snag_session_prepare(&session, cwd, "default", "model", "default",
+        error, sizeof(error)) == 0);
+    assert(snag_session_persist(store, &session, error, sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+    for (unsigned int i = 0u; i < 130u; ++i) {
+        const char *old = i % 2u ? "high" : "default";
+        const char *next = i % 2u ? "default" : "high";
+        commit_event(&session, "effort_changed",
+            checked_json(json_pack("{s:s,s:s}", "old_effort", old, "new_effort", next)));
+    }
+    assert(session.checkpoint_seq && session.checkpoint_offset > 0);
+    /* A managed-process cursor starts after the checkpoint and verifies its
+     * own hash chain without replaying or assuming a zero checkpoint pointer. */
+    struct snag_process_state cursor = {0};
+    cursor.log_offset = (uint64_t)session.log_end;
+    cursor.log_seq = session.next_seq;
+    memcpy(cursor.log_hash, session.prev_sha256, sizeof(cursor.log_hash));
+    commit_event(&session, "effort_changed",
+        checked_json(json_pack("{s:s,s:s}", "old_effort", "default",
+                               "new_effort", "high")));
+    size_t tail_count = 0u;
+    assert(snag_session_each_event_since(&session, &cursor, count_cursor_event,
+        &tail_count, error, sizeof(error)) == 0 && tail_count == 1u);
+    commit_event(&session, "effort_changed",
+        checked_json(json_pack("{s:s,s:s}", "old_effort", "high",
+                               "new_effort", "default")));
+    assert(faccessat(session.dir_fd, "checkpoint.json", F_OK, 0) < 0 && errno == ENOENT);
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(session.checkpoint_seq && strcmp(session.default_effort, "default") == 0);
+    /* The recovered state and context come from one checkpoint record, not a
+     * whole-file verification pass; old prefix corruption is found only by an
+     * explicit full-history request. Restore this fixture's byte afterwards. */
+    unsigned char original;
+    assert(pread(session.log_fd, &original, 1u, 0) == 1);
+    unsigned char changed = original == 'X' ? 'Y' : 'X';
+    int writer = openat(session.dir_fd, "events.jsonl", O_WRONLY | O_CLOEXEC);
+    assert(writer >= 0 && pwrite(writer, &changed, 1u, 0) == 1);
+    assert(fdatasync(writer) == 0 && close(writer) == 0);
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(session.checkpoint_seq && strcmp(session.default_effort, "default") == 0);
+    writer = openat(session.dir_fd, "events.jsonl", O_WRONLY | O_CLOEXEC);
+    assert(writer >= 0 && pwrite(writer, &original, 1u, 0) == 1);
+    assert(fdatasync(writer) == 0 && close(writer) == 0);
+    /* A broken referenced checkpoint is a hard error, never a quiet prefix
+     * scan. An incomplete trailing append is separately recoverable. */
+    int64_t checkpoint = session.checkpoint_offset;
+    unsigned char checkpoint_byte;
+    assert(pread(session.log_fd, &checkpoint_byte, 1u, checkpoint) == 1);
+    writer = openat(session.dir_fd, "events.jsonl", O_WRONLY | O_CLOEXEC);
+    assert(writer >= 0 && pwrite(writer, &changed, 1u, checkpoint) == 1);
+    assert(fdatasync(writer) == 0 && close(writer) == 0);
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) < 0);
+    snag_session_close(&session);
+    int dir = openat(store->sessions_fd, id, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    assert(dir >= 0);
+    int log = openat(dir, "events.jsonl", O_WRONLY | O_CLOEXEC);
+    assert(log >= 0 && pwrite(log, &checkpoint_byte, 1u, checkpoint) == 1);
+    assert(fdatasync(log) == 0);
+    assert(close(log) == 0 && close(dir) == 0);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    int64_t complete = session.log_end;
+    assert(write(session.log_fd, "{incomplete", 11u) == 11);
+    assert(fdatasync(session.log_fd) == 0);
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(session.log_end == complete && lseek(session.log_fd, 0, SEEK_END) == complete);
+    snag_session_close(&session);
+}
+
+static json_t *
+large_checkpoint_context(void *opaque, const struct snag_session *session)
+{
+    (void)opaque;
+    (void)session;
+    char *payload = malloc(17u * 1024u * 1024u);
+    assert(payload);
+    memset(payload, 'x', 17u * 1024u * 1024u);
+    json_t *item = json_stringn(payload, 17u * 1024u * 1024u);
+    free(payload);
+    return checked_json(json_pack("{s:o}", "payload", item));
+}
+
+static void
+test_large_embedded_checkpoint(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session;
+    char id[SNAG_ID_HEX_LEN + 1u], error[256];
+    snag_session_init(&session);
+    assert(snag_session_create(store, &session, cwd, "default", "model", "medium",
+                               error, sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+    session.on_checkpoint = large_checkpoint_context;
+    assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+    session.on_checkpoint = NULL;
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(session.checkpoint_has_context &&
+        json_string_length(json_object_get(session.checkpoint_context, "payload")) ==
+            17u * 1024u * 1024u);
+    size_t count = 0u;
+    assert(snag_session_each_event(&session, count_event, &count, error, sizeof(error)) == 0);
+    assert(count == 2u);
     snag_session_close(&session);
 }
 
@@ -844,6 +979,8 @@ main(void)
     snag_session_init(&session);
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
     test_pending_session(&store, cwd);
+    test_one_file_checkpoint(&store, cwd);
+    test_large_embedded_checkpoint(&store, cwd);
     test_failed_append_retry(&store, cwd);
     test_pending_input_media(&store, cwd);
     test_closure_reserve(&store, cwd);
@@ -1071,10 +1208,11 @@ main(void)
 
         /* Write the block the way a build without the rule would have written it. */
         legacy_data = goal_reason_data(locked_goal, "model", "reason", "written before the rule");
-        legacy_event = json_pack("{s:O,s:s,s:I,s:s,s:I,s:s,s:i}", "data", legacy_data,
+        legacy_event = json_pack("{s:O,s:s,s:I,s:s,s:I,s:s,s:i,s:I}", "data", legacy_data,
             "prev_sha256", legacy_session.prev_sha256, "seq", (json_int_t)legacy_session.next_seq,
             "session_id", legacy_session.id, "time_ms", (json_int_t)legacy_session.last_time_ms,
-            "type", "goal_blocked", "v", 1);
+            "type", "goal_blocked", "v", 2,
+            "checkpoint_offset", (json_int_t)legacy_session.checkpoint_offset);
         json_decref(legacy_data);
         assert(legacy_event && snag_json_digest(legacy_event, digest) == 0);
         assert(json_object_set_new(legacy_event, "event_sha256", json_string(digest)) == 0);

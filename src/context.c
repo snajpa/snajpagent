@@ -62,10 +62,12 @@ struct context_builder {
 struct context_cache {
     struct context_builder view;
     json_t *pending;
+    json_t *recent; /* Uncompressed events needed for compaction boundaries. */
     json_t *steering_snapshot;
     uint64_t compact_seq, rebase_seq;
     char scope[SNAG_SHA256_HEX_LEN + 1u];
     bool invalid;
+    bool rebuild_images;
 };
 
 static void
@@ -88,8 +90,61 @@ context_cache_free(void *opaque)
     if (!cache) return;
     context_builder_release(&cache->view);
     json_decref(cache->pending);
+    json_decref(cache->recent);
     json_decref(cache->steering_snapshot);
     free(cache);
+}
+
+static int
+context_cache_trim(struct context_cache *cache, uint64_t boundary)
+{
+    uint64_t overlap = boundary > SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS ?
+        boundary - SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS : 0u;
+    json_t *recent = json_array(), *pending = json_array();
+    if (!recent || !pending) goto fail;
+    for (size_t i = 0; i < json_array_size(cache->recent); ++i) {
+        json_t *event = json_array_get(cache->recent, i);
+        uint64_t seq;
+        if (snag_json_integer_u64(event, "seq", &seq) < 0 ||
+            (seq >= overlap && json_array_append(recent, event) < 0)) goto fail;
+    }
+    for (size_t i = 0; i < json_array_size(cache->pending); ++i) {
+        json_t *event = json_array_get(cache->pending, i);
+        uint64_t seq;
+        if (snag_json_integer_u64(event, "seq", &seq) < 0 ||
+            (seq > boundary && json_array_append(pending, event) < 0)) goto fail;
+    }
+    json_decref(cache->recent);
+    json_decref(cache->pending);
+    cache->recent = recent;
+    cache->pending = pending;
+    return 0;
+fail:
+    json_decref(recent);
+    json_decref(pending);
+    return -1;
+}
+
+static int
+context_cache_record(struct context_cache *cache, const struct snag_session *session,
+                     uint64_t seq, const char *type, const json_t *data, bool pending)
+{
+    bool unfinished = false;
+    for (size_t i = 0; i < session->pending_call_count; ++i)
+        if (!session->pending_calls[i].finished) { unfinished = true; break; }
+    json_t *entry = json_pack("{s:I,s:s,s:O,s:I,s:s,s:b,s:b,s:b}",
+        "seq", (json_int_t)seq, "type", type, "data", data,
+        "time", (json_int_t)session->last_time_ms, "turn", session->active_turn_id,
+        "active", session->active_turn, "unfinished", unfinished,
+        "processes", session->process_count > 0u);
+    int rc = entry && json_array_append(cache->recent, entry) == 0 &&
+        (!pending || json_array_append(cache->pending, entry) == 0) ? 0 : -1;
+    json_decref(entry);
+    if (rc < 0) return -1;
+    if ((!strcmp(type, "compaction_completed") || !strcmp(type, "context_rebased")) &&
+        context_cache_trim(cache, session->context_rebase_seq > session->compact_seq ?
+                           session->context_rebase_seq : session->compact_seq) < 0) return -1;
+    return 0;
 }
 
 static void
@@ -97,14 +152,9 @@ context_cache_commit(void *opaque, const struct snag_session *session, uint64_t 
                      const char *type, const json_t *data)
 {
     struct context_cache *cache = opaque;
-    if (cache->invalid) return;
-    json_t *entry = json_pack("{s:I,s:s,s:O,s:I,s:s,s:b}",
-        "seq", (json_int_t)seq, "type", type, "data", data,
-        "time", (json_int_t)session->last_time_ms, "turn", session->active_turn_id,
-        "active", session->active_turn);
-    if (!entry || json_array_append(cache->pending, entry) < 0)
-        cache->invalid = true; /* Never misreport a successful durable commit. */
-    json_decref(entry);
+    if (cache->invalid || !strcmp(type, "session_checkpoint")) return;
+    if (context_cache_record(cache, session, seq, type, data, true) < 0)
+        cache->invalid = true; /* A durable event is never retroactively failed. */
 }
 
 static struct context_cache *
@@ -113,17 +163,188 @@ context_cache_new(void)
     struct context_cache *cache = calloc(1u, sizeof(*cache));
     if (!cache) return NULL;
     cache->pending = json_array();
+    cache->recent = json_array();
     cache->steering_snapshot = json_array();
     cache->view.request_input = json_array();
     cache->view.tool_feedback = json_array();
     cache->view.deferred_input = json_array();
     cache->view.input_timing = json_array();
-    if (!cache->pending || !cache->steering_snapshot || !cache->view.request_input ||
+    if (!cache->pending || !cache->recent || !cache->steering_snapshot ||
+        !cache->view.request_input ||
         !cache->view.tool_feedback || !cache->view.deferred_input || !cache->view.input_timing) {
         context_cache_free(cache);
         return NULL;
     }
     return cache;
+}
+
+/* A journal checkpoint is one state-plus-provider-view record. No second
+ * context file or independently advanced cursor exists. */
+static json_t *
+checkpoint_input_timing(const struct context_builder *view)
+{
+    json_t *timings = json_deep_copy(view->input_timing);
+    if (!timings) return NULL;
+    for (size_t i = 0; i < json_array_size(timings); ++i) {
+        json_t *entry = json_array_get(timings, i);
+        const json_t *original = json_array_get(view->input_timing, i);
+        const json_t *message = json_object_get(original, "message");
+        for (size_t j = 0; j < json_array_size(view->request_input); ++j) {
+            if (json_array_get(view->request_input, j) != message) continue;
+            if (snag_json_set_new(entry, "__request_index", json_integer((json_int_t)j)) < 0) {
+                json_decref(timings); return NULL;
+            }
+            break;
+        }
+    }
+    return timings;
+}
+
+static json_t *
+context_cache_checkpoint(void *opaque, const struct snag_session *session)
+{
+    struct context_cache *cache = opaque;
+    struct context_builder *v = &cache->view;
+    if (cache->invalid || !json_is_array(cache->pending)) return NULL;
+    json_t *timings = checkpoint_input_timing(v);
+    json_t *doc = timings ? json_pack("{s:o,s:s,s:s,s:s,s:s}",
+        "timings", timings, "scope", cache->scope,
+        "active_turn_id", v->active_turn_id, "target_turn_id", v->target_turn_id,
+        "schema", "provider-view-1") : NULL;
+    (void)session;
+    if (!doc) { json_decref(timings); return NULL; }
+#define CJ(f) do { \
+    if (snag_json_set_new(doc, #f, v->f ? json_incref(v->f) : json_null()) < 0) goto fail; \
+} while (0)
+    CJ(call_ids); CJ(request_input); CJ(tool_feedback); CJ(deferred_input);
+    CJ(deferred_irc); CJ(last_host_context);
+#undef CJ
+    uint64_t pending_first = session->next_seq;
+    if (json_array_size(cache->pending) &&
+        snag_json_integer_u64(json_array_get(cache->pending, 0u), "seq",
+                              &pending_first) < 0) goto fail;
+    if (pending_first > INT64_MAX ||
+        snag_json_set_new(doc, "steering_snapshot", json_incref(cache->steering_snapshot)) < 0 ||
+        snag_json_set_new(doc, "recent", json_incref(cache->recent)) < 0 ||
+        snag_json_set_new(doc, "pending_first_seq",
+                          json_integer((json_int_t)pending_first)) < 0) goto fail;
+#define CI(f) do { \
+    if (v->f > INT64_MAX || \
+        snag_json_set_new(doc, #f, json_integer((json_int_t)v->f)) < 0) goto fail; \
+} while (0)
+    CI(recovery_first_ms); CI(event_time_ms); CI(deferred_irc_seq);
+    CI(steering_seen); CI(tool_result_bytes); CI(compact_seq); CI(compact_walk_seq);
+#undef CI
+    if (cache->compact_seq > INT64_MAX || cache->rebase_seq > INT64_MAX ||
+        snag_json_set_new(doc, "cache_compact_seq",
+                          json_integer((json_int_t)cache->compact_seq)) < 0 ||
+        snag_json_set_new(doc, "cache_rebase_seq",
+                          json_integer((json_int_t)cache->rebase_seq)) < 0 ||
+        snag_json_set_new(doc, "active_turn", json_boolean(v->active_turn)) < 0 ||
+        snag_json_set_new(doc, "rebuild_images", json_boolean(cache->rebuild_images)) < 0 ||
+        snag_json_set_new(doc, "input_timed", json_boolean(v->input_timed)) < 0) goto fail;
+    return doc;
+fail:
+    json_decref(doc);
+    return NULL;
+}
+
+static int
+restore_input_timing(struct context_builder *v)
+{
+    for (size_t i = 0; i < json_array_size(v->input_timing); ++i) {
+        json_t *entry = json_array_get(v->input_timing, i);
+        json_t *index = json_object_get(entry, "__request_index");
+        if (!index) continue;
+        if (!json_is_integer(index) || json_integer_value(index) < 0 ||
+            (uint64_t)json_integer_value(index) >= json_array_size(v->request_input)) return -1;
+        if (json_object_set(entry, "message", json_array_get(v->request_input,
+                (size_t)json_integer_value(index))) < 0 ||
+            json_object_del(entry, "__request_index") < 0) return -1;
+    }
+    return 0;
+}
+
+static int
+checkpoint_context_event(void *opaque, const struct snag_session *state, uint64_t seq,
+                         const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct context_cache *cache = opaque;
+    context_cache_commit(cache, state, seq, type, data);
+    return cache->invalid ? snag_fail(error, error_size, ENOMEM,
+        "cannot apply embedded checkpoint suffix") : 0;
+}
+
+static int
+context_cache_restore(struct snag_session *session, struct context_cache **out,
+                      char *error, size_t error_size)
+{
+    const json_t *doc = session->checkpoint_context;
+    struct context_cache *cache = context_cache_new();
+    if (!cache || !json_is_object(doc) || !session->checkpoint_state) goto invalid;
+#define GET_J(f) do { \
+    const json_t *value = json_object_get(doc, #f); \
+    if (!value) goto invalid; \
+    json_decref(cache->view.f); \
+    cache->view.f = json_is_null(value) ? NULL : json_incref((json_t *)value); \
+} while (0)
+    GET_J(call_ids); GET_J(request_input); GET_J(tool_feedback); GET_J(deferred_input);
+    GET_J(deferred_irc); GET_J(last_host_context);
+#undef GET_J
+    const json_t *timings = json_object_get(doc, "timings");
+    const json_t *steering = json_object_get(doc, "steering_snapshot");
+    const json_t *recent = json_object_get(doc, "recent");
+    if (!json_is_array(cache->view.request_input) || !json_is_array(cache->view.tool_feedback) ||
+        !json_is_array(cache->view.deferred_input) || !json_is_array(timings) ||
+        (!json_is_array(steering) && !json_is_object(steering)) ||
+        !json_is_array(recent)) goto invalid;
+    json_decref(cache->view.input_timing);
+    cache->view.input_timing = json_deep_copy(timings);
+    if (!cache->view.input_timing || restore_input_timing(&cache->view) < 0) goto invalid;
+    json_decref(cache->steering_snapshot);
+    cache->steering_snapshot = json_incref((json_t *)steering);
+    uint64_t pending_first;
+    if (snag_json_integer_u64(doc, "pending_first_seq", &pending_first) < 0) goto invalid;
+    json_decref(cache->recent);
+    cache->recent = json_incref((json_t *)recent);
+    for (size_t i = 0; i < json_array_size(recent); ++i) {
+        json_t *event = json_array_get(recent, i);
+        uint64_t seq;
+        if (snag_json_integer_u64(event, "seq", &seq) < 0 ||
+            (seq >= pending_first && json_array_append(cache->pending, event) < 0)) goto invalid;
+    }
+#define GET_I(f) do { \
+    uint64_t n; if (snag_json_integer_u64(doc, #f, &n) < 0) goto invalid; \
+    cache->view.f = n; \
+} while (0)
+    GET_I(recovery_first_ms); GET_I(event_time_ms); GET_I(deferred_irc_seq);
+    GET_I(steering_seen); GET_I(tool_result_bytes); GET_I(compact_seq); GET_I(compact_walk_seq);
+#undef GET_I
+    if (snag_json_integer_u64(doc, "cache_compact_seq", &cache->compact_seq) < 0 ||
+        snag_json_integer_u64(doc, "cache_rebase_seq", &cache->rebase_seq) < 0) goto invalid;
+    const char *scope = snag_json_string(doc, "scope");
+    const char *active = snag_json_string(doc, "active_turn_id");
+    const char *target = snag_json_string(doc, "target_turn_id");
+    const char *schema = snag_json_string(doc, "schema");
+    const json_t *active_turn = json_object_get(doc, "active_turn");
+    const json_t *input_timed = json_object_get(doc, "input_timed");
+    const json_t *rebuild_images = json_object_get(doc, "rebuild_images");
+    if (!scope || !active || !target || !schema || strcmp(schema, "provider-view-1") ||
+        !snag_strcpy(cache->scope, sizeof(cache->scope), scope) ||
+        !snag_strcpy(cache->view.active_turn_id, sizeof(cache->view.active_turn_id), active) ||
+        !snag_strcpy(cache->view.target_turn_id, sizeof(cache->view.target_turn_id), target) ||
+        !json_is_boolean(active_turn) || !json_is_boolean(input_timed) ||
+        !json_is_boolean(rebuild_images)) goto invalid;
+    cache->view.active_turn = json_is_true(active_turn);
+    cache->view.input_timed = json_is_true(input_timed);
+    cache->rebuild_images = json_is_true(rebuild_images);
+    if (snag_session_each_event_from_checkpoint(session, session->checkpoint_state,
+        checkpoint_context_event, cache, error, error_size) < 0) goto invalid;
+    *out = cache;
+    return 0;
+invalid:
+    context_cache_free(cache);
+    return snag_fail(error, error_size, EINVAL, "invalid embedded provider checkpoint");
 }
 
 void
@@ -137,6 +358,7 @@ snag_context_start_new(struct snag_session *session)
     session->on_commit = context_cache_commit;
     session->on_commit_free = context_cache_free;
     session->on_commit_opaque = cache;
+    session->on_checkpoint = context_cache_checkpoint;
 }
 
 void
@@ -1860,6 +2082,41 @@ compact_event(void *opaque, const struct snag_session *state,
     return 0;
 }
 
+/* Materialized uncompressed event seam: the compact reducer and the
+ * post-summary provider use the same events and the same context_event logic.
+ * Old summarized prefixes are never reparsed to select a new boundary. */
+static int
+context_recent_each(struct context_cache *cache, struct context_builder *builder,
+                    snag_session_event_fn fn, char *error, size_t error_size)
+{
+    if (!cache || cache->invalid || !json_is_array(cache->recent)) return -1;
+    for (size_t i = 0; i < json_array_size(cache->recent); ++i) {
+        const json_t *entry = json_array_get(cache->recent, i);
+        struct snag_session state = {0};
+        struct snag_pending_call unfinished = {0};
+        uint64_t seq, time_ms;
+        const char *turn = snag_json_string(entry, "turn");
+        const char *type = snag_json_string(entry, "type");
+        json_t *data = json_object_get(entry, "data");
+        json_t *active = json_object_get(entry, "active");
+        json_t *pending_call = json_object_get(entry, "unfinished");
+        json_t *processes = json_object_get(entry, "processes");
+        if (!turn || !type || !json_is_object(data) || !json_is_boolean(active) ||
+            !json_is_boolean(pending_call) || !json_is_boolean(processes) ||
+            snag_json_integer_u64(entry, "seq", &seq) < 0 ||
+            snag_json_integer_u64(entry, "time", &time_ms) < 0 ||
+            !snag_strcpy(state.active_turn_id, sizeof(state.active_turn_id), turn))
+            return snag_fail(error, error_size, EINVAL, "invalid embedded context seam");
+        state.last_time_ms = time_ms;
+        state.active_turn = json_is_true(active);
+        state.pending_calls = json_is_true(pending_call) ? &unfinished : NULL;
+        state.pending_call_count = json_is_true(pending_call) ? 1u : 0u;
+        state.process_count = json_is_true(processes) ? 1u : 0u;
+        if (fn(builder, &state, seq, type, data, error, error_size) < 0) return -1;
+    }
+    return 0;
+}
+
 int
 snag_context_compact_output_valid(const json_t *output, char output_hash[SNAG_SHA256_HEX_LEN + 1u],
                                      size_t *output_bytes, char *error, size_t error_size)
@@ -2015,7 +2272,24 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
             builder.compact_walk_seq = 0u;
         }
     }
-    if (snag_session_each_event(session, compact_event, &builder, error, error_size) < 0) goto out;
+    {
+        struct context_cache *cache = session->on_commit == context_cache_commit ?
+            session->on_commit_opaque : NULL;
+        if (!cache && session->checkpoint_has_context) {
+            if (context_cache_restore(session, &cache, error, error_size) < 0) goto out;
+            session->on_commit = context_cache_commit;
+            session->on_commit_free = context_cache_free;
+            session->on_commit_opaque = cache;
+            session->on_checkpoint = context_cache_checkpoint;
+        }
+        if (cache && cache->invalid) {
+            snag_errorf(error, error_size, "cannot compact invalid provider checkpoint");
+            goto out;
+        }
+        if (cache ? context_recent_each(cache, &builder, compact_event, error, error_size) < 0 :
+                    snag_session_each_event(session, compact_event, &builder,
+                                            error, error_size) < 0) goto out;
+    }
     if (prune_dangling_calls(builder.request_input) < 0) goto out;
     if (append_deferred_input(&builder) < 0) goto out;
     if (builder.compact_current && !builder.compact_stopped) {
@@ -2204,8 +2478,9 @@ context_cache_update(struct context_cache *cache, struct snag_session *session,
             for (size_t k = 0u; k < json_array_size(parts); ++k) {
                 const char *part_type = snag_json_string(json_array_get(parts, k), "type");
                 if (part_type && !strcmp(part_type, "input_image")) {
-                    cache->invalid = true;
-                    return -1;
+                    /* Retained media is resolved again from its asset on each
+                     * request. Keep the uncovered seam for a bounded rebuild. */
+                    return 1;
                 }
             }
         }
@@ -2218,6 +2493,22 @@ context_cache_update(struct context_cache *cache, struct snag_session *session,
     view->steering = NULL;
     view->control = NULL;
     return 0;
+}
+
+struct context_capture {
+    struct context_builder *builder;
+    struct context_cache *cache;
+};
+
+static int
+context_capture_event(void *opaque, const struct snag_session *state, uint64_t seq,
+                      const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct context_capture *capture = opaque;
+    if (strcmp(type, "session_checkpoint") &&
+        context_cache_record(capture->cache, state, seq, type, data, false) < 0)
+        return snag_fail(error, error_size, ENOMEM, "cannot capture uncompressed context");
+    return context_event(capture->builder, state, seq, type, data, error, error_size);
 }
 
 int
@@ -2367,23 +2658,33 @@ snag_context_build(struct snag_session *session, const char *model, const char *
         }
         struct context_cache *cache = session->on_commit == context_cache_commit ?
             session->on_commit_opaque : NULL;
+        if (!cache && session->checkpoint_has_context) {
+            if (context_cache_restore(session, &cache, error, error_size) < 0) goto out;
+            session->on_commit = context_cache_commit;
+            session->on_commit_free = context_cache_free;
+            session->on_commit_opaque = cache;
+            session->on_checkpoint = context_cache_checkpoint;
+            json_decref(session->checkpoint_context);
+            json_decref(session->checkpoint_state);
+            session->checkpoint_context = NULL;
+            session->checkpoint_state = NULL;
+        }
         if (cache && !cache->scope[0] && continuation_scope &&
             !snag_strcpy(cache->scope, sizeof(cache->scope), continuation_scope)) cache->invalid = true;
-        if (cache && (cache->invalid || cache->compact_seq != session->compact_seq ||
-            cache->rebase_seq != session->context_rebase_seq ||
-            strcmp(cache->scope, continuation_scope ? continuation_scope : ""))) {
-            context_cache_free(cache);
-            session->on_commit = NULL;
-            session->on_commit_free = NULL;
-            session->on_commit_opaque = NULL;
-            cache = NULL;
+        if (cache && cache->invalid) {
+            (void)snag_fail(error, error_size, EINVAL, "provider checkpoint is invalid");
+            goto out;
         }
+        bool rebuild_cache = cache && (cache->rebuild_images ||
+            cache->compact_seq != session->compact_seq ||
+            cache->rebase_seq != session->context_rebase_seq ||
+            strcmp(cache->scope, continuation_scope ? continuation_scope : ""));
         if (control && control->cancelled && control->cancelled(control->opaque)) {
             (void)snag_fail(error, error_size, ECANCELED, "context preparation cancelled");
             goto out;
         }
         bool used_cache = false;
-        if (cache) {
+        if (cache && !rebuild_cache) {
             errno = 0;
             int update = context_cache_update(cache, session, instructions, steering,
                                               control, builder.networked, error, error_size);
@@ -2397,16 +2698,36 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             }
         }
         if (!used_cache) {
-            if (cache) {
-                context_cache_free(cache);
+            struct context_cache *old_cache = cache;
+            cache = context_cache_new();
+            if (!cache) {
+                (void)snag_fail(error, error_size, ENOMEM, "cannot capture provider checkpoint");
+                goto out;
+            }
+            if (old_cache) {
+                json_decref(cache->recent);
+                cache->recent = json_incref(old_cache->recent);
+                if (context_recent_each(old_cache, &builder, context_event,
+                                        error, error_size) < 0) {
+                    context_cache_free(cache);
+                    goto out;
+                }
+                context_cache_free(old_cache);
                 session->on_commit = NULL;
                 session->on_commit_free = NULL;
                 session->on_commit_opaque = NULL;
+                session->on_checkpoint = NULL;
+            } else {
+                struct context_capture capture = { .builder = &builder, .cache = cache };
+                if (snag_session_each_event(session, context_capture_event, &capture,
+                                            error, error_size) < 0) {
+                    context_cache_free(cache);
+                    goto out;
+                }
             }
-            if (snag_session_each_event(session, context_event, &builder, error, error_size) < 0) goto out;
             /* Retained images are resolved against separate media files on each
-             * request; a cached encoded image would mask a removed asset. */
-            cache = snag_media_request_has_images(builder.request_input) ? NULL : context_cache_new();
+             * request, using only the uncovered seam on future builds. */
+            cache->rebuild_images = snag_media_request_has_images(builder.request_input);
             if (cache) {
                 json_decref(cache->steering_snapshot);
                 cache->steering_snapshot = json_deep_copy(steering);
@@ -2423,6 +2744,7 @@ snag_context_build(struct snag_session *session, const char *model, const char *
                     session->on_commit = context_cache_commit;
                     session->on_commit_free = context_cache_free;
                     session->on_commit_opaque = cache;
+                    session->on_checkpoint = context_cache_checkpoint;
                 } else context_cache_free(cache);
             }
         }
@@ -2542,6 +2864,9 @@ projection_error: snag_errorf(error, error_size, "response request projection ex
         goto out;
     }
     projection->input_tokens_bound = 0u; /* Unknown until counted by the provider. */
+    if (session->checkpoint_seq && !session->checkpoint_has_context &&
+        session->on_checkpoint &&
+        snag_session_checkpoint(session, error, error_size) < 0) goto out;
     rc = 0;
 out:
     if (rc < 0) snag_context_projection_free(projection);

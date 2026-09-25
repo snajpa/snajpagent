@@ -7,7 +7,17 @@ server and maintain outgoing IRC connections, but does not fork a background
 worker or rely on a socket to keep sessions alive. Durable state is written to
 local event logs, and resume reconstructs the active session from those logs.
 The append-only rollout for a session is
-`$DOTDIR/sessions/<session-id>/events.jsonl`. Once a manual or automatic
+`$DOTDIR/sessions/<session-id>/events.jsonl`. Format-4 records carry the byte
+offset of the last embedded checkpoint, which combines session state and the
+materialized provider view. Resume reads the final complete record, seeks to
+that checkpoint and verifies its hash and bounded suffix. Format-2/3 journals
+with a long history need one initial scan and are not rewritten; the next
+checkpoint indexes their existing history. Short journals remain bounded by
+the checkpoint interval. The journal remains the authoritative record. Its lock and
+metadata files, and retained media, have separate operational roles rather than
+forming a second session-state checkpoint. Explicit old-history inspection
+still reads the requested old records. A broken referenced checkpoint stops
+recovery rather than silently rescanning the whole journal. Once a manual or automatic
 compaction succeeds, context projection places a synthetic system notice
 with that absolute path immediately after the compact output. The notice is
 rebuilt during replay and does not modify the provider-produced compact output
@@ -104,9 +114,12 @@ byte counts and request views, rather than copying it into unrelated locals.
 Mutable session state is staged once per event and adopted only after durable
 append; a failed append leaves the live session unchanged.
 
-Only current pre-1.0 session format 2 is accepted. Model selection changes use
-`model_selection_changed`; the obsolete single-model event reader is removed.
-No migration or destructive rewrite of existing logs is performed.
+New sessions use journal format 4. Legacy format-2 and format-3 records remain
+readable; checkpoint creation does not destructively rewrite their prefix.
+Model selection changes use `model_selection_changed`. A compaction summary is
+the coverage boundary for provider input, not a second checkpoint file or a
+request to replay covered images and completed tool exchanges. The next indexed
+checkpoint saves the post-compaction view and only its uncovered event seam.
 
 Before `response_started`, the runtime builds the exact outgoing model-input
 and request projections and accounts for them in token units. The default

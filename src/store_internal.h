@@ -13,6 +13,9 @@
 enum snag_tail_policy {
     SNAG_TAIL_REJECT, SNAG_TAIL_TRUNCATE, SNAG_TAIL_IGNORE };
 
+json_t *snag_checkpoint_state_encode(const struct snag_session *session);
+int snag_checkpoint_state_decode(const json_t *data, struct snag_session *state);
+
 bool snag_store_trash_id(const char *name, char id[SNAG_ID_HEX_LEN + 1u]);
 int snag_store_verify_private_fd(int fd, bool directory, const char *name, char *error, size_t error_size);
 int snag_store_open_session_files(struct snag_session *session, bool create, char *error, size_t error_size);

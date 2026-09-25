@@ -246,13 +246,14 @@ snag_json_load_arguments(const unsigned char *data, size_t len, size_t max_len, 
 }
 
 json_t *
-snag_json_load_canonical(const unsigned char *data, size_t len, char *error, size_t error_size)
+snag_json_load_canonical_bounded(const unsigned char *data, size_t len, size_t max_len,
+                                 char *error, size_t error_size)
 {
     json_t *value;
 
-    value = snag_json_load_strict(data, len, SNAG_MAX_EVENT_LINE, error, error_size);
+    value = snag_json_load_strict(data, len, max_len, error, error_size);
     if (!value) return NULL;
-    struct snag_buf encoded = {.max = SNAG_MAX_EVENT_LINE};
+    struct snag_buf encoded = {.max = max_len};
     if (snag_json_canonical(value, &encoded) < 0 || encoded.len != len ||
         memcmp(encoded.data, data, len) != 0) {
         if (error_size) (void)snprintf(error, error_size, "record is not canonical format-1 JSON");
@@ -263,6 +264,12 @@ snag_json_load_canonical(const unsigned char *data, size_t len, char *error, siz
     }
     snag_buf_free(&encoded);
     return value;
+}
+
+json_t *
+snag_json_load_canonical(const unsigned char *data, size_t len, char *error, size_t error_size)
+{
+    return snag_json_load_canonical_bounded(data, len, SNAG_MAX_EVENT_LINE, error, error_size);
 }
 
 int

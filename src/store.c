@@ -17,6 +17,9 @@
 #define SNAG_LOG_RESERVE ((int64_t)32 * 1024 * 1024)
 #define SNAG_EVENT_LIMIT UINT64_C(1000000)
 #define SNAG_EVENT_RESERVE UINT64_C(256)
+/* The checkpoint is a materialized current view, not one ordinary 16 MiB
+ * event. Its maximum covers the active provider request and pending state. */
+#define SNAG_CHECKPOINT_EVENT_MAX (128u * 1024u * 1024u)
 static int
 open_dir_path(const char *path)
 {
@@ -206,6 +209,8 @@ free_session_state(struct snag_session *session)
     json_decref(session->pending_input);
     json_decref(session->active_instructions);
     json_decref(session->response_public);
+    json_decref(session->checkpoint_context);
+    json_decref(session->checkpoint_state);
 }
 
 void
@@ -257,6 +262,17 @@ snag_store_open_session_files(struct snag_session *session, bool create, char *e
         return snag_errorf(error, error_size, "cannot seek event log: %s", strerror(errno));
     return 0;
 }
+static bool
+session_closure_event(const char *type)
+{
+    return snag_string_in(type,
+        "response_interrupted response_failed response_completed response_output_correction "
+        "tool_finished process_closed turn_completed turn_completed_silent turn_failed "
+        "turn_interrupted turn_cancel_requested turn_recovery compaction_interrupted "
+        "compaction_completed control_finished goal_paused goal_cancelled session_archived "
+        "session_delete_requested input_cancelled");
+}
+
 static int
 snag_session_append(struct snag_session *session, const char *type, json_t *data,
                    uint64_t *written_seq, char *error, size_t error_size)
@@ -266,13 +282,11 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
     int64_t actual_end;
     uint64_t seq = session->next_seq;
     int rc = -1;
-    struct snag_buf line = {.max = SNAG_MAX_EVENT_LINE};
-    bool closing = snag_string_in(type,
-        "response_interrupted response_failed response_completed response_output_correction "
-        "tool_finished process_closed turn_completed turn_completed_silent turn_failed "
-        "turn_interrupted turn_cancel_requested turn_recovery compaction_interrupted "
-        "compaction_completed control_finished goal_paused goal_cancelled session_archived "
-        "session_delete_requested input_cancelled");
+    bool checkpoint = strcmp(type, "session_checkpoint") == 0;
+    bool new_format = checkpoint || session->checkpoint_offset || session->format_version == 4u;
+    int64_t checkpoint_offset = checkpoint ? session->log_end : session->checkpoint_offset;
+    struct snag_buf line = {.max = checkpoint ? SNAG_CHECKPOINT_EVENT_MAX : SNAG_MAX_EVENT_LINE};
+    bool closing = session_closure_event(type);
     uint64_t event_limit = closing ? SNAG_EVENT_LIMIT : SNAG_EVENT_LIMIT - SNAG_EVENT_RESERVE;
     int64_t byte_limit = closing ? SNAG_LOG_HARD_LIMIT : SNAG_LOG_HARD_LIMIT - SNAG_LOG_RESERVE;
     if (!data || seq > event_limit || session->log_end > byte_limit) {
@@ -281,8 +295,11 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
     }
     event = json_pack("{s:O,s:s,s:I,s:s,s:I,s:s,s:i}", "data", data, "prev_sha256", session->prev_sha256,
         "seq", (json_int_t)seq, "session_id", session->id,
-        "time_ms", (json_int_t)session->last_time_ms, "type", type, "v", 1);
-    if (!event || snag_json_digest(event, digest) < 0) goto memory_error;
+        "time_ms", (json_int_t)session->last_time_ms, "type", type, "v", new_format ? 2 : 1);
+    if (event && new_format &&
+        snag_json_set_new(event, "checkpoint_offset", json_integer(checkpoint_offset)) < 0)
+        goto memory_error;
+    if (!event || snag_json_digest_bounded(event, line.max, digest, NULL) < 0) goto memory_error;
     if (snag_json_set_new(event, "event_sha256", json_string(digest)) < 0 ||
         snag_json_canonical(event, &line) < 0 || snag_buf_putc(&line, '\n') < 0) goto memory_error;
     if ((int64_t)line.len > byte_limit - session->log_end) {
@@ -315,6 +332,10 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
     session->log_end += (int64_t)line.len;
     session->next_seq++;
     memcpy(session->prev_sha256, digest, sizeof(digest));
+    if (checkpoint) {
+        session->checkpoint_offset = checkpoint_offset;
+        session->checkpoint_seq = seq;
+    }
     if (written_seq) *written_seq = seq;
     rc = 0;
     goto out;
@@ -341,11 +362,15 @@ common_event_valid(json_t *event, struct snag_session *session, uint64_t seq,
     const char *prev_hash;
     const char *session_id;
     const char *type;
-    uint64_t n;
+    uint64_t n, checkpoint_pointer;
     json_t *copy;
     char computed[SNAG_SHA256_HEX_LEN + 1u];
-    if (!snag_json_exact_keys(event, "data event_sha256 prev_sha256 seq session_id time_ms type v") ||
-        snag_json_integer_u64(event, "v", &n) < 0 || n != 1 ||
+    if (snag_json_integer_u64(event, "v", &n) < 0 || (n != 1u && n != 2u) ||
+        !snag_json_exact_keys(event, n == 1u ?
+            "data event_sha256 prev_sha256 seq session_id time_ms type v" :
+            "checkpoint_offset data event_sha256 prev_sha256 seq session_id time_ms type v") ||
+        (n == 2u && (snag_json_integer_u64(event, "checkpoint_offset", &checkpoint_pointer) < 0 ||
+                     checkpoint_pointer > (uint64_t)SNAG_LOG_HARD_LIMIT)) ||
         snag_json_integer_u64(event, "seq", &n) < 0 || n != seq ||
         snag_json_integer_u64(event, "time_ms", &n) < 0 ||
         !(event_hash = snag_json_string(event, "event_sha256")) ||
@@ -358,7 +383,9 @@ common_event_valid(json_t *event, struct snag_session *session, uint64_t seq,
         return false;
     }
     copy = json_copy(event);
-    if (!copy || json_object_del(copy, "event_sha256") < 0 || snag_json_digest(copy, computed) < 0) {
+    if (!copy || json_object_del(copy, "event_sha256") < 0 ||
+        snag_json_digest_bounded(copy, !strcmp(type, "session_checkpoint") ?
+            SNAG_CHECKPOINT_EVENT_MAX : SNAG_MAX_EVENT_LINE, computed, NULL) < 0) {
         json_decref(copy);
         snag_errorf(error, error_size, "cannot verify event digest");
         return false;
@@ -806,13 +833,14 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
          * workspace feature is gone, so that value maps onto the current cwd
          * and has no other role; the record stays replayable. */
         if (seq != 1 || snag_json_integer_u64(data, "format", &n) < 0) goto invalid;
+        session->format_version = (unsigned int)n;
         if (n == 2u) {
             if (!snag_json_exact_keys(data,
                     "default_effort default_model default_provider format protocol workspace"))
                 goto invalid;
             cwd = snag_json_string(data, "workspace");
             session->legacy_journal = true;
-        } else if (n != 3u || !snag_json_exact_keys(data,
+        } else if ((n != 3u && n != 4u) || !snag_json_exact_keys(data,
                 "default_effort default_model default_provider format protocol cwd")) {
             goto invalid;
         }
@@ -2403,6 +2431,24 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !(call = find_pending_call(session, call_id)) || call->started || call->finished ||
             strcmp(call->action_sha256, original) != 0) goto invalid;
         memcpy(call->action_sha256, effective, SNAG_SHA256_HEX_LEN + 1u);
+    } else if (strcmp(type, "session_checkpoint") == 0) {
+        const json_t *state = json_object_get(data, "state");
+        const json_t *context = json_object_get(data, "context");
+        if (!snag_json_exact_keys(data, "context format snapshot_v state") ||
+            !json_is_object(state) || !context ||
+            (!json_is_object(context) && !json_is_null(context)) ||
+            snag_json_integer_u64(data, "snapshot_v", &n) < 0 || n != 1u ||
+            snag_json_integer_u64(data, "format", &n) < 0 || n != 4u ||
+            strcmp(snag_json_string(state, "id") ? snag_json_string(state, "id") : "", session->id))
+            goto invalid;
+        if (!live) {
+            json_decref(session->checkpoint_state);
+            json_decref(session->checkpoint_context);
+            session->checkpoint_state = json_incref((json_t *)state);
+            session->checkpoint_context = json_is_null(context) ? NULL :
+                json_incref((json_t *)context);
+        }
+        session->checkpoint_has_context = !json_is_null(context);
     } else {
         return snag_fail(error, error_size, ENOTSUP,
                   "event type %s is not implemented by this checkpoint", type);
@@ -2436,7 +2482,8 @@ invalid:
 static int
 read_event_log(struct snag_session *source, struct snag_session *verifier,
                int64_t boundary, enum snag_tail_policy tail_policy, snag_session_event_fn fn, void *opaque,
-               const struct snag_process_state *cursor, int64_t *complete_end_out, uint64_t *next_seq_out,
+               const struct snag_process_state *cursor, bool apply_suffix,
+               int64_t *complete_end_out, uint64_t *next_seq_out,
                char *error, size_t error_size)
 {
     unsigned char chunk[8192];
@@ -2445,7 +2492,7 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
     uint64_t seq = cursor ? cursor->log_seq : 1u;
     int rc = -1;
 
-    struct snag_buf line = {.max = SNAG_MAX_EVENT_LINE};
+    struct snag_buf line = {.max = SNAG_CHECKPOINT_EVENT_MAX};
     for (;;) {
         size_t want = sizeof(chunk);
         ssize_t got;
@@ -2488,7 +2535,7 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
             const unsigned char *newline = memchr(chunk + i, '\n', (size_t)(got - i));
             size_t span = newline ? (size_t)(newline - (chunk + i)) : (size_t)(got - i);
             if (span && (!newline || line.len) && snag_buf_append(&line, chunk + i, span) < 0) {
-                snag_errorf(error, error_size, "event line exceeds 16 MiB");
+                snag_errorf(error, error_size, "event line exceeds checkpoint limit");
                 goto out;
             }
             if (!newline) break;
@@ -2500,21 +2547,47 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
                     "blank event line at sequence %llu", (unsigned long long)seq);
                 goto out;
             }
-            event = snag_json_load_canonical(record, record_len, jerr, sizeof(jerr));
+            event = snag_json_load_canonical_bounded(record, record_len,
+                record_len > SNAG_MAX_EVENT_LINE ? SNAG_CHECKPOINT_EVENT_MAX : SNAG_MAX_EVENT_LINE,
+                jerr, sizeof(jerr));
             if (!event) {
                 snag_errorf(error, error_size, "corrupt event %llu: %s", (unsigned long long)seq, jerr);
                 goto out;
             }
+            const char *event_type = snag_json_string(event, "type");
+            uint64_t pointer = 0u;
+            bool indexed = json_integer_value(json_object_get(event, "v")) == 2;
+            if ((record_len > SNAG_MAX_EVENT_LINE &&
+                 (!event_type || strcmp(event_type, "session_checkpoint"))) ||
+                (indexed && (snag_json_integer_u64(event, "checkpoint_offset", &pointer) < 0 ||
+                 pointer > (uint64_t)complete_end ||
+                 (event_type && !strcmp(event_type, "session_checkpoint") ?
+                    pointer != (uint64_t)complete_end :
+                    ((!cursor || apply_suffix) &&
+                     pointer != (uint64_t)verifier->checkpoint_offset)))) ||
+                (!indexed && (verifier->checkpoint_seq || verifier->format_version == 4u))) {
+                json_decref(event);
+                (void)snag_fail(error, error_size, EINVAL,
+                    "invalid checkpoint pointer at event %llu",
+                    (unsigned long long)seq);
+                goto out;
+            }
             if (!common_event_valid(event, verifier, seq, &type, &data, error, error_size) ||
-                (!cursor && apply_event(verifier, type, data, seq, false, error, error_size) < 0)) {
+                ((!cursor || apply_suffix) &&
+                 apply_event(verifier, type, data, seq, false, error, error_size) < 0)) {
                 json_decref(event);
                 goto out;
+            }
+            if (indexed && (!cursor || apply_suffix)) {
+                verifier->checkpoint_offset = (int64_t)pointer;
+                if (!strcmp(type, "session_checkpoint")) verifier->checkpoint_seq = seq;
             }
             complete_end = read_off - (int64_t)(got - i - 1);
             if (fn) {
                 verifier->log_end = complete_end;
                 verifier->next_seq = seq + 1u;
-                if (fn(opaque, cursor ? NULL : verifier, seq, type, data, error, error_size) < 0) {
+                if (fn(opaque, cursor && !apply_suffix ? NULL : verifier,
+                       seq, type, data, error, error_size) < 0) {
                     json_decref(event);
                     goto out;
                 }
@@ -2544,18 +2617,168 @@ out: snag_buf_free(&line);
     return rc;
 }
 
+/* Seek backwards through a private append-only journal; at most the final
+ * event is parsed before jumping to its checkpoint byte offset. */
+static int64_t
+previous_newline(struct snag_session *session, int64_t before)
+{
+    unsigned char chunk[8192];
+    while (before > 0) {
+        size_t size = before < (int64_t)sizeof(chunk) ? (size_t)before : sizeof(chunk);
+        int64_t start = before - (int64_t)size;
+        ssize_t n = snag_pread(session->log_fd, chunk, size, start);
+        if (n < 0 && errno == EINTR) continue;
+        if (n != (ssize_t)size) return -2;
+        for (size_t i = size; i > 0; --i)
+            if (chunk[i - 1u] == '\n') return start + (int64_t)i - 1;
+        before = start;
+    }
+    return -1;
+}
+
+static json_t *
+read_record_at(struct snag_session *session, int64_t offset, int64_t *end_out)
+{
+    struct snag_buf bytes = {.max = SNAG_CHECKPOINT_EVENT_MAX};
+    json_t *record = NULL;
+    int64_t pos = offset;
+    char error[192];
+    for (;;) {
+        unsigned char chunk[8192];
+        ssize_t n = snag_pread(session->log_fd, chunk, sizeof(chunk), pos);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) break;
+        const unsigned char *newline = memchr(chunk, '\n', (size_t)n);
+        size_t length = newline ? (size_t)(newline - chunk) : (size_t)n;
+        if (snag_buf_append(&bytes, chunk, length) < 0) break;
+        pos += (int64_t)length;
+        if (!newline) continue;
+        if (end_out) *end_out = pos + 1;
+        record = snag_json_load_canonical_bounded(bytes.data, bytes.len,
+            bytes.len > SNAG_MAX_EVENT_LINE ? SNAG_CHECKPOINT_EVENT_MAX : SNAG_MAX_EVENT_LINE,
+            error, sizeof(error));
+        break;
+    }
+    snag_buf_free(&bytes);
+    return record;
+}
+
+/* 1 = indexed record; 0 = an older or uncheckpointed journal; -1 = corrupt.
+ * A malformed index is never interpreted as permission to scan the prefix. */
+static int
+latest_checkpoint_pointer(struct snag_session *session, enum snag_tail_policy tail_policy,
+                          int64_t *offset_out, int64_t *complete_out,
+                          char *error, size_t error_size)
+{
+    int64_t end = snag_seek(session->log_fd, 0, SEEK_END);
+    if (end <= 0) return 0;
+    unsigned char last;
+    if (snag_pread(session->log_fd, &last, 1u, end - 1) != 1) goto invalid;
+    if (last != '\n') {
+        int64_t newline = previous_newline(session, end);
+        if (newline < 0 || tail_policy == SNAG_TAIL_REJECT) goto invalid;
+        end = newline + 1;
+        if (tail_policy == SNAG_TAIL_TRUNCATE &&
+            (snag_truncate(session->log_fd, end) < 0 ||
+             snag_sync_file(session->log_fd) < 0)) goto invalid;
+    }
+    int64_t delimiter = previous_newline(session, end - 1);
+    if (delimiter < -1) goto invalid;
+    int64_t start = delimiter + 1;
+    if (start >= end - 1 || end - start > SNAG_CHECKPOINT_EVENT_MAX) goto invalid;
+    int64_t read_end = -1;
+    json_t *record = read_record_at(session, start, &read_end);
+    if (!record || read_end != end) { json_decref(record); goto invalid; }
+    uint64_t version = 0u, offset = 0u;
+    if (snag_json_integer_u64(record, "v", &version) < 0 ||
+        strcmp(snag_json_string(record, "session_id") ?
+               snag_json_string(record, "session_id") : "", session->id)) {
+        json_decref(record); goto invalid;
+    }
+    if (version == 1u) { json_decref(record); *complete_out = end; return 0; }
+    if (version != 2u || snag_json_integer_u64(record, "checkpoint_offset", &offset) < 0 ||
+        offset > (uint64_t)start || offset > INT64_MAX) { json_decref(record); goto invalid; }
+    json_decref(record);
+    *offset_out = (int64_t)offset;
+    *complete_out = end;
+    return 1;
+invalid:
+    return snag_fail(error, error_size, EINVAL, "invalid final event or checkpoint pointer");
+}
+
+static int
+scan_checkpoint_suffix(struct snag_session *session, int64_t checkpoint_offset,
+                       int64_t boundary, int64_t *complete_end_out, uint64_t *next_seq_out,
+                       char *error, size_t error_size)
+{
+    int64_t record_end = -1;
+    json_t *record = read_record_at(session, checkpoint_offset, &record_end);
+    if (!record || record_end > boundary ||
+        strcmp(snag_json_string(record, "type") ? snag_json_string(record, "type") : "",
+               "session_checkpoint")) goto invalid;
+    json_t *data = json_object_get(record, "data");
+    struct snag_session restored;
+    if (snag_checkpoint_state_decode(json_object_get(data, "state"), &restored) < 0) {
+        snag_session_close(&restored);
+        goto invalid;
+    }
+    uint64_t seq = 0u, pointer = 0u;
+    if (snag_json_integer_u64(record, "seq", &seq) < 0 ||
+        snag_json_integer_u64(record, "checkpoint_offset", &pointer) < 0 ||
+        pointer != (uint64_t)checkpoint_offset ||
+        strcmp(restored.id, session->id) || restored.log_end != checkpoint_offset ||
+        restored.next_seq != seq ||
+        strcmp(restored.prev_sha256, snag_json_string(record, "prev_sha256") ?
+               snag_json_string(record, "prev_sha256") : "")) {
+        snag_session_close(&restored); goto invalid;
+    }
+    const char *type;
+    json_t *event_data;
+    if (!common_event_valid(record, &restored, seq, &type, &event_data, error, error_size) ||
+        apply_event(&restored, type, event_data, seq, false, error, error_size) < 0) {
+        snag_session_close(&restored); goto invalid;
+    }
+    restored.checkpoint_offset = checkpoint_offset;
+    restored.checkpoint_seq = seq;
+    restored.log_end = record_end;
+    restored.next_seq = seq + 1u;
+    int dir_fd = session->dir_fd, log_fd = session->log_fd, lock_fd = session->lock_fd;
+    char *dir_path = session->dir_path;
+    *session = restored;
+    session->dir_fd = dir_fd; session->log_fd = log_fd; session->lock_fd = lock_fd;
+    session->dir_path = dir_path;
+    struct snag_process_state anchor = {0};
+    anchor.log_offset = (uint64_t)record_end;
+    anchor.log_seq = session->next_seq;
+    memcpy(anchor.log_hash, session->prev_sha256, sizeof(anchor.log_hash));
+    json_decref(record);
+    return read_event_log(session, session, boundary, SNAG_TAIL_REJECT, NULL, NULL,
+        &anchor, true, complete_end_out, next_seq_out, error, error_size);
+invalid:
+    json_decref(record);
+    return snag_fail(error, error_size, EINVAL, "invalid session checkpoint record");
+}
+
 int
 snag_store_scan_log(struct snag_session *session, enum snag_tail_policy tail_policy,
                    char *error, size_t error_size)
 {
-    int64_t complete_end;
-    uint64_t next_seq;
-
-    if (read_event_log(session, session, -1, tail_policy, NULL, NULL, NULL,
-                       &complete_end, &next_seq, error, error_size) < 0) return -1;
+    int64_t complete_end = -1, checkpoint_offset = 0, boundary = -1;
+    uint64_t next_seq = 0u;
+    int indexed = session->pending_log ? 0 : latest_checkpoint_pointer(session, tail_policy,
+        &checkpoint_offset, &boundary, error, error_size);
+    if (indexed < 0) return -1;
+    if (indexed && checkpoint_offset) {
+        if (scan_checkpoint_suffix(session, checkpoint_offset, boundary,
+                                   &complete_end, &next_seq, error, error_size) < 0) return -1;
+    } else if (read_event_log(session, session, boundary, tail_policy, NULL, NULL, NULL,
+                              false, &complete_end, &next_seq, error, error_size) < 0) return -1;
     session->log_end = complete_end;
     session->next_seq = next_seq;
     if (next_seq == 1) return snag_fail(error, error_size, EINVAL, "session event log is empty");
+    if (tail_policy == SNAG_TAIL_TRUNCATE && session->lock_fd >= 0 &&
+        !session->delete_requested && !session->checkpoint_seq && next_seq > 128u &&
+        snag_session_checkpoint(session, error, error_size) < 0) return -1;
     return 0;
 }
 
@@ -2572,7 +2795,8 @@ snag_session_each_event(struct snag_session *session, snag_session_event_fn fn,
     snag_session_init(&verifier);
     memcpy(verifier.id, session->id, sizeof(verifier.id));
     int rc = read_event_log(session, &verifier, session->log_end,
-                           SNAG_TAIL_REJECT, fn, opaque, NULL, NULL, NULL, error, error_size);
+                           SNAG_TAIL_REJECT, fn, opaque, NULL, false,
+                           NULL, NULL, error, error_size);
     snag_session_close(&verifier);
     return rc;
 }
@@ -2589,7 +2813,34 @@ snag_session_each_event_since(struct snag_session *session, const struct snag_pr
     memcpy(verifier.id, session->id, sizeof(verifier.id));
     memcpy(verifier.prev_sha256, cursor->log_hash, sizeof(verifier.prev_sha256));
     return read_event_log(session, &verifier, session->log_end,
-                          SNAG_TAIL_REJECT, fn, opaque, cursor, NULL, NULL, error, error_size);
+                          SNAG_TAIL_REJECT, fn, opaque, cursor, false,
+                          NULL, NULL, error, error_size);
+}
+
+int
+snag_session_each_event_from_checkpoint(struct snag_session *session, const json_t *state,
+                                        snag_session_event_fn fn, void *opaque,
+                                        char *error, size_t error_size)
+{
+    struct snag_session verifier;
+    struct snag_process_state anchor = {0};
+    if (snag_checkpoint_state_decode(state, &verifier) < 0) {
+        snag_session_close(&verifier);
+        return snag_fail(error, error_size, EINVAL, "invalid embedded checkpoint state");
+    }
+    if (strcmp(verifier.id, session->id) || verifier.log_end < 0 ||
+        verifier.log_end > session->log_end || verifier.next_seq > session->next_seq) {
+        snag_session_close(&verifier);
+        return snag_fail(error, error_size, EINVAL, "checkpoint does not belong to session");
+    }
+    anchor.log_offset = (uint64_t)verifier.log_end;
+    anchor.log_seq = verifier.next_seq;
+    memcpy(anchor.log_hash, verifier.prev_sha256, sizeof(anchor.log_hash));
+    int rc = read_event_log(session, &verifier, session->log_end,
+                            SNAG_TAIL_REJECT, fn, opaque, &anchor, true,
+                            NULL, NULL, error, error_size);
+    snag_session_close(&verifier);
+    return rc;
 }
 
 static int
@@ -2609,6 +2860,8 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
     staged->pending_input = json_incref(source->pending_input);
     staged->active_instructions = json_incref(source->active_instructions);
     staged->response_public = json_incref(source->response_public);
+    staged->checkpoint_context = json_incref(source->checkpoint_context);
+    staged->checkpoint_state = json_incref(source->checkpoint_state);
     if (source->pending_call_count) {
         staged->pending_calls = malloc(source->pending_call_capacity * sizeof(*staged->pending_calls));
         if (!staged->pending_calls) return -1;
@@ -2651,6 +2904,25 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
 }
 
 int
+snag_session_checkpoint(struct snag_session *session, char *error, size_t error_size)
+{
+    if (!session || session->pending_log || session->log_fd < 0 || session->lock_fd < 0)
+        return snag_fail(error, error_size, EINVAL, "session has no durable checkpoint boundary");
+    json_t *state = snag_checkpoint_state_encode(session);
+    json_t *context = session->on_checkpoint ?
+        session->on_checkpoint(session->on_commit_opaque, session) : json_null();
+    if (!state || !context) {
+        json_decref(state);
+        json_decref(context);
+        return snag_fail(error, error_size, ENOMEM, "cannot materialize session checkpoint");
+    }
+    json_t *data = json_pack("{s:o,s:o,s:i,s:i}", "state", state,
+                             "context", context, "snapshot_v", 1, "format", 4);
+    if (!data) return snag_fail(error, error_size, ENOMEM, "cannot encode session checkpoint");
+    return snag_session_commit(session, "session_checkpoint", data, NULL, error, error_size);
+}
+
+int
 snag_session_commit(struct snag_session *session, const char *type, json_t *data,
                    uint64_t *written_seq, char *error, size_t error_size)
 {
@@ -2676,6 +2948,13 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
         }
         session->append_rollback_pending = false;
     }
+    if (strcmp(type, "session_checkpoint") && !session_closure_event(type) &&
+        !session->pending_log && session->lock_fd >= 0 &&
+        session->next_seq - 1u - session->checkpoint_seq >= 128u &&
+        snag_session_checkpoint(session, error, error_size) < 0) {
+        json_decref(data);
+        return -1;
+    }
     if (!data || clone_session_state(session, &staged) < 0) {
         (void)snag_fail(error, error_size, ENOMEM, "cannot stage %s event", type);
     } else if ((staged.last_time_ms = snag_time_ms(), apply_event(&staged, type, data, session->next_seq, true,
@@ -2697,6 +2976,14 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
         *session = staged;
         if (session->on_commit) session->on_commit(session->on_commit_opaque,
             session, session->next_seq - 1u, type, data);
+        /* No retroactive failure after a synced ordinary event. A failed
+         * checkpoint prevents the next admission from growing its tail. */
+        if (strcmp(type, "session_checkpoint") && !session_closure_event(type) &&
+            !session->pending_log && session->lock_fd >= 0 &&
+            session->next_seq - 1u - session->checkpoint_seq >= 128u) {
+            char ignored[128];
+            (void)snag_session_checkpoint(session, ignored, sizeof(ignored));
+        }
     }
     json_decref(data);
     return rc;
@@ -2913,7 +3200,7 @@ snag_session_prepare(struct snag_session *session, const char *cwd,
     snag_buf_init(session->pending_log, SNAG_LOG_HARD_LIMIT - SNAG_LOG_RESERVE);
     rc = snag_session_commit(session, "session_created", json_pack("{s:s,s:s,s:s,s:i,s:s,s:s}",
             "default_effort", effort, "default_model", model,
-            "default_provider", provider, "format", 3, "protocol", "responses", "cwd", resolved),
+            "default_provider", provider, "format", 4, "protocol", "responses", "cwd", resolved),
         NULL, error, error_size);
 out: free(resolved);
     return rc;

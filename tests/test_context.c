@@ -3713,18 +3713,27 @@ test_host_snapshot_replay(struct snag_store *store, const char *cwd)
     json_t *b = json_object_get(next.create_request.value, "input");
     for (size_t i = 0u; i + 1u < json_array_size(a); ++i)
         assert(json_equal(json_array_get(a, i), json_array_get(b, i)));
+    assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+    assert(session.checkpoint_has_context);
     snag_session_close(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     build_context(&session, 1u, empty, NULL, &replay);
     assert(!replay.host_context &&
            json_equal(next.create_request.value, replay.create_request.value));
+    int journal = session.log_fd;
+    session.log_fd = -1; /* Compaction must use the embedded uncovered seam. */
     assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium",
         true, 0u, false, NULL, &compact, error, sizeof(error), NULL) == 0);
+    session.log_fd = journal;
     json_t *output = compact_output_fixture();
     commit_counted_compaction(&session, compact_id, "hard_budget",
                               SNAJPAGENT_MODEL, &compact, output);
     json_decref(output);
+    session.log_fd = -1; /* Summary transition must not replay the old prefix. */
     build_context(&session, 1u, empty, NULL, &replay);
+    session.log_fd = journal;
+    assert(!message_matching(json_object_get(replay.create_request.value, "input"),
+                             "snapshot answer"));
     assert(replay.host_context && json_equal(replay.host_context, first.host_context));
     size_t snapshots = 0u;
     b = json_object_get(replay.create_request.value, "input");
@@ -3780,6 +3789,47 @@ test_live_projection_without_journal_read(struct snag_store *store, const char *
     assert(next.create_request.value && next.model_input.value);
     snag_context_projection_free(&first);
     snag_context_projection_free(&next);
+    json_decref(steering);
+    snag_session_close(&session);
+}
+
+static void
+test_embedded_provider_checkpoint(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session;
+    struct snag_context_projection first = {0}, live = {0}, resumed = {0};
+    json_t *steering = json_array();
+    char id[SNAG_ID_HEX_LEN + 1u], error[512] = {0};
+    const char *turn = "c2000000000000000000000000000001";
+    const char *response = "c2000000000000000000000000000002";
+    create_session(store, &session, cwd, "medium");
+    snag_context_start_new(&session);
+    memcpy(id, session.id, sizeof(id));
+    commit_event(&session, "turn_started", turn_started(turn, 1u, "resume checkpoint", cwd, NULL));
+    build_context(&session, 1u, steering, NULL, &first);
+    assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+    assert(session.checkpoint_has_context && session.checkpoint_offset > 0);
+    commit_event(&session, "response_started", response_started(turn, response, NULL));
+    commit_event(&session, "response_completed", response_completed(turn, response, "done"));
+    build_context(&session, 2u, steering, NULL, &live);
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(session.checkpoint_has_context && session.checkpoint_context);
+    build_context(&session, 2u, steering, NULL, &resumed);
+    assert(json_equal(live.model_input.value, resumed.model_input.value));
+    assert(json_equal(live.create_request.value, resumed.create_request.value));
+    assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+    snag_context_projection_free(&resumed);
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    build_context(&session, 2u, steering, NULL, &resumed);
+    assert(json_equal(live.model_input.value, resumed.model_input.value));
+    assert(json_equal(live.create_request.value, resumed.create_request.value));
+    snag_context_projection_free(&first);
+    snag_context_projection_free(&live);
+    snag_context_projection_free(&resumed);
     json_decref(steering);
     snag_session_close(&session);
 }
@@ -4020,6 +4070,7 @@ main(int argc, char **argv)
     struct snag_instruction_set instructions = {0};
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
     test_live_projection_without_journal_read(&store, cwd);
+    test_embedded_provider_checkpoint(&store, cwd);
     test_host_snapshot_replay(&store, cwd);
     test_host_fact_cache_prefix(&store, cwd);
     test_office_commands_export(&store, cwd);

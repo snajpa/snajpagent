@@ -88,7 +88,7 @@ LIVE_WORKSPACE ?= $(CURDIR)
 LIVE_RESULT_ROOT ?=
 TMUX_TEST_ROOT ?= $(CURDIR)/build/tmux-test
 PLATFORM_SRC = src/base64.c src/base.c src/platform.c src/term_host.c src/wake.c src/net.c src/process_host.c
-COMMON_SRC = $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/credential.c src/auth.c src/auth_http.c src/login.c src/secret.c src/instructions.c src/json.c src/wire.c src/context.c src/provider_retry.c src/http.c src/update.c src/provider.c src/model_cache.c src/tools.c src/tools_read.c src/irc.c src/irc_runtime.c src/sse.c src/responses.c src/turn.c src/store.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/tools_write.c src/history.c src/term.c src/render.c src/render_prepare.c src/cli.c src/ui.c src/app_events.c src/app_stream.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/app.c
+COMMON_SRC = $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/credential.c src/auth.c src/auth_http.c src/login.c src/secret.c src/instructions.c src/json.c src/wire.c src/context.c src/provider_retry.c src/http.c src/update.c src/provider.c src/model_cache.c src/tools.c src/tools_read.c src/irc.c src/irc_runtime.c src/sse.c src/responses.c src/turn.c src/store.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_patch.c src/tools_write.c src/history.c src/term.c src/render.c src/render_prepare.c src/cli.c src/ui.c src/app_events.c src/app_stream.c src/app_lifecycle.c src/app_compact.c src/app_provider.c src/app.c
 COMMON_SRC += src/convert.c src/tools_media.c src/media.c src/tools_document.c src/tools_audio.c src/app_media.c src/app_audio.c src/av.c src/pcm.c src/audio_device.c src/office.c src/office_package.c src/office_confine.c src/office_sheet.c src/voice.c src/voice_rtc.c src/app_voice.c
 COMMON_OBJ = $(COMMON_SRC:.c=.o) $(PDF_OBJ) $(AUDIO_DEVICE_OBJ)
 HEADERS = src/snajpagent.h src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/config.h src/secret_source.h src/credential.h src/auth.h src/login.h src/secret.h src/instructions.h src/json.h src/snag_jansson.h src/snag_jansson_abi.h src/wire.h src/context.h src/provider_retry.h src/http.h src/update.h src/provider.h src/model_cache.h src/tools.h src/process_host.h src/tools_patch.h src/irc.h src/irc_internal.h src/sse.h src/responses.h src/turn.h src/store.h src/store_internal.h src/term.h src/render.h src/cli.h src/app.h src/app_internal.h src/ui.h src/history.h src/base64.h src/convert.h src/media.h src/rules.h src/tools_write.h src/tools_file.h
@@ -203,9 +203,9 @@ tests/test_provider_transport: $(COMMON_SRC) tests/test_provider_transport.c $(H
 
 tests/test_context: CPPFLAGS += $(PDF_CFLAGS)
 
-tests/test_context: $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/json.c src/instructions.c src/context.c src/media.c src/turn.c src/store.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_media.c src/tools_document.c src/convert.c src/process_host.c src/av.c src/office.c src/office_package.c src/office_confine.c src/office_sheet.c tests/test_context.c $(HEADERS) $(PDF_OBJ) $(AUDIO_DEVICE_OBJ)
+tests/test_context: $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/json.c src/instructions.c src/context.c src/media.c src/turn.c src/store.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/tools_media.c src/tools_document.c src/convert.c src/process_host.c src/av.c src/office.c src/office_package.c src/office_confine.c src/office_sheet.c tests/test_context.c $(HEADERS) $(PDF_OBJ) $(AUDIO_DEVICE_OBJ)
 
-tests/test_model_cache: $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/json.c src/instructions.c src/media.c src/turn.c src/store.c src/irc_event.c src/model_cache.c tests/test_model_cache.c $(HEADERS)
+tests/test_model_cache: $(PLATFORM_SRC) src/config.c src/rules.c src/secret_source.c src/json.c src/instructions.c src/media.c src/turn.c src/store.c src/store_checkpoint.c src/irc_event.c src/model_cache.c tests/test_model_cache.c $(HEADERS)
 
 tests/test_render: $(PLATFORM_SRC) src/json.c src/history.c src/term.c src/render.c src/irc_event.c src/render_prepare.c tests/test_render.c \
 		src/base.h src/fs.h src/term_host.h src/wake.h src/net.h src/json.h src/term.h src/term_host.h src/render.h src/snajpagent.h
@@ -214,7 +214,7 @@ tests/test_turn: $(PLATFORM_SRC) src/json.c src/media.c src/turn.c src/tools_rea
 
 tests/test_tools: $(PLATFORM_SRC) src/json.c src/wire.c src/credential.c src/secret.c src/config.c src/rules.c src/secret_source.c src/media.c src/turn.c src/tools.c src/convert.c src/tools_read.c src/tools_patch.c tests/test_tools.c $(HEADERS)
 
-tests/test_store: $(PLATFORM_SRC) src/json.c src/instructions.c src/media.c src/turn.c src/store.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c tests/test_store.c $(HEADERS)
+tests/test_store: $(PLATFORM_SRC) src/json.c src/instructions.c src/media.c src/turn.c src/store.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c tests/test_store.c $(HEADERS)
 
 tests/test_context tests/test_store tests/test_tools tests/test_turn: tests/checked_json.h
 

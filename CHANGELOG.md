@@ -4,6 +4,15 @@
 
 ## Unreleased
 
+- Embed versioned session checkpoints in `events.jsonl`, containing both
+  recoverable session state and the materialized provider conversation. Indexed
+  records let resume verify and apply a short suffix rather than reconstructing
+  the whole journal; compaction reads the same uncovered context seam. Existing
+  long format-2/3 journals migrate on first open without rewriting their history.
+
+- Keep queued-turn text intact when opening `/q 1e`: pausing the queue replaces
+  staged session storage, so the editor captures the draft before that commit.
+
 - Keep /yield responsive when a tool takes the foreground during a prompt
   transition. Hide the steer prompt during a provider-policy stop that retains
   a running command until Ctrl-C leaves the stopped turn.

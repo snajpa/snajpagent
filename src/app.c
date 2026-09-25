@@ -728,14 +728,26 @@ begin_queue_edit(struct app_state *app, size_t number, bool active, char *error,
         return 1;
     }
     queued = &app->session.pending_queue[number - 1u];
-    memcpy(app->queue_edit_id, queued->queue_id, sizeof(app->queue_edit_id));
-    app->queue_edit_number = number;
-    app->queue_edit_was_armed = app->session.queue_armed;
-    if (snag_app_queue_arm(app, false) < 0) return -1;
+    /* Arming appends an event and swaps the staged session into place. Read the
+     * old queue entry before that commit invalidates its text pointer. */
     struct snag_buf draft = {.max = SNAG_MAX_QUEUED_TEXT + 8u};
     draft_rc = snag_buf_printf(&draft, "%s%s", queued->read_only ? "/ro " :
                               queued->text[0] == '/' ? "/" : "", queued->text);
     if (draft_rc == 0) draft_rc = snag_buf_terminate(&draft);
+    if (draft_rc < 0) {
+        snag_buf_free(&draft);
+        return snag_errorf(error, error_size, "queue editor could not be displayed");
+    }
+    memcpy(app->queue_edit_id, queued->queue_id, sizeof(app->queue_edit_id));
+    app->queue_edit_number = number;
+    app->queue_edit_was_armed = app->session.queue_armed;
+    if (snag_app_queue_arm(app, false) < 0) {
+        app->queue_edit_id[0] = '\0';
+        app->queue_edit_number = 0u;
+        app->queue_edit_was_armed = false;
+        snag_buf_free(&draft);
+        return -1;
+    }
     if (draft_rc == 0 && set_input_prompt(app, active) == 0)
         draft_rc = snag_ui_send(&app->ui, (struct snag_ui_command){
             .kind = SNAG_UI_DRAFT, .text = (char *)draft.data});
