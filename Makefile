@@ -341,14 +341,25 @@ tmuxcheck: $(BIN) $(FIXTURE_BIN)
 		   exit 2 ;; \
 	esac
 	rm -rf "$(abspath $(TMUX_TEST_ROOT))"
-	mkdir -p -m 700 "$(abspath $(TMUX_TEST_ROOT))/home" "$(abspath $(TMUX_TEST_ROOT))/work"
-	HOME="$(abspath $(TMUX_TEST_ROOT))/home" LC_ALL=C.utf8 \
+	mkdir -p -m 700 "$(abspath $(TMUX_TEST_ROOT))"
+	$(MAKE) -j3 tmuxcheck-run
+
+# Build both executables above, before concurrent fixtures touch the same tree.
+# Every lane gets its own HOME, state directory and tmux socket namespace.
+tmuxcheck-run: tmuxcheck-fixture tmuxcheck-irc-early tmuxcheck-irc-middle tmuxcheck-irc-retry tmuxcheck-irc-provider tmuxcheck-irc-network
+
+tmuxcheck-fixture:
+	mkdir -p -m 700 "$(abspath $(TMUX_TEST_ROOT))/fixture/home" "$(abspath $(TMUX_TEST_ROOT))/fixture/work"
+	HOME="$(abspath $(TMUX_TEST_ROOT))/fixture/home" LC_ALL=C.utf8 \
 		python3 ./tests/tmux_terminal.py fixture \
-		./$(FIXTURE_BIN) "$(abspath $(TMUX_TEST_ROOT))/work" \
-		"$(abspath $(TMUX_TEST_ROOT))/run"
-	HOME="$(abspath $(TMUX_TEST_ROOT))/home" LC_ALL=C.utf8 \
+		./$(FIXTURE_BIN) "$(abspath $(TMUX_TEST_ROOT))/fixture/work" \
+		"$(abspath $(TMUX_TEST_ROOT))/fixture/run"
+
+tmuxcheck-irc-%:
+	mkdir -p -m 700 "$(abspath $(TMUX_TEST_ROOT))/irc-$*/home"
+	HOME="$(abspath $(TMUX_TEST_ROOT))/irc-$*/home" LC_ALL=C.utf8 \
 		python3 ./tests/tmux_terminal.py irc ./$(BIN) \
-		"$(abspath $(TMUX_TEST_ROOT))/irc"
+		"$(abspath $(TMUX_TEST_ROOT))/irc-$*/run" --group $*
 
 terminallivecheck: $(BIN)
 	@test -n "$(LIVE_RESULT_ROOT)" || { \

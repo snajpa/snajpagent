@@ -9322,76 +9322,90 @@ def run_irc_peer_join_case(binary, root):
         provider.close()
 
 
-def run_irc_case(binary, root):
+IRC_GROUPS = ("early", "middle", "retry", "provider", "network")
+
+
+def run_irc_case(binary, root, group="all"):
+    if group == "all":
+        for name in IRC_GROUPS:
+            run_irc_case(binary, root / name, name)
+        return
     binary = os.path.abspath(binary)
     root.mkdir(mode=0o700, parents=True)
-    run_unsettled_process_close_case(binary, root)
-    run_unsettled_owner_lost_case(binary, root)
-    run_default_zero_wait_case(binary, root)
-    run_session_process_recovery_case(binary, root)
-    run_session_process_recovery_case(binary, root / "silent", emit_output=False)
-    run_punctuation_case(binary, root)
+    if group == "early":
+        run_unsettled_process_close_case(binary, root)
+        run_unsettled_owner_lost_case(binary, root)
+        run_default_zero_wait_case(binary, root)
+        run_session_process_recovery_case(binary, root)
+        run_session_process_recovery_case(binary, root / "silent", emit_output=False)
+        run_punctuation_case(binary, root)
     provider = FakeResponses()
     # One-shot subprocess cases need the same locale/PATH as terminal cases.
     environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret", PAGER="")
     try:
-        run_token_accounting_cases(binary, root / "token-accounting")
-        run_capacity_handoff_cases(binary, root / "capacity-handoff")
-        run_assistant_phase_case(binary, root)
-        run_goal_request_boundary_cases(binary, root)
-        run_host_cache_prefix_case(binary, root / "host-cache-prefix")
-        run_goal_recovery_cases(binary, root, provider, environment)
-        run_queue_dispatch_retry_case(binary, root)
-        run_steer_draft_handoff_case(binary, root)
-        run_steer_draft_handoff_case(binary, root, with_draft=False)
-        for active, chat, width, verbosity in ((False, False, 100, 0), (False, True, 28, 2),
-                                             (True, False, 28, 0), (True, True, 100, 2)):
-            run_history_length_case(binary, root, active, chat, width, verbosity)
-        run_persistent_model_recovery_case(binary, root)
-        run_long_model_resume_recovery_case(binary, root)
-        for chat in (False, True):
-            run_goal_interrupt_http_case(binary, root, chat)
-        run_blank_enter_stream_case(binary, root)
-        run_blank_enter_stream_case(binary, root, help_commands=True)
-        run_nested_command_cases(binary, root)
-        run_manual_compaction_cases(binary, root)
-        run_compaction_text_cases(binary, root)
-        run_compacted_goal_cases(binary, root)
-        run_automatic_turn_retry_cases(binary, root, provider, environment)
-        run_post_exit_drain_cases(binary, root, provider, environment)
-        run_tool_yield_cases(binary, root, provider, environment)
-        run_tool_cases(binary, root, provider, environment)
-        run_manual_retry_cases(binary, root, provider, environment)
-        run_provider_retry_input_cases(binary, root, provider, environment)
-        run_provider_clarification_cases(binary, root, provider, environment)
-        run_policy_partial_goal_cases(binary, root, provider, environment)
-        run_clarification_episode_cases(binary, root, provider, environment)
-        run_policy_stop_cases(binary, root, provider, environment)
-        run_runtime_networking_cases(binary, root, provider, environment)
-        run_runtime_routing_cases(binary, root, provider, environment)
-        run_runtime_boundary_cases(binary, root, provider, environment)
-        run_runtime_history_case(binary, root, provider, environment)
-        run_destination_case(binary, root, provider, environment)
-        run_destination_reconnect_case(binary, root, provider, environment)
-        run_listener_collision_case(binary, root, provider, environment)
-        run_resume_network_pairing_case(binary, root, provider, environment)
-        run_argument_snapshot_cases(binary, root, provider, environment)
-        run_reasoning_boundary_cases(binary, root, provider, environment)
-        run_reasoning_continuity_cases(binary, root, provider, environment)
-        run_multi_tool_cases(binary, root, provider, environment)
-        run_wrapped_table_cases(binary, root / "wrapped-table")
-        run_operator_visibility_cases(binary, root / "operator-visibility")
-        run_tool_contract_cases(binary, root, provider, environment)
-        run_output_cap_cases(binary, root, provider, environment)
-        run_ctrl_d_cases(binary, root, provider, environment)
-        run_model_catalog_case(binary, root, provider, environment)
-        run_configured_efforts_case(binary, root, provider, environment)
+        if group == "early":
+            run_token_accounting_cases(binary, root / "token-accounting")
+            run_capacity_handoff_cases(binary, root / "capacity-handoff")
+            run_assistant_phase_case(binary, root)
+            run_goal_request_boundary_cases(binary, root)
+            run_host_cache_prefix_case(binary, root / "host-cache-prefix")
+            run_goal_recovery_cases(binary, root, provider, environment)
+        elif group == "middle":
+            run_queue_dispatch_retry_case(binary, root)
+            run_steer_draft_handoff_case(binary, root)
+            run_steer_draft_handoff_case(binary, root, with_draft=False)
+            for active, chat, width, verbosity in ((False, False, 100, 0), (False, True, 28, 2),
+                                                 (True, False, 28, 0), (True, True, 100, 2)):
+                run_history_length_case(binary, root, active, chat, width, verbosity)
+            run_persistent_model_recovery_case(binary, root)
+            run_long_model_resume_recovery_case(binary, root)
+            for chat in (False, True):
+                run_goal_interrupt_http_case(binary, root, chat)
+            run_blank_enter_stream_case(binary, root)
+            run_blank_enter_stream_case(binary, root, help_commands=True)
+            run_nested_command_cases(binary, root)
+        elif group == "retry":
+            run_manual_compaction_cases(binary, root)
+            run_compaction_text_cases(binary, root)
+            run_compacted_goal_cases(binary, root)
+            run_automatic_turn_retry_cases(binary, root, provider, environment)
+            run_post_exit_drain_cases(binary, root, provider, environment)
+            run_tool_yield_cases(binary, root, provider, environment)
+            run_tool_cases(binary, root, provider, environment)
+        elif group == "provider":
+            run_manual_retry_cases(binary, root, provider, environment)
+            run_provider_retry_input_cases(binary, root, provider, environment)
+            run_provider_clarification_cases(binary, root, provider, environment)
+            run_policy_partial_goal_cases(binary, root, provider, environment)
+            run_clarification_episode_cases(binary, root, provider, environment)
+            run_policy_stop_cases(binary, root, provider, environment)
+        elif group == "network":
+            run_runtime_networking_cases(binary, root, provider, environment)
+            run_runtime_routing_cases(binary, root, provider, environment)
+            run_runtime_boundary_cases(binary, root, provider, environment)
+            run_runtime_history_case(binary, root, provider, environment)
+            run_destination_case(binary, root, provider, environment)
+            run_destination_reconnect_case(binary, root, provider, environment)
+            run_listener_collision_case(binary, root, provider, environment)
+            run_resume_network_pairing_case(binary, root, provider, environment)
+            run_argument_snapshot_cases(binary, root, provider, environment)
+            run_reasoning_boundary_cases(binary, root, provider, environment)
+            run_reasoning_continuity_cases(binary, root, provider, environment)
+            run_multi_tool_cases(binary, root, provider, environment)
+            run_wrapped_table_cases(binary, root / "wrapped-table")
+            run_operator_visibility_cases(binary, root / "operator-visibility")
+            run_tool_contract_cases(binary, root, provider, environment)
+            run_output_cap_cases(binary, root, provider, environment)
+            run_ctrl_d_cases(binary, root, provider, environment)
+            run_model_catalog_case(binary, root, provider, environment)
+            run_configured_efforts_case(binary, root, provider, environment)
     finally:
         provider.close()
-    run_irc_chat_case(binary, root / "chat")
-    run_irc_peer_join_case(binary, root / "peer-join")
-    run_incremental_history_case(binary, root / "catchup")
-    run_interrupted_history_case(binary, root / "interrupted-catchup")
+    if group == "network":
+        run_irc_chat_case(binary, root / "chat")
+        run_irc_peer_join_case(binary, root / "peer-join")
+        run_incremental_history_case(binary, root / "catchup")
+        run_interrupted_history_case(binary, root / "interrupted-catchup")
 
 
 def run_tools_only(binary, root):
@@ -9774,6 +9788,7 @@ def main():
     irc = subparsers.add_parser("irc")
     irc.add_argument("binary")
     irc.add_argument("root", type=Path)
+    irc.add_argument("--group", choices=("all", *IRC_GROUPS), default="all")
     tools = subparsers.add_parser("tools")
     tools.add_argument("binary")
     tools.add_argument("root", type=Path)
@@ -9789,7 +9804,7 @@ def main():
     if args.mode == "fixture":
         run_fixture(args.binary, args.workspace, args.root)
     elif args.mode == "irc":
-        run_irc_case(args.binary, args.root)
+        run_irc_case(args.binary, args.root, args.group)
     elif args.mode == "tools":
         run_tools_only(args.binary, args.root)
     else:
