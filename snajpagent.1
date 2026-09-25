@@ -1440,7 +1440,8 @@ requested termination continues in the background and is reported as pending.
 The model can inspect the results and choose its next action.
 .PP
 Available in both views while a managed-tool wait owns the foreground,
-including termination waits, even without a steer prompt. Outside a tool wait
+including termination waits and prompt transitions, even without a steer
+prompt. Outside a tool wait
 the command reports that none is active;
 it does not queue a future yield or interrupt a provider request.
 .SS Attachments
@@ -3955,6 +3956,7 @@ stops automatic retries and pauses an active goal. Other policy rejections also
 stop automatic retries. A policy pause is recorded as a provider rejection;
 an explicit model refusal has a separate pause reason and notice.
 Existing running commands are retained while the policy-stopped turn waits.
+The input prompt stays hidden while the command is retained.
 Press Ctrl-C to leave that turn before submitting a clarification or another
 command; retained commands are not replayed.
 There is no provider switch or concealed task scope.

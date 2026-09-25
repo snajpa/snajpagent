@@ -813,6 +813,19 @@ read_input(struct snag_ui_display *display, int timeout_ms)
     item = calloc(1u, sizeof(*item));
     if (!item) return -1;
     rc = snag_term_poll(term, timeout_ms, runtime->commands[0], &item->action, &item->text);
+    /* The prompt can be held while snag_term_poll is waiting for input. A
+     * /yield completed at that boundary must take the same priority path as
+     * a line found in the held input ring, rather than waiting in the action
+     * queue until the tool/provider handoff has already finished. */
+    if (rc > 0 && item->action == SNAG_TERM_SUBMIT && item->text &&
+        !strcmp(item->text, "/yield") &&
+        (term->spinner_states & (1u << SNAG_TERM_SPINNER_TOOL))) {
+        atomic_store(&runtime->yield_requested, true);
+        snag_wakeup_send(runtime->actions.wake[1]);
+        free(item->text);
+        free(item);
+        return 0;
+    }
     item->history_warning = term->history_reader.warning;
     term->history_reader.warning = false;
     if (item->text) item->received_ms = snag_time_ms();

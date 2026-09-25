@@ -6274,6 +6274,7 @@ def run_policy_stop_cases(binary, root, provider, environment,
             if running:
                 # The policy-stopped turn has no accepted response to steer.
                 # Its process survives while Ctrl-C leaves the held foreground.
+                # A steer composer from the rejected response must not reopen.
                 assert "host-model/medium A>" not in terminal.capture().split(
                     "Running commands retained")[-1]
                 terminal.send_key("C-c")
@@ -8860,6 +8861,9 @@ def run_tool_yield_cases(binary, root, provider, environment):
                     assert time.monotonic() < deadline, provider.failure
                     time.sleep(0.01)
                 terminal.submit("/yield")
+                # Tool admission can race the transition from an open prompt
+                # into a held tool wait; the priority control must still land.
+                wait_event_count(terminal.dotdir, "turn_yield_requested", 1)
             terminal.wait("tool yield complete " + mode, timeout=10.0, join_wrapped=True)
             _, log = read_events(terminal.dotdir)
             assert not event_list(log, "turn_failed"), log[-6:]

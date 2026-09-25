@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Keep /yield responsive when a tool takes the foreground during a prompt
+  transition. Hide the steer prompt during a provider-policy stop that retains
+  a running command until Ctrl-C leaves the stopped turn.
+
 - Retry a transient HTTP 5xx `upstream_error` with `server_error` using the
   existing bounded transport backoff and unchanged request, including gateway
   access-verification 503s. An actual access denial or provider policy rejection

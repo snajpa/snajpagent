@@ -3524,7 +3524,11 @@ turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
     app->recovery_delay_ms = delay < 30000u / 2u ? delay * 2u : 30000u;
     app->recovery_wait = true;
     /* A retry timer has not yet acquired a response that can accept steering. */
-    if (!app->execute) (void)hold_response_prompt(app);
+    /* A policy stop with a retained process needs Ctrl-C before a new
+     * composer. Preserve the steering composer at ordinary retry boundaries,
+     * but never expose it while this foreground process is held. */
+    if (!app->execute) (void)(policy && app->session.process_count ?
+        snag_ui_hold(&app->ui, true) : hold_response_prompt(app));
     app->steering_requested = false;
     if (policy) {
         (void)app_warning(app,
