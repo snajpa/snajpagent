@@ -1546,6 +1546,15 @@ context_event(void *opaque, const struct snag_session *state,
         builder->deferred_irc_seq = (uint64_t)json_integer_value(json_object_get(
             json_array_get(builder->deferred_irc, 0u), "seq"));
         const json_t *steering = json_object_get(data, "steering");
+        /* Keep the room event, but leave a still-pending IRC steer outside an
+         * active-turn compaction source, just like a direct steering_added.
+         * Compaction has no steering snapshot against which to check it. */
+        if (steering && builder->compact_stop_before_active && builder->compact_current) {
+            const struct snag_pending_steering *pending =
+                pending_steering_at_seq(builder->session, seq);
+            const char *id = snag_json_string(steering, "steering_id");
+            if (pending && id && !strcmp(pending->steering_id, id)) return 0;
+        }
         return steering ? context_event(opaque, state, seq, "steering_added", steering, error, error_size) : 0;
     }
     if (!strcmp(type, "turn_started")) {

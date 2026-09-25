@@ -1111,20 +1111,46 @@ test_parallel_journal_recovery(struct snag_store *store, const char *cwd)
     commit_event(&session, "input_admitted", json_pack("{s:[s],s:I,s:s}",
         "steering_ids", steer, "time_ms", (json_int_t)1788739290000LL,
         "turn_id", turn));
+    /* The active turn survives a completed compaction. A later IRC admission
+     * carries its steer inside irc_admitted, not as a standalone event. It
+     * must remain live input instead of breaking the next compact request. */
+    const char *room_steer = "c7000000000000000000000000000000";
+    struct snag_irc_event room = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 2u,
+        .endpoint = "<redacted:secret>host:6667", .room = "#lab", .nick = "peer",
+        .text = "urgent room steer", .stream = "cccccccccccccccccccccccccccccccc",
+        .sequence = 1u, .historical = true, .input = true};
+    commit_event(&session, "irc_event", snag_irc_event_data(&room));
+    uint64_t received = session.irc_received_seq;
+    commit_event(&session, "irc_admitted", json_pack("{s:[I],s:o}",
+        "sequences", (json_int_t)received, "steering",
+        steering_added(turn, room_steer, "urgent room steer")));
+    commit_event(&session, "input_admitted", json_pack("{s:[s],s:I,s:s}",
+        "steering_ids", room_steer, "time_ms", (json_int_t)1788739291000LL,
+        "turn_id", turn));
+    struct snag_context_projection next_prefix = {0};
+    int compact_rc = snag_context_compact_request_build(&session, SNAJPAGENT_MODEL,
+        "medium", true, 0u, false, NULL, &next_prefix, error, sizeof(error), NULL);
+    if (compact_rc < 0) fprintf(stderr, "IRC steer compact build: %s\n", error);
+    assert(compact_rc >= 0);
+    snag_context_projection_free(&next_prefix);
     struct snag_context_projection projection = {0};
     struct snag_instruction_set instructions = {0};
-    json_t *snapshot = checked_json(json_pack("[{s:s,s:s}]", "id", steer, "text", "fresh steer"));
+    json_t *snapshot = checked_json(json_pack("[{s:s,s:s},{s:s,s:s}]",
+        "id", steer, "text", "fresh steer", "id", room_steer, "text", "urgent room steer"));
     build_context(&session, 2u, snapshot, &instructions, &projection);
     json_t *input = json_object_get(projection.create_request.value, "input");
-    unsigned int user = 0u, steering = 0u;
+    unsigned int user = 0u, steering = 0u, room_updates = 0u, room_steers = 0u;
     for (size_t i = 0u; i < json_array_size(input); ++i) {
         const char *text = snag_json_string(json_array_get(input, i), "content");
         if (text) {
             user += !strcmp(text, "batch");
             steering += !strcmp(text, "fresh steer");
+            room_updates += strstr(text, room.stream) != NULL;
+            room_steers += !strcmp(text, "urgent room steer");
         }
     }
-    assert(user == 1u && steering == 1u && session.process_count == 2u);
+    assert(user == 1u && steering == 1u && room_updates >= 1u && room_steers == 1u &&
+        session.process_count == 2u);
     const char *summary = snag_json_string(
         message_matching(input, "The preceding JSON describes unsettled commands"),
         "content");

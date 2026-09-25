@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Keep an admitted IRC steer out of the active-turn compaction source while
+  retaining its room event. A long-running turn can now compact again without
+  rejecting the missing steering snapshot and exhausting its retry bound.
+
 - Embed versioned session checkpoints in `events.jsonl`, containing both
   recoverable session state and the materialized provider conversation. Indexed
   records let resume verify and apply a short suffix rather than reconstructing
