@@ -669,6 +669,14 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
             if (rc < 0) (void)input_start(display);
         } else {
             rc = snag_term_external_end(term, error, error_size);
+            /* Transfer input already read beyond EXIT belongs in the native
+             * input ring ahead of bytes the restarted worker can read. */
+            if (rc == 0 && command->len) {
+                if (!command->text || command->len > UI_INPUT_CAPACITY)
+                    rc = snag_errorf(error, error_size, "transfer input tail exceeds terminal capacity");
+                else input_enqueue(display->runtime,
+                                   (const unsigned char *)command->text, command->len);
+            }
             if (rc == 0 && input_start(display) < 0)
                 rc = snag_errorf(error, error_size, "cannot restart terminal input worker: %s", strerror(errno));
         }
@@ -834,7 +842,8 @@ read_input(struct snag_ui_display *display, int timeout_ms)
         item->action = SNAG_TERM_NONE;
     }
     take_snapshot(display, &item->snapshot);
-    if (item->text) snag_term_destination_route(term, item->text, &item->route);
+    if (item->text && item->action != SNAG_TERM_UPLOAD)
+        snag_term_destination_route(term, item->text, &item->route);
     if (item->action == SNAG_TERM_INTERRUPT) term->interrupt_pending = true;
     if (item->action == SNAG_TERM_CANCEL || item->action == SNAG_TERM_INTERRUPT) {
         bool deferred = term->defer_redraw;
@@ -1331,6 +1340,15 @@ int
 snag_ui_external(struct snag_ui *ui, bool begin, char *error, size_t error_size)
 {
     struct ui_message message = {.command = {.kind = SNAG_UI_EXTERNAL, .data.value = begin}};
+    return request(ui, &message, NULL, error, error_size);
+}
+
+int
+snag_ui_external_replay(struct snag_ui *ui, const unsigned char *tail, size_t length,
+                        char *error, size_t error_size)
+{
+    struct ui_message message = {.command = {
+        .kind = SNAG_UI_EXTERNAL, .data.value = false, .text = (const char *)tail, .len = length}};
     return request(ui, &message, NULL, error, error_size);
 }
 

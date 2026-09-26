@@ -24,6 +24,8 @@ int snag_media_snapshot(int session_fd, const char *cwd, const char *path,
                         const char *mime, size_t max_bytes,
                         int (*pump)(void *, unsigned int), void *opaque,
                         json_t **asset, char *error, size_t error_size);
+/* Only a freshly created asset for an unaccepted operation may be discarded. */
+int snag_media_discard(int session_fd, const json_t *asset);
 const char *snag_media_mime(const char *path);
 int snag_media_save(int session_fd, const void *bytes, size_t len, const char *mime,
                     json_t **asset, char *error, size_t error_size);

@@ -209,7 +209,8 @@ snag_media_snapshot(int session_fd, const char *cwd, const char *path,
         else if (n >= 2 && header[0] == 'B' && header[1] == 'M') mime = "image/bmp";
         else if (n >= 4 && (!memcmp(header, "II\052\0", 4u) || !memcmp(header, "MM\0\052", 4u))) mime = "image/tiff";
         else {
-            errno = EINVAL;
+            /* Unknown signature, distinct from an unsafe or invalid source. */
+            errno = ENOTSUP;
             snag_errorf(error, error_size, "Expected PNG, JPEG, GIF, WebP, BMP or TIFF image bytes.");
             close(input);
             return -1;
@@ -256,6 +257,20 @@ out:
     if (dir >= 0) close(dir);
     if (rc < 0 && error_size)
         (void)snprintf(error, error_size, "Cannot snapshot media: %s", strerror(saved));
+    errno = saved;
+    return rc;
+}
+
+int
+snag_media_discard(int session_fd, const json_t *asset)
+{
+    if (!snag_media_valid(asset)) return snag_errno(EINVAL);
+    int dir = private_directory(session_fd);
+    if (dir < 0) return -1;
+    int rc = snag_unlink_at(dir, snag_json_string(asset, "id"), false);
+    if (rc == 0) rc = snag_sync_dir(dir);
+    int saved = errno;
+    close(dir);
     errno = saved;
     return rc;
 }

@@ -52,6 +52,14 @@ snag_image_prepare(struct snag_session *session, const char *path, uint32_t fram
     rc = *part ? 0 : -1;
 out:
     if (state.interrupted == 2) rc = 2;
+    if (rc) {
+        /* Neither snapshot belongs to an accepted image part yet. */
+        if (derived) (void)snag_media_discard(session->dir_fd, derived);
+        if (source && strncmp(path, "asset:", 6u))
+            (void)snag_media_discard(session->dir_fd, source);
+        json_decref(*part);
+        *part = NULL;
+    }
     json_decref(source); json_decref(derived); free(retained); snag_buf_free(&png);
     return rc;
 }

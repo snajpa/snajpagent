@@ -3330,11 +3330,15 @@ snag_session_media(struct snag_session *session, const char *path, const char *m
     } else if (snag_media_snapshot(session->dir_fd, session->cwd, path, mime,
               SNAG_MEDIA_FILE_MAX, pump, opaque, asset, error, error_size) < 0) return -1;
     if (snag_media_verify(session->dir_fd, *asset, pump, opaque, error, error_size) < 0) {
+        if (strncmp(path, "asset:", 6u)) (void)snag_media_discard(session->dir_fd, *asset);
         json_decref(*asset); *asset = NULL; return -1;
     }
     char *dir = snag_path_join(session->dir_path, "media");
     if (dir) *retained_path = snag_path_join(dir, snag_json_string(*asset, "id"));
     free(dir);
-    if (!*retained_path) { json_decref(*asset); *asset = NULL; return -1; }
+    if (!*retained_path) {
+        if (strncmp(path, "asset:", 6u)) (void)snag_media_discard(session->dir_fd, *asset);
+        json_decref(*asset); *asset = NULL; return -1;
+    }
     return 0;
 }

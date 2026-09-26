@@ -83,6 +83,10 @@ int snag_ui_capture_route(struct snag_ui *ui, const char *text);
 uint32_t snag_ui_pause_remaining(struct snag_ui *ui);
 int snag_ui_open(struct snag_ui *ui, char *error, size_t error_size);
 int snag_ui_external(struct snag_ui *ui, bool begin, char *error, size_t error_size);
+/* Resume the terminal input worker after external ownership; enqueue bytes
+ * already received after the transfer's final EXIT before restarting it. */
+int snag_ui_external_replay(struct snag_ui *ui, const unsigned char *tail, size_t length,
+                            char *error, size_t error_size);
 int snag_ui_hold(struct snag_ui *ui, bool active);
 int snag_ui_prompt(struct snag_ui *ui, bool active, const char *label,
                     const char *const spinners[SNAG_TERM_SPINNER_COUNT],

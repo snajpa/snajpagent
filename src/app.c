@@ -2569,7 +2569,8 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         if (*handled) return rc;
         rc = snag_app_audio_command(app, line, handled);
         if (*handled) return rc;
-        if ((app->audio || app->voice) && !strncmp(line, "/attach", 7u)) {
+        if ((app->audio || app->voice) &&
+            (!strncmp(line, "/attach", 7u) || !strcmp(line, "/upload"))) {
             *handled = true;
             return app_error(app, "Stop local audio before preparing an attachment.");
         }
@@ -2846,6 +2847,12 @@ again:;
         app->interrupt_requested = true;
         free(line);
         return 2;
+    }
+    if (action == SNAG_TERM_UPLOAD) {
+        bool directory = line && !strcmp(line, "trz -d");
+        free(line);
+        rc = snag_app_upload_command(app, directory);
+        return rc < 0 ? rc : set_input_prompt(app, true);
     }
     if (action == SNAG_TERM_VIEW) return input_view_toggle(app);
     if (!line) return 0;
@@ -5120,6 +5127,13 @@ interactive_loop(struct app_state *app, const char *initial)
                     commit_event(app, "input_cancelled", json_object(), error, sizeof(error)) < 0)
                     goto ui_failed;
                 if (cancel_queue_edit(app, false) < 0) goto ui_failed;
+                continue;
+            }
+            if (action == SNAG_TERM_UPLOAD) {
+                bool directory = owned && !strcmp(owned, "trz -d");
+                free(owned); owned = NULL;
+                if (snag_app_upload_command(app, directory) < 0 || set_input_prompt(app, false) < 0)
+                    goto ui_failed;
                 continue;
             }
             if (action == SNAG_TERM_VIEW) {

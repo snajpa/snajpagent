@@ -1979,6 +1979,11 @@ complete_action(struct snag_term *term, enum snag_term_action action, enum snag_
 
     if (term->utf8_pending_len || (!term->draft.len && action != SNAG_TERM_SUBMIT)) return 0;
     if (snag_buf_terminate(&term->draft) < 0) return -1;
+    /* The workstation's stock drag wrapper injects precisely these launch
+     * lines. Admit them as local terminal work, never as provider/IRC text. */
+    if (action == SNAG_TERM_SUBMIT &&
+        (!strcmp((const char *)term->draft.data, "trz") ||
+         !strcmp((const char *)term->draft.data, "trz -d"))) action = SNAG_TERM_UPLOAD;
     if (action == SNAG_TERM_QUEUE && verbosity) action = SNAG_TERM_SUBMIT;
     bool local = action == SNAG_TERM_SUBMIT && (destination == SNAG_IRC_TARGET_SELECT || verbosity ||
                   (term->blank_local && snag_text_blank((char *)term->draft.data)));
