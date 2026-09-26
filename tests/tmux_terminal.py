@@ -964,7 +964,7 @@ def run_paced_decode_case(binary, root, width=28, unicode=False, resize=None, ty
             terminal.resize(resize, 14)
             time.sleep(0.02)
             assert_live_paragraph_gap(terminal, "• Paced", "form")
-        _, split_word_at = wait_prose(split)
+        _, split_word_at = wait_prose(split, timeout=3.0)
         if split_word_at - split_prefix_at < 0.03:
             raise AssertionError(
                 "the fixture lost its pause before completing the word"

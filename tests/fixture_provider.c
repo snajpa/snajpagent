@@ -814,8 +814,10 @@ flood_done: snag_buf_free(&text);
                 add_call(graph, workspace, cycle, 1u, "fixture paced") < 0) goto allocation;
             for (size_t part = 0u; part < fragment_count; ++part) {
                 if (emit_fragment(&out, index, fragments[part], strlen(fragments[part])) < 0) goto allocation;
+                /* The tmux gate runs beside other fixtures. Leave the split
+                 * word observable even when its reader is descheduled. */
                 if ((control = wait_ticks(&out, part + 1u == fragment_count ? 60u :
-                                               part == 2u ? 20u : 4u)) != 0) return control;
+                                               part == 2u ? 80u : 4u)) != 0) return control;
             }
             return 0;
         }
