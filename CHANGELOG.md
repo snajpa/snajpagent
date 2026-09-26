@@ -15,6 +15,10 @@
   retaining its room event. A long-running turn can now compact again without
   rejecting the missing steering snapshot and exhausting its retry bound.
 
+- Keep IRC reconnect history available when a context rebase trims a room
+  event just before its already-summarized admission. The retained admission
+  no longer causes response context projection to fail.
+
 - Embed versioned session checkpoints in `events.jsonl`, containing both
   recoverable session state and the materialized provider conversation. Indexed
   records let resume verify and apply a short suffix rather than reconstructing

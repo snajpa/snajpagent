@@ -5381,11 +5381,9 @@ def run_runtime_routing_cases(binary, root, provider, environment):
             assert len(outputs) == 1
             if tool == "irc_state":
                 assert "no active endpoints" in outputs[0] and "invalid" not in outputs[0]
-            elif phase in ("count", "retry"):
-                # Preparation/retry owns the foreground: a subsequent topology command
-                # cannot retroactively revoke a call admitted at that boundary.
-                assert "destination 1: queued" in outputs[0], outputs
             elif change != "noop":
+                # Tool schemas stay frozen through count/retry, but a foreground
+                # /server stop can remove their destination before execution.
                 assert "not performed" in outputs[0], outputs
             else:
                 assert "destination 1: queued" in outputs[0], outputs
@@ -5393,7 +5391,7 @@ def run_runtime_routing_cases(binary, root, provider, environment):
             assert not event_list(log, "turn_failed"), log
             public = [event["data"] for event in event_list(log, "irc_event")
                       if event["data"]["text"] == marker]
-            assert len(public) == (1 if change == "noop" or phase in ("count", "retry") else 0), public
+            assert len(public) == (1 if change == "noop" else 0), public
             if public:
                 assert public[0]["endpoint"] == endpoint
             if peer is not None:

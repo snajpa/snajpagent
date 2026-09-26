@@ -1691,6 +1691,45 @@ test_durable_irc_input_watermark(struct snag_store *store, const char *path)
 }
 
 static void
+test_rebased_irc_admission_overlap(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session;
+    struct snag_context_projection projection = {0};
+    struct snag_instruction_set instructions = {0};
+    json_t *empty = json_array();
+    const char *turn = "d1000000000000000000000000000000";
+    struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u,
+        .endpoint = "127.0.0.1:6667", .room = "#lab", .nick = "peer",
+        .text = "admitted just before the retained seam",
+        .stream = "11111111111111111111111111111111", .sequence = 1u, .input = true};
+
+    assert(empty);
+    create_session(store, &session, cwd, "medium");
+    commit_event(&session, "turn_started", turn_started(turn, 1u, "inspect room history", cwd, NULL));
+    commit_event(&session, "irc_event", snag_irc_event_data(&event));
+    uint64_t received = session.irc_received_seq;
+    commit_event(&session, "irc_admitted", json_pack("{s:[I]}", "sequences", (json_int_t)received));
+    uint64_t admission = received + 1u;
+    build_context(&session, 1u, empty, &instructions, &projection);
+    snag_context_projection_free(&projection);
+
+    /* Put the rebase overlap exactly between a room event and its admission. */
+    event.input = false;
+    for (unsigned int i = 0u; i < SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS - 1u; ++i) {
+        event.sequence++;
+        event.timestamp_ms++;
+        commit_event(&session, "irc_event", snag_irc_event_data(&event));
+    }
+    commit_event(&session, "context_rebased", json_pack("{s:s,s:s}",
+        "reason", "turn_recovery", "turn_id", turn));
+    assert(session.context_rebase_seq - SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS == admission);
+    build_context(&session, 2u, empty, &instructions, &projection);
+    snag_context_projection_free(&projection);
+    snag_session_close(&session);
+    json_decref(empty);
+}
+
+static void
 test_admitted_room_event_stays_out_of_tool_exchange(struct snag_store *store, const char *cwd)
 {
     const char *turn = "e1000000000000000000000000000000";
@@ -4125,6 +4164,7 @@ main(int argc, char **argv)
     test_leading_instructions_boundary(&store, cwd);
     test_reasoning_continuation(&store, cwd);
     test_durable_irc_input_watermark(&store, cwd);
+    test_rebased_irc_admission_overlap(&store, cwd);
     test_admitted_room_event_stays_out_of_tool_exchange(&store, cwd);
     test_compact_groups(&store, cwd);
     test_large_compact_prefix(&store, cwd);

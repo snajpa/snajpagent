@@ -1543,7 +1543,11 @@ context_event(void *opaque, const struct snag_session *state,
                     break;
                 }
             }
-            if (!found) return -1;
+            /* A rebase may trim the source event just before the overlap while
+             * retaining its admission inside it. Both are already summarized;
+             * only an uncovered admission still needs its source event. */
+            if (!found && !summarized)
+                return snag_fail(error, error_size, EINVAL, "IRC admission lacks its source event");
         }
         builder->deferred_irc_seq = (uint64_t)json_integer_value(json_object_get(
             json_array_get(builder->deferred_irc, 0u), "seq"));
