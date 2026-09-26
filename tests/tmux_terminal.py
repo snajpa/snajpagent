@@ -879,10 +879,11 @@ def run_status_case(binary, root):
             raise AssertionError(f"prompt redraw erased streamed text:\n{middle}")
         if "working…" in middle:
             raise AssertionError(f"removed activity row reappeared:\n{middle}")
-        # Cursor-capable terminals own wrapping, so joined scrollback retains
-        # the logical model line without a renderer-added continuation prefix.
+        # The renderer hard-wraps the whole word with a two-space continuation;
+        # the durable assistant text remains the original unwrapped sentence.
         expected = "status-first-fragment status-second-fragment"
-        final = terminal.wait(expected, timeout=3.0, join_wrapped=True)
+        final = terminal.wait("status-first-fragment\n  status-second-fragment",
+                              timeout=3.0, join_wrapped=True)
         assert_order(final, ["status-first-fragment", "status-second-fragment"])
         _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
         completed = event_list(events, "response_completed")
