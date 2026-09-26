@@ -428,6 +428,10 @@ fixture_response(const char *prompt, const json_t *steering, const json_t *reque
         if (cycle <= 4u) return add_call(graph, workspace, cycle, 0u, "fixture context anchor large output");
         return final_answer(&out, "msg_fixture_context_anchor", "context anchor complete");
     }
+    if (strcmp(prompt, "compact_after_progress") == 0) {
+        if (cycle == 1u) return add_call(graph, workspace, cycle, 0u, "printf progress");
+        return final_answer(&out, "msg_fixture_compact_progress", "compaction progress complete");
+    }
     if (strcmp(prompt, "citation_markers") == 0) return final_answer(&out, "msg_fixture_citations",
             "citations: " "\xee\x88\x80" "cite" "\xee\x88\x82" "turn2view0"
             "\xee\x88\x82" "turn0view3" "\xee\x88\x81" " tail");

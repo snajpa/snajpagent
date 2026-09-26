@@ -1850,12 +1850,20 @@ Commands still require collection before a final answer or goal completion.
 .PP
 Automatic compaction uses the provider threshold and resolved input capacity;
 setting the proactive threshold to zero does not disable capacity handling.
+With a known hard input window, the default automatic threshold is 90% of that
+window.  The prompt percentage shows measured input usage of the selected
+window.  It can fall after a completed compaction; each new attempt announces
+itself.  A long turn can compact again after a completed response and later
+tool progress when its next request exceeds the hard budget.  A recovery rebase clears the
+previous usage measurement until a new response supplies one.
 Native compaction is used when enabled.  Set
 .B native_compaction=false
 to summarize through ordinary Responses; the application wraps the returned
 summary text in its stored message format. Direct ChatGPT/Codex also falls back
 once to Responses summarization when its native endpoint is unavailable;
-other native failures remain errors.  Manual
+failed native requests may retry with a smaller complete-history source within
+the bounded attempt.  Failures that remain report an error and retain the
+previous context.  Manual
 .B /compact
 is accepted at idle and during active work.  It reports when compaction starts,
 waits for a complete context boundary, finishes, or is interrupted.  An idle

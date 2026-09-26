@@ -4209,6 +4209,12 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                          "continuation_scope", projection.continuation_scope), error, sizeof(error)) < 0) {
             goto fail;
         }
+        /* Bound repeated hard-budget compactions while rebuilding one request,
+         * not for the whole (possibly very long) active turn. A completed
+         * provider response is genuine progress; its new tool/assistant group
+         * may need another checkpoint later instead of a summary-less rebase. */
+        hard_compaction_attempts = 0u;
+        over_budget_request_hash[0] = '\0';
           {
               struct snag_usage_totals *totals = &app->program_usage;
               const struct snag_response_usage *u = &graph.usage;

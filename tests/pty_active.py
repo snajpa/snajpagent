@@ -1034,6 +1034,26 @@ def test_hard_compaction_progress_is_remeasured():
     assert len(starts) == 2 and starts[-1]["data"]["input_tokens_bound"] == 1000
 
 
+def test_hard_compaction_resets_after_completed_response():
+    config = write_config("hard-compact-after-progress.ini",
+        "[provider openai]\nexact_token_count = true\nnative_compaction = true\n"
+        "auto_compact_input_tokens = 0\n"
+        f"[model-limit openai/{DEFAULT_MODEL}]\nmax_input_tokens = 89999\n")
+    child = Child(["--config", str(config)], DEFAULT_IDLE_PROMPT)
+    child.send_wait_idle(b"ping\r", b"pong")
+    end = child.send_wait_idle(b"compact_after_progress\r", b"compaction progress complete")
+    child.exit_cleanly(end)
+    log = events(child.session_id())
+    started = [event for event in log if event["type"] == "compaction_started"]
+    completed = [event for event in log if event["type"] == "compaction_completed"]
+    assert len(started) == len(completed) == 2, (len(started), len(completed))
+    assert started[0]["data"]["source_seq"] < started[1]["data"]["source_seq"]
+    # Each installed compact checkpoint legitimately rebases the active request;
+    # the regression is that the second checkpoint exists after tool progress.
+    assert len([event for event in log if event["type"] == "context_rebased"]) == 2
+    assert len([event for event in log if event["type"] == "tool_finished"]) == 1
+
+
 def test_read_only_multiline_compaction_and_chat():
     Path(WORKSPACE, "ro-input.txt").write_text("native text\nsecond line\n", encoding="utf-8")
     config = write_config("ro-compaction.ini", "[provider openai]\nauto_compact_input_tokens = 1\n")
@@ -5873,6 +5893,7 @@ if __name__ == "__main__":
     test_resize_and_suspend_preserve_draft()
     test_compaction_ignores_legacy_samples()
     test_hard_compaction_progress_is_remeasured()
+    test_hard_compaction_resets_after_completed_response()
     test_ctrl_d_exit()
     test_goal_orderly_quit_resume()
     test_stalled_output_consumes_input()

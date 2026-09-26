@@ -1698,6 +1698,11 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         memcpy(session->context_rebase_turn_id, session->active_turn_id,
                sizeof(session->context_rebase_turn_id));
         session->context_rebase_has_new_results = false;
+        /* A recovery rebase replaces the measured request's history while
+         * retaining its compact_id. The old usage/meter and anchor must not
+         * describe (or bound) the new request until it is measured again. */
+        session->context_meter.valid = false;
+        session->usage_anchor.valid = false;
     } else if (strcmp(type, "response_started") == 0) {
         static const char keys[] =
             "irc_seq baseline_sha256 capability_version compact_id capacity_source count_method "

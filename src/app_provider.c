@@ -28,6 +28,7 @@ snag_app_provider_input_pump(void *opaque, unsigned int timeout_ms)
 
 #ifdef SNAJPAGENT_TEST_FIXTURE
 static bool fixture_capacity_rejected_once;
+static unsigned int fixture_progress_compactions;
 
 static json_t *
 fixture_model_limits(size_t index)
@@ -178,6 +179,12 @@ snag_app_provider_count(struct app_state *app, const json_t *count_request,
         *input_tokens = app->session.compact_id[0] ? 1000u : 90000u;
         *count_method = "exact";
     }
+    if (app->session.last_user && strcmp(app->session.last_user, "compact_after_progress") == 0 &&
+        json_object_get(count_request, "tools")) {
+        *input_tokens = fixture_progress_compactions == 0u ||
+            (fixture_progress_compactions == 1u && app->session.active_cycle > 0u) ? 90000u : 1000u;
+        *count_method = "exact";
+    }
     {
         bool wait_for_mention;
 
@@ -261,7 +268,11 @@ snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
                 return pump_rc;
             }
         }
-    return snag_context_compact_output_set(output, fixture_output, error, error_size);
+    int rc = snag_context_compact_output_set(output, fixture_output, error, error_size);
+    if (rc == 0 && app->session.last_user &&
+        strcmp(app->session.last_user, "compact_after_progress") == 0)
+        ++fixture_progress_compactions;
+    return rc;
 #else
     return snag_provider_responses_compact((struct snag_provider_connection){
         app->config, app->turn_provider, credential, &app->ui, snag_app_provider_input_pump, app, app->session.id, 0},

@@ -1176,10 +1176,12 @@ test_accounting_lineage(struct snag_store *store, const char *cwd)
     const char *compact = "03030303030303030303030303030303";
     const char *source = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
     char output_hash[65];
+    char id[SNAG_ID_HEX_LEN + 1u], error[256] = {0};
     struct snag_session session;
     json_t *output = compact_output_fixture();
     assert(snag_json_digest(output, output_hash) == 0);
     create_session(store, &session, cwd, "default");
+    memcpy(id, session.id, sizeof(id));
     commit_event(&session, "compaction_started",
                  compaction_started_data(&session, compact, "manual", 1u, source, source, 1u));
     commit_event(&session, "turn_started", turn_started(turn, 1u, "lineage", cwd, NULL));
@@ -1191,6 +1193,17 @@ test_accounting_lineage(struct snag_store *store, const char *cwd)
     assert(!strcmp(session.usage_anchor.compact_id, compact));
     assert(session.context_meter.input_tokens == 10u);
     assert(session.usage_anchor.input_tokens == 10u);
+    assert(session.context_meter.valid && session.usage_anchor.valid);
+    /* A rebase replaces the measured request history without changing its
+     * compact_id. Neither the old meter nor its token anchor can describe the
+     * smaller request until a fresh response supplies its usage. */
+    commit_event(&session, "context_rebased", checked_json(json_pack("{s:s,s:s}",
+        "reason", "turn_recovery", "turn_id", turn)));
+    assert(!session.context_meter.valid && !session.usage_anchor.valid);
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(!session.context_meter.valid && !session.usage_anchor.valid);
     snag_session_close(&session);
     json_decref(output);
 }

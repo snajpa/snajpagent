@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Allow another bounded hard-budget compaction after completed response/tool
+  progress in a long turn, and clear stale usage after a recovery rebase.
+
 - Explain how GNU Screen redraws after resize can appear as repeated lines in
   an outer terminal's saved scrollback without replaying snajpagent output.
 

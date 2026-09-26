@@ -169,7 +169,12 @@ Responses summary path runs first, and the rebuilt request must be recounted
 below the hard budget. Oversized historical tool/process and assistant text is
 represented by a bounded provenance notice containing its byte size, digest,
 and durable rollout path. The current user input, active controller state, and
-tool schemas are never silently dropped. Responses-based recovery can compact
+tool schemas are never silently dropped. Compaction can summarize newly
+completed response/tool groups again after a previous checkpoint in the
+same long turn; the repeated-hard-budget bound applies to one pre-response
+rebuild, not every later cycle. A summary-less recovery rebase invalidates the
+prior request's token meter and usage anchor until new usage is measured.
+Responses-based recovery can compact
 the oldest complete response/tool-group prefix hierarchically, including a
 prefix inside an older turn, while preserving its remaining suffix, all newer
 turns and the current request. Historical cuts never separate calls from results
