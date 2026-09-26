@@ -174,10 +174,36 @@ test_tool_argument_diagnostics(void)
     json_decref(args);
 }
 
+static void
+test_long_canonical_string(void)
+{
+    enum { RUN = 65536 };
+    static const char tail[] = {'"', '\\', '\x1f', '\xe2', '\x82', '\xac'};
+    static const char encoded_tail[] = "\\\"\\\\\\u001f\xe2\x82\xac\"";
+    struct snag_buf out = {.max = 2u * RUN};
+    char *text = malloc(RUN + sizeof(tail));
+    json_t *value;
+
+    assert(text);
+    memset(text, 'x', RUN);
+    memcpy(text + RUN, tail, sizeof(tail));
+    value = json_stringn(text, RUN + sizeof(tail));
+    assert(value);
+    assert(snag_json_canonical(value, &out) == 0);
+    assert(out.len == RUN + 1u + sizeof(encoded_tail) - 1u);
+    assert(out.data[0] == '"');
+    assert(memcmp(out.data + 1u, text, RUN) == 0);
+    assert(memcmp(out.data + RUN + 1u, encoded_tail, sizeof(encoded_tail) - 1u) == 0);
+    snag_buf_free(&out);
+    json_decref(value);
+    free(text);
+}
+
 int
 main(void)
 {
     test_tool_argument_diagnostics();
+    test_long_canonical_string();
     json_t *fields = json_pack("{s:i,s:n}", "name", 1, "name_suffix");
     assert(fields && snag_json_exact_keys(fields, "name name_suffix"));
     assert(snag_json_exact_keys(fields, "name_suffix name"));

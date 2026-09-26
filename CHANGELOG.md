@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Batch plain SSE line spans and JSON string runs instead of performing a
+  buffer-capacity check for every streamed byte. Keep the same wire limits,
+  UTF-8 checks and escaped JSON output.
+
 - Continue automatic compaction after a long active turn's recovery rebase
   even when its start has left the retained event overlap.
 - Tell the model how to collect unsettled command handles after a rejected

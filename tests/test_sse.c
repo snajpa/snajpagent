@@ -161,6 +161,37 @@ test_bounds(void)
 }
 
 static void
+test_chunked_large_line(void)
+{
+    enum { RUN = 32768 };
+    struct snag_sse_parser parser;
+    char error[128] = {0};
+    unsigned int count = 0u;
+    char *line = malloc(6u + RUN + 1u);
+
+    assert(line);
+    memcpy(line, "data: ", 6u);
+    memset(line + 6u, 'x', RUN);
+    line[6u + RUN] = '\r';
+    snag_sse_init(&parser, count_record, &count);
+    assert(snag_sse_feed(&parser, line, 6u + RUN / 2u, error, sizeof(error)) == 0);
+    assert(snag_sse_feed(&parser, line + 6u + RUN / 2u, RUN / 2u + 1u,
+                         error, sizeof(error)) == 0);
+    assert(snag_sse_feed(&parser, "\n\r\n", 3u, error, sizeof(error)) == 0);
+    assert(snag_sse_finish(&parser, error, sizeof(error)) == 0);
+    assert(count == 1u);
+    snag_sse_free(&parser);
+
+    line[6u + RUN] = '\0';
+    snag_sse_init(&parser, count_record, &count);
+    assert(snag_sse_feed(&parser, line, 6u + RUN + 1u, error, sizeof(error)) < 0);
+    assert(strstr(error, "contains NUL"));
+    assert(count == 1u);
+    snag_sse_free(&parser);
+    free(line);
+}
+
+static void
 test_failures(void)
 {
     static const unsigned char bare_cr[] = "data: x\rdata: y\n\n";
@@ -216,6 +247,7 @@ main(void)
 {
     test_streams();
     test_bounds();
+    test_chunked_large_line();
     test_failures();
     test_consumer_failure();
     puts("test_sse: ok");

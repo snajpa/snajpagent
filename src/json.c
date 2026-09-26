@@ -38,27 +38,32 @@ encode_string(struct snag_buf *out, const char *s, size_t len)
     static const char hex[] = "0123456789abcdef";
 
     if (snag_buf_putc(out, '"') < 0) return -1;
-    for (size_t i = 0; i < len; ++i) {
+    size_t start = 0u;
+    for (size_t i = 0; i < len;) {
         unsigned char c = (unsigned char)s[i];
         if (!c) return snag_errno(EILSEQ);
         if (c >= 0x80u) {
             size_t n = snag_utf8_size(c);
             if (!n || n > len - i || !snag_utf8_valid((const unsigned char *)s + i, n, true))
                 return snag_errno(EILSEQ);
-            if (snag_buf_append(out, s + i, n) < 0) return -1;
-            i += n - 1u;
+            i += n;
             continue;
         }
+        if (c != '"' && c != '\\' && c > 0x1fu) {
+            ++i;
+            continue;
+        }
+        if (i > start && snag_buf_append(out, s + start, i - start) < 0) return -1;
         if (c == '"' || c == '\\') {
             if (snag_buf_putc(out, '\\') < 0 || snag_buf_putc(out, c) < 0) return -1;
         } else if (c <= 0x1fu) {
             unsigned char escaped[6] = {'\\', 'u', '0', '0', (unsigned char)hex[c >> 4],
                                         (unsigned char)hex[c & 15u]};
             if (snag_buf_append(out, escaped, sizeof(escaped)) < 0) return -1;
-        } else if (snag_buf_putc(out, c) < 0) {
-            return -1;
         }
+        start = ++i;
     }
+    if (len > start && snag_buf_append(out, s + start, len - start) < 0) return -1;
     return snag_buf_putc(out, '"');
 }
 

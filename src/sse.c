@@ -175,25 +175,32 @@ snag_sse_feed(struct snag_sse_parser *parser, const void *data, size_t len, char
     if (len > SNAG_MAX_PROVIDER_WIRE - parser->wire_bytes) return fail(parser, error, error_size,
                     "provider wire aggregate exceeds 64 MiB");
     parser->wire_bytes += len;
-    for (size_t i = 0; i < len; ++i) {
-        unsigned char c = input[i];
-
-        if (c == '\0') return fail(parser, error, error_size, "SSE stream contains NUL");
+    for (size_t i = 0; i < len;) {
         if (parser->pending_cr) {
             parser->pending_cr = false;
-            if (c != '\n') return fail(parser, error, error_size, "SSE stream contains bare carriage return");
+            if (input[i++] != '\n') return fail(parser, error, error_size,
+                                      "SSE stream contains bare carriage return");
             if (end_line(parser, error, error_size) < 0) return -1;
             continue;
         }
-        if (c == '\r') {
-            parser->pending_cr = true;
-        } else if (c == '\n') {
-            if (end_line(parser, error, error_size) < 0) return -1;
-        } else if (snag_buf_putc(&parser->line, c) < 0) {
+
+        size_t start = i;
+        while (i < len && input[i] != '\0' && input[i] != '\r' && input[i] != '\n') ++i;
+        size_t span = i - start;
+        size_t room = parser->line.max - parser->line.len;
+        size_t amount = span < room ? span : room;
+        if ((amount && snag_buf_append(&parser->line, input + start, amount) < 0) ||
+            span > amount) {
             parser->failed = true;
             return snag_fail(error, error_size, EPROTO, "SSE %s line exceeds 1 MiB",
                              oversized_line_kind(parser));
         }
+        if (i == len) break;
+        unsigned char c = input[i++];
+        if (c == '\0') return fail(parser, error, error_size, "SSE stream contains NUL");
+        if (c == '\r') {
+            parser->pending_cr = true;
+        } else if (end_line(parser, error, error_size) < 0) return -1;
     }
     return 0;
 }
