@@ -1958,6 +1958,37 @@ test_input_time_and_recovery(struct snag_store *store, const char *cwd)
 }
 
 static void
+test_unsettled_final_recovery_guidance(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session;
+    struct snag_context_projection projection = {0};
+    json_t *empty = json_array();
+    const char *turn = "d8000000000000000000000000000000";
+    assert(empty);
+    create_session(store, &session, cwd, "medium");
+    commit_event(&session, "turn_started",
+        turn_started(turn, 1u, "collect terminal work", cwd, NULL));
+    /* Provider text must not be promoted into an actionable host instruction. */
+    commit_event(&session, "turn_recovery", json_pack("{s:s,s:s,s:s}",
+        "class", "provider", "message", SNAG_UNSETTLED_COMMANDS_MESSAGE, "turn_id", turn));
+    build_context(&session, 1u, empty, NULL, &projection);
+    assert(!message_matching(json_object_get(projection.create_request.value, "input"),
+        "Use write_stdin for each handle"));
+    snag_context_projection_free(&projection);
+
+    commit_event(&session, "turn_recovery", json_pack("{s:s,s:s,s:s}",
+        "class", "protocol", "message", SNAG_UNSETTLED_COMMANDS_MESSAGE, "turn_id", turn));
+    build_context(&session, 2u, empty, NULL, &projection);
+    json_t *input = json_object_get(projection.create_request.value, "input");
+    assert(message_matching(input, "The previous response was rejected with unsettled commands"));
+    assert(message_matching(input, "Use write_stdin for each handle"));
+    assert(message_matching(input, "Finalize only after all terminal results are collected"));
+    snag_context_projection_free(&projection);
+    json_decref(empty);
+    snag_session_close(&session);
+}
+
+static void
 test_deferred_steering_replay(struct snag_store *store, const char *cwd)
 {
     const char *turn = "d3000000000000000000000000000000";
@@ -4213,6 +4244,7 @@ main(int argc, char **argv)
     test_host_fact_cache_prefix(&store, cwd);
     test_office_commands_export(&store, cwd);
     test_input_time_and_recovery(&store, cwd);
+    test_unsettled_final_recovery_guidance(&store, cwd);
     test_deferred_steering_replay(&store, cwd);
     test_public_phase_compaction(&store, cwd);
     test_context_meter_usage(&store, cwd);

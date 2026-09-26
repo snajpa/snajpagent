@@ -2824,6 +2824,12 @@ input continue under a process handle; the model can wait, interact, or
 explicitly terminate them with
 .BR write_stdin .
 .PP
+An unsettled command handle blocks a final model answer.  Recovery points
+the model to the current process snapshot and
+.B write_stdin
+so it can collect terminal results before answering; a terminally failed
+turn closes its owned commands.
+.PP
 The current foreground process owns its command handles.  Turn interruption, closure, or process exit closes managed commands;
 resume does not revive an operating-system process.
 .PP

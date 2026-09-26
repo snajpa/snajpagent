@@ -112,6 +112,8 @@ that session; commands keep their exact bytes and must use that shell's syntax.
 progress, completion, waiting or interruption. Empty-draft Ctrl-C interrupts it,
 text entered during idle compaction becomes future queued work, and a provider
 error keeps the previous context and session available for a retry.
+An unsettled command handle blocks a final answer; recovery points the model
+to `write_stdin` to collect each terminal result before finishing the turn.
 
 ### Keep working, or leave and come back
 

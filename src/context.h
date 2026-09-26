@@ -8,6 +8,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define SNAG_UNSETTLED_COMMANDS_MESSAGE \
+    "Unsettled commands remain; collect their terminal results before a final answer."
+
 #define SNAG_CONTEXT_MAX_REQUEST (32u * 1024u * 1024u)
 #define SNAG_CONTEXT_MAX_COMPACT (12u * 1024u * 1024u)
 

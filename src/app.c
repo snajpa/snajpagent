@@ -4292,7 +4292,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
          * wave and hands running commands back before the next cycle sees it. */
         if (decision.outcome == SNAG_GRAPH_REFUSAL) app->turn_policy_stopped = SNAG_POLICY_STOP_REFUSAL;
         if (app->session.process_count && decision.outcome != SNAG_GRAPH_CALLS) {
-            const char *message = "Unsettled commands remain; collect their terminal results before a final answer.";
+            const char *message = SNAG_UNSETTLED_COMMANDS_MESSAGE;
             if (fail_turn(app, retry, turn_id, "protocol_failure", "protocol", message,
                            error, sizeof(error)) < 0) (void)app_error(app, error);
             else (void)app_error(app, message);

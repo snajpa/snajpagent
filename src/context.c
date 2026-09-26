@@ -664,17 +664,23 @@ compact_forget_item(struct context_builder *builder, const json_t *item)
 }
 
 static int
-append_host_failed(struct context_builder *builder, const char *class_name)
+append_host_failed(struct context_builder *builder, const char *class_name, bool unsettled)
 {
-    char text[384];
+    char text[512];
     if (!builder->recovery_count) builder->recovery_first_ms = builder->event_time_ms;
     if (builder->recovery_count < UINT64_MAX) ++builder->recovery_count;
-    (void)snprintf(text, sizeof(text),
+    int length = snprintf(text, sizeof(text),
         "snajpagent recovery (host-generated): %llu failed attempts; last class=%s; elapsed=%llus. "
-        "Retain completed work and unsettled command handles. Failure is not goal completion or a task blocker.",
+        "Retain completed work and unsettled command handles. "
+        "Failure is not goal completion or a task blocker.%s",
         (unsigned long long)builder->recovery_count, class_name,
         (unsigned long long)((builder->event_time_ms >= builder->recovery_first_ms ?
-            builder->event_time_ms - builder->recovery_first_ms : 0u) / 1000u));
+            builder->event_time_ms - builder->recovery_first_ms : 0u) / 1000u),
+        unsettled ? " The previous response was rejected with unsettled commands. "
+                    "Use write_stdin for each handle in the "
+                    "current process snapshot; if any is still running, continue work or wait. "
+                    "Finalize only after all terminal results are collected." : "");
+    if (length < 0 || (size_t)length >= sizeof(text)) return -1;
     if (builder->recovery_count == 1u) {
         builder->recovery_index = json_array_size(builder->request_input);
         return append_message(builder, "user", text);
@@ -1552,7 +1558,10 @@ context_event(void *opaque, const struct snag_session *state,
     if (!strcmp(type, "turn_recovery")) {
         if (builder->session && seq <= builder->compact_walk_seq) return 0;
         const char *class_name = snag_json_string(data, "class");
-        return class_name ? append_host_failed(builder, class_name) : -1;
+        const char *message = snag_json_string(data, "message");
+        bool unsettled = class_name && !strcmp(class_name, "protocol") && message &&
+            !strcmp(message, SNAG_UNSETTLED_COMMANDS_MESSAGE);
+        return class_name ? append_host_failed(builder, class_name, unsettled) : -1;
     }
     if (!strcmp(type, "response_failed")) {
         json_t *partial = json_object_get(data, "partial_public");
@@ -1700,7 +1709,8 @@ context_event(void *opaque, const struct snag_session *state,
                                       json_object_get(data, "result"));
     if (snag_string_in(type, "turn_completed turn_completed_silent turn_failed turn_interrupted")) {
         if (append_deferred_input(builder) < 0) return -1;
-        if (!strcmp(type, "turn_failed")) return append_host_failed(builder, snag_json_string(data, "class"));
+        if (!strcmp(type, "turn_failed"))
+            return append_host_failed(builder, snag_json_string(data, "class"), false);
         if (!strcmp(type, "turn_interrupted"))
             return append_host_interrupted(builder, snag_json_string(data, "origin"),
                                             snag_json_string(data, "reason"));

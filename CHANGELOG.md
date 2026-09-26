@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Tell the model how to collect unsettled command handles after a rejected
+  final answer while retaining the existing process-ownership safety guard.
 - Preserve pending IRC source events across context compaction and recovery;
   older checkpoints can resolve a later admission from the verified journal.
 - Restore explicit whole-word hard wrapping and two-space prose continuation on
