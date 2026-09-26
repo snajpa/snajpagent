@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Preserve pending IRC source events across context compaction and recovery;
+  older checkpoints can resolve a later admission from the verified journal.
 - Restore explicit whole-word hard wrapping and two-space prose continuation on
   cursor-capable terminals as well as the existing dumb-terminal path; stored
   model text remains byte-exact. Keep the active composer visible from turn

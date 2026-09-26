@@ -95,8 +95,25 @@ context_cache_free(void *opaque)
     free(cache);
 }
 
+static bool
+context_cache_unconsumed_irc(const json_t *entry, uint64_t consumed)
+{
+    uint64_t seq;
+    const char *type = snag_json_string(entry, "type");
+    const json_t *data = json_object_get(entry, "data");
+    if (!type || snag_json_integer_u64(entry, "seq", &seq) < 0 || seq <= consumed) return false;
+    if (!strcmp(type, "irc_event")) return json_is_true(json_object_get(data, "input"));
+    if (!strcmp(type, "irc_admitted")) {
+        const json_t *items = json_object_get(data, "sequences");
+        for (size_t i = 0u; i < json_array_size(items); ++i)
+            if ((uint64_t)json_integer_value(json_array_get(items, i)) > consumed) return true;
+    }
+    return false;
+}
+
 static int
-context_cache_trim(struct context_cache *cache, uint64_t boundary)
+context_cache_trim(struct context_cache *cache, const struct snag_session *session,
+                   uint64_t boundary)
 {
     uint64_t overlap = boundary > SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS ?
         boundary - SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS : 0u;
@@ -106,13 +123,15 @@ context_cache_trim(struct context_cache *cache, uint64_t boundary)
         json_t *event = json_array_get(cache->recent, i);
         uint64_t seq;
         if (snag_json_integer_u64(event, "seq", &seq) < 0 ||
-            (seq >= overlap && json_array_append(recent, event) < 0)) goto fail;
+            ((seq >= overlap || context_cache_unconsumed_irc(event, session->irc_consumed_seq)) &&
+             json_array_append(recent, event) < 0)) goto fail;
     }
     for (size_t i = 0; i < json_array_size(cache->pending); ++i) {
         json_t *event = json_array_get(cache->pending, i);
         uint64_t seq;
         if (snag_json_integer_u64(event, "seq", &seq) < 0 ||
-            (seq > boundary && json_array_append(pending, event) < 0)) goto fail;
+            ((seq > boundary || context_cache_unconsumed_irc(event, session->irc_consumed_seq)) &&
+             json_array_append(pending, event) < 0)) goto fail;
     }
     json_decref(cache->recent);
     json_decref(cache->pending);
@@ -142,7 +161,7 @@ context_cache_record(struct context_cache *cache, const struct snag_session *ses
     json_decref(entry);
     if (rc < 0) return -1;
     if ((!strcmp(type, "compaction_completed") || !strcmp(type, "context_rebased")) &&
-        context_cache_trim(cache, session->context_rebase_seq > session->compact_seq ?
+        context_cache_trim(cache, session, session->context_rebase_seq > session->compact_seq ?
                            session->context_rebase_seq : session->compact_seq) < 0) return -1;
     return 0;
 }
@@ -1479,6 +1498,32 @@ defer_room_event(struct context_builder *builder, const json_t *data)
     return rc;
 }
 
+struct irc_source_lookup {
+    const json_t *sequences;
+    json_t *sources;
+    uint64_t admission_seq;
+};
+
+static int
+recover_irc_source(void *opaque, const struct snag_session *state, uint64_t seq,
+                   const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct irc_source_lookup *lookup = opaque;
+    (void)state;
+    (void)error;
+    (void)error_size;
+    if (seq >= lookup->admission_seq || strcmp(type, "irc_event")) return 0;
+    for (size_t i = 0u; i < json_array_size(lookup->sequences); ++i) {
+        if ((uint64_t)json_integer_value(json_array_get(lookup->sequences, i)) != seq) continue;
+        struct snag_irc_event event;
+        if (snag_irc_event_read(data, &event) < 0 || !event.input) return 0;
+        json_t *source = json_pack("{s:I,s:O}", "seq", (json_int_t)seq, "event", data);
+        if (!source || json_array_append_new(lookup->sources, source) < 0) return -1;
+        break;
+    }
+    return 0;
+}
+
 static int
 context_event(void *opaque, const struct snag_session *state,
               uint64_t seq, const char *type, const json_t *data, char *error, size_t error_size)
@@ -1529,6 +1574,23 @@ context_event(void *opaque, const struct snag_session *state,
     }
     if (!strcmp(type, "irc_admitted")) {
         const json_t *sequences = json_object_get(data, "sequences");
+        struct irc_source_lookup lookup = { .sequences = sequences, .admission_seq = seq };
+        if (!summarized) for (size_t i = 0u; i < json_array_size(sequences); ++i) {
+            json_int_t wanted = json_integer_value(json_array_get(sequences, i));
+            bool present = false;
+            for (size_t j = 0u; j < json_array_size(builder->deferred_irc); ++j)
+                if (json_integer_value(json_object_get(json_array_get(builder->deferred_irc, j),
+                        "seq")) == wanted) { present = true; break; }
+            if (present) continue;
+            lookup.sources = json_array();
+            if (!lookup.sources || !builder->session ||
+                snag_session_each_event((struct snag_session *)builder->session,
+                    recover_irc_source, &lookup, error, error_size) < 0) {
+                json_decref(lookup.sources);
+                return -1;
+            }
+            break;
+        }
         for (size_t i = 0u; i < json_array_size(sequences); ++i) {
             json_int_t wanted = json_integer_value(json_array_get(sequences, i));
             size_t j;
@@ -1543,12 +1605,26 @@ context_event(void *opaque, const struct snag_session *state,
                     break;
                 }
             }
+            if (!found) for (j = 0u; j < json_array_size(lookup.sources); ++j) {
+                json_t *source = json_array_get(lookup.sources, j);
+                if (json_integer_value(json_object_get(source, "seq")) == wanted) {
+                    if (defer_room_event(builder, json_object_get(source, "event")) < 0) {
+                        json_decref(lookup.sources);
+                        return -1;
+                    }
+                    found = true;
+                    break;
+                }
+            }
             /* A rebase may trim the source event just before the overlap while
              * retaining its admission inside it. Both are already summarized;
              * only an uncovered admission still needs its source event. */
-            if (!found && !summarized)
+            if (!found && !summarized) {
+                json_decref(lookup.sources);
                 return snag_fail(error, error_size, EINVAL, "IRC admission lacks its source event");
+            }
         }
+        json_decref(lookup.sources);
         builder->deferred_irc_seq = (uint64_t)json_integer_value(json_object_get(
             json_array_get(builder->deferred_irc, 0u), "seq"));
         const json_t *steering = json_object_get(data, "steering");

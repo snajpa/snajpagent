@@ -1730,6 +1730,69 @@ test_rebased_irc_admission_overlap(struct snag_store *store, const char *cwd)
 }
 
 static void
+test_pending_irc_source_across_rebase(struct snag_store *store, const char *cwd)
+{
+    for (unsigned int legacy = 0u; legacy < 2u; ++legacy) {
+        struct snag_session session;
+        struct snag_context_projection projection = {0};
+        struct snag_instruction_set instructions = {0};
+        json_t *empty = json_array();
+        const char *turn = "d2000000000000000000000000000000";
+        const char *response = "d3000000000000000000000000000000";
+        struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u,
+            .endpoint = "127.0.0.1:6667", .room = "#lab", .nick = "peer",
+            .text = "pending before the covered boundary",
+            .stream = "11111111111111111111111111111111", .sequence = 1u, .input = true};
+
+        assert(empty);
+        create_session(store, &session, cwd, "medium");
+        commit_event(&session, "turn_started",
+            turn_started(turn, 1u, "inspect room history", cwd, NULL));
+        commit_event(&session, "irc_event", snag_irc_event_data(&event));
+        uint64_t source = session.irc_received_seq;
+        build_context(&session, 1u, empty, &instructions, &projection);
+        assert(projection.irc_seq == source - 1u);
+        snag_context_projection_free(&projection);
+        if (legacy) {
+            /* A previously broken cache could advance the consumed watermark
+             * despite an unadmitted event. Its source is still in the journal. */
+            json_t *started = response_started(turn, response, NULL);
+            assert(json_object_set_new(started, "irc_seq", json_integer((json_int_t)source)) == 0);
+            commit_event(&session, "response_started", started);
+            commit_event(&session, "response_completed",
+                response_completed(turn, response, "continuing"));
+            assert(session.irc_consumed_seq == source);
+        }
+        event.input = false;
+        for (unsigned int i = 0u; i <= SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS; ++i) {
+            ++event.sequence;
+            ++event.timestamp_ms;
+            commit_event(&session, "irc_event", snag_irc_event_data(&event));
+        }
+        commit_event(&session, "context_rebased", json_pack("{s:s,s:s}",
+            "reason", "turn_recovery", "turn_id", turn));
+        if (!legacy) {
+            build_context(&session, 2u, empty, &instructions, &projection);
+            assert(projection.irc_seq == source - 1u);
+            snag_context_projection_free(&projection);
+        }
+        commit_event(&session, "irc_admitted", json_pack("{s:[I]}",
+            "sequences", (json_int_t)source));
+        build_context(&session, 3u, empty, &instructions, &projection);
+        const json_t *input = json_object_get(projection.create_request.value, "input");
+        size_t copies = 0u;
+        for (size_t i = 0u; i < json_array_size(input); ++i) {
+            const char *content = snag_json_string(json_array_get(input, i), "content");
+            if (content && strstr(content, "pending before the covered boundary")) ++copies;
+        }
+        assert(copies == 1u);
+        snag_context_projection_free(&projection);
+        snag_session_close(&session);
+        json_decref(empty);
+    }
+}
+
+static void
 test_admitted_room_event_stays_out_of_tool_exchange(struct snag_store *store, const char *cwd)
 {
     const char *turn = "e1000000000000000000000000000000";
@@ -4165,6 +4228,7 @@ main(int argc, char **argv)
     test_reasoning_continuation(&store, cwd);
     test_durable_irc_input_watermark(&store, cwd);
     test_rebased_irc_admission_overlap(&store, cwd);
+    test_pending_irc_source_across_rebase(&store, cwd);
     test_admitted_room_event_stays_out_of_tool_exchange(&store, cwd);
     test_compact_groups(&store, cwd);
     test_large_compact_prefix(&store, cwd);

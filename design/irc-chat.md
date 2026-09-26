@@ -361,6 +361,11 @@ The converse holds for room traffic: an admission batch is the prompt of an
 IRC-triggered turn, not operator input, so it is never echoed as a submission.
 The chat view shows the room events and the durable trail records the
 admission; conversation level keeps only the turn's own work.
+Unconsumed IRC sources and their admissions survive a context-cache trim even
+when the source precedes the compaction boundary. If an older checkpoint has
+already lost a pending source from its cache, an uncovered admission resolves
+the referenced input event from the verified journal. A missing or non-input
+source still fails the admission instead of fabricating room content.
 
 Switching views never clears or repaints terminal history. It appends a short
 view boundary, emits every semantic item accumulated for the entered view

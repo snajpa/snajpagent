@@ -174,6 +174,8 @@ for older history still read the relevant records. A corrupt checkpoint is
 reported instead of triggering an unnoticed full-journal rebuild. Successful
 compaction keeps its summary and uncovered continuation, not the covered
 conversation or completed tool results.
+Pending room updates remain available for their later admission across
+compaction and resume.
 
 ### Attach files and use voice
 
