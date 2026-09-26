@@ -1054,6 +1054,31 @@ def test_hard_compaction_resets_after_completed_response():
     assert len([event for event in log if event["type"] == "tool_finished"]) == 1
 
 
+def test_proactive_compaction_does_not_repeat_after_goal_resume():
+    config = write_config("compact-then-goal-resume.ini",
+        "[provider openai]\nexact_token_count = true\nnative_compaction = true\n"
+        f"[model-limit openai/{DEFAULT_MODEL}]\nmax_input_tokens = 100000\n")
+    with Child(["--config", str(config)], DEFAULT_IDLE_PROMPT) as child:
+        child.send_wait_idle(b"ping\r", b"pong")
+        child.send_wait_idle(b"compact_budget_once\r", b"fixture answer")
+        child.send_wait_idle(b"/goal blocked goal\r", b"goal done")
+        child.send_wait_idle(b"/goal resume\r", b"goal done")
+        child.exit_now()
+    log = events(child.session_id())
+    started = [event for event in log if event["type"] == "compaction_started"]
+    completed = [event for event in log if event["type"] == "compaction_completed"]
+    assert len(started) == len(completed) == 1
+    assert started[0]["data"]["reason"] == "proactive"
+    assert len([event for event in log if event["type"] == "goal_resumed"]) == 1
+    resumed = one(log, "goal_resumed")["seq"]
+    assert not [event for event in log if event["seq"] > resumed and
+                event["type"] in ("compaction_started", "context_rebased")]
+    assert not [event for event in log if event["seq"] > resumed and
+                event["type"] == "turn_recovery" and event["data"]["class"] == "context"]
+    starts = [event for event in log if event["type"] == "response_started"]
+    assert any(event["data"]["input_tokens_bound"] == 1000 for event in starts)
+
+
 def test_read_only_multiline_compaction_and_chat():
     Path(WORKSPACE, "ro-input.txt").write_text("native text\nsecond line\n", encoding="utf-8")
     config = write_config("ro-compaction.ini", "[provider openai]\nauto_compact_input_tokens = 1\n")
@@ -5894,6 +5919,7 @@ if __name__ == "__main__":
     test_compaction_ignores_legacy_samples()
     test_hard_compaction_progress_is_remeasured()
     test_hard_compaction_resets_after_completed_response()
+    test_proactive_compaction_does_not_repeat_after_goal_resume()
     test_ctrl_d_exit()
     test_goal_orderly_quit_resume()
     test_stalled_output_consumes_input()
