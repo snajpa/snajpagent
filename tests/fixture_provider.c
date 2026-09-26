@@ -863,7 +863,10 @@ flood_done: snag_buf_free(&text);
     }
     if (snag_string_in(prompt,
             "slow slow_utf8 queue_slow queue_prompt_slow slow_resteer compaction_steer")) {
-        if (cycle == 1u) {
+        /* Pre-response compaction can finish with an already-submitted steer;
+         * the first provider request must answer that steer, not replay slow. */
+        if (cycle == 1u && (strcmp(prompt, "compaction_steer") != 0 ||
+            !json_is_array(steering) || json_array_size(steering) == 0u)) {
             if (strcmp(prompt, "slow_utf8") == 0) {
                 static const char euro[] = "€";
                 size_t index = graph->count;

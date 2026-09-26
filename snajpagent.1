@@ -313,21 +313,22 @@ shows compact tool activity alongside model text;
 adds previews of tool inputs and results.  These controls also work during a turn.
 .SS Correct this task or queue the next one
 Typing during work opens an unsent draft; it does not interrupt the model.
-Once a provider request has been accepted and is processing, the rollout
-composer shows the steer marker.  Enter then supplies immediate steering. For example,
+The rollout composer shows the steer marker once the turn starts, even before
+the provider has accepted a request. Enter then supplies steering. For example,
 "Use the existing parser; do not add a dependency" changes the current task.
 The model's response is interrupted and continued from its delivered text.
 An already-started command stays alive for the model to collect or stop.
 .PP
-The submitted line is shown immediately. Before the provider request is
-ready, typed input waits without a steer prompt. After a foreground slash
-command, snajpagent waits for that command to finish before presenting or
-executing another app command. Ctrl-C and exit remain priority controls.
+The submitted line is shown immediately. The active prompt remains visible
+while a request is prepared, sent, retried or continued; a submitted steer
+before provider acceptance is handled at a safe request boundary. A foreground
+slash command temporarily hides the prompt until that command finishes, and
+snajpagent does not execute another app command meanwhile. Ctrl-C and exit
+remain priority controls.
 .PP
-The first steer prompt waits for an accepted response. Once shown, it stays
-visible and editable throughout that turn, even when empty or while the next
-response is unready. A foreground command hides it until completion. Enter
-still submits a steer for admission at a safe turn boundary.
+The active prompt is visible and editable throughout the turn, even when empty
+or while a response is unready. Only a foreground slash command hides it until
+completion. Enter submits a steer for admission at a safe turn boundary.
 .PP
 For a separate follow-up, type "Then add regression coverage" and press Tab
 at the end while work is active.  That message waits in the queue until the
@@ -1180,22 +1181,20 @@ inside a fence are displayed literally, including pipe tables.
 Top-level prose paragraphs are bulleted, with one empty row above and below,
 even while a paragraph is streaming.  Adjacent paragraphs share that row;
 headings, lists, code, tables and prompts use the same paragraph boundary.
-Cursor-capable terminals receive streamed model prose as logical lines and own
-their native soft wrapping.  Existing rows therefore reflow after resize, and
-terminal copy does not include synthetic newlines or continuation spaces.  The
-dumb-terminal fallback holds an unfinished word until whitespace or the end of
-an item, keeping attached punctuation together across provider chunks and
-Markdown style changes.  Words that fit a fallback row wrap as a unit; longer
-tokens stream in bounded pieces.  Intervening messages flush pending text in order.
+All terminals wrap streamed model prose explicitly at whole-word boundaries.
+The renderer holds an unfinished word until whitespace or the end of an item,
+keeping attached punctuation together across provider chunks and Markdown
+style changes. Words that fit a row wrap as a unit; longer tokens stream in
+bounded pieces. Intervening messages flush pending text in order.
 The editable draft also wraps whole words when they fit a terminal row; longer
 words use terminal wrapping.  These displayed wraps do not insert submitted
 newlines.  Explicit newlines and leading whitespace remain part of the draft.
 Any prompt after non-prompt content has one empty row above it.  Consecutive
 submitted prompts may be adjacent.
 .PP
-Provider-supplied prose continuation lines align two spaces below the paragraph
-text.  Generated dumb-terminal fallback continuations use the same alignment;
-native terminal soft wraps add no bytes to copied text.
+Provider-supplied and renderer-generated prose continuation lines align two
+spaces below the paragraph text. These presentation newlines and spaces can
+appear in terminal copies, but are not part of stored model text.
 Code-block whitespace and the provider's original text are unchanged.  The live prompt is displayed
 immediately on cursor-capable terminals, without waiting for a quiet period.
 Before new output it is erased
@@ -1628,7 +1627,8 @@ queued dispatch renders a new normal prompt with the dispatch-time local clock.
 UTC provenance and the displayed clock describe different events.
 .SS Goals
 An active goal continues across ordinary turns until complete, paused,
-cancelled, or blocked.  Queued operator turns run before the next automatic
+cancelled, or blocked; there is no default per-goal-turn working or step budget.
+Queued operator turns run before the next automatic
 goal turn.  Ordinary errors retain the active goal and schedule recovery with
 interruptible backoff, without an attempt limit.  Policy stops and provider
 refusals pause automatic continuation and require clarification.  Turn-only

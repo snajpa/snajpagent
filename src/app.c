@@ -604,12 +604,14 @@ set_input_prompt(struct app_state *app, bool active)
 }
 
 static int
-hold_response_prompt(struct app_state *app)
+ensure_turn_prompt(struct app_state *app)
 {
-    /* Automatic response boundaries do not take away a composer once the
-     * provider has offered steering during this turn. */
-    return app->steer_prompt_seen && app->session.active_turn ? 0 :
-        snag_ui_hold(&app->ui, true);
+    /* A pending provider request is already a future steering target. Show
+     * the composer once per turn; automatic response boundaries never hide it. */
+    if (!app->session.active_turn || app->turn_prompt_seen) return 0;
+    if (set_input_prompt(app, true) < 0) return -1;
+    app->turn_prompt_seen = true;
+    return 0;
 }
 
 static int
@@ -684,9 +686,6 @@ snag_app_request_ready(void *opaque)
 
     if (!app->session.active_turn || !app->session.response_open) return 0;
     app->provider_request_ready = true;
-    if (!app->ui.opened || app->execute || app->input_closed) return 0;
-    if (set_input_prompt(app, true) < 0) return -1;
-    app->steer_prompt_seen = true;
     return 0;
 }
 
@@ -2511,7 +2510,7 @@ apply_controls(struct app_state *app)
         if (rc < 0 && bit != SNAG_CONTROL_COMPACT) { result = -1; break; }
     }
     app->applying_controls = false;
-    if (result == 0 && !app->session.pending_controls && app->steer_prompt_seen &&
+    if (result == 0 && !app->session.pending_controls && app->turn_prompt_seen &&
         app->session.active_turn && app->ui.opened && !app->execute && !app->input_closed &&
         set_input_prompt(app, true) < 0) result = -1;
     return result;
@@ -2787,12 +2786,9 @@ again:;
         if (timeout_ms > 25u) timeout_ms = 25u;
     }
     if (app->execute || app->input_closed) return 0;
-    /* The input worker keeps bytes and priority controls alive. A submitted
-     * action cannot become a steer before the provider has accepted a response;
-     * consume its typeahead only after response.created arrives. */
-    if (app->session.active_turn && !app->provider_request_ready &&
-        !snag_ui_interrupt_pending(&app->ui) && !snag_ui_yield_pending(&app->ui) &&
-        !snag_ui_leaving(&app->ui)) return 0;
+    /* Input remains actionable before response.created. An early steer rebuilds
+     * the active request; a foreground slash command owns the composer until
+     * it finishes. Neither needs a provider acknowledgement to be displayed. */
     rc = snag_ui_poll(&app->ui, (int)timeout_ms, &action, &line);
     history_warning(app);
     if (rc < 0) {
@@ -2866,10 +2862,10 @@ again:;
         if (rc < 0) goto active_done;
         if (handled) {
             if (!app->queue_edit_id[0] && !prompt_ready) {
-                if (app->control_requested || (!app->steer_prompt_seen &&
-                    (!app->provider_request_ready || app->model_switch_requested)))
+                if (app->control_requested || app->model_switch_requested) {
                     rc = snag_ui_hold(&app->ui, true);
-                else rc = set_input_prompt(app, true);
+                    if (rc == 0) app->turn_prompt_seen = false;
+                } else rc = set_input_prompt(app, true);
             }
         } else if (single_line && line[0] == '/' && line[1] != '/') {
             (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, "unknown slash command");
@@ -2912,9 +2908,12 @@ again:;
                         (void)snag_ui_send(&app->ui, (struct snag_ui_command){
                             .kind = SNAG_UI_DRAFT, .text = line});
                 } else {
-                    /* Deferred steers queue (steering_added above) without
-                     * interrupting; they are admitted at turn end. */
-                    if (!app->session.steering_deferred) app->steering_requested = true;
+                    /* A steer during pre-response compaction belongs in the
+                     * next projection, not in an interruption of compaction.
+                     * Explicitly deferred steers likewise wait for turn end. */
+                    if (!app->session.steering_deferred &&
+                        !app->session.active_compact_id[0])
+                        app->steering_requested = true;
                     if (app->steering_requested) {
                         app->provider_request_ready = false;
                         rc = set_input_prompt(app, true);
@@ -3535,12 +3534,9 @@ turn_recovery_wait(struct app_state *app, struct turn_retry *retry)
     uint64_t deadline = snag_monotonic_ms() + delay;
     app->recovery_delay_ms = delay < 30000u / 2u ? delay * 2u : 30000u;
     app->recovery_wait = true;
-    /* A retry timer has not yet acquired a response that can accept steering. */
-    /* A policy stop with a retained process needs Ctrl-C before a new
-     * composer. Preserve the steering composer at ordinary retry boundaries,
-     * but never expose it while this foreground process is held. */
-    if (!app->execute) (void)(policy && app->session.process_count ?
-        snag_ui_hold(&app->ui, true) : hold_response_prompt(app));
+    /* Retried requests and policy stops remain future steering targets; only
+     * foreground slash commands take the composer away. */
+    if (!app->execute) (void)ensure_turn_prompt(app);
     app->steering_requested = false;
     if (policy) {
         (void)app_warning(app,
@@ -3700,7 +3696,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
     if (!continuing) {
         app->turn_started_ms = snag_monotonic_ms();
         app->turn_output_tokens = 0u;
-        app->steer_prompt_seen = false;
+        app->turn_prompt_seen = false;
     }
     if (!continuing && commit_input(app, "turn_started",
                      json_pack("{s:{s:s,s:s,s:o,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:I,s:I,s:I,s:I,s:I,s:I,s:b,s:I},"
@@ -3736,6 +3732,10 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         report_message = "queued prompt could not be rendered";
         goto output_fail;
     }
+    if (!app->execute && ensure_turn_prompt(app) < 0) {
+        report_message = "active prompt could not be displayed";
+        goto output_fail;
+    }
     /* prepare_turn_settings owns the identity, including after the reducer
      * clears its active-turn fields at completion. */
 #ifndef SNAJPAGENT_TEST_FIXTURE
@@ -3750,10 +3750,6 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
             turn_id, read_only ? " (read-only)" : "", app->turn_model,
             app->turn_effort, app->session.cwd) < 0) {
         report_message = "turn runtime facts could not be rendered";
-        goto output_fail;
-    }
-    if (!app->execute && hold_response_prompt(app) < 0) {
-        report_message = "active submission could not be held";
         goto output_fail;
     }
     for (unsigned int cycle = next_cycle; cycle != 0u; ++cycle) {
@@ -3771,7 +3767,6 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         if (app->input_closed) { result = 0; goto out; }
         if (app->interrupt_requested) goto user_interrupted;
         app->provider_request_ready = false;
-        if (!app->execute && hold_response_prompt(app) < 0) goto fail;
         bool selected_new_model = app->session.active_turn &&
             (strcmp(app->session.active_turn_provider, app->session.default_provider) != 0 ||
              strcmp(app->session.active_turn_model, app->session.default_model) != 0 ||
@@ -3788,12 +3783,15 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         if (reconfigured || selected_new_model) {
             if (prepare_turn_settings(app, error, sizeof(error)) < 0) goto fail;
             provider_capacity_source_sha256(app->turn_provider, app->turn_model, provider_source_hash);
+        }
+        if (!app->execute && ensure_turn_prompt(app) < 0) goto fail;
 #ifndef SNAJPAGENT_TEST_FIXTURE
+        if (reconfigured || selected_new_model) {
             snag_credential_clear(&credential);
             if (snag_auth_read(app->store.root_fd, app->turn_provider, false, NULL,
                     &credential, snag_app_active_input_pump, app, error, sizeof(error)) < 0) goto fail;
-#endif
         }
+#endif
 
         if (snag_app_irc_flush_urgent(app, error, sizeof(error)) < 0) {
             report_message = error[0] ? error : "urgent IRC input could not be admitted";
@@ -3995,7 +3993,6 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                                    projection.create_request.value, &credential, &graph, &provider_failure,
                                    error, sizeof(error), &provider_retry_count);
         app->provider_request_ready = false;
-        if (!app->execute && hold_response_prompt(app) < 0) goto fail;
         if (snag_app_provider_activity(app, false) < 0) goto fail;
         if (provider_rc < 0 && provider_failure.retry_after_ms > app->recovery_delay_ms)
             app->recovery_delay_ms = provider_failure.retry_after_ms;

@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Restore explicit whole-word hard wrapping and two-space prose continuation on
+  cursor-capable terminals as well as the existing dumb-terminal path; stored
+  model text remains byte-exact. Keep the active composer visible from turn
+  start, including before provider acceptance and across response handoffs;
+  only a foreground slash command temporarily hides it. Clarify that active
+  goals have no default per-goal-turn working or step budget.
+
 - Keep an admitted IRC steer out of the active-turn compaction source while
   retaining its room event. A long-running turn can now compact again without
   rejecting the missing steering snapshot and exhausting its retry bound.
@@ -18,8 +25,8 @@
   staged session storage, so the editor captures the draft before that commit.
 
 - Keep /yield responsive when a tool takes the foreground during a prompt
-  transition. Hide the steer prompt during a provider-policy stop that retains
-  a running command until Ctrl-C leaves the stopped turn.
+  transition. The active composer remains available during provider-policy
+  stops; Ctrl-C still interrupts retained work.
 
 - Retry a transient HTTP 5xx `upstream_error` with `server_error` using the
   existing bounded transport backoff and unchanged request, including gateway
@@ -55,11 +62,10 @@
   also interrupts an in-progress response and restarts on the chosen model
   with retained history, completed tool results and live process handles.
 
-- Show the first steer prompt only after an accepted provider response can
-  receive steering. Once shown, keep it visible for the rest of that turn,
-  including empty drafts and unready response boundaries; hide it only while
-  a foreground command runs. Enter still submits a steer durably during a
-  response handoff.
+- Show the active prompt from the turn's durable start, without waiting for
+  response.created. Keep it visible for the rest of that turn, including empty
+  drafts and unready response boundaries; hide it only while a foreground
+  slash command runs. Enter submits a steer durably at a safe boundary.
 
 - Name recognized SSE event types when an incoming line exceeds the existing
   1 MiB safety bound, without logging provider content or guessing the type

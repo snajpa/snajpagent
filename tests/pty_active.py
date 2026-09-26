@@ -1157,12 +1157,14 @@ def test_managed_command_typeahead_and_tab_queue():
 
     log = events(child.session_id())
     steering = one(log, "steering_added")
-    completed = one(log, "tool_finished")
-    assert completed["data"]["result"]["status"] == "succeeded"
-    # During a tool wait there is no accepted provider request to steer.
-    # Typeahead becomes steering after the tool settles and a new request starts.
-    assert completed["seq"] < steering["seq"]
-    assert one(log, "response_interrupted")["data"]["reason"] == "steered"
+    completed = [item for item in log if item["type"] == "tool_finished"]
+    # Early steering does not have to wait for the foreground tool. The first
+    # result retains its live handle, which the next model cycle collects.
+    assert [item["data"]["result"]["status"] for item in completed] == [
+        "running", "succeeded"
+    ]
+    assert steering["seq"] < completed[0]["seq"] < completed[1]["seq"]
+    assert not [item for item in log if item["type"] == "response_interrupted"]
     assert not [item for item in log if item["type"] == "process_closed"]
 
     child = Child(["-v"], DEFAULT_IDLE_PROMPT)
@@ -1202,10 +1204,10 @@ def test_steering_during_pre_response_compaction():
     child = Child(["--config", str(config), "--resume", session_id], DEFAULT_ACCOUNTED_IDLE_PROMPT)
     start = len(child.buf)
     begin = child.send_wait(b"compaction_steer\r", b"Compacting context")
-    assert DEFAULT_ACTIVE_PROMPT not in bytes(child.buf[start:begin])
+    assert DEFAULT_ACTIVE_PROMPT in bytes(child.buf[start:begin])
     child.send(b"change plan\r")
     completed = child.wait(COMPACTED, start=begin)
-    assert DEFAULT_ACTIVE_PROMPT not in bytes(child.buf[begin:completed])
+    assert DEFAULT_ACTIVE_PROMPT in bytes(child.buf[begin:completed])
     answer_end = child.wait(b"steered: change plan", start=completed)
     child.exit_cleanly(answer_end)
 
@@ -5746,7 +5748,7 @@ def test_editor_during_blocked_engine(key=b"\r"):
             tsan = "libtsan" in Path(f"/proc/{child.pid}/maps").read_text()
             assert len(list(tasks.iterdir())) == 4 + int(tsan)
         child.drain(0.4)
-        child.wait(b"engine-block-start \r\r\n\r\r\n")
+        child.wait(DEFAULT_ACTIVE_PROMPT, start=after)
         assert len(set(re.findall("[◴◷◶◵]", child.buf[after:].decode()))) > 1
         after = child.send_wait(b"/verbose 2" + key, b"verbosity: 2 (previews)", start=after, timeout=0.25)
         after = child.send_wait(b"/verbose 7" + key, b"/verbose expects one integer from 0 through 6",

@@ -798,6 +798,8 @@ append_goal_controller(struct context_builder *builder)
         (unsigned long long)builder->session->goal_revision,
         builder->session->goal_locked ? "locked" : "unlocked",
         active ? "Keep working across turns until it is complete or genuinely blocked. "
+        "There is no default per-goal-turn working or step budget; do not invent one "
+        "or stop solely to roll work over to another goal turn. "
         "A normal final answer is a checkpoint and " SNAJPAGENT_NAME " will start another "
         "goal turn. Use update_goal action=complete with text=null only when the "
         "goal is finished. Use action=block with a specific reason only when no "

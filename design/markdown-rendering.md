@@ -52,15 +52,13 @@ above and below, including while incomplete. Adjacent paragraphs share one row;
 headings, lists, quotations, fences, tables and prompts respect the same boundary.
 The renderer counts existing terminal newlines and adds only the missing ones.
 Repeated source blank lines at prose boundaries cannot multiply the gap; internal
-code whitespace is preserved. Cursor-capable terminals receive each paragraph
-as one logical line, so their native soft wraps reflow on resize and copy without
-synthetic newlines or continuation spaces. Provider-supplied non-blank line
-breaks remain explicit and continue with two spaces below the paragraph text.
-The dumb-terminal fallback also aligns generated continuation lines there,
-buffers an unfinished fitting word across provider/style chunks until whitespace
-or item completion, and keeps its punctuation attached. Overlong fallback words
-hard-wrap through bounded output. Apostrophes are not special break markers.
-When a fallback wrap would otherwise print a separator space as the first
+code whitespace is preserved. All terminals wrap model prose explicitly at
+whole-word boundaries. Both provider-supplied non-blank line breaks and
+renderer-generated continuation lines begin with two spaces below the paragraph
+text. The renderer buffers an unfinished fitting word across provider/style
+chunks until whitespace or item completion, and keeps its punctuation attached.
+Overlong words hard-wrap through bounded output. Apostrophes are not special
+break markers. When a wrap would otherwise print a separator space as the first
 character on the new row, that one space is omitted. Explicit non-blank source
 line breaks within one paragraph remain unbulleted. Headings,
 list items, block quotes, and fenced code keep their own structural markers

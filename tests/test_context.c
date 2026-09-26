@@ -3920,6 +3920,16 @@ test_host_fact_cache_prefix(struct snag_store *store, const char *cwd)
             phase < 2u ? "Local operator display snapshot: verbosity=0" :
                          "Local operator display snapshot: verbosity=3",
             &next, error, sizeof(error), NULL) == 0);
+        if (phase == 5u) {
+            bool no_goal_budget = false;
+            json_t *input = json_object_get(next.create_request.value, "input");
+            for (size_t i = 0u; i < json_array_size(input); ++i) {
+                const char *content = snag_json_string(json_array_get(input, i), "content");
+                if (content && strstr(content, "no default per-goal-turn working or step budget"))
+                    no_goal_budget = true;
+            }
+            assert(no_goal_budget);
+        }
         json_t *updated = cache_policy(&next);
         if (!json_equal(policy, updated)) {
             fprintf(stderr, "cache policy changed for %s\n", names[phase]);

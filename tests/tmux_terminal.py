@@ -1179,9 +1179,9 @@ def run_render_case(binary, root):
         ])
         if re.search(r"(?m)^• alpha beta gamma", first) is None:
             raise AssertionError(f"model prose did not begin with a bullet:\n{first}")
-        if "• alpha beta gamma delta-extraordinary" not in first:
+        if "• alpha beta gamma\n  delta-extraordinary" not in first:
             raise AssertionError(
-                f"joined model prose contains a synthetic wrap boundary:\n{first}"
+                f"a word that fits a row did not wrap as a unit:\n{first}"
             )
 
         time.sleep(0.1)
@@ -1250,8 +1250,8 @@ def run_render_case(binary, root):
                 "draft plus again with long resize text",
             ],
         )
-        if "alpha beta gamma delta-extraordinary" not in joined:
-            raise AssertionError("joined model output retained a synthetic wrap boundary")
+        if "alpha beta gamma delta-extraordinary" in joined:
+            raise AssertionError("model output lost its explicit word wrap")
         completed = event_list(events, "response_completed")
         if len(completed) != 1 or completed[0]["data"]["items"][0]["text"] != RENDER_TEXT:
             raise AssertionError("rendering changed durable assistant text")
@@ -1891,20 +1891,11 @@ def run_punctuation_case(binary, root):
     ))
     text = "\n\n".join(paragraphs) + "\n\nI haven't changed this: punctuation, not breaks. café́界 wrap-done"
 
-    def assert_copy_safe(screen, markdown):
-        first = ("• " if markdown else "") + paragraphs[0]
-        start = screen.find(first)
-        end = screen.find("wrap-done", start)
-        if start < 0 or end < 0:
-            raise AssertionError(f"logical prose is missing after terminal reflow:\n{screen}")
-        logical = screen[start:end + len("wrap-done")]
-        for paragraph in text.split("\n\n"):
-            visible = paragraph.replace("**", "") if markdown else paragraph
-            expected = ("• " if markdown else "") + visible
-            if expected not in logical:
-                raise AssertionError(f"copied prose retained a synthetic wrap:\n{logical}")
-        if "\n  " in logical:
-            raise AssertionError(f"copied prose retained a continuation prefix:\n{logical}")
+    def assert_hard_wrapped(screen, markdown):
+        if "I’ll fold" not in screen or "wrap-done" not in screen:
+            raise AssertionError(f"model prose went missing:\n{screen}")
+        if markdown and not re.search(r"(?m)^  \S", screen):
+            raise AssertionError(f"prose lost its two-space hard-wrap continuation:\n{screen}")
 
     provider = FakeResponses()
     paused, proceed = threading.Event(), threading.Event()
@@ -1979,11 +1970,11 @@ def run_punctuation_case(binary, root):
                     assert not rows[first - 1].strip(), screen
                     assert not rows[last + 1].strip(), screen
                     assert sum("> draft" in row for row in rows) == 1, screen
-                    assert_copy_safe(joined, markdown)
+                    assert_hard_wrapped(joined, markdown)
                     if width == 110 and markdown:
                         terminal.resize(24, 20)
                         time.sleep(0.1)
-                        assert_copy_safe(terminal.capture(join_wrapped=True), markdown)
+                        assert_hard_wrapped(terminal.capture(join_wrapped=True), markdown)
                     _, events = read_events(case / "s")
                     response = event_list(events, "response_completed")[-1]
                     assert response["data"]["items"][0]["text"] == text
@@ -2424,6 +2415,8 @@ def run_persistent_model_recovery_case(binary, root):
     write_irc_config(config, provider.port, "initial-model")
     with config.open("a") as out:
         out.write("prompt = {model}/{effort}{chat:C>}{rollout-idle:I>}{rollout-active:A>}\n")
+    config.write_text(config.read_text().replace("idle_timeout_ms = 3000", "idle_timeout_ms = 120000")
+                      .replace("request_timeout_ms = 5000", "request_timeout_ms = 120000"))
     original_config = config.read_bytes()
     requests, ready, release = [], threading.Event(), threading.Event()
     switched, release_switched = threading.Event(), threading.Event()
@@ -2438,9 +2431,9 @@ def run_persistent_model_recovery_case(binary, root):
             handler.end_headers()
             handler.wfile.write(body[:at]); handler.wfile.flush()
             if len(requests) == 1:
-                ready.set(); release.wait(12)
+                ready.set(); release.wait(90)
             else:
-                switched.set(); release_switched.wait(12)
+                switched.set(); release_switched.wait(90)
             try: handler.wfile.write(body[at:])
             except (BrokenPipeError, ConnectionResetError): pass
         else:
@@ -2457,6 +2450,7 @@ def run_persistent_model_recovery_case(binary, root):
             terminal.submit("/model next-model/low")
             terminal.wait("until changed")
             assert switched.wait(SUPPLY_TIMEOUT)
+            terminal.wait("next-model/lowA>")
             for text in ("queued one", "queued two"):
                 terminal.submit("/q " + text)
                 terminal.wait("queued (/next or /q c) › " + text)
@@ -3406,6 +3400,70 @@ def run_pager_case(binary, root):
     finally:
         provider.close()
     print("pager catalogue: ok", flush=True)
+
+
+def run_pre_request_composer_case(binary, root, early_steer=False):
+    case = root / ("pre-request-steer" if early_steer else "pre-request-composer")
+    case.mkdir(parents=True, exist_ok=True)
+    provider = FakeResponses()
+    config = case / "config.ini"
+    write_irc_config(config, provider.port, "host-model")
+    config.write_text(config.read_text().replace("idle_timeout_ms = 3000", "idle_timeout_ms = 120000")
+                      .replace("request_timeout_ms = 5000", "request_timeout_ms = 120000"))
+    entered, release = threading.Event(), threading.Event()
+
+    def respond(handler, request, sequence):
+        if early_steer and sequence != 1:
+            provider.reply(handler, provider.response_body(sequence, "pre-ack steer settled").encode())
+            return
+        entered.set()
+        assert release.wait(90), "the fixture did not release the provider"
+        try:
+            provider.reply(handler, provider.response_body(sequence, "pre-ack settled").encode())
+        except (BrokenPipeError, ConnectionResetError):
+            if not early_steer:
+                raise
+
+    provider.runtime_handler = respond
+    terminal = None
+    try:
+        terminal = TmuxTerminal(case / "t", binary, case, case / "s", config, 120, 28,
+                                environment={"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"})
+        terminal.wait("host-model/medium")
+        terminal.submit("pending-before-ack")
+        assert entered.wait(SUPPLY_TIMEOUT), "the provider never received the request"
+
+        def active_composer(screen):
+            lines = [line for line in screen.splitlines() if line.strip()]
+            return bool(lines and "host-model/medium" in lines[-1] and "»" in lines[-1])
+
+        terminal.wait_until(active_composer, "active prompt before response.created")
+        if early_steer:
+            terminal.submit("steer-before-created")
+            events = wait_event_count(case / "s", "steering_added", 1)
+            assert event_list(events, "steering_added")[0]["data"]["text"] == "steer-before-created"
+            assert not event_list(events, "response_completed")
+            terminal.wait("pre-ack steer settled")
+            assert len(provider.requests) >= 2
+            assert provider.latest_user(provider.requests[-1]["body"]) == "steer-before-created"
+            release.set()
+        else:
+            terminal.submit("/help")
+            terminal.wait("Full reference: man snajpagent")
+            terminal.wait_until(active_composer, "returned prompt after /help, still before response.created")
+            assert not event_list(read_events(case / "s")[1], "response_completed")
+            release.set()
+            terminal.wait("pre-ack settled")
+        wait_event_count(case / "s", "turn_completed", 1)
+        terminal.exit()
+        if provider.failure:
+            raise AssertionError(provider.failure)
+    finally:
+        release.set()
+        if terminal is not None:
+            terminal.close()
+        provider.close()
+    print("tmux_terminal pre-request", "steer" if early_steer else "composer", "ok", flush=True)
 
 
 def run_fixture(binary, workspace, root):
@@ -6272,10 +6330,9 @@ def run_policy_stop_cases(binary, root, provider, environment,
             assert len(requests) == before, (mode, before, len(requests))
             assert len(failures) == (1 if mode in ("content-filter", "refusal") else 6), mode
             if running:
-                # The policy-stopped turn has no accepted response to steer.
-                # Its process survives while Ctrl-C leaves the held foreground.
-                # A steer composer from the rejected response must not reopen.
-                assert "host-model/medium A>" not in terminal.capture().split(
+                # A policy stop leaves the future-steer composer visible while
+                # the managed command is retained; Ctrl-C leaves the turn.
+                assert "host-model/medium A>" in terminal.capture().split(
                     "Running commands retained")[-1]
                 terminal.send_key("C-c")
                 events = wait_event_count(state, "turn_interrupted", 1)
@@ -8722,7 +8779,8 @@ def run_capacity_handoff_cases(binary, root, modes=("queue", "chat", "cancel")):
             assert ready.wait(5)
             if mode == "queue":
                 terminal.submit("/queue fresh-capacity-input")
-                # Before response.created this is typeahead, not an admitted command.
+                # The active composer admits this queue command before response.created.
+                wait_event_count(state, "future_turn_queued", 1)
             elif mode == "chat":
                 peer.sendall(b"PRIVMSG #lab :fresh-capacity-input\r\n")
                 deadline = time.monotonic() + 3
@@ -8742,33 +8800,33 @@ def run_capacity_handoff_cases(binary, root, modes=("queue", "chat", "cancel")):
                 continue
             release.set()
             terminal.wait("handoff recovered", timeout=15)
-            if mode == "queue":
-                wait_event_count(state, "future_turn_queued", 1)
             path, log = read_events(state)
             if mode == "queue":
-                assert event_list(log, "response_capacity_rejected")
+                assert any(e["data"].get("new_input") and e["data"].get("class") == "context"
+                           for e in event_list(log, "response_failed"))
+                assert event_list(log, "turn_failed")
             else:
                 assert any(e["data"].get("new_input")
                            for e in event_list(log, "response_failed"))
             assert event_list(log, "context_rebased")
             assert not event_list(log, "compaction_started")
             assert not event_list(log, "response_output_correction")
-            if mode == "chat":
+            if mode in ("chat", "queue"):
                 assert "fresh-capacity-input" in json.dumps(requests[-1])
             terminal.exit()
             if mode == "queue":
                 queued = event_list(log, "future_turn_queued")[-1]
                 assert queued["data"]["text"] == "fresh-capacity-input"
-                assert queued["seq"] > event_list(log, "turn_completed")[-1]["seq"]
+                failed = event_list(log, "turn_failed")[-1]
+                assert queued["seq"] < failed["seq"]
                 terminal.close()
-                # Resume from the durable queue admission, before its next turn.
-                path.write_bytes(b"".join(path.read_bytes().splitlines(keepends=True)[:queued["seq"]]))
+                # Resume after the failed request, before the queued turn starts.
+                path.write_bytes(b"".join(path.read_bytes().splitlines(keepends=True)[:failed["seq"]]))
                 terminal = TmuxTerminal(case / "r", binary, case, state, config, 130, 28,
                     args=("--no-listen", "--no-client", "--resume", path.parent.name),
                     environment=environment)
-                terminal.wait("queued future turns are paused", timeout=15)
-                terminal.submit("/next")
-                wait_event_count(state, "turn_completed", 3, timeout=15)
+                # An in-flight /queue remains armed and resumes automatically.
+                wait_event_count(state, "turn_completed", 2, timeout=15)
                 assert "fresh-capacity-input" in json.dumps(requests[-1])
                 assert not event_list(read_events(state)[1], "compaction_started")
                 terminal.exit()
@@ -8891,7 +8949,9 @@ def run_post_exit_drain_cases(binary, root, provider, environment):
         workspace = case / "workspace"
         workspace.mkdir(mode=0o700, parents=True)
         listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        path = str(case / "handoff.sock")
+        # Stay beneath the lane root so long isolated worktree names still fit
+        # within the platform's AF_UNIX path limit.
+        path = str(root / ("post-exit-" + mode + ".sock"))
         listener.bind(path)
         listener.listen(1)
         listener.settimeout(5.0)
@@ -9344,6 +9404,8 @@ def run_irc_case(binary, root, group="all"):
     environment = dict(os.environ, SNAJPAGENT_IRC_UI_KEY="irc-ui-secret", PAGER="")
     try:
         if group == "early":
+            run_pre_request_composer_case(binary, root)
+            run_pre_request_composer_case(binary, root, early_steer=True)
             run_token_accounting_cases(binary, root / "token-accounting")
             run_capacity_handoff_cases(binary, root / "capacity-handoff")
             run_assistant_phase_case(binary, root)

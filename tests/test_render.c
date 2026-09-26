@@ -1215,83 +1215,28 @@ capture_markdown(const char *text, bool enabled, bool split, enum snag_color_mod
     return used;
 }
 
-static size_t
-capture_native_markdown(const char *text, unsigned int before, unsigned int after,
-                        char *out, size_t out_size, struct snag_buf *delivered)
+static void
+test_capable_terminal_hard_wrap(void)
 {
+    static const char source[] = "alpha beta gamma delta";
     struct snag_render render;
     struct snag_term term;
-    size_t len = strlen(text);
+    struct snag_buf delivered = {.max = 1024u};
+    char output[256];
+    struct output_capture capture = capture_terminal(&render, &term, 20u, true, false);
 
-    struct output_capture capture = capture_terminal(&render, &term, before, true, false);
     term.opened = term.capable = term.defer_redraw = true;
     snag_render_set_color(&render, SNAG_COLOR_NEVER);
     assert(snag_render_public_begin(&render, STDOUT_FILENO, NULL) == 0);
-    for (size_t i = 0u; i < len; ++i) {
-        if (i == len / 2u) term.columns = after;
-        assert(snag_render_public(&render, text + i, 1u, delivered) == 0);
-    }
+    for (size_t i = 0u; i < sizeof(source) - 1u; ++i)
+        assert(snag_render_public(&render, source + i, 1u, &delivered) == 0);
     assert(snag_render_public_end(&render) == 0);
-    size_t used = capture_close(&capture, out, out_size, 0u);
+    assert(capture_close(&capture, output, sizeof(output), 0u) > 0u);
+    assert(strcmp(output, "\n• alpha beta gamma\n  delta\n\n") == 0);
+    assert(snag_buf_terminate(&delivered) == 0);
+    assert(strcmp((const char *)delivered.data, source) == 0);
+    snag_buf_free(&delivered);
     snag_term_close(&term);
-    return used;
-}
-
-static void
-test_native_soft_wrap_copy(void)
-{
-    static const char *const source[] = {
-        "The per-slot run is progressing normally; early loss is already "
-        "around 0.05–0.08 with 45.9 GB GPU memory used. While it trains, "
-        "I’m recording the method changes and rejected branches in the "
-        "maintained Tuzing research note so the next paid decision remains "
-        "grounded in evidence rather than chat history.",
-        "The slot-choice adapter finished 96 updates and 593,877 tokens in "
-        "23.5 minutes; training loss saturated near zero. I’m now evaluating "
-        "steps 32/64/96 with bounded candidate scoring. The only positive "
-        "result is 82/82 choices and 13/13 reconstructed records.",
-        "The method cleared its exact gate: step 96 scored **82/82 slot choices "
-        "and 13/13 reconstructed records**, including **8/8 E5 and 5/5 E7**. "
-        "This is the first learned exact-maintenance result that generalizes "
-        "across the sealed synthetic validation split. The adapter remains "
-        "diagnostic-only; I’m now landing the actual product boundary—externally "
-        "catalogued, per-slot choices compiled into canonical managed records—"
-        "before admitting a replay-anchored full-parameter candidate."
-    };
-    static const char *const plain[] = {
-        "The per-slot run is progressing normally; early loss is already "
-        "around 0.05–0.08 with 45.9 GB GPU memory used. While it trains, "
-        "I’m recording the method changes and rejected branches in the "
-        "maintained Tuzing research note so the next paid decision remains "
-        "grounded in evidence rather than chat history.",
-        "The slot-choice adapter finished 96 updates and 593,877 tokens in "
-        "23.5 minutes; training loss saturated near zero. I’m now evaluating "
-        "steps 32/64/96 with bounded candidate scoring. The only positive "
-        "result is 82/82 choices and 13/13 reconstructed records.",
-        "The method cleared its exact gate: step 96 scored 82/82 slot choices "
-        "and 13/13 reconstructed records, including 8/8 E5 and 5/5 E7. This is "
-        "the first learned exact-maintenance result that generalizes across the "
-        "sealed synthetic validation split. The adapter remains diagnostic-only; "
-        "I’m now landing the actual product boundary—externally catalogued, per-slot "
-        "choices compiled into canonical managed records—before admitting a "
-        "replay-anchored full-parameter candidate."
-    };
-    static const unsigned int widths[][2] = {{106u, 24u}, {32u, 20u}, {24u, 80u}};
-    char output[4096], expected[4096];
-
-    for (size_t i = 0u; i < sizeof(source) / sizeof(source[0]); ++i) {
-        assert(snprintf(expected, sizeof(expected), "\n• %s\n\n", plain[i]) > 0);
-        for (size_t w = 0u; w < sizeof(widths) / sizeof(widths[0]); ++w) {
-            struct snag_buf delivered = {.max = 4096u};
-            assert(capture_native_markdown(source[i], widths[w][0], widths[w][1], output,
-                                           sizeof(output), &delivered) > 0u);
-            assert(strcmp(output, expected) == 0);
-            assert(!strstr(output, "\n  "));
-            assert(snag_buf_terminate(&delivered) == 0);
-            assert(strcmp((const char *)delivered.data, source[i]) == 0);
-            snag_buf_free(&delivered);
-        }
-    }
 }
 
 static void
@@ -1721,7 +1666,6 @@ test_live_paragraph_gap(void)
         assert(render.public_item_open && term.prompt_visible);
         (void)drain_available(capture.fd, output, sizeof(output), 0u);
         if (i == 0u) {
-            assert(term.output_columns == 1u); /* Native soft wrap crossed the margin. */
             assert(snag_term_set_prompt_template(&term, true, "input › ", frames, 8u, 0u) == 0);
             assert(term.output_detour == 2u && term.prompt_visible);
             (void)drain_available(capture.fd, output, sizeof(output), 0u);
@@ -3069,7 +3013,7 @@ main(void)
     test_punctuation_word_boundaries();
     test_bounded_wrap_word();
     test_punctuation_wrapping();
-    test_native_soft_wrap_copy();
+    test_capable_terminal_hard_wrap();
     test_citation_blocks();
 
     snag_buf_init(&delivered, sizeof(markdown));

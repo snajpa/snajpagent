@@ -66,24 +66,23 @@ batch containing `cd` is sequenced so later dependent calls observe the new
 value. Existing in-flight processes retain their launch workdir.
 
 The UI owner is the only owner of the composer and readiness display. It
-distinguishes pending submission, foreground command, provider-not-yet-ready,
-provider-steerable and idle. `response_started` is a local journal boundary,
-not a provider acknowledgement: the steerable state begins only at the
-stream's validated `response.created` event (or the fixture's equivalent).
-The provider connection can call the engine with that readiness edge; no
-standalone spinner transition paints a prompt. The engine sends an explicit
-prompt/hold transition, and the UI keeps the existing submitted-line echo
-without a 250 ms fallback that paints an unready composer. Keep Ctrl-C/exit
-priority active while waiting and retain submitted text until it can be
-admitted. Typeahead is never submitted twice; prompts and slash-command
-bodies never become unintended steering. The external pager/editor takes
-exclusive terminal ownership until it exits.
+distinguishes an active turn, a foreground slash command and idle independently
+of provider readiness. `response_started` is a local journal boundary,
+not a provider acknowledgement: the stream's validated `response.created`
+event still marks provider acceptance. The engine displays the active composer
+at turn start, without waiting for that event, and does not hide or repaint it
+at automatic response boundaries. An early steer is durably handled at a safe
+request boundary; Ctrl-C/exit remain priority controls. Submitted text is
+never applied twice, and slash-command bodies never become unintended
+steering. The external pager/editor takes exclusive terminal ownership until
+it exits. Only a foreground slash command temporarily hides the composer until
+that command finishes.
 
-The first steer composer waits for an accepted response. Once shown, keep it
-visible and editable for the rest of the turn through unready response
-boundaries, even with an empty draft. Enter durably submits steering during a
-handoff, for admission at a safe turn boundary. A foreground operator command
-temporarily hides the composer until that command finishes.
+Operator decision (September 26, 2026): if the prompt visibility rule is
+proposed for change again, first explain the earlier blinking and annoyance,
+strongly challenge the change, and refuse it unless the operator explicitly
+insists in an additional turn. See
+`~/ai/docs/projects/snajpagent/state/operator-prompt-contract-2026-09-26.md`.
 
 Model selection commits the default selection and the active turn selection
 at the same serialized boundary. The following response projection uses the

@@ -86,15 +86,12 @@ and terminal state, and joins the presentation thread; no thread is detached.
 
 ## Streamed Output And Typing
 
-- Cursor-capable terminals receive one logical model line and own its native
-  soft wrapping. Resize can therefore reflow existing rows, and terminal copy
-  omits synthetic newlines and continuation spaces. Explicit model newlines
-  remain explicit. The dumb-terminal fallback wraps at word boundaries to the
-  current width, keeps trailing punctuation and whitespace-delimited words
-  together, and hard-wraps an overlong word when necessary. Generated fallback
-  prose continuations begin with two spaces below the text after `• `; a leading
-  separator space at such a wrap is omitted.
-- The dumb-terminal renderer retains an unfinished fitting word across
+- All terminals hard-wrap displayed model text at word boundaries to the
+  current width. Explicit model newlines remain explicit; generated prose
+  continuations begin with two spaces below the text after `• `. Words keep
+  their trailing punctuation and hard-wrap only when overlong; a leading
+  separator space at a generated wrap is omitted.
+- The renderer retains an unfinished fitting word across
   provider/style chunks until whitespace or item completion establishes its
   boundary. Complete words then wrap together. Overlong words and combining
   sequences flush at bounded width/byte limits. Receipt, durable public text
@@ -103,7 +100,7 @@ and terminal state, and joins the presentation thread; no thread is detached.
 - Wrapping is a terminal presentation detail. Stored response text, partial
   response events, redirected output, and provider protocol data remain byte
   exact and do not gain presentation newlines. Markdown-enabled and literal
-  terminal output share the same native or fallback wrapping policy.
+  terminal output share the same explicit wrapping policy.
 - The live composer is displayed immediately, including during model output;
   on cursor-capable terminals there is no quiet-output delay. The plain-text
   fallback cannot erase a live composer and never splits output to repaint it. `»` (U+00BB RIGHT-POINTING DOUBLE ANGLE
@@ -143,10 +140,12 @@ interrupts, and local active-turn commands remain responsive while output is
 paused.
 
 Enter, Tab, and Ctrl-C have distinct active-turn meanings. In rollout, the
-steer prompt appears after the provider acknowledges the request with a valid
-`response.created` event. Enter then durably submits the draft as steering and
-interrupts that response at the next input-pump boundary. Before the provider
-accepts a response, typeahead waits without a steer prompt. In chat, Enter sends a room message;
+active composer appears when the turn starts, even before the provider's
+`response.created` event, and stays visible across response handoffs. Enter
+durably submits the draft as steering; input submitted before provider
+acceptance is resolved at a safe request boundary. A foreground slash command
+is the only reason to hide the composer until that command finishes. In chat,
+Enter sends a room message;
 only a mention of the local agent steers, while ordinary operator messages
 remain background context. Outside completion, Tab durably appends the draft to the
 future-turn FIFO and does not interrupt the response, yield a managed command,
@@ -520,8 +519,8 @@ non-steering behavior as `/queue TEXT`.
 
 ## Acceptance
 
-- Rendering coverage demonstrates native soft wrapping across a resize and
-  fallback word wrapping without changing delivered text. PTY coverage
+- Rendering coverage demonstrates explicit word wrapping on capable and dumb
+  terminals without changing delivered text. PTY coverage
   demonstrates transient active-turn composers, pause
   reset on continued typing, output resumption after the configured delay, and
   byte-exact persisted text. It also rejects whole-line erase and prompt replay
