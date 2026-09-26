@@ -2353,6 +2353,11 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
     builder.compact_allow_oversized_first = allow_oversized_first;
     if (session && session->active_turn_id[0]) memcpy(builder.target_turn_id, session->active_turn_id,
                sizeof(builder.target_turn_id));
+    /* A rebase of this turn can cover its turn_started beyond the retained
+     * overlap. Later events are already inside the active turn; a rebase from
+     * another turn must still stop at this turn's own start. */
+    builder.compact_current = active_prefix && rebased_without_summary &&
+        !strcmp(session->context_rebase_turn_id, builder.target_turn_id);
     if (!session || !model || !effort || !builder.request_input ||
         !builder.input_timing || !builder.deferred_input ||
         session->response_open || session->pending_call_count || (!active_prefix && session->process_count) ||

@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Continue automatic compaction after a long active turn's recovery rebase
+  even when its start has left the retained event overlap.
 - Tell the model how to collect unsettled command handles after a rejected
   final answer while retaining the existing process-ownership safety guard.
 - Preserve pending IRC source events across context compaction and recovery;

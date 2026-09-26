@@ -232,7 +232,9 @@ including when there is no active goal. Steering within that turn retains the
 existing rebase instead of recording a second checkpoint. A newly completed
 model response after that boundary supplies fresh history; if it later exceeds
 the limit, the same turn can advance to another checkpoint rather than being
-treated as an unchanged minimal request.
+treated as an unchanged minimal request. When that turn began before the
+retained overlap, its own rebase still establishes the active-turn boundary
+for later compaction; a rebase from another turn does not move that boundary.
 An active IRC update prompt contains durable room-event references. Minimal
 recovery resolves only the references named by that current prompt and supplies
 their message text, not unrelated old room traffic; the journal remains the

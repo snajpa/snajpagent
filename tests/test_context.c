@@ -1989,6 +1989,52 @@ test_unsettled_final_recovery_guidance(struct snag_store *store, const char *cwd
 }
 
 static void
+test_rebased_active_compaction_after_trim(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session;
+    struct snag_context_projection projection = {0};
+    json_t *empty = json_array();
+    char error[512] = {0};
+    const char *turn = "d9000000000000000000000000000000";
+    const char *response = "da000000000000000000000000000000";
+    const char *next = "db000000000000000000000000000000";
+    struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u,
+        .endpoint = "127.0.0.1:6667", .room = "#lab", .nick = "peer",
+        .text = "background event", .stream = "11111111111111111111111111111111",
+        .sequence = 1u, .input = false};
+    assert(empty);
+    create_session(store, &session, cwd, "medium");
+    commit_event(&session, "turn_started", turn_started(turn, 1u, "continue", cwd, NULL));
+    build_context(&session, 1u, empty, NULL, &projection);
+    snag_context_projection_free(&projection);
+    for (unsigned int i = 0u; i <= SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS; ++i) {
+        event.sequence = i + 1u;
+        event.timestamp_ms = i + 1u;
+        commit_event(&session, "irc_event", snag_irc_event_data(&event));
+    }
+    commit_event(&session, "context_rebased", json_pack("{s:s,s:s}",
+        "reason", "turn_recovery", "turn_id", turn));
+    assert(!strcmp(session.context_rebase_turn_id, turn));
+    commit_event(&session, "response_started", response_started(turn, response, NULL));
+    commit_event(&session, "response_completed", response_completed(turn, response, "new result"));
+    int rc = snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium",
+        true, 0u, false, NULL, &projection, error, sizeof(error), NULL);
+    if (rc < 0) fprintf(stderr, "rebased active compact: %s\n", error);
+    assert(rc == 0 && projection.source_seq == session.next_seq - 1u);
+    snag_context_projection_free(&projection);
+
+    commit_event(&session, "turn_completed", turn_completed(turn, response));
+    uint64_t previous = session.next_seq - 1u;
+    commit_event(&session, "turn_started", turn_started(next, 2u, "next turn", cwd, NULL));
+    rc = snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium",
+        true, 0u, false, NULL, &projection, error, sizeof(error), NULL);
+    assert(rc == 0 && projection.source_seq == previous);
+    snag_context_projection_free(&projection);
+    snag_session_close(&session);
+    json_decref(empty);
+}
+
+static void
 test_deferred_steering_replay(struct snag_store *store, const char *cwd)
 {
     const char *turn = "d3000000000000000000000000000000";
@@ -4245,6 +4291,7 @@ main(int argc, char **argv)
     test_office_commands_export(&store, cwd);
     test_input_time_and_recovery(&store, cwd);
     test_unsettled_final_recovery_guidance(&store, cwd);
+    test_rebased_active_compaction_after_trim(&store, cwd);
     test_deferred_steering_replay(&store, cwd);
     test_public_phase_compaction(&store, cwd);
     test_context_meter_usage(&store, cwd);

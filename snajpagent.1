@@ -2166,6 +2166,8 @@ and
 .B read_tool_output
 tools to recover a needed fact without replaying those calls. This recovery
 survives interruption and resume, including a turn without an active goal.
+If that same active turn later needs another compaction, its recovery boundary
+remains valid even after the turn's start leaves the retained event overlap.
 For a current IRC update, the request also retains the referenced room
 messages from the durable journal; unrelated historical room traffic stays
 available through history tools rather than being replayed.
