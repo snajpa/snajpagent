@@ -812,7 +812,8 @@ render_history_turn(struct snag_render *render, const struct snag_history_turn *
     int rc = 0;
 
     struct snag_buf line = {.max = 4u * 1024u * 1024u};
-    if (user && (snag_buf_append(&line, "user: ", 6u) < 0 ||
+    const char *label = turn->timer ? "timer: " : "user: ";
+    if (user && (snag_buf_append(&line, label, strlen(label)) < 0 ||
          snag_buf_append(&line, user, strlen(user)) < 0 || snag_buf_putc(&line, '\n') < 0)) rc = -1;
     else if (line.len) rc = write_block(render, STDERR_FILENO, (char *)line.data, line.len,
                          render->stderr_terminal, true);

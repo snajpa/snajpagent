@@ -1452,7 +1452,11 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         session->pending_queue_count = out;
     } else if (strcmp(type, "input_received") == 0) {
         if (session->active_turn || session->pending_input ||
-            !input_fields_valid(data, "effort instructions model provider read_only received_at_ms text") ||
+            !input_fields_valid(data, json_object_get(data, "origin") ?
+                "effort instructions model origin provider read_only received_at_ms text" :
+                "effort instructions model provider read_only received_at_ms text") ||
+            (json_object_get(data, "origin") &&
+             !snag_string_in(snag_json_string(data, "origin"), "timer")) ||
             !snag_text_valid(snag_json_string(data, "text"), 1u, SNAG_MAX_DIRECT_PROMPT) ||
             !snag_text_valid(snag_json_string(data, "model"), 1u, SNAG_MODEL_MAX_BYTES - 1u) ||
             !snag_text_valid(snag_json_string(data, "effort"), 1u, SNAG_EFFORT_MAX_BYTES - 1u) ||
@@ -1479,6 +1483,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         json_t *config = json_object_get(data, "config");
         bool queued;
         bool goal;
+        bool timer;
         uint64_t queue_seq = 0;
         uint64_t max_parallel = 4u;
         uint64_t default_yield = 10000u, max_wait = 60000u;
@@ -1556,10 +1561,13 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             default_timeout > max_timeout || output_cache > SNAG_CONFIG_OUTPUT_CACHE_MAX) goto invalid;
         queued = strcmp(kind, "queued") == 0;
         goal = strcmp(kind, "goal") == 0;
-        if (!queued && !goal && strcmp(kind, "direct") != 0) goto invalid;
+        timer = strcmp(kind, "timer") == 0;
+        if (!queued && !goal && !timer && strcmp(kind, "direct") != 0) goto invalid;
+        if (timer && !session->pending_input) goto invalid;
         if (session->pending_input) {
             const json_t *pending = session->pending_input;
             if (queued || goal || strcmp(text, snag_json_string(pending, "text")) ||
+                timer != (json_object_get(pending, "origin") != NULL) ||
                 strcmp(model, snag_json_string(pending, "model")) ||
                 strcmp(provider, snag_json_string(pending, "provider")) ||
                 strcmp(effort, snag_json_string(pending, "effort")) ||

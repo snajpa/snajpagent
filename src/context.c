@@ -1662,6 +1662,7 @@ context_event(void *opaque, const struct snag_session *state,
         const char *kind = snag_json_string(data, "input_kind");
         if (!strcmp(kind, "goal")) return !summarized && builder->recovery_count ? 0 :
                    append_host_input(builder->request_input, text);
+        if (!strcmp(kind, "timer")) return append_host_input(builder->request_input, text);
         return append_input(builder, text, kind, state->active_turn_id, time_ms, 0u, json_object_get(data,"content"));
     }
     if (summarized) {

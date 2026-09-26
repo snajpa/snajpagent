@@ -137,6 +137,10 @@ When a model turn ends:
 
 1. `completed`, `blocked`, `paused`, and `cancelled` goals stop and return to
    the idle prompt after the current turn has closed.
+   A blocked goal with a scheduled timer remains blocked; the idle notice names
+   that timer rather than saying it awaits the operator. When the timer fires,
+   its prompt is identified as host-originated in the transcript and model
+   context, not as an operator submission.
 2. A normal final answer while the goal is still active is a checkpoint, not a
    completion signal. snajpagent immediately starts another goal turn.
 3. User turns queued during the active turn run in FIFO order before that next

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Describe blocked goals with an armed timer as scheduled rather than awaiting
+  the operator. Mark timer-fired turns as timer-originated in the live transcript,
+  history and provider context instead of presenting them as operator prompts.
+
 - Batch plain SSE line spans and JSON string runs instead of performing a
   buffer-capacity check for every streamed byte. Keep the same wire limits,
   UTF-8 checks and escaped JSON output.

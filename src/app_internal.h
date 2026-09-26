@@ -245,7 +245,7 @@ int snag_app_close_active_processes(struct app_state *, const char *, const char
 int snag_app_lifecycle_command(struct app_state *app, const char *line, bool *handled, bool *exit_now);
 int snag_app_parse_queue_argument(const char *argument, enum queue_command_kind *kind, size_t *number);
 
-json_t *snag_app_input_received_data(struct app_state *, const char *, bool);
+json_t *snag_app_input_received_data(struct app_state *, const char *, bool, bool);
 
 bool snag_app_context_cancelled(void *opaque);
 int snag_app_active_input_pump(void *opaque, unsigned int timeout_ms);

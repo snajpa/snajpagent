@@ -484,7 +484,8 @@ is an alias for
 .BR /state " goal" .
 When a turn leaves a paused or blocked goal with nothing pending, the
 terminal prints an idle line naming the state, so paused no longer reads
-as stuck.
+as stuck. A blocked goal with an armed timer says the timer is scheduled;
+it does not claim to be awaiting the operator.
 Armed waiting prompts continue after recovered active work.  Paused prompts
 need
 .B /next
@@ -3440,7 +3441,9 @@ accepts delay_ms and text. A positive delay_ms and nonblank text replace any
 current one-shot timer. delay_ms 0 cancels the current timer and requires text
 null. The schedule is durable across resume. When due, the foreground process
 records the firing and admits one fresh ordinary turn containing the stored text.
-That turn does not resume a paused or blocked goal. Timer calls remain subject
+The transcript and history label this as a timer turn, not an operator
+submission, and the model receives it as host continuation. That turn does
+not resume a paused or blocked goal. Timer calls remain subject
 to the current turn's policy and cannot authorize a refused side effect.
 .SS Steering
 .B defer_steering

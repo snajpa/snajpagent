@@ -1742,6 +1742,7 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
         if (history_finish(history) < 0) return -1;
         if (history->skip) { --history->skip; return 0; }
         turn->user = strdup(snag_json_string(data, "text"));
+        turn->timer = !strcmp(snag_json_string(data, "input_kind"), "timer");
         turn->status = "unfinished";
         return turn->user ? 0 : -1;
     }

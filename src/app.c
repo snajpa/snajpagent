@@ -3609,7 +3609,7 @@ admit_input(struct app_state *app, char *error, size_t error_size)
 
 static int
 run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
-         const struct snag_queued_turn *queued, bool goal_turn, bool read_only,
+         const struct snag_queued_turn *queued, bool goal_turn, bool timer_turn, bool read_only,
          const json_t *content)
 {
     char turn_id[SNAG_ID_HEX_LEN + 1u];
@@ -3717,7 +3717,8 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                          "output_cache_bytes", (json_int_t)execution.output_cache_bytes,
                          "parallel_tool_calls", app->turn_provider->parallel_tool_calls,
                          "max_turn_retries", (json_int_t)retry->limit,
-                         "input_kind", goal_turn ? "goal" : queued ? "queued" : "direct",
+                         "input_kind", goal_turn ? "goal" : queued ? "queued" :
+                             timer_turn ? "timer" : "direct",
                          "instructions", snag_instructions_metadata_json(&app->turn_instructions),
                          "received_at_ms", (json_int_t)(queued ? queued->received_ms : app->input_received_ms),
                          "read_only", read_only, "queue_id", queued ? queued->queue_id : NULL,
@@ -4347,8 +4348,10 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 (app->session.goal_status == SNAG_GOAL_PAUSED ||
                  app->session.goal_status == SNAG_GOAL_BLOCKED) &&
                 app->session.pending_queue_count == 0u && !app->session.pending_steering_count &&
-                app_textf(app, SNAG_UI_WARNING, "idle: goal %s, awaiting operator",
-                    app->session.goal_status == SNAG_GOAL_PAUSED ? "paused" : "blocked") < 0) {
+                app_textf(app, SNAG_UI_WARNING, "idle: goal %s",
+                    app->session.goal_status == SNAG_GOAL_PAUSED ? "paused, awaiting operator" :
+                    app->session.timer_id[0] ? "blocked, timer scheduled" :
+                    "blocked, awaiting operator") < 0) {
                 report_message = "idle-state notice could not be rendered";
                 goto output_fail;
             }
@@ -4418,22 +4421,28 @@ out: snag_app_response_cycle_release(app, &graph, &steering, &projection, &reque
 }
 
 json_t *
-snag_app_input_received_data(struct app_state *app, const char *text, bool read_only)
+snag_app_input_received_data(struct app_state *app, const char *text,
+                             bool read_only, bool timer_turn)
 {
     const struct snag_provider_config *provider = next_provider(app);
     const char *effort = resolve_effort(app->session.default_effort);
     if (!provider || !effort || !snag_text_valid(text, 1u, SNAG_MAX_DIRECT_PROMPT)) return NULL;
-    return json_pack("{s:s,s:o,s:s,s:s,s:b,s:I,s:s}",
+    json_t *data = json_pack("{s:s,s:o,s:s,s:s,s:b,s:I,s:s}",
         "effort", effort, "instructions", snag_instructions_metadata_json(&app->cli->doc_instructions),
         "model", app->session.default_model, "provider", provider->name, "read_only", read_only,
         "received_at_ms", (json_int_t)(app->ui.input_received_ms ? app->ui.input_received_ms : snag_time_ms()),
         "text", text);
+    if (timer_turn && data && json_object_set_new(data, "origin", json_string("timer")) < 0) {
+        json_decref(data);
+        return NULL;
+    }
+    return data;
 }
 
 static int
 run_tracked_turn(struct app_state *app, const char *prompt,
                  const struct snag_queued_turn *queued, bool goal_turn,
-                 bool read_only, const json_t *content)
+                 bool read_only, const json_t *content, bool timer_turn)
 {
     if (app->session.active_turn) {
         read_only = app->session.active_read_only;
@@ -4457,7 +4466,8 @@ run_tracked_turn(struct app_state *app, const char *prompt,
             return 2;
         }
         if (!app->session.pending_input) {
-            if (commit_input(app, "input_received", snag_app_input_received_data(app, prompt, read_only),
+            if (commit_input(app, "input_received",
+                    snag_app_input_received_data(app, prompt, read_only, timer_turn),
                              content, error, sizeof(error)) < 0) {
                 (void)app_error(app, error);
                 return 3;
@@ -4477,13 +4487,15 @@ run_tracked_turn(struct app_state *app, const char *prompt,
         }
         prompt = snag_json_string(app->session.pending_input, "text");
         content = json_object_get(app->session.pending_input, "content");
+        timer_turn = snag_json_string(app->session.pending_input, "origin") != NULL;
         read_only = json_is_true(json_object_get(app->session.pending_input, "read_only"));
         app->input_received_ms = (uint64_t)json_integer_value(
             json_object_get(app->session.pending_input, "received_at_ms"));
         /* Room traffic admitted as a turn prompt is not a submission: the
          * durable trail and the chat view already show it. */
         if (!app->execute && !snag_app_irc_prompt(prompt) &&
-            snag_ui_submitted(&app->ui, app->ui.label, prompt, true) < 0) return 6;
+            snag_ui_submitted(&app->ui, timer_turn ? "timer › " : app->ui.label,
+                              prompt, !timer_turn) < 0) return 6;
         if (snag_ui_leaving(&app->ui)) return 0;
     }
     /* A queued entry can be consumed by turn_started: own the input across retries. */
@@ -4537,7 +4549,8 @@ run_tracked_turn(struct app_state *app, const char *prompt,
             read_only = queued_copy.read_only;
         }
         retry.pending = false;
-        rc = run_turn(app, &retry, retained, queued, goal_turn, read_only, retained_content);
+        rc = run_turn(app, &retry, retained, queued, goal_turn, timer_turn,
+                      read_only, retained_content);
         if (app->session.turn_count != turns) queued = NULL;
         if (app->turn_policy_stopped) {
             retry.attempts = 0u;
@@ -4788,7 +4801,7 @@ run_queued_chain(struct app_state *app)
     while (!app->input_closed && app->session.queue_armed && app->session.pending_queue_count != 0u) {
         const struct snag_queued_turn *queued = &app->session.pending_queue[0];
         int turn_rc = run_tracked_turn(app, queued->text, queued, false,
-                                       queued->read_only, queued->content);
+                                       queued->read_only, queued->content, false);
         if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY) {
             if (!app->input_closed && snag_app_queue_arm(app, false) < 0) return 3;
             return turn_rc;
@@ -4822,7 +4835,7 @@ run_due_timer(struct app_state *app)
         (void)app_error(app, error);
         return 3;
     }
-    rc = run_tracked_turn(app, text, NULL, false, false, NULL);
+    rc = run_tracked_turn(app, text, NULL, false, false, NULL, true);
     free(text);
     return rc;
 }
@@ -4855,7 +4868,7 @@ run_ready_chains(struct app_state *app)
         if (!app->session.active_turn && app->session.pending_input) {
             turn_rc = run_tracked_turn(app, snag_json_string(app->session.pending_input, "text"),
                 NULL, false, json_is_true(json_object_get(app->session.pending_input, "read_only")),
-                json_object_get(app->session.pending_input, "content"));
+                json_object_get(app->session.pending_input, "content"), false);
             if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY) return turn_rc;
             continue;
         }
@@ -4869,7 +4882,7 @@ run_ready_chains(struct app_state *app)
             if (app->session.policy_stopped) return 0;
             if (app->session.active_goal && app->session.goal_status != SNAG_GOAL_ACTIVE) return 0;
             turn_rc = run_tracked_turn(app, app->session.active_prompt, NULL,
-                app->session.active_goal, app->session.active_read_only, NULL);
+                app->session.active_goal, app->session.active_read_only, NULL, false);
             if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY)
                 return turn_rc;
             continue;
@@ -4879,7 +4892,7 @@ run_ready_chains(struct app_state *app)
             bool local_operator = false;
             char *prompt = snag_app_irc_take_pending(app, &local_operator, true);
             if (prompt) {
-                turn_rc = run_tracked_turn(app, prompt, NULL, false, false, NULL);
+                turn_rc = run_tracked_turn(app, prompt, NULL, false, false, NULL, false);
                 free(prompt);
                 if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY) return turn_rc;
                 continue;
@@ -4901,7 +4914,7 @@ run_ready_chains(struct app_state *app)
         if (app->goal_armed && app->session.pending_queue_count == 0u &&
             app->session.goal_status == SNAG_GOAL_ACTIVE) {
             turn_rc = run_tracked_turn(app, SNAG_GOAL_CONTINUATION_TEXT,
-                                      NULL, true, false, NULL);
+                                      NULL, true, false, NULL, false);
             if (turn_rc != 0 && turn_rc != SNAG_APP_INPUT_READY)
                 return turn_rc;
             continue;
@@ -4969,7 +4982,7 @@ submit_idle(struct app_state *app, const char *prompt, enum snag_render_view inp
             return 0;
         }
         if (snag_app_queue_arm(app, false) < 0) return 3;
-        rc = run_tracked_turn(app, query, NULL, false, read_only, app->draft_content);
+        rc = run_tracked_turn(app, query, NULL, false, read_only, app->draft_content, false);
         if (rc == 3 || rc == 6)
             return rc;
         if ((rc == 0 || rc == SNAG_APP_INPUT_READY) &&
@@ -5022,7 +5035,7 @@ interactive_loop(struct app_state *app, const char *initial)
             owned = snag_app_irc_take_pending(app, &local_operator, false);
             if (owned) {
                 if (snag_app_queue_arm(app, false) < 0) { rc = 3; break; }
-                rc = run_tracked_turn(app, owned, NULL, false, false, NULL);
+                rc = run_tracked_turn(app, owned, NULL, false, false, NULL, false);
                 if (rc == 3 || rc == 6)
                     break;
                 if ((rc == 0 || rc == SNAG_APP_INPUT_READY) &&
@@ -5326,7 +5339,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         if (cli->prompt) {
             bool read_only;
             const char *query = snag_prompt_parse(cli->prompt, &read_only);
-            rc = run_tracked_turn(&app, query, NULL, false, read_only, NULL);
+            rc = run_tracked_turn(&app, query, NULL, false, read_only, NULL, false);
         }
         if ((rc == 0 || rc == SNAG_APP_INPUT_READY) &&
             (!cli->prompt || app.session.queue_armed || app.goal_armed || timer_due(&app))) rc = run_ready_chains(&app);

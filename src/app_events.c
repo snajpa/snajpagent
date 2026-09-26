@@ -404,7 +404,8 @@ snag_app_irc_take_pending(struct app_state *app, bool *local_operator, bool forc
     char error[256] = {0};
     if (admit_irc_input(app, source == &app->irc_urgent ? &app->irc_urgent_refs :
                         &app->irc_background_refs, used, "input_received",
-                        snag_app_input_received_data(app, copy, false), error, sizeof(error)) < 0) {
+                        snag_app_input_received_data(app, copy, false, false),
+                        error, sizeof(error)) < 0) {
         free(copy);
         (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
         return NULL;

@@ -346,10 +346,10 @@ steered_irc_lifecycle(struct fixture_output *out, const json_t *steering,
 }
 
 static int
-add_block_and_timer_call(struct snag_response_graph *graph, unsigned int cycle)
+add_block_and_timer_call(struct snag_response_graph *graph, unsigned int cycle, uint64_t delay_ms)
 {
     if (add_goal_call(graph, cycle, false, "block", "waiting for timer") < 0) return -1;
-    return add_timer_call(graph, cycle, 0u, 25u, "timer fired");
+    return add_timer_call(graph, cycle, 0u, delay_ms, "timer fired");
 }
 
 static bool
@@ -360,7 +360,8 @@ managed_prompt(const char *prompt)
 }
 
 static int
-fixture_response(const char *prompt, const json_t *steering, const char *workspace, unsigned int cycle,
+fixture_response(const char *prompt, const json_t *steering, const json_t *request,
+                     const char *workspace, unsigned int cycle,
                      const char *goal_prompt, uint64_t goal_turn_count,
                      snag_responses_emit_fn emit, snag_provider_pump_fn pump, void *opaque,
                      snag_responses_hosted_fn hosted, void *hosted_opaque,
@@ -474,8 +475,19 @@ fixture_response(const char *prompt, const json_t *steering, const char *workspa
             return add_call(graph, workspace, cycle, 0u, "fixture deferred intermediate command");
         return final_answer(&out, "msg_fixture_defer_slow_final", "defer slow complete");
     }
-    if (strcmp(prompt, "timer fired") == 0)
+    if (strcmp(prompt, "timer fired") == 0) {
+        const json_t *input = json_object_get(request, "input");
+        bool host_timer = false;
+        for (size_t i = 0u; i < json_array_size(input); ++i) {
+            const char *text = snag_json_string(json_array_get(input, i), "content");
+            if (text && strncmp(text, "[snajpagent host continuation",
+                                sizeof("[snajpagent host continuation") - 1u) == 0 &&
+                strstr(text, "timer fired")) host_timer = true;
+        }
+        if (!host_timer) return snag_errorf(error, error_size,
+                                          "timer reminder appears as operator input");
         return final_answer(&out, "msg_fixture_timer_fired", "timer reminder handled");
+    }
     if (strcmp(prompt, "timer_replace_test") == 0) {
         if (cycle == 1u) return add_timer_replacement_calls(graph, cycle);
         return final_answer(&out, "msg_fixture_timer_replaced", "timer replacement scheduled");
@@ -537,8 +549,11 @@ fixture_response(const char *prompt, const json_t *steering, const char *workspa
         }
         if (strcmp(goal_prompt, "automatic goal") == 0 && goal_turn_count == 1u)
             return final_answer(&out, "msg_fixture_goal_checkpoint", "goal checkpoint");
-        if (strcmp(goal_prompt, "timer blocked goal") == 0 && goal_turn_count == 1u && cycle == 1u)
-            return add_block_and_timer_call(graph, cycle);
+        if (goal_turn_count == 1u && cycle == 1u &&
+            (!strcmp(goal_prompt, "timer blocked goal") ||
+             !strcmp(goal_prompt, "timer slow blocked goal")))
+            return add_block_and_timer_call(graph, cycle,
+                !strcmp(goal_prompt, "timer blocked goal") ? 25u : 6000u);
         if (strcmp(goal_prompt, "rewrite goal") == 0 && cycle == 1u)
             return add_goal_call(graph, cycle, false, "rewrite", "rewritten goal");
         if (strcmp(goal_prompt, "rewritten goal") == 0 && cycle == 2u)
@@ -1085,7 +1100,7 @@ snag_fixture_response(const char *prompt, const json_t *steering, const json_t *
             if (result < 0) goto out;
         }
     }
-    rc = fixture_response((char *)resolved.data, expanded, workspace, cycle,
+    rc = fixture_response((char *)resolved.data, expanded, request, workspace, cycle,
                            goal_prompt, goal_turn_count, emit, pump, opaque, hosted, hosted_opaque,
                            graph, failure, error, error_size);
     if (rc == 0 && !graph->usage.input_known &&

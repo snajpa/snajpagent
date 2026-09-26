@@ -2160,20 +2160,24 @@ def test_goal_quoted_reserved_wording():
 
 
 def test_timer_wakes_an_ordinary_model_turn():
-    child = Child([], PROMPT.rstrip())
-    scheduled_end = child.send_wait(b"timer_test\r", b"timer scheduled")
-    handled_end = child.wait(b"timer reminder handled", start=scheduled_end)
-    child.exit_cleanly(handled_end)
+    with Child([], PROMPT.rstrip()) as child:
+        scheduled_end = child.send_wait(b"timer_test\r", b"timer scheduled")
+        handled_end = child.wait(b"timer reminder handled", start=scheduled_end)
+        assert b"timer \xe2\x80\xba timer fired" in child.buf
+        history_end = child.send_wait(b"/history\r", b"timer: timer fired", start=handled_end)
+        child.exit_cleanly(history_end)
+        session_id = child.session_id()
 
-    log = events(child.session_id())
+    log = events(session_id)
     turns = [event for event in log if event["type"] == "turn_started"]
     scheduled = one(log, "timer_scheduled")
     fired = one(log, "timer_fired")
     assert len(turns) == 2
     assert turns[0]["data"]["input_kind"] == "direct"
     assert turns[0]["data"]["text"] == "timer_test"
-    assert turns[1]["data"]["input_kind"] == "direct"
+    assert turns[1]["data"]["input_kind"] == "timer"
     assert turns[1]["data"]["text"] == "timer fired"
+    assert [event["data"].get("origin") for event in log if event["type"] == "input_received"] == [None, "timer"]
     assert scheduled["seq"] < fired["seq"] < turns[1]["seq"]
 
 
@@ -2187,7 +2191,7 @@ def test_timer_wakes_while_goal_stays_blocked():
     blocked = one(log, "goal_blocked")
     scheduled = one(log, "timer_scheduled")
     fired = one(log, "timer_fired")
-    assert [turn["data"]["input_kind"] for turn in turns] == ["goal", "direct"]
+    assert [turn["data"]["input_kind"] for turn in turns] == ["goal", "timer"]
     assert turns[1]["data"]["text"] == "timer fired"
     assert blocked["seq"] < scheduled["seq"] < fired["seq"] < turns[1]["seq"]
     assert not [event for event in log if event["type"] in {"goal_resumed", "goal_completed"}]
