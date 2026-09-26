@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Explain how GNU Screen redraws after resize can appear as repeated lines in
+  an outer terminal's saved scrollback without replaying snajpagent output.
+
 - Describe blocked goals with an armed timer as scheduled rather than awaiting
   the operator. Mark timer-fired turns as timer-originated in the live transcript,
   history and provider context instead of presenting them as operator prompts.

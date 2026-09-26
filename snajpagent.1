@@ -1203,6 +1203,14 @@ immediately on cursor-capable terminals, without waiting for a quiet period.
 Before new output it is erased
 and then redrawn with the unsent draft intact; work-in-progress prompts are not
 left in scrollback.  Submitted input remains in the transcript.
+.PP
+Inside GNU Screen, a terminal resize can make Screen redraw recently visible
+lines.  An outer terminal that saves those redraws in its own scrollback may
+show repeated completed lines even when snajpagent did not send them again.
+The outer terminal's alternate-screen and status-region scrollback behavior
+can affect whether such redraws enter its saved history.  This is separate from
+the session's durable transcript and from Screen copy mode.
+.PP
 Timestamped IRC chat messages do not receive the synthetic paragraph bullet;
 genuine Markdown list items retain their structural bullets.
 .PP
