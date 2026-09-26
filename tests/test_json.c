@@ -39,6 +39,19 @@ test_arguments_resolve_duplicate_keys_last_wins(void)
 }
 
 static void
+test_arguments_reject_decoded_nul(void)
+{
+    static const unsigned char decoded_nul[] = "{\"x\":\"\\u0000\"}";
+    char error[192] = {0};
+
+    /* Provider arguments tolerate duplicate keys, not an embedded NUL that
+     * would truncate a C-string tool parameter after JSON decoding. */
+    assert(snag_json_load_arguments(decoded_nul, sizeof(decoded_nul) - 1u, sizeof(decoded_nul),
+                                    error, sizeof(error)) == NULL);
+    assert(error[0]);
+}
+
+static void
 test_strict_rejects_ambiguous_or_invalid_input(void)
 {
     static const unsigned char duplicate[] = "{\"x\":1,\"x\":2}";
@@ -217,6 +230,7 @@ main(void)
     snag_json_document_free(&document);
     test_strict_accepts_wire_json();
     test_arguments_resolve_duplicate_keys_last_wins();
+    test_arguments_reject_decoded_nul();
     test_strict_rejects_ambiguous_or_invalid_input();
     test_nesting_limit();
     test_canonical_remains_durable_only();
