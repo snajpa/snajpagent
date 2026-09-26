@@ -46,8 +46,9 @@ Your request and the work through its final answer make up a **turn**, which
 appears in **rollout**. You can type while it runs; typing alone does not
 interrupt it.
 
-Each nonblank submission appears in scrollback immediately. The active prompt
-appears as the turn starts, before the provider accepts a response, and stays
+A submitted active rollout steer stays visible in scrollback even when the
+engine is busy. Its durable record follows when the engine admits it. The active
+prompt appears as the turn starts, before the provider accepts a response, and stays
 visible and editable through request preparation, retries and handoffs. Only a
 foreground slash command hides it until that command finishes. Enter submits
 a steer at the next safe boundary, including before provider acceptance. Blank or

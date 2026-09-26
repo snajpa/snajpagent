@@ -935,6 +935,17 @@ read_input(struct snag_ui_display *display, int timeout_ms)
                 atomic_fetch_add(&runtime->steering_pending, 1u);
             }
         }
+        /* Keep an active rollout steer visible even when the engine cannot
+         * accept another composer yet. Slash commands and queued controls
+         * retain their engine-owned acknowledgements. */
+        if (item->action == SNAG_TERM_SUBMIT && item->text && item->snapshot.active &&
+            item->snapshot.view == SNAG_RENDER_ROLLOUT && !item->submission_echoed &&
+            (item->text[0] != '/' || item->text[1] == '/') &&
+            !queue_full(&runtime->actions)) {
+            if (snag_render_input_submitted(&display->render, item->snapshot.label,
+                                            item->text) < 0) goto fail;
+            item->submission_echoed = true;
+        }
         if (queue_push(&runtime->actions, item)) return 0;
         atomic_store(&runtime->fatal, item->error ? item->error : EOVERFLOW);
     }

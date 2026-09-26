@@ -177,9 +177,17 @@ class Child:
             re.escape(meter[index:] + b"% \xe2\x80\xba")
             for index in range(len(meter))
         )
+        # Some cursor-capable repaints replace only the changed prefix, leaving
+        # a shared trailing digit and "% ›" in place (32 -> 42 writes just 4).
+        prefixes = b"|".join(
+            rb"\r\x1b\[\d+C" + re.escape(meter[:index]) +
+            rb"\r\x1b\[\d+C\r\x1b\[\d+C\xe2\x80\xba"
+            for index in range(1, len(meter) + 1)
+        )
         pattern = re.compile(
             re.escape(meter + b"% \xe2\x80\xba") +
-            rb"|\r(?:\x1b\[\d+C)?(?:" + suffixes + rb")(?=\r)"
+            rb"|\r(?:\x1b\[\d+C)?(?:" + suffixes + rb")(?=\r)" +
+            rb"|(?:" + prefixes + rb")"
         )
         return self.wait_pattern(pattern, start, timeout)
 
@@ -4162,6 +4170,30 @@ def test_known_context_meter():
     child.exit_cleanly(answered)
 
 
+def test_context_meter_repaints_during_turn_and_at_idle():
+    config = write_config("prompt-live-meter.ini",
+        "[provider openai]\n"
+        f"[model-limit openai/{DEFAULT_MODEL}]\nmax_input_tokens = 250000\n")
+    with Child(["--config", str(config)], ready=DEFAULT_IDLE_PROMPT) as child:
+        start = len(child.buf)
+        answered = child.send_wait(b"context_anchor_chain\r", b"context anchor complete", start=start)
+        log = events(child.session_id())
+        starts = [item["data"] for item in log if item["type"] == "response_started"]
+        completed = [item["data"] for item in log if item["type"] == "response_completed"]
+        assert len(starts) == len(completed) == 5, (len(starts), len(completed))
+        hard = starts[0]["hard_input_tokens"]
+        assert isinstance(hard, int) and hard > 0
+        percentages = [min(100, (item["usage"]["input_tokens"] * 100 + hard - 1) // hard)
+                       for item in completed]
+        assert len(set(percentages)) == 5, percentages
+        active_output = bytes(child.buf[start:answered])
+        assert any(f"{percent}%".encode() in active_output for percent in percentages[:-1]), (
+            "active prompt never painted a completed response measurement", percentages,
+            re.findall(rb"[0-9?]{1,3}%", active_output)[-20:])
+        child.wait_context_percent(percentages[-1], start=answered)
+        child.exit_cleanly(answered)
+
+
 def test_model_selection_stays():
     config = write_config("model-stays.ini",
         "[provider first]\n[provider second]\n[agent]\n"
@@ -5783,6 +5815,38 @@ def test_editor_during_render_flood():
         assert text == expected
 
 
+def test_submitted_steering_visible_before_blocked_engine_returns():
+    # The terminal clears the draft on Enter. The queued input must have a
+    # transcript copy even while the engine cannot offer the next composer.
+    submitted = b"rollout-submission-before-composer"
+    echo = re.compile(re.escape(submitted) + rb"\r{0,2}\n")
+    with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
+        child.send_wait(b"engine_blocked\r", b"engine-block-start")
+        start = len(child.buf)
+        child.send(submitted + b"\r")
+        deadline = time.monotonic() + MIN_WAIT_S
+        while True:
+            visible = echo.search(child.buf, start)
+            ended = child.buf.find(b"engine-block-end", start)
+            if visible or ended >= 0:
+                break
+            assert time.monotonic() < deadline, (
+                "accepted rollout submission disappeared while composer was held",
+                repr(bytes(child.buf[start:])[-350:]))
+            child.read_once(0.02)
+        assert visible and (ended < 0 or visible.start() < ended), (
+            "submitted text appeared only after the engine resumed",
+            repr(bytes(child.buf[start:])[-350:]))
+        finish = child.wait(b"engine-block-end", start=start, timeout=8)
+        child.exit_cleanly(finish)
+        assert len(echo.findall(child.buf, start)) == 1, (
+            "submission printed again after the engine resumed",
+            len(echo.findall(child.buf, start)))
+        log = events(child.session_id())
+        assert any(item["data"].get("text") == submitted.decode()
+                   for item in log if item["type"] == "steering_added")
+
+
 def test_editor_during_blocked_engine(key=b"\r"):
     child = Child([])
     failure = None
@@ -5923,6 +5987,7 @@ if __name__ == "__main__":
     test_ctrl_d_exit()
     test_goal_orderly_quit_resume()
     test_stalled_output_consumes_input()
+    test_submitted_steering_visible_before_blocked_engine_returns()
     test_editor_during_render_flood()
     test_editor_during_blocked_engine()
     test_editor_during_blocked_engine(b"\t")
@@ -6026,6 +6091,7 @@ if __name__ == "__main__":
     test_model_configuration_save()
     test_config_editor_reload()
     test_known_context_meter()
+    test_context_meter_repaints_during_turn_and_at_idle()
     test_model_selection_stays()
     test_config_and_cli_model_passthrough()
     test_exit_resume_matrix()

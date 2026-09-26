@@ -420,6 +420,13 @@ parked. Shutdown leaves remaining intent for resume rather than launching it.
 UI polling drains actions in receipt order and returns the submission-time view
 and activity state. Text entered at idle just before work starts remains future
 input, rather than steering the new turn. Commands behind it stay responsive.
+In rollout, the presentation owner echoes an ordinary active steer when the
+terminal accepts it, including while the engine is blocked. The action carries
+that acknowledgement to the engine, so a successfully persisted steer is not
+echoed twice. Visible acknowledgement precedes the durable `steering_added`
+event; slash commands and queued controls keep their engine-owned feedback.
+Measured context changes from exact input counts, completed responses and
+context rebases refresh the active or idle composer after event application.
 Slash-command transcript echo is shared. A queued turn renders its ordinary
 submitted prompt at actual dispatch with a fresh local clock while preserving
 original receipt provenance and an existing draft's text/clock.

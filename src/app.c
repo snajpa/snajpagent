@@ -362,6 +362,7 @@ prepare_turn_settings(struct app_state *app, char *error, size_t error_size)
     return 0;
 }
 static unsigned int prompt_spinner_states(const struct app_state *app);
+static int set_input_prompt(struct app_state *app, bool active);
 
 int
 snag_app_commit_event(struct app_state *app, const char *type, json_t *data, char *error, size_t error_size)
@@ -402,6 +403,13 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data, cha
             .kind = SNAG_UI_EVENT, .text = type, .data.seq = seq}) < 0) {
         return snag_errorf(error, error_size, "durable event output failed");
     }
+    /* The reducer has already changed the measurement. Keep the live composer
+     * current across response/tool cycles and the idle prompt after a count;
+     * ordinary output does not otherwise rebuild its context field. */
+    if (app->ui.opened && snag_string_in(type,
+            "input_token_count response_completed context_rebased") &&
+        set_input_prompt(app, app->session.active_turn) < 0)
+        return snag_errorf(error, error_size, "context prompt could not be updated");
     if (strcmp(type, "turn_failed") == 0 && app->session.goal_status != SNAG_GOAL_ACTIVE)
         return app_warning(app, "turn failed; try /retry to continue");
     return 0;
@@ -2898,7 +2906,7 @@ again:;
                         snag_app_steering_added_data(app->session.active_turn_id,
                                             steering_id, text),
                         app->draft_content, error, sizeof(error));
-                if (rc == 0 && snag_ui_submitted(&app->ui,
+                if (rc == 0 && !app->ui.input_echoed && snag_ui_submitted(&app->ui,
                         app->ui.label, text, true) < 0)
                     rc = -1;
                 if (rc < 0) {

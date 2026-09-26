@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Refresh the measured context percentage during active work and at idle after
+  input counts or completed responses. Keep an accepted active rollout steer
+  visible while the engine is blocked, without echoing it again after admission.
+
 - Allow another bounded hard-budget compaction after completed response/tool
   progress in a long turn, and clear stale usage after a recovery rebase.
 

@@ -373,6 +373,11 @@ later responses can still be changed now. Inspection and display commands
 run when accepted; deferred controls acknowledge the boundary they await and
 retain accepted intent for resume. A running foreground slash command owns the
 prompt. Bytes typed during it wait and are interpreted only after its result.
+In rollout, an ordinary active-turn submission is echoed before the engine
+handoff, so it remains visible even if that handoff blocks the next composer.
+The steering record becomes durable when the engine admits it; successful
+admission does not print the text a second time. Slash commands and queued
+controls keep their own acknowledgement timing.
 Empty-draft Ctrl-C interrupts an active operation.
 .PP
 Queue editing keeps command input separate from replacement text.  Enter on
@@ -1852,8 +1857,10 @@ Automatic compaction uses the provider threshold and resolved input capacity;
 setting the proactive threshold to zero does not disable capacity handling.
 With a known hard input window, the default automatic threshold is 90% of that
 window.  The prompt percentage shows measured input usage of the selected
-window.  It can fall after a completed compaction; each new attempt announces
-itself.  A long turn can compact again after a completed response and later
+window.  Exact input counts and completed responses refresh the composer during
+active work and after return to idle.  Streaming output enters a later request
+when its input is measured.  The percentage can fall after a completed
+compaction; each new attempt announces itself.  A long turn can compact again after a completed response and later
 tool progress when its next request exceeds the hard budget.  A recovery rebase clears the
 previous usage measurement until a new response supplies one.
 Native compaction is used when enabled.  Set
