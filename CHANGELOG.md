@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Enable device audio and native realtime voice in Linux production builds,
+  using the ALSA and PulseAudio backends.
+
 - Use the configured provider URL's HTTP/HTTPS scheme for realtime voice,
   including hostname-based subscription gateways. HTTPS retains certificate
   verification; plain HTTP requires a trusted network or secure tunnel.

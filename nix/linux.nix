@@ -172,6 +172,7 @@ in {
         'DEBUG=${if debug then "1" else "0"}'
         ${pkgs.lib.optionalString (updateBase != "") "'UPDATE_BASE_URL=${updateBase}' 'UPDATE_TARGET=${updateTarget}'"}
         'TARGET_OS=Linux'
+        'WITH_AUDIO_DEVICE=1'
         # Release artifacts must not bundle LibreOffice: the standing rule is
         # installed runtimes only, never bundled on any platform, and the linked
         # Office dependency in this closure would be pulled into the artifact as

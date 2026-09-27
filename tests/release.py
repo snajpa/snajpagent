@@ -745,6 +745,7 @@ for flag in ("MA_NO_RUNTIME_LINKING", "MA_ENABLE_ONLY_SPECIFIC_BACKENDS",
              "MA_ENABLE_ALSA", "MA_ENABLE_PULSEAUDIO"):
     assert "-D" + flag in linux
 assert '"AUDIO_DEVICE_LIBS=$($PKG_CONFIG --static --libs alsa libpulse)"' in linux
+assert "'WITH_AUDIO_DEVICE=1'" in linux.split("makeFlagsArray+=(", 1)[1]
 assert 'propagatedBuildInputs = [ staticFixed.libsndfile ];' in linux
 assert 'Requires.private: sndfile' in linux
 assert '#define ALSA_CONFIG_DIR "/usr/share/alsa"' in linux
