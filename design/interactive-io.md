@@ -62,6 +62,26 @@ completion, attach/list races, stale endpoints, failed switching, lock retention
 catch-up bounds and no redraw/repeated model response. A native transport must
 fit `term_host`/the current UI boundary, not duplicate the app controller.
 
+The initial Linux host uses one private PTY as the existing terminal I/O endpoint. This
+is needed by the current external editor/pager and native file-transfer paths,
+which take exclusive ownership of terminal descriptors. A transport owner drains
+the PTY while detached; it retains no screen cells or raw-output history. The
+replaceable client controls the real terminal. Session startup forks before any
+application worker exists; the surviving process keeps the PTY and all application
+owners. Terminal loss closes only its client connection. Ctrl-Z suspends the
+client, not the session engine. Reattachment invalidates only the previous
+composer coordinates and uses bounded semantic history on the new terminal.
+
+The local stream protocol has bounded frames and independently handles partial
+reads/writes. Socket access requires the private session directory and matching
+native peer credentials. Only a held session writer lock authorizes publishing
+or replacing an endpoint; endpoint cleanup checks its recorded inode identity.
+A socket file alone is not proof of a live session. The handshake reserves one
+client before committing attachment, and output during reservation is discarded,
+not accumulated for raw replay. These are transport boundaries, not a second
+application controller. Other hosts retain their existing direct
+terminal behavior until their attachment backend is implemented and tested.
+
 The commands and transport above are a design/acceptance contract, not a claim
 that installed rescue binaries already provide native attachment.
 

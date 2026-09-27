@@ -6,6 +6,7 @@
 #include "wake.h"
 #include "net.h"
 #include "term_host.h"
+#include "session_host.h"
 #include "process_host.h"
 #include "office.h"
 
@@ -42,6 +43,8 @@
 #else
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 #include <sys/wait.h>
 #include <pthread.h>
@@ -2663,6 +2666,169 @@ test_wakeup(void)
 }
 
 static void
+test_session_transport(void)
+{
+    struct snag_session_packet sent = {0}, received = {0};
+    assert(snag_session_packet_set(&sent, SNAG_SESSION_OUTPUT, "hello", 5u) == 0);
+    assert(snag_session_packet_length(&sent) == 5u);
+    assert(snag_session_packet_type(&sent) == SNAG_SESSION_OUTPUT);
+    assert(snag_session_packet_set(&sent, 0, NULL, 0u) < 0 && errno == EINVAL);
+    assert(snag_session_packet_set(&sent, SNAG_SESSION_INPUT, NULL, 1u) < 0 && errno == EINVAL);
+    assert(snag_session_packet_set(&sent, SNAG_SESSION_INPUT, "x",
+                                  SNAG_SESSION_FRAME_MAX + 1u) < 0);
+#if defined(__linux__) && !defined(_WIN32)
+    if (!snag_session_host_supported()) return;
+    int pair[2];
+    assert(snag_session_stream_pair(pair) == 0);
+    assert(fcntl(pair[0], F_GETFL) & O_NONBLOCK);
+    assert(fcntl(pair[1], F_GETFD) & FD_CLOEXEC);
+    assert(snag_session_packet_read(pair[1], &received) == 0);
+    /* Split every header and payload boundary; a short read is never EOF or
+     * a complete user input. Each frame consumes only its own bytes. */
+    for (size_t split = 1u; split < sent.used; ++split) {
+        received = (struct snag_session_packet){0};
+        assert(write(pair[0], sent.bytes, split) == (ssize_t)split);
+        assert(snag_session_packet_read(pair[1], &received) == 0);
+        assert(write(pair[0], sent.bytes + split, sent.used - split) ==
+               (ssize_t)(sent.used - split));
+        assert(snag_session_packet_read(pair[1], &received) == 1);
+        assert(received.used == sent.used && !memcmp(received.bytes, sent.bytes, sent.used));
+    }
+    assert(snag_session_packet_write(pair[0], &sent) == 1);
+    assert(snag_session_packet_set(&sent, SNAG_SESSION_DETACH, NULL, 0u) == 0);
+    assert(snag_session_packet_write(pair[0], &sent) == 1);
+    received = (struct snag_session_packet){0};
+    assert(snag_session_packet_read(pair[1], &received) == 1);
+    assert(snag_session_packet_type(&received) == SNAG_SESSION_OUTPUT);
+    received = (struct snag_session_packet){0};
+    assert(snag_session_packet_read(pair[1], &received) == 1);
+    assert(snag_session_packet_type(&received) == SNAG_SESSION_DETACH);
+    for (size_t bad = 0u; bad < SNAG_SESSION_HEADER; ++bad) {
+        struct snag_session_packet corrupt = sent;
+        corrupt.bytes[bad] = 255u;
+        if (bad == 4u || bad == 5u) continue;
+        assert(write(pair[0], corrupt.bytes, SNAG_SESSION_HEADER) == SNAG_SESSION_HEADER);
+        received = (struct snag_session_packet){0};
+        assert(snag_session_packet_read(pair[1], &received) < 0 && errno == EPROTO);
+    }
+    int small = 1024;
+    assert(setsockopt(pair[0], SOL_SOCKET, SO_SNDBUF, &small, sizeof(small)) == 0);
+    unsigned char payload[SNAG_SESSION_FRAME_MAX];
+    memset(payload, 0xa5, sizeof(payload));
+    assert(snag_session_packet_set(&sent, SNAG_SESSION_OUTPUT, payload, sizeof(payload)) == 0);
+    assert(snag_session_packet_write(pair[0], &sent) == 0);
+    assert(sent.offset > 0u && sent.offset < sent.used);
+    received = (struct snag_session_packet){0};
+    for (unsigned int attempts = 0u; received.used != sent.used; ++attempts) {
+        assert(attempts < 100u);
+        assert(snag_session_packet_read(pair[1], &received) >= 0);
+        assert(snag_session_packet_write(pair[0], &sent) >= 0);
+    }
+    assert(!memcmp(sent.bytes, received.bytes, sent.used));
+    assert(close(pair[0]) == 0);
+    received = (struct snag_session_packet){0};
+    assert(snag_session_packet_read(pair[1], &received) < 0 && errno == ECONNRESET);
+    assert(snag_session_packet_set(&sent, SNAG_SESSION_OUTPUT, "x", 1u) == 0);
+    assert(snag_session_packet_write(pair[1], &sent) < 0);
+    assert(close(pair[1]) == 0);
+
+    const char *temp = getenv("TMPDIR");
+    char *root = snag_path_join(temp ? temp : "/tmp", "snag-session-host-XXXXXX");
+    assert(root && mkdtemp(root));
+    int dir = open(root, O_RDONLY | O_DIRECTORY);
+    assert(dir >= 0);
+    int lock = openat(dir, "lock", O_CREAT | O_RDWR, 0600);
+    assert(lock >= 0 && snag_lock_file(lock, false) == 0);
+    struct snag_session_listener listener, other;
+    assert(snag_session_listener_open(&listener, dir, root, -1) < 0 && errno == EBADF);
+    assert(snag_session_listener_open(&listener, dir, root, lock) == 0);
+    assert(snag_session_listener_open(&other, dir, root, lock) < 0 && errno == EADDRINUSE);
+    /* The stale-endpoint probe connected but did not reserve an attachment. */
+    int peer = snag_session_listener_accept(&listener);
+    assert(peer >= 0);
+    assert(close(peer) == 0);
+    int client = snag_session_endpoint_connect(dir, root);
+    assert(client >= 0);
+    peer = snag_session_listener_accept(&listener);
+    assert(peer >= 0 && (fcntl(peer, F_GETFL) & O_NONBLOCK));
+    assert(snag_session_packet_set(&sent, SNAG_SESSION_RESERVE, NULL, 0u) == 0);
+    assert(snag_session_packet_write(client, &sent) == 1);
+    received = (struct snag_session_packet){0};
+    assert(snag_session_packet_read(peer, &received) == 1);
+    assert(snag_session_packet_type(&received) == SNAG_SESSION_RESERVE);
+    assert(close(client) == 0 && close(peer) == 0);
+#if defined(__linux__)
+    if (geteuid() == 0u) {
+        /* Deliberately expose only this disposable fixture to reach native
+         * peer authentication independently of the directory permission gate. */
+        assert(fchmod(dir, 0711) == 0);
+        assert(fchmodat(dir, SNAG_SESSION_ENDPOINT, 0666, 0) == 0);
+        pid_t stranger = fork();
+        assert(stranger >= 0);
+        if (!stranger) {
+            struct sockaddr_un address = {.sun_family = AF_UNIX};
+            if (setgid(65534u) < 0 || setuid(65534u) < 0) _exit(1);
+            int raw = socket(AF_UNIX, SOCK_STREAM, 0);
+            if (raw < 0) _exit(2);
+            int length = snprintf(address.sun_path, sizeof(address.sun_path),
+                "/proc/self/fd/%d/%s", dir, SNAG_SESSION_ENDPOINT);
+            if (length < 0 || (size_t)length >= sizeof(address.sun_path)) _exit(3);
+            if (connect(raw, (const struct sockaddr *)&address, sizeof(address)) < 0) _exit(4);
+            _exit(0);
+        }
+        int result;
+        assert(waitpid(stranger, &result, 0) == stranger &&
+               WIFEXITED(result) && !WEXITSTATUS(result));
+        assert(snag_session_listener_accept(&listener) < 0 && errno == EACCES);
+        assert(fchmod(dir, 0700) == 0);
+        assert(fchmodat(dir, SNAG_SESSION_ENDPOINT, 0600, 0) == 0);
+    }
+#endif
+    /* Closing an old owner must not unlink a replacement endpoint. */
+    assert(renameat(dir, SNAG_SESSION_ENDPOINT, dir, "old.sock") == 0);
+    assert(snag_session_listener_open(&other, dir, root, lock) == 0);
+    snag_session_listener_close(&listener);
+    struct stat st;
+    assert(fstatat(dir, SNAG_SESSION_ENDPOINT, &st, AT_SYMLINK_NOFOLLOW) == 0 &&
+           S_ISSOCK(st.st_mode));
+    snag_session_listener_close(&other);
+    assert(unlinkat(dir, "old.sock", 0) == 0);
+    /* A crashed listener leaves a recoverable socket, never a writable file
+     * or symlink that cleanup may remove. */
+    assert(snag_session_listener_open(&listener, dir, root, lock) == 0);
+    assert(close(listener.fd) == 0 && close(listener.dir_fd) == 0);
+    assert(snag_session_listener_open(&listener, dir, root, lock) == 0);
+    snag_session_listener_close(&listener);
+    int regular = openat(dir, SNAG_SESSION_ENDPOINT, O_CREAT | O_EXCL | O_WRONLY, 0600);
+    assert(regular >= 0 && close(regular) == 0);
+    assert(snag_session_listener_open(&listener, dir, root, lock) < 0 && errno == EACCES);
+    assert(fstatat(dir, SNAG_SESSION_ENDPOINT, &st, AT_SYMLINK_NOFOLLOW) == 0 &&
+           S_ISREG(st.st_mode));
+    assert(unlinkat(dir, SNAG_SESSION_ENDPOINT, 0) == 0);
+    assert(symlinkat("lock", dir, SNAG_SESSION_ENDPOINT) == 0);
+    assert(snag_session_listener_open(&listener, dir, root, lock) < 0 && errno == EACCES);
+    assert(unlinkat(dir, SNAG_SESSION_ENDPOINT, 0) == 0);
+    assert(fchmod(dir, 0755) == 0);
+    assert(snag_session_listener_open(&listener, dir, root, lock) < 0 && errno == EACCES);
+    assert(fchmod(dir, 0700) == 0);
+    pid_t child = fork();
+    assert(child >= 0);
+    if (!child) {
+        int rc = snag_lock_file(lock, false);
+        _exit(rc < 0 && (errno == EAGAIN || errno == EACCES) ? 0 : 1);
+    }
+    int status;
+    assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && !WEXITSTATUS(status));
+    assert(close(lock) == 0 && unlinkat(dir, "lock", 0) == 0 && close(dir) == 0);
+    assert(rmdir(root) == 0);
+    free(root);
+#else
+    assert(!snag_session_host_supported());
+    (void)received;
+#endif
+}
+
+static void
 test_sockets(void)
 {
     struct sockaddr_in address = {0};
@@ -3299,6 +3465,7 @@ run_base(int argc, char **argv)
     test_memory_primitives();
     test_thread_local();
     test_sockets();
+    test_session_transport();
 #if defined(__linux__) && !defined(_WIN32)
     test_raw_pty_empty_read();
 #endif
