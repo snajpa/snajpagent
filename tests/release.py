@@ -1318,6 +1318,10 @@ assert '"--disable-postproc"' not in mac_av  # Removed in pinned FFmpeg 8.
 assert '"AV_LIBS=$(pkg-config --static --libs libavformat libavcodec libavutil libswresample libswscale)"' in macos
 assert 'buildInputs = [ jansson curl av pdf png freetype expat fontconfig jpeg openjpeg xml archive ] ++ voiceRtc.dependencies ++ networkLibraries;' in macos
 assert "'MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src}'" in macos
+mac_application = macos.split("  application = ", 1)[1]
+assert "'WITH_AUDIO_DEVICE=1'" in mac_application
+assert '"RTC_CFLAGS=${voiceRtc.cflags}"' in mac_application
+assert '"RTC_LIBS=${voiceRtc.libs} -lc++"' in mac_application
 assert 'makeFlags = [ "ASMSTRIPFLAGS=" ];' in mac_av
 # Upstream's assembler rule conditionally invokes STRIP via ASMSTRIPFLAGS.
 # Reproduce that pre-link call and prove the production make override omits it.

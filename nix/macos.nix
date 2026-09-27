@@ -342,6 +342,7 @@ in {
         'DEBUG=${if debug then "1" else "0"}'
         ${pkgs.lib.optionalString (updateBase != "") "'UPDATE_BASE_URL=${updateBase}' 'UPDATE_TARGET=${updateTarget}'"}
           'TARGET_OS=Darwin'
+          'WITH_AUDIO_DEVICE=1'
           'WITH_OFFICE=0' 'WITH_OFFICE_COMMANDS=1'
           'HAVE_POPPLER_NEW_API=0'
           'CC=${compiler} --target=${target} -isysroot ${sdk}'

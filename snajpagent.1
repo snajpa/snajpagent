@@ -4520,7 +4520,9 @@ packaging is never bundled and is resolved from a separately installed runtime.
 .TP
 .B make WITH_AUDIO_DEVICE=0
 Build a custom executable without capture, playback or audio-device enumeration.
-The default is WITH_AUDIO_DEVICE=1. MINIAUDIO_CFLAGS supplies the path to
+The tracked config.mk defaults to WITH_AUDIO_DEVICE=0; configure can enable
+available device support, and the macOS production recipes explicitly enable it.
+MINIAUDIO_CFLAGS supplies the path to
 miniaudio.h; AUDIO_DEVICE_LIBS overrides platform backend link flags.
 The device adapter uses miniaudio's low-level API, without its engine or decoders.
 FreeBSD uses OSS. With older OSS headers, device enumeration reports only the
@@ -4761,8 +4763,9 @@ disambiguate wrap.  Wall-clock time is never used as a monotonic substitute.
 Legacy flag setup remains non-atomic; no external helper command is invoked.
 .TP
 .BR "make prod-macos-arm64" , " make prod-macos-x86_64"
-Cross-build a macOS 11+ executable with static application libraries and CA
-data; only the OS libSystem remains dynamic.  Output is
+Cross-build for the selected macOS deployment target with static application
+libraries and CA data. Capture, playback and realtime voice are enabled;
+the executable uses the system libraries and audio frameworks. Output is
 .IR build/matrix/macos-ARCH/bin/snajpagent ,
 with an adjacent matching dSYM.
 .TP

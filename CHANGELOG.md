@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Enable microphone, playback and realtime voice in macOS production builds.
+  Apple Silicon builds use the native arm64 target; device behavior still needs
+  runtime testing on macOS.
+
 - Add a feature matrix below the website's platform downloads, distinguishing
   compiled-in media, provider audio routes, device audio and Office dependencies
   in the published binaries.
