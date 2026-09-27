@@ -192,7 +192,8 @@ valid_version_suffix(const char *suffix)
 {
     size_t length;
 
-    if (!*suffix || (suffix[0] >= 'a' && suffix[0] <= 'z' && !suffix[1])) return true;
+    if (*suffix >= 'a' && *suffix <= 'z') ++suffix;
+    if (!*suffix) return true;
     if (*suffix != '-') return false;
     length = strlen(suffix + 1u);
     return length >= 7u && length <= 40u && snag_hex_is_lower(suffix + 1u, length);
@@ -206,10 +207,12 @@ newer_version(const char *candidate)
     const char *current = version_parts(SNAJPAGENT_VERSION, b);
     if (!suffix || !current || !valid_version_suffix(suffix) || !valid_version_suffix(current))
         return false;
-    if (*suffix == '-' && *current != '-') return false;
+    bool candidate_dev = strchr(suffix, '-') != NULL;
+    bool current_dev = strchr(current, '-') != NULL;
+    if (candidate_dev && !current_dev) return false;
     for (size_t i = 0; i < 3u; ++i)
         if (a[i] != b[i]) return a[i] > b[i];
-    if (*current == '-') return *suffix != '-' || strcmp(candidate, SNAJPAGENT_VERSION) != 0;
+    if (current_dev) return !candidate_dev || strcmp(candidate, SNAJPAGENT_VERSION) != 0;
     /* Stable letter suffixes follow the plain numeric release in alphabetic
      * order. Git hashes have no chronological ordering: the dev publisher
      * chooses the tip, while a stable build never adopts a dev channel. */

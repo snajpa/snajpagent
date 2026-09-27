@@ -14,7 +14,7 @@ import tempfile
 import threading
 import time
 
-old, new, local, stable, aside, letter = (Path(p).resolve() for p in sys.argv[1:])
+old, new, local, stable, aside, letter, letter_dev = (Path(p).resolve() for p in sys.argv[1:])
 marker = b"\nsnajpagent-update-v1\nsnajpagent\nlinux-x86_64\nhttps://publisher.test\n"
 assert marker in old.read_bytes() and marker in new.read_bytes()
 assert marker not in local.read_bytes()
@@ -127,6 +127,29 @@ with tempfile.TemporaryDirectory(prefix="update-", dir=os.environ.get("TMPDIR"))
     assert result.returncode == 0 and "updated ===" not in result.stderr
     assert exe.read_bytes() == letter.read_bytes()
     print("PASS: stable 0.99.8 upgrades to 0.99.8b; letter release does not downgrade")
+    home = root / "letter-development"
+    home.mkdir(mode=0o700)
+    exe = home / "snajpagent"
+    shutil.copyfile(old, exe)
+    exe.chmod(0o750)
+    server.data = letter_dev.read_bytes()
+    server.meta.update(version="0.99.8b-ccccccc", url=url,
+                       sha256=hashlib.sha256(server.data).hexdigest(), size=len(server.data))
+    result = run(exe)
+    assert "=== snajpagent updated ===" in result.stderr, result.stderr
+    assert exe.read_bytes() == letter_dev.read_bytes()
+    server.data = letter.read_bytes()
+    server.meta.update(version="0.99.8b", url=stable_url,
+                       sha256=hashlib.sha256(server.data).hexdigest(), size=len(server.data))
+    result = subprocess.run([exe, stable_url, "10000"], capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0 and "=== snajpagent updated ===" in result.stderr, result.stderr
+    assert exe.read_bytes() == letter.read_bytes()
+    server.data = letter_dev.read_bytes()
+    server.meta.update(version="0.99.8b-ccccccc", url=url,
+                       sha256=hashlib.sha256(server.data).hexdigest(), size=len(server.data))
+    result = run(exe)
+    assert "updated ===" not in result.stderr and exe.read_bytes() == letter.read_bytes()
+    print("PASS: letter-suffixed development updates and stable promotion without stable downgrade")
     for label, changes in [
         ("hash", dict(sha256="0" * 64)), ("size", dict(size=len(new.read_bytes()) + 1)),
         ("target", dict(target="windows-arm64")), ("name", dict(name="other")),

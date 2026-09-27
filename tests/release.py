@@ -200,6 +200,14 @@ with tempfile.TemporaryDirectory(prefix="release-", dir=root / "build") as tmp:
         release.stage(args)
         assert (args.output / "snajpagent-0.99.8b-linux-x86_64").read_bytes() == letter_data
         assert release.load_channel(args.output / "latest", ["linux-x86_64"])[0][1]["version"] == "0.99.8b"
+        args.version = f"0.99.8b-{revision[:7]}"
+        args.release = f"https://publisher.test/{args.version}"
+        args.output = tmp / "stage-letter-dev"
+        letter_dev_data = data.replace(version.encode(), args.version.encode())
+        binary.write_bytes(letter_dev_data)
+        (symbols / "snajpagent").write_bytes(letter_dev_data)
+        release.stage(args)
+        assert release.load_channel(args.output / "latest-dev", ["linux-x86_64"])[0][1]["version"] == args.version
 
 # An annotated tag supplies the canonical native/matrix and staging identity.
 with tempfile.TemporaryDirectory(prefix="release-tag-", dir=root / "build") as tmp:
