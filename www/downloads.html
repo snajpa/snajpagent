@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Download snajpagent 0.99.8. Standalone binaries, OS requirements and checksums.">
+  <meta name="description" content="Download snajpagent 0.99.8b. Standalone binaries, OS requirements and checksums.">
   <title>Download snajpagent</title>
   <link rel="canonical" href="https://agent.snajpa.net/downloads.html">
   <link rel="stylesheet" href="style.css">
@@ -12,7 +12,7 @@
 <body class="downloads">
   <header>
     <h1>Download snajpagent</h1>
-    <p><strong>0.99.8</strong> · September 23, 2026 · Latest stable</p>
+    <p><strong>0.99.8b</strong> · September 27, 2026 · Latest stable</p>
     <nav aria-label="Project">
       <a href="index.html">Home</a> · <a href="manual.html">Manual</a> ·
       <a href="https://github.com/snajpa/snajpagent/releases">Older releases</a>
@@ -20,8 +20,8 @@
   </header>
   <main>
     <p>Choose your OS and architecture. Download the executable, then verify its
-      <a href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/SHA256SUMS">SHA-256</a>.
-      <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.8">Source, symbols and release notes</a>.</p>
+      <a href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/SHA256SUMS">SHA-256</a>.
+      <a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.8b">Source, symbols and release notes</a>.</p>
     <details class="os-family" id="linux">
       <summary>Linux</summary>
       <div class="family-content">
@@ -32,54 +32,55 @@
             <tbody>
               <tr data-target="linux-x86_64">
                 <td>x86-64</td><td>2.6.39+¹</td>
-                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-linux-x86_64" title="snajpagent">Download</a>
-                  <span class="file-size" title="33,885,272 bytes">32.32 MiB</span>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/snajpagent-0.99.8b-linux-x86_64" title="snajpagent">Download</a>
+                  <span class="file-size" title="33,950,808 bytes">32.38 MiB</span>
                   <details class="checksum"><summary>SHA-256</summary>
-                    <code class="sha256">eaa6d443dd4817102cb67b3a17610ae58039e699ef505051e2b56aa30ac51419</code>
+                    <code class="sha256">3adb1b1bba951d01aad380e2e90e39e047cbeb6b1024abee3b8d86a767bc0a1d</code>
                   </details></td>
               </tr>
               <tr data-target="linux-aarch64">
                 <td>ARM64</td><td>3.7+¹</td>
-                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-linux-aarch64" title="snajpagent">Download</a>
-                  <span class="file-size" title="30,051,640 bytes">28.66 MiB</span>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/snajpagent-0.99.8b-linux-aarch64" title="snajpagent">Download</a>
+                  <span class="file-size" title="30,117,176 bytes">28.72 MiB</span>
                   <details class="checksum"><summary>SHA-256</summary>
-                    <code class="sha256">e55a9d39aeb5562d4040d1ea9aca4bc8bc0143c71c9f8848bed4b951a106478a</code>
+                    <code class="sha256">1418b4b5724321320bc511e35f797b6c7d5458bd00543cd79fb130502a883f1d</code>
                   </details></td>
               </tr>
               <tr data-target="linux-i686">
                 <td>i686</td><td>2.6.39+¹</td>
-                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-linux-i686" title="snajpagent">Download</a>
-                  <span class="file-size" title="30,482,136 bytes">29.07 MiB</span>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/snajpagent-0.99.8b-linux-i686" title="snajpagent">Download</a>
+                  <span class="file-size" title="30,543,576 bytes">29.13 MiB</span>
                   <details class="checksum"><summary>SHA-256</summary>
-                    <code class="sha256">cf69c1a25c3bfc9b1fbad6fbb573132448154c6601fd65167886d29423b81dfa</code>
+                    <code class="sha256">4e464c795be0285f8a2e0f9089a7601163f53d3e158bcd5d8443c94269685a09</code>
                   </details></td>
               </tr>
               <tr data-target="linux-i686-legacy">
                 <td>i686 · legacy</td><td>2.4.27+²</td>
-                <td>Not built in this release: its pinned uClibc source set cannot build it (a chain inside the pin &mdash; check 0.15.2's own test suite, then fontconfig 2.17.1's fc-cache link against undefined Brotli* symbols with the correct link order). The recipe stays buildable.</td>
+                <td>No release binary for this ABI. See the release notes for the
+                  pinned-build limitation.</td>
               </tr>
               <tr data-target="linux-armv6">
                 <td>ARMv6 / ARMv7 · experimental</td><td>2.6.39+¹<br>ARMv6KZ, VFPv2 hard-float</td>
-                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-linux-armv6" title="snajpagent">Download</a>
-                  <span class="file-size" title="26,534,232 bytes">25.31 MiB</span>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/snajpagent-0.99.8b-linux-armv6" title="snajpagent">Download</a>
+                  <span class="file-size" title="26,603,864 bytes">25.37 MiB</span>
                   <details class="checksum"><summary>SHA-256</summary>
-                    <code class="sha256">ca6f4938d16b98eab4049b93001bd29a276834a97a8969eb33daaaa8b817a858</code>
+                    <code class="sha256">008c7a6d08a149d1b39c856a0e32dc08a9614e1af8f12377d2d5696f1e83d802</code>
                   </details></td>
               </tr>
               <tr data-target="linux-riscv64">
                 <td>RISC-V 64-bit · experimental</td><td>4.15+¹<br>RV64GC / LP64D</td>
-                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-linux-riscv64" title="snajpagent">Download</a>
-                  <span class="file-size" title="27,470,848 bytes">26.20 MiB</span>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/snajpagent-0.99.8b-linux-riscv64" title="snajpagent">Download</a>
+                  <span class="file-size" title="27,532,288 bytes">26.26 MiB</span>
                   <details class="checksum"><summary>SHA-256</summary>
-                    <code class="sha256">159e993bb0f1ff062f4a0ea75e6bf67beee4f9cdf3a0f0d85cf90c6a90eb977a</code>
+                    <code class="sha256">db6ad17611acf8f26c2e6a1b0c18573dfe21438025ba4999a0b83204074a1ae3</code>
                   </details></td>
               </tr>
               <tr data-target="linux-ppc64le">
                 <td>PowerPC 64-bit LE · experimental</td><td>3.13+¹<br>POWER8 / ELFv2</td>
-                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-linux-ppc64le" title="snajpagent">Download</a>
-                  <span class="file-size" title="35,818,896 bytes">34.16 MiB</span>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/snajpagent-0.99.8b-linux-ppc64le" title="snajpagent">Download</a>
+                  <span class="file-size" title="35,884,432 bytes">34.22 MiB</span>
                   <details class="checksum"><summary>SHA-256</summary>
-                    <code class="sha256">fb6b92b55586d8498974d89070cb7d750d69b06da60bcdf47b00ec9ca0e42c08</code>
+                    <code class="sha256">b1b653104b0093b7d35d6ff66e98391e8334fff3530906c37316498609dbcd13</code>
                   </details></td>
               </tr>
             </tbody>
@@ -100,26 +101,26 @@
             <tbody>
               <tr data-target="macos-arm64">
                 <td>Apple Silicon</td><td>macOS 11 or later</td>
-                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-macos-arm64" title="snajpagent">Download</a>
-                  <span class="file-size" title="23,488,752 bytes">22.40 MiB</span>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/snajpagent-0.99.8b-macos-arm64" title="snajpagent">Download</a>
+                  <span class="file-size" title="23,538,464 bytes">22.45 MiB</span>
                   <details class="checksum"><summary>SHA-256</summary>
-                    <code class="sha256">a87220d07d124999bed844332b009c1a52c1f263caf0b95f3c7ff03d02651b36</code>
+                    <code class="sha256">dcee6cee830f3cf21ddcbb7eeead5a1801219529ef6ce12a17a1227cfdd9f1b0</code>
                   </details></td>
               </tr>
               <tr data-target="macos-x86_64">
                 <td>Intel</td><td>macOS 11 or later</td>
-                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-macos-x86_64" title="snajpagent">Download</a>
-                  <span class="file-size" title="27,012,128 bytes">25.76 MiB</span>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/snajpagent-0.99.8b-macos-x86_64" title="snajpagent">Download</a>
+                  <span class="file-size" title="27,077,832 bytes">25.82 MiB</span>
                   <details class="checksum"><summary>SHA-256</summary>
-                    <code class="sha256">5b8a8f264b385f5feb48d9af1c828730512df4b6cca252827451e3bbc01b3298</code>
+                    <code class="sha256">4952462ba6876136c343d2931255dc90a1842eaa09eeda99e0bbc575f9593df5</code>
                   </details></td>
               </tr>
               <tr data-target="macos-universal">
                 <td>Universal · Intel + Apple Silicon</td><td>macOS 11 or later</td>
-                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-macos-universal" title="snajpagent">Download</a>
-                  <span class="file-size" title="50,505,968 bytes">48.17 MiB</span>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/snajpagent-0.99.8b-macos-universal" title="snajpagent">Download</a>
+                  <span class="file-size" title="50,621,216 bytes">48.28 MiB</span>
                   <details class="checksum"><summary>SHA-256</summary>
-                    <code class="sha256">05e802ed0be1faee8743d7f31f81955cfa7b23a8144d52b103be5243a9c5049c</code>
+                    <code class="sha256">f623eaf4cbdda8573d3dda40f1b725588fd1b589fb3b0bfe8dffcc66eeb621b5</code>
                   </details></td>
               </tr>
             </tbody>
@@ -140,18 +141,18 @@
             <tbody>
               <tr data-target="windows-x86_64">
                 <td>x86-64</td><td>Windows XP x64 / Server 2003 or later³</td>
-                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-windows-x86_64.exe" title="snajpagent">Download</a>
-                  <span class="file-size" title="29,882,368 bytes">28.50 MiB</span>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/snajpagent-0.99.8b-windows-x86_64.exe" title="snajpagent">Download</a>
+                  <span class="file-size" title="29,934,080 bytes">28.55 MiB</span>
                   <details class="checksum"><summary>SHA-256</summary>
-                    <code class="sha256">cbf0036826f8f627a4bd5c5eb567a4c34ef15a816d880e488e20630985a89b01</code>
+                    <code class="sha256">062a37be033cac4ac087963823217912a7c79a70c0b50e5609a1b6e3e2f10b84</code>
                   </details></td>
               </tr>
               <tr data-target="windows-arm64">
                 <td>ARM64</td><td>Windows 10 or later · OS UCRT</td>
-                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-windows-arm64.exe" title="snajpagent">Download</a>
-                  <span class="file-size" title="24,944,640 bytes">23.79 MiB</span>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/snajpagent-0.99.8b-windows-arm64.exe" title="snajpagent">Download</a>
+                  <span class="file-size" title="24,994,304 bytes">23.84 MiB</span>
                   <details class="checksum"><summary>SHA-256</summary>
-                    <code class="sha256">74a13ac57ea9cb6f8cec8c6f23857f72b149c65b7e0a962d6bacc0a1904a3740</code>
+                    <code class="sha256">2907889258210aa8ff2604a814c22800ce44c33ca087bc156feae4363bed86f7</code>
                   </details></td>
               </tr>
             </tbody>
@@ -170,18 +171,18 @@
             <tbody>
               <tr data-target="freebsd-amd64">
                 <td>amd64</td><td>FreeBSD 8.4 or later<br>Requires libc.so.7, libthr.so.3</td>
-                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-freebsd-amd64" title="snajpagent">Download</a>
-                  <span class="file-size" title="29,761,600 bytes">28.38 MiB</span>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/snajpagent-0.99.8b-freebsd-amd64" title="snajpagent">Download</a>
+                  <span class="file-size" title="29,827,952 bytes">28.45 MiB</span>
                   <details class="checksum"><summary>SHA-256</summary>
-                    <code class="sha256">f36b8c47147fc8e4c236ed1e48605492273e152dd088a732fb51c70eeb72f5d8</code>
+                    <code class="sha256">0acea19db07728f4109cbbf4d6b119355998fac13e34ece1b3afe7cef0927407</code>
                   </details></td>
               </tr>
               <tr data-target="freebsd-amd64-legacy">
                 <td>amd64 · legacy</td><td>FreeBSD 5.1–5.5<br>Requires libc.so.5, libc_r.so.5</td>
-                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-freebsd-amd64-legacy" title="snajpagent">Download</a>
-                  <span class="file-size" title="29,567,152 bytes">28.20 MiB</span>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/snajpagent-0.99.8b-freebsd-amd64-legacy" title="snajpagent">Download</a>
+                  <span class="file-size" title="29,630,800 bytes">28.26 MiB</span>
                   <details class="checksum"><summary>SHA-256</summary>
-                    <code class="sha256">f41890c8e9be390fa445af0b5015fcc39d83fe73e239dbbe9ecbc69d731951a6</code>
+                    <code class="sha256">9adf9f34e542180fb992a2788ae7c744e9cf4b90514ff961115dd7e359b85b5e</code>
                   </details></td>
               </tr>
             </tbody>
@@ -200,26 +201,26 @@
             <tbody>
               <tr data-target="openbsd-amd64">
                 <td>amd64</td><td>OpenBSD 7.9 ABI<br>libc.so.103.0, libpthread.so.28.1</td>
-                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-openbsd-amd64" title="snajpagent">Download</a>
-                  <span class="file-size" title="31,201,592 bytes">29.76 MiB</span>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/snajpagent-0.99.8b-openbsd-amd64" title="snajpagent">Download</a>
+                  <span class="file-size" title="31,273,240 bytes">29.82 MiB</span>
                   <details class="checksum"><summary>SHA-256</summary>
-                    <code class="sha256">84bcad73068dc18bb0001aafe207953004ee56656d6b34c4e9a98ca88380aa56</code>
+                    <code class="sha256">1528ad8af3943751925fef3e9fdd06ea355d79691b01ada6ca7ad3533356dc63</code>
                   </details></td>
               </tr>
               <tr data-target="openbsd-amd64-legacy">
                 <td>amd64 · legacy</td><td>OpenBSD 5.9 ABI<br>libc.so.84.2, libpthread.so.20.1</td>
-                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-openbsd-amd64-legacy" title="snajpagent">Download</a>
-                  <span class="file-size" title="31,647,856 bytes">30.18 MiB</span>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/snajpagent-0.99.8b-openbsd-amd64-legacy" title="snajpagent">Download</a>
+                  <span class="file-size" title="31,719,376 bytes">30.25 MiB</span>
                   <details class="checksum"><summary>SHA-256</summary>
-                    <code class="sha256">e9dad5492205e9aa6d56c80770c745772b9f2e22e3f95df4c83c822cf6df08fb</code>
+                    <code class="sha256">21ebb734aac9e2707317ae5e2e6c32b461ec2114e5a29b6e1ca7343c769a9c23</code>
                   </details></td>
               </tr>
               <tr data-target="openbsd-amd64-early">
                 <td>amd64 · early</td><td>OpenBSD 3.5 ABI<br>libc.so.30.3, libpthread.so.2.4</td>
-                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-openbsd-amd64-early" title="snajpagent">Download</a>
-                  <span class="file-size" title="29,373,144 bytes">28.01 MiB</span>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/snajpagent-0.99.8b-openbsd-amd64-early" title="snajpagent">Download</a>
+                  <span class="file-size" title="29,435,896 bytes">28.07 MiB</span>
                   <details class="checksum"><summary>SHA-256</summary>
-                    <code class="sha256">f645f8569c6ff9b0f52c286a14dfdc75ac4e799b3285a699eb40e62744cfe43e</code>
+                    <code class="sha256">0fade93d483cb1b2d66d571fc9a0074ecad88420d9e4e80d2bef2bfb30badc4d</code>
                   </details></td>
               </tr>
             </tbody>
@@ -238,18 +239,18 @@
             <tbody>
               <tr data-target="netbsd-amd64">
                 <td>amd64</td><td>NetBSD 10.1 ABI<br>libc.so.12, libpthread.so.1</td>
-                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-netbsd-amd64" title="snajpagent">Download</a>
-                  <span class="file-size" title="32,202,752 bytes">30.71 MiB</span>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/snajpagent-0.99.8b-netbsd-amd64" title="snajpagent">Download</a>
+                  <span class="file-size" title="32,274,656 bytes">30.78 MiB</span>
                   <details class="checksum"><summary>SHA-256</summary>
-                    <code class="sha256">b35349bbd2a6892186c208e1b0d5c9a22ed582b596099b1c1d51ca34ecc81d16</code>
+                    <code class="sha256">bb729f6ecd4a66feb9ac6b6f2731ca1194005035358b64241045e691a87c2449</code>
                   </details></td>
               </tr>
               <tr data-target="netbsd-amd64-legacy">
                 <td>amd64 · legacy</td><td>NetBSD 2.0–5.2.3 ABI<br>libc.so.12, libpthread.so.0</td>
-                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8/snajpagent-0.99.8-netbsd-amd64-legacy" title="snajpagent">Download</a>
-                  <span class="file-size" title="29,297,544 bytes">27.94 MiB</span>
+                <td><a class="download" href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b/snajpagent-0.99.8b-netbsd-amd64-legacy" title="snajpagent">Download</a>
+                  <span class="file-size" title="29,361,224 bytes">28.00 MiB</span>
                   <details class="checksum"><summary>SHA-256</summary>
-                    <code class="sha256">b2f2a44bb412a06d1a31568714af3a4c8c0e615d53263d8801406266a4d441d9</code>
+                    <code class="sha256">fc824f90379b0642ebd40d469a9a204d0b8b870d64789c175d8a8c06fe8c550e</code>
                   </details></td>
               </tr>
             </tbody>
@@ -259,7 +260,19 @@
       </div>
     </details>
     <section aria-labelledby="changelog">
-      <h2 id="changelog">0.99.8 highlights</h2>
+      <h2 id="changelog">Release highlights</h2>
+      <h3>0.99.8b · September 27, 2026</h3>
+      <ul>
+        <li>Long sessions recover from repeated context and media limits while
+          retaining completed tool work and attachments.</li>
+        <li>The prompt keeps context usage current, and submitted input remains
+          visible while the next composer waits.</li>
+        <li>Regular files upload through the wrapped terminal or
+          <code>/upload</code> and stay private until sent.</li>
+        <li>Model-tool selection uses current provider catalog entries; the
+          stable updater recognizes 0.99.8b.</li>
+      </ul>
+      <h3>0.99.8 · September 23, 2026</h3>
       <ul>
         <li>Long provider turns recover from context and image-input limits without replaying completed tool calls.</li>
         <li>Resume and model switching retain the selected binding, pending work and bounded access to durable history.</li>
