@@ -2492,6 +2492,17 @@ invalid:
     }
 }
 
+static ssize_t
+session_read_at(struct snag_session *session, void *buffer, size_t size, int64_t offset)
+{
+    if (!session->pending_log) return snag_pread(session->log_fd, buffer, size, offset);
+    if (offset < 0 || (uint64_t)offset > session->pending_log->len) return snag_errno(EIO);
+    size_t available = session->pending_log->len - (size_t)offset;
+    if (size > available) size = available;
+    if (size) memcpy(buffer, session->pending_log->data + (size_t)offset, size);
+    return (ssize_t)size;
+}
+
 static int
 read_event_log(struct snag_session *source, struct snag_session *verifier,
                int64_t boundary, enum snag_tail_policy tail_policy, snag_session_event_fn fn, void *opaque,
@@ -2518,15 +2529,7 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
             }
             if ((int64_t)want > boundary - read_off) want = (size_t)(boundary - read_off);
         }
-        if (source->pending_log) {
-            if (read_off < 0 || (uint64_t)read_off > source->pending_log->len) goto boundary_error;
-            if (want > source->pending_log->len - (size_t)read_off)
-                want = source->pending_log->len - (size_t)read_off;
-            got = (ssize_t)want;
-            if (want) memcpy(chunk, source->pending_log->data + read_off, want);
-        } else {
-            got = snag_pread(source->log_fd, chunk, want, read_off);
-        }
+        got = session_read_at(source, chunk, want, read_off);
         if (got < 0) {
             if (errno == EINTR) continue;
             snag_errorf(error, error_size, "cannot read event log: %s", strerror(errno));
@@ -2636,16 +2639,20 @@ static int64_t
 previous_newline(struct snag_session *session, int64_t before)
 {
     unsigned char chunk[8192];
-    while (before > 0) {
-        size_t size = before < (int64_t)sizeof(chunk) ? (size_t)before : sizeof(chunk);
+    int64_t floor = before > (int64_t)SNAG_CHECKPOINT_EVENT_MAX + 1 ?
+        before - (int64_t)SNAG_CHECKPOINT_EVENT_MAX - 1 : 0;
+    while (before > floor) {
+        int64_t available = before - floor;
+        size_t size = available < (int64_t)sizeof(chunk) ? (size_t)available : sizeof(chunk);
         int64_t start = before - (int64_t)size;
-        ssize_t n = snag_pread(session->log_fd, chunk, size, start);
+        ssize_t n = session_read_at(session, chunk, size, start);
         if (n < 0 && errno == EINTR) continue;
         if (n != (ssize_t)size) return -2;
         for (size_t i = size; i > 0; --i)
             if (chunk[i - 1u] == '\n') return start + (int64_t)i - 1;
         before = start;
     }
+    if (floor) { errno = EOVERFLOW; return -2; }
     return -1;
 }
 
@@ -2658,7 +2665,7 @@ read_record_at(struct snag_session *session, int64_t offset, int64_t *end_out)
     char error[192];
     for (;;) {
         unsigned char chunk[8192];
-        ssize_t n = snag_pread(session->log_fd, chunk, sizeof(chunk), pos);
+        ssize_t n = session_read_at(session, chunk, sizeof(chunk), pos);
         if (n < 0 && errno == EINTR) continue;
         if (n <= 0) break;
         const unsigned char *newline = memchr(chunk, '\n', (size_t)n);
@@ -2674,6 +2681,128 @@ read_record_at(struct snag_session *session, int64_t offset, int64_t *end_out)
     }
     snag_buf_free(&bytes);
     return record;
+}
+
+static int
+history_record_valid(struct snag_session *session, json_t *record, int64_t start, int64_t end,
+    uint64_t seq, char *error, size_t error_size)
+{
+    struct snag_session verifier;
+    snag_session_init(&verifier);
+    memcpy(verifier.id, session->id, sizeof(verifier.id));
+    const char *prev = snag_json_string(record, "prev_sha256"), *type;
+    json_t *data;
+    if (!prev || !snag_hex_is_lower(prev, SNAG_SHA256_HEX_LEN)) goto invalid;
+    if (seq != 1u) memcpy(verifier.prev_sha256, prev, sizeof(verifier.prev_sha256));
+    if (!common_event_valid(record, &verifier, seq, &type, &data, error, error_size)) return -1;
+    if (start < 0 || end <= start || end > session->log_end || (start == 0) != (seq == 1u) ||
+        ((uint64_t)(end - start - 1) > SNAG_MAX_EVENT_LINE &&
+         strcmp(type, "session_checkpoint"))) goto invalid;
+    if (json_integer_value(json_object_get(record, "v")) == 2) {
+        uint64_t pointer;
+        if (snag_json_integer_u64(record, "checkpoint_offset", &pointer) < 0 ||
+            pointer > (uint64_t)start ||
+            (!strcmp(type, "session_checkpoint") ? pointer != (uint64_t)start :
+                (start > 0 && pointer == (uint64_t)start))) goto invalid;
+    }
+    return 0;
+invalid:
+    return snag_fail(error, error_size, EINVAL, "invalid history record boundary");
+}
+
+static int
+history_cursor_before(struct snag_session *session, uint64_t before,
+    struct snag_journal_cursor *cursor, char *error, size_t error_size)
+{
+    if (!before || before >= session->next_seq) {
+        cursor->offset = session->log_end;
+        cursor->next_seq = session->next_seq;
+        memcpy(cursor->prev_sha256, session->prev_sha256, sizeof(cursor->prev_sha256));
+        return 0;
+    }
+    if (session->history_cursor.next_seq == before) {
+        *cursor = session->history_cursor;
+        return 0;
+    }
+    if (before == 1u) {
+        *cursor = (struct snag_journal_cursor){.next_seq = 1u};
+        memset(cursor->prev_sha256, '0', SNAG_SHA256_HEX_LEN);
+        return 0;
+    }
+    /* Sequence numbers are monotonic in the one append-only JSONL file. Seek
+     * arbitrary older bounds without parsing the prefix into reducer state. */
+    int64_t low = 0, high = session->log_end;
+    while (low < high) {
+        int64_t split = previous_newline(session, low + (high - low) / 2);
+        if (split < -1) goto invalid;
+        int64_t start = split + 1, end = -1;
+        json_t *record = read_record_at(session, start, &end);
+        uint64_t seq;
+        if (start < low || end > high ||
+            snag_json_integer_u64(record, "seq", &seq) < 0 ||
+            history_record_valid(session, record, start, end, seq, error, error_size) < 0) {
+            json_decref(record);
+            goto invalid;
+        }
+        if (seq == before) {
+            cursor->offset = start;
+            cursor->next_seq = before;
+            memcpy(cursor->prev_sha256, snag_json_string(record, "prev_sha256"),
+                sizeof(cursor->prev_sha256));
+            json_decref(record);
+            return 0;
+        }
+        json_decref(record);
+        if (seq < before) low = end;
+        else high = start;
+    }
+invalid:
+    return snag_fail(error, error_size, EINVAL, "cannot locate verified history boundary");
+}
+
+int
+snag_session_each_event_reverse(struct snag_session *session, uint64_t before, size_t scan_bytes,
+    snag_session_event_fn fn, void *opaque, uint64_t *next_before, char *error, size_t error_size)
+{
+    struct snag_journal_cursor cursor;
+    if (!scan_bytes || !fn || !next_before)
+        return snag_fail(error, error_size, EINVAL, "invalid reverse history scan");
+    *next_before = 0u;
+    if (history_cursor_before(session, before, &cursor, error, error_size) < 0) return -1;
+    while (cursor.offset > 0 && scan_bytes) {
+        int64_t split = previous_newline(session, cursor.offset - 1);
+        if (split < -1 || cursor.next_seq <= 1u)
+            return snag_fail(error, error_size, EINVAL, "invalid reverse history position");
+        int64_t start = split + 1, end = -1;
+        json_t *record = read_record_at(session, start, &end);
+        uint64_t seq = cursor.next_seq - 1u;
+        if (end != cursor.offset ||
+            history_record_valid(session, record, start, end, seq, error, error_size) < 0) {
+            json_decref(record);
+            return snag_fail(error, error_size, EINVAL, "invalid reverse history record");
+        }
+        if (strcmp(cursor.prev_sha256, snag_json_string(record, "event_sha256"))) {
+            json_decref(record);
+            return snag_fail(error, error_size, EINVAL, "history hash chain mismatch");
+        }
+        int rc = fn(opaque, NULL, seq, snag_json_string(record, "type"),
+            json_object_get(record, "data"), error, error_size);
+        if (rc) {
+            json_decref(record);
+            if (rc < 0) return -1;
+            break;
+        }
+        uint64_t visited = (uint64_t)(cursor.offset - start);
+        scan_bytes = visited >= scan_bytes ? 0u : scan_bytes - (size_t)visited;
+        cursor.offset = start;
+        cursor.next_seq = seq;
+        memcpy(cursor.prev_sha256, snag_json_string(record, "prev_sha256"),
+            sizeof(cursor.prev_sha256));
+        json_decref(record);
+    }
+    session->history_cursor = cursor;
+    *next_before = cursor.offset ? cursor.next_seq : 0u;
+    return 0;
 }
 
 /* 1 = indexed record; 0 = an older or uncheckpointed journal; -1 = corrupt.

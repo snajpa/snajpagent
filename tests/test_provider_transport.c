@@ -1840,6 +1840,13 @@ test_goal_tool_manipulates_unfinished_goals(void)
     snag_config_free(&config);
 }
 
+static json_t *
+history_checkpoint_document(void *opaque, const struct snag_session *session)
+{
+    (void)session;
+    return json_incref(opaque);
+}
+
 static void
 test_history_and_goal_list_tools(void)
 {
@@ -1927,6 +1934,101 @@ test_history_and_goal_list_tools(void)
     call.arguments = json_pack("{s:i}", "limit", 51);
     assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
     assert(!strcmp(snag_json_string(result, "status"), "failed"));
+    json_decref(result);
+    json_decref(call.arguments);
+
+    /* A recent page must not replay an unrelated old prefix. */
+    assert(snag_session_checkpoint(&app.session, error, sizeof(error)) == 0);
+    assert(snag_session_commit(&app.session, "effort_changed",
+        json_pack("{s:s,s:s}", "old_effort", "medium", "new_effort", "high"),
+        NULL, error, sizeof(error)) == 0);
+    uint64_t tail_seq = app.session.next_seq - 1u;
+    unsigned char original;
+    assert(pread(app.session.log_fd, &original, 1u, 0) == 1);
+    int writer = openat(app.session.dir_fd, "events.jsonl", O_WRONLY | O_CLOEXEC);
+    assert(writer >= 0 && pwrite(writer, "X", 1u, 0) == 1);
+    call.name = "read_session_history";
+    call.arguments = json_pack("{s:i,s:i}", "limit", 1, "detail_bytes", 512);
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    text = snag_json_string(result, "model_text");
+    assert(text && strstr(text, "returned=1") && strstr(text, "effort_changed"));
+    json_decref(result);
+    json_decref(call.arguments);
+    call.arguments = json_pack("{s:I,s:i}", "before_seq", (json_int_t)tail_seq, "limit", 1);
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    text = snag_json_string(result, "model_text");
+    assert(text && strstr(text, "session_checkpoint") && strstr(text, "provider_view"));
+    assert(!strstr(text, "\"state\"") && !strstr(text, "\"context\""));
+    json_decref(result);
+    json_decref(call.arguments);
+    assert(pwrite(writer, &original, 1u, 0) == 1 && close(writer) == 0);
+
+    call.arguments = json_pack("{s:[s],s:i}", "event_types", "goal_started", "limit", 2);
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    text = snag_json_string(result, "model_text");
+    assert(text && strstr(text, "returned=1") && strstr(text, started));
+    assert(!strstr(text, "goal_replaced") && !strstr(text, "effort_changed"));
+    assert(strstr(text, "scan_complete=true") && strstr(text, "next_before_seq=0"));
+    json_decref(result);
+    json_decref(call.arguments);
+
+    /* A valid request that cannot fit a record is not an empty/end page. */
+    app.session.tool_output_bytes = 256u;
+    for (size_t i = 0u; i < 2u; ++i) {
+        call.name = i ? "list_goals" : "read_session_history";
+        call.arguments = json_pack("{s:i}", "limit", 1);
+        assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+        assert(!strcmp(snag_json_string(result, "status"), "failed"));
+        text = snag_json_string(result, "model_text");
+        assert(text && strstr(text, "budget") && !strstr(text, "next_before_seq=0"));
+        json_decref(result);
+        json_decref(call.arguments);
+    }
+
+    /* A filtered scan quantum can end before any match; keep a usable cursor. */
+    size_t padding_size = 4u * 1024u * 1024u + 4096u;
+    char *padding = malloc(padding_size + 1u);
+    assert(padding);
+    memset(padding, 'p', padding_size);
+    padding[padding_size] = '\0';
+    json_t *document = json_pack("{s:s,s:s}", "marker", "history-private-payload",
+        "padding", padding);
+    free(padding);
+    assert(document);
+    app.session.tool_output_bytes = 2048u;
+    app.session.on_checkpoint = history_checkpoint_document;
+    app.session.on_commit_opaque = document;
+    assert(snag_session_checkpoint(&app.session, error, sizeof(error)) == 0);
+    app.session.on_checkpoint = NULL;
+    app.session.on_commit_opaque = NULL;
+    json_decref(document);
+    uint64_t checkpoint_seq = app.session.checkpoint_seq;
+    call.name = "read_session_history";
+    call.arguments = json_pack("{s:[s]}", "event_types", "goal_started");
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    text = snag_json_string(result, "model_text");
+    assert(text && strstr(text, "returned=0") && strstr(text, "scan_complete=false"));
+    (void)snprintf(cursor, sizeof(cursor), "next_before_seq=%llu",
+        (unsigned long long)checkpoint_seq);
+    assert(strstr(text, cursor));
+    json_decref(result);
+    assert(json_object_set_new(call.arguments, "before_seq",
+        json_integer((json_int_t)checkpoint_seq)) == 0);
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    text = snag_json_string(result, "model_text");
+    assert(text && strstr(text, "returned=1") && strstr(text, started));
+    assert(strstr(text, "scan_complete=true") && strstr(text, "next_before_seq=0"));
+    json_decref(result);
+    json_decref(call.arguments);
+
+    call.arguments = json_pack("{s:i}", "limit", 1);
+    app.interrupt_requested = true;
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) < 0);
+    assert(errno == ECANCELED && app.session.next_seq == checkpoint_seq + 1u);
+    app.interrupt_requested = false;
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    text = snag_json_string(result, "model_text");
+    assert(text && strstr(text, "provider_view") && !strstr(text, "history-private-payload"));
     json_decref(result);
     json_decref(call.arguments);
 

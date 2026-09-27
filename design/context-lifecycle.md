@@ -221,6 +221,27 @@ stored originals. Full retained command bytes remain pageable after settlement
 and resume. Goal pages preserve creation identity, final/current status and
 replacement links, even when paging older creations past newer revisions.
 
+Recent event pages walk the journal backwards from its verified live boundary.
+Each record uses the existing envelope/digest validator and links to the previous
+record. One derived in-memory position per session avoids rediscovering the last
+page boundary; it is discarded on reopen and is not another durable index.
+An arbitrary older sequence is located by searching complete JSONL records by
+their monotonic sequence, validating the inspected records. Unread older records
+are not represented as checked. Malformed records or broken links remain errors;
+sequence one must be at the physical beginning, not a self-consistent suffix
+mistaken for complete history.
+
+After locating a sequence boundary, bound each history page scan to 4 MiB of
+visited records, allowing one complete record under the existing journal-record
+limit. Boundary lookup additionally inspects logarithmically many records when
+the in-memory cursor is unavailable. This bounds filtered search work even when
+few events match; it is a paging quantum, not a storage or session quota.
+Report scanned range, returned count, whether the beginning was
+reached and the next exclusive sequence. A record that cannot fit the output
+page stays eligible for the next request. Checkpoint details expose coverage
+metadata, not embedded provider transcripts. Event filters preserve original
+event identities and may return an empty but explicitly incomplete search page.
+
 Zero-fitting-record pages are budget failures with a usable recovery instruction,
 not successful empty/end-of-history responses. UTF-8 clipping and redaction apply
 before presentation; large payload fields cannot consume all navigation metadata.

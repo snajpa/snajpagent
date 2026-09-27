@@ -2306,8 +2306,28 @@ conversation, images and completed tool calls. The model can use bounded
 .B read_session_history
 and
 .B read_tool_output
-tools to recover a needed fact without replaying those calls. This recovery
-survives interruption and resume, including a turn without an active goal.
+tools to recover a needed fact without replaying those calls.
+.PP
+History pages walk verified journal records backwards without replaying the full
+session. Use the returned exclusive
+.B next_before_seq
+cursor for older records. The optional nonempty
+.B event_types
+array filters exact event names; omitted or null selects all types.
+An uncached older boundary uses record-aligned search; consecutive pages reuse
+one in-memory position. After locating the boundary, a page scans up to 4 MiB
+plus at most one complete record under the existing record limit. Counts describe
+only that scanned range, excluding boundary lookup. A filtered page may be
+empty with
+.BR scan_complete=false ;
+continue with its cursor rather than treating it as the end of history.
+Checkpoint records show coverage metadata instead of saved transcripts;
+provider continuations and encrypted compaction payloads are omitted.
+History and goal listing report an output-budget failure, not a false empty/end
+page, when no matching entry fits. Reduce history detail or increase the
+configured tool output budget as indicated.
+.PP
+This recovery survives interruption and resume, including a turn without an active goal.
 If that same active turn later needs another compaction, its recovery boundary
 remains valid even after the turn's start leaves the retained event overlap.
 For a current IRC update, the request also retains the referenced room

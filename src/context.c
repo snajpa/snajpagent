@@ -2059,14 +2059,21 @@ tool_schemas(bool goal_active,
                     "description", "Total model-facing page ceiling in bytes. Null uses the configured common output ceiling; larger requests are capped."))) < 0 ||
         json_array_append_new(tools, tool_schema("read_session_history", "",
             "Read a bounded newest-first page of this session's verified durable event history. "
-            "Use next_before_seq as the next exclusive cursor to walk older history after resume, compaction or recovery.",
-            json_pack("{s:{s:[s,s],s:i,s:s},s:{s:[s,s],s:i,s:i,s:s},s:{s:[s,s],s:i,s:i,s:s}}",
+            "Use next_before_seq to walk older history, including empty filtered pages "
+            "with scan_complete=false. Counts cover the scanned range, not the entire journal; "
+            "provider-only payloads are omitted.",
+            json_pack("{s:{s:[s,s],s:i,s:s},s:{s:[s,s],s:i,s:i,s:s},"
+                "s:{s:[s,s],s:i,s:i,s:s},s:{s:[s,s],s:i,s:{s:s},s:s}}",
                 "before_seq", "type", "integer", "null", "minimum", 1,
                     "description", "Exclusive event sequence upper bound; omission/null selects the newest events.",
                 "limit", "type", "integer", "null", "minimum", 1, "maximum", 50,
                     "description", "Maximum complete events to return; omission/null selects 20.",
                 "detail_bytes", "type", "integer", "null", "minimum", 128, "maximum", 2048,
-                    "description", "Maximum compact JSON bytes retained per event; omission/null selects 512."))) < 0 ||
+                    "description", "Maximum compact JSON bytes retained per event; "
+                        "omission/null selects 512.",
+                "event_types", "type", "array", "null", "minItems", 1, "items", "type", "string",
+                    "description", "Optional nonempty list of exact event type names; "
+                        "omission/null selects all types."))) < 0 ||
         json_array_append_new(tools, tool_schema("list_goals", "",
             "List bounded durable goal identities, final/current statuses and copy-on-write parent/replacement lineage. "
             "Use next_before_seq to walk older goals without changing the current goal.",

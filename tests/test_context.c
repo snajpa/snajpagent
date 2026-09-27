@@ -1461,10 +1461,12 @@ assert_context_tool_schemas(json_t *tools, const char *active_handle, uint32_t m
             "maximum", (json_int_t)SNAG_CONFIG_TOKEN_LIMIT_MAX));
     tool = item_by_field(tools, "name", "read_session_history");
     if (tool) assert_properties(tool, json_pack(
-        "{s:{s:[s,s],s:i},s:{s:[s,s],s:i,s:i},s:{s:[s,s],s:i,s:i}}",
+        "{s:{s:[s,s],s:i},s:{s:[s,s],s:i,s:i},s:{s:[s,s],s:i,s:i},"
+        "s:{s:[s,s],s:i,s:{s:s}}}",
         "before_seq", "type", "integer", "null", "minimum", 1,
         "limit", "type", "integer", "null", "minimum", 1, "maximum", 50,
-        "detail_bytes", "type", "integer", "null", "minimum", 128, "maximum", 2048));
+        "detail_bytes", "type", "integer", "null", "minimum", 128, "maximum", 2048,
+        "event_types", "type", "array", "null", "minItems", 1, "items", "type", "string"));
     tool = item_by_field(tools, "name", "list_goals");
     if (tool) assert_properties(tool, json_pack(
         "{s:{s:[s,s],s:i},s:{s:[s,s],s:i,s:i}}",

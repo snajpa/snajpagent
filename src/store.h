@@ -117,6 +117,12 @@ struct snag_usage_totals {
     bool cached_seen;
 };
 
+struct snag_journal_cursor {
+    int64_t offset;
+    uint64_t next_seq;
+    char prev_sha256[SNAG_SHA256_HEX_LEN + 1u];
+};
+
 struct snag_session {
     char id[SNAG_ID_HEX_LEN + 1u];
     char prev_sha256[SNAG_SHA256_HEX_LEN + 1u];
@@ -188,6 +194,8 @@ struct snag_session {
     int64_t checkpoint_offset;
     uint64_t checkpoint_seq;
     bool checkpoint_has_context;
+    /* Derived paging position only; never encoded into a checkpoint. */
+    struct snag_journal_cursor history_cursor;
     unsigned int format_version;
     /* An optional in-process consumer of newly committed events. The durable
      * state remains authoritative; a failed consumer must invalidate itself,
@@ -329,6 +337,11 @@ int snag_session_checkpoint(struct snag_session *, char *error, size_t error_siz
  * No established checkpoint returns NULL documents; a damaged one fails. */
 int snag_session_checkpoint_read(struct snag_session *, json_t **state, json_t **context,
     char *error, size_t error_size);
+/* Backward, envelope/hash-verified records without reducer replay. The callback
+ * gets NULL state; positive pauses before consuming that record, negative fails.
+ * A byte quantum may include one larger complete record. Zero next_before is EOF. */
+int snag_session_each_event_reverse(struct snag_session *, uint64_t before_seq, size_t scan_bytes,
+    snag_session_event_fn, void *opaque, uint64_t *next_before, char *error, size_t error_size);
 
 int snag_session_media(struct snag_session *session, const char *path, const char *mime,
                        int (*pump)(void *, unsigned int), void *opaque,

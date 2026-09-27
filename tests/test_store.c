@@ -211,6 +211,119 @@ legacy_event(int fd, const char *session_id, uint64_t seq, char hash[SNAG_SHA256
     memcpy(hash, digest, sizeof(digest));
 }
 
+struct reverse_scan {
+    uint64_t next;
+    size_t count, limit;
+    bool cancel;
+};
+
+static int
+reverse_event(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct reverse_scan *scan = opaque;
+    (void)type;
+    (void)data;
+    assert(!state && seq == scan->next - 1u);
+    if (scan->cancel) return snag_fail(error, error_size, ECANCELED, "test history cancellation");
+    if (scan->count == scan->limit) return 1;
+    scan->next = seq;
+    ++scan->count;
+    return 0;
+}
+
+static void
+test_reverse_history(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session;
+    char error[256], id[SNAG_ID_HEX_LEN + 1u];
+    snag_session_init(&session);
+    assert(snag_session_prepare(&session, cwd, "default", "model", "high",
+        error, sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+    for (size_t i = 0u; i < 140u; ++i)
+        commit_event(&session, "effort_changed", change_data("old_effort",
+            i % 2u ? "low" : "high", "new_effort", i % 2u ? "high" : "low"));
+    for (size_t phase = 0u; phase < 3u; ++phase) {
+        uint64_t next, original_seq = session.next_seq;
+        int64_t original_end = session.log_end;
+        struct reverse_scan scan = {.next = original_seq, .limit = SIZE_MAX};
+        assert(snag_session_each_event_reverse(&session, 0u, SIZE_MAX, reverse_event,
+            &scan, &next, error, sizeof(error)) == 0);
+        assert(!next && scan.count == original_seq - 1u && scan.next == 1u);
+        /* Exercise every binary-search boundary without the derived cursor. */
+        for (uint64_t before = 2u; before < original_seq; ++before) {
+            session.history_cursor = (struct snag_journal_cursor){0};
+            scan = (struct reverse_scan){.next = before, .limit = SIZE_MAX};
+            assert(snag_session_each_event_reverse(&session, before, 1u, reverse_event,
+                &scan, &next, error, sizeof(error)) == 0);
+            assert(scan.count == 1u && scan.next == before - 1u);
+            assert(next == (before == 2u ? 0u : before - 1u));
+        }
+        /* A callback pause leaves the unreturned record eligible. */
+        scan = (struct reverse_scan){.next = original_seq, .limit = 2u};
+        assert(snag_session_each_event_reverse(&session, 0u, SIZE_MAX, reverse_event,
+            &scan, &next, error, sizeof(error)) == 0);
+        assert(next == original_seq - 2u && scan.count == 2u);
+        struct snag_journal_cursor saved = session.history_cursor;
+        scan = (struct reverse_scan){.next = next, .limit = SIZE_MAX, .cancel = true};
+        uint64_t resume = next;
+        assert(snag_session_each_event_reverse(&session, resume, 1u, reverse_event,
+            &scan, &next, error, sizeof(error)) < 0 && errno == ECANCELED);
+        assert(saved.offset == session.history_cursor.offset &&
+            saved.next_seq == session.history_cursor.next_seq &&
+            !strcmp(saved.prev_sha256, session.history_cursor.prev_sha256));
+        scan.cancel = false;
+        assert(snag_session_each_event_reverse(&session, resume, 1u, reverse_event,
+            &scan, &next, error, sizeof(error)) == 0);
+        assert(next == resume - 1u && scan.count == 1u);
+        assert(session.next_seq == original_seq && session.log_end == original_end);
+        if (!phase) {
+            assert(snag_session_persist(store, &session, error, sizeof(error)) == 0);
+            assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+        } else if (phase == 1u) {
+            snag_session_close(&session);
+            assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+        }
+    }
+    /* Damage a requested record, not an unrelated prefix: never return it. */
+    int writer = openat(session.dir_fd, "events.jsonl", O_WRONLY | O_CLOEXEC);
+    assert(writer >= 0);
+    unsigned char original;
+    assert(pread(session.log_fd, &original, 1u, session.checkpoint_offset) == 1);
+    assert(pwrite(writer, "X", 1u, session.checkpoint_offset) == 1);
+    struct reverse_scan scan = {.next = session.next_seq, .limit = SIZE_MAX};
+    uint64_t next;
+    assert(snag_session_each_event_reverse(&session, 0u, 1u, reverse_event,
+        &scan, &next, error, sizeof(error)) < 0 && !scan.count);
+    assert(pwrite(writer, &original, 1u, session.checkpoint_offset) == 1);
+    assert(close(writer) == 0);
+    assert(snag_session_each_event_reverse(&session, 0u, 1u, reverse_event,
+        &scan, &next, error, sizeof(error)) == 0 && scan.count == 1u);
+    snag_session_close(&session);
+
+    /* A self-consistent suffix is not the beginning of a complete journal. */
+    assert(snag_session_create(store, &session, cwd, "default", "model", "high",
+        error, sizeof(error)) == 0);
+    writer = openat(session.dir_fd, "events.jsonl", O_WRONLY | O_TRUNC | O_CLOEXEC);
+    assert(writer >= 0);
+    char hash[SNAG_SHA256_HEX_LEN + 1u];
+    memset(hash, '0', SNAG_SHA256_HEX_LEN);
+    hash[SNAG_SHA256_HEX_LEN] = '\0';
+    legacy_event(writer, session.id, 2u, hash, "effort_changed",
+        change_data("old_effort", "high", "new_effort", "low"));
+    legacy_event(writer, session.id, 3u, hash, "effort_changed",
+        change_data("old_effort", "low", "new_effort", "high"));
+    assert(close(writer) == 0);
+    session.log_end = lseek(session.log_fd, 0, SEEK_END);
+    session.next_seq = 4u;
+    memcpy(session.prev_sha256, hash, sizeof(hash));
+    scan = (struct reverse_scan){.next = session.next_seq, .limit = SIZE_MAX};
+    assert(snag_session_each_event_reverse(&session, 0u, SIZE_MAX, reverse_event,
+        &scan, &next, error, sizeof(error)) < 0 && scan.count == 1u);
+    snag_session_close(&session);
+}
+
 static void
 test_legacy_journal(struct snag_store *store, const char *cwd)
 {
@@ -272,6 +385,11 @@ test_legacy_journal(struct snag_store *store, const char *cwd)
     assert(session.active_turn && session.turn_count == 1u);
     assert(session.max_parallel_commands == 4u && session.parallel_tool_calls);
     assert(!session.active_read_only);
+    struct reverse_scan scan = {.next = session.next_seq, .limit = SIZE_MAX};
+    uint64_t next;
+    assert(snag_session_each_event_reverse(&session, 0u, SIZE_MAX, reverse_event,
+        &scan, &next, error, sizeof(error)) == 0);
+    assert(!next && scan.count == session.next_seq - 1u);
     snag_session_close(&session);
 }
 
@@ -1056,6 +1174,7 @@ main(void)
     snag_session_init(&session);
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
     test_pending_session(&store, cwd);
+    test_reverse_history(&store, cwd);
     test_upload_staging_lifecycle(&store, cwd);
     test_one_file_checkpoint(&store, cwd);
     test_large_embedded_checkpoint(&store, cwd);
