@@ -146,7 +146,7 @@ fail:
 
 static int
 context_cache_record(struct context_cache *cache, const struct snag_session *session,
-                     uint64_t seq, const char *type, const json_t *data, bool pending)
+                     uint64_t seq, const char *type, const json_t *data)
 {
     bool unfinished = false;
     for (size_t i = 0; i < session->pending_call_count; ++i)
@@ -157,7 +157,7 @@ context_cache_record(struct context_cache *cache, const struct snag_session *ses
         "active", session->active_turn, "unfinished", unfinished,
         "processes", session->process_count > 0u);
     int rc = entry && json_array_append(cache->recent, entry) == 0 &&
-        (!pending || json_array_append(cache->pending, entry) == 0) ? 0 : -1;
+        json_array_append(cache->pending, entry) == 0 ? 0 : -1;
     json_decref(entry);
     if (rc < 0) return -1;
     if ((!strcmp(type, "compaction_completed") || !strcmp(type, "context_rebased")) &&
@@ -172,7 +172,7 @@ context_cache_commit(void *opaque, const struct snag_session *session, uint64_t 
 {
     struct context_cache *cache = opaque;
     if (cache->invalid || !strcmp(type, "session_checkpoint")) return;
-    if (context_cache_record(cache, session, seq, type, data, true) < 0)
+    if (context_cache_record(cache, session, seq, type, data) < 0)
         cache->invalid = true; /* A durable event is never retroactively failed. */
 }
 
@@ -289,6 +289,9 @@ checkpoint_context_event(void *opaque, const struct snag_session *state, uint64_
                          const char *type, const json_t *data, char *error, size_t error_size)
 {
     struct context_cache *cache = opaque;
+    const struct snag_context_control *control = cache->view.control;
+    if (control && control->cancelled && control->cancelled(control->opaque))
+        return snag_fail(error, error_size, ECANCELED, "context restoration cancelled");
     context_cache_commit(cache, state, seq, type, data);
     return cache->invalid ? snag_fail(error, error_size, ENOMEM,
         "cannot apply embedded checkpoint suffix") : 0;
@@ -296,11 +299,12 @@ checkpoint_context_event(void *opaque, const struct snag_session *state, uint64_
 
 static int
 context_cache_restore(struct snag_session *session, struct context_cache **out,
-                      char *error, size_t error_size)
+    char *error, size_t error_size, const struct snag_context_control *control)
 {
     const json_t *doc = session->checkpoint_context;
     struct context_cache *cache = context_cache_new();
-    if (!cache || !json_is_object(doc) || !session->checkpoint_state) goto invalid;
+    if (!cache) goto memory;
+    if (!json_is_object(doc) || !session->checkpoint_state) goto invalid;
 #define GET_J(f) do { \
     const json_t *value = json_object_get(doc, #f); \
     if (!value) goto invalid; \
@@ -319,18 +323,21 @@ context_cache_restore(struct snag_session *session, struct context_cache **out,
         !json_is_array(recent)) goto invalid;
     json_decref(cache->view.input_timing);
     cache->view.input_timing = json_deep_copy(timings);
-    if (!cache->view.input_timing || restore_input_timing(&cache->view) < 0) goto invalid;
+    if (!cache->view.input_timing) goto memory;
+    if (restore_input_timing(&cache->view) < 0) goto invalid;
     json_decref(cache->steering_snapshot);
     cache->steering_snapshot = json_incref((json_t *)steering);
     uint64_t pending_first;
     if (snag_json_integer_u64(doc, "pending_first_seq", &pending_first) < 0) goto invalid;
     json_decref(cache->recent);
-    cache->recent = json_incref((json_t *)recent);
+    /* Suffix replay must not mutate the saved source document on failure. */
+    cache->recent = json_copy((json_t *)recent);
+    if (!cache->recent) goto memory;
     for (size_t i = 0; i < json_array_size(recent); ++i) {
         json_t *event = json_array_get(recent, i);
         uint64_t seq;
-        if (snag_json_integer_u64(event, "seq", &seq) < 0 ||
-            (seq >= pending_first && json_array_append(cache->pending, event) < 0)) goto invalid;
+        if (snag_json_integer_u64(event, "seq", &seq) < 0) goto invalid;
+        if (seq >= pending_first && json_array_append(cache->pending, event) < 0) goto memory;
     }
 #define GET_I(f) do { \
     uint64_t n; if (snag_json_integer_u64(doc, #f, &n) < 0) goto invalid; \
@@ -358,13 +365,68 @@ context_cache_restore(struct snag_session *session, struct context_cache **out,
     cache->view.input_timed = json_is_true(input_timed);
     /* The legacy field also covers interrupted derived-view updates. */
     cache->rebuild_view = json_is_true(rebuild_images);
+    cache->view.control = control;
     if (snag_session_each_event_from_checkpoint(session, session->checkpoint_state,
-        checkpoint_context_event, cache, error, error_size) < 0) goto invalid;
+        checkpoint_context_event, cache, error, error_size) < 0) goto fail;
+    cache->view.control = NULL;
     *out = cache;
     return 0;
+memory:
+    (void)snag_fail(error, error_size, ENOMEM, "cannot restore embedded provider checkpoint");
+    goto fail;
 invalid:
+    (void)snag_fail(error, error_size, EINVAL, "invalid embedded provider checkpoint");
+fail:
     context_cache_free(cache);
-    return snag_fail(error, error_size, EINVAL, "invalid embedded provider checkpoint");
+    return -1;
+}
+
+static int
+context_cache_get(struct snag_session *session, struct context_cache **out,
+    char *error, size_t error_size, const struct snag_context_control *control)
+{
+    if (control && control->cancelled && control->cancelled(control->opaque))
+        return snag_fail(error, error_size, ECANCELED, "context preparation cancelled");
+    struct context_cache *old = session->on_commit == context_cache_commit ?
+        session->on_commit_opaque : NULL;
+    if (old && !old->invalid) { *out = old; return 0; }
+    if (old || (session->checkpoint_has_context && !session->checkpoint_context)) {
+        json_t *state = NULL, *context = NULL;
+        if (snag_session_checkpoint_read(session, &state, &context,
+                error, error_size) < 0) return -1;
+        json_decref(session->checkpoint_state);
+        json_decref(session->checkpoint_context);
+        session->checkpoint_state = state;
+        session->checkpoint_context = context;
+    }
+    struct context_cache *cache = NULL;
+    if (session->checkpoint_has_context) {
+        if (context_cache_restore(session, &cache, error, error_size, control) < 0) return -1;
+    } else {
+        /* Only the first capture without a saved provider view reads history.
+         * Both normal requests and compaction reuse its retained source seam. */
+        cache = context_cache_new();
+        if (!cache) return snag_fail(error, error_size, ENOMEM, "cannot capture provider context");
+        cache->view.control = control;
+        if (snag_session_each_event(session, checkpoint_context_event, cache,
+                error, error_size) < 0) {
+            context_cache_free(cache);
+            return -1;
+        }
+        cache->view.control = NULL;
+        cache->rebuild_view = true;
+    }
+    session->on_commit = context_cache_commit;
+    session->on_commit_free = context_cache_free;
+    session->on_commit_opaque = cache;
+    session->on_checkpoint = context_cache_checkpoint;
+    context_cache_free(old);
+    json_decref(session->checkpoint_context);
+    json_decref(session->checkpoint_state);
+    session->checkpoint_context = NULL;
+    session->checkpoint_state = NULL;
+    *out = cache;
+    return 0;
 }
 
 void
@@ -2401,22 +2463,9 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
         }
     }
     {
-        struct context_cache *cache = session->on_commit == context_cache_commit ?
-            session->on_commit_opaque : NULL;
-        if (!cache && session->checkpoint_has_context) {
-            if (context_cache_restore(session, &cache, error, error_size) < 0) goto out;
-            session->on_commit = context_cache_commit;
-            session->on_commit_free = context_cache_free;
-            session->on_commit_opaque = cache;
-            session->on_checkpoint = context_cache_checkpoint;
-        }
-        if (cache && cache->invalid) {
-            snag_errorf(error, error_size, "cannot compact invalid provider checkpoint");
-            goto out;
-        }
-        if (cache ? context_recent_each(cache, &builder, compact_event, error, error_size) < 0 :
-                    snag_session_each_event(session, compact_event, &builder,
-                                            error, error_size) < 0) goto out;
+        struct context_cache *cache = NULL;
+        if (context_cache_get(session, &cache, error, error_size, control) < 0 ||
+            context_recent_each(cache, &builder, compact_event, error, error_size) < 0) goto out;
     }
     if (prune_dangling_calls(builder.request_input) < 0) goto out;
     if (append_deferred_input(&builder) < 0) goto out;
@@ -2620,22 +2669,6 @@ context_cache_update(struct context_cache *cache, struct snag_session *session,
     return 0;
 }
 
-struct context_capture {
-    struct context_builder *builder;
-    struct context_cache *cache;
-};
-
-static int
-context_capture_event(void *opaque, const struct snag_session *state, uint64_t seq,
-                      const char *type, const json_t *data, char *error, size_t error_size)
-{
-    struct context_capture *capture = opaque;
-    if (strcmp(type, "session_checkpoint") &&
-        context_cache_record(capture->cache, state, seq, type, data, false) < 0)
-        return snag_fail(error, error_size, ENOMEM, "cannot capture uncompressed context");
-    return context_event(capture->builder, state, seq, type, data, error, error_size);
-}
-
 int
 snag_context_build(struct snag_session *session, const char *model, const char *effort, unsigned int cycle,
                   const json_t *steering, uint64_t max_output_tokens, bool max_output_known,
@@ -2781,35 +2814,19 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             if (install_rc < 0) goto out;
             if (install_rc == 1) builder.compact_seq = 0u;
         }
-        struct context_cache *cache = session->on_commit == context_cache_commit ?
-            session->on_commit_opaque : NULL;
-        if (!cache && session->checkpoint_has_context) {
-            if (context_cache_restore(session, &cache, error, error_size) < 0) goto out;
-            session->on_commit = context_cache_commit;
-            session->on_commit_free = context_cache_free;
-            session->on_commit_opaque = cache;
-            session->on_checkpoint = context_cache_checkpoint;
-            json_decref(session->checkpoint_context);
-            json_decref(session->checkpoint_state);
-            session->checkpoint_context = NULL;
-            session->checkpoint_state = NULL;
-        }
-        if (cache && !cache->scope[0] && continuation_scope &&
-            !snag_strcpy(cache->scope, sizeof(cache->scope), continuation_scope)) cache->invalid = true;
-        if (cache && cache->invalid) {
-            (void)snag_fail(error, error_size, EINVAL, "provider checkpoint is invalid");
+        struct context_cache *cache = NULL;
+        if (context_cache_get(session, &cache, error, error_size, control) < 0) goto out;
+        if (!cache->scope[0] && continuation_scope &&
+            !snag_strcpy(cache->scope, sizeof(cache->scope), continuation_scope)) {
+            (void)snag_fail(error, error_size, EINVAL, "invalid provider continuation scope");
             goto out;
         }
-        bool rebuild_cache = cache && (cache->rebuild_view ||
+        bool rebuild_cache = cache->rebuild_view ||
             cache->compact_seq != session->compact_seq ||
             cache->rebase_seq != session->context_rebase_seq ||
-            strcmp(cache->scope, continuation_scope ? continuation_scope : ""));
-        if (control && control->cancelled && control->cancelled(control->opaque)) {
-            (void)snag_fail(error, error_size, ECANCELED, "context preparation cancelled");
-            goto out;
-        }
+            strcmp(cache->scope, continuation_scope ? continuation_scope : "");
         bool used_cache = false;
-        if (cache && !rebuild_cache) {
+        if (!rebuild_cache) {
             errno = 0;
             int update = context_cache_update(cache, session, instructions, steering,
                                               control, builder.networked, error, error_size);
@@ -2834,50 +2851,38 @@ snag_context_build(struct snag_session *session, const char *model, const char *
                 (void)snag_fail(error, error_size, ENOMEM, "cannot capture provider checkpoint");
                 goto out;
             }
-            if (old_cache) {
-                json_decref(cache->recent);
-                cache->recent = json_incref(old_cache->recent);
-                if (context_recent_each(old_cache, &builder, context_event,
-                                        error, error_size) < 0) {
-                    context_cache_free(cache);
-                    goto out;
-                }
-            } else {
-                struct context_capture capture = { .builder = &builder, .cache = cache };
-                if (snag_session_each_event(session, context_capture_event, &capture,
-                                            error, error_size) < 0) {
-                    context_cache_free(cache);
-                    goto out;
-                }
+            json_decref(cache->recent);
+            cache->recent = json_incref(old_cache->recent);
+            if (context_recent_each(old_cache, &builder, context_event, error, error_size) < 0) {
+                context_cache_free(cache);
+                goto out;
             }
             /* Retained images are resolved against separate media files on each
              * request, using only the uncovered seam on future builds. */
             cache->rebuild_view = snag_media_request_has_images(builder.request_input);
-            if (cache) {
-                json_decref(cache->steering_snapshot);
-                cache->steering_snapshot = json_deep_copy(steering);
-                cache->compact_seq = session->compact_seq;
-                cache->rebase_seq = session->context_rebase_seq;
-                cache->view.control = control;
-                if (cache->pending && cache->steering_snapshot && cache->view.request_input && cache->view.tool_feedback &&
-                    cache->view.deferred_input && cache->view.input_timing &&
-                    snag_strcpy(cache->scope, sizeof(cache->scope), continuation_scope ? continuation_scope : "") &&
-                    context_copy_events(&cache->view, &builder, builder.base_request_count) == 0) {
-                    cache->view.compact_seq = builder.compact_seq;
-                    cache->view.control = NULL;
-                    cache->view.compact_walk_seq = builder.compact_walk_seq;
-                    memcpy(cache->view.target_turn_id, builder.target_turn_id,
-                           sizeof(cache->view.target_turn_id));
-                    session->on_commit = context_cache_commit;
-                    session->on_commit_free = context_cache_free;
-                    session->on_commit_opaque = cache;
-                    session->on_checkpoint = context_cache_checkpoint;
-                    /* Replacement becomes visible only after a complete copy. */
-                    context_cache_free(old_cache);
-                } else {
-                    context_cache_free(cache);
-                    goto out;
-                }
+            json_decref(cache->steering_snapshot);
+            cache->steering_snapshot = json_deep_copy(steering);
+            cache->compact_seq = session->compact_seq;
+            cache->rebase_seq = session->context_rebase_seq;
+            cache->view.control = control;
+            if (cache->steering_snapshot &&
+                snag_strcpy(cache->scope, sizeof(cache->scope),
+                    continuation_scope ? continuation_scope : "") &&
+                context_copy_events(&cache->view, &builder, builder.base_request_count) == 0) {
+                cache->view.compact_seq = builder.compact_seq;
+                cache->view.control = NULL;
+                cache->view.compact_walk_seq = builder.compact_walk_seq;
+                memcpy(cache->view.target_turn_id, builder.target_turn_id,
+                    sizeof(cache->view.target_turn_id));
+                session->on_commit = context_cache_commit;
+                session->on_commit_free = context_cache_free;
+                session->on_commit_opaque = cache;
+                session->on_checkpoint = context_cache_checkpoint;
+                /* Replacement becomes visible only after a complete copy. */
+                context_cache_free(old_cache);
+            } else {
+                context_cache_free(cache);
+                goto out;
             }
         }
     }

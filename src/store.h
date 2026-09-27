@@ -325,6 +325,10 @@ int snag_session_commit(struct snag_session *session, const char *type, json_t *
                        char *error, size_t error_size);
 /* One indexed checkpoint record in events.jsonl; never a second session file. */
 int snag_session_checkpoint(struct snag_session *, char *error, size_t error_size);
+/* Read owned snapshot documents without replacing current live state.
+ * No established checkpoint returns NULL documents; a damaged one fails. */
+int snag_session_checkpoint_read(struct snag_session *, json_t **state, json_t **context,
+    char *error, size_t error_size);
 
 int snag_session_media(struct snag_session *session, const char *path, const char *mime,
                        int (*pump)(void *, unsigned int), void *opaque,

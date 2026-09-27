@@ -15,6 +15,10 @@
   completion and cancellation, including its default disabled alternate screen.
 - Give terminal transfers and the complete model tool catalog dedicated manual
   sections; clarify macOS Go-wrapper setup and upload/download destinations.
+- Reconstruct a failed source cache from the journal's validated checkpoint and
+  recent suffix. Interrupted restore preserves its saved source for retry;
+  damaged referenced checkpoints remain errors rather than triggering replay.
+
 - Recover interrupted context-cache updates from retained source events. Retry
   and checkpoint/resume preserve each conversation item once; cancellation
   during replacement copying keeps the previous cache available.

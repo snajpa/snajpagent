@@ -15,6 +15,7 @@
 #include "snajpagent.h"
 
 #include <assert.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -3957,6 +3958,149 @@ test_cancelled_cache_update_recovers(struct snag_store *store, const char *cwd)
     }
 }
 
+static void *
+fail_json_malloc(size_t size)
+{
+    (void)size;
+    errno = ENOMEM;
+    return NULL;
+}
+
+static void
+test_lost_cache_source_recovers(struct snag_store *store, const char *cwd)
+{
+    const char *turn = "cf000000000000000000000000000001";
+    const char *response = "cf000000000000000000000000000002";
+    for (unsigned int mode = 0u; mode < 4u; ++mode) {
+        bool checkpoint = (mode & 1u) != 0u;
+        struct snag_session session;
+        struct snag_instruction_set instructions = {0};
+        struct snag_context_projection projection = {0};
+        char error[256] = "";
+        json_t *steering = json_array();
+        assert(steering);
+        create_session(store, &session, cwd, "medium");
+        commit_event(&session, "turn_started",
+            turn_started(turn, 1u, "lost-cache-input", cwd, NULL));
+        build_context(&session, 1u, steering, &instructions, &projection);
+        snag_context_projection_free(&projection);
+        if (checkpoint) assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+
+        /* Fail only the cache notification after a successful durable commit. */
+        void (*notify)(void *, const struct snag_session *, uint64_t,
+            const char *, const json_t *) = session.on_commit;
+        json_t *data = response_started(turn, response, NULL);
+        assert(data && notify);
+        session.on_commit = NULL;
+        commit_event(&session, "response_started", json_incref(data));
+        session.on_commit = notify;
+        json_malloc_t allocate;
+        json_free_t release;
+        json_get_alloc_funcs(&allocate, &release);
+        json_set_alloc_funcs(fail_json_malloc, release);
+        notify(session.on_commit_opaque, &session, session.next_seq - 1u, "response_started", data);
+        json_set_alloc_funcs(allocate, release);
+        json_decref(data);
+        assert(!session.on_checkpoint(session.on_commit_opaque, &session));
+        commit_event(&session, "response_completed",
+            response_completed(turn, response, "lost-cache-answer"));
+        uint64_t next_seq = session.next_seq;
+
+        int writer = -1;
+        unsigned char original = 0u;
+        if (checkpoint) {
+            writer = openat(session.dir_fd, "events.jsonl", O_WRONLY | O_CLOEXEC);
+            assert(writer >= 0);
+            unsigned char checkpoint_byte;
+            assert(pread(session.log_fd, &checkpoint_byte, 1u, session.checkpoint_offset) == 1);
+            assert(pwrite(writer, "X", 1u, session.checkpoint_offset) == 1);
+            assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, steering,
+                0u, false, NULL, NULL, &instructions, NULL, &projection,
+                error, sizeof(error), NULL) < 0);
+            assert(session.next_seq == next_seq && !projection.create_request.value);
+            assert(pwrite(writer, &checkpoint_byte, 1u, session.checkpoint_offset) == 1);
+            /* Successful repair must use the indexed checkpoint, not old history. */
+            assert(pread(session.log_fd, &original, 1u, 0) == 1);
+            assert(pwrite(writer, "X", 1u, 0) == 1);
+        }
+        if (mode >= 2u) {
+            /* Compaction must repair the same source before a normal request.
+             * Its source-only cache must also survive checkpoint and reopen. */
+            assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium",
+                true, 100000u, false, NULL, &projection, error, sizeof(error), NULL) >= 0);
+            snag_context_projection_free(&projection);
+            char id[SNAG_ID_HEX_LEN + 1u];
+            memcpy(id, session.id, sizeof(id));
+            assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+            next_seq = session.next_seq;
+            snag_session_close(&session);
+            snag_session_init(&session);
+            assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+        }
+        for (unsigned int again = 0u; again < 2u; ++again) {
+            build_context(&session, 1u, steering, &instructions, &projection);
+            json_t *input = json_object_get(projection.create_request.value, "input");
+            const char *needles[] = {"lost-cache-input", "lost-cache-answer"};
+            for (size_t n = 0u; n < 2u; ++n) {
+                size_t occurrences = 0u;
+                for (size_t i = 0u; i < json_array_size(input); ++i) {
+                    const char *text = snag_json_string(json_array_get(input, i), "content");
+                    if (text && strstr(text, needles[n])) ++occurrences;
+                }
+                assert(occurrences == 1u);
+            }
+            assert(session.next_seq == next_seq);
+            snag_context_projection_free(&projection);
+        }
+        if (checkpoint) {
+            assert(pwrite(writer, &original, 1u, 0) == 1 && close(writer) == 0);
+        }
+        json_decref(steering);
+        snag_session_close(&session);
+    }
+}
+
+static void
+test_cancelled_checkpoint_restore_recovers(struct snag_store *store, const char *cwd)
+{
+    const char *turn = "cf000000000000000000000000000003";
+    const char *response = "cf000000000000000000000000000004";
+    struct snag_session session;
+    struct snag_instruction_set instructions = {0};
+    struct snag_context_projection projection = {0};
+    char error[256] = "", id[SNAG_ID_HEX_LEN + 1u];
+    json_t *steering = json_array();
+    assert(steering);
+    create_session(store, &session, cwd, "medium");
+    commit_event(&session, "turn_started", turn_started(turn, 1u, "restore-input", cwd, NULL));
+    build_context(&session, 1u, steering, &instructions, &projection);
+    snag_context_projection_free(&projection);
+    assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+    commit_event(&session, "response_started", response_started(turn, response, NULL));
+    commit_event(&session, "response_completed",
+        response_completed(turn, response, "restore-answer"));
+    memcpy(id, session.id, sizeof(id));
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    json_t *saved = json_deep_copy(session.checkpoint_context);
+    assert(saved);
+    unsigned int remaining = 4u;
+    struct snag_context_control control = {.cancelled = cancel_preparation, .opaque = &remaining};
+    assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, steering,
+        0u, false, NULL, NULL, &instructions, NULL, &projection,
+        error, sizeof(error), &control) < 0 && errno == ECANCELED);
+    assert(!remaining && !session.on_commit && !projection.create_request.value);
+    assert(json_equal(saved, session.checkpoint_context));
+    json_decref(saved);
+    build_context(&session, 1u, steering, &instructions, &projection);
+    assert(message_matching(json_object_get(projection.create_request.value, "input"),
+        "restore-answer"));
+    snag_context_projection_free(&projection);
+    json_decref(steering);
+    snag_session_close(&session);
+}
+
 static void
 test_many_pending_steers(struct snag_store *store, const char *cwd)
 {
@@ -4482,6 +4626,8 @@ main(int argc, char **argv)
     test_parallel_journal_recovery(&store, cwd);
     test_many_pending_steers(&store, cwd);
     test_cancelled_cache_update_recovers(&store, cwd);
+    test_lost_cache_source_recovers(&store, cwd);
+    test_cancelled_checkpoint_restore_recovers(&store, cwd);
     test_hosted_search_many_sources(&store, cwd);
     test_refused_file_call_after_start(&store, cwd);
     test_accounting_lineage(&store, cwd);

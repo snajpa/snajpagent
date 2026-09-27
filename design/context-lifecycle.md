@@ -96,6 +96,15 @@ rebuild disposition so reopening cannot apply pending events twice. Keep the old
 source-bearing cache until a complete, cancellation-aware replacement is ready.
 A source-cache append failure instead requires recovery from a trusted durable
 checkpoint and suffix; clearing its invalid flag would conceal a missing event.
+Use the restart path's checkpoint reader without replacing current controller or
+process-owner state. Reconstruct from original history only when no provider-view
+checkpoint has been established yet. A restored view stages suffix records in an
+independently owned list: interruption or allocation failure must leave its saved
+checkpoint document unchanged for the next attempt.
+Normal requests and compaction acquire this source through the same recovery
+path. Initial capture without a saved provider view produces a rebuildable cache
+that either caller can reuse, including across checkpoint/reopen before a normal
+request has materialized its derived view.
 
 A checkpoint restore must retain input timestamps, deferred IRC/steering,
 call/result identities, coverage boundaries, scope, accounting provenance and

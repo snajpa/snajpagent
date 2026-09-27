@@ -2720,56 +2720,81 @@ invalid:
 }
 
 static int
-scan_checkpoint_suffix(struct snag_session *session, int64_t checkpoint_offset,
-                       int64_t boundary, int64_t *complete_end_out, uint64_t *next_seq_out,
-                       char *error, size_t error_size)
+read_checkpoint_at(struct snag_session *session, int64_t checkpoint_offset,
+    int64_t boundary, struct snag_session *restored, char *error, size_t error_size)
 {
+    snag_session_init(restored);
     int64_t record_end = -1;
     json_t *record = read_record_at(session, checkpoint_offset, &record_end);
     if (!record || record_end > boundary ||
         strcmp(snag_json_string(record, "type") ? snag_json_string(record, "type") : "",
                "session_checkpoint")) goto invalid;
     json_t *data = json_object_get(record, "data");
-    struct snag_session restored;
-    if (snag_checkpoint_state_decode(json_object_get(data, "state"), &restored) < 0) {
-        snag_session_close(&restored);
-        goto invalid;
-    }
+    if (snag_checkpoint_state_decode(json_object_get(data, "state"), restored) < 0) goto invalid;
     uint64_t seq = 0u, pointer = 0u;
     if (snag_json_integer_u64(record, "seq", &seq) < 0 ||
         snag_json_integer_u64(record, "checkpoint_offset", &pointer) < 0 ||
         pointer != (uint64_t)checkpoint_offset ||
-        strcmp(restored.id, session->id) || restored.log_end != checkpoint_offset ||
-        restored.next_seq != seq ||
-        strcmp(restored.prev_sha256, snag_json_string(record, "prev_sha256") ?
-               snag_json_string(record, "prev_sha256") : "")) {
-        snag_session_close(&restored); goto invalid;
-    }
+        strcmp(restored->id, session->id) || restored->log_end != checkpoint_offset ||
+        restored->next_seq != seq ||
+        strcmp(restored->prev_sha256, snag_json_string(record, "prev_sha256") ?
+               snag_json_string(record, "prev_sha256") : "")) goto invalid;
     const char *type;
     json_t *event_data;
-    if (!common_event_valid(record, &restored, seq, &type, &event_data, error, error_size) ||
-        apply_event(&restored, type, event_data, seq, false, error, error_size) < 0) {
-        snag_session_close(&restored); goto invalid;
+    if (!common_event_valid(record, restored, seq, &type, &event_data, error, error_size) ||
+        apply_event(restored, type, event_data, seq, false, error, error_size) < 0) goto invalid;
+    restored->checkpoint_offset = checkpoint_offset;
+    restored->checkpoint_seq = seq;
+    restored->log_end = record_end;
+    restored->next_seq = seq + 1u;
+    json_decref(record);
+    return 0;
+invalid:
+    json_decref(record);
+    snag_session_close(restored);
+    return snag_fail(error, error_size, EINVAL, "invalid session checkpoint record");
+}
+
+int
+snag_session_checkpoint_read(struct snag_session *session, json_t **state, json_t **context,
+    char *error, size_t error_size)
+{
+    *state = NULL;
+    *context = NULL;
+    if (!session->checkpoint_seq) return 0;
+    struct snag_session restored;
+    if (read_checkpoint_at(session, session->checkpoint_offset, session->log_end,
+            &restored, error, error_size) < 0) return -1;
+    if (restored.checkpoint_seq != session->checkpoint_seq ||
+        restored.checkpoint_has_context != session->checkpoint_has_context) {
+        snag_session_close(&restored);
+        return snag_fail(error, error_size, EINVAL, "session checkpoint boundary changed");
     }
-    restored.checkpoint_offset = checkpoint_offset;
-    restored.checkpoint_seq = seq;
-    restored.log_end = record_end;
-    restored.next_seq = seq + 1u;
+    *state = json_incref(restored.checkpoint_state);
+    *context = json_incref(restored.checkpoint_context);
+    snag_session_close(&restored);
+    return 0;
+}
+
+static int
+scan_checkpoint_suffix(struct snag_session *session, int64_t checkpoint_offset,
+    int64_t boundary, int64_t *complete_end_out, uint64_t *next_seq_out,
+    char *error, size_t error_size)
+{
+    struct snag_session restored;
+    if (read_checkpoint_at(session, checkpoint_offset, boundary,
+            &restored, error, error_size) < 0) return -1;
     int dir_fd = session->dir_fd, log_fd = session->log_fd, lock_fd = session->lock_fd;
     char *dir_path = session->dir_path;
     *session = restored;
     session->dir_fd = dir_fd; session->log_fd = log_fd; session->lock_fd = lock_fd;
     session->dir_path = dir_path;
     struct snag_process_state anchor = {0};
-    anchor.log_offset = (uint64_t)record_end;
+    anchor.log_offset = (uint64_t)session->log_end;
     anchor.log_seq = session->next_seq;
     memcpy(anchor.log_hash, session->prev_sha256, sizeof(anchor.log_hash));
-    json_decref(record);
     return read_event_log(session, session, boundary, SNAG_TAIL_REJECT, NULL, NULL,
         &anchor, true, complete_end_out, next_seq_out, error, error_size);
-invalid:
-    json_decref(record);
-    return snag_fail(error, error_size, EINVAL, "invalid session checkpoint record");
 }
 
 int
