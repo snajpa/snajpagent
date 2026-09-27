@@ -4000,6 +4000,27 @@ def run_destination_case(binary, root, provider, environment):
         client.wait(f"destination[1]: {endpoints[0]}")
         client.wait(f"destination[2]: {endpoints[1]}")
 
+        # Empty Tab cycles rollout and each room, not only two view modes.
+        # Check the current prompt, not an older prompt in scrollback, and
+        # verify that Enter follows the newly selected room exactly once.
+        def cycle_to(prompt, destination=None):
+            client.send_key("Tab")
+            def selected(screen):
+                line = screen.rstrip().splitlines()[-1]
+                return line.endswith(prompt) and (destination is None or
+                                                  line.startswith(destination))
+            client.wait_until(selected, "empty Tab selected " + str(destination) + " " + prompt)
+
+        rollout_prompt = "fake/two-model/medium   ?% ›"
+        cycle_to(rollout_prompt)
+        cycle_to(f"routerop@{MACHINE_HOSTNAME} :", "[1 #alpha]")
+        client.submit("destination-tab-one")
+        deliveries("destination-tab-one", {"a": 1, "c": 1})
+        cycle_to(f"routerop@{MACHINE_HOSTNAME} :", "[2 #beta]")
+        client.submit("destination-tab-two")
+        deliveries("destination-tab-two", {"b": 1, "c": 1})
+        cycle_to(rollout_prompt)
+
         client.submit_wait("/rollout", "fake/two-model/medium   ?% ›")
         client.submit("destination-model 1 model-to-one")
         deliveries("model-to-one", {"a": 1, "c": 1})
@@ -4028,6 +4049,12 @@ def run_destination_case(binary, root, provider, environment):
         client.submit_wait("/2 removed-target", "destination 2 is unavailable; use /names")
         client.wait(": /2 removed-target")
         deliveries("removed-target", {})
+        client.send_key("C-u")
+        cycle_to(f"routerop@{MACHINE_HOSTNAME} :", "[3 #beta]")
+        client.submit("destination-tab-reconnected")
+        deliveries("destination-tab-reconnected", {"b": 1, "c": 1})
+        cycle_to(rollout_prompt)
+        cycle_to(f"routerop@{MACHINE_HOSTNAME} :", "[1 #alpha]")
         for terminal in reversed(list(terminals.values())):
             terminal.send_key("C-u")
             terminal.send_key("C-d")

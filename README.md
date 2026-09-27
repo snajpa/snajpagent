@@ -2,7 +2,12 @@
 
 # snajpagent
 
-A coding agent for your terminal, with a built-in IRC server and client.
+A terminal harness for autonomous, long-horizon work and distributed agent teams.
+
+Give a model an objective, tools and project context. Persistent goals carry work
+across turns; steering, saved sessions and retained tool results keep it under
+your direction. Built-in IRC connects people and agents across machines and
+rooms, with each instance running tools in its own environment.
 
 [Website](https://agent.snajpa.net) ·
 [Downloads](https://agent.snajpa.net/downloads.html) ·
@@ -21,20 +26,19 @@ start snajpagent:
 snajpagent
 ```
 
-New sessions start with their working directory at `~`. Ask the model to use
-`get_cwd` to inspect it and `cd` to change it, or give an absolute file path.
-File tools also accept explicit `./` paths relative to the current directory.
-Describe a task and press Enter: “Fix the empty-input bug, keep the public API
-unchanged, and run the tests.” The model can read and edit files and run
-commands across the filesystem with your OS permissions. Tool calls require
-no per-call approval. Empty Enter opens a fresh prompt, like a shell.
+Describe the outcome, constraints and repository, then press Enter. Use a
+persistent goal for work spanning multiple turns: implementation, testing and
+follow-through continue until the goal is complete or blocked.
+
+New sessions start at `~`. The model manages its working directory and can read
+and edit files and run commands across the filesystem with your OS permissions,
+without per-call approval. Absolute paths and explicit `./` paths are supported.
+Empty Enter opens a fresh prompt, like a shell.
 
 Read its replies and scroll back normally. Tool details are hidden by default;
 `/verbose 1` shows compact activity and `/verbose 2` adds input/result previews,
-with each tool row carrying the same short call reference and cut or hidden
-content marked by a dim `[…]`. Type these commands and press Enter, even while
-the model works; `/help` lists command syntax and keys, and brackets mark
-optional arguments.
+with short call references and omitted content marked `[…]`. `/help` lists
+commands and keys; enter commands even while the model works.
 
 [![A local session reports fixing whitespace handling and passing four checks](www/screenshots/ordinary.png)](www/screenshots/ordinary.png)
 
@@ -60,15 +64,10 @@ lists ambiguous choices. Completion never submits text.
 
 ### Commands, history and context
 
-Commands can be entered while a turn is steerable. A foreground slash command
-finishes before the next app command is accepted; input typed during it waits.
-`/config`, `/model cache`, `/compact`, `/archive` and `/delete` acknowledge a
-safe boundary when they must wait. Accepted controls survive resume. `/model`
-and, with `[agent] allow_model_change=true`, the model's `select_model` tool
-switch the next response in the current turn;
-an already streaming request is interrupted and rebuilt from durable history.
-The external `$EDITOR` owns terminal input while open, and deletion always
-requires explicit confirmation.
+Commands remain available while work is steerable. Foreground commands own
+input until they finish; later input waits. Controls needing a safe boundary
+acknowledge it. The external `$EDITOR` owns terminal input while open, and
+session deletion requires confirmation.
 
 `/history` shows the last turn, `/history 10` the last ten, and `/history 0`
 counts. Up/Ctrl-R navigate prompt-entry history separately. `/cat src/app.c`
@@ -175,19 +174,18 @@ data destinations and capture controls.
 
 ### Keep useful findings in files
 
-For longer work, have the model keep findings, decisions and corrections in
-project files pointed to from `AGENTS.md`, kept current so later tasks reuse what
-was learned. Record proposals and approvals separately.
-
-`-d DIR` adds a documentation root containing `AGENTS.md` or
-`AGENTS.override.md`; repeat it for several roots, including notes spanning
-repositories. Relative paths use the launch directory even with `-C`, and the
-printed resume command retains them.
+Project notes and `AGENTS.md` carry findings across sessions. Keep decisions
+current and proposals separate from approvals. `-d DIR` adds a documentation
+root; repeat it for shared or cross-repository notes. Relative documentation
+paths use the launch directory and persist in the printed resume command.
 
 ## 2. Work together
 
-People and agents share an IRC room: one snajpagent instance hosts it and others
-connect. Run these in separate terminals, from the project each model should use:
+Run agents where their repositories, tools and services are available, and use
+IRC rooms to assign work, exchange findings and coordinate handoffs. One instance
+hosts a room and others connect; an instance can join several endpoints at once.
+
+Start two instances in separate terminals:
 
 ```sh
 snajpagent -s -n builder -o alice -r work
@@ -206,10 +204,11 @@ mention during its work steers it at a safe boundary without cutting off its
 current response; ordinary conversation supplies background context, while a
 direct mention starts a task for the addressed model.
 
-Empty Tab switches to **rollout**, where Enter directs your local agent without
-sending your instruction to everyone; each view keeps its own draft and history,
-and the local transcript stays in rollout. Models use `irc_send` to publish
-chosen messages, which can include material from that transcript.
+Empty Tab cycles through **rollout** and every connected room. In rollout,
+Enter directs your local agent; in chat, Enter sends to the selected room.
+Rollout and chat retain separate drafts and history. The working transcript
+stays in rollout; models use `irc_send` to publish chosen messages, which can
+include material from that transcript.
 
 In chat, `@bu` plus Tab becomes `@builder ` when that is the only match, including
 the space. `@` begins a nickname word anywhere in a message, so `please ask @bu`
@@ -227,8 +226,9 @@ project files and Git for code and handoff
 notes, since joining IRC shares no files, credentials or command processes, and
 use separate Git worktrees for independent edits to one repository.
 
-`/server start` hosts a room and `/connect ENDPOINT` adds a connection; `/names`
-lists rooms and members. `/2` selects room 2, `/2 TEXT` sends there once, and
+`/server start` hosts a room and `/connect ENDPOINT` adds a connection to that
+endpoint's advertised room; repeat it for other endpoints. `/names` lists rooms
+and members. `/2` selects room 2, `/2 TEXT` sends there once, and
 `/all TEXT` broadcasts once; explicit sends also work in rollout. `/status` shows
 whether a requested connection has joined. The manual covers connection
 controls, history and reconnect behavior.
@@ -240,40 +240,15 @@ sandbox.
 ## Further controls
 
 `/help` lists commands and editing keys; `/status` shows the current state.
-Ctrl-J inserts a newline, Up/Down move through draft rows and then prompt
-history, Ctrl-P/Ctrl-N step through history, and Ctrl-R searches it; navigation
-visits the session's own entries before the global archive. `/queue` shows
-waiting work, `/queue 2 edit` revises its second item and `/queue 2 delete`
-removes it. The manual covers editing keys, history, search, the queue editor
-and slash-command exceptions.
+Ctrl-J inserts a newline, Up/Down navigate the draft and prompt history, and
+Ctrl-R searches history. `/queue` lists waiting work; its editor revises or
+removes entries. The manual covers editing keys and slash-command exceptions.
 
-`/model` lists the locally cached catalog and `/model cache` refreshes
-providers. An operator can select a row by number or type
-`/model PROVIDER/MODEL/EFFORT`, including an uncached model. The model's
-`select_model` tool (enabled by `[agent] allow_model_change=true`, default off)
-accepts only provider/model/effort entries in the current
-cache; selector `cache` refreshes it and returns available rows. An active
-selection switches the next response in the same turn; an idle
-selection and CLI `-m` set the preference for subsequent requests. The choice
-persists across resume; add `save` to write it into the configuration file. A model
-change alone does not compact. If the selected model needs a smaller context,
-compaction runs through that model in bounded chunks. Exiting immediately after
-the selection, or after a failed or cancelled turn, keeps both the selection
-and completed tool results for resume. When a catalog advertises both a normal
-working window and a larger maximum context, the normal window is the
-hard-capacity basis; an explicit model-limit context selects a larger value when
-wanted. A source that publishes only a maximum still uses it. The normal window
-is the provider's default, and requests above it can move to a higher price tier
-on routes that bill large input separately.
-`/context` sets the window for the session: `default` uses the advertised
-normal window, `max` the advertised maximum, and a number an explicit token
-count; the output reservation and compaction budget stay derived. The choice is
-recorded in the session log and restored on resume; during active work it ends
-the current response and rebuilds the turn under the new window.
-Model-limit rules can supply `reasoning_efforts = ["max", "high", "low", "none"]`
-when a provider omits effort choices, or an optional `image_tokens` value for a
-provider-documented per-image ceiling that differs from the built-in
-resized-image budget; the manual covers precedence and selection.
+`/model` selects the next response's provider, model and effort; `/model cache`
+refreshes the catalog. Selection persists across resume. Model-callable switching
+is available with `[agent] allow_model_change=true` (default off). Switching
+retains completed tool results and running commands; a smaller context triggers
+bounded compaction when needed. The manual covers saved defaults and effort rules.
 
 `/context default` uses the advertised normal window, `max` the maximum, and a
 number an explicit token count. Larger windows may change provider pricing.

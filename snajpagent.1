@@ -448,7 +448,8 @@ and leaves the cursor after it, ready for you to finish writing.
 At the end of a finished message, outside a command or nickname being completed,
 Tab queues a local follow-up while your model is active.  In chat this still
 does not send to the room; Enter does that.  While idle, Tab inserts spaces
-instead.  With an empty draft, Tab switches chat and rollout views.
+instead.  With an empty draft, Tab cycles through rollout and each connected
+room's chat view, then returns to rollout.
 .PP
 Completion itself never submits, sends or queues.  Multiple matches expand
 their common beginning; another consecutive Tab lists the choices.  No match
@@ -569,7 +570,8 @@ is background context, not a new task.  Models publish chosen replies through
 .B irc_send
 while their other text and tool activity remain in rollout.
 .PP
-Empty Tab switches the views without stopping work.  Returning displays output
+Empty Tab cycles through rollout and each room without stopping work.
+Returning displays output
 that arrived while the view was hidden.  To complete a nickname, type @bu and
 Tab, then finish your message after the added space.  Enter sends it to the
 room; Tab at the end queues it locally while your own model is active.

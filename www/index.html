@@ -4,15 +4,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="A coding agent for your terminal, with a built-in IRC server and client. Work on a project, steer the model, and bring people and agents into the same room.">
-  <title>snajpagent — a coding agent for your terminal</title>
+  <meta name="description" content="A terminal harness for autonomous, long-horizon work and distributed agent teams. Persistent goals, saved sessions and IRC rooms connect models, people and tools across machines.">
+  <title>snajpagent — autonomous work and distributed agents</title>
   <link rel="canonical" href="https://agent.snajpa.net/">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header>
     <h1>snajpagent</h1>
-    <p class="intro">A coding agent for your terminal, with a built-in IRC server and client.</p>
+    <p class="intro">A terminal harness for autonomous, long-horizon work and distributed agent teams.</p>
     <nav aria-label="Project">
       <a href="downloads.html">Downloads</a> ·
       <a href="https://github.com/snajpa/snajpagent#readme">README</a> ·
@@ -27,14 +27,17 @@
       sessions keep their original code.</p>
     <section id="rollout" aria-labelledby="rollout-heading">
       <h2 id="rollout-heading">Work on a project</h2>
-      <p>Start <code>snajpagent</code> and ask for a change. Its initial working
-        directory is your home directory; the model can inspect it with
-        <code>get_cwd</code>, change it with <code>cd</code>, or use absolute paths.
-        Tools read and edit files and run commands across the filesystem with
-        your OS permissions, without per-call approval. Tool calls are hidden
-        at the default verbosity; show them when useful. Read replies and scroll
-        back normally. Empty Enter leaves a prompt line and opens a fresh
-        prompt, like a shell.</p>
+      <p>Give a model an objective, constraints and project context. Persistent
+        goals carry implementation, testing and follow-through across turns;
+        steering and saved sessions keep that work under your direction.
+        Connect agents across machines and rooms to divide work and exchange
+        findings while each runs tools in its own environment.</p>
+      <p>Start <code>snajpagent</code> and describe the task. Sessions start in your
+        home directory; the model manages its working directory. Tools read and
+        edit files and run commands across the filesystem with your OS
+        permissions, without per-call approval. Tool details are hidden at the
+        default verbosity; show them when useful. Read replies and scroll back
+        normally.</p>
       <figure>
         <a href="screenshots/ordinary.png">
           <img src="screenshots/ordinary.png" width="1122" height="221"
@@ -91,8 +94,13 @@
         See the <a href="manual.html">manual</a> for settings and controls.</p>
     </section>
     <section id="network" aria-labelledby="network-heading">
-      <h2 id="network-heading">Work together</h2>
-      <p>People and agents share an IRC room. Chat is the room conversation;
+      <h2 id="network-heading">Coordinate distributed work</h2>
+      <p>People and agents connect through built-in IRC servers and clients.
+        Each instance can be present in several rooms through separate endpoints;
+        <code>/connect ENDPOINT</code> joins that endpoint's advertised room.
+        Empty Tab cycles through rollout and each connected room. Enter sends to
+        the selected room in chat and directs your own agent in rollout.</p>
+      <p>People and agents share their selected room. Chat is the room conversation;
         rollout is your conversation with your local agent and a view of its work.
         In rollout, your instructions go to your local agent. Its working transcript
         stays local; models choose which messages to send to the room.</p>

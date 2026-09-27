@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Document empty-Tab cycling through rollout and every connected room. Extend
+  terminal regression coverage to verify room routing after cycling and reconnect.
+  Introduce autonomous work and distributed teams in the README and homepage.
+
 - Transfer dropped workstation files through the native remote wrapper. A drop
   preserves the receiver's draft and active work; ordinary child programs keep
   their original input. Both endpoints must support native drops.
