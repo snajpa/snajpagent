@@ -236,6 +236,15 @@ synchronize, and publish the format selection last. Retain the old source for
 rollback and reject attempts by an older writer to append to migrated state.
 Never change a live operator journal as an implementation experiment.
 
+The converter is built into `snajpagent`, including bulk conversion of the saved
+session collection with bounded parallel workers. Each worker holds one stopped
+session's exclusive writer lock throughout validation and publication. Report
+locked sessions as skipped, and continue independent sessions after an individual
+failure. Worker count bounds aggregate decoding memory and disk pressure; do not
+spawn one worker per session. Preserve source journals and per-session diagnostics.
+Bulk success requires every selected unlocked session to pass equivalence checks;
+a partial run reports converted, already-current, skipped and failed counts.
+
 Implement in dependency order:
 
 1. Typed framing/codecs, bounded batch reader and tail recovery in existing
