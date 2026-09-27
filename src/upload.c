@@ -6,7 +6,6 @@
 #include "upload_wire.h"
 
 #include <errno.h>
-#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -175,7 +174,7 @@ static int
 send_integer(struct upload_io *io, uint64_t value)
 {
     char text[40];
-    int length = snprintf(text, sizeof(text), "#SUCC:%" PRIu64 "\n", value);
+    int length = snprintf(text, sizeof(text), "#SUCC:%llu\n", (unsigned long long)value);
     if (length < 0 || (size_t)length >= sizeof(text)) return snag_errno(EOVERFLOW);
     return write_bytes(io, (const unsigned char *)text, (size_t)length);
 }
@@ -363,8 +362,9 @@ snag_upload_receive(int tty, int stage_fd, size_t slots, bool directory,
     snag_buf_init(&frame.payload, SNAG_UPLOAD_LINE_MAX);
     uint64_t identifier = 1000000000000ull + snag_time_ms() % 899999999999ull;
     char marker[96];
-    int marker_len = snprintf(marker, sizeof(marker), "\033[s::TRZSZ:TRANSFER:%c:1.0.0:%013"
-                              PRIu64 ":0\r\n", directory ? 'D' : 'R', identifier);
+    int marker_len = snprintf(marker, sizeof(marker),
+                              "\033[s::TRZSZ:TRANSFER:%c:1.0.0:%013llu:0\r\n",
+                              directory ? 'D' : 'R', (unsigned long long)identifier);
     if (marker_len < 0 || (size_t)marker_len >= sizeof(marker)) {
         errno = EOVERFLOW;
         goto done;

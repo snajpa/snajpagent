@@ -533,9 +533,10 @@ from forced unwinds, and instruction-pointer lookup uses the existing GetIP
 fallback. Poppler keeps native pow calls when the SDK lacks exp2.
 The same runtime recipe builds on NetBSD 5.2.3 and OpenBSD 5.9. Production legacy
 NetBSD uses the 2.0 SDK; that runtime and OpenBSD 3.5 remain in development.
-The older BSD headers omit `strnlen` and, for some ABIs, `EBADMSG`:
-checkpoint text encoding uses bounded `memchr`, and terminal-upload digest
-failure uses the existing portable `EPROTO` error path.
+The older BSD headers omit `strnlen` and, for some ABIs, `EBADMSG` and
+`PRIu64`: checkpoint text encoding uses bounded `memchr`; terminal upload
+formats explicitly cast 64-bit unsigned integers and report digest failures
+through the existing portable `EPROTO` error path.
 
 ### FreeBSD 5.1/5.5 legacy target
 

@@ -30,9 +30,9 @@ that tag, plus updater support for this letter-suffixed stable version.
   `0.99.8`. Stable installations stay on `latest`; Git-suffixed development
   builds stay on `latest-dev`. Existing processes continue running their mapped
   executables until their operators restart them.
-- Checkpoint serialization and upload checksum errors use interfaces available
-  in the older BSD build SDKs; compilation does not establish new runtime
-  qualification on those operating systems.
+- Checkpoint serialization, upload transfer formatting, and upload checksum
+  errors use interfaces available in the older BSD build SDKs; compilation
+  does not establish new runtime qualification on those operating systems.
 
 ## Scope and known limits
 
