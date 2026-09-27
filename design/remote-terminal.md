@@ -31,7 +31,7 @@ Keep the workstation wrapper outside SSH hops and reattach through it. Extra
 nested screen backends need a wrapper at the intermediate boundary to relay
 passthrough; arbitrary nested multiplexers are outside the qualified paths.
 
-The Go client remains interoperable for explicit `/upload` and `/download`.
+The Go client remains interoperable for explicit `/receive` and `/send`.
 Its unchanged protocol does not answer the native availability probe; model
 exports with that client remain queued until native attachment or explicit
 operator download and queue removal. This preserves detached-screen safety.

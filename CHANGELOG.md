@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Name terminal commands from the running agent: `/receive` accepts workstation
+  files as unsent attachments; `/send PATH` sends an agent file to the workstation.
+  The former command names are removed.
+
 - Add client-only `snajpagent remote COMMAND…` with a literal-argv PTY, native
   upload/download endpoints, configurable workstation destination defaulting to
   `~/Downloads`, actual-path receipts and upstream native-wrapper relay.
@@ -18,7 +22,7 @@
   from intermittently mistaking uploads or downloads for a Windows server.
 
 - Send a regular file or accepted retained asset to the workstation through the
-  trzsz wrapper with `/download PATH` or the model's `send_file` tool. Stream
+  trzsz wrapper with `/send PATH` or the model's `send_file` tool. Stream
   bounded blocks, verify client digest/EXIT acknowledgements, restore terminal
   ownership and preserve post-transfer keyboard input.
 - Keep terminal-transfer wire output out of GNU screen's saved display on

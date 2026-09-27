@@ -42,6 +42,8 @@ exit/signals and terminal restoration, binary upload and binary/empty download,
 collision destinations and actual-path receipts, nested native endpoint ownership,
 local GNU screen containing a wrapper, remote GNU screen attach/detach, pending
 outbox delivery on wrapped resume, unwrapped resume, and changed-source retention.
+The command-name regression checks `/receive` and `/send PATH` help/usage, rejects
+the former command names and malformed prefixes; transfer cases use the new names.
 The detached-screen regression checks receipt scrollback and restoration of a
 partly edited draft and its cursor on reattachment. Changed-source checks also
 cover same-size edits with restored mtime, requiring the saved SHA256.

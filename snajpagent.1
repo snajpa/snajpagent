@@ -1286,7 +1286,7 @@ an inner native wrapper between them to relay passthrough to the outer client.
 GNU screen passthrough keeps transfer
 frames out of its display and scrollback; its settings remain unchanged.
 .SS "Alternative workstation client: trzsz-go"
-The Go trzsz wrapper remains usable with the target's /upload and /download
+The Go trzsz wrapper remains usable with the target's /receive and /send
 commands. On macOS:
 .PP
 .nf
@@ -1301,10 +1301,10 @@ the trzsz wrapper; --dragfile belongs to that wrapper. Set
 DefaultDownloadPath in the workstation's ~/.trzsz.conf for automatic saving.
 The target needs no trz or tsz executable. Native-client availability and
 automatic outbox delivery use the native wrapper; with trzsz-go, explicitly
-request /download PATH and remove any corresponding pending export afterward.
-.SS Upload from the workstation
+request /send PATH and remove any corresponding pending export afterward.
+.SS Receive from the workstation
 Type
-.B /upload
+.B /receive
 for native selection, then enter one regular local file path; an empty path,
 Escape or Ctrl-C cancels. With trzsz-go, select files or drop regular files
 into the composer. A stock Go-client drag sends Ctrl-C followed by trz;
@@ -1319,17 +1319,17 @@ Receiving a file alone submits no message. Preparation failure removes new files
 from that batch and retains existing unsent attachments. A batch has at most eight
 files; retained files are at most 256 MiB each, and prepared image content uses
 the existing 12 MiB input budget.
-.SS Download to the workstation
+.SS Send to the workstation
 Type
-.B /download PATH
+.B /send PATH
 or ask the model to send a file through its
 .B send_file
 tool. For example:
 .PP
 .nf
-    /download ./report.md
-    /download /home/user/report with spaces.pdf
-    /download asset:0123456789abcdef0123456789abcdef
+    /send ./report.md
+    /send /home/user/report with spaces.pdf
+    /send asset:0123456789abcdef0123456789abcdef
 .fi
 .PP
 Paths are literal, absolute or relative to the session's current working
@@ -1719,11 +1719,11 @@ be rolled back. Backend latency can delay the end of audible sound.
 Interrupt file playback. Dictation and file playback share one local device
 owner and return busy when the other operation is active.
 .TP
-.B /upload
+.B /receive
 Receive workstation files as unsent attachments through the trzsz wrapper.
 See Terminal file transfers for setup, drag behavior, verification and limits.
 .TP
-.B /download PATH
+.B /send PATH
 Send one regular file or retained asset to the workstation through the trzsz
 wrapper. The remainder is a literal path, including spaces; no shell expansion,
 quotes or globbing are interpreted. See Terminal file transfers.

@@ -75,6 +75,30 @@ class RemoteProcess:
 
 
 class RemoteStartupTests(unittest.TestCase):
+    def test_agent_transfer_names_have_no_old_aliases(self):
+        with tempfile.TemporaryDirectory(prefix="snag-remote-names-") as tmp:
+            root = Path(tmp)
+            child = RemoteProcess(root, [str(PRODUCT), "--dotdir", str(root / "agent")])
+            try:
+                child.until("›".encode(), 8)
+                os.write(child.master, b"/send\r")
+                child.until(b"usage: /send PATH", 8)
+                child.output.clear()
+                for command in (b"/upload", b"/download missing", b"/receive extra",
+                                b"/send-more", b"/sendfile"):
+                    os.write(child.master, command + b"\r")
+                    child.until(b"unknown slash command", 8)
+                    child.output.clear()
+                os.write(child.master, b"/help\r")
+                output = child.until(b"/receive", 8)
+                output = child.until(b"/send PATH", 8)
+                self.assertNotIn(b"/upload", output)
+                self.assertNotIn(b"/download", output)
+                os.write(child.master, b"/exit\r")
+                child.wait(0)
+            finally:
+                child.close()
+
     def test_resize_reaches_child_pty(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-resize-") as tmp:
             code = ("import fcntl,os,signal,struct,termios,time; "
@@ -97,7 +121,7 @@ class RemoteStartupTests(unittest.TestCase):
             child = RemoteProcess(root, [str(PRODUCT), "--dotdir", str(root / "agent")])
             try:
                 child.until("›".encode(), 8)
-                os.write(child.master, b"/upload\r")
+                os.write(child.master, b"/receive\r")
                 child.until(b"Select local file", 8)
                 os.write(child.master, b"\x03")
                 child.until(b"Upload cancelled", 8)
@@ -144,7 +168,7 @@ class RemoteStartupTests(unittest.TestCase):
                     self.assertFalse(inner_destination.exists())
                     upload = home / "workstation-upload.bin"
                     upload.write_bytes(os.urandom(16384))
-                    os.write(child.master, b"/upload\r")
+                    os.write(child.master, b"/receive\r")
                     child.until(b"Select local file", 8)
                     os.write(child.master, str(upload).encode() + b"\r")
                     child.until(b"1 unsent attachment(s)", 12)
@@ -181,7 +205,7 @@ class RemoteStartupTests(unittest.TestCase):
                 wrapped=None, extra_env=env)
             try:
                 child.until("›".encode(), 8)
-                os.write(child.master, f"/download {source}\r".encode())
+                os.write(child.master, f"/send {source}\r".encode())
                 target = home / "Downloads" / source.name
                 child.until(str(target).encode(), 12)
                 self.assertEqual(target.read_bytes(), source.read_bytes())
@@ -261,7 +285,7 @@ class RemoteStartupTests(unittest.TestCase):
                 "remote-test", str(server), str(PRODUCT), str(dotdir)])
             try:
                 child.until("›".encode(), 8)
-                os.write(child.master, f"/download {server / 'résumé file.bin'}\r".encode())
+                os.write(child.master, f"/send {server / 'résumé file.bin'}\r".encode())
                 target = home / "Downloads" / "résumé file.bin"
                 child.until(str(target).encode(), 12)
                 self.assertEqual(target.read_bytes(), data)
@@ -285,7 +309,7 @@ class RemoteStartupTests(unittest.TestCase):
             child = RemoteProcess(home, [str(PRODUCT), "--dotdir", str(dotdir)])
             try:
                 child.until("›".encode(), 8)
-                os.write(child.master, b"/upload\r")
+                os.write(child.master, b"/receive\r")
                 child.until(b"Select local file", 8)
                 os.write(child.master, f"{source}\r".encode())
                 child.until(b"1 unsent attachment(s)", 12)
@@ -314,7 +338,7 @@ class RemoteStartupTests(unittest.TestCase):
                                         "--dotdir", str(root / "remote-session")])
             try:
                 child.until("›".encode(), 8)
-                os.write(child.master, f"/download {source}\r".encode())
+                os.write(child.master, f"/send {source}\r".encode())
                 child.until(b"Download completed:", 12)
                 self.assertEqual((destination / source.name).read_bytes(), b"preserve")
                 landed = [p for p in destination.iterdir() if p.name != source.name]

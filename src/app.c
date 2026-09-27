@@ -156,7 +156,8 @@ static const struct snag_term_command commands[] = {
     {"/status", "session and next-turn settings"},
     {"/history [N]", "show N retained turns; default 1, 0 counts only"},
     {"/cat PATH", "open a local file in the configured pager"},
-    {"/download PATH", "send one file to the workstation through trzsz"},
+    {"/receive", "receive workstation files as unsent attachments"},
+    {"/send PATH", "send one file to the workstation through trzsz"},
     {"/model [list|cache]", "list cached models; cache refreshes all providers"},
     {"/model [#]N [save|s]", "select numbered model/effort row (N starts at 1)"},
     {"/model MODEL[/EFFORT] [save|s]", "select on the next-turn provider"},
@@ -2649,7 +2650,7 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         rc = snag_app_audio_command(app, line, handled);
         if (*handled) return rc;
         if ((app->audio || app->voice) &&
-            (!strncmp(line, "/attach", 7u) || !strcmp(line, "/upload"))) {
+            (!strncmp(line, "/attach", 7u) || !strcmp(line, "/receive"))) {
             *handled = true;
             return app_error(app, "Stop local audio before preparing an attachment.");
         }
@@ -2704,17 +2705,17 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
     }
     if (strncmp(line, "/cat", 4u) == 0 && (!line[4] || isspace((unsigned char)line[4])))
         return page_local_file(app, line + 4u);
-    if (!strncmp(line, "/download", 9u) && (!line[9] || isspace((unsigned char)line[9]))) {
-        const char *path = line + 9u;
+    if (!strncmp(line, "/send", 5u) && (!line[5] || isspace((unsigned char)line[5]))) {
+        const char *path = line + 5u;
         json_t *result = NULL;
         char error[256] = {0};
         while (isspace((unsigned char)*path)) ++path;
-        if (!*path) return app_error(app, "usage: /download PATH");
+        if (!*path) return app_error(app, "usage: /send PATH");
         int rc = snag_app_download(app, path, &result, error, sizeof(error));
         if (rc == 0) {
             const char *message = snag_json_string(result, "model_text");
             rc = snag_ui_text(&app->ui, (!strcmp(snag_json_string(result, "status"), "succeeded")) ?
-                SNAG_UI_HOST : SNAG_UI_ERROR, message ? message : "Download finished.");
+                SNAG_UI_HOST : SNAG_UI_ERROR, message ? message : "Send finished.");
         }
         json_decref(result);
         return rc;
@@ -2827,7 +2828,7 @@ flush_download_queue(struct app_state *app)
             rc = snag_ui_text(&app->ui,
                 !strcmp(snag_json_string(result, "status"), "succeeded") ?
                 SNAG_UI_HOST : SNAG_UI_ERROR,
-                message ? message : "Download finished.");
+                message ? message : "Send finished.");
         }
         if (rc == 0 && result &&
             !strcmp(snag_json_string(result, "status"), "succeeded")) {
