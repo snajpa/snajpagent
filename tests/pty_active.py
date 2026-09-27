@@ -367,9 +367,13 @@ def test_session_list_keeps_live_owner():
             assert first_id.encode() in output, output
             assert second_id[:8].encode() in output, output
             assert stopped_id[:8].encode() not in output, output
-            output = query(first, b"/session list", b"saved sessions:")
-            for identity in (first_id, second_id, stopped_id):
-                assert identity[:8].encode() in output, output
+            for command in (b"/session list", b"/session l", b"/s list", b"/s l"):
+                output = query(first, command, b"saved sessions:")
+                for identity in (first_id, second_id, stopped_id):
+                    assert identity[:8].encode() in output, output
+            output = query(first, b"/s", b"running sessions:")
+            assert first_id.encode() in output and second_id[:8].encode() in output, output
+            assert stopped_id[:8].encode() not in output, output
             for identity in (first_id, second_id):
                 with open(Path(DOTDIR) / "sessions" / identity / "lock", "r+b") as lock:
                     try:
@@ -379,6 +383,7 @@ def test_session_list_keeps_live_owner():
                     else:
                         raise AssertionError("session listing released its live owner's lock")
             query(first, b"/session invalid", b"usage: /session")
+            query(first, b"/s invalid", b"usage: /session")
             first.send_wait(b"terminal_status\r", DEFAULT_ACTIVE_PROMPT)
             output = query(first, b"/session", b"running sessions:")
             assert first_id.encode() in output, output
@@ -3083,12 +3088,71 @@ def test_help_plain_terminal():
             text = bytes(child.buf[start:])
             assert b"[optional]" in text and b"/state goal [set] TEXT" in text
             assert b"\x1b" not in text
+            if command != b"/goal help\r":
+                for heading in HELP_SECTIONS:
+                    assert heading in text, text
+                assert b"/receive" in text and b"/send PATH" in text
+                assert b"/download" not in text
         child.exit_now(expect_resume=False)
         assert session_ids() == child.sessions_before
 
 
+HELP_SECTIONS = (
+    b"Help and settings", b"Models and context", b"Goals and queued work",
+    b"Session history", b"Files and media", b"Network chat", b"Keyboard",
+)
+
+
+def test_help_pager():
+    root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
+    capture = root / "help-pager.txt"
+    pager = root / "help-pager.sh"
+    pager.write_text(
+        '#!/bin/sh\ncat "$1" > "$HELP_CAPTURE"\nprintf "help-pager-ready\\n"\n'
+        'read -r answer < /dev/tty\n'
+    )
+    pager.chmod(0o700)
+    env = dict(os.environ, PAGER=str(pager), HELP_CAPTURE=str(capture))
+    with Child([], ready=DEFAULT_IDLE_PROMPT, env=env) as child:
+        for command in (b"/help\r", b"/?\r", b"/goal help\r"):
+            start = len(child.buf)
+            child.send(command)
+            end = child.wait(b"help-pager-ready", start=start)
+            text = capture.read_bytes()
+            assert b"\x1b" not in text, text
+            assert b"/state goal [set] TEXT" in text, text
+            if command == b"/goal help\r":
+                assert b"/send PATH" not in text, text
+            else:
+                for heading in HELP_SECTIONS:
+                    assert heading in text, text
+                assert text.count(b"/send PATH") == 1, text
+            assert b"/state goal [set] TEXT" not in child.buf[start:], child.buf[start:]
+            child.send(b"\r")
+            child.wait_idle_prompt(start=end)
+        child.send_wait_idle(b"ping\r", b"pong")
+        child.exit_now()
+
+
+def test_help_pager_fallback():
+    root = Path(os.environ["SNAJPAGENT_TEST_ROOT"])
+    config = write_config("help-pager-off.ini", "[provider openai]\n[ui]\npager = off\n")
+    for args, pager in ((["--config", str(config)], "false"),
+                        ([], str(root / "missing-pager"))):
+        with Child(args, ready=DEFAULT_IDLE_PROMPT,
+                   env=dict(os.environ, PAGER=pager)) as child:
+            start = len(child.buf)
+            child.send(b"/help\r")
+            child.wait(b"Full reference:", start=start)
+            child.wait_idle_prompt(start=start)
+            text = bytes(child.buf[start:])
+            assert b"Models and context" in text and b"/send PATH" in text, text
+            child.exit_now(expect_resume=False)
+            assert session_ids() == child.sessions_before
+
+
 def test_command_name_completion():
-    child = Child([], PROMPT.rstrip(), env=dict(os.environ, EDITOR="true"))
+    child = Child([], PROMPT.rstrip(), env=dict(os.environ, EDITOR="true", PAGER=""))
 
     start = len(child.buf)
     end = child.send_wait(b"/he\t", b"lp", start=start)
@@ -6209,6 +6273,8 @@ if __name__ == "__main__":
     test_preferences_and_verbosity()
     test_runtime_verbosity_resume()
     test_help_plain_terminal()
+    test_help_pager()
+    test_help_pager_fallback()
     test_command_name_completion()
     test_uncached_typed_model_selection()
     test_provider_login_and_first_run()

@@ -153,24 +153,22 @@ graph_outcome_name(enum snag_graph_outcome outcome)
     return "unknown";
 }
 static const struct snag_term_command commands[] = {
-    {"/help", "commands and keys (alias /?)"}, {"/?", "same as /help"},
+    {"/help", "commands and keys (alias /?)"},
+    {"/?", "same as /help"},
     {"/status", "session and next-turn settings"},
-    {"/session", "current session ID and running sessions"},
-    {"/session list", "all saved sessions and their live state"},
-    {"/history [N]", "show N retained turns; default 1, 0 counts only"},
-    {"/cat PATH", "open a local file in the configured pager"},
-    {"/receive", "receive workstation files as unsent attachments"},
-    {"/send PATH", "send one file to the workstation through trzsz"},
+    {"/config", "edit/reload configuration at a safe boundary"},
+    {"/verbose [0..6]", "show/set verbosity for this process"},
+    {"/banner [TEXT|clear]", "show/set session banner echoed in later requests"},
     {"/model [list|cache]", "list cached models; cache refreshes all providers"},
     {"/model [#]N [save|s]", "select numbered model/effort row (N starts at 1)"},
     {"/model MODEL[/EFFORT] [save|s]", "select on the next-turn provider"},
     {"/model PROVIDER/MODEL/EFFORT [save|s]", "select explicit provider/model/effort"},
-    {"/config", "edit/reload configuration at a safe boundary"},
     {"/effort [LEVEL]", "show/set provider-defined effort (default means medium)"},
     {"/context", "show the context window, its reserve and compaction budget"},
     {"/context default", "use the provider's normal working window"},
     {"/context max", "use the advertised maximum context"},
     {"/context N", "use an explicit token window (N tokens)"},
+    {"/compact", "compact context at a safe request boundary"},
     {"/state", "session state including goal and its actions"},
     {"/state goal [status|help]", "show goal section or this usage"},
     {"/state goal [set] TEXT", "start/reword goal; set accepts reserved first words"},
@@ -180,8 +178,8 @@ static const struct snag_term_command commands[] = {
     {"/state goal complete|cancel|clear", "end goal; clear=cancel; current turn finishes"},
     {"/goal ...", "alias for /state goal ..."},
     {"/ro QUERY", "one read-only turn; queued during active work"},
-    {"/verbose [0..6]", "show/set verbosity for this process"},
-    {"/queue [TEXT]", "list/add future turns (alias /q)"}, {"/queue clear|c", "remove all queued turns"},
+    {"/queue [TEXT]", "list/add future turns (alias /q)"},
+    {"/queue clear|c", "remove all queued turns"},
     {"/queue pop|p", "remove newest queued turn"},
     {"/queue N delete|d", "remove queued turn N (N starts at 1)"},
     {"/queue N edit|e", "edit queued turn N in the composer"},
@@ -189,30 +187,36 @@ static const struct snag_term_command commands[] = {
     {"/next", "run oldest paused turn; arm queue if active"},
     {"/retry", "retry failed turn; if active, restart at a safe boundary"},
     {"/yield", "return tool wait to model; keep running processes"},
+    {"/session", "current session ID and running sessions"},
+    {"/session list|l", "all saved sessions and their live state"},
+    {"/s [list|l]", "alias for /session [list|l]"},
+    {"/history [N]", "show N retained turns; default 1, 0 counts only"},
     {"/archive", "archive at a safe boundary and exit"},
-    {"/compact", "compact context at a safe request boundary"},
     {"/delete", "delete after confirmation at a safe boundary"},
     {"/exit", "stop work, preserve session and exit"},
+    {"/cat PATH", "open a local file in the configured pager"},
+    {"/receive", "receive workstation files as unsent attachments"},
+    {"/send PATH", "send one file to the workstation through trzsz"},
     {"/attach PATH", "prepare an image or retain a media/document file for the next private input"},
+    {"/attachments", "list unsent attachments"},
+    {"/detach N|all", "remove unsent attachments"},
     {"/dictate", "capture up to 60s; Enter finishes, Escape cancels; insert transcript into draft"},
     {"/voice on", "start explicit live voice using the configured API route"},
     {"/voice off", "close voice; coding work keeps its existing owner"},
     {"/voice mute", "stop microphone forwarding; /voice unmute resumes fresh audio"},
     {"/voice devices", "list exact capture and playback device names"},
     {"/play asset:ID", "play the first 60s of an accepted audio asset; /play stop interrupts"},
-    {"/attachments", "list unsent attachments"},
-    {"/detach N|all", "remove unsent attachments"},
     {"/chat", "show IRC room activity"},
     {"/rollout", "show local model activity"},
     {"/topic [TEXT]", "show/set selected room topic"},
     {"/nick [NICK]", "show/set agent nick (shared via IRC)"},
     {"/steering [mentions|all|clear]", "show/set steering admission for next turn"},
-    {"/banner [TEXT|clear]", "show/set session banner echoed in later requests"},
     {"/names", "numbered destinations, members and modes"},
     {"/server [start [ENDPOINT]|stop]", "show/start/stop hosting; default localhost:6667"},
     {"/connect [ENDPOINT]", "add outgoing connection; default localhost:6667"},
     {"/disconnect [ENDPOINT]", "remove one/all outgoing connections; keep hosting"},
-    {"/N [TEXT]", "select destination N, or send there once"}, {"/all TEXT", "send once to all destinations"}
+    {"/N [TEXT]", "select destination N, or send there once"},
+    {"/all TEXT", "send once to all destinations"},
 };
 
 static size_t
@@ -1130,23 +1134,38 @@ render_status(struct app_state *app)
 out: snag_buf_free(&text);
     return rc;
 }
+static bool page_reference(struct app_state *app, const char *text, size_t length);
+
 int
 snag_app_help(struct app_state *app, const char *command)
 {
     static const char legend[] = "Syntax: [optional], A|B alternatives, UPPERCASE values.\n";
     static const char settings[] =
-        "\nModel/effort: next full turn onward, until changed; save (s) also writes config.\n"
+        "\nNotes\n"
+        "Model/effort: next full turn onward, until changed; save (s) also writes config.\n"
         "Omitted model effort: highest cached effort/default, then current effort.\n"
         "ENDPOINT: host[:port] or [IPv6][:port]; IPv6 brackets literal; port 6667.\n"
         "Queue: idle adds paused; active adds armed; N is the displayed position.\n"
         "Queue TEXT may begin /ro for read-only work; //TEXT escapes a leading slash.\n";
-    static const char keys[] = "\nKeys: blank Enter new prompt; Enter submit/steer (chat: send).\n"
+    static const char keys[] = "\nKeyboard\n"
+        "Keys: blank Enter new prompt; Enter submit/steer (chat: send).\n"
         "Empty Tab switch view; Tab complete/indent/queue (chat: @nick).\n"
         "Ctrl-C cancel draft or interrupt; empty Ctrl-D exit, otherwise delete.\n"
         "Ctrl-J newline; Up/Down history; Ctrl-R search; Ctrl-L redraw.\n"
-        "\nVerbosity: 0 conversation; 1 tool rows; 2 previews; 3 retained tools;\n"
+        "Verbosity: 0 conversation; 1 tool rows; 2 previews; 3 retained tools;\n"
         "4 debug; 5 redacted protocol; 6 wire. Traces appear in rollout.\n"
         "Full reference: man snajpagent (snajpagent --help).\n";
+    static const struct {
+        const char *first;
+        const char *title;
+    } sections[] = {
+        {"/help", "Help and settings"},
+        {"/model [list|cache]", "Models and context"},
+        {"/state", "Goals and queued work"},
+        {"/session", "Session history"},
+        {"/cat PATH", "Files and media"},
+        {"/chat", "Network chat"},
+    };
     struct snag_buf text = {.max = 64u * 1024u};
     size_t prefix = command ? strlen(command) : 0u;
     int rc = -1;
@@ -1155,12 +1174,19 @@ snag_app_help(struct app_state *app, const char *command)
     for (size_t i = 0u; i < command_count(); ++i) {
         if (command && (strncmp(commands[i].syntax, command, prefix) ||
                         (commands[i].syntax[prefix] && commands[i].syntax[prefix] != ' '))) continue;
+        if (!command) {
+            for (size_t j = 0u; j < sizeof(sections) / sizeof(sections[0]); ++j) {
+                if (!strcmp(commands[i].syntax, sections[j].first) &&
+                    snag_buf_printf(&text, "\n%s\n", sections[j].title) < 0) goto out;
+            }
+        }
         if (snag_buf_printf(&text, "%s — %s\n", commands[i].syntax, commands[i].description) < 0) goto out;
     }
     if (!command && (snag_buf_append(&text, settings, sizeof(settings) - 1u) < 0 ||
                      snag_buf_append(&text, keys, sizeof(keys) - 1u) < 0)) goto out;
     if (snag_buf_terminate(&text) < 0) goto out;
-    rc = snag_ui_text(&app->ui, SNAG_UI_HELP, (const char *)text.data);
+    rc = page_reference(app, (const char *)text.data, text.len) ? 0 :
+        snag_ui_text(&app->ui, SNAG_UI_HELP, (const char *)text.data);
 out: snag_buf_free(&text);
     return rc;
 }
@@ -1293,7 +1319,7 @@ append_model_row(void *opaque, size_t index, const char *provider, const char *m
 
 static void service_external(void *opaque);
 
-/* The configured pager command, or NULL to print the catalogue directly. */
+/* The configured pager command, or NULL for direct reference display. */
 static const char *
 pager_command(const struct app_state *app)
 {
@@ -1407,10 +1433,9 @@ out:
     return rc;
 }
 
-/* Page the catalogue when it has a terminal and a configured pager; false
- * leaves direct display to the caller. */
+/* Reference text shares terminal ownership and fallback with the model catalogue. */
 static bool
-page_model_catalog(struct app_state *app, const char *text, size_t length)
+page_reference(struct app_state *app, const char *text, size_t length)
 {
     const char *command = pager_command(app);
     char error[256] = {0};
@@ -1474,7 +1499,7 @@ render_model_catalog(struct app_state *app)
     cache_timestamp(timestamp, sizeof(timestamp), app->model_cache.updated_at_ms);
     if (snag_buf_printf(&text, "\ncache updated: %s", timestamp) < 0) goto out;
     if (snag_buf_terminate(&text) < 0) goto out;
-    if (page_model_catalog(app, (const char *)text.data, text.len))
+    if (page_reference(app, (const char *)text.data, text.len))
         rc = 0;
     else
         rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
@@ -2702,14 +2727,16 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         return app_textf(app, SNAG_UI_HOST, "Operator requested tool yield; returning control to the model.");
     }
     if (strcmp(line, "/status") == 0) return render_status(app);
-    if (!strncmp(line, "/session", 8u) && (!line[8] || isspace((unsigned char)line[8]))) {
-        const char *argument = line + 8u;
+    if ((!strncmp(line, "/session", 8u) && (!line[8] || isspace((unsigned char)line[8]))) ||
+        (!strncmp(line, "/s", 2u) && (!line[2] || isspace((unsigned char)line[2])))) {
+        const char *argument = line + (line[2] == 'e' ? 8u : 2u);
         char error[256] = {0};
         while (isspace((unsigned char)*argument)) ++argument;
         size_t len = strlen(argument);
         while (len && isspace((unsigned char)argument[len - 1u])) --len;
-        if (len && (len != 4u || strncmp(argument, "list", 4u)))
-            return app_error(app, "usage: /session [list]");
+        if (len && !(len == 1u && argument[0] == 'l') &&
+            (len != 4u || strncmp(argument, "list", 4u)))
+            return app_error(app, "usage: /session [list|l] (alias /s)");
         if (app_textf(app, SNAG_UI_HOST, "current session: %s%s\n%s sessions:",
                       app->session.id, app->session.pending_log ? " (not yet saved)" : "",
                       len ? "saved" : "running") < 0) return -1;

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Group interactive help by topic and show it through the configured pager.
+  Direct output uses ordinary text with bold headings. Add `/s` and session
+  `list|l` shortcuts.
+
 - Keep context meters and requests on the session's in-memory model catalog.
   Model listings load changed cache files; ordinary accounting updates only its
   own observations, preserving model selections across another session's refresh.

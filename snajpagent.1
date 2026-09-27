@@ -1430,10 +1430,15 @@ acknowledgement follows event-log acceptance.
 .SS Session and model
 .TP
 .BR /help , " /?"
-Show concise syntax, aliases, defaults and essential keys for all commands.
+Show commands grouped by settings, models/context, goals/queue, sessions,
+files/media and network chat, followed by usage notes and essential keys.
 Square brackets mark optional parts, a vertical bar separates alternatives,
 and uppercase words are values to supply. Required goal and queue subcommands
-are listed explicitly. Long help lines wrap at word boundaries.
+are listed explicitly. Interactive help uses the configured
+.BR pager ;
+when paging is disabled, unavailable or fails, it prints directly with ordinary
+foreground text and bold section headings where color is enabled. Long lines
+wrap at word boundaries. Pager text and redirected output are plain text.
 .B /state goal help
 shows the same goal forms separately.
 .B /goal
@@ -1444,11 +1449,11 @@ is an alias for
 Show session, selection, queue, verbosity, capacity, token accounting, requested
 network roles and actual connection state.
 .TP
-.B /session
+.BR /session , " /s"
 Print the full current session ID followed by running sessions. A new unsaved
 session is identified as not yet saved; listing does not start a model turn.
 .TP
-.B /session list
+.BR "/session list" , " /session l" , " /s list" , " /s l"
 Print the current session ID and all saved sessions, including archived ones,
 with their live or idle state. This does not attach to or resume a session.
 .TP
@@ -2677,13 +2682,13 @@ also restores its room history.
 Output pause after an input edit, 0 through 5000.  Default: 500.
 .TP
 .B pager
-Model-catalogue and /cat paging:
+Help, model-catalogue and /cat paging:
 .B on
 (the default) runs
 .B $PAGER
-when the catalogue is displayed on a terminal and the variable is set;
+when reference text is displayed on a terminal and the variable is set;
 .B off
-prints the catalogue directly and disables /cat; any other value is a command template.  A
+prints help and catalogues directly and disables /cat; any other value is a command template.  A
 template may contain
 .B %s
 where the quoted file path goes; without it the path is appended.  Listings

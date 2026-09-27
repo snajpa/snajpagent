@@ -1339,6 +1339,24 @@ test_banner_word_layout(void)
 }
 
 static void
+test_help_emphasis(void)
+{
+    const char *help = "\nSession history\n/session — current session\n";
+    struct snag_render render;
+    struct snag_term term;
+    char output[1024];
+    struct output_capture capture = capture_terminal(&render, &term, 80u, false, true);
+    snag_render_set_color(&render, SNAG_COLOR_ALWAYS);
+    assert(snag_render_help(&render, help) == 0);
+    assert(capture_close(&capture, output, sizeof(output), 0u) > 0u);
+    assert(strstr(output, "\033[34m") == NULL);
+    assert(strstr(output, "\033[1mSession history\n\033[0m"));
+    assert(strstr(output, "/session — current session\n"));
+    snag_render_free(&render);
+    snag_term_close(&term);
+}
+
+static void
 test_help_layout(void)
 {
     const char *help = "/goal pause|resume — automatic continuation\n";
@@ -3116,6 +3134,7 @@ main(void)
     test_markdown_fences();
     test_banner_word_layout();
     test_help_layout();
+    test_help_emphasis();
     test_update_banner();
     test_wrapped_markdown_tables();
     test_markdown_tables();

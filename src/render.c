@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #define COLOR_RESET "\033[0m"
+#define COLOR_HEADING "\033[1m"
 #define COLOR_META "\033[2m"
 #define COLOR_AGENT "\033[1;36m"
 #define COLOR_OPERATOR "\033[1;35m"
@@ -2877,7 +2878,27 @@ int
 snag_render_help(struct snag_render *render, const char *text)
 {
     size_t len = strlen(text);
-    return write_banner(render, BOUNDARY_CONTENT, COLOR_HOST, text, len, len);
+    if (!render->stderr_terminal || !render->color_stderr)
+        return write_banner(render, BOUNDARY_CONTENT, COLOR_RESET, text, len, 0u);
+
+    bool section = false;
+    int rc = 0;
+    if (output_begin(render) < 0) return -1;
+    while (len) {
+        const char *newline = memchr(text, '\n', len);
+        size_t amount = newline ? (size_t)(newline - text) + 1u : len;
+        bool blank = amount == 1u && text[0] == '\n';
+        rc = write_banner(render, BOUNDARY_CONTENT, COLOR_HEADING, text, amount,
+                          section && !blank ? amount : 0u);
+        if (rc < 0) break;
+        section = blank;
+        text += amount;
+        len -= amount;
+    }
+    int saved = errno;
+    if (output_end(render) < 0 && rc == 0) return -1;
+    errno = saved;
+    return rc;
 }
 
 int

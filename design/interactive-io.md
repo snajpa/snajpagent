@@ -139,9 +139,14 @@ owners. Ctrl-J remains newline insertion, and nonempty Enter keeps its normal
 submission/steering/chat behavior. Continuing work requires explicit text.
 
 The command/completion table lists each accepted syntax form with a short
-explanation. `/help` shows that table with a required/optional notation legend;
+explanation. `/help` groups that table by topic with a required/optional legend;
 `/goal help` selects its goal rows from the same owner. Completion deduplicates
-repeated command tokens and retains aliases. Help uses the existing terminal
+repeated command tokens and retains aliases. Help shares the model catalogue's
+configured pager and external-terminal handoff; pager-off, missing pager and
+failed pager fall back to direct output. Generated pager text is plain text.
+Direct help uses ordinary foreground text and bold headings where enabled,
+batched into one output transaction. `/s` aliases `/session`, and `l` aliases
+its `list` subcommand. Help uses the existing terminal
 word layout through a presentation operation, preserving the active draft,
 streaming Markdown state and redirected bytes. Other host/status output keeps
 its existing formatting. Interactive model syntax documents its own parser:
