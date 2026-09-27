@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Keep context meters and requests on the session's in-memory model catalog.
+  Model listings load changed cache files; ordinary accounting updates only its
+  own observations, preserving model selections across another session's refresh.
+
 - Resume checkpoints written before the download outbox was introduced, and
   keep replayed outbox changes separate from the saved checkpoint state.
 

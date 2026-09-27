@@ -3823,9 +3823,47 @@ static void test_voice_captions(void)
     voice_end(voice,&f);
 }
 
+static void
+test_context_preview_retains_catalog(void)
+{
+    struct app_state app = {0};
+    struct snag_config config;
+    struct snag_model_capacity capacity;
+    struct snag_context_choice choice = {SNAG_CONTEXT_MODE_DEFAULT, 0u};
+    char error[256] = {0};
+
+    snag_config_init(&config);
+    snag_store_init(&app.store);
+    app.config = &config;
+    const struct snag_provider_config *provider = &config.providers[0];
+    json_t *limits = json_pack("{s:n,s:n,s:n,s:n,s:n,s:i,s:n}",
+        "auto_compact_input_tokens", "context_window_tokens", "effective_context_window_percent",
+        "input_context_window_tokens", "max_context_window_tokens", "max_input_tokens", 258400,
+        "max_output_tokens");
+    assert(limits);
+    app.model_cache.providers = json_pack("[{s:s,s:s,s:s,s:[{s:s,s:o,s:s,s:i}]}]",
+        "name", provider->name, "base_url", provider->base_url,
+        "protocol", snag_provider_catalog_protocol(provider), "models",
+        "id", "catalog-test", "limits", limits, "count_capability", "unknown",
+        "observed_hard_input_tokens", 0);
+    assert(app.model_cache.providers);
+    json_t *original = app.model_cache.providers;
+
+    /* A preview must work without access to the on-disk catalog at all. */
+    for (unsigned int i = 0u; i < 3u; ++i) {
+        assert(snag_app_context_preview(&app, provider, "catalog-test", &choice,
+            &capacity, error, sizeof(error)) == 0);
+        assert(capacity.hard_input_known && capacity.hard_input_tokens == 258400u);
+        assert(app.model_cache.providers == original);
+    }
+    snag_model_cache_free(&app.model_cache);
+    snag_config_free(&config);
+}
+
 int
 main(void)
 {
+    test_context_preview_retains_catalog();
     /* Every fixture is a forked copy of this process and is stopped with
      * SIGTERM: install the handler before the first fork so all of them
      * inherit it, whatever path starts them, and exit with status 0. */

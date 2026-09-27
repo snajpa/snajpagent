@@ -307,11 +307,6 @@ snag_app_context_preview(struct app_state *app, const struct snag_provider_confi
 
     if (!app || !provider || !model || !choice || !capacity)
         return snag_fail(error, error_size, EINVAL, "invalid model capacity selection");
-    snag_model_cache_free(&app->model_cache);
-    app->capacity_cache_error[0] = '\0';
-    cache_rc = snag_model_cache_load(&app->store, &app->model_cache, app->capacity_cache_error,
-                                    sizeof(app->capacity_cache_error));
-    if (cache_rc == 1) app->capacity_cache_error[0] = '\0';
     cache_rc = snag_model_capacity_resolve(&app->model_cache, app->config,
         provider, model, snag_provider_catalog_protocol(provider), choice, capacity, error, error_size);
     if (cache_rc == 0) apply_capacity_ceiling(app, provider, model, capacity);
@@ -1218,6 +1213,7 @@ refresh_model_cache(struct app_state *app, char *error, size_t error_size)
     }
     if (snag_model_cache_replace(&app->store, providers, snag_time_ms(),
                                 &app->model_cache, error, error_size) < 0) goto out;
+    app->capacity_cache_error[0] = '\0';
     rc = 0;
 out: json_decref(providers);
     app->applying_controls = applying;
@@ -1229,8 +1225,10 @@ load_model_cache(struct app_state *app, bool refresh, char *error, size_t error_
 {
     int rc;
     if (refresh) return refresh_model_cache(app, error, error_size);
-    rc = snag_model_cache_load(&app->store, &app->model_cache, error, error_size);
+    rc = snag_model_cache_reload_if_changed(&app->store, &app->model_cache, error, error_size);
+    if (rc == 0) app->capacity_cache_error[0] = '\0';
     if (rc == 1) {
+        if (app->model_cache.providers) return 0;
         for (size_t i = 0; i < app->config->provider_count; ++i)
             if (app->config->providers[i].model_count)
                 return 0; /* Configured models do not require discovery. */
@@ -1645,8 +1643,8 @@ select_typed_model(struct app_state *app, char *value, bool save)
     {
         char ignored[256] = {0};
         const json_t *cached = NULL;
-        if (snag_model_cache_load(&app->store, &app->model_cache, ignored, sizeof(ignored)) == 0)
-            cached = snag_model_metadata(&app->model_cache, provider, model);
+        (void)load_model_cache(app, false, ignored, sizeof(ignored));
+        cached = snag_model_metadata(&app->model_cache, provider, model);
         known_in_cache = cached != NULL;
         if (count == 1u)
             effort = snag_model_best_effort(app->config, provider->name, model, cached, resolve_effort(effort));
@@ -1750,9 +1748,7 @@ snag_app_select_model_tool(struct app_state *app, const struct snag_response_ite
     const char *selector = NULL;
     const struct snag_provider_config *fallback = next_provider(app);
     struct snag_model_selection selected = {0};
-    char load_error[256] = {0};
     struct model_tool_rows rows = {0};
-    int cache_rc;
     struct snag_buf message = {.max = SNAG_CONFIG_MODEL_MAX +
         SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_EFFORT_MAX + 128u};
 
@@ -1790,16 +1786,9 @@ snag_app_select_model_tool(struct app_state *app, const struct snag_response_ite
         snag_buf_free(&listing);
         return *result ? 0 : -1;
     }
-    cache_rc = snag_model_cache_load(&app->store, &app->model_cache,
-                                     load_error, sizeof(load_error));
-    if (cache_rc != 0) {
-        if (cache_rc == 1)
-            snag_errorf(error, error_size,
-                        "model cache is empty; use select_model selector cache to refresh");
-        else
-            snag_errorf(error, error_size,
-                        "cannot use current model cache: %s; use selector cache to refresh",
-                        load_error);
+    if (!app->model_cache.providers) {
+        snag_errorf(error, error_size,
+            "model cache is empty; use select_model selector cache to refresh");
         *result = snag_tool_result_terminal(false, error);
         return *result ? 0 : -1;
     }

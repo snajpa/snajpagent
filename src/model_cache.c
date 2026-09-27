@@ -192,9 +192,27 @@ decode_cache(const unsigned char *data, size_t len,
     return 0;
 }
 
-int
-snag_model_cache_load(struct snag_store *store, struct snag_model_cache *cache,
-                     char *error, size_t error_size)
+static bool
+same_cache_file(const snag_file_info *a, const snag_file_info *b)
+{
+    if (a->st_dev != b->st_dev || a->st_ino != b->st_ino ||
+        a->st_size != b->st_size || a->st_mtime != b->st_mtime) return false;
+#ifndef _WIN32
+    if (a->st_ctime != b->st_ctime) return false;
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    if (a->st_mtimespec.tv_nsec != b->st_mtimespec.tv_nsec ||
+        a->st_ctimespec.tv_nsec != b->st_ctimespec.tv_nsec) return false;
+#else
+    if (a->st_mtim.tv_nsec != b->st_mtim.tv_nsec ||
+        a->st_ctim.tv_nsec != b->st_ctim.tv_nsec) return false;
+#endif
+#endif
+    return true;
+}
+
+static int
+load_cache(struct snag_store *store, struct snag_model_cache *cache, bool only_changed,
+           char *error, size_t error_size)
 {
     snag_file_info st;
     int fd;
@@ -215,13 +233,27 @@ snag_model_cache_load(struct snag_store *store, struct snag_model_cache *cache,
             "model cache must be a private user-owned regular file no larger than 8 MiB");
         goto out;
     }
+    if (only_changed && cache->loaded_file_valid && same_cache_file(&cache->loaded_file, &st)) {
+        rc = 0;
+        goto out;
+    }
     int read_rc = snag_buf_read(&data, fd);
     if (read_rc < 0) {
         snag_errorf(error, error_size, read_rc == -2 ? "model cache exceeds 8 MiB" :
                     "cannot read model cache: %s", strerror(errno));
         goto out;
     }
+    snag_file_info after;
+    if (snag_fstat(fd, &after) < 0 || !same_cache_file(&st, &after)) {
+        (void)snag_fail(error, error_size, ESTALE,
+            "model cache changed while reading; retry /model");
+        goto out;
+    }
     rc = decode_cache(data.data, data.len, cache, error, error_size);
+    if (rc == 0) {
+        cache->loaded_file = st;
+        cache->loaded_file_valid = true;
+    }
 out:
     {
         int saved = errno;
@@ -230,6 +262,20 @@ out:
         errno = saved;
     }
     return rc;
+}
+
+int
+snag_model_cache_load(struct snag_store *store, struct snag_model_cache *cache,
+                      char *error, size_t error_size)
+{
+    return load_cache(store, cache, false, error, error_size);
+}
+
+int
+snag_model_cache_reload_if_changed(struct snag_store *store, struct snag_model_cache *cache,
+                                  char *error, size_t error_size)
+{
+    return load_cache(store, cache, true, error, error_size);
 }
 
 static int
@@ -281,16 +327,12 @@ write_cache(struct snag_store *store, const json_t *providers,
         snag_errorf(error, error_size, "cannot create model cache: %s", strerror(errno));
         goto out;
     }
-    if (snag_write_full(fd, data.data, data.len) < 0 || snag_sync_file(fd) < 0) {
+    snag_file_info written;
+    if (snag_write_full(fd, data.data, data.len) < 0 || snag_sync_file(fd) < 0 ||
+        snag_fstat(fd, &written) < 0) {
         snag_errorf(error, error_size, "cannot write model cache: %s", strerror(errno));
         goto out;
     }
-    if (close(fd) < 0) {
-        fd = -1;
-        snag_errorf(error, error_size, "cannot close model cache: %s", strerror(errno));
-        goto out;
-    }
-    fd = -1;
     if (snag_rename_at(store->root_fd, tmp_name, store->root_fd, "models.json") < 0) {
         snag_errorf(error, error_size, "cannot install model cache: %s", strerror(errno));
         goto out;
@@ -300,11 +342,23 @@ write_cache(struct snag_store *store, const json_t *providers,
         snag_errorf(error, error_size, "cannot sync model cache directory: %s", strerror(errno));
         goto out;
     }
+    if (snag_fstat(fd, &written) < 0) {
+        snag_errorf(error, error_size, "cannot stat model cache: %s", strerror(errno));
+        goto out;
+    }
+    if (close(fd) < 0) {
+        fd = -1;
+        snag_errorf(error, error_size, "cannot close model cache: %s", strerror(errno));
+        goto out;
+    }
+    fd = -1;
     /* Keep one reference after the root object releases its reference. */
     json_incref((json_t *)providers);
     snag_model_cache_free(cache);
     cache->providers = (json_t *)providers;
     cache->updated_at_ms = updated_at_ms;
+    cache->loaded_file = written;
+    cache->loaded_file_valid = true;
     rc = 0;
 out: saved = errno;
     if (fd >= 0) (void)close(fd);
@@ -376,62 +430,86 @@ out: json_decref(prepared);
     return rc;
 }
 
+static json_t *
+bound_model(struct snag_model_cache *cache, const struct snag_provider_config *provider,
+            const char *protocol, const char *model)
+{
+    const json_t *source = provider_entry(cache->providers, provider->name);
+
+    if (!source || strcmp(snag_json_string(source, "base_url"), provider->base_url) ||
+        strcmp(snag_json_string(source, "protocol"), protocol)) return NULL;
+    return (json_t *)snag_model_cache_find(cache, provider->name, model);
+}
+
+static int
+record_observation(json_t *item, enum snag_count_capability capability,
+                   uint64_t hard_input_tokens, bool apply)
+{
+    const char *next = capability == SNAG_COUNT_SUPPORTED ? "supported" : "unsupported";
+    bool count_changed = capability != SNAG_COUNT_UNKNOWN &&
+        strcmp(snag_json_string(item, "count_capability"), next) != 0;
+    uint64_t value = 0u;
+
+    (void)snag_json_integer_u64(item, "observed_hard_input_tokens", &value);
+    bool limit_changed = hard_input_tokens && (!value || hard_input_tokens < value);
+    if (!count_changed && !limit_changed) return 0;
+    if (!apply) return 1;
+    if (count_changed && json_object_set_new(item, "count_capability", json_string(next)) < 0) {
+        return -1;
+    }
+    if (limit_changed && json_object_set_new(item, "observed_hard_input_tokens",
+            json_integer((json_int_t)hard_input_tokens)) < 0) return -1;
+    return 1;
+}
+
 int
 snag_model_cache_record(struct snag_store *store, struct snag_model_cache *cache,
-                       const struct snag_provider_config *provider, const char *protocol, const char *model,
-                       enum snag_count_capability capability, uint64_t hard_input_tokens,
-                       char *error, size_t error_size)
+                       const struct snag_provider_config *provider, const char *protocol,
+                       const char *model, enum snag_count_capability capability,
+                       uint64_t hard_input_tokens, char *error, size_t error_size)
 {
-    struct snag_model_cache staged = {0};
-    const json_t *source;
-    const json_t *item;
-    const char *current_state;
-    const char *next_state = NULL;
-    uint64_t value = 0u;
-    bool capability_changed;
-    bool hard_limit_changed;
-    int lock_fd;
-    int rc = 1;
-
     if (!store || !cache || !provider || !protocol || !model || !*model ||
         capability > SNAG_COUNT_UNSUPPORTED || hard_input_tokens > SNAG_CONFIG_TOKEN_LIMIT_MAX ||
-        (capability == SNAG_COUNT_UNKNOWN && !hard_input_tokens)) {
-        return snag_errno(EINVAL);
-    }
+        (capability == SNAG_COUNT_UNKNOWN && !hard_input_tokens)) return snag_errno(EINVAL);
     model = snag_config_model_upstream(provider, model);
+    json_t *item = bound_model(cache, provider, protocol, model);
+    if (!item) return 1;
+    if (!record_observation(item, capability, hard_input_tokens, false)) return 0;
+
+    /* Accounting cannot import a catalog refreshed by another running session. */
+    struct snag_model_cache staged = *cache;
+    struct snag_model_cache disk = {0};
+    int lock_fd = -1;
+    int rc = -1;
+
+    staged.providers = json_deep_copy(cache->providers);
+    if (!staged.providers) goto memory_error;
+    item = bound_model(&staged, provider, protocol, model);
+    if (record_observation(item, capability, hard_input_tokens, true) < 0) goto memory_error;
     lock_fd = lock_cache(store, error, error_size);
-    if (lock_fd < 0) return -1;
-    rc = snag_model_cache_load(store, &staged, error, error_size);
-    if (rc != 0) goto out;
-    rc = 1;
-    source = provider_entry(staged.providers, provider->name);
-    item = snag_model_cache_find(&staged, provider->name, model);
-    if (!source || strcmp(snag_json_string(source, "base_url"), provider->base_url) ||
-        strcmp(snag_json_string(source, "protocol"), protocol) || !item) goto adopt;
-    current_state = snag_json_string(item, "count_capability");
-    if (capability != SNAG_COUNT_UNKNOWN) next_state = capability == SNAG_COUNT_SUPPORTED ?
-            "supported" : "unsupported";
-    capability_changed = next_state && strcmp(current_state, next_state) != 0;
-    (void)snag_json_integer_u64(item, "observed_hard_input_tokens", &value);
-    hard_limit_changed = hard_input_tokens && (!value || hard_input_tokens < value);
-    if (!capability_changed && !hard_limit_changed) {
-        rc = 0;
-        goto adopt;
+    if (lock_fd < 0) goto out;
+    int loaded = snag_model_cache_load(store, &disk, error, error_size);
+    if (loaded < 0) goto out;
+    item = loaded == 0 ? bound_model(&disk, provider, protocol, model) : NULL;
+    if (item) {
+        int changed = record_observation(item, capability, hard_input_tokens, true);
+        if (changed < 0) goto memory_error;
+        if (changed && write_cache(store, disk.providers, disk.updated_at_ms,
+                &disk, error, error_size) < 0) goto out;
     }
-    if (capability_changed && json_object_set_new((json_t *)item, "count_capability",
-                            json_string(next_state)) < 0) goto write_error;
-    if (hard_limit_changed && json_object_set_new((json_t *)item, "observed_hard_input_tokens",
-                            json_integer((json_int_t)hard_input_tokens)) < 0) goto write_error;
-    rc = write_cache(store, staged.providers, staged.updated_at_ms, cache, error, error_size);
-    goto out;
-adopt: snag_model_cache_free(cache);
+    /* Removed/rebound disk models stay removed. Preserve the last imported stamp
+     * so the next listing can still notice any intervening catalog replacement. */
+    snag_model_cache_free(cache);
     *cache = staged;
     staged = (struct snag_model_cache){0};
+    rc = 0;
     goto out;
-write_error: (void)snag_fail(error, error_size, ENOMEM, "cannot update model cache observation");
-    rc = -1;
-out: snag_model_cache_free(&staged);
-    (void)close(lock_fd);
+memory_error:
+    (void)snag_fail(error, error_size, ENOMEM, "cannot update model cache observation");
+out:
+    snag_model_cache_free(&staged);
+    snag_model_cache_free(&disk);
+    if (lock_fd >= 0) (void)close(lock_fd);
     return rc;
 }
 

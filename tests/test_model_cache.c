@@ -248,6 +248,66 @@ test_local_models(struct snag_store *store, struct snag_model_cache *cache)
     snag_config_free(&config);
 }
 
+static void
+test_catalog_reload_boundary(struct snag_store *store, struct snag_model_cache *cache,
+                             const struct snag_config *config, const json_t *providers)
+{
+    struct snag_model_cache writer = {0};
+    char error[256] = {0};
+    const struct snag_provider_config *provider = &config->providers[0];
+
+    assert(snag_model_cache_load(store, cache, error, sizeof(error)) == 0);
+    json_t *original = cache->providers;
+    assert(snag_model_cache_reload_if_changed(store, cache, error, sizeof(error)) == 0);
+    assert(cache->providers == original);
+    /* A no-op observation does not even open the cache directory. */
+    int root_fd = store->root_fd;
+    store->root_fd = -1;
+    assert(snag_model_cache_record(store, cache, provider, "openai", "org/model",
+        SNAG_COUNT_UNKNOWN, 850000u, error, sizeof(error)) == 0);
+    assert(cache->providers == original);
+    store->root_fd = root_fd;
+
+    assert(renameat(root_fd, "models.json", root_fd, "models.saved") == 0);
+    assert(snag_model_cache_reload_if_changed(store, cache, error, sizeof(error)) == 1);
+    assert(cache->providers == original);
+    write_file_at(root_fd, "models.json", "{}\n");
+    assert(snag_model_cache_reload_if_changed(store, cache, error, sizeof(error)) < 0);
+    assert(cache->providers == original);
+    assert(snag_model_cache_record(store, cache, provider, "openai", "org/model",
+        SNAG_COUNT_UNSUPPORTED, 0u, error, sizeof(error)) < 0);
+    assert(cache->providers == original);
+
+    /* Another process removes the selected model. Accounting must not import
+     * that removal into this session or resurrect the model on disk. */
+    json_t *replacement = json_deep_copy(providers);
+    assert(replacement);
+    assert(json_array_remove(json_object_get(json_array_get(replacement, 0), "models"), 0) == 0);
+    assert(snag_model_cache_replace(store, replacement, 456789u,
+        &writer, error, sizeof(error)) == 0);
+    struct stat before;
+    struct stat after;
+    assert(fstatat(root_fd, "models.json", &before, 0) == 0);
+    assert(snag_model_cache_record(store, cache, provider, "openai", "org/model",
+        SNAG_COUNT_UNSUPPORTED, 0u, error, sizeof(error)) == 0);
+    assert(snag_model_cache_find(cache, provider->name, "org/model"));
+    assert(!snag_model_cache_find(&writer, provider->name, "org/model"));
+    assert(fstatat(root_fd, "models.json", &after, 0) == 0);
+    assert(before.st_ino == after.st_ino && before.st_size == after.st_size);
+    assert(snag_model_cache_reload_if_changed(store, cache, error, sizeof(error)) == 0);
+    assert(!snag_model_cache_find(cache, provider->name, "org/model"));
+    assert(json_equal(cache->providers, writer.providers));
+    original = cache->providers;
+    assert(snag_model_cache_reload_if_changed(store, cache, error, sizeof(error)) == 0);
+    assert(cache->providers == original);
+
+    assert(renameat(root_fd, "models.saved", root_fd, "models.json") == 0);
+    assert(snag_model_cache_reload_if_changed(store, cache, error, sizeof(error)) == 0);
+    assert(snag_model_cache_find(cache, provider->name, "org/model"));
+    snag_model_cache_free(&writer);
+    json_decref(replacement);
+}
+
 int
 main(void)
 {
@@ -266,7 +326,7 @@ main(void)
         "\"id\":\"codex-context-only\",\"limits\":{\"context_window_tokens\":272000,"
         "\"max_context_window_tokens\":872000}}],\"name\":\"codex\",\"protocol\":\"codex\"}]";
     static const char old_cache[] = "{\"format\":1,\"providers\":[],\"updated_at_ms\":1}\n";
-    char temp[] = "/tmp/snajpagent-model-cache-XXXXXX";
+    char temp[4096];
     char error[256] = {0};
     char encoded[8192];
     struct snag_store store;
@@ -278,6 +338,8 @@ main(void)
     int fd;
     ssize_t got;
 
+    assert(snprintf(temp, sizeof(temp), "%s/snajpagent-model-cache-XXXXXX",
+        getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp") > 0);
     assert(mkdtemp(temp));
     snag_store_init(&store);
     assert(snag_store_open(&store, temp, error, sizeof(error)) == 0);
@@ -519,9 +581,14 @@ main(void)
                    "openai", "org/model", SNAG_COUNT_SUPPORTED, 800000u, error, sizeof(error)) == 0);
         assert(json_equal(retained, stale.providers));
         assert(!json_equal(retained, cache.providers));
-        /* A no-op still adopts changes made by another cache owner. */
+        /* Ordinary accounting applies only this owner's observation. */
         assert(snag_model_cache_record(&store, &stale, &config.providers[0],
                    "openai", "org/model", SNAG_COUNT_UNKNOWN, 850000u, error, sizeof(error)) == 0);
+        capacity = resolve_capacity(&stale, &config, 0, "org/model", "openai");
+        assert(capacity.hard_input_tokens == 850000u);
+        assert(capacity.count_capability == SNAG_COUNT_UNKNOWN);
+        assert(!json_equal(stale.providers, cache.providers));
+        assert(snag_model_cache_reload_if_changed(&store, &stale, error, sizeof(error)) == 0);
         assert(json_equal(stale.providers, cache.providers));
         snag_model_cache_free(&stale);
         json_decref(retained);
@@ -541,6 +608,7 @@ main(void)
     capacity = resolve_capacity(&cache, &config, 0, "org/model", "openai");
     assert(capacity.hard_input_tokens == 700000u);
     assert(snag_model_compact_threshold(&config.providers[0], &capacity) == 630000u);
+    test_catalog_reload_boundary(&store, &cache, &config, providers);
     /* Legacy samples stay readable but refresh clears them and never derives ratios. */
     json_t *legacy_model = (json_t *)snag_model_cache_find(&cache, config.providers[0].name, "org/model");
     assert(legacy_model);

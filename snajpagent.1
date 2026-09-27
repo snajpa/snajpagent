@@ -1472,6 +1472,11 @@ without changing configuration or model context.
 Read the local provider/model catalog.  No provider request is made.  On an
 interactive terminal the displayed catalogue pages through the configured
 .BR pager .
+The catalog is loaded at startup; ordinary requests, context meters and status
+use that in-memory copy.  Model commands check for a changed cache file and
+load it only when changed.  Missing or invalid replacements preserve the last
+valid copy.  Selecting a numbered row through the model tool uses its listed
+snapshot; an explicit cache refresh obtains a new one.
 .TP
 .B /model cache
 Refresh every configured provider through its authenticated model endpoint,

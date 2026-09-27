@@ -3,6 +3,7 @@
 #define SNAJPAGENT_MODEL_CACHE_H
 
 #include "config.h"
+#include "fs.h"
 #include "store.h"
 
 #include "snag_jansson.h"
@@ -12,6 +13,8 @@
 struct snag_model_cache {
     json_t *providers;
     uint64_t updated_at_ms;
+    snag_file_info loaded_file;
+    bool loaded_file_valid;
 };
 
 enum snag_count_capability {
@@ -45,6 +48,9 @@ bool snag_model_limits_valid(const json_t *limits);
 /* Returns 1 when models.json does not exist, 0 on success, and -1 on error. */
 int snag_model_cache_load(struct snag_store *store, struct snag_model_cache *cache,
                          char *error, size_t error_size);
+/* Listing boundary: retain memory if unchanged, missing or invalid. Same return codes. */
+int snag_model_cache_reload_if_changed(struct snag_store *store, struct snag_model_cache *cache,
+                                      char *error, size_t error_size);
 int snag_model_cache_replace(struct snag_store *store, const json_t *providers,
                             uint64_t updated_at_ms, struct snag_model_cache *cache,
                             char *error, size_t error_size);
