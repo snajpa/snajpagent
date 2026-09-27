@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep the resolved credential through native voice setup and attachment,
+  fixing false login requests when starting voice with a configured gateway key.
+
 - Enable microphone, playback and realtime voice in macOS production builds.
   Apple Silicon builds use the native arm64 target; device behavior still needs
   runtime testing on macOS.

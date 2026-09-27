@@ -1650,9 +1650,13 @@ snag_provider_voice_call(const struct snag_config *config,
         (struct snag_provider_connection){config,provider,credential,NULL,
             pump,opaque,NULL, 0},
         65536u,65536u);
+    /* The caller resolves credentials before starting voice. Keep that same
+     * snapshot for the call and WebSocket attachment; the worker's provider
+     * copy deliberately omits borrowed secret-source pointers. */
+    ctx.credential.root_fd = -1;
     ctx.audio_output=answer;ctx.location=location;ctx.location_size=sizeof(location);
     json_t *body=json_pack("{s:s,s:O}","sdp",sdp,"session",session);
-    if (!body || provider_request_setup(&ctx,credential,
+    if (!body || provider_request_setup(&ctx, &ctx.credential,
         "/realtime/calls?intent=quicksilver&architecture=avas","application/sdp",body,
         "Native voice session exceeds request capacity",audio_write_cb,error,size)<0)goto out;
     if (append_header(&ctx.headers,"openai-alpha: quicksilver=v2")<0 ||

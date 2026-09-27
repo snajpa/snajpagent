@@ -65,6 +65,8 @@ int snag_provider_audio(enum snag_audio_operation operation, const json_t *reque
  * receive: 1 whole text message, 0 incomplete/would-block, -1 stopped/error.
  * Clear the receive buffer after each whole message; preserve it otherwise. */
 struct snag_voice_socket;
+/* Resolve/refresh once before starting voice. Call and attach use the supplied
+ * credential snapshot; neither resolves the provider's secret source again. */
 int snag_provider_voice_call(const struct snag_config *,const struct snag_provider_config *,
     const struct snag_credential *,const char *sdp,const json_t *session,
     snag_provider_pump_fn,void *,struct snag_buf *answer,char call[257],char *,size_t);

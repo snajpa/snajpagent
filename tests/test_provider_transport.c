@@ -594,6 +594,9 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         if (fd<0)server_fail("native voice accept failed");
         read_request(fd,&request);
         if (strcmp(request.method,"POST"))server_fail("native voice method");
+        if (!strstr(request.headers, expected_authorization_header)) {
+            server_fail("native voice authorization");
+        }
         if (models==MODEL_NATIVE_TRANSCRIBE) {
             if (strcmp(request.path,"/backend-api/transcribe") ||
                 !strstr(request.body,"name=\"file\""))
@@ -3480,6 +3483,50 @@ static void test_native_voice_protocol(void)
     voice_end(v,&f);
 }
 
+static void
+test_native_voice_credential_snapshot(void)
+{
+    struct local_server server;
+    struct snag_config config;
+    struct snag_store store;
+    struct snag_credential credential;
+    struct snag_buf output = {.max = 65536u};
+    char path[4096], error[256] = {0}, call[257] = {0};
+    const char *tmp = getenv("TMPDIR");
+
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-voice-auth-XXXXXX",
+        tmp ? tmp : "/tmp") > 0);
+    assert(mkdtemp(path));
+    snag_store_init(&store);
+    assert(snag_store_open(&store, path, error, sizeof(error)) == 0);
+    start_server(&server, MODEL_NATIVE_CALL, false, "/backend-api/codex");
+    struct snag_provider_connection conn = transport_connection(&config,
+        &credential, server.endpoint);
+    config.providers[0].auth = SNAG_AUTH_API_KEY;
+    assert(snag_secret_source_parse(&config.providers[0].api_key,
+        "\"transport-secret\"", NULL, error, sizeof(error)) == 0);
+    assert(snag_auth_read(store.root_fd, conn.provider, false, NULL,
+        &credential, NULL, NULL, error, sizeof(error)) == 0);
+    assert(credential.root_fd == store.root_fd);
+    /* The voice owner keeps the resolved credential, not the mutable source.
+     * No login file exists for a provider authenticated by a configured key. */
+    snag_secret_source_free(&config.providers[0].api_key);
+    json_t *session = json_pack("{s:s}", "model", "gpt-live-1-codex");
+    int rc = snag_provider_voice_call(NULL, conn.provider, &credential,
+        "v=0\r\n", session, NULL, NULL, &output, call, error, sizeof(error));
+    bool valid = rc == 0 && !strcmp(call, "rtc_native") && output.len != 0u;
+    bool unchanged = credential.root_fd == store.root_fd &&
+        !strcmp(credential.value, "transport-secret");
+    json_decref(session);
+    snag_buf_free(&output);
+    snag_credential_clear(&credential);
+    snag_config_free(&config);
+    snag_store_close(&store);
+    stop_server(&server);
+    if (!valid) fprintf(stderr, "native voice credential snapshot: %s\n", error);
+    assert(valid && unchanged);
+}
+
 static void test_native_voice_transport(void)
 {
     for (unsigned int direct=0;direct<2u;++direct)
@@ -3870,6 +3917,7 @@ main(void)
     (void)signal(SIGTERM, fixture_stop);
     test_audio_provider_selection();
     test_native_voice_protocol();
+    test_native_voice_credential_snapshot();
     test_native_voice_transport();
 #if SNAJPAGENT_AUDIO_DEVICE
     test_native_media();
