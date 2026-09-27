@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Transfer dropped workstation files through the native remote wrapper. A drop
+  preserves the receiver's draft and active work; ordinary child programs keep
+  their original input. Both endpoints must support native drops.
+
 - Keep the resolved credential through native voice setup and attachment,
   fixing false login requests when starting voice with a configured gateway key.
 

@@ -1318,7 +1318,15 @@ request /send PATH and remove any corresponding pending export afterward.
 Type
 .B /receive
 for native selection, then enter one regular local file path; an empty path,
-Escape or Ctrl-C cancels. With trzsz-go, select files or drop regular files
+Escape or Ctrl-C cancels. With current native wrappers and receivers, drop one
+regular workstation file into the composer, or paste its absolute path.
+Literal, shell-quoted and bracketed-paste paths are accepted without shell
+expansion. The file becomes an unsent attachment; existing draft text and active
+work are preserved. Ordinary text, missing paths and input to other programs
+pass through unchanged. Update both endpoints for native drops; use /receive
+with older receivers. Drop files one at a time.
+.PP
+With trzsz-go, select files or drop regular files
 into the composer. A stock Go-client drag sends Ctrl-C followed by trz;
 that Ctrl-C can cancel a typed draft or interrupt active work. Save needed draft
 text first. Directory mode (trz -d), directories and zero-byte uploads are rejected.

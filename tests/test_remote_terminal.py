@@ -2,6 +2,7 @@
 """Native client-only remote-mode startup and PTY ownership regressions."""
 import json
 import fcntl
+import hashlib
 import struct
 import os
 import pty
@@ -76,6 +77,133 @@ class RemoteProcess:
 
 
 class RemoteStartupTests(unittest.TestCase):
+    def test_native_drop_preserves_draft(self):
+        for form in ("plain", "escaped", "quoted", "paste", "fragmented", "nested", "active"):
+            with self.subTest(form=form), tempfile.TemporaryDirectory(prefix="snag-drop-") as tmp:
+                root = Path(tmp)
+                name = "HANDOFF_ALL.md" if form == "plain" else "résumé 'notes'.md"
+                source = root / name
+                source.write_bytes(b"native dropped file\n")
+                command = [str(PRODUCT), "--dotdir", str(root / "agent")]
+                if form == "nested":
+                    command = [str(PRODUCT), "remote", *command]
+                child = RemoteProcess(root, command)
+                try:
+                    child.until("›".encode(), 8)
+                    if form == "active":
+                        os.write(child.master, b"defer_slow_test\r")
+                        child.until(b"working slowly", 8)
+                    if form != "plain":
+                        os.write(child.master, b"ping")
+                        child.until(b"ping", 8)
+                    if form == "plain":
+                        data = str(source).encode() + b" "
+                    elif form == "escaped":
+                        data = str(source).replace(" ", "\\ ").replace("'", "\\'").encode() + b" "
+                    elif form == "quoted":
+                        data = ('"' + str(source) + '" ').encode()
+                    else:
+                        data = b"\x1b[200~" + str(source).encode() + b"\x1b[201~"
+                    if form == "fragmented":
+                        for at in range(0, len(data), 3):
+                            os.write(child.master, data[at:at + 3])
+                            time.sleep(0.005)
+                    else:
+                        os.write(child.master, data)
+                    child.until(b"1 unsent attachment(s)", 8)
+                    landed = list((root / "agent" / "sessions").glob("*/media/*"))
+                    self.assertTrue(any(p.read_bytes() == source.read_bytes() for p in landed))
+                    self.assertNotIn(b"unknown slash command", child.output)
+                    if form == "active":
+                        # Streamed words have composer redraws between them.
+                        child.until(b" complete", 8)
+                    os.write(child.master, b"ping\r" if form == "plain" else b"\r")
+                    child.until(b"pong", 8)
+                    os.write(child.master, b"/exit\r")
+                    child.wait(0)
+                finally:
+                    child.close()
+
+    def test_native_drop_leaves_generic_child_input_unchanged(self):
+        with tempfile.TemporaryDirectory(prefix="snag-drop-shell-") as tmp:
+            root = Path(tmp)
+            source = root / "regular.md"
+            source.write_text("do not transfer to generic child")
+            code = textwrap.dedent('''
+                import os, tty
+                tty.setraw(0)
+                print('READY', flush=True)
+                data = b''
+                while not data.endswith(b'\x1b[201~'):
+                    data += os.read(0, 4096)
+                print(data.hex(), flush=True)
+            ''')
+            child = RemoteProcess(root, [sys.executable, "-u", "-c", code])
+            try:
+                child.until(b"READY", 8)
+                data = b"\x1b[200~" + str(source).encode() + b"\x1b[201~"
+                os.write(child.master, data)
+                child.until(data.hex().encode(), 8)
+                child.wait(0)
+            finally:
+                child.close()
+
+    def test_native_drop_keeps_nonfile_and_embedded_paths_literal(self):
+        with tempfile.TemporaryDirectory(prefix="snag-drop-literal-") as tmp:
+            root = Path(tmp)
+            source = root / "regular.md"
+            source.write_text("explicit drops only")
+            link = root / "link.md"
+            link.symlink_to(source)
+            fifo = root / "fifo"
+            os.mkfifo(fifo)
+            payloads = [b"mention " + str(source).encode() + b"\r",
+                        b"\x1b[A\x1b[B", str(link).encode() + b"\r",
+                        str(root).encode() + b"\r", str(fifo).encode() + b"\r",
+                        str(root / "missing").encode() + b"\r",
+                        b"\x1b[200~ordinary text " + str(source).encode() + b"\x1b[201~",
+                        b"\x1b[200~" + b"x" * 40000 + str(source).encode() + b"\x1b[201~"]
+            code = textwrap.dedent(r'''
+                import hashlib, json, os, sys, tty
+                tty.setraw(0)
+                os.write(1, b'\x1b[?9002hREADY\n')
+                for size in json.loads(sys.argv[1]):
+                    data = b''
+                    while len(data) < size:
+                        data += os.read(0, min(4096, size - len(data)))
+                    print(hashlib.sha256(data).hexdigest(), flush=True)
+            ''')
+            child = RemoteProcess(root, [sys.executable, "-u", "-c", code,
+                                         json.dumps([len(data) for data in payloads])])
+            try:
+                child.until(b"READY", 8)
+                for data in payloads:
+                    os.write(child.master, data)
+                    child.until(hashlib.sha256(data).hexdigest().encode(), 8)
+                child.wait(0)
+            finally:
+                child.close()
+
+    def test_native_drop_cancel_keeps_draft(self):
+        with tempfile.TemporaryDirectory(prefix="snag-drop-cancel-") as tmp:
+            root = Path(tmp)
+            source = root / "cancel.bin"
+            source.write_bytes(os.urandom(65536))
+            child = RemoteProcess(root, [str(PRODUCT), "--dotdir", str(root / "agent")])
+            try:
+                child.until("›".encode(), 8)
+                os.write(child.master, b"ping")
+                child.until(b"ping", 8)
+                os.write(child.master, b"\x1b[200~" + str(source).encode() + b"\x1b[201~\x03")
+                child.until(b"Upload cancelled", 8)
+                self.assertNotIn(b"1 unsent attachment(s)", child.output)
+                os.write(child.master, b"\r")
+                child.until(b"pong", 8)
+                os.write(child.master, b"/exit\r")
+                child.wait(0)
+            finally:
+                child.close()
+
     def test_native_upload_caps_bursts_when_peer_advertises_large_blocks(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-burst-") as tmp:
             root = Path(tmp)
@@ -131,7 +259,8 @@ class RemoteStartupTests(unittest.TestCase):
     def test_agent_transfer_names_have_no_old_aliases(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-names-") as tmp:
             root = Path(tmp)
-            child = RemoteProcess(root, [str(PRODUCT), "--dotdir", str(root / "agent")])
+            child = RemoteProcess(root, [str(PRODUCT), "--dotdir", str(root / "agent")],
+                                  extra_env={"PAGER": "cat"})
             try:
                 child.until("›".encode(), 8)
                 os.write(child.master, b"/send\r")
@@ -147,6 +276,7 @@ class RemoteStartupTests(unittest.TestCase):
                 output = child.until(b"/send PATH", 8)
                 self.assertNotIn(b"/upload", output)
                 self.assertNotIn(b"/download", output)
+                child.until(b"\x1b[?2004h", 8)
                 os.write(child.master, b"/exit\r")
                 child.wait(0)
             finally:

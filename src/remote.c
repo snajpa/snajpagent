@@ -84,7 +84,136 @@ struct remote_transfer {
     size_t marker_len;
     unsigned char keys[4096];
     size_t key_len;
+    bool drop_ready;
+    bool paste_passthrough;
+    size_t paste_end;
+    struct snag_buf input;
+    uint64_t input_at;
+    int drop_fd;
+    char drop_name[SNAG_NAME_MAX_BYTES + 1u];
+    uint64_t drop_at;
 };
+
+/* Terminal drops are literal paths, shell-quoted paths or bracketed pastes.
+ * Decode quoting only: never expand variables, substitutions or glob patterns. */
+static int
+remote_drop_open(struct remote_transfer *client, const unsigned char *data, size_t length)
+{
+    char path[SNAG_PATH_MAX_BYTES + 1u];
+    while (length && (data[length - 1u] == ' ' || data[length - 1u] == '\r' ||
+                     data[length - 1u] == '\n')) --length;
+    if (!length || length > sizeof(path) - 1u) return -1;
+    for (size_t i = 0; i < length; ++i)
+        if (data[i] < 0x20u || data[i] == 0x7fu) return -1;
+    memcpy(path, data, length);
+    path[length] = '\0';
+    int fd = path[0] == '/' ? snag_open_read(path, false) : -1;
+    if (fd < 0) {
+        unsigned char quote = 0;
+        size_t used = 0;
+        for (size_t i = 0; i < length; ++i) {
+            unsigned char byte = data[i];
+            if (byte == quote) { quote = 0; continue; }
+            if (!quote && (byte == '\'' || byte == '"')) { quote = byte; continue; }
+            if (byte == '\\' && quote != '\'') {
+                if (++i == length) return -1;
+                byte = data[i];
+                if (quote == '"' && byte != '"' && byte != '\\' && byte != '$' &&
+                    byte != '`') path[used++] = '\\';
+            } else if (!quote && byte == ' ') return -1;
+            path[used++] = (char)byte;
+        }
+        if (quote || !used || path[0] != '/') return -1;
+        path[used] = '\0';
+        fd = snag_open_read(path, false);
+    }
+    if (fd < 0) return -1;
+    struct stat info;
+    const char *name = strrchr(path, '/') + 1u;
+    size_t size = strlen(name);
+    if (fstat(fd, &info) < 0 || !S_ISREG(info.st_mode) || !size ||
+        size > SNAG_NAME_MAX_BYTES || !snag_utf8_valid((const unsigned char *)name, size, true)) {
+        (void)close(fd);
+        return -1;
+    }
+    memcpy(client->drop_name, name, size + 1u);
+    return fd;
+}
+
+static int
+remote_input_flush(struct remote_transfer *client, bool complete)
+{
+    const unsigned char *data = client->input.data;
+    size_t length = client->input.len;
+    if (!length) return 0;
+    if (complete && client->drop_ready) {
+        if (length >= 12u && !memcmp(data, "\033[200~", 6u) &&
+            !memcmp(data + length - 6u, "\033[201~", 6u)) {
+            data += 6u;
+            length -= 12u;
+        }
+        client->drop_fd = remote_drop_open(client, data, length);
+        if (client->drop_fd >= 0) {
+            client->input.len = 0;
+            client->drop_at = snag_monotonic_ms();
+            return remote_write(client->child->fd[2], "\033[9002~", 7u);
+        }
+    }
+    int rc = remote_write(client->child->fd[2], client->input.data, client->input.len);
+    client->input.len = 0;
+    return rc;
+}
+
+static int
+remote_input(struct remote_transfer *client, const unsigned char *data, size_t length)
+{
+    static const char begin[] = "\033[200~", end[] = "\033[201~";
+    if (client->relay) return remote_write(client->child->fd[2], data, length);
+    for (size_t i = 0; i < length; ++i) {
+        unsigned char byte = data[i];
+        if (client->drop_fd >= 0) {
+            if (length - i > sizeof(client->keys) - client->key_len)
+                return snag_errno(ENOBUFS);
+            memcpy(client->keys + client->key_len, data + i, length - i);
+            client->key_len += length - i;
+            return 0;
+        }
+        if (client->paste_passthrough) {
+            if (remote_write(client->child->fd[2], &byte, 1u) < 0) return -1;
+            client->paste_end = byte == (unsigned char)end[client->paste_end] ?
+                client->paste_end + 1u : byte == 27u ? 1u : 0u;
+            if (client->paste_end == 6u) {
+                client->paste_passthrough = false;
+                client->paste_end = 0;
+            }
+            continue;
+        }
+        if (!client->input.len && (i != 0 || !client->drop_ready ||
+            (byte != '/' && byte != '\'' && byte != '"' && byte != 27u))) {
+            return remote_write(client->child->fd[2], data + i, length - i);
+        }
+        if (snag_buf_putc(&client->input, byte) < 0) return -1;
+        client->input_at = snag_monotonic_ms();
+        size_t n = client->input.len;
+        unsigned char *input = client->input.data;
+        bool paste = n >= 6u && !memcmp(input, begin, 6u);
+        if (paste && n >= 12u && !memcmp(input + n - 6u, end, 6u)) {
+            if (remote_input_flush(client, true) < 0) return -1;
+        } else if (n == 2u * SNAG_PATH_MAX_BYTES + 12u) {
+            client->paste_passthrough = paste;
+            if (paste) {
+                for (size_t at = 6u; at < n; ++at)
+                    client->paste_end = input[at] == (unsigned char)end[client->paste_end] ?
+                        client->paste_end + 1u : input[at] == 27u ? 1u : 0u;
+            }
+            if (remote_input_flush(client, false) < 0) return -1;
+        } else if (!paste && ((input[0] == 27u &&
+                   (n > 6u || memcmp(input, begin, n))) || byte == '\r' || byte == '\n')) {
+            if (remote_input_flush(client, input[0] != 27u) < 0) return -1;
+        }
+    }
+    return 0;
+}
 
 static int
 remote_checkpoint(void *opaque)
@@ -92,6 +221,12 @@ remote_checkpoint(void *opaque)
     struct remote_transfer *client = opaque;
     if (remote_signal) return 1;
     if (remote_resize) { remote_resize = 0; snag_child_resize(client->child); }
+    for (size_t i = 0; i < client->key_len; ++i) {
+        if (client->keys[i] != 3u) continue;
+        memmove(client->keys + i, client->keys + i + 1u, client->key_len - i - 1u);
+        --client->key_len;
+        return 1;
+    }
     struct pollfd ready = {STDIN_FILENO, POLLIN, 0};
     if (poll(&ready, 1u, 0) > 0 && (ready.revents & POLLIN)) {
         unsigned char keys[256];
@@ -183,6 +318,11 @@ remote_transfer_run(struct remote_transfer *client, char direction)
         fd = remote_download_root(client, &directory);
         if (fd >= 0) rc = snag_client_download(client->child->fd[0], fd, directory,
             remote_checkpoint, client, &result, error, sizeof(error));
+    } else if (client->drop_fd >= 0) {
+        fd = client->drop_fd;
+        client->drop_fd = -1;
+        rc = snag_client_upload(client->child->fd[0], fd, client->drop_name,
+            remote_checkpoint, client, &result, error, sizeof(error));
     } else {
         char path[SNAG_PATH_MAX_BYTES + 1u];
         if (remote_upload_choice(client, path, sizeof(path)) == 0 && path[0]) {
@@ -205,7 +345,7 @@ remote_transfer_run(struct remote_transfer *client, char direction)
         snag_buf_free(&response);
     }
     if (result.tail_len && remote_output(client, result.tail, result.tail_len) < 0) return -1;
-    if (client->key_len) {
+    if (client->key_len && client->drop_fd < 0) {
         (void)remote_write(client->child->fd[2], client->keys, client->key_len);
         client->key_len = 0;
     }
@@ -236,6 +376,7 @@ remote_output(struct remote_transfer *client, const unsigned char *data, size_t 
 {
     static const char prefix[] = "::TRZSZ:TRANSFER:";
     static const char probe[] = "\033[?9001;";
+    static const char drop[] = "\033[?9002";
     for (size_t i = 0; i < length; ++i) {
         unsigned char byte = data[i];
         if (client->relay_transfer) {
@@ -262,6 +403,15 @@ remote_output(struct remote_transfer *client, const unsigned char *data, size_t 
         client->marker[client->marker_len++] = byte;
         if (client->marker[0] == 0x1bu) {
             size_t n = client->marker_len;
+            if (n <= sizeof(drop) - 1u && !memcmp(client->marker, drop, n)) continue;
+            if (n == sizeof(drop) && !memcmp(client->marker, drop, n - 1u) &&
+                (byte == 'h' || byte == 'l')) {
+                if (client->relay) {
+                    if (remote_passthrough(client, client->marker, n) < 0) return -1;
+                } else client->drop_ready = byte == 'h';
+                client->marker_len = 0;
+                continue;
+            }
             if (n <= sizeof(probe) - 1u && !memcmp(client->marker, probe, n)) continue;
             if (n > sizeof(probe) - 1u &&
                 !memcmp(client->marker, probe, sizeof(probe) - 1u)) {
@@ -391,7 +541,9 @@ remote_proxy(const char *executable, const char *const *command, const char *dow
         if (sigaction(signals[installed], &action, &saved[installed]) < 0) break;
     }
     int rc = installed == sizeof(signals) / sizeof(signals[0]) ? 0 : -1;
-    struct remote_transfer client = {.child = &child, .downloads = downloads};
+    struct remote_transfer client = {.child = &child, .downloads = downloads, .drop_fd = -1};
+    /* A fully escaped maximum-size path plus bracketed-paste framing. */
+    snag_buf_init(&client.input, 2u * SNAG_PATH_MAX_BYTES + 12u);
     if (rc == 0) rc = remote_upstream(&client);
     const char *sty = getenv("STY");
     client.screen = sty && *sty;
@@ -418,8 +570,21 @@ remote_proxy(const char *executable, const char *const *command, const char *dow
             remote_resize = 0;
             snag_child_resize(&child);
         }
-        struct pollfd ready[] = {{child.fd[0], POLLIN, 0}, {STDIN_FILENO, POLLIN, 0}};
-        int count = poll(ready, 2u, 100);
+        if (client.input.len && snag_monotonic_ms() - client.input_at >= 80u &&
+            (client.input.len < 6u || memcmp(client.input.data, "\033[200~", 6u))) {
+            if (remote_input_flush(&client, true) < 0) { rc = -1; break; }
+        }
+        if (client.drop_fd >= 0 && snag_monotonic_ms() - client.drop_at >= 5000u) {
+            (void)close(client.drop_fd);
+            client.drop_fd = -1;
+            static const char failed[] = "\r\nRemote upload did not start; file was not sent.\r\n";
+            if (remote_write(STDOUT_FILENO, failed, sizeof(failed) - 1u) < 0 ||
+                remote_write(child.fd[2], client.keys, client.key_len) < 0) { rc = -1; break; }
+            client.key_len = 0;
+        }
+        struct pollfd ready[] = {{child.fd[0], POLLIN, 0},
+            {STDIN_FILENO, client.drop_fd < 0 ? POLLIN : 0, 0}};
+        int count = poll(ready, 2u, client.input.len ? 20 : 100);
         if (count < 0 && errno == EINTR) continue;
         if (count < 0) { rc = -1; break; }
         unsigned char bytes[8192];
@@ -434,12 +599,14 @@ remote_proxy(const char *executable, const char *const *command, const char *dow
             ssize_t n = read(STDIN_FILENO, bytes, sizeof(bytes));
             if (n < 0 && errno == EINTR) continue;
             if (n <= 0) { ended = true; break; }
-            if (remote_write(child.fd[2], bytes, (size_t)n) < 0) { rc = -1; break; }
+            if (remote_input(&client, bytes, (size_t)n) < 0) { rc = -1; break; }
         }
         if (ready[0].revents & POLLNVAL) { errno = EIO; rc = -1; }
     }
     if (client.marker_len)
         (void)remote_write(STDOUT_FILENO, client.marker, client.marker_len);
+    if (client.drop_fd >= 0) (void)close(client.drop_fd);
+    snag_buf_free(&client.input);
     int reason = remote_signal;
     if (child.pid > 0 && (reason || rc < 0 || !ended)) {
         (void)kill(-child.pid, reason ? reason : SIGTERM);

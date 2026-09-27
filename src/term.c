@@ -477,6 +477,26 @@ set_raw(struct snag_term *term)
     return 0;
 }
 
+/* Scope native drop interception to the agent's input ownership. Screen needs
+ * a passthrough envelope for this private mode; ordinary paste stays visible. */
+static int
+input_modes(bool enabled)
+{
+    const char *paste = enabled ? "\033[?2004h" : "\033[?2004l";
+    if (snag_term_write(STDERR_FILENO, paste, 8u) < 0) return -1;
+#ifndef _WIN32
+    const char *sty = getenv("STY");
+    bool screen = sty && *sty;
+    char mode[16];
+    int n = snprintf(mode, sizeof(mode), "%s\033[?9002%c%s",
+        screen ? "\033P" : "", enabled ? 'h' : 'l', screen ? "\033\\" : "");
+    if (n < 0 || (size_t)n >= sizeof(mode)) return -1;
+    return snag_term_write(STDERR_FILENO, mode, (size_t)n);
+#else
+    return 0;
+#endif
+}
+
 int
 snag_term_open(struct snag_term *term, char *error, size_t error_size)
 {
@@ -513,7 +533,7 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
         term->output_fd[fd - STDOUT_FILENO] = copy;
     }
     snag_term_output_bind(term);
-    if (term->capable && snag_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0) {
+    if (term->capable && input_modes(true) < 0) {
         int saved_errno = errno;
         snag_term_close(term);
         errno = saved_errno;
@@ -531,7 +551,7 @@ snag_term_external_begin(struct snag_term *term, char *error, size_t error_size)
         return snag_errorf(error, error_size, "terminal is not open: %s", strerror(errno));
     }
     if (snag_term_hide(term) < 0) goto fail;
-    if (term->bracketed_paste && snag_term_write(STDERR_FILENO, "\033[?2004l", 8u) < 0) goto fail;
+    if (term->bracketed_paste && input_modes(false) < 0) goto fail;
     term->bracketed_paste = false;
     if (term->raw && snag_term_input_restore(&term->host, true) < 0) goto fail;
     term->raw = false;
@@ -552,7 +572,7 @@ snag_term_external_end(struct snag_term *term, char *error, size_t error_size)
     if (snag_term_output_mode(&term->host, true) < 0) goto fail;
     update_size(term);
     if (term->capable && set_raw(term) < 0) goto fail;
-    if (term->capable && snag_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0) goto fail;
+    if (term->capable && input_modes(true) < 0) goto fail;
     term->bracketed_paste = term->capable;
     return 0;
 fail: return snag_errorf(error, error_size, "cannot restore terminal after editor: %s", strerror(errno));
@@ -1954,13 +1974,13 @@ suspend_terminal(struct snag_term *term)
 {
     if (!snag_term_can_suspend()) return snag_term_write(STDERR_FILENO, "\a", 1u);
     if (snag_term_hide(term) < 0) return -1;
-    if (term->bracketed_paste && snag_term_write(STDERR_FILENO, "\033[?2004l", 8u) < 0) return -1;
+    if (term->bracketed_paste && input_modes(false) < 0) return -1;
     term->bracketed_paste = false;
     if (snag_term_input_flush(&term->host) < 0 || snag_term_input_restore(&term->host, false) < 0) return -1;
     term->raw = false;
     if (snag_term_suspend() < 0) return -1;
     if (set_raw(term) < 0) return -1;
-    if (term->capable && snag_term_write(STDERR_FILENO, "\033[?2004h", 8u) < 0) return -1;
+    if (term->capable && input_modes(true) < 0) return -1;
     term->bracketed_paste = term->capable;
     update_size(term);
     return redraw(term);
@@ -2125,7 +2145,7 @@ struct escape_key {
 
 enum {
     KEY_UP = 1, KEY_DOWN, KEY_RIGHT, KEY_LEFT, KEY_HOME, KEY_END, KEY_DELETE, KEY_PASTE_BEGIN,
-    KEY_WORD_LEFT, KEY_WORD_RIGHT };
+    KEY_WORD_LEFT, KEY_WORD_RIGHT, KEY_UPLOAD };
 
 static const struct escape_key keys[] = {
     {"\033[1;5D", 6u, KEY_WORD_LEFT}, {"\033[1;5C", 6u, KEY_WORD_RIGHT},
@@ -2137,7 +2157,8 @@ static const struct escape_key keys[] = {
     {"\033OA", 3u, KEY_UP}, {"\033OB", 3u, KEY_DOWN}, {"\033OC", 3u, KEY_RIGHT}, {"\033OD", 3u, KEY_LEFT},
     {"\033OH", 3u, KEY_HOME}, {"\033OF", 3u, KEY_END}, {"\033[H", 3u, KEY_HOME}, {"\033[F", 3u, KEY_END},
     {"\033[1~", 4u, KEY_HOME}, {"\033[4~", 4u, KEY_END},
-    {"\033[3~", 4u, KEY_DELETE}, {"\033[200~", 6u, KEY_PASTE_BEGIN}
+    {"\033[3~", 4u, KEY_DELETE}, {"\033[200~", 6u, KEY_PASTE_BEGIN},
+    {"\033[9002~", 7u, KEY_UPLOAD}
 };
 
 static int
@@ -2209,6 +2230,13 @@ feed_escape(struct snag_term *term, unsigned char byte, enum snag_term_action *a
             if (term->escape_len == keys[i].len) {
                 int key = keys[i].key;
                 term->escape_len = 0u;
+                if (key == KEY_UPLOAD) {
+                    /* A drop adds attachments without submitting or clearing
+                     * the draft, history search, queue or active request. */
+                    if (term->dictating) return 0;
+                    *action = SNAG_TERM_UPLOAD;
+                    return 1;
+                }
                 return apply_key(term, key);
             }
         }
@@ -2532,7 +2560,7 @@ snag_term_close(struct snag_term *term)
     if (!term) return;
     if (term->opened) {
         (void)snag_term_hide(term);
-        if (term->bracketed_paste) (void)snag_term_write(STDERR_FILENO, "\033[?2004l", 8u);
+        if (term->bracketed_paste) (void)input_modes(false);
         if (term->raw) (void)snag_term_input_restore(&term->host, true);
     }
     if (term->controls_installed) snag_term_controls_restore(&term->host);

@@ -425,7 +425,7 @@ remain unreaped until output collection so a reused PID cannot be signaled.
 
 POSIX terminal upload is an exclusive input lease: the UI stops and joins its
 input worker before the engine reads from the controlling terminal. Exact stock
-trz actions and /receive enter the same bounded protocol-1 receive path;
+trz actions, native drop requests and /receive enter the same bounded protocol-1 receive path;
 the remote host launches no shell command. The receiver writes a complete,
 digest-checked batch into a private operation-owned directory, then restores
 termios and the UI before preparing each attachment through the ordinary media
@@ -434,6 +434,15 @@ prepared. Failure discards only operation-created media. Bytes read past the
 transfer EXIT are seeded into the restarted input ring ahead of new terminal
 reads. The workstation's trzsz filter owns local selection and file streaming;
 this path adds no listener or out-of-band connection.
+The native receiver advertises private mode 9002 only while it owns terminal
+input, with screen passthrough where needed. The outer wrapper recognizes one
+absolute local-file path in a drop burst or bracketed paste, decodes quoting
+without shell evaluation, and retains an opened regular-file descriptor until
+the transfer. CSI 9002~ requests upload without modifying or submitting the
+draft. Generic programs and relay wrappers pass input through. Oversized and
+non-file pastes retain their original bytes. Unframed path bursts wait 80 ms
+for remaining bytes; an unanswered upload request closes its descriptor after
+five seconds and reports that the file was not sent.
 On session resume or deletion, the session lock protects cleanup of crash-left
 upload staging. Only private directories with exact operation names and ordinary
 private file leaves are removed; unfamiliar content stops cleanup, and retained

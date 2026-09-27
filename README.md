@@ -130,8 +130,10 @@ snajpagent remote ssh -t snajpadev screen -r sessionname
 ```
 
 `remote` passes a generic child command and its arguments literally through a
-PTY, without starting a local agent session. Use `/receive` in the POSIX agent
-and enter a workstation regular-file path; verified files become unsent attachments.
+PTY, without starting a local agent session. Drop one workstation regular file
+into the POSIX agent's composer, or use `/receive` and enter its path. Native
+drops require current binaries at both ends and preserve the draft and active
+work. Verified files become unsent attachments.
 Review `/attachments` before submitting. Uploads reject directories and empty files.
 
 Use `/send PATH` to send an agent file to the workstation, or ask the model to
