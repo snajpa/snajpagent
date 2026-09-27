@@ -1754,10 +1754,15 @@ voice_connect(const struct snag_provider_config *provider,const struct snag_cred
     } else if (provider_endpoint_url(provider,"/v1/realtime",endpoint,
             sizeof(endpoint),&base,error,size)<0)
         return -1;
-    if(!strncmp(base,"https://",8u))authority=base+8u;
-    else if(!strncmp(base,"http://127.0.0.1:",17u)) {scheme="ws";authority=base+7u;}
-    else if (!strncmp(base,"http://[::1]:",13u)) {scheme="ws";authority=base+7u;}
-    if(!authority) {snag_errorf(error,size,"Realtime microphone transport requires an HTTPS provider URL");return -1;}
+    if (!strncmp(base, "https://", 8u)) authority = base + 8u;
+    else if (!strncmp(base, "http://", 7u)) {
+        scheme = "ws";
+        authority = base + 7u;
+    }
+    if (!authority) {
+        snag_errorf(error, size, "Realtime voice requires an HTTP or HTTPS provider URL");
+        return -1;
+    }
     bool local_gateway = !call && base &&
         (!strncmp(base, "http://127.0.0.1:", 17u) ||
             !strncmp(base, "http://[::1]:", 13u));

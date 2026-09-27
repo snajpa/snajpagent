@@ -1689,6 +1689,10 @@ Start a voice conversation using the selected provider and its credentials.
 Direct Codex subscriptions and codex-lb use native subscription voice; compatible
 BYOK providers use their Realtime API. A codex-lb gateway must use its
 /backend-api/codex base for native voice; a bare /v1 base does not select it.
+Realtime follows the configured URL: HTTPS uses a certificate-verified secure
+WebSocket, and HTTP uses an unencrypted WebSocket. HTTP sends credentials and
+voice control traffic without TLS; use HTTPS or a secure tunnel outside a
+trusted network.
 Native voice resolves credentials at startup and uses the same credential for
 call setup and attachment. A configured gateway key needs no separate login.
 [audio] settings are optional overrides.

@@ -773,6 +773,10 @@ after their matching user turn has a finalized transcript. Captions use stable
 turn identities, and barge-in clears queued playback before new output is admitted.
 Provider credentials stay with the voice connection owner. Account, endpoint and
 billing route are fixed for that connection.
+Realtime maps the configured HTTP/HTTPS scheme to WS/WSS without a hostname
+exception. The same explicit gateway route carries call creation and attachment;
+TLS peer/hostname verification and redirect rejection remain enabled for HTTPS.
+Plain HTTP is appropriate only on a trusted network or inside a secure tunnel.
 
 `base64.c/h` encodes incrementally into a synchronous byte sink with no allocation,
 files, JSON, process or device dependency. It retains at most two pending input

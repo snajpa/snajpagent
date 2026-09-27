@@ -3238,12 +3238,16 @@ ws_read_client(int fd,size_t expected,unsigned char byte)
 }
 
 static void
-ws_server(unsigned int mode,int listen_fd)
+ws_server(unsigned int mode,int listen_fd,bool native)
 {
     alarm(15u);
     int fd=accept(listen_fd,NULL,NULL);if(fd<0)server_fail("WebSocket fixture accept failed");
     struct http_request request;read_request(fd,&request);
-    if(strcmp(request.method,"GET") || strcmp(request.path,"/v1/realtime?model=fixture%20voice") ||
+    const char *path = native ? "/backend-api/codex/rtc_native" :
+        "/v1/realtime?model=fixture%20voice";
+    if (strcmp(request.method,"GET") || strcmp(request.path,path) ||
+        !header_contains(request.headers,"Authorization: Bearer transport-secret") ||
+        (native && !header_contains(request.headers,"openai-alpha: quicksilver=v2")) ||
         !header_contains(request.headers,"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ=="))
         server_fail("WebSocket handshake URL/nonce mismatch");
     if(mode==4u) {
@@ -3291,14 +3295,17 @@ test_voice_socket(void)
     strcpy(provider.openrouter_title,"snajpagent");
     strcpy(credential.value,"transport-secret");credential.len=strlen(credential.value);
     struct snag_voice_socket *voice=NULL;char error[256];
-    strcpy(provider.base_url,"http://remote.invalid");
+    strcpy(provider.base_url,"ftp://remote.invalid");
     assert(snag_provider_voice_open(&provider,&credential,"fixture",NULL,NULL,&voice,error,sizeof(error))<0 && !voice);
     strcpy(provider.base_url,"http://127.0.0.1:1/v1/");
     assert(snag_provider_voice_open(&provider,&credential,"fixture",NULL,NULL,
         &voice,error,sizeof(error))<0 && !voice);
     assert(strstr(error,"/backend-api/codex"));
-    for(unsigned int mode=0;mode<6u;++mode) {
-        fprintf(stderr,"WebSocket fixture mode %u\n",mode);
+    for (unsigned int test=0;test<18u;++test) {
+        unsigned int mode = test % 6u;
+        unsigned int route = test / 6u;
+        bool native = route == 2u;
+        fprintf(stderr,"WebSocket fixture route %u mode %u\n",route,mode);
         struct local_server server;
         struct sockaddr_in address; socklen_t address_size=sizeof(address);
         memset(&server,0,sizeof(server));memset(&address,0,sizeof(address));
@@ -3308,18 +3315,26 @@ test_voice_socket(void)
         assert(getsockname(server.fd,(struct sockaddr *)&address,&address_size)==0);
         server.port=ntohs(address.sin_port);
         server.pid=fork();assert(server.pid>=0);
-        if(!server.pid)ws_server(mode,server.fd);
+        if (!server.pid) ws_server(mode,server.fd,native);
         close(server.fd);server.fd=-1;
-        snprintf(provider.base_url,sizeof(provider.base_url),"http://127.0.0.1:%u/v1/",server.port);
+        snprintf(provider.base_url,sizeof(provider.base_url),"http://%s:%u/%s",
+            route ? "localhost" : "127.0.0.1",server.port,native ? "backend-api/codex" : "v1/");
         uint64_t deadline=snag_monotonic_ms()+200u;
-        int rc=snag_provider_voice_open(&provider,&credential,"fixture voice",mode==5u?ws_cancel:NULL,
-            &deadline,&voice,error,sizeof(error));
+        int rc = native ? snag_provider_voice_attach(&provider,&credential,"rtc_native",
+            mode==5u?ws_cancel:NULL,&deadline,&voice,error,sizeof(error)) :
+            snag_provider_voice_open(&provider,&credential,"fixture voice",mode==5u?ws_cancel:NULL,
+                &deadline,&voice,error,sizeof(error));
         if(mode>=4u) {
             assert(rc==(mode==5u?2:-1) && !voice);
             if(mode==4u)assert(strstr(error,"401") && !strstr(error,"private denied body"));
             stop_server(&server);continue;
         }
-        if(rc)fprintf(stderr,"WebSocket fixture: %s\n",error);
+        if (rc) {
+            fprintf(stderr,"WebSocket fixture: %s\n",error);
+            int status;
+            (void)kill(server.pid,SIGTERM);
+            assert(waitpid(server.pid,&status,0)==server.pid);
+        }
         assert(rc==0 && voice);
         struct snag_buf received;snag_buf_init(&received,mode?64u:65536u);
         deadline=snag_monotonic_ms()+10000u;

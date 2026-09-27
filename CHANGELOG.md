@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Use the configured provider URL's HTTP/HTTPS scheme for realtime voice,
+  including hostname-based subscription gateways. HTTPS retains certificate
+  verification; plain HTTP requires a trusted network or secure tunnel.
+
 - Bind IRC admissions to the committed event sequence when a checkpoint is
   inserted before receipt. Recover older shifted references only when the
   adjacent saved IRC event exactly matches the admission's recorded identity.
