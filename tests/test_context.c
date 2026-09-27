@@ -1956,6 +1956,60 @@ test_pending_irc_source_across_rebase(struct snag_store *store, const char *cwd)
 }
 
 static void
+test_irc_source_shifted_by_checkpoint(struct snag_store *store, const char *cwd)
+{
+    const char *turn = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    const char *prompt = "[IRC update id=11111111111111111111111111111111:44 "
+        "endpoint=fixture:1234 room=#work event=message sender=peer]\n";
+    for (unsigned int mode = 0; mode < 3u; ++mode) {
+        struct snag_session session;
+        struct snag_context_projection projection = {0};
+        struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u,
+            .endpoint = "fixture:1234", .room = "#work", .nick = "peer",
+            .text = "checkpoint shifted source payload", .classified = true, .input = true,
+            .stream = "11111111111111111111111111111111", .sequence = 44u};
+        char error[512] = {0};
+        char id[SNAG_ID_HEX_LEN + 1u];
+        json_t *empty = json_array();
+        create_session(store, &session, cwd, "medium");
+        memcpy(id, session.id, sizeof(id));
+        uint64_t checkpoint = session.next_seq;
+        assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+        if (mode == 1u) ++event.sequence;
+        if (mode == 2u) event.input = false;
+        commit_event(&session, "irc_event", snag_irc_event_data(&event));
+        assert(session.next_seq == checkpoint + 2u);
+        commit_event(&session, "irc_admitted", json_pack("{s:[I],s:o}",
+            "sequences", (json_int_t)checkpoint, "input", input_received_data(prompt)));
+        commit_event(&session, "turn_started", turn_started(turn, 1u, prompt, cwd, json_array()));
+        for (unsigned int pass = 0; pass < 2u; ++pass) {
+            int rc = snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, empty,
+                0u, false, NULL, NULL, NULL, NULL, &projection, error, sizeof(error), NULL);
+            if (mode) {
+                assert(rc < 0 && strstr(error, "IRC admission lacks its source event"));
+            } else {
+                if (rc < 0) fprintf(stderr, "shifted IRC: %s\n", error);
+                assert(rc == 0);
+                json_t *input = json_object_get(projection.create_request.value, "input");
+                size_t copies = 0;
+                for (size_t i = 0; i < json_array_size(input); ++i) {
+                    const char *text = snag_json_string(json_array_get(input, i), "content");
+                    if (text && strstr(text, event.text)) ++copies;
+                }
+                assert(copies == 1u && projection.irc_seq >= checkpoint + 1u);
+            }
+            snag_context_projection_free(&projection);
+            if (!pass) {
+                snag_session_close(&session);
+                assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+            }
+        }
+        json_decref(empty);
+        snag_session_close(&session);
+    }
+}
+
+static void
 test_admitted_room_event_stays_out_of_tool_exchange(struct snag_store *store, const char *cwd)
 {
     const char *turn = "e1000000000000000000000000000000";
@@ -4690,6 +4744,7 @@ main(int argc, char **argv)
     test_durable_irc_input_watermark(&store, cwd);
     test_rebased_irc_admission_overlap(&store, cwd);
     test_pending_irc_source_across_rebase(&store, cwd);
+    test_irc_source_shifted_by_checkpoint(&store, cwd);
     test_admitted_room_event_stays_out_of_tool_exchange(&store, cwd);
     test_compact_groups(&store, cwd);
     test_repeated_compaction_active_seam(&store, cwd);

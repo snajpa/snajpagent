@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Bind IRC admissions to the committed event sequence when a checkpoint is
+  inserted before receipt. Recover older shifted references only when the
+  adjacent saved IRC event exactly matches the admission's recorded identity.
+
 - Document empty-Tab cycling through rollout and every connected room. Extend
   terminal regression coverage to verify room routing after cycling and reconnect.
   Introduce autonomous work and distributed teams in the README and homepage.

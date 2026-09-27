@@ -230,9 +230,11 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     accepted.urgent = chat && !event->historical &&
         snag_irc_mentions_agent(app->irc, event->endpoint, event->text);
     accepted.reply = accepted.urgent && snag_irc_local_identity(app->irc, event, false);
-    uint64_t accepted_seq = app->session.next_seq;
     if (snag_app_commit_event(app, "irc_event", snag_irc_event_data(&accepted), error, sizeof(error)) < 0)
         return -1;
+    /* Commit may insert a checkpoint before the IRC event. The reducer keeps
+     * the actual durable sequence, including any checkpoint on either side. */
+    uint64_t accepted_seq = app->session.irc_received_seq;
     if (snag_ui_send(&app->ui, (struct snag_ui_command){
         .kind = SNAG_UI_IRC, .data.irc = event}) < 0) return -1;
     if (event->kind == SNAG_IRC_DISCONNECTED &&

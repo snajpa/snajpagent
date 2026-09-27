@@ -367,6 +367,16 @@ already lost a pending source from its cache, an uncovered admission resolves
 the referenced input event from the verified journal. A missing or non-input
 source still fails the admission instead of fabricating room content.
 
+Admission references use the reducer's committed `irc_received_seq`. Capturing
+`next_seq` before commit is invalid because commit may first insert a checkpoint.
+For already-written shifted references, context recovery requires a verified
+checkpoint at the referenced sequence and an input IRC event immediately after
+it, before the admission. Its stream ID, stream sequence, endpoint, room, event
+kind and sender must match the complete header in the admission's saved input
+or steering text. Recovery consumes that actual pending source once without
+rewriting history. An absent identity, different neighbor or non-input event
+remains an error.
+
 Switching views never clears or repaints terminal history. It appends a short
 view boundary, emits every semantic item accumulated for the entered view
 since that view was last active in the current foreground run, in original

@@ -1575,7 +1575,25 @@ struct irc_source_lookup {
     const json_t *sequences;
     json_t *sources;
     uint64_t admission_seq;
+    uint64_t checkpoint_seq;
+    const char *prompt;
 };
+
+static bool
+irc_source_prompt_matches(const char *prompt, const struct snag_irc_event *event)
+{
+    if (!prompt || !event->stream[0] || !event->sequence) return false;
+    char marker[SNAG_CONFIG_IRC_ENDPOINT_MAX + SNAG_CONFIG_IRC_ROOM_MAX +
+        SNAG_CONFIG_IRC_NICK_MAX + 128u];
+    int n = snprintf(marker, sizeof(marker),
+        "[IRC update id=%s:%llu endpoint=%s room=%s event=%s sender=%s]\n",
+        event->stream, (unsigned long long)event->sequence, event->endpoint, event->room,
+        snag_irc_kind_name(event->kind), event->nick[0] ? event->nick : "server");
+    if (n < 0 || (size_t)n >= sizeof(marker)) return false;
+    const char *match = strstr(prompt, marker);
+    return match && (match == prompt || match[-1] == '\n') &&
+        !strstr(match + (size_t)n, marker);
+}
 
 static int
 recover_irc_source(void *opaque, const struct snag_session *state, uint64_t seq,
@@ -1585,15 +1603,29 @@ recover_irc_source(void *opaque, const struct snag_session *state, uint64_t seq,
     (void)state;
     (void)error;
     (void)error_size;
-    if (seq >= lookup->admission_seq || strcmp(type, "irc_event")) return 0;
+    if (seq >= lookup->admission_seq) return 0;
+    uint64_t wanted = 0;
     for (size_t i = 0u; i < json_array_size(lookup->sequences); ++i) {
         if ((uint64_t)json_integer_value(json_array_get(lookup->sequences, i)) != seq) continue;
-        struct snag_irc_event event;
-        if (snag_irc_event_read(data, &event) < 0 || !event.input) return 0;
-        json_t *source = json_pack("{s:I,s:O}", "seq", (json_int_t)seq, "event", data);
-        if (!source || json_array_append_new(lookup->sources, source) < 0) return -1;
+        wanted = seq;
         break;
     }
+    if (wanted && !strcmp(type, "session_checkpoint")) {
+        lookup->checkpoint_seq = seq;
+        return 0;
+    }
+    if (strcmp(type, "irc_event")) return 0;
+    struct snag_irc_event event;
+    if (snag_irc_event_read(data, &event) < 0 || !event.input) return 0;
+    /* Older writers captured next_seq before commit inserted a checkpoint.
+     * Repair only that adjacent shift with an exact durable input identity;
+     * a missing source or unrelated neighboring event remains an error. */
+    if (!wanted && lookup->checkpoint_seq && seq == lookup->checkpoint_seq + 1u &&
+        irc_source_prompt_matches(lookup->prompt, &event)) wanted = lookup->checkpoint_seq;
+    if (!wanted) return 0;
+    json_t *source = json_pack("{s:I,s:I,s:O}", "seq", (json_int_t)wanted,
+        "source_seq", (json_int_t)seq, "event", data);
+    if (!source || json_array_append_new(lookup->sources, source) < 0) return -1;
     return 0;
 }
 
@@ -1653,7 +1685,9 @@ context_event(void *opaque, const struct snag_session *state,
         const json_t *steering = json_object_get(data, "steering");
         bool has_prompt = json_is_object(steering) ||
             json_is_object(json_object_get(data, "input"));
-        struct irc_source_lookup lookup = { .sequences = sequences, .admission_seq = seq };
+        struct irc_source_lookup lookup = {.sequences = sequences, .admission_seq = seq,
+            .prompt = snag_json_string(json_is_object(steering) ? steering :
+                json_object_get(data, "input"), "text")};
         if (!summarized) for (size_t i = 0u; i < json_array_size(sequences); ++i) {
             json_int_t wanted = json_integer_value(json_array_get(sequences, i));
             bool present = false;
@@ -1692,6 +1726,16 @@ context_event(void *opaque, const struct snag_session *state,
                             has_prompt) < 0) {
                         json_decref(lookup.sources);
                         return -1;
+                    }
+                    json_int_t actual = json_integer_value(json_object_get(source, "source_seq"));
+                    for (size_t k = 0; k < json_array_size(builder->deferred_irc); ++k) {
+                        if (json_integer_value(json_object_get(
+                            json_array_get(builder->deferred_irc, k), "seq")) != actual) continue;
+                        if (json_array_remove(builder->deferred_irc, k) < 0) {
+                            json_decref(lookup.sources);
+                            return -1;
+                        }
+                        break;
                     }
                     found = true;
                     break;
