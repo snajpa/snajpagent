@@ -2752,6 +2752,128 @@ test_plain_irc_pending_resume(void)
 }
 
 static void
+test_irc_reply_restore_scope(void)
+{
+    struct snag_config config;
+    struct snag_store store;
+    char path[4096], error[256] = {0};
+    const char *tmp = getenv("TMPDIR");
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-irc-replies-XXXXXX",
+        tmp ? tmp : "/tmp") > 0);
+    assert(mkdtemp(path));
+    snag_config_init(&config);
+    strcpy(config.irc.room_name, "#plain");
+    int probe = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in address = {.sin_family = AF_INET};
+    socklen_t address_size = sizeof(address);
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    assert(probe >= 0 && bind(probe, (struct sockaddr *)&address, sizeof(address)) == 0);
+    assert(getsockname(probe, (struct sockaddr *)&address, &address_size) == 0);
+    assert(snprintf(config.irc.listen, sizeof(config.irc.listen), "127.0.0.1:%u",
+        (unsigned int)ntohs(address.sin_port)) > 0);
+    assert(close(probe) == 0);
+    config.irc.listen_explicit = true;
+    snag_store_init(&store);
+    assert(snag_store_open(&store, path, error, sizeof(error)) == 0);
+    for (unsigned int mode = 0u; mode < 9u; ++mode) {
+        struct app_state app = {0};
+        char session_id[33];
+        bool steer_current = mode == 8u;
+        bool active = steer_current || (mode & 1u);
+        bool current_reply = steer_current || (mode & 2u), cancel_old = mode & 4u;
+        app.config = &config;
+        snag_session_init(&app.session);
+        assert(snag_session_create(&store, &app.session, path, "default", "fixture",
+            "medium", error, sizeof(error)) == 0);
+        strcpy(session_id, app.session.id);
+        struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u,
+            .room = "#plain", .nick = "operator",
+            .local = true, .classified = true, .input = true, .urgent = true, .reply = true};
+        strcpy(event.endpoint, config.irc.listen);
+        for (unsigned int turn = 1u; turn <= 2u; ++turn) {
+            char id[33], text[64];
+            assert(snprintf(id, sizeof(id), "%032x", turn) > 0);
+            assert(snprintf(text, sizeof(text), "request %u for the agent", turn) > 0);
+            json_t *input = json_pack("{s:s,s:o,s:s,s:s,s:b,s:I,s:s}",
+                "effort", "medium", "instructions", json_array(), "model", "fixture",
+                "provider", "default", "read_only", 0,
+                "received_at_ms", (json_int_t)snag_time_ms(), "text", text);
+            assert(input);
+            if (turn == 1u || (current_reply && !steer_current)) {
+                uint64_t received;
+                strcpy(event.text, text);
+                assert(snag_session_commit(&app.session, "irc_event", snag_irc_event_data(&event),
+                    &received, error, sizeof(error)) == 0);
+                input = json_pack("{s:[I],s:o}", "sequences", (json_int_t)received, "input", input);
+                assert(snag_session_commit(&app.session, "irc_admitted", input,
+                    NULL, error, sizeof(error)) == 0);
+            } else {
+                assert(snag_session_commit(&app.session, "input_received", input,
+                    NULL, error, sizeof(error)) == 0);
+            }
+            if (turn == 1u && cancel_old) {
+                assert(snag_session_commit(&app.session, "input_cancelled", json_object(),
+                    NULL, error, sizeof(error)) == 0);
+                continue;
+            }
+            if (turn == 1u || active) {
+                json_t *started = json_pack("{s:{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b},"
+                    "s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:I,s:s}",
+                    "config", "capability_version", SNAJPAGENT_CAPABILITY_VERSION,
+                    "effort", "medium", "max_output_tokens", "model", "fixture",
+                    "provider", "default", "profile_id", SNAJPAGENT_PROFILE_ID,
+                    "prompt_schema", 1, "replay_schema", 1, "tool_schema", 1,
+                    "max_parallel_commands", 4, "parallel_tool_calls", 1,
+                    "input_kind", "direct", "read_only", 0, "instructions", json_array(),
+                    "queue_id", "queue_seq", "text", text, "turn_id", id,
+                    "turn_number", (json_int_t)(turn - (cancel_old ? 1u : 0u)),
+                    "cwd", app.session.cwd);
+                assert(snag_session_commit(&app.session, "turn_started", started,
+                    NULL, error, sizeof(error)) == 0);
+            }
+            if (turn == 1u)
+                assert(snag_session_commit(&app.session, "turn_failed",
+                    json_pack("{s:s,s:s,s:s}", "class", "provider", "message", "fixture",
+                        "turn_id", id), NULL, error, sizeof(error)) == 0);
+            if (turn == 2u && steer_current) {
+                uint64_t received;
+                strcpy(event.text, "current room steering");
+                assert(snag_session_commit(&app.session, "irc_event", snag_irc_event_data(&event),
+                    &received, error, sizeof(error)) == 0);
+                assert(snag_session_commit(&app.session, "irc_admitted",
+                    json_pack("{s:[I],s:{s:s,s:s,s:s}}", "sequences", (json_int_t)received,
+                        "steering", "turn_id", id, "steering_id",
+                        "33333333333333333333333333333333", "text", event.text),
+                    NULL, error, sizeof(error)) == 0);
+            }
+        }
+        snag_session_close(&app.session);
+        assert(snag_session_open(&store, &app.session, session_id, error, sizeof(error)) == 0);
+        snag_buf_init(&app.irc_background, 4096u);
+        snag_buf_init(&app.irc_background_refs, 1024u);
+        snag_buf_init(&app.irc_urgent, 4096u);
+        snag_buf_init(&app.irc_urgent_refs, 1024u);
+        /* An owned loopback listener supplies identity; no pump starts owners. */
+        assert(snag_irc_open(&app.irc, &config, path, NULL, NULL, NULL,
+            error, sizeof(error)) == 0);
+        struct snag_irc_target target;
+        assert(snag_irc_event_target(app.irc, &event, &target));
+        assert(snag_app_irc_restore(&app, error, sizeof(error)) == 0);
+        assert(app.irc_turn_replies.count == (current_reply ? 1u : 0u));
+        if (current_reply) assert(app.irc_turn_replies.targets[0].id == target.id);
+        assert(!app.irc_urgent.len && !app.irc_background.len);
+        snag_irc_close(app.irc);
+        snag_buf_free(&app.irc_background);
+        snag_buf_free(&app.irc_background_refs);
+        snag_buf_free(&app.irc_urgent);
+        snag_buf_free(&app.irc_urgent_refs);
+        snag_session_close(&app.session);
+    }
+    snag_store_close(&store);
+    snag_config_free(&config);
+}
+
+static void
 test_irc_failed_intent_retains_pending(void)
 {
     struct snag_config config = {0};
@@ -3716,6 +3838,7 @@ main(void)
 #endif
     test_irc_steering_mode();
     test_plain_irc_pending_resume();
+    test_irc_reply_restore_scope();
     test_irc_failed_intent_retains_pending();
 #if SNAJPAGENT_AUDIO_DEVICE && defined(MA_NO_RUNTIME_LINKING) && defined(MA_ENABLE_ALSA)
     test_static_alsa_config();

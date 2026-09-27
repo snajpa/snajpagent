@@ -649,6 +649,8 @@ local-operator mention turn reaches a terminal response without a successful
 .B irc_send
 message, the model receives one reminder.  Notices do not satisfy that reply
 requirement.  Other room traffic never forces a reply.
+Each requirement stays with the input or turn that admitted it. Resume restores
+those belonging to the current pending input or active turn.
 .PP
 The accepted per-server nick drives mentions, echo suppression, and model
 instructions.  Live IRC nick changes retain op status and produce room

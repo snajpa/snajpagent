@@ -322,6 +322,14 @@ control duplicate suppression, not whether current conversation input survives
 resume. Admission removes the exact saved event once; it cannot replay that
 input merely because its original display buffer was lost.
 
+Reply obligations belong to the input/turn that admitted them. Replay stages
+pending-input obligations separately, promotes them at that input's
+`turn_started`, and clears them when the canonical pending/active lifetime ends.
+An older input, including one cancelled before a turn starts, cannot lend its
+obligations to an unrelated current turn. Current-turn steering retains its
+own obligations. The restored reply routes are published only after replay
+succeeds.
+
 ## Reconciliation and acceptance
 
 Use focused additions to the existing tests for these combinations, preserving

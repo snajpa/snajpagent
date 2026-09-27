@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Restore IRC reply requirements within their original input/turn lifetime,
+  keeping earlier turns and cancelled pending inputs out of unrelated work.
+
 - Preserve unconsumed messages and notices from plain IRC servers across
   session resume, including servers without catch-up stream IDs. Recorded
   admission consumes each saved input once.
