@@ -1965,11 +1965,12 @@ tool_schemas(bool goal_active,
                 "reason", "type", "string", "null", "description",
                 "Optional concise reason for remove or clear."))) < 0 ||
         json_array_append_new(tools, tool_schema("send_file", "path",
-            "Send one regular file or accepted asset to the workstation through the active trzsz "
-            "terminal wrapper. Requires an interactive POSIX terminal; takes exclusive terminal "
-            "ownership until completion or cancellation. File bytes are not tool output. "
-            "Success means the client acknowledged the digest and final EXIT, "
-            "not a guessed save path.",
+            "Export one regular file or accepted asset to the workstation. Journals a pending "
+            "download in the existing session before sending. A live native remote wrapper "
+            "permits delivery; otherwise returns queued intent, not delivery. Interactive POSIX "
+            "delivery owns the terminal until completion or cancellation and requires digest "
+            "and final EXIT acknowledgement. Failed or uncertain delivery stays pending. "
+            "File bytes are not tool output; read-only turns cannot export files.",
             json_pack("{s:{s:s,s:s}}", "path", "type", "string", "description",
                 "Literal cwd-relative or absolute file path without symlinks, or asset:ID. "
                 "Directories are rejected; empty regular files are supported."))) < 0 ||

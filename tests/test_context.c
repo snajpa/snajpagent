@@ -1241,6 +1241,7 @@ assert_optional_tool_contract(json_t *tool)
         {"get_cwd", ""},
         {"cd", "path"},
         {"send_file", "path"},
+        {"download_queue", "action"},
         {"select_model", "selector"},
         {"list_files", "path"},
         {"read_file", "path"},
@@ -1489,12 +1490,13 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
             assert(!item_by_field(ts, "type", openrouter ? "web_search" : "openrouter:web_search"));
             static const char *const unconditional[] = {
                 "view_image", "read_document", "view_video", "listen_audio", "transcribe_audio",
-                "speak_text", "send_file", "exec_command", "write_stdin", "read_tool_output",
+                "speak_text", "send_file", "download_queue", "exec_command", "write_stdin",
+                "read_tool_output",
                 "read_session_history", "list_goals", "set_command_shell",
                 "apply_patch", "get_cwd", "list_files", "read_file",
                 "grep", "write_file", "edit_file", "irc_send", "irc_state", "irc_topic", "irc_nick", "irc_connect",
                 "irc_host", "irc_disconnect", "create_goal", "update_goal", "timer", "defer_steering" };
-            assert(json_array_size(ts) == 34u);
+            assert(json_array_size(ts) == 35u);
             for (size_t k = 0u; k < sizeof(unconditional) / sizeof(unconditional[0]); ++k)
                 assert(item_by_field(ts, "name", unconditional[k]));
             for (size_t j = 0; j < json_array_size(ts); ++j) {
@@ -1507,6 +1509,11 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
             (void)assert_optional_tool_contract(item_by_field(ts, "name", "grep"));
             (void)assert_optional_tool_contract(item_by_field(ts, "name", "write_file"));
             (void)assert_optional_tool_contract(item_by_field(ts, "name", "edit_file"));
+            json_t *queue = item_by_field(ts, "name", "download_queue");
+            assert_properties(queue, json_pack("{s:{s:s},s:{s:[s,s]},s:{s:[s,s]}}",
+                "action", "type", "string", "id", "type", "string", "null",
+                "reason", "type", "string", "null"));
+            assert(strstr(snag_json_string(queue, "description"), "read-only"));
         }
         struct snag_buf serialized = {.max = SNAG_CONTEXT_MAX_REQUEST};
         assert(snag_json_canonical(projection.create_request.value, &serialized) == 0);
