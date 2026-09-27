@@ -198,16 +198,21 @@ def case_model_switch(binary, provider, root):
             with provider.lock:
                 provider.catalog_failure = None
 
-    case, run, events = run_case(binary, provider, root, "model-switch",
-        "switch the model and retain results", responder(provider, [
-            ("select_model", {"selector": "uncached-model"}),
-            ("select_model", {"selector": "cache"}),
-            ("select_model", {"selector": "ghost-model/medium"}),
-            ("select_model", {"selector": "standard-model/ultra"}),
-            ("select_model", {"selector": "cache"}),
-            ("select_model", {"selector": "#1"}),
-            ("get_cwd", {}),
-        ], "model switch complete", inspect=observed))
+    previous_agents = provider.AGENTS
+    provider.AGENTS = {**previous_agents, "standard-model": "standardbot"}
+    try:
+        case, run, events = run_case(binary, provider, root, "model-switch",
+            "switch the model and retain results", responder(provider, [
+                ("select_model", {"selector": "uncached-model"}),
+                ("select_model", {"selector": "cache"}),
+                ("select_model", {"selector": "ghost-model/medium"}),
+                ("select_model", {"selector": "standard-model/ultra"}),
+                ("select_model", {"selector": "cache"}),
+                ("select_model", {"selector": "#1"}),
+                ("get_cwd", {}),
+            ], "model switch complete", inspect=observed))
+    finally:
+        provider.AGENTS = previous_agents
     assert run.returncode == 0, (run.stdout, run.stderr)
     assert models[:6] == ["host-model"] * 6, models
     assert models[-2:] == ["standard-model"] * 2, models

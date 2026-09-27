@@ -120,7 +120,6 @@ def is_summary_request(request):
 class FakeResponses:
     AGENTS = {
         "host-model": "hostbot",
-        "standard-model": "standardbot",
         "one-model": "onebot",
         "two-model": "twobot",
     }
