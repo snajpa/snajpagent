@@ -18,6 +18,40 @@ The measured failure makes the first optimization clear: 422 embedded full
 checkpoints accounted for 2,050,400,577 of 2,113,498,737 journal bytes. Changing
 serialization alone would leave that repeated-state growth intact.
 
+## Format evolution and compatibility
+
+The new encoding is provisional while implementation and recovery testing expose
+missing requirements. Refine its framing, typed records and state references
+together before the first binary-format release. A development conversion keeps
+its source and identifies the exact draft revision; it does not freeze an
+incomplete encoding as a released format. Reconvert draft fixtures from their
+preserved originals when the draft changes.
+
+A released format creates a continuing read or migration obligation. Keep the
+legacy importer isolated behind the import interface, and retain decoding or
+migration paths plus permanent fixtures for every released format. Writers emit
+the current format; readers select the appropriate decoder from the file header.
+Incompatible conversion produces a separately verified destination and preserves
+the original until explicit cutover. A release number and an on-disk format
+version are separate identities.
+
+Keep major versions for incompatible interpretation. Within a major version,
+minor additions use length-delimited extensions with stable numeric IDs and
+explicit required/optional semantics. Never reuse retired IDs, silently change
+field meanings or assume that an unknown field is optional. Unknown required
+state prevents resumption or append before any mutation; optional metadata may
+be skipped only when doing so preserves all execution and recovery semantics.
+Read compatibility alone does not grant append compatibility. Opening a newer
+file must check the writer requirements too, so an older executable cannot drop
+state it does not understand while checkpointing or extending the journal.
+
+Exercise these rules with byte-level fixtures in the existing store tests:
+released predecessor imports, optional extensions, unknown required features,
+unsupported record versions, truncation, checked lengths and cross-endian bytes.
+Freeze the first layout only after the full session state and converter use it.
+Add extension points for concrete record evolution; keep a general schema or
+plugin system out of the storage implementation.
+
 ## Layout decision
 
 Use one logical session store with four binary files:
@@ -260,6 +294,16 @@ missing authority or completed effects. Report exact unresolved sequence/byte
 ranges and continuation constraints. Distinguish a torn uncommitted tail from a
 corrupt committed record. Recovery should reconcile everything supported by the
 available evidence, rather than treating the first validation failure as final.
+
+Old instances may keep appending for hours after a test conversion. Record the
+source file identity, verified sequence/hash and length; copied-source outputs
+are provisional and never select the active format. Acquire the original writer
+lock before final validation and cutover. If the source has advanced, reconvert
+the stopped source. Incremental catch-up is an optional optimization only when
+the verified prefix still matches and the implementation stays simple. Do not
+invent a live replication protocol. Publication must also prevent an older
+executable from resuming writes into the superseded legacy journal; preserve
+that journal under a rollback name with crash-recoverable publication ordering.
 
 Implement in dependency order:
 
