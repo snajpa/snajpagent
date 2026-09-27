@@ -5,6 +5,9 @@
 The common context requirements and transition rules are maintained in
 [Context lifecycle](context-lifecycle.md). Component details below must agree
 with that contract across live operation, checkpoint restore and history tools.
+The next-format [binary storage design](session-storage.md) defines replacement
+checkpoints and indexed history. The storage implementation described here is
+the current JSONL format.
 
 snajpagent is a single foreground terminal process. It can host a built-in IRC
 server and maintain outgoing IRC connections, but does not fork a background

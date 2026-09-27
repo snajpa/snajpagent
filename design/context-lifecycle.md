@@ -7,7 +7,10 @@ request accounting and original-history navigation. `architecture.md` describes
 component ownership; `goals.md` owns goal lifecycle; `interactive-io.md` owns
 terminal interaction. Those surfaces must use the transitions defined here.
 Implementation and test reconciliation is in progress; this design is not a
-claim that every existing path already satisfies it.
+claim that every existing path already satisfies it. [Binary session storage](session-storage.md)
+defines the next-format layout, replacement checkpoints, index and grouped I/O.
+Its explicit layout decisions supersede the one-file restrictions below for that
+future format; the descriptions below still apply to the current JSONL store.
 
 ## Requirements
 
