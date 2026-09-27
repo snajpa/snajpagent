@@ -35,6 +35,11 @@ claim that every existing path already satisfies it.
 7. Enforce the selected model's actual capacity. Exact counts, provider usage,
    conservative media bounds, statistical estimates and byte sizes have distinct
    meanings. A byte size is never displayed or persisted as measured tokens.
+   An upper bound above the capacity does not prove actual overflow. It cannot
+   trigger token-budget compaction or discard a successful summary. Without an
+   exact count, use compatible provider measurements for proactive decisions and
+   the existing provider-rejection recovery path for actual overflow. Native
+   image/body byte limits remain independent, enforced transport constraints.
 8. Present consistent context information while working and at idle. The prompt
    and `/status` use the same observation validity and selected-capacity rules;
    issuing a command must not be necessary to refresh them.

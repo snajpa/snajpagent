@@ -180,6 +180,11 @@ snag_app_provider_count(struct app_state *app, const json_t *count_request,
         *input_tokens = app->session.compact_id[0] ? 1000u : 90000u;
         *count_method = "exact";
     }
+    if (app->session.last_user && !strcmp(app->session.last_user, "compact_media_bound_after") &&
+        json_object_get(count_request, "tools")) {
+        *input_tokens = 90000u;
+        *count_method = app->session.compact_id[0] ? "media_upper_bound" : "exact";
+    }
     if (app->session.last_user && strcmp(app->session.last_user, "compact_after_progress") == 0 &&
         json_object_get(count_request, "tools")) {
         *input_tokens = fixture_progress_compactions == 0u ||

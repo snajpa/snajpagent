@@ -1628,17 +1628,35 @@ test_media_count_fallback(void)
         assert(!compacted);
         assert(snag_app_compact_after_turn(&app, tokens, method, error, sizeof(error)) == 0);
     }
-    /* A media bound over the hard budget compacts before the request is sent,
-     * instead of sending it and waiting for the provider to reject it. */
+    /* An exceeding upper bound does not prove actual overflow. Reproduce the
+     * large-text plus one-image route without an exact token counter. */
     app.turn_capacity.hard_input_known = true;
-    app.turn_capacity.hard_input_tokens = 1u;
+    app.turn_capacity.hard_input_tokens = 258400u;
     {
+        char *large = malloc(300001u);
+        assert(large);
+        memset(large, 'a', 300000u);
+        large[300000] = '\0';
+        json_t *parts = json_object_get(json_array_get(
+            json_object_get(request, "input"), 0u), "content");
+        assert(json_array_append_new(parts,
+            json_pack("{s:s,s:s}", "type", "input_text", "text", large)) == 0);
+        free(large);
+        assert(snag_app_provider_count(&app, request, &credential, &tokens, &method,
+            error, sizeof(error)) == SNAG_APP_COUNT_SKIPPED);
+        assert(tokens > app.turn_capacity.hard_input_tokens &&
+            !strcmp(method, "media_upper_bound"));
         bool compacted = false;
         char guard_error[256] = {0};
         int guard_rc = snag_app_compact_before_response(&app, &credential, tokens, method,
                                                         &compacted, guard_error, sizeof(guard_error));
-        assert(guard_rc != 0);
+        assert(guard_rc == 0);
         assert(!compacted);
+        /* A real exact count above the same hard capacity remains guarded. */
+        assert(snag_app_compact_before_response(&app, &credential, tokens, "exact",
+            &compacted, guard_error, sizeof(guard_error)) != 0);
+        assert(!compacted);
+        assert(json_array_remove(parts, json_array_size(parts) - 1u) == 0);
     }
     app.turn_capacity.hard_input_known = false;
     strcpy(config.providers[0].base_url, "https://api.openai.com");

@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Do not treat a conservative media upper bound as proof of token overflow.
+  Image-bearing requests with substantial measured headroom no longer compact
+  solely because their text-byte upper bound exceeds the token window. Preserve
+  successful summaries across this case; exact counts, provider rejections and
+  image/body byte limits retain their existing guards.
+
 - Reserve the platform-flag suffix in POSIX transfer IDs, preventing the client
   from intermittently mistaking uploads or downloads for a Windows server.
 

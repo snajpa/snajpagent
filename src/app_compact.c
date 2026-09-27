@@ -457,14 +457,11 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             }
             if (stage_rc == SNAG_APP_COUNT_SKIPPED) use_exact = false;
         }
-        /* A known bound over the model's hard input means this request cannot
-         * be sent: shrink the source first. Only an unknown count leaves the
-         * attempt as built, and the provider answer decides from there.
-         * A media upper bound counts as known here: the turn guard already
-         * treats it that way, and sending an 11M-token compaction request to a
-         * 258k-token route stalls the provider and re-runs on every resume. */
+        /* Only an exact count or the provider's rejection proves overflow.
+         * An exceeding upper bound does not prove the actual input is too big;
+         * transport/source byte bounds remain separate constraints. */
         if (stage_rc != SNAG_PROVIDER_CONTEXT_OVERFLOW &&
-            !(strcmp(count_method, "unknown") != 0 &&
+            !(strcmp(count_method, "exact") == 0 &&
               app->turn_capacity.hard_input_known &&
               input_tokens_bound > app->turn_capacity.hard_input_tokens)) {
             if (snag_random_id(compact_id) < 0) {
@@ -770,26 +767,16 @@ snag_app_compact_before_response(struct app_state *app, const struct snag_creden
     {
         uint64_t threshold = snag_model_compact_threshold(app->turn_provider, &app->turn_capacity);
         uint64_t measured = input_tokens_bound;
-        /* A local media upper bound is a known figure for the hard guard: the
-         * request either fits the model window or the provider rejects it, so
-         * compacting before sending is the only safe order. */
-        bool known_bound = strcmp(count_method, "exact") == 0 ||
-            strcmp(count_method, "media_upper_bound") == 0;
+        /* A conservative upper bound is not a measurement. In particular,
+         * media fallback includes one token per text byte; exceeding a token
+         * limit with that bound does not establish actual overflow. */
         bool measured_known = strcmp(count_method, "exact") == 0 || snag_app_measured_input(app, &measured);
-        /* A session that is already over its window never produces a successful
-         * usage figure, so the proactive path could never fire for it. Let a
-         * known bound (exact or media) drive the same threshold check. */
-        if (!measured_known && known_bound) {
-            measured = input_tokens_bound;
-            measured_known = true;
-        }
         /* The window can shrink when the model or provider changes, and a route
          * without exact counting reports no bound at all: an input the session
          * already measured above the hard window must compact in stages rather
          * than be sent whole (the resume failure fed 8.3 MB to a 258k window). */
-        bool over_hard = app->turn_capacity.hard_input_known &&
-            ((known_bound && input_tokens_bound > app->turn_capacity.hard_input_tokens) ||
-             (measured_known && measured > app->turn_capacity.hard_input_tokens));
+        bool over_hard = app->turn_capacity.hard_input_known && measured_known &&
+            measured > app->turn_capacity.hard_input_tokens;
         bool over_proactive = measured_known && threshold && measured >= threshold;
         int rc;
 

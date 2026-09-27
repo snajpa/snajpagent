@@ -3478,6 +3478,11 @@ from their processed size rather than their compressed bytes.  Base64 length
 and text-only learned ratios never estimate vision tokens.  The same rule
 applies to compaction, and the provider's own reported input count remains
 authoritative after each response.
+An upper bound above the model capacity does not prove actual overflow and does
+not itself trigger token-budget compaction or discard a successful summary.
+Without exact counting, proactive compaction uses compatible provider-reported
+usage; an actual provider capacity rejection follows the existing recovery path.
+The image and request-body byte limits remain enforced independently.
 .PP
 A
 .B [model-limit]

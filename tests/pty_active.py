@@ -1026,21 +1026,24 @@ def test_hard_compaction_progress_is_remeasured():
         "[provider openai]\nexact_token_count = true\nnative_compaction = true\n"
         "auto_compact_input_tokens = 0\n"
         f"[model-limit openai/{DEFAULT_MODEL}]\nmax_input_tokens = 89999\n")
-    child = Child(["--config", str(config)], DEFAULT_IDLE_PROMPT)
-    child.send_wait_idle(b"ping\r", b"pong")
-    start = len(child.buf)
-    end = child.send_wait_idle(b"compact_budget_once\r", b"fixture answer", start=start)
-    child.drain(0.1)
-    visible = re.sub(LIVE_GAP, b"", child.buf[start:end])
-    assert b"Compacting context; Ctrl-C interrupts" in visible, visible
-    assert COMPACTED in visible, visible
-    assert b"context still over the model window" not in visible, visible
-    child.exit_cleanly(end)
-    log = events(child.session_id())
-    assert len([event for event in log if event["type"] == "compaction_completed"]) == 1
-    starts = [event for event in log if event["type"] == "response_started"]
-    assert len(starts) == 2 and starts[-1]["data"]["input_tokens_bound"] == 1000
-    assert not [event for event in log if event["type"] == "context_rebased"]
+    for prompt, bound, method in ((b"compact_budget_once", 1000, "exact"),
+                                  (b"compact_media_bound_after", 90000, "media_upper_bound")):
+        child = Child(["--config", str(config)], DEFAULT_IDLE_PROMPT)
+        child.send_wait_idle(b"ping\r", b"pong")
+        start = len(child.buf)
+        end = child.send_wait_idle(prompt + b"\r", b"fixture answer", start=start)
+        child.drain(0.1)
+        visible = re.sub(LIVE_GAP, b"", child.buf[start:end])
+        assert b"Compacting context; Ctrl-C interrupts" in visible, visible
+        assert COMPACTED in visible, visible
+        assert b"context still over the model window" not in visible, visible
+        child.exit_cleanly(end)
+        log = events(child.session_id())
+        assert len([event for event in log if event["type"] == "compaction_completed"]) == 1
+        starts = [event for event in log if event["type"] == "response_started"]
+        assert len(starts) == 2 and starts[-1]["data"]["input_tokens_bound"] == bound
+        assert starts[-1]["data"]["count_method"] == method
+        assert not [event for event in log if event["type"] == "context_rebased"]
 
 
 def test_hard_compaction_resets_after_completed_response():

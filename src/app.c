@@ -3997,7 +3997,8 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
         if (app->irc_urgent.len) goto rebuild_request;
         {
             bool compacted = false;
-            bool over_hard = app->turn_capacity.hard_input_known &&
+            bool over_hard = !strcmp(count_method, "exact") &&
+                app->turn_capacity.hard_input_known &&
                 projection.input_tokens_bound > app->turn_capacity.hard_input_tokens;
             int compact_rc;
 
