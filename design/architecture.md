@@ -465,6 +465,11 @@ directories, and the atomically replaced `models.json` provider catalog. Cache
 age never causes an implicit refresh. A missing catalog directs the operator to
 explicit `/model cache`; snajpagent neither imports nor depends on Codex CLI
 cache state.
+The model's `select_model` tool reloads the current cache for each choice and
+accepts only a matching provider, model and effort row bound to the configured
+provider URL. Selector `cache` runs the existing atomic provider refresh and
+returns available cached rows; a failed refresh retains the previous cache.
+An operator's typed `/model` remains able to choose a new uncached identifier.
 
 Interactive `/config` opens the exact active configuration path in `$EDITOR`.
 The terminal returns to ordinary cooked mode while the editor owns it. After

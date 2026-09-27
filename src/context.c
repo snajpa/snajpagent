@@ -1957,10 +1957,12 @@ tool_schemas(bool goal_active,
             "Select the provider/model/effort for the next response, including within the current "
                 "turn. "
             "A completed tool result is retained; ongoing command handles remain live. "
-            "Use [provider/]model[/effort] or a numbered row from the current model cache. "
+            "Other selectors must match a provider/model/effort in the current model cache. "
+            "Use selector cache to refresh the catalog and see its available rows; "
+            "then select [provider/]model[/effort] or a numbered cached row. "
             "This changes the session selection, not the configuration file.",
             json_pack("{s:{s:s,s:s}}", "selector", "type", "string", "description",
-                "Model selector, e.g. provider/model/effort or numbered cached row."))) < 0 ||
+                "Cached model/effort row, or cache to refresh and list."))) < 0 ||
         json_array_append_new(tools, read_only_schema("list_files")) < 0 ||
         json_array_append_new(tools, read_only_schema("read_file")) < 0 ||
         json_array_append_new(tools, read_only_schema("grep")) < 0 ||

@@ -1695,6 +1695,41 @@ change_model(struct app_state *app, const char *value, bool active)
     return rc;
 }
 
+struct model_tool_rows {
+    const struct snag_model_cache *cache;
+    const struct snag_config *config;
+    const struct snag_model_selection *selected;
+    struct snag_buf *listing;
+    bool found;
+    bool truncated;
+};
+
+static int
+model_tool_cached_row(void *opaque, size_t index, const char *provider, const char *model,
+                      const char *effort, const json_t *metadata)
+{
+    struct model_tool_rows *rows = opaque;
+    const struct snag_provider_config *configured = snag_config_provider(rows->config, provider);
+    char line[SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_MODEL_MAX + SNAG_CONFIG_EFFORT_MAX + 48u];
+    int length;
+
+    if (!configured || !metadata || snag_model_metadata(rows->cache, configured, model) != metadata)
+        return 0;
+    if (rows->selected) {
+        rows->found = !strcmp(rows->selected->provider->name, provider) &&
+                      !strcmp(rows->selected->model, model) &&
+                      !strcmp(rows->selected->effort, effort);
+        return rows->found ? 1 : 0;
+    }
+    length = snprintf(line, sizeof(line), "\n%zu. %s / %s / %s", index, provider, model, effort);
+    if (length < 0 || (size_t)length >= sizeof(line)) return -1;
+    if (rows->listing->len + (size_t)length + 96u > rows->listing->max) {
+        rows->truncated = true;
+        return 1;
+    }
+    return snag_buf_append(rows->listing, line, (size_t)length) < 0 ? -1 : 0;
+}
+
 int
 snag_app_select_model_tool(struct app_state *app, const struct snag_response_item *call,
                            json_t **result, char *error, size_t error_size)
@@ -1702,8 +1737,9 @@ snag_app_select_model_tool(struct app_state *app, const struct snag_response_ite
     const char *selector = NULL;
     const struct snag_provider_config *fallback = next_provider(app);
     struct snag_model_selection selected = {0};
-    char ignored[256] = {0};
-    const struct snag_model_cache *cache = NULL;
+    char load_error[256] = {0};
+    struct model_tool_rows rows = {0};
+    int cache_rc;
     struct snag_buf message = {.max = SNAG_CONFIG_MODEL_MAX +
         SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_EFFORT_MAX + 128u};
 
@@ -1714,16 +1750,58 @@ snag_app_select_model_tool(struct app_state *app, const struct snag_response_ite
         *result = snag_tool_result_terminal(false, error);
         return *result ? 0 : -1;
     }
-    if (snag_model_cache_load(&app->store, &app->model_cache, ignored, sizeof(ignored)) == 0)
-        cache = &app->model_cache;
-    if (snag_model_select_selector(cache, app->config, selector, fallback,
+    if (!strcmp(selector, "cache")) {
+        struct snag_buf listing = {.max = 64u * 1024u};
+
+        if (refresh_model_cache(app, error, error_size) < 0) {
+            *result = snag_tool_result_terminal(false,
+                                                error[0] ? error : "model cache refresh failed");
+            return *result ? 0 : -1;
+        }
+        rows = (struct model_tool_rows){.cache = &app->model_cache, .config = app->config,
+                                        .listing = &listing};
+        if (snag_buf_printf(&listing, "model cache updated; available cached rows:") < 0 ||
+            snag_model_each(&app->model_cache, app->config, app->session.default_effort,
+                            model_tool_cached_row, &rows) < 0 ||
+            (rows.truncated && snag_buf_printf(&listing, "\n... more rows omitted") < 0) ||
+            snag_buf_terminate(&listing) < 0) {
+            snag_buf_free(&listing);
+            return snag_errorf(error, error_size, "cache updated, but model listing failed");
+        }
+        *result = snag_tool_result_terminal(true, (const char *)listing.data);
+        snag_buf_free(&listing);
+        return *result ? 0 : -1;
+    }
+    cache_rc = snag_model_cache_load(&app->store, &app->model_cache,
+                                     load_error, sizeof(load_error));
+    if (cache_rc != 0) {
+        if (cache_rc == 1)
+            snag_errorf(error, error_size,
+                        "model cache is empty; use select_model selector cache to refresh");
+        else
+            snag_errorf(error, error_size,
+                        "cannot use current model cache: %s; use selector cache to refresh",
+                        load_error);
+        *result = snag_tool_result_terminal(false, error);
+        return *result ? 0 : -1;
+    }
+    if (snag_model_select_selector(&app->model_cache, app->config, selector, fallback,
             app->session.default_effort, &selected, error, error_size) < 0) {
         *result = snag_tool_result_terminal(false, error[0] ? error : "invalid model selector");
         return *result ? 0 : -1;
     }
-    bool known = cache && snag_model_metadata(cache, selected.provider, selected.model) != NULL;
+    rows = (struct model_tool_rows){.cache = &app->model_cache, .config = app->config,
+                                    .selected = &selected};
+    if (snag_model_each(&app->model_cache, app->config, app->session.default_effort,
+                        model_tool_cached_row, &rows) < 0) return -1;
+    if (!rows.found) {
+        *result = snag_tool_result_terminal(false,
+            "model selector is not a current cached provider/model/effort; "
+            "use selector cache to refresh");
+        return *result ? 0 : -1;
+    }
     if (commit_model_selection(app, selected.provider, selected.model,
-            selected.effort, known, false) < 0)
+            selected.effort, true, false) < 0)
         return snag_errorf(error, error_size, "cannot apply model selection");
     if (snag_buf_printf(&message, "model for %s: %s / %s / %s",
             app->session.active_turn ? "next response in this turn" : "next turn",

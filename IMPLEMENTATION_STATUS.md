@@ -2,6 +2,12 @@
 
 # Implementation status
 
+Model-driven `select_model` choices now require an entry in the current model
+cache, including its provider and effort. The tool's `cache` selector refreshes
+provider catalogs and returns selectable rows; failed refresh leaves the prior
+cache and model selection intact. Operator `/model` retains typed uncached
+selection.
+
 Current source receives terminal uploads on POSIX hosts through a workstation
 trzsz filter. Stock drag launch and /upload share a bounded receiver; complete
 batches become private unsent attachments. The pinned Go client's binary

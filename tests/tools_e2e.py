@@ -183,24 +183,47 @@ def case_home_default(binary, provider, root):
 
 def case_model_switch(binary, provider, root):
     models = []
+    cache_path = root / "model-switch" / "state" / "models.json"
+    cache_snapshot = []
 
     def observed(outs, request):
-        del outs
         models.append(request["model"])
+        if len(outs) == 2:
+            cache_snapshot.append((cache_path.read_bytes(), cache_path.stat().st_ino))
+        if len(outs) == 4:
+            with provider.lock:
+                provider.catalog_failure = "/v1/models"
+        if len(outs) == 5:
+            assert (cache_path.read_bytes(), cache_path.stat().st_ino) == cache_snapshot[0]
+            with provider.lock:
+                provider.catalog_failure = None
 
     case, run, events = run_case(binary, provider, root, "model-switch",
         "switch the model and retain results", responder(provider, [
-            ("select_model", {"selector": "one-model"}),
+            ("select_model", {"selector": "uncached-model"}),
+            ("select_model", {"selector": "cache"}),
+            ("select_model", {"selector": "ghost-model/medium"}),
+            ("select_model", {"selector": "standard-model/ultra"}),
+            ("select_model", {"selector": "cache"}),
+            ("select_model", {"selector": "#1"}),
             ("get_cwd", {}),
         ], "model switch complete", inspect=observed))
     assert run.returncode == 0, (run.stdout, run.stderr)
-    assert models[:3] == ["host-model", "one-model", "one-model"], models
+    assert models[:6] == ["host-model"] * 6, models
+    assert models[-2:] == ["standard-model"] * 2, models
     assert sum(event["type"] == "turn_model_changed" for event in events) == 1
     assert sum(event["type"] == "model_selection_changed" for event in events) == 1
     results = [entry["data"]["result"] for entry in finished(events)]
-    assert len(results) == 2 and all(item["status"] == "succeeded" for item in results), results
-    assert str(case) in results[1]["model_text"]
-    print("tools e2e same-turn model switch: ok", flush=True)
+    assert [item["status"] for item in results] == [
+        "failed", "succeeded", "failed", "failed", "failed", "succeeded", "succeeded"], results
+    assert "cache" in results[0]["model_text"]
+    assert "standard-model" in results[1]["model_text"]
+    assert "cached" in results[2]["model_text"]
+    assert "effort" in results[3]["model_text"] or "cached" in results[3]["model_text"]
+    assert "catalog rejected" in results[4]["model_text"]
+    assert str(case) in results[6]["model_text"]
+    assert cache_path.is_file() and len(cache_snapshot) == 1
+    print("tools e2e current-cache selection and refresh: ok", flush=True)
 
 
 def case_read_only_refuses_writes(binary, provider, root):

@@ -279,8 +279,11 @@ removes it. The manual covers editing keys, history, search, the queue editor
 and slash-command exceptions.
 
 `/model` lists the locally cached catalog and `/model cache` refreshes
-providers; select a row by number or with `/model PROVIDER/MODEL/EFFORT`. Both
-An active `/model` switches the next response in the same turn; an idle
+providers. An operator can select a row by number or type
+`/model PROVIDER/MODEL/EFFORT`, including an uncached model. The model's
+`select_model` tool accepts only provider/model/effort entries in the current
+cache; selector `cache` refreshes it and returns available rows. An active
+selection switches the next response in the same turn; an idle
 selection and CLI `-m` set the preference for subsequent requests. The choice
 persists across resume; add `save` to write it into the configuration file. A model
 change alone does not compact. If the selected model needs a smaller context,

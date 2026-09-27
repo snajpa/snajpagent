@@ -1811,8 +1811,9 @@ for the model resolves to the compiled default;
 .B default
 for effort resolves to
 .BR medium .
-Other nonblank bounded values are sent to the provider without checking a
-model catalog.
+Operator-typed /model and command-line -m send other nonblank bounded values
+without checking a model catalog. The model's select_model tool uses only
+entries in the current cache.
 .PP
 Use
 .B /model cache
@@ -3071,7 +3072,16 @@ later tool calls; existing processes keep their own launch directory.
 requires selector, either a configured
 .IR "provider/model/effort" ,
 a shorter model selector, or a numbered row from the cached model listing.
-It selects the next response in the current turn and remains selected for
+The provider, model and effort must match a row in the current model cache;
+an empty or unreadable cache leaves the session selection unchanged. Selector
+.B cache
+refreshes every configured provider and returns the available cached rows.
+A failed refresh retains the previous cache and model selection. Operator-typed
+.B /model
+and command-line
+.B -m
+may still choose uncached identifiers.
+A model choice selects the next response in the current turn and remains selected for
 later turns. An already running command handle stays live; completed tool
 results are retained in the next request's context. This tool does not modify
 the configuration file. The

@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Restrict the model's `select_model` choices to the current cached
+  provider/model/effort entries. Selector `cache` refreshes and returns rows;
+  a failed refresh preserves the previous cache and selection. Operator-typed
+  `/model` still accepts uncached identifiers.
+
 - Receive regular files over a wrapped terminal connection with stock `trz`
   drag actions or `/upload`. Verify and privately retain a complete batch as
   unsent attachments; restore terminal input and preserve the pending draft on
