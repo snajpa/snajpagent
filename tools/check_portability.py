@@ -62,8 +62,12 @@ def main() -> int:
             "macOS PTY branch must define capability and include <util.h>")
     require("#if defined(SNAJPAGENT_HAVE_PTY)\nstatic void\nhost_winsize" in tools,
             "PTY helper implementation must be guarded by capability, not by one OS")
-    require(tools.count("#if defined(SNAJPAGENT_HAVE_PTY)\n            exec_pty_child") == 1,
-            "the unified managed PTY child path must use the capability guard")
+    require(tools.count(
+        "#if defined(SNAJPAGENT_HAVE_PTY)\n"
+        "            if (argv) exec_terminal_child(shell, argv, slave);\n"
+        "            exec_pty_child(shell, command, argv, directory, slave, environment);\n"
+        "#else\n            _exit(125);\n#endif") == 1,
+        "native and managed PTY child paths must share the capability guard and fallback")
     require(tools.count("#if defined(__linux__)") == 1,
             "Linux-only preprocessor guards must not wrap PTY behavior outside the include/capability branch")
     require("-D_POSIX_C_SOURCE=200809L" in config and "-D_XOPEN_SOURCE=700" in config,
