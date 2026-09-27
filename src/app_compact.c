@@ -652,31 +652,34 @@ static int
 run_compaction(struct app_state *app, const char *reason, bool active_prefix,
                const struct snag_credential *credential, bool *compacted, char *error, size_t error_size)
 {
-    /* A provider that keeps aborting the summary request used to hold the
-     * session: every turn retry re-ran the same compaction (13 attempts over
-     * 1.5 hours in one report). Bound consecutive failures; a completed
-     * compaction, new operator input or a manual /compact resets the count. */
+    bool did_compact = false;
+    if (compacted) *compacted = false;
+    app->compaction_bounded = false;
+    /* Ordinary turns retain their failure bound. Active goals keep making
+     * real paced attempts; a permanent latch would make them report errors
+     * forever without allowing a recovered provider to compact again. */
     if (app->history_orientation < SNAG_HISTORY_ORIENTATION_COMPACT)
         app->history_orientation = SNAG_HISTORY_ORIENTATION_COMPACT;
-    if (app->compaction_failures >= 8u) {
+    if (app->compaction_failures >= 8u && app->session.goal_status != SNAG_GOAL_ACTIVE) {
         app->compaction_bounded = true;
         return snag_fail(error, error_size, EPROTO,
             "compaction failed %u times in a row; previous context retained; "
             "new input or /compact can retry", app->compaction_failures);
     }
     int rc = run_compaction_attempt(app, reason, active_prefix, true,
-                                    credential, compacted, error, error_size);
+                                    credential, &did_compact, error, error_size);
     if (rc == SNAG_PROVIDER_UNSUPPORTED) {
         if (snag_ui_text(&app->ui, SNAG_UI_WARNING,
             "native compaction unavailable; compacting through Responses") < 0) return -1;
         if (error_size) error[0] = '\0';
         rc = run_compaction_attempt(app, reason, active_prefix, false,
-                                    credential, compacted, error, error_size);
+                                    credential, &did_compact, error, error_size);
     }
-    if (rc == 0 && compacted && *compacted) {
+    if (compacted) *compacted = did_compact;
+    if (rc == 0 && did_compact) {
         app->compaction_failures = 0u;
         app->compaction_bounded = false;
-    } else if (rc < 0) {
+    } else if (rc < 0 && app->compaction_failures < 8u) {
         ++app->compaction_failures;
     }
     return rc;

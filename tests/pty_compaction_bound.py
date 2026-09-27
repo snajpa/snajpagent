@@ -5,7 +5,8 @@
 The release-session report (782e7a68) showed a compaction storm: the provider
 kept aborting the summary request and every turn retry re-ran it (13 attempts
 over 1.5 hours). A session now stops attempting after eight consecutive
-failures and reports it; a completed compaction, fresh operator input or a
+failures and reports it for ordinary turns; active goals retain real paced
+retries beyond that bound. A completed compaction, fresh operator input or a
 manual /compact clears the count. The fixture fails native compaction for the
 `compact_fail` prompt, and a proactive threshold makes the pre-response path
 run it.
@@ -54,5 +55,30 @@ def main():
     print("compaction failure bound: ok")
 
 
+def test_goal_compaction_failure_recovery():
+    config = H.write_config("goal-compaction-recovery.ini",
+        "[agent]\nmax_turn_retries = 0\n[provider openai]\n"
+        "exact_token_count = true\nnative_compaction = true\n"
+        "auto_compact_input_tokens = 1\n")
+    with H.Child([], ready=H.DEFAULT_IDLE_PROMPT, term="xterm") as seed:
+        end = seed.send_wait(b"ping\r", b"pong")
+        seed.exit_cleanly(end)
+        session = seed.session_id()
+    with H.Child(["--config", str(config), "--resume", session],
+                 ready=H.DEFAULT_IDLE_PROMPT, term="xterm") as child:
+        child.send(b"/goal compaction recovery goal\r")
+        end = child.wait(b"goal done", timeout=160.0)
+        child.exit_cleanly(end)
+    log = H.events(session)
+    assert len([e for e in log if e["type"] == "turn_recovery"]) == 9
+    assert not [e for e in log if e["type"] in
+                ("goal_paused", "goal_blocked", "goal_cancelled", "goal_resumed", "turn_failed")]
+    completed = H.one(log, "goal_completed")
+    assert completed["data"]["goal_id"] == H.one(log, "goal_started")["data"]["goal_id"]
+    assert any(e["type"] == "compaction_completed" and e["seq"] < completed["seq"] for e in log)
+    print("active goal recovered after nine compaction failures: ok")
+
+
 if __name__ == "__main__":
     main()
+    test_goal_compaction_failure_recovery()

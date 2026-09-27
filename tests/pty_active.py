@@ -1040,6 +1040,7 @@ def test_hard_compaction_progress_is_remeasured():
     assert len([event for event in log if event["type"] == "compaction_completed"]) == 1
     starts = [event for event in log if event["type"] == "response_started"]
     assert len(starts) == 2 and starts[-1]["data"]["input_tokens_bound"] == 1000
+    assert not [event for event in log if event["type"] == "context_rebased"]
 
 
 def test_hard_compaction_resets_after_completed_response():
@@ -1056,9 +1057,9 @@ def test_hard_compaction_resets_after_completed_response():
     completed = [event for event in log if event["type"] == "compaction_completed"]
     assert len(started) == len(completed) == 2, (len(started), len(completed))
     assert started[0]["data"]["source_seq"] < started[1]["data"]["source_seq"]
-    # Each installed compact checkpoint legitimately rebases the active request;
-    # the regression is that the second checkpoint exists after tool progress.
-    assert len([event for event in log if event["type"] == "context_rebased"]) == 2
+    # Successful summaries remain the context boundary. A summary-less rebase
+    # here would discard exactly the progress the compaction just preserved.
+    assert not [event for event in log if event["type"] == "context_rebased"]
     assert len([event for event in log if event["type"] == "tool_finished"]) == 1
 
 

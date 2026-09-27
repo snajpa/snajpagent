@@ -3987,14 +3987,14 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                 projection.input_tokens_bound > app->turn_capacity.hard_input_tokens;
             int compact_rc;
 
-            if (over_hard) {
-                app->history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
-                app->history_recovery_rebase = true;
-            }
             if (over_hard && !pure_history_recovery && hard_compaction_attempts) {
                 /* One checkpoint can summarize an ordinary prefix. If the
                  * active turn still exceeds the window, let the model fetch
-                 * needed history rather than walking every older tool group. */
+                 * needed history rather than walking every older tool group.
+                 * Select this fallback only after recounting the summary: an
+                 * eager rebase discarded even a successful, fitting compact. */
+                app->history_orientation = SNAG_HISTORY_ORIENTATION_RECOVERY;
+                app->history_recovery_rebase = true;
                 goto rebuild_request;
             }
             if (over_hard && pure_history_recovery) {

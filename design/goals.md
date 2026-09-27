@@ -152,6 +152,11 @@ When a model turn ends:
    goal mentions remain conversation context, and already-frozen requests are
    not retroactively changed. A `/ro` query exposes no goal lifecycle tools.
 4. Refusals and errors retain the goal's active state and its continuation arm.
+   This includes every error class and repeated compaction failures. An error
+   or an exhausted per-attempt budget is not a goal lifecycle decision: it must
+   not pause, block, complete or cancel the goal. Recovery must remain able to
+   attempt the failed operation again; repeatedly reporting a latched failure
+   without retrying that operation is not recovery.
 5. Provider, protocol, context, resource, output and tool failures enter paced,
    interruptible recovery without an attempt limit. Provider/protocol failures
    continue the same turn with completed tool results and live process handles.

@@ -29,6 +29,7 @@ snag_app_provider_input_pump(void *opaque, unsigned int timeout_ms)
 #ifdef SNAJPAGENT_TEST_FIXTURE
 static bool fixture_capacity_rejected_once;
 static unsigned int fixture_progress_compactions;
+static unsigned int fixture_goal_compact_failures;
 
 static json_t *
 fixture_model_limits(size_t index)
@@ -258,6 +259,13 @@ snag_app_provider_compact(struct app_state *app, const json_t *compact_request,
         json_decref(fixture_output);
         return snag_errorf(error, error_size, "fixture compaction failed");
     }
+    if (app->session.goal_prompt && !strcmp(app->session.goal_prompt, "compaction recovery goal") &&
+        fixture_goal_compact_failures < 9u) {
+        ++fixture_goal_compact_failures;
+        json_decref(fixture_output);
+        (void)snag_errorf(error, error_size, "fixture transient compact rejection");
+        return SNAG_PROVIDER_REJECTED;
+    }
     if (app && app->session.last_user &&
         (snag_string_in(app->session.last_user, "compaction_steer capacity_recovery_steer")))
         for (unsigned int i = 0u; i < 100u; ++i) {
@@ -305,6 +313,19 @@ snag_app_provider_run(struct app_state *app, const char *prompt, const json_t *s
     {
         json_t *input = json_object_get(create_request, "input");
         bool read_only = app->session.active_read_only;
+
+        if (app->session.compact_id[0] &&
+            snag_string_in(prompt, "compact_budget_once compact_after_progress")) {
+            bool summary = false;
+            for (size_t i = 0u; i < json_array_size(input); ++i) {
+                const char *type = snag_json_string(json_array_get(input, i), "type");
+                if (type && !strcmp(type, "compaction")) summary = true;
+            }
+            if (!summary) {
+                return snag_errorf(error, error_size,
+                                   "fixture lost the successful compaction summary");
+            }
+        }
 
         for (size_t i = 0; i < json_array_size(input); ++i) {
             json_t *message = json_array_get(input, i);

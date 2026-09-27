@@ -1040,6 +1040,82 @@ test_compact_groups(struct snag_store *store, const char *cwd)
     json_decref(empty);
 }
 
+static void
+test_repeated_compaction_active_seam(struct snag_store *store, const char *cwd)
+{
+    const char *turn = "a5000000000000000000000000000000";
+    const char *handle = "a6000000000000000000000000000000";
+    const char *steer = "a7000000000000000000000000000000";
+
+    for (unsigned int reopen = 0u; reopen < 2u; ++reopen) {
+        struct snag_session session;
+        struct snag_context_projection projection = {0};
+        struct snag_instruction_set instructions = {0};
+        json_t *empty = json_array(), *output = compact_output_fixture();
+        char error[512] = {0}, session_id[SNAG_ID_HEX_LEN + 1u];
+
+        create_session(store, &session, cwd, "medium");
+        memcpy(session_id, session.id, sizeof(session_id));
+        commit_event(&session, "turn_started",
+                     turn_started(turn, 1u, "continue the long turn", cwd, NULL));
+        build_context(&session, 1u, empty, &instructions, &projection);
+        snag_context_projection_free(&projection);
+        for (unsigned int cycle = 1u; cycle <= 3u; ++cycle) {
+            char response[33], call[33], compact[33], text[64];
+            json_t *data, *result;
+
+            snprintf(response, sizeof(response), "%032x", 0xe000u + cycle);
+            snprintf(call, sizeof(call), "%032x", 0xf000u + cycle);
+            snprintf(compact, sizeof(compact), "%032x", 0x10000u + cycle);
+            snprintf(text, sizeof(text), "retained group %u", cycle);
+            data = response_started(turn, response,
+                                    session.compact_id[0] ? session.compact_id : NULL);
+            assert(json_object_set_new(data, "cycle", json_integer(cycle)) == 0);
+            commit_event(&session, "response_started", data);
+            data = response_completed_call(turn, response, call, cwd);
+            assert(json_object_set_new(data, "cycle", json_integer(cycle)) == 0);
+            commit_event(&session, "response_completed", data);
+            commit_event(&session, "tool_started",
+                         tool_started_data(turn, call,
+                                           session.pending_calls[0].action_sha256, cwd));
+            for (unsigned int i = 0u; i <= SNAG_CONTEXT_COMPACT_OVERLAP_EVENTS; ++i)
+                commit_event(&session, "irc_snapshot", checked_json(json_pack("{s:s,s:s,s:i}",
+                    "reason", "topology", "text", "long turn seam", "timestamp_ms", i + 1u)));
+            result = running_result_limit(handle, text, NULL, 60000);
+            assert(json_object_set_new(result, "status", json_string("succeeded")) == 0);
+            assert(json_object_set_new(result, "exit_code", json_integer(0)) == 0);
+            assert(json_object_set_new(result, "handle", json_null()) == 0);
+            commit_event(&session, "tool_finished", tool_finished_data(turn, call, result));
+            uint64_t boundary = session.next_seq - 1u;
+            if (cycle == 3u)
+                commit_event(&session, "steering_added",
+                             steering_added(turn, steer, "pending steer stays outside summary"));
+            assert(snag_context_compact_request_build(&session, SNAJPAGENT_MODEL, "medium",
+                true, 0u, false, NULL, &projection, error, sizeof(error), NULL) == 0);
+            assert(projection.source_seq == boundary);
+            char *source = json_dumps(projection.model_input.value, JSON_COMPACT);
+            assert(source && strstr(source, text));
+            assert(!strstr(source, "pending steer stays outside summary"));
+            free(source);
+            commit_counted_compaction(&session, compact, "hard_budget", SNAJPAGENT_MODEL,
+                                      &projection, output);
+            snag_context_projection_free(&projection);
+            assert(session.active_turn && !strcmp(session.active_turn_id, turn));
+            if (reopen && cycle < 3u) {
+                assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+                snag_session_close(&session);
+                assert(snag_session_open(store, &session, session_id, error, sizeof(error)) == 0);
+            }
+        }
+        assert(session.pending_steering_count == 1u);
+        assert(!strcmp(session.pending_steering[0].steering_id, steer));
+        snag_session_close(&session);
+        json_decref(empty);
+        json_decref(output);
+        snag_instructions_free(&instructions);
+    }
+}
+
 static json_t *
 process_closed_data(const char *turn_id, const char *handle, json_t *result)
 {
@@ -4325,6 +4401,7 @@ main(int argc, char **argv)
     test_pending_irc_source_across_rebase(&store, cwd);
     test_admitted_room_event_stays_out_of_tool_exchange(&store, cwd);
     test_compact_groups(&store, cwd);
+    test_repeated_compaction_active_seam(&store, cwd);
     test_large_compact_prefix(&store, cwd);
     test_voice_completed_result(&store, cwd);
     test_parallel_journal_recovery(&store, cwd);

@@ -15,6 +15,13 @@
   completion and cancellation, including its default disabled alternate screen.
 - Give terminal transfers and the complete model tool catalog dedicated manual
   sections; clarify macOS Go-wrapper setup and upload/download destinations.
+- Preserve successful hard-budget summaries in the next request; select a
+  summary-less recovery fallback only after the rebuilt request is still too
+  large. Repeated compaction in a long active turn recognizes its covered
+  boundary even after checkpoint trimming and resume.
+- Keep active goals retrying actual compaction after repeated failures,
+  including past the ordinary-turn eight-failure bound. Successful compaction
+  clears the failure count for both pre-response and post-turn paths.
 
 ## 0.99.8b — September 27, 2026
 

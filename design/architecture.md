@@ -172,7 +172,14 @@ and durable rollout path. The current user input, active controller state, and
 tool schemas are never silently dropped. Compaction can summarize newly
 completed response/tool groups again after a previous checkpoint in the
 same long turn; the repeated-hard-budget bound applies to one pre-response
-rebuild, not every later cycle. A summary-less recovery rebase invalidates the
+rebuild, not every later cycle. The rebuilt request carries the successful
+summary and is counted before selecting a summary-less recovery fallback.
+That fallback applies only if the rebuilt request still exceeds the hard
+window; an initial over-budget count alone does not supersede a new summary.
+The compaction walker uses validated covered-event turn state when the retained
+seam begins after `turn_started`, both live and after checkpoint restore. It
+still stops at complete response/tool groups and excludes pending steering.
+A summary-less recovery rebase invalidates the
 prior request's token meter and usage anchor until new usage is measured.
 Responses-based recovery can compact
 the oldest complete response/tool-group prefix hierarchically, including a

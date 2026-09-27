@@ -2168,7 +2168,16 @@ compact_event(void *opaque, const struct snag_session *state,
     bool group = snag_string_in(type, "response_completed tool_finished process_closed");
 
     if (builder->compact_stopped) return 0;
-    if (seq <= builder->compact_seq) return context_event(opaque, state, seq, type, data, error, error_size);
+    if (seq <= builder->compact_seq) {
+        /* The retained seam can begin after turn_started. Covered events carry
+         * validated turn state, so they still prove that the summary already
+         * entered this same active turn. A different turn supplies no such proof. */
+        if (builder->compact_stop_before_active && state->active_turn &&
+            !strcmp(state->active_turn_id, builder->target_turn_id)) {
+            builder->compact_current = true;
+        }
+        return context_event(opaque, state, seq, type, data, error, error_size);
+    }
     builder->compact_source_seq = seq;
     if (builder->compact_stop_before_active && !strcmp(type, "turn_started") &&
         !strcmp(state->active_turn_id, builder->target_turn_id)) {

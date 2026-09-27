@@ -1978,6 +1978,13 @@ waits for a complete context boundary, finishes, or is interrupted.  An idle
 request with no new context reports that it was skipped.  Whitespace after the
 command is accepted; additional arguments are rejected.
 .PP
+An active goal keeps retrying failed compaction with paced, interruptible waits,
+including after eight consecutive failures. Each retry can attempt compaction
+again. Ordinary turns retain the eight-failure bound; fresh input or
+.B /compact
+starts another attempt. Successful compaction clears that failure count,
+including compaction performed after a turn.
+.PP
 A summary survives a model, provider, effort or account change.  A switch by
 itself does not start compaction.  When the selected binding needs a smaller
 context, that binding keeps the covered boundary, leads its source with the
@@ -2301,8 +2308,10 @@ messages from the durable journal; unrelated historical room traffic stays
 available through history tools rather than being replayed.
 A rejection of the minimal recovery request fails that attempt rather than
 starting another compaction loop. Known hard-budget overflow may compact one
-tractable prefix first; if the active turn remains too large, it takes the same
-history-oriented recovery path. Irreducible current input fails clearly; the
+tractable prefix first. The rebuilt request retains that summary and is counted
+again; only if it remains too large does it take the same history-oriented
+recovery path. Later compactions recognize the covered active turn even after
+its start leaves the retained checkpoint overlap. Irreducible current input fails clearly; the
 durable history is retained. Normal same-model compaction remains available,
 and a provider/model/account switch retains the saved covered boundary and
 portable summary where it fits.
@@ -4114,6 +4123,7 @@ An oversized SSE line reports its recognized event type when present, without
 echoing provider content. The existing 1 MiB line bound still applies.
 .PP
 An active goal retries failed work indefinitely with paced, interruptible waits.
+This includes compaction failures and exhausted preparation-attempt budgets.
 Provider capacity exhaustion, protocol errors, context recovery failures and
 local prerequisites do not pause or block the goal.  Recovery preserves
 completed tool effects, partial output and unsettled command handles.  Unsafe
