@@ -3883,6 +3883,81 @@ test_request_prefix_stability(struct snag_store *store, const char *cwd)
 }
 
 static void
+test_cancelled_cache_update_recovers(struct snag_store *store, const char *cwd)
+{
+    const char *first = "ce000000000000000000000000000001";
+    const char *second = "ce000000000000000000000000000002";
+    const char *response = "ce000000000000000000000000000003";
+    const char *needles[] = {"cache-old-input", "cache-old-answer", "cache-current-input"};
+    struct snag_instruction_set instructions = {0};
+
+    for (unsigned int reopen = 0u; reopen < 2u; ++reopen) {
+        struct snag_session session;
+        struct snag_context_projection projection = {0};
+        json_t *steering = json_array();
+        char error[512] = {0};
+        assert(steering);
+        create_session(store, &session, cwd, "medium");
+        commit_event(&session, "turn_started", turn_started(first, 1u, needles[0], cwd, NULL));
+        build_context(&session, 1u, steering, &instructions, &projection);
+        snag_context_projection_free(&projection);
+        commit_event(&session, "response_started", response_started(first, response, NULL));
+        commit_event(&session, "response_completed",
+            response_completed(first, response, needles[1]));
+        commit_event(&session, "turn_completed", turn_completed(first, response));
+        commit_event(&session, "turn_started", turn_started(second, 2u, needles[2], cwd, NULL));
+
+        /* Cancel after the response text has changed the cached view, but
+         * before the pending batch commits. The original events stay intact. */
+        unsigned int remaining = 4u;
+        struct snag_context_control control = {
+            .cancelled = cancel_preparation, .opaque = &remaining
+        };
+        uint64_t next_seq = session.next_seq;
+        assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, steering,
+            0u, false, NULL, NULL, &instructions, NULL, &projection, error, sizeof(error),
+            &control) < 0 && errno == ECANCELED);
+        assert(!remaining && session.next_seq == next_seq);
+        assert(!projection.create_request.value);
+        void *old_cache = session.on_commit_opaque;
+        json_t *checkpoint = session.on_checkpoint(old_cache, &session);
+        assert(checkpoint);
+        remaining = (unsigned int)json_array_size(json_object_get(checkpoint, "recent")) + 2u;
+        json_decref(checkpoint);
+        /* A second cancellation at replacement-copy time preserves the old
+         * source-bearing cache until a new view can actually be committed. */
+        assert(snag_context_build(&session, SNAJPAGENT_MODEL, "medium", 1u, steering,
+            0u, false, NULL, NULL, &instructions, NULL, &projection, error, sizeof(error),
+            &control) < 0 && errno == ECANCELED);
+        assert(!remaining && session.next_seq == next_seq);
+        assert(session.on_commit_opaque == old_cache);
+        if (reopen) {
+            char id[SNAG_ID_HEX_LEN + 1u];
+            memcpy(id, session.id, sizeof(id));
+            assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+            snag_session_close(&session);
+            snag_session_init(&session);
+            assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+        }
+        for (unsigned int again = 0u; again < 2u; ++again) {
+            build_context(&session, 1u, steering, &instructions, &projection);
+            json_t *input = json_object_get(projection.create_request.value, "input");
+            for (size_t n = 0u; n < sizeof(needles) / sizeof(needles[0]); ++n) {
+                size_t occurrences = 0u;
+                for (size_t i = 0u; i < json_array_size(input); ++i) {
+                    const char *text = snag_json_string(json_array_get(input, i), "content");
+                    if (text && strstr(text, needles[n])) ++occurrences;
+                }
+                assert(occurrences == 1u);
+            }
+            snag_context_projection_free(&projection);
+        }
+        json_decref(steering);
+        snag_session_close(&session);
+    }
+}
+
+static void
 test_many_pending_steers(struct snag_store *store, const char *cwd)
 {
     static const char turn[] = "d1000000000000000000000000000000";
@@ -4406,6 +4481,7 @@ main(int argc, char **argv)
     test_voice_completed_result(&store, cwd);
     test_parallel_journal_recovery(&store, cwd);
     test_many_pending_steers(&store, cwd);
+    test_cancelled_cache_update_recovers(&store, cwd);
     test_hosted_search_many_sources(&store, cwd);
     test_refused_file_call_after_start(&store, cwd);
     test_accounting_lineage(&store, cwd);

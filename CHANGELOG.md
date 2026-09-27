@@ -15,6 +15,10 @@
   completion and cancellation, including its default disabled alternate screen.
 - Give terminal transfers and the complete model tool catalog dedicated manual
   sections; clarify macOS Go-wrapper setup and upload/download destinations.
+- Recover interrupted context-cache updates from retained source events. Retry
+  and checkpoint/resume preserve each conversation item once; cancellation
+  during replacement copying keeps the previous cache available.
+
 - Accept sparse Responses stream indexes and reconcile terminal arrays by item
   identity. Preserve canonical tool order while rejecting index/ID collisions,
   missing or duplicate terminal items and changed recognized kinds. Failed

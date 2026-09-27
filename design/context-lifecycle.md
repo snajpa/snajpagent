@@ -89,6 +89,14 @@ boundary. Treat a damaged indexed checkpoint as an error, not permission for an
 unbounded fallback scan. Legacy journals may need their documented one-time
 initial scan before an indexed checkpoint exists.
 
+Distinguish a lost source-cache append from an interrupted derived-view update.
+The latter keeps its complete retained event seam and marks the view for rebuilding;
+it must not latch a permanent invalid-checkpoint error. Checkpoints preserve that
+rebuild disposition so reopening cannot apply pending events twice. Keep the old
+source-bearing cache until a complete, cancellation-aware replacement is ready.
+A source-cache append failure instead requires recovery from a trusted durable
+checkpoint and suffix; clearing its invalid flag would conceal a missing event.
+
 A checkpoint restore must retain input timestamps, deferred IRC/steering,
 call/result identities, coverage boundaries, scope, accounting provenance and
 process ownership facts. A dead process owner is reported as lost/unknown; a

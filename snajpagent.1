@@ -2019,6 +2019,9 @@ rewriting old history.  A damaged referenced checkpoint stops recovery with an
 error rather than silently starting a full-history replay.  Explicit requests
 for old history still read those older records.  The session lock, metadata and
 retained media are not alternate checkpoint files.
+Cancelled request preparation can be retried or resumed from a saved checkpoint;
+partially prepared context is rebuilt from retained events without duplicating
+the conversation.
 .PP
 If compaction leaves only instructions, outgoing requests include a labelled
 host continuation so gateways can keep a nonempty conversation input.  It adds

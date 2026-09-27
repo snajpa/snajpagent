@@ -67,7 +67,7 @@ struct context_cache {
     uint64_t compact_seq, rebase_seq;
     char scope[SNAG_SHA256_HEX_LEN + 1u];
     bool invalid;
-    bool rebuild_images;
+    bool rebuild_view;
 };
 
 static void
@@ -260,7 +260,7 @@ context_cache_checkpoint(void *opaque, const struct snag_session *session)
         snag_json_set_new(doc, "cache_rebase_seq",
                           json_integer((json_int_t)cache->rebase_seq)) < 0 ||
         snag_json_set_new(doc, "active_turn", json_boolean(v->active_turn)) < 0 ||
-        snag_json_set_new(doc, "rebuild_images", json_boolean(cache->rebuild_images)) < 0 ||
+        snag_json_set_new(doc, "rebuild_images", json_boolean(cache->rebuild_view)) < 0 ||
         snag_json_set_new(doc, "input_timed", json_boolean(v->input_timed)) < 0) goto fail;
     return doc;
 fail:
@@ -356,7 +356,8 @@ context_cache_restore(struct snag_session *session, struct context_cache **out,
         !json_is_boolean(rebuild_images)) goto invalid;
     cache->view.active_turn = json_is_true(active_turn);
     cache->view.input_timed = json_is_true(input_timed);
-    cache->rebuild_images = json_is_true(rebuild_images);
+    /* The legacy field also covers interrupted derived-view updates. */
+    cache->rebuild_view = json_is_true(rebuild_images);
     if (snag_session_each_event_from_checkpoint(session, session->checkpoint_state,
         checkpoint_context_event, cache, error, error_size) < 0) goto invalid;
     *out = cache;
@@ -2616,9 +2617,6 @@ context_cache_update(struct context_cache *cache, struct snag_session *session,
     if (!snapshot || json_array_clear(cache->pending) < 0) { json_decref(snapshot); return -1; }
     json_decref(cache->steering_snapshot);
     cache->steering_snapshot = snapshot;
-    view->instructions = NULL;
-    view->steering = NULL;
-    view->control = NULL;
     return 0;
 }
 
@@ -2802,7 +2800,7 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             (void)snag_fail(error, error_size, EINVAL, "provider checkpoint is invalid");
             goto out;
         }
-        bool rebuild_cache = cache && (cache->rebuild_images ||
+        bool rebuild_cache = cache && (cache->rebuild_view ||
             cache->compact_seq != session->compact_seq ||
             cache->rebase_seq != session->context_rebase_seq ||
             strcmp(cache->scope, continuation_scope ? continuation_scope : ""));
@@ -2815,8 +2813,13 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             errno = 0;
             int update = context_cache_update(cache, session, instructions, steering,
                                               control, builder.networked, error, error_size);
+            cache->view.instructions = NULL;
+            cache->view.steering = NULL;
+            cache->view.control = NULL;
+            /* Pending reduction may have changed the derived view before
+             * failing. Retained source events remain complete and rebuildable. */
+            if (update != 0) cache->rebuild_view = true;
             if (update < 0 && errno == ECANCELED) {
-                cache->invalid = true;
                 goto out;
             }
             if (update == 0) {
@@ -2839,11 +2842,6 @@ snag_context_build(struct snag_session *session, const char *model, const char *
                     context_cache_free(cache);
                     goto out;
                 }
-                context_cache_free(old_cache);
-                session->on_commit = NULL;
-                session->on_commit_free = NULL;
-                session->on_commit_opaque = NULL;
-                session->on_checkpoint = NULL;
             } else {
                 struct context_capture capture = { .builder = &builder, .cache = cache };
                 if (snag_session_each_event(session, context_capture_event, &capture,
@@ -2854,17 +2852,19 @@ snag_context_build(struct snag_session *session, const char *model, const char *
             }
             /* Retained images are resolved against separate media files on each
              * request, using only the uncovered seam on future builds. */
-            cache->rebuild_images = snag_media_request_has_images(builder.request_input);
+            cache->rebuild_view = snag_media_request_has_images(builder.request_input);
             if (cache) {
                 json_decref(cache->steering_snapshot);
                 cache->steering_snapshot = json_deep_copy(steering);
                 cache->compact_seq = session->compact_seq;
                 cache->rebase_seq = session->context_rebase_seq;
+                cache->view.control = control;
                 if (cache->pending && cache->steering_snapshot && cache->view.request_input && cache->view.tool_feedback &&
                     cache->view.deferred_input && cache->view.input_timing &&
                     snag_strcpy(cache->scope, sizeof(cache->scope), continuation_scope ? continuation_scope : "") &&
                     context_copy_events(&cache->view, &builder, builder.base_request_count) == 0) {
                     cache->view.compact_seq = builder.compact_seq;
+                    cache->view.control = NULL;
                     cache->view.compact_walk_seq = builder.compact_walk_seq;
                     memcpy(cache->view.target_turn_id, builder.target_turn_id,
                            sizeof(cache->view.target_turn_id));
@@ -2872,7 +2872,12 @@ snag_context_build(struct snag_session *session, const char *model, const char *
                     session->on_commit_free = context_cache_free;
                     session->on_commit_opaque = cache;
                     session->on_checkpoint = context_cache_checkpoint;
-                } else context_cache_free(cache);
+                    /* Replacement becomes visible only after a complete copy. */
+                    context_cache_free(old_cache);
+                } else {
+                    context_cache_free(cache);
+                    goto out;
+                }
             }
         }
     }
