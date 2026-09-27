@@ -88,6 +88,13 @@ still uses one Nix build job/core and isolated `build/matrix/<target>/` outputs;
 the load-aware scheduler does not omit implemented targets. Plain `make`
 remains host-only and does not build or publish a release.
 
+The next full binary release must enable device audio on every first-tier
+platform, as requested on September 27, 2026. Check the actual application build
+flags and linked device/voice backends for each target; file decoding and provider
+audio routes alone do not satisfy this requirement. Keep any platform-specific
+runtime dependencies explicit. This requirement does not authorize a version
+change or alter previously published binaries.
+
 The current required outputs are:
 
 | Target | Executable in `build/matrix/<target>/bin/` | Distribution scope |
@@ -192,6 +199,13 @@ size and full SHA-256 (a closed checksum disclosure is acceptable). Link each
 family to the manual's installation instructions. Preserve the macOS quarantine
 command for verified downloads. Source, symbols and licensing companions remain
 available from the release page.
+
+Below the platform panels, maintain a static feature matrix for the exact
+downloadable release. Distinguish compiled-in file/media processing, configured
+provider routes, device audio and separately installed Office runtimes. Group
+architectures or ABI variants only when their capabilities match. Update the
+matrix with the release's actual build settings; development plans belong in
+source documentation rather than being presented as available download features.
 
 A tested OS version is not a minimum. Linux kernel baselines must distinguish
 libc/architecture requirements from actual qualification; exact oldest-working

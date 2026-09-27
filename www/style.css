@@ -43,6 +43,9 @@ blockquote { margin: 1.5rem 0; padding-left: 1rem; border-left: 2px solid var(--
 .table-scroll caption { text-align: left; margin-bottom: 0.5rem; }
 .table-scroll th, .table-scroll td { text-align: left; padding: 0.6rem; border-bottom: 1px solid var(--rule); }
 .table-scroll th { vertical-align: top; }
+.feature-matrix { min-width: 44rem; table-layout: fixed; }
+.feature-matrix th:first-child { width: 28%; }
+.feature-matrix td { vertical-align: top; }
 .intro { font-size: 1.15rem; }
 li { margin: 0.4rem 0; }
 nav, footer { line-height: 2; }

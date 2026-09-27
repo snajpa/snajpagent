@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Add a feature matrix below the website's platform downloads, distinguishing
+  compiled-in media, provider audio routes, device audio and Office dependencies
+  in the published binaries.
+
 - Group interactive help by topic and show it through the configured pager.
   Direct output uses ordinary text with bold headings. Add `/s` and session
   `list|l` shortcuts.

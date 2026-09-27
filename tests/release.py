@@ -650,6 +650,26 @@ for link in downloads:
     size = next(n for n in nodes if "file-size" in n["attrs"].get("class", "").split() and row in n["parents"])
     assert size["attrs"]["title"] == f'{meta["size"]:,} bytes'
 assert seen == set(channel)
+features = next(n for n in nodes if n["attrs"].get("aria-labelledby") == "build-features")
+assert nodes.index(features) > max(nodes.index(family) for family in families)
+assert next(iter(versions)) in features["text"], "feature matrix must name the downloadable release"
+matrix = next(n for n in nodes if n["tag"] == "table" and features in n["parents"])
+assert any(n["tag"] == "caption" and matrix in n["parents"] for n in nodes)
+columns = [n for n in nodes if n["tag"] == "th" and n["attrs"].get("scope") == "col"
+           and matrix in n["parents"]]
+assert len(columns) == 5
+for family in families:
+    assert family["attrs"]["id"] in " ".join(n["text"].lower() for n in columns)
+feature_rows = [n for n in nodes if n["tag"] == "tr" and matrix in n["parents"]
+                and any(p["tag"] == "tbody" for p in n["parents"])]
+assert len(feature_rows) == 6
+for row in feature_rows:
+    heading = [n for n in nodes if n["tag"] == "th" and n["parents"][-1] is row]
+    cells = [n for n in nodes if n["tag"] == "td" and n["parents"][-1] is row]
+    assert len(heading) == 1 and heading[0]["attrs"].get("scope") == "row"
+    assert len(cells) == len(columns) - 1 and all(n["text"].strip() for n in cells)
+assert "File-audio tools work independently" in features["text"]
+assert "Installed LibreOffice" in features["text"] and "Provider route" in features["text"]
 html = (root / "www/downloads.html").read_text()
 assert 'href="https://github.com/snajpa/snajpagent/releases">Older releases</a>' in html
 assert "coming-soon" not in html and "Tier 1" not in html and "latest-dev" not in html

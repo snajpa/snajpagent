@@ -259,6 +259,45 @@
         <p><a href="manual.html#Install_on_NetBSD">Install on NetBSD</a></p>
       </div>
     </details>
+    <section aria-labelledby="build-features">
+      <h2 id="build-features">Build features</h2>
+      <p>This matrix describes the <strong>0.99.8b downloads above</strong>, including
+        their architecture and legacy ABI variants. Included means the feature is
+        compiled in; provider access and any runtime requirements still apply.</p>
+      <div class="table-scroll" role="region" aria-label="Build feature matrix" tabindex="0">
+        <table class="feature-matrix">
+          <caption>Features in the 0.99.8b binaries</caption>
+          <thead>
+            <tr><th scope="col">Feature</th><th scope="col">Linux</th>
+              <th scope="col">macOS</th><th scope="col">Windows</th>
+              <th scope="col">FreeBSD / NetBSD / OpenBSD</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Shell commands and file tools</th>
+              <td>Included</td><td>Included</td><td>Included</td><td>Included</td></tr>
+            <tr><th scope="row">Image files and PDF pages</th>
+              <td>Included</td><td>Included</td><td>Included</td><td>Included</td></tr>
+            <tr><th scope="row">Audio/video file decoding</th>
+              <td>Included</td><td>Included</td><td>Included</td><td>Included</td></tr>
+            <tr><th scope="row">File transcription and speech generation</th>
+              <td>Provider route</td><td>Provider route</td>
+              <td>Provider route</td><td>Provider route</td></tr>
+            <tr><th scope="row">Microphone, playback and live voice</th>
+              <td>Disabled in this build</td><td>Disabled in this build</td>
+              <td>Disabled in this build</td><td>Disabled in this build</td></tr>
+            <tr><th scope="row">Office documents</th>
+              <td>Installed LibreOffice</td><td>Installed LibreOffice</td>
+              <td>Installed LibreOffice</td><td>Installed LibreOffice</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Provider routes require a configured compatible service and credentials;
+        audio requests may be billed separately. File-audio tools work independently
+        of microphone and speaker support. Office rendering needs a compatible
+        LibreOffice installation; it is not bundled. See the
+        <a href="manual.html">manual</a> for supported formats and configuration,
+        or the release's matching manual for its exact command set.</p>
+    </section>
     <section aria-labelledby="changelog">
       <h2 id="changelog">Release highlights</h2>
       <h3>0.99.8b · September 27, 2026</h3>
