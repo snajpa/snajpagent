@@ -245,6 +245,22 @@ spawn one worker per session. Preserve source journals and per-session diagnosti
 Bulk success requires every selected unlocked session to pass equivalence checks;
 a partial run reports converted, already-current, skipped and failed counts.
 
+Reuse the existing JSONL reader, reducer, checkpoint decoder and compatibility
+rules behind a legacy import adapter. Keep semantic recovery in one place;
+the binary backend changes storage and references, not the meaning of tool,
+input, goal or context transitions. A legacy checkpoint that cannot be decoded
+does not condemn its canonical history: explicit conversion tries verified
+anchors and replay, reconstructs derived state, and reports repairs performed.
+Rebuild indexes and use original defaults for absent optional legacy fields.
+Retain original source bytes even when replacing superseded snapshots.
+
+If corruption prevents complete state, preserve independently verified history
+and recovery evidence without publishing an executable session that invents
+missing authority or completed effects. Report exact unresolved sequence/byte
+ranges and continuation constraints. Distinguish a torn uncommitted tail from a
+corrupt committed record. Recovery should reconcile everything supported by the
+available evidence, rather than treating the first validation failure as final.
+
 Implement in dependency order:
 
 1. Typed framing/codecs, bounded batch reader and tail recovery in existing
