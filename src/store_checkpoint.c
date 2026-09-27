@@ -190,9 +190,9 @@ encode_fields(const void *source, const struct checkpoint_field *fields, size_t 
         uint64_t n = 0;
         json_t *item = NULL;
         if (f->kind == CK_TEXT) {
-            size_t len = strnlen((const char *)p, f->width);
-            if (len == f->width) goto fail;
-            item = json_stringn((const char *)p, len);
+            const unsigned char *end = memchr(p, '\0', f->width);
+            if (!end) goto fail;
+            item = json_stringn((const char *)p, (size_t)(end - p));
         } else if (f->kind == CK_BOOLEAN) {
             bool value;
             memcpy(&value, p, sizeof(value));

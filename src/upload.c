@@ -308,7 +308,7 @@ receive_file(struct upload_io *io, struct upload_frame *frame,
     if (read_expected(io, frame, "MD5") < 0 ||
         decode_payload(frame, announced, sizeof(announced), &length) < 0) return -1;
     if (length != sizeof(digest) || memcmp(digest, announced, sizeof(digest))) {
-        return snag_errno(EBADMSG);
+        return snag_errno(EPROTO);
     }
     if (fsync(file->fd) < 0) return -1;
     int rc = close(file->fd);

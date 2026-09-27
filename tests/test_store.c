@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "checked_json.h"
 #include "store.h"
+#include "store_internal.h"
 #include "media.h"
 #include "fs.h"
 #include "instructions.h"
@@ -1007,9 +1008,26 @@ test_image_compaction_control(struct snag_store *store, const char *cwd)
     snag_session_close(&session);
 }
 
+static void
+test_checkpoint_text_width(void)
+{
+    struct snag_session session = {0};
+    json_t *state = snag_checkpoint_state_encode(&session);
+    assert(state && json_string_length(json_object_get(state, "id")) == 0u);
+    json_decref(state);
+
+    memset(session.id, 'x', sizeof(session.id));
+    assert(!snag_checkpoint_state_encode(&session));
+    session.id[sizeof(session.id) - 1u] = '\0';
+    state = snag_checkpoint_state_encode(&session);
+    assert(state && json_string_length(json_object_get(state, "id")) == sizeof(session.id) - 1u);
+    json_decref(state);
+}
+
 int
 main(void)
 {
+    test_checkpoint_text_width();
     char *temp = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
                                 "snajpagent-store-XXXXXX");
     char state[4096];

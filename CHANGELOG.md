@@ -6,6 +6,9 @@
 
 ## 0.99.8b — September 27, 2026
 
+- Keep checkpoint text encoding and upload digest failures buildable with the
+  older BSD libc declarations and errno values in the production matrix.
+
 - Accept an operator-approved letter-suffixed stable version (0.99.8b) in
   release staging, channel descriptors and the updater. A stable 0.99.8
   installation can upgrade to 0.99.8b without joining the development channel;
