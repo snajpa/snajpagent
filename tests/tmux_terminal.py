@@ -459,6 +459,12 @@ class FakeResponses:
         if jobs:
             assert {"exec_command", "apply_patch", "write_stdin"}.issubset(
                 {tool.get("name") for tool in request["tools"]})
+            if mode == "steer":
+                # The fake provider must not terminate B before the parent sees b.pid.
+                deadline = time.monotonic() + wait_budget(10.0)
+                while not (self.tool_workspace / "steer-requested").exists():
+                    assert time.monotonic() < deadline, "steer was not submitted"
+                    time.sleep(0.02)
             return self.functions_body(sequence, [(f"poll_{sequence}_{i}", "write_stdin", {
                 "handle": job["handle"], "data": "", "eof": False,
                 "terminate": mode == "steer", "yield_ms": 1000, "max_output_tokens": None,
@@ -4608,6 +4614,7 @@ def run_multi_tool_cases(binary, root, provider, environment):
                     print("tmux_terminal multi-tool cancel: ok", flush=True)
                     continue
                 terminal.submit("multi-tools steer")
+                (workspace / "steer-requested").touch()
             terminal.wait("multi tools confirmed")
             _, events = wait_for_terminal_event(terminal.dotdir, {"turn_completed"}, 5.0)
             starts = event_list(events, "tool_started")
