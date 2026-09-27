@@ -16,8 +16,8 @@ protocol errors, input-tail replay and terminal recovery, pass disposable PTY
 fixtures. Crash-left upload staging is removed on resume and deletion only when
 its ownership and file shapes match the upload operation; existing media is
 preserved. Desktop GUI drag, nested SSH, tmux relay and terminal-specific behavior
-remain unqualified; PTY path injection is not a GUI drop. The current stable
-download does not yet include this feature.
+remain unqualified; PTY path injection is not a GUI drop. The 0.99.8 tag
+predates this feature.
 
 Voice supports native Codex subscription calls and public Realtime BYOK.
 The selected provider supplies credentials and defaults. Native media uses

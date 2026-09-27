@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Accept an operator-approved letter-suffixed stable version (0.99.8b) in
+  release staging, channel descriptors and the updater. A stable 0.99.8
+  installation can upgrade to 0.99.8b without joining the development channel;
+  older numeric versions and development commit identities retain their order.
+
 - Restrict the model's `select_model` choices to the current cached
   provider/model/effort entries. Selector `cache` refreshes and returns rows;
   a failed refresh preserves the previous cache and selection. Operator-typed

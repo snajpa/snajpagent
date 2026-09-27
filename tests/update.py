@@ -14,12 +14,12 @@ import tempfile
 import threading
 import time
 
-old, new, local, stable, aside = (Path(p).resolve() for p in sys.argv[1:])
+old, new, local, stable, aside, letter = (Path(p).resolve() for p in sys.argv[1:])
 marker = b"\nsnajpagent-update-v1\nsnajpagent\nlinux-x86_64\nhttps://publisher.test\n"
 assert marker in old.read_bytes() and marker in new.read_bytes()
 assert marker not in local.read_bytes()
 assert "0.99.2-aaaaaaa 0 https://publisher.test/latest-dev/" in subprocess.check_output([old, "--defaults"], text=True)
-assert "0.99.2 1 https://publisher.test/latest/" in subprocess.check_output([stable, "--defaults"], text=True)
+assert "0.99.8 1 https://publisher.test/latest/" in subprocess.check_output([stable, "--defaults"], text=True)
 assert " 0 " in subprocess.check_output([local, "--defaults"], text=True)
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -104,6 +104,29 @@ with tempfile.TemporaryDirectory(prefix="update-", dir=os.environ.get("TMPDIR"))
     result = run(exe)
     assert not result.stderr and server.paths.count(url.split(str(server.server_port), 1)[1]) == 1
     print("PASS: background startup, real self-replacement, old process survives, one banner, permissions, next launch")
+    stable_url = f"http://127.0.0.1:{server.server_port}/latest/snajpagent-linux-x86_64"
+    assert "0.99.8b 1 https://publisher.test/latest/" in subprocess.check_output(
+        [letter, "--defaults"], text=True)
+    home = root / "letter-release"
+    home.mkdir(mode=0o700)
+    exe = home / "snajpagent"
+    shutil.copyfile(stable, exe)
+    exe.chmod(0o750)
+    server.data = letter.read_bytes()
+    server.meta = dict(name="snajpagent", target="linux-x86_64", version="0.99.8b",
+                       url=stable_url, sha256=hashlib.sha256(server.data).hexdigest(),
+                       size=len(server.data), changelog="https://publisher.test/downloads.html#changelog")
+    result = subprocess.run([exe, stable_url, "10000"], capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0 and "=== snajpagent updated ===" in result.stderr, result.stderr
+    assert exe.read_bytes() == letter.read_bytes()
+    assert subprocess.check_output([exe, "-V"], text=True).strip() == "0.99.8b"
+    server.data = stable.read_bytes()
+    server.meta.update(version="0.99.8", sha256=hashlib.sha256(server.data).hexdigest(),
+                       size=len(server.data))
+    result = subprocess.run([exe, stable_url, "10000"], capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0 and "updated ===" not in result.stderr
+    assert exe.read_bytes() == letter.read_bytes()
+    print("PASS: stable 0.99.8 upgrades to 0.99.8b; letter release does not downgrade")
     for label, changes in [
         ("hash", dict(sha256="0" * 64)), ("size", dict(size=len(new.read_bytes()) + 1)),
         ("target", dict(target="windows-arm64")), ("name", dict(name="other")),

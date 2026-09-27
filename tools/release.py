@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_BINARY = 256 * 1024 * 1024
+VERSION = re.compile(r"\d+\.\d+\.\d+[a-z]?(?:-[0-9a-f]{7,40})?")
 
 
 def targets(revision=None):
@@ -52,7 +53,7 @@ def load_channel(directory, expected=None):
         suffix = ".exe" if target.startswith("windows-") else ""
         if (meta["name"] != "snajpagent" or not re.fullmatch(r"[a-z0-9_]+(?:-[a-z0-9_]+)+", target)
                 or path.name != f"snajpagent-{target}{suffix}.json"
-                or not re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9a-f]{7,40})?", meta["version"])
+                or not VERSION.fullmatch(meta["version"])
                 or not re.fullmatch(r"[0-9a-f]{64}", meta["sha256"])
                 or type(meta["size"]) is not int or not 0 < meta["size"] <= MAX_BINARY):
             raise ValueError(f"invalid update descriptor: {path}")
@@ -74,7 +75,7 @@ def stage(args):
     if version is None:
         version = subprocess.check_output(
             ["git", "describe", "--tags", "--exact-match", revision], cwd=ROOT, text=True).strip()
-    if not re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9a-f]{7,40})?", version):
+    if not VERSION.fullmatch(version):
         raise ValueError("version must be a stable version or version-commit")
     if "-" in version and not revision.startswith(version.split("-", 1)[1]):
         raise ValueError("development suffix must identify the archived source revision")

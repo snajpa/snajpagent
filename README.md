@@ -434,6 +434,8 @@ asks you to restart when convenient, and `[agent] auto_update = false` opts out.
 Development binaries are debug builds that default to updates off, following
 `latest-dev` when set to `true`. Ordinary source builds remain updater-free; the
 manual covers publisher URLs, permissions and recovery.
+An approved letter-suffixed stable release such as `0.99.8b` follows its
+numeric base in updater ordering and stays on the stable `latest` channel.
 
 `./configure` probes the toolchain and the four optional modalities and tunes the
 tracked `config.mk`; `make WITH_*=…` stays an explicit override.

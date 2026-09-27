@@ -2075,6 +2075,9 @@ Configuration changes apply to the next launch's update attempt.
 HTTPS URL for the latest executable matching this installation.  The built-in
 URL uses the publisher's latest or latest-dev directory and the exact build
 target; universal macOS and legacy Linux remain their original variants.
+Stable letter-suffixed versions, such as 0.99.8b, follow the plain numeric
+version on the latest channel.  Commit-suffixed development versions use
+latest-dev; an installed stable version never takes a development update.
 The updater reads the URL with .json appended, then downloads the immutable
 version URL it describes.  Treat a URL override as a publisher trust decision.
 Only HTTPS transfers are allowed; verification checks the declared SHA-256,

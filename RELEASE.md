@@ -24,6 +24,9 @@ agent-written plans, successful builds and push-approval tokens are not version
 authority. An explicitly authorized development-snapshot workflow uses the
 existing approved base plus its actual Git suffix; it does not advance the base
 or promote the snapshot to stable. Previously published assets remain immutable.
+An approved stable tag may add one lowercase letter after its numeric patch
+(for example `0.99.8b`); it stays on `latest` and sorts after `0.99.8` for
+updating. Git commit suffixes use a hyphen and remain on `latest-dev`.
 
 ## Documentation shipment
 

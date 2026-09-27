@@ -191,6 +191,15 @@ with tempfile.TemporaryDirectory(prefix="release-", dir=root / "build") as tmp:
             assert not list(channel.glob("*.download"))
         args.version = "0.99.2-0000000"
         rejected(lambda: release.stage(args))
+        args.version = "0.99.8b"
+        args.release = "https://publisher.test/0.99.8b"
+        args.output = tmp / "stage-letter"
+        letter_data = data.replace(version.encode(), args.version.encode())
+        binary.write_bytes(letter_data)
+        (symbols / "snajpagent").write_bytes(letter_data)
+        release.stage(args)
+        assert (args.output / "snajpagent-0.99.8b-linux-x86_64").read_bytes() == letter_data
+        assert release.load_channel(args.output / "latest", ["linux-x86_64"])[0][1]["version"] == "0.99.8b"
 
 # An annotated tag supplies the canonical native/matrix and staging identity.
 with tempfile.TemporaryDirectory(prefix="release-tag-", dir=root / "build") as tmp:
