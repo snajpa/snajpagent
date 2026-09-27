@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import termios
+import textwrap
 import time
 import unittest
 from pathlib import Path
@@ -75,6 +76,58 @@ class RemoteProcess:
 
 
 class RemoteStartupTests(unittest.TestCase):
+    def test_native_upload_caps_bursts_when_peer_advertises_large_blocks(self):
+        with tempfile.TemporaryDirectory(prefix="snag-remote-burst-") as tmp:
+            root = Path(tmp)
+            upload = root / "bulk.bin"
+            upload.write_bytes(os.urandom(16384))
+            peer = textwrap.dedent(r'''
+                import base64, hashlib, json, sys, tty, zlib
+                from pathlib import Path
+                sys.path.insert(0, sys.argv[1])
+                from test_upload_client import frame
+                tty.setraw(sys.stdin.fileno())
+                def send(kind, data, numeric=False):
+                    sys.stdout.buffer.write(frame(kind, data, numeric))
+                    sys.stdout.buffer.flush()
+                def receive(kind, numeric=False):
+                    line = sys.stdin.buffer.readline()
+                    prefix, payload = line.rstrip(b"\n").split(b":", 1)
+                    assert prefix == b"#" + kind.encode(), line
+                    return int(payload) if numeric else zlib.decompress(base64.b64decode(payload))
+                sys.stdout.buffer.write(b"::TRZSZ:TRANSFER:R:1.0.0:0000000000000:0\r\n")
+                sys.stdout.buffer.flush()
+                assert json.loads(receive("ACT"))["native"]
+                send("CFG", b'{"protocol":1,"bufsize":65536,"binary":false,"directory":false}')
+                assert receive("NUM", True) == 1
+                send("SUCC", 1, True)
+                name = receive("NAME")
+                send("SUCC", name)
+                size = receive("SIZE", True)
+                send("SUCC", size, True)
+                data = bytearray()
+                while len(data) < size:
+                    block = receive("DATA")
+                    assert 0 < len(block) <= 1024, len(block)
+                    data.extend(block)
+                    send("SUCC", len(block), True)
+                assert bytes(data) == Path(sys.argv[2]).read_bytes()
+                digest = hashlib.md5(data).digest()
+                assert receive("MD5") == digest
+                send("SUCC", digest)
+                assert receive("EXIT") == b"Sent"
+                print("NATIVE_UPLOAD_BURST_OK", flush=True)
+            ''')
+            child = RemoteProcess(root, [sys.executable, "-u", "-c", peer,
+                                         str(PRODUCT.parent), str(upload)])
+            try:
+                child.until(b"Select local file", 8)
+                os.write(child.master, str(upload).encode() + b"\r")
+                child.until(b"NATIVE_UPLOAD_BURST_OK", 8)
+                child.wait(0)
+            finally:
+                child.close()
+
     def test_agent_transfer_names_have_no_old_aliases(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-names-") as tmp:
             root = Path(tmp)

@@ -44,6 +44,9 @@ local GNU screen containing a wrapper, remote GNU screen attach/detach, pending
 outbox delivery on wrapped resume, unwrapped resume, and changed-source retention.
 The command-name regression checks `/receive` and `/send PATH` help/usage, rejects
 the former command names and malformed prefixes; transfer cases use the new names.
+A synthetic native peer advertises 64 KiB blocks and verifies every upload DATA
+block remains at most 1 KiB, plus complete bytes and digest/EXIT. The nested-screen
+binary upload covers the upstream input queue hidden by an intermediate relay.
 The detached-screen regression checks receipt scrollback and restoration of a
 partly edited draft and its cursor on reattachment. Changed-source checks also
 cover same-size edits with restored mtime, requiring the saved SHA256.

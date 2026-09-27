@@ -54,6 +54,7 @@ snag_upload_cleanup(int stage_fd, struct snag_upload_result *result)
 
 #define SNAG_UPLOAD_FRAME_TIMEOUT_MS 20000u
 #define SNAG_UPLOAD_READ_CHUNK 4096u
+#define SNAG_UPLOAD_SCREEN_BLOCK 1024u
 
 struct upload_io {
     int fd;
@@ -288,7 +289,7 @@ send_config(struct upload_io *io)
     char config[256];
     /* screen's input queue can lose a large pasted protocol-1 DATA line.
      * Keep client DATA frames within a small raw-tty input burst there. */
-    unsigned int block = io->screen ? 1024u : SNAG_UPLOAD_BLOCK_MAX;
+    unsigned int block = io->screen ? SNAG_UPLOAD_SCREEN_BLOCK : SNAG_UPLOAD_BLOCK_MAX;
     int n = snprintf(config, sizeof(config),
         "{\"lang\":\"c-snajpagent\",\"protocol\":1,\"binary\":false,"
         "\"directory\":false,\"overwrite\":false,\"bufsize\":%u,"
@@ -823,6 +824,9 @@ snag_client_upload(int tty, int fd, const char *name,
         read_expected(&io, &frame, "SUCC") < 0 ||
         decode_payload(&frame, bytes, sizeof(bytes), &length) < 0 || !length ||
         download_integer(&io, &frame, "SIZE", (uint64_t)before.st_size) < 0) goto done;
+    /* A relay can hide STY while an upstream screen still carries input. Match
+     * its safe burst even when the peer advertises the full wire block size. */
+    if (block > SNAG_UPLOAD_SCREEN_BLOCK) block = SNAG_UPLOAD_SCREEN_BLOCK;
     struct snag_upload_md5 hash;
     snag_upload_md5_init(&hash);
     uint64_t sent = 0u;

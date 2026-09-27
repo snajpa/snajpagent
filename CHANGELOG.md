@@ -7,6 +7,8 @@
 - Name terminal commands from the running agent: `/receive` accepts workstation
   files as unsent attachments; `/send PATH` sends an agent file to the workstation.
   The former command names are removed.
+- Keep native upload DATA blocks within the existing 1 KiB screen-safe input
+  burst, including upstream GNU screen boundaries hidden behind a relay.
 
 - Add client-only `snajpagent remote COMMAND…` with a literal-argv PTY, native
   upload/download endpoints, configurable workstation destination defaulting to

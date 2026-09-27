@@ -73,3 +73,9 @@ carry the queue; deletion follows ordinary session deletion.
 - `tests/test_upload_client.py`: pinned Go upload and protocol failure coverage.
 
 Qualification records distinguish PTY/path selection from desktop GUI actions.
+
+Native uploads use the existing 1 KiB screen-safe DATA burst even when the peer
+advertises a larger wire block. An intermediate relay clears inherited STY at
+its child PTY, so the agent may not see an upstream screen input queue. Larger
+incompressible DATA lines reproduced a one-byte loss there. This per-frame bound
+preserves streaming and acknowledged completion; it adds no file/session quota.

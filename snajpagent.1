@@ -1319,6 +1319,8 @@ Receiving a file alone submits no message. Preparation failure removes new files
 from that batch and retains existing unsent attachments. A batch has at most eight
 files; retained files are at most 256 MiB each, and prepared image content uses
 the existing 12 MiB input budget.
+Native uploads use acknowledged blocks of at most 1 KiB to preserve input
+through GNU screen, including screen boundaries hidden behind a relay.
 .SS Send to the workstation
 Type
 .B /send PATH
