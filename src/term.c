@@ -2177,7 +2177,8 @@ apply_key(struct snag_term *term, int key)
 }
 
 static int
-feed_escape(struct snag_term *term, unsigned char byte)
+feed_escape(struct snag_term *term, unsigned char byte, enum snag_term_action *action,
+            char **text)
 {
     bool prefix = false;
 
@@ -2186,6 +2187,22 @@ feed_escape(struct snag_term *term, unsigned char byte)
         return 0;
     }
     term->escape[term->escape_len++] = byte;
+    /* A private live-client reply is input metadata, never draft text. */
+    if (term->escape_len >= 3u && !memcmp(term->escape, "\033[>", 3u)) {
+        size_t length = term->escape_len;
+        if (byte == 'S' && length > 3u) {
+            term->escape[length - 1u] = '\0';
+            *text = strdup((char *)term->escape + 3u);
+            term->escape_len = 0u;
+            if (!*text) return -1;
+            *action = SNAG_TERM_REMOTE_READY;
+            return 1;
+        }
+        if (length <= 12u && (length == 3u || (byte >= '0' && byte <= '9')))
+            return 0;
+        term->escape_len = 0u;
+        return 0;
+    }
     for (size_t i = 0u; i < sizeof(keys) / sizeof(keys[0]); ++i) {
         if (term->escape_len <= keys[i].len && memcmp(term->escape, keys[i].bytes, term->escape_len) == 0) {
             prefix = true;
@@ -2299,7 +2316,7 @@ feed_byte(struct snag_term *term, unsigned char byte, enum snag_term_action *act
     }
     term->ctrl_c_count = 0u;
     if (term->paste) return feed_paste(term, byte);
-    if (term->escape_len) return feed_escape(term, byte);
+    if (term->escape_len) return feed_escape(term, byte, action, text);
     if (byte == 0x1bu) {
         term->escape[0] = byte;
         term->escape_len = 1u;

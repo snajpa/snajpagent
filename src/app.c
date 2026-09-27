@@ -2841,6 +2841,45 @@ cancel_queue_edit(struct app_state *app, bool active)
 }
 
 static int
+flush_download_queue(struct app_state *app)
+{
+    if (!app->session.download_queue || !json_array_size(app->session.download_queue)) return 0;
+    if (app->session.active_turn || app->attaching || app->execute || !app->ui.opened)
+        return 0;
+    json_t *snapshot = json_deep_copy(app->session.download_queue);
+    if (!snapshot) return -1;
+    int rc = 0;
+    for (size_t i = 0; rc == 0 && i < json_array_size(snapshot); ++i) {
+        json_t *item = json_array_get(snapshot, i);
+        const char *id = snag_json_string(item, "id");
+        char error[256] = {0};
+        json_t *result = NULL;
+        rc = snag_app_download_pending(app, item, &result, error, sizeof(error));
+        if (rc == 0) {
+            const char *message = snag_json_string(result, "model_text");
+            rc = snag_ui_text(&app->ui,
+                !strcmp(snag_json_string(result, "status"), "succeeded") ?
+                SNAG_UI_HOST : SNAG_UI_ERROR,
+                message ? message : "Download finished.");
+        }
+        if (rc == 0 && result &&
+            !strcmp(snag_json_string(result, "status"), "succeeded")) {
+            if (snag_app_commit_event(app, "download_removed",
+                    json_pack("{s:s,s:s}", "id", id, "reason",
+                              "delivered to wrapped client"),
+                    error, sizeof(error)) < 0) {
+                rc = snag_ui_text(&app->ui, SNAG_UI_ERROR,
+                    error[0] ? error :
+                    "delivered download could not be removed from queue");
+            }
+        }
+        json_decref(result);
+    }
+    json_decref(snapshot);
+    return rc;
+}
+
+static int
 input_view_toggle(struct app_state *app)
 {
     if (app->queue_edit_id[0]) {
@@ -2979,6 +3018,11 @@ again:;
         app->interrupt_requested = true;
         free(line);
         return 2;
+    }
+    if (action == SNAG_TERM_REMOTE_READY) {
+        snag_app_remote_reply(app, line);
+        free(line);
+        return 0;
     }
     if (action == SNAG_TERM_UPLOAD) {
         bool directory = line && !strcmp(line, "trz -d");
@@ -4998,6 +5042,8 @@ static int
 idle_poll_timeout(const struct app_state *app)
 {
     int timeout = app->audio || app->voice || app->networked || app->irc_background.len ? 25 : -1;
+    if (json_array_size(app->session.download_queue) && (timeout < 0 || timeout > 250))
+        timeout = 250;
     if (app->session.timer_id[0] && app->session.timer_due_ms) {
         uint64_t now = snag_time_ms();
         uint64_t remaining = app->session.timer_due_ms > now ? app->session.timer_due_ms - now : 0u;
@@ -5204,6 +5250,11 @@ interactive_loop(struct app_state *app, const char *initial)
             if (app->ui.active != app->session.active_turn &&
                 set_input_prompt(app, app->session.active_turn) < 0)
                 goto ui_failed;
+            if (snag_monotonic_ms() - app->remote_reply_at >= 2000u)
+                app->remote_available = false;
+            if (json_array_size(app->session.download_queue) && !app->session.active_turn &&
+                snag_monotonic_ms() - app->remote_probe_at >= 1000u &&
+                snag_app_remote_probe(app) < 0) goto ui_failed;
             int poll_rc = snag_ui_poll(&app->ui, idle_poll_timeout(app), &action, &owned);
             if (owned) app->input_received_ms = app->ui.input_received_ms;
             history_warning(app);
@@ -5264,6 +5315,17 @@ interactive_loop(struct app_state *app, const char *initial)
                     commit_event(app, "input_cancelled", json_object(), error, sizeof(error)) < 0)
                     goto ui_failed;
                 if (cancel_queue_edit(app, false) < 0) goto ui_failed;
+                continue;
+            }
+            if (action == SNAG_TERM_REMOTE_READY) {
+                snag_app_remote_reply(app, owned);
+                free(owned); owned = NULL;
+                if (app->remote_verified) {
+                    app->remote_verified = false;
+                    bool newly_available = !app->remote_available;
+                    app->remote_available = true;
+                    if (newly_available && flush_download_queue(app) < 0) goto ui_failed;
+                }
                 continue;
             }
             if (action == SNAG_TERM_UPLOAD) {

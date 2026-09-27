@@ -9,11 +9,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #ifndef _WIN32
 #include <fcntl.h>
 #include <termios.h>
-#include <unistd.h>
 
 static int
 transfer_checkpoint(void *opaque)
@@ -220,13 +220,126 @@ out:
 }
 
 int
-snag_app_download(struct app_state *app, const char *path, json_t **result,
-                  char *error, size_t error_size)
+snag_app_remote_probe(struct app_state *app)
+{
+    if (app->execute || !app->ui.opened || snag_isatty(STDERR_FILENO) != 1) return 0;
+    char id[SNAG_ID_HEX_LEN + 1u];
+    if (snag_random_id(id) < 0) return -1;
+    id[8] = '\0';
+    (void)snprintf(app->remote_nonce, sizeof(app->remote_nonce), "%lu",
+                   strtoul(id, NULL, 16) % 1000000000ul);
+    app->remote_probe_at = snag_monotonic_ms();
+    app->remote_verified = false;
+    char query[48];
+    const char *sty = getenv("STY");
+    bool screen = sty && *sty;
+    int n = snprintf(query, sizeof(query), "%s\033[?9001;%sn%s",
+                     screen ? "\033P" : "", app->remote_nonce, screen ? "\033\\" : "");
+    return n < 0 || (size_t)n >= sizeof(query) ? -1 :
+        snag_ui_send(&app->ui, (struct snag_ui_command){.kind = SNAG_UI_RAW,
+            .data.value = STDERR_FILENO, .text = query, .len = (size_t)n});
+}
+
+void
+snag_app_remote_reply(struct app_state *app, const char *nonce)
+{
+    if (nonce && app->remote_nonce[0] && !strcmp(nonce, app->remote_nonce) &&
+        snag_monotonic_ms() - app->remote_probe_at < 1000u) {
+        app->remote_verified = true;
+        app->remote_reply_at = snag_monotonic_ms();
+        app->remote_nonce[0] = '\0';
+    }
+}
+
+int
+snag_app_download_queue(struct app_state *app, const char *path, json_t **result,
+                        char *error, size_t error_size)
+{
+    *result = NULL;
+    json_t *asset = NULL;
+    char *source = NULL;
+    const char *name = NULL;
+    int fd = -1, rc = -1;
+    snag_file_info info;
+    char id[SNAG_ID_HEX_LEN + 1u];
+    char sha[SNAG_SHA256_HEX_LEN + 1u];
+
+    if (!strncmp(path, "asset:", 6u)) {
+        if (snag_session_media(&app->session, path, NULL, prepare_checkpoint, app,
+                               &asset, &source, error, error_size) < 0) goto out;
+        name = snag_json_string(asset, "name");
+    } else {
+        source = snag_path_root_len(path) ? strdup(path) : snag_path_join(app->session.cwd, path);
+    }
+    if (!source) goto out;
+    if (!name || !*name) {
+        const char *slash = strrchr(source, '/');
+        name = slash ? slash + 1u : source;
+    }
+    if (!*name || strlen(name) > SNAG_NAME_MAX_BYTES ||
+        !snag_utf8_valid((const unsigned char *)name, strlen(name), true)) {
+        (void)snag_fail(error, error_size, EINVAL, "download needs a valid file name");
+        goto out;
+    }
+    for (size_t i = 0; name[i]; ++i)
+        if ((unsigned char)name[i] < 0x20u || name[i] == 0x7f ||
+            name[i] == '/' || name[i] == '\\') {
+            (void)snag_fail(error, error_size, EINVAL, "download needs a printable leaf file name");
+            goto out;
+        }
+    fd = snag_open_inspect_path(app->session.cwd, source);
+    if (fd < 0 || snag_fstat(fd, &info) < 0 || !S_ISREG(info.st_mode) || info.st_size < 0) {
+        (void)snag_errorf(error, error_size, "Download queue requires a readable regular file: %s",
+                          strerror(errno));
+        goto out;
+    }
+    struct snag_sha256 hash;
+    snag_sha256_init(&hash);
+    unsigned char bytes[65536];
+    for (;;) {
+        ssize_t n = read(fd, bytes, sizeof(bytes));
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) {
+            (void)snag_errorf(error, error_size,
+                "Cannot hash queued file: %s", strerror(errno));
+            goto out;
+        }
+        if (!n) break;
+        snag_sha256_update(&hash, bytes, (size_t)n);
+    }
+    snag_sha256_final_hex(&hash, sha);
+    if (snag_random_id(id) < 0) goto out;
+    json_t *event = json_pack("{s:s,s:s,s:s,s:I,s:I,s:s,s:I}",
+        "id", id, "path", source, "name", name, "bytes", (json_int_t)info.st_size,
+        "mtime", (json_int_t)info.st_mtime, "sha256", sha,
+        "queued_ms", (json_int_t)snag_time_ms());
+    if (!event || snag_app_commit_event(app, "download_queued", event, error, error_size) < 0)
+        goto out;
+    char message[SNAG_PATH_MAX_BYTES + SNAG_ID_HEX_LEN + 128u];
+    (void)snprintf(message, sizeof(message),
+        "Queued download %s for the next wrapped workstation client; not delivered yet: %s",
+        id, source);
+    *result = snag_tool_result_terminal(true, message);
+    rc = *result ? 0 : -1;
+out:
+    if (fd >= 0) (void)close(fd);
+    free(source);
+    json_decref(asset);
+    if (rc < 0 && !*result)
+        *result = snag_tool_result_terminal(false,
+            error[0] ? error : "Download queue failed.");
+    return *result ? 0 : -1;
+}
+
+static int
+app_download(struct app_state *app, const char *path, const json_t *pending, json_t **result,
+             char *error, size_t error_size)
 {
     *result = NULL;
 #ifdef _WIN32
     (void)app;
     (void)path;
+    (void)pending;
     (void)error;
     (void)error_size;
     *result = snag_tool_result_terminal(false, "Terminal download is not available on this host.");
@@ -268,6 +381,33 @@ snag_app_download(struct app_state *app, const char *path, json_t **result,
                           input < 0 ? strerror(errno) : "directories are not supported");
         goto out;
     }
+    const char *expected = pending ? snag_json_string(pending, "sha256") : NULL;
+    if (pending) {
+        if (info.st_size != json_integer_value(json_object_get(pending, "bytes")) ||
+            info.st_mtime != json_integer_value(json_object_get(pending, "mtime"))) {
+            (void)snag_errorf(error, error_size, "queued source changed; left pending: %s", source);
+            goto out;
+        }
+        struct snag_sha256 hash;
+        snag_sha256_init(&hash);
+        unsigned char bytes[65536];
+        for (;;) {
+            ssize_t n = read(input, bytes, sizeof(bytes));
+            if (n < 0 && errno == EINTR) continue;
+            if (n < 0) goto out;
+            if (!n) break;
+            snag_sha256_update(&hash, bytes, (size_t)n);
+        }
+        char actual[SNAG_SHA256_HEX_LEN + 1u];
+        snag_sha256_final_hex(&hash, actual);
+        if (strcmp(actual, expected)) {
+            (void)snag_errorf(error, error_size,
+                "queued source digest changed; left pending: %s", source);
+            goto out;
+        }
+        if (lseek(input, 0, SEEK_SET) < 0) goto out;
+        name = snag_json_string(pending, "name");
+    }
     app->attaching = true;
     owning = true;
     if (snag_ui_external(&app->ui, true, error, error_size) < 0) goto out;
@@ -284,7 +424,7 @@ snag_app_download(struct app_state *app, const char *path, json_t **result,
         goto out;
     }
     raw = true;
-    rc = snag_download_send(tty, input, name, transfer_checkpoint, app,
+    rc = snag_download_send(tty, input, name, expected, transfer_checkpoint, app,
                             &transfer, error, error_size);
 out:
     if (raw && tcsetattr(tty, TCSANOW, &saved) < 0) {
@@ -304,10 +444,29 @@ out:
     free(source);
     json_decref(asset);
     if (!restored) return -1;
+    char receipt[SNAG_PATH_MAX_BYTES + 128u];
+    if (rc == 0 && transfer.receipt[0])
+        (void)snprintf(receipt, sizeof(receipt), "Download completed: %s\n"
+                       "Client acknowledged the file digest and final EXIT.", transfer.receipt);
     *result = snag_tool_result_terminal(rc == 0, rc == 0 ?
+        transfer.receipt[0] ? receipt :
         "Download completed: client acknowledged the file digest and final EXIT." : rc == 1 ?
         "Download cancelled; a partial file may remain on the workstation." :
         error[0] ? error : "Download failed.");
     return *result ? 0 : -1;
 #endif
+}
+
+int
+snag_app_download(struct app_state *app, const char *path, json_t **result,
+                  char *error, size_t error_size)
+{
+    return app_download(app, path, NULL, result, error, error_size);
+}
+
+int
+snag_app_download_pending(struct app_state *app, const json_t *item, json_t **result,
+                          char *error, size_t error_size)
+{
+    return app_download(app, snag_json_string(item, "path"), item, result, error, error_size);
 }

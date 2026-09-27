@@ -15,6 +15,8 @@ struct snag_upload_file {
 };
 
 struct snag_upload_result {
+    bool native_client;
+    char receipt[SNAG_PATH_MAX_BYTES + 1u];
     struct snag_upload_file files[SNAG_UPLOAD_FILES_MAX];
     size_t count;
     unsigned char tail[4096];
@@ -32,8 +34,26 @@ void snag_upload_cleanup(int stage_fd, struct snag_upload_result *result);
 
 /* Send one already-open regular file over the same terminal lease. The caller
  * owns file_fd. Result carries only post-EXIT input; no attachment is created. */
-int snag_download_send(int tty, int file_fd, const char *name,
+int snag_download_send(int tty, int file_fd, const char *name, const char *expected_sha,
                         int (*checkpoint)(void *), void *opaque,
                         struct snag_upload_result *result, char *error, size_t error_size);
+
+#ifndef _WIN32
+struct snag_client_result {
+    char path[SNAG_PATH_MAX_BYTES + 1u];
+    bool landed;
+    uint64_t bytes;
+    unsigned char tail[4096];
+    size_t tail_len;
+};
+/* Workstation endpoints; tty is the proxy's private nonblocking child PTY.
+ * The caller owns selection, output presentation, fd and directory lifetime. */
+int snag_client_download(int tty, int directory, const char *path,
+                         int (*checkpoint)(void *), void *opaque,
+                         struct snag_client_result *result, char *error, size_t error_size);
+int snag_client_upload(int tty, int fd, const char *name,
+                       int (*checkpoint)(void *), void *opaque,
+                       struct snag_client_result *result, char *error, size_t error_size);
+#endif
 
 #endif

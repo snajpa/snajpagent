@@ -46,36 +46,17 @@ Your request and the work through its final answer make up a **turn**, which
 appears in **rollout**. You can type while it runs; typing alone does not
 interrupt it.
 
-A submitted active rollout steer stays visible in scrollback even when the
-engine is busy. Its durable record follows when the engine admits it. The active
-prompt appears as the turn starts, before the provider accepts a response, and stays
-visible and editable through request preparation, retries and handoffs. Only a
-foreground slash command hides it until that command finishes. Enter submits
-a steer at the next safe boundary, including before provider acceptance. Blank or
-whitespace-only Enter stays local and starts no turn, command or provider call.
-
-**Enter sends a correction during a steerable provider request**: “Use the
-existing parser; don't add a dependency.” It interrupts that response and
-continues from the text already delivered; running commands stay alive while
-the model waits for or stops them. Input submitted before the provider is ready
-waits for the first safe boundary.
+**Enter sends a correction during active work**: “Use the existing parser;
+don't add a dependency.” The steer remains visible and is admitted at a safe
+boundary, continuing from delivered text while running commands stay alive.
+The active prompt remains editable through request preparation and retries.
+Blank Enter starts no work.
 
 **Tab at the end of an ordinary message queues a follow-up while work is
-active**, so “Then add regression coverage” waits for the current turn. Queued
-prompts run oldest first, one at a time; `(N)` counts waiting turns, excluding
-current work. The acknowledgement `queued (/next or /q c) ›` confirms
-submission: `/next` resumes a paused queue, while `/q c` clears waiting prompts
-without stopping current work.
-
-Tab completes command names before it queues: `/sta` plus Tab gives `/status `,
-and Enter runs it. Completion applies while the cursor is in or at the end of
-that first `/command`; afterwards Tab follows the nickname-completion or
-idle/active behavior below. A unique match adds a space, an ambiguous one
-extends the common prefix and a second Tab lists choices, and no match leaves
-the draft unchanged. Completion never sends or queues text. At queue dispatch
-the prompt shows its dispatch-time clock and effective model settings, while its
-durable provenance keeps the original receipt time; same-turn retries do not
-print a duplicate submission.
+active.** Waiting prompts run oldest first; `(N)` counts them. `/next` resumes
+a paused queue, and `/q c` clears waiting prompts without stopping current work.
+Tab first completes a `/command` name: `/sta` becomes `/status `; a second Tab
+lists ambiguous choices. Completion never submits text.
 
 ### Commands, history and context
 
@@ -89,40 +70,23 @@ an already streaming request is interrupted and rebuilt from durable history.
 The external `$EDITOR` owns terminal input while open, and deletion always
 requires explicit confirmation.
 
-Submitted slash commands remain in scrollback above their output. `/history`
-shows the last turn (including unfinished work), `/history 10` the last ten and
-`/history 0` only counts, while the header and footer report session and
-shown/completed totals. These are conversation turns, separate from the Up/Ctrl-R
-prompt-entry history.
+`/history` shows the last turn, `/history 10` the last ten, and `/history 0`
+counts. Up/Ctrl-R navigate prompt-entry history separately. `/cat src/app.c`
+opens a file in `$PAGER` without adding its contents to the conversation.
 
-Use `/cat src/app.c` to open a local file in `$PAGER` (or the configured
-`[ui] pager` command). Relative paths use the current working directory; file contents
-stay in the pager rather than the conversation.
+Use `/ro QUERY` for inspection without commands, edits, goal changes or IRC
+sends. During work it queues a separate read-only turn. `/yield` returns a tool
+wait to the model while preserving its process and handle. Durable command
+output remains pageable after resume without rerunning commands.
 
-Use `/ro QUERY` for a read-only query; during work it queues a separate read-only
-turn without changing the current turn's permissions. Every request declares the
-same native tool catalog. A read-only turn runs its permitted inspection calls
-and returns a refusal for a state-changing call. `/yield` returns an active tool
-wait to the model while leaving the process and its handle alive.
-
-Command results include durable stdout/stderr references. The model can page
-older bytes from the saved session without rerunning a command, including after
-resume. It can also select an absolute executable shell for later commands in
-that session; commands keep their exact bytes and must use that shell's syntax.
-
-`/compact` reduces model context while retaining the full local log, reporting
-progress, completion, waiting or interruption. Empty-draft Ctrl-C interrupts it,
-text entered during idle compaction becomes future queued work, and a provider
-error keeps the previous context and session available for a retry.
-An unsettled command handle blocks a final answer; recovery points the model
-to `write_stdin` to collect each terminal result before finishing the turn.
+`/compact` summarizes model context while retaining the full local log. It
+reports progress and interruptions; failed compaction preserves the previous
+context. Unsettled command handles must be collected before a final answer.
 
 ### Keep working, or leave and come back
 
-Failed turns retry automatically five times; `[agent] max_turn_retries` changes
-the limit (`0` disables ordinary automatic retries), and a successful actionable
-response resets the consecutive-failure budget. Active goals retry ordinary
-errors without a limit, while policy stops and refusals pause them.
+Failed turns retry five times by default; `[agent] max_turn_retries` changes
+this. Goals retry ordinary errors without a limit, while policy stops pause them.
 
 A normal final answer ends the turn; set a goal to continue work beyond it:
 
@@ -130,75 +94,65 @@ A normal final answer ends the turn; set a goal to continue work beyond it:
 /goal fix the bug and validate the change
 ```
 
-Goals continue until complete, paused, cancelled or blocked; queued prompts
-come first. `/goal pause` pauses continuation at a turn boundary without
-interrupting a running turn, `/goal resume` continues a paused or blocked goal,
-and `/goal clear` cancels the goal while retaining its history. An active goal
-retries errors with paced, interruptible waits, preserving completed work and
-live command handles.
+Goals continue until complete or blocked; queued prompts come first. `/goal pause`
+pauses at a turn boundary, `/goal resume` continues paused or blocked work, and
+`/goal clear` cancels while retaining history.
 
-Ctrl-C clears a nonempty draft; with an empty draft it interrupts the turn and
-pauses goal continuation. The next idle prompt clears the active goal flag, and
-empty Enter leaves the goal paused (use `/goal resume`). Ordinary IRC updates
-that were already pending stay pending at that boundary, including after exit
-and resume; a direct mention remains eligible for urgent handling. Ctrl-D on an
-empty
-draft exits; no work continues after exit. Tools require operands and default
-optional controls. Verbosity 1 shows rejected attempts as compact outcome rows;
-argument errors identify corrections, and capped output reports requested and
-applied limits. The model sees current tool definitions, runtime settings and
-local display visibility, so hidden tools call for progress updates and fuller
-traces reduce duplication. Decisions and outcomes stay explicit.
+Ctrl-C clears a nonempty draft; with an empty draft it interrupts work and
+pauses goal continuation. Empty Enter leaves the goal paused; use `/goal resume`.
+Ctrl-D on an empty draft exits, and no work continues after exit. Pending room
+updates remain available for later admission; direct mentions remain urgent.
 
-The conversation, tool results, queue and goal are saved as a **session**.
-Resume continues in-progress work without a fresh prompt, including from
-scripts: `snajpagent -e --resume SESSION_ID </dev/null`. Calls started without
-results retain their original command and an explicit unknown outcome rather
-than re-running blindly, and explicit cancellations and paused automatic work
-stay stopped. After accepted work, normal exit prints its resume command;
-preparing an attachment, `/dictate` and `/voice on` also retain the session,
-while exiting an unused one saves nothing. You can also list sessions or reopen
-the latest one for this project directory:
+The conversation, tools, queue and goal are saved as a **session**. Resume
+continues unfinished work; started calls without results are reported as
+unknown rather than blindly repeated. Accepted work, attachments and voice
+retain the session; exiting an unused session saves nothing. Normal exit
+prints its resume command. List sessions or reopen the latest one:
 
 ```sh
 snajpagent -l
 snajpagent --resume --last
 ```
 
-**An active goal continues on resume**, so pause it before exiting to keep it
-paused; paused, blocked and finished goals retain their states. Armed queues
-continue after recovered work, while paused queues need `/next` and take priority
-over goal work. Resume shows retained public history and continues unfinished
-turns from saved input and tool results; commands with uncertain outcomes are
-reported rather than restarted.
-The versioned session journal stores state and provider-context checkpoints
-inside `events.jsonl`. Resume validates the latest checkpoint and its recent
-suffix. Older long journals need one initial migration scan, while explicit requests
-for older history still read the relevant records. A corrupt checkpoint is
-reported instead of triggering an unnoticed full-journal rebuild. Successful
-compaction keeps its summary and uncovered continuation, not the covered
-conversation or completed tool results.
-Pending room updates remain available for their later admission across
-compaction and resume.
+**Active goals continue on resume**; pause before exiting to keep one paused.
+Armed queues run before goal work, while paused queues need `/next`. Resume
+retains public history and completed tool results. Keep important requirements
+in project files alongside the session log.
 
 ### Transfer files through the terminal
 
-On your workstation, install the Go wrapper (`brew install trzsz-go` on macOS;
-remove the conflicting Python `trzsz` package first if installed). Start the
-outer connection with `trzsz --dragfile ssh target`, then run snajpagent on the
-POSIX target, including inside screen. Drop regular files into the composer or
-use `/upload`; verified files become unsent attachments. A stock drag sends
-Ctrl-C first, which can cancel a draft or interrupt work. Review `/attachments`
-before submitting; uploads reject directories and empty files.
+Wrap your connection with the native workstation client:
+
+```sh
+snajpagent remote ssh -t snajpadev screen -S sessionname snajpagent
+# Reattach an existing remote screen session:
+snajpagent remote ssh -t snajpadev screen -r sessionname
+```
+
+`remote` passes a generic child command and its arguments literally through a
+PTY, without starting a local agent session. Use `/upload` on the POSIX target
+and enter a local regular-file path; verified files become unsent attachments.
+Review `/attachments` before submitting. Uploads reject directories and empty files.
 
 Use `/download PATH`, or ask the model to send a file with `send_file`, for the
-reverse direction. Literal paths and accepted `asset:ID` references are supported;
-downloads accept empty regular files. The workstation wrapper chooses the save
-directory; `DefaultDownloadPath` in its `~/.trzsz.conf` enables automatic saving.
-Transfers own terminal input temporarily and restore the display afterward.
-See the manual's **Terminal file transfers** and **Model tools** sections for
-requirements, limits, cancellation and the complete tool catalog. Downloads are
-available in development source builds; the 0.99.8b stable binary supports uploads.
+reverse direction. Downloads accept empty files and accepted `asset:ID` references.
+Native downloads default to `~/Downloads`; set `[terminal] download_dir` in the
+workstation's `~/.snajpagent/config.ini` to change it. Receipts list actual saved
+paths, and transfers restore the prompt and editable draft.
+
+Model sends while detached queue durable exports in the existing remote session.
+Wrapped reattachment delivers them at an idle boundary. Changed sources and
+uncertain transfers remain pending; ask the model to list, remove or clear them
+with `download_queue`. Source and completed local files are preserved.
+
+The trzsz-go wrapper remains an alternative for explicit `/upload` and
+`/download` commands: on macOS, install `trzsz-go` with Homebrew and connect using
+`trzsz --dragfile ssh target`. Its `~/.trzsz.conf` `DefaultDownloadPath` controls
+saving. Go-client stock drag sends Ctrl-C first, which can cancel a draft or work.
+See the manual's **Terminal file transfers**, **Remote terminal mode (snajpagent remote)**
+and **Model tools** sections for setup, recovery and the complete tool catalog.
+Native wrapper, downloads and outbox are development-source features; the
+0.99.8b stable binary supports uploads.
 
 ### Attach files and use voice
 
@@ -319,17 +273,12 @@ when a provider omits effort choices, or an optional `image_tokens` value for a
 provider-documented per-image ceiling that differs from the built-in
 resized-image budget; the manual covers precedence and selection.
 
-The prompt's context percentage compares the last measured request input with
-the resolved input budget, from provider-reported counts. A fresh session starts
-at `0%` and unknown measurements show `?%`; `/status` explains the accounting.
-Older context is compacted into a summary as it fills, or on `/compact`; the
-original transcript stays on disk, but keep important requirements in project
-documents because a summary omits detail.
-
-For inspection without commands or edits, use `/ro QUERY`: it can list, read and
-search files and use provider-hosted web search, but cannot run commands, patch
-files, change goals or send IRC messages. `/queue /ro QUERY` asks it next during
-active work.
+`/context default` uses the advertised normal window, `max` the maximum, and a
+number an explicit token count. Larger windows may change provider pricing.
+The prompt's percentage shows measured input against the resolved budget;
+`?%` means unknown. `/status` explains accounting, and `/compact` summarizes
+older context while preserving the transcript on disk. The manual covers
+model-limit rules, effort choices and context changes during active work.
 
 ### Restrict what the model may do
 

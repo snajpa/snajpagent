@@ -184,6 +184,7 @@ struct snag_session {
     /* The one-file journal checkpoint's persisted provider view is consumed
      * once on resume. Live checkpoint encoding is supplied by context.c. */
     json_t *checkpoint_context, *checkpoint_state;
+    json_t *download_queue; /* Pending workstation downloads, durable in the journal. */
     size_t response_public_bytes;
     int dir_fd;
     int log_fd;

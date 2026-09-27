@@ -20,6 +20,7 @@ enum section {
     SECTION_NONE,
     SECTION_AGENT,
     SECTION_AUDIO,
+    SECTION_TERMINAL,
     SECTION_PROVIDER,
     SECTION_MODEL_LIMIT,
     SECTION_MODEL_ALIAS,
@@ -94,6 +95,8 @@ snag_config_init(struct snag_config *config)
         "{rollout-active:{provider}/{model}/{effort} {context:3}% {queued:({queue}) }»}";
 
     memset(config, 0, sizeof(*config));
+    (void)snag_strcpy(config->terminal_download_dir,
+                       sizeof(config->terminal_download_dir), "~/Downloads");
     memcpy(config->model, "default", 8u);
     memcpy(config->reasoning_effort, "default", 8u);
     config->providers = calloc(8u, sizeof(*config->providers));
@@ -596,6 +599,8 @@ set_section(struct parse_state *state, char *name)
     enum section section;
     if (strcmp(name, "agent") == 0)
         section = SECTION_AGENT;
+    else if (strcmp(name, "terminal") == 0)
+        section = SECTION_TERMINAL;
     else if (strncmp(name, "provider ", 9u) == 0)
         return set_provider_section(state, trim(name + 9u));
     else if (strncmp(name, "model-limit ", 12u) == 0)
@@ -725,6 +730,8 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         void *target;
         uint64_t min, max;
     } settings[] = {
+        {SECTION_TERMINAL, "download_dir", SET_TEXT, config->terminal_download_dir,
+         0, sizeof(config->terminal_download_dir)},
         {SECTION_AGENT, "auto_update", SET_BOOL, &config->auto_update, 0, 0},
         {SECTION_AGENT, "update_url", SET_HTTPS, config->update_url, 0, sizeof(config->update_url)},
         {SECTION_AGENT, "provider", SET_TEXT, config->provider, 0, sizeof(config->provider)},
@@ -1109,6 +1116,52 @@ out:
         (void)close(fd);
         errno = saved;
     }
+    return rc;
+}
+
+int
+snag_config_terminal(const char *explicit_path, const char *dotdir, char *downloads,
+                      size_t capacity, char *error, size_t error_size)
+{
+    char *path = snag_config_path(explicit_path, dotdir, error, error_size);
+    if (!path) return -1;
+    struct snag_buf text;
+    snag_buf_init(&text, SNAG_CONFIG_FILE_MAX + 1u);
+    int rc = -1;
+    if (!snag_strcpy(downloads, capacity, "~/Downloads")) goto done;
+    int loaded = read_config(path, explicit_path != NULL, &text, NULL, NULL, NULL,
+                             error, error_size);
+    if (loaded < 0) goto done;
+    if (loaded == 1) { rc = 0; goto done; }
+    bool terminal = false, seen_section = false, seen_dir = false;
+    char *line = (char *)text.data;
+    for (unsigned int number = 1u; line; ++number) {
+        char *next = strchr(line, '\n');
+        if (next) *next++ = '\0';
+        char *clean = trim(line);
+        if (*clean == '[') {
+            terminal = !strcmp(clean, "[terminal]");
+            if (terminal && seen_section) goto invalid;
+            if (terminal) seen_section = true;
+        } else if (terminal && *clean && *clean != '#' && *clean != ';') {
+            char *equal = strchr(clean, '=');
+            if (!equal) goto invalid;
+            *equal = '\0';
+            if (strcmp(trim(clean), "download_dir") || seen_dir ||
+                copy_value(downloads, capacity, trim(equal + 1u)) < 0) goto invalid;
+            seen_dir = true;
+        }
+        line = next;
+        continue;
+invalid:
+        (void)snag_fail(error, error_size, EINVAL,
+                         "invalid [terminal] configuration at line %u", number);
+        goto done;
+    }
+    rc = 0;
+done:
+    free(path);
+    snag_buf_free(&text);
     return rc;
 }
 

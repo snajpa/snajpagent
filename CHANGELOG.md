@@ -35,6 +35,16 @@
   successful summaries across this case; exact counts, provider rejections and
   image/body byte limits retain their existing guards.
 
+- Add client-only `snajpagent remote COMMAND…` with a literal-argv PTY, native
+  upload/download endpoints, configurable workstation destination defaulting to
+  `~/Downloads`, actual-path receipts and upstream native-wrapper relay.
+- Journal model-requested workstation exports in the existing remote session;
+  detached sends queue without transfer frames, wrapped reattachment delivers
+  at idle boundaries, and uncertain or changed-source exports remain pending.
+  Add stable-ID `download_queue` list/remove/clear with read-only inspection.
+- Cover native startup isolation, GNU screen detach/reattach and local/nested
+  wrapper ownership; retain trzsz-go interoperability for explicit transfers.
+
 - Reserve the platform-flag suffix in POSIX transfer IDs, preventing the client
   from intermittently mistaking uploads or downloads for a Windows server.
 

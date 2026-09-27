@@ -1028,6 +1028,16 @@ snag_child_spawn(struct snag_child *child, const char *shell, const char *comman
 }
 
 int
+snag_child_spawn_terminal(struct snag_child *child, const char *executable,
+                           const char *const *argv)
+{
+    (void)child;
+    (void)executable;
+    (void)argv;
+    return snag_errno(ENOTSUP);
+}
+
+int
 snag_child_spawn_argv(struct snag_child *child,const char *const *argv,const char *directory,char **environment)
 {
     if(!argv || !argv[0])return snag_errno(EINVAL);
@@ -1405,11 +1415,27 @@ open_pty_pair(int *master_fd, int *slave_fd, unsigned short *rows, unsigned shor
 }
 
 static void
-exec_pty_child(const char *shell, const char *command, const char *workdir, int slave_fd, char **env)
+exec_terminal_child(const char *executable, const char *const *argv, int slave_fd)
+{
+    if (setsid() < 0 || ioctl(slave_fd, TIOCSCTTY, 0) < 0) _exit(125);
+    if (dup2(slave_fd, STDIN_FILENO) < 0 || dup2(slave_fd, STDOUT_FILENO) < 0 ||
+        dup2(slave_fd, STDERR_FILENO) < 0) _exit(125);
+    if (slave_fd > STDERR_FILENO) (void)close(slave_fd);
+    (void)signal(SIGPIPE, SIG_DFL);
+    /* A user's terminal command inherits cwd, environment and limits. It is
+     * not a bounded document helper and must not acquire that helper's sandbox. */
+    extern char **environ;
+    execve(executable, (char *const *)argv, environ);
+    _exit(errno == ENOENT ? 127 : 126);
+}
+
+static void
+exec_pty_child(const char *shell, const char *command, const char *const *argv,
+               const char *workdir, int slave_fd, char **env)
 {
     if (setsid() < 0) _exit(125);
     (void)ioctl(slave_fd, TIOCSCTTY, 0);
-    exec_child(shell, command, NULL, workdir, slave_fd, slave_fd, slave_fd, env);
+    exec_child(shell, command, argv, workdir, slave_fd, slave_fd, slave_fd, env);
 }
 #else
 static void
@@ -1464,7 +1490,8 @@ child_spawn(struct snag_child *child, const char *shell, const char *command,
         if (pty) {
             close_if_open(&master);
 #if defined(SNAJPAGENT_HAVE_PTY)
-            exec_pty_child(shell, command, directory, slave, environment);
+            if (argv) exec_terminal_child(shell, argv, slave);
+            exec_pty_child(shell, command, argv, directory, slave, environment);
 #else
             _exit(125);
 #endif
@@ -1725,5 +1752,13 @@ snag_child_spawn_argv(struct snag_child *child, const char *const *argv,
 {
     if (!argv || !argv[0] || !snag_path_root_len(argv[0])) { errno = EINVAL; return -1; }
     return child_spawn(child, argv[0], NULL, argv, directory, environment, false);
+}
+
+int
+snag_child_spawn_terminal(struct snag_child *child, const char *executable,
+                           const char *const *argv)
+{
+    if (!argv || !argv[0] || !snag_path_root_len(executable)) return snag_errno(EINVAL);
+    return child_spawn(child, executable, NULL, argv, NULL, NULL, true);
 }
 #endif

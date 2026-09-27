@@ -33,6 +33,9 @@ int snag_child_spawn(struct snag_child *child, const char *shell, const char *co
 /* Direct executable invocation, no shell expansion. argv[0] must be absolute. */
 int snag_child_spawn_argv(struct snag_child *child, const char *const *argv,
                           const char *directory, char **environment);
+/* Direct argv in a new controlling terminal, no shell or agent environment. */
+int snag_child_spawn_terminal(struct snag_child *child, const char *executable,
+                               const char *const *argv);
 void snag_child_signal(struct snag_child *child, enum snag_child_signal signal);
 /* 1 exited without reaping, 0 running, -1 error/lost ownership. */
 int snag_child_exited(struct snag_child *child);

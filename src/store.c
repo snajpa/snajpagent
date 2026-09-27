@@ -209,6 +209,7 @@ free_session_state(struct snag_session *session)
     json_decref(session->response_public);
     json_decref(session->checkpoint_context);
     json_decref(session->checkpoint_state);
+    json_decref(session->download_queue);
 }
 
 void
@@ -809,6 +810,68 @@ snag_context_choice_valid(enum snag_context_mode mode, uint64_t tokens)
     return false;
 }
 
+static bool
+download_queue_entry_valid(const json_t *entry)
+{
+    const char *id = snag_json_string(entry, "id");
+    const char *path = snag_json_string(entry, "path");
+    const char *name = snag_json_string(entry, "name");
+    const char *sha = snag_json_string(entry, "sha256");
+    json_int_t bytes = json_integer_value(json_object_get(entry, "bytes"));
+    json_int_t mtime = json_integer_value(json_object_get(entry, "mtime"));
+    json_int_t queued = json_integer_value(json_object_get(entry, "queued_ms"));
+
+    return snag_json_exact_keys(entry, "id path name bytes mtime sha256 queued_ms") &&
+        id && snag_hex_is_lower(id, SNAG_ID_HEX_LEN) &&
+        snag_text_valid(path, 1u, SNAG_PATH_MAX_BYTES) && snag_path_root_len(path) &&
+        snag_text_valid(name, 1u, SNAG_NAME_MAX_BYTES) &&
+        sha && snag_hex_is_lower(sha, SNAG_SHA256_HEX_LEN) &&
+        json_is_integer(json_object_get(entry, "bytes")) && bytes >= 0 &&
+        json_is_integer(json_object_get(entry, "mtime")) && mtime >= 0 &&
+        json_is_integer(json_object_get(entry, "queued_ms")) && queued >= 0;
+}
+
+static int
+download_queue_add(struct snag_session *session, const json_t *data)
+{
+    if (!download_queue_entry_valid(data)) return snag_errno(EINVAL);
+    if (!session->download_queue) {
+        session->download_queue = json_array();
+        if (!session->download_queue) return -1;
+    }
+    for (size_t i = 0; i < json_array_size(session->download_queue); ++i) {
+        const char *id = snag_json_string(json_array_get(session->download_queue, i), "id");
+        if (id && !strcmp(id, snag_json_string(data, "id"))) return snag_errno(EEXIST);
+    }
+    return json_array_append_new(session->download_queue, json_incref((json_t *)data)) < 0 ? -1 : 0;
+}
+
+static int
+download_queue_remove(struct snag_session *session, const json_t *data)
+{
+    const char *id = snag_json_string(data, "id");
+    if (!snag_json_exact_keys(data, "id reason") || !id ||
+        !snag_hex_is_lower(id, SNAG_ID_HEX_LEN) ||
+        !snag_text_valid(snag_json_string(data, "reason"), 0u, 1024u)) return snag_errno(EINVAL);
+    if (!session->download_queue) return snag_errno(ENOENT);
+    for (size_t i = 0; i < json_array_size(session->download_queue); ++i) {
+        const char *item = snag_json_string(json_array_get(session->download_queue, i), "id");
+        if (item && !strcmp(item, id))
+            return json_array_remove(session->download_queue, i) < 0 ? -1 : 0;
+    }
+    return snag_errno(ENOENT);
+}
+
+static int
+download_queue_clear(struct snag_session *session, const json_t *data)
+{
+    if (!snag_json_exact_keys(data, "reason") ||
+        !snag_text_valid(snag_json_string(data, "reason"), 0u, 1024u)) return snag_errno(EINVAL);
+    json_decref(session->download_queue);
+    session->download_queue = json_array();
+    return session->download_queue ? 0 : -1;
+}
+
 static int
 apply_event(struct snag_session *session, const char *type, const json_t *data,
             uint64_t seq, bool live, char *error, size_t error_size)
@@ -825,7 +888,13 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
     const char *diag_call = NULL;
     const char *diag_status = NULL;
 
-    if (strcmp(type, "session_created") == 0) {
+    if (!strcmp(type, "download_queued")) {
+        if (download_queue_add(session, data) < 0) goto invalid;
+    } else if (!strcmp(type, "download_removed")) {
+        if (download_queue_remove(session, data) < 0) goto invalid;
+    } else if (!strcmp(type, "downloads_cleared")) {
+        if (download_queue_clear(session, data) < 0) goto invalid;
+    } else if (strcmp(type, "session_created") == 0) {
         const char *effort = snag_json_string(data, "default_effort");
         const char *model = snag_json_string(data, "default_model");
         const char *provider = snag_json_string(data, "default_provider");
@@ -3034,6 +3103,7 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
     staged->response_public = json_incref(source->response_public);
     staged->checkpoint_context = json_incref(source->checkpoint_context);
     staged->checkpoint_state = json_incref(source->checkpoint_state);
+    staged->download_queue = json_deep_copy(source->download_queue);
     if (source->pending_call_count) {
         staged->pending_calls = malloc(source->pending_call_capacity * sizeof(*staged->pending_calls));
         if (!staged->pending_calls) return -1;
@@ -3072,7 +3142,8 @@ clone_session_state(const struct snag_session *source, struct snag_session *stag
         staged->process_capacity = source->process_capacity;
         staged->process_count = source->process_count;
     }
-    return source->strings && !staged->strings ? -1 : 0;
+    return (source->strings && !staged->strings) ||
+           (source->download_queue && !staged->download_queue) ? -1 : 0;
 }
 
 int

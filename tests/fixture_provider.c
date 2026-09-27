@@ -946,6 +946,24 @@ flood_done: snag_buf_free(&text);
         if (cycle == 1u) return add_call(graph, workspace, cycle, 0u, "fixture crash");
         return final_answer(&out, "msg_fixture_crash_final", "unexpected continuation");
     }
+
+    if (!strcmp(prompt, "download_queue_list") ||
+        !strncmp(prompt, "download_queue_remove ", 22u) ||
+        !strcmp(prompt, "download_queue_clear") ||
+        !strcmp(prompt, "download_queue_readonly_clear")) {
+        if (cycle == 1u) {
+            json_t *args = NULL;
+            if (!strcmp(prompt, "download_queue_list"))
+                args = json_pack("{s:s}", "action", "list");
+            else if (!strncmp(prompt, "download_queue_remove ", 22u))
+                args = json_pack("{s:s,s:s,s:s}", "action", "remove", "id", prompt + 22u,
+                                 "reason", "fixture cleanup");
+            else
+                args = json_pack("{s:s,s:s}", "action", "clear", "reason", "fixture cleanup");
+            return indexed_call(graph, cycle, 0u, "download_queue", args);
+        }
+        return final_answer(&out, "msg_fixture_download_queue_final", "download queue complete");
+    }
     if (!strncmp(prompt, "download_tool ", 14u) || !strcmp(prompt, "download_tool_bad")) {
         if (cycle == 1u) {
             json_t *args = !strcmp(prompt, "download_tool_bad") ?

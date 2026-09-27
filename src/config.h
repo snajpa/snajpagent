@@ -192,10 +192,14 @@ struct snag_config {
     struct snag_rules *rules;
     struct snag_secret_source *secrets;
     size_t secret_count, secret_capacity;
+    char terminal_download_dir[SNAG_CONFIG_PATH_MAX + 1u];
     char source_path[SNAG_CONFIG_PATH_MAX + 1u];
 };
 
 void snag_config_init(struct snag_config *config);
+/* Read only [terminal] settings, without provider/agent initialization. */
+int snag_config_terminal(const char *explicit_path, const char *dotdir, char *downloads,
+                          size_t capacity, char *error, size_t error_size);
 /* Growable protected-value list; parses and retains one additional source. */
 int snag_config_add_secret(struct snag_config *config, const char *value, const char *source_path,
                            char *error, size_t error_size);
