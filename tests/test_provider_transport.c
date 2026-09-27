@@ -3373,6 +3373,7 @@ test_voice_socket(void)
 struct voice_fixture {
     json_t *sent,*notices;
     uint32_t played,frames,interrupts,ends;
+    const char *audio_item;
 };
 static int voice_send(void *opaque,const json_t *event)
 {
@@ -3384,7 +3385,8 @@ static int voice_notice(void *opaque,const json_t *event)
 }
 static int voice_play(void *opaque,const char *item,const int16_t *pcm,uint32_t frames)
 {
-    struct voice_fixture *f=opaque;assert(!strcmp(item,"audio-1"));
+    struct voice_fixture *f=opaque;
+    assert(!strcmp(item,f->audio_item?f->audio_item:"audio-1"));
     if(!frames) {assert(!pcm);++f->ends;return 0;}
     assert(frames==24u);
     for(uint32_t i=0;i<frames;++i)assert(pcm[i]==(int16_t)i-12);
@@ -3447,6 +3449,38 @@ static void test_audio_provider_selection(void)
     assert(!strcmp(resolved.realtime_model,"custom-voice-model") &&
         !strcmp(resolved.voice,"custom-voice"));
     snag_config_free(&config);
+}
+
+static void test_native_voice_playback(void)
+{
+    struct voice_fixture f={.sent=json_array(),.notices=json_array(),.audio_item="native-output"};
+    struct snag_voice_io io={.send=voice_send,.notice=voice_notice,
+        .play=voice_play,.interrupt=voice_interrupt};
+    struct snag_voice *v=snag_voice_new(&io,&f,"gpt-live-1-codex","gpt-4o-transcribe","marin");
+    assert(v);
+    json_decref(snag_voice_native_session(v));
+    char error[256];int16_t pcm[24];
+    for (uint32_t i=0;i<24u;++i)pcm[i]=(int16_t)i-12;
+    assert(snag_voice_native_output(v,pcm,24u)<0);
+    assert(snag_voice_begin(v,error,sizeof(error))==0);
+    /* RTC has no turn ID and can precede sideband assistant metadata. */
+    assert(snag_voice_native_output(v,pcm,24u)==0 && f.frames==24u);
+    assert(voice_deliver(v,json_pack("{s:s,s:{s:s,s:s}}","type","turn.created",
+        "turn","id","user-1","role","user"))==0 && f.interrupts==1u);
+    /* Barge-in flushes queued speech, not the entire future RTC stream. */
+    assert(snag_voice_native_output(v,pcm,24u)==0 && f.frames==48u);
+    assert(voice_deliver(v,json_pack("{s:s,s:{s:s,s:s}}","type","turn.created",
+        "turn","id","audio-1","role","assistant"))==0);
+    assert(snag_voice_native_output(v,pcm,24u)==0 && f.frames==72u);
+    assert(voice_deliver(v,json_pack("{s:s,s:{s:s,s:s,s:s}}","type","turn.done",
+        "turn","id","audio-1","role","assistant","transcript","Hello."))==0);
+    assert(f.ends==1u);
+    assert(snag_voice_native_output(v,pcm,24u)==0 && f.frames==96u);
+    assert(voice_deliver(v,json_pack("{s:s,s:{s:s,s:s}}","type","turn.created",
+        "turn","id","user-2","role","user"))==0 && f.interrupts==2u);
+    assert(snag_voice_mute(v,true,error,sizeof(error))==0);
+    assert(snag_voice_native_output(v,pcm,24u)==0 && f.frames==120u);
+    voice_end(v,&f);
 }
 
 static void test_native_voice_protocol(void)
@@ -3932,6 +3966,7 @@ main(void)
     (void)signal(SIGTERM, fixture_stop);
     test_audio_provider_selection();
     test_native_voice_protocol();
+    test_native_voice_playback();
     test_native_voice_credential_snapshot();
     test_native_voice_transport();
 #if SNAJPAGENT_AUDIO_DEVICE

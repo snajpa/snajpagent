@@ -768,7 +768,10 @@ Voice resolves optional audio preferences against the selected provider. Native
 Codex subscriptions and codex-lb use call creation, WebRTC media and a call-bound
 sideband; public Realtime uses its API-key WebSocket session. `voice_rtc.c` wraps
 libdatachannel and Opus. Its encoded queue handles packet reordering; the device
-ring controls playback timing. Native delegations enter the coding queue only
+ring controls playback timing. Native PCM retains one playback identity across
+sideband turn changes: RTC packets carry no transcript turn ID. Barge-in flushes
+queued media without latching off later packets while assistant metadata catches
+up. Native delegations enter the coding queue only
 after their matching user turn has a finalized transcript. Captions use stable
 turn identities, and barge-in clears queued playback before new output is admitted.
 Provider credentials stay with the voice connection owner. Account, endpoint and

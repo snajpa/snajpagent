@@ -1695,6 +1695,8 @@ voice control traffic without TLS; use HTTPS or a secure tunnel outside a
 trusted network.
 Native voice resolves credentials at startup and uses the same credential for
 call setup and attachment. A configured gateway key needs no separate login.
+Native audio playback runs independently of caption timing; interrupting a reply
+clears queued speech while keeping the connection ready for the next reply.
 [audio] settings are optional overrides.
 The prompt identifies microphone capture, which starts after connection setup.
 Microphone audio goes to the provider's media servers and replies

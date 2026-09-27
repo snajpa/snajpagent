@@ -374,7 +374,7 @@ static int native_event(struct snag_voice *s,const json_t *event,const char *typ
             in->finished=true;if (!strcmp(s->speaking,id))s->speaking[0]=0;
             if (in->discarded || !*text) {in->failed=true;return input_settle(s,in,error,size);}
             in->text=snag_strdup_checked(text,VOICE_TEXT-1u);if (!in->text)return -1;
-        } else if (s->io.play(s->opaque,id,NULL,0u)<0)return -1;
+        } else if (s->io.play(s->opaque,"native-output",NULL,0u)<0)return -1;
         if (notice(s,json_pack("{s:s,s:s,s:s,s:s}","type","voice_transcript",
             "speaker",role,"item_id",id,"text",text))<0)
             return -1;
@@ -424,8 +424,10 @@ static int native_event(struct snag_voice *s,const json_t *event,const char *typ
 int snag_voice_native_output(struct snag_voice *s,const int16_t *pcm,uint32_t frames)
 {
     if (!s || !s->native || !snag_voice_ready(s))return -1;
-    if (s->interrupted)return 0;
-    return s->io.play(s->opaque,s->response[0]?s->response:"native-output",pcm,frames);
+    /* RTC is one continuous stream, independent of sideband turn ordering.
+     * Barge-in flushes queued samples; a delayed assistant turn must neither
+     * suppress new media nor relabel samples while playback is pending. */
+    return s->io.play(s->opaque,"native-output",pcm,frames);
 }
 
 int snag_voice_event(struct snag_voice *s,const json_t *event,char *error,size_t size)

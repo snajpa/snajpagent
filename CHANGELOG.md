@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep native subscription voice playback flowing across barge-in and delayed
+  caption events, with a stable identity for its continuous audio stream.
+
 - Enable device audio and native realtime voice in Linux production builds,
   using the ALSA and PulseAudio backends.
 
