@@ -15,6 +15,10 @@
   completion and cancellation, including its default disabled alternate screen.
 - Give terminal transfers and the complete model tool catalog dedicated manual
   sections; clarify macOS Go-wrapper setup and upload/download destinations.
+- Preserve buffered citation text across streaming deliveries in both terminal
+  views. Presentation failures retain their own diagnostic instead of being
+  reported as an oversized or invalid input draft.
+
 - Preserve successful hard-budget summaries in the next request; select a
   summary-less recovery fallback only after the rebuilt request is still too
   large. Repeated compaction in a long active turn recognizes its covered

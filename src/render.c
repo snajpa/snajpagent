@@ -2540,13 +2540,18 @@ static int
 render_public_chunk(struct snag_render *render, const char *text, size_t len, struct snag_buf *delivered)
 {
     size_t complete_max;
+    size_t filtered_max;
     int rc = -1;
     int saved_errno = 0;
 
-    if (!render->public_item_open || !snag_size_add(len, sizeof(render->utf8_pending), &complete_max))
+    if (!render->public_item_open ||
+        !snag_size_add(len, sizeof(render->utf8_pending), &complete_max) ||
+        !snag_size_add(complete_max, render->cite.pending.len, &filtered_max)) {
         return snag_errno(EOVERFLOW);
+    }
     struct snag_buf complete = {.max = complete_max};
-    struct snag_buf filtered = {.max = complete_max};
+    /* A terminator can release a citation retained by earlier chunks. */
+    struct snag_buf filtered = {.max = filtered_max};
     if (complete_utf8(render->utf8_pending, &render->utf8_pending_len, text, len, &complete) < 0) goto out;
     cite_prepare(&render->cite);
     if (complete.len && (cite_feed(&render->cite, (const char *)complete.data, complete.len,
@@ -2742,14 +2747,17 @@ snag_render_rollout(struct snag_render *render, const char *text, size_t len, st
     struct snag_buf complete;
     struct snag_buf filtered;
     size_t complete_max;
+    size_t filtered_max;
     int rc = -1;
 
-    if (!record || record->complete || !snag_size_add(len, sizeof(record->utf8_pending), &complete_max)) {
+    if (!record || record->complete ||
+        !snag_size_add(len, sizeof(record->utf8_pending), &complete_max) ||
+        !snag_size_add(complete_max, record->cite.pending.len, &filtered_max)) {
         errno = record ? EOVERFLOW : EINVAL;
         return -1;
     }
     snag_buf_init(&complete, complete_max);
-    snag_buf_init(&filtered, complete_max);
+    snag_buf_init(&filtered, filtered_max);
     if (complete_utf8(record->utf8_pending, &record->utf8_pending_len, text, len, &complete) < 0) goto out;
     cite_prepare(&record->cite);
     if (complete.len && cite_feed(&record->cite, (const char *)complete.data, complete.len,

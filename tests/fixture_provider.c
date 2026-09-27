@@ -97,6 +97,11 @@ emit_public(struct fixture_output *out, enum snag_item_kind kind,
     if (pattern == 1) return emit_fragment(out, index, "ha", 2u) < 0 ||
                emit_fragment(out, index, "ha", 2u) < 0 ? -1 : 0;
     if (pattern == 2) split = 1u;
+    if (pattern == 3) {
+        if (emit_fragment(out, index, text, len - 3u) < 0) return -1;
+        int rc = wait_ticks(out, 8u);
+        return rc ? rc : emit_fragment(out, index, text + len - 3u, 3u);
+    }
     if ((split && emit_fragment(out, index, text, split) < 0) ||
         emit_fragment(out, index, text + split, len - split) < 0) return -1;
     return 0;
@@ -435,12 +440,14 @@ fixture_response(const char *prompt, const json_t *steering, const json_t *reque
     if (strcmp(prompt, "citation_markers") == 0) return final_answer(&out, "msg_fixture_citations",
             "citations: " "\xee\x88\x80" "cite" "\xee\x88\x82" "turn2view0"
             "\xee\x88\x82" "turn0view3" "\xee\x88\x81" " tail");
+    if (strcmp(prompt, "cite_tail") == 0) return emit_public(&out, SNAG_ITEM_ASSISTANT,
+        SNAG_PHASE_FINAL_ANSWER, "msg_fixture_cite_tail", "citation tail "
+        "\xee\x88\x80" "cite\xee\x88\x82" "turn2view3\xee\x88\x81", 3);
     /* The block carries more turn references than the presenter rewrites
      * (SNAG_CITE_MAX_TURNS), so the presenter keeps it verbatim, and the
      * fixture's two-fragment emission splits it across public deliveries:
-     * the second delivery must fold the held prefix back in. That made the
-     * per-delivery render bound fail with EOVERFLOW, the input-shaped
-     * condition covered by tests/pty_delivery_recovery.py. */
+     * the second delivery must fold the held prefix back in without an
+     * overflow in either the renderer or the UI handoff. */
     if (strcmp(prompt, "cite_split") == 0) {
         char text[1600];
         size_t at = 0u;

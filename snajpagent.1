@@ -1181,6 +1181,8 @@ The page index within a turn is omitted and a repeated turn appears once.  The
 rule is independent of Markdown.  Unknown, malformed, oversized or
 unterminated blocks are painted unchanged, and redirected one-shot output,
 provider traffic and durable events keep the original bytes.
+Citation fragments remain buffered across streaming deliveries, including when
+the closing marker arrives on its own.
 .PP
 Plain-text fences labelled text, txt or plaintext omit the language label.
 Other fence labels remain visible.  Indentation and Markdown-looking content

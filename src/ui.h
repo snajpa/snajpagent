@@ -13,6 +13,7 @@ struct snag_ui {
     bool opened;
     bool prompt_wanted;
     bool active, input_active, input_echoed, input_view_applied;
+    bool input_error;
     uint64_t turn_generation;
     uint64_t input_received_ms;
     char label[SNAG_TERM_LABEL_BYTES];

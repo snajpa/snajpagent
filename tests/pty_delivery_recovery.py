@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""A failed public-output delivery is an input-shaped condition, not a broken
-terminal.
+"""Buffered citation fragments survive renderer and UI delivery boundaries.
 
-The presenter used to latch terminal input closed on any delivery error, so a
-session whose public output tripped the render bound stopped reading keys
-entirely - nothing echoed and no prompt ran again - while the engine kept
-running. The fixture's cite_split answer carries more turn references than the
-presenter rewrites and crosses the fixture's emission split, so one delivery
-fails with EOVERFLOW exactly like the release session did; the next prompt must
-still reach the composer. Usage: pty_delivery_recovery.py <binary> <workspace>
+Both a large unrecognized citation and a small recognized citation with its
+terminator delivered separately must finish without retries or a false input
+overflow. The next ordinary prompt must still work.
+Usage: pty_delivery_recovery.py <binary> <workspace>
 with SNAJPAGENT_DOTDIR and SNAJPAGENT_TEST_ROOT in the environment (same
 convention as test_cli.sh).
 """
@@ -23,14 +19,19 @@ import pty_active as H
 
 def main():
     with H.Child([], ready=H.DEFAULT_IDLE_PROMPT, term="xterm") as child:
-        child.send_wait(b"cite_split\r", b"public output delivery failed", timeout=20.0)
-        # The failed delivery must not close terminal input: the next prompt
-        # still has to be consumed and echoed. A latched close ate every
-        # keystroke silently, so this text never appeared at all.
-        after = len(child.buf)
-        child.send(b"ping\r")
-        child.wait(b"ping", start=after, timeout=10.0)
-    print("delivery recovery: ok")
+        end = child.send_wait(b"cite_split\r", b"yyyyyyyy", timeout=20.0)
+        child.wait_idle_prompt(start=end)
+        end = child.send_wait(b"cite_tail\r", b"[cite: turn 2]", timeout=20.0)
+        child.wait_idle_prompt(start=end)
+        end = child.send_wait(b"ping\r", b"pong", timeout=10.0)
+        child.exit_cleanly(end)
+        assert b"public output delivery failed" not in child.buf
+        assert b"submission exceeds" not in child.buf
+        assert b"prompt exceeds" not in child.buf
+        log = H.events(child.session_id())
+        assert not [e for e in log if e["type"] in ("response_failed", "turn_recovery")]
+        assert len([e for e in log if e["type"] == "response_completed"]) == 3
+    print("fragmented citation delivery: ok")
 
 
 if __name__ == "__main__":

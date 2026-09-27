@@ -2901,8 +2901,13 @@ again:;
             free(line);
             return 2;
         }
-        (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, errno == EOVERFLOW ? "active submission exceeds 1 MiB" :
-            errno == EILSEQ ? "active submission contains invalid UTF-8" : "active input could not be read");
+        const char *message = "terminal presentation or dispatch failed";
+        if (app->ui.input_error) {
+            message = input_errno == EOVERFLOW ? "active submission exceeds 1 MiB" :
+                input_errno == EILSEQ ? "active submission contains invalid UTF-8" :
+                "active input could not be read";
+        }
+        (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, message);
         return input_errno == EOVERFLOW || input_errno == EILSEQ ? 0 : -1;
     }
     if (rc == 0) {
@@ -5174,9 +5179,13 @@ interactive_loop(struct app_state *app, const char *initial)
                     rc = 0;
                     break;
                 }
-                (void)app_error(app, errno == EOVERFLOW ? "prompt exceeds 1 MiB" :
-                    errno == EILSEQ ? "terminal input contains invalid UTF-8" :
-                    "terminal input could not be read");
+                const char *message = "terminal presentation or dispatch failed";
+                if (app->ui.input_error) {
+                    message = input_errno == EOVERFLOW ? "prompt exceeds 1 MiB" :
+                        input_errno == EILSEQ ? "terminal input contains invalid UTF-8" :
+                        "terminal input could not be read";
+                }
+                (void)app_error(app, message);
                 if ((input_errno != EOVERFLOW && input_errno != EILSEQ) || set_input_prompt(app, false) < 0)
                     goto ui_failed;
                 continue;

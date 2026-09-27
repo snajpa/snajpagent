@@ -2816,6 +2816,45 @@ test_citation_blocks(void)
 }
 
 static void
+test_citation_fragment_budget(void)
+{
+    static const char *const inputs[] = {
+        "x\xee\x88\x80" "cite\xee\x88\x82" "turn2view3\xee\x88\x81y",
+        "x\xee\x88\x80" "note\xee\x88\x82" "turn2view3\xee\x88\x81y"
+    };
+    static const char *const expected[] = {"x[cite: turn 2]y", inputs[1]};
+    for (size_t c = 0u; c < 2u; ++c) {
+        size_t len = strlen(inputs[c]);
+        for (size_t split = 0u; split <= len; ++split) {
+            for (unsigned int rollout = 0u; rollout < 2u; ++rollout) {
+                struct snag_render render;
+                struct snag_buf delivered = {.max = 256u};
+                char output[1024];
+                struct output_capture capture = capture_open(true, false);
+                snag_render_init(&render, 0u);
+                assert((rollout ? snag_render_rollout_begin(&render, STDOUT_FILENO, NULL,
+                            SNAG_PRESENT_CONVERSATION) :
+                        snag_render_public_begin(&render, STDOUT_FILENO, NULL)) == 0);
+                for (unsigned int part = 0u; part < 2u; ++part) {
+                    const char *text = inputs[c] + (part ? split : 0u);
+                    size_t size = part ? len - split : split;
+                    assert((rollout ? snag_render_rollout(&render, text, size, &delivered) :
+                            snag_render_public(&render, text, size, &delivered)) == 0);
+                }
+                assert((rollout ? snag_render_rollout_end(&render) :
+                        snag_render_public_end(&render)) == 0);
+                assert(snag_buf_terminate(&delivered) == 0);
+                assert(!strcmp((const char *)delivered.data, expected[c]));
+                assert(capture_close(&capture, output, sizeof(output), 0u) > 0u);
+                assert(count_text(output, expected[c]) == 1u);
+                snag_buf_free(&delivered);
+                snag_render_free(&render);
+            }
+        }
+    }
+}
+
+static void
 test_tool_ref_rows(void)
 {
     static const char long_id[] = "call_abcdef1234567890-very-long-provider-id";
@@ -3015,6 +3054,7 @@ main(void)
     test_punctuation_wrapping();
     test_capable_terminal_hard_wrap();
     test_citation_blocks();
+    test_citation_fragment_budget();
 
     snag_buf_init(&delivered, sizeof(markdown));
     assert(capture_markdown(markdown, true, true, SNAG_COLOR_NEVER, 120u,

@@ -66,7 +66,7 @@ struct ui_action {
     enum snag_term_action action;
     char *text;
     int error;
-    bool submission_echoed, view_applied;
+    bool submission_echoed, view_applied, input_error;
     bool history_refresh, history_warning, steering, local;
     struct ui_snapshot snapshot;
     struct snag_irc_route route;
@@ -854,7 +854,10 @@ read_input(struct snag_ui_display *display, int timeout_ms)
     }
     atomic_store(&runtime->pause_until,
         term->typing_active ? term->last_input_ms + term->typing_pause_ms : 0u);
-    if (rc < 0 && errno != EINTR) item->error = errno;
+    if (rc < 0 && errno != EINTR) {
+        item->error = errno;
+        item->input_error = true;
+    }
     if (term->history_refresh_requested && !term->input_backlog) {
         term->history_refresh_requested = false;
         item->history_refresh = true;
@@ -1096,7 +1099,9 @@ presentation_main(void *opaque)
         }
         if (local_feedback(&display) < 0) atomic_store(&runtime->fatal, errno ? errno : EIO);
         if (message) {
-            snag_buf_init(&message->delivered, message->command.len + 4u);
+            /* A short delivery may release a citation held by the renderer. */
+            snag_buf_init(&message->delivered,
+                message->command.len + 4u + SNAG_CITE_BLOCK_MAX);
             message->result = apply_display(&display, message);
             message->saved_errno = errno;
             if (message->result < 0 && message->command.kind != SNAG_UI_VALIDATE &&
@@ -1159,7 +1164,7 @@ request(struct snag_ui *ui, struct ui_message *message, struct snag_buf *deliver
     struct snag_ui_runtime *runtime = ui->runtime;
     assert(pthread_equal(pthread_self(), runtime->engine));
     atomic_init(&message->done, false);
-    if (message->command.len > SIZE_MAX - 4u) {
+    if (message->command.len > SIZE_MAX - 4u - SNAG_CITE_BLOCK_MAX) {
         errno = EOVERFLOW;
         goto out;
     }
@@ -1475,14 +1480,14 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
     *action = SNAG_TERM_NONE;
     *text = NULL;
     ui->input_echoed = false;
+    ui->input_error = false;
     for (;;) {
         snag_wakeup_drain(runtime->actions.wake[0]);
         int fatal = atomic_load(&runtime->fatal);
         if (fatal) {
             errno = fatal;
-            /* An oversized draft or an invalid byte is an input condition, not a broken runtime.
-             * Report it once and let the loop read input again; keeping it latched starved the
-             * session of all keystrokes, which is how a full draft made a session unreachable. */
+            /* A buffer/encoding failure can originate in presentation too.
+             * Report it once without closing input or blaming the draft. */
             if (input_condition(fatal)) atomic_store(&runtime->fatal, 0);
             return -1;
         }
@@ -1526,6 +1531,7 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
         }
     }
     ui->input_received_ms = item->received_ms;
+    ui->input_error = item->input_error;
     ui->input_view = item->snapshot.view;
     ui->input_active = item->snapshot.active;
     ui->input_route = item->route;
@@ -1543,7 +1549,10 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
     if (item->steering) atomic_fetch_sub(&runtime->steering_pending, 1u);
     if (item->history_warning && !ui->history.warned) ui->history.warning = ui->history.warned = true;
     if (item->history_refresh) {
-        if (history_snapshot(ui, true) < 0) item->error = errno;
+        if (history_snapshot(ui, true) < 0) {
+            item->error = errno;
+            ui->input_error = false;
+        }
     }
     {
         int error = item->error;
