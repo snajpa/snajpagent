@@ -19,6 +19,7 @@ int snag_checkpoint_state_decode(const json_t *data, struct snag_session *state)
 bool snag_store_trash_id(const char *name, char id[SNAG_ID_HEX_LEN + 1u]);
 int snag_store_verify_private_fd(int fd, bool directory, const char *name, char *error, size_t error_size);
 int snag_store_open_session_files(struct snag_session *session, bool create, char *error, size_t error_size);
+int snag_store_remove_upload_staging(int session_fd, char *error, size_t error_size);
 int snag_store_scan_log(struct snag_session *session, enum snag_tail_policy tail_policy,
                        char *error, size_t error_size);
 int snag_store_complete_trash_delete(struct snag_store *store, const char *trash_name,

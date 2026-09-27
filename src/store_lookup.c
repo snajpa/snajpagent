@@ -134,6 +134,7 @@ open_full_id(struct snag_store *store, struct snag_session *session,
                            error, error_size) < 0)
         return -1;
     if (snag_media_work_remove(session->dir_fd,error,error_size)<0)return -1;
+    if (snag_store_remove_upload_staging(session->dir_fd, error, error_size) < 0) return -1;
     if (session->delete_requested) {
         if (snag_session_complete_delete(store, session, error, error_size) < 0) return -1;
         snag_errorf(error, error_size, "session deletion was completed");

@@ -403,7 +403,7 @@ input_main(void *opaque)
 }
 
 static int
-input_start(struct snag_ui_display *display)
+input_start(struct snag_ui_display *display, const unsigned char *first, size_t first_len)
 {
     struct snag_ui_runtime *runtime = display->runtime;
     struct ui_input *input = &runtime->input;
@@ -416,6 +416,8 @@ input_start(struct snag_ui_display *display)
     input->stop = input->ended = input->overflow = false;
     (void)pthread_mutex_unlock(&input->lock);
     atomic_store(&runtime->hard_exit_acknowledged, false);
+    /* Seed the empty ring before the worker can read newer terminal bytes. */
+    if (first_len) input_enqueue(runtime, first, first_len);
     snag_term_input_redirect(input->host, input_status, input_read, input);
     rc = pthread_create(&input->thread, NULL, input_main, runtime);
     if (rc != 0) {
@@ -654,7 +656,7 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         return 0;
     case SNAG_UI_OPEN:
         if (snag_term_open(term, error, error_size) < 0) return -1;
-        if (input_start(display) < 0) {
+        if (input_start(display, NULL, 0u) < 0) {
             (void)snprintf(error, error_size, "cannot start terminal input worker: %s", strerror(errno));
             snag_term_close(term);
             return -1;
@@ -666,18 +668,16 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         if (command->data.value) {
             input_stop(display);
             rc = snag_term_external_begin(term, error, error_size);
-            if (rc < 0) (void)input_start(display);
+            if (rc < 0) (void)input_start(display, NULL, 0u);
         } else {
             rc = snag_term_external_end(term, error, error_size);
-            /* Transfer input already read beyond EXIT belongs in the native
-             * input ring ahead of bytes the restarted worker can read. */
-            if (rc == 0 && command->len) {
-                if (!command->text || command->len > UI_INPUT_CAPACITY)
-                    rc = snag_errorf(error, error_size, "transfer input tail exceeds terminal capacity");
-                else input_enqueue(display->runtime,
-                                   (const unsigned char *)command->text, command->len);
-            }
-            if (rc == 0 && input_start(display) < 0)
+            if (rc == 0 && command->len && (!command->text || command->len > UI_INPUT_CAPACITY))
+                rc = snag_errorf(error, error_size,
+                                "transfer input tail exceeds terminal capacity");
+            /* input_start resets the ring; seed the tail after that reset but
+             * before the restarted worker can read newer terminal bytes. */
+            if (rc == 0 && input_start(display, (const unsigned char *)command->text,
+                                       command->len) < 0)
                 rc = snag_errorf(error, error_size, "cannot restart terminal input worker: %s", strerror(errno));
         }
         if (rc == 0) display->suspended = command->data.value != 0u;

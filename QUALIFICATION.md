@@ -23,6 +23,8 @@ separate opt-in tools:
 | `make sizecheck` | reports source/test line counts and the largest production file, with no thresholds or line-count failures |
 | `tests/test_provider_transport` | exercises the real libcurl create/count/compact transport against a local loopback HTTP server |
 | `tests/pty_*.py` | exercises the interactive terminal composer, live resize, suspend/continue, and TERM/width fallback behavior through a PTY on the current POSIX host |
+| `tests/test_upload_client.py` | exercises ten terminal-upload PTY cases on Linux x86-64, including pinned Go trzsz client binary/text multi-file transfer, rollback after invalid image preparation, synthetic protocol failures and terminal recovery; GUI drag and nested SSH are not exercised |
+| `tests/test_store` | exercises cleanup of exact crash-left upload staging on session resume and deletion, retention of existing media, and refusal of unfamiliar symlink leaves |
 | `make tmuxcheck` | asserts the rendered screen/scrollback for deterministic streaming, Markdown enabled/disabled overrides, status, wrapping, steering, resize, queue, durable-text, and instruction-discovery scenarios, then runs one production IRC server plus two production clients against loopback fake Responses endpoints and checks bidirectional Markdown-rendered chat, three-agent model traffic, durable attribution, verbosity, color, peer leaves, and exact cleanup; `make check` runs it whenever tmux is installed |
 | `make terminallivecheck` | runs the fixed vpsAdminOS 6.12.95 real-work prompt through the configured default provider in a 52×18 tmux, serializes checks using the same config file, and compares rendered public text with durable response events and `AGENTS.md` metadata |
 
@@ -32,6 +34,9 @@ behavior then uses the same `openpty`, `ioctl(TIOCGWINSZ/TIOCSWINSZ)`,
 controlling-terminal, immediate-run, yielded-run, and `write_stdin` paths.
 The tmux layer complements those raw-PTY checks by interpreting cursor movement,
 erase, wrap, and resize sequences as a real terminal does.
+The terminal-upload PTY fixtures do not qualify desktop GUI drag, terminal-specific
+filters, nested SSH or tmux relay. The receiver runs on POSIX hosts; Windows
+terminal upload is not part of this source change.
 
 ## Download-page kernel baselines
 

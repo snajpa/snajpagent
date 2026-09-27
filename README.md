@@ -182,10 +182,17 @@ compaction and resume.
 
 ### Attach files and use voice
 
-Use `/attach PATH` to stage an image, inspect the staged list with
-`/attachments`, then submit it with your prompt. Ask the agent to inspect PDF,
-Office or text documents, sample a video interval, or transcribe an audio file;
-accepted originals and prepared results stay with the saved session.
+Use `/attach PATH` to stage an image or file, inspect the staged list with
+`/attachments`, then submit it with your prompt. To upload files from your
+workstation to a POSIX host over an existing SSH terminal, start the outer
+connection with `trzsz --dragfile ssh target`, run `snajpagent` on the target,
+and drop regular files into its ordinary composer. `/upload` opens the same
+receiver through the wrapper's file selection. A stock drop sends Ctrl-C first:
+it can cancel a typed draft or interrupt active work. Review the unsent
+attachments before submitting; directory and empty-file uploads are rejected.
+Ask the agent to inspect PDF, Office or text documents, sample a video interval,
+or transcribe an audio file; accepted originals and prepared results stay with
+the saved session.
 
 `/dictate` inserts speech into your editable draft. `/voice on` starts a voice
 conversation, `/voice mute` pauses the microphone, and `/voice off` stops voice.

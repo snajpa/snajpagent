@@ -409,6 +409,22 @@ remain unreaped until output collection so a reused PID cannot be signaled.
 
 ## Active commands and input ownership
 
+POSIX terminal upload is an exclusive input lease: the UI stops and joins its
+input worker before the engine reads from the controlling terminal. Exact stock
+trz actions and /upload enter the same bounded receive-only protocol-1 path;
+the remote host launches no shell command. The receiver writes a complete,
+digest-checked batch into a private operation-owned directory, then restores
+termios and the UI before preparing each attachment through the ordinary media
+path. The candidate array replaces the unsent draft only after every file is
+prepared. Failure discards only operation-created media. Bytes read past the
+transfer EXIT are seeded into the restarted input ring ahead of new terminal
+reads. The workstation's trzsz filter owns local selection and file streaming;
+this path adds no listener or out-of-band connection.
+On session resume or deletion, the session lock protects cleanup of crash-left
+upload staging. Only private directories with exact operation names and ordinary
+private file leaves are removed; unfamiliar content stops cleanup, and retained
+media stays outside those staging directories.
+
 Command admission is independent of turn activity. The shared engine dispatcher
 handles both views and queue-edit/delete-confirmation states. Controls that cannot
 safely mutate an in-flight request retain durable intent and acknowledge their

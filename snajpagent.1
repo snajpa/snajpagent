@@ -1566,11 +1566,33 @@ be rolled back. Backend latency can delay the end of audible sound.
 Interrupt file playback. Dictation and file playback share one local device
 owner and return busy when the other operation is active.
 .TP
+.B /upload
+Receive regular files from a workstation through an existing interactive
+terminal connection on a POSIX host. Start the outer connection on the
+workstation with the Go trzsz filter, for example
+.B "trzsz --dragfile ssh target"
+and run snajpagent on the target. /upload requests the filter's file selection;
+the filter must already wrap the connection. A stock drag at the ordinary
+composer also launches this receiver by sending Ctrl-C followed by trz. That
+Ctrl-C can cancel a typed draft or request interruption during active work.
+Save needed draft text first. The remote host needs no separate trz executable.
+Directory mode (trz -d), directories and zero-byte files are rejected.
+The receiver verifies a complete batch before preparing and listing its files
+as unsent attachments. It neither submits a message nor sends a chat message.
+Preparation failure removes new files from that batch and retains existing
+unsent attachments. A missing sender or malformed transfer reports a bounded
+error and returns to ordinary terminal input. Review /attachments afterward.
+After a crash, resuming or deleting the session removes recognized private
+upload staging. Unknown content in such a directory stops cleanup rather than
+removing existing media or unrelated files.
+.TP
 .BI /attach " path"
-Prepare an image or snapshot a recognized document, audio or video file for the next
+Prepare an image or retain a regular file for the next
 private message, queued turn or steering input.  The entire remainder is a literal path, including spaces: no shell
 expansion, quotes or globbing are interpreted.  Relative paths use the current working
-directory; symlinks are rejected.  The input prompt shows the attachment count.
+directory; symlinks are rejected. Recognized documents, audio and video retain
+their format; other non-image bytes are kept as a generic file reference.
+The input prompt shows the attachment count.
 .TP
 .B /attachments
 List unsent attachments by number, format, size and retained asset identifier.

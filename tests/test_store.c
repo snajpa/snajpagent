@@ -325,6 +325,65 @@ test_pending_session(struct snag_store *store, const char *cwd)
 }
 
 static void
+test_upload_staging_lifecycle(struct snag_store *store, const char *cwd)
+{
+    static const char stage[] = "upload-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    static const char leaf[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    struct snag_session session;
+    json_t *asset = NULL;
+    char id[SNAG_ID_HEX_LEN + 1u], error[256] = {0};
+    int stage_fd, file_fd;
+    struct stat st;
+
+    snag_session_init(&session);
+    assert(snag_session_prepare(&session, cwd, "default", "model", "high",
+                                error, sizeof(error)) == 0);
+    assert(snag_session_persist(store, &session, error, sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+    assert(snag_media_save(session.dir_fd, "retained", 8u, "application/octet-stream",
+                           &asset, error, sizeof(error)) == 0);
+    assert(mkdirat(session.dir_fd, stage, 0700) == 0);
+    stage_fd = openat(session.dir_fd, stage, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    assert(stage_fd >= 0);
+    file_fd = openat(stage_fd, leaf, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    assert(file_fd >= 0 && write(file_fd, "partial", 7u) == 7);
+    assert(close(file_fd) == 0 && close(stage_fd) == 0);
+    snag_session_close(&session);
+
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(fstatat(session.dir_fd, stage, &st, AT_SYMLINK_NOFOLLOW) < 0 && errno == ENOENT);
+    assert(snag_media_verify(session.dir_fd, asset, NULL, NULL, error, sizeof(error)) == 0);
+
+    /* Unknown content in a stage is not operation-owned: fail closed. */
+    assert(mkdirat(session.dir_fd, stage, 0700) == 0);
+    stage_fd = openat(session.dir_fd, stage, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    assert(stage_fd >= 0);
+    assert(symlinkat("../meta.json", stage_fd, leaf) == 0);
+    snag_session_close(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) < 0);
+    assert(fstatat(session.dir_fd, stage, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISDIR(st.st_mode));
+    assert(fstatat(stage_fd, leaf, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISLNK(st.st_mode));
+    snag_session_close(&session);
+    assert(unlinkat(stage_fd, leaf, 0) == 0 && close(stage_fd) == 0);
+    stage_fd = openat(store->sessions_fd, id, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    assert(stage_fd >= 0);
+    assert(unlinkat(stage_fd, stage, AT_REMOVEDIR) == 0 && close(stage_fd) == 0);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(snag_media_verify(session.dir_fd, asset, NULL, NULL, error, sizeof(error)) == 0);
+
+    /* A second crash leaves staging behind just before the delete path. */
+    assert(mkdirat(session.dir_fd, stage, 0700) == 0);
+    stage_fd = openat(session.dir_fd, stage, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    assert(stage_fd >= 0);
+    file_fd = openat(stage_fd, leaf, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    assert(file_fd >= 0 && close(file_fd) == 0 && close(stage_fd) == 0);
+    id[8] = '\0';
+    assert(snag_session_delete(store, &session, id, NULL, error, sizeof(error)) == 0);
+    snag_session_close(&session);
+    json_decref(asset);
+}
+
+static void
 test_one_file_checkpoint(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
@@ -979,6 +1038,7 @@ main(void)
     snag_session_init(&session);
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
     test_pending_session(&store, cwd);
+    test_upload_staging_lifecycle(&store, cwd);
     test_one_file_checkpoint(&store, cwd);
     test_large_embedded_checkpoint(&store, cwd);
     test_failed_append_retry(&store, cwd);

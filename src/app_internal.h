@@ -159,6 +159,10 @@ int snag_app_request_ready(void *opaque);
 int snag_app_queue_arm(struct app_state *, bool);
 
 int snag_app_media_command(struct app_state *app, const char *line, bool *handled);
+int snag_app_prepare_attachment(struct app_state *, const char *path, const char *name,
+                                int (*pump)(void *, unsigned int), json_t **part,
+                                char *error, size_t error_size);
+void snag_app_discard_part(struct app_state *, const json_t *part);
 int snag_app_upload_command(struct app_state *app, bool directory);
 
 int snag_app_tool_output(void *, const char *, unsigned int, uint64_t, const void *, size_t);

@@ -34,7 +34,8 @@ prepare_checkpoint(void *opaque, unsigned int timeout_ms)
     if (action == SNAG_TERM_EXIT) app->input_closed = true;
     if (text && !*text) { free(text); return 0; }
     if (text) {
-        int rc = snag_ui_send(&app->ui, (struct snag_ui_command){.kind = SNAG_UI_DRAFT, .text = text});
+        int rc = snag_ui_send(&app->ui,
+                              (struct snag_ui_command){.kind = SNAG_UI_DRAFT, .text = text});
         free(text);
         return rc < 0 ? -1 : 1;
     }
@@ -87,10 +88,7 @@ rollback_parts(struct app_state *app, const json_t *parts, const json_t *extra)
     for (size_t i = 0u; i <= json_array_size(parts); ++i) {
         const json_t *part = i == json_array_size(parts) ? extra : json_array_get(parts, i);
         if (!part) continue;
-        const json_t *asset = json_object_get(part, "asset");
-        const json_t *source = json_object_get(part, "source");
-        if (asset) (void)snag_media_discard(app->session.dir_fd, asset);
-        if (source) (void)snag_media_discard(app->session.dir_fd, source);
+        snag_app_discard_part(app, part);
     }
 }
 
@@ -105,28 +103,15 @@ prepare_files(struct app_state *app, const char *stage, struct snag_upload_resul
     for (size_t i = 0; i < result->count; ++i) {
         struct snag_upload_file *file = &result->files[i];
         char *path = staged_path(&app->session, stage, file->leaf);
-        json_t *asset = NULL, *part = NULL;
+        json_t *part = NULL;
         if (!path) goto out;
-        const char *mime = snag_media_mime(file->name);
-        if (!mime) {
-            rc = snag_image_prepare(&app->session, path, 0u, NULL,
-                                    prepare_checkpoint, app, &part, error, error_size);
-            if (rc < 0 && errno == ENOTSUP) mime = "application/octet-stream";
-        }
-        if (mime) {
-            rc = snag_media_snapshot(app->session.dir_fd, app->session.cwd, path, mime,
-                                     SNAG_MEDIA_FILE_MAX, prepare_checkpoint, app,
-                                     &asset, error, error_size);
-            if (!rc) part = json_pack("{s:s,s:O}", "type", "file", "asset", asset);
-        }
+        rc = snag_app_prepare_attachment(app, path, file->name, prepare_checkpoint,
+                                         &part, error, error_size);
         free(path);
         if (rc || !part) {
-            if (asset) (void)snag_media_discard(app->session.dir_fd, asset);
-            json_decref(asset);
             json_decref(part);
             goto out;
         }
-        json_decref(asset);
         if (json_array_append(addition, part) < 0) {
             rollback_parts(app, NULL, part);
             json_decref(part);
@@ -171,17 +156,22 @@ snag_app_upload_command(struct app_state *app, bool directory)
         return snag_ui_text(&app->ui, SNAG_UI_ERROR, "Attachment preparation is already active.");
     if (snag_session_persist(&app->store, &app->session, error, sizeof(error)) < 0) goto out;
     if (json_array_size(app->draft_content) >= SNAG_UPLOAD_FILES_MAX) {
-        (void)snag_errorf(error, sizeof(error), "At most eight files may be attached to one input.");
+        (void)snag_errorf(error, sizeof(error),
+                          "At most eight files may be attached to one input.");
         goto out;
     }
     stage_fd = stage_open(app, stage);
-    if (stage_fd < 0) { (void)snag_errorf(error, sizeof(error), "Cannot stage upload: %s", strerror(errno)); goto out; }
+    if (stage_fd < 0) {
+        (void)snag_errorf(error, sizeof(error), "Cannot stage upload: %s", strerror(errno));
+        goto out;
+    }
     app->attaching = true;
     if (snag_ui_external(&app->ui, true, error, sizeof(error)) < 0) goto out;
     leased = true;
     tty = open("/dev/tty", O_RDWR | O_CLOEXEC | O_NOCTTY | O_NONBLOCK);
     if (tty < 0 || tcgetattr(tty, &saved) < 0) {
-        (void)snag_errorf(error, sizeof(error), "Cannot open transfer terminal: %s", strerror(errno));
+        (void)snag_errorf(error, sizeof(error),
+                          "Cannot open transfer terminal: %s", strerror(errno));
         goto out;
     }
     struct termios mode = saved;
@@ -199,13 +189,17 @@ out:
     if (raw && tcsetattr(tty, TCSANOW, &saved) < 0) {
         restored = false;
         rc = -1;
-        (void)snag_errorf(error, sizeof(error), "Cannot restore transfer terminal: %s", strerror(errno));
+        (void)snag_errorf(error, sizeof(error),
+                          "Cannot restore transfer terminal: %s", strerror(errno));
     }
     if (tty >= 0) close(tty);
+    char replay_error[256] = {0};
     if (leased && restored && snag_ui_external_replay(&app->ui, result.tail, result.tail_len,
-                                          error, sizeof(error)) < 0) {
+                                          replay_error, sizeof(replay_error)) < 0) {
         restored = false;
         rc = -1;
+        (void)snag_errorf(error, sizeof(error), "Cannot restore transfer display: %s",
+                          replay_error[0] ? replay_error : strerror(errno));
     }
     if (rc == 0 && prepare_files(app, stage, &result, error, sizeof(error)) < 0) rc = -1;
     if (stage_fd >= 0) {
@@ -219,7 +213,8 @@ out:
         bool handled;
         return snag_app_media_command(app, "/attachments", &handled);
     }
-    if (rc == 1) return snag_ui_text(&app->ui, SNAG_UI_HOST, "Upload cancelled; no files attached.");
+    if (rc == 1)
+        return snag_ui_text(&app->ui, SNAG_UI_HOST, "Upload cancelled; no files attached.");
     return snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
 #endif
 }

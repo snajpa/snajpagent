@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store_internal.h"
 #include "media.h"
+#include "upload.h"
 #include "fs.h"
 #include "base.h"
 #include "json.h"
@@ -9,6 +10,120 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+
+#ifndef _WIN32
+/* A live transfer holds the session lock. Once that lock is reclaimed, only
+ * exactly shaped, private operation scratch may be removed on resume/delete. */
+static int
+remove_upload_stage(int session_fd, const char *stage, char *error, size_t error_size)
+{
+    char leaves[SNAG_UPLOAD_FILES_MAX][SNAG_ID_HEX_LEN + 1u];
+    struct snag_file_privacy privacy;
+    struct snag_directory *dir = NULL;
+    size_t count = 0u;
+    int stage_fd = -1, scan_fd = -1;
+    const char *name;
+
+    stage_fd = snag_open_read_at(session_fd, stage, true);
+    if (stage_fd < 0 || snag_fd_privacy(stage_fd, &privacy) < 0) goto failed;
+    if (!privacy.effective_owner || !privacy.private_access) { errno = EPERM; goto failed; }
+    scan_fd = snag_open_read_at(stage_fd, ".", true);
+    if (scan_fd < 0) goto failed;
+    dir = snag_directory_open(scan_fd);
+    if (!dir) goto failed;
+    scan_fd = -1;
+    for (;;) {
+        snag_file_info info;
+        int file_fd;
+
+        errno = 0;
+        name = snag_directory_next(dir);
+        if (!name) {
+            if (errno) goto failed;
+            break;
+        }
+        if (!strcmp(name, ".") || !strcmp(name, "..")) continue;
+        if (strlen(name) != SNAG_ID_HEX_LEN || !snag_hex_is_lower(name, SNAG_ID_HEX_LEN) ||
+            count == SNAG_UPLOAD_FILES_MAX) { errno = EPERM; goto failed; }
+        file_fd = snag_open_read_at(stage_fd, name, false);
+        if (file_fd < 0) goto failed;
+        if (snag_fstat(file_fd, &info) < 0 || snag_fd_privacy(file_fd, &privacy) < 0 ||
+            !S_ISREG(info.st_mode) || info.st_nlink != 1 ||
+            info.st_size < 0 || info.st_size > SNAG_MEDIA_FILE_MAX ||
+            !privacy.effective_owner || !privacy.private_access) {
+            (void)close(file_fd);
+            errno = EPERM;
+            goto failed;
+        }
+        if (close(file_fd) < 0) goto failed;
+        memcpy(leaves[count], name, SNAG_ID_HEX_LEN + 1u);
+        ++count;
+    }
+    if (snag_directory_close(dir) < 0) { dir = NULL; goto failed; }
+    dir = NULL;
+    for (size_t i = 0u; i < count; ++i)
+        if (snag_unlink_at(stage_fd, leaves[i], false) < 0) goto failed;
+    if (snag_sync_dir(stage_fd) < 0) goto failed;
+    if (close(stage_fd) < 0) {
+        stage_fd = -1;
+        goto failed;
+    }
+    stage_fd = -1;
+    if (snag_unlink_at(session_fd, stage, true) < 0 || snag_sync_dir(session_fd) < 0) goto failed;
+    return 0;
+failed: {
+    int saved_errno = errno;
+    if (dir) (void)snag_directory_close(dir);
+    if (scan_fd >= 0) (void)close(scan_fd);
+    if (stage_fd >= 0) (void)close(stage_fd);
+    return snag_errorf(error, error_size, "cannot safely clean upload staging %s: %s",
+                       stage, strerror(saved_errno));
+}
+}
+#endif
+
+int
+snag_store_remove_upload_staging(int session_fd, char *error, size_t error_size)
+{
+#ifdef _WIN32
+    (void)session_fd; (void)error; (void)error_size;
+    return 0; /* Terminal upload does not create staging on Windows. */
+#else
+    for (;;) {
+        char stage[SNAG_ID_HEX_LEN + 8u] = {0};
+        struct snag_directory *dir;
+        const char *name;
+        int scan_fd = snag_open_read_at(session_fd, ".", true);
+        int scan_error = 0;
+
+        if (scan_fd < 0)
+            return snag_errorf(error, error_size, "cannot inspect upload staging: %s",
+                               strerror(errno));
+        dir = snag_directory_open(scan_fd);
+        if (!dir) {
+            int saved_errno = errno;
+            (void)close(scan_fd);
+            return snag_errorf(error, error_size, "cannot inspect upload staging: %s",
+                               strerror(saved_errno));
+        }
+        for (;;) {
+            errno = 0;
+            name = snag_directory_next(dir);
+            if (!name) { scan_error = errno; break; }
+            if (strncmp(name, "upload-", 7u) || strlen(name) != 7u + SNAG_ID_HEX_LEN ||
+                !snag_hex_is_lower(name + 7u, SNAG_ID_HEX_LEN)) continue;
+            memcpy(stage, name, sizeof(stage));
+            break;
+        }
+        if (snag_directory_close(dir) < 0 && !scan_error) scan_error = errno;
+        if (scan_error)
+            return snag_errorf(error, error_size, "cannot inspect upload staging: %s",
+                               strerror(scan_error));
+        if (!stage[0]) return 0;
+        if (remove_upload_stage(session_fd, stage, error, error_size) < 0) return -1;
+    }
+#endif
+}
 
 static json_t *
 origin_user_data(void)
@@ -65,6 +180,7 @@ remove_deleted_session(struct snag_store *store, struct snag_session *session, c
         return snag_errorf(error, error_size, "cannot close deleted-session files: %s",
                   strerror(errno));
     if (snag_media_work_remove(session->dir_fd,error,error_size)!=0)return -1;
+    if (snag_store_remove_upload_staging(session->dir_fd, error, error_size) < 0) return -1;
     if (snag_media_remove(session->dir_fd,error,error_size)<0)return -1;
     /* Keep the durable delete intent until other content is gone. The private
      * trash name remains the deletion marker after the final log unlink. */

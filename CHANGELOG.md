@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Receive regular files over a wrapped terminal connection with stock `trz`
+  drag actions or `/upload`. Verify and privately retain a complete batch as
+  unsent attachments; restore terminal input and preserve the pending draft on
+  failure. `/attach` also accepts opaque files as retained references.
+  Session resume and deletion safely clear abandoned upload staging after a crash.
+
 - Refresh the measured context percentage during active work and at idle after
   input counts or completed responses. Keep an accepted active rollout steer
   visible while the engine is blocked, without echoing it again after admission.

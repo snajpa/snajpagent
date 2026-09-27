@@ -50,6 +50,45 @@ show_attachments(struct app_state *app)
     return rc;
 }
 
+void
+snag_app_discard_part(struct app_state *app, const json_t *part)
+{
+    const json_t *asset = json_object_get(part, "asset");
+    const json_t *source = json_object_get(part, "source");
+    if (asset) (void)snag_media_discard(app->session.dir_fd, asset);
+    if (source) (void)snag_media_discard(app->session.dir_fd, source);
+}
+
+int
+snag_app_prepare_attachment(struct app_state *app, const char *path, const char *name,
+                            int (*pump)(void *, unsigned int), json_t **part,
+                            char *error, size_t error_size)
+{
+    const char *mime = snag_media_mime(name);
+    json_t *asset = NULL;
+    int rc;
+    *part = NULL;
+    if (!mime) {
+        rc = snag_image_prepare(&app->session, path, 0u, NULL, pump, app,
+                                part, error, error_size);
+        if (rc >= 0 || errno != ENOTSUP) return rc;
+        /* Unknown bytes are retained as a file, not rejected as a bad image. */
+        mime = "application/octet-stream";
+        error[0] = '\0';
+    }
+    rc = snag_media_snapshot(app->session.dir_fd, app->session.cwd, path, mime,
+                             SNAG_MEDIA_FILE_MAX, pump, app, &asset, error, error_size);
+    if (rc == 0) {
+        *part = json_pack("{s:s,s:O}", "type", "file", "asset", asset);
+        if (!*part) {
+            (void)snag_media_discard(app->session.dir_fd, asset);
+            rc = snag_errorf(error, error_size, "Cannot record retained attachment");
+        }
+    }
+    json_decref(asset);
+    return rc;
+}
+
 int
 snag_app_media_command(struct app_state *app, const char *line, bool *handled)
 {
@@ -85,25 +124,22 @@ snag_app_media_command(struct app_state *app, const char *line, bool *handled)
             return snag_ui_text(&app->ui, SNAG_UI_ERROR, "At most eight files may be attached to one input.");
         }
         char error[256] = "Could not prepare attachment.";
-        json_t *asset = NULL, *part = NULL;
+        json_t *part = NULL;
         if(snag_session_persist(&app->store,&app->session,error,sizeof(error))<0) {
             json_decref(next);return snag_ui_text(&app->ui,SNAG_UI_ERROR,error);
         }
         app->attaching = true;
-        const char *mime = snag_media_mime(arg);
-        int rc;
-        if (!mime) rc = snag_image_prepare(&app->session, arg, 0u, NULL, attachment_checkpoint, app,
-                                           &part, error, sizeof(error));
-        else {
-            rc = snag_media_snapshot(app->session.dir_fd, app->session.cwd, arg, mime,
-                SNAG_MEDIA_FILE_MAX, attachment_checkpoint, app, &asset, error, sizeof(error));
-            if (!rc) part = json_pack("{s:s,s:O}", "type", "file", "asset", asset);
-            json_decref(asset);
-        }
+        int rc = snag_app_prepare_attachment(app, arg, arg, attachment_checkpoint,
+                                             &part, error, sizeof(error));
         app->attaching = false;
         if (rc || !part) { json_decref(next); return snag_ui_text(&app->ui, SNAG_UI_ERROR, error); }
-        if (json_array_append_new(next, part) < 0) { json_decref(next); return -1; }
+        if (json_array_append(next, part) < 0) {
+            snag_app_discard_part(app, part);
+            json_decref(part); json_decref(next); return -1;
+        }
+        json_decref(part);
         if (!snag_media_content_valid(next)) {
+            snag_app_discard_part(app, json_array_get(next, json_array_size(next) - 1u));
             json_decref(next);
             return snag_ui_text(&app->ui, SNAG_UI_ERROR, "Attached images exceed 12 MiB; remove one or use smaller images.");
         }
