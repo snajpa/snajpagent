@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import pty
+import re
 import select
 import shlex
 import signal
@@ -56,6 +57,13 @@ class Session:
             command = [str(ADAPTER), "--receive", str(self.stage), str(self.receipt)]
         if wrapper:
             command = [wrapper, "--dragfile", *command]
+        env = dict(os.environ, TERM="xterm-256color") if env is None else dict(env)
+        # A disposable PTY is not the operator's inherited screen/tmux window.
+        # A screen launched below sets its own STY for the product child.
+        env.pop("STY", None)
+        env.pop("TMUX", None)
+        env.pop("TMUX_PANE", None)
+        env["TERM"] = "xterm-256color"
         self.process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave,
                                         preexec_fn=controlling_tty, cwd=cwd, env=env)
         os.close(slave)
@@ -95,6 +103,7 @@ class Session:
     def read_frame(self, expected):
         prefix = b"#" + expected.encode("ascii") + b":"
         seen = self.read_until(b"\n")
+        seen = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"", seen).lstrip(b"\r")
         if not seen.startswith(prefix):
             raise AssertionError(f"wanted {expected}, got {seen[:120]!r}")
         return seen[len(prefix):-1]
@@ -162,7 +171,9 @@ class ProductSession(Session):
 class UploadClientTests(unittest.TestCase):
     def start_synthetic(self, session):
         session.write(b"\x03trz\r")
-        self.assertIn(b"::TRZSZ:TRANSFER:R:1.0.0:", session.read_until(b"\r\n"))
+        session.read_until(b"::TRZSZ:TRANSFER:R:1.0.0:")
+        marker = session.read_until(b"\r\n")
+        self.assertRegex(marker, rb"^[0-9]{11}00:0\r\n$")
         action = json.dumps({"confirm": True, "protocol": 4, "newline": "\n"}).encode()
         session.write(frame("ACT", action))
         config = json.loads(zlib.decompress(base64.b64decode(session.read_frame("CFG"))))
@@ -244,7 +255,8 @@ class UploadProductTests(unittest.TestCase):
     def start_synthetic(self, session, launch=b"/upload\r"):
         session.write(launch)
         session.read_until(b"::TRZSZ:TRANSFER:R:1.0.0:", 7)
-        session.read_until(b"\r\n")
+        marker = session.read_until(b"\r\n")
+        self.assertRegex(marker, rb"^[0-9]{11}00:0\r\n$")
         action = json.dumps({"confirm": True, "protocol": 4, "newline": "\n"}).encode()
         session.write(frame("ACT", action))
         config = json.loads(zlib.decompress(base64.b64decode(session.read_frame("CFG"))))

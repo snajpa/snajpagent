@@ -481,6 +481,17 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
     if (call && call->name && !strcmp(call->name, "select_model"))
         return snag_app_select_model_tool(app, call, result, error, error_size);
 
+    if (call && call->name && !strcmp(call->name, "send_file")) {
+        const char *path = NULL;
+        if (!snag_json_arg_keys(call->arguments, "path", "", error, error_size) ||
+            !snag_json_arg_text(call->arguments, "path", 1u, SNAG_PATH_MAX_BYTES,
+                                false, &path, error, error_size)) {
+            *result = snag_tool_result_terminal(false, error);
+            return *result ? 0 : -1;
+        }
+        return snag_app_download(app, path, result, error, error_size);
+    }
+
     if (call && call->name && !strcmp(call->name, "set_command_shell")) {
         const char *path = NULL;
         char message[SNAG_CONFIG_PATH_MAX + 64u];

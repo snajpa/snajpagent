@@ -4,6 +4,18 @@
 
 ## Unreleased
 
+- Reserve the platform-flag suffix in POSIX transfer IDs, preventing the client
+  from intermittently mistaking uploads or downloads for a Windows server.
+
+- Send a regular file or accepted retained asset to the workstation through the
+  trzsz wrapper with `/download PATH` or the model's `send_file` tool. Stream
+  bounded blocks, verify client digest/EXIT acknowledgements, restore terminal
+  ownership and preserve post-transfer keyboard input.
+- Keep terminal-transfer wire output out of GNU screen's saved display on
+  completion and cancellation, including its default disabled alternate screen.
+- Give terminal transfers and the complete model tool catalog dedicated manual
+  sections; clarify macOS Go-wrapper setup and upload/download destinations.
+
 ## 0.99.8b — September 27, 2026
 
 - Keep checkpoint text encoding, upload transfer formatting, and upload digest

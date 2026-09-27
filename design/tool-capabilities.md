@@ -49,3 +49,12 @@ The check covers no goal, active/paused/blocked/completed goal state, read-only,
 queued state, and network-disabled configuration. Existing runtime refusal tests
 remain responsible for proving that visibility does not bypass read-only or
 other execution constraints.
+
+## Workstation file delivery
+
+`send_file` is always advertised and requires `path`. Interactive POSIX dispatch
+uses the acknowledged terminal lease; read-only, one-shot and Windows execution
+return a factual failed result. Filesystem paths and accepted session assets are
+supported. A successful terminal result requires digest acknowledgement and EXIT
+from the workstation trzsz client, with source bytes excluded from tool output.
+See the manual's Model tools and Terminal file transfers sections.

@@ -939,6 +939,15 @@ flood_done: snag_buf_free(&text);
         if (cycle == 1u) return add_call(graph, workspace, cycle, 0u, "fixture crash");
         return final_answer(&out, "msg_fixture_crash_final", "unexpected continuation");
     }
+    if (!strncmp(prompt, "download_tool ", 14u) || !strcmp(prompt, "download_tool_bad")) {
+        if (cycle == 1u) {
+            json_t *args = !strcmp(prompt, "download_tool_bad") ?
+                json_pack("{s:s,s:b}", "path", "report.bin", "extra", true) :
+                json_pack("{s:s}", "path", prompt + 14u);
+            return indexed_call(graph, cycle, 0u, "send_file", args);
+        }
+        return final_answer(&out, "msg_fixture_download_final", "download tool complete");
+    }
     if (strcmp(prompt, "tool_only") == 0) {
         if (cycle == 1u) return add_call(graph, workspace, cycle, 0u, "fixture ok");
         return final_answer(&out, "msg_fixture_tool_final", "tool complete");

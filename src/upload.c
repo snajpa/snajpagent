@@ -12,6 +12,20 @@
 
 #ifdef _WIN32
 int
+snag_download_send(int tty, int file_fd, const char *name,
+                    int (*checkpoint)(void *), void *opaque,
+                    struct snag_upload_result *result, char *error, size_t error_size)
+{
+    (void)tty;
+    (void)file_fd;
+    (void)name;
+    (void)checkpoint;
+    (void)opaque;
+    (void)result;
+    return snag_fail(error, error_size, ENOTSUP, "terminal download is unavailable on this host");
+}
+
+int
 snag_upload_receive(int tty, int stage_fd, size_t slots, bool directory,
                     int (*checkpoint)(void *), void *opaque,
                     struct snag_upload_result *result, char *error, size_t error_size)
@@ -43,6 +57,8 @@ snag_upload_cleanup(int stage_fd, struct snag_upload_result *result)
 struct upload_io {
     int fd;
     int stage_fd;
+    bool display_started;
+    bool screen;
     int (*checkpoint)(void *);
     void *opaque;
     unsigned char input[SNAG_UPLOAD_READ_CHUNK];
@@ -80,13 +96,82 @@ write_bytes(struct upload_io *io, const unsigned char *bytes, size_t length)
     uint64_t deadline = snag_monotonic_ms() + SNAG_UPLOAD_FRAME_TIMEOUT_MS;
     while (length) {
         if (wait_ready(io, POLLOUT, deadline) < 0) return -1;
-        ssize_t amount = write(io->fd, bytes, length);
+        ssize_t amount;
+        if (io->screen) {
+            /* GNU screen's DCS passthrough forwards these bytes without storing
+             * protocol text in its virtual display. Stay below its string buffer. */
+            unsigned char packet[132];
+            size_t chunk = length > 128u ? 128u : length;
+            packet[0] = 0x1bu;
+            packet[1] = 'P';
+            memcpy(packet + 2u, bytes, chunk);
+            packet[chunk + 2u] = 0x1bu;
+            packet[chunk + 3u] = '\\';
+            size_t sent = 0;
+            while (sent < chunk + 4u) {
+                if (wait_ready(io, POLLOUT, deadline) < 0) return -1;
+                ssize_t n = write(io->fd, packet + sent, chunk + 4u - sent);
+                if (n < 0 && (errno == EAGAIN || errno == EINTR)) continue;
+                if (n <= 0) return n < 0 ? -1 : snag_errno(EIO);
+                sent += (size_t)n;
+            }
+            amount = (ssize_t)chunk;
+        } else {
+            amount = write(io->fd, bytes, length);
+        }
         if (amount < 0 && (errno == EAGAIN || errno == EINTR)) continue;
         if (amount <= 0) return amount < 0 ? -1 : snag_errno(EIO);
         bytes += (size_t)amount;
         length -= (size_t)amount;
     }
     return 0;
+}
+
+static int
+transfer_begin(struct upload_io *io, char direction)
+{
+    /* TERM describes capabilities and can be forwarded over SSH. Only STY
+     * identifies a GNU screen backend that will unwrap DCS packets here. */
+    const char *sty = getenv("STY");
+    io->screen = sty && *sty;
+    /* The final two digits are platform flags: 10 means Windows, not a nonce.
+     * Match the POSIX client's 13-digit marker with a reserved 00 suffix. */
+    uint64_t identifier = (snag_time_ms() % 100000000000ull) * 100ull;
+    char marker[128];
+    int n = snprintf(marker, sizeof(marker),
+        "%s\033[s::TRZSZ:TRANSFER:%c:1.0.0:%013llu:0\r\n",
+        io->screen ? "" : "\033[?1049h", direction, (unsigned long long)identifier);
+    if (n < 0 || (size_t)n >= sizeof(marker)) return snag_errno(EOVERFLOW);
+    io->display_started = true;
+    return write_bytes(io, (const unsigned char *)marker, (size_t)n);
+}
+
+static int
+transfer_end(struct upload_io *io, bool stopped)
+{
+    const char *restore = io->screen ? "\033[u\033[0J\r\n" :
+                                      "\033[u\033[0J\033[?1049l\r\n";
+    if (!io->display_started) return 0;
+    io->checkpoint = NULL;
+    if (stopped) {
+        /* The client drains terminal output on error. Match trzsz's 500 ms
+         * server-exit quiet interval so it does not discard the restored UI. */
+        uint64_t deadline = snag_monotonic_ms() + 500u;
+        for (;;) {
+            uint64_t now = snag_monotonic_ms();
+            if (now >= deadline) break;
+            if (poll(NULL, 0, (int)(deadline - now)) < 0 && errno != EINTR) return -1;
+        }
+    }
+    if (io->screen) {
+        /* End a DCS even if cancellation interrupted a partial packet. ST is
+         * harmless outside a string and never becomes screen history text. */
+        io->screen = false;
+        int rc = write_bytes(io, (const unsigned char *)"\033\\", 2u);
+        io->screen = true;
+        if (rc < 0) return -1;
+    }
+    return write_bytes(io, (const unsigned char *)restore, strlen(restore));
 }
 
 static int
@@ -115,6 +200,7 @@ read_frame(struct upload_io *io, struct upload_frame *frame)
     for (;;) {
         unsigned char byte;
         if (read_byte(io, deadline, &byte) < 0) goto done;
+        if (byte == 0x03u) { errno = ECANCELED; goto done; }
         if (byte == '\n') break;
         if (snag_buf_putc(&line, byte) < 0) goto done;
     }
@@ -193,6 +279,21 @@ send_encoded(struct upload_io *io, const char *type, const void *data, size_t le
 done:
     snag_buf_free(&frame);
     return rc;
+}
+
+static int
+send_config(struct upload_io *io)
+{
+    char config[256];
+    /* screen's input queue can lose a large pasted protocol-1 DATA line.
+     * Keep client DATA frames within a small raw-tty input burst there. */
+    unsigned int block = io->screen ? 1024u : SNAG_UPLOAD_BLOCK_MAX;
+    int n = snprintf(config, sizeof(config),
+        "{\"lang\":\"c-snajpagent\",\"protocol\":1,\"binary\":false,"
+        "\"directory\":false,\"overwrite\":false,\"bufsize\":%u,"
+        "\"timeout\":20,\"quiet\":false}", block);
+    if (n < 0 || (size_t)n >= sizeof(config)) return snag_errno(EOVERFLOW);
+    return send_encoded(io, "CFG", config, (size_t)n);
 }
 
 static int
@@ -337,10 +438,6 @@ snag_upload_receive(int tty, int stage_fd, size_t slots, bool directory,
                     int (*checkpoint)(void *), void *opaque,
                     struct snag_upload_result *result, char *error, size_t error_size)
 {
-    static const char config[] =
-        "{\"lang\":\"c-snajpagent\",\"protocol\":1,\"binary\":false,"
-        "\"directory\":false,\"overwrite\":false,\"bufsize\":65536,"
-        "\"timeout\":20,\"quiet\":false}";
     struct upload_io io = {.fd = tty, .stage_fd = stage_fd,
                            .checkpoint = checkpoint, .opaque = opaque};
     struct upload_frame frame;
@@ -360,16 +457,7 @@ snag_upload_receive(int tty, int stage_fd, size_t slots, bool directory,
     if (!slots) return snag_fail(error, error_size, EFBIG, "attachment slots are full");
 
     snag_buf_init(&frame.payload, SNAG_UPLOAD_LINE_MAX);
-    uint64_t identifier = 1000000000000ull + snag_time_ms() % 899999999999ull;
-    char marker[96];
-    int marker_len = snprintf(marker, sizeof(marker),
-                              "\033[s::TRZSZ:TRANSFER:%c:1.0.0:%013llu:0\r\n",
-                              directory ? 'D' : 'R', (unsigned long long)identifier);
-    if (marker_len < 0 || (size_t)marker_len >= sizeof(marker)) {
-        errno = EOVERFLOW;
-        goto done;
-    }
-    if (write_bytes(&io, (const unsigned char *)marker, (size_t)marker_len) < 0 ||
+    if (transfer_begin(&io, directory ? 'D' : 'R') < 0 ||
         receive_action(&io, &frame, &peer_cancelled) < 0) goto done;
     if (peer_cancelled) {
         rc = 1;
@@ -379,7 +467,7 @@ snag_upload_receive(int tty, int stage_fd, size_t slots, bool directory,
         errno = ENOTSUP;
         goto done;
     }
-    if (send_encoded(&io, "CFG", config, sizeof(config) - 1u) < 0) goto done;
+    if (send_config(&io) < 0) goto done;
 
     phase = "file count";
     uint64_t count;
@@ -413,6 +501,135 @@ done:
         if (cause == ECANCELED) rc = 1;
         snag_upload_cleanup(stage_fd, result);
         errno = cause;
+    }
+    if (transfer_end(&io, rc != 0) < 0) {
+        (void)snag_errorf(error, error_size, "Cannot restore transfer display: %s",
+                          strerror(errno));
+        snag_upload_cleanup(stage_fd, result);
+        rc = -1;
+    }
+    snag_buf_free(&frame.payload);
+    return rc;
+}
+
+static int
+download_integer(struct upload_io *io, struct upload_frame *frame,
+                 const char *type, uint64_t value)
+{
+    char text[48];
+    uint64_t accepted;
+    int length = snprintf(text, sizeof(text), "#%s:%llu\n", type, (unsigned long long)value);
+    if (length < 0 || (size_t)length >= sizeof(text)) return snag_errno(EOVERFLOW);
+    if (write_bytes(io, (const unsigned char *)text, (size_t)length) < 0 ||
+        read_integer(io, frame, "SUCC", &accepted) < 0) return -1;
+    return accepted == value ? 0 : snag_errno(EPROTO);
+}
+
+int
+snag_download_send(int tty, int file_fd, const char *name,
+                    int (*checkpoint)(void *), void *opaque,
+                    struct snag_upload_result *result, char *error, size_t error_size)
+{
+    struct upload_io io = {.fd = tty, .checkpoint = checkpoint, .opaque = opaque};
+    struct upload_frame frame;
+    snag_file_info before, after;
+    const char *phase = "download handshake";
+    bool cancelled = false;
+    bool started = false;
+    int rc = -1;
+    unsigned char block[SNAG_UPLOAD_BLOCK_MAX];
+    unsigned char decoded[SNAG_NAME_MAX_BYTES + 1u];
+    size_t length;
+
+    if (!result || !error || !error_size || !name || !*name || !isatty(tty) ||
+        snag_fstat(file_fd, &before) < 0 || !S_ISREG(before.st_mode) || before.st_size < 0) {
+        return snag_fail(error, error_size, EINVAL, "download needs a terminal and a regular file");
+    }
+    int flags = fcntl(tty, F_GETFL);
+    if (flags < 0 || !(flags & O_NONBLOCK))
+        return snag_fail(error, error_size, EINVAL,
+                         "download needs a private nonblocking terminal");
+    length = strlen(name);
+    if (length > SNAG_NAME_MAX_BYTES ||
+        !snag_utf8_valid((const unsigned char *)name, length, true) ||
+        strchr(name, '/') || strchr(name, '\\') || (length > 1u && name[1] == ':') ||
+        !strcmp(name, ".") || !strcmp(name, "..")) {
+        return snag_fail(error, error_size, EINVAL, "download needs a safe UTF-8 file name");
+    }
+    for (size_t i = 0; i < length; ++i) {
+        if ((unsigned char)name[i] < 0x20u || name[i] == 0x7f)
+            return snag_fail(error, error_size, EINVAL, "download needs a printable file name");
+    }
+    memset(result, 0, sizeof(*result));
+    snag_buf_init(&frame.payload, SNAG_UPLOAD_LINE_MAX);
+    if (transfer_begin(&io, 'S') < 0) goto done;
+    started = true;
+    if (receive_action(&io, &frame, &cancelled) < 0) goto done;
+    if (cancelled) { rc = 1; goto done; }
+    if (send_config(&io) < 0 ||
+        download_integer(&io, &frame, "NUM", 1u) < 0) goto done;
+    phase = "download file name";
+    if (send_encoded(&io, "NAME", name, strlen(name)) < 0 ||
+        read_expected(&io, &frame, "SUCC") < 0 ||
+        decode_payload(&frame, decoded, sizeof(decoded), &length) < 0 || !length) goto done;
+    phase = "download contents";
+    if (download_integer(&io, &frame, "SIZE", (uint64_t)before.st_size) < 0) goto done;
+    struct snag_upload_md5 hash;
+    snag_upload_md5_init(&hash);
+    uint64_t sent = 0;
+    while (sent < (uint64_t)before.st_size) {
+        size_t limit = io.screen ? 1024u : sizeof(block);
+        size_t want = (uint64_t)before.st_size - sent > limit ? limit :
+                      (size_t)((uint64_t)before.st_size - sent);
+        ssize_t amount = read(file_fd, block, want);
+        if (amount < 0 && errno == EINTR) continue;
+        if (amount <= 0) { if (!amount) errno = ESTALE; goto done; }
+        uint64_t accepted;
+        if (send_encoded(&io, "DATA", block, (size_t)amount) < 0 ||
+            read_integer(&io, &frame, "SUCC", &accepted) < 0) goto done;
+        if (accepted != (uint64_t)amount) { errno = EPROTO; goto done; }
+        snag_upload_md5_update(&hash, block, (size_t)amount);
+        sent += (uint64_t)amount;
+    }
+    /* A regular-mode virtual file can report zero size but contain data. */
+    unsigned char extra;
+    ssize_t remaining;
+    do remaining = read(file_fd, &extra, 1u); while (remaining < 0 && errno == EINTR);
+    if (remaining < 0) goto done;
+    if (remaining) { errno = ESTALE; goto done; }
+    if (snag_fstat(file_fd, &after) < 0) goto done;
+    if (before.st_size != after.st_size || before.st_mtime != after.st_mtime ||
+        before.st_ctime != after.st_ctime) { errno = ESTALE; goto done; }
+    phase = "download digest";
+    unsigned char digest[16];
+    snag_upload_md5_finish(&hash, digest);
+    if (send_encoded(&io, "MD5", digest, sizeof(digest)) < 0 ||
+        read_expected(&io, &frame, "SUCC") < 0 ||
+        decode_payload(&frame, decoded, sizeof(decoded), &length) < 0) goto done;
+    if (length != sizeof(digest) || memcmp(decoded, digest, sizeof(digest))) {
+        errno = EPROTO;
+        goto done;
+    }
+    phase = "download final exit";
+    if (read_expected(&io, &frame, "EXIT") < 0 ||
+        decode_payload(&frame, block, sizeof(block), &length) < 0) goto done;
+    result->tail_len = io.len - io.at;
+    memcpy(result->tail, io.input + io.at, result->tail_len);
+    rc = 0;
+done:
+    if (rc < 0) {
+        int cause = errno;
+        if (started && cause != EPIPE && cause != EIO && cause != ETIMEDOUT && cause != ECANCELED)
+            (void)send_encoded(&io, "FAIL", "download failed", sizeof("download failed") - 1u);
+        (void)snag_errorf(error, error_size, "%s: %s", phase, strerror(cause));
+        if (cause == ECANCELED) rc = 1;
+        errno = cause;
+    }
+    /* Complete the wrapper's terminal restoration before the app repaints. */
+    if (transfer_end(&io, rc != 0) < 0) {
+        (void)snag_errorf(error, error_size, "Cannot restore transfer display: %s",
+                          strerror(errno));
+        rc = -1;
     }
     snag_buf_free(&frame.payload);
     return rc;

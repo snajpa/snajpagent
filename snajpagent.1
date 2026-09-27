@@ -1227,6 +1227,95 @@ and its Markdown styles are unchanged.  This display rule
 applies to live and retained chat; it does not change mention admission or
 turn history into fresh instructions.  Color-disabled output has no escapes.
 .PP
+.SH "Terminal file transfers"
+.SS Workstation setup
+On a POSIX target, uploads and downloads use the existing interactive terminal
+connection. Install the Go trzsz wrapper on the workstation. On macOS:
+.PP
+.nf
+    brew install trzsz-go
+    trzsz --dragfile ssh target
+.fi
+.PP
+If Homebrew's Python trzsz package is already installed, run
+.B "brew uninstall trzsz"
+first: the packages conflict because both provide trz and tsz. The trzsz-go
+package also supplies the trzsz wrapper.
+.B --dragfile
+is a wrapper option, not a trz option. Run snajpagent inside the wrapped
+connection; the target's native transfer code needs no trz or tsz executable.
+.PP
+Wrap the outer SSH connection, including connections that attach to screen.
+The wrapper must remain active when reconnecting. The terminal lease temporarily
+isolates transfer output and restores the normal screen, input mode and composer
+when the transfer finishes. GNU screen uses its terminal passthrough so wire
+frames stay out of its saved display and scrollback. Screen settings, including
+its default disabled alternate screen, are left unchanged. Reattaching the
+session restores ordinary conversation output.
+.SS Upload from the workstation
+Drop regular files into the ordinary composer, or type
+.B /upload
+for the wrapper's file selection. A stock drag sends Ctrl-C followed by trz;
+that Ctrl-C can cancel a typed draft or interrupt active work. Save needed draft
+text first. Directory mode (trz -d), directories and zero-byte uploads are rejected.
+.PP
+The receiver verifies the complete batch before retaining and listing files as
+unsent attachments. Review
+.B /attachments
+and submit them with the intended private prompt, queued turn or steer.
+Receiving a file alone submits no message. Preparation failure removes new files
+from that batch and retains existing unsent attachments. A batch has at most eight
+files; retained files are at most 256 MiB each, and prepared image content uses
+the existing 12 MiB input budget.
+.SS Download to the workstation
+Type
+.B /download PATH
+or ask the model to send a file through its
+.B send_file
+tool. For example:
+.PP
+.nf
+    /download ./report.md
+    /download /home/user/report with spaces.pdf
+    /download asset:0123456789abcdef0123456789abcdef
+.fi
+.PP
+Paths are literal, absolute or relative to the session's current working
+directory. Symlinks and directories are rejected. Empty regular files can be
+downloaded. An asset:ID must identify a file already accepted by this saved
+session; its retained bytes are verified before sending. Downloads stream in
+bounded blocks and do not inherit attachment-size limits.
+.PP
+The workstation wrapper chooses the destination. It normally offers a directory
+selector. To save automatically, set this in the workstation's ~/.trzsz.conf:
+.PP
+.nf
+    DefaultDownloadPath = /Users/user/Downloads
+.fi
+.PP
+The client receives the basename. Retained assets without a saved display name
+use their asset ID as the basename. Existing files are preserved through trzsz's
+non-overwrite naming behavior. A successful result means the client acknowledged
+the file's MD5 digest and final EXIT. The model receives a completion result,
+not the workstation's filesystem path or raw file bytes. Transfers intentionally
+send the selected file bytes to the workstation without tool-output redaction.
+.SS Cancellation and recovery
+Transfers take exclusive terminal input until completion, cancellation or error.
+Cancel the workstation selector or press Ctrl-C during the transfer. Ordinary
+commands and steering are unavailable while the transfer owns input. Per-frame
+I/O waits are bounded at 20 seconds; a missing wrapper returns a transfer error.
+Transfers through GNU screen use 1 KiB DATA blocks to keep input frames within
+its terminal input burst capacity; other connections use up to 64 KiB blocks.
+A cancelled or failed download can leave a partial workstation file; inspect it
+before use. Only an acknowledged complete transfer reports success.
+.PP
+The terminal lease restores modes and display on success and failure, then
+replays keyboard bytes received after the final EXIT. Source files are unchanged.
+If the source's size or modification timestamp changes while being sent,
+the transfer fails. Interactive terminal
+transfers are unavailable on Windows hosts and in one-shot execution. Read-only
+model turns reject send_file. The same tool schema remains visible with a factual
+failure result when the runtime cannot perform the transfer.
 .SH "Commands"
 Commands normally occupy a single submitted line.
 .BR /ro ,
@@ -1567,24 +1656,13 @@ Interrupt file playback. Dictation and file playback share one local device
 owner and return busy when the other operation is active.
 .TP
 .B /upload
-Receive regular files from a workstation through an existing interactive
-terminal connection on a POSIX host. Start the outer connection on the
-workstation with the Go trzsz filter, for example
-.B "trzsz --dragfile ssh target"
-and run snajpagent on the target. /upload requests the filter's file selection;
-the filter must already wrap the connection. A stock drag at the ordinary
-composer also launches this receiver by sending Ctrl-C followed by trz. That
-Ctrl-C can cancel a typed draft or request interruption during active work.
-Save needed draft text first. The remote host needs no separate trz executable.
-Directory mode (trz -d), directories and zero-byte files are rejected.
-The receiver verifies a complete batch before preparing and listing its files
-as unsent attachments. It neither submits a message nor sends a chat message.
-Preparation failure removes new files from that batch and retains existing
-unsent attachments. A missing sender or malformed transfer reports a bounded
-error and returns to ordinary terminal input. Review /attachments afterward.
-After a crash, resuming or deleting the session removes recognized private
-upload staging. Unknown content in such a directory stops cleanup rather than
-removing existing media or unrelated files.
+Receive workstation files as unsent attachments through the trzsz wrapper.
+See Terminal file transfers for setup, drag behavior, verification and limits.
+.TP
+.B /download PATH
+Send one regular file or retained asset to the workstation through the trzsz
+wrapper. The remainder is a literal path, including spaces; no shell expansion,
+quotes or globbing are interpreted. See Terminal file transfers.
 .TP
 .BI /attach " path"
 Prepare an image or retain a regular file for the next
@@ -2797,7 +2875,7 @@ verbs have no replacement: configurations using them fail startup with a
 pointer to
 .IR design/io-rules.md .
 
-.SH "Scripting and tools"
+.SH "Scripting"
 .SS Automation and integration
 Use
 .B \-e
@@ -3008,7 +3086,8 @@ Terminal/output failure or one-shot interruption that cannot return to a prompt.
 .B 128+N
 Graceful exit after signal
 .IR N .
-.SS Tool reference
+.SH "Model tools"
+.SS Visibility and execution
 These are model-callable tools, not slash commands to type into the composer.
 Every provider request advertises the complete native catalog. Read-only mode,
 goal and queue state, network configuration, continuation mode and current
@@ -3018,6 +3097,37 @@ that call. Arguments use strict JSON objects: required fields are present, with
 .B null
 where a nullable field should use its default. Unknown fields are rejected.
 Pre-1.0 tool and event formats are not a stable third-party automation API.
+.SS Tool catalog
+The following names are the functions shown to the model. Their operands and
+results are documented below. Slash commands are operator input; they are listed
+under Commands. Hosted search is advertised in the provider's native form.
+.TP
+.B Working directory and model
+get_cwd, cd, select_model.
+.TP
+.B Commands and process control
+exec_command, write_stdin, read_tool_output, set_command_shell.
+.TP
+.B Filesystem exploration
+list_files, read_file, grep.
+.TP
+.B File modification
+write_file, edit_file, apply_patch.
+.TP
+.B Media and workstation delivery
+view_image, read_document, view_video, listen_audio, transcribe_audio,
+speak_text, send_file.
+.TP
+.B Saved history and continued work
+read_session_history, list_goals, create_goal, update_goal, timer,
+defer_steering.
+.TP
+.B IRC
+irc_state, irc_send, irc_topic, irc_nick, irc_connect, irc_host,
+irc_disconnect.
+.TP
+.B Search
+Provider-hosted web search, when supplied by the provider request format.
 .SS Argument validation and applied limits
 Every provider receives the same native tool contract: required operands,
 optional controls, types, ranges and parameter descriptions. Object key order
@@ -3091,6 +3201,15 @@ the configuration file. The
 .B /model
 command uses the same persistent selection and can interrupt a streaming
 response to start a request on the new model.
+.SS send_file
+Requires path, a literal cwd-relative or absolute regular-file path without
+symlinks, or asset:ID for an accepted retained file. Sends one file through the
+workstation's active trzsz terminal wrapper. The application takes exclusive
+terminal ownership and returns a terminal succeeded or failed tool result;
+there is no managed-process handle to poll. Completion requires the client's
+digest acknowledgement and final EXIT. File bytes are not tool output and
+are not uploaded to the model. See Terminal file transfers for setup,
+destination selection, cancellation, platform requirements and failure behavior.
 .SS exec_command
 Requires command, the source text for the configured shell. Workdir is optional:
 omission or null uses the session's current working directory; a supplied
@@ -3481,6 +3600,18 @@ Each search is journaled and shown as a display-only tool row: a start row
 with the action and query, then a finish row with the provider's status and
 retained sources.  The row is never a local function call, command or
 dispatcher target, and it cannot be vetoed after the provider ran the search.
+.SS Saved history and goal inspection
+.B read_session_history
+reads a bounded newest-first page of verified durable session events. Optional
+before_seq is an exclusive positive event sequence cursor; omit it for the newest
+page. Limit defaults to 20 events (1..50), and detail_bytes defaults to 512 bytes
+per event (128..2048). Use the returned next_before_seq to page older events.
+.PP
+.B list_goals
+lists bounded durable goal identities, current/final statuses and parent/replacement
+lineage. Optional before_seq selects an exclusive goal-creation event sequence;
+limit defaults to 20 (1..50). Use next_before_seq to continue. Neither inspection
+tool changes the current goal.
 .SS Model goal controls
 .B create_goal
 accepts objective text and is declared in every request. It succeeds only when

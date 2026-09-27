@@ -66,7 +66,7 @@ EMPTY_OUTPUT_CORRECTION = (
 )
 NATIVE_FUNCTION_NAMES = {
     "view_image", "read_document", "view_video", "listen_audio", "transcribe_audio",
-    "speak_text", "exec_command", "write_stdin", "apply_patch", "list_files", "read_file",
+    "speak_text", "send_file", "exec_command", "write_stdin", "apply_patch", "list_files", "read_file",
     "grep", "write_file", "edit_file", "read_tool_output", "read_session_history", "list_goals",
     "set_command_shell", "irc_send", "irc_state", "irc_topic", "irc_nick", "irc_connect",
     "irc_host", "irc_disconnect", "create_goal", "update_goal", "timer", "defer_steering",

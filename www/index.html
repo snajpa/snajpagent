@@ -72,12 +72,14 @@
         in project files, with pointers in <code>AGENTS.md</code>. Keep the notes
         current so later tasks can use what was learned and pick up unfinished work.</p>
       <p>Stage images or files with <code>/attach PATH</code> and submit them with
-        your prompt. For files on your workstation, wrap the outer SSH connection
-        with <code>trzsz --dragfile ssh target</code>, then run snajpagent on the
-        POSIX target and drop regular files into its composer. <code>/upload</code>
-        invokes the same receiver through the wrapper's file picker. A stock
-        drop sends Ctrl-C first, which can cancel a draft or interrupt active
-        work. Review unsent files with <code>/attachments</code> before submitting.
+        your prompt. For terminal file transfers, install the Go wrapper on the workstation
+        (<code>brew install trzsz-go</code> on macOS), start the outer connection with
+        <code>trzsz --dragfile ssh target</code>, and run snajpagent on the POSIX target.
+        Drop regular files into the composer or use <code>/upload</code>, then review
+        <code>/attachments</code> before submitting. A stock drop sends Ctrl-C first.
+        Development source builds also provide <code>/download PATH</code> and the
+        model's <code>send_file</code> tool to send files back to the workstation.
+        The manual has dedicated Terminal file transfers and Model tools sections.
         Ask for selected document pages, spreadsheet cells, video frames or
         audio transcription. Accepted files stay with the saved session.</p>
       <p><code>/dictate</code> inserts speech into your draft. <code>/voice on</code>

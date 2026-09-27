@@ -218,3 +218,96 @@ out:
     return snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
 #endif
 }
+
+int
+snag_app_download(struct app_state *app, const char *path, json_t **result,
+                  char *error, size_t error_size)
+{
+    *result = NULL;
+#ifdef _WIN32
+    (void)app;
+    (void)path;
+    (void)error;
+    (void)error_size;
+    *result = snag_tool_result_terminal(false, "Terminal download is not available on this host.");
+    return *result ? 0 : -1;
+#else
+    struct snag_upload_result transfer = {0};
+    json_t *asset = NULL;
+    char *source = NULL;
+    const char *name = NULL;
+    int input = -1, tty = -1, rc = -1;
+    bool leased = false, raw = false, restored = true, owning = false;
+    struct termios saved;
+    snag_file_info info;
+
+    if (app->execute || !app->ui.opened || snag_isatty(STDERR_FILENO) != 1) {
+        (void)snag_errorf(error, error_size, "Download needs an interactive POSIX terminal.");
+        goto out;
+    }
+    if (app->attaching) {
+        (void)snag_errorf(error, error_size,
+                          "A terminal transfer or attachment is already active.");
+        goto out;
+    }
+    if (!strncmp(path, "asset:", 6u)) {
+        if (snag_session_media(&app->session, path, NULL, prepare_checkpoint, app,
+                               &asset, &source, error, error_size) < 0) goto out;
+        name = snag_json_string(asset, "name");
+    } else {
+        source = snag_path_root_len(path) ? strdup(path) : snag_path_join(app->session.cwd, path);
+    }
+    if (!source) goto out;
+    if (!name || !*name) {
+        const char *slash = strrchr(source, '/');
+        name = slash ? slash + 1u : source;
+    }
+    input = snag_open_read(source, false);
+    if (input < 0 || snag_fstat(input, &info) < 0 || !S_ISREG(info.st_mode)) {
+        (void)snag_errorf(error, error_size, "Download requires a readable regular file: %s",
+                          input < 0 ? strerror(errno) : "directories are not supported");
+        goto out;
+    }
+    app->attaching = true;
+    owning = true;
+    if (snag_ui_external(&app->ui, true, error, error_size) < 0) goto out;
+    leased = true;
+    tty = open("/dev/tty", O_RDWR | O_CLOEXEC | O_NOCTTY | O_NONBLOCK);
+    if (tty < 0 || tcgetattr(tty, &saved) < 0) {
+        (void)snag_errorf(error, error_size, "Cannot open transfer terminal: %s", strerror(errno));
+        goto out;
+    }
+    struct termios mode = saved;
+    raw_transfer_mode(&mode);
+    if (tcsetattr(tty, TCSANOW, &mode) < 0) {
+        (void)snag_errorf(error, error_size, "Cannot enter transfer mode: %s", strerror(errno));
+        goto out;
+    }
+    raw = true;
+    rc = snag_download_send(tty, input, name, transfer_checkpoint, app,
+                            &transfer, error, error_size);
+out:
+    if (raw && tcsetattr(tty, TCSANOW, &saved) < 0) {
+        restored = false;
+        (void)snag_errorf(error, error_size, "Cannot restore transfer terminal: %s",
+                          strerror(errno));
+    }
+    if (tty >= 0) close(tty);
+    if (input >= 0) close(input);
+    char replay_error[256] = {0};
+    if (leased && snag_ui_external_replay(&app->ui, transfer.tail, transfer.tail_len,
+                                          replay_error, sizeof(replay_error)) < 0) {
+        (void)snag_errorf(error, error_size, "Cannot restore transfer input: %s", replay_error);
+        restored = false;
+    }
+    if (owning) app->attaching = false;
+    free(source);
+    json_decref(asset);
+    if (!restored) return -1;
+    *result = snag_tool_result_terminal(rc == 0, rc == 0 ?
+        "Download completed: client acknowledged the file digest and final EXIT." : rc == 1 ?
+        "Download cancelled; a partial file may remain on the workstation." :
+        error[0] ? error : "Download failed.");
+    return *result ? 0 : -1;
+#endif
+}

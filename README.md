@@ -180,17 +180,29 @@ conversation or completed tool results.
 Pending room updates remain available for their later admission across
 compaction and resume.
 
+### Transfer files through the terminal
+
+On your workstation, install the Go wrapper (`brew install trzsz-go` on macOS;
+remove the conflicting Python `trzsz` package first if installed). Start the
+outer connection with `trzsz --dragfile ssh target`, then run snajpagent on the
+POSIX target, including inside screen. Drop regular files into the composer or
+use `/upload`; verified files become unsent attachments. A stock drag sends
+Ctrl-C first, which can cancel a draft or interrupt work. Review `/attachments`
+before submitting; uploads reject directories and empty files.
+
+Use `/download PATH`, or ask the model to send a file with `send_file`, for the
+reverse direction. Literal paths and accepted `asset:ID` references are supported;
+downloads accept empty regular files. The workstation wrapper chooses the save
+directory; `DefaultDownloadPath` in its `~/.trzsz.conf` enables automatic saving.
+Transfers own terminal input temporarily and restore the display afterward.
+See the manual's **Terminal file transfers** and **Model tools** sections for
+requirements, limits, cancellation and the complete tool catalog. Downloads are
+available in development source builds; the 0.99.8b stable binary supports uploads.
+
 ### Attach files and use voice
 
 Use `/attach PATH` to stage an image or file, inspect the staged list with
-`/attachments`, then submit it with your prompt. To upload files from your
-workstation to a POSIX host over an existing SSH terminal, start the outer
-connection with `trzsz --dragfile ssh target`, run `snajpagent` on the target,
-and drop regular files into its ordinary composer. `/upload` opens the same
-receiver through the wrapper's file selection. A stock drop sends Ctrl-C first:
-it can cancel a typed draft or interrupt active work. Review the unsent
-attachments before submitting; directory and empty-file uploads are rejected.
-Ask the agent to inspect PDF, Office or text documents, sample a video interval,
+`/attachments`, then submit it with your prompt. Ask the agent to inspect PDF, Office or text documents, sample a video interval,
 or transcribe an audio file; accepted originals and prepared results stay with
 the saved session.
 

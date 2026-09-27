@@ -411,7 +411,7 @@ remain unreaped until output collection so a reused PID cannot be signaled.
 
 POSIX terminal upload is an exclusive input lease: the UI stops and joins its
 input worker before the engine reads from the controlling terminal. Exact stock
-trz actions and /upload enter the same bounded receive-only protocol-1 path;
+trz actions and /upload enter the same bounded protocol-1 receive path;
 the remote host launches no shell command. The receiver writes a complete,
 digest-checked batch into a private operation-owned directory, then restores
 termios and the UI before preparing each attachment through the ordinary media
@@ -761,3 +761,24 @@ relax peak RAM limits. No firmware port or device qualification is claimed.
 Desktop conversion is a separate boundary; capture requires explicit activation
 and visible mute/stop. Default desktop releases remain fully linked/enabled;
 custom exclusions must not change that default.
+
+### Terminal downloads
+
+`/download PATH` and `send_file {path}` use the same acknowledged UI/controlling-
+TTY lease and wire codec as uploads. The native sender opens one regular file
+without following symlinks; an accepted asset is resolved and verified through
+session media lookup. The open descriptor is streamed, without copying the
+source into an attachment or inheriting attachment-size limits. Protocol 1 uses
+Base64/zlib DATA blocks, acknowledged sizes, MD5 and final EXIT. The durable tool
+result contains completion status, never wire file bytes or an inferred client
+save path. Client cancellation and malformed acknowledgements fail factually.
+
+Ordinary terminals use temporary alternate-screen ownership and a paired cursor
+restore/clear before releasing the lease. Failed/cancelled transfers honor the
+client's 500 ms server-exit quiet interval before repainting, so its error drain
+does not swallow the UI. A nonempty STY (not the TERM capability string)
+identifies GNU screen; outgoing wire bytes use bounded 128-byte DCS passthrough
+chunks, keeping frames out of its virtual display and scrollback. In screen,
+1 KiB DATA blocks avoid long input bursts that exceed its pasted-input capacity.
+These are in-band transfers; there is no helper executable, listener or network
+connection outside the terminal chain. Screen settings are never modified.

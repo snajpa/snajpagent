@@ -156,6 +156,7 @@ static const struct snag_term_command commands[] = {
     {"/status", "session and next-turn settings"},
     {"/history [N]", "show N retained turns; default 1, 0 counts only"},
     {"/cat PATH", "open a local file in the configured pager"},
+    {"/download PATH", "send one file to the workstation through trzsz"},
     {"/model [list|cache]", "list cached models; cache refreshes all providers"},
     {"/model [#]N [save|s]", "select numbered model/effort row (N starts at 1)"},
     {"/model MODEL[/EFFORT] [save|s]", "select on the next-turn provider"},
@@ -2703,6 +2704,21 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
     }
     if (strncmp(line, "/cat", 4u) == 0 && (!line[4] || isspace((unsigned char)line[4])))
         return page_local_file(app, line + 4u);
+    if (!strncmp(line, "/download", 9u) && (!line[9] || isspace((unsigned char)line[9]))) {
+        const char *path = line + 9u;
+        json_t *result = NULL;
+        char error[256] = {0};
+        while (isspace((unsigned char)*path)) ++path;
+        if (!*path) return app_error(app, "usage: /download PATH");
+        int rc = snag_app_download(app, path, &result, error, sizeof(error));
+        if (rc == 0) {
+            const char *message = snag_json_string(result, "model_text");
+            rc = snag_ui_text(&app->ui, (!strcmp(snag_json_string(result, "status"), "succeeded")) ?
+                SNAG_UI_HOST : SNAG_UI_ERROR, message ? message : "Download finished.");
+        }
+        json_decref(result);
+        return rc;
+    }
     if (strcmp(line, "/chat") == 0) {
         int rc = app->ui.input_view_applied ? set_input_prompt(app, active) :
                                              user_switch_view(app, SNAG_RENDER_CHAT, active);
