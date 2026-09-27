@@ -292,8 +292,10 @@ int snag_session_open(struct snag_store *store, struct snag_session *session,
 int snag_session_open_last(struct snag_store *store, struct snag_session *session,
                           char *error, size_t error_size);
 typedef int (*snag_store_emit_fn)(void *, const char *, size_t);
-int snag_store_list(struct snag_store *store,
-                    bool include_archived, snag_store_emit_fn emit, void *opaque,
+enum snag_session_list { SNAG_SESSIONS_ACTIVE, SNAG_SESSIONS_ALL, SNAG_SESSIONS_RUNNING };
+/* Supply the caller's owned session so probing never opens/closes its lock. */
+int snag_store_list(struct snag_store *store, const struct snag_session *owned,
+                    enum snag_session_list filter, snag_store_emit_fn emit, void *opaque,
                     char *error, size_t error_size);
 int snag_session_archive(struct snag_session *session, uint64_t *written_seq, char *error, size_t error_size);
 int snag_session_unarchive(struct snag_session *session, uint64_t *written_seq,

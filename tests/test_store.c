@@ -18,6 +18,28 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifndef _WIN32
+#include <sys/wait.h>
+#endif
+
+static void
+assert_session_lock_retained(const struct snag_session *session, const char *stage)
+{
+#ifndef _WIN32
+    pid_t pid = fork();
+    assert(pid >= 0);
+    if (pid == 0)
+        _exit(snag_lock_file(session->lock_fd, false) < 0 && errno == EAGAIN ? 0 : 1);
+    int status;
+    assert(waitpid(pid, &status, 0) == pid);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+        fprintf(stderr, "session lock lost %s\n", stage);
+    assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+#else
+    (void)session;
+    (void)stage;
+#endif
+}
 
 static void
 commit_event(struct snag_session *session, const char *type, json_t *data)
@@ -1437,11 +1459,13 @@ main(void)
 
     assert(snag_session_archive(&session, NULL, error, sizeof(error)) == 0);
     assert(session.archived);
+    assert_session_lock_retained(&session, "before listing");
     assert(snprintf(list_path, sizeof(list_path), "%s/list", temp) > 0);
     {
         int fd = open(list_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
         assert(fd >= 0);
-        assert(snag_store_list(&store, false, list_to_fd, &fd, error, sizeof(error)) == 0);
+        assert(snag_store_list(&store, &session, SNAG_SESSIONS_ACTIVE,
+                              list_to_fd, &fd, error, sizeof(error)) == 0);
         assert(close(fd) == 0);
         assert(read_file(list_path, list_buf, sizeof(list_buf)) > 0u);
         assert(strstr(list_buf, id_prefix) == NULL);
@@ -1449,11 +1473,13 @@ main(void)
     {
         int fd = open(list_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
         assert(fd >= 0);
-        assert(snag_store_list(&store, true, list_to_fd, &fd, error, sizeof(error)) == 0);
+        assert(snag_store_list(&store, &session, SNAG_SESSIONS_ALL,
+                              list_to_fd, &fd, error, sizeof(error)) == 0);
         assert(close(fd) == 0);
         assert(read_file(list_path, list_buf, sizeof(list_buf)) > 0u);
         assert(strstr(list_buf, "\tarchived\t") != NULL);
     }
+    assert_session_lock_retained(&session, "after listing");
     assert(snag_session_unarchive(&session, NULL, error, sizeof(error)) == 0);
     assert(!session.archived);
     assert(snag_session_delete(&store, &session, id_prefix, NULL, error, sizeof(error)) == 0);

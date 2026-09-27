@@ -230,8 +230,8 @@ session_live(int dir_fd)
 }
 
 int
-snag_store_list(struct snag_store *store,
-                bool include_archived, snag_store_emit_fn emit, void *opaque, char *error, size_t error_size)
+snag_store_list(struct snag_store *store, const struct snag_session *owned,
+                enum snag_session_list filter, snag_store_emit_fn emit, void *opaque, char *error, size_t error_size)
 {
     struct snag_directory *dir;
     const char *entry;
@@ -241,9 +241,16 @@ snag_store_list(struct snag_store *store,
     if (!dir) return -1;
     while ((entry = snag_directory_next(dir)) != NULL) {
         struct snag_session snapshot;
-        if (matching_snapshot(store, &snapshot, entry, include_archived) < 0) continue;
+        if (matching_snapshot(store, &snapshot, entry, filter != SNAG_SESSIONS_ACTIVE) < 0) continue;
         struct snag_buf row = {.max = 8192u};
-        bool live = session_live(snapshot.dir_fd);
+        /* Closing any descriptor of our POSIX lock file drops all locks held
+         * by this process on that file, even if another descriptor owns them. */
+        bool live = owned && owned->lock_fd >= 0 && !strcmp(owned->id, entry);
+        if (!live) live = session_live(snapshot.dir_fd);
+        if (filter == SNAG_SESSIONS_RUNNING && !live) {
+            snag_session_close(&snapshot);
+            continue;
+        }
         if (snag_buf_printf(&row, "%.8s\t%s\t%llu\t%s\t%s\t%s\n", entry, snapshot.default_model,
                            (unsigned long long)snapshot.turn_count, snapshot.archived ? "archived" : "active",
                            live ? "live" : "idle",

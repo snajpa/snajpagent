@@ -339,6 +339,56 @@ def test_resize_and_suspend_preserve_draft():
         assert turn["data"]["text"] == text.decode(), turn
 
 
+def test_session_list_keeps_live_owner():
+    def query(child, command, heading):
+        start = len(child.buf)
+        end = child.send_wait(command + b"\r", heading, start=start)
+        child.wait_idle_prompt(start=end)
+        return bytes(child.buf[start:])
+
+    with Child([], ready=DEFAULT_IDLE_PROMPT, cols=160) as stopped:
+        end = stopped.send_wait(b"stopped-session-regression\r", b"fixture answer")
+        stopped.wait_idle_prompt(start=end)
+        stopped_id = stopped.session_id()
+        stopped.exit_now()
+    with Child([], ready=DEFAULT_IDLE_PROMPT, cols=160) as first:
+        initial = query(first, b"/session", b"running sessions:")
+        current = re.search(rb"current session: ([0-9a-f]{32})", initial)
+        assert current, initial
+        end = first.send_wait(b"first-live-session\r", b"fixture answer")
+        first.wait_idle_prompt(start=end)
+        first_id = first.session_id()
+        assert current[1].decode() == first_id, (current[1], first_id)
+        with Child([], ready=DEFAULT_IDLE_PROMPT, cols=160) as second:
+            end = second.send_wait(b"second-live-session\r", b"fixture answer")
+            second.wait_idle_prompt(start=end)
+            second_id = second.session_id()
+            output = query(first, b"/session", b"running sessions:")
+            assert first_id.encode() in output, output
+            assert second_id[:8].encode() in output, output
+            assert stopped_id[:8].encode() not in output, output
+            output = query(first, b"/session list", b"saved sessions:")
+            for identity in (first_id, second_id, stopped_id):
+                assert identity[:8].encode() in output, output
+            for identity in (first_id, second_id):
+                with open(Path(DOTDIR) / "sessions" / identity / "lock", "r+b") as lock:
+                    try:
+                        fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        pass
+                    else:
+                        raise AssertionError("session listing released its live owner's lock")
+            query(first, b"/session invalid", b"usage: /session")
+            first.send_wait(b"terminal_status\r", DEFAULT_ACTIVE_PROMPT)
+            output = query(first, b"/session", b"running sessions:")
+            assert first_id.encode() in output, output
+            second.exit_now()
+        first.exit_now()
+        turns = [event for event in events(first_id) if event["type"] == "turn_started"]
+        assert [turn["data"]["text"] for turn in turns] == [
+            "first-live-session", "terminal_status"], turns
+
+
 def test_redraw_preserves_sealed_output():
     with Child([], ready=DEFAULT_IDLE_PROMPT, term="xterm-256color", cols=100) as child:
         end = child.send_wait(b"sealed-output-regression\r", b"fixture answer")
@@ -6059,6 +6109,7 @@ if __name__ == "__main__":
     test_empty_network_session()
     test_resize_and_suspend_preserve_draft()
     test_redraw_preserves_sealed_output()
+    test_session_list_keeps_live_owner()
     test_compaction_ignores_legacy_samples()
     test_hard_compaction_progress_is_remeasured()
     test_hard_compaction_resets_after_completed_response()

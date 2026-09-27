@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Add `/session` for the current ID and running sessions, and `/session list`
+  for all saved sessions. Listing from a running owner preserves its writer lock.
+
 - Keep completed output visible when Ctrl-L redraws the composer; avoid the
   whole-screen erase that some terminals copy into scrollback.
 

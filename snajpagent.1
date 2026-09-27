@@ -1378,6 +1378,14 @@ is an alias for
 Show session, selection, queue, verbosity, capacity, token accounting, requested
 network roles and actual connection state.
 .TP
+.B /session
+Print the full current session ID followed by running sessions. A new unsaved
+session is identified as not yet saved; listing does not start a model turn.
+.TP
+.B /session list
+Print the current session ID and all saved sessions, including archived ones,
+with their live or idle state. This does not attach to or resume a session.
+.TP
 .B /state
 Show session state including the goal and its actions: the
 .B /status

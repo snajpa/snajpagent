@@ -91,6 +91,7 @@ app_error(struct app_state *app, const char *message)
     app->recovery_notice_ms = now;
     return snag_ui_text(&app->ui, SNAG_UI_ERROR, message);
 }
+static int list_row(void *opaque, const char *text, size_t len);
 static int
 app_warning(struct app_state *app, const char *message)
 {
@@ -154,6 +155,8 @@ graph_outcome_name(enum snag_graph_outcome outcome)
 static const struct snag_term_command commands[] = {
     {"/help", "commands and keys (alias /?)"}, {"/?", "same as /help"},
     {"/status", "session and next-turn settings"},
+    {"/session", "current session ID and running sessions"},
+    {"/session list", "all saved sessions and their live state"},
     {"/history [N]", "show N retained turns; default 1, 0 counts only"},
     {"/cat PATH", "open a local file in the configured pager"},
     {"/download PATH", "send one file to the workstation through trzsz"},
@@ -2704,6 +2707,22 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         return app_textf(app, SNAG_UI_HOST, "Operator requested tool yield; returning control to the model.");
     }
     if (strcmp(line, "/status") == 0) return render_status(app);
+    if (!strncmp(line, "/session", 8u) && (!line[8] || isspace((unsigned char)line[8]))) {
+        const char *argument = line + 8u;
+        char error[256] = {0};
+        while (isspace((unsigned char)*argument)) ++argument;
+        size_t len = strlen(argument);
+        while (len && isspace((unsigned char)argument[len - 1u])) --len;
+        if (len && (len != 4u || strncmp(argument, "list", 4u)))
+            return app_error(app, "usage: /session [list]");
+        if (app_textf(app, SNAG_UI_HOST, "current session: %s%s\n%s sessions:",
+                      app->session.id, app->session.pending_log ? " (not yet saved)" : "",
+                      len ? "saved" : "running") < 0) return -1;
+        if (snag_store_list(&app->store, &app->session,
+                            len ? SNAG_SESSIONS_ALL : SNAG_SESSIONS_RUNNING,
+                            list_row, app, error, sizeof(error)) < 0) return app_error(app, error);
+        return error[0] ? app_textf(app, SNAG_UI_HOST, "%s", error) : 0;
+    }
     if (strncmp(line, "/history", 8u) == 0 && (!line[8] || isspace((unsigned char)line[8]))) {
         const char *argument = line + 8u;
         uint64_t count = 1u;
@@ -4907,7 +4926,7 @@ pick_session(struct app_state *app, char *error, size_t error_size)
     char *prefix = NULL;
     int rc = -1;
 
-    if (snag_store_list(&app->store, false, list_row, app, error, error_size) < 0 ||
+    if (snag_store_list(&app->store, NULL, SNAG_SESSIONS_ACTIVE, list_row, app, error, error_size) < 0 ||
         snag_ui_open(&app->ui, error, error_size) < 0 ||
         snag_ui_prompt(&app->ui, false, "session › ", frames, 1u, 0u) < 0) return -1;
     do {
@@ -5390,7 +5409,7 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         "cannot use the home directory as the default working directory");
     if (!cwd) goto fail;
     if (cli->list) {
-        rc = snag_store_list(&app.store, true, list_row, &app,
+        rc = snag_store_list(&app.store, NULL, SNAG_SESSIONS_ALL, list_row, &app,
                             error, sizeof(error)) < 0 ? 3 : 0;
         if (rc) (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
         goto out;
