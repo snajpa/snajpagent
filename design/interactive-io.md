@@ -7,6 +7,64 @@ the terminal, and how users inspect and modify queued turns.
 
 ## Runtime Ownership And Scheduling
 
+### Native session attachment (implementation in progress)
+
+The operator must be able to leave a live session without a terminal multiplexer
+and reconnect without restarting its engine. `--attach` / `-A` attach to a live
+owner; `--resume` continues a stopped session. Existing file `/attach` and
+`/detach` remain unchanged. Bare `/session` prints the full current ID followed
+by running sessions; `/session list` also includes stopped/archived sessions;
+`/session detach` returns to the shell; `/session attach ID` switches terminals
+to another live owner. Unique ID prefixes are accepted and ambiguous matches
+are listed rather than guessed. Omitting an attach ID offers a live-session
+selection, not an implicit resume or a new session.
+
+Keep the existing engine/presentation ownership split. One process remains the
+session and journal owner throughout requests, tools, IRC, goals and terminal
+disconnects. A small same-binary terminal client is the replaceable attachment;
+no service manager, terminal emulator, screen buffer, pane/session multiplexer,
+second journal writer or per-session helper executable is required. The client
+owns its actual terminal modes and forwards input/geometry. The owner retains
+editor/render state and presents output through a narrow local connection.
+Start the surviving owner before creating worker threads, not by forking a
+multithreaded process at `/session detach`. Noninteractive execution, listing,
+help and version do not silently create surviving background work.
+
+One terminal may control a session at a time. Authenticate the local endpoint
+using the existing private-store ownership boundary and native peer identity;
+never treat a stale socket/PID file as proof of ownership. The session lock is
+the durable writer authority. List/status probes must neither acquire an
+attachment nor release the current process's session lock. A failed switch
+keeps the source attached: resolve/authenticate/reserve the destination before
+releasing the source, then commit the transfer. Do not silently steal a terminal
+or terminate either owner's work. Stopped/unreachable targets report the actual
+condition and the appropriate explicit attach/resume action.
+
+Detachment and terminal transport failure are not engine EOF, cancellation or
+shutdown. Keep active requests/process handles/goals intact and keep admitting
+their durable results. Preserve the unsent draft, route, selected view and
+model/effort in the owning session; drafts are not submitted by switching.
+Detached presentation must not backpressure the engine indefinitely. Do not
+spool unlimited raw terminal bytes or replay cursor-control output into a new
+terminal. At attachment, establish fresh geometry and an explicit bounded
+catch-up from existing display history, with a visible omission/range notice
+when needed, then show the retained composer. Catch-up is display only and must
+not create model inputs, repeat provider work, resend IRC, or change journal
+lineage. Normal streaming/resizing still never repaints sealed conversation.
+
+Before enabling this path, account for every actual-terminal ownership path:
+Ctrl-C/quit versus detach, Ctrl-Z/job control, signals and abrupt SSH/terminal
+loss, external editor/pager, audio capture and native upload/download. Preserve
+the existing exclusive-terminal contracts rather than accidentally letting a
+background owner read the shell or signal the user's process group. Cover these
+through the existing PTY/tmux/fake-provider suites, including detached live-tool
+completion, attach/list races, stale endpoints, failed switching, lock retention,
+catch-up bounds and no redraw/repeated model response. A native transport must
+fit `term_host`/the current UI boundary, not duplicate the app controller.
+
+The commands and transport above are a design/acceptance contract, not a claim
+that installed rescue binaries already provide native attachment.
+
 Every application mode uses the same two core threads: one presentation owner
 and one engine owner. The editor and renderer stay together on the presentation
 thread. Only actual input/output capabilities differ for interactive, execute,
