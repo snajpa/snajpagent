@@ -115,7 +115,7 @@ struct snag_term {
     unsigned int ctrl_c_count;
     unsigned char utf8_pending[4];
     size_t utf8_pending_len;
-    unsigned char escape[8];
+    unsigned char escape[16];
     size_t escape_len;
     unsigned char input[256];
     size_t input_pos;

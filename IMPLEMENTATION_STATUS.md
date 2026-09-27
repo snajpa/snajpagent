@@ -8,16 +8,20 @@ provider catalogs and returns selectable rows; failed refresh leaves the prior
 cache and model selection intact. Operator `/model` retains typed uncached
 selection.
 
-Current source receives terminal uploads on POSIX hosts through a workstation
-trzsz filter. Stock drag launch and /upload share a bounded receiver; complete
-batches become private unsent attachments. The pinned Go client's binary
-multi-file success and malformed-image preparation rollback, plus synthetic
-protocol errors, input-tail replay and terminal recovery, pass disposable PTY
-fixtures. Crash-left upload staging is removed on resume and deletion only when
-its ownership and file shapes match the upload operation; existing media is
-preserved. Desktop GUI drag, nested SSH, tmux relay and terminal-specific behavior
-remain unqualified; PTY path injection is not a GUI drop. The 0.99.8 tag
-predates this feature.
+Current development source includes client-only `snajpagent remote COMMAND…`
+and native POSIX workstation upload/download endpoints. Workstation configuration
+reads only `[terminal] download_dir`, defaulting to `~/Downloads`. Verified
+uploads become private unsent attachments; acknowledged downloads display actual
+local-path receipts. The trzsz-go client remains usable with explicit transfer
+commands. Model `send_file` uses native-client availability and journals export
+intent before delivery. The saved remote-session queue supports stable-ID listing,
+removal and clearing, including stale sources; read-only permits listing only.
+Detached GNU screen exports remain pending without protocol frames; native wrapped
+reattachment delivers at idle boundaries. Changed sources and uncertain outcomes
+remain pending. Native selector input is a regular-file path, not a desktop picker.
+Actual desktop GUI drag and macOS UI remain unqualified. See QUALIFICATION.md for
+tested terminal/SSH scenarios. The 0.99.8b stable downloads predate native remote
+mode, downloads and the durable outbox.
 
 Voice supports native Codex subscription calls and public Realtime BYOK.
 The selected provider supplies credentials and defaults. Native media uses

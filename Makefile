@@ -254,6 +254,8 @@ check: $(TEST_BIN)
 	./tests/test_upload_wire
 	python3 tests/test_upload_client.py
 	python3 tests/test_download_client.py
+	python3 tests/test_remote_terminal.py
+	python3 tests/test_remote_ssh.py
 	./tests/test_responses
 	./tests/test_provider_retry
 	./tests/test_provider_transport

@@ -72,16 +72,16 @@
         in project files, with pointers in <code>AGENTS.md</code>. Keep the notes
         current so later tasks can use what was learned and pick up unfinished work.</p>
       <p>Stage images or files with <code>/attach PATH</code> and submit them with
-        your prompt. For terminal file transfers, install the Go wrapper on the workstation
-        (<code>brew install trzsz-go</code> on macOS), start the outer connection with
-        <code>trzsz --dragfile ssh target</code>, and run snajpagent on the POSIX target.
-        Drop regular files into the composer or use <code>/upload</code>, then review
-        <code>/attachments</code> before submitting. A stock drop sends Ctrl-C first.
-        Development source builds also provide <code>/download PATH</code> and the
-        model's <code>send_file</code> tool to send files back to the workstation.
-        The manual has dedicated Terminal file transfers and Model tools sections.
-        Ask for selected document pages, spreadsheet cells, video frames or
-        audio transcription. Accepted files stay with the saved session.</p>
+        your prompt. Development source builds provide a native workstation wrapper:
+        <code>snajpagent remote ssh -t target snajpagent</code>.
+        Use <code>/upload</code> to select a local file, then review
+        <code>/attachments</code> before submitting. Use <code>/download PATH</code>
+        to save a remote file under <code>~/Downloads</code>. Model exports while
+        detached stay in the saved session until wrapped reattachment; receipts
+        identify actual local paths. The trzsz-go wrapper remains an alternative
+        for explicit transfers (<code>brew install trzsz-go</code> on macOS,
+        then <code>trzsz --dragfile ssh target</code>). See the manual's
+        Terminal file transfers section.</p>
       <p><code>/dictate</code> inserts speech into your draft. <code>/voice on</code>
         starts a voice conversation; <code>/voice mute</code> pauses the microphone
         and <code>/voice off</code> stops voice. Use your selected Codex subscription,

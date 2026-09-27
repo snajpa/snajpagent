@@ -52,9 +52,17 @@ other execution constraints.
 
 ## Workstation file delivery
 
-`send_file` is always advertised and requires `path`. Interactive POSIX dispatch
-uses the acknowledged terminal lease; read-only, one-shot and Windows execution
-return a factual failed result. Filesystem paths and accepted session assets are
-supported. A successful terminal result requires digest acknowledgement and EXIT
-from the workstation trzsz client, with source bytes excluded from tool output.
-See the manual's Model tools and Terminal file transfers sections.
+`send_file` is always advertised and requires `path`. Dispatch first commits a
+pending export in the existing remote session, then probes for a live native
+workstation client. A queued result reports intent, not delivery; acknowledged
+completion requires digest confirmation and EXIT. Actual native receipt paths
+enter the model result and ordinary UI after terminal restoration. Source bytes
+stay outside tool output. Read-only rejects export creation.
+
+`download_queue` is always advertised with list/remove/clear actions and stable
+item IDs. Listing is allowed in read-only mode; mutations follow its ordinary
+refusal. Removal cancels intent without deleting source or completed local files.
+Detached, unwrapped, interrupted and changed-source exports remain pending.
+Explicit `/upload` and `/download` retain trzsz-go interoperability.
+See [remote-terminal.md](remote-terminal.md) and the manual's Model tools and
+Terminal file transfers sections for the wire and recovery lifecycle.

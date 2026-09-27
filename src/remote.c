@@ -76,11 +76,14 @@ remote_usage(void)
 struct remote_transfer {
     struct snag_child *child;
     const char *downloads;
+    bool relay;
+    bool screen;
+    bool relay_transfer;
+    bool relay_frame;
     unsigned char marker[128];
     size_t marker_len;
     unsigned char keys[4096];
     size_t key_len;
-    bool remote_ready_sent;
 };
 
 static int
@@ -167,31 +170,12 @@ remote_upload_choice(struct remote_transfer *client, char *path, size_t capacity
     return length && !snag_utf8_valid((const unsigned char *)path, length, true) ? -1 : 0;
 }
 
-static bool
-remote_contains(const unsigned char *data, size_t length, const char *needle)
-{
-    size_t n = strlen(needle);
-    if (!n || length < n) return false;
-    for (size_t i = 0; i <= length - n; ++i)
-        if (memcmp(data + i, needle, n) == 0) return true;
-    return false;
-}
-
-static void
-remote_maybe_announce(struct remote_transfer *client, const unsigned char *data, size_t length)
-{
-    static const unsigned char ready[] = "\033[>S";
-    if (client->remote_ready_sent) return;
-    if (!remote_contains(data, length, "snajpagent ") &&
-        !remote_contains(data, length, " \342\200\272 ")) return;
-    if (remote_write(client->child->fd[2], ready, sizeof(ready) - 1u) == 0)
-        client->remote_ready_sent = true;
-}
+static int remote_output(struct remote_transfer *, const unsigned char *, size_t);
 
 static int
 remote_transfer_run(struct remote_transfer *client, char direction)
 {
-    struct snag_client_result result;
+    struct snag_client_result result = {0};
     char error[256] = {0};
     int rc = -1, fd = -1;
     char *directory = NULL;
@@ -220,6 +204,7 @@ remote_transfer_run(struct remote_transfer *client, char direction)
             (void)remote_write(client->child->fd[2], response.data, response.len);
         snag_buf_free(&response);
     }
+    if (result.tail_len && remote_output(client, result.tail, result.tail_len) < 0) return -1;
     if (client->key_len) {
         (void)remote_write(client->child->fd[2], client->keys, client->key_len);
         client->key_len = 0;
@@ -228,20 +213,79 @@ remote_transfer_run(struct remote_transfer *client, char direction)
 }
 
 static int
+remote_passthrough(struct remote_transfer *client, const unsigned char *data, size_t length)
+{
+    if (!client->screen) return remote_write(STDOUT_FILENO, data, length);
+    while (length) {
+        unsigned char packet[132];
+        size_t chunk = length > 128u ? 128u : length;
+        packet[0] = 0x1bu;
+        packet[1] = 'P';
+        memcpy(packet + 2u, data, chunk);
+        packet[chunk + 2u] = 0x1bu;
+        packet[chunk + 3u] = '\\';
+        if (remote_write(STDOUT_FILENO, packet, chunk + 4u) < 0) return -1;
+        data += chunk;
+        length -= chunk;
+    }
+    return 0;
+}
+
+static int
 remote_output(struct remote_transfer *client, const unsigned char *data, size_t length)
 {
     static const char prefix[] = "::TRZSZ:TRANSFER:";
+    static const char probe[] = "\033[?9001;";
     for (size_t i = 0; i < length; ++i) {
         unsigned char byte = data[i];
-        if (!client->marker_len && byte != ':') {
+        if (client->relay_transfer) {
+            if (client->relay_frame || byte == '#') {
+                size_t end = i;
+                while (end < length && end - i < 128u) {
+                    if (data[end++] == '\n') break;
+                }
+                client->relay_frame = data[end - 1u] != '\n';
+                if (remote_passthrough(client, data + i, end - i) < 0) return -1;
+                i = end - 1u;
+                continue;
+            }
+            /* Restoration and subsequent UI output belong to screen's display. */
+            client->relay_transfer = false;
+        }
+        if (!client->marker_len && byte != ':' && byte != 0x1bu) {
             size_t end = i + 1u;
-            while (end < length && data[end] != ':') ++end;
+            while (end < length && data[end] != ':' && data[end] != 0x1bu) ++end;
             if (remote_write(STDOUT_FILENO, data + i, end - i) < 0) return -1;
-            remote_maybe_announce(client, data + i, end - i);
             i = end - 1u;
             continue;
         }
         client->marker[client->marker_len++] = byte;
+        if (client->marker[0] == 0x1bu) {
+            size_t n = client->marker_len;
+            if (n <= sizeof(probe) - 1u && !memcmp(client->marker, probe, n)) continue;
+            if (n > sizeof(probe) - 1u &&
+                !memcmp(client->marker, probe, sizeof(probe) - 1u)) {
+                if (n <= sizeof(probe) + 8u && byte >= '0' && byte <= '9') continue;
+                if (byte == 'n' && n > sizeof(probe) && n <= sizeof(probe) + 9u) {
+                    if (client->relay) {
+                        if (remote_passthrough(client, client->marker, n) < 0) return -1;
+                        client->marker_len = 0;
+                        continue;
+                    }
+                    client->marker[n - 1u] = '\0';
+                    char reply[16];
+                    int count = snprintf(reply, sizeof(reply), "\033[>%sS",
+                        client->marker + sizeof(probe) - 1u);
+                    client->marker_len = 0;
+                    if (count < 0 || (size_t)count >= sizeof(reply) ||
+                        remote_write(client->child->fd[2], reply, (size_t)count) < 0) return -1;
+                    continue;
+                }
+            }
+            if (remote_write(STDOUT_FILENO, client->marker, n) < 0) return -1;
+            client->marker_len = 0;
+            continue;
+        }
         bool candidate = client->marker_len >= sizeof(prefix) - 1u ||
             !memcmp(client->marker, prefix, client->marker_len);
         if (!candidate || client->marker_len == sizeof(client->marker)) {
@@ -259,11 +303,55 @@ remote_output(struct remote_transfer *client, const unsigned char *data, size_t 
                 (client->marker[used] == '\r' || !client->marker[used]);
             client->marker_len = 0;
             if (valid) {
-                if (remote_transfer_run(client, direction) < 0) return -1;
+                if (client->relay) {
+                    client->marker[marker_len - 1u] = '\n';
+                    if (remote_passthrough(client, client->marker, marker_len) < 0) return -1;
+                    client->relay_transfer = true;
+                } else if (remote_transfer_run(client, direction) < 0) return -1;
             } else {
                 client->marker[marker_len - 1u] = '\n';
                 if (remote_write(STDOUT_FILENO, client->marker, marker_len) < 0) return -1;
-                remote_maybe_announce(client, client->marker, marker_len);
+            }
+        }
+    }
+    return 0;
+}
+
+static int
+remote_upstream(struct remote_transfer *client)
+{
+    char id[SNAG_ID_HEX_LEN + 1u];
+    if (snag_random_id(id) < 0) return -1;
+    id[8] = '\0';
+    unsigned long nonce = strtoul(id, NULL, 16) % 1000000000ul;
+    char reply[16];
+    int expected = snprintf(reply, sizeof(reply), "\033[>%luS", nonce);
+    const char *sty = getenv("STY");
+    unsigned attempts = sty && *sty ? 2u : 1u;
+    for (unsigned attempt = 0; attempt < attempts; ++attempt) {
+        char query[48];
+        int size = snprintf(query, sizeof(query), "%s\033[?9001;%lun%s",
+            attempt ? "\033P" : "", nonce, attempt ? "\033\\" : "");
+        if (remote_write(STDOUT_FILENO, query, (size_t)size) < 0) return -1;
+        uint64_t deadline = snag_monotonic_ms() + 1000u;
+        while (snag_monotonic_ms() < deadline && !remote_signal) {
+            struct pollfd input = {STDIN_FILENO, POLLIN, 0};
+            int ready = poll(&input, 1u, 20);
+            if (ready < 0 && errno == EINTR) continue;
+            if (ready < 0) return -1;
+            if (!ready) continue;
+            if (client->key_len == sizeof(client->keys)) return 0;
+            ssize_t amount = read(STDIN_FILENO, client->keys + client->key_len,
+                sizeof(client->keys) - client->key_len);
+            if (amount <= 0) return amount < 0 ? -1 : 0;
+            client->key_len += (size_t)amount;
+            for (size_t at = 0; at + (size_t)expected <= client->key_len; ++at) {
+                if (memcmp(client->keys + at, reply, (size_t)expected)) continue;
+                memmove(client->keys + at, client->keys + at + expected,
+                    client->key_len - at - (size_t)expected);
+                client->key_len -= (size_t)expected;
+                client->relay = true;
+                return 0;
             }
         }
     }
@@ -280,9 +368,6 @@ remote_proxy(const char *executable, const char *const *command, const char *dow
     if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO) ||
         tcgetattr(STDIN_FILENO, &original) < 0) {
         return snag_fail(error, error_size, ENOTTY, "requires an interactive workstation terminal");
-    }
-    if (snag_child_spawn_terminal(&child, executable, command) < 0) {
-        return snag_errorf(error, error_size, "cannot start child terminal: %s", strerror(errno));
     }
     raw = original;
     raw.c_iflag &= (tcflag_t)~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
@@ -307,6 +392,26 @@ remote_proxy(const char *executable, const char *const *command, const char *dow
     }
     int rc = installed == sizeof(signals) / sizeof(signals[0]) ? 0 : -1;
     struct remote_transfer client = {.child = &child, .downloads = downloads};
+    if (rc == 0) rc = remote_upstream(&client);
+    const char *sty = getenv("STY");
+    client.screen = sty && *sty;
+    char *screen_backend = client.screen ? strdup(sty) : NULL;
+    if (client.screen && !screen_backend) rc = -1;
+    /* Each wrapper terminates the inherited backend at its child PTY. Relays
+     * envelope probes and file frames for the parent screen, leaving UI ordinary. */
+    if (rc == 0 && screen_backend) rc = unsetenv("STY");
+    if (rc == 0) rc = snag_child_spawn_terminal(&child, executable, command);
+    int spawn_errno = errno;
+    if (screen_backend && setenv("STY", screen_backend, 1) < 0 && rc == 0) {
+        spawn_errno = errno;
+        rc = -1;
+    }
+    free(screen_backend);
+    if (rc < 0) errno = spawn_errno;
+    if (rc == 0 && client.key_len) {
+        rc = remote_write(child.fd[2], client.keys, client.key_len);
+        client.key_len = 0;
+    }
     bool ended = false;
     while (rc == 0 && !ended && !remote_signal) {
         if (remote_resize) {
@@ -336,7 +441,7 @@ remote_proxy(const char *executable, const char *const *command, const char *dow
     if (client.marker_len)
         (void)remote_write(STDOUT_FILENO, client.marker, client.marker_len);
     int reason = remote_signal;
-    if (reason || rc < 0 || !ended) {
+    if (child.pid > 0 && (reason || rc < 0 || !ended)) {
         (void)kill(-child.pid, reason ? reason : SIGTERM);
     }
     uint64_t deadline = snag_monotonic_ms() + 1000u;

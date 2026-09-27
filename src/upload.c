@@ -12,12 +12,13 @@
 
 #ifdef _WIN32
 int
-snag_download_send(int tty, int file_fd, const char *name,
+snag_download_send(int tty, int file_fd, const char *name, const char *expected_sha,
                     int (*checkpoint)(void *), void *opaque,
                     struct snag_upload_result *result, char *error, size_t error_size)
 {
     (void)tty;
     (void)file_fd;
+    (void)expected_sha;
     (void)name;
     (void)checkpoint;
     (void)opaque;
@@ -529,7 +530,7 @@ download_integer(struct upload_io *io, struct upload_frame *frame,
 }
 
 int
-snag_download_send(int tty, int file_fd, const char *name,
+snag_download_send(int tty, int file_fd, const char *name, const char *expected_sha,
                     int (*checkpoint)(void *), void *opaque,
                     struct snag_upload_result *result, char *error, size_t error_size)
 {
@@ -578,7 +579,9 @@ snag_download_send(int tty, int file_fd, const char *name,
     phase = "download contents";
     if (download_integer(&io, &frame, "SIZE", (uint64_t)before.st_size) < 0) goto done;
     struct snag_upload_md5 hash;
+    struct snag_sha256 queued_hash;
     snag_upload_md5_init(&hash);
+    snag_sha256_init(&queued_hash);
     uint64_t sent = 0;
     while (sent < (uint64_t)before.st_size) {
         size_t limit = io.screen ? 1024u : sizeof(block);
@@ -592,6 +595,7 @@ snag_download_send(int tty, int file_fd, const char *name,
             read_integer(&io, &frame, "SUCC", &accepted) < 0) goto done;
         if (accepted != (uint64_t)amount) { errno = EPROTO; goto done; }
         snag_upload_md5_update(&hash, block, (size_t)amount);
+        if (expected_sha) snag_sha256_update(&queued_hash, block, (size_t)amount);
         sent += (uint64_t)amount;
     }
     /* A regular-mode virtual file can report zero size but contain data. */
@@ -603,6 +607,11 @@ snag_download_send(int tty, int file_fd, const char *name,
     if (snag_fstat(file_fd, &after) < 0) goto done;
     if (before.st_size != after.st_size || before.st_mtime != after.st_mtime ||
         before.st_ctime != after.st_ctime) { errno = ESTALE; goto done; }
+    if (expected_sha) {
+        char actual[SNAG_SHA256_HEX_LEN + 1u];
+        snag_sha256_final_hex(&queued_hash, actual);
+        if (strcmp(actual, expected_sha)) { errno = ESTALE; goto done; }
+    }
     phase = "download digest";
     unsigned char digest[16];
     snag_upload_md5_finish(&hash, digest);

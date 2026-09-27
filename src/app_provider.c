@@ -407,7 +407,7 @@ download_queue_tool(struct app_state *app, const struct snag_response_item *call
     json_t *queue = app->session.download_queue;
     if (!strcmp(action, "list")) {
         struct snag_buf text;
-        snag_buf_init(&text, 4096u);
+        snag_buf_init(&text, SIZE_MAX);
         size_t count = queue ? json_array_size(queue) : 0u;
         if (snag_buf_printf(&text, "%zu pending workstation download(s).", count) < 0) goto oom;
         for (size_t i = 0; i < count; ++i) {
@@ -561,9 +561,37 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
             *result = snag_tool_result_terminal(false, error);
             return *result ? 0 : -1;
         }
-        if (app->execute || !app->ui.opened || snag_isatty(STDERR_FILENO) != 1)
-            return snag_app_download_queue(app, path, result, error, error_size);
-        return snag_app_download(app, path, result, error, error_size);
+        /* Journal the export before touching the terminal so uncertain sends
+         * survive interruption and detached sessions never emit file frames. */
+        if (snag_app_download_queue(app, path, result, error, error_size) < 0) return -1;
+        if (strcmp(snag_json_string(*result, "status"), "succeeded")) return 0;
+        json_t *item = json_incref(json_array_get(app->session.download_queue,
+            json_array_size(app->session.download_queue) - 1u));
+        int rc = snag_app_remote_probe(app);
+        uint64_t deadline = snag_monotonic_ms() + 1000u;
+        while (rc == 0 && !app->remote_verified && app->remote_nonce[0] &&
+               snag_monotonic_ms() < deadline) {
+            if (snag_app_active_input_pump(app, 25u) != 0) break;
+        }
+        bool live = rc == 0 && app->remote_verified;
+        app->remote_available = live;
+        app->remote_verified = false;
+        app->remote_nonce[0] = '\0';
+        if (live) {
+            json_decref(*result);
+            *result = NULL;
+            rc = snag_app_download_pending(app, item, result, error, error_size);
+            if (rc == 0 && !strcmp(snag_json_string(*result, "status"), "succeeded")) {
+                rc = snag_app_commit_event(app, "download_removed", json_pack("{s:s,s:s}",
+                    "id", snag_json_string(item, "id"), "reason", "delivered to wrapped client"),
+                    error, error_size);
+            }
+            if (rc == 0) rc = snag_ui_text(&app->ui,
+                !strcmp(snag_json_string(*result, "status"), "succeeded") ?
+                SNAG_UI_HOST : SNAG_UI_ERROR, snag_json_string(*result, "model_text"));
+        }
+        json_decref(item);
+        return rc;
     }
 
     if (call && call->name && !strcmp(call->name, "set_command_shell")) {

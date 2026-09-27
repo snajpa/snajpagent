@@ -35,6 +35,12 @@ snajpagent \- terminal coding agent with built-in IRC
 .RI [ options ]
 .B logout
 .RI [ provider ]
+.br
+.B snajpagent remote
+.RI [ --config " PATH]"
+.RI [ --dotdir " PATH]"
+.RI [ -- ]
+.RI [ COMMAND " ARG ...]"
 .SH DESCRIPTION
 .B snajpagent
 is a coding agent for the terminal, with a built-in IRC server and client.
@@ -1228,9 +1234,60 @@ applies to live and retained chat; it does not change mention admission or
 turn history into fresh instructions.  Color-disabled output has no escapes.
 .PP
 .SH "Terminal file transfers"
-.SS Workstation setup
-On a POSIX target, uploads and downloads use the existing interactive terminal
-connection. Install the Go trzsz wrapper on the workstation. On macOS:
+.SS "Remote terminal mode (snajpagent remote)"
+On the POSIX workstation, wrap the connection with the native client:
+.PP
+.nf
+    snajpagent remote ssh -t snajpadev screen -S sessionname snajpagent
+.fi
+.PP
+This starts an attached GNU screen session on snajpadev, running the remote
+agent. The workstation wrapper owns file selection and the download destination.
+For an existing screen session, reconnect through the wrapper:
+.PP
+.nf
+    snajpagent remote ssh -t snajpadev screen -r sessionname
+.fi
+.PP
+The syntax is
+.B "snajpagent remote [--config PATH] [--dotdir PATH] [--] [COMMAND ARG...]".
+Arguments after the client options are passed literally to a child PTY;
+shell expressions require an explicit shell command. With no command, the
+client starts SHELL, or /bin/sh when SHELL is unset. Resize, terminal signals
+and the child's exit status propagate through the wrapper. Ordinary agent
+options and prompts retain their existing meaning outside this subcommand.
+.PP
+Client mode reads only the workstation configuration's terminal section. It
+starts no agent, provider, tools, IRC connection, media preparation or session
+journal. Configuration lookup uses --config, then --dotdir/config.ini,
+then ~/.snajpagent/config.ini. An explicit --config path must be absolute.
+Client mode does not use SNAJPAGENT_DOTDIR.
+A missing default file uses
+client defaults. Downloads default to ~/Downloads; override them on the
+workstation, for example:
+.PP
+.nf
+    [terminal]
+    download_dir = ~/Incoming files
+.fi
+.PP
+Use an absolute destination or a path beginning with ~/. The client creates
+the final directory if its parent exists, resolves it before receiving, and
+preserves existing files through collision-safe names. Actual landed paths
+appear in download receipts in the remote conversation, with the prompt and
+editable draft restored afterward. Receipt paths also enter the saved tool
+result for model-triggered sends.
+.PP
+Keep the outer workstation wrapper active across SSH hops and screen
+reattachments. An inner native wrapper probes for an upstream native client
+and relays to it, preserving workstation endpoint ownership. A local screen
+can contain the workstation wrapper. For two nested screen backends, place
+an inner native wrapper between them to relay passthrough to the outer client.
+GNU screen passthrough keeps transfer
+frames out of its display and scrollback; its settings remain unchanged.
+.SS "Alternative workstation client: trzsz-go"
+The Go trzsz wrapper remains usable with the target's /upload and /download
+commands. On macOS:
 .PP
 .nf
     brew install trzsz-go
@@ -1239,23 +1296,18 @@ connection. Install the Go trzsz wrapper on the workstation. On macOS:
 .PP
 If Homebrew's Python trzsz package is already installed, run
 .B "brew uninstall trzsz"
-first: the packages conflict because both provide trz and tsz. The trzsz-go
-package also supplies the trzsz wrapper.
-.B --dragfile
-is a wrapper option, not a trz option. Run snajpagent inside the wrapped
-connection; the target's native transfer code needs no trz or tsz executable.
-.PP
-Wrap the outer SSH connection, including connections that attach to screen.
-The wrapper must remain active when reconnecting. The terminal lease temporarily
-isolates transfer output and restores the normal screen, input mode and composer
-when the transfer finishes. GNU screen uses its terminal passthrough so wire
-frames stay out of its saved display and scrollback. Screen settings, including
-its default disabled alternate screen, are left unchanged. Reattaching the
-session restores ordinary conversation output.
+first: both packages provide trz and tsz. The trzsz-go package also supplies
+the trzsz wrapper; --dragfile belongs to that wrapper. Set
+DefaultDownloadPath in the workstation's ~/.trzsz.conf for automatic saving.
+The target needs no trz or tsz executable. Native-client availability and
+automatic outbox delivery use the native wrapper; with trzsz-go, explicitly
+request /download PATH and remove any corresponding pending export afterward.
 .SS Upload from the workstation
-Drop regular files into the ordinary composer, or type
+Type
 .B /upload
-for the wrapper's file selection. A stock drag sends Ctrl-C followed by trz;
+for native selection, then enter one regular local file path; an empty path,
+Escape or Ctrl-C cancels. With trzsz-go, select files or drop regular files
+into the composer. A stock Go-client drag sends Ctrl-C followed by trz;
 that Ctrl-C can cancel a typed draft or interrupt active work. Save needed draft
 text first. Directory mode (trz -d), directories and zero-byte uploads are rejected.
 .PP
@@ -1286,19 +1338,31 @@ downloaded. An asset:ID must identify a file already accepted by this saved
 session; its retained bytes are verified before sending. Downloads stream in
 bounded blocks and do not inherit attachment-size limits.
 .PP
-The workstation wrapper chooses the destination. It normally offers a directory
-selector. To save automatically, set this in the workstation's ~/.trzsz.conf:
-.PP
-.nf
-    DefaultDownloadPath = /Users/user/Downloads
-.fi
-.PP
 The client receives the basename. Retained assets without a saved display name
-use their asset ID as the basename. Existing files are preserved through trzsz's
-non-overwrite naming behavior. A successful result means the client acknowledged
-the file's MD5 digest and final EXIT. The model receives a completion result,
-not the workstation's filesystem path or raw file bytes. Transfers intentionally
-send the selected file bytes to the workstation without tool-output redaction.
+use their asset ID as the basename. Completion requires the client's digest
+acknowledgement and final EXIT. Native receipts identify actual landed paths;
+file bytes stay outside model tool output. Transfers intentionally send the
+selected file bytes to the workstation without tool-output redaction.
+.SS "Pending downloads and reattachment"
+The model's send_file journals an export in the existing remote session before
+attempting delivery. A live native-client probe permits immediate delivery;
+one-shot runs, detached screen and clients without that probe report
+\(lqqueued; not delivered yet\(rq. They emit no file-transfer frames.
+.PP
+Wrapped reattachment discovers the live client and delivers pending files at
+an idle render boundary. Unwrapped attachment leaves exports pending. Only
+acknowledged completion removes an export. Interrupted or uncertain transfers
+remain pending, so a reconnect may produce a collision-safe duplicate if a
+prior client landed the file but its completion acknowledgement was lost.
+.PP
+Each export has a stable ID, source path, byte count, timestamp and SHA256.
+A changed or unavailable source remains pending and reports an error rather
+than exporting different bytes. Ask the model to inspect its download_queue
+with action=list, remove one ID with action=remove, or use action=clear.
+An optional reason records why an export was cancelled. Queue removal changes
+only export intent; source and completed workstation files remain intact.
+Read-only mode permits inspection and rejects send_file and queue mutations.
+Exports have no automatic age expiry.
 .SS Cancellation and recovery
 Transfers take exclusive terminal input until completion, cancellation or error.
 Cancel the workstation selector or press Ctrl-C during the transfer. Ordinary
@@ -1306,16 +1370,16 @@ commands and steering are unavailable while the transfer owns input. Per-frame
 I/O waits are bounded at 20 seconds; a missing wrapper returns a transfer error.
 Transfers through GNU screen use 1 KiB DATA blocks to keep input frames within
 its terminal input burst capacity; other connections use up to 64 KiB blocks.
-A cancelled or failed download can leave a partial workstation file; inspect it
-before use. Only an acknowledged complete transfer reports success.
+The native client removes unpublished temporary files on transfer failure;
+a process crash can leave a hidden .snag-upload-ID staging file. Other clients
+can leave partial files: inspect them before use. Only acknowledged completion
+reports delivery.
 .PP
 The terminal lease restores modes and display on success and failure, then
 replays keyboard bytes received after the final EXIT. Source files are unchanged.
 If the source's size or modification timestamp changes while being sent,
-the transfer fails. Interactive terminal
-transfers are unavailable on Windows hosts and in one-shot execution. Read-only
-model turns reject send_file. The same tool schema remains visible with a factual
-failure result when the runtime cannot perform the transfer.
+the transfer fails. Interactive terminal transfers require POSIX hosts. One-shot send_file queues
+its export for wrapped attachment. Read-only model turns reject send_file.
 .SH "Commands"
 Commands normally occupy a single submitted line.
 .BR /ro ,
@@ -3116,7 +3180,7 @@ write_file, edit_file, apply_patch.
 .TP
 .B Media and workstation delivery
 view_image, read_document, view_video, listen_audio, transcribe_audio,
-speak_text, send_file.
+speak_text, send_file, download_queue.
 .TP
 .B Saved history and continued work
 read_session_history, list_goals, create_goal, update_goal, timer,
@@ -3203,13 +3267,21 @@ command uses the same persistent selection and can interrupt a streaming
 response to start a request on the new model.
 .SS send_file
 Requires path, a literal cwd-relative or absolute regular-file path without
-symlinks, or asset:ID for an accepted retained file. Sends one file through the
-workstation's active trzsz terminal wrapper. The application takes exclusive
-terminal ownership and returns a terminal succeeded or failed tool result;
-there is no managed-process handle to poll. Completion requires the client's
-digest acknowledgement and final EXIT. File bytes are not tool output and
-are not uploaded to the model. See Terminal file transfers for setup,
-destination selection, cancellation, platform requirements and failure behavior.
+symlinks, or asset:ID for an accepted retained file. Journals a workstation
+export in the current session and sends it when a live native wrapper replies.
+Returns a terminal result distinguishing queued intent from delivery; there
+is no managed-process handle to poll. Completion requires the client's digest
+acknowledgement and final EXIT. Native completion receipts list actual local
+paths. File bytes are outside tool output and never uploaded to the model.
+See Terminal file transfers for setup, destination, cancellation and recovery.
+.SS download_queue
+Requires action=list, remove or clear. List returns pending IDs, source paths,
+byte counts and SHA256 digests. Remove also requires the item's id; clear
+removes all pending exports. An optional reason is saved with mutations.
+Stale sources can be removed without opening them. Removing an export changes
+neither its source nor any landed workstation file. Read-only permits list
+and rejects remove and clear. Pending state belongs to the existing saved
+remote session and survives resume and checkpoint replay.
 .SS exec_command
 Requires command, the source text for the configured shell. Workdir is optional:
 omission or null uses the session's current working directory; a supplied

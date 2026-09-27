@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Native client-only remote-mode startup and PTY ownership regressions."""
 import json
+import fcntl
+import struct
 import os
 import pty
 import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -16,6 +19,18 @@ from pathlib import Path
 PRODUCT = Path(__file__).resolve().parent / "snajpagent-fixture"
 
 
+def screen_snapshot(env, name, path):
+    path.unlink(missing_ok=True)
+    subprocess.run(["screen", "-S", name, "-X", "hardcopy", "-h", str(path)],
+                   env=env, check=True, timeout=5)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if path.is_file() and path.stat().st_size:
+            return path.read_bytes()
+        time.sleep(0.05)
+    raise AssertionError("screen did not write its asynchronous hardcopy")
+
+
 class RemoteProcess:
     def __init__(self, home, arguments, wrapped=True, cwd=None, extra_env=None):
         self.master, self.slave = pty.openpty()
@@ -25,9 +40,13 @@ class RemoteProcess:
             env.update(extra_env)
         for key in ("STY", "TMUX", "TMUX_PANE", "OPENAI_API_KEY"):
             env.pop(key, None)
-        command = [str(PRODUCT), *(["remote"] if wrapped else []), *arguments]
+        command = arguments if wrapped is None else [str(PRODUCT), *(["remote"] if wrapped else []), *arguments]
+        def controlling_terminal():
+            os.setsid()
+            fcntl.ioctl(self.slave, termios.TIOCSCTTY, 0)
         self.process = subprocess.Popen(command, stdin=self.slave, stdout=self.slave,
-                                        stderr=self.slave, cwd=cwd or home, env=env)
+                                        stderr=self.slave, cwd=cwd or home, env=env,
+                                        preexec_fn=controlling_terminal)
         self.output = bytearray()
 
     def until(self, marker, timeout=5):
@@ -45,13 +64,135 @@ class RemoteProcess:
 
     def close(self):
         if self.process.poll() is None:
-            self.process.kill()
-            self.process.wait(timeout=5)
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=5)
         os.close(self.master)
         os.close(self.slave)
 
 
 class RemoteStartupTests(unittest.TestCase):
+    def test_resize_reaches_child_pty(self):
+        with tempfile.TemporaryDirectory(prefix="snag-remote-resize-") as tmp:
+            code = ("import fcntl,os,signal,struct,termios,time; "
+                    "signal.signal(signal.SIGWINCH,lambda *_: "
+                    "print('SIZE',*struct.unpack('HHHH',fcntl.ioctl(0,termios.TIOCGWINSZ,b'\\0'*8))[:2],flush=True)); "
+                    "print('READY',flush=True); time.sleep(1.5)")
+            child = RemoteProcess(Path(tmp), [sys.executable, "-c", code])
+            try:
+                child.until(b"READY")
+                fcntl.ioctl(child.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 31, 107, 0, 0))
+                child.process.send_signal(signal.SIGWINCH)
+                child.until(b"SIZE 31 107")
+                child.wait(0)
+            finally:
+                child.close()
+
+    def test_native_upload_cancel_restores_input(self):
+        with tempfile.TemporaryDirectory(prefix="snag-remote-cancel-") as tmp:
+            root = Path(tmp)
+            child = RemoteProcess(root, [str(PRODUCT), "--dotdir", str(root / "agent")])
+            try:
+                child.until("›".encode(), 8)
+                os.write(child.master, b"/upload\r")
+                child.until(b"Select local file", 8)
+                os.write(child.master, b"\x03")
+                child.until(b"Upload cancelled", 8)
+                os.write(child.master, b"ping\r")
+                child.until(b"pong", 8)
+                os.write(child.master, b"/exit\r")
+                child.wait(0)
+            finally:
+                child.close()
+
+    def test_nested_wrapper_relays_to_workstation_destination(self):
+        for screen in (0, 1, 2):
+            if screen and not shutil.which("screen"):
+                continue
+            with self.subTest(screen=screen), tempfile.TemporaryDirectory(prefix="snag-nested-") as tmp:
+                root = Path(tmp)
+                home = root / "client"
+                home.mkdir()
+                source = root / "nested.bin"
+                source.write_bytes(bytes(range(256)) * 500)
+                inner_config = root / "inner.ini"
+                inner_destination = root / "wrong-endpoint"
+                inner_config.write_text(f"[terminal]\ndownload_dir = {inner_destination}\n")
+                command = [str(PRODUCT), "remote", "--config", str(inner_config),
+                           str(PRODUCT), "--dotdir", str(root / "agent")]
+                env = {}
+                if screen:
+                    sockets = root / "screens"
+                    sockets.mkdir(mode=0o700)
+                    env["SCREENDIR"] = str(sockets)
+                    cfg = root / "screenrc"
+                    cfg.write_text("startup_message off\naltscreen off\n")
+                    if screen == 2:
+                        command = command[:4] + ["screen", "-m", "-c", str(cfg),
+                            "-S", "inner", *command[4:]]
+                    command = ["screen", "-c", str(cfg), "-S", "nested", *command]
+                child = RemoteProcess(home, command, extra_env=env)
+                try:
+                    child.until("›".encode(), 8)
+                    os.write(child.master, f"download_tool {source}\r".encode())
+                    target = home / "Downloads" / source.name
+                    child.until(str(target).encode(), 12)
+                    self.assertEqual(target.read_bytes(), source.read_bytes())
+                    self.assertFalse(inner_destination.exists())
+                    upload = home / "workstation-upload.bin"
+                    upload.write_bytes(os.urandom(16384))
+                    os.write(child.master, b"/upload\r")
+                    child.until(b"Select local file", 8)
+                    os.write(child.master, str(upload).encode() + b"\r")
+                    child.until(b"1 unsent attachment(s)", 12)
+                    landed = list((root / "agent" / "sessions").glob("*/media/*"))
+                    self.assertTrue(any(path.read_bytes() == upload.read_bytes() for path in landed))
+                    os.write(child.master, b"/exit\r")
+                    child.wait(0)
+                finally:
+                    if screen:
+                        if screen == 2:
+                            subprocess.run(["screen", "-S", "inner", "-X", "quit"],
+                                           env=dict(os.environ, **env), timeout=5,
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        subprocess.run(["screen", "-S", "nested", "-X", "quit"],
+                                       env=dict(os.environ, **env), timeout=5,
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    child.close()
+
+    @unittest.skipUnless(shutil.which("screen"), "GNU screen unavailable")
+    def test_local_screen_contains_native_workstation_wrapper(self):
+        with tempfile.TemporaryDirectory(prefix="snag-local-screen-") as tmp:
+            root = Path(tmp)
+            home = root / "client"
+            home.mkdir()
+            sockets = root / "screens"
+            sockets.mkdir(mode=0o700)
+            cfg = root / "screenrc"
+            cfg.write_text("startup_message off\naltscreen off\n")
+            source = root / "local-screen.bin"
+            source.write_bytes(b"local screen workstation bytes")
+            env = {"SCREENDIR": str(sockets)}
+            child = RemoteProcess(home, ["screen", "-c", str(cfg), "-S", "local",
+                str(PRODUCT), "remote", str(PRODUCT), "--dotdir", str(root / "agent")],
+                wrapped=None, extra_env=env)
+            try:
+                child.until("›".encode(), 8)
+                os.write(child.master, f"/download {source}\r".encode())
+                target = home / "Downloads" / source.name
+                child.until(str(target).encode(), 12)
+                self.assertEqual(target.read_bytes(), source.read_bytes())
+                os.write(child.master, b"/exit\r")
+                child.wait(0)
+            finally:
+                subprocess.run(["screen", "-S", "local", "-X", "quit"],
+                               env=dict(os.environ, **env), timeout=5,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                child.close()
+
     def test_literal_child_argv_exit_and_no_agent_state(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-") as tmp:
             home = Path(tmp)
@@ -264,21 +405,97 @@ class RemoteStartupTests(unittest.TestCase):
             self.assertIn("1 pending workstation download(s).", texts[-1])
 
     def test_wrapped_resume_keeps_changed_queued_source_pending(self):
-        with tempfile.TemporaryDirectory(prefix="snag-remote-stale-") as tmp:
+        for digest_only in (False, True):
+            with self.subTest(digest_only=digest_only), tempfile.TemporaryDirectory(prefix="snag-remote-stale-") as tmp:
+                root = Path(tmp)
+                original = b"original queued bytes\n"
+                client_home, _remote_home, dotdir, journal, sid, source, _env = \
+                    self.queue_detached_download(root, original)
+                saved = source.stat()
+                source.write_bytes(b"x" * len(original) if digest_only else
+                                   b"changed queued bytes that must not be delivered\n")
+                if digest_only:
+                    os.utime(source, ns=(saved.st_atime_ns, saved.st_mtime_ns))
+                child = RemoteProcess(client_home, [str(PRODUCT), "--dotdir", str(dotdir), "--resume", sid])
+                try:
+                    error = b"queued source digest changed" if digest_only else b"queued source changed"
+                    child.until(error + b"; left pending", 12)
+                    self.assertFalse((client_home / "Downloads" / "queued file.bin").exists())
+                    os.write(child.master, b"/exit\r")
+                    child.wait(0)
+                finally:
+                    child.close()
+                events = [json.loads(line) for line in journal.read_text().splitlines()]
+                self.assertEqual([e["type"] for e in events].count("download_removed"), 0)
+
+    @unittest.skipUnless(shutil.which("screen"), "GNU screen unavailable")
+    def test_detached_screen_send_queues_then_wrapped_attach_delivers(self):
+        with tempfile.TemporaryDirectory(prefix="snag-remote-detach-") as tmp:
             root = Path(tmp)
-            client_home, _remote_home, dotdir, journal, sid, source, _env = \
-                self.queue_detached_download(root, b"original queued bytes\n")
-            source.write_bytes(b"changed queued bytes that must not be delivered\n")
-            child = RemoteProcess(client_home, [str(PRODUCT), "--dotdir", str(dotdir), "--resume", sid])
+            home, remote = root / "client", root / "server"
+            home.mkdir()
+            remote.mkdir()
+            sockets = root / "screens"
+            sockets.mkdir(mode=0o700)
+            config = root / "screenrc"
+            config.write_text("startup_message off\naltscreen off\n")
+            dotdir = root / "dotdir"
+            source = remote / "report.bin"
+            source.write_bytes(b"detached screen bytes\n" * 2000)
+            env = {"SCREENDIR": str(sockets)}
+            child = RemoteProcess(home, ["screen", "-c", str(config), "-S", "native",
+                str(PRODUCT), "--dotdir", str(dotdir)], extra_env=env)
             try:
-                child.until(b"queued source changed; left pending", 12)
-                self.assertFalse((client_home / "Downloads" / "queued file.bin").exists())
-                os.write(child.master, b"/exit\r")
+                child.until("›".encode(), 8)
+                command_env = dict(os.environ, **env)
+                subprocess.run(["screen", "-S", "native", "-X", "detach"],
+                               env=command_env, check=True, timeout=5)
                 child.wait(0)
+                subprocess.run(["screen", "-S", "native", "-X", "stuff",
+                                f"download_tool {source}\r"],
+                               env=command_env, check=True, timeout=5)
+                deadline = time.monotonic() + 4
+                events = []
+                while time.monotonic() < deadline:
+                    journals = list((dotdir / "sessions").glob("*/events.jsonl"))
+                    if not journals:
+                        time.sleep(0.05)
+                        continue
+                    journal = journals[0]
+                    events = [json.loads(line) for line in journal.read_text().splitlines()]
+                    if any(e["type"] == "download_queued" for e in events):
+                        break
+                    time.sleep(0.05)
+                self.assertTrue(any(e["type"] == "download_queued" for e in events),
+                                "detached screen must queue without a transfer timeout")
+                hardcopy = root / "hardcopy"
+                self.assertNotIn(b"::TRZSZ:TRANSFER:",
+                                 screen_snapshot(command_env, "native", hardcopy))
+                # Leave a draft with its cursor before the final character.
+                # Delivery on reattachment must preserve both draft and cursor.
+                time.sleep(1.2)
+                subprocess.run(["screen", "-S", "native", "-X", "stuff", "pig\x1b[D"],
+                               env=command_env, check=True, timeout=5)
+                time.sleep(0.2)
+                again = RemoteProcess(home, ["screen", "-r", "native"], extra_env=env)
+                try:
+                    target = home / "Downloads" / source.name
+                    again.until(str(target).encode(), 12)
+                    self.assertEqual(target.read_bytes(), source.read_bytes())
+                    rendered = screen_snapshot(command_env, "native", hardcopy)
+                    self.assertIn(str(target).encode(), rendered.replace(b"\n", b""))
+                    self.assertIn(b"pig", rendered)
+                    os.write(again.master, b"n\r")
+                    again.until(b"pong", 8)
+                    os.write(again.master, b"/exit\r")
+                    again.wait(0)
+                finally:
+                    again.close()
             finally:
+                subprocess.run(["screen", "-S", "native", "-X", "quit"],
+                               env=dict(os.environ, **env), stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=5)
                 child.close()
-            events = [json.loads(line) for line in journal.read_text().splitlines()]
-            self.assertEqual([e["type"] for e in events].count("download_removed"), 0)
 
     def test_help_is_pure_and_nonterminal_refusal_is_factual(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-help-") as tmp:

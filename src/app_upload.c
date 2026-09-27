@@ -9,11 +9,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #ifndef _WIN32
 #include <fcntl.h>
 #include <termios.h>
-#include <unistd.h>
 
 static int
 transfer_checkpoint(void *opaque)
@@ -220,6 +220,38 @@ out:
 }
 
 int
+snag_app_remote_probe(struct app_state *app)
+{
+    if (app->execute || !app->ui.opened || snag_isatty(STDERR_FILENO) != 1) return 0;
+    char id[SNAG_ID_HEX_LEN + 1u];
+    if (snag_random_id(id) < 0) return -1;
+    id[8] = '\0';
+    (void)snprintf(app->remote_nonce, sizeof(app->remote_nonce), "%lu",
+                   strtoul(id, NULL, 16) % 1000000000ul);
+    app->remote_probe_at = snag_monotonic_ms();
+    app->remote_verified = false;
+    char query[48];
+    const char *sty = getenv("STY");
+    bool screen = sty && *sty;
+    int n = snprintf(query, sizeof(query), "%s\033[?9001;%sn%s",
+                     screen ? "\033P" : "", app->remote_nonce, screen ? "\033\\" : "");
+    return n < 0 || (size_t)n >= sizeof(query) ? -1 :
+        snag_ui_send(&app->ui, (struct snag_ui_command){.kind = SNAG_UI_RAW,
+            .data.value = STDERR_FILENO, .text = query, .len = (size_t)n});
+}
+
+void
+snag_app_remote_reply(struct app_state *app, const char *nonce)
+{
+    if (nonce && app->remote_nonce[0] && !strcmp(nonce, app->remote_nonce) &&
+        snag_monotonic_ms() - app->remote_probe_at < 1000u) {
+        app->remote_verified = true;
+        app->remote_reply_at = snag_monotonic_ms();
+        app->remote_nonce[0] = '\0';
+    }
+}
+
+int
 snag_app_download_queue(struct app_state *app, const char *path, json_t **result,
                         char *error, size_t error_size)
 {
@@ -299,14 +331,15 @@ out:
     return *result ? 0 : -1;
 }
 
-int
-snag_app_download(struct app_state *app, const char *path, json_t **result,
-                  char *error, size_t error_size)
+static int
+app_download(struct app_state *app, const char *path, const json_t *pending, json_t **result,
+             char *error, size_t error_size)
 {
     *result = NULL;
 #ifdef _WIN32
     (void)app;
     (void)path;
+    (void)pending;
     (void)error;
     (void)error_size;
     *result = snag_tool_result_terminal(false, "Terminal download is not available on this host.");
@@ -348,6 +381,33 @@ snag_app_download(struct app_state *app, const char *path, json_t **result,
                           input < 0 ? strerror(errno) : "directories are not supported");
         goto out;
     }
+    const char *expected = pending ? snag_json_string(pending, "sha256") : NULL;
+    if (pending) {
+        if (info.st_size != json_integer_value(json_object_get(pending, "bytes")) ||
+            info.st_mtime != json_integer_value(json_object_get(pending, "mtime"))) {
+            (void)snag_errorf(error, error_size, "queued source changed; left pending: %s", source);
+            goto out;
+        }
+        struct snag_sha256 hash;
+        snag_sha256_init(&hash);
+        unsigned char bytes[65536];
+        for (;;) {
+            ssize_t n = read(input, bytes, sizeof(bytes));
+            if (n < 0 && errno == EINTR) continue;
+            if (n < 0) goto out;
+            if (!n) break;
+            snag_sha256_update(&hash, bytes, (size_t)n);
+        }
+        char actual[SNAG_SHA256_HEX_LEN + 1u];
+        snag_sha256_final_hex(&hash, actual);
+        if (strcmp(actual, expected)) {
+            (void)snag_errorf(error, error_size,
+                "queued source digest changed; left pending: %s", source);
+            goto out;
+        }
+        if (lseek(input, 0, SEEK_SET) < 0) goto out;
+        name = snag_json_string(pending, "name");
+    }
     app->attaching = true;
     owning = true;
     if (snag_ui_external(&app->ui, true, error, error_size) < 0) goto out;
@@ -364,7 +424,7 @@ snag_app_download(struct app_state *app, const char *path, json_t **result,
         goto out;
     }
     raw = true;
-    rc = snag_download_send(tty, input, name, transfer_checkpoint, app,
+    rc = snag_download_send(tty, input, name, expected, transfer_checkpoint, app,
                             &transfer, error, error_size);
 out:
     if (raw && tcsetattr(tty, TCSANOW, &saved) < 0) {
@@ -395,4 +455,18 @@ out:
         error[0] ? error : "Download failed.");
     return *result ? 0 : -1;
 #endif
+}
+
+int
+snag_app_download(struct app_state *app, const char *path, json_t **result,
+                  char *error, size_t error_size)
+{
+    return app_download(app, path, NULL, result, error, error_size);
+}
+
+int
+snag_app_download_pending(struct app_state *app, const json_t *item, json_t **result,
+                          char *error, size_t error_size)
+{
+    return app_download(app, snag_json_string(item, "path"), item, result, error, error_size);
 }

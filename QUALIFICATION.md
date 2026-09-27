@@ -34,9 +34,35 @@ behavior then uses the same `openpty`, `ioctl(TIOCGWINSZ/TIOCSWINSZ)`,
 controlling-terminal, immediate-run, yielded-run, and `write_stdin` paths.
 The tmux layer complements those raw-PTY checks by interpreting cursor movement,
 erase, wrap, and resize sequences as a real terminal does.
-The terminal-upload PTY fixtures do not qualify desktop GUI drag, terminal-specific
-filters, nested SSH or tmux relay. The receiver runs on POSIX hosts; Windows
-terminal upload is not part of this source change.
+## Native terminal transfers
+
+The development-source native wrapper is exercised on Linux x86-64 by
+`tests/test_remote_terminal.py`: isolated client startup, literal argv, PTY size,
+exit/signals and terminal restoration, binary upload and binary/empty download,
+collision destinations and actual-path receipts, nested native endpoint ownership,
+local GNU screen containing a wrapper, remote GNU screen attach/detach, pending
+outbox delivery on wrapped resume, unwrapped resume, and changed-source retention.
+The detached-screen regression checks receipt scrollback and restoration of a
+partly edited draft and its cursor on reattachment. Changed-source checks also
+cover same-size edits with restored mtime, requiring the saved SHA256.
+
+`tests/test_download_client.py` covers server framing, wrong digests/cancellation,
+uncertain model-transfer retention, durable queue IDs/list/remove/clear and
+read-only guards. `tests/test_upload_client.py` and the download suite also exercise
+pinned trzsz-go revision `665084211187` for explicit transfers. Go clients do not
+answer the native availability probe; model exports stay pending until a native
+attachment, or can be fetched explicitly and removed from the queue.
+
+`tests/test_remote_ssh.py` uses an isolated loopback OpenSSH daemon, temporary keys
+and pinned host verification. It exercises first-hop SSH, remote UTF-8 GNU screen
+and two nested SSH hops. This root-only fixture skips when its prerequisites are
+absent. All three routes assert bytes, actual workstation-path receipts and
+confirmed outbox removal.
+
+Actual macOS terminal UI, desktop file pickers/drag-and-drop, external-network SSH,
+arbitrary nested multiplexers and tmux transfer relay remain unqualified. Native
+selection is a one-file terminal path prompt. The transfer endpoints and wrapper
+are POSIX-only; Windows terminal transfers are outside this implementation.
 
 ## Download-page kernel baselines
 

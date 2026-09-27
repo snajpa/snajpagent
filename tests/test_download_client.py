@@ -60,6 +60,10 @@ class DownloadSession(Session):
     def download(self, name, data, request=None, expected_name=None):
         (self.home / name).write_bytes(data)
         self.write(request or f"/download ./{name}\r".encode())
+        if request and request.startswith(b"download_tool "):
+            self.read_until(b"\x1b[?9001;")
+            nonce = self.read_until(b"n")[:-1]
+            self.write(b"\x1b[>" + nonce + b"S")
         self.read_until(b"::TRZSZ:TRANSFER:S:1.0.0:")
         marker = self.read_until(b"\r\n")
         assert len(marker) == 17 and marker[:-4].isdigit() and marker.endswith(b"00:0\r\n"), marker
@@ -120,7 +124,8 @@ class DownloadTests(unittest.TestCase):
             try:
                 data = b"private file bytes; never a tool result"
                 digest = session.download("report.bin", data, b"download_tool ./report.bin\r")
-                session.finish(digest, marker=b" complete")
+                session.finish(digest)
+                session.read_until(b" complete")
                 results = [e["data"]["result"] for e in session.events() if e["type"] == "tool_finished"]
                 self.assertEqual(results[-1]["status"], "succeeded")
                 self.assertNotIn(data.decode(), json.dumps(results))
@@ -132,7 +137,8 @@ class DownloadTests(unittest.TestCase):
                 session.read_until(b"pong", 8)
                 request = b"download_tool asset:" + identifier + b"\r"
                 digest = session.download("report.bin", data, request, expected_name=identifier)
-                session.finish(digest, marker=b" complete")
+                session.finish(digest)
+                session.read_until(b" complete")
                 self.assertEqual([e["data"]["result"]["status"] for e in session.events()
                                   if e["type"] == "tool_finished"], ["succeeded", "succeeded"])
                 session.exit()
@@ -263,6 +269,30 @@ class DownloadTests(unittest.TestCase):
                 session.read_until(b"download digest:")
                 session.write(b"ping\r")
                 session.read_until(b"pong", 8)
+                session.exit()
+            finally:
+                session.close()
+
+    def test_failed_model_transfer_retains_stable_pending_item(self):
+        with tempfile.TemporaryDirectory(prefix="snag-download-pending-") as path:
+            session = DownloadSession(Path(path))
+            try:
+                session.download("pending.bin", b"abc", request=b"download_tool ./pending.bin\r")
+                session.write(frame("SUCC", b"x" * 16))
+                session.read_frame("FAIL")
+                session.read_until(b"download digest:")
+                session.read_until(b" complete")
+                events = session.events()
+                queued = [event for event in events if event["type"] == "download_queued"]
+                self.assertEqual(len(queued), 1)
+                self.assertFalse(any(event["type"] == "download_removed" for event in events))
+                item_id = queued[0]["data"]["id"]
+                session.write(b"download_queue_list\r")
+                session.read_until(b" complete")
+                results = [event["data"]["result"] for event in session.events()
+                           if event["type"] == "tool_finished"]
+                self.assertIn(item_id, results[-1]["model_text"])
+                self.assertEqual((session.home / "pending.bin").read_bytes(), b"abc")
                 session.exit()
             finally:
                 session.close()

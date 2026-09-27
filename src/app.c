@@ -2808,56 +2808,6 @@ cancel_queue_edit(struct app_state *app, bool active)
 }
 
 static int
-queued_download_unchanged(struct snag_session *session, json_t *item,
-                          char *error, size_t error_size)
-{
-    const char *path = snag_json_string(item, "path");
-    const char *sha = snag_json_string(item, "sha256");
-    json_int_t bytes = json_integer_value(json_object_get(item, "bytes"));
-    json_int_t mtime = json_integer_value(json_object_get(item, "mtime"));
-    int fd = snag_open_inspect_path(session->cwd, path);
-    if (fd < 0)
-        return snag_errorf(error, error_size,
-            "queued source is unavailable: %s", strerror(errno));
-    snag_file_info info;
-    int rc = -1;
-    if (snag_fstat(fd, &info) < 0 || !S_ISREG(info.st_mode) || info.st_size != bytes ||
-        info.st_mtime != mtime) {
-        (void)snag_errorf(error, error_size, "queued source changed; left pending: %s", path);
-        goto out;
-    }
-    struct snag_sha256 hash;
-    unsigned char block[65536];
-    char actual[SNAG_SHA256_HEX_LEN + 1u];
-    snag_sha256_init(&hash);
-    for (;;) {
-        ssize_t n = read(fd, block, sizeof(block));
-        if (n < 0 && errno == EINTR) continue;
-        if (n < 0) {
-            (void)snag_errorf(error, error_size,
-                "cannot hash queued source: %s", strerror(errno));
-            goto out;
-        }
-        if (!n) break;
-        snag_sha256_update(&hash, block, (size_t)n);
-    }
-    snag_sha256_final_hex(&hash, actual);
-    if (strcmp(actual, sha) != 0) {
-        (void)snag_errorf(error, error_size,
-            "queued source digest changed; left pending: %s", path);
-        goto out;
-    }
-    rc = 0;
-out:
-    {
-        int saved = errno;
-        (void)close(fd);
-        errno = saved;
-    }
-    return rc;
-}
-
-static int
 flush_download_queue(struct app_state *app)
 {
     if (!app->session.download_queue || !json_array_size(app->session.download_queue)) return 0;
@@ -2869,15 +2819,9 @@ flush_download_queue(struct app_state *app)
     for (size_t i = 0; rc == 0 && i < json_array_size(snapshot); ++i) {
         json_t *item = json_array_get(snapshot, i);
         const char *id = snag_json_string(item, "id");
-        const char *path = snag_json_string(item, "path");
         char error[256] = {0};
-        if (queued_download_unchanged(&app->session, item, error, sizeof(error)) < 0) {
-            rc = snag_ui_text(&app->ui, SNAG_UI_ERROR,
-                              error[0] ? error : "queued download changed; left pending");
-            continue;
-        }
         json_t *result = NULL;
-        rc = snag_app_download(app, path, &result, error, sizeof(error));
+        rc = snag_app_download_pending(app, item, &result, error, sizeof(error));
         if (rc == 0) {
             const char *message = snag_json_string(result, "model_text");
             rc = snag_ui_text(&app->ui,
@@ -3038,6 +2982,7 @@ again:;
         return 2;
     }
     if (action == SNAG_TERM_REMOTE_READY) {
+        snag_app_remote_reply(app, line);
         free(line);
         return 0;
     }
@@ -5058,6 +5003,8 @@ static int
 idle_poll_timeout(const struct app_state *app)
 {
     int timeout = app->audio || app->voice || app->networked || app->irc_background.len ? 25 : -1;
+    if (json_array_size(app->session.download_queue) && (timeout < 0 || timeout > 250))
+        timeout = 250;
     if (app->session.timer_id[0] && app->session.timer_due_ms) {
         uint64_t now = snag_time_ms();
         uint64_t remaining = app->session.timer_due_ms > now ? app->session.timer_due_ms - now : 0u;
@@ -5264,6 +5211,11 @@ interactive_loop(struct app_state *app, const char *initial)
             if (app->ui.active != app->session.active_turn &&
                 set_input_prompt(app, app->session.active_turn) < 0)
                 goto ui_failed;
+            if (snag_monotonic_ms() - app->remote_reply_at >= 2000u)
+                app->remote_available = false;
+            if (json_array_size(app->session.download_queue) && !app->session.active_turn &&
+                snag_monotonic_ms() - app->remote_probe_at >= 1000u &&
+                snag_app_remote_probe(app) < 0) goto ui_failed;
             int poll_rc = snag_ui_poll(&app->ui, idle_poll_timeout(app), &action, &owned);
             if (owned) app->input_received_ms = app->ui.input_received_ms;
             history_warning(app);
@@ -5323,9 +5275,14 @@ interactive_loop(struct app_state *app, const char *initial)
                 continue;
             }
             if (action == SNAG_TERM_REMOTE_READY) {
+                snag_app_remote_reply(app, owned);
                 free(owned); owned = NULL;
-                if (flush_download_queue(app) < 0 || set_input_prompt(app, false) < 0)
-                    goto ui_failed;
+                if (app->remote_verified) {
+                    app->remote_verified = false;
+                    bool newly_available = !app->remote_available;
+                    app->remote_available = true;
+                    if (newly_available && flush_download_queue(app) < 0) goto ui_failed;
+                }
                 continue;
             }
             if (action == SNAG_TERM_UPLOAD) {

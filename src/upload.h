@@ -34,7 +34,7 @@ void snag_upload_cleanup(int stage_fd, struct snag_upload_result *result);
 
 /* Send one already-open regular file over the same terminal lease. The caller
  * owns file_fd. Result carries only post-EXIT input; no attachment is created. */
-int snag_download_send(int tty, int file_fd, const char *name,
+int snag_download_send(int tty, int file_fd, const char *name, const char *expected_sha,
                         int (*checkpoint)(void *), void *opaque,
                         struct snag_upload_result *result, char *error, size_t error_size);
 
