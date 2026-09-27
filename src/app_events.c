@@ -222,12 +222,13 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
 
     if (!app || !event) return -1;
     if (snag_app_sync_destinations(app) < 0) return -1;
+    chat = event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE;
     struct snag_irc_event accepted = *event;
     accepted.input = !snag_irc_local_identity(app->irc, event, true) &&
-        event->kind != SNAG_IRC_HISTORY_READY && (event->stream[0] || event->historical);
+        event->kind != SNAG_IRC_HISTORY_READY && (event->stream[0] || event->historical || chat);
     accepted.classified = true;
-    accepted.urgent = (event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE) &&
-        !event->historical && snag_irc_mentions_agent(app->irc, event->endpoint, event->text);
+    accepted.urgent = chat && !event->historical &&
+        snag_irc_mentions_agent(app->irc, event->endpoint, event->text);
     accepted.reply = accepted.urgent && snag_irc_local_identity(app->irc, event, false);
     uint64_t accepted_seq = app->session.next_seq;
     if (snag_app_commit_event(app, "irc_event", snag_irc_event_data(&accepted), error, sizeof(error)) < 0)
@@ -237,7 +238,6 @@ snag_app_irc_event(void *opaque, const struct snag_irc_event *event)
     if (event->kind == SNAG_IRC_DISCONNECTED &&
         strstr(event->text, "endpoint removed; discarded ") == event->text &&
         snag_ui_text(&app->ui, SNAG_UI_WARNING, event->text) < 0) return -1;
-    chat = event->kind == SNAG_IRC_MESSAGE || event->kind == SNAG_IRC_NOTICE;
     own_agent = snag_irc_local_identity(app->irc, event, true);
     local_operator = snag_irc_local_identity(app->irc, event, false);
     if (own_agent) {

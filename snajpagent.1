@@ -606,8 +606,9 @@ background traffic never admits a second input while one is live, so another
 worker joining, being opped or leaving can never end or interrupt this session.
 First join and successful
 compaction inject bounded room history.  The runtime reconnects outgoing links automatically.
-Pending room updates retain their original event across compaction and resume;
-later admission presents each update once.
+Pending room messages and notices retain their original journal event across
+compaction and resume, including on plain IRC servers without catch-up stream IDs.
+Later admission presents each saved input once.
 .PP
 Implicit outgoing nicks form zero-based sequences:
 .BR agent0 ,

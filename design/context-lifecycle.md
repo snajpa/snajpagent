@@ -316,6 +316,12 @@ not by itself a replacement for the current application-level restore scan.
 Legacy checkpoints without this state need explicit initialization; malformed
 present state must fail rather than silently turn into an empty room.
 
+Unconsumed IRC messages and notices remain journal-backed pending input even
+when a plain IRC server supplies no catch-up stream identity. Stream watermarks
+control duplicate suppression, not whether current conversation input survives
+resume. Admission removes the exact saved event once; it cannot replay that
+input merely because its original display buffer was lost.
+
 ## Reconciliation and acceptance
 
 Use focused additions to the existing tests for these combinations, preserving

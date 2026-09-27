@@ -2679,6 +2679,79 @@ test_irc_steering_mode(void)
 }
 
 static void
+test_plain_irc_pending_resume(void)
+{
+    struct snag_config config;
+    struct app_state app = {0};
+    char path[4096], id[33], error[256] = {0};
+    const char *tmp = getenv("TMPDIR");
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-plain-irc-XXXXXX",
+        tmp ? tmp : "/tmp") > 0);
+    assert(mkdtemp(path));
+    snag_config_init(&config);
+    app.config = &config;
+    snag_store_init(&app.store);
+    snag_session_init(&app.session);
+    assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
+    assert(snag_ui_init(&app.ui) == 0);
+    for (unsigned int kind = 0u; kind < 2u; ++kind) {
+        uint64_t received = 0u;
+        struct snag_irc_event event = {
+            .kind = kind ? SNAG_IRC_NOTICE : SNAG_IRC_MESSAGE, .timestamp_ms = 1u};
+        strcpy(event.endpoint, "127.0.0.1:16669");
+        strcpy(event.room, "#plain");
+        strcpy(event.nick, "peer");
+        strcpy(event.text, "unconsumed plain IRC input");
+        for (unsigned int phase = 0u; phase < 3u; ++phase) {
+            snag_buf_init(&app.irc_background, 4096u);
+            snag_buf_init(&app.irc_background_refs, 1024u);
+            snag_buf_init(&app.irc_urgent, 4096u);
+            snag_buf_init(&app.irc_urgent_refs, 1024u);
+            if (!phase) {
+                assert(snag_session_create(&app.store, &app.session, path, "default",
+                    "fixture", "medium", error, sizeof(error)) == 0);
+                strcpy(id, app.session.id);
+            } else {
+                assert(snag_session_open(&app.store, &app.session, id,
+                    error, sizeof(error)) == 0);
+            }
+            /* No endpoints: inject the already parsed event without networking. */
+            assert(snag_irc_open(&app.irc, &config, path, NULL, NULL, NULL,
+                error, sizeof(error)) == 0);
+            if (!phase) {
+                received = app.session.next_seq;
+                assert(snag_app_irc_event(&app, &event) == 0);
+            } else {
+                assert(snag_app_irc_restore(&app, error, sizeof(error)) == 0);
+            }
+            if (phase < 2u) {
+                assert(app.irc_background.len > 0u);
+                assert(snag_buf_terminate(&app.irc_background) == 0);
+                assert(strstr((const char *)app.irc_background.data, event.text));
+            } else {
+                assert(!app.irc_background.len && !app.irc_background_refs.len);
+            }
+            if (phase == 1u) {
+                assert(app.irc_background_refs.len > 0u);
+                assert(snag_session_commit(&app.session, "irc_admitted",
+                    json_pack("{s:[I]}", "sequences", (json_int_t)received),
+                    NULL, error, sizeof(error)) == 0);
+            }
+            snag_irc_close(app.irc);
+            app.irc = NULL;
+            snag_session_close(&app.session);
+            snag_buf_free(&app.irc_background);
+            snag_buf_free(&app.irc_background_refs);
+            snag_buf_free(&app.irc_urgent);
+            snag_buf_free(&app.irc_urgent_refs);
+        }
+    }
+    snag_ui_free(&app.ui);
+    snag_store_close(&app.store);
+    snag_config_free(&config);
+}
+
+static void
 test_irc_failed_intent_retains_pending(void)
 {
     struct snag_config config = {0};
@@ -3642,6 +3715,7 @@ main(void)
     test_native_media();
 #endif
     test_irc_steering_mode();
+    test_plain_irc_pending_resume();
     test_irc_failed_intent_retains_pending();
 #if SNAJPAGENT_AUDIO_DEVICE && defined(MA_NO_RUNTIME_LINKING) && defined(MA_ENABLE_ALSA)
     test_static_alsa_config();

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Preserve unconsumed messages and notices from plain IRC servers across
+  session resume, including servers without catch-up stream IDs. Recorded
+  admission consumes each saved input once.
+
 - Preserve cached command output and its handle when a replacement page cannot
   be read. Report corrupt or incomplete retained output as a read failure, and
   honor cancellation on cached reads. Uncollected output uses the live process's

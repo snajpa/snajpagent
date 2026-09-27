@@ -1725,6 +1725,65 @@ test_leading_instructions_boundary(struct snag_store *store, const char *temp)
 }
 
 static void
+test_plain_irc_admission_projection(struct snag_store *store, const char *path)
+{
+    const char *turn = "22222222222222222222222222222222";
+    const char *steer = "33333333333333333333333333333333";
+    for (unsigned int wire = 0u; wire < 3u; ++wire) {
+        for (unsigned int mode = 0u; mode < 3u; ++mode) {
+            struct snag_session session;
+            struct snag_context_projection projection = {0};
+            struct snag_irc_event event = {.kind = wire == 1u ? SNAG_IRC_NOTICE :
+                SNAG_IRC_MESSAGE, .timestamp_ms = 1u, .endpoint = "fixture:1234",
+                .room = "#plain", .nick = "peer", .text = "unique plain room payload",
+                .classified = true, .input = true};
+            const char *prompt = "[IRC endpoint=fixture:1234 room=#plain]\n"
+                "unique plain room payload\n";
+            if (wire == 2u) {
+                strcpy(event.stream, "11111111111111111111111111111111");
+                event.sequence = 1u;
+                prompt = "[IRC update id=11111111111111111111111111111111:1]\n";
+            }
+            json_t *snapshot = json_array();
+            create_session(store, &session, path, "medium");
+            if (mode == 1u)
+                commit_event(&session, "turn_started", turn_started(turn, 1u,
+                    "inspect room input", path, json_array()));
+            commit_event(&session, "irc_event", snag_irc_event_data(&event));
+            json_t *admitted = json_pack("{s:[I]}", "sequences",
+                (json_int_t)session.irc_received_seq);
+            if (!mode)
+                assert(json_object_set_new(admitted, "input", input_received_data(prompt)) == 0);
+            if (mode == 1u) {
+                assert(json_object_set_new(admitted, "steering",
+                    steering_added(turn, steer, prompt)) == 0);
+                assert(json_array_append_new(snapshot,
+                    json_pack("{s:s,s:s}", "id", steer, "text", prompt)) == 0);
+            }
+            commit_event(&session, "irc_admitted", admitted);
+            if (mode == 1u)
+                commit_event(&session, "input_admitted", json_pack("{s:[s],s:I,s:s}",
+                    "steering_ids", steer, "time_ms", (json_int_t)session.last_time_ms,
+                    "turn_id", turn));
+            if (mode != 1u)
+                commit_event(&session, "turn_started", turn_started(turn, 1u,
+                    !mode ? prompt : "inspect room input", path, json_array()));
+            build_context(&session, 1u, snapshot, NULL, &projection);
+            json_t *input = json_object_get(projection.create_request.value, "input");
+            size_t copies = 0u;
+            for (size_t i = 0u; i < json_array_size(input); ++i) {
+                const char *text = snag_json_string(json_array_get(input, i), "content");
+                if (text && strstr(text, event.text)) ++copies;
+            }
+            assert(copies == 1u);
+            snag_context_projection_free(&projection);
+            json_decref(snapshot);
+            snag_session_close(&session);
+        }
+    }
+}
+
+static void
 test_durable_irc_input_watermark(struct snag_store *store, const char *path)
 {
     char error[256], id[SNAG_ID_HEX_LEN + 1u];
@@ -4617,6 +4676,7 @@ main(int argc, char **argv)
     test_provider_model_projection(&store, cwd);
     test_leading_instructions_boundary(&store, cwd);
     test_reasoning_continuation(&store, cwd);
+    test_plain_irc_admission_projection(&store, cwd);
     test_durable_irc_input_watermark(&store, cwd);
     test_rebased_irc_admission_overlap(&store, cwd);
     test_pending_irc_source_across_rebase(&store, cwd);

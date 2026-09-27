@@ -4631,7 +4631,11 @@ def test_network_resume_roles():
     replayed = resumed_server.wait("── history replayed ──".encode(), start=restored)
     assert b" history @firstpeer" not in resumed_server.buf
     assert resumed_server.buf[:replayed].count("── history replayed ──".encode()) == 1
-    assert resumed_server.buf.count(b"retained room message") == 1
+    # The conversation history may also quote this message in admitted model
+    # input. The hosted-room replay itself must contain exactly one chat row.
+    assert resumed_server.buf[:replayed].count(b"retained room message") == 1
+    assert resumed_server.buf.count("@firstpeer › retained room message".encode()) == 1, \
+        bytes(resumed_server.buf)
     resumed_server.wait(chat_prompt("serverop"))
     peer = IRCClient(server_port, "secondpeer")
     peer.wait(b" PRIVMSG #lab :retained room message\r\n")

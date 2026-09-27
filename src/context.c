@@ -1458,7 +1458,7 @@ pending_steering_at_seq(const struct snag_session *session, uint64_t seq)
     return NULL;
 }
 
-static int defer_room_event(struct context_builder *builder, const json_t *data);
+static int defer_room_event(struct context_builder *builder, const json_t *data, bool has_prompt);
 
 struct recovery_room_input {
     struct context_builder *builder;
@@ -1484,7 +1484,7 @@ recovery_room_event(void *opaque, const struct snag_session *state, uint64_t seq
     (void)snprintf(reference, sizeof(reference), "[IRC update id=%s:%llu ",
         event.stream, (unsigned long long)event.sequence);
     if (!strstr(input->builder->session->active_prompt, reference)) return 0;
-    if (defer_room_event(input->builder, data) < 0) return -1;
+    if (defer_room_event(input->builder, data, false) < 0) return -1;
     ++input->matched;
     return 0;
 }
@@ -1554,11 +1554,15 @@ prepare_history_recovery_orientation(struct context_builder *builder,
  * recorded splits a tool exchange whenever room traffic arrives while a call is
  * outstanding, and the provider then reads the call as unanswered. */
 static int
-defer_room_event(struct context_builder *builder, const json_t *data)
+defer_room_event(struct context_builder *builder, const json_t *data, bool has_prompt)
 {
     struct snag_irc_event event;
     struct snag_buf text;
     if (snag_irc_event_read(data, &event) < 0) return -1;
+    /* Plain IRC admission carries the complete payload in its input/steer.
+     * Stream references and metadata-only admissions still need expansion. */
+    if (has_prompt && !event.stream[0] && !event.historical &&
+        (event.kind == SNAG_IRC_MESSAGE || event.kind == SNAG_IRC_NOTICE)) return 0;
     snag_buf_init(&text, SNAG_IRC_TEXT_MAX + 2048u);
     int rc = snag_irc_event_projection(&text, &event);
     if (rc == 0) rc = snag_buf_terminate(&text);
@@ -1646,6 +1650,9 @@ context_event(void *opaque, const struct snag_session *state,
     }
     if (!strcmp(type, "irc_admitted")) {
         const json_t *sequences = json_object_get(data, "sequences");
+        const json_t *steering = json_object_get(data, "steering");
+        bool has_prompt = json_is_object(steering) ||
+            json_is_object(json_object_get(data, "input"));
         struct irc_source_lookup lookup = { .sequences = sequences, .admission_seq = seq };
         if (!summarized) for (size_t i = 0u; i < json_array_size(sequences); ++i) {
             json_int_t wanted = json_integer_value(json_array_get(sequences, i));
@@ -1670,7 +1677,8 @@ context_event(void *opaque, const struct snag_session *state,
             for (j = 0u; j < json_array_size(builder->deferred_irc); ++j) {
                 json_t *pending = json_array_get(builder->deferred_irc, j);
                 if (json_integer_value(json_object_get(pending, "seq")) == wanted) {
-                    if (!summarized && defer_room_event(builder, json_object_get(pending, "event")) < 0)
+                    if (!summarized && defer_room_event(builder,
+                            json_object_get(pending, "event"), has_prompt) < 0)
                         return -1;
                     if (json_array_remove(builder->deferred_irc, j) < 0) return -1;
                     found = true;
@@ -1680,7 +1688,8 @@ context_event(void *opaque, const struct snag_session *state,
             if (!found) for (j = 0u; j < json_array_size(lookup.sources); ++j) {
                 json_t *source = json_array_get(lookup.sources, j);
                 if (json_integer_value(json_object_get(source, "seq")) == wanted) {
-                    if (defer_room_event(builder, json_object_get(source, "event")) < 0) {
+                    if (defer_room_event(builder, json_object_get(source, "event"),
+                            has_prompt) < 0) {
                         json_decref(lookup.sources);
                         return -1;
                     }
@@ -1699,7 +1708,6 @@ context_event(void *opaque, const struct snag_session *state,
         json_decref(lookup.sources);
         builder->deferred_irc_seq = (uint64_t)json_integer_value(json_object_get(
             json_array_get(builder->deferred_irc, 0u), "seq"));
-        const json_t *steering = json_object_get(data, "steering");
         /* Keep the room event, but leave a still-pending IRC steer outside an
          * active-turn compaction source, just like a direct steering_added.
          * Compaction has no steering snapshot against which to check it. */
