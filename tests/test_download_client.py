@@ -155,24 +155,83 @@ class DownloadTests(unittest.TestCase):
             finally:
                 session.close()
 
-    def test_one_shot_tool_fails_without_a_transfer_marker(self):
-        with tempfile.TemporaryDirectory(prefix="snag-download-execute-") as path:
+    def test_one_shot_tool_queues_without_a_live_workstation_client(self):
+        with tempfile.TemporaryDirectory(prefix="snag-download-queue-") as path:
+            root = Path(path)
+            home, dotdir = root / "home", root / "dotdir"
+            home.mkdir(mode=0o700)
+            dotdir.mkdir(mode=0o700)
+            (home / "report.bin").write_bytes(b"queued bytes\n")
+            env = dict(os.environ, HOME=str(home), SNAJPAGENT_DOTDIR=str(dotdir))
+            first = subprocess.run([str(PRODUCT), "--dotdir", str(dotdir), "-e", "--",
+                                    "download_tool ./report.bin"], cwd=home, env=env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertNotIn(b"::TRZSZ:TRANSFER:", first.stdout + first.stderr)
+            journal = next((dotdir / "sessions").glob("*/events.jsonl"))
+            events = [json.loads(line) for line in journal.read_text().splitlines()]
+            queued = [e["data"] for e in events if e["type"] == "download_queued"]
+            self.assertEqual(len(queued), 1)
+            self.assertEqual((queued[0]["name"], queued[0]["bytes"]), ("report.bin", 13))
+            self.assertRegex(queued[0]["id"], r"^[0-9a-f]{32}$")
+            self.assertRegex(queued[0]["sha256"], r"^[0-9a-f]{64}$")
+            results = [e["data"]["result"] for e in events if e["type"] == "tool_finished"]
+            self.assertEqual(results[-1]["status"], "succeeded")
+            self.assertIn("not delivered yet", results[-1]["model_text"])
+            sid = json.loads(journal.read_text().splitlines()[0])["session_id"]
+            resumed = subprocess.run([str(PRODUCT), "--dotdir", str(dotdir), "--resume", sid,
+                                      "-e", "--", "download_queue_list"], cwd=home, env=env,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            self.assertEqual(resumed.returncode, 0, resumed.stderr)
+            events = [json.loads(line) for line in journal.read_text().splitlines()]
+            model_text = [e["data"]["result"]["model_text"] for e in events
+                          if e["type"] == "tool_finished"][-1]
+            self.assertIn("1 pending workstation download(s)", model_text)
+            self.assertIn(queued[0]["id"], model_text)
+            self.assertIn("sha256=", model_text)
+
+    def test_download_queue_remove_clear_and_read_only_guard(self):
+        with tempfile.TemporaryDirectory(prefix="snag-download-queue-tool-") as path:
             root = Path(path)
             home, dotdir = root / "home", root / "dotdir"
             home.mkdir(mode=0o700)
             dotdir.mkdir(mode=0o700)
             env = dict(os.environ, HOME=str(home), SNAJPAGENT_DOTDIR=str(dotdir))
-            completed = subprocess.run([str(PRODUCT), "--dotdir", str(dotdir), "-e", "--",
-                                        "download_tool ./report.bin"], cwd=home, env=env,
-                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertNotIn(b"::TRZSZ:TRANSFER:", completed.stdout + completed.stderr)
-            events = [json.loads(line) for journal in (dotdir / "sessions").glob("*/events.jsonl")
-                      for line in journal.read_text().splitlines()]
+            for name in ("one.bin", "two.bin"):
+                (home / name).write_bytes(name.encode())
+            first = subprocess.run([str(PRODUCT), "--dotdir", str(dotdir), "-e", "--",
+                                    "download_tool ./one.bin"], cwd=home, env=env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            journal = next((dotdir / "sessions").glob("*/events.jsonl"))
+            sid = json.loads(journal.read_text().splitlines()[0])["session_id"]
+            second = subprocess.run([str(PRODUCT), "--dotdir", str(dotdir), "--resume", sid,
+                                     "-e", "--", "download_tool ./two.bin"], cwd=home, env=env,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            self.assertEqual(second.returncode, 0, second.stderr)
+            events = [json.loads(line) for line in journal.read_text().splitlines()]
+            queued = [e["data"] for e in events if e["type"] == "download_queued"]
+            self.assertEqual(len(queued), 2)
+            for prompt in (f"download_queue_remove {queued[0]['id']}", "download_queue_list",
+                           "/ro download_queue_readonly_clear", "download_queue_clear",
+                           "download_queue_list"):
+                run = subprocess.run([str(PRODUCT), "--dotdir", str(dotdir), "--resume", sid,
+                                      "-e", "--", prompt], cwd=home, env=env,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+                self.assertEqual(run.returncode, 0, run.stderr)
+            events = [json.loads(line) for line in journal.read_text().splitlines()]
             results = [e["data"]["result"] for e in events if e["type"] == "tool_finished"]
-            self.assertEqual(len(results), 1)
-            self.assertEqual(results[0]["status"], "failed")
-            self.assertIn("interactive POSIX terminal", results[0]["model_text"])
+            texts = [r["model_text"] for r in results]
+            self.assertTrue(any("Removed one pending download" in text for text in texts))
+            self.assertTrue(any("1 pending workstation download(s)" in text for text in texts))
+            readonly = [r for r in results if "read-only" in r["model_text"]]
+            self.assertEqual(len(readonly), 1)
+            self.assertEqual(readonly[0]["status"], "failed")
+            self.assertTrue(any("Cleared the pending download queue" in text for text in texts))
+            self.assertEqual([e["type"] for e in events].count("download_removed"), 1)
+            self.assertEqual([e["type"] for e in events].count("downloads_cleared"), 1)
+            self.assertEqual((home / "one.bin").read_bytes(), b"one.bin")
+            self.assertEqual((home / "two.bin").read_bytes(), b"two.bin")
 
     @unittest.skipUnless(shutil.which("screen"), "requires GNU screen")
     def test_screen_cancellation_keeps_display_clean_and_input_working(self):

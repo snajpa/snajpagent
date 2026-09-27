@@ -2125,7 +2125,7 @@ struct escape_key {
 
 enum {
     KEY_UP = 1, KEY_DOWN, KEY_RIGHT, KEY_LEFT, KEY_HOME, KEY_END, KEY_DELETE, KEY_PASTE_BEGIN,
-    KEY_WORD_LEFT, KEY_WORD_RIGHT };
+    KEY_WORD_LEFT, KEY_WORD_RIGHT, KEY_REMOTE_READY };
 
 static const struct escape_key keys[] = {
     {"\033[1;5D", 6u, KEY_WORD_LEFT}, {"\033[1;5C", 6u, KEY_WORD_RIGHT},
@@ -2137,7 +2137,8 @@ static const struct escape_key keys[] = {
     {"\033OA", 3u, KEY_UP}, {"\033OB", 3u, KEY_DOWN}, {"\033OC", 3u, KEY_RIGHT}, {"\033OD", 3u, KEY_LEFT},
     {"\033OH", 3u, KEY_HOME}, {"\033OF", 3u, KEY_END}, {"\033[H", 3u, KEY_HOME}, {"\033[F", 3u, KEY_END},
     {"\033[1~", 4u, KEY_HOME}, {"\033[4~", 4u, KEY_END},
-    {"\033[3~", 4u, KEY_DELETE}, {"\033[200~", 6u, KEY_PASTE_BEGIN}
+    {"\033[3~", 4u, KEY_DELETE}, {"\033[200~", 6u, KEY_PASTE_BEGIN},
+    {"\033[>S", 4u, KEY_REMOTE_READY}
 };
 
 static int
@@ -2177,7 +2178,7 @@ apply_key(struct snag_term *term, int key)
 }
 
 static int
-feed_escape(struct snag_term *term, unsigned char byte)
+feed_escape(struct snag_term *term, unsigned char byte, enum snag_term_action *action)
 {
     bool prefix = false;
 
@@ -2192,6 +2193,7 @@ feed_escape(struct snag_term *term, unsigned char byte)
             if (term->escape_len == keys[i].len) {
                 int key = keys[i].key;
                 term->escape_len = 0u;
+                if (key == KEY_REMOTE_READY) { *action = SNAG_TERM_REMOTE_READY; return 1; }
                 return apply_key(term, key);
             }
         }
@@ -2299,7 +2301,7 @@ feed_byte(struct snag_term *term, unsigned char byte, enum snag_term_action *act
     }
     term->ctrl_c_count = 0u;
     if (term->paste) return feed_paste(term, byte);
-    if (term->escape_len) return feed_escape(term, byte);
+    if (term->escape_len) return feed_escape(term, byte, action);
     if (byte == 0x1bu) {
         term->escape[0] = byte;
         term->escape_len = 1u;

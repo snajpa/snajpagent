@@ -2808,6 +2808,101 @@ cancel_queue_edit(struct app_state *app, bool active)
 }
 
 static int
+queued_download_unchanged(struct snag_session *session, json_t *item,
+                          char *error, size_t error_size)
+{
+    const char *path = snag_json_string(item, "path");
+    const char *sha = snag_json_string(item, "sha256");
+    json_int_t bytes = json_integer_value(json_object_get(item, "bytes"));
+    json_int_t mtime = json_integer_value(json_object_get(item, "mtime"));
+    int fd = snag_open_inspect_path(session->cwd, path);
+    if (fd < 0)
+        return snag_errorf(error, error_size,
+            "queued source is unavailable: %s", strerror(errno));
+    snag_file_info info;
+    int rc = -1;
+    if (snag_fstat(fd, &info) < 0 || !S_ISREG(info.st_mode) || info.st_size != bytes ||
+        info.st_mtime != mtime) {
+        (void)snag_errorf(error, error_size, "queued source changed; left pending: %s", path);
+        goto out;
+    }
+    struct snag_sha256 hash;
+    unsigned char block[65536];
+    char actual[SNAG_SHA256_HEX_LEN + 1u];
+    snag_sha256_init(&hash);
+    for (;;) {
+        ssize_t n = read(fd, block, sizeof(block));
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) {
+            (void)snag_errorf(error, error_size,
+                "cannot hash queued source: %s", strerror(errno));
+            goto out;
+        }
+        if (!n) break;
+        snag_sha256_update(&hash, block, (size_t)n);
+    }
+    snag_sha256_final_hex(&hash, actual);
+    if (strcmp(actual, sha) != 0) {
+        (void)snag_errorf(error, error_size,
+            "queued source digest changed; left pending: %s", path);
+        goto out;
+    }
+    rc = 0;
+out:
+    {
+        int saved = errno;
+        (void)close(fd);
+        errno = saved;
+    }
+    return rc;
+}
+
+static int
+flush_download_queue(struct app_state *app)
+{
+    if (!app->session.download_queue || !json_array_size(app->session.download_queue)) return 0;
+    if (app->session.active_turn || app->attaching || app->execute || !app->ui.opened)
+        return 0;
+    json_t *snapshot = json_deep_copy(app->session.download_queue);
+    if (!snapshot) return -1;
+    int rc = 0;
+    for (size_t i = 0; rc == 0 && i < json_array_size(snapshot); ++i) {
+        json_t *item = json_array_get(snapshot, i);
+        const char *id = snag_json_string(item, "id");
+        const char *path = snag_json_string(item, "path");
+        char error[256] = {0};
+        if (queued_download_unchanged(&app->session, item, error, sizeof(error)) < 0) {
+            rc = snag_ui_text(&app->ui, SNAG_UI_ERROR,
+                              error[0] ? error : "queued download changed; left pending");
+            continue;
+        }
+        json_t *result = NULL;
+        rc = snag_app_download(app, path, &result, error, sizeof(error));
+        if (rc == 0) {
+            const char *message = snag_json_string(result, "model_text");
+            rc = snag_ui_text(&app->ui,
+                !strcmp(snag_json_string(result, "status"), "succeeded") ?
+                SNAG_UI_HOST : SNAG_UI_ERROR,
+                message ? message : "Download finished.");
+        }
+        if (rc == 0 && result &&
+            !strcmp(snag_json_string(result, "status"), "succeeded")) {
+            if (snag_app_commit_event(app, "download_removed",
+                    json_pack("{s:s,s:s}", "id", id, "reason",
+                              "delivered to wrapped client"),
+                    error, sizeof(error)) < 0) {
+                rc = snag_ui_text(&app->ui, SNAG_UI_ERROR,
+                    error[0] ? error :
+                    "delivered download could not be removed from queue");
+            }
+        }
+        json_decref(result);
+    }
+    json_decref(snapshot);
+    return rc;
+}
+
+static int
 input_view_toggle(struct app_state *app)
 {
     if (app->queue_edit_id[0]) {
@@ -2941,6 +3036,10 @@ again:;
         app->interrupt_requested = true;
         free(line);
         return 2;
+    }
+    if (action == SNAG_TERM_REMOTE_READY) {
+        free(line);
+        return 0;
     }
     if (action == SNAG_TERM_UPLOAD) {
         bool directory = line && !strcmp(line, "trz -d");
@@ -5221,6 +5320,12 @@ interactive_loop(struct app_state *app, const char *initial)
                     commit_event(app, "input_cancelled", json_object(), error, sizeof(error)) < 0)
                     goto ui_failed;
                 if (cancel_queue_edit(app, false) < 0) goto ui_failed;
+                continue;
+            }
+            if (action == SNAG_TERM_REMOTE_READY) {
+                free(owned); owned = NULL;
+                if (flush_download_queue(app) < 0 || set_input_prompt(app, false) < 0)
+                    goto ui_failed;
                 continue;
             }
             if (action == SNAG_TERM_UPLOAD) {

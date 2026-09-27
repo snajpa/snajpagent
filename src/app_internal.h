@@ -166,6 +166,8 @@ void snag_app_discard_part(struct app_state *, const json_t *part);
 int snag_app_upload_command(struct app_state *app, bool directory);
 int snag_app_download(struct app_state *app, const char *path, json_t **result,
                       char *error, size_t error_size);
+int snag_app_download_queue(struct app_state *app, const char *path, json_t **result,
+                            char *error, size_t error_size);
 
 int snag_app_tool_output(void *, const char *, unsigned int, uint64_t, const void *, size_t);
 int snag_app_tool_read(void *, const char *, unsigned int, uint64_t, uint64_t, struct snag_buf *);

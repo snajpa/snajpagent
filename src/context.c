@@ -1953,6 +1953,17 @@ tool_schemas(bool goal_active,
             "The directory is saved for resume.",
             json_pack("{s:{s:s,s:s}}", "path", "type", "string", "description",
                 "Existing directory, absolute or relative to current cwd."))) < 0 ||
+        json_array_append_new(tools, tool_schema("download_queue", "action",
+            "Inspect or manage pending workstation downloads queued while no native wrapped "
+            "client was live. action=list is allowed in read-only turns; action=remove "
+            "needs id and action=clear removes all pending exports. Removing queue items "
+            "never deletes source files or files already downloaded.",
+            json_pack("{s:{s:s,s:s},s:{s:[s,s],s:s},s:{s:[s,s],s:s}}",
+                "action", "type", "string", "description", "One of: list, remove, clear.",
+                "id", "type", "string", "null", "description",
+                "Stable queued item id for remove; omit/null otherwise.",
+                "reason", "type", "string", "null", "description",
+                "Optional concise reason for remove or clear."))) < 0 ||
         json_array_append_new(tools, tool_schema("send_file", "path",
             "Send one regular file or accepted asset to the workstation through the active trzsz "
             "terminal wrapper. Requires an interactive POSIX terminal; takes exclusive terminal "

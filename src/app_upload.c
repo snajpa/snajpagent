@@ -220,6 +220,86 @@ out:
 }
 
 int
+snag_app_download_queue(struct app_state *app, const char *path, json_t **result,
+                        char *error, size_t error_size)
+{
+    *result = NULL;
+    json_t *asset = NULL;
+    char *source = NULL;
+    const char *name = NULL;
+    int fd = -1, rc = -1;
+    snag_file_info info;
+    char id[SNAG_ID_HEX_LEN + 1u];
+    char sha[SNAG_SHA256_HEX_LEN + 1u];
+
+    if (!strncmp(path, "asset:", 6u)) {
+        if (snag_session_media(&app->session, path, NULL, prepare_checkpoint, app,
+                               &asset, &source, error, error_size) < 0) goto out;
+        name = snag_json_string(asset, "name");
+    } else {
+        source = snag_path_root_len(path) ? strdup(path) : snag_path_join(app->session.cwd, path);
+    }
+    if (!source) goto out;
+    if (!name || !*name) {
+        const char *slash = strrchr(source, '/');
+        name = slash ? slash + 1u : source;
+    }
+    if (!*name || strlen(name) > SNAG_NAME_MAX_BYTES ||
+        !snag_utf8_valid((const unsigned char *)name, strlen(name), true)) {
+        (void)snag_fail(error, error_size, EINVAL, "download needs a valid file name");
+        goto out;
+    }
+    for (size_t i = 0; name[i]; ++i)
+        if ((unsigned char)name[i] < 0x20u || name[i] == 0x7f ||
+            name[i] == '/' || name[i] == '\\') {
+            (void)snag_fail(error, error_size, EINVAL, "download needs a printable leaf file name");
+            goto out;
+        }
+    fd = snag_open_inspect_path(app->session.cwd, source);
+    if (fd < 0 || snag_fstat(fd, &info) < 0 || !S_ISREG(info.st_mode) || info.st_size < 0) {
+        (void)snag_errorf(error, error_size, "Download queue requires a readable regular file: %s",
+                          strerror(errno));
+        goto out;
+    }
+    struct snag_sha256 hash;
+    snag_sha256_init(&hash);
+    unsigned char bytes[65536];
+    for (;;) {
+        ssize_t n = read(fd, bytes, sizeof(bytes));
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) {
+            (void)snag_errorf(error, error_size,
+                "Cannot hash queued file: %s", strerror(errno));
+            goto out;
+        }
+        if (!n) break;
+        snag_sha256_update(&hash, bytes, (size_t)n);
+    }
+    snag_sha256_final_hex(&hash, sha);
+    if (snag_random_id(id) < 0) goto out;
+    json_t *event = json_pack("{s:s,s:s,s:s,s:I,s:I,s:s,s:I}",
+        "id", id, "path", source, "name", name, "bytes", (json_int_t)info.st_size,
+        "mtime", (json_int_t)info.st_mtime, "sha256", sha,
+        "queued_ms", (json_int_t)snag_time_ms());
+    if (!event || snag_app_commit_event(app, "download_queued", event, error, error_size) < 0)
+        goto out;
+    char message[SNAG_PATH_MAX_BYTES + SNAG_ID_HEX_LEN + 128u];
+    (void)snprintf(message, sizeof(message),
+        "Queued download %s for the next wrapped workstation client; not delivered yet: %s",
+        id, source);
+    *result = snag_tool_result_terminal(true, message);
+    rc = *result ? 0 : -1;
+out:
+    if (fd >= 0) (void)close(fd);
+    free(source);
+    json_decref(asset);
+    if (rc < 0 && !*result)
+        *result = snag_tool_result_terminal(false,
+            error[0] ? error : "Download queue failed.");
+    return *result ? 0 : -1;
+}
+
+int
 snag_app_download(struct app_state *app, const char *path, json_t **result,
                   char *error, size_t error_size)
 {
@@ -304,7 +384,12 @@ out:
     free(source);
     json_decref(asset);
     if (!restored) return -1;
+    char receipt[SNAG_PATH_MAX_BYTES + 128u];
+    if (rc == 0 && transfer.receipt[0])
+        (void)snprintf(receipt, sizeof(receipt), "Download completed: %s\n"
+                       "Client acknowledged the file digest and final EXIT.", transfer.receipt);
     *result = snag_tool_result_terminal(rc == 0, rc == 0 ?
+        transfer.receipt[0] ? receipt :
         "Download completed: client acknowledged the file digest and final EXIT." : rc == 1 ?
         "Download cancelled; a partial file may remain on the workstation." :
         error[0] ? error : "Download failed.");

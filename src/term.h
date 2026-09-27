@@ -48,7 +48,8 @@ enum snag_term_action {
     SNAG_TERM_EXIT,
     SNAG_TERM_DICTATE_DONE,
     SNAG_TERM_DICTATE_CANCEL,
-    SNAG_TERM_UPLOAD
+    SNAG_TERM_UPLOAD,
+    SNAG_TERM_REMOTE_READY
 };
 
 struct snag_term_command {

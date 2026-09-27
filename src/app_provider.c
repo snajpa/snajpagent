@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 int
 snag_app_provider_input_pump(void *opaque, unsigned int timeout_ms)
@@ -392,6 +393,75 @@ video_transcribe(void *opaque, const json_t *source, uint64_t start, uint64_t en
         app->config, snag_app_active_input_pump, app, snag_ui_wake_fd(&app->ui), result);
 }
 
+static int
+download_queue_tool(struct app_state *app, const struct snag_response_item *call,
+                    json_t **result, char *error, size_t error_size)
+{
+    const char *action = snag_json_string(call->arguments, "action");
+    if (!action || !snag_json_arg_keys(call->arguments, "action", "id reason", error, error_size)) {
+        *result = snag_tool_result_terminal(false,
+            error[0] ? error :
+            "download_queue requires action=list, remove or clear; id is required for remove.");
+        return *result ? 0 : -1;
+    }
+    json_t *queue = app->session.download_queue;
+    if (!strcmp(action, "list")) {
+        struct snag_buf text;
+        snag_buf_init(&text, 4096u);
+        size_t count = queue ? json_array_size(queue) : 0u;
+        if (snag_buf_printf(&text, "%zu pending workstation download(s).", count) < 0) goto oom;
+        for (size_t i = 0; i < count; ++i) {
+            json_t *item = json_array_get(queue, i);
+            if (snag_buf_printf(&text, "\n%s  %s  %lld bytes  sha256=%s",
+                    snag_json_string(item, "id"), snag_json_string(item, "path"),
+                    (long long)json_integer_value(json_object_get(item, "bytes")),
+                    snag_json_string(item, "sha256")) < 0) goto oom;
+        }
+        if (snag_buf_terminate(&text) < 0) goto oom;
+        *result = snag_tool_result_terminal(true, (const char *)text.data);
+        snag_buf_free(&text);
+        return *result ? 0 : -1;
+oom:
+        snag_buf_free(&text);
+        return -1;
+    }
+    if (app->session.active_read_only) {
+        *result = snag_tool_result_terminal(false,
+            "download_queue can only list in a read-only turn; remove and clear mutate the queue.");
+        return *result ? 0 : -1;
+    }
+    const char *reason = snag_json_string(call->arguments, "reason");
+    if (!reason) reason = "";
+    if (!strcmp(action, "remove")) {
+        const char *id = snag_json_string(call->arguments, "id");
+        if (!id || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN)) {
+            *result = snag_tool_result_terminal(false,
+                "download_queue remove needs a queued item id.");
+            return *result ? 0 : -1;
+        }
+        if (snag_app_commit_event(app, "download_removed",
+                json_pack("{s:s,s:s}", "id", id, "reason", reason), error, error_size) < 0) {
+            *result = snag_tool_result_terminal(false,
+                error[0] ? error : "No such queued download.");
+            return *result ? 0 : -1;
+        }
+        *result = snag_tool_result_terminal(true,
+            "Removed one pending download. Source files and completed downloads were not deleted.");
+        return *result ? 0 : -1;
+    }
+    if (!strcmp(action, "clear")) {
+        if (snag_app_commit_event(app, "downloads_cleared",
+                json_pack("{s:s}", "reason", reason), error, error_size) < 0) return -1;
+        *result = snag_tool_result_terminal(true,
+            "Cleared the pending download queue. Source files and completed "
+            "downloads were not deleted.");
+        return *result ? 0 : -1;
+    }
+    *result = snag_tool_result_terminal(false,
+        "download_queue action must be list, remove or clear.");
+    return *result ? 0 : -1;
+}
+
 int
 snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
                  const struct snag_credential *credential, json_t **result, char *error, size_t error_size)
@@ -402,6 +472,8 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         return snag_app_history_page(app, call, result, error, error_size);
     if (call && call->name && !strcmp(call->name, "list_goals"))
         return snag_app_goal_list(app, call, result, error, error_size);
+    if (call && call->name && !strcmp(call->name, "download_queue"))
+        return download_queue_tool(app, call, result, error, error_size);
     if (call && call->name && (!strcmp(call->name, "read_document") ||
         !strcmp(call->name, "view_video") || !strcmp(call->name, "view_image") ||
         !strcmp(call->name, "listen_audio") || !strcmp(call->name, "transcribe_audio") ||
@@ -489,6 +561,8 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
             *result = snag_tool_result_terminal(false, error);
             return *result ? 0 : -1;
         }
+        if (app->execute || !app->ui.opened || snag_isatty(STDERR_FILENO) != 1)
+            return snag_app_download_queue(app, path, result, error, error_size);
         return snag_app_download(app, path, result, error, error_size);
     }
 

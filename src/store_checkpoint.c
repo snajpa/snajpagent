@@ -348,7 +348,7 @@ encode_state(const struct snag_session *s)
     PUT("pending_queue", queue);
 #define JSON_FIELD(f) PUT(#f, s->f ? json_incref(s->f) : json_null())
     JSON_FIELD(strings); JSON_FIELD(compact_output); JSON_FIELD(pending_input);
-    JSON_FIELD(active_instructions); JSON_FIELD(response_public);
+    JSON_FIELD(active_instructions); JSON_FIELD(response_public); JSON_FIELD(download_queue);
 #undef JSON_FIELD
 #define TEXT_FIELD(f) PUT("has_" #f, json_boolean(s->f != NULL))
     TEXT_FIELD(cwd); TEXT_FIELD(first_user); TEXT_FIELD(last_user);
@@ -423,9 +423,10 @@ decode_state(const json_t *data, struct snag_session *s)
     s->f = json_is_null(value) ? NULL : json_incref((json_t *)value); \
 } while (0)
     JSON_FIELD(strings); JSON_FIELD(compact_output); JSON_FIELD(pending_input);
-    JSON_FIELD(active_instructions); JSON_FIELD(response_public);
+    JSON_FIELD(active_instructions); JSON_FIELD(response_public); JSON_FIELD(download_queue);
 #undef JSON_FIELD
     if (s->strings && !json_is_object(s->strings)) return -1;
+    if (s->download_queue && !json_is_array(s->download_queue)) return -1;
     /* Replayed suffix events replace entries in strings. The checkpoint's
      * serialized state is also needed later to restore provider context;
      * sharing its mutable object would silently change the saved snapshot. */
