@@ -2046,6 +2046,10 @@ for old history still read those older records.  The session lock, metadata and
 retained media are not alternate checkpoint files.
 Cache recovery uses the same checkpoint and recent suffix whenever a provider
 view has been saved.
+Journal growth is limited by available storage and representable file offsets,
+rather than a lifetime byte or event quota. Existing sessions that reached the
+former closure reserve can continue with an updated executable; keep their
+journals intact. Per-record bounds and durable append validation still apply.
 Cancelled request preparation can be retried or resumed from a saved checkpoint;
 partially prepared context is rebuilt from retained events without duplicating
 the conversation.

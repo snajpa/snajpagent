@@ -13,10 +13,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#define SNAG_LOG_HARD_LIMIT ((int64_t)2 * 1024 * 1024 * 1024)
-#define SNAG_LOG_RESERVE ((int64_t)32 * 1024 * 1024)
-#define SNAG_EVENT_LIMIT UINT64_C(1000000)
-#define SNAG_EVENT_RESERVE UINT64_C(256)
+/* Startup staging is an in-memory buffer, separate from durable log length. */
+#define SNAG_PENDING_LOG_MAX (2016u * 1024u * 1024u)
 /* The checkpoint is a materialized current view, not one ordinary 16 MiB
  * event. Its maximum covers the active provider request and pending state. */
 #define SNAG_CHECKPOINT_EVENT_MAX (128u * 1024u * 1024u)
@@ -286,11 +284,15 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
     bool new_format = checkpoint || session->checkpoint_offset || session->format_version == 4u;
     int64_t checkpoint_offset = checkpoint ? session->log_end : session->checkpoint_offset;
     struct snag_buf line = {.max = checkpoint ? SNAG_CHECKPOINT_EVENT_MAX : SNAG_MAX_EVENT_LINE};
-    bool closing = session_closure_event(type);
-    uint64_t event_limit = closing ? SNAG_EVENT_LIMIT : SNAG_EVENT_LIMIT - SNAG_EVENT_RESERVE;
-    int64_t byte_limit = closing ? SNAG_LOG_HARD_LIMIT : SNAG_LOG_HARD_LIMIT - SNAG_LOG_RESERVE;
-    if (!data || seq > event_limit || session->log_end > byte_limit) {
-        (void)snag_fail(error, error_size, ENOSPC, "session log has no admission reserve");
+    if (!data) {
+        (void)snag_fail(error, error_size, EINVAL, "session event has no data");
+        goto out;
+    }
+    /* Offsets and the next sequence are serialized as signed JSON integers.
+     * Session lifetime has no quota beyond that representation and storage. */
+    if (!seq || seq >= (uint64_t)INT64_MAX || session->log_end < 0) {
+        (void)snag_fail(error, error_size, EOVERFLOW,
+            "session journal position is not representable");
         goto out;
     }
     event = json_pack("{s:O,s:s,s:I,s:s,s:I,s:s,s:i}", "data", data, "prev_sha256", session->prev_sha256,
@@ -302,8 +304,9 @@ snag_session_append(struct snag_session *session, const char *type, json_t *data
     if (!event || snag_json_digest_bounded(event, line.max, digest, NULL) < 0) goto memory_error;
     if (snag_json_set_new(event, "event_sha256", json_string(digest)) < 0 ||
         snag_json_canonical(event, &line) < 0 || snag_buf_putc(&line, '\n') < 0) goto memory_error;
-    if ((int64_t)line.len > byte_limit - session->log_end) {
-        (void)snag_fail(error, error_size, ENOSPC, "event would consume session closure reserve");
+    if ((uint64_t)line.len > (uint64_t)(INT64_MAX - session->log_end)) {
+        (void)snag_fail(error, error_size, EOVERFLOW,
+            "session event exceeds representable file offsets");
         goto out;
     }
     if (session->pending_log) {
@@ -370,7 +373,7 @@ common_event_valid(json_t *event, struct snag_session *session, uint64_t seq,
             "data event_sha256 prev_sha256 seq session_id time_ms type v" :
             "checkpoint_offset data event_sha256 prev_sha256 seq session_id time_ms type v") ||
         (n == 2u && (snag_json_integer_u64(event, "checkpoint_offset", &checkpoint_pointer) < 0 ||
-                     checkpoint_pointer > (uint64_t)SNAG_LOG_HARD_LIMIT)) ||
+                     checkpoint_pointer > (uint64_t)INT64_MAX)) ||
         snag_json_integer_u64(event, "seq", &n) < 0 || n != seq ||
         snag_json_integer_u64(event, "time_ms", &n) < 0 ||
         !(event_hash = snag_json_string(event, "event_sha256")) ||
@@ -1844,7 +1847,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             snag_json_integer_u64(data, "request_input_bytes", &value.request_input_bytes) < 0 ||
             (has_full_accounting && value.request_input_bytes == 0u) ||
             snag_json_integer_u64(data, "request_input_count", &value.request_input_count) < 0 ||
-            value.request_input_count > SNAG_EVENT_LIMIT || (strcmp(method, "anchored_upper_bound") == 0 &&
+            (strcmp(method, "anchored_upper_bound") == 0 &&
              (value.request_input_bytes < session->usage_anchor.request_input_bytes ||
               value.request_input_count < session->usage_anchor.request_input_count)) ||
             snag_json_integer_u64(data, "cycle", &cycle) < 0 ||
@@ -3366,7 +3369,7 @@ snag_session_prepare(struct snag_session *session, const char *cwd,
     }
     session->pending_log = calloc(1u, sizeof(*session->pending_log));
     if (!session->pending_log) goto out;
-    snag_buf_init(session->pending_log, SNAG_LOG_HARD_LIMIT - SNAG_LOG_RESERVE);
+    snag_buf_init(session->pending_log, SNAG_PENDING_LOG_MAX);
     rc = snag_session_commit(session, "session_created", json_pack("{s:s,s:s,s:s,s:i,s:s,s:s}",
             "default_effort", effort, "default_model", model,
             "default_provider", provider, "format", 4, "protocol", "responses", "cwd", resolved),

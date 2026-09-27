@@ -843,29 +843,60 @@ test_pending_input_media(struct snag_store *store, const char *cwd)
 }
 
 static void
-test_closure_reserve(struct snag_store *store, const char *cwd)
+test_journal_lifetime_boundaries(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
     char error[256];
+    char id[SNAG_ID_HEX_LEN + 1u];
     snag_session_init(&session);
     assert(snag_session_create(store, &session, cwd, "default", "test", "default",
-                               error, sizeof(error)) == 0);
-    uint64_t seq = session.next_seq;
-    int64_t end = session.log_end;
-    /* Exercise admission at the event boundary without writing a million
-     * records. Restore the real cursor before re-opening this private fixture. */
-    session.next_seq = UINT64_C(1000000) - 256u + 1u;
+        error, sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+
+    /* Sparse fixture: cross the former closure reserve with an ordinary event
+     * without allocating a multi-gigabyte test payload. */
+    session.log_end = INT64_C(2) * 1024 * 1024 * 1024 - 32 * 1024 * 1024 - 64;
+    assert(ftruncate(session.log_fd, session.log_end) == 0);
     assert(snag_session_commit(&session, "effort_changed",
         change_data("old_effort", "default", "new_effort", "high"),
-        NULL, error, sizeof(error)) < 0 && errno == ENOSPC);
-    assert(session.log_end == end && !strcmp(session.default_effort, "default"));
-    assert(snag_session_commit(&session, "session_archived", json_pack("{s:s}", "origin", "user"),
-                               NULL, error, sizeof(error)) == 0);
-    assert(session.archived && session.log_end > end);
-    assert(ftruncate(session.log_fd, end) == 0 && fsync(session.log_fd) == 0);
+        NULL, error, sizeof(error)) == 0);
+
+    /* Checkpoints and their suffix must also work past both old lifetime caps.
+     * Reopening reads the checkpoint, not the deliberately sparse old prefix. */
+    session.log_end = INT64_C(2) * 1024 * 1024 * 1024 + 4096;
+    session.next_seq = UINT64_C(1000001);
+    assert(ftruncate(session.log_fd, session.log_end) == 0);
+    assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+    assert(session.checkpoint_offset > INT64_C(2) * 1024 * 1024 * 1024);
+    assert(snag_session_commit(&session, "effort_changed",
+        change_data("old_effort", "high", "new_effort", "default"),
+        NULL, error, sizeof(error)) == 0);
+    uint64_t seq = session.next_seq;
+    int64_t end = session.log_end;
+    snag_session_close(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(session.next_seq == seq && session.log_end == end);
+    assert(strcmp(session.default_effort, "default") == 0);
+    assert(snag_session_commit(&session, "effort_changed",
+        change_data("old_effort", "default", "new_effort", "high"),
+        NULL, error, sizeof(error)) == 0);
+    seq = session.next_seq;
+    end = session.log_end;
+    uint64_t checkpoint_seq = session.checkpoint_seq;
+    session.next_seq = (uint64_t)INT64_MAX;
+    session.checkpoint_seq = session.next_seq - 1u;
+    assert(snag_session_commit(&session, "effort_changed",
+        change_data("old_effort", "high", "new_effort", "default"),
+        NULL, error, sizeof(error)) < 0 && errno == EOVERFLOW);
+    assert(session.log_end == end && strcmp(session.default_effort, "high") == 0);
     session.next_seq = seq;
+    session.checkpoint_seq = checkpoint_seq;
+    session.log_end = INT64_MAX - 1;
+    assert(snag_session_commit(&session, "effort_changed",
+        change_data("old_effort", "high", "new_effort", "default"),
+        NULL, error, sizeof(error)) < 0 && errno == EOVERFLOW);
+    assert(strcmp(session.default_effort, "high") == 0 && session.next_seq == seq);
     session.log_end = end;
-    session.archived = false;
     snag_session_close(&session);
 }
 
@@ -1319,7 +1350,7 @@ main(void)
     test_large_embedded_checkpoint(&store, cwd);
     test_failed_append_retry(&store, cwd);
     test_pending_input_media(&store, cwd);
-    test_closure_reserve(&store, cwd);
+    test_journal_lifetime_boundaries(&store, cwd);
     assert(snag_session_create(&store, &session, cwd, "default",
             "gpt-5.5-2026-04-23", "default",
                               error, sizeof(error)) == 0);

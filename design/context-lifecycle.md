@@ -11,6 +11,11 @@ claim that every existing path already satisfies it.
 
 ## Requirements
 
+Durable journal length and lifetime event count have no application quota.
+Per-record bounds, checked signed 64-bit positions/sequences and atomic append
+recovery remain enforced. A checkpoint beyond 2 GiB is a valid recovery boundary;
+routine reopen reads that boundary and its suffix, not the lifetime prefix.
+
 1. Continue from retained state. Normal requests and indexed resume use the
    materialized view plus new events, not repeated reconstruction of the entire
    journal. A successful compaction replaces its covered prefix exactly once.
