@@ -94,11 +94,11 @@ snag_app_media_command(struct app_state *app, const char *line, bool *handled)
 {
     bool attach = !strcmp(line, "/attach") || !strncmp(line, "/attach ", 8u);
     bool detach = !strcmp(line, "/detach") || !strncmp(line, "/detach ", 8u);
-    bool upload = !strcmp(line, "/upload");
-    *handled = attach || detach || upload || !strcmp(line, "/attachments");
+    bool receive = !strcmp(line, "/receive");
+    *handled = attach || detach || receive || !strcmp(line, "/attachments");
     if (!*handled) return 0;
     if (app->attaching) return snag_ui_text(&app->ui, SNAG_UI_ERROR, "Attachment preparation is already active.");
-    if (upload) return snag_app_upload_command(app, false);
+    if (receive) return snag_app_upload_command(app, false);
     if (!attach && !detach) return show_attachments(app);
     const char *arg = strchr(line, ' ');
     if (!arg || !arg[1]) return snag_ui_text(&app->ui, SNAG_UI_ERROR,

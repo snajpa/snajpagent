@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import termios
+import textwrap
 import time
 import unittest
 from pathlib import Path
@@ -75,6 +76,82 @@ class RemoteProcess:
 
 
 class RemoteStartupTests(unittest.TestCase):
+    def test_native_upload_caps_bursts_when_peer_advertises_large_blocks(self):
+        with tempfile.TemporaryDirectory(prefix="snag-remote-burst-") as tmp:
+            root = Path(tmp)
+            upload = root / "bulk.bin"
+            upload.write_bytes(os.urandom(16384))
+            peer = textwrap.dedent(r'''
+                import base64, hashlib, json, sys, tty, zlib
+                from pathlib import Path
+                sys.path.insert(0, sys.argv[1])
+                from test_upload_client import frame
+                tty.setraw(sys.stdin.fileno())
+                def send(kind, data, numeric=False):
+                    sys.stdout.buffer.write(frame(kind, data, numeric))
+                    sys.stdout.buffer.flush()
+                def receive(kind, numeric=False):
+                    line = sys.stdin.buffer.readline()
+                    prefix, payload = line.rstrip(b"\n").split(b":", 1)
+                    assert prefix == b"#" + kind.encode(), line
+                    return int(payload) if numeric else zlib.decompress(base64.b64decode(payload))
+                sys.stdout.buffer.write(b"::TRZSZ:TRANSFER:R:1.0.0:0000000000000:0\r\n")
+                sys.stdout.buffer.flush()
+                assert json.loads(receive("ACT"))["native"]
+                send("CFG", b'{"protocol":1,"bufsize":65536,"binary":false,"directory":false}')
+                assert receive("NUM", True) == 1
+                send("SUCC", 1, True)
+                name = receive("NAME")
+                send("SUCC", name)
+                size = receive("SIZE", True)
+                send("SUCC", size, True)
+                data = bytearray()
+                while len(data) < size:
+                    block = receive("DATA")
+                    assert 0 < len(block) <= 1024, len(block)
+                    data.extend(block)
+                    send("SUCC", len(block), True)
+                assert bytes(data) == Path(sys.argv[2]).read_bytes()
+                digest = hashlib.md5(data).digest()
+                assert receive("MD5") == digest
+                send("SUCC", digest)
+                assert receive("EXIT") == b"Sent"
+                print("NATIVE_UPLOAD_BURST_OK", flush=True)
+            ''')
+            child = RemoteProcess(root, [sys.executable, "-u", "-c", peer,
+                                         str(PRODUCT.parent), str(upload)])
+            try:
+                child.until(b"Select local file", 8)
+                os.write(child.master, str(upload).encode() + b"\r")
+                child.until(b"NATIVE_UPLOAD_BURST_OK", 8)
+                child.wait(0)
+            finally:
+                child.close()
+
+    def test_agent_transfer_names_have_no_old_aliases(self):
+        with tempfile.TemporaryDirectory(prefix="snag-remote-names-") as tmp:
+            root = Path(tmp)
+            child = RemoteProcess(root, [str(PRODUCT), "--dotdir", str(root / "agent")])
+            try:
+                child.until("›".encode(), 8)
+                os.write(child.master, b"/send\r")
+                child.until(b"usage: /send PATH", 8)
+                child.output.clear()
+                for command in (b"/upload", b"/download missing", b"/receive extra",
+                                b"/send-more", b"/sendfile"):
+                    os.write(child.master, command + b"\r")
+                    child.until(b"unknown slash command", 8)
+                    child.output.clear()
+                os.write(child.master, b"/help\r")
+                output = child.until(b"/receive", 8)
+                output = child.until(b"/send PATH", 8)
+                self.assertNotIn(b"/upload", output)
+                self.assertNotIn(b"/download", output)
+                os.write(child.master, b"/exit\r")
+                child.wait(0)
+            finally:
+                child.close()
+
     def test_resize_reaches_child_pty(self):
         with tempfile.TemporaryDirectory(prefix="snag-remote-resize-") as tmp:
             code = ("import fcntl,os,signal,struct,termios,time; "
@@ -97,7 +174,7 @@ class RemoteStartupTests(unittest.TestCase):
             child = RemoteProcess(root, [str(PRODUCT), "--dotdir", str(root / "agent")])
             try:
                 child.until("›".encode(), 8)
-                os.write(child.master, b"/upload\r")
+                os.write(child.master, b"/receive\r")
                 child.until(b"Select local file", 8)
                 os.write(child.master, b"\x03")
                 child.until(b"Upload cancelled", 8)
@@ -144,7 +221,7 @@ class RemoteStartupTests(unittest.TestCase):
                     self.assertFalse(inner_destination.exists())
                     upload = home / "workstation-upload.bin"
                     upload.write_bytes(os.urandom(16384))
-                    os.write(child.master, b"/upload\r")
+                    os.write(child.master, b"/receive\r")
                     child.until(b"Select local file", 8)
                     os.write(child.master, str(upload).encode() + b"\r")
                     child.until(b"1 unsent attachment(s)", 12)
@@ -181,7 +258,7 @@ class RemoteStartupTests(unittest.TestCase):
                 wrapped=None, extra_env=env)
             try:
                 child.until("›".encode(), 8)
-                os.write(child.master, f"/download {source}\r".encode())
+                os.write(child.master, f"/send {source}\r".encode())
                 target = home / "Downloads" / source.name
                 child.until(str(target).encode(), 12)
                 self.assertEqual(target.read_bytes(), source.read_bytes())
@@ -261,7 +338,7 @@ class RemoteStartupTests(unittest.TestCase):
                 "remote-test", str(server), str(PRODUCT), str(dotdir)])
             try:
                 child.until("›".encode(), 8)
-                os.write(child.master, f"/download {server / 'résumé file.bin'}\r".encode())
+                os.write(child.master, f"/send {server / 'résumé file.bin'}\r".encode())
                 target = home / "Downloads" / "résumé file.bin"
                 child.until(str(target).encode(), 12)
                 self.assertEqual(target.read_bytes(), data)
@@ -285,7 +362,7 @@ class RemoteStartupTests(unittest.TestCase):
             child = RemoteProcess(home, [str(PRODUCT), "--dotdir", str(dotdir)])
             try:
                 child.until("›".encode(), 8)
-                os.write(child.master, b"/upload\r")
+                os.write(child.master, b"/receive\r")
                 child.until(b"Select local file", 8)
                 os.write(child.master, f"{source}\r".encode())
                 child.until(b"1 unsent attachment(s)", 12)
@@ -314,7 +391,7 @@ class RemoteStartupTests(unittest.TestCase):
                                         "--dotdir", str(root / "remote-session")])
             try:
                 child.until("›".encode(), 8)
-                os.write(child.master, f"/download {source}\r".encode())
+                os.write(child.master, f"/send {source}\r".encode())
                 child.until(b"Download completed:", 12)
                 self.assertEqual((destination / source.name).read_bytes(), b"preserve")
                 landed = [p for p in destination.iterdir() if p.name != source.name]

@@ -9,7 +9,8 @@ cache and model selection intact. Operator `/model` retains typed uncached
 selection.
 
 Current development source includes client-only `snajpagent remote COMMAND…`
-and native POSIX workstation upload/download endpoints. Workstation configuration
+and native POSIX workstation file endpoints via `/receive` (into the agent)
+and `/send PATH` (to the workstation). Workstation configuration
 reads only `[terminal] download_dir`, defaulting to `~/Downloads`. Verified
 uploads become private unsent attachments; acknowledged downloads display actual
 local-path receipts. The trzsz-go client remains usable with explicit transfer

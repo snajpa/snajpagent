@@ -130,12 +130,12 @@ snajpagent remote ssh -t snajpadev screen -r sessionname
 ```
 
 `remote` passes a generic child command and its arguments literally through a
-PTY, without starting a local agent session. Use `/upload` on the POSIX target
-and enter a local regular-file path; verified files become unsent attachments.
+PTY, without starting a local agent session. Use `/receive` in the POSIX agent
+and enter a workstation regular-file path; verified files become unsent attachments.
 Review `/attachments` before submitting. Uploads reject directories and empty files.
 
-Use `/download PATH`, or ask the model to send a file with `send_file`, for the
-reverse direction. Downloads accept empty files and accepted `asset:ID` references.
+Use `/send PATH` to send an agent file to the workstation, or ask the model to
+use `send_file`. Downloads accept empty files and accepted `asset:ID` references.
 Native downloads default to `~/Downloads`; set `[terminal] download_dir` in the
 workstation's `~/.snajpagent/config.ini` to change it. Receipts list actual saved
 paths, and transfers restore the prompt and editable draft.
@@ -145,8 +145,8 @@ Wrapped reattachment delivers them at an idle boundary. Changed sources and
 uncertain transfers remain pending; ask the model to list, remove or clear them
 with `download_queue`. Source and completed local files are preserved.
 
-The trzsz-go wrapper remains an alternative for explicit `/upload` and
-`/download` commands: on macOS, install `trzsz-go` with Homebrew and connect using
+The trzsz-go wrapper remains an alternative for explicit `/receive` and
+`/send` commands: on macOS, install `trzsz-go` with Homebrew and connect using
 `trzsz --dragfile ssh target`. Its `~/.trzsz.conf` `DefaultDownloadPath` controls
 saving. Go-client stock drag sends Ctrl-C first, which can cancel a draft or work.
 See the manual's **Terminal file transfers**, **Remote terminal mode (snajpagent remote)**

@@ -63,6 +63,6 @@ stay outside tool output. Read-only rejects export creation.
 item IDs. Listing is allowed in read-only mode; mutations follow its ordinary
 refusal. Removal cancels intent without deleting source or completed local files.
 Detached, unwrapped, interrupted and changed-source exports remain pending.
-Explicit `/upload` and `/download` retain trzsz-go interoperability.
+Explicit `/receive` and `/send` retain trzsz-go interoperability.
 See [remote-terminal.md](remote-terminal.md) and the manual's Model tools and
 Terminal file transfers sections for the wire and recovery lifecycle.

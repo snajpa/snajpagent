@@ -31,7 +31,7 @@ Keep the workstation wrapper outside SSH hops and reattach through it. Extra
 nested screen backends need a wrapper at the intermediate boundary to relay
 passthrough; arbitrary nested multiplexers are outside the qualified paths.
 
-The Go client remains interoperable for explicit `/upload` and `/download`.
+The Go client remains interoperable for explicit `/receive` and `/send`.
 Its unchanged protocol does not answer the native availability probe; model
 exports with that client remain queued until native attachment or explicit
 operator download and queue removal. This preserves detached-screen safety.
@@ -73,3 +73,9 @@ carry the queue; deletion follows ordinary session deletion.
 - `tests/test_upload_client.py`: pinned Go upload and protocol failure coverage.
 
 Qualification records distinguish PTY/path selection from desktop GUI actions.
+
+Native uploads use the existing 1 KiB screen-safe DATA burst even when the peer
+advertises a larger wire block. An intermediate relay clears inherited STY at
+its child PTY, so the agent may not see an upstream screen input queue. Larger
+incompressible DATA lines reproduced a one-byte loss there. This per-frame bound
+preserves streaming and acknowledged completion; it adds no file/session quota.

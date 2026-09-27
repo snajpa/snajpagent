@@ -252,7 +252,7 @@ class UploadClientTests(unittest.TestCase):
 
 
 class UploadProductTests(unittest.TestCase):
-    def start_synthetic(self, session, launch=b"/upload\r"):
+    def start_synthetic(self, session, launch=b"/receive\r"):
         session.write(launch)
         session.read_until(b"::TRZSZ:TRANSFER:R:1.0.0:", 7)
         marker = session.read_until(b"\r\n")

@@ -59,7 +59,7 @@ class DownloadSession(Session):
 
     def download(self, name, data, request=None, expected_name=None):
         (self.home / name).write_bytes(data)
-        self.write(request or f"/download ./{name}\r".encode())
+        self.write(request or f"/send ./{name}\r".encode())
         if request and request.startswith(b"download_tool "):
             self.read_until(b"\x1b[?9001;")
             nonce = self.read_until(b"n")[:-1]
@@ -245,7 +245,7 @@ class DownloadTests(unittest.TestCase):
             session = DownloadSession(Path(path), screen=True)
             try:
                 (session.home / "cancel").write_bytes(b"abc")
-                session.write(b"/download cancel\r")
+                session.write(b"/send cancel\r")
                 session.read_until(b"::TRZSZ:TRANSFER:S:")
                 session.read_until(b"\r\n")
                 session.write(b"\x03")
@@ -303,7 +303,7 @@ class DownloadTests(unittest.TestCase):
                 session = DownloadSession(Path(path))
                 try:
                     (session.home / "cancel").write_bytes(b"abc")
-                    session.write(b"/download cancel\r")
+                    session.write(b"/send cancel\r")
                     session.read_until(b"::TRZSZ:TRANSFER:S:")
                     session.read_until(b"\r\n")
                     session.write(action)
@@ -322,12 +322,12 @@ class DownloadTests(unittest.TestCase):
                 (session.home / "link").symlink_to("real")
                 os.mkfifo(session.home / "fifo")
                 for name in ("missing", ".", "link", "fifo"):
-                    session.write(f"/download {name}\r".encode())
+                    session.write(f"/send {name}\r".encode())
                     output = session.read_until(b"Download requires a readable regular file:")
                     self.assertNotIn(b"::TRZSZ:TRANSFER:", output)
                     session.read_until("› ".encode())
-                session.write(b"/download\r")
-                session.read_until(b"usage: /download PATH")
+                session.write(b"/send\r")
+                session.read_until(b"usage: /send PATH")
                 session.exit()
             finally:
                 session.close()
@@ -342,7 +342,7 @@ class DownloadTests(unittest.TestCase):
             try:
                 data = os.urandom(70000)
                 (session.home / "report").write_bytes(data)
-                session.write(b"/download report\r")
+                session.write(b"/send report\r")
                 session.read_until(b"Download completed:", 15)
                 self.assertEqual((session.downloads / "report").read_bytes(), data)
                 session.exit()
@@ -354,7 +354,7 @@ class DownloadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="snag-download-size-") as path:
             session = DownloadSession(Path(path), CLIENT)
             try:
-                session.write(b"/download /proc/version\r")
+                session.write(b"/send /proc/version\r")
                 output = session.read_until(b"download contents:", 10)
                 self.assertNotIn(b"Download completed:", output)
                 session.write(b"ping\r")
@@ -371,7 +371,7 @@ class DownloadTests(unittest.TestCase):
                 try:
                     data = os.urandom(90000)
                     (session.home / "report").write_bytes(data)
-                    session.write(b"/download report\r")
+                    session.write(b"/send report\r")
                     session.read_until(b"Download completed:", 15)
                     self.assertEqual((session.downloads / "report").read_bytes(), data)
                     session.write(b"\x01d")
@@ -423,10 +423,10 @@ class DownloadTests(unittest.TestCase):
             try:
                 for name, data in (("binary.bin", bytes(range(256)) * 300), ("empty", b"")):
                     (session.home / name).write_bytes(data)
-                    session.write(f"/download {name}\r".encode())
+                    session.write(f"/send {name}\r".encode())
                     session.read_until(b"Download completed:", 15)
                     self.assertEqual((session.downloads / name).read_bytes(), data)
-                session.write(b"/download binary.bin\r")
+                session.write(b"/send binary.bin\r")
                 session.read_until(b"Download completed:", 15)
                 files = list(session.downloads.iterdir())
                 self.assertEqual(len(files), 3)

@@ -425,7 +425,7 @@ remain unreaped until output collection so a reused PID cannot be signaled.
 
 POSIX terminal upload is an exclusive input lease: the UI stops and joins its
 input worker before the engine reads from the controlling terminal. Exact stock
-trz actions and /upload enter the same bounded protocol-1 receive path;
+trz actions and /receive enter the same bounded protocol-1 receive path;
 the remote host launches no shell command. The receiver writes a complete,
 digest-checked batch into a private operation-owned directory, then restores
 termios and the UI before preparing each attachment through the ordinary media
@@ -785,7 +785,7 @@ custom exclusions must not change that default.
 
 ### Terminal downloads
 
-`/download PATH` and `send_file {path}` use the same acknowledged UI/controlling-
+`/send PATH` and `send_file {path}` use the same acknowledged UI/controlling-
 TTY lease and wire codec as uploads. The native sender opens one regular file
 without following symlinks; an accepted asset is resolved and verified through
 session media lookup. The open descriptor is streamed, without copying the
