@@ -56,6 +56,123 @@ list_to_fd(void *opaque, const char *text, size_t len)
     return snag_write_full(*(int *)opaque, text, len);
 }
 
+static int
+matches_to_buf(void *opaque, const char *text, size_t len)
+{
+    return snag_buf_append(opaque, text, len);
+}
+
+static int
+matches_fail(void *opaque, const char *text, size_t len)
+{
+    (void)opaque;
+    (void)text;
+    (void)len;
+    errno = EPIPE;
+    return -1;
+}
+
+static void
+test_session_location(struct snag_store *store, const struct snag_session *owned)
+{
+    static const char ids[][SNAG_ID_HEX_LEN + 1u] = {
+        "abcdefab111111111111111111111111", "abcdefab222222222222222222222222",
+        "abcdefab333333333333333333333333"
+    };
+    static const char trash[] =
+        "abcdefab444444444444444444444444.11111111111111111111111111111111";
+    struct snag_buf matches = {.max = 1024u};
+    struct snag_session target;
+    char error[256];
+
+    /* Locating our own session must not open/close another lock descriptor. */
+    snag_session_init(&target);
+    assert_session_lock_retained(owned, "before target lookup");
+    assert(snag_session_locate(store, &target, owned->id, matches_to_buf, &matches,
+                               error, sizeof(error)) == 0);
+    assert(!strcmp(target.id, owned->id) && !strcmp(target.dir_path, owned->dir_path));
+    assert(target.dir_fd >= 0 && target.lock_fd == -1 && target.log_fd == -1);
+    assert(matches.len == 0u);
+    assert(snag_session_locate(store, &target, owned->id, NULL, NULL,
+                               error, sizeof(error)) < 0 && errno == EINVAL);
+    snag_session_close(&target);
+    assert_session_lock_retained(owned, "after target lookup");
+
+    /* No event/lock files are needed for location; it is not proof of liveness. */
+    for (size_t i = 0u; i < (sizeof(ids) / sizeof(ids[0])); ++i) {
+        assert(mkdirat(store->sessions_fd, ids[i], 0700) == 0);
+    }
+    assert(mkdirat(store->trash_fd, trash, 0700) == 0);
+    snag_session_init(&target);
+    assert(snag_session_locate(store, &target, "abcdefab", matches_to_buf, &matches,
+                               error, sizeof(error)) < 0 && errno == EEXIST);
+    assert(matches.len == (sizeof(ids) / sizeof(ids[0])) * (SNAG_ID_HEX_LEN + 1u));
+    for (size_t i = 0u; i < (sizeof(ids) / sizeof(ids[0])); ++i) {
+        assert(strstr((char *)matches.data, ids[i]));
+    }
+    assert(target.dir_fd == -1 && target.dir_path == NULL);
+    assert(snag_session_locate(store, &target, "abcdefab", matches_fail, NULL,
+                               error, sizeof(error)) < 0 && errno == EPIPE);
+    assert(snag_session_locate(store, &target, "abcdefab4", NULL, NULL,
+                               error, sizeof(error)) < 0 && errno == ENOENT);
+    static const char *invalid[] = {NULL, "", "abcdefa", "ABCDEFAB", "../abcdefab",
+                                    "abcdefab1111111111111111111111111"};
+    for (size_t i = 0u; i < (sizeof(invalid) / sizeof(invalid[0])); ++i) {
+        assert(snag_session_locate(store, &target, invalid[i], NULL, NULL,
+                                   error, sizeof(error)) < 0 && errno == EINVAL);
+    }
+    assert(snag_session_locate(store, &target, "abcdefab1", NULL, NULL,
+                               error, sizeof(error)) == 0);
+    assert(!strcmp(target.id, ids[0]));
+    int dir_fd = dup(target.dir_fd);
+    assert(dir_fd >= 0);
+    snag_session_close(&target);
+
+    /* A damaged tail and staging residue stay byte-for-byte intact. */
+    int fd = openat(dir_fd, "events.jsonl", O_CREAT | O_EXCL | O_RDWR, 0600);
+    assert(fd >= 0 && snag_write_full(fd, "unfinished", 10u) == 0);
+    assert(mkdirat(dir_fd, "uploads", 0700) == 0);
+    snag_session_init(&target);
+    assert(snag_session_locate(store, &target, ids[0], NULL, NULL,
+                               error, sizeof(error)) == 0);
+    assert(target.log_fd == -1 && target.lock_fd == -1);
+    snag_session_close(&target);
+    char tail[16] = {0};
+    assert(lseek(fd, 0, SEEK_SET) == 0 && read(fd, tail, sizeof(tail)) == 10);
+    assert(!strcmp(tail, "unfinished"));
+    struct stat st;
+    assert(fstatat(dir_fd, "lock", &st, 0) < 0 && errno == ENOENT);
+    assert(fstatat(dir_fd, "uploads", &st, 0) == 0 && S_ISDIR(st.st_mode));
+    assert(fstatat(store->trash_fd, trash, &st, 0) == 0 && S_ISDIR(st.st_mode));
+    assert(close(fd) == 0);
+    assert(unlinkat(dir_fd, "events.jsonl", 0) == 0);
+    assert(unlinkat(dir_fd, "uploads", AT_REMOVEDIR) == 0);
+
+#ifndef _WIN32
+    assert(fchmod(dir_fd, 0755) == 0);
+    snag_session_init(&target);
+    assert(snag_session_locate(store, &target, ids[0], NULL, NULL,
+                               error, sizeof(error)) < 0);
+    snag_session_close(&target);
+    assert(fchmod(dir_fd, 0700) == 0);
+#endif
+    assert(close(dir_fd) == 0);
+    for (size_t i = 0u; i < (sizeof(ids) / sizeof(ids[0])); ++i) {
+        assert(unlinkat(store->sessions_fd, ids[i], AT_REMOVEDIR) == 0);
+    }
+#ifndef _WIN32
+    assert(symlinkat(owned->id, store->sessions_fd, ids[0]) == 0);
+    snag_session_init(&target);
+    assert(snag_session_locate(store, &target, ids[0], NULL, NULL,
+                               error, sizeof(error)) < 0);
+    snag_session_close(&target);
+    assert(unlinkat(store->sessions_fd, ids[0], 0) == 0);
+#endif
+    assert(unlinkat(store->trash_fd, trash, AT_REMOVEDIR) == 0);
+    assert_session_lock_retained(owned, "after rejected target lookups");
+    snag_buf_free(&matches);
+}
+
 static json_t *
 change_data(const char *old_key, const char *old_value, const char *new_key, const char *new_value)
 {
@@ -1207,6 +1324,7 @@ main(void)
             "gpt-5.5-2026-04-23", "default",
                               error, sizeof(error)) == 0);
     test_media(&session);
+    test_session_location(&store, &session);
     memcpy(id, session.id, sizeof(id));
     memcpy(id_prefix, session.id, 8u);
     id_prefix[8] = '\0';

@@ -64,16 +64,27 @@ snag_store_trash_id(const char *name, char id[SNAG_ID_HEX_LEN + 1u])
 }
 
 static int
-resolve_prefix(struct snag_store *store, const char *prefix,
-               struct resolved_session *target, char *error, size_t error_size)
+emit_match(snag_store_emit_fn emit, void *opaque, const char *id)
 {
-    size_t len = strlen(prefix);
+    char line[SNAG_ID_HEX_LEN + 1u];
+
+    memcpy(line, id, SNAG_ID_HEX_LEN);
+    line[SNAG_ID_HEX_LEN] = '\n';
+    return emit(opaque, line, sizeof(line));
+}
+
+static int
+resolve_prefix(struct snag_store *store, const char *prefix,
+               struct resolved_session *target, bool include_trash,
+               snag_store_emit_fn matches_emit, void *opaque, char *error, size_t error_size)
+{
+    size_t len = prefix ? strlen(prefix) : 0u;
     unsigned int matches = 0;
 
     memset(target, 0, sizeof(*target));
     if (len < 8u || len > SNAG_ID_HEX_LEN || !snag_hex_is_lower(prefix, len))
         return snag_fail(error, error_size, EINVAL, "session id must be 8..32 lowercase hex characters");
-    for (unsigned int trash = 0u; trash < 2u; ++trash) {
+    for (unsigned int trash = 0u; trash < (include_trash ? 2u : 1u); ++trash) {
         struct snag_directory *dir = open_store_dir(store, trash ? "trash" : "sessions",
             trash ? "trash directory" : "sessions directory", error, error_size);
         const char *entry;
@@ -91,6 +102,15 @@ resolve_prefix(struct snag_store *store, const char *prefix,
                 memcpy(target->id, id, sizeof(target->id));
                 target->trash = trash != 0u;
                 if (trash) memcpy(target->trash_name, entry, sizeof(target->trash_name));
+            } else if (matches_emit) {
+                /* Emit the first candidate only once ambiguity is established. */
+                if ((matches == 2u && emit_match(matches_emit, opaque, target->id) < 0) ||
+                    emit_match(matches_emit, opaque, id) < 0) {
+                    int saved = errno ? errno : EIO;
+                    (void)snag_directory_close(dir);
+                    return snag_fail(error, error_size, saved,
+                                     "cannot write matching session ids");
+                }
             }
         }
         if (finish_directory(dir, error, error_size) < 0) return -1;
@@ -124,6 +144,24 @@ open_session_dir(struct snag_store *store, struct snag_session *session,
     return snag_store_verify_private_fd(session->dir_fd, true, "session directory", error, error_size);
 }
 
+int
+snag_session_locate(struct snag_store *store, struct snag_session *session,
+                    const char *prefix, snag_store_emit_fn matches_emit, void *opaque,
+                    char *error, size_t error_size)
+{
+    struct resolved_session target;
+
+    if (session->dir_fd >= 0 || session->log_fd >= 0 || session->lock_fd >= 0 ||
+        session->dir_path) {
+        return snag_fail(error, error_size, EINVAL, "session location is already open");
+    }
+    if (resolve_prefix(store, prefix, &target, false, matches_emit, opaque,
+                       error, error_size) < 0) return -1;
+    /* Attachment only needs the verified directory. Opening a writer or replaying
+     * the journal here would turn a lookup into a second session runner. */
+    return open_session_dir(store, session, target.id, error, error_size);
+}
+
 static int
 open_full_id(struct snag_store *store, struct snag_session *session,
              const char *id, char *error, size_t error_size)
@@ -149,7 +187,8 @@ snag_session_open(struct snag_store *store, struct snag_session *session,
 {
     struct resolved_session target;
 
-    if (resolve_prefix(store, prefix, &target, error, error_size) < 0) return -1;
+    if (resolve_prefix(store, prefix, &target, true, NULL, NULL,
+                       error, error_size) < 0) return -1;
     if (target.trash) {
         if (snag_store_complete_trash_delete(store, target.trash_name, error, error_size) < 0) return -1;
         snag_errorf(error, error_size, "session deletion was completed");

@@ -34,7 +34,11 @@ One terminal may control a session at a time. Authenticate the local endpoint
 using the existing private-store ownership boundary and native peer identity;
 never treat a stale socket/PID file as proof of ownership. The session lock is
 the durable writer authority. List/status probes must neither acquire an
-attachment nor release the current process's session lock. A failed switch
+attachment nor release the current process's session lock. Attach-target lookup
+opens only the verified session directory: it neither replays/truncates the
+journal nor opens the lock, removes staging files or finishes trash deletion.
+Ambiguous prefixes report full matching IDs. Live-owner authentication and the
+attachment reservation happen separately against the private endpoint. A failed switch
 keeps the source attached: resolve/authenticate/reserve the destination before
 releasing the source, then commit the transfer. Do not silently steal a terminal
 or terminate either owner's work. Stopped/unreachable targets report the actual

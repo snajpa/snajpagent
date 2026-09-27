@@ -292,6 +292,12 @@ int snag_session_open(struct snag_store *store, struct snag_session *session,
 int snag_session_open_last(struct snag_store *store, struct snag_session *session,
                           char *error, size_t error_size);
 typedef int (*snag_store_emit_fn)(void *, const char *, size_t);
+/* Resolve a saved session's private directory without opening its lock/journal
+ * or cleaning up trash. The caller supplies an initialized, unopened session
+ * and closes it on every outcome. This does not establish live-owner status.
+ * On EEXIST, matches_emit (if non-NULL) receives each full matching ID + newline. */
+int snag_session_locate(struct snag_store *, struct snag_session *, const char *prefix,
+                        snag_store_emit_fn matches_emit, void *, char *error, size_t error_size);
 enum snag_session_list { SNAG_SESSIONS_ACTIVE, SNAG_SESSIONS_ALL, SNAG_SESSIONS_RUNNING };
 /* Supply the caller's owned session so probing never opens/closes its lock. */
 int snag_store_list(struct snag_store *store, const struct snag_session *owned,
