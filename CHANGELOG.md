@@ -15,6 +15,11 @@
   completion and cancellation, including its default disabled alternate screen.
 - Give terminal transfers and the complete model tool catalog dedicated manual
   sections; clarify macOS Go-wrapper setup and upload/download destinations.
+- Accept sparse Responses stream indexes and reconcile terminal arrays by item
+  identity. Preserve canonical tool order while rejecting index/ID collisions,
+  missing or duplicate terminal items and changed recognized kinds. Failed
+  snapshots retain consistent public text without admitting executable calls.
+
 - Preserve buffered citation text across streaming deliveries in both terminal
   views. Presentation failures retain their own diagnostic instead of being
   reported as an oversized or invalid input draft.

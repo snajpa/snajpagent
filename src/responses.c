@@ -214,15 +214,41 @@ find_item_index(const struct snag_responses_stream *stream, const char *id, size
     return false;
 }
 
-/* Some Responses providers (llama.cpp) stream output items and deltas without
- * output_index/content_index. The item id is always present, so resolve the
- * index from it; an explicit index stays strict about its value. */
+/* Provider indexes are sparse identities, not allocation sizes or vector
+ * positions. Providers omitting indexes use the same item-ID mapping. */
 static int
 event_output_index(struct snag_responses_stream *stream, const json_t *root,
                    const char *item_id, size_t *out)
 {
-    if (json_object_get(root, "output_index")) return json_index(stream, root, "output_index", out);
-    if (find_item_index(stream, item_id, out)) return 0;
+    size_t wire_index;
+    size_t id_index;
+    bool found_id = find_item_index(stream, item_id, &id_index);
+
+    if (!json_object_get(root, "output_index")) {
+        *out = found_id ? id_index : stream->item_count;
+        return 0;
+    }
+    if (json_index(stream, root, "output_index", &wire_index) < 0) return -1;
+    for (size_t i = 0u; i < stream->item_count; ++i) {
+        struct snag_wire_item *item = &stream->items[i];
+        if (!item->output_index_known || item->output_index != wire_index) continue;
+        if ((found_id && id_index != i) ||
+            (item_id && item->id && strcmp(item_id, item->id))) {
+            return stream_fail(stream, EPROTO, "response item identity or index conflict");
+        }
+        *out = i;
+        return 0;
+    }
+    if (found_id) {
+        struct snag_wire_item *item = &stream->items[id_index];
+        if (item->output_index_known) {
+            return stream_fail(stream, EPROTO, "response item changed output index");
+        }
+        item->output_index = wire_index;
+        item->output_index_known = true;
+        *out = id_index;
+        return 0;
+    }
     *out = stream->item_count;
     return 0;
 }
@@ -303,7 +329,7 @@ new_item(struct snag_responses_stream *stream, size_t output_index,
     struct snag_wire_item *item;
 
     if (output_index != stream->item_count) {
-        (void)stream_fail(stream, EPROTO, "response output indexes are not contiguous");
+        (void)stream_fail(stream, EPROTO, "invalid response item slot");
         return NULL;
     }
     if (stream->item_count == stream->item_capacity) {
@@ -323,6 +349,7 @@ new_item(struct snag_responses_stream *stream, size_t output_index,
     }
     item = &stream->items[stream->item_count];
     memset(item, 0, sizeof(*item));
+    item->terminal_order = SIZE_MAX;
     snag_buf_init(&item->arguments, SNAG_MAX_TOOL_ARGUMENTS);
     item->kind = kind;
     if (id && copy_once(stream, &item->id, id, SNAG_MAX_PROVIDER_ID, "provider item id") < 0) {
@@ -576,7 +603,7 @@ inert_snapshot(struct snag_responses_stream *stream, size_t output_index, const 
         item = &stream->items[output_index];
         if (item->kind != SNAG_WIRE_ITEM_INERT) return stream_fail(stream, EPROTO,
                                "response item kind or order conflict");
-        if (id && !item->id &&
+        if (id &&
             copy_once(stream, &item->id, id, SNAG_MAX_PROVIDER_ID, "provider item id") < 0) return -1;
         return 0;
     }
@@ -689,6 +716,16 @@ item_snapshot(struct snag_responses_stream *stream, size_t output_index,
 
     if (!json_is_object(snapshot) || !type)
         return stream_fail(stream, EPROTO, "invalid response output item");
+    if (output_index < stream->item_count) {
+        const struct snag_wire_item *item = &stream->items[output_index];
+        /* Unknown extensions remain inert even when their type name evolves.
+         * Recognized reasoning and hosted-search identities cannot change class. */
+        if (item->kind == SNAG_WIRE_ITEM_INERT &&
+            (item->reasoning_seen != !strcmp(type, "reasoning") ||
+             item->hosted_search != hosted_search_type(type))) {
+            return stream_fail(stream, EPROTO, "response item changed kind");
+        }
+    }
     if (strcmp(type, "message") == 0) return message_snapshot(stream, output_index, snapshot, complete);
     if (strcmp(type, "function_call") == 0)
         return function_snapshot(stream, output_index, snapshot, complete);
@@ -750,7 +787,13 @@ handle_output_item(struct snag_responses_stream *stream, const json_t *root, boo
     const char *item_id = json_is_object(item) ? snag_json_string(item, "id") : NULL;
 
     if (!stream->created || event_output_index(stream, root, item_id, &output_index) < 0) return -1;
-    return item_snapshot(stream, output_index, item, complete);
+    if (item_snapshot(stream, output_index, item, complete) < 0) return -1;
+    if (json_object_get(root, "output_index")) {
+        stream->items[output_index].output_index =
+            (size_t)json_integer_value(json_object_get(root, "output_index"));
+        stream->items[output_index].output_index_known = true;
+    }
+    return 0;
 }
 
 static int
@@ -838,6 +881,56 @@ parse_provider_usage(struct snag_responses_stream *stream, const json_t *respons
 }
 
 static int
+terminal_order_compare(const void *left, const void *right)
+{
+    const struct snag_wire_item *a = left;
+    const struct snag_wire_item *b = right;
+    return (a->terminal_order > b->terminal_order) - (a->terminal_order < b->terminal_order);
+}
+
+static int
+terminal_output(struct snag_responses_stream *stream, const json_t *output)
+{
+    size_t count = json_array_size(output);
+
+    /* Some relays omit the terminal array or send an empty placeholder.
+     * A nonempty snapshot must account for each already observed identity. */
+    if (!count) return 0;
+    for (size_t i = 0u; i < stream->item_count; ++i) {
+        const char *id = stream->items[i].id;
+        bool found = !id;
+        for (size_t j = 0u; id && !found && j < count; ++j) {
+            const char *candidate = snag_json_string(json_array_get(output, j), "id");
+            found = candidate && !strcmp(id, candidate);
+        }
+        if (!found) {
+            return stream_fail(stream, EPROTO, "terminal snapshot omitted an observed item");
+        }
+    }
+    for (size_t i = 0u; i < count; ++i) {
+        const json_t *snapshot = json_array_get(output, i);
+        const char *id = snag_json_string(snapshot, "id");
+        size_t slot = stream->item_count;
+        if (!find_item_index(stream, id, &slot) &&
+            i < stream->item_count && !stream->items[i].id) {
+            slot = i;
+        }
+        if (slot < stream->item_count && stream->items[slot].terminal_order != SIZE_MAX) {
+            return stream_fail(stream, EPROTO, "duplicate terminal item identity");
+        }
+        if (item_snapshot(stream, slot, snapshot, true) < 0) return -1;
+        stream->items[slot].terminal_order = i;
+    }
+    if (stream->item_count != count) {
+        return stream_fail(stream, EPROTO, "terminal snapshot omitted an observed item");
+    }
+    /* Emission used stable retained slots. Reorder only after reconciliation,
+     * when no more deltas can arrive, for canonical graph/tool order. */
+    qsort(stream->items, stream->item_count, sizeof(*stream->items), terminal_order_compare);
+    return 0;
+}
+
+static int
 handle_response_completed(struct snag_responses_stream *stream, const json_t *root)
 {
     json_t *response = json_object_get(root, "response");
@@ -854,8 +947,7 @@ handle_response_completed(struct snag_responses_stream *stream, const json_t *ro
     if (output) {
         if (!json_is_array(output))
             return stream_fail(stream, EPROTO, "invalid terminal response output");
-        for (size_t i = 0; i < json_array_size(output); ++i)
-            if (item_snapshot(stream, i, json_array_get(output, i), true) < 0) return -1;
+        if (terminal_output(stream, output) < 0) return -1;
     }
     stream->terminal = true;
     return 0;
@@ -921,8 +1013,12 @@ dispatch_event(struct snag_responses_stream *stream, const char *type, const jso
                 /* Validate snapshots through their existing identity reducer.
                  * Only public text survives a failed response. */
                 bool complete = snag_string_in(snag_json_string(item, "status"), "completed");
-                int rc = !strcmp(kind, "function_call") ? function_snapshot(stream, i, item, complete) :
-                    message_snapshot(stream, i, item, complete);
+                size_t slot = stream->item_count;
+                if (!find_item_index(stream, snag_json_string(item, "id"), &slot) &&
+                    i < stream->item_count) {
+                    slot = i;
+                }
+                int rc = item_snapshot(stream, slot, item, complete);
                 if (rc < 0) {
                     (void)snprintf(stream->clarification_skipped, sizeof(stream->clarification_skipped),
                                    "invalid_response_output_snapshot");

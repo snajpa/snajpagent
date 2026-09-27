@@ -48,6 +48,9 @@ struct snag_wire_part {
 
 struct snag_wire_item {
     enum snag_wire_item_kind kind;
+    size_t output_index;
+    size_t terminal_order;
+    bool output_index_known;
     bool reasoning_seen;
     json_t *reasoning;
     char *id;

@@ -211,6 +211,25 @@ test_failed_snapshot_preserves_only_consistent_text(void)
 }
 
 static void
+test_failed_snapshot_after_unobserved_reasoning(void)
+{
+    const char *wire =
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\","
+        "\"status\":\"in_progress\",\"output\":[]}}\n\n"
+        "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"r\","
+        "\"status\":\"failed\",\"error\":{\"code\":\"cyber_policy\",\"message\":\"stopped\"},"
+        "\"output\":[{\"type\":\"reasoning\",\"id\":\"rs\",\"summary\":[]},"
+        "{\"type\":\"message\",\"id\":\"m\",\"status\":\"completed\",\"role\":\"assistant\","
+        "\"content\":[{\"type\":\"output_text\",\"text\":\"visible\"}]}]}}\n\n";
+    struct parsed_stream parsed = parsed_new(1024u);
+    assert(parse_stream(wire, 1u, &parsed) < 0);
+    assert(strstr(parsed.error, "response.failed"));
+    assert(parsed.text.len == 7u && !memcmp(parsed.text.data, "visible", 7u));
+    assert(parsed.graph.count == 0u);
+    parsed_free(&parsed);
+}
+
+static void
 test_completed_announcements_and_empty_placeholders(void)
 {
     static const char announced[] =
@@ -1363,10 +1382,117 @@ test_hosted_search_many_sources(void)
     snag_buf_free(&wire);
 }
 
+static void
+test_sparse_output_identities(void)
+{
+    const char *search1 = "{\"id\":\"ws_1\",\"type\":\"web_search_call\","
+        "\"status\":\"completed\"}";
+    const char *search2 = "{\"id\":\"ws_2\",\"type\":\"web_search_call\","
+        "\"status\":\"completed\"}";
+    const char *message = "{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\","
+        "\"status\":\"completed\",\"phase\":\"commentary\","
+        "\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}";
+    const char *call = "{\"id\":\"f\",\"type\":\"function_call\",\"status\":\"completed\","
+        "\"call_id\":\"c\",\"name\":\"get_cwd\",\"arguments\":\"{}\"}";
+
+    /* Sparse and very large keys, reversed snapshot order, late inert items,
+     * omitted indexes, collisions, duplicate/omitted terminal identities,
+     * changed names/text/types, and a failed response carrying a valid call. */
+    for (unsigned int mode = 0u; mode < 14u; ++mode) {
+        struct snag_buf wire = {.max = 16384u};
+        struct snag_buf terminal = {.max = 4096u};
+        struct parsed_stream parsed = parsed_new(1024u);
+        unsigned long long base = mode == 2u ? 1000000000ull : 0ull;
+        assert(snag_buf_printf(&wire,
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r_sparse\","
+            "\"status\":\"in_progress\",\"output\":[]}}\n\n"
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":%llu,"
+            "\"item\":%s}\n\n"
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":%llu,"
+            "\"item\":%s}\n\n"
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":%llu,"
+            "\"item\":{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\","
+            "\"status\":\"in_progress\",\"phase\":\"commentary\",\"content\":[]}}\n\n"
+            "data: {\"type\":\"response.content_part.added\",\"output_index\":%llu,"
+            "\"item_id\":\"m\",\"content_index\":0,"
+            "\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n",
+            base + 7u, search1, base + (mode == 3u ? 7u : 2u),
+            mode == 4u ? search1 : search2, base + 9u, base + 9u) == 0);
+        if (mode == 10u) {
+            assert(snag_buf_printf(&wire,
+                "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"m\","
+                "\"content_index\":0,\"delta\":\"ok\"}\n\n") == 0);
+        } else {
+            assert(snag_buf_printf(&wire,
+                "data: {\"type\":\"response.output_text.delta\",\"output_index\":%llu,"
+                "\"item_id\":\"%s\",\"content_index\":0,\"delta\":\"ok\"}\n\n",
+                base + 9u, mode == 5u ? "ws_1" : "m") == 0);
+        }
+        assert(snag_buf_printf(&wire,
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":%llu,"
+            "\"item\":{\"id\":\"f\",\"type\":\"function_call\",\"status\":\"in_progress\","
+            "\"call_id\":\"c\",\"name\":\"get_cwd\",\"arguments\":\"\"}}\n\n"
+            "data: {\"type\":\"response.function_call_arguments.delta\","
+            "\"output_index\":%llu,\"item_id\":\"f\",\"delta\":\"{}\"}\n\n"
+            "data: {\"type\":\"response.function_call_arguments.done\","
+            "\"output_index\":%llu,\"item_id\":\"f\",\"arguments\":\"{}\"}\n\n",
+            base + 25u, base + 25u, base + 25u) == 0);
+        if (mode == 1u) {
+            assert(snag_buf_printf(&terminal, "%s,%s,%s,%s",
+                call, message, search2, search1) == 0);
+        } else {
+            const char *first = mode == 13u ?
+                "{\"id\":\"ws_1\",\"type\":\"reasoning\",\"summary\":[]}" : search1;
+            assert(snag_buf_printf(&terminal, "%s,%s,%s", first, search2,
+                mode == 12u ? "{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\","
+                    "\"status\":\"completed\",\"content\":[{\"type\":\"output_text\","
+                    "\"text\":\"conflict\"}]}" : message) == 0);
+            if (mode == 6u) assert(snag_buf_printf(&terminal, ",%s", message) == 0);
+            if (mode != 7u) {
+                assert(snag_buf_printf(&terminal, ",%s", mode == 8u ?
+                    "{\"id\":\"f\",\"type\":\"function_call\",\"status\":\"completed\","
+                    "\"call_id\":\"c\",\"name\":\"get_other\",\"arguments\":\"{}\"}" : call) == 0);
+            }
+            if (mode == 11u) {
+                assert(snag_buf_printf(&terminal,
+                    ",{\"id\":\"late\",\"type\":\"reasoning\",\"summary\":[]}") == 0);
+            }
+        }
+        assert(snag_buf_terminate(&terminal) == 0);
+        assert(snag_buf_printf(&wire,
+            "data: {\"type\":\"response.%s\",\"response\":{\"id\":\"r_sparse\","
+            "\"status\":\"%s\",\"output\":[%s]}}\n\n",
+            mode == 9u ? "failed" : "completed", mode == 9u ? "failed" : "completed",
+            terminal.data) == 0);
+        assert(snag_buf_terminate(&wire) == 0);
+        int rc = parse_stream((const char *)wire.data, 1u, &parsed);
+        if (mode < 3u || mode == 10u || mode == 11u) {
+            if (rc != 0) fprintf(stderr, "sparse mode %u: %s\n", mode, parsed.error);
+            assert(rc == 0);
+            assert(parsed.graph.count == 2u);
+            assert(parsed.text.len == 2u && !memcmp(parsed.text.data, "ok", 2u));
+            assert(parsed.last_index == 2u);
+            assert(snag_response_graph_item(&parsed.graph, mode == 1u ? 0u : 1u).kind ==
+                SNAG_ITEM_TOOL_CALL);
+            assert(!strcmp(snag_response_graph_item(&parsed.graph,
+                mode == 1u ? 1u : 0u).text, "ok"));
+        } else {
+            if (rc >= 0) fprintf(stderr, "sparse conflict mode %u accepted\n", mode);
+            assert(rc < 0);
+            assert(parsed.graph.count == 0u);
+            if (mode == 9u) assert(strstr(parsed.error, "response.failed"));
+        }
+        parsed_free(&parsed);
+        snag_buf_free(&terminal);
+        snag_buf_free(&wire);
+    }
+}
+
 int
 main(void)
 {
     test_message_completion_finalizes_phase();
+    test_sparse_output_identities();
     test_failed_function_clarification_boundaries();
     test_deltas_survive_empty_terminal_output();
     test_llamacpp_stream_without_indexes();
@@ -1375,6 +1501,7 @@ main(void)
     test_reasoning_part_cannot_complete_response();
     test_terminal_snapshot_can_supply_unseen_items();
     test_failed_snapshot_preserves_only_consistent_text();
+    test_failed_snapshot_after_unobserved_reasoning();
     test_empty_public_items_get_specific_correction();
     test_completed_announcements_and_empty_placeholders();
     test_oversized_public_items_get_specific_correction();
