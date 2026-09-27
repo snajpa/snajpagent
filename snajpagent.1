@@ -1960,9 +1960,15 @@ Automatic compaction uses the provider threshold and resolved input capacity;
 setting the proactive threshold to zero does not disable capacity handling.
 With a known hard input window, the default automatic threshold is 90% of that
 window.  The prompt percentage shows measured input usage of the selected
-window.  Exact input counts and completed responses refresh the composer during
-active work and after return to idle.  Streaming output enters a later request
-when its input is measured.  The percentage can fall after a completed
+window. An exact outgoing count refreshes the composer when the response attempt
+starts, before provider output. Completed responses refresh it from measured
+usage. Compaction and recovery rebases replace the measured context; the meter
+shows unknown until a compatible measurement exists. Status retains a historical
+observation only with an explicit label when provider source, model, effort or
+compaction no longer matches. Context-selection advice uses the same compatibility
+check. A matching last observation is not a measurement of later unsubmitted
+tool output. Streaming output enters a later request when its input is measured.
+The percentage can fall after a completed
 compaction; each new attempt announces itself.  A long turn can compact again after a completed response and later
 tool progress when its next request exceeds the hard budget.  A recovery rebase clears the
 previous usage measurement until a new response supplies one.

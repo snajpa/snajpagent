@@ -4195,6 +4195,49 @@ def test_context_meter_repaints_during_turn_and_at_idle():
         child.exit_cleanly(answered)
 
 
+def test_context_meter_exact_start_and_lineage():
+    config = write_config("prompt-exact-start.ini",
+        "[provider openai]\nexact_token_count = true\nauto_compact_input_tokens = 0\n"
+        f"[model-limit openai/{DEFAULT_MODEL}]\nmax_input_tokens = 100000\n")
+    with Child(["--config", str(config)], ready=DEFAULT_IDLE_PROMPT) as child:
+        start = len(child.buf)
+        child.send_wait(b"queue_prompt_slow\r", b"working slowly", start=start)
+        for _ in range(5):
+            child.read_once(0.02)
+        log = events(child.session_id())
+        request = [event["data"] for event in log if event["type"] == "response_started"][-1]
+        assert request["count_method"] == "exact", request
+        assert not [event for event in log if event["type"] == "response_completed"]
+        used, hard = request["input_tokens_bound"], request["hard_input_tokens"]
+        percent = min(100, (used * 100 + hard - 1) // hard)
+        active_output = bytes(child.buf[start:])
+        assert f"{percent}%".encode() in active_output, (
+            "exact request-start measurement was not painted before provider completion",
+            re.findall(rb"[0-9?]{1,3}%", active_output)[-20:])
+        interrupted = child.send_wait(b"\x03", b"turn interrupted")
+        child.exit_cleanly(interrupted)
+
+    config = write_config("prompt-meter-lineage.ini",
+        "[provider openai]\nnative_compaction = true\nauto_compact_input_tokens = 0\n"
+        "[provider second]\nauto_compact_input_tokens = 0\n"
+        f"[model-limit openai/{DEFAULT_MODEL}]\nmax_input_tokens = 100000\nmax_output_tokens = 100\n"
+        "[model-limit second/other]\nmax_input_tokens = 100000\nmax_output_tokens = 100\n")
+    with Child(["--config", str(config)], ready=DEFAULT_IDLE_PROMPT) as child:
+        end = child.send_wait_idle(b"ping\r", b"pong")
+        end = child.send_wait_idle(b"/status\r", b"matching selection and compaction", start=end)
+        end = child.send_wait_idle(b"/compact\r", COMPACTED, start=end)
+        end = child.send_wait_idle(b"/status\r", b"historical; different selection or compaction", start=end)
+        start = len(child.buf)
+        end = child.send_wait_idle(b"/context 500\r", b"context for next turn", start=start)
+        assert b"the next request compacts first" not in bytes(child.buf[start:])
+        end = child.send_wait_idle(b"/context default\r", b"context for next turn", start=end)
+        end = child.send_wait_idle(b"/model second/other/high\r", b"model for next turn", start=end)
+        end = child.send_wait_idle(b"/status\r", b"historical; different selection or compaction", start=end)
+        end = child.send_wait_idle(b"ping\r", b"pong", start=end)
+        end = child.send_wait_idle(b"/status\r", b"matching selection and compaction", start=end)
+        child.exit_cleanly(end)
+
+
 def test_model_selection_stays():
     config = write_config("model-stays.ini",
         "[provider first]\n[provider second]\n[agent]\n"
@@ -6093,6 +6136,7 @@ if __name__ == "__main__":
     test_config_editor_reload()
     test_known_context_meter()
     test_context_meter_repaints_during_turn_and_at_idle()
+    test_context_meter_exact_start_and_lineage()
     test_model_selection_stays()
     test_config_and_cli_model_passthrough()
     test_exit_resume_matrix()

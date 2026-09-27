@@ -408,7 +408,7 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data, cha
      * current across response/tool cycles and the idle prompt after a count;
      * ordinary output does not otherwise rebuild its context field. */
     if (app->ui.opened && snag_string_in(type,
-            "input_token_count response_completed context_rebased") &&
+            "response_started response_completed compaction_completed context_rebased") &&
         set_input_prompt(app, app->session.active_turn) < 0)
         return snag_errorf(error, error_size, "context prompt could not be updated");
     if (strcmp(type, "turn_failed") == 0 && app->session.goal_status != SNAG_GOAL_ACTIVE)
@@ -488,16 +488,23 @@ render_queue(struct app_state *app)
     return 0;
 }
 
+static bool
+context_meter_matches(struct app_state *app, const struct snag_provider_config *provider,
+    const char *model, const char *effort)
+{
+    char hash[SNAG_SHA256_HEX_LEN + 1u];
+    if (!provider || !model || !effort) return false;
+    provider_capacity_source_sha256(provider, model, hash);
+    return snag_input_observation_matches(&app->session.context_meter,
+        provider->name, model, effort, hash, app->session.compact_id);
+}
+
 bool
 snag_app_measured_input(struct app_state *app, uint64_t *tokens)
 {
-    struct snag_session *s = &app->session;
-    char hash[SNAG_SHA256_HEX_LEN + 1u];
-
-    provider_capacity_source_sha256(app->turn_provider, app->turn_model, hash);
-    if (!snag_input_observation_matches(&s->context_meter,
-            app->turn_provider->name, app->turn_model, app->turn_effort, hash, s->compact_id)) return false;
-    *tokens = s->context_meter.input_tokens;
+    if (!context_meter_matches(app, app->turn_provider, app->turn_model, app->turn_effort))
+        return false;
+    *tokens = app->session.context_meter.input_tokens;
     return true;
 }
 
@@ -509,7 +516,6 @@ format_context_meter(struct app_state *app, bool active, char meter[32u])
     const char *effort = active ? app->turn_effort : resolve_effort(app->session.default_effort);
     struct snag_model_capacity resolved;
     const struct snag_model_capacity *capacity = &app->turn_capacity;
-    char provider_source_hash[SNAG_SHA256_HEX_LEN + 1u];
     uint64_t used;
     uint64_t hard;
     unsigned int percent;
@@ -526,9 +532,7 @@ format_context_meter(struct app_state *app, bool active, char meter[32u])
         if (snag_app_capacity_resolve(app, provider, model, &resolved, error, sizeof(error)) < 0) return -1;
         capacity = &resolved;
     }
-    provider_capacity_source_sha256(provider, model, provider_source_hash);
-    if (!snag_input_observation_matches(&app->session.context_meter,
-            provider->name, model, effort, provider_source_hash, app->session.compact_id)) {
+    if (!context_meter_matches(app, provider, model, effort)) {
         memcpy(meter, "?", sizeof("?"));
         return 0;
     }
@@ -1061,10 +1065,15 @@ render_status(struct app_state *app)
             capacity.count_capability == SNAG_COUNT_SUPPORTED ? "supported" :
             capacity.count_capability == SNAG_COUNT_UNSUPPORTED ? "unsupported" : "unknown") < 0) goto out;
     if (app->session.context_meter.valid) {
-        if (snag_buf_printf(&text, "\nobserved usage: input=%llu tokens · provider=%s · model=%s · effort=%s",
+        bool matches = context_meter_matches(app, provider, app->session.default_model,
+            resolve_effort(app->session.default_effort));
+        if (snag_buf_printf(&text,
+                "\nobserved usage: input=%llu tokens · provider=%s · model=%s · effort=%s · %s",
                 (unsigned long long)app->session.context_meter.input_tokens,
                 app->session.context_meter.provider, app->session.context_meter.model,
-                app->session.context_meter.effort) < 0) goto out;
+                app->session.context_meter.effort, matches ?
+                    "last measurement; matching selection and compaction" :
+                    "historical; different selection or compaction") < 0) goto out;
     } else if (snag_buf_append(&text, "\nobserved usage: unknown", strlen("\nobserved usage: unknown")) < 0) {
         goto out;
     }
@@ -2118,9 +2127,9 @@ report_context(struct app_state *app, const struct snag_provider_config *provide
                                    &rule, rule_sources) && rule.context_window_tokens &&
         snag_buf_append(&text, "\nconfigured context rule is ignored by the session selection",
                         strlen("\nconfigured context rule is ignored by the session selection")) < 0) goto out;
-    over_budget = capacity.hard_input_known && app->session.context_meter.valid &&
-        strcmp(app->session.context_meter.provider, provider->name) == 0 &&
-        strcmp(app->session.context_meter.model, app->session.default_model) == 0 &&
+    over_budget = capacity.hard_input_known &&
+        context_meter_matches(app, provider, app->session.default_model,
+            resolve_effort(app->session.default_effort)) &&
         app->session.context_meter.input_tokens >= snag_model_compact_threshold(provider, &capacity);
     if (over_budget && snag_buf_append(&text,
             "\nthe next request compacts first: the measured input is over this budget",

@@ -196,6 +196,13 @@ Both summary completion and recovery rebase invalidate pre-boundary measurements
 and growth anchors. Failed compaction retains them because coverage did not change.
 The compact output's count alone is not the full next-request count.
 
+An exact outgoing count becomes durable at `response_started`; provider usage
+may replace it at `response_completed`. There is no `input_token_count` journal
+transition. Refresh at those real transitions and at completed compaction/rebase.
+Use the same binding/compaction matcher for the meter, status annotation and
+context-selection budget advice. Status may retain a historical observation for
+diagnostics, but must label it ineligible rather than implying current occupancy.
+
 Refresh presentation after committed observation, coverage or selected-identity
 changes and when entering idle. Preserve the user's draft, terminal ownership,
 input timestamp and immutable submitted-label history. Repainting the prefix must
