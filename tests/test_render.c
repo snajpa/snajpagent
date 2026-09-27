@@ -1825,13 +1825,13 @@ test_history_turns(void)
     assert(snag_render_rollout(&render, "active suffix", 13u, NULL) == 0);
     assert(snag_render_rollout_end(&render) == 0);
     assert(capture_close(&capture, output, sizeof(output), 0u) > 0u);
-    assert(count_text(output, "── history: 3 total turns · 2 completed ──") == 1u);
-    assert(count_text(output, "history: 0 shown · 0 completed · 0 total") == 1u);
+    assert(count_text(output, "── history: 3 total turns ──") == 1u);
+    assert(count_text(output, "history: 0 shown · 0 completed among shown · 0 total") == 1u);
     const char *position = output;
     const char *const fragments[] = {
-        "active prefix", "history: 3 total turns · 2 completed", "user: first input",
+        "active prefix", "history: 3 total turns", "user: first input",
         "first answer", "user: second input", "second answer",
-        "history: 2 shown · 2 completed · 3 total", "active suffix" };
+        "history: 2 shown · 2 completed among shown · 3 total", "active suffix" };
     for (size_t i = 0u; i < sizeof(fragments) / sizeof(fragments[0]); ++i) {
         position = strstr(position, fragments[i]);
         assert(position);
@@ -3077,7 +3077,7 @@ main(void)
     assert(strcmp(output, "\n• **\n\n") == 0);
 
     assert(capture_static_markdown(0u, output, sizeof(output)) > 0u);
-    assert(count_text(output, "history: 1 shown · 2 completed · 3 total") == 2u);
+    assert(count_text(output, "history: 1 shown · 2 completed among shown · 3 total") == 2u);
     for (unsigned int verbosity = 1u; verbosity <= 6u; ++verbosity) {
         char other[8192u];
 

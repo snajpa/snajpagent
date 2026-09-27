@@ -339,7 +339,10 @@ int snag_session_checkpoint_read(struct snag_session *, json_t **state, json_t *
     char *error, size_t error_size);
 /* Backward, envelope/hash-verified records without reducer replay. The callback
  * gets NULL state; positive pauses before consuming that record, negative fails.
+ * SNAG_JOURNAL_STOP_AFTER consumes that record and stops without reading another.
  * A byte quantum may include one larger complete record. Zero next_before is EOF. */
+#define SNAG_JOURNAL_PAGE_BYTES (4u * 1024u * 1024u)
+#define SNAG_JOURNAL_STOP_AFTER 2
 int snag_session_each_event_reverse(struct snag_session *, uint64_t before_seq, size_t scan_bytes,
     snag_session_event_fn, void *opaque, uint64_t *next_before, char *error, size_t error_size);
 

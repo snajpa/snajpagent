@@ -2787,7 +2787,7 @@ snag_session_each_event_reverse(struct snag_session *session, uint64_t before, s
         }
         int rc = fn(opaque, NULL, seq, snag_json_string(record, "type"),
             json_object_get(record, "data"), error, error_size);
-        if (rc) {
+        if (rc && rc != SNAG_JOURNAL_STOP_AFTER) {
             json_decref(record);
             if (rc < 0) return -1;
             break;
@@ -2799,6 +2799,7 @@ snag_session_each_event_reverse(struct snag_session *session, uint64_t before, s
         memcpy(cursor.prev_sha256, snag_json_string(record, "prev_sha256"),
             sizeof(cursor.prev_sha256));
         json_decref(record);
+        if (rc == SNAG_JOURNAL_STOP_AFTER) break;
     }
     session->history_cursor = cursor;
     *next_before = cursor.offset ? cursor.next_seq : 0u;

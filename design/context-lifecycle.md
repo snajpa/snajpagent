@@ -229,6 +229,15 @@ and resume. Goal pages preserve creation identity, final/current status and
 replacement links, even when paging older creations past newer revisions.
 
 Recent event pages walk the journal backwards from its verified live boundary.
+Startup display history uses the same scan quantum. It collects recent public
+turn events, then renders them chronologically; count zero reads no journal.
+Completion counts describe shown turns, not a lifetime total obtained by replay.
+A window beginning inside a turn labels the omitted prefix as display metadata,
+never as invented user input. Older IRC references may remain unresolved when
+outside the window. They remain recoverable from the original journal. Display
+restoration is separate from authoritative IRC recovery: deduplication cursors,
+pending admissions and reply obligations cannot be dropped to bound a preview.
+
 Each record uses the existing envelope/digest validator and links to the previous
 record. One derived in-memory position per session avoids rediscovering the last
 page boundary; it is discarded on reopen and is not another durable index.

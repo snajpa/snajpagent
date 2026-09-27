@@ -1614,8 +1614,7 @@ struct history_replay {
     struct snag_buf response;
     struct history_irc_payload *payloads;
     size_t payload_count;
-    uint64_t completed, skip, shown, total;
-    bool counting;
+    uint64_t completed, shown, total;
 };
 
 /* Turn prompts name IRC updates by durable id and keep the room event itself
@@ -1714,6 +1713,7 @@ history_display(struct history_replay *history, const struct snag_history_turn *
 static int
 history_append(char **target, const char *text, const char *separator)
 {
+    if (!text) return snag_errno(EINVAL);
     size_t old = *target ? strlen(*target) : 0u;
     size_t sep = old ? strlen(separator) : 0u, len = strlen(text);
     size_t size;
@@ -1742,7 +1742,7 @@ static int
 history_finish(struct history_replay *history)
 {
     char *resolved;
-    if (!history->turn.user) return 0;
+    if (!history->turn.user && !history->turn.partial) return 0;
     resolved = history_resolve_irc(history, history->turn.user);
     if (resolved) {
         free(history->turn.user);
@@ -1770,21 +1770,19 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
     bool completed = snag_string_in(type, "turn_completed turn_completed_silent");
     (void)state; (void)seq; (void)error; (void)error_size;
     if (history->ui && snag_ui_leaving(history->ui)) return snag_errno(ECANCELED);
-    if (history->counting) {
-        history->completed += completed;
-        return 0;
-    }
     if (history->ui && !strcmp(type, "irc_event") && history_note_irc_event(history, data) < 0)
         return -1;
     if (!strcmp(type, "turn_started")) {
         if (history_finish(history) < 0) return -1;
-        if (history->skip) { --history->skip; return 0; }
-        turn->user = strdup(snag_json_string(data, "text"));
-        turn->timer = !strcmp(snag_json_string(data, "input_kind"), "timer");
+        const char *text = snag_json_string(data, "text");
+        const char *kind = snag_json_string(data, "input_kind");
+        if (!text) return snag_errno(EINVAL);
+        turn->user = strdup(text);
+        turn->timer = kind && !strcmp(kind, "timer");
         turn->status = "unfinished";
         return turn->user ? 0 : -1;
     }
-    if (!turn->user) return 0;
+    if (!turn->user && !turn->partial) return 0;
     if (!strcmp(type, "irc_admitted") && json_object_get(data, "steering"))
         return history_append(&turn->user, snag_json_string(json_object_get(data, "steering"), "text"), "\nsteering: ");
     if (!strcmp(type, "steering_added"))
@@ -1794,7 +1792,7 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
     } else if (!strcmp(type, "response_output")) {
         const char *text = snag_json_string(json_object_get(data, "item"), "text");
         uint64_t offset;
-        if (snag_json_integer_u64(data, "offset", &offset) < 0) return -1;
+        if (!text || snag_json_integer_u64(data, "offset", &offset) < 0) return snag_errno(EINVAL);
         if (!offset && history->response.len && snag_buf_append(&history->response, "\n\n", 2u) < 0)
             return -1;
         return snag_buf_append(&history->response, text, strlen(text));
@@ -1804,10 +1802,48 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
         if (!items) items = json_object_get(data, "partial_public");
         return history_items(history, items);
     } else if (completed || snag_string_in(type, "turn_failed turn_interrupted")) {
+        history->completed += completed;
         turn->status = completed ? "completed" : !strcmp(type, "turn_failed") ? "failed" : "interrupted";
         return history_finish(history);
     }
     return 0;
+}
+
+struct history_window {
+    struct snag_ui *ui;
+    json_t *events;
+    uint64_t remaining;
+    size_t prefix_irc;
+    bool wants_irc;
+};
+
+static int
+history_collect(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct history_window *window = opaque;
+    (void)state; (void)seq; (void)error; (void)error_size;
+    if (snag_ui_leaving(window->ui)) return snag_errno(ECANCELED);
+    bool irc = !strcmp(type, "irc_event");
+    if (!strcmp(type, "irc_admitted") && !json_object_get(data, "steering")) return 0;
+    if (!window->remaining) {
+        if (!window->wants_irc || window->prefix_irc == HISTORY_IRC_PAYLOADS) return 1;
+        if (!irc) return 0;
+        ++window->prefix_irc;
+    } else if (!irc && !snag_string_in(type,
+            "turn_started steering_added irc_admitted response_started response_output "
+            "response_completed response_failed response_interrupted response_output_correction "
+            "turn_completed turn_completed_silent turn_failed turn_interrupted")) return 0;
+    const json_t *text_data = !strcmp(type, "irc_admitted") ?
+        json_object_get(data, "steering") : data;
+    const char *text = !irc ? snag_json_string(text_data, "text") : NULL;
+    if (text && strstr(text, "[IRC update id=")) window->wants_irc = true;
+    if (!strcmp(type, "turn_started")) --window->remaining;
+    if (json_array_append_new(window->events,
+            json_pack("{s:s,s:O}", "type", type, "data", (json_t *)data)) < 0) return -1;
+    bool done = !window->remaining &&
+        (!window->wants_irc || window->prefix_irc == HISTORY_IRC_PAYLOADS);
+    return done ? SNAG_JOURNAL_STOP_AFTER : 0;
 }
 
 int
@@ -1815,14 +1851,33 @@ snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count
 {
     /* One response's public text plus one separator per fragment, under the
      * response-public byte bound. */
-    struct history_replay history = {.ui = ui, .counting = true, .total = session->turn_count,
+    struct history_replay history = {.ui = ui, .total = session->turn_count,
         .response = {.max = 3u * SNAG_MAX_RESPONSE_GRAPH}};
-    int rc = snag_session_each_event(session, history_event, &history, NULL, 0u);
-    history.counting = false;
-    if (rc == 0 && count && history.total) {
-        history.skip = history.total > count ? history.total - count : 0u;
-        rc = snag_session_each_event(session, history_event, &history, NULL, 0u);
+    struct history_window window = {.ui = ui, .remaining = count, .events = json_array()};
+    uint64_t before = 0u;
+    int rc = window.events ? 0 : -1;
+    if (!rc && count && history.total) {
+        rc = snag_session_each_event_reverse(session, 0u, SNAG_JOURNAL_PAGE_BYTES,
+            history_collect, &window, &before, NULL, 0u);
+        bool first = true;
+        for (size_t i = json_array_size(window.events); !rc && i; --i) {
+            const json_t *entry = json_array_get(window.events, i - 1u);
+            const char *type = snag_json_string(entry, "type");
+            if (first && strcmp(type, "irc_event")) {
+                history.turn.partial = before && strcmp(type, "turn_started");
+                history.turn.status = "unfinished";
+                first = false;
+            }
+            rc = history_event(&history, NULL, 0u, type, json_object_get(entry, "data"), NULL, 0u);
+        }
         if (rc == 0) rc = history_finish(&history);
+        if (!rc && before && window.remaining) {
+            char notice[192];
+            (void)snprintf(notice, sizeof(notice),
+                "History scan window ended; earlier events: read_session_history before_seq=%llu.",
+                (unsigned long long)before);
+            rc = snag_ui_text(ui, SNAG_UI_HOST, notice);
+        }
     }
     if (rc == 0 && count && session->pending_input)
         rc = snag_ui_submitted(ui, "pending input › ", snag_json_string(session->pending_input, "text"), false);
@@ -1833,6 +1888,7 @@ snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count
     if (history.payloads)
         for (size_t i = 0u; i < HISTORY_IRC_PAYLOADS; ++i) free(history.payloads[i].text);
     free(history.payloads);
+    json_decref(window.events);
     return rc;
 }
 

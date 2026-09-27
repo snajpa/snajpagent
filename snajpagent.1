@@ -388,11 +388,15 @@ confirmation; opening the queue editor cancels deletion and opens that editor.
 The external configuration editor takes exclusive terminal input until it exits.
 .SS Read history and its length
 .B /history
-replays one retained turn by default.  Use /history 10 for the last ten turns,
-or /history 0 for counts alone.  Nonempty replay starts with total session turns
-and completed turns, and every replay ends with shown/completed/total counts.
-Unfinished, failed and interrupted work is included; a total can exceed completed
-turns.  Automatic resume uses the same replay and defaults to one turn.
+replays up to one recent retained turn by default. Use /history 10 to request ten,
+or /history 0 for the total turn count without reading the journal. Replay ends
+with shown turns, completions among those shown, and the total session turn count.
+Unfinished, failed and interrupted work is included. Automatic resume uses the
+same replay and defaults to one turn. The scan covers at most 4 MiB plus one
+atomic journal record. A partial oldest turn is explicitly marked; omitted input
+is not rendered as user text. When the scan ends early, its continuation sequence
+locates older records through the model's read_session_history tool. IRC references
+outside the window may remain unresolved.
 .PP
 Conversation replay is separate from the session's prompt-entry history used by
 Up, Ctrl-P and Ctrl-R.  Compaction reduces model context, not the full local
@@ -1378,11 +1382,11 @@ is an alias for
 .BR /state " goal" .
 .TP
 .BR /history " [N]"
-Show the last N turns, oldest first, including unfinished, failed and interrupted work.  Default: 1.  Available during
-active work.  N is a nonnegative decimal count; large counts show all
-turns.  Zero shows only the counts.  Nonempty replay begins with total session
-turns and completed turns, then ends with shown, completed and total counts.
-Empty replay also displays the counts.  Uses the same replay as
+Show up to N recent turns, oldest first, including unfinished, failed and interrupted
+work. Default: 1. Available during active work. N is a nonnegative decimal count;
+the bounded scan may show fewer turns or a marked partial oldest turn. Zero shows
+the total turn count without scanning. Completion counts cover only shown turns.
+Older original events remain available through read_session_history. Uses the same replay as
 .B resume_history_turns
 without changing configuration or model context.
 .TP

@@ -862,7 +862,6 @@ out:
 
 #define APP_HISTORY_LIMIT_MAX 50u
 #define APP_HISTORY_DETAIL_MAX 2048u
-#define APP_HISTORY_SCAN_BYTES (4u * 1024u * 1024u)
 
 struct app_history_scan {
     struct app_state *app;
@@ -1005,7 +1004,7 @@ snag_app_history_page(struct app_state *app, const struct snag_response_item *ca
     scan.body.max = app->session.tool_output_bytes > 512u ?
         app->session.tool_output_bytes - 512u : 0u;
     uint64_t next_before;
-    if (snag_session_each_event_reverse(&app->session, before, APP_HISTORY_SCAN_BYTES,
+    if (snag_session_each_event_reverse(&app->session, before, SNAG_JOURNAL_PAGE_BYTES,
             history_event, &scan, &next_before, error, error_size) < 0) goto out;
     if (scan.budget_failed) {
         snag_errorf(error, error_size, "History output budget cannot fit one record. "

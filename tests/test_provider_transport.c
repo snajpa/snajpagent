@@ -2037,6 +2037,138 @@ test_history_and_goal_list_tools(void)
 }
 
 static void
+test_ui_bounded_history(void)
+{
+    char path[4096], output_path[4096], error[256] = {0}, output[8192];
+    struct snag_store store;
+    struct snag_session session;
+    struct snag_ui ui;
+    const char *tmp = getenv("TMPDIR");
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-ui-history-XXXXXX", tmp ? tmp : "/tmp") > 0);
+    assert(mkdtemp(path));
+    snag_store_init(&store);
+    snag_session_init(&session);
+    assert(snag_store_open(&store, path, error, sizeof(error)) == 0);
+    assert(snag_session_create(&store, &session, path, "default", "fixture", "medium",
+        error, sizeof(error)) == 0);
+    assert(snprintf(output_path, sizeof(output_path), "%s/capture", path) > 0);
+    int fd = open(output_path, O_CREAT | O_EXCL | O_RDWR, 0600), saved = dup(STDERR_FILENO);
+    assert(fd >= 0 && saved >= 0 && dup2(fd, STDERR_FILENO) == STDERR_FILENO);
+    assert(snag_ui_init(&ui) == 0);
+    int64_t damaged = 0;
+    json_t *checkpoint = NULL;
+    for (unsigned int i = 1u; i <= 3u; ++i) {
+        char id[33], text[32];
+        assert(snprintf(id, sizeof(id), "%032x", i) > 0);
+        assert(snprintf(text, sizeof(text), "history input %u", i) > 0);
+        json_t *started = json_pack("{s:{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b},"
+            "s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:I,s:s}",
+            "config", "capability_version", SNAJPAGENT_CAPABILITY_VERSION, "effort", "medium",
+            "max_output_tokens", "model", "fixture", "provider", "default",
+            "profile_id", SNAJPAGENT_PROFILE_ID,
+            "prompt_schema", 1, "replay_schema", 1, "tool_schema", 1, "max_parallel_commands", 4,
+            "parallel_tool_calls", 1, "input_kind", "direct", "read_only", 0,
+            "instructions", json_array(), "queue_id", "queue_seq", "text", text,
+            "turn_id", id, "turn_number", (json_int_t)i, "cwd", session.cwd);
+        assert(snag_session_commit(&session, "turn_started", started,
+            NULL, error, sizeof(error)) == 0);
+        if (i == 1u) damaged = session.log_end;
+        if (i == 3u) {
+            size_t size = SNAG_JOURNAL_PAGE_BYTES + 4096u;
+            char *padding = malloc(size);
+            assert(padding); memset(padding, 'x', size);
+            checkpoint = json_pack("{s:o}", "padding", json_stringn(padding, size));
+            free(padding); assert(checkpoint);
+            session.on_checkpoint = history_checkpoint_document;
+            session.on_commit_opaque = checkpoint;
+            assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+            session.on_checkpoint = NULL; session.on_commit_opaque = NULL;
+        }
+        assert(snag_session_commit(&session, "turn_failed",
+            json_pack("{s:s,s:s,s:s}", "class", "provider", "message", "fixture", "turn_id", id),
+            NULL, error, sizeof(error)) == 0);
+        if (i == 2u) {
+            char original;
+            int writer = openat(session.dir_fd, "events.jsonl", O_WRONLY | O_CLOEXEC);
+            assert(writer >= 0);
+            assert(pread(session.log_fd, &original, 1u, damaged) == 1);
+            assert(pwrite(writer, "!", 1u, damaged) == 1);
+            assert(snag_ui_history(&ui, &session, 0u) == 0);
+            assert(snag_ui_history(&ui, &session, 1u) == 0);
+            assert(snag_ui_history(&ui, &session, 2u) < 0);
+            assert(pwrite(writer, &original, 1u, damaged) == 1);
+            assert(close(writer) == 0);
+        }
+    }
+    assert(snag_ui_history(&ui, &session, 1u) == 0);
+    /* Admission metadata beyond a large checkpoint is not an invented turn. */
+    struct snag_irc_event event = {.kind = SNAG_IRC_MESSAGE, .timestamp_ms = 1u,
+        .stream = "11111111111111111111111111111111", .sequence = 1u,
+        .endpoint = "fixture:1234", .room = "#fixture", .nick = "peer", .text = "background",
+        .classified = true, .input = true};
+    uint64_t irc_seq;
+    assert(snag_session_commit(&session, "irc_event", snag_irc_event_data(&event),
+        &irc_seq, error, sizeof(error)) == 0);
+    session.on_checkpoint = history_checkpoint_document;
+    session.on_commit_opaque = checkpoint;
+    assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+    session.on_checkpoint = NULL; session.on_commit_opaque = NULL;
+    json_decref(checkpoint);
+    assert(snag_session_commit(&session, "irc_admitted",
+        json_pack("{s:[I]}", "sequences", (json_int_t)irc_seq), NULL, error, sizeof(error)) == 0);
+    assert(snag_ui_history(&ui, &session, 1u) == 0);
+    /* Integrity-valid envelopes still need safe presentation-field checks. */
+    for (unsigned int malformed = 0u; malformed < 3u; ++malformed) {
+        struct snag_session broken;
+        struct snag_buf bytes = {.max = 65536u};
+        snag_session_init(&broken);
+        memcpy(broken.id, session.id, sizeof(broken.id));
+        broken.pending_log = &bytes; broken.turn_count = 1u;
+        for (unsigned int row = 0u; row <= (malformed ? 1u : 0u); ++row) {
+            const char *type = !row ? "turn_started" : malformed == 1u ?
+                "response_output" : "response_completed";
+            json_t *data = !row ? (malformed ? json_pack("{s:s}", "text", "fixture") :
+                json_object()) : malformed == 1u ? json_pack("{s:i,s:{}}", "offset", 0, "item") :
+                json_pack("{s:[{s:s}]}", "items", "kind", "assistant");
+            json_t *record = json_pack("{s:o,s:s,s:I,s:s,s:i,s:s,s:i}", "data", data,
+                "prev_sha256", broken.prev_sha256, "seq", (json_int_t)broken.next_seq,
+                "session_id", broken.id, "time_ms", 1, "type", type, "v", 1);
+            assert(record && snag_json_digest(record, broken.prev_sha256) == 0);
+            assert(json_object_set_new(record, "event_sha256",
+                json_string(broken.prev_sha256)) == 0);
+            struct snag_buf line = {.max = 65536u};
+            assert(snag_json_canonical(record, &line) == 0);
+            assert(snag_buf_append(&bytes, line.data, line.len) == 0 &&
+                snag_buf_putc(&bytes, '\n') == 0);
+            snag_buf_free(&line);
+            json_decref(record);
+            ++broken.next_seq;
+        }
+        broken.log_end = (int64_t)bytes.len;
+        assert(snag_ui_history(&ui, &broken, 1u) < 0 && errno == EINVAL);
+        assert(broken.history_cursor.next_seq == 1u && broken.history_cursor.offset == 0);
+        snag_buf_free(&bytes);
+    }
+    snag_ui_signal(&ui);
+    assert(snag_ui_history(&ui, &session, 1u) < 0 && errno == ECANCELED);
+    snag_ui_free(&ui);
+    assert(dup2(saved, STDERR_FILENO) == STDERR_FILENO && close(saved) == 0);
+    ssize_t got = pread(fd, output, sizeof(output) - 1u, 0);
+    assert(got > 0); output[got] = '\0';
+    assert(strstr(output, "history input 2") && !strstr(output, "history input 1"));
+    assert(!strstr(output, "history input 3"));
+    assert(strstr(output, "earlier input outside restored history window"));
+    assert(!strstr(strstr(output, "earlier input outside restored history window") + 1,
+        "earlier input outside restored history window"));
+    assert(strstr(output, "History scan window ended"));
+    assert(strstr(output, "1 shown · 0 completed among shown · 3 total"));
+    assert(strstr(output, "0 shown · 0 completed among shown · 3 total"));
+    assert(close(fd) == 0);
+    snag_session_close(&session);
+    snag_store_close(&store);
+}
+
+static void
 test_ui_output_order_and_failure(void)
 {
     struct snag_ui ui;
@@ -3397,6 +3529,7 @@ main(void)
     test_native_compaction_probe();
     test_local_audio_admission();
     test_ui_output_order_and_failure();
+    test_ui_bounded_history();
     test_read_only_dispatch();
     test_goal_tool_manipulates_unfinished_goals();
     test_history_and_goal_list_tools();

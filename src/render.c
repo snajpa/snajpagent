@@ -813,6 +813,8 @@ render_history_turn(struct snag_render *render, const struct snag_history_turn *
 
     struct snag_buf line = {.max = 4u * 1024u * 1024u};
     const char *label = turn->timer ? "timer: " : "user: ";
+    if (turn->partial && render_banner(render,
+            "── earlier input outside restored history window ──\n") < 0) return -1;
     if (user && (snag_buf_append(&line, label, strlen(label)) < 0 ||
          snag_buf_append(&line, user, strlen(user)) < 0 || snag_buf_putc(&line, '\n') < 0)) rc = -1;
     else if (line.len) rc = write_block(render, STDERR_FILENO, (char *)line.data, line.len,
@@ -841,8 +843,8 @@ snag_render_history(struct snag_render *render, const struct snag_history_turn *
     if (turn) {
         if (shown == 1u) {
             char header[128];
-            (void)snprintf(header, sizeof(header), "── history: %llu total turns · %llu completed ──\n",
-                (unsigned long long)total, (unsigned long long)completed);
+            (void)snprintf(header, sizeof(header), "── history: %llu total turns ──\n",
+                (unsigned long long)total);
             if (render_banner(render, header) < 0) return -1;
         }
         if (turn->status && strcmp(turn->status, "completed")) {
@@ -853,7 +855,8 @@ snag_render_history(struct snag_render *render, const struct snag_history_turn *
         return render_history_turn(render, turn);
     }
     char footer[160];
-    (void)snprintf(footer, sizeof(footer), "── history: %llu shown · %llu completed · %llu total ──\n",
+    (void)snprintf(footer, sizeof(footer),
+        "── history: %llu shown · %llu completed among shown · %llu total ──\n",
         (unsigned long long)shown, (unsigned long long)completed, (unsigned long long)total);
     return render_banner(render, footer);
 }
