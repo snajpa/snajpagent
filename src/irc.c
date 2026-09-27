@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "irc_internal.h"
+#include "json.h"
 #include "snajpagent.h"
 #include "net.h"
 
@@ -2532,6 +2533,154 @@ snag_irc_core_restore_event(struct snag_irc_core *irc, const struct snag_irc_eve
     if (snag_irc_core_accept(irc, event) < 0) return -1;
     snag_irc_core_remember(irc, event);
     return 0;
+}
+
+json_t *
+snag_irc_core_checkpoint(const struct snag_irc_core *irc)
+{
+    if (!irc) return NULL;
+    json_t *out = json_pack("{s:i,s:[],s:[],s:[]}", "v", 1,
+        "cursors", "members", "history");
+    if (!out) return NULL;
+    json_t *cursors = json_object_get(out, "cursors");
+    json_t *members = json_object_get(out, "members");
+    json_t *history = json_object_get(out, "history");
+    for (const struct irc_cursor *c = irc->cursors; c; c = c->next) {
+        if (c->sequence > INT64_MAX || json_array_append_new(cursors,
+            json_pack("{s:s,s:s,s:s,s:I}", "endpoint", c->endpoint, "room", c->room,
+                "stream", c->stream, "sequence", (json_int_t)c->sequence)) < 0) goto fail;
+    }
+    for (size_t i = 0u; i < irc->replay_member_count; ++i) {
+        const struct irc_replay_member *m = &irc->replay_members[i];
+        if (json_array_append_new(members, json_pack("{s:s,s:s,s:s,s:b}",
+            "endpoint", m->endpoint, "room", m->room, "nick", m->nick, "op", m->op)) < 0)
+            goto fail;
+    }
+    for (size_t i = 0u; i < irc->history_count; ++i)
+        if (json_array_append_new(history, snag_irc_event_data(
+            &irc->history[(irc->history_start + i) % irc->history_limit])) < 0) goto fail;
+    return out;
+fail:
+    json_decref(out);
+    return NULL;
+}
+
+static void
+checkpoint_replay_free(struct snag_irc_core *irc)
+{
+    while (irc->cursors) {
+        struct irc_cursor *next = irc->cursors->next;
+        free(irc->cursors);
+        irc->cursors = next;
+    }
+    free(irc->replay_members);
+    free(irc->history);
+}
+
+int
+snag_irc_core_restore_checkpoint(struct snag_irc_core *irc, const json_t *data)
+{
+    struct snag_irc_core staged = {0};
+    const json_t *version = json_object_get(data, "v");
+    const json_t *cursors = json_object_get(data, "cursors");
+    const json_t *members = json_object_get(data, "members");
+    const json_t *history = json_object_get(data, "history");
+    int rc = -1;
+
+    if (!irc || !snag_json_exact_keys(data, "v cursors members history") ||
+        !json_is_integer(version) || json_integer_value(version) != 1 ||
+        !json_is_array(cursors) || !json_is_array(members) || !json_is_array(history) ||
+        json_array_size(history) > SNAG_CONFIG_IRC_HISTORY_MAX ||
+        json_array_size(members) > IRC_REPLAY_MEMBERS_MAX) return snag_errno(EINVAL);
+    staged.history_limit = irc->history_limit;
+    if (staged.history_limit)
+        staged.history = calloc(staged.history_limit, sizeof(*staged.history));
+    staged.replay_members = calloc(IRC_REPLAY_MEMBERS_MAX, sizeof(*staged.replay_members));
+    if ((staged.history_limit && !staged.history) || !staged.replay_members) goto out;
+    /* find_cursor prepends: decode backwards to preserve the encoded order. */
+    for (size_t i = json_array_size(cursors); i > 0u; --i) {
+        const json_t *entry = json_array_get(cursors, i - 1u);
+        const char *endpoint = snag_json_string(entry, "endpoint");
+        const char *room = snag_json_string(entry, "room");
+        const char *stream = snag_json_string(entry, "stream");
+        uint64_t sequence;
+        if (!snag_json_exact_keys(entry, "endpoint room stream sequence") ||
+            !endpoint || !endpoint_valid(endpoint) || !event_field_safe(endpoint) ||
+            strlen(endpoint) > SNAG_CONFIG_IRC_ENDPOINT_MAX ||
+            !room || !event_field_safe(room) || strlen(room) > SNAG_CONFIG_IRC_ROOM_MAX + 1u ||
+            (room[0] && (room[0] != '#' || !room_valid(room))) ||
+            !stream || !snag_hex_is_lower(stream, SNAG_ID_HEX_LEN) ||
+            snag_json_integer_u64(entry, "sequence", &sequence) < 0 || !sequence ||
+            find_cursor(&staged, endpoint, room, false)) goto invalid;
+        struct irc_cursor *cursor = find_cursor(&staged, endpoint, room, true);
+        if (!cursor) goto out;
+        memcpy(cursor->stream, stream, sizeof(cursor->stream));
+        cursor->sequence = sequence;
+    }
+    for (size_t i = 0u; i < json_array_size(members); ++i) {
+        const json_t *entry = json_array_get(members, i);
+        struct irc_replay_member *member = &staged.replay_members[i];
+        const char *endpoint = snag_json_string(entry, "endpoint");
+        const char *room = snag_json_string(entry, "room");
+        const char *nick = snag_json_string(entry, "nick");
+        if (!snag_json_exact_keys(entry, "endpoint room nick op") ||
+            !endpoint || !endpoint_valid(endpoint) || !event_field_safe(endpoint) ||
+            !room || room[0] != '#' || !room_valid(room) || !nick || !nick_valid(nick) ||
+            !event_field_safe(room) || !event_field_safe(nick) ||
+            !json_is_boolean(json_object_get(entry, "op")) ||
+            replay_member_find(&staged, endpoint, room, nick) ||
+            !snag_strcpy(member->endpoint, sizeof(member->endpoint), endpoint) ||
+            !snag_strcpy(member->room, sizeof(member->room), room) ||
+            !snag_strcpy(member->nick, sizeof(member->nick), nick)) goto invalid;
+        member->op = json_is_true(json_object_get(entry, "op"));
+        ++staged.replay_member_count;
+    }
+    for (size_t i = 0u; i < json_array_size(history); ++i) {
+        struct snag_irc_event event;
+        if (snag_irc_event_read(json_array_get(history, i), &event) < 0 ||
+            !restored_event_shape_valid(&event) || !event_remembered(event.kind)) goto invalid;
+        if (event.stream[0]) {
+            const struct irc_cursor *cursor = find_cursor(
+                &staged, event.endpoint, event.room, false);
+            if (!cursor || (!strcmp(cursor->stream, event.stream) &&
+                event.sequence > cursor->sequence)) goto invalid;
+            for (size_t j = 0u; j < i; ++j) {
+                const json_t *previous = json_array_get(history, j);
+                const char *stream = snag_json_string(previous, "stream");
+                if (stream && !strcmp(stream, event.stream) &&
+                    json_integer_value(json_object_get(previous, "sequence")) ==
+                        (json_int_t)event.sequence) goto invalid;
+            }
+        }
+        /* Membership transitions preceding this bounded ring live in members. */
+        snag_irc_core_remember(&staged, &event);
+    }
+
+    /* Every allocation and validation has succeeded. Network ownership stays. */
+    checkpoint_replay_free(irc);
+    irc->cursors = staged.cursors;
+    irc->replay_members = staged.replay_members;
+    irc->replay_member_count = staged.replay_member_count;
+    irc->history = staged.history;
+    irc->history_count = staged.history_count;
+    irc->history_start = staged.history_start;
+    staged.cursors = NULL;
+    staged.replay_members = NULL;
+    staged.history = NULL;
+    if (irc->hosting) {
+        const struct irc_cursor *own = find_cursor(irc, irc->listen, irc->room, false);
+        if (own) {
+            memcpy(irc->stream, own->stream, sizeof(irc->stream));
+            irc->sequence = own->sequence;
+        }
+    }
+    rc = 0;
+    goto out;
+invalid:
+    errno = EINVAL;
+out:
+    checkpoint_replay_free(&staged);
+    return rc;
 }
 
 const char *

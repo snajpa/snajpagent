@@ -293,6 +293,29 @@ not an operator input-length error. The input poll path must preserve the origin
 of a terminal failure rather than infer it only from `errno`. Regression tests
 include every split point and prior buffered content, not only complete strings.
 
+## Authoritative IRC checkpoint state
+
+The native IRC replay state has three distinct parts: per-endpoint/room stream
+watermarks, current replay membership, and the bounded visible history ring.
+The ring alone cannot restore the other two. In particular, a member's JOIN may
+have left the ring while later messages and MODE/NICK transitions still depend
+on its recorded operator status. A quiet endpoint's watermark can also outlive
+every one of its visible messages.
+
+Serialize those parts as typed data, separate from the human-readable room
+snapshot. Validate a restored image into detached storage and replace the old
+image only after every entry succeeds. Importing a shorter history ring keeps
+the newest fitting records without reducing membership or deduplication state.
+Sockets, connection attempts and uncommitted owner-thread events are outside
+this serialized replay state.
+
+The session checkpoint integration must capture committed IRC state at its
+journal boundary, together with pending admissions and current reply obligations,
+then apply only the uncovered suffix. The native replay codec is a prerequisite,
+not by itself a replacement for the current application-level restore scan.
+Legacy checkpoints without this state need explicit initialization; malformed
+present state must fail rather than silently turn into an empty room.
+
 ## Reconciliation and acceptance
 
 Use focused additions to the existing tests for these combinations, preserving

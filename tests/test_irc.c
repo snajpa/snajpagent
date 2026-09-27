@@ -3,6 +3,8 @@
 #include "cli.h"
 #include "config.h"
 #include "irc.h"
+#include "irc_internal.h"
+#include "json.h"
 #include "snajpagent.h"
 #include "store.h"
 #include "net.h"
@@ -1466,6 +1468,122 @@ static void __attribute__((noinline)) test_callback_failure(void)
     snag_config_free(&config);
 }
 
+static void
+test_replay_checkpoint(void)
+{
+    struct snag_config config;
+    struct snag_irc_core *source = NULL, *restored = NULL, *small = NULL;
+    struct capture capture = {0};
+    char error[256] = {0};
+    struct snag_irc_event quiet = {.kind = SNAG_IRC_JOIN, .timestamp_ms = 1u, .sequence = 9u};
+    struct snag_irc_event event = {.kind = SNAG_IRC_JOIN, .timestamp_ms = 2u,
+        .sequence = 41u, .op = true};
+
+    init_server_config(&config, 16667u);
+    config.irc.history_lines = 2u;
+    assert(snag_irc_core_open(&source, &config, "/fixture", false,
+        NULL, NULL, NULL, error, sizeof(error)) == 0);
+    assert(snag_irc_core_open(&restored, &config, "/fixture", false,
+        capture_event, NULL, &capture, error, sizeof(error)) == 0);
+    strcpy(quiet.endpoint, "127.0.0.1:16668");
+    strcpy(quiet.room, "#lab");
+    strcpy(quiet.nick, "quiet");
+    strcpy(quiet.stream, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    assert(snag_irc_core_restore_event(source, &quiet) == 0);
+    strcpy(event.endpoint, config.irc.listen);
+    strcpy(event.room, "#lab");
+    strcpy(event.nick, "operator");
+    strcpy(event.stream, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert(snag_irc_core_restore_event(source, &event) == 0);
+    event.kind = SNAG_IRC_MESSAGE;
+    for (unsigned int i = 0u; i < 2u; ++i) {
+        ++event.sequence;
+        strcpy(event.text, i ? "second" : "first");
+        assert(snag_irc_core_restore_event(source, &event) == 0);
+    }
+
+    /* Both JOINs have left the visible ring; authority and dedup still survive. */
+    json_t *saved = snag_irc_core_checkpoint(source);
+    assert(saved && json_array_size(json_object_get(saved, "history")) == 2u);
+    assert(json_array_size(json_object_get(saved, "members")) == 2u);
+    assert(json_array_size(json_object_get(saved, "cursors")) == 2u);
+    assert(snag_irc_core_restore_checkpoint(restored, saved) == 0);
+    json_t *roundtrip = snag_irc_core_checkpoint(restored);
+    assert(roundtrip && json_equal(saved, roundtrip));
+    json_decref(roundtrip);
+    assert(snag_irc_core_received(restored, &quiet));
+    assert(snag_irc_core_received(restored, &event));
+
+    /* Reject late corruption and conflicting metadata without partial adoption. */
+    for (unsigned int i = 0u; i < 8u; ++i) {
+        json_t *bad = json_deep_copy(saved);
+        json_t *cursors = json_object_get(bad, "cursors");
+        json_t *members = json_object_get(bad, "members");
+        json_t *history = json_object_get(bad, "history");
+        assert(bad);
+        if (i == 0u)
+            assert(json_object_set_new(json_array_get(cursors, 1u),
+                "sequence", json_integer(0)) == 0);
+        else if (i == 1u)
+            assert(json_array_append(cursors, json_array_get(cursors, 0u)) == 0);
+        else if (i == 2u)
+            assert(json_array_append(members, json_array_get(members, 0u)) == 0);
+        else if (i == 3u)
+            assert(json_object_set_new(json_array_get(history, 1u),
+                "room", json_string("invalid")) == 0);
+        else if (i == 4u)
+            assert(json_object_set_new(bad, "v", json_integer(2)) == 0);
+        else if (i == 5u)
+            assert(json_array_set(history, 1u, json_array_get(history, 0u)) == 0);
+        else if (i == 6u)
+            assert(json_object_set_new(json_array_get(cursors, 0u),
+                "sequence", json_integer(1)) == 0);
+        else
+            while (json_array_size(history) <= SNAG_CONFIG_IRC_HISTORY_MAX)
+                assert(json_array_append(history, json_array_get(history, 0u)) == 0);
+        assert(snag_irc_core_restore_checkpoint(restored, bad) < 0 && errno == EINVAL);
+        roundtrip = snag_irc_core_checkpoint(restored);
+        assert(roundtrip && json_equal(saved, roundtrip));
+        json_decref(roundtrip);
+        json_decref(bad);
+    }
+
+    ++event.sequence;
+    event.op = false;
+    assert(snag_irc_core_restore_event(restored, &event) < 0);
+    event.op = true;
+    event.kind = SNAG_IRC_MODE;
+    strcpy(event.text, "+o visitor");
+    assert(snag_irc_core_restore_event(restored, &event) == 0);
+    /* A restored host continues the original stream, not a newly minted one. */
+    assert(snag_irc_core_send(restored, true, SNAG_IRC_MESSAGE,
+        "after checkpoint", error, sizeof(error)) == 0);
+    assert(capture.events[SNAG_IRC_MESSAGE] == 1u);
+    assert(capture.last_message.sequence == event.sequence + 1u);
+    assert(!strcmp(capture.last_message.stream, event.stream));
+
+    for (unsigned int limit = 0u; limit < 2u; ++limit) {
+        config.irc.history_lines = limit;
+        assert(snag_irc_core_open(&small, &config, "/fixture", false,
+            NULL, NULL, NULL, error, sizeof(error)) == 0);
+        assert(snag_irc_core_restore_checkpoint(small, saved) == 0);
+        roundtrip = snag_irc_core_checkpoint(small);
+        assert(roundtrip && json_array_size(json_object_get(roundtrip, "history")) == limit);
+        assert(json_equal(json_object_get(saved, "members"),
+            json_object_get(roundtrip, "members")));
+        assert(json_equal(json_object_get(saved, "cursors"),
+            json_object_get(roundtrip, "cursors")));
+        if (limit) assert(!strcmp(snag_json_string(json_array_get(
+            json_object_get(roundtrip, "history"), 0u), "text"), "second"));
+        json_decref(roundtrip);
+        snag_irc_core_close(small);
+    }
+    json_decref(saved);
+    snag_irc_core_close(source);
+    snag_irc_core_close(restored);
+    snag_config_free(&config);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -1488,6 +1606,7 @@ main(int argc, char **argv)
     assert(snag_network_init() == 0);
     set_user("root");
     test_validation();
+    test_replay_checkpoint();
     test_cli_network_roles();
     test_listener_collision();
     test_runtime_roles();
