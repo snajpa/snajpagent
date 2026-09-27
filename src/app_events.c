@@ -805,6 +805,7 @@ snag_app_tool_read(void *opaque, const char *handle, unsigned int stream,
 }
 
 struct process_output_scan {
+    struct app_state *app;
     const char *handle;
     unsigned int stream;
     uint64_t from, retain, total;
@@ -822,8 +823,9 @@ scan_process_output(void *opaque, const struct snag_session *state, uint64_t seq
     uint64_t stream, offset;
     (void)state;
     (void)seq;
-    (void)error;
-    (void)error_size;
+
+    if (snag_app_context_cancelled(scan->app))
+        return snag_fail(error, error_size, ECANCELED, "retained output scan cancelled");
 
     if (!strcmp(type, "tool_finished") || !strcmp(type, "process_closed"))
         result = json_object_get(data, "result");
@@ -851,6 +853,10 @@ scan_process_output(void *opaque, const struct snag_session *state, uint64_t seq
     if (scan->retain && scan->from < end && offset < window_end) {
         uint64_t from = offset > scan->from ? offset : scan->from;
         uint64_t to = end < window_end ? end : window_end;
+        if (from != scan->from + scan->out->len) {
+            (void)snag_fail(error, error_size, EINVAL, "retained output range is not contiguous");
+            goto out;
+        }
         if (from < to && snag_buf_append(scan->out, bytes.data + (size_t)(from - offset),
                                          (size_t)(to - from)) < 0) goto out;
     }
@@ -1218,14 +1224,34 @@ out:
 
 static int
 load_output_window(struct app_state *app, const char *handle, unsigned int stream,
-                   uint64_t offset, size_t retain, struct snag_buf *out, uint64_t *total)
+                   uint64_t offset, size_t retain, struct snag_buf *out, uint64_t *total,
+                   char *error, size_t error_size)
 {
     struct process_output_scan scan = {
-        .handle = handle, .stream = stream, .from = offset, .retain = retain, .out = out};
-    char error[256] = {0};
-    if (snag_session_each_event(&app->session, scan_process_output, &scan, error, sizeof(error)) < 0)
-        return -1;
-    if (!scan.known || offset > scan.total) return snag_errno(ENOENT);
+        .app = app, .handle = handle, .stream = stream,
+        .from = offset, .retain = retain, .out = out};
+    struct snag_process_state *process = snag_session_process(&app->session, handle);
+    if (error_size) error[0] = '\0';
+    if (snag_app_context_cancelled(app))
+        return snag_fail(error, error_size, ECANCELED, "retained output scan cancelled");
+    /* Collection advances the process cursor; it cannot locate older bytes. */
+    bool indexed = process && process->log_seq && offset >= process->collected_bytes[stream];
+    if (indexed) {
+        scan.total = process->output_bytes[stream];
+        scan.known = true;
+    }
+    int rc = indexed ? snag_session_each_event_since(&app->session, process,
+        scan_process_output, &scan, error, error_size) :
+        snag_session_each_event(&app->session, scan_process_output, &scan, error, error_size);
+    if (rc < 0) return -1;
+    if (!scan.known || offset > scan.total)
+        return snag_fail(error, error_size, ENOENT,
+            "No durable %s output exists for handle %s at offset %llu in this session.",
+            stream ? "stderr" : "stdout", handle, (unsigned long long)offset);
+    uint64_t wanted = scan.total - offset;
+    if (wanted > retain) wanted = retain;
+    if (out->len != wanted)
+        return snag_fail(error, error_size, EINVAL, "retained output range has missing bytes");
     *total = scan.total;
     return 0;
 }
@@ -1246,6 +1272,8 @@ snag_app_output_page(struct app_state *app, const struct snag_response_item *cal
     char header[256];
 
     *result = NULL;
+    if (snag_app_context_cancelled(app))
+        return snag_fail(error, error_size, ECANCELED, "retained output read cancelled");
     if (!snag_json_arg_keys(call->arguments, "handle stream", "offset max_output_bytes", error, error_size) ||
         !snag_json_arg_text(call->arguments, "handle", SNAG_ID_HEX_LEN, SNAG_ID_HEX_LEN,
                             false, &handle, error, error_size) ||
@@ -1282,10 +1310,12 @@ snag_app_output_page(struct app_state *app, const struct snag_response_item *cal
         total = app->output_cache.total;
         cached = true;
     } else if (app->session.output_cache_bytes) {
+        snag_buf_init(&direct, retain);
+        if (load_output_window(app, handle, stream, offset, retain, &direct, &total,
+                               error, error_size) < 0) goto unavailable;
         snag_buf_free(&app->output_cache.data);
-        snag_buf_init(&app->output_cache.data, retain);
-        if (load_output_window(app, handle, stream, offset, retain,
-                               &app->output_cache.data, &total) < 0) goto unavailable;
+        app->output_cache.data = direct;
+        memset(&direct, 0, sizeof(direct));
         memcpy(app->output_cache.handle, handle, SNAG_ID_HEX_LEN + 1u);
         app->output_cache.stream = stream;
         app->output_cache.offset = offset;
@@ -1296,7 +1326,8 @@ snag_app_output_page(struct app_state *app, const struct snag_response_item *cal
         available = app->output_cache.data.len;
     } else {
         snag_buf_init(&direct, retain);
-        if (load_output_window(app, handle, stream, offset, retain, &direct, &total) < 0)
+        if (load_output_window(app, handle, stream, offset, retain, &direct, &total,
+                               error, error_size) < 0)
             goto unavailable;
         bytes = direct.data ? direct.data : (const unsigned char *)"";
         available = direct.len;
@@ -1327,10 +1358,9 @@ snag_app_output_page(struct app_state *app, const struct snag_response_item *cal
     return 0;
 
 unavailable:
-    (void)snag_errorf(error, error_size,
-        "No durable %s output exists for handle %s at offset %llu in this session.",
-        stream_name ? stream_name : "tool", handle ? handle : "(invalid)",
-        (unsigned long long)offset);
+    if (errno == ECANCELED) goto fail;
+    if (!error[0])
+        (void)snag_errorf(error, error_size, "Cannot read retained output: %s", strerror(errno));
 invalid:
     *result = snag_tool_result_terminal(false, error[0] ? error : "Invalid read_tool_output arguments.");
     snag_buf_free(&direct);

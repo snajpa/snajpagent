@@ -233,6 +233,15 @@ stored originals. Full retained command bytes remain pageable after settlement
 and resume. Goal pages preserve creation identity, final/current status and
 replacement links, even when paging older creations past newer revisions.
 
+Retained-output cache replacement is transactional: a failed fill cannot attach
+partial new bytes to the previous handle, offset or total. Corrupt/unreadable
+history is not evidence that a handle has no output, and scans remain cancellable.
+An unsettled process's journal cursor advances after collection; it covers only
+the uncollected suffix, not the command's entire lifetime. Use that cursor only
+when the requested byte offset is at or beyond the stream's collected boundary.
+Older and settled ranges still require historical discovery; this cursor alone
+does not make those lookups bounded.
+
 Recent event pages walk the journal backwards from its verified live boundary.
 Startup display history uses the same scan quantum. It collects recent public
 turn events, then renders them chronologically; count zero reads no journal.

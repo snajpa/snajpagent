@@ -2055,6 +2055,122 @@ test_history_and_goal_list_tools(void)
 }
 
 static void
+test_output_cache_failure(void)
+{
+    const char *a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const char *b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const char *text = "output from the second command";
+    char error[256] = {0}, hash[65];
+    struct app_state app = {0};
+    struct snag_buf journal = {.max = 65536u}, line = {.max = 65536u};
+    struct snag_response_item call = {.kind = SNAG_ITEM_TOOL_CALL, .name = "read_tool_output"};
+    json_t *result = NULL;
+    snag_session_init(&app.session);
+    strcpy(app.session.id, "cccccccccccccccccccccccccccccccc");
+    app.session.tool_output_bytes = 1024u;
+    app.session.output_cache_bytes = 4096u;
+    app.session.pending_log = &journal;
+    app.session.processes = calloc(1u, sizeof(*app.session.processes));
+    assert(app.session.processes);
+    app.session.process_count = app.session.process_capacity = 1u;
+    struct snag_process_state *process = app.session.processes;
+    strcpy(process->handle, b);
+    memset(process->log_hash, 'e', 64u);
+    process->log_hash[64] = '\0';
+    /* The established process cursor makes this unrelated prefix irrelevant. */
+    assert(snag_buf_printf(&journal, "unread earlier history\n") == 0);
+    process->log_offset = journal.len;
+    process->log_seq = 100u;
+    process->output_bytes[0] = strlen(text);
+    json_t *record = json_pack("{s:o,s:s,s:i,s:s,s:i,s:s,s:i}", "data",
+        json_pack("{s:s,s:s,s:i,s:i,s:s,s:s}", "turn_id", app.session.id,
+            "handle", b, "stream", 0, "offset", 0, "encoding", "utf8", "data", text),
+        "prev_sha256", process->log_hash, "seq", 100, "session_id", app.session.id,
+        "time_ms", 1, "type", "process_output", "v", 1);
+    assert(record && snag_json_digest(record, hash) == 0);
+    assert(json_object_set_new(record, "event_sha256", json_string(hash)) == 0);
+    assert(snag_json_canonical(record, &line) == 0);
+    assert(snag_buf_append(&journal, line.data, line.len) == 0 &&
+        snag_buf_putc(&journal, '\n') == 0);
+    json_decref(record);
+    size_t complete = journal.len;
+    assert(snag_buf_printf(&journal, "broken later record\n") == 0);
+    app.session.log_end = (int64_t)journal.len;
+    app.session.next_seq = 102u;
+
+    /* Seed a previously verified cache, then fail while loading another handle. */
+    strcpy(app.output_cache.handle, a);
+    app.output_cache.valid = true;
+    app.output_cache.total = 8u;
+    snag_buf_init(&app.output_cache.data, 4096u);
+    assert(snag_buf_printf(&app.output_cache.data, "original") == 0);
+    call.arguments = json_pack("{s:s,s:s}", "handle", b, "stream", "stdout");
+    assert(snag_app_output_page(&app, &call, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), "failed"));
+    assert(app.output_cache.valid && !strcmp(app.output_cache.handle, a));
+    assert(app.output_cache.data.len == 8u &&
+        !memcmp(app.output_cache.data.data, "original", 8u));
+    assert(strstr(snag_json_string(result, "model_text"), "corrupt event 101"));
+    assert(!strstr(snag_json_string(result, "model_text"), "No durable"));
+    json_decref(result);
+
+    assert(json_object_set_new(call.arguments, "handle", json_string(a)) == 0);
+    assert(snag_app_output_page(&app, &call, &result, error, sizeof(error)) == 0);
+    assert(strstr(snag_json_string(result, "model_text"), "cache=hit]\noriginal"));
+    json_decref(result);
+    app.interrupt_requested = true;
+    assert(snag_app_output_page(&app, &call, &result, error, sizeof(error)) < 0);
+    assert(errno == ECANCELED && !result && app.output_cache.valid);
+    assert(!strcmp(app.output_cache.handle, a) && app.output_cache.data.len == 8u &&
+        !memcmp(app.output_cache.data.data, "original", 8u));
+    app.interrupt_requested = false;
+
+    /* Repair only the selected suffix; successful fill never reads the prefix. */
+    app.session.log_end = (int64_t)complete;
+    app.session.next_seq = 101u;
+    assert(json_object_set_new(call.arguments, "handle", json_string(b)) == 0);
+    assert(snag_app_output_page(&app, &call, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), "succeeded"));
+    assert(strstr(snag_json_string(result, "model_text"), text));
+    json_decref(result);
+    app.interrupt_requested = true;
+    assert(snag_app_output_page(&app, &call, &result, error, sizeof(error)) < 0);
+    assert(errno == ECANCELED && !result && app.output_cache.valid);
+    assert(app.output_cache.data.len == strlen(text) &&
+        !memcmp(app.output_cache.data.data, text, strlen(text)));
+    app.interrupt_requested = false;
+    /* A bad cursor and a hole in retained bytes remain explicit read failures. */
+    uint64_t anchor = process->log_offset;
+    process->log_offset = (uint64_t)app.session.log_end + 1u;
+    assert(snag_app_output_page(&app, &call, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), "failed"));
+    assert(strstr(snag_json_string(result, "model_text"), "invalid process output cursor"));
+    json_decref(result);
+    process->log_offset = anchor;
+    ++process->output_bytes[0];
+    assert(snag_app_output_page(&app, &call, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), "failed"));
+    assert(strstr(snag_json_string(result, "model_text"), "missing bytes"));
+    json_decref(result);
+    --process->output_bytes[0];
+    assert(app.output_cache.valid && !strcmp(app.output_cache.handle, b));
+    assert(app.output_cache.data.len == strlen(text) &&
+        !memcmp(app.output_cache.data.data, text, strlen(text)));
+    /* Collection advances this cursor: older bytes must not be declared absent. */
+    process->collected_bytes[0] = 1u;
+    assert(snag_app_output_page(&app, &call, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), "failed"));
+    assert(strstr(snag_json_string(result, "model_text"), "corrupt event 1"));
+    json_decref(result);
+    json_decref(call.arguments);
+    app.session.pending_log = NULL;
+    snag_session_close(&app.session);
+    snag_buf_free(&app.output_cache.data);
+    snag_buf_free(&journal);
+    snag_buf_free(&line);
+}
+
+static void
 test_ui_bounded_history(void)
 {
     char path[4096], output_path[4096], error[256] = {0}, output[8192];
@@ -3548,6 +3664,7 @@ main(void)
     test_local_audio_admission();
     test_ui_output_order_and_failure();
     test_ui_bounded_history();
+    test_output_cache_failure();
     test_read_only_dispatch();
     test_goal_tool_manipulates_unfinished_goals();
     test_history_and_goal_list_tools();

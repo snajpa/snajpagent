@@ -2975,8 +2975,9 @@ snag_session_each_event_since(struct snag_session *session, const struct snag_pr
 {
     struct snag_session verifier;
     if (!cursor || !cursor->log_seq) return snag_session_each_event(session, fn, opaque, error, error_size);
-    if (cursor->log_offset > (uint64_t)session->log_end ||
-        !snag_hex_is_lower(cursor->log_hash, SNAG_SHA256_HEX_LEN)) return -1;
+    if (session->log_end < 0 || cursor->log_offset > (uint64_t)session->log_end ||
+        !snag_hex_is_lower(cursor->log_hash, SNAG_SHA256_HEX_LEN))
+        return snag_fail(error, error_size, EINVAL, "invalid process output cursor");
     snag_session_init(&verifier);
     memcpy(verifier.id, session->id, sizeof(verifier.id));
     memcpy(verifier.prev_sha256, cursor->log_hash, sizeof(verifier.prev_sha256));

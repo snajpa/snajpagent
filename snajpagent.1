@@ -3043,6 +3043,10 @@ cache disposition and either UTF-8 text or base64 for binary bytes.  Pages are
 bounded by the effective common result ceiling; settled output remains readable
 after compaction, cache eviction and session resume.  Unknown handles, streams
 or offsets fail without running a replacement command.
+Failed or cancelled cache fills preserve the previous cached page and its handle.
+Unreadable or corrupt history is reported as a read failure, not as proof that
+output does not exist. Uncollected output can use the live process's verified
+journal cursor; older and settled ranges still require historical lookup.
 .PP
 .B set_command_shell
 selects an absolute executable regular file for later

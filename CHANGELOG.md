@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Preserve cached command output and its handle when a replacement page cannot
+  be read. Report corrupt or incomplete retained output as a read failure, and
+  honor cancellation on cached reads. Uncollected output uses the live process's
+  verified journal cursor rather than replaying its earlier history.
+
 - Do not treat a conservative media upper bound as proof of token overflow.
   Image-bearing requests with substantial measured headroom no longer compact
   solely because their text-byte upper bound exceeds the token window. Preserve
