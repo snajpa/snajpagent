@@ -39,8 +39,9 @@ opens only the verified session directory: it neither replays/truncates the
 journal nor opens the lock, removes staging files or finishes trash deletion.
 Ambiguous prefixes report full matching IDs. Live-owner authentication and the
 attachment reservation happen separately against the private endpoint. A failed switch
-keeps the source attached: resolve/authenticate/reserve the destination before
-releasing the source, then commit the transfer. Do not silently steal a terminal
+keeps the source attached: resolve/authenticate/reserve the destination and wait
+for its commit acknowledgement before releasing the source. The source's switch
+request alone never closes its client. Do not silently steal a terminal
 or terminate either owner's work. Stopped/unreachable targets report the actual
 condition and the appropriate explicit attach/resume action.
 
@@ -85,6 +86,29 @@ client before committing attachment, and output during reservation is discarded,
 not accumulated for raw replay. These are transport boundaries, not a second
 application controller. Other hosts retain their existing direct
 terminal behavior until their attachment backend is implemented and tested.
+
+The relay has one descriptor owner and one frame per input/output direction;
+other threads must serialize requests to that owner. Each frame carries at most
+16 KiB, so slow terminals cannot create an unbounded queue. A silent handshake
+expires after 15 seconds; five seconds without progress in a queued input or
+output frame disconnects only that client. Detached output is drained rather
+than saved. A competing client receives a busy response, including while the
+first client is reserved but has not committed. Socket hangup is processed even
+when pending PTY input has temporarily disabled socket reads.
+For job-control suspension the existing client retains its reservation without
+an idle timeout while output is drained. On continue it submits new geometry
+through the same commit/repaint boundary; the session engine is never stopped.
+
+Commit supplies the new geometry and requests a presentation barrier. While
+presentation writes are quiescent, forget the old composer coordinates and flush
+the private PTY's old output before acknowledging attachment. On Linux the slave
+output flush precedes the master input flush: pending flip-buffer output and
+already-delivered line-discipline bytes are different queues. A read-until-EAGAIN
+loop alone does not establish this boundary. This sequence preserves the
+engine's pending input. Only the current reservation generation may activate;
+a delayed acknowledgement cannot activate a replacement client. The foreground
+terminal/SIGTTOU rules also apply during external pager/editor ownership. After
+activation, present bounded semantic catch-up rather than old cursor bytes.
 
 The commands and transport above are a design/acceptance contract, not a claim
 that installed rescue binaries already provide native attachment.

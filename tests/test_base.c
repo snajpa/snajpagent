@@ -7,6 +7,7 @@
 #include "net.h"
 #include "term_host.h"
 #include "session_host.h"
+#include "session_relay.h"
 #include "process_host.h"
 #include "office.h"
 
@@ -44,6 +45,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
 #include <sys/un.h>
 #include <unistd.h>
 #include <sys/wait.h>
@@ -2828,6 +2830,310 @@ test_session_transport(void)
 #endif
 }
 
+#if defined(__linux__) && !defined(_WIN32)
+static void
+relay_send_frame(int fd, enum snag_session_message type, const void *bytes, size_t len)
+{
+    struct snag_session_packet packet = {0};
+    assert(snag_session_packet_set(&packet, type, bytes, len) == 0);
+    assert(snag_session_packet_write(fd, &packet) == 1);
+}
+
+static void
+relay_receive_frame(struct snag_session_relay *relay,
+                     const struct snag_session_listener *listener, int fd,
+                     enum snag_session_message type, struct snag_session_packet *packet)
+{
+    *packet = (struct snag_session_packet){0};
+    for (unsigned int i = 0u; i < 1000u; ++i) {
+        enum snag_session_message event;
+        assert(snag_session_relay_step(relay, listener, 1, &event) == 0 && !event);
+        int rc = snag_session_packet_read(fd, packet);
+        assert(rc >= 0);
+        if (rc == 1) {
+            assert(snag_session_packet_type(packet) == type);
+            return;
+        }
+    }
+    assert(!"relay frame timed out");
+}
+
+static void
+relay_wait_event(struct snag_session_relay *relay,
+                  const struct snag_session_listener *listener, enum snag_session_message type)
+{
+    for (unsigned int i = 0u; i < 1000u; ++i) {
+        enum snag_session_message event;
+        assert(snag_session_relay_step(relay, listener, 1, &event) == 0);
+        if (event) {
+            assert(event == type);
+            return;
+        }
+    }
+    assert(!"relay event timed out");
+}
+
+static int
+relay_reserve(struct snag_session_relay *relay, const struct snag_session_listener *listener,
+               int dir, const char *path)
+{
+    int fd = snag_session_endpoint_connect(dir, path);
+    assert(fd >= 0);
+    relay_send_frame(fd, SNAG_SESSION_RESERVE, NULL, 0u);
+    struct snag_session_packet ready;
+    relay_receive_frame(relay, listener, fd, SNAG_SESSION_READY, &ready);
+    assert(relay->phase == SNAG_SESSION_RESERVED);
+    return fd;
+}
+
+static void
+relay_output_pressure(struct snag_session_relay *relay, int slave, int client)
+{
+    int small = 1024;
+    assert(setsockopt(relay->peer, SOL_SOCKET, SO_SNDBUF, &small, sizeof(small)) == 0);
+    unsigned char bytes[SNAG_SESSION_FRAME_MAX];
+    for (size_t i = 0u; i < sizeof(bytes); ++i) bytes[i] = (unsigned char)(i % 251u);
+    size_t written = 0u;
+    size_t received = 0u;
+    const size_t total = sizeof(bytes) * 16u;
+    bool partial = false;
+    struct snag_session_packet packet = {0};
+    for (unsigned int i = 0u; i < 20000u && received < total; ++i) {
+        if (written < total) {
+            size_t offset = written % sizeof(bytes);
+            ssize_t n = write(slave, bytes + offset, sizeof(bytes) - offset);
+            assert(n >= 0 || errno == EAGAIN);
+            if (n > 0) written += (size_t)n;
+        }
+        enum snag_session_message event;
+        assert(snag_session_relay_step(relay, NULL, 1, &event) == 0 && !event);
+        if (relay->output.offset && relay->output.offset < relay->output.used) partial = true;
+        /* Deliberately let the small socket fill before consuming each burst. */
+        if (i % 7u) continue;
+        int rc = snag_session_packet_read(client, &packet);
+        assert(rc >= 0);
+        if (rc != 1) continue;
+        assert(snag_session_packet_type(&packet) == SNAG_SESSION_OUTPUT);
+        size_t length = snag_session_packet_length(&packet);
+        assert(length && length <= total - received);
+        for (size_t j = 0u; j < length; ++j) {
+            assert(packet.bytes[SNAG_SESSION_HEADER + j] == bytes[(received + j) % sizeof(bytes)]);
+        }
+        received += length;
+        packet = (struct snag_session_packet){0};
+    }
+    assert(written == total && received == total && partial);
+    assert(!relay->output.used && snag_session_packet_read(client, &packet) == 0);
+}
+
+static void
+test_session_relay(void)
+{
+    char *root = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
+                                "snag-relay-XXXXXX");
+    assert(root && mkdtemp(root));
+    int dir = open(root, O_RDONLY | O_DIRECTORY);
+    assert(dir >= 0);
+    int lock = snag_create_private_at(dir, "lock", true);
+    assert(lock >= 0 && snag_lock_file(lock, false) == 0);
+    struct snag_session_listener listener;
+    assert(snag_session_listener_open(&listener, dir, root, lock) == 0);
+    int master = posix_openpt(O_RDWR | O_NOCTTY);
+    assert(master >= 0 && grantpt(master) == 0 && unlockpt(master) == 0);
+    const char *name = ptsname(master);
+    assert(name);
+    int slave = open(name, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    assert(slave >= 0);
+    struct termios raw;
+    assert(tcgetattr(slave, &raw) == 0);
+    raw.c_iflag = raw.c_oflag = raw.c_lflag = 0;
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    assert(tcsetattr(slave, TCSANOW, &raw) == 0);
+    int pair[2];
+    assert(snag_session_stream_pair(pair) == 0);
+    struct snag_session_relay relay;
+    assert(snag_session_relay_init(&relay, master, pair[0]) == 0);
+    assert(fcntl(master, F_GETFL) & O_NONBLOCK);
+    assert(fcntl(master, F_GETFD) & FD_CLOEXEC);
+    uint64_t initial = relay.generation;
+    struct snag_session_packet packet;
+    assert(write(slave, "once", 4u) == 4);
+    relay_receive_frame(&relay, &listener, pair[1], SNAG_SESSION_OUTPUT, &packet);
+    assert(snag_session_packet_length(&packet) == 4u);
+    assert(!memcmp(packet.bytes + SNAG_SESSION_HEADER, "once", 4u));
+    relay_output_pressure(&relay, slave, pair[1]);
+
+    /* A switch request alone never surrenders the source attachment. */
+    assert(snag_session_relay_control(&relay, SNAG_SESSION_SWITCH, "12345678", 8u) == 0);
+    relay_receive_frame(&relay, &listener, pair[1], SNAG_SESSION_SWITCH, &packet);
+    assert(relay.peer == pair[0] && relay.generation == initial && !relay.closing);
+    assert(write(slave, "source-retained", 15u) == 15);
+    relay_receive_frame(&relay, &listener, pair[1], SNAG_SESSION_OUTPUT, &packet);
+    assert(snag_session_packet_length(&packet) == 15u);
+
+    /* A competing client cannot steal the attachment or consume its input. */
+    int competitor = snag_session_endpoint_connect(dir, root);
+    assert(competitor >= 0);
+    relay_send_frame(competitor, SNAG_SESSION_RESERVE, NULL, 0u);
+    relay_receive_frame(&relay, &listener, competitor, SNAG_SESSION_ERROR, &packet);
+    assert(relay.peer == pair[0] && relay.generation == initial);
+    assert(close(competitor) == 0);
+    relay_send_frame(pair[1], SNAG_SESSION_INPUT, "draft", 5u);
+    char input[32] = {0};
+    ssize_t n = -1;
+    for (unsigned int i = 0u; i < 1000u && n < 0; ++i) {
+        enum snag_session_message event;
+        assert(snag_session_relay_step(&relay, &listener, 1, &event) == 0 && !event);
+        n = read(slave, input, sizeof(input));
+        assert(n >= 0 || errno == EAGAIN);
+    }
+    assert(n == 5 && !strcmp(input, "draft"));
+    /* A closed terminal must detach promptly even when engine input is full;
+     * POLLHUP is reported with events=0 and must not spin until the stall timer. */
+    unsigned char blocked[SNAG_SESSION_FRAME_MAX];
+    memset(blocked, 'b', sizeof(blocked));
+    bool full = false;
+    for (unsigned int i = 0u; i < 1024u; ++i) {
+        n = write(master, blocked, sizeof(blocked));
+        if (n < 0 && errno == EAGAIN) {
+            full = true;
+            break;
+        }
+        assert(n > 0);
+    }
+    assert(full);
+    relay_send_frame(pair[1], SNAG_SESSION_INPUT, blocked, sizeof(blocked));
+    for (unsigned int i = 0u; i < 100u && !relay.input_pending; ++i) {
+        enum snag_session_message event;
+        assert(snag_session_relay_step(&relay, &listener, 1, &event) == 0 && !event);
+    }
+    assert(relay.input_pending && relay.input_deadline > snag_monotonic_ms());
+    assert(close(pair[1]) == 0);
+    relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
+    assert(relay.peer == -1 && relay.master == master);
+    assert(tcflush(master, TCOFLUSH) == 0 && tcflush(slave, TCIFLUSH) == 0);
+
+    /* Detached output does not fill a raw spool or close the engine's PTY. */
+    unsigned char output[16384];
+    memset(output, 'x', sizeof(output));
+    size_t written = 0u;
+    for (unsigned int i = 0u; i < 10000u && written < 1024u * 1024u; ++i) {
+        n = write(slave, output, sizeof(output));
+        assert(n >= 0 || errno == EAGAIN);
+        if (n > 0) written += (size_t)n;
+        enum snag_session_message event;
+        assert(snag_session_relay_step(&relay, &listener, 0, &event) == 0 && !event);
+        assert(relay.output.used == 0u);
+    }
+    assert(written >= 1024u * 1024u);
+
+    int client = relay_reserve(&relay, &listener, dir, root);
+    uint64_t next = relay.generation;
+    assert(next != initial);
+    competitor = snag_session_endpoint_connect(dir, root);
+    assert(competitor >= 0);
+    relay_receive_frame(&relay, &listener, competitor, SNAG_SESSION_ERROR, &packet);
+    assert(close(competitor) == 0 && relay.generation == next);
+    const unsigned char geometry[] = {37u, 0u, 123u, 0u};
+    relay_send_frame(client, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
+    relay_wait_event(&relay, &listener, SNAG_SESSION_COMMIT);
+    struct winsize size;
+    assert(ioctl(slave, TIOCGWINSZ, &size) == 0 && size.ws_row == 37 && size.ws_col == 123);
+    assert(snag_session_relay_activate(&relay, initial, slave) < 0 && errno == ESTALE);
+    assert(write(master, "keep-input", 10u) == 10);
+    assert(write(slave, "old-cursor-bytes", 16u) == 16);
+    assert(snag_session_relay_activate(&relay, next, slave) == 0);
+    relay_receive_frame(&relay, &listener, client, SNAG_SESSION_READY, &packet);
+    assert(read(slave, input, sizeof(input)) == 10 && !memcmp(input, "keep-input", 10u));
+    assert(write(slave, "fresh", 5u) == 5);
+    relay_receive_frame(&relay, &listener, client, SNAG_SESSION_OUTPUT, &packet);
+    assert(snag_session_packet_length(&packet) == 5u);
+    assert(!memcmp(packet.bytes + SNAG_SESSION_HEADER, "fresh", 5u));
+    packet = (struct snag_session_packet){0};
+    assert(snag_session_packet_read(client, &packet) == 0);
+
+    /* Job-control suspension parks the client, not the engine or its PTY.
+     * Resume uses the same peer with a fresh generation and repaint barrier. */
+    assert(snag_session_relay_control(&relay, SNAG_SESSION_SUSPEND, NULL, 0u) == 0);
+    relay_receive_frame(&relay, &listener, client, SNAG_SESSION_SUSPEND, &packet);
+    assert(relay.phase == SNAG_SESSION_RESERVED && !relay.handshake_deadline && !relay.closing);
+    assert(relay.generation != next);
+    assert(write(slave, "hidden", 6u) == 6);
+    enum snag_session_message suspended_event;
+    assert(snag_session_relay_step(&relay, &listener, 100, &suspended_event) == 0);
+    assert(!suspended_event && !relay.output.used);
+    relay_send_frame(client, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
+    relay_wait_event(&relay, &listener, SNAG_SESSION_COMMIT);
+    assert(snag_session_relay_activate(&relay, next, slave) < 0 && errno == ESTALE);
+    assert(snag_session_relay_activate(&relay, relay.generation, slave) == 0);
+    relay_receive_frame(&relay, &listener, client, SNAG_SESSION_READY, &packet);
+    assert(write(slave, "continued", 9u) == 9);
+    relay_receive_frame(&relay, &listener, client, SNAG_SESSION_OUTPUT, &packet);
+    assert(snag_session_packet_length(&packet) == 9u);
+    assert(!memcmp(packet.bytes + SNAG_SESSION_HEADER, "continued", 9u));
+
+    /* Client detach and malformed control frames never become engine EOF. */
+    relay_send_frame(client, SNAG_SESSION_DETACH, NULL, 0u);
+    relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
+    assert(close(client) == 0);
+    assert(snag_session_relay_activate(&relay, next, slave) < 0 && errno == ESTALE);
+    client = relay_reserve(&relay, &listener, dir, root);
+    relay_send_frame(client, SNAG_SESSION_INPUT, "not-committed", 13u);
+    relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
+    assert(close(client) == 0);
+    assert(read(slave, input, sizeof(input)) < 0 && errno == EAGAIN);
+    client = relay_reserve(&relay, &listener, dir, root);
+    relay.handshake_deadline = 1u;
+    relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
+    assert(close(client) == 0);
+
+    /* Bad initial messages and zero geometry cannot commit an attachment. */
+    client = snag_session_endpoint_connect(dir, root);
+    assert(client >= 0);
+    relay_send_frame(client, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
+    relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
+    assert(close(client) == 0);
+    client = relay_reserve(&relay, &listener, dir, root);
+    const unsigned char invalid_geometry[] = {0u, 0u, 80u, 0u};
+    relay_send_frame(client, SNAG_SESSION_COMMIT, invalid_geometry, sizeof(invalid_geometry));
+    relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
+    assert(close(client) == 0);
+
+    /* A stalled frame drops only the client; the next attachment can recover. */
+    client = relay_reserve(&relay, &listener, dir, root);
+    relay_send_frame(client, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
+    relay_wait_event(&relay, &listener, SNAG_SESSION_COMMIT);
+    assert(snag_session_relay_activate(&relay, relay.generation, slave) == 0);
+    relay_receive_frame(&relay, &listener, client, SNAG_SESSION_READY, &packet);
+    assert(write(slave, "stalled", 7u) == 7);
+    enum snag_session_message event;
+    assert(snag_session_relay_step(&relay, &listener, 100, &event) == 0 && !event);
+    assert(relay.output.used > 0u);
+    relay.output_deadline = 1u;
+    relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
+    assert(close(client) == 0);
+    client = relay_reserve(&relay, &listener, dir, root);
+    relay_send_frame(client, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
+    relay_wait_event(&relay, &listener, SNAG_SESSION_COMMIT);
+    assert(snag_session_relay_activate(&relay, relay.generation, slave) == 0);
+    relay_receive_frame(&relay, &listener, client, SNAG_SESSION_READY, &packet);
+    assert(snag_session_relay_control(&relay, SNAG_SESSION_EXIT, "\0", 1u) == 0);
+    relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
+    packet = (struct snag_session_packet){0};
+    assert(snag_session_packet_read(client, &packet) == 1);
+    assert(snag_session_packet_type(&packet) == SNAG_SESSION_EXIT);
+    assert(close(client) == 0);
+    assert(close(slave) == 0);
+    assert(snag_session_relay_step(&relay, &listener, 100, &event) == 1);
+    snag_session_relay_close(&relay);
+    snag_session_listener_close(&listener);
+    assert(close(lock) == 0 && unlinkat(dir, "lock", 0) == 0);
+    assert(close(dir) == 0 && rmdir(root) == 0);
+    free(root);
+}
+#endif /* __linux__ && !_WIN32 */
+
 static void
 test_sockets(void)
 {
@@ -3467,6 +3773,7 @@ run_base(int argc, char **argv)
     test_sockets();
     test_session_transport();
 #if defined(__linux__) && !defined(_WIN32)
+    test_session_relay();
     test_raw_pty_empty_read();
 #endif
     test_input_mode();
