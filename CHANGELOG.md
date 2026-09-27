@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## 0.99.8b — September 27, 2026
+
 - Accept an operator-approved letter-suffixed stable version (0.99.8b) in
   release staging, channel descriptors and the updater. A stable 0.99.8
   installation can upgrade to 0.99.8b without joining the development channel;
