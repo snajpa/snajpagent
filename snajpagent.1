@@ -992,7 +992,7 @@ Clear the draft.
 Delete the preceding word.
 .TP
 .B Ctrl-L
-Clear and redraw the terminal.
+Redraw the current composer, preserving completed output and scrollback.
 .TP
 .B Ctrl-Z
 Suspend after restoring normal terminal state; redraw after continuation.
@@ -1221,6 +1221,9 @@ left in scrollback.  Submitted input remains in the transcript.
 Inside GNU Screen, a terminal resize can make Screen redraw recently visible
 lines.  An outer terminal that saves those redraws in its own scrollback may
 show repeated completed lines even when snajpagent did not send them again.
+Screen can also redisplay after recovering from blocked terminal output.
+Its full-screen erase before redisplay can cause an outer terminal to save the
+old viewport into history before receiving the replacement viewport.
 The outer terminal's alternate-screen and status-region scrollback behavior
 can affect whether such redraws enter its saved history.  This is separate from
 the session's durable transcript and from Screen copy mode.

@@ -897,14 +897,17 @@ def run_status_case(binary, root):
             raise AssertionError("status scenario changed durable assistant text")
         # Only the live composer may repaint on resize. A completed response
         # must not be emitted a second time into the outer terminal's history.
-        for width, height in ((40, 14), (32, 18)):
+        for width, height in ((40, 14), (40, 14), (32, 18)):
             if width != 40:
                 terminal.resize(width, height)
+            else:
+                terminal.send_key("C-l")
+                terminal.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, join_wrapped=True)
             screen = terminal.capture(join_wrapped=True)
             for fragment in ("status-first-fragment", "status-second-fragment"):
                 if screen.count(fragment) != 1:
                     raise AssertionError(
-                        f"sealed response repeated after resize {width}x{height}:\n{screen}"
+                        f"sealed response erased/repeated after redraw {width}x{height}:\n{screen}"
                     )
         terminal.exit()
 
@@ -2886,17 +2889,21 @@ def run_help_case(binary, root, active=False, chat=False, width=80):
             if word in text: assert word in screen, (word, screen)
         (case / "help.txt").write_text(screen)
         overview = text[text.index("Syntax:"):].split("Full reference:")[0]
+        # Ctrl-L preserves sealed output. Wait for a new response, not the
+        # previous help footer, and compare only the newest help body.
         terminal.send_key("C-l")
-        terminal.run("clear-history", "-t", terminal.target)
         terminal.submit("/?")
-        wait_normalized(terminal, "Full reference: man snajpagent", timeout=5.0)
-        alias = terminal.capture(join_wrapped=True)
-        assert normalize_space(alias[alias.index("Syntax:"):]).split("Full reference:")[0] == overview
+        alias = normalize_space(terminal.wait_until(
+            lambda screen: normalize_space(screen).count("Full reference: man snajpagent") == 2,
+            "second complete help response", timeout=5, join_wrapped=True))
+        assert alias[alias.rindex("Syntax:"):].split("Full reference:")[0] == overview
+        goals_before = alias.count("clear=cancel")
         terminal.send_key("C-l")
-        terminal.run("clear-history", "-t", terminal.target)
         terminal.submit("/goal help")
-        terminal.wait("clear=cancel")
-        goal = normalize_space(terminal.capture(join_wrapped=True))
+        goal = normalize_space(terminal.wait_until(
+            lambda screen: normalize_space(screen).count("clear=cancel") == goals_before + 1,
+            "new goal help response", join_wrapped=True))
+        goal = goal[goal.rindex("Syntax:"):]
         assert '/state goal "TEXT"' in goal and "/state goal pause|resume" in goal
         assert "/model PROVIDER" not in goal
         terminal.exit()
@@ -3005,10 +3012,11 @@ def run_blank_enter_stream_case(binary, root, help_commands=False):
             if help_commands:
                 for command, end in (("/help", "Full reference:"), ("/?", "Full reference:"),
                                      ("/goal help", "clear=cancel")):
+                    previous = normalize_space(terminal.capture(join_wrapped=True)).count(end)
                     terminal.send_key("C-l")
-                    terminal.run("clear-history", "-t", terminal.target)
                     terminal.submit(command)
-                    wait_normalized(terminal, end, timeout=2)
+                    terminal.wait_until(lambda screen: normalize_space(screen).count(end) > previous,
+                                        "new help response", timeout=2, join_wrapped=True)
                 terminal.send_text("retained-help-draft")
                 terminal.wait("retained-help-draft")
                 assert len(requests) == 1

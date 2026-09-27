@@ -339,6 +339,33 @@ def test_resize_and_suspend_preserve_draft():
         assert turn["data"]["text"] == text.decode(), turn
 
 
+def test_redraw_preserves_sealed_output():
+    with Child([], ready=DEFAULT_IDLE_PROMPT, term="xterm-256color", cols=100) as child:
+        end = child.send_wait(b"sealed-output-regression\r", b"fixture answer")
+        child.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT, start=end)
+        child.send_wait(b"preserved draft", b"preserved draft")
+        for action in ("redraw", "resize", "same-size"):
+            start = len(child.buf)
+            if action == "redraw":
+                child.send(b"\x0c")
+            else:
+                fcntl.ioctl(child.fd, termios.TIOCSWINSZ,
+                            struct.pack("HHHH", 30, 90, 0, 0))
+                os.kill(child.pid, signal.SIGWINCH)
+            child.wait_text(b"preserved draft", start=start)
+            output = bytes(child.buf[start:])
+            assert b"\x1b[2J" not in output, (action, output)
+            assert b"\x1b[3J" not in output, (action, output)
+            assert b"\x1b[H" not in output, (action, output)
+            for fragment in (b"fixture", b"answer"):
+                assert fragment not in output, (action, output)
+        child.send_wait(b"\x15/status\r", b"state: idle")
+        # Streamed fragments can be separated by legitimate composer updates.
+        for fragment in (b"fixture", b"answer"):
+            assert bytes(child.buf).count(fragment) == 1, bytes(child.buf)
+        child.exit_now()
+
+
 class IRCClient:
     def __init__(self, port, nick, agent=False):
         self.sock = socket.create_connection(("127.0.0.1", port), timeout=4.0)
@@ -6031,6 +6058,7 @@ if __name__ == "__main__":
     test_empty_session_lifecycle()
     test_empty_network_session()
     test_resize_and_suspend_preserve_draft()
+    test_redraw_preserves_sealed_output()
     test_compaction_ignores_legacy_samples()
     test_hard_compaction_progress_is_remeasured()
     test_hard_compaction_resets_after_completed_response()

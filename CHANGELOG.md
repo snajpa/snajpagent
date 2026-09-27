@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep completed output visible when Ctrl-L redraws the composer; avoid the
+  whole-screen erase that some terminals copy into scrollback.
+
 - Restore IRC reply requirements within their original input/turn lifetime,
   keeping earlier turns and cancelled pending inputs out of unrelated work.
 

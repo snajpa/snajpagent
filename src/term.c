@@ -2342,7 +2342,6 @@ feed_byte(struct snag_term *term, unsigned char byte, enum snag_term_action *act
                          next_cp(term->draft.data, term->draft.len, term->cursor)) : 0;
     case 0x0cu:
         if (snag_term_hide(term) < 0) return -1;
-        if (term->capable && snag_term_write(STDERR_FILENO, "\033[2J\033[H", 7u) < 0) return -1;
         return redraw(term);
     case 0x15u: return delete_range(term, 0u, term->draft.len);
     case 0x17u: return delete_range(term, word_left(term), term->cursor);

@@ -237,7 +237,10 @@ stores a row count: it parks below live prose and resumes at the retained logica
 endpoint on the next delta. A prompt uses that same gap rather than adding one.
 Completion commits the gap; resize and exact-margin restoration reuse the same
 cursor handling. This adds constant-size state, not a paragraph buffer or a
-full-screen repaint.
+full-screen repaint. Explicit Ctrl-L also repaints only that retained composer;
+it never clears the whole screen or re-emits completed conversation. A terminal
+may save a whole-screen erase into scrollback, so replacing the display with
+previous text would duplicate it even without another model response.
 
 ## Prompt Identity And Tab
 
