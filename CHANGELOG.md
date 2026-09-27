@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Resume checkpoints written before the download outbox was introduced, and
+  keep replayed outbox changes separate from the saved checkpoint state.
+
 - Keep long sessions writable beyond 2 GiB and one million events. Remove the
   journal lifetime quota and closure reserve while retaining record bounds,
   checked offsets and atomic append recovery.

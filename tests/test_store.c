@@ -642,6 +642,50 @@ test_upload_staging_lifecycle(struct snag_store *store, const char *cwd)
 }
 
 static void
+test_checkpoint_optional_download_queue(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session, restored;
+    char error[256], id[SNAG_ID_HEX_LEN + 1u];
+    json_t *state;
+
+    snag_session_init(&session);
+    assert(snag_session_create(store, &session, cwd, "default", "model", "default",
+        error, sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+    state = snag_checkpoint_state_encode(&session);
+    assert(state && json_object_del(state, "download_queue") == 0);
+    /* Earlier snapshot-v1 writers predate the download outbox. Their verified
+     * checkpoints still carry every required field of the original format. */
+    commit_event(&session, "session_checkpoint", checked_json(json_pack(
+        "{s:o,s:n,s:i,s:i}", "state", state, "context", "snapshot_v", 1, "format", 4)));
+    commit_event(&session, "effort_changed", checked_json(json_pack(
+        "{s:s,s:s}", "old_effort", "default", "new_effort", "high")));
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(!session.download_queue && !strcmp(session.default_effort, "high"));
+
+    state = snag_checkpoint_state_encode(&session);
+    assert(state);
+    assert(json_object_set_new(state, "download_queue", json_object()) == 0);
+    assert(snag_checkpoint_state_decode(state, &restored) < 0);
+    snag_session_close(&restored);
+    assert(json_object_set_new(state, "download_queue", json_null()) == 0);
+    assert(snag_checkpoint_state_decode(state, &restored) == 0);
+    snag_session_close(&restored);
+    assert(json_object_set_new(state, "download_queue", json_array()) == 0);
+    assert(snag_checkpoint_state_decode(state, &restored) == 0);
+    assert(json_array_append_new(restored.download_queue, json_object()) == 0);
+    assert(json_array_size(json_object_get(state, "download_queue")) == 0u);
+    snag_session_close(&restored);
+    assert(json_object_del(state, "pending_input") == 0);
+    assert(snag_checkpoint_state_decode(state, &restored) < 0);
+    snag_session_close(&restored);
+    json_decref(state);
+    snag_session_close(&session);
+}
+
+static void
 test_one_file_checkpoint(struct snag_store *store, const char *cwd)
 {
     struct snag_session session;
@@ -1346,6 +1390,7 @@ main(void)
     test_pending_session(&store, cwd);
     test_reverse_history(&store, cwd);
     test_upload_staging_lifecycle(&store, cwd);
+    test_checkpoint_optional_download_queue(&store, cwd);
     test_one_file_checkpoint(&store, cwd);
     test_large_embedded_checkpoint(&store, cwd);
     test_failed_append_retry(&store, cwd);
