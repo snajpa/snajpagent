@@ -1955,7 +1955,8 @@ tool_schemas(bool goal_active,
     const char *search_type = snag_config_provider_is_openrouter(
         snag_config_provider(config, provider_name)) ? "openrouter:web_search" : "web_search";
 
-    /* State affects execution, never catalog visibility. */
+    /* Runtime state affects execution, not catalog visibility. Operator
+     * configuration can disable a capability entirely. */
     (void)goal_active;
     (void)goal_create_allowed;
     (void)networked;
@@ -2033,7 +2034,8 @@ tool_schemas(bool goal_active,
             json_pack("{s:{s:s,s:s}}", "path", "type", "string", "description",
                 "Literal cwd-relative or absolute file path without symlinks, or asset:ID. "
                 "Directories are rejected; empty regular files are supported."))) < 0 ||
-        json_array_append_new(tools, tool_schema("select_model", "selector",
+        (config && config->allow_model_change &&
+         json_array_append_new(tools, tool_schema("select_model", "selector",
             "Select the provider/model/effort for the next response, including within the current "
                 "turn. "
             "A completed tool result is retained; ongoing command handles remain live. "
@@ -2042,7 +2044,7 @@ tool_schemas(bool goal_active,
             "then select [provider/]model[/effort] or a numbered cached row. "
             "This changes the session selection, not the configuration file.",
             json_pack("{s:{s:s,s:s}}", "selector", "type", "string", "description",
-                "Cached model/effort row, or cache to refresh and list."))) < 0 ||
+                "Cached model/effort row, or cache to refresh and list."))) < 0) ||
         json_array_append_new(tools, read_only_schema("list_files")) < 0 ||
         json_array_append_new(tools, read_only_schema("read_file")) < 0 ||
         json_array_append_new(tools, read_only_schema("grep")) < 0 ||

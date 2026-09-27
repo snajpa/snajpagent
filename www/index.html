@@ -134,7 +134,8 @@ sudo make install</code></pre>
       <p>Supported connections: OpenAI, ChatGPT/Codex subscription, OpenRouter, and custom
         providers with an OpenAI-compatible Responses API.</p>
       <p>Refresh available models with <code>/model cache</code>. The model's
-        <code>select_model</code> tool chooses from the current cache and can refresh
+        <code>select_model</code> tool, enabled with <code>[agent] allow_model_change=true</code>
+        (default off), chooses from the current cache and can refresh
         it before selecting a newly listed model.</p>
       <ul>
         <li><strong>OpenAI GPT-5+:</strong> recommended; the only model family thoroughly tested and

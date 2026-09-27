@@ -732,6 +732,7 @@ parse_setting(struct parse_state *state, const char *key, const char *value)
         {SECTION_AGENT, "reasoning_effort", SET_TEXT, config->reasoning_effort, 0, sizeof(config->reasoning_effort)},
         {SECTION_AGENT, "max_goal_prompt_bytes", SET_U32, &config->max_goal_prompt_bytes, 1, 1024u * 1024u},
         {SECTION_AGENT, "read_agents_md", SET_BOOL, &config->read_agents_md, 0, 0},
+        {SECTION_AGENT, "allow_model_change", SET_BOOL, &config->allow_model_change, 0, 0},
         {SECTION_AGENT, "max_turn_retries", SET_U32, &config->max_turn_retries, 0, UINT32_MAX},
         {SECTION_PROVIDER, "parallel_tool_calls", SET_BOOL, &provider->parallel_tool_calls, 0, 0},
         {SECTION_PROVIDER, "connect_timeout_ms", SET_U32, &provider->connect_timeout_ms, 1000, 120000},

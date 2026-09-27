@@ -70,7 +70,7 @@ NATIVE_FUNCTION_NAMES = {
     "grep", "write_file", "edit_file", "read_tool_output", "read_session_history", "list_goals",
     "set_command_shell", "irc_send", "irc_state", "irc_topic", "irc_nick", "irc_connect",
     "irc_host", "irc_disconnect", "create_goal", "update_goal", "timer", "defer_steering",
-    "get_cwd", "cd", "select_model",
+    "get_cwd", "cd",
 }
 
 

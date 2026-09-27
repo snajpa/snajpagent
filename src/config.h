@@ -162,6 +162,7 @@ struct snag_config {
     uint32_t max_goal_prompt_bytes;
     uint32_t max_turn_retries;
     bool read_agents_md;
+    bool allow_model_change;
     bool auto_update;
     char update_url[SNAG_CONFIG_URL_MAX];
     struct snag_provider_config *providers;

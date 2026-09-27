@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Gate the model's `select_model` tool behind `[agent] allow_model_change`,
+  defaulting to `false`. Operator `/model` and CLI `-m` remain available.
+
 - Add `/session` for the current ID and running sessions, and `/session list`
   for all saved sessions. Listing from a running owner preserves its writer lock.
 

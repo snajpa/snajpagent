@@ -1910,7 +1910,8 @@ for the model resolves to the compiled default;
 for effort resolves to
 .BR medium .
 Operator-typed /model and command-line -m send other nonblank bounded values
-without checking a model catalog. The model's select_model tool uses only
+without checking a model catalog. The model's select_model tool is available when
+[agent] allow_model_change=true and uses only
 entries in the current cache.
 .PP
 Use
@@ -2164,6 +2165,23 @@ The configured limit is captured at turn start, including an explicit
 .BR /retry .
 Active goals ignore this limit and retain unlimited recovery. Paused and blocked
 goals keep their state while ordinary prompts retry.
+.TP
+.B allow_model_change
+Permit the model to use the
+.B select_model
+tool to refresh its model catalog or change provider, model, or reasoning effort.
+Default:
+.BR false .
+When disabled, the tool is omitted from provider requests and calls are rejected
+without changing the session selection or refreshing the cache. Set
+.B allow_model_change=true
+in
+.B [agent]
+to enable it. Operator
+.B /model
+and command-line
+.B \-m
+remain available. The current configuration applies on launch and resume.
 .TP
 .B read_agents_md
 Discover global and project
@@ -3153,7 +3171,11 @@ Graceful exit after signal
 .SH "Model tools"
 .SS Visibility and execution
 These are model-callable tools, not slash commands to type into the composer.
-Every provider request advertises the complete native catalog. Read-only mode,
+Every provider request advertises the configured native catalog. The
+.B allow_model_change
+setting controls whether
+.B select_model
+is available; it defaults to false. Read-only mode,
 goal and queue state, network configuration, continuation mode and current
 endpoint state do not remove a schema. A declaration describes a call shape;
 runtime validation and tool results report whether the current turn can perform
@@ -3249,6 +3271,10 @@ later tool calls; existing processes keep their own launch directory.
 requires selector, either a configured
 .IR "provider/model/effort" ,
 a shorter model selector, or a numbered row from the cached model listing.
+It is available when
+.B [agent] allow_model_change=true
+(default: false). When disabled, the tool is absent from the model's catalog and
+calls fail without side effects.
 The provider, model and effort must match a row in the current model cache;
 an empty or unreadable cache leaves the session selection unchanged. Selector
 .B cache

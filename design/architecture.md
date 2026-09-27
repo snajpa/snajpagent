@@ -476,7 +476,14 @@ directories, and the atomically replaced `models.json` provider catalog. Cache
 age never causes an implicit refresh. A missing catalog directs the operator to
 explicit `/model cache`; snajpagent neither imports nor depends on Codex CLI
 cache state.
-The model's `select_model` tool reloads the current cache for each choice and
+`[agent] allow_model_change` defaults to `false`. Disabled sessions omit
+`select_model` from the provider tool catalog and reject unsolicited or retained
+calls before cache refresh or selection changes. Explicit `true` enables the
+model tool. Operator `/model` and CLI `-m` remain available regardless of this
+setting. The setting comes from current configuration on each launch/resume;
+model tools cannot enable it by changing session state.
+
+The enabled `select_model` tool reloads the current cache for each choice and
 accepts only a matching provider, model and effort row bound to the configured
 provider URL. Selector `cache` runs the existing atomic provider refresh and
 returns available cached rows; a failed refresh retains the previous cache.

@@ -28,13 +28,16 @@ DENY_WRITE = (
 
 
 def run_case(binary, provider, root, name, prompt, respond, rules="", read_only=False,
-             prepare=None):
+             prepare=None, agent_settings=""):
     case = root / name
     case.mkdir(parents=True)
     if prepare is not None:
         prepare(case)
     config = case / "config.ini"
     harness.write_irc_config(config, provider.port, "host-model")
+    if agent_settings:
+        config.write_text(config.read_text(encoding="utf-8").replace(
+            "[agent]\n", "[agent]\n" + agent_settings, 1), encoding="utf-8")
     if rules:
         with config.open("a", encoding="utf-8") as out:
             out.write(rules)
@@ -48,7 +51,10 @@ def run_case(binary, provider, root, name, prompt, respond, rules="", read_only=
             capture_output=True, text=True, timeout=60)
     finally:
         provider.runtime_handler = None
-    _, events = harness.read_events(state)
+    try:
+        _, events = harness.read_events(state)
+    except AssertionError as error:
+        raise AssertionError((str(error), result.returncode, result.stdout, result.stderr)) from error
     return case, result, events
 
 
@@ -181,12 +187,38 @@ def case_home_default(binary, provider, root):
     print("tools e2e home default: ok", flush=True)
 
 
+def case_model_switch_disabled(binary, provider, root):
+    for name, setting in (("default", ""), ("explicit", "allow_model_change=false\n")):
+        requests = []
+        case, run, events = run_case(
+            binary, provider, root, f"model-switch-disabled-{name}", "keep this model",
+            responder(provider, [
+                ("select_model", {"selector": "cache"}),
+                ("select_model", {"selector": "standard-model/ultra"}),
+                ("get_cwd", {}),
+            ], "model selection unchanged", inspect=lambda outs, request: requests.append(request)),
+            agent_settings=setting)
+        assert run.returncode == 0, (run.stdout, run.stderr)
+        assert requests and all("select_model" not in {
+            tool.get("name") for tool in request["tools"]} for request in requests), \
+            "disabled select_model was advertised"
+        results = [entry["data"]["result"] for entry in finished(events)]
+        assert [item["status"] for item in results] == ["failed", "failed", "succeeded"], results
+        assert all("allow_model_change" in item["model_text"] for item in results[:2]), results
+        assert all(request["model"] == "host-model" for request in requests)
+        assert not any(event["type"] in ("turn_model_changed", "model_selection_changed")
+                       for event in events)
+        assert not (case / "state" / "models.json").exists()
+    print("tools e2e model change default/explicit off: ok", flush=True)
+
+
 def case_model_switch(binary, provider, root):
     models = []
     cache_path = root / "model-switch" / "state" / "models.json"
     cache_snapshot = []
 
     def observed(outs, request):
+        assert "select_model" in {tool.get("name") for tool in request["tools"]}
         models.append(request["model"])
         if len(outs) == 2:
             cache_snapshot.append((cache_path.read_bytes(), cache_path.stat().st_ino))
@@ -210,7 +242,8 @@ def case_model_switch(binary, provider, root):
                 ("select_model", {"selector": "cache"}),
                 ("select_model", {"selector": "#1"}),
                 ("get_cwd", {}),
-            ], "model switch complete", inspect=observed))
+            ], "model switch complete", inspect=observed),
+            agent_settings="allow_model_change=true\n")
     finally:
         provider.AGENTS = previous_agents
     assert run.returncode == 0, (run.stdout, run.stderr)
@@ -298,6 +331,7 @@ def case_wide_call_batch(binary, provider, root):
 
 CASES = (
     case_home_default,
+    case_model_switch_disabled,
     case_model_switch,
     case_exploration,
     case_write_and_edit,

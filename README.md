@@ -83,7 +83,8 @@ Commands can be entered while a turn is steerable. A foreground slash command
 finishes before the next app command is accepted; input typed during it waits.
 `/config`, `/model cache`, `/compact`, `/archive` and `/delete` acknowledge a
 safe boundary when they must wait. Accepted controls survive resume. `/model`
-and the model's `select_model` tool switch the next response in the current turn;
+and, with `[agent] allow_model_change=true`, the model's `select_model` tool
+switch the next response in the current turn;
 an already streaming request is interrupted and rebuilt from durable history.
 The external `$EDITOR` owns terminal input while open, and deletion always
 requires explicit confirmation.
@@ -293,7 +294,8 @@ and slash-command exceptions.
 `/model` lists the locally cached catalog and `/model cache` refreshes
 providers. An operator can select a row by number or type
 `/model PROVIDER/MODEL/EFFORT`, including an uncached model. The model's
-`select_model` tool accepts only provider/model/effort entries in the current
+`select_model` tool (enabled by `[agent] allow_model_change=true`, default off)
+accepts only provider/model/effort entries in the current
 cache; selector `cache` refreshes it and returns available rows. An active
 selection switches the next response in the same turn; an idle
 selection and CLI `-m` set the preference for subsequent requests. The choice

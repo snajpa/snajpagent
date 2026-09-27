@@ -1757,6 +1757,11 @@ snag_app_select_model_tool(struct app_state *app, const struct snag_response_ite
         SNAG_CONFIG_PROVIDER_NAME_MAX + SNAG_CONFIG_EFFORT_MAX + 128u};
 
     *result = NULL;
+    if (!app->config->allow_model_change) {
+        *result = snag_tool_result_terminal(false,
+            "select_model is disabled; enable [agent] allow_model_change to permit model changes");
+        return *result ? 0 : -1;
+    }
     if (!snag_json_arg_keys(call->arguments, "selector", "", error, error_size) ||
         !snag_json_arg_text(call->arguments, "selector", 1u, SNAG_CONFIG_PATH_MAX,
                             false, &selector, error, error_size)) {

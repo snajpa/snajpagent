@@ -47,6 +47,25 @@ expect_invalid(const char *path)
 }
 
 static void
+test_model_change_setting(const char *path)
+{
+    struct snag_config config;
+    const char *values[] = {"false", "true"};
+    for (size_t i = 0u; i < 2u; ++i) {
+        char text[128];
+        int n = snprintf(text, sizeof(text), "[agent]\nallow_model_change=%s\n", values[i]);
+        assert(n > 0 && (size_t)n < sizeof(text));
+        write_bytes(path, text, (size_t)n);
+        load_config(&config, path, NULL);
+        assert(config.allow_model_change == (i != 0u));
+        snag_config_free(&config);
+    }
+    const char *invalid = "[agent]\nallow_model_change=maybe\n";
+    write_bytes(path, invalid, strlen(invalid));
+    expect_invalid(path);
+}
+
+static void
 test_model_steering(const char *path)
 {
     struct snag_config config;
@@ -724,6 +743,7 @@ main(void)
         "reasoning_effort = future-effort\n"
         "max_goal_prompt_bytes = 123456\n"
         "read_agents_md = false\n"
+        "allow_model_change = true\n"
         "\n[audio]\nprovider=backup\nlisten_model=listen-fixture\ntranscribe_model=transcribe-fixture\n"
         "speech_model=speech-fixture\nrealtime_model=realtime-fixture\nvoice=alloy\ncapture_device=USB microphone\nplayback_device=USB speaker\n"
         "\n[provider default]\n"
@@ -772,6 +792,7 @@ main(void)
     assert(config.max_goal_prompt_bytes == 256u * 1024u);
     assert(config.max_turn_retries == 5u);
     assert(config.read_agents_md);
+    assert(!config.allow_model_change);
 #ifdef SNAJPAGENT_UPDATE_URL
     assert(config.auto_update == (strchr(SNAJPAGENT_VERSION, '-') == NULL));
     assert(strcmp(config.update_url, SNAJPAGENT_UPDATE_URL) == 0);
@@ -877,6 +898,7 @@ main(void)
     assert(strcmp(config.reasoning_effort, "future-effort") == 0);
     assert(config.max_goal_prompt_bytes == 123456u);
     assert(!config.read_agents_md);
+    assert(config.allow_model_change);
     assert(config.provider_count == 2u);
     assert(strcmp(config.providers[0].name, "default") == 0);
     assert(config.providers[0].connect_timeout_ms == 1000u);
@@ -1023,6 +1045,7 @@ main(void)
             values, 0xfdu, expanded, sizeof(expanded)) < 0);
     }
 
+    test_model_change_setting(path);
     test_model_steering(path);
     test_configured_efforts(path);
     test_model_execution(path);
