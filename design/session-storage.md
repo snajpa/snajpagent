@@ -149,7 +149,7 @@ leaves the committed anchor unchanged. No framing API modifies a file.
 Payload version1 assigns session/configuration IDs1..12, timer
 schedule/fire/cancel IDs32..34, goal
 start/replace/reword/lock/pause/block/complete/resume/cancel IDs64..72 and initial
-input/steering IDs96..103. IDs13..31
+input/steering IDs96..105. IDs13..31
 remain reserved for session metadata. Required semantic kinds occupy the low
 half of the 16-bit namespace. The high half permits explicitly optional metadata;
 unknown required records, unsupported semantic payload versions and optional
@@ -206,6 +206,8 @@ Initial input and steering records use these layouts:
 | 101 | input admitted | turn UUID16, first-context time8, steering UUID list |
 | 102 | future queue state | armed boolean1 |
 | 103 | future turn cancelled | user reason1, nonempty queued UUID list |
+| 104 | future turn queued | queue UUID16, flags1, while-turn kind1 and optional UUID16, optional receipt time8, original text, optional content or voice source |
+| 105 | future turn edited | queue UUID16, flags1, optional receipt time8, original text, optional content |
 
 Input origin0 preserves the original absent origin field; origin1 means timer.
 It does not elevate IRC/voice input to operator authority. Input flag bits0/1
@@ -214,6 +216,17 @@ content-present, preserving absent versus explicitly zero receipt timestamps.
 Remaining bits are rejected. Queue admission/order, duplicate IDs, original
 text equality and authority remain reducer checks. UUID lists use count4 plus
 packed16-byte entries; admission may carry an empty list, cancellation may not.
+
+Queue flag bits0..5 mean read-only, armed-present, armed-value, timestamp-present,
+content-present and voice-present. An armed value without presence is invalid.
+While-turn kind0 retains the empty string used by idle ordinary input, kind1
+carries an active turn UUID, and kind2 retains null for idle voice input. Voice
+input cannot also carry content or read-only state, and editing carries neither
+a while-turn field nor voice provenance. Voice source fields are connection
+UUID16, provider input/response/call ID text, provider/model text, transcript
+text and requested-action text. These remain provenance, not speaker identity
+or additional authority; the existing reducer still checks queue identity and
+active-turn matching. No flags or absent timestamps/arming values are inferred.
 
 Instruction lists use count4, then per entry a metadata-present boolean1 and
 path text. Workspace-era entries additionally retain byte count8 and SHA25632,
@@ -226,8 +239,8 @@ field shape/size, UTF-8 and flags; path/MIME policy, aggregate image limits and
 actual asset verification remain the existing domain validators' responsibility.
 Borrowed list iterators avoid allocating a second array proportional to event
 size. Counts are checked against remaining bytes before iteration. These are
-typed field encodings, not embedded JSON. Queued-input creation/editing, voice
-provenance and full turn-start records remain to be added.
+typed field encodings, not embedded JSON. Full turn-start records remain to be
+added.
 
 The ordinary event-size bound remains a resource contract. Start with a 1 MiB
 batch target, admitting one larger permitted event alone. A batch never becomes

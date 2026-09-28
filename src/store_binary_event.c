@@ -333,10 +333,108 @@ read_selection(struct fields *fields, struct snag_binary_selection *selection)
 }
 
 static int
+write_voice_source(struct snag_buf *out, const struct snag_binary_voice_source *voice)
+{
+    if (snag_buf_append(out, voice->connection_id, 16u) < 0 ||
+        write_text(out, voice->input_id, 1u, SNAG_MAX_PROVIDER_ID) < 0 ||
+        write_text(out, voice->response_id, 1u, SNAG_MAX_PROVIDER_ID) < 0 ||
+        write_text(out, voice->call_id, 1u, SNAG_MAX_PROVIDER_ID) < 0 ||
+        write_text(out, voice->provider, 1u, SNAG_CONFIG_PROVIDER_NAME_MAX) < 0 ||
+        write_text(out, voice->model, 1u, SNAG_MODEL_MAX_BYTES - 1u) < 0 ||
+        write_text(out, voice->transcript, 1u, SNAG_MAX_QUEUED_TEXT - 1u) < 0 ||
+        write_text(out, voice->request, 1u, SNAG_MAX_QUEUED_TEXT - 1u) < 0) return -1;
+    return 0;
+}
+
+static bool
+read_voice_source(struct fields *fields, struct snag_binary_voice_source *voice)
+{
+    return read_id(fields, voice->connection_id) &&
+        read_text(fields, &voice->input_id, 1u, SNAG_MAX_PROVIDER_ID) &&
+        read_text(fields, &voice->response_id, 1u, SNAG_MAX_PROVIDER_ID) &&
+        read_text(fields, &voice->call_id, 1u, SNAG_MAX_PROVIDER_ID) &&
+        read_text(fields, &voice->provider, 1u, SNAG_CONFIG_PROVIDER_NAME_MAX) &&
+        read_text(fields, &voice->model, 1u, SNAG_MODEL_MAX_BYTES - 1u) &&
+        read_text(fields, &voice->transcript, 1u, SNAG_MAX_QUEUED_TEXT - 1u) &&
+        read_text(fields, &voice->request, 1u, SNAG_MAX_QUEUED_TEXT - 1u);
+}
+
+static bool
+queue_flags_valid(uint64_t flags, bool adding)
+{
+    /* readonly, armed-present, armed-value, receipt-present, content, voice. */
+    return flags <= 63u && (!(flags & 4u) || (flags & 2u)) &&
+        (!(flags & 32u) || (adding && !(flags & 17u)));
+}
+
+static bool
+while_valid(enum snag_binary_while_turn kind, bool voice)
+{
+    return kind == SNAG_BINARY_WHILE_ID ||
+        kind == (voice ? SNAG_BINARY_WHILE_NULL : SNAG_BINARY_WHILE_EMPTY);
+}
+
+static int
+encode_queued(struct snag_buf *out, const struct snag_binary_event *event)
+{
+    bool adding = event->kind == SNAG_BINARY_FUTURE_TURN_QUEUED;
+    bool content = event->data.queued.content.data || event->data.queued.content.size;
+    uint64_t flags = (event->data.queued.read_only ? 1u : 0u) |
+        (event->data.queued.has_armed ? 2u : 0u) |
+        (event->data.queued.has_armed && event->data.queued.armed ? 4u : 0u) |
+        (event->data.queued.has_received_ms ? 8u : 0u) | (content ? 16u : 0u) |
+        (event->data.queued.has_voice ? 32u : 0u);
+    if (!queue_flags_valid(flags, adding) ||
+        (adding && !while_valid(event->data.queued.while_kind, event->data.queued.has_voice)))
+        return invalid();
+    if (snag_buf_append(out, event->data.queued.id, 16u) < 0 ||
+        write_uint(out, flags, 1u) < 0) return -1;
+    if (adding) {
+        if (write_uint(out, event->data.queued.while_kind, 1u) < 0) return -1;
+        if (event->data.queued.while_kind == SNAG_BINARY_WHILE_ID &&
+            snag_buf_append(out, event->data.queued.while_id, 16u) < 0) return -1;
+    }
+    if (event->data.queued.has_received_ms &&
+        write_uint(out, event->data.queued.received_ms, 8u) < 0) return -1;
+    if (write_text(out, event->data.queued.text, 1u, SNAG_MAX_QUEUED_TEXT) < 0 ||
+        (content && write_content(out, event->data.queued.content) < 0)) return -1;
+    return event->data.queued.has_voice ? write_voice_source(out, &event->data.queued.voice) : 0;
+}
+
+static bool
+decode_queued(struct fields *fields, struct snag_binary_event *event)
+{
+    bool adding = event->kind == SNAG_BINARY_FUTURE_TURN_QUEUED;
+    uint64_t flags, value;
+    if (!read_id(fields, event->data.queued.id) || !read_uint(fields, 1u, &flags) ||
+        !queue_flags_valid(flags, adding)) return false;
+    event->data.queued.read_only = (flags & 1u) != 0;
+    event->data.queued.has_armed = (flags & 2u) != 0;
+    event->data.queued.armed = (flags & 4u) != 0;
+    event->data.queued.has_received_ms = (flags & 8u) != 0;
+    event->data.queued.has_voice = (flags & 32u) != 0;
+    if (adding) {
+        if (!read_uint(fields, 1u, &value) ||
+            !while_valid((enum snag_binary_while_turn)value, event->data.queued.has_voice))
+            return false;
+        event->data.queued.while_kind = (enum snag_binary_while_turn)value;
+        if (event->data.queued.while_kind == SNAG_BINARY_WHILE_ID &&
+            !read_id(fields, event->data.queued.while_id)) return false;
+    }
+    return (!(flags & 8u) || read_uint(fields, 8u, &event->data.queued.received_ms)) &&
+        read_text(fields, &event->data.queued.text, 1u, SNAG_MAX_QUEUED_TEXT) &&
+        (!(flags & 16u) || read_content(fields, &event->data.queued.content)) &&
+        (!(flags & 32u) || read_voice_source(fields, &event->data.queued.voice));
+}
+
+static int
 encode_input(struct snag_buf *out, const struct snag_binary_event *event)
 {
     bool content;
     switch (event->kind) {
+    case SNAG_BINARY_FUTURE_TURN_QUEUED:
+    case SNAG_BINARY_FUTURE_TURN_EDITED:
+        return encode_queued(out, event);
     case SNAG_BINARY_INPUT_RECEIVED:
         if (event->data.input.origin != SNAG_BINARY_INPUT_DEFAULT &&
             event->data.input.origin != SNAG_BINARY_INPUT_TIMER) return invalid();
@@ -388,6 +486,9 @@ decode_input(struct fields *fields, struct snag_binary_event *event)
 {
     uint64_t value, flags;
     switch (event->kind) {
+    case SNAG_BINARY_FUTURE_TURN_QUEUED:
+    case SNAG_BINARY_FUTURE_TURN_EDITED:
+        return decode_queued(fields, event);
     case SNAG_BINARY_INPUT_RECEIVED:
         if (!read_uint(fields, 1u, &value) || value > SNAG_BINARY_INPUT_TIMER ||
             !read_uint(fields, 1u, &flags) || flags > 3u) return false;
@@ -589,7 +690,7 @@ static int
 encode_fields(struct snag_buf *out, const struct snag_binary_event *event)
 {
     if (event->kind >= SNAG_BINARY_INPUT_RECEIVED &&
-        event->kind <= SNAG_BINARY_FUTURE_TURN_CANCELLED) return encode_input(out, event);
+        event->kind <= SNAG_BINARY_FUTURE_TURN_EDITED) return encode_input(out, event);
     if (event->kind >= SNAG_BINARY_SESSION_CREATED &&
         event->kind <= SNAG_BINARY_COMMAND_SHELL_CHANGED) return encode_metadata(out, event);
     if (timer_kind(event->kind)) {
@@ -646,7 +747,7 @@ decode_fields(struct fields *fields, struct snag_binary_event *event)
 {
     uint64_t value;
     if (event->kind >= SNAG_BINARY_INPUT_RECEIVED &&
-        event->kind <= SNAG_BINARY_FUTURE_TURN_CANCELLED) return decode_input(fields, event);
+        event->kind <= SNAG_BINARY_FUTURE_TURN_EDITED) return decode_input(fields, event);
     if (event->kind >= SNAG_BINARY_SESSION_CREATED &&
         event->kind <= SNAG_BINARY_COMMAND_SHELL_CHANGED) return decode_metadata(fields, event);
     if (timer_kind(event->kind)) {

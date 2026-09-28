@@ -340,6 +340,118 @@ test_input_events(void)
 }
 
 static void
+test_queued_input(void)
+{
+    struct snag_binary_event event = {.kind = SNAG_BINARY_FUTURE_TURN_QUEUED};
+    event.data.queued.id[0] = 10u;
+    event.data.queued.text = text("x");
+    roundtrip(&event);
+    struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
+    assert(!snag_binary_event_encode(&payload, &event));
+    static const unsigned char golden[23] = {[0] = 10, [18] = 1, [22] = 'x'};
+    assert(payload.len == sizeof(golden) && !memcmp(payload.data, golden, sizeof(golden)));
+    struct snag_binary_record record = {
+        .kind = SNAG_BINARY_FUTURE_TURN_QUEUED, .version = 1u,
+        .payload = payload.data, .size = payload.len
+    };
+    payload.data[16] = 4u; /* Armed value cannot appear without presence. */
+    assert_rejected(record);
+    payload.data[16] = 64u;
+    assert_rejected(record);
+    payload.data[16] = 0u;
+    payload.data[17] = 2u; /* Null while-turn belongs to voice, not typed input. */
+    assert_rejected(record);
+    payload.data[17] = 3u;
+    assert_rejected(record);
+    event.data.queued.while_kind = SNAG_BINARY_WHILE_ID;
+    memset(event.data.queued.while_id, 0x11, 16u);
+    event.data.queued.read_only = true;
+    event.data.queued.has_armed = true;
+    event.data.queued.has_received_ms = true;
+    roundtrip(&event); /* Explicit disarm and zero receipt time remain present. */
+    event.data.queued.armed = true;
+    event.data.queued.received_ms = UINT64_C(0x0102030405060708);
+    roundtrip(&event);
+    struct snag_buf content = {.max = SNAG_MAX_EVENT_LINE};
+    struct snag_binary_part part = {.kind = SNAG_BINARY_PART_TEXT, .text = text("queue original")};
+    assert(!snag_binary_content_encode(&content, &part, 1u));
+    event.data.queued.content = (struct snag_binary_content){content.data, content.len};
+    roundtrip(&event);
+    event.kind = SNAG_BINARY_FUTURE_TURN_EDITED;
+    roundtrip(&event);
+    event.data.queued.has_armed = false;
+    event.data.queued.has_received_ms = false;
+    roundtrip(&event);
+
+    event = (struct snag_binary_event){.kind = SNAG_BINARY_FUTURE_TURN_QUEUED};
+    event.data.queued.id[0] = 10u;
+    event.data.queued.text = text("x");
+    event.data.queued.has_voice = true;
+    event.data.queued.while_kind = SNAG_BINARY_WHILE_NULL;
+    memset(event.data.queued.voice.connection_id, 0x33, 16u);
+    event.data.queued.voice.input_id = text("i");
+    event.data.queued.voice.response_id = text("r");
+    event.data.queued.voice.call_id = text("c");
+    event.data.queued.voice.provider = text("p");
+    event.data.queued.voice.model = text("m");
+    event.data.queued.voice.transcript = text("t");
+    event.data.queued.voice.request = text("q");
+    roundtrip(&event);
+    snag_buf_reset(&payload);
+    assert(!snag_binary_event_encode(&payload, &event));
+    static const unsigned char voice_tail[] =
+        "\x01\0\0\0i\x01\0\0\0r\x01\0\0\0c\x01\0\0\0p"
+        "\x01\0\0\0m\x01\0\0\0t\x01\0\0\0q";
+    assert(payload.len == 74u && payload.data[16] == 32u && payload.data[17] == 2u);
+    assert(!memcmp(payload.data + 23, event.data.queued.voice.connection_id, 16u));
+    assert(!memcmp(payload.data + 39, voice_tail, sizeof(voice_tail) - 1u));
+    record.payload = payload.data;
+    record.size = payload.len;
+    struct snag_binary_event decoded;
+    assert(!snag_binary_event_decode(&record, &decoded));
+    assert(decoded.data.queued.has_voice &&
+           decoded.data.queued.while_kind == SNAG_BINARY_WHILE_NULL);
+    assert(decoded.data.queued.voice.transcript.size == 1u);
+    assert(decoded.data.queued.voice.transcript.data[0] == 't');
+    assert(decoded.data.queued.voice.request.data[0] == 'q');
+    payload.data[16] = 33u;
+    assert_rejected(record);
+    payload.data[16] = 48u;
+    assert_rejected(record);
+    payload.data[16] = 32u;
+    payload.data[17] = 0u;
+    assert_rejected(record);
+    payload.data[17] = 2u;
+    record.kind = SNAG_BINARY_FUTURE_TURN_EDITED;
+    assert_rejected(record);
+    size_t saved = payload.len;
+    event.kind = SNAG_BINARY_FUTURE_TURN_EDITED;
+    assert(snag_binary_event_encode(&payload, &event) < 0 && payload.len == saved);
+    event.kind = SNAG_BINARY_FUTURE_TURN_QUEUED;
+    event.data.queued.read_only = true;
+    assert(snag_binary_event_encode(&payload, &event) < 0 && payload.len == saved);
+    event.data.queued.read_only = false;
+    event.data.queued.content = (struct snag_binary_content){content.data, content.len};
+    assert(snag_binary_event_encode(&payload, &event) < 0 && payload.len == saved);
+    event.data.queued.content = (struct snag_binary_content){0};
+    event.data.queued.while_kind = SNAG_BINARY_WHILE_EMPTY;
+    assert(snag_binary_event_encode(&payload, &event) < 0 && payload.len == saved);
+    event.data.queued.while_kind = SNAG_BINARY_WHILE_ID;
+    memset(event.data.queued.while_id, 0x44, 16u);
+    event.data.queued.has_armed = true;
+    event.data.queued.armed = true;
+    event.data.queued.has_received_ms = true;
+    event.data.queued.received_ms = 123u;
+    roundtrip(&event);
+    event.data.queued.voice.input_id = text("");
+    assert(snag_binary_event_encode(&payload, &event) < 0 && payload.len == saved);
+    event.data.queued.voice.input_id = text("i");
+    event.data.queued.voice.transcript.size = SNAG_MAX_QUEUED_TEXT;
+    assert(snag_binary_event_encode(&payload, &event) < 0 && payload.len == saved);
+    snag_buf_free(&payload); snag_buf_free(&content);
+}
+
+static void
 test_metadata(void)
 {
     struct snag_binary_selection before = {text("p"), text("m"), text("e")};
@@ -457,6 +569,7 @@ test_store_binary_event(void)
 {
     test_input_lists();
     test_input_events();
+    test_queued_input();
     test_metadata();
     static const unsigned char text[] = "goal caf\xc3\xa9";
     struct snag_binary_event event = {.kind = SNAG_BINARY_TIMER_SCHEDULED};

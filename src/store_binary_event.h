@@ -39,7 +39,9 @@ enum snag_binary_kind {
     SNAG_BINARY_STEERING_DEFERRED = 100,
     SNAG_BINARY_INPUT_ADMITTED = 101,
     SNAG_BINARY_FUTURE_QUEUE_STATE = 102,
-    SNAG_BINARY_FUTURE_TURN_CANCELLED = 103
+    SNAG_BINARY_FUTURE_TURN_CANCELLED = 103,
+    SNAG_BINARY_FUTURE_TURN_QUEUED = 104,
+    SNAG_BINARY_FUTURE_TURN_EDITED = 105
 };
 
 enum snag_binary_actor { SNAG_BINARY_USER = 1, SNAG_BINARY_MODEL = 2 };
@@ -114,6 +116,17 @@ int snag_binary_instructions_next(const struct snag_binary_instructions *instruc
 enum snag_binary_input_origin { SNAG_BINARY_INPUT_DEFAULT = 0, SNAG_BINARY_INPUT_TIMER = 1 };
 struct snag_binary_ids { const unsigned char (*values)[16]; size_t count; };
 
+enum snag_binary_while_turn {
+    SNAG_BINARY_WHILE_EMPTY = 0, SNAG_BINARY_WHILE_ID = 1, SNAG_BINARY_WHILE_NULL = 2
+};
+
+/* Voice provenance is not speaker authentication or additional authority. */
+struct snag_binary_voice_source {
+    unsigned char connection_id[16];
+    struct snag_binary_text input_id, response_id, call_id;
+    struct snag_binary_text provider, model, transcript, request;
+};
+
 struct snag_binary_selection {
     struct snag_binary_text provider, model, effort;
 };
@@ -170,6 +183,15 @@ struct snag_binary_event {
         struct { enum snag_binary_actor actor; struct snag_binary_ids ids; } queue_cancel;
         unsigned char turn[16];
         bool queue_armed;
+        struct {
+            unsigned char id[16], while_id[16];
+            enum snag_binary_while_turn while_kind;
+            bool read_only, has_armed, armed, has_received_ms, has_voice;
+            uint64_t received_ms;
+            struct snag_binary_text text;
+            struct snag_binary_content content;
+            struct snag_binary_voice_source voice;
+        } queued;
         struct {
             unsigned char id[16];
             uint64_t due_ms;
