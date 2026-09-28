@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Forward committed model progress and control changes into the voice connection
+  as ordered passive observations, using a journal cursor and bounded fragments.
+
 - Let the voice interface inspect older session history through the existing
   verified, paged history tool, without starting model work.
 

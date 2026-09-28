@@ -901,8 +901,8 @@ history_excerpt(const char *text, size_t limit)
     return copy;
 }
 
-static char *
-history_data(uint64_t seq, const char *type, const json_t *data)
+char *
+snag_app_history_data(uint64_t seq, const char *type, const json_t *data)
 {
     json_t *view = NULL, *items = NULL;
     char *encoded = NULL;
@@ -956,7 +956,7 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
     scan->last_seq = seq;
     if (scan->filter && !json_object_get(scan->filter, type)) return 0;
     ++scan->matched;
-    char *encoded = history_data(seq, type, data);
+    char *encoded = snag_app_history_data(seq, type, data);
     if (!encoded) return -1;
     char *detail = history_excerpt(encoded, scan->detail_bytes);
     free(encoded);

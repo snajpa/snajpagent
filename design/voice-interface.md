@@ -72,6 +72,12 @@ Each service step reads a bounded byte quantum; a consumer can pause before an
 event or after consuming it. Advance the cursor only after consumption. New
 commits remain available on later steps, so a slow voice connection needs neither
 a lifetime scan nor an unbounded parallel queue of model output.
+Live progress packets identify their session, journal sequence, event type and
+fragment byte offset. Each packet is an observation, not a command. A single
+pending packet applies backpressure. The owner retains one redacted record while
+fragmenting it, so larger descriptions continue without repeated disk reads or
+lost remainder bytes. Existing voice snapshots remain separate from this live
+cursor while conversation retention is developed.
 
 Keep the stable instruction/help prefix and append new context to the history.
 Choose batched compaction versus a sliding window from measured prefill latency,

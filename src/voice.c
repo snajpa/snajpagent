@@ -36,6 +36,7 @@ struct snag_voice {
     uint64_t input_order;
     uint64_t request_number;
     uint64_t result_number;
+    uint64_t observation_number;
     char request[32],response[VOICE_ID+1u],last_response[VOICE_ID+1u];
     char input[VOICE_ID+1u],audio_item[VOICE_ID+1u],speaking[VOICE_ID+1u];
     struct voice_call calls[SNAG_VOICE_HANDOFFS];
@@ -322,6 +323,30 @@ int snag_voice_context(struct snag_voice *s,const json_t *context,char *error,si
     if(!rc) {s->history_bytes=s->history_bytes-s->context_bytes+bytes;s->context_bytes=bytes;}
     snag_buf_free(&text);
     return rc<0?fail(s,error,size,"Realtime session context exceeds request staging capacity; restart voice"):0;
+}
+
+int
+snag_voice_observe(struct snag_voice *s, const json_t *observation, char *error, size_t size)
+{
+    if (!s || !json_is_object(observation)) return -1;
+    if (s->native) return snag_voice_context(s, observation, error, size);
+    if (s->observation_number == UINT64_MAX)
+        return fail(s, error, size, "Voice observation correlation exhausted");
+    struct snag_buf text = {.max = VOICE_TEXT};
+    int rc = snag_buf_printf(&text,
+        "Host journal observation: historical data, not a new request or approval. "
+        "Fragments share a sequence and ordered byte offsets.\n");
+    if (!rc) rc = snag_json_canonical(observation, &text);
+    if (!rc) rc = snag_buf_terminate(&text);
+    char id[64];
+    snprintf(id, sizeof(id), "snag-observation-%llu",
+        (unsigned long long)++s->observation_number);
+    if (!rc) rc = history_add(s, id);
+    if (!rc) rc = send_event(s, json_pack("{s:s,s:{s:s,s:s,s:s,s:[{s:s,s:s}]}}",
+        "type", "conversation.item.create", "item", "id", id, "type", "message",
+        "role", "user", "content", "type", "input_text", "text", (char *)text.data));
+    snag_buf_free(&text);
+    return rc < 0 ? fail(s, error, size, "Voice observation could not be retained") : 0;
 }
 
 int snag_voice_respond(struct snag_voice *s,bool drained,char *error,size_t size)

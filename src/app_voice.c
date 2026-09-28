@@ -198,6 +198,10 @@ struct app_voice {
     struct snag_voice *protocol;
     struct snag_audio_device *device;
     json_t *notices[VOICE_NOTICES],*result,*context;
+    json_t *observation;
+    json_t *observation_record; /* Owner-only source for the next bounded fragment. */
+    struct snag_journal_cursor observation_cursor;
+    size_t observation_offset;
     size_t notice_read,notice_count,notice_bytes,notice_size[VOICE_NOTICES];
     struct snag_buf send[8],receive;
     bool send_audio[8];
@@ -219,6 +223,15 @@ struct app_voice {
     bool servicing;
     bool close_requested;
 };
+
+static void
+observation_start(struct app_voice *v, const struct snag_session *session)
+{
+    v->observation_cursor.offset = session->log_end;
+    v->observation_cursor.next_seq = session->next_seq;
+    memcpy(v->observation_cursor.prev_sha256, session->prev_sha256,
+        sizeof(v->observation_cursor.prev_sha256));
+}
 
 static int
 request_pump(void *opaque, unsigned int timeout_ms)
@@ -482,6 +495,8 @@ int snag_app_voice_fixture(struct app_state *app,const json_t *notices,bool done
     strcpy(v->config.provider,"default");strcpy(v->config.realtime_model,"fixture");
     for(size_t i=0;i<8u;++i)snag_buf_init(&v->send[i],VOICE_MESSAGE);
     snag_buf_init(&v->receive,VOICE_MESSAGE);v->announced=true;app->voice=v;
+    observation_start(v, &app->session);
+    if (snag_secret_set_build(&v->secrets, app->config, NULL, NULL, 0u) < 0) return -1;
     for(size_t i=0;i<json_array_size(notices);++i)
         if(owner_notice(v,json_array_get(notices,i))<0)return -1;
     return 0;
@@ -496,6 +511,17 @@ snag_app_voice_fixture_result(struct app_state *app)
     v->result = NULL;
     pthread_mutex_unlock(&v->mutex);
     return result;
+}
+json_t *
+snag_app_voice_fixture_observation(struct app_state *app)
+{
+    struct app_voice *v = app->voice;
+    if (!v) return NULL;
+    pthread_mutex_lock(&v->mutex);
+    json_t *observation = v->observation;
+    v->observation = NULL;
+    pthread_mutex_unlock(&v->mutex);
+    return observation;
 }
 #endif
 
@@ -731,6 +757,18 @@ native_done:
             int rc=snag_voice_context(v->protocol,context,v->error,sizeof(v->error));
             json_decref(context);if(rc<0) {json_decref(result);break;}
         }
+        pthread_mutex_lock(&v->mutex);
+        json_t *observation = v->observation;
+        v->observation = NULL;
+        pthread_mutex_unlock(&v->mutex);
+        if (observation) {
+            int rc = snag_voice_observe(v->protocol, observation, v->error, sizeof(v->error));
+            json_decref(observation);
+            if (rc < 0) {
+                json_decref(result);
+                break;
+            }
+        }
         if (result) {
             int rc;
             if (json_is_true(json_object_get(result, "standalone"))) {
@@ -843,6 +881,8 @@ void snag_app_voice_close(struct app_state *app)
         json_decref(v->handoffs[i].input);
         json_decref(v->handoffs[i].reply);
     }
+    json_decref(v->observation);
+    json_decref(v->observation_record);
     snag_credential_clear(&v->credential);snag_secret_set_free(&v->secrets);json_decref(v->result);json_decref(v->context);
     pthread_mutex_destroy(&v->mutex);free(v);app->voice=NULL;
 }
@@ -1254,6 +1294,84 @@ voice_transcript(struct app_state *app, struct app_voice *v, const json_t *event
     return rc;
 }
 
+static int
+observation_event(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    struct app_state *app = opaque;
+    struct app_voice *v = app->voice;
+    (void)state;
+    if (!snag_string_in(type,
+            "turn_started turn_completed turn_completed_silent turn_failed turn_interrupted "
+            "response_output response_output_correction response_completed response_interrupted "
+            "response_failed tool_started tool_finished process_closed input_received "
+            "future_turn_queued future_turn_edited future_turn_cancelled steering_added "
+            "control_started control_completed goal_started goal_replaced goal_completed "
+            "goal_paused goal_resumed goal_blocked model_changed effort_changed")) return 0;
+    char *encoded = snag_app_history_data(seq, type, data);
+    if (!encoded) return -1;
+    struct snag_buf clean = {.max = SNAG_MAX_EVENT_LINE};
+    int rc = snag_wire_json_redact((const unsigned char *)encoded, strlen(encoded),
+        &v->secrets.wire, &clean, error, size);
+    snag_secret_clear(encoded, strlen(encoded));
+    free(encoded);
+    if (!rc) {
+        v->observation_record = json_pack("{s:s,s:s,s:I,s:s,s:I,s:s%}",
+            "kind", "session_observation", "session_id", app->session.id,
+            "seq", (json_int_t)seq, "event_type", type, "length", (json_int_t)clean.len,
+            "text", (char *)clean.data, clean.len);
+        if (!v->observation_record) rc = -1;
+    }
+    snag_buf_free(&clean);
+    return rc < 0 ? -1 : SNAG_JOURNAL_STOP_AFTER;
+}
+
+static int
+observation_service(struct app_state *app, char *error, size_t size)
+{
+    struct app_voice *v = app->voice;
+    if (atomic_load(&v->stop) || atomic_load(&v->done)) return 0;
+    pthread_mutex_lock(&v->mutex);
+    bool pending = v->observation != NULL;
+    pthread_mutex_unlock(&v->mutex);
+    if (pending) return 0;
+    if (!v->observation_record) {
+        if (v->observation_cursor.next_seq >= app->session.next_seq) return 0;
+        int rc = snag_session_each_event_forward(&app->session, &v->observation_cursor,
+            SNAG_JOURNAL_PAGE_BYTES, observation_event, app, error, size);
+        if (rc < 0) return rc;
+        if (!v->observation_record) return 0;
+    }
+    /* Retain one decoded record so fragmentation never rereads it quadratically. */
+    const char *text = snag_json_string(v->observation_record, "text");
+    size_t length = json_string_length(json_object_get(v->observation_record, "text"));
+    size_t start = v->observation_offset;
+    if (!text || start >= length) return -1;
+    /* One 1 KiB fragment bounds copying per service step, not model capacity. */
+    size_t end = length - start > 1024u ? start + 1024u : length;
+    while (end < length && end > start && ((unsigned char)text[end] & 0xc0u) == 0x80u) {
+        --end;
+    }
+    bool complete = end == length;
+    json_t *packet = json_copy(v->observation_record);
+    if (!packet || json_object_set_new(packet, "offset", json_integer((json_int_t)start)) < 0 ||
+        json_object_set_new(packet, "end", json_integer((json_int_t)end)) < 0 ||
+        json_object_set_new(packet, "complete", json_boolean(complete)) < 0 ||
+        json_object_set_new(packet, "text", json_stringn(text + start, end - start)) < 0) {
+        json_decref(packet);
+        return -1;
+    }
+    pthread_mutex_lock(&v->mutex);
+    v->observation = packet;
+    pthread_mutex_unlock(&v->mutex);
+    v->observation_offset = complete ? 0u : end;
+    if (complete) {
+        json_decref(v->observation_record);
+        v->observation_record = NULL;
+    }
+    return 0;
+}
+
 int snag_app_voice_service(struct app_state *app)
 {
     struct app_voice *v = app->voice;
@@ -1270,6 +1388,7 @@ int snag_app_voice_service(struct app_state *app)
         pthread_mutex_lock(&v->mutex);json_decref(v->context);v->context=context;pthread_mutex_unlock(&v->mutex);
         v->context_dirty=false;
     }
+    if (observation_service(app, error, sizeof(error)) < 0) goto failed;
     for(;;) {
         pthread_mutex_lock(&v->mutex);
         json_t *event=NULL;
@@ -1484,6 +1603,7 @@ int snag_app_voice_command(struct app_state *app,const char *line,bool *handled)
         snag_secret_set_build(&v->secrets,app->config,&v->credential,
             error,sizeof(error))<0)goto failed;
     if(snag_session_voice_context(&app->session,&v->context,error,sizeof(error))<0)goto failed;
+    observation_start(v, &app->session);
     if(pthread_create(&v->thread,NULL,voice_owner,v))goto failed;
     v->thread_started=true;return 0;
 failed:

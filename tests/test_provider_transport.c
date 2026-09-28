@@ -2063,6 +2063,80 @@ test_voice_concurrent_owner(void)
 }
 
 static void
+test_voice_observation_cursor(void)
+{
+    char path[4096], error[256];
+    const char *tmp = getenv("TMPDIR");
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-voice-observe-XXXXXX",
+        tmp ? tmp : "/tmp") > 0 && mkdtemp(path));
+    struct snag_config config;
+    snag_config_init(&config);
+    assert(snag_secret_source_parse(&config.providers[0].api_key,
+        "\"voice-observation-secret\"", NULL, error, sizeof(error)) == 0);
+    struct app_state app = {.config = &config};
+    snag_store_init(&app.store);
+    snag_session_init(&app.session);
+    assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
+    assert(snag_session_create(&app.store, &app.session, path, "default", "fixture", "medium",
+        error, sizeof(error)) == 0);
+    assert(snag_ui_init(&app.ui) == 0);
+    json_t *notices = json_array();
+    assert(notices && snag_app_voice_fixture(&app, notices, false) == 0);
+    json_decref(notices);
+    assert(snag_app_voice_service(&app) == 0);
+    assert(!snag_app_voice_fixture_observation(&app));
+    char prompt[6100];
+    for (size_t i = 0; i < 6000u; i += 2u) memcpy(prompt + i, "λ", 2u);
+    strcpy(prompt + 6000u, "voice-observation-secret");
+    const char *goal = "0123456789abcdef0123456789abcdef";
+    json_t *data = json_pack("{s:s,s:s}", "goal_id", goal, "prompt", prompt);
+    uint64_t seq = app.session.next_seq;
+    strcpy(prompt + 6000u, "<redacted:secret>");
+    json_t *redacted = json_deep_copy(data);
+    assert(redacted && json_object_set_new(redacted, "prompt", json_string(prompt)) == 0);
+    char *expected = snag_app_history_data(seq, "goal_started", redacted);
+    json_decref(redacted);
+    assert(expected && snag_session_commit(&app.session, "goal_started", data,
+        NULL, error, sizeof(error)) == 0);
+    struct snag_buf joined = {.max = SNAG_MAX_EVENT_LINE};
+    bool complete = false;
+    size_t packets = 0u;
+    while (!complete && packets < 16u) {
+        assert(snag_app_voice_service(&app) == 0 && app.voice);
+        /* A pending packet survives repeated owner service without overwrite. */
+        assert(snag_app_voice_service(&app) == 0 && app.voice);
+        json_t *packet = snag_app_voice_fixture_observation(&app);
+        assert(packet && !strcmp(snag_json_string(packet, "session_id"), app.session.id));
+        assert((uint64_t)json_integer_value(json_object_get(packet, "seq")) == seq);
+        assert((size_t)json_integer_value(json_object_get(packet, "offset")) == joined.len);
+        const char *text = snag_json_string(packet, "text");
+        assert(text && strlen(text) <= 1024u && snag_text_valid(text, 1u, 1024u));
+        assert(snag_buf_append(&joined, text, strlen(text)) == 0);
+        complete = json_is_true(json_object_get(packet, "complete"));
+        json_decref(packet);
+        ++packets;
+    }
+    assert(complete && packets > 1u && snag_buf_terminate(&joined) == 0);
+    assert(!strcmp((char *)joined.data, expected));
+    free(expected);
+    snag_buf_free(&joined);
+    assert(snag_app_voice_service(&app) == 0 && !snag_app_voice_fixture_observation(&app));
+    assert(snag_session_commit(&app.session, "effort_changed",
+        json_pack("{s:s,s:s}", "old_effort", "medium", "new_effort", "high"),
+        NULL, error, sizeof(error)) == 0);
+    assert(snag_app_voice_service(&app) == 0);
+    json_t *packet = snag_app_voice_fixture_observation(&app);
+    assert(packet && !strcmp(snag_json_string(packet, "event_type"), "effort_changed"));
+    json_decref(packet);
+    assert(!app.session.active_turn && !app.session.pending_queue_count);
+    snag_app_voice_close(&app);
+    snag_ui_free(&app.ui);
+    snag_session_close(&app.session);
+    snag_store_close(&app.store);
+    snag_config_free(&config);
+}
+
+static void
 test_voice_read_tools(void)
 {
     char path[4096], file[4096], error[256];
@@ -4775,6 +4849,55 @@ static void test_voice_muted_input(void)
     voice_end(voice,&f);
 }
 
+static void
+test_voice_observe(void)
+{
+    char error[256];
+    for (unsigned int native = 0u; native < 2u; ++native) {
+        struct voice_fixture f;
+        struct snag_voice *voice;
+        if (native) {
+            memset(&f, 0, sizeof(f));
+            f.sent = json_array();
+            f.notices = json_array();
+            assert(f.sent && f.notices);
+            const struct snag_voice_io io = {voice_send, voice_notice, voice_play, voice_interrupt};
+            voice = voice_fixture_new(&io, &f, "gpt-live-1-codex", "gpt-4o-transcribe", "cove");
+            assert(voice);
+            json_t *session = snag_voice_native_session(voice);
+            assert(session);
+            json_decref(session);
+            assert(snag_voice_begin(voice, error, sizeof(error)) == 0);
+        } else voice = voice_start(&f);
+        size_t sent = json_array_size(f.sent);
+        for (unsigned int i = 0u; i < 2u; ++i) {
+            json_t *packet = json_pack("{s:s,s:i,s:s}", "kind", "session_observation",
+                "seq", (int)i + 1, "text", i ? "second progress" : "first progress");
+            assert(packet && snag_voice_observe(voice, packet, error, sizeof(error)) == 0);
+            json_decref(packet);
+            const json_t *event = voice_last(f.sent);
+            assert(!strcmp(snag_json_string(event, "type"), native ?
+                "session.context.append" : "conversation.item.create"));
+            if (native) assert(!strcmp(snag_json_string(event, "channel"), "commentary"));
+        }
+        assert(json_array_size(f.sent) == sent + 2u && !voice_notice_count(&f, "voice_handoff"));
+        assert(snag_voice_respond(voice, true, error, sizeof(error)) == 0);
+        assert(json_array_size(f.sent) == sent + 2u);
+        if (!native) {
+            voice_commit(voice, "question", "what happened?");
+            assert(snag_voice_respond(voice, true, error, sizeof(error)) == 0);
+            const json_t *input = json_object_get(json_object_get(voice_last(f.sent), "response"),
+                "input");
+            assert(json_array_size(input) == 3u);
+            assert(!strcmp(snag_json_string(json_array_get(input, 0u), "id"),
+                "snag-observation-1"));
+            assert(!strcmp(snag_json_string(json_array_get(input, 1u), "id"),
+                "snag-observation-2"));
+        }
+        voice_end(voice, &f);
+    }
+}
+
 static void test_voice_context(void)
 {
     struct voice_fixture f;char error[256];struct snag_voice *voice=voice_start(&f);
@@ -5181,6 +5304,7 @@ main(void)
     test_voice_concurrent_results();
     test_voice_async_asr();
     test_voice_captions();
+    test_voice_observe();
     test_voice_context();
     test_voice_muted_input();
 #if SNAJPAGENT_AUDIO_DEVICE
@@ -5189,6 +5313,7 @@ main(void)
     test_voice_close();
     test_voice_transcript_labels();
     test_voice_concurrent_owner();
+    test_voice_observation_cursor();
     test_voice_read_tools();
     test_voice_interface_read();
     test_voice_independent_request();

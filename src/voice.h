@@ -29,6 +29,8 @@ json_t *snag_voice_native_session(struct snag_voice *);
 int snag_voice_native_output(struct snag_voice *,const int16_t *,uint32_t);
 /* Replace textual session context; never requests speech or coding work. */
 int snag_voice_context(struct snag_voice *,const json_t *,char *,size_t);
+/* Append a passive journal observation; never requests speech or coding work. */
+int snag_voice_observe(struct snag_voice *, const json_t *, char *, size_t);
 int snag_voice_event(struct snag_voice *,const json_t *,char *,size_t);
 /* At most one response at once. Committed audio may be answered before ASR
  * finishes; only a coding handoff waits for its correlated final transcript. */

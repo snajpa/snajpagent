@@ -175,6 +175,7 @@ int snag_app_audio_fixture(struct app_state *,bool playing);
 int snag_app_audio_fixture_checkpoint(struct app_state *);
 int snag_app_voice_fixture(struct app_state *,const json_t *notices,bool done);
 json_t *snag_app_voice_fixture_result(struct app_state *);
+json_t *snag_app_voice_fixture_observation(struct app_state *);
 int snag_app_voice_fixture_mute(struct app_state *);
 int snag_app_voice_fixture_checkpoint(struct app_state *);
 #endif
@@ -202,6 +203,7 @@ int snag_app_tool_read(void *, const char *, unsigned int, uint64_t, uint64_t, s
 int snag_app_recovered_output(struct app_state *, const char *, json_t *);
 int snag_app_output_page(struct app_state *, const struct snag_response_item *, json_t **,
                          char *, size_t);
+char *snag_app_history_data(uint64_t, const char *, const json_t *);
 int snag_app_history_page(struct app_state *, const struct snag_response_item *, json_t **,
                           char *, size_t);
 int snag_app_goal_list(struct app_state *, const struct snag_response_item *, json_t **,
