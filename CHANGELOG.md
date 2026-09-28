@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Use native session attach/detach in remote SSH examples and client help.
+  Keep native session socket addressing relative to its held directory, without
+  a procfs pathname or a short absolute-path requirement.
+
 - Add native Linux terminal attachment: `/session detach|d` keeps the owner
   running, `--attach`/`-A` reconnects, and `/session attach|a ID` switches live
   sessions. `/s` keeps the same aliases. Preserve drafts, writer locks and

@@ -84,6 +84,9 @@
       <p>Stage images or files with <code>/attach PATH</code> and submit them with
         your prompt. Development source builds provide a native workstation wrapper:
         <code>snajpagent remote ssh -t target snajpagent</code>.
+        Detach with <code>/session detach</code> and reconnect through
+        <code>snajpagent remote ssh -t target snajpagent --attach SESSION_ID</code>.
+        Omit the ID to choose a running session.
         Use <code>/receive</code> to select a workstation file, then review
         <code>/attachments</code> before submitting. Use <code>/send PATH</code>
         to save a remote file under <code>~/Downloads</code>. Transfers show progress

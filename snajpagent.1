@@ -1298,16 +1298,20 @@ turn history into fresh instructions.  Color-disabled output has no escapes.
 On the POSIX workstation, wrap the connection with the native client:
 .PP
 .nf
-    snajpagent remote ssh -t snajpadev screen -S sessionname snajpagent
+    snajpagent remote ssh -t target snajpagent
 .fi
 .PP
-This starts an attached GNU screen session on snajpadev, running the remote
-agent. The workstation wrapper owns file selection and the download destination.
-For an existing screen session, reconnect through the wrapper:
+The workstation wrapper owns file selection and the download destination.
+Use /session detach in the agent to return to the shell while work continues.
+Reconnect to the running agent through the wrapper:
 .PP
 .nf
-    snajpagent remote ssh -t snajpadev screen -r sessionname
+    snajpagent remote ssh -t target snajpagent --attach SESSION_ID
 .fi
+.PP
+Omit SESSION_ID to choose from running sessions.
+Keep the workstation wrapper outside SSH when reconnecting so file transfers
+use the current workstation terminal.
 .PP
 The syntax is
 .B "snajpagent remote [--config PATH] [--dotdir PATH] [--] [COMMAND ARG...]".

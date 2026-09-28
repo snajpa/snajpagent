@@ -133,10 +133,13 @@ in project files alongside the session log.
 Wrap your connection with the native workstation client:
 
 ```sh
-snajpagent remote ssh -t snajpadev screen -S sessionname snajpagent
-# Reattach an existing remote screen session:
-snajpagent remote ssh -t snajpadev screen -r sessionname
+snajpagent remote ssh -t target snajpagent
+# Reattach a running agent session:
+snajpagent remote ssh -t target snajpagent --attach SESSION_ID
 ```
+
+Use `/session detach` in the agent to return to the shell while work continues.
+Omit `SESSION_ID` from the attach command to choose a running session.
 
 `remote` passes a generic child command and its arguments literally through a
 PTY, without starting a local agent session. Drop one workstation regular file

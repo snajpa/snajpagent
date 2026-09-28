@@ -886,10 +886,14 @@ class RemoteStartupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="snag-remote-help-") as tmp:
             home = Path(tmp)
             env = dict(os.environ, HOME=tmp)
-            result = subprocess.run([str(PRODUCT), "remote", "--help"], env=env,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
-            self.assertEqual(result.returncode, 0)
-            self.assertIn(b"does not start an agent", result.stderr)
+            for option, status in (("--help", 0), ("--unknown-option", 2)):
+                result = subprocess.run([str(PRODUCT), "remote", option], env=env,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+                self.assertEqual(result.returncode, status)
+                self.assertIn(b"does not start an agent", result.stderr)
+                self.assertIn(b"/session detach", result.stderr)
+                self.assertIn(b"ssh -t target snajpagent --attach", result.stderr)
+                self.assertNotIn(b"screen -", result.stderr)
             result = subprocess.run([str(PRODUCT), "remote", "/bin/sh", "-c", "echo launched"], env=env,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
             self.assertNotEqual(result.returncode, 0)

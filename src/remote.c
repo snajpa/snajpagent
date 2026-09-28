@@ -71,7 +71,10 @@ remote_usage(void)
         "Usage: snajpagent remote [--config PATH] [--dotdir PATH] [--] [COMMAND ARG...]\n"
         "Client-only terminal wrapper; does not start an agent or chat session.\n"
         "With no command, starts your local shell. Child arguments are passed literally.\n"
-        "Example: snajpagent remote ssh -t snajpadev screen -S sessionname snajpagent\n");
+        "Start: snajpagent remote ssh -t target snajpagent\n"
+        "Detach inside the agent: /session detach\n"
+        "Reattach: snajpagent remote ssh -t target snajpagent --attach [SESSION_ID]\n"
+        "Without SESSION_ID, attach offers a running-session picker.\n");
 }
 
 struct remote_transfer {
