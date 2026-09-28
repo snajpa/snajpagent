@@ -6,10 +6,10 @@
 
 Engineering design, September 27, 2026, with framing implementation begun
 September 28. Installed builds keep the existing JSONL format. The draft header,
-commit-batch codec and bounded positional reader are exercised by the store
-tests. Typed event payloads, checkpoint replacement, indexed runtime storage,
-grouped durability and conversion remain under implementation. The application
-does not yet read or write binary sessions.
+commit-batch codec, bounded positional reader and typed goal/timer payloads are
+exercised by the store tests. Remaining event families, checkpoint replacement,
+indexed runtime storage, grouped durability and conversion remain under
+implementation. The application does not yet read or write binary sessions.
 
 The storage contract preserves canonical history, exact input authority,
 completed tool results, context lineage and single-writer ownership. Active
@@ -142,6 +142,31 @@ batch and distinguishes incomplete tails from corruption and unexpected EOF
 beneath that boundary. Source identity, exclusive writer ownership and any tail
 truncation remain the session backend's responsibility. Failed verification
 leaves the committed anchor unchanged. No framing API modifies a file.
+
+### Typed control payloads
+
+Payload version1 assigns timer schedule/fire/cancel IDs32..34 and goal
+start/replace/reword/lock/pause/block/complete/resume/cancel IDs64..72. IDs1..31
+remain reserved for session metadata. Required semantic kinds occupy the low
+half of the 16-bit namespace. The high half permits explicitly optional metadata;
+unknown required records, unsupported semantic payload versions and optional
+flags on semantic kinds are errors before state adoption.
+
+Each control payload starts with its 16-byte timer or goal ID. Scheduling adds
+an 8-byte due time and text. Goal start adds its prompt; replacement adds the new
+16-byte ID, actor and prompt; reword adds actor and prompt. Lock/pause add one
+byte for the boolean/reason enum. Block adds actor and blocker text; completion
+adds actor. Fire, cancel and resume need only the ID. Text uses a 4-byte length
+followed by exact UTF-8 bytes, with existing field-size limits and embedded NUL
+rejection. Actor values1/2 are user/model; pause reason values1..6 retain the
+legacy order input-closed, provider-policy, refusal, session-resumed, turn-stopped,
+user. These are compatibility representations, not new automatic transitions.
+
+The codec returns typed C values and borrowed text slices. It performs no JSON
+serialization and preserves caller output on malformed input. Current-state,
+lineage and authority checks remain with the existing reducer; valid encoding
+alone does not authorize a transition. Checkpoints will refer to these canonical
+payloads when checkpoint/reference integration is complete.
 
 The ordinary event-size bound remains a resource contract. Start with a 1 MiB
 batch target, admitting one larger permitted event alone. A batch never becomes

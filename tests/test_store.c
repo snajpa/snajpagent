@@ -1357,11 +1357,13 @@ test_checkpoint_text_width(void)
 }
 
 void test_store_binary(void);
+void test_store_binary_event(void);
 
 int
 main(void)
 {
     test_store_binary();
+    test_store_binary_event();
     test_checkpoint_text_width();
     char *temp = snag_path_join(getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp",
                                 "snajpagent-store-XXXXXX");
