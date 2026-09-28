@@ -77,6 +77,29 @@ remote_usage(void)
         "Without SESSION_ID, attach offers a running-session picker.\n");
 }
 
+static int
+remote_child_write(struct snag_child *child, const void *bytes, size_t length)
+{
+    const unsigned char *data = bytes;
+    while (length) {
+        if (remote_signal) return snag_errno(ECANCELED);
+        ssize_t amount = snag_child_write(child, data, length);
+        if (amount < 0 && errno == EINTR) continue;
+        if (amount < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            struct snag_child_event event = {.child = child, .stream = 2u,
+                .events = SNAG_CHILD_WRITE};
+            if (snag_child_wait(&event, 1u, SNAG_WAKE_INVALID, 50) < 0 && errno != EINTR)
+                return -1;
+            if (event.revents & (SNAG_CHILD_END | SNAG_CHILD_ERROR)) return snag_errno(EIO);
+            continue;
+        }
+        if (amount <= 0) return amount < 0 ? -1 : snag_errno(EIO);
+        data += (size_t)amount;
+        length -= (size_t)amount;
+    }
+    return 0;
+}
+
 struct remote_transfer {
     struct snag_child *child;
     const char *downloads;
@@ -163,10 +186,10 @@ remote_input_flush(struct remote_transfer *client, bool complete)
         if (client->drop_fd >= 0) {
             client->input.len = 0;
             client->drop_at = snag_monotonic_ms();
-            return remote_write(client->child->fd[2], "\033[9002~", 7u);
+            return remote_child_write(client->child, "\033[9002~", 7u);
         }
     }
-    int rc = remote_write(client->child->fd[2], client->input.data, client->input.len);
+    int rc = remote_child_write(client->child, client->input.data, client->input.len);
     client->input.len = 0;
     return rc;
 }
@@ -175,7 +198,7 @@ static int
 remote_input(struct remote_transfer *client, const unsigned char *data, size_t length)
 {
     static const char begin[] = "\033[200~", end[] = "\033[201~";
-    if (client->relay) return remote_write(client->child->fd[2], data, length);
+    if (client->relay) return remote_child_write(client->child, data, length);
     for (size_t i = 0; i < length; ++i) {
         unsigned char byte = data[i];
         if (client->drop_fd >= 0) {
@@ -186,7 +209,7 @@ remote_input(struct remote_transfer *client, const unsigned char *data, size_t l
             return 0;
         }
         if (client->paste_passthrough) {
-            if (remote_write(client->child->fd[2], &byte, 1u) < 0) return -1;
+            if (remote_child_write(client->child, &byte, 1u) < 0) return -1;
             client->paste_end = byte == (unsigned char)end[client->paste_end] ?
                 client->paste_end + 1u : byte == 27u ? 1u : 0u;
             if (client->paste_end == 6u) {
@@ -197,7 +220,7 @@ remote_input(struct remote_transfer *client, const unsigned char *data, size_t l
         }
         if (!client->input.len && (i != 0 || !client->drop_ready ||
             (byte != '/' && byte != '\'' && byte != '"' && byte != 27u))) {
-            return remote_write(client->child->fd[2], data + i, length - i);
+            return remote_child_write(client->child, data + i, length - i);
         }
         if (snag_buf_putc(&client->input, byte) < 0) return -1;
         client->input_at = snag_monotonic_ms();
@@ -354,19 +377,19 @@ remote_transfer_run(struct remote_transfer *client, char direction)
     client->progress_at = 0u;
     if (direction == 'S') {
         fd = remote_download_root(client, &directory);
-        if (fd >= 0) rc = snag_client_download(client->child->fd[0], fd, directory,
+        if (fd >= 0) rc = snag_client_download(client->child, fd, directory,
             remote_progress, remote_checkpoint, client, &result, error, sizeof(error));
     } else if (client->drop_fd >= 0) {
         fd = client->drop_fd;
         client->drop_fd = -1;
-        rc = snag_client_upload(client->child->fd[0], fd, client->drop_name,
+        rc = snag_client_upload(client->child, fd, client->drop_name,
             remote_progress, remote_checkpoint, client, &result, error, sizeof(error));
     } else {
         char path[SNAG_PATH_MAX_BYTES + 1u];
         if (remote_upload_choice(client, path, sizeof(path)) == 0 && path[0]) {
             fd = snag_open_read(path, false);
             const char *name = strrchr(path, '/');
-            if (fd >= 0) rc = snag_client_upload(client->child->fd[0], fd,
+            if (fd >= 0) rc = snag_client_upload(client->child, fd,
                 name ? name + 1u : path, remote_progress, remote_checkpoint, client,
                 &result, error, sizeof(error));
         }
@@ -380,14 +403,14 @@ remote_transfer_run(struct remote_transfer *client, char direction)
         if (snag_buf_append(&response, "#ACT:", 5u) == 0 &&
             snag_upload_wire_encode(cancel, sizeof(cancel) - 1u, &response) == 0 &&
             snag_buf_putc(&response, '\n') == 0)
-            (void)remote_write(client->child->fd[2], response.data, response.len);
+            (void)remote_child_write(client->child, response.data, response.len);
         snag_buf_free(&response);
     }
     if (client->progress_visible && remote_write(STDOUT_FILENO, "\r\033[2K", 5u) < 0) return -1;
     client->progress_visible = false;
     if (result.tail_len && remote_output(client, result.tail, result.tail_len) < 0) return -1;
     if (client->key_len && client->drop_fd < 0) {
-        (void)remote_write(client->child->fd[2], client->keys, client->key_len);
+        (void)remote_child_write(client->child, client->keys, client->key_len);
         client->key_len = 0;
     }
     return 0;
@@ -469,7 +492,7 @@ remote_output(struct remote_transfer *client, const unsigned char *data, size_t 
                         client->marker + sizeof(probe) - 1u);
                     client->marker_len = 0;
                     if (count < 0 || (size_t)count >= sizeof(reply) ||
-                        remote_write(client->child->fd[2], reply, (size_t)count) < 0) return -1;
+                        remote_child_write(client->child, reply, (size_t)count) < 0) return -1;
                     continue;
                 }
             }
@@ -602,7 +625,7 @@ remote_proxy(const char *executable, const char *const *command, const char *dow
     free(screen_backend);
     if (rc < 0) errno = spawn_errno;
     if (rc == 0 && client.key_len) {
-        rc = remote_write(child.fd[2], client.keys, client.key_len);
+        rc = remote_child_write(&child, client.keys, client.key_len);
         client.key_len = 0;
     }
     bool ended = false;
@@ -620,7 +643,7 @@ remote_proxy(const char *executable, const char *const *command, const char *dow
             client.drop_fd = -1;
             static const char failed[] = "\r\nRemote upload did not start; file was not sent.\r\n";
             if (remote_write(STDOUT_FILENO, failed, sizeof(failed) - 1u) < 0 ||
-                remote_write(child.fd[2], client.keys, client.key_len) < 0) { rc = -1; break; }
+                remote_child_write(&child, client.keys, client.key_len) < 0) { rc = -1; break; }
             client.key_len = 0;
         }
         struct pollfd ready[] = {{child.fd[0], POLLIN, 0},

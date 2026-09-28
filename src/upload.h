@@ -41,6 +41,7 @@ int snag_download_send(int tty, int file_fd, const char *name, const char *expec
                         struct snag_upload_result *result, char *error, size_t error_size);
 
 #ifndef _WIN32
+struct snag_child;
 struct snag_client_result {
     char path[SNAG_PATH_MAX_BYTES + 1u];
     bool landed;
@@ -48,13 +49,13 @@ struct snag_client_result {
     unsigned char tail[4096];
     size_t tail_len;
 };
-/* Workstation endpoints; tty is the proxy's private nonblocking child PTY.
- * The caller owns selection, output presentation, fd and directory lifetime. */
-int snag_client_download(int tty, int directory, const char *path,
+/* Workstation endpoints use the proxy's private child terminal through the
+ * process host. The caller owns selection, presentation and child lifetime. */
+int snag_client_download(struct snag_child *child, int directory, const char *path,
                          int (*progress)(void *, uint64_t, uint64_t),
                          int (*checkpoint)(void *), void *opaque,
                          struct snag_client_result *result, char *error, size_t error_size);
-int snag_client_upload(int tty, int fd, const char *name,
+int snag_client_upload(struct snag_child *child, int fd, const char *name,
                        int (*progress)(void *, uint64_t, uint64_t),
                        int (*checkpoint)(void *), void *opaque,
                        struct snag_client_result *result, char *error, size_t error_size);

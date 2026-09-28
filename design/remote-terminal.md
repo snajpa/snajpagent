@@ -8,6 +8,10 @@ SHELL), owns a child PTY and forwards input, resize, signals and exit status.
 It creates no local session, provider, tools, IRC runtime or media state.
 `[terminal] download_dir` defaults to `~/Downloads`.
 
+Workstation file streaming uses the existing process-host child read, write and
+wait operations. The proxy retains ownership of that child throughout a transfer;
+the protocol layer borrows it without reaching into its platform-specific descriptors.
+
 ## Session attachment transport
 
 The native session endpoint is rooted in its held private directory, not a

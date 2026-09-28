@@ -2,6 +2,7 @@
 #include "upload.h"
 #include "json.h"
 #include "media.h"
+#include "process_host.h"
 #include "upload_md5.h"
 #include "upload_wire.h"
 
@@ -62,6 +63,7 @@ snag_upload_cleanup(int stage_fd, struct snag_upload_result *result)
 
 struct upload_io {
     int fd;
+    struct snag_child *child;
     int stage_fd;
     bool display_started;
     bool screen;
@@ -85,6 +87,17 @@ wait_ready(struct upload_io *io, short events, uint64_t deadline)
         uint64_t now = snag_monotonic_ms();
         if (now >= deadline) return snag_errno(ETIMEDOUT);
         int timeout = (int)(deadline - now > 50u ? 50u : deadline - now);
+        if (io->child) {
+            unsigned int wanted = events == POLLIN ? SNAG_CHILD_READ : SNAG_CHILD_WRITE;
+            struct snag_child_event event = {.child = io->child,
+                .stream = events == POLLIN ? 0u : 2u, .events = wanted};
+            int rc = snag_child_wait(&event, 1u, SNAG_WAKE_INVALID, timeout);
+            if (rc < 0 && errno == EINTR) continue;
+            if (rc < 0) return -1;
+            if (event.revents & wanted) return 0;
+            if (event.revents & (SNAG_CHILD_END | SNAG_CHILD_ERROR)) return snag_errno(EIO);
+            continue;
+        }
         struct pollfd pollfd = {.fd = io->fd, .events = events};
         int rc = poll(&pollfd, 1u, timeout);
         if (rc < 0 && errno == EINTR) continue;
@@ -94,6 +107,12 @@ wait_ready(struct upload_io *io, short events, uint64_t deadline)
             return snag_errno(EIO);
         }
     }
+}
+
+static ssize_t
+stream_write(struct upload_io *io, const unsigned char *bytes, size_t length)
+{
+    return io->child ? snag_child_write(io->child, bytes, length) : write(io->fd, bytes, length);
 }
 
 static int
@@ -116,14 +135,14 @@ write_bytes(struct upload_io *io, const unsigned char *bytes, size_t length)
             size_t sent = 0;
             while (sent < chunk + 4u) {
                 if (wait_ready(io, POLLOUT, deadline) < 0) return -1;
-                ssize_t n = write(io->fd, packet + sent, chunk + 4u - sent);
+                ssize_t n = stream_write(io, packet + sent, chunk + 4u - sent);
                 if (n < 0 && (errno == EAGAIN || errno == EINTR)) continue;
                 if (n <= 0) return n < 0 ? -1 : snag_errno(EIO);
                 sent += (size_t)n;
             }
             amount = (ssize_t)chunk;
         } else {
-            amount = write(io->fd, bytes, length);
+            amount = stream_write(io, bytes, length);
         }
         if (amount < 0 && (errno == EAGAIN || errno == EINTR)) continue;
         if (amount <= 0) return amount < 0 ? -1 : snag_errno(EIO);
@@ -186,7 +205,8 @@ read_byte(struct upload_io *io, uint64_t deadline, unsigned char *byte)
 {
     while (io->at == io->len) {
         if (wait_ready(io, POLLIN, deadline) < 0) return -1;
-        ssize_t amount = read(io->fd, io->input, sizeof(io->input));
+        ssize_t amount = io->child ? snag_child_read(io->child, 0u, io->input, sizeof(io->input)) :
+                                    read(io->fd, io->input, sizeof(io->input));
         if (amount < 0 && (errno == EAGAIN || errno == EINTR)) continue;
         if (amount <= 0) return amount < 0 ? -1 : snag_errno(EPIPE);
         io->at = 0;
@@ -729,12 +749,12 @@ client_publish(int dir, struct snag_upload_file *file, const char *path,
 }
 
 int
-snag_client_download(int tty, int directory, const char *path,
+snag_client_download(struct snag_child *child, int directory, const char *path,
                      int (*progress)(void *, uint64_t, uint64_t),
                      int (*checkpoint)(void *), void *opaque,
                      struct snag_client_result *result, char *error, size_t error_size)
 {
-    struct upload_io io = {.fd = tty, .stage_fd = directory,
+    struct upload_io io = {.fd = -1, .child = child, .stage_fd = directory,
                            .checkpoint = checkpoint, .opaque = opaque};
     struct upload_frame frame = {0};
     struct snag_upload_file file = {.fd = -1};
@@ -814,12 +834,12 @@ done:
 }
 
 int
-snag_client_upload(int tty, int fd, const char *name,
+snag_client_upload(struct snag_child *child, int fd, const char *name,
                    int (*progress)(void *, uint64_t, uint64_t),
                    int (*checkpoint)(void *), void *opaque,
                    struct snag_client_result *result, char *error, size_t error_size)
 {
-    struct upload_io io = {.fd = tty, .checkpoint = checkpoint, .opaque = opaque};
+    struct upload_io io = {.fd = -1, .child = child, .checkpoint = checkpoint, .opaque = opaque};
     struct upload_frame frame = {0};
     snag_buf_init(&frame.payload, SNAG_UPLOAD_LINE_MAX);
     memset(result, 0, sizeof(*result));
