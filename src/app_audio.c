@@ -15,11 +15,20 @@ struct app_audio {
     struct snag_audio_device *device;
     struct snag_av_audio *decoder;
     struct snag_buf wav;
-    uint64_t started, drained;
+    uint64_t started, drained, attachment;
     bool transcribing, cancelled, playing, eof;
     int16_t pending[16384];
     uint32_t frames, offset;
 };
+
+static bool
+audio_cancelled(struct app_state *app)
+{
+    struct app_audio *audio = app->audio;
+    if (audio && app->ui.native && (!audio->attachment ||
+        audio->attachment != snag_ui_session_attachment(&app->ui))) audio->cancelled = true;
+    return snag_app_shutdown(app) || app->input_closed || !audio || audio->cancelled;
+}
 
 void
 snag_app_audio_close(struct app_state *app)
@@ -52,9 +61,10 @@ checkpoint(void *opaque, unsigned int timeout)
     struct app_state *app = opaque;
     enum snag_term_action action = SNAG_TERM_NONE;
     char *text = NULL;
-    if (snag_app_shutdown(app) || app->input_closed || !app->audio || app->audio->cancelled) return 2;
+    if (audio_cancelled(app)) return 2;
     int rc = snag_ui_poll(&app->ui, (int)(timeout > 25u ? 25u : timeout), &action, &text);
     if (rc < 0) return -1;
+    if (audio_cancelled(app)) { free(text); return 2; }
     if (action == SNAG_TERM_EXIT) app->input_closed = true;
     bool cancel = app->input_closed || action == SNAG_TERM_CANCEL || action == SNAG_TERM_INTERRUPT ||
         action == SNAG_TERM_DICTATE_CANCEL || (action == SNAG_TERM_DICTATE_DONE &&
@@ -73,8 +83,28 @@ decode_checkpoint(void *opaque, unsigned int timeout)
 {
     struct app_state *app = opaque;
     (void)timeout;
-    return snag_app_shutdown(app) || app->input_closed || !app->audio || app->audio->cancelled ? 2 : 0;
+    return audio_cancelled(app) ? 2 : 0;
 }
+
+#ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
+/* Exercise cancellation with retained sample bytes, without opening a device. */
+int snag_app_audio_fixture(struct app_state *app, bool playing)
+{
+    if (app->audio) return -1;
+    struct app_audio *audio = calloc(1u, sizeof(*audio));
+    if (!audio) return -1;
+    audio->attachment = snag_ui_session_attachment(&app->ui);
+    audio->playing = playing;
+    snag_buf_init(&audio->wav, 128u);
+    app->audio = audio;
+    return snag_buf_append(&audio->wav, "fixture samples", 15u);
+}
+
+int snag_app_audio_fixture_checkpoint(struct app_state *app)
+{
+    return decode_checkpoint(app, 0u);
+}
+#endif
 
 static void
 le32(unsigned char *out, uint32_t n)
@@ -161,7 +191,11 @@ snag_app_audio_service(struct app_state *app)
 {
     if(snag_app_voice_service(app)<0)return -1;
     struct app_audio *audio = app->audio;
-    if (!audio || audio->transcribing) return 0;
+    if (!audio) return 0;
+    if (audio_cancelled(app))
+        return finish(app,
+            "Local audio cancelled; controlling terminal ended. Capture discarded.", false);
+    if (audio->transcribing) return 0;
     if (!audio->device) return 0; /* Preparing an accepted playback asset. */
     if (snag_audio_fault(audio->device))
         return finish(app, "Audio device stopped, rerouted or overflowed; local audio discarded.", true);
@@ -252,6 +286,7 @@ snag_app_audio_command(struct app_state *app, const char *line, bool *handled)
     struct app_audio *audio = calloc(1u, sizeof(*audio));
     if (!audio) return -1;
     app->audio = audio; audio->playing = play;
+    audio->attachment = snag_ui_session_attachment(&app->ui);
     snag_buf_init(&audio->wav, 60u * 48000u + 44u);
     if (play) {
         json_t *asset = NULL; char *path = NULL;
@@ -263,7 +298,8 @@ snag_app_audio_command(struct app_state *app, const char *line, bool *handled)
         if (!rc) rc = snag_av_audio_open(path, 0u, 60u, decode_checkpoint, app, &audio->decoder, error, sizeof(error));
         json_decref(asset); free(path);
         if (rc) return finish(app, error, true);
-        if (snag_ui_audio(&app->ui, "[playing; /play stop] ", false) < 0) return finish(app, NULL, true);
+        if (snag_ui_audio(&app->ui, "[playing; /play stop] ", false) != 0)
+            return finish(app, "Playback requires an attached terminal.", true);
     } else {
         unsigned char header[44] = "RIFF\0\0\0\0WAVEfmt ";
         if (snag_buf_reserve(&audio->wav, 60u * 48000u + 44u) < 0 ||

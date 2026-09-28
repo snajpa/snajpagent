@@ -35,6 +35,8 @@ struct app_voice {
     bool send_audio[8];
     size_t send_read,send_count,send_bytes,send_offset;
     uint64_t send_deadline,start_ms,drained_ms,expires_ms;
+    const struct snag_ui *ui;
+    uint64_t attachment;
     char connection[33],error[256],audio_item[SNAG_MAX_PROVIDER_ID+1u];
     uint32_t audio_base,gaps;
     bool gap_reported;
@@ -44,6 +46,15 @@ struct app_voice {
     char call[SNAG_MAX_PROVIDER_ID+1u],queue[33],turn[33];
     bool result_needed,context_dirty;
 };
+
+static bool voice_attachment_lost(const struct app_voice *v)
+{
+    return v->ui && v->ui->native &&
+        (!v->attachment || snag_ui_session_attachment(v->ui)!=v->attachment);
+}
+
+static const char lost_terminal[] =
+    "Voice stopped: controlling terminal detached, suspended or changed.";
 
 static int voice_record(struct app_state *app,struct app_voice *v,json_t *event)
 {
@@ -122,6 +133,7 @@ int snag_app_voice_fixture(struct app_state *app,const json_t *notices,bool done
     if(pthread_mutex_init(&v->mutex,NULL)) {free(v);return -1;}
     atomic_init(&v->stop,false);atomic_init(&v->muted,false);atomic_init(&v->mute_pending,false);
     atomic_init(&v->activate,false);atomic_init(&v->done,done);
+    v->ui=&app->ui;v->attachment=snag_ui_session_attachment(&app->ui);
     strcpy(v->connection,"0123456789abcdef0123456789abcdef");
     strcpy(v->config.provider,"default");strcpy(v->config.realtime_model,"fixture");
     for(size_t i=0;i<8u;++i)snag_buf_init(&v->send[i],VOICE_MESSAGE);
@@ -172,11 +184,14 @@ static uint32_t owner_interrupt(void *opaque)
 }
 static int owner_controls(void *opaque,unsigned int timeout)
 {
-    (void)timeout;return atomic_load(&((struct app_voice *)opaque)->stop)?2:0;
+    struct app_voice *v=opaque;
+    (void)timeout;
+    if (voice_attachment_lost(v))atomic_store(&v->stop,true);
+    return atomic_load(&v->stop)?2:0;
 }
 static int owner_flush(struct app_voice *v)
 {
-    if(!v->send_count || atomic_load(&v->stop))return 0;
+    if (!v->send_count || owner_controls(v,0u))return 0;
     if(!v->send_offset && v->send_audio[v->send_read] &&
         (atomic_load(&v->muted) || atomic_load(&v->mute_pending))) {
         struct snag_buf *out=&v->send[v->send_read];v->send_bytes-=out->len;
@@ -222,6 +237,11 @@ static int owner_mute(struct app_voice *v)
 }
 
 #ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
+int snag_app_voice_fixture_checkpoint(struct app_state *app)
+{
+    return app->voice?owner_controls(app->voice,0u):-1;
+}
+
 int snag_app_voice_fixture_mute(struct app_state *app)
 {
     struct app_voice *v=app->voice;if(!v)return -1;
@@ -264,7 +284,7 @@ static void *voice_owner(void *opaque)
         struct snag_buf offer={.max=32768u},answer={.max=32768u};char call[257];
         json_t *session=snag_voice_native_session(v->protocol);int rc=-1;
         if (!session || snag_voice_rtc_open(&v->rtc,v->error,sizeof(v->error))<0)goto native_done;
-        while (!atomic_load(&v->stop) && snag_monotonic_ms()-v->start_ms<15000u) {
+        while (!owner_controls(v,0u) && snag_monotonic_ms()-v->start_ms<15000u) {
             rc=snag_voice_rtc_offer(v->rtc,&offer);
             if (rc)break;
             snag_sleep_ms(10u);
@@ -293,7 +313,7 @@ native_done:
         &v->socket,v->error,sizeof(v->error)))goto done;
     snag_credential_clear(&v->credential);
     if (snag_voice_begin(v->protocol,v->error,sizeof(v->error))<0)goto done;
-    while(!atomic_load(&v->stop)) {
+    while (!owner_controls(v,0u)) {
         uint64_t now=snag_monotonic_ms();
         if (v->announced && v->rtc && !snag_voice_rtc_ready(v->rtc)) {
             strcpy(v->error,"Native voice media connection stopped");break;
@@ -336,7 +356,9 @@ native_done:
             int rc=event?owner_notice(v,event):-1;json_decref(event);if(rc<0)goto failed;
             v->announced=true;
         }
-        if(v->announced && !v->device_started && !atomic_load(&v->stop) && !atomic_load(&v->muted) && atomic_load(&v->activate)) {
+        if (owner_controls(v,0u))break;
+        if (v->announced && !v->device_started && !atomic_load(&v->muted) &&
+            atomic_load(&v->activate)) {
             if(snag_audio_open(true,true,1u,v->config.capture_device,v->config.playback_device,&v->device,v->error,sizeof(v->error))<0)break;
             /* Duplex opens gated: even mute/stop during backend startup cannot
              * accumulate stale capture. Unmute is acknowledged next iteration. */
@@ -353,6 +375,7 @@ native_done:
             int rc=snag_voice_result(v->protocol,snag_json_string(result,"call_id"),snag_json_string(result,"text"),v->error,sizeof(v->error));
             json_decref(result);if(rc<0)break;
         }
+        if (owner_controls(v,0u))break;
         if(v->device) {
             if(snag_audio_fault(v->device)) {strcpy(v->error,"Realtime audio device stopped, rerouted or overflowed");break;}
             uint32_t gaps=snag_audio_gaps(v->device);
@@ -396,6 +419,7 @@ native_done:
 failed:
     strcpy(v->error,"Realtime voice stopped because its device, protocol or mailbox became unavailable");
 done:
+    if (voice_attachment_lost(v))strcpy(v->error,lost_terminal);
     snag_audio_close(v->device);v->device=NULL;
     snag_provider_voice_close(v->socket);v->socket=NULL;
     snag_voice_rtc_close(v->rtc);v->rtc=NULL;
@@ -409,6 +433,7 @@ void snag_app_voice_close(struct app_state *app)
     struct app_voice *v=app->voice;if(!v)return;
     atomic_store(&v->stop,true);
     if(v->thread_started)pthread_join(v->thread,NULL);
+    if (voice_attachment_lost(v))strcpy(v->error,lost_terminal);
     /* The worker is joined: preserve final notices on shutdown/error as well
      * as /voice off. Closing never accepts a previously unaccepted handoff. */
     bool failed=false;
@@ -469,6 +494,10 @@ static int deliver_result(struct app_voice *v,const char *text)
 int snag_app_voice_service(struct app_state *app)
 {
     struct app_voice *v=app->voice;if(!v)return 0;
+    if (voice_attachment_lost(v)) {
+        snag_app_voice_close(app);
+        return snag_ui_text(&app->ui,SNAG_UI_HOST,lost_terminal);
+    }
     char error[256];
     if(v->context_dirty && !atomic_load(&v->stop) && !atomic_load(&v->done)) {
         json_t *context=NULL;
@@ -488,14 +517,18 @@ int snag_app_voice_service(struct app_state *app)
         if(!event)break;
         const char *type=snag_json_string(event,"type");
         if(!strcmp(type,"voice_ready")) {
-            if(atomic_load(&v->stop) || atomic_load(&v->done)) {json_decref(event);continue;}
+            if (atomic_load(&v->stop) || atomic_load(&v->done) || voice_attachment_lost(v)) {
+                json_decref(event);continue;
+            }
             bool mute=atomic_load(&v->muted);
             if(snag_ui_voice(&app->ui,mute?"[voice mic off; /voice unmute | off] ":"[voice starting mic; /voice mute | off] ")==0) {
                 if(voice_record(app,v,json_pack("{s:s}","type","voice_started"))<0) {json_decref(event);goto failed;}
                 atomic_store(&v->activate,true);
             } else {json_decref(event);goto failed;}
         } else if(!strcmp(type,"voice_handoff")) {
-            if(atomic_load(&v->stop) || atomic_load(&v->done)) {json_decref(event);continue;}
+            if (atomic_load(&v->stop) || atomic_load(&v->done) || voice_attachment_lost(v)) {
+                json_decref(event);continue;
+            }
             if(v->call[0]) {json_decref(event);goto failed;}
             json_t *source=json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s}","connection_id",v->connection,
                 "input_id",snag_json_string(event,"input_id"),"response_id",snag_json_string(event,"response_id"),
@@ -640,10 +673,14 @@ int snag_app_voice_command(struct app_state *app,const char *line,bool *handled)
     if(pthread_mutex_init(&v->mutex,NULL)) {free(v);return -1;}
     atomic_init(&v->stop,false);atomic_init(&v->muted,false);atomic_init(&v->mute_pending,false);
     atomic_init(&v->activate,false);atomic_init(&v->done,false);
+    v->ui=&app->ui;v->attachment=snag_ui_session_attachment(&app->ui);
     for(size_t i=0;i<8u;++i)snag_buf_init(&v->send[i],VOICE_MESSAGE);
     snag_buf_init(&v->receive,VOICE_MESSAGE);app->voice=v;
-    if(snag_random_id(v->connection)<0 || snag_auth_read(app->store.root_fd,provider,false,NULL,&v->credential,
-        NULL,NULL,error,sizeof(error))<0 || snag_secret_set_build(&v->secrets,app->config,&v->credential,error,sizeof(error))<0)goto failed;
+    if (snag_random_id(v->connection)<0 ||
+        snag_auth_read(app->store.root_fd,provider,false,NULL,&v->credential,
+            owner_controls,v,error,sizeof(error))<0 ||
+        snag_secret_set_build(&v->secrets,app->config,&v->credential,
+            error,sizeof(error))<0)goto failed;
     if(snag_session_voice_context(&app->session,&v->context,error,sizeof(error))<0)goto failed;
     if(pthread_create(&v->thread,NULL,voice_owner,v))goto failed;
     v->thread_started=true;return 0;

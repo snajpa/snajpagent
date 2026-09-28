@@ -17,9 +17,12 @@ struct snag_session_relay {
     int master, peer, reject;
     enum snag_session_phase phase;
     uint64_t generation, handshake_deadline, output_deadline, input_deadline;
-    uint64_t reject_deadline;
+    uint64_t reject_deadline, output_ack_deadline;
     struct snag_session_packet input, output, rejection;
-    size_t input_offset;
+    struct snag_terminal_profile profile;
+    size_t input_offset, output_length, output_acknowledged;
+    unsigned char event_data[256];
+    size_t event_length;
     bool input_pending, closing;
 };
 
@@ -27,7 +30,9 @@ struct snag_session_relay {
  * authenticated socketpair peer. That initial peer is already attached. */
 int snag_session_relay_init(struct snag_session_relay *, int master, int initial_peer);
 void snag_session_relay_close(struct snag_session_relay *);
-/* Poll/drain once. event is COMMIT (UI must reset) or DETACH, otherwise zero.
+/* Poll/drain once. event is COMMIT (UI must reset), RESIZE, DETACH, ERROR or zero.
+ * ERROR is a client diagnostic in event_data/event_length until the next step;
+ * it never becomes PTY input or releases the current attachment.
  * Returns 1 on PTY EOF, 0 on progress/timeout, -1 on a PTY/poll failure. Peer
  * failures only detach. The listener is borrowed; NULL disables new accepts. */
 int snag_session_relay_step(struct snag_session_relay *, const struct snag_session_listener *,

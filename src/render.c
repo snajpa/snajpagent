@@ -806,6 +806,21 @@ pause_rollout(struct snag_render *render)
     return 0;
 }
 
+int
+snag_render_rebind(struct snag_render *render)
+{
+    if (pause_rollout(render) < 0) return -1;
+    if (render->public_item_open && snag_render_public_end(render) < 0) return -1;
+    render->trailing_newlines = 1u;
+    render->boundary = BOUNDARY_NONE;
+    render->previous_public_item = false;
+    render->previous_public_markdown = false;
+    render->stdout_item_seen = false;
+    render->stdout_item_ended_lf = true;
+    if (render->term) snag_term_rebind(render->term);
+    return 0;
+}
+
 static int
 render_history_turn(struct snag_render *render, const struct snag_history_turn *turn)
 {

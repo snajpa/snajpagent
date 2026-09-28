@@ -8,6 +8,7 @@ import shutil
 import shlex
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -102,6 +103,54 @@ class DownloadSession(Session):
 
 
 class DownloadTests(unittest.TestCase):
+    @unittest.skipUnless(hasattr(os, "pidfd_open"), "native attachment needs Linux")
+    def test_native_download_disconnect_preserves_pending_intent(self):
+        for tool in (False, True):
+            with self.subTest(tool=tool), tempfile.TemporaryDirectory(prefix="snag-download-rebind-") as tmp:
+                root = Path(tmp)
+                original_root, replacement_root = root / "original", root / "replacement"
+                original_root.mkdir(mode=0o700)
+                replacement_root.mkdir(mode=0o700)
+                original = DownloadSession(original_root)
+                replacement = None
+                data = b"source stays intact across terminal replacement\n"
+                source = original.home / "report.bin"
+                source.write_bytes(data)
+                try:
+                    sid = next((original.dotdir / "sessions").glob("*/events.jsonl")).parent.name
+                    original.write(b"download_tool ./report.bin\r" if tool else b"/send ./report.bin\r")
+                    if tool:
+                        original.read_until(b"\x1b[?9001;")
+                        nonce = original.read_until(b"n")[:-1]
+                        original.write(b"\x1b[>" + nonce + b"S")
+                    original.read_until(b"::TRZSZ:TRANSFER:S:1.0.0:")
+                    original.write(b"#ACT:")
+                    time.sleep(0.05)
+                    original.process.terminate()
+                    original.process.wait(timeout=3)
+                    replacement = Session(replacement_root,
+                        command=[str(PRODUCT), "--dotdir", str(original.dotdir), "-A", sid],
+                        ready=b"", cwd=original.home, env=dict(os.environ, HOME=str(original.home)))
+                    seen = replacement.read_until(b"Attached session", 6)
+                    seen += replacement.read_until("›".encode())
+                    replacement.write(b"ping\r")
+                    seen += replacement.read_until(b"pong")
+                    seen += replacement.read_until("›".encode())
+                    self.assertNotIn(b"::TRZSZ:TRANSFER:", seen)
+                    replacement.write(b"/exit\r")
+                    replacement.read_until(b"--resume")
+                    self.assertEqual(replacement.process.wait(timeout=3), 0)
+                    log = original.events()
+                    self.assertEqual(sum(e["type"] == "download_queued" for e in log), int(tool))
+                    self.assertFalse(any(e["type"] == "download_removed" for e in log))
+                    self.assertEqual(sum(e["type"] == "tool_finished" for e in log), int(tool))
+                    self.assertEqual(sum(e["type"] == "turn_completed" for e in log), 1 + int(tool))
+                    self.assertEqual(source.read_bytes(), data)
+                finally:
+                    if replacement is not None:
+                        replacement.close()
+                    original.close()
+
     def test_binary_and_empty_file_and_keyboard_tail(self):
         with tempfile.TemporaryDirectory(prefix="snag-download-") as path:
             session = DownloadSession(Path(path))

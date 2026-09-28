@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
+import atexit
 import errno
 import fcntl
 import hashlib
@@ -73,6 +74,8 @@ class Child:
         self.kill()
 
     def __init__(self, args, ready=None, *, term=None, cols=None, env=None):
+        self.owner_fd = None
+        self.native_owner = False
         self.sessions_before = session_ids()
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
@@ -90,6 +93,7 @@ class Child:
                 fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 24, cols, 0, 0))
             os.execve(BINARY, [BINARY, "--dotdir", DOTDIR, *args], env)
         self.buf = bytearray()
+        atexit.register(self.kill)
         if ready is not None:
             try:
                 self.wait(ready)
@@ -100,6 +104,8 @@ class Child:
     @classmethod
     def from_command(cls, command, *, env=None):
         child = cls.__new__(cls)
+        child.owner_fd = None
+        child.native_owner = False
         child.sessions_before = session_ids()
         child.pid, child.fd = pty.fork()
         if child.pid == 0:
@@ -107,12 +113,23 @@ class Child:
             os.execle("/bin/sh", "sh", "-c", "exec " + command,
                       os.environ if env is None else env)
         child.buf = bytearray()
+        atexit.register(child.kill)
         return child
 
     def session_id(self):
-        return new_session(self.sessions_before)
+        return new_session(self.sessions_before, self)
+
+    def assert_unsubmitted(self):
+        before = self.sessions_before
+        if self.native_owner:
+            # Native startup saves exactly one session, before any model input.
+            sid = new_session(before)
+            assert not any(event["type"] == "turn_started" for event in events(sid))
+            before = before | {sid}
+        assert session_ids() == before
 
     def read_once(self, timeout):
+        self.remember_owner()
         ready, _, _ = select.select([self.fd], [], [], timeout)
         if not ready:
             return False
@@ -291,13 +308,320 @@ class Child:
             )
         return None
 
-    def kill(self):
-        if self.pid is None:
+    def remember_owner(self):
+        # Native owners survive the frontend. Pin only a verified direct child
+        # of this fixture's fork, never a PID obtained from an arbitrary session.
+        if self.owner_fd is not None or self.pid is None or not hasattr(os, "pidfd_open"):
             return
-        os.kill(self.pid, signal.SIGKILL)
-        os.waitpid(self.pid, 0)
-        self.pid = None
-        os.close(self.fd)
+        try:
+            children = Path(f"/proc/{self.pid}/task/{self.pid}/children").read_text().split()
+            for value in children:
+                fd = os.pidfd_open(int(value))
+                try:
+                    status = Path(f"/proc/{value}/status").read_text()
+                    if re.search(rf"^PPid:\s+{self.pid}$", status, re.M):
+                        self.owner_fd = fd
+                        self.native_owner = True
+                        return
+                except FileNotFoundError:
+                    pass
+                os.close(fd)
+        except (FileNotFoundError, ProcessLookupError):
+            pass
+
+    def engine_pid(self):
+        self.remember_owner()
+        if self.owner_fd is None:
+            return self.pid
+        info = Path(f"/proc/self/fdinfo/{self.owner_fd}").read_text()
+        pid = int(re.search(r"^Pid:\s+(-?\d+)$", info, re.M)[1])
+        assert pid > 0, "fixture engine has already exited"
+        return pid
+
+    def signal_engine(self, signum):
+        self.remember_owner()
+        if self.owner_fd is not None:
+            signal.pidfd_send_signal(self.owner_fd, signum)
+        else:
+            os.kill(self.pid, signum)
+
+    def kill(self):
+        atexit.unregister(self.kill)
+        self.remember_owner()
+        if self.owner_fd is not None:
+            try:
+                signal.pidfd_send_signal(self.owner_fd, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            os.close(self.owner_fd)
+            self.owner_fd = None
+        if self.pid is not None:
+            os.kill(self.pid, signal.SIGKILL)
+            os.waitpid(self.pid, 0)
+            self.pid = None
+            os.close(self.fd)
+
+
+def test_native_attachment():
+    if not sys.platform.startswith("linux"):
+        return
+    assert not (Path(DOTDIR) / "config.ini").exists()
+    attach_env = dict(os.environ, SNAJPAGENT_TEST_LOGIN="1", HOME=WORKSPACE, PAGER="")
+    attach_env.pop("OPENAI_API_KEY", None)
+    with Child([], ready=DEFAULT_IDLE_PROMPT, cols=120) as original:
+        sid = original.session_id()
+        pong_end = original.send_wait(b"ping\r", b"pong")
+        original.wait_idle_prompt(start=pong_end)
+        original.send_wait(b"retained draft", b"retained draft")
+        assert original.owner_fd is not None
+        original.send(b"\x1a")
+        deadline = time.monotonic() + MIN_WAIT_S
+        while True:
+            got, status = os.waitpid(original.pid, os.WUNTRACED | os.WNOHANG)
+            if got:
+                assert os.WIFSTOPPED(status), status
+                break
+            assert time.monotonic() < deadline
+            original.read_once(0.05)
+        start = len(original.buf)
+        os.kill(original.pid, signal.SIGCONT)
+        original.wait_text(b"retained draft", start=start)
+        assert original.buf.count(b"pong") == 1, bytes(original.buf)
+        os.kill(original.pid, signal.SIGTERM)
+        assert original.reap() == 128 + signal.SIGTERM
+        with Child(["-A", sid[:8]], ready=b"Attached session", cols=67,
+                   env=attach_env) as attached:
+            attached.wait_text(b"retained draft")
+            attached.send(b"\x15")
+            start = len(attached.buf)
+            attached.send_wait(b"/s a 00000000\r", b"session", start=start)
+            attached.wait_idle_prompt(start=start)
+            with open(STATE_ROOT / sid / "lock", "r+b") as lock:
+                try:
+                    fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    pass
+                else:
+                    raise AssertionError("attachment released the writer lock")
+            with Child(["--attach", sid], env=attach_env) as competing:
+                competing.wait_text(b"session already has a terminal")
+                assert competing.reap() != 0
+            attached.send(b"/s d\r")
+            assert attached.reap() == 0
+        with Child(["--attach"], ready="session › ".encode(), env=attach_env) as picker:
+            assert sid[:8].encode() in picker.buf
+            picker.send(sid.encode() + b"\r")
+            picker.wait_text(b"Attached session")
+            picker.wait_idle_prompt()
+            picker.exit_now()
+        starts = [entry for entry in events(sid) if entry["type"] == "turn_started"]
+        assert len(starts) == 1 and starts[0]["data"]["text"] == "ping", starts
+        assert not (Path(DOTDIR) / "config.ini").exists()
+    print("native attachment: ok")
+
+
+def test_native_switch_with_process():
+    if not sys.platform.startswith("linux"):
+        return
+    started = Path(WORKSPACE) / "native-process-started"
+    finished = Path(WORKSPACE) / "native-process-finished"
+    started.unlink(missing_ok=True)
+    finished.unlink(missing_ok=True)
+    with Child([], ready=DEFAULT_IDLE_PROMPT, cols=160) as source:
+        source_id = source.session_id()
+        with Child([], ready=DEFAULT_IDLE_PROMPT, cols=160) as target:
+            target_id = target.session_id()
+            source.send_wait(f"/s a {target_id[:8]}\r".encode(),
+                             b"session already has a terminal")
+            source.wait_idle_prompt()
+            target.send(b"/s d\r")
+            assert target.reap() == 0
+            source.send(b"native_attachment_process\r")
+            deadline = time.monotonic() + MIN_WAIT_S
+            while not started.exists():
+                assert time.monotonic() < deadline, bytes(source.buf)
+                source.read_once(0.05)
+            assert not finished.exists(), "command finished before the live switch"
+            before = len(source.buf)
+            source.send(f"/session attach {target_id}\r".encode())
+            source.wait_text(f"Attached session {target_id}".encode(), start=before)
+            deadline = time.monotonic() + MIN_WAIT_S
+            while not any(e["type"] == "turn_completed" for e in events(source_id)):
+                assert time.monotonic() < deadline, events(source_id)
+                source.read_once(0.05)
+            assert finished.read_text() == "completed"
+            before = len(source.buf)
+            source.send(f"/s a {source_id[:8]}\r".encode())
+            source.wait_text(f"Attached session {source_id}".encode(), start=before)
+            source.wait_text(b"native process complete", start=before)
+            source.wait_idle_prompt(start=before)
+            source.exit_now()
+            with Child(["-A", target_id], ready=b"Attached session") as last:
+                last.wait_idle_prompt()
+                last.exit_now()
+    log = events(source_id)
+    assert len([e for e in log if e["type"] == "turn_started"]) == 1
+    results = [e["data"]["result"] for e in log if e["type"] == "tool_finished"]
+    assert results[0]["status"] == "running" and results[-1]["status"] == "succeeded", results
+    assert all(r["output_ref"]["handle"] == results[0]["handle"] for r in results), results
+    assert "native-command-completed" in results[-1]["model_text"], results
+    calls = [item for e in log if e["type"] == "response_completed"
+             for item in e["data"]["items"] if item["kind"] == "tool_call"]
+    assert len([c for c in calls if c["name"] == "exec_command"]) == 1, calls
+    assert not [e for e in log if e["type"] in
+                ("turn_interrupted", "response_interrupted", "turn_recovery", "turn_failed")]
+    print("native switch and real process continuity: ok")
+
+
+def test_native_active_goal_attachment():
+    if not sys.platform.startswith("linux"):
+        return
+    for terminal_eof in (False, True):
+        with Child([], ready=DEFAULT_IDLE_PROMPT) as original:
+            sid = original.session_id()
+            original.send_wait(b"/goal slow goal\r", b"working on goal")
+            if terminal_eof:
+                attrs = termios.tcgetattr(original.fd)
+                attrs[3] |= termios.ICANON
+                termios.tcsetattr(original.fd, termios.TCSANOW, attrs)
+                original.send(b"\x04")
+            else:
+                os.kill(original.pid, signal.SIGTERM)
+            status = original.reap()
+            assert status == (3 if terminal_eof else 128 + signal.SIGTERM), status
+            deadline = time.monotonic() + MIN_WAIT_S
+            while len([e for e in events(sid) if e["type"] == "turn_completed"]) < 2:
+                assert time.monotonic() < deadline, events(sid)
+                time.sleep(0.02)
+            with Child(["-A", sid], ready=b"Attached session") as attached:
+                attached.wait_text(b"goal done")
+                attached.wait_idle_prompt()
+                attached.exit_now()
+        log = events(sid)
+        one(log, "goal_started")
+        one(log, "goal_completed")
+        assert len([e for e in log if e["type"] == "turn_started"]) == 2
+        assert not [e for e in log if e["type"] in
+                    ("goal_paused", "turn_interrupted", "response_interrupted", "turn_recovery")]
+    print("native active goal and provider continuity: ok")
+
+
+def test_native_hard_exit_attachment():
+    if not sys.platform.startswith("linux"):
+        return
+    with Child([], ready=DEFAULT_IDLE_PROMPT) as original:
+        sid = original.session_id()
+        original.send(b"/s d\r")
+        assert original.reap() == 0
+        with Child(["-A", sid], ready=b"Attached session") as attached:
+            attached.wait_idle_prompt()
+            attached.send_wait(b"engine_blocked\r", b"engine-block-start")
+            terminal = os.dup(attached.fd)
+            try:
+                began = time.monotonic()
+                attached.send(b"\x03" * 5)
+                assert attached.reap() == 0
+                assert time.monotonic() - began < 1.5
+                modes = termios.tcgetattr(terminal)[3]
+                assert modes & termios.ICANON and modes & termios.ECHO
+            finally:
+                os.close(terminal)
+        assert select.select([original.owner_fd], [], [], 1.0)[0], "engine still alive"
+        with open(STATE_ROOT / sid / "lock", "r+b") as lock:
+            fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    print("native attached hard escape: ok")
+
+
+def test_native_irc_attachment():
+    if not sys.platform.startswith("linux"):
+        return
+    port = free_port()
+    args = ["--no-client", "--listen", f"127.0.0.1:{port}",
+            "-n", "attachagent", "-o", "attachop", "-r", "lab"]
+    with Child(args, ready=chat_prompt("attachop")) as original:
+        sid = original.session_id()
+        peer = IRCClient(port, "attachpeer")
+        try:
+            os.kill(original.pid, signal.SIGTERM)
+            assert original.reap() == 128 + signal.SIGTERM
+            before = len(peer.buf)
+            peer.message("attachagent: network_one")
+            reply = b"PRIVMSG #lab :network one reply\r\n"
+            peer.wait(reply, start=before)
+            with Child(["--attach", sid], ready=b"Attached session") as attached:
+                wait_turn_completed(attached, sid, "network_one")
+                peer.message("same connection after attachment")
+                attached.wait_text(b"same connection after attachment")
+                attached.exit_now()
+            assert bytes(peer.buf[before:]).count(reply) == 1, bytes(peer.buf)
+        finally:
+            peer.close()
+    log = events(sid)
+    turns = [e for e in log if e["type"] == "turn_started" and
+             "network_one" in e["data"]["text"]]
+    assert len(turns) == 1, turns
+    turn_id = turns[0]["data"]["turn_id"]
+    # Explicit exit may interrupt unrelated background membership catch-up.
+    assert not [e for e in log if e["type"] in ("turn_recovery", "response_interrupted")
+                and e["data"].get("turn_id") == turn_id]
+    print("native IRC continuity: ok")
+
+
+def test_native_external_suspend():
+    if not sys.platform.startswith("linux"):
+        return
+    pager = Path(os.environ["SNAJPAGENT_TEST_ROOT"]) / "native-pager.sh"
+    pager.write_text(
+        '#!/bin/sh\ntrap \'printf "pager-resized\\n"\' WINCH\n'
+        'printf "native-pager-ready\\n"\n'
+        'while ! read -r answer < /dev/tty; do :; done\n'
+    )
+    pager.chmod(0o700)
+    env = dict(os.environ, PAGER=str(pager), EDITOR=str(pager))
+    with Child([], ready=DEFAULT_IDLE_PROMPT, env=env) as child:
+        child.send_wait(b"/help\r", b"native-pager-ready")
+        child.send(b"\x1a")
+        deadline = time.monotonic() + 5.0
+        while True:
+            got, status = os.waitpid(child.pid, os.WUNTRACED | os.WNOHANG)
+            if got:
+                assert os.WIFSTOPPED(status), (status, bytes(child.buf))
+                break
+            assert time.monotonic() < deadline, "pager Ctrl-Z did not suspend the frontend"
+            child.read_once(0.05)
+        modes = termios.tcgetattr(child.fd)
+        assert modes[3] & termios.ICANON and modes[3] & termios.ECHO
+        start = len(child.buf)
+        os.kill(child.pid, signal.SIGCONT)
+        child.wait_text(b"pager-resized", start=start)
+        child.send(b"\r")
+        child.wait_idle_prompt(start=start)
+        start = len(child.buf)
+        child.send_wait(b"/config\r", b"native-pager-ready", start=start)
+        sid = child.session_id()
+        os.kill(child.pid, signal.SIGTERM)
+        assert child.reap() == 128 + signal.SIGTERM
+        with Child(["-A", sid], ready=b"pager-resized", cols=10) as replacement:
+            assert b"Attached session" not in replacement.buf
+            replacement.send(b"\x03")
+            replacement.wait_text(b"Attached session")
+            replacement.wait_idle_prompt()
+            replacement.send(b"\x1a")
+            deadline = time.monotonic() + 5.0
+            while True:
+                got, status = os.waitpid(replacement.pid, os.WUNTRACED | os.WNOHANG)
+                if got:
+                    assert os.WIFSTOPPED(status), (status, bytes(replacement.buf))
+                    break
+                assert time.monotonic() < deadline, "narrow editor return lost native Ctrl-Z"
+                replacement.read_once(0.05)
+            start = len(replacement.buf)
+            fcntl.ioctl(replacement.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+            os.kill(replacement.pid, signal.SIGCONT)
+            replacement.wait_idle_prompt(start=start)
+            replacement.send_wait_idle(b"ping\r", b"pong")
+            replacement.exit_now()
+    print("native external suspend: ok")
 
 
 def test_resize_and_suspend_preserve_draft():
@@ -519,7 +843,13 @@ def new_session(before, child=None):
     deadline = time.monotonic() + 4.0
     while True:
         created = session_ids() - before
-        if child is None or (created and all(
+        if child is not None:
+            # Concurrent native fixtures each save before either submits input.
+            # Resolve the ID advertised on this fixture's own terminal.
+            shown = re.search(rb"\bsession id ([0-9a-f]{8})\b", child.buf)
+            if shown:
+                created = {sid for sid in created if sid.startswith(shown[1].decode("ascii"))}
+        if child is None or child.pid is None or (created and all(
                 (STATE_ROOT / sid / "events.jsonl").is_file() for sid in created)):
             break
         assert time.monotonic() < deadline, bytes(child.buf)
@@ -1668,9 +1998,8 @@ def test_history_local_first_archive():
     history.write_bytes(archive)
     try:
         with Child([], DEFAULT_IDLE_PROMPT, cols=160) as local, Child([], DEFAULT_IDLE_PROMPT, cols=160) as peer:
-            before = session_ids()
             local.send_wait_idle(b"archive-match-995-local\r", b"fixture answer", start=len(local.buf))
-            sid = new_session(before)
+            sid = local.session_id()
             peer.send_wait_idle(b"archive-peer-995\r", b"fixture answer", start=len(peer.buf))
             assert history.read_bytes() == archive, "live submissions changed the global archive"
             local_file = Path(DOTDIR, "sessions", sid, "prompt_history")
@@ -1710,9 +2039,8 @@ def test_history_repeated_resume_exit():
     marker = b"history-resume-once-995"
     initial = history.read_bytes().splitlines().count(marker) if history.exists() else 0
     with Child([], DEFAULT_IDLE_PROMPT) as child:
-        before = session_ids()
         child.send_wait_idle(marker + b"\r", b"fixture answer", start=len(child.buf))
-        sid = new_session(before)
+        sid = child.session_id()
         child.send(b"\x04")
         child.finish()
     original = history.read_bytes()
@@ -1758,7 +2086,7 @@ def test_history_large_archive():
             child.send_wait(b"\x1b", b"history-large-oldest-995", start=len(child.buf))
             child.send_wait(b"\x03", b"^C\r\n", start=len(child.buf))
             child.send(b"\x04")
-            child.finish(expect_resume=False)
+            child.finish(expect_resume=child.owner_fd is not None)
         assert history.stat().st_size == size
         assert hashlib.sha256(history.read_bytes()).digest() == digest
     finally:
@@ -1783,7 +2111,7 @@ def test_history_sparse_archive_cancellation():
             child.send_wait(b"\x07draft-still-live-995", b"draft-still-live-995", start=start, timeout=0.5)
             child.send_wait(b"\x03", b"^C\r\n", start=len(child.buf))
             child.send(b"\x04")
-            child.finish(expect_resume=False)
+            child.finish(expect_resume=child.owner_fd is not None)
         assert history.stat().st_size == size
     finally:
         history.write_bytes(saved)
@@ -1795,12 +2123,11 @@ def test_session_prompt_history_isolation():
     first = Child([], DEFAULT_IDLE_PROMPT)
     second = Child([], DEFAULT_IDLE_PROMPT)
     try:
-        before = session_ids()
         second.send_wait_idle(marker_b + b"\r", b"fixture answer", start=len(second.buf))
-        second_id = new_session(before)
-        before = session_ids()
+        second_id = second.session_id()
         first.send_wait_idle(marker_a + b"\r", b"fixture answer", start=len(first.buf))
-        first_id = new_session(before)
+        first_id = first.session_id()
+        assert first_id != second_id
         start = len(second.buf)
         second.send(b"\x1b[A")
         second.drain(0.4)  # Includes the engine/editor history snapshot handoff.
@@ -1841,7 +2168,7 @@ def test_session_prompt_history_isolation():
         fresh.send(b"\x12" + marker_b)
         fresh.wait(b"': " + marker_b, start=start)
         fresh.send(b"\x07")
-        fresh.exit_now(expect_resume=False)
+        fresh.exit_now(expect_resume=fresh.native_owner)
     records = Path(DOTDIR, "prompt_history").read_text().splitlines()
     assert records.count(marker_a.decode()) == 1
     assert records.count(marker_b.decode()) == 1
@@ -1851,15 +2178,14 @@ def test_session_prompt_history_exit_and_crash():
     for abrupt in (False, True):
         marker = f"history-local-{'crash' if abrupt else 'signal'}-945".encode()
         with Child([], DEFAULT_IDLE_PROMPT) as child:
-            before = session_ids()
             child.send_wait_idle(marker + b"\r", b"fixture answer", start=len(child.buf))
-            sid = new_session(before)
+            sid = child.session_id()
             local = Path(DOTDIR, "sessions", sid, "prompt_history")
             assert marker.decode() in local.read_text()
             if abrupt:
                 child.kill()
             else:
-                os.kill(child.pid, signal.SIGTERM)
+                child.signal_engine(signal.SIGTERM)
                 child.finish(expected=128 + signal.SIGTERM)
         merged = marker.decode() in Path(DOTDIR, "prompt_history").read_text()
         assert merged == (not abrupt), (abrupt, merged)
@@ -1887,7 +2213,7 @@ def test_prompt_history_and_reverse_search():
 
     before_second = session_ids()
     second = Child([], DEFAULT_IDLE_PROMPT)
-    assert session_ids() == before_second
+    second.assert_unsubmitted()
     second.send(b"draft-restore")
     # The terminal may reuse the existing trailing blank instead of emitting it.
     second.send_wait(b"\x12", b"(failed reverse-i-search)`draft-restore':")
@@ -2737,7 +3063,7 @@ def test_goal_control_whitespace():
 def test_goal_clear_without_goal_and_reserved_wording():
     with Child([], ready=DEFAULT_IDLE_PROMPT) as child:
         end = child.send_wait_idle(b"/goal clear\r", b"no unfinished goal can be cancelled")
-        assert session_ids() == child.sessions_before
+        child.assert_unsubmitted()
         end = child.send_wait_idle(b"/goal blocked goal\r", b"goal done", start=end)
         end = child.send_wait_idle(b'/goal "clear the build directory"\r', GOAL_UPDATED, start=end)
         end = child.send_wait_idle(b"/goal set clear the cache\r", GOAL_UPDATED, start=end)
@@ -3147,8 +3473,8 @@ def test_help_pager_fallback():
             child.wait_idle_prompt(start=start)
             text = bytes(child.buf[start:])
             assert b"Models and context" in text and b"/send PATH" in text, text
-            child.exit_now(expect_resume=False)
-            assert session_ids() == child.sessions_before
+            child.exit_now(expect_resume=child.native_owner)
+            child.assert_unsubmitted()
 
 
 def test_command_name_completion():
@@ -3544,8 +3870,8 @@ def test_uncached_typed_model_selection():
     )
     child.wait(PROMPT.rstrip(), start=end)
     assert not cache_path.exists()
-    child.exit_now(expect_resume=False)
-    assert session_ids() == before
+    child.exit_now(expect_resume=child.native_owner)
+    child.assert_unsubmitted()
 
     # The conventional ~/.codex cache is ignored as well.
     env.pop("CODEX_HOME", None)
@@ -3553,8 +3879,8 @@ def test_uncached_typed_model_selection():
     end = child.send_wait(b"/model list\r", b"model cache is empty; use /model cache")
     child.wait(PROMPT.rstrip(), start=end)
     assert not cache_path.exists()
-    child.exit_now(expect_resume=False)
-    assert session_ids() == before
+    child.exit_now(expect_resume=child.native_owner)
+    child.assert_unsubmitted()
 
 
 def test_provider_login_and_first_run():
@@ -3636,12 +3962,17 @@ def test_provider_login_and_first_run():
                 child.finish(expected=2, expect_resume=False)
                 assert not (fresh / "config.ini").exists()
                 assert not (fresh / "auth").exists()
+                assert not list((fresh / "sessions").glob("*/events.jsonl"))
             else:
                 child.send_wait(b"n\n", b"Model number or exact model ID: ", start=end)
                 end = child.send_wait(b"vendor/model\n", b"Default model: openrouter / vendor/model")
                 child.wait(PROMPT.rstrip(), start=end)
-                child.exit_now(expect_resume=False)
-                assert not list((fresh / "sessions").glob("*/events.jsonl"))
+                child.exit_now(expect_resume=child.native_owner)
+                journals = list((fresh / "sessions").glob("*/events.jsonl"))
+                assert len(journals) == int(child.native_owner), journals
+                for journal in journals:
+                    assert not any(json.loads(line)["type"] == "turn_started"
+                                   for line in journal.read_bytes().splitlines())
                 assert (fresh / "auth" / "openrouter.json").exists()
                 assert b"hidden-first-run-key" not in child.buf
 
@@ -3689,8 +4020,8 @@ def test_context_selection_command_and_resume():
         child.wait(PROMPT.rstrip())
         end = child.send_wait(b"/model cache\r", b"cache updated:", start=len(child.buf))
         child.wait(PROMPT.rstrip(), start=end)
-        # A real turn makes the session durable; an empty session is discarded
-        # on exit and prints no resume command.
+        # Exercise startup catalog loading with completed history and a saved
+        # context selection, without an explicit CLI model override.
         child.send_wait_idle(b"ping\r", b"pong")
         # The normal working window is the default budget.
         end = child.send_wait(b"/context\r", b"context for next turn: default", start=len(child.buf))
@@ -3728,16 +4059,38 @@ def test_context_selection_command_and_resume():
         assert changes and changes[-1]["data"]["new_mode"] == "max"
         assert changes[-1]["data"]["new_tokens"] == 0
         # The durable event is picked up on resume.
-        resumed = Child(["--config", str(config), "--resume", session_id], PROMPT.rstrip())
-        try:
-            end = resumed.send_wait(b"/context\r", b"context for next turn: max",
-                                    start=len(resumed.buf))
-            end = resumed.wait(b"selected=872000", start=end)
-            end = resumed.wait(b"compact=745560 (auto)", start=end)
-            end = resumed.send_wait(b"/status\r", b"selection=max", start=end)
-            resumed.exit_now()
-        finally:
-            resumed.kill()
+        for term in ("xterm", "dumb"):
+            with Child(["--config", str(config), "--resume", session_id],
+                       PROMPT.rstrip(), term=term) as resumed:
+                end = resumed.send_wait(b"/context\r", b"context for next turn: max",
+                                        start=len(resumed.buf))
+                end = resumed.wait(b"selected=872000", start=end)
+                end = resumed.wait(b"compact=745560 (auto)", start=end)
+                end = resumed.send_wait(b"/status\r", b"selection=max", start=end)
+                resumed.exit_now()
+        # Missing or malformed startup catalogs leave an unknown meter and
+        # usable recovery commands. Neither case silently resets max to default.
+        for replacement in (None, b"{broken"):
+            for term in ("xterm", "dumb"):
+                if replacement is None:
+                    cache_path.unlink(missing_ok=True)
+                else:
+                    cache_path.write_bytes(replacement)
+                with Child(["--config", str(config), "--resume", session_id],
+                           PROMPT.rstrip(), term=term) as resumed:
+                    assert b"?%" in resumed.buf, bytes(resumed.buf)
+                    end = resumed.send_wait(b"/context\r", b"publishes no maximum context",
+                                            start=len(resumed.buf))
+                    resumed.wait(PROMPT.rstrip(), start=end)
+                    end = resumed.send_wait(b"/model cache\r", b"cache updated:",
+                                            start=len(resumed.buf))
+                    resumed.wait(PROMPT.rstrip(), start=end)
+                    end = resumed.send_wait(b"/context\r", b"context for next turn: max",
+                                            start=len(resumed.buf))
+                    resumed.wait(b"selected=872000", start=end)
+                    resumed.exit_now()
+        assert len([event for event in events(session_id)
+                    if event["type"] == "turn_started"]) == 1
     finally:
         child.kill()
         if old_cache is None:
@@ -3783,8 +4136,8 @@ def test_compaction_policy_selection():
                 child.wait(PROMPT.rstrip(), start=end)
         assert config.read_bytes() == original_config
         assert cache_path.read_bytes() == original_cache
-        child.exit_now(expect_resume=False)
-        assert session_ids() == before
+        child.exit_now(expect_resume=child.native_owner)
+        child.assert_unsubmitted()
     finally:
         child.kill()
         if old_cache is None:
@@ -3808,7 +4161,7 @@ def test_provider_local_models(native=True):
     config = write_config("provider-models.ini",text)
     before = session_ids()
     with Child(["--config", str(config)], ready=b"codex-lb/small/high") as child:
-        assert session_ids() == before
+        child.assert_unsubmitted()
         child.send_wait(b"/status\r", b"hard-input=121600")
         child.wait(b"context rule: [model-limit codex-lb/small]")
         start = len(child.buf)
@@ -4065,14 +4418,13 @@ def test_model_configuration_save():
     ]
 
     # A new session consumes the saved provider and defaults from that path.
-    before_new = session_ids()
     child = Child(["--config", str(config)], PROMPT.rstrip())
     end = child.send_wait(b"/status\r", b"provider: second")
     child.wait(b"model: durable-new", start=end)
     end = child.wait(b"effort: cosmic", start=end)
     child.wait(PROMPT.rstrip(), start=end)
-    child.exit_now(expect_resume=False)
-    assert session_ids() == before_new
+    child.exit_now(expect_resume=child.native_owner)
+    child.assert_unsubmitted()
 
 
 def test_config_editor_reload():
@@ -4134,7 +4486,7 @@ def test_config_editor_reload():
                SNAJPAGENT_EDITOR_PLAN=str(plan), SNAJPAGENT_EDITOR_SEEN=str(seen))
     before = session_ids()
     child = Child(["--config", str(config)], PROMPT.rstrip(), env=env)
-    assert session_ids() == before
+    child.assert_unsubmitted()
     child.send_wait(b"/verbose 2\r", b"verbosity: 2")
 
     plan.write_text("unchanged", encoding="utf-8")
@@ -4264,7 +4616,7 @@ def test_config_editor_reload():
         )
         child.wait(PROMPT.rstrip(), start=end)
         assert seen.read_text(encoding="utf-8") == str(default_config)
-        child.exit_now(expect_resume=False)
+        child.exit_now(expect_resume=child.native_owner)
     finally:
         if prior_default is None:
             default_config.unlink(missing_ok=True)
@@ -4280,7 +4632,7 @@ def test_known_context_meter():
         b"model for next turn: first / gpt-5.6-luna / high"
     )
     child.wait(b"gpt-5.6-luna/high   0% \xe2\x80\xba ", start=selected)
-    assert session_ids() == before
+    child.assert_unsubmitted()
     start = len(child.buf)
     child.send_wait(b"slow\r", b"working slowly", start=start)
     session_id = new_session(before)
@@ -4471,30 +4823,39 @@ def test_empty_session_lifecycle():
                    signal.SIGHUP, signal.SIGTERM):
         before = session_ids()
         with Child(["--no-color", "--no-listen", "--no-client"], DEFAULT_IDLE_PROMPT) as child:
-            assert session_ids() == before
+            native = child.owner_fd is not None
+            sid = child.session_id() if native else None
+            saved = before | {sid} if native else before
+            assert session_ids() == saved
             child.send_wait(b"/compact\r", b"nothing to compact before the first prompt")
             child.send(b"/status\r")
             child.wait(DEFAULT_IDLE_PROMPT, start=len(child.buf))
-            assert session_ids() == before
+            assert session_ids() == saved
             if isinstance(action, int):
-                os.kill(child.pid, action)
-                child.finish(expected=128 + action, expect_resume=False)
+                child.signal_engine(action)
+                child.finish(expected=128 + action, expect_resume=native)
             else:
-                child.send(action)
-                child.finish(expect_resume=False)
-            assert session_ids() == before
+                if native and action == b"/delete\r":
+                    child.send_wait(action, b"type the displayed 8-character id prefix to confirm")
+                    child.send(sid[:8].encode() + b"\r")
+                else:
+                    child.send(action)
+                child.finish(expect_resume=native and action != b"/delete\r")
+            assert session_ids() == (before if action == b"/delete\r" else saved)
 
     before = session_ids()
     with Child(["--no-color", "--no-listen", "--no-client"], DEFAULT_IDLE_PROMPT) as child:
         child.send_wait(b"unsent draft", b"unsent draft")
+        native = child.owner_fd is not None
+        sid = child.session_id() if native else None
         child.send(b"\x15\x04")
-        child.finish(expect_resume=False)
-        assert session_ids() == before
+        child.finish(expect_resume=native)
+        assert session_ids() == (before | {sid} if native else before)
 
     before = session_ids()
     with Child(["--no-color", "--no-listen", "--no-client"], DEFAULT_IDLE_PROMPT) as child:
         child.send_wait(b"/model selected-before-prompt / high\r", b"selected-before-prompt/high   0%")
-        assert session_ids() == before
+        assert session_ids() == (before | {child.session_id()} if child.owner_fd is not None else before)
         child.send_wait(b"ping\r", b"pong")
         sid = new_session(before)
         command = child.exit_now()
@@ -4531,8 +4892,11 @@ def test_empty_network_session():
             peer.message("background before input")
             child.wait(b"background before input")
             child.drain(0.2)  # Cross the ordinary background admission delay.
-            assert session_ids() == before
-            # Exercise buffered IRC rendering before a durable log exists.
+            native = child.owner_fd is not None
+            sid = child.session_id() if native else None
+            saved = before | {sid} if native else before
+            assert session_ids() == saved
+            # Exercise IRC rendering before the first submitted prompt.
             rollout_start = len(child.buf)
             child.send_wait(b"/rollout\r", DEFAULT_IDLE_PROMPT, start=rollout_start)
             child.send(b"/chat\r")
@@ -4558,8 +4922,8 @@ def test_empty_network_session():
                 assert ("operator first message" if sent == "operator" else "network_zero") in journal
             else:
                 child.send(b"/exit\r")
-                child.finish(expect_resume=False)
-                assert session_ids() == before
+                child.finish(expect_resume=native)
+                assert session_ids() == saved
         finally:
             if peer:
                 peer.close()
@@ -4590,7 +4954,7 @@ def test_exit_resume_matrix():
                 assert os.waitpid(child.pid, os.WNOHANG) == (0, 0)
                 child.send(b"\x03")
             elif isinstance(action, int):
-                os.kill(child.pid, action)
+                child.signal_engine(action)
             elif action == b"/delete\r":
                 child.send_wait(action, b"type the displayed 8-character id prefix to confirm")
                 child.send(session_id[:8].encode() + b"\r")
@@ -4657,14 +5021,14 @@ def test_runtime_network_commands():
     peer = None
     try:
         child.wait(PROMPT.rstrip())
-        assert session_ids() == before
+        child.assert_unsubmitted()
         end = child.send_wait(b"/help\r", b"/disconnect [ENDPOINT]")
         child.wait(PROMPT.rstrip(), start=end)
         end = child.send_wait(b"/chat\r", b"chat is offline")
         child.wait(chat_prompt("runtimeop"), start=end)
         end = child.send_wait(b"keep-unsent-draft\r", b"no IRC destination selected; use /names")
         child.wait(b"keep-unsent-draft", start=end)
-        assert session_ids() == before
+        child.assert_unsubmitted()
         end = child.send_wait(b"\x15/rollout\r", "── rollout ──".encode(), start=end)
         child.wait(PROMPT.rstrip(), start=end)
         end = child.send_wait(b"slow\r", b"working slowly", start=end)
@@ -4721,7 +5085,7 @@ def test_network_resume_roles():
         "--no-color", "-c", upstream_endpoint,
         "-n", "clientagent", "-o", "clientop",
     ], chat_prompt("clientop"))
-    assert session_ids() == before
+    client.assert_unsubmitted()
     first_links = accept_connections(upstream, 2)
     switched = client.send_wait_idle(b"/rollout\r", "── rollout ──".encode())
     answered = client.send_wait_idle(b"ping\r", b"pong", start=switched)
@@ -4750,7 +5114,7 @@ def test_network_resume_roles():
         "--no-color", "-s", server_endpoint,
         "-n", "serveragent", "-o", "serverop", "-r", "lab",
     ], chat_prompt("serverop"))
-    assert session_ids() == before
+    server.assert_unsubmitted()
     peer = IRCClient(server_port, "firstpeer")
     peer.message("retained room message")
     server.wait("firstpeer › retained room message".encode())
@@ -4796,7 +5160,7 @@ def test_network_resume_roles():
         "-c", upstream_endpoint,
         "-n", "combinedagent", "-o", "combinedop", "-r", "lab",
     ], chat_prompt("combinedop"))
-    assert session_ids() == before
+    combined.assert_unsubmitted()
     first_links = accept_connections(upstream, 2)
     peer = IRCClient(combined_port, "combinedpeer")
     combined.send_wait(b"resume setup\r", "combinedop › resume setup".encode())
@@ -4891,7 +5255,7 @@ def test_network_live_nick_prompt():
     links = []
     try:
         child.wait(chat_prompt("operator"))
-        assert session_ids() == before
+        child.assert_unsubmitted()
         links = accept_connections(upstream, 2)
         for link in links:
             link.settimeout(4.0)
@@ -5117,7 +5481,7 @@ def test_network_view_routing_and_atomic_catchup():
 
     try:
         child.wait(network_idle)
-        assert session_ids() == before
+        child.assert_unsubmitted()
         child.send_wait(b"session setup\r", "localop › session setup".encode())
         session_id = new_session(before, child)
         human = IRCClient(port, "remoteop")
@@ -5261,7 +5625,7 @@ def test_chat_mention_completion_and_steering():
     human = None
     try:
         child.wait(chat_prompt("localop"))
-        assert session_ids() == before
+        child.assert_unsubmitted()
         child.send_wait(b"session setup\r", "localop › session setup".encode())
         session_id = new_session(before, child)
         human = IRCClient(port, "remoteop")
@@ -5347,7 +5711,7 @@ def test_network_chat_and_managed_mention():
     )
     try:
         child.wait(network_idle)
-        assert session_ids() == before
+        child.assert_unsubmitted()
 
         view_start = len(child.buf)
         rollout_end = child.send_wait(b"\t", "── rollout ──".encode(), start=view_start)
@@ -5700,19 +6064,23 @@ def test_ctrl_d_exit():
                 child.send_wait(b"\t", b"queued (/next or /q c) " + PROMPT + b"ping", start=start)
             else:
                 child.send(b"\x7f" * 4)
-            if prompt == b"slow":
-                # Canonical Ctrl-D is read(0), as in the cooked fallback.
+            if prompt == b"slow" and child.owner_fd is None:
+                # Canonical Ctrl-D is read(0) on direct cooked terminals.
                 attrs = termios.tcgetattr(child.fd)
                 attrs[3] |= termios.ICANON
                 termios.tcsetattr(child.fd, termios.TCSANOW, attrs)
             child.send_wait(b"\x04", RESUME_HEADER if prompt else b"\x1b[?2004l",
                        timeout=MIN_WAIT_S if prompt == b"engine_blocked"
                        else 1.0)
-            flags = termios.tcgetattr(child.fd)[3]
-            assert flags & termios.ICANON and flags & termios.ECHO
-            command = child.finish(expect_resume=bool(prompt))
+            terminal = os.dup(child.fd)
+            try:
+                command = child.finish(expect_resume=bool(prompt) or child.owner_fd is not None)
+                flags = termios.tcgetattr(terminal)[3]
+                assert flags & termios.ICANON and flags & termios.ECHO
+            finally:
+                os.close(terminal)
             if not prompt:
-                assert session_ids() == before
+                assert session_ids() == (before | {child.session_id()} if child.owner_fd is not None else before)
                 continue
             log = events(new_session(before))
             if prompt:
@@ -5762,13 +6130,16 @@ def test_goal_orderly_quit_resume():
                 child.read_once(0.01)
             expected = 0
             if mode == "eof":
-                attrs = termios.tcgetattr(child.fd)
-                attrs[3] |= termios.ICANON
-                termios.tcsetattr(child.fd, termios.TCSANOW, attrs)
+                # Native terminal EOF detaches; raw Ctrl-D is the engine's
+                # explicit quit. Direct hosts still exercise kernel EOF.
+                if child.owner_fd is None:
+                    attrs = termios.tcgetattr(child.fd)
+                    attrs[3] |= termios.ICANON
+                    termios.tcsetattr(child.fd, termios.TCSANOW, attrs)
                 child.send(b"\x04")
             elif mode in ("sigterm", "sighup"):
                 signum = signal.SIGTERM if mode == "sigterm" else signal.SIGHUP
-                os.kill(child.pid, signum)
+                child.signal_engine(signum)
                 expected = 128 + signum
             elif mode == "five-ctrl-c":
                 # A turn-only Ctrl-C deliberately pauses first; a later exit
@@ -5842,13 +6213,14 @@ def test_five_ctrl_c_exit():
         assert os.waitpid(child.pid, os.WNOHANG) == (0, 0)
         started = time.monotonic()
         child.send(b"\x03")
-        assert child.reap() == 0
+        status = child.reap()
+        assert status == 0, (prompt, status)
         assert time.monotonic() - started < 1.5
         if not prompt:
-            assert session_ids() == before
+            assert session_ids() == (before | {child.session_id()} if child.owner_fd is not None else before)
 
 
-def test_five_ctrl_c_exit_during_stalled_output():
+def test_five_ctrl_c_exit_during_stalled_output(prompt=b"render_flood"):
     child = Child(["-vvvvvv", "--no-markdown"])
     slave = None
     reaped = False
@@ -5856,7 +6228,7 @@ def test_five_ctrl_c_exit_during_stalled_output():
         child.wait_idle_prompt()
         slave = os.open(os.readlink(f"/proc/{child.pid}/fd/0"),
                         os.O_RDWR | os.O_NOCTTY)
-        child.send_wait(b"render_flood\r", b"row-0000")
+        child.send_wait(prompt + b"\r", b"row-0000")
 
         # Do not drain the master. On Linux its full PTY read buffer holds
         # 4095 bytes; wait for that backlog instead of guessing when the
@@ -5868,6 +6240,9 @@ def test_five_ctrl_c_exit_during_stalled_output():
         while pending_output() < 4095:
             assert time.monotonic() < backlog_deadline, "terminal output did not stall"
             time.sleep(0.01)
+        if prompt == b"render_transport_flood":
+            # Let the larger response also fill the intermediate native socket.
+            time.sleep(0.5)
         # No output is read while waiting for exit: a repaint or resume banner
         # must not be what frees the writer.
         mode = termios.tcgetattr(slave)[3]
@@ -5910,8 +6285,8 @@ def test_ctrl_c_sequence_reset():
         child.drain(0.05)
         assert os.waitpid(child.pid, os.WNOHANG) == (0, 0)
         child.send_wait(b"\x03", b"\x1b[?2004l")
-        child.finish(expect_resume=False)
-        assert session_ids() == before
+        child.finish(expect_resume=child.owner_fd is not None)
+        assert session_ids() == (before | {child.session_id()} if child.owner_fd is not None else before)
 
 
 def test_blank_enter_during_engine_stall():
@@ -5978,8 +6353,8 @@ def test_history_lock_keeps_editing_live():
             fcntl.lockf(history, fcntl.LOCK_UN)
         child.send(b"\x03")
         child.drain(0.1)
-        child.exit_now(expect_resume=False)
-        assert session_ids() == before
+        child.exit_now(expect_resume=child.owner_fd is not None)
+        assert session_ids() == (before | {child.session_id()} if child.owner_fd is not None else before)
 
 
 def test_editor_during_render_flood():
@@ -6045,12 +6420,13 @@ def test_editor_during_blocked_engine(key=b"\r"):
     try:
         child.wait_idle_prompt()
         after = child.send_wait(b"engine_blocked\r", b"engine-block-start")
-        tasks = Path(f"/proc/{child.pid}/task")
+        engine = child.engine_pid()
+        tasks = Path(f"/proc/{engine}/task")
         if tasks.exists():
             # The engine/main thread is joined by presentation, input, and
             # durable-backfill workers. GCC TSan adds one instrumentation
             # worker, not another application owner.
-            tsan = "libtsan" in Path(f"/proc/{child.pid}/maps").read_text()
+            tsan = "libtsan" in Path(f"/proc/{engine}/maps").read_text()
             assert len(list(tasks.iterdir())) == 4 + int(tsan)
         child.drain(0.4)
         child.wait(DEFAULT_ACTIVE_PROMPT, start=after)
@@ -6168,6 +6544,12 @@ def test_idle_prompt_after_partial_effort_repaint():
 
 
 if __name__ == "__main__":
+    test_native_attachment()
+    test_native_switch_with_process()
+    test_native_active_goal_attachment()
+    test_native_hard_exit_attachment()
+    test_native_irc_attachment()
+    test_native_external_suspend()
     test_idle_prompt_after_partial_effort_repaint()
     test_empty_session_lifecycle()
     test_empty_network_session()
@@ -6190,6 +6572,7 @@ if __name__ == "__main__":
     test_active_verbosity()
     test_five_ctrl_c_exit()
     test_five_ctrl_c_exit_during_stalled_output()
+    test_five_ctrl_c_exit_during_stalled_output(b"render_transport_flood")
     test_ctrl_c_sequence_reset()
     test_blank_enter_during_engine_stall()
     test_full_input_queue_keeps_exit_live()

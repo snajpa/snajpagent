@@ -147,6 +147,9 @@ void snag_render_free(struct snag_render *render);
 void snag_render_set_color(struct snag_render *render, enum snag_color_mode mode);
 void snag_render_set_markdown(struct snag_render *render, bool enabled);
 void snag_render_attach_term(struct snag_render *render, struct snag_term *term);
+/* End the physical block on the old, quiescent endpoint without completing
+ * its semantic stream. The caller discards that endpoint's output afterward. */
+int snag_render_rebind(struct snag_render *render);
 enum snag_render_view snag_render_view(const struct snag_render *render);
 int snag_render_set_view(struct snag_render *render, enum snag_render_view view);
 int snag_render_set_chat_room(struct snag_render *render, const char *endpoint, const char *room,

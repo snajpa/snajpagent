@@ -211,6 +211,8 @@ void
 snag_term_init(struct snag_term *term)
 {
     memset(term, 0, sizeof(*term));
+    const char *sty = getenv("STY");
+    term->screen = sty && *sty;
     term->output_fd[0] = term->output_fd[1] = -1;
     snag_buf_init(&term->draft, SNAG_MAX_DIRECT_PROMPT + 1u);
     snag_buf_init(&term->search_label, SNAG_MAX_DIRECT_PROMPT + 64u);
@@ -457,7 +459,7 @@ update_size(struct snag_term *term)
     }
     unsigned int columns = snag_term_host_columns();
     if (columns != 0u) {
-        if (columns >= 20u) {
+        if (columns >= SNAG_TERM_MIN_COLUMNS) {
             term->columns = columns;
             if (term->raw) term->capable = true;
         } else {
@@ -480,21 +482,34 @@ set_raw(struct snag_term *term)
 /* Scope native drop interception to the agent's input ownership. Screen needs
  * a passthrough envelope for this private mode; ordinary paste stays visible. */
 static int
-input_modes(bool enabled)
+input_modes(const struct snag_term *term, bool enabled)
 {
     const char *paste = enabled ? "\033[?2004h" : "\033[?2004l";
     if (snag_term_write(STDERR_FILENO, paste, 8u) < 0) return -1;
 #ifndef _WIN32
-    const char *sty = getenv("STY");
-    bool screen = sty && *sty;
+    bool screen = term->screen;
     char mode[16];
     int n = snprintf(mode, sizeof(mode), "%s\033[?9002%c%s",
         screen ? "\033P" : "", enabled ? 'h' : 'l', screen ? "\033\\" : "");
     if (n < 0 || (size_t)n >= sizeof(mode)) return -1;
     return snag_term_write(STDERR_FILENO, mode, (size_t)n);
 #else
+    (void)term;
     return 0;
 #endif
+}
+
+int
+snag_term_output_prepare(struct snag_term *term)
+{
+    for (int fd = STDOUT_FILENO; fd <= STDERR_FILENO; ++fd) {
+        if (term->output_fd[fd - STDOUT_FILENO] >= 0 || !snag_isatty(fd)) continue;
+        int copy = snag_term_output_open(&term->host, fd);
+        if (copy < 0) return -1;
+        term->output_fd[fd - STDOUT_FILENO] = copy;
+    }
+    snag_term_output_bind(term);
+    return 0;
 }
 
 int
@@ -508,7 +523,7 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
         return snag_errorf(error, error_size, "cannot read terminal attributes: %s", strerror(errno));
     term->capable = term_control_capable();
     update_size(term);
-    if (term->capable && set_raw(term) < 0)
+    if ((term->capable || term->suspend) && set_raw(term) < 0)
         return snag_errorf(error, error_size, "cannot enter terminal input mode: %s", strerror(errno));
     if (snag_term_controls_install(&term->host, mark_sigint, mark_sigwinch) < 0) {
         int saved_errno = errno;
@@ -521,19 +536,14 @@ snag_term_open(struct snag_term *term, char *error, size_t error_size)
     sigint_pending = 0;
     sigwinch_pending = 0;
     term->opened = true;
-    for (int fd = STDOUT_FILENO; fd <= STDERR_FILENO; ++fd) {
-        if (!snag_isatty(fd)) continue;
-        int copy = snag_term_output_open(&term->host, fd);
-        if (copy < 0) {
-            int saved_errno = errno;
-            snag_term_close(term);
-            errno = saved_errno;
-            return snag_errorf(error, error_size, "cannot open private terminal output: %s", strerror(errno));
-        }
-        term->output_fd[fd - STDOUT_FILENO] = copy;
+    if (snag_term_output_prepare(term) < 0) {
+        int saved_errno = errno;
+        snag_term_close(term);
+        errno = saved_errno;
+        return snag_errorf(error, error_size,
+            "cannot open private terminal output: %s", strerror(errno));
     }
-    snag_term_output_bind(term);
-    if (term->capable && input_modes(true) < 0) {
+    if (term->capable && input_modes(term, true) < 0) {
         int saved_errno = errno;
         snag_term_close(term);
         errno = saved_errno;
@@ -551,7 +561,7 @@ snag_term_external_begin(struct snag_term *term, char *error, size_t error_size)
         return snag_errorf(error, error_size, "terminal is not open: %s", strerror(errno));
     }
     if (snag_term_hide(term) < 0) goto fail;
-    if (term->bracketed_paste && input_modes(false) < 0) goto fail;
+    if (term->bracketed_paste && input_modes(term, false) < 0) goto fail;
     term->bracketed_paste = false;
     if (term->raw && snag_term_input_restore(&term->host, true) < 0) goto fail;
     term->raw = false;
@@ -571,8 +581,8 @@ snag_term_external_end(struct snag_term *term, char *error, size_t error_size)
     sigwinch_pending = 0;
     if (snag_term_output_mode(&term->host, true) < 0) goto fail;
     update_size(term);
-    if (term->capable && set_raw(term) < 0) goto fail;
-    if (term->capable && input_modes(true) < 0) goto fail;
+    if ((term->capable || term->suspend) && set_raw(term) < 0) goto fail;
+    if (term->capable && input_modes(term, true) < 0) goto fail;
     term->bracketed_paste = term->capable;
     return 0;
 fail: return snag_errorf(error, error_size, "cannot restore terminal after editor: %s", strerror(errno));
@@ -600,6 +610,29 @@ clear_output_baseline(struct snag_term *term)
     term->output_newlines = 1u;
     term->output_columns = 0u;
     snag_buf_reset(&term->output_line);
+}
+
+int
+snag_term_attachment_modes(struct snag_term *term, bool enabled)
+{
+    if (term->capable && input_modes(term, enabled) < 0) return -1;
+    term->bracketed_paste = enabled && term->capable;
+    return 0;
+}
+
+void
+snag_term_rebind(struct snag_term *term)
+{
+    clear_prompt_frame(term);
+    clear_output_baseline(term);
+    snag_buf_reset(&term->painted_prompt);
+    snag_buf_reset(&term->output_cell);
+    term->output_cell_width = 0u;
+    term->output_cell_style[0] = '\0';
+    term->painted_columns = 0u;
+    term->painted_label_len = term->painted_cursor_byte = 0u;
+    term->viewport_row = 0u;
+    update_size(term);
 }
 
 int
@@ -1972,15 +2005,16 @@ out: snag_buf_free(&matches.names);
 static int
 suspend_terminal(struct snag_term *term)
 {
+    if (term->suspend) return term->suspend(term->suspend_opaque);
     if (!snag_term_can_suspend()) return snag_term_write(STDERR_FILENO, "\a", 1u);
     if (snag_term_hide(term) < 0) return -1;
-    if (term->bracketed_paste && input_modes(false) < 0) return -1;
+    if (term->bracketed_paste && input_modes(term, false) < 0) return -1;
     term->bracketed_paste = false;
     if (snag_term_input_flush(&term->host) < 0 || snag_term_input_restore(&term->host, false) < 0) return -1;
     term->raw = false;
     if (snag_term_suspend() < 0) return -1;
     if (set_raw(term) < 0) return -1;
-    if (term->capable && input_modes(true) < 0) return -1;
+    if (term->capable && input_modes(term, true) < 0) return -1;
     term->bracketed_paste = term->capable;
     update_size(term);
     return redraw(term);
@@ -2413,6 +2447,12 @@ feed_byte(struct snag_term *term, unsigned char byte, enum snag_term_action *act
     }
 }
 
+void
+snag_term_notify_resize(void)
+{
+    sigwinch_pending = 1;
+}
+
 static int
 consume_resize(struct snag_term *term)
 {
@@ -2532,9 +2572,15 @@ snag_term_poll(struct snag_term *term, int timeout_ms, snag_wake_fd wake_fd,
         term->input_len = (size_t)count;
     }
     while (term->input_pos < term->input_len) {
+        /* Output checkpoints can receive native resize controls while a
+         * buffered typing burst is still being painted. */
+        if (consume_resize(term) < 0) return -1;
         rc = feed_byte(term, term->input[term->input_pos++], action, text);
         if (rc < 0) return -1;
         if (rc > 0) return 1;
+        /* Let the native UI service output acknowledgements and geometry
+         * before painting more buffered input at the previous width. */
+        if (term->suspend && !term->input_only) return 0;
     }
     term->input_pos = 0u;
     term->input_len = 0u;
@@ -2560,7 +2606,7 @@ snag_term_close(struct snag_term *term)
     if (!term) return;
     if (term->opened) {
         (void)snag_term_hide(term);
-        if (term->bracketed_paste) (void)input_modes(false);
+        if (term->bracketed_paste) (void)input_modes(term, false);
         if (term->raw) (void)snag_term_input_restore(&term->host, true);
     }
     if (term->controls_installed) snag_term_controls_restore(&term->host);

@@ -20,6 +20,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from test_upload_client import FixtureChildren
+
 # Waits for expected output tolerate a loaded host. Short literals in the
 # cases express intent and pacing, not how fast this host must produce the
 # bytes; a slow box must not fail a correct build.
@@ -626,6 +628,7 @@ class TmuxTerminal:
         self.target = f"{self.session}:0.0"
         self.last_screen = ""
         self.started = False
+        self.children = None
         self.root.mkdir(mode=0o700, parents=True)
         if self.socket.exists():
             raise AssertionError(f"refusing existing tmux socket {self.socket}")
@@ -665,6 +668,9 @@ class TmuxTerminal:
                 text=True,
             )
             self.started = True
+            server, pane = self.run("display-message", "-p", "-t", self.target,
+                                    "#{pid} #{pane_pid}").split()
+            self.children = FixtureChildren(int(pane), parent=int(server))
             size = self.run(
                 "display-message", "-p", "-t", self.target,
                 "#{pane_width}x#{pane_height}",
@@ -686,6 +692,8 @@ class TmuxTerminal:
             stderr=subprocess.PIPE,
             text=True,
         )
+        if self.children is not None:
+            self.children.remember()
         if check and result.returncode != 0:
             raise AssertionError(
                 f"tmux {' '.join(args)} failed ({result.returncode}): "
@@ -785,8 +793,12 @@ class TmuxTerminal:
                 except Exception:
                     pass
             if os.path.lexists(self.socket):
+                if self.children is not None:
+                    self.children.close()
                 self.run("kill-server", check=False)
         finally:
+            if self.children is not None:
+                self.children.close()
             self.started = False
             try:
                 self.socket.unlink()
@@ -1212,10 +1224,12 @@ def run_render_case(binary, root):
             raise AssertionError(
                 f"model output ignored the configured typing pause:\n{paused}"
             )
-        second = terminal.wait("explicit café € line", timeout=4.0,
-                               join_wrapped=True)
+        terminal.wait("explicit café € line", timeout=4.0, join_wrapped=True)
         if time.monotonic() - pause_started < 1.7:
             raise AssertionError("model output resumed before the typing pause")
+        # The native relay can deliver the text and restored composer in
+        # separate output frames. Inspect the completed paint.
+        second = wait_wrapped_fragment(terminal, f"{DEFAULT_ACTIVE_PROMPT} draft plus")
         assert_wrapped_order(second, [
             "explicit café € line", f"{DEFAULT_ACTIVE_PROMPT} draft plus",
         ])
@@ -1229,6 +1243,8 @@ def run_render_case(binary, root):
 
         terminal.send_text(" again with long resize text")
         repeat_pause_started = time.monotonic()
+        # Resize immediately: native buffered input must yield to geometry
+        # controls before old-width repainting can erase sealed response text.
         exact_margin = (
             f"{DEFAULT_ACTIVE_PROMPT} draft plus again with long resize text"
         )
@@ -1243,13 +1259,13 @@ def run_render_case(binary, root):
                 f"repeated editing did not restart the typing pause:\n{paused_again}"
             )
 
-        final = terminal.wait("control:\\x1B[31m", timeout=5.0,
-                              join_wrapped=True)
+        terminal.wait("control:\\x1B[31m", timeout=5.0, join_wrapped=True)
         if time.monotonic() - repeat_pause_started < 1.7:
             raise AssertionError("repeated typing pause ended too early")
         # The turn completes here, so the composer may already carry the idle
         # marker; count the draft text itself, which must appear exactly once.
         draft_snapshot = "draft plus again with long resize text"
+        final = wait_wrapped_fragment(terminal, draft_snapshot)
         if final.count(draft_snapshot) != 1:
             raise AssertionError(f"draft snapshot scrolled into history:\n{final}")
         assert_wrapped_order(final, ["supercalifragilisticexpialidocious",
@@ -1745,6 +1761,7 @@ def run_tool_spinner_delay_case(binary, root):
                 assert bottom().strip() == "TIDLE>", bottom()
                 terminal.send_text("draft survives")
                 terminal.resize(70, 16)
+                terminal.wait("IDLE> draft survives")
                 assert "draft survives" in bottom(), bottom()
                 if delay == 1500:
                     time.sleep(0.3)
@@ -2474,16 +2491,18 @@ def run_persistent_model_recovery_case(binary, root):
                 terminal.wait("queued (/next or /q c) › " + text)
             sid = read_events(state)[0].parent.name
             assert [r["model"] for r in requests] == ["initial-model", "next-model"]
-            pid = int(terminal.run("display-message", "-p", "-t", terminal.target, "#{pane_pid}"))
-            os.kill(pid, signal.SIGKILL)  # Exact child launched by this test.
-            terminal.wait_dead(); release.set(); release_switched.set()
+            # Crash the pinned private fixture family before releasing either
+            # response. Losing only the frontend leaves a native owner running.
+            terminal.close()
+            release.set(); release_switched.set()
         with TmuxTerminal(case / "resume", binary, case, state, config, 100, 32,
                 args=("--no-listen", "--no-client", "-m", "recovered-model/high", "--resume", sid),
                 environment=env) as terminal:
             log = wait_event_count(state, "turn_completed", 3)
             terminal.wait("recovered-model/highI>")
             assert [r["model"] for r in requests] == [
-                "initial-model", "next-model", "recovered-model", "recovered-model", "recovered-model"]
+                "initial-model", "next-model", "recovered-model", "recovered-model", "recovered-model"], \
+                [r["model"] for r in requests]
             assert len(event_list(log, "turn_model_changed")) == 2
             turns = event_list(log, "turn_started")
             assert [t["data"]["config"]["model"] for t in turns] == [
@@ -2934,6 +2953,7 @@ def run_blank_enter_case(binary, root, active=False, chat=False, width=100):
         marker = "chat>" if chat else "busy>" if active else "idle>"
         before = terminal.capture().count(marker)
         before_log = maybe_events(state)[1]
+        before_sessions = set((state / "sessions").glob("*/events.jsonl"))
         history = state / "prompt_history"
         before_history = history.read_bytes() if history.exists() else b""
         for index in range(3):
@@ -2949,7 +2969,7 @@ def run_blank_enter_case(binary, root, active=False, chat=False, width=100):
         log = maybe_events(state)[1]
         for kind in ("turn_started", "input_received", "steering_added", "future_turn_queued", "turn_cancel_requested"):
             assert len(event_list(log, kind)) == len(event_list(before_log, kind)), (kind, log)
-        if not active: assert not list((state / "sessions").glob("*/events.jsonl"))
+        assert set((state / "sessions").glob("*/events.jsonl")) == before_sessions
         assert (history.read_bytes() if history.exists() else b"") == before_history
         terminal.run("send-keys", "-t", terminal.target, *(["Enter"] * 40))
         terminal.wait_until(lambda text: text.count(marker) == before + 44,
@@ -2998,9 +3018,12 @@ def run_blank_enter_stream_case(binary, root, help_commands=False):
                 args=("--no-listen", "--no-client"),
                 environment={"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}) as terminal:
             terminal.wait("idle>")
+            before_sessions = set((state / "sessions").glob("*/events.jsonl"))
             terminal.run("send-keys", "-t", terminal.target, "Enter", "Enter")
             terminal.wait_until(lambda text: text.count("idle>") == 3, "idle blank lines")
-            assert not requests and not list((state / "sessions").glob("*/events.jsonl"))
+            assert not requests
+            assert set((state / "sessions").glob("*/events.jsonl")) == before_sessions
+            assert not event_list(maybe_events(state)[1], "turn_started")
             terminal.submit("stream-check")
             assert ready.wait(SUPPLY_TIMEOUT)
             terminal.wait("stream-before")
@@ -3102,9 +3125,10 @@ def run_history_length_case(binary, root, active=False, chat=False, width=100, v
         terminal = TmuxTerminal(case / "terminal", binary, workspace, state, config, width, 32,
             args=("--no-listen", "--no-client") + ("-v",) * verbosity, environment=env)
         terminal.wait("host-model/medium", join_wrapped=True)
+        before_sessions = set((state / "sessions").glob("*/events.jsonl"))
         terminal.submit("/history")
-        assert not list((state / "sessions").glob("*/events.jsonl")), "empty history created a session"
         wait_normalized(terminal, "history: 0 shown · 0 completed among shown · 0 total", timeout=10)
+        assert set((state / "sessions").glob("*/events.jsonl")) == before_sessions
         assert not event_list(maybe_events(state)[1], "turn_started")
         terminal.submit("seed history check")
         wait_event_count(state, "turn_completed", 1)
@@ -6932,6 +6956,7 @@ def run_nested_command_cases(binary, root, modes=("nested", "nested-resume", "po
             terminal = TmuxTerminal(case / "term", binary, case, state, config, 140, 32,
                 environment={"SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret", "EDITOR": "true"})
             terminal.wait("host-model/medium")
+            saved_before_command = maybe_events(state)[0] is not None
             if "cache" in mode:
                 if mode != "lazy-cache":
                     terminal.submit("seed")
@@ -6958,9 +6983,12 @@ def run_nested_command_cases(binary, root, modes=("nested", "nested-resume", "po
                     terminal.submit("/status")
                     terminal.wait("session:")
                 release.set()
-                expected = [1] if mode == "lazy-cache" else [2, 1]
+                # Native sessions persist before input, so their first cache
+                # refresh has the same durable control pair as later refreshes.
+                expected = [1] if mode == "lazy-cache" and not saved_before_command else [2, 1]
                 log = wait_event_count(state, "control_finished", len(expected))
-                assert [e["data"]["control"] for e in event_list(log, "control_finished")] == expected
+                finished = [e["data"]["control"] for e in event_list(log, "control_finished")]
+                assert finished == expected, finished
                 terminal.wait("configuration unchanged")
                 terminal.exit()
             elif mode.startswith("nested"):
@@ -7182,9 +7210,6 @@ def run_manual_compaction_cases(binary, root, modes=("after-cancel", "native-can
                     _, log = read_events(state)
                     assert not event_list(log, "control_finished")
                     sid = next((state / "sessions").iterdir()).name
-                    pid = int(terminal.run("display-message", "-p", "-t", terminal.target, "#{pane_pid}"))
-                    os.kill(pid, signal.SIGKILL)
-                    terminal.wait_dead()
                     terminal.close()
                     finish_turn.set()
                     terminal = TmuxTerminal(case / "resumed", binary, case, state, config, 140, 28,

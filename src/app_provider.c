@@ -51,6 +51,7 @@ int snag_fixture_response(const char *prompt, const json_t *steering, const json
                          char *error, size_t error_size);
 int snag_fixture_tool(const struct snag_response_item *call, snag_provider_pump_fn pump, void *pump_opaque,
                      json_t **result, char *error, size_t error_size);
+bool snag_fixture_real_tool(const struct snag_response_item *call);
 #endif
 
 int
@@ -374,7 +375,6 @@ snag_app_provider_run(struct app_state *app, const char *prompt, const json_t *s
 #endif
 }
 
-#ifndef SNAJPAGENT_TEST_FIXTURE
 static int
 tool_input_pump(void *opaque, unsigned int timeout_ms)
 {
@@ -384,7 +384,6 @@ tool_input_pump(void *opaque, unsigned int timeout_ms)
     if (rc == 0 && app->irc_urgent.len) return 1;
     return rc;
 }
-#endif
 
 static bool
 irc_tool_route(const struct app_state *app, const json_t *destination, struct snag_irc_route *route)
@@ -754,10 +753,10 @@ snag_app_tool_run(struct app_state *app, const struct snag_response_item *call,
         return rc < 0 || !*result ? -1 : 0;
     }
 #ifdef SNAJPAGENT_TEST_FIXTURE
-    (void)credential;
-    return snag_fixture_tool(call, snag_app_active_input_pump, app, result, error, error_size);
-#else
+    /* This fixture covers actual process lifetime through terminal loss. */
+    if (!snag_fixture_real_tool(call))
+        return snag_fixture_tool(call, snag_app_active_input_pump, app, result, error, error_size);
+#endif
     return snag_tools_run(call, app->config, credential, app->session.cwd,
                          tool_input_pump, app, snag_ui_wake_fd(&app->ui), result, error, error_size);
-#endif
 }

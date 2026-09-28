@@ -7,6 +7,9 @@
 #include <sys/types.h>
 #include <signal.h>
 
+/* Narrower windows use the terminal's plain presentation fallback. */
+#define SNAG_TERM_MIN_COLUMNS 20u
+
 struct snag_term;
 struct snag_term *snag_term_output_owner(void);
 void snag_term_output_bind(struct snag_term *term);

@@ -4,6 +4,25 @@
 
 ## Unreleased
 
+- Add native Linux terminal attachment: `/session detach|d` keeps the owner
+  running, `--attach`/`-A` reconnects, and `/session attach|a ID` switches live
+  sessions. `/s` keeps the same aliases. Preserve drafts, writer locks and
+  in-flight work, and show bounded history on a replacement terminal.
+  Reconnect without provider onboarding when the owner uses an explicit config.
+  Rebind TERM and GNU Screen passthrough on replacement, including transfers
+  and newly launched editors/pagers. Plain terminals retain direct operation.
+  Avoid ANSI resets at frontend exit when the owner emitted only plain output.
+  Start narrow plain terminals directly; preserve native control keys after
+  narrow editor/pager return.
+  Preserve displayed response text when a typing burst overlaps terminal resize.
+  Stop local voice, dictation and playback when their native terminal detaches,
+  disconnects or suspends. Reattachment does not restart microphone capture.
+  Forward same-size resize notifications and remove the attachment endpoint
+  before deleting a native session. Keep the five-Ctrl-C hard escape responsive
+  through stalled terminal output, including on a replacement attachment.
+  Cancel unfinished file exchanges when their terminal disconnects and preserve
+  queued downloads for a freshly verified workstation connection.
+
 - Keep terminal transfers on the conversation screen and show a compact native
   upload/download progress line with byte counts and percentage.
 
@@ -45,6 +64,8 @@
   `list|l` shortcuts.
 
 - Keep context meters and requests on the session's in-memory model catalog.
+  Load it on every startup, including resume without a model override. Keep
+  recovery commands available when a saved context selection lacks catalog facts.
   Model listings load changed cache files; ordinary accounting updates only its
   own observations, preserving model selections across another session's refresh.
 

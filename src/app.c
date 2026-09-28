@@ -13,6 +13,7 @@
 #include "render.h"
 #include "rules.h"
 #include "secret.h"
+#include "session_client.h"
 #include "snajpagent.h"
 #include "store.h"
 #include "turn.h"
@@ -134,6 +135,33 @@ app_textf(struct app_state *app, enum snag_ui_operation operation, const char *f
     snag_buf_free(&text);
     return rc;
 }
+static int
+service_attachment(struct app_state *app, bool external)
+{
+    uint64_t generation = snag_ui_session_pending(&app->ui);
+    if (generation) {
+        if (snag_ui_session_rebind(&app->ui, generation) < 0)
+            return errno == ESTALE ? 0 : -1;
+        if (!app->ui.native_continuing) {
+            app->attachment_history_pending = true;
+            app->remote_verified = app->remote_available = false;
+            app->remote_nonce[0] = '\0';
+            app->remote_probe_at = app->remote_reply_at = 0u;
+            app->remote_attachment = 0u;
+        }
+    }
+    int rc = 0;
+    if (!external && app->attachment_history_pending) {
+        app->attachment_history_pending = false;
+        rc = app_textf(app, SNAG_UI_HOST,
+            "Attached session %s; recent history follows. Use /history N for earlier turns.",
+            app->session.id);
+        if (!rc) rc = snag_ui_history(&app->ui, &app->session, app->config->resume_history_turns);
+    }
+    if (generation && snag_ui_session_ready(&app->ui, generation) < 0 && errno != ESTALE) return -1;
+    return rc;
+}
+
 static void
 usage_number(char out[32], bool known, uint64_t value)
 {
@@ -189,7 +217,9 @@ static const struct snag_term_command commands[] = {
     {"/yield", "return tool wait to model; keep running processes"},
     {"/session", "current session ID and running sessions"},
     {"/session list|l", "all saved sessions and their live state"},
-    {"/s [list|l]", "alias for /session [list|l]"},
+    {"/session attach|a ID", "switch to a live session; failure keeps this attachment"},
+    {"/session detach|d", "return to the shell while this session continues"},
+    {"/s [list|l|attach|a ID|detach|d]", "alias for /session"},
     {"/history [N]", "show N retained turns; default 1, 0 counts only"},
     {"/archive", "archive at a safe boundary and exit"},
     {"/delete", "delete after confirmation at a safe boundary"},
@@ -532,7 +562,12 @@ format_context_meter(struct app_state *app, bool active, char meter[32u])
     if (!active) {
         char error[256] = {0};
 
-        if (snag_app_capacity_resolve(app, provider, model, &resolved, error, sizeof(error)) < 0) return -1;
+        if (snag_app_capacity_resolve(app, provider, model, &resolved, error, sizeof(error)) < 0) {
+            /* Keep recovery commands available when a saved selection needs
+             * catalog facts that are absent. Requests still resolve strictly. */
+            memcpy(meter, "?", sizeof("?"));
+            return 0;
+        }
         capacity = &resolved;
     }
     if (!context_meter_matches(app, provider, model, effort)) {
@@ -1318,6 +1353,7 @@ append_model_row(void *opaque, size_t index, const char *provider, const char *m
 }
 
 static void service_external(void *opaque);
+static int suspend_external(void *opaque);
 
 /* The configured pager command, or NULL for direct reference display. */
 static const char *
@@ -1415,7 +1451,8 @@ page_local_file(struct app_state *app, const char *argument)
         rc = app_error(app, error);
         goto out;
     }
-    rc = snag_pager_file(command, resolved, &shown, service_external, app);
+    rc = snag_pager_file(command, resolved, &shown, service_external, suspend_external, app,
+        app->ui.native ? &app->ui.profile : NULL);
     saved = errno;
     if (snag_ui_external(&app->ui, false, error, sizeof(error)) < 0) {
         rc = -1;
@@ -1444,7 +1481,8 @@ page_reference(struct app_state *app, const char *text, size_t length)
 
     if (!command || snag_isatty(STDERR_FILENO) != 1) return false;
     if (snag_ui_external(&app->ui, true, error, sizeof(error)) < 0) return false;
-    rc = snag_pager_show(command, text, length, &shown, service_external, app);
+    rc = snag_pager_show(command, text, length, &shown, service_external, suspend_external, app,
+        app->ui.native ? &app->ui.profile : NULL);
     if (snag_ui_external(&app->ui, false, error, sizeof(error)) < 0) return shown;
     return rc == 0 && shown;
 }
@@ -2021,11 +2059,25 @@ out: snag_config_free(&candidate);
     return rc;
 }
 
+static int
+suspend_external(void *opaque)
+{
+    struct app_state *app = opaque;
+    if (app->ui.native)
+        return snag_ui_session_control(&app->ui, SNAG_SESSION_SUSPEND, NULL, 0u);
+    return snag_term_suspend();
+}
+
 static void
 service_external(void *opaque)
 {
     struct app_state *app = opaque;
     char error[256] = {0};
+    /* Do not apply ordinary audio prompts while an external program owns input.
+     * A lost native controller must close audio before replacement activates. */
+    if (app->ui.native && !snag_ui_session_attachment(&app->ui) &&
+        snag_app_audio_service(app) < 0) app->interrupt_requested = true;
+    if (service_attachment(app, true) < 0) app->interrupt_requested = true;
     /* The editor owns terminal input; the engine still owns live jobs and IRC. */
     if (snag_tools_service(0, snag_ui_wake_fd(&app->ui), error, sizeof(error)) < 0)
         app->interrupt_requested = true;
@@ -2044,7 +2096,8 @@ run_config_editor(struct app_state *app, bool *success, char *error, size_t erro
         return 1;
     }
     if (snag_ui_external(&app->ui, true, error, error_size) < 0) return -1;
-    int rc = snag_editor_run(app->config_path, success, service_external, app);
+    int rc = snag_editor_run(app->config_path, success, service_external, suspend_external, app,
+        app->ui.native ? &app->ui.profile : NULL);
     int saved = errno;
     if (snag_ui_external(&app->ui, false, error, error_size) < 0) return -1;
     if (rc < 0) {
@@ -2697,7 +2750,7 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         const char *rest = line + 8u;
         while (isspace((unsigned char)*rest)) ++rest;
         if (*rest) return app_error(app, "usage: /compact");
-        if (app->session.pending_log)
+        if (!app->session.turn_count)
             return app_textf(app, SNAG_UI_HOST, "nothing to compact before the first prompt");
         return request_control(app, SNAG_CONTROL_COMPACT, "/compact");
     }
@@ -2734,9 +2787,40 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         while (isspace((unsigned char)*argument)) ++argument;
         size_t len = strlen(argument);
         while (len && isspace((unsigned char)argument[len - 1u])) --len;
+        if ((len == 1u && argument[0] == 'd') ||
+            (len == 6u && !strncmp(argument, "detach", 6u))) {
+            if (!app->ui.native) return app_error(app, "native attachment is unavailable here");
+            if (snag_ui_session_control(&app->ui, SNAG_SESSION_DETACH, NULL, 0u) < 0)
+                return app_error(app, "cannot detach terminal client");
+            return 0;
+        }
+        size_t verb = 0u;
+        while (verb < len && !isspace((unsigned char)argument[verb])) ++verb;
+        if ((verb == 1u && argument[0] == 'a') ||
+            (verb == 6u && !strncmp(argument, "attach", 6u))) {
+            if (!app->ui.native) return app_error(app, "native attachment is unavailable here");
+            while (verb < len && isspace((unsigned char)argument[verb])) ++verb;
+            if (len - verb < 8u || len - verb > SNAG_ID_HEX_LEN)
+                return app_error(app, "usage: /session attach|a ID (8..32 character prefix)");
+            char prefix[SNAG_ID_HEX_LEN + 1u];
+            memcpy(prefix, argument + verb, len - verb);
+            prefix[len - verb] = '\0';
+            struct snag_session target;
+            snag_session_init(&target);
+            int rc = snag_session_locate(&app->store, &target, prefix,
+                list_row, app, error, sizeof(error));
+            if (!rc && !strcmp(target.id, app->session.id))
+                rc = snag_errorf(error, sizeof(error), "already attached to this session");
+            if (!rc && snag_ui_session_control(&app->ui, SNAG_SESSION_SWITCH,
+                                                target.id, strlen(target.id)) < 0)
+                rc = snag_errorf(error, sizeof(error),
+                    "cannot switch terminal: %s", strerror(errno));
+            snag_session_close(&target);
+            return rc < 0 ? app_error(app, error) : 0;
+        }
         if (len && !(len == 1u && argument[0] == 'l') &&
             (len != 4u || strncmp(argument, "list", 4u)))
-            return app_error(app, "usage: /session [list|l] (alias /s)");
+            return app_error(app, "usage: /session [list|l|attach|a ID|detach|d] (alias /s)");
         if (app_textf(app, SNAG_UI_HOST, "current session: %s%s\n%s sessions:",
                       app->session.id, app->session.pending_log ? " (not yet saved)" : "",
                       len ? "saved" : "running") < 0) return -1;
@@ -2949,6 +3033,7 @@ again:;
     int rc;
     if (snag_app_flush_public(app, false) < 0)
         return -1;
+    if (service_attachment(app, false) < 0) return -1;
     if (snag_app_shutdown(app) || (app->interrupt_requested && !leaving)) {
         snag_app_audio_close(app);
         app->interrupt_requested = true;
@@ -4985,14 +5070,16 @@ list_row(void *opaque, const char *text, size_t len)
 }
 
 static int
-pick_session(struct app_state *app, char *error, size_t error_size)
+pick_session_id(struct app_state *app, enum snag_session_list filter, char **id,
+                 char *error, size_t error_size)
 {
     const char *frames[SNAG_TERM_SPINNER_COUNT] = {" ", " ", " "};
     enum snag_term_action action;
     char *prefix = NULL;
     int rc = -1;
 
-    if (snag_store_list(&app->store, NULL, SNAG_SESSIONS_ACTIVE, list_row, app, error, error_size) < 0 ||
+    *id = NULL;
+    if (snag_store_list(&app->store, NULL, filter, list_row, app, error, error_size) < 0 ||
         snag_ui_open(&app->ui, error, error_size) < 0 ||
         snag_ui_prompt(&app->ui, false, "session › ", frames, 1u, 0u) < 0) return -1;
     do {
@@ -5005,8 +5092,19 @@ pick_session(struct app_state *app, char *error, size_t error_size)
         snag_errorf(error, error_size, "enter an 8..32 character session id prefix");
         rc = -1;
     } else {
-        rc = snag_session_open(&app->store, &app->session, prefix, error, error_size);
+        *id = prefix;
+        return 0;
     }
+    free(prefix);
+    return rc;
+}
+
+static int
+pick_session(struct app_state *app, char *error, size_t error_size)
+{
+    char *prefix = NULL;
+    int rc = pick_session_id(app, SNAG_SESSIONS_ACTIVE, &prefix, error, error_size);
+    if (!rc) rc = snag_session_open(&app->store, &app->session, prefix, error, error_size);
     free(prefix);
     return rc;
 }
@@ -5236,6 +5334,7 @@ interactive_loop(struct app_state *app, const char *initial)
         initial = NULL;
         free(owned);
         owned = NULL;
+        if (service_attachment(app, false) < 0) { rc = 6; break; }
         if (snag_app_shutdown(app) || app->input_closed) {
             rc = 0;
             break;
@@ -5379,8 +5478,8 @@ render_room_history(void *opaque, const struct snag_irc_event *event)
         .kind = SNAG_UI_IRC, .data.irc = event});
 }
 
-int
-snag_app_run(const struct snag_cli *cli, const char *program)
+static int
+run_owner(const struct snag_cli *cli, const char *program, struct snag_session_process *process)
 {
     struct app_state app;
     struct snag_shutdown signal_handlers;
@@ -5408,6 +5507,10 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     snag_session_init(&app.session);
     (void)snag_http_init();
     if (snag_ui_init(&app.ui) < 0) return 3;
+    if (process && snag_ui_session_start(&app.ui, process) < 0) {
+        snag_ui_free(&app.ui);
+        return 3;
+    }
     atomic_store(&shutdown_ui, &app.ui);
     snag_ui_send(&app.ui, (struct snag_ui_command){
         .kind = SNAG_UI_COLOR, .data.value = snag_cli_color(cli, SNAG_COLOR_AUTO)});
@@ -5442,7 +5545,12 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     config_path = snag_config_path(cli->config_path, dotdir, error, sizeof(error));
     if (!config_path) goto invalid;
     if (snag_store_open(&app.store, dotdir, error, sizeof(error)) < 0) goto fail;
-    if (cli->update_model_cache && refresh_model_cache(&app, error, sizeof(error)) < 0) goto fail;
+    if (cli->update_model_cache) {
+        if (refresh_model_cache(&app, error, sizeof(error)) < 0) goto fail;
+    } else {
+        (void)snag_model_cache_load(&app.store, &app.model_cache,
+            app.capacity_cache_error, sizeof(app.capacity_cache_error));
+    }
     app.config_path = config_path;
     app.irc_file_config = config.irc;
     snag_ui_send(&app.ui, (struct snag_ui_command){
@@ -5466,9 +5574,6 @@ snag_app_run(const struct snag_cli *cli, const char *program)
     new_model = effective_model(config.model);
     new_effort = cli->effort ? cli->effort : config.reasoning_effort;
     if (cli->model) {
-        char ignored[256] = {0};
-        if (!cli->update_model_cache)
-            (void)snag_model_cache_load(&app.store, &app.model_cache, ignored, sizeof(ignored));
         if (snag_model_select_selector(&app.model_cache, &config, cli->model,
                 snag_config_provider(&config, cli->provider), new_effort,
                 &selection, error, sizeof(error)) < 0) {
@@ -5590,6 +5695,12 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         goto out;
     }
     if (snag_ui_open(&app.ui, error, sizeof(error)) < 0) goto fail;
+    if (app.ui.native && (persist_session(&app, error, sizeof(error)) < 0 ||
+        snag_ui_session_listen(&app.ui, &app.session) < 0)) {
+        if (!error[0]) (void)snag_errorf(error, sizeof(error),
+            "cannot publish session attachment: %s", strerror(errno));
+        goto fail;
+    }
     (void)snag_ui_history_open(&app.ui, dotdir, app.session.dir_path);
     history_warning(&app);
     if (snag_ui_orientation(&app.ui, &app.session, cli->resume) < 0 ||
@@ -5623,6 +5734,15 @@ out:
     atomic_store(&shutdown_ui, NULL);
     snag_tools_shutdown();
     snag_tools_journal(NULL, NULL, NULL);
+    if (app.ui.native) {
+        /* Stop accepting controllers before releasing the original writer
+         * lock. EXIT acknowledges a stopped owner to the frontend. */
+        (void)snag_ui_session_listen(&app.ui, NULL);
+        snag_session_close(&app.session);
+        unsigned char status = (unsigned char)(app.shutdown_signal > 0 ?
+            128 + app.shutdown_signal : rc);
+        (void)snag_ui_session_control(&app.ui, SNAG_SESSION_EXIT, &status, 1u);
+    }
     snag_ui_free(&app.ui);
     (void)snag_app_shutdown(&app);
     snag_buf_free(&app.irc_urgent);
@@ -5643,5 +5763,108 @@ out:
     snag_config_free(&config);
     if (signal_handlers_installed) snag_shutdown_finish(&signal_handlers);
     if (app.shutdown_signal > 0 && app.shutdown_signal < 128) rc = 128 + app.shutdown_signal;
+    return rc;
+}
+
+static int
+attachment_candidate(void *opaque, const char *text, size_t length)
+{
+    (void)opaque;
+    return snag_write_full(STDERR_FILENO, text, length);
+}
+
+static int
+connect_session(void *opaque, const char *prefix, char *error, size_t error_size)
+{
+    const struct snag_cli *cli = opaque;
+    struct snag_store store;
+    struct snag_session target;
+    char *dotdir = snag_app_dotdir(cli->dotdir, error, error_size);
+    int peer = -1;
+    snag_store_init(&store);
+    snag_session_init(&target);
+    if (dotdir && snag_store_open(&store, dotdir, error, error_size) == 0 &&
+        snag_session_locate(&store, &target, prefix, attachment_candidate, NULL,
+                            error, error_size) == 0) {
+        peer = snag_session_endpoint_connect(target.dir_fd, target.dir_path);
+        if (peer < 0) (void)snag_errorf(error, error_size,
+            "session %s has no reachable native owner (%s); use --resume after it stops",
+            target.id, strerror(errno));
+    }
+    snag_session_close(&target);
+    snag_store_close(&store);
+    free(dotdir);
+    return peer;
+}
+
+static int
+attach_session(const struct snag_cli *cli, char *error, size_t error_size)
+{
+    char *selected = NULL;
+    int peer = -1;
+    if (!snag_session_host_supported())
+        return snag_errorf(error, error_size, "native attachment is unavailable on this host");
+    if (!snag_text_locale_init())
+        return snag_errorf(error, error_size, "a UTF-8 locale is required");
+    if (!snag_isatty(STDIN_FILENO) || !snag_isatty(STDOUT_FILENO) || !snag_isatty(STDERR_FILENO))
+        return snag_errorf(error, error_size,
+            "attachment requires terminal stdin, stdout and stderr");
+    if (!cli->attach_id) {
+        struct app_state app = {.cli = cli};
+        char *dotdir = snag_app_dotdir(cli->dotdir, error, error_size);
+        if (!dotdir) return -1;
+        snag_store_init(&app.store);
+        int rc = snag_store_open(&app.store, dotdir, error, error_size);
+        if (!rc) {
+            rc = snag_ui_init(&app.ui);
+            if (!rc) {
+                rc = pick_session_id(&app, SNAG_SESSIONS_RUNNING, &selected, error, error_size);
+                snag_ui_free(&app.ui);
+            }
+        }
+        snag_store_close(&app.store);
+        free(dotdir);
+        if (rc < 0) return -1;
+    }
+    peer = connect_session((void *)cli, cli->attach_id ? cli->attach_id : selected,
+        error, error_size);
+    free(selected);
+    if (peer < 0) return -1;
+    return snag_session_client_terminal(peer, false, 0u, connect_session,
+                                        (void *)cli, error, error_size);
+}
+
+int
+snag_app_run(const struct snag_cli *cli, const char *program)
+{
+    struct snag_session_process process = {.master = -1, .slave = -1, .peer = -1};
+    char error[256] = {0};
+    int rc;
+    if (cli->attach) {
+        rc = attach_session(cli, error, sizeof(error));
+    } else if (cli->execute || cli->list || !snag_session_host_supported() ||
+               !snag_term_host_capable()) {
+        return run_owner(cli, program, NULL);
+    } else {
+        rc = snag_session_process_start(&process);
+        if (rc < 0) {
+            if (errno == ENOTTY) return run_owner(cli, program, NULL);
+            (void)snag_errorf(error, sizeof(error),
+                "cannot start native session: %s", strerror(errno));
+        } else if (rc == 0) {
+            rc = run_owner(cli, program, &process);
+            snag_session_process_close(&process);
+            return rc;
+        } else {
+            rc = snag_session_client_terminal(process.peer, true, process.child,
+                connect_session, (void *)cli, error, sizeof(error));
+            process.peer = -1;
+            snag_session_process_close(&process);
+        }
+    }
+    if (rc < 0) {
+        (void)fprintf(stderr, "%s: %s\n", program, error[0] ? error : strerror(errno));
+        return 3;
+    }
     return rc;
 }

@@ -18,6 +18,11 @@ The final EXIT carries native receipt JSON with actual landed paths. The remote
 application restores its terminal lease before rendering that receipt through
 ordinary UI text, preserving the composer and cursor. Buffered post-transfer
 output and keyboard bytes return to their respective owners.
+For a native session, the exclusive transfer lease carries its attachment
+identity. A disconnected or replaced client cancels the unfinished exchange;
+the old protocol input is discarded before returning to the composer. Completed
+verified results remain valid. Workstation probe replies are bound to the same
+attachment, and replacements start with fresh capability discovery.
 Transfers keep the conversation on the main screen. The native endpoint shows
 one rate-limited progress line with direction, byte count and percentage,
 shortening it for narrow terminals and clearing it before agent output resumes.

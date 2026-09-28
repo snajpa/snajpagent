@@ -60,6 +60,8 @@ struct snag_term_command {
 struct snag_term {
     int (*input_checkpoint)(void *);
     void *input_opaque;
+    int (*suspend)(void *);
+    void *suspend_opaque;
     int output_fd[2];
     bool input_only, cancel_pending, interrupt_pending, dictating;
     char audio_label[64];
@@ -139,7 +141,7 @@ struct snag_term {
     bool submit_awaiting_activity;
     bool prompt_visible;
     bool active;
-    bool capable;
+    bool capable, screen;
     bool controls_installed;
     bool line_submission_echoed;
     bool typing_active;
@@ -158,6 +160,12 @@ struct snag_term {
 };
 
 void snag_term_init(struct snag_term *term);
+/* Bind private nonblocking output before interactive input is opened. */
+int snag_term_output_prepare(struct snag_term *term);
+/* Forget physical coordinates at a native attachment barrier. No terminal
+ * writes or input flush: draft, route and already admitted input are retained. */
+void snag_term_rebind(struct snag_term *term);
+int snag_term_attachment_modes(struct snag_term *term, bool enabled);
 int snag_term_set_destinations(struct snag_term *term, const struct snag_irc_destinations *destinations);
 int snag_term_select_destination(struct snag_term *term, uint32_t id);
 void snag_term_destination_prefix(const struct snag_term *term, char *out, size_t size);
@@ -172,6 +180,8 @@ void snag_term_close(struct snag_term *term);
 void snag_term_abort(struct snag_term *term);
 int snag_term_external_begin(struct snag_term *term, char *error, size_t error_size);
 int snag_term_external_end(struct snag_term *term, char *error, size_t error_size);
+/* Notify the presentation owner even when a native resize kept the same dimensions. */
+void snag_term_notify_resize(void);
 /* Optional content-free composer trace; empty unless SNAJPAGENT_TERM_TRACE names a path. */
 void snag_term_trace(const struct snag_term *term, const char *event, const char *source);
 

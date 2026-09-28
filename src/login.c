@@ -341,8 +341,9 @@ snag_login_dispatch(const struct snag_cli *cli, bool *handled)
     /* Ordinary agent fixtures bypass onboarding; login PTYs opt into it. */
     if (setup && !getenv("SNAJPAGENT_TEST_LOGIN")) return 0;
 #endif
-    if (setup && (cli->update_model_cache || cli->execute || cli->resume || cli->list || cli->config_path || cli->provider ||
-                   !snag_isatty(STDIN_FILENO) || !snag_isatty(STDERR_FILENO))) return 0;
+    if (setup && (cli->update_model_cache || cli->execute || cli->resume || cli->attach ||
+                  cli->list || cli->config_path || cli->provider ||
+                  !snag_isatty(STDIN_FILENO) || !snag_isatty(STDERR_FILENO))) return 0;
     snag_config_init(&config);
     snag_store_init(&store);
     snag_auth_clear(&tokens);

@@ -435,7 +435,8 @@ assert "--replace-fail '__REPB_PREFIX(used)' '__REPB_PREFIX(snag_used)'" in andr
 print("PASS: Android links the shared static Unicode regex implementation")
 
 # The system shell is shared by command defaults and EDITOR on Android.
-assert 'execl(SNAG_SYSTEM_SHELL, "sh", "-c",' in platform
+assert 'char *const arguments[] = {"sh", "-c", (char *)script,' in platform
+assert 'execve(SNAG_SYSTEM_SHELL, arguments, environment ? environment : environ);' in platform
 shell_start = platform.index("#if defined(__ANDROID__)\n#define SNAG_SYSTEM_SHELL")
 shell_end = platform.index("\nint\nsnag_hostname", shell_start)
 with tempfile.TemporaryDirectory(prefix="android-shell-", dir=root / "build") as tmp:

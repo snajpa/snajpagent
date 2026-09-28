@@ -66,9 +66,11 @@ struct app_state {
     uint64_t last_response_ms;
     uint64_t last_response_output_tokens;
     struct snag_ui ui;
+    bool attachment_history_pending;
     char remote_nonce[10];
     uint64_t remote_probe_at;
     uint64_t remote_reply_at;
+    uint64_t remote_attachment;
     bool remote_available;
     bool remote_verified;
     struct snag_irc *irc;
@@ -156,8 +158,11 @@ int snag_app_voice_service(struct app_state *);
 void snag_app_voice_close(struct app_state *);
 void snag_app_voice_event(struct app_state *,const char *,const json_t *);
 #ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
+int snag_app_audio_fixture(struct app_state *,bool playing);
+int snag_app_audio_fixture_checkpoint(struct app_state *);
 int snag_app_voice_fixture(struct app_state *,const json_t *notices,bool done);
 int snag_app_voice_fixture_mute(struct app_state *);
+int snag_app_voice_fixture_checkpoint(struct app_state *);
 #endif
 bool snag_app_shutdown(struct app_state *);
 int snag_app_request_ready(void *opaque);

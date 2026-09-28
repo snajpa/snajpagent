@@ -19,6 +19,8 @@ import time
 import unittest
 from pathlib import Path
 
+from test_upload_client import FixtureChildren, ProductSession
+
 PRODUCT = Path(__file__).resolve().parent / "snajpagent-fixture"
 
 
@@ -35,7 +37,8 @@ def screen_snapshot(env, name, path):
 
 
 class RemoteProcess:
-    def __init__(self, home, arguments, wrapped=True, cwd=None, extra_env=None):
+    def __init__(self, home, arguments, wrapped=True, cwd=None, extra_env=None, *,
+                 server_children=None):
         self.master, self.slave = pty.openpty()
         self.original = termios.tcgetattr(self.slave)
         env = dict(os.environ, HOME=str(home), TERM="xterm-256color", SHELL="/bin/sh")
@@ -50,22 +53,35 @@ class RemoteProcess:
         self.process = subprocess.Popen(command, stdin=self.slave, stdout=self.slave,
                                         stderr=self.slave, cwd=cwd or home, env=env,
                                         preexec_fn=controlling_terminal)
+        self.children = FixtureChildren(self.process.pid)
+        self.server_children = server_children
         self.output = bytearray()
+
+    def remember_children(self):
+        self.children.remember()
+        if self.server_children is not None:
+            # Loopback SSH's remote side belongs to its private server, not this client.
+            self.server_children.remember()
 
     def until(self, marker, timeout=5):
         deadline = time.monotonic() + timeout
         while marker not in self.output and time.monotonic() < deadline:
+            self.remember_children()
             if select.select([self.master], [], [], 0.1)[0]:
                 self.output.extend(os.read(self.master, 65536))
+        self.remember_children()
         if marker not in self.output:
             raise AssertionError(f"missing {marker!r}: {bytes(self.output)!r}")
         return bytes(self.output)
 
     def wait(self, expected):
+        self.remember_children()
         assert self.process.wait(timeout=5) == expected, bytes(self.output)
         assert termios.tcgetattr(self.slave) == self.original
 
     def close(self):
+        self.remember_children()
+        self.children.close()
         if self.process.poll() is None:
             self.process.terminate()
             try:
@@ -73,14 +89,135 @@ class RemoteProcess:
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait(timeout=5)
-        os.close(self.master)
-        os.close(self.slave)
+        if self.master is not None:
+            os.close(self.master)
+            self.master = None
+        if self.slave is not None:
+            os.close(self.slave)
+            self.slave = None
 
 
 class RemoteStartupTests(unittest.TestCase):
+    def test_plain_terminal_startup_keeps_direct_owner(self):
+        for term in ("dumb", ""):
+            with self.subTest(term=term), tempfile.TemporaryDirectory(prefix="snag-plain-") as tmp:
+                home = Path(tmp)
+                child = RemoteProcess(home, ["--dotdir", str(home / "dotdir")],
+                                      wrapped=False, extra_env={"TERM": term})
+                try:
+                    child.until("›".encode())
+                    if hasattr(os, "pidfd_open"):
+                        self.assertEqual(list(child.children.handles), [child.process.pid])
+                    os.write(child.master, b"ping\n")
+                    child.until(b"pong")
+                    os.write(child.master, b"/exit\n")
+                    child.wait(0)
+                finally:
+                    child.close()
+
+    @unittest.skipUnless(hasattr(os, "pidfd_open"), "native attachment needs Linux")
+    def test_native_attach_refuses_unsupported_terminal_without_taking_owner(self):
+        with tempfile.TemporaryDirectory(prefix="snag-attach-capability-") as tmp:
+            root = Path(tmp)
+            original = ProductSession(root)
+            home = root / "home"
+            try:
+                sid = original.session_dir().name
+                original.write(b"/s d\r")
+                self.assertEqual(original.process.wait(timeout=3), 0)
+                command = [str(PRODUCT), "--dotdir", str(original.dotdir), "-A", sid]
+                for term in ("dumb", "", "x" * 256):
+                    with self.subTest(term=term[:10]):
+                        bad = RemoteProcess(home, command, wrapped=None, extra_env={"TERM": term})
+                        try:
+                            message = b"File name too long" if len(term) == 256 else b"ANSI-capable TERM"
+                            bad.until(message)
+                            bad.wait(3)
+                        finally:
+                            bad.close()
+                self.assertEqual(original.request_count(), 0)
+                good = RemoteProcess(home, command, wrapped=None)
+                try:
+                    good.until(b"Attached session", 6)
+                    good.until("›".encode())
+                    os.write(good.master, b"ping\r")
+                    good.until(b"pong")
+                    os.write(good.master, b"/exit\r")
+                    good.wait(0)
+                finally:
+                    good.close()
+                self.assertEqual(original.request_count(), 1)
+            finally:
+                original.close()
+
+    @unittest.skipUnless(hasattr(os, "pidfd_open") and shutil.which("screen"),
+                         "native profile replacement needs Linux and GNU screen")
+    def test_native_attachment_rebinds_terminal_profile(self):
+        with tempfile.TemporaryDirectory(prefix="snag-attach-profile-") as tmp:
+            root = Path(tmp)
+            original_root = root / "original"
+            original_root.mkdir(mode=0o700)
+            sockets = root / "screens"
+            sockets.mkdir(mode=0o700)
+            config = root / "screenrc"
+            config.write_text("startup_message off\naltscreen off\n")
+            snapshot = root / "editor-profile"
+            editor = root / "editor"
+            editor.write_text("#!/bin/sh\n"
+                f"printf '%s\\n%s\\n' \"$TERM\" \"${{STY-}}\" >{shlex.quote(str(snapshot))}\n"
+                "printf 'PROFILE_EDITOR_DONE\\n'\n")
+            editor.chmod(0o700)
+            original = ProductSession(original_root,
+                                      extra_env={"EDITOR": str(editor), "PAGER": str(editor)})
+            home = original_root / "home"
+            screen_env = dict(os.environ, SCREENDIR=str(sockets))
+            try:
+                sid = original.session_dir().name
+                original.write(b"/s d\r")
+                self.assertEqual(original.process.wait(timeout=3), 0)
+                for screen in (True, False):
+                    with self.subTest(screen=screen):
+                        command = [str(PRODUCT), "--dotdir", str(original.dotdir), "-A", sid]
+                        if screen:
+                            command = ["screen", "-U", "-c", str(config), "-S", "profile", *command]
+                        child = RemoteProcess(home, command, extra_env={"SCREENDIR": str(sockets)})
+                        try:
+                            child.until(b"Attached session", 6)
+                            child.until("›".encode())
+                            for action in (b"/config\r", b"/help\r"):
+                                child.output.clear()
+                                snapshot.unlink(missing_ok=True)
+                                os.write(child.master, action)
+                                child.until(b"PROFILE_EDITOR_DONE")
+                                term, sty = snapshot.read_text().splitlines()
+                                if screen:
+                                    self.assertTrue(term.startswith("screen"), (term, sty))
+                                    self.assertTrue(sty.endswith(".profile"), (term, sty))
+                                else:
+                                    self.assertEqual((term, sty), ("xterm-256color", ""))
+                            source = home / ("screen.bin" if screen else "plain.bin")
+                            source.write_bytes(bytes(range(256)) * 300)
+                            os.write(child.master, f"download_tool {source}\r".encode())
+                            target = home / "Downloads" / source.name
+                            child.until(str(target).encode(), 12)
+                            self.assertEqual(target.read_bytes(), source.read_bytes())
+                            self.assertNotIn(b"#DATA:", child.output)
+                            os.write(child.master, b"/s d\r" if screen else b"/exit\r")
+                            child.wait(0)
+                        finally:
+                            child.close()
+                records = [json.loads(line) for line in
+                           (original.session_dir() / "events.jsonl").read_text().splitlines()]
+                self.assertEqual(sum(e["type"] == "tool_finished" for e in records), 2)
+                self.assertEqual(sum(e["type"] == "download_removed" for e in records), 2)
+            finally:
+                subprocess.run(["screen", "-S", "profile", "-X", "quit"], env=screen_env,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+                original.close()
+
     @unittest.skipUnless(shutil.which("tmux"), "tmux is required for rendered transfer coverage")
     def test_native_drop_keeps_one_composer_and_sealed_rollout(self):
-        from tmux_terminal import TmuxTerminal
+        from tmux_terminal import TmuxTerminal, DEFAULT_ACCOUNTED_IDLE_PROMPT
         with tempfile.TemporaryDirectory(prefix="snag-drop-view-") as tmp:
             root = Path(tmp)
             launcher = root / "wrapped-agent"
@@ -93,7 +230,8 @@ class RemoteStartupTests(unittest.TestCase):
                               100, 28) as term:
                 term.wait("›")
                 term.submit("ping")
-                before = term.wait("pong")
+                term.wait("pong")
+                before = term.wait(DEFAULT_ACCOUNTED_IDLE_PROMPT)
                 term.send_text("\x1b[200~" + str(source) + "\x1b[201~")
                 term.wait("1 unsent attachment(s)")
                 after = term.wait("[1 attached]")
@@ -724,6 +862,12 @@ class RemoteStartupTests(unittest.TestCase):
                     again.until(str(target).encode(), 12)
                     self.assertEqual(target.read_bytes(), source.read_bytes())
                     rendered = screen_snapshot(command_env, "native", hardcopy)
+                    # The receipt and restored composer can reach screen in
+                    # separate relay frames; wait for the actual draft redraw.
+                    deadline = time.monotonic() + 5
+                    while b"pig" not in rendered and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                        rendered = screen_snapshot(command_env, "native", hardcopy)
                     self.assertIn(str(target).encode(), rendered.replace(b"\n", b""))
                     self.assertIn(b"pig", rendered)
                     os.write(again.master, b"n\r")

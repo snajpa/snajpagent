@@ -239,6 +239,8 @@ snag_app_lifecycle_command(struct app_state *app, const char *line, bool *handle
         /* Confirmation precedes stopping any owned processes. */
         if (app->session.process_count && snag_app_close_active_processes(app,
                 app->session.active_turn_id, "user_interrupt", true, error, sizeof(error)) < 0) return -1;
+        /* Unlink the private endpoint while its original writer lock is held. */
+        if (app->ui.native && snag_ui_session_listen(&app->ui, NULL) < 0) return -1;
         seq = app->session.next_seq;
         if (snag_session_delete(&app->store, &app->session, prefix, &seq, error, sizeof(error)) < 0) {
             (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);

@@ -1338,7 +1338,7 @@ bool
 snag_term_host_capable(void)
 {
     const char *name = getenv("TERM");
-    return name && strcmp(name, "dumb");
+    return name && *name && strcmp(name, "dumb");
 }
 
 unsigned int

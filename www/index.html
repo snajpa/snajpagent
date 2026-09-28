@@ -64,6 +64,13 @@
       <p>Resume continues unfinished work without a new prompt. For scripts, use
         <code>snajpagent -e --resume SESSION_ID &lt;/dev/null</code>. Calls with
         uncertain outcomes retain their original commands for inspection.</p>
+      <p>Current Linux source starts detachable sessions on ANSI terminals at
+        least 20 columns wide. Use
+        <code>/s d</code> to return to the shell while work continues, then
+        <code>snajpagent --attach SESSION_ID</code> to reconnect with the retained
+        draft. Without an ID, attach lists running sessions. Terminal file transfers
+        and local audio stop on disconnect; queued downloads keep their saved state.
+        Restart microphone capture explicitly after reconnecting.</p>
       <p>Set a goal when you want work to continue beyond the next reply. Exit to
         stop the program and resume the saved session later. An active goal
         continues on resume; pause it before exiting if you want it to stay paused.

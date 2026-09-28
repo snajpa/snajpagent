@@ -7,6 +7,8 @@ from pty_active import Child, DEFAULT_IDLE_PROMPT, STATE_ROOT
 def run_case(term, cols, expect_ansi, expected_text):
     with Child(["-vvvv"], term=term, cols=cols) as child:
         child.wait_text(DEFAULT_IDLE_PROMPT)
+        if not expect_ansi:
+            assert child.owner_fd is None, f"{term}/{cols}: plain startup created a native owner"
         child.send(expected_text.encode() + b"\r")
         answer_end = child.wait_text(b"fixture answer")
         terminal_end = child.wait_text(b"turn_completed synced", start=answer_end)

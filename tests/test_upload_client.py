@@ -5,6 +5,7 @@ Set TRZSZ_CLIENT to a pinned, locally built trzsz wrapper for the real-client
 case. The synthetic sender remains part of the ordinary fixture suite.
 """
 
+import atexit
 import base64
 import fcntl
 import hashlib
@@ -39,6 +40,84 @@ def frame(kind, data, numeric=False):
     return b"#" + kind.encode("ascii") + b":" + payload + b"\n"
 
 
+class FixtureChildren:
+    """Pin only verified descendants of a fixture-owned process on Linux."""
+
+    def __init__(self, pid, parent=None):
+        self.handles = {}
+        if hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"):
+            self.pin(pid, os.getpid() if parent is None else parent)
+        atexit.register(self.close)
+        self.remember()
+
+    def pin(self, pid, parent, parent_fd=None):
+        if pid in self.handles:
+            return
+        try:
+            fd = os.pidfd_open(pid)
+        except ProcessLookupError:
+            return
+        try:
+            status = Path(f"/proc/{pid}/status").read_text()
+            parents = [fd] if parent_fd is None else [fd, parent_fd]
+            if re.search(rf"^PPid:\s+{parent}$", status, re.M) and not select.select(parents, [], [], 0)[0]:
+                self.handles[pid] = fd
+                fd = None
+        except FileNotFoundError:
+            pass
+        finally:
+            if fd is not None:
+                os.close(fd)
+
+    def remember(self, stop=False):
+        pending = list(self.handles)
+        seen = set()
+        while pending:
+            pid = pending.pop()
+            if pid in seen:
+                continue
+            seen.add(pid)
+            fd = self.handles[pid]
+            if select.select([fd], [], [], 0)[0]:
+                continue
+            try:
+                if stop:
+                    signal.pidfd_send_signal(fd, signal.SIGSTOP)
+                for task in Path(f"/proc/{pid}/task").iterdir():
+                    for child in (task / "children").read_text().split():
+                        self.pin(int(child), pid, fd)
+                        if int(child) in self.handles:
+                            pending.append(int(child))
+            except (FileNotFoundError, ProcessLookupError):
+                pass
+
+    def close(self):
+        atexit.unregister(self.close)
+        try:
+            # Freeze known parents before discovering their last descendants.
+            # Detached owners remain pinned even after their frontend is reaped.
+            self.remember(stop=True)
+        finally:
+            try:
+                for fd in self.handles.values():
+                    try:
+                        signal.pidfd_send_signal(fd, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                pending = list(self.handles.values())
+                deadline = time.monotonic() + 3
+                while pending:
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        raise AssertionError("pinned fixture processes did not exit")
+                    ready = select.select(pending, [], [], left)[0]
+                    pending = [fd for fd in pending if fd not in ready]
+            finally:
+                for fd in self.handles.values():
+                    os.close(fd)
+                self.handles.clear()
+
+
 class Session:
     def __init__(self, root, wrapper=None, *, command=None,
                  ready=b"ADAPTER_READY\r\n", cwd=None, env=None):
@@ -66,12 +145,20 @@ class Session:
         env["TERM"] = "xterm-256color"
         self.process = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave,
                                         preexec_fn=controlling_tty, cwd=cwd, env=env)
+        self.children = FixtureChildren(self.process.pid)
         os.close(slave)
         self.pending = b""
-        self.read_until(ready, 6)
+        try:
+            self.read_until(ready, 6)
+        except BaseException:
+            self.close()
+            raise
 
     def close(self):
-        os.close(self.master)
+        self.children.close()
+        if self.master is not None:
+            os.close(self.master)
+            self.master = None
         if self.process.poll() is None:
             try:
                 os.killpg(self.process.pid, signal.SIGTERM)
@@ -86,6 +173,7 @@ class Session:
     def read_until(self, marker, seconds=5):
         deadline = time.monotonic() + seconds
         while marker not in self.pending:
+            self.children.remember()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise AssertionError(f"timeout waiting for {marker!r}; tail={self.pending[-180:]!r}")
@@ -96,6 +184,7 @@ class Session:
             if not chunk:
                 raise AssertionError(f"PTY ended before {marker!r}")
             self.pending = (self.pending + chunk)[-131072:]
+        self.children.remember()
         at = self.pending.index(marker) + len(marker)
         found, self.pending = self.pending[:at], self.pending[at:]
         return found
@@ -134,7 +223,7 @@ class Session:
 
 
 class ProductSession(Session):
-    def __init__(self, root, wrapper=None):
+    def __init__(self, root, wrapper=None, extra_env=None):
         self.dotdir = root / "dotdir"
         home = root / "home"
         for path in (self.dotdir, home):
@@ -143,6 +232,8 @@ class ProductSession(Session):
         env = dict(os.environ)
         env.update(HOME=str(home), TERM="xterm-256color", PAGER="",
                    SNAJPAGENT_DOTDIR=str(self.dotdir))
+        if extra_env:
+            env.update(extra_env)
         super().__init__(root, wrapper, command=[str(PRODUCT), "--dotdir", str(self.dotdir)],
                          ready="› ".encode(), cwd=home, env=env)
 
@@ -252,6 +343,91 @@ class UploadClientTests(unittest.TestCase):
 
 
 class UploadProductTests(unittest.TestCase):
+    @unittest.skipUnless(hasattr(os, "pidfd_open"), "native attachment needs Linux")
+    def test_native_upload_disconnect_cancels_before_replacement_input(self):
+        for partial in (False, True):
+            with self.subTest(partial=partial):
+                self.check_native_upload_disconnect(partial)
+
+    def check_native_upload_disconnect(self, partial):
+        with tempfile.TemporaryDirectory(prefix="snag-upload-rebind-") as tmp:
+            root = Path(tmp)
+            original_root, replacement_root = root / "original", root / "replacement"
+            original_root.mkdir(mode=0o700)
+            replacement_root.mkdir(mode=0o700)
+            original = ProductSession(original_root)
+            replacement = None
+            try:
+                retained = original_root / "retained.txt"
+                retained.write_bytes(b"keep the already accepted attachment\n")
+                original.write(f"/attach {retained}\r".encode())
+                original.read_until(b"1 unsent attachment(s)")
+                sid = original.session_dir().name
+                if partial:
+                    self.start_synthetic(original)
+                    original.write(frame("NUM", 1, numeric=True))
+                    self.assertEqual(original.read_frame("SUCC"), b"1")
+                    original.write(frame("NAME", b"partial.bin"))
+                    self.assertTrue(original.read_frame("SUCC"))
+                    original.write(frame("SIZE", 6, numeric=True))
+                    self.assertEqual(original.read_frame("SUCC"), b"6")
+                    original.write(frame("DATA", b"abc"))
+                    self.assertEqual(original.read_frame("SUCC"), b"3")
+                    original.write(b"#DATA:")
+                else:
+                    original.write(b"/receive\r")
+                    original.read_until(b"::TRZSZ:TRANSFER:R:1.0.0:")
+                    original.write(b"#ACT:")
+                # Incomplete old protocol input must not become a draft.
+                time.sleep(0.05)
+                original.process.terminate()
+                original.process.wait(timeout=3)
+                env = dict(os.environ, HOME=str(original_root / "home"))
+                replacement = Session(replacement_root,
+                    command=[str(PRODUCT), "--dotdir", str(original.dotdir), "-A", sid],
+                    ready=b"Attached session", cwd=original_root / "home", env=env)
+                replacement.read_until("›".encode())
+                replacement.write(b"ping\r")
+                replacement.read_until(b"pong")
+                replacement.read_until("›".encode())
+                replacement.write(b"/exit\r")
+                replacement.read_until(b"--resume")
+                self.assertEqual(replacement.process.wait(timeout=3), 0)
+                self.assertEqual(original.request_count(), 1)
+                self.assertFalse(list(original.session_dir().glob("upload-*")))
+                self.assertEqual(original.media_bytes(), [retained.read_bytes()])
+            finally:
+                if replacement is not None:
+                    replacement.close()
+                original.close()
+
+    @unittest.skipUnless(hasattr(os, "pidfd_open"), "native owner cleanup needs Linux pidfds")
+    def test_native_fixture_cleanup_after_frontend_loss(self):
+        with tempfile.TemporaryDirectory(prefix="snag-owner-cleanup-") as tmp:
+            session = ProductSession(Path(tmp))
+            sibling = subprocess.Popen(["/bin/sleep", "30"])
+            pinned = []
+            try:
+                rejected = FixtureChildren(sibling.pid, parent=os.getpid() + 1)
+                self.assertFalse(rejected.handles)
+                rejected.close()
+                session.children.remember()
+                pinned = [os.dup(fd) for pid, fd in session.children.handles.items()
+                          if pid != session.process.pid]
+                self.assertTrue(pinned, "native engine was not pinned")
+                session.process.terminate()
+                session.process.wait(timeout=3)
+                self.assertLess(len(select.select(pinned, [], [], 0)[0]), len(pinned))
+                session.close()
+                self.assertEqual(set(select.select(pinned, [], [], 0)[0]), set(pinned))
+                self.assertIsNone(sibling.poll(), "cleanup touched a sibling fixture")
+            finally:
+                session.close()
+                for fd in pinned:
+                    os.close(fd)
+                sibling.terminate()
+                sibling.wait(timeout=3)
+
     def start_synthetic(self, session, launch=b"/receive\r"):
         session.write(launch)
         session.read_until(b"::TRZSZ:TRANSFER:R:1.0.0:", 7)

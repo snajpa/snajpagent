@@ -86,6 +86,45 @@ count_text(const char *haystack, const char *needle)
     return count;
 }
 
+static void
+test_native_rebind(void)
+{
+    struct snag_render render;
+    struct snag_term term;
+    struct output_capture capture = capture_terminal(&render, &term, 57u, false, true);
+    struct snag_buf delivered = {.max = 1024u};
+    snag_render_set_color(&render, SNAG_COLOR_NEVER);
+    snag_render_set_markdown(&render, false);
+    assert(snag_buf_append(&term.draft, "retained draft", 14u) == 0);
+    term.cursor = 4u;
+    term.input[0] = 'x';
+    term.input_len = 1u;
+    assert(snag_render_rollout_begin(&render, STDERR_FILENO, "agent: ",
+                                     SNAG_PRESENT_CONVERSATION) == 0);
+    assert(snag_render_rollout(&render, "before", 6u, &delivered) == 0);
+    struct snag_render_record *open = render.rollout_open;
+    assert(open);
+    term.prompt_visible = true;
+    term.rendered_rows = 4u;
+    term.rendered_cursor_row = 3u;
+    assert(snag_buf_append(&term.painted_prompt, "obsolete coordinates", 20u) == 0);
+    snag_term_rebind(&term);
+    assert(!term.prompt_visible && !term.rendered_rows && !term.rendered_cursor_row);
+    assert(!term.painted_prompt.len && !term.output_seen);
+    assert(term.draft.len == 14u && !memcmp(term.draft.data, "retained draft", 14u));
+    assert(term.cursor == 4u && term.input_len == 1u && term.input[0] == 'x');
+    assert(snag_render_rebind(&render) == 0 && render.rollout_open == open);
+    assert(snag_render_rollout(&render, "after", 5u, &delivered) == 0);
+    assert(snag_render_rollout_end(&render) == 0);
+    snag_buf_free(&delivered);
+    snag_render_free(&render);
+    snag_term_close(&term);
+    char output[4096];
+    (void)capture_close(&capture, output, sizeof(output), 0u);
+    assert(count_text(output, "before") == 1u && count_text(output, "after") == 1u);
+    assert(!strstr(output, "\033[") && !strstr(output, "obsolete coordinates"));
+}
+
 static size_t
 history_records(const struct snag_history *history, const char *text, bool local_only)
 {
@@ -667,6 +706,38 @@ editor_input(struct snag_term *term, const char *bytes)
     memcpy(term->input, bytes, term->input_len);
     assert(snag_term_poll(term, 0, -1, &action, &text) == 0);
     assert(action == SNAG_TERM_NONE && !text);
+}
+
+static int
+unexpected_native_suspend(void *opaque)
+{
+    (void)opaque;
+    assert(false);
+    return -1;
+}
+
+static void
+test_native_input_yield(void)
+{
+    struct snag_term term;
+    enum snag_term_action action;
+    char *text = NULL;
+
+    snag_term_init(&term);
+    term.suspend = unexpected_native_suspend;
+    memcpy(term.input, "abc", 3u);
+    term.input_len = 3u;
+    for (size_t i = 1u; i <= 3u; ++i) {
+        assert(snag_term_poll(&term, 0, -1, &action, &text) == 0);
+        assert(action == SNAG_TERM_NONE && !text);
+        assert(term.input_pos == i && term.draft.len == i);
+    }
+    /* Output checkpoints retain burst admission without recursive painting. */
+    term.input_only = true;
+    editor_input(&term, "def");
+    assert(term.draft.len == 6u && !memcmp(term.draft.data, "abcdef", 6u));
+    term.input_only = false;
+    snag_term_close(&term);
 }
 
 static void
@@ -3123,7 +3194,9 @@ main(void)
     test_history_hold_count_uncapped();
     test_prompt_clock();
     test_prompt_spinners();
+    test_native_input_yield();
     test_retained_prompt();
+    test_native_rebind();
     test_tool_ref_rows();
     test_output_span_prompt_repaint();
     test_mention_completion();

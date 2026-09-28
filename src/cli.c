@@ -188,6 +188,7 @@ parse_options(struct snag_cli *cli, int argc, char **argv, int *index, char *err
         {"--effort", 0, true, &cli->effort, NULL}, {"--listen", 's', true, &cli->irc_listen, NULL},
         {"--client", 'c', true, NULL, NULL}, {"--last", 0, false, NULL, &cli->last},
         {"--resume", 0, false, NULL, &cli->resume},
+        {"--attach", 'A', false, NULL, &cli->attach},
         {"--no-listen", 0, false, NULL, &cli->irc_no_listen},
         {"--no-client", 0, false, NULL, &cli->irc_no_client}, {NULL, 'e', false, NULL, &cli->execute},
         {NULL, 'l', false, NULL, &cli->list}, {"--help", 'h', false, NULL, &cli->help},
@@ -280,10 +281,11 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t 
         }
         if (parse_options(cli, argc, argv, &i, error, error_size) < 0) return -1;
     }
-    if (cli->resume && positional >= 0 && !dashdash && !cli->last) {
+    if ((cli->resume || cli->attach) && positional >= 0 && !dashdash && !cli->last) {
         if (strlen(argv[positional]) > SNAG_ID_HEX_LEN)
             return snag_fail(error, error_size, EOVERFLOW, "session id is too long or unavailable");
-        cli->resume_id = argv[positional];
+        if (cli->attach) cli->attach_id = argv[positional];
+        else cli->resume_id = argv[positional];
         ++positional;
         while (positional < argc) {
             const char *tail = argv[positional];
@@ -300,12 +302,24 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t 
             positional = tail_index + 1;
         }
         if (positional < argc && !dashdash)
-            return snag_errorf(error, error_size, "resume follow-up must follow --");
+            return snag_errorf(error, error_size, cli->attach ?
+                "--attach accepts one session id" : "resume follow-up must follow --");
     }
     if ((cli->help || cli->version) && (argc != 2 ||
          (strcmp(argv[1], "-h") != 0 && strcmp(argv[1], "--help") != 0 && strcmp(argv[1], "-V") != 0)))
         return snag_errorf(error, error_size, "-h, --help and -V must stand alone");
     if (cli->help || cli->version) return 0;
+    if (cli->attach) {
+        if (cli->resume || cli->execute || cli->list || cli->last || dashdash ||
+            (positional >= 0 && positional < argc) || cli->doc_instructions.count ||
+            cli->model || cli->provider || cli->effort || cli->verbosity || cli->config_path ||
+            cli->update_model_cache || cli->color || cli->markdown || cli->irc_listen ||
+            cli->irc_no_listen || cli->irc_no_client || cli->irc_client_count ||
+            cli->irc_model_nick || cli->irc_operator_nick || cli->irc_room_name)
+            return snag_errorf(error, error_size,
+                "--attach accepts only --dotdir and an optional live session id");
+        return 0;
+    }
     if ((cli->irc_no_listen && cli->irc_listen) || (cli->irc_no_client && cli->irc_client_count))
         return snag_errorf(error, error_size, "conflicting positive and negative IRC role options");
     if (!cli->execute && !cli->resume && !dashdash && positional >= 0 &&
@@ -370,6 +384,7 @@ snag_cli_usage(int fd)
 {
     static const char text[] = "usage: " SNAJPAGENT_NAME " [OPTIONS] [--] [INITIAL PROMPT...]\n"
         "       " SNAJPAGENT_NAME " --resume [OPTIONS] [SESSION_ID|--last] [OPTIONS] [-- FOLLOW-UP...]\n"
+        "       " SNAJPAGENT_NAME " --attach [--dotdir DIR] [SESSION_ID] (alias -A)\n"
         "       " SNAJPAGENT_NAME " -e [OPTIONS] [-- PROMPT...]\n" "       " SNAJPAGENT_NAME " -l [OPTIONS]\n"
         "       " SNAJPAGENT_NAME " [OPTIONS] login [PROVIDER] [--openai-device-auth|--meta-device-auth|--with-api-key]\n"
         "       " SNAJPAGENT_NAME " [OPTIONS] login status [PROVIDER]\n"

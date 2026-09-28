@@ -3956,9 +3956,264 @@ test_context_preview_retains_catalog(void)
     snag_config_free(&config);
 }
 
+#if defined(__linux__) && !defined(_WIN32)
+static pid_t native_ui_owner;
+
+static void
+native_ui_failed(void)
+{
+    /* This PID came directly from this fixture's owner fork. A stopped owner
+     * cannot receive its alarm; terminate/reap it before an assertion exits. */
+    assert(native_ui_owner > 0);
+    (void)kill(native_ui_owner, SIGKILL);
+    int status;
+    pid_t done;
+    do { done = waitpid(native_ui_owner, &status, 0); } while (done < 0 && errno == EINTR);
+    assert(done == native_ui_owner);
+    native_ui_owner = 0;
+}
+
+static void
+native_ui_frame(int fd, enum snag_session_message type, const void *data, size_t length)
+{
+    struct snag_session_packet packet = {0};
+    if (type == SNAG_SESSION_COMMIT) {
+        struct snag_terminal_profile profile = {.term = "xterm"};
+        assert(length == 4u && snag_session_commit_set(&packet, data, &profile) == 0);
+    } else assert(snag_session_packet_set(&packet, type, data, length) == 0);
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
+    int rc;
+    do {
+        rc = snag_session_packet_write(fd, &packet);
+        bool okay = rc >= 0 && snag_monotonic_ms() < deadline;
+        if (!okay) native_ui_failed();
+        assert(okay);
+        if (!rc) (void)snag_sleep_ms(1u);
+    } while (!rc);
+}
+
+static void
+native_ui_expect(int fd, enum snag_session_message expected, struct snag_buf *output)
+{
+    struct snag_session_packet packet = {0};
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
+    for (;;) {
+        int rc = snag_session_packet_read(fd, &packet);
+        bool okay = rc >= 0 && snag_monotonic_ms() < deadline;
+        if (!okay) native_ui_failed();
+        assert(okay);
+        if (!rc) { (void)snag_sleep_ms(1u); continue; }
+        enum snag_session_message type = snag_session_packet_type(&packet);
+        if (type != SNAG_SESSION_OUTPUT) {
+            assert(type == expected);
+            return;
+        }
+        if (output) assert(snag_buf_append(output, packet.bytes + SNAG_SESSION_HEADER,
+                                           snag_session_packet_length(&packet)) == 0);
+        size_t length = snag_session_packet_length(&packet);
+        unsigned char offset[2] = {(unsigned char)length, (unsigned char)(length >> 8u)};
+        native_ui_frame(fd, SNAG_SESSION_OUTPUT_ACK, offset, sizeof(offset));
+        if (type == expected) return;
+        packet = (struct snag_session_packet){0};
+    }
+}
+
+static void
+test_native_ui(void)
+{
+    char path[4096], directory[4096], id[33], error[256];
+    const char *tmp = getenv("TMPDIR");
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-native-ui-XXXXXX", tmp ? tmp : "/tmp") > 0);
+    assert(mkdtemp(path));
+    int saved[3], report[2], proceed[2];
+    assert(pipe(report) == 0 && pipe(proceed) == 0 && fflush(NULL) == 0);
+    for (int fd = 0; fd < 3; ++fd) {
+        saved[fd] = fcntl(fd, F_DUPFD_CLOEXEC, 3);
+        assert(saved[fd] >= 0);
+    }
+    int outer = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
+    assert(outer >= 0 && grantpt(outer) == 0 && unlockpt(outer) == 0);
+    int screen = open(ptsname(outer), O_RDWR | O_NOCTTY | O_CLOEXEC);
+    assert(screen >= 0);
+    for (int fd = 0; fd < 3; ++fd) assert(dup2(screen, fd) == fd);
+    struct snag_session_process process;
+    int frontend = snag_session_process_start(&process);
+    if (!frontend) {
+        (void)alarm(10u);
+        for (int fd = 0; fd < 3; ++fd) assert(close(saved[fd]) == 0);
+        assert(close(outer) == 0 && close(screen) == 0);
+        assert(close(report[0]) == 0 && close(proceed[1]) == 0);
+        struct app_state app = {0};
+        struct snag_config config;
+        snag_config_init(&config);
+        app.config = &config;
+        struct snag_store *store = &app.store;
+        struct snag_session *session = &app.session;
+        struct snag_ui *ui = &app.ui;
+        snag_store_init(store);
+        snag_session_init(session);
+        assert(snag_store_open(store, path, error, sizeof(error)) == 0);
+        assert(snag_session_create(store, session, path, "default", "fixture", "medium",
+                                    error, sizeof(error)) == 0);
+        assert(snag_ui_init(ui) == 0 && snag_ui_session_start(ui, &process) == 0);
+        assert(snag_ui_session_attachment(ui) == 1u);
+        assert(process.master == -1 && process.peer == -1 && process.slave == -1);
+        /* Startup output can exceed the PTY buffer before input is opened. */
+        char startup[65537];
+        memset(startup, 's', sizeof(startup) - 1u);
+        startup[sizeof(startup) - 1u] = '\0';
+        assert(snag_ui_text(ui, SNAG_UI_HOST, startup) == 0);
+        assert(snag_ui_open(ui, error, sizeof(error)) == 0);
+        assert(snag_ui_session_listen(ui, session) == 0);
+        assert(snag_ui_simple_prompt(ui, false) == 0);
+        assert(snag_ui_insert_draft(ui, "retained draft") == 0);
+        assert(snag_ui_voice(ui, "[VOICE MIC ON] ") == 0);
+        json_t *notices = json_pack("[{s:s,s:s,s:s,s:s},{s:s}]",
+            "type", "voice_transcript", "speaker", "user", "item_id", "input-1",
+            "text", "final words", "type", "voice_handoff");
+        assert(notices && snag_app_voice_fixture(&app, notices, false) == 0);
+        json_decref(notices);
+        assert(snag_app_voice_fixture_checkpoint(&app) == 0);
+        assert(write(report[1], session->id, sizeof(id)) == (ssize_t)sizeof(id));
+        char release;
+        assert(read(proceed[0], &release, 1u) == 1);
+        assert(snag_ui_text(ui, SNAG_UI_HOST, "work after disconnect") == 0);
+        assert(snag_ui_session_attachment(ui) == 0u);
+        char capture = (char)('0' + snag_ui_voice(ui, "[VOICE MIC ON] "));
+        assert(write(report[1], &capture, 1u) == 1);
+        assert(capture == '1');
+        assert(snag_ui_audio(ui, "[MIC ON] ", true) == 1);
+        assert(snag_ui_audio(ui, "[playing] ", false) == 1);
+        assert(snag_app_voice_fixture_checkpoint(&app) == 2);
+        assert(snag_app_voice_service(&app) == 0 && !app.voice);
+        unsigned int voice_counts[2] = {0};
+        assert(snag_session_each_event(session, voice_close_record, voice_counts,
+                                        error, sizeof(error)) == 0);
+        assert(voice_counts[0] == 1u && voice_counts[1] == 1u && !session->pending_queue_count);
+        for (unsigned int playing = 0u; playing < 2u; ++playing) {
+            assert(snag_app_audio_fixture(&app, playing != 0u) == 0);
+            assert(snag_app_audio_fixture_checkpoint(&app) == 2);
+            assert(snag_app_audio_service(&app) == 0 && !app.audio);
+        }
+        assert(write(report[1], "D", 1u) == 1);
+        uint64_t generation, deadline = snag_monotonic_ms() + 5000u;
+        while (!(generation = snag_ui_session_pending(ui))) {
+            assert(snag_monotonic_ms() < deadline);
+            (void)snag_sleep_ms(1u);
+        }
+        assert(snag_ui_session_attachment(ui) == 0u);
+        assert(snag_ui_session_rebind(ui, generation) == 0);
+        assert(snag_ui_session_attachment(ui) == generation);
+        assert(!app.voice && !app.audio);
+        assert(snag_app_audio_fixture(&app, false) == 0);
+        assert(snag_app_audio_fixture_checkpoint(&app) == 0);
+        assert(snag_ui_text(ui, SNAG_UI_HOST, "semantic catch-up") == 0);
+        assert(write(report[1], "B", 1u) == 1);
+        assert(read(proceed[0], &release, 1u) == 1);
+        enum snag_term_action action = SNAG_TERM_NONE;
+        char *text = NULL;
+        assert(snag_ui_poll(ui, 0, &action, &text) == 0);
+        assert(snag_ui_session_ready(ui, generation) == 0);
+        deadline = snag_monotonic_ms() + 2000u;
+        int rc;
+        do {
+            uint64_t resumed = snag_ui_session_pending(ui);
+            if (resumed) {
+                generation = resumed;
+                assert(snag_ui_session_rebind(ui, generation) == 0);
+                assert(snag_ui_session_ready(ui, generation) == 0);
+            }
+            rc = snag_ui_poll(ui, 20, &action, &text);
+            assert(rc >= 0 && snag_monotonic_ms() < deadline);
+            assert(snag_app_audio_service(&app) == 0);
+        } while (!rc);
+        assert(!app.audio && !app.voice);
+        assert(action == SNAG_TERM_SUBMIT && text && !strcmp(text, "retained draftz"));
+        free(text);
+        assert(snag_ui_session_rebind(ui, generation - 1u) < 0 && errno == ESTALE);
+        assert(snag_ui_text(ui, SNAG_UI_HOST, "owner-ok") == 0);
+        unsigned char success = 0u;
+        assert(snag_ui_session_control(ui, SNAG_SESSION_EXIT, &success, 1u) == 0);
+        snag_ui_free(ui);
+        snag_session_close(session);
+        snag_store_close(store);
+        snag_config_free(&config);
+        assert(close(report[1]) == 0 && close(proceed[0]) == 0);
+        _exit(0);
+    }
+    for (int fd = 0; fd < 3; ++fd) {
+        assert(dup2(saved[fd], fd) == fd && close(saved[fd]) == 0);
+    }
+    assert(frontend == 1);
+    native_ui_owner = (pid_t)process.child;
+    assert(close(outer) == 0 && close(screen) == 0);
+    assert(close(report[1]) == 0 && close(proceed[0]) == 0);
+    /* Act as the initial frontend while startup output exceeds one frame. */
+    for (;;) {
+        struct pollfd ready[] = {{report[0], POLLIN, 0}, {process.peer, POLLIN, 0}};
+        int rc = poll(ready, 2u, 5000);
+        if (rc <= 0) native_ui_failed();
+        assert(rc > 0);
+        if (ready[0].revents) break;
+        native_ui_expect(process.peer, SNAG_SESSION_OUTPUT, NULL);
+    }
+    ssize_t identified = read(report[0], id, sizeof(id));
+    if (identified != (ssize_t)sizeof(id)) {
+        int failed;
+        assert(waitpid((pid_t)process.child, &failed, 0) == (pid_t)process.child);
+    }
+    assert(identified == (ssize_t)sizeof(id));
+    snag_session_process_close(&process);
+    assert(write(proceed[1], "d", 1u) == 1);
+    char phase;
+    assert(read(report[0], &phase, 1u) == 1);
+    if (phase != '1') {
+        fprintf(stderr, "detached voice activation returned %c, expected 1 (refused)\n", phase);
+        native_ui_failed();
+    }
+    assert(phase == '1');
+    assert(read(report[0], &phase, 1u) == 1 && phase == 'D');
+    assert(snprintf(directory, sizeof(directory), "%s/sessions/%s", path, id) > 0);
+    int dir = open(directory, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    assert(dir >= 0);
+    int peer = snag_session_endpoint_connect(dir, directory);
+    assert(peer >= 0 && close(dir) == 0);
+    native_ui_frame(peer, SNAG_SESSION_RESERVE, NULL, 0u);
+    native_ui_expect(peer, SNAG_SESSION_READY, NULL);
+    unsigned char geometry[4] = {31u, 0u, 97u, 0u};
+    native_ui_frame(peer, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
+    native_ui_expect(peer, SNAG_SESSION_READY, NULL);
+    assert(read(report[0], &phase, 1u) == 1 && phase == 'B');
+    /* Ctrl-Z must suspend only the replaceable frontend. The following byte
+     * was already admitted and must survive suspension and recommit. */
+    native_ui_frame(peer, SNAG_SESSION_INPUT, "\032z", 2u);
+    (void)snag_sleep_ms(40u);
+    assert(write(proceed[1], "r", 1u) == 1);
+    struct snag_buf output = {.max = 64u * 1024u};
+    native_ui_expect(peer, SNAG_SESSION_SUSPEND, &output);
+    geometry[0] = 33u;
+    native_ui_frame(peer, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
+    native_ui_expect(peer, SNAG_SESSION_READY, &output);
+    native_ui_frame(peer, SNAG_SESSION_INPUT, "\r", 1u);
+    native_ui_expect(peer, SNAG_SESSION_EXIT, &output);
+    assert(strstr((const char *)output.data, "semantic catch-up"));
+    assert(strstr((const char *)output.data, "owner-ok"));
+    assert(!strstr((const char *)output.data, "work after disconnect"));
+    snag_buf_free(&output);
+    assert(close(peer) == 0 && close(report[0]) == 0 && close(proceed[1]) == 0);
+    int status;
+    assert(waitpid((pid_t)process.child, &status, 0) == (pid_t)process.child);
+    assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    native_ui_owner = 0;
+}
+#endif /* __linux__ && !_WIN32 */
+
 int
 main(void)
 {
+#if defined(__linux__) && !defined(_WIN32)
+    test_native_ui();
+#endif
     test_context_preview_retains_catalog();
     /* Every fixture is a forked copy of this process and is stopped with
      * SIGTERM: install the handler before the first fork so all of them

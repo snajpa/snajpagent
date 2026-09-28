@@ -15,11 +15,32 @@
 #include <fcntl.h>
 #include <termios.h>
 
+struct terminal_transfer {
+    struct app_state *app;
+    uint64_t attachment;
+};
+
+static bool
+transfer_replaced(const struct terminal_transfer *lease)
+{
+    return lease->app->ui.native && (!lease->attachment ||
+        lease->attachment != snag_ui_session_attachment(&lease->app->ui));
+}
+
 static int
 transfer_checkpoint(void *opaque)
 {
-    struct app_state *app = opaque;
-    return app->input_closed || app->shutdown_signal ? 1 : 0;
+    const struct terminal_transfer *lease = opaque;
+    return lease->app->input_closed || lease->app->shutdown_signal || transfer_replaced(lease);
+}
+
+static int
+transfer_discard_stale_input(const struct terminal_transfer *lease, int tty,
+                              struct snag_upload_result *result)
+{
+    if (!transfer_replaced(lease)) return 0;
+    result->tail_len = 0u;
+    return tty < 0 ? 0 : tcflush(tty, TCIFLUSH);
 }
 
 static int
@@ -29,7 +50,7 @@ prepare_checkpoint(void *opaque, unsigned int timeout_ms)
     enum snag_term_action action = SNAG_TERM_NONE;
     char *text = NULL;
     (void)timeout_ms;
-    if (transfer_checkpoint(app)) return 2;
+    if (app->input_closed || app->shutdown_signal) return 2;
     if (snag_ui_poll(&app->ui, 0, &action, &text) < 0) return -1;
     if (action == SNAG_TERM_EXIT) app->input_closed = true;
     if (text && !*text) { free(text); return 0; }
@@ -147,6 +168,8 @@ snag_app_upload_command(struct app_state *app, bool directory)
     return snag_ui_text(&app->ui, SNAG_UI_ERROR, "Terminal upload is not available on this host.");
 #else
     struct snag_upload_result result = {0};
+    struct terminal_transfer lease = {.app = app,
+        .attachment = snag_ui_session_attachment(&app->ui)};
     char error[256] = "upload could not start";
     char stage[SNAG_ID_HEX_LEN + 8u] = {0};
     int stage_fd = -1, tty = -1, rc = -1;
@@ -183,9 +206,16 @@ snag_app_upload_command(struct app_state *app, bool directory)
     raw = true;
     rc = snag_upload_receive(tty, stage_fd,
         SNAG_UPLOAD_FILES_MAX - json_array_size(app->draft_content), directory,
-        transfer_checkpoint, app, &result, error, sizeof(error));
+        app->ui.native ? &app->ui.profile : NULL,
+        transfer_checkpoint, &lease, &result, error, sizeof(error));
     if (rc == 0 && result.count == 0u) rc = 1; /* No attachment to publish. */
 out:
+    if (leased && transfer_discard_stale_input(&lease, tty, &result) < 0) {
+        restored = false;
+        rc = -1;
+        (void)snag_errorf(error, sizeof(error), "Cannot discard disconnected transfer input: %s",
+                          strerror(errno));
+    }
     if (raw && tcsetattr(tty, TCSANOW, &saved) < 0) {
         restored = false;
         rc = -1;
@@ -223,6 +253,13 @@ int
 snag_app_remote_probe(struct app_state *app)
 {
     if (app->execute || !app->ui.opened || snag_isatty(STDERR_FILENO) != 1) return 0;
+    app->remote_attachment = snag_ui_session_attachment(&app->ui);
+    if (app->ui.native && !app->remote_attachment) {
+        app->remote_verified = app->remote_available = false;
+        app->remote_nonce[0] = '\0';
+        app->remote_probe_at = snag_monotonic_ms();
+        return 0;
+    }
     char id[SNAG_ID_HEX_LEN + 1u];
     if (snag_random_id(id) < 0) return -1;
     id[8] = '\0';
@@ -232,7 +269,7 @@ snag_app_remote_probe(struct app_state *app)
     app->remote_verified = false;
     char query[48];
     const char *sty = getenv("STY");
-    bool screen = sty && *sty;
+    bool screen = app->ui.native ? app->ui.profile.sty[0] != '\0' : sty && *sty;
     int n = snprintf(query, sizeof(query), "%s\033[?9001;%sn%s",
                      screen ? "\033P" : "", app->remote_nonce, screen ? "\033\\" : "");
     return n < 0 || (size_t)n >= sizeof(query) ? -1 :
@@ -244,6 +281,8 @@ void
 snag_app_remote_reply(struct app_state *app, const char *nonce)
 {
     if (nonce && app->remote_nonce[0] && !strcmp(nonce, app->remote_nonce) &&
+        (!app->ui.native || (app->remote_attachment &&
+         app->remote_attachment == snag_ui_session_attachment(&app->ui))) &&
         snag_monotonic_ms() - app->remote_probe_at < 1000u) {
         app->remote_verified = true;
         app->remote_reply_at = snag_monotonic_ms();
@@ -346,6 +385,8 @@ app_download(struct app_state *app, const char *path, const json_t *pending, jso
     return *result ? 0 : -1;
 #else
     struct snag_upload_result transfer = {0};
+    struct terminal_transfer lease = {.app = app,
+        .attachment = snag_ui_session_attachment(&app->ui)};
     json_t *asset = NULL;
     char *source = NULL;
     const char *name = NULL;
@@ -424,9 +465,16 @@ app_download(struct app_state *app, const char *path, const json_t *pending, jso
         goto out;
     }
     raw = true;
-    rc = snag_download_send(tty, input, name, expected, transfer_checkpoint, app,
+    rc = snag_download_send(tty, input, name, expected, app->ui.native ? &app->ui.profile : NULL,
+                            transfer_checkpoint, &lease,
                             &transfer, error, error_size);
 out:
+    if (leased && transfer_discard_stale_input(&lease, tty, &transfer) < 0) {
+        restored = false;
+        rc = -1;
+        (void)snag_errorf(error, error_size, "Cannot discard disconnected transfer input: %s",
+                          strerror(errno));
+    }
     if (raw && tcsetattr(tty, TCSANOW, &saved) < 0) {
         restored = false;
         (void)snag_errorf(error, error_size, "Cannot restore transfer terminal: %s",

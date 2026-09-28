@@ -3,6 +3,7 @@
 #include "json.h"
 #include "provider.h"
 #include "store.h"
+#include "tools.h"
 #include "turn.h"
 
 #include <stdbool.h>
@@ -15,7 +16,23 @@
 #include <unistd.h>
 
 static char managed_handle[SNAG_ID_HEX_LEN + 1u];
+static char native_process_handle[SNAG_ID_HEX_LEN + 1u];
 static const char wrong_managed_handle[] = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+bool
+snag_fixture_real_tool(const struct snag_response_item *call)
+{
+    static const char prefix[] = "# native attachment fixture\n";
+    const char *command = snag_json_string(call->arguments, "command");
+    if (strcmp(call->name, "exec_command") == 0 && command &&
+        strncmp(command, prefix, sizeof(prefix) - 1u) == 0) {
+        memcpy(native_process_handle, call->call_id, sizeof(native_process_handle));
+        return true;
+    }
+    const char *handle = snag_json_string(call->arguments, "handle");
+    return strcmp(call->name, "write_stdin") == 0 && handle &&
+        strcmp(handle, native_process_handle) == 0;
+}
 
 static json_t *
 empty_excerpt(void)
@@ -706,6 +723,16 @@ fixture_response(const char *prompt, const json_t *steering, const json_t *reque
         if (cycle == 1u) return add_call(graph, workspace, cycle, 0u, "fixture managed queue wait");
         return final_answer(&out, "msg_fixture_managed_queued", "managed command queue complete");
     }
+    if (strcmp(prompt, "native_attachment_process") == 0) {
+        if (cycle == 1u) return add_call(graph, workspace, cycle, 0u,
+            "# native attachment fixture\n"
+            "printf started > native-process-started; sleep 3; "
+            "printf completed > native-process-finished; printf 'native-command-completed\\n'");
+        if (snag_tools_busy() || snag_tools_ready(native_process_handle))
+            return indexed_call(graph, cycle, 0u, "write_stdin",
+                json_pack("{s:s,s:i}", "handle", native_process_handle, "yield_ms", 10000));
+        return final_answer(&out, "msg_fixture_native_process", "native process complete");
+    }
     if (managed_prompt(prompt)) {
         if (cycle == 1u) return add_call(graph, workspace, cycle, 0u, "fixture managed start");
         if (cycle == 2u) {
@@ -753,11 +780,12 @@ fixture_response(const char *prompt, const json_t *steering, const json_t *reque
         if ((control = wait_ticks(&out, 100u)) != 0) return control;
         return 0;
     }
-    if (strcmp(prompt, "render_flood") == 0) {
+    if (strcmp(prompt, "render_flood") == 0 || strcmp(prompt, "render_transport_flood") == 0) {
         int rc = -1;
-        struct snag_buf text = {.max = 128u * 1024u};
+        bool transport = strcmp(prompt, "render_transport_flood") == 0;
+        struct snag_buf text = {.max = 2u * 1024u * 1024u};
         if (snag_buf_printf(&text, "| row | text |\n| --- | --- |\n") < 0) goto flood_done;
-        for (unsigned int i = 0u; i < 2048u; ++i)
+        for (unsigned int i = 0u; i < (transport ? 32768u : 2048u); ++i)
             if (snag_buf_printf(&text, "| row-%04u | **bold** and `code` |\n", i) < 0) goto flood_done;
         if (snag_buf_printf(&text, "\nflood-end\n") == 0 && snag_buf_terminate(&text) == 0)
             rc = final_answer(&out, "msg_flood", (char *)text.data);

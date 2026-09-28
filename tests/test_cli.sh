@@ -58,6 +58,14 @@ LC_ALL=C expect_exit 2 $bin -l >"$root/locale.out" 2>"$root/locale.err"
 grep -q 'UTF-8 locale is required' "$root/locale.err"
 export LC_ALL=C.utf8
 
+for args in '--attach --resume' '-A --last' '--attach -e' '--attach -l' \
+            '--attach -m ignored' '--attach -- ignored'; do
+    expect_exit 2 $bin $args >"$root/attach-invalid.out" 2>"$root/attach-invalid.err"
+    grep -q -- '--attach accepts' "$root/attach-invalid.err"
+done
+expect_exit 3 $bin --attach </dev/null >"$root/attach-no-tty.out" 2>"$root/attach-no-tty.err"
+grep -Eq 'attachment requires terminal|unavailable on this host' "$root/attach-no-tty.err"
+
 version=$($bin -V)
 [ "$version" = "$SNAJPAGENT_TEST_NAME $SNAJPAGENT_TEST_VERSION" ]
 

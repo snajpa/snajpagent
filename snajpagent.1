@@ -13,6 +13,10 @@ snajpagent \- terminal coding agent with built-in IRC
 .RI [ session-id " | --last]"
 .RI "[-- " follow-up " ...]"
 .br
+.B snajpagent \-\-attach
+.RI [ --dotdir " PATH]"
+.RI [ session-id ]
+.br
 .B snajpagent \-e
 .RI [ options ]
 .RI "[-- " prompt " ...]"
@@ -482,6 +486,28 @@ Ordinary errors retain the goal and recover automatically.  Policy stops and
 provider refusals pause automatic goal continuation.
 Explicit turn interruption pauses automatic goal work.
 .SS Leave and resume a session
+On Linux, interactive ANSI terminal sessions keep running when their terminal disconnects.
+Use
+.B /s d
+to return to the shell while requests, commands, IRC and goals continue.
+Reconnect with
+.BR "snajpagent --attach SESSION_ID" ;
+.B \-A
+is the short option. Without an ID, select from the running-session list.
+Only one terminal controls a session at a time. The session keeps its unsent
+draft, selected view and destination; attachment displays bounded recent
+history before restoring the composer.
+Typing and terminal resizing preserve the draft and previously displayed conversation.
+An unfinished terminal file transfer ends when its controlling terminal
+disconnects; queued downloads retain their saved state.
+Local voice, dictation and playback stop when that terminal detaches,
+disconnects or suspends. Reconnecting does not restart capture.
+.PP
+New editors and pagers use the attached terminal's TERM and GNU Screen profile.
+An already-running external program keeps its launch environment and receives
+the terminal resize notification. Owner configuration, including color policy,
+stays unchanged.
+.PP
 A session saves its current working directory, conversation, tool results,
 model selection, queue and goal on disk. Normal exit prints a command to reopen
 that exact session. You can also list sessions with
@@ -829,12 +855,29 @@ Render supported model Markdown on terminals.  This is the default.
 Show model Markdown literally.
 .TP
 .BR \-\-resume " [" session-id "]"
-Resume a durable session.  Without an ID or
+Resume a stopped durable session.  Without an ID or
 .BR \-\-last ,
 interactively select an active session.
 An ID is a unique prefix of 8 through 32 lowercase hexadecimal characters.
 An exact ID may select an archived session; a live session lock prevents
 concurrent resume.
+.TP
+.BR \-A , " \-\-attach [" session-id "]"
+Connect a terminal to a live native session owner on Linux. Without an ID,
+select a running session. Accepts a unique 8..32-character ID prefix and
+.BR \-\-dotdir ;
+the owner retains its existing configuration and model selection. Ambiguous
+prefixes list full matching IDs. An occupied terminal is never taken over.
+Attachment skips provider setup, including when the owner started with an
+explicit configuration file outside its state directory.
+Requires terminal stdin, stdout and stderr, with a nonempty TERM other than
+.BR dumb .
+TERM and STY each accept at most 255 bytes. Unsupported replacement terminals
+are refused before activation. Ordinary startup with an empty or dumb TERM,
+or a known width below 20 columns, retains direct-terminal operation, as do
+other hosts until their native backend is available. An existing native owner
+keeps its control keys when a terminal becomes narrower, including after an
+editor or pager returns.
 .TP
 .BR \-\-last
 Resume the most recently used active session.  Requires
@@ -1473,6 +1516,18 @@ session is identified as not yet saved; listing does not start a model turn.
 Print the current session ID and all saved sessions, including archived ones,
 with their live or idle state. This does not attach to or resume a session.
 .TP
+.BR "/session attach ID" , " /session a ID" , " /s a ID"
+Switch the terminal to a live session on Linux. A unique short ID is accepted.
+The source stays attached until the destination accepts the connection;
+refusal, timeout or an unavailable owner leaves the source usable.
+.TP
+.BR "/session detach" , " /session d" , " /s d"
+Return to the shell while the native session continues. Terminal loss has
+the same lifetime behavior. Use /exit to stop the session, or --attach to
+reconnect. File attachment commands /attach and /detach keep their existing meaning.
+An unfinished file exchange is cancelled when its terminal disconnects;
+reattachment restores ordinary input and verifies the new workstation client.
+.TP
 .B /state
 Show session state including the goal and its actions: the
 .B /status
@@ -1500,6 +1555,12 @@ use that in-memory copy.  Model commands check for a changed cache file and
 load it only when changed.  Missing or invalid replacements preserve the last
 valid copy.  Selecting a numbered row through the model tool uses its listed
 snapshot; an explicit cache refresh obtains a new one.
+Startup also loads the catalog when resuming with the saved model.  If a saved
+context selection requires unavailable catalog facts, the idle meter shows
+.BR ?% .
+Use
+.B /model cache
+or change the context selection before submitting work that needs those facts.
 .TP
 .B /model cache
 Refresh every configured provider through its authenticated model endpoint,
@@ -1680,6 +1741,9 @@ from coding token counters and model input; unreported usage remains unknown.
 A journal write failure is reported and never triggers another paid request.
 Device loss, rerouting or capture backlog overflow
 stops dictation and discards the sound.
+Native terminal detach, loss, switching away or suspension also cancels
+dictation. A late transcription is not inserted after the attachment changes;
+a request already sent may still have been billed.
 .TP
 .B /voice devices
 List available capture and playback device names without starting capture.
@@ -1737,6 +1801,9 @@ Stop capture, playback and the voice connection. Accepted coding work stays with
 the existing session owner. Use the normal coding controls to interrupt that work.
 Device loss, overflow or connection failure stops voice without automatic
 reconnect or audio replay. Restart explicitly with /voice on.
+Native terminal loss, detach, switching away or job suspension also stops
+voice. Final transcripts and previously accepted coding work remain saved;
+unaccepted voice handoffs are discarded. Reattach before restarting voice.
 When the provider supplies a session expiry time, a warning appears within its
 last minute. Expiry stops the connection and requires an explicit restart.
 Final notices already received are saved on shutdown and connection failure.
@@ -1770,6 +1837,8 @@ chunks into the shared output ring; it does not buffer the entire selection.
 Playback opens no microphone or API connection. Keyboard input remains usable.
 Device loss or decoding failure stops playback; already played samples cannot
 be rolled back. Backend latency can delay the end of audible sound.
+Native terminal detach, loss, switching away or suspension stops playback;
+the accepted source asset remains in the session.
 .TP
 .B /play stop
 Interrupt file playback. Dictation and file playback share one local device
@@ -3247,6 +3316,8 @@ requests graceful shutdown.
 .BR SIGHUP , " SIGTERM"
 Request graceful shutdown, terminal restoration, IRC closure, and a resume
 hint.  Exit status is 128 plus the signal number.
+For a Linux native terminal frontend these signals disconnect only that
+frontend; its session owner continues. /exit stops the owning session.
 .TP
 .B SIGTSTP
 Ctrl-Z restores the terminal before suspension and redraws after continuation.
@@ -3998,8 +4069,10 @@ on accepted interactive submissions. The global archive is not copied into it.
 An older session without this file starts with empty local history and still
 has access to global history. Existing local files remain readable, including
 entries copied by older builds; those entries are not merged again on resume.
-Empty sessions keep unsaved history in memory until exit; editing alone does not
-create a session directory.
+Linux native terminal sessions create their directory before the first prompt,
+so their ID and attachment endpoint remain available through terminal loss.
+Direct-terminal sessions on other hosts keep empty-session history in memory
+until accepted work requires persistence.
 .PP
 Abrupt termination can skip the global merge; already saved local history remains
 available on resume. Previous unmerged entries are not retroactively published.

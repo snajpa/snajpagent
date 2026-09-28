@@ -5,17 +5,22 @@
 #include "session_host.h"
 #include "base.h"
 #include "fs.h"
+#include "term_host.h"
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(__linux__) && !defined(_WIN32)
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <termios.h>
 #include <unistd.h>
 #define SNAG_SESSION_NATIVE 1
 #endif
@@ -47,11 +52,11 @@ int
 snag_session_packet_set(struct snag_session_packet *packet, enum snag_session_message type,
                          const void *data, size_t length)
 {
-    if (type < SNAG_SESSION_RESERVE || type > SNAG_SESSION_SUSPEND ||
+    if (type < SNAG_SESSION_RESERVE || type > SNAG_SESSION_OUTPUT_ACK ||
         length > SNAG_SESSION_FRAME_MAX || (length && !data)) return snag_errno(EINVAL);
     packet->bytes[0] = 'S';
     packet->bytes[1] = 'A';
-    packet->bytes[2] = 1u;
+    packet->bytes[2] = 2u;
     packet->bytes[3] = (unsigned char)type;
     for (size_t i = 0u; i < 4u; ++i) packet->bytes[4u + i] = (unsigned char)(length >> (8u * i));
     if (length) memcpy(packet->bytes + SNAG_SESSION_HEADER, data, length);
@@ -60,7 +65,94 @@ snag_session_packet_set(struct snag_session_packet *packet, enum snag_session_me
     return 0;
 }
 
+int
+snag_session_commit_set(struct snag_session_packet *packet, const unsigned char geometry[4],
+                         const struct snag_terminal_profile *profile)
+{
+    unsigned char data[SNAG_SESSION_COMMIT_BYTES];
+    if (!snag_terminal_profile_ansi(profile)) return snag_errno(ENOTSUP);
+    memcpy(data, geometry, 4u);
+    memcpy(data + 4u, profile->term, SNAG_TERMINAL_NAME_BYTES);
+    memcpy(data + 4u + SNAG_TERMINAL_NAME_BYTES, profile->sty, SNAG_TERMINAL_NAME_BYTES);
+    return snag_session_packet_set(packet, SNAG_SESSION_COMMIT, data, sizeof(data));
+}
+
 #ifdef SNAG_SESSION_NATIVE
+void
+snag_session_process_close(struct snag_session_process *process)
+{
+    if (process->peer >= 0) (void)close(process->peer);
+    if (process->slave >= 0) (void)close(process->slave);
+    if (process->master >= 0) (void)close(process->master);
+    process->master = process->slave = process->peer = -1;
+}
+
+int
+snag_session_process_start(struct snag_session_process *process)
+{
+    struct termios modes;
+    struct winsize geometry;
+    struct stat terminal, other;
+    int pair[2] = {-1, -1};
+    char name[128];
+    *process = (struct snag_session_process){.master = -1, .slave = -1, .peer = -1};
+
+    if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO) || !isatty(STDERR_FILENO))
+        return snag_errno(ENOTTY);
+    if (fstat(STDIN_FILENO, &terminal) < 0) return -1;
+    for (int fd = STDOUT_FILENO; fd <= STDERR_FILENO; ++fd) {
+        if (fstat(fd, &other) < 0) return -1;
+        if (other.st_rdev != terminal.st_rdev) return snag_errno(ENOTTY);
+    }
+    if (snag_terminal_profile_capture(&process->profile) < 0) return -1;
+    if (tcgetattr(STDIN_FILENO, &modes) < 0 ||
+        ioctl(STDIN_FILENO, TIOCGWINSZ, &geometry) < 0) return -1;
+    if (geometry.ws_col && geometry.ws_col < SNAG_TERM_MIN_COLUMNS) return snag_errno(ENOTTY);
+    process->master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC | O_NONBLOCK);
+    if (process->master < 0 || grantpt(process->master) < 0 ||
+        unlockpt(process->master) < 0) goto fail;
+    int rc = ptsname_r(process->master, name, sizeof(name));
+    if (rc) {
+        errno = rc;
+        goto fail;
+    }
+    process->slave = open(name, O_RDWR | O_NOCTTY | O_CLOEXEC);
+    if (process->slave < 0 || tcsetattr(process->slave, TCSANOW, &modes) < 0 ||
+        ioctl(process->slave, TIOCSWINSZ, &geometry) < 0 ||
+        snag_session_stream_pair(pair) < 0) goto fail;
+    pid_t child = fork();
+    if (child < 0) goto fail;
+    if (!child) {
+        (void)close(pair[0]);
+        process->peer = pair[1];
+        /* Startup/cleanup owns the private PTY; the application installs its
+         * normal shutdown handlers before publishing the live session. */
+        struct sigaction ignore = {.sa_handler = SIG_IGN};
+        sigemptyset(&ignore.sa_mask);
+        if (sigaction(SIGHUP, &ignore, NULL) < 0 ||
+            sigaction(SIGTTOU, &ignore, NULL) < 0 || setsid() < 0 ||
+            ioctl(process->slave, TIOCSCTTY, 0) < 0 ||
+            tcsetpgrp(process->slave, getpgrp()) < 0) _exit(125);
+        for (int fd = STDIN_FILENO; fd <= STDERR_FILENO; ++fd)
+            if (dup2(process->slave, fd) < 0) _exit(125);
+        return 0;
+    }
+    (void)close(pair[1]);
+    (void)close(process->master);
+    (void)close(process->slave);
+    process->master = process->slave = -1;
+    process->peer = pair[0];
+    process->child = (uint64_t)child;
+    return 1;
+fail: {
+        int saved = errno;
+        if (pair[0] >= 0) (void)close(pair[0]);
+        if (pair[1] >= 0) (void)close(pair[1]);
+        snag_session_process_close(process);
+        return snag_errno(saved);
+    }
+}
+
 static int
 private_directory(int fd)
 {
@@ -249,9 +341,9 @@ snag_session_packet_read(int fd, struct snag_session_packet *packet)
     size_t target = SNAG_SESSION_HEADER;
     for (;;) {
         if (packet->used >= SNAG_SESSION_HEADER) {
-            if (packet->bytes[0] != 'S' || packet->bytes[1] != 'A' || packet->bytes[2] != 1u ||
+            if (packet->bytes[0] != 'S' || packet->bytes[1] != 'A' || packet->bytes[2] != 2u ||
                 packet->bytes[3] < SNAG_SESSION_RESERVE ||
-                packet->bytes[3] > SNAG_SESSION_SUSPEND ||
+                packet->bytes[3] > SNAG_SESSION_OUTPUT_ACK ||
                 snag_session_packet_length(packet) > SNAG_SESSION_FRAME_MAX)
                 return snag_errno(EPROTO);
             target += snag_session_packet_length(packet);
@@ -286,7 +378,34 @@ snag_session_packet_write(int fd, struct snag_session_packet *packet)
     }
     return 1;
 }
+int
+snag_session_process_redraw(const struct snag_session_process *process)
+{
+    pid_t group = tcgetpgrp(process->slave);
+    if (group <= 0 || tcgetsid(process->slave) != getsid(0)) return snag_errno(ENOTTY);
+    return group == getpgrp() ? 0 : kill(-group, SIGWINCH);
+}
 #else
+int
+snag_session_process_redraw(const struct snag_session_process *process)
+{
+    (void)process;
+    return snag_errno(ENOTSUP);
+}
+
+int
+snag_session_process_start(struct snag_session_process *process)
+{
+    *process = (struct snag_session_process){.master = -1, .slave = -1, .peer = -1};
+    return snag_errno(ENOTSUP);
+}
+
+void
+snag_session_process_close(struct snag_session_process *process)
+{
+    (void)process;
+}
+
 int
 snag_session_listener_open(struct snag_session_listener *listener, int dir_fd,
                            const char *dir_path, int lock_fd)

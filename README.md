@@ -104,9 +104,19 @@ updates remain available for later admission; direct mentions remain urgent.
 
 The conversation, tools, queue and goal are saved as a **session**. Resume
 continues unfinished work; started calls without results are reported as
-unknown rather than blindly repeated. Accepted work, attachments and voice
-retain the session; exiting an unused session saves nothing. Normal exit
-prints its resume command. List sessions or reopen the latest one:
+unknown rather than blindly repeated. Linux sessions started on ANSI terminals
+at least 20 columns wide are saved at startup and continue through terminal loss.
+Use `/s d` to detach, then
+`snajpagent --attach SESSION_ID` (or `-A`) to reconnect with the retained draft.
+Without an ID, attach offers a running-session picker. `/s a ID` switches
+between live sessions; a failed switch keeps the source. Normal exit
+prints its resume command. An unfinished terminal file transfer ends when its
+controlling terminal disconnects; queued downloads retain their saved state.
+New editors and pagers use the replacement terminal's profile; a running
+external program keeps its launch environment.
+Local voice, dictation and playback stop on terminal detach, loss or suspension;
+restart them explicitly after reconnecting.
+List sessions or reopen the latest one:
 
 ```sh
 snajpagent -l

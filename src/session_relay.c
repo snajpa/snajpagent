@@ -38,6 +38,8 @@ peer_drop(struct snag_session_relay *relay)
     relay->handshake_deadline = 0u;
     relay->input_deadline = 0u;
     relay->output_deadline = 0u;
+    relay->output_ack_deadline = 0u;
+    relay->output_length = relay->output_acknowledged = 0u;
     relay->input.used = relay->input.offset = 0u;
     relay->output.used = relay->output.offset = 0u;
     relay->input_pending = relay->closing = false;
@@ -92,10 +94,15 @@ snag_session_relay_control(struct snag_session_relay *relay, enum snag_session_m
 {
     if (relay->peer < 0) return snag_errno(ENOTCONN);
     if (type != SNAG_SESSION_DETACH && type != SNAG_SESSION_EXIT &&
-        type != SNAG_SESSION_SWITCH && type != SNAG_SESSION_SUSPEND) return snag_errno(EINVAL);
+        type != SNAG_SESSION_SWITCH && type != SNAG_SESSION_SUSPEND &&
+        type != SNAG_SESSION_QUITTING) return snag_errno(EINVAL);
     if ((type == SNAG_SESSION_SWITCH || type == SNAG_SESSION_SUSPEND) &&
         relay->phase != SNAG_SESSION_ATTACHED) return snag_errno(EBUSY);
     if (relay->closing) return snag_errno(EALREADY);
+    /* Graceful closure follows the physical output acknowledgement. Hard
+     * escape is a separate notice and may precede a stalled display writer. */
+    if ((type == SNAG_SESSION_DETACH || type == SNAG_SESSION_EXIT) && relay->output_length)
+        return snag_errno(EAGAIN);
     if (queue_output(relay, type, data, length) < 0) return -1;
     relay->closing = type == SNAG_SESSION_DETACH || type == SNAG_SESSION_EXIT;
     if (type == SNAG_SESSION_SUSPEND) {
@@ -115,7 +122,10 @@ master_read(struct snag_session_relay *relay, bool discard)
 
     if (n > 0) {
         if (discard) return 0;
-        return queue_output(relay, SNAG_SESSION_OUTPUT, bytes, (size_t)n);
+        if (queue_output(relay, SNAG_SESSION_OUTPUT, bytes, (size_t)n) < 0) return -1;
+        relay->output_length = (size_t)n;
+        relay->output_acknowledged = 0u;
+        return 0;
     }
     if (!n || errno == EIO) return 1;
     if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return 0;
@@ -139,12 +149,13 @@ snag_session_relay_activate(struct snag_session_relay *relay, uint64_t generatio
 }
 
 static int
-resize_terminal(struct snag_session_relay *relay)
+resize_terminal(struct snag_session_relay *relay, bool commit)
 {
     const unsigned char *p = relay->input.bytes + SNAG_SESSION_HEADER;
     struct winsize size = {0};
 
-    if (snag_session_packet_length(&relay->input) != 4u) return snag_errno(EPROTO);
+    size_t expected = commit ? SNAG_SESSION_COMMIT_BYTES : 4u;
+    if (snag_session_packet_length(&relay->input) != expected) return snag_errno(EPROTO);
     size.ws_row = (unsigned short)((unsigned int)p[0] | (unsigned int)p[1] << 8u);
     size.ws_col = (unsigned short)((unsigned int)p[2] | (unsigned int)p[3] << 8u);
     if (!size.ws_row || !size.ws_col) return snag_errno(EPROTO);
@@ -157,25 +168,54 @@ peer_message(struct snag_session_relay *relay, enum snag_session_message *event)
     enum snag_session_message type = snag_session_packet_type(&relay->input);
     size_t length = snag_session_packet_length(&relay->input);
 
+    /* An attached peer may finish in-flight input/controls after SUSPEND.
+     * A fresh reservation still has a handshake deadline and cannot send
+     * these frames before activation. */
+    bool suspended = relay->phase == SNAG_SESSION_RESERVED && !relay->handshake_deadline;
+    if (type == SNAG_SESSION_INPUT && length &&
+        (relay->phase == SNAG_SESSION_ATTACHED || suspended)) {
+        relay->input_pending = true;
+        relay->input_offset = 0u;
+        relay->input_deadline = snag_monotonic_ms() + STALL_MS;
+        return 0;
+    }
     if (relay->phase == SNAG_SESSION_WAIT_RESERVE) {
         if (type != SNAG_SESSION_RESERVE || length) return snag_errno(EPROTO);
         if (queue_output(relay, SNAG_SESSION_READY, NULL, 0u) < 0) return -1;
         relay->phase = SNAG_SESSION_RESERVED;
-    } else if (relay->phase == SNAG_SESSION_RESERVED) {
-        if (type != SNAG_SESSION_COMMIT || relay->output.used) return snag_errno(EPROTO);
-        if (resize_terminal(relay) < 0) return -1;
+    } else if (relay->phase == SNAG_SESSION_RESERVED && type == SNAG_SESSION_COMMIT) {
+        if (relay->output.used || relay->output_length) return snag_errno(EPROTO);
+        if (length != SNAG_SESSION_COMMIT_BYTES) return snag_errno(EPROTO);
+        struct snag_terminal_profile profile;
+        const unsigned char *p = relay->input.bytes + SNAG_SESSION_HEADER + 4u;
+        memcpy(profile.term, p, SNAG_TERMINAL_NAME_BYTES);
+        memcpy(profile.sty, p + SNAG_TERMINAL_NAME_BYTES, SNAG_TERMINAL_NAME_BYTES);
+        if (!snag_terminal_profile_ansi(&profile)) return snag_errno(EPROTO);
+        if (resize_terminal(relay, true) < 0) return -1;
+        relay->profile = profile;
         relay->phase = SNAG_SESSION_REPAINT;
         relay->handshake_deadline = snag_monotonic_ms() + HANDSHAKE_MS;
         *event = SNAG_SESSION_COMMIT;
-    } else if (relay->phase == SNAG_SESSION_ATTACHED) {
-        if (type == SNAG_SESSION_INPUT && length) {
-            relay->input_pending = true;
-            relay->input_offset = 0u;
-            relay->input_deadline = snag_monotonic_ms() + STALL_MS;
-            return 0;
-        }
-        if (type == SNAG_SESSION_RESIZE) {
-            if (resize_terminal(relay) < 0) return -1;
+    } else if (relay->phase == SNAG_SESSION_ATTACHED || suspended) {
+        if (type == SNAG_SESSION_OUTPUT_ACK && length == 2u) {
+            const unsigned char *p = relay->input.bytes + SNAG_SESSION_HEADER;
+            size_t offset = (size_t)p[0] | (size_t)p[1] << 8u;
+            if (offset <= relay->output_acknowledged || offset > relay->output_length)
+                return snag_errno(EPROTO);
+            relay->output_acknowledged = offset;
+            relay->output_ack_deadline = snag_monotonic_ms() + STALL_MS;
+            if (offset == relay->output_length) {
+                relay->output_length = relay->output_acknowledged = 0u;
+                relay->output_ack_deadline = 0u;
+            }
+        } else if (type == SNAG_SESSION_RESIZE) {
+            if (resize_terminal(relay, false) < 0) return -1;
+            *event = SNAG_SESSION_RESIZE;
+        } else if (type == SNAG_SESSION_ERROR && length && length < sizeof(relay->event_data)) {
+            memcpy(relay->event_data, relay->input.bytes + SNAG_SESSION_HEADER, length);
+            relay->event_data[length] = 0;
+            relay->event_length = length;
+            *event = SNAG_SESSION_ERROR;
         } else if (type == SNAG_SESSION_DETACH && !length) {
             peer_drop(relay);
             *event = SNAG_SESSION_DETACH;
@@ -216,6 +256,8 @@ peer_write(struct snag_session_relay *relay, enum snag_session_message *event)
         peer_drop(relay);
         *event = SNAG_SESSION_DETACH;
     } else if (rc == 1) {
+        if (snag_session_packet_type(&relay->output) == SNAG_SESSION_OUTPUT)
+            relay->output_ack_deadline = snag_monotonic_ms() + STALL_MS;
         relay->output.used = relay->output.offset = 0u;
         relay->output_deadline = 0u;
     } else if (before != relay->output.offset) {
@@ -236,6 +278,7 @@ expire(struct snag_session_relay *relay, uint64_t now, enum snag_session_message
 {
     if ((relay->handshake_deadline && now >= relay->handshake_deadline) ||
         (relay->output_deadline && now >= relay->output_deadline) ||
+        (relay->output_ack_deadline && now >= relay->output_ack_deadline) ||
         (relay->input_deadline && now >= relay->input_deadline)) {
         peer_drop(relay);
         *event = SNAG_SESSION_DETACH;
@@ -269,17 +312,19 @@ snag_session_relay_step(struct snag_session_relay *relay,
                         enum snag_session_message *event)
 {
     *event = 0;
+    relay->event_length = 0u;
     if (timeout_ms < -1 || relay->master < 0) return snag_errno(EINVAL);
     uint64_t now = snag_monotonic_ms();
     expire(relay, now, event);
     if (*event) timeout_ms = 0;
     timeout_ms = deadline_wait(timeout_ms, now, relay->handshake_deadline);
     timeout_ms = deadline_wait(timeout_ms, now, relay->output_deadline);
+    timeout_ms = deadline_wait(timeout_ms, now, relay->output_ack_deadline);
     timeout_ms = deadline_wait(timeout_ms, now, relay->input_deadline);
     timeout_ms = deadline_wait(timeout_ms, now, relay->reject_deadline);
     bool output = relay->peer >= 0 && relay->phase == SNAG_SESSION_ATTACHED;
     struct pollfd fds[] = {
-        {relay->master, (!output || !relay->output.used ? POLLIN : 0) |
+        {relay->master, (!output || (!relay->output.used && !relay->output_length) ? POLLIN : 0) |
             (relay->input_pending ? POLLOUT : 0), 0},
         {relay->peer, (!relay->input_pending && !relay->closing ? POLLIN : 0) |
             (relay->output.used ? POLLOUT : 0), 0},
@@ -311,7 +356,7 @@ snag_session_relay_step(struct snag_session_relay *relay,
     }
     if (fds[0].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) {
         output = relay->peer >= 0 && relay->phase == SNAG_SESSION_ATTACHED;
-        if (!output || !relay->output.used) {
+        if (!output || (!relay->output.used && !relay->output_length)) {
             rc = master_read(relay, !output);
             if (rc != 0) return rc;
         }

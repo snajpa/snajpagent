@@ -81,13 +81,24 @@ int snag_isatty(int fd);
 char *snag_default_shell(void);
 char *snag_program_path(const char *program);
 int snag_file_executable(const char *path);
-int snag_editor_run(const char *path, bool *success, void (*service)(void *), void *opaque);
+/* Bounded terminal/Screen socket-name components, not general environment data. */
+#define SNAG_TERMINAL_NAME_BYTES 256u
+struct snag_terminal_profile {
+    char term[SNAG_TERMINAL_NAME_BYTES], sty[SNAG_TERMINAL_NAME_BYTES];
+};
+int snag_terminal_profile_capture(struct snag_terminal_profile *);
+bool snag_terminal_profile_ansi(const struct snag_terminal_profile *);
+int snag_editor_run(const char *path, bool *success, void (*service)(void *),
+                int (*suspend)(void *), void *opaque,
+                const struct snag_terminal_profile *profile);
 /* Show text through an external pager command; *shown reports that it ran. */
 int snag_pager_show(const char *command, const char *text, size_t length, bool *shown,
-                    void (*service)(void *), void *opaque);
+                    void (*service)(void *), int (*suspend)(void *), void *opaque,
+                    const struct snag_terminal_profile *profile);
 /* Pass an existing file to the same pager command without copying its contents. */
 int snag_pager_file(const char *command, const char *path, bool *shown,
-                    void (*service)(void *), void *opaque);
+                    void (*service)(void *), int (*suspend)(void *), void *opaque,
+                    const struct snag_terminal_profile *profile);
 int snag_hostname(char *out, size_t size);
 /* Owned UTF-8 copies; absent environment variables return NULL/ENOENT. */
 char *snag_environment(const char *name);

@@ -4,6 +4,7 @@
 #include "wake.h"
 
 #include "render.h"
+#include "session_host.h"
 
 /* Engine-owned preferences and last acknowledged input state, not a renderer. */
 struct snag_ui {
@@ -11,6 +12,8 @@ struct snag_ui {
     struct snag_history history;
     enum snag_render_view view;
     bool opened;
+    bool native, native_continuing;
+    struct snag_terminal_profile profile;
     bool prompt_wanted;
     bool active, input_active, input_echoed, input_view_applied;
     bool input_error;
@@ -32,7 +35,9 @@ enum snag_ui_operation {
     SNAG_UI_DRAFT, SNAG_UI_INSERT, SNAG_UI_AUDIO, SNAG_UI_CAPTION,
     SNAG_UI_VIEW, SNAG_UI_SUBMITTED, SNAG_UI_PUBLIC_BEGIN, SNAG_UI_PUBLIC, SNAG_UI_VALIDATE,
     SNAG_UI_ORIENTATION, SNAG_UI_HISTORY, SNAG_UI_IRC, SNAG_UI_DURABLE, SNAG_UI_EVENT,
-    SNAG_UI_RESUME, SNAG_UI_PROTOCOL, SNAG_UI_TRANSPORT, SNAG_UI_RAW, SNAG_UI_HISTORY_SNAPSHOT, SNAG_UI_UPDATE, SNAG_UI_STOP
+    SNAG_UI_RESUME, SNAG_UI_PROTOCOL, SNAG_UI_TRANSPORT, SNAG_UI_RAW, SNAG_UI_HISTORY_SNAPSHOT,
+    SNAG_UI_UPDATE, SNAG_UI_SESSION_START, SNAG_UI_SESSION_LISTEN, SNAG_UI_SESSION_CONTROL,
+    SNAG_UI_SESSION_REBIND, SNAG_UI_SESSION_READY, SNAG_UI_STOP
 };
 
 struct snag_ui_prompt {
@@ -53,6 +58,8 @@ struct snag_ui_command {
     size_t len;
     union {
         unsigned int value;
+        struct snag_session_process *session_process;
+        const struct snag_session *session;
         struct snag_ui_prompt prompt;
         struct { uint32_t typing_pause_ms, tool_spinner_off_delay_ms; } timing;
         struct { int fd; enum snag_presentation kind; } public;
@@ -73,6 +80,16 @@ struct snag_ui_command {
 int snag_ui_send(struct snag_ui *ui, struct snag_ui_command command);
 
 int snag_ui_init(struct snag_ui *ui);
+/* Transfer owner descriptors to the presentation thread before opening input. */
+int snag_ui_session_start(struct snag_ui *, struct snag_session_process *);
+int snag_ui_session_listen(struct snag_ui *, const struct snag_session *);
+int snag_ui_session_control(struct snag_ui *, enum snag_session_message, const void *, size_t);
+uint64_t snag_ui_session_pending(const struct snag_ui *);
+/* Current activated native attachment identity; zero when absent/pending/suspended or
+ * using a direct terminal. Changes also identify exclusive-transfer lease loss. */
+uint64_t snag_ui_session_attachment(const struct snag_ui *);
+int snag_ui_session_rebind(struct snag_ui *, uint64_t generation);
+int snag_ui_session_ready(struct snag_ui *, uint64_t generation);
 int snag_ui_update(struct snag_ui *ui, const char *program, const char *url);
 int snag_ui_set_verbosity(struct snag_ui *ui, unsigned int level);
 unsigned int snag_ui_verbosity(const struct snag_ui *ui);

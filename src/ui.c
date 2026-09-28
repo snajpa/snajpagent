@@ -3,6 +3,7 @@
 #include "irc.h"
 #include "wake.h"
 #include "update.h"
+#include "session_relay.h"
 
 #include <assert.h>
 #include <ctype.h>
@@ -18,7 +19,8 @@
 
 struct ui_snapshot {
     enum snag_render_view view;
-    bool opened, prompt_wanted, active;
+    bool opened, prompt_wanted, active, native_continuing;
+    struct snag_terminal_profile profile;
     char label[SNAG_TERM_LABEL_BYTES];
     uint64_t turn_generation;
     struct snag_irc_target selection;
@@ -81,10 +83,12 @@ struct snag_ui_runtime {
     struct snag_signal_mask saved_mask;
     atomic_int fatal;
     atomic_bool exit_requested, cancel, hard_exit_acknowledged, yield_requested;
+    atomic_bool hard_exit_requested;
     atomic_uint steering_pending, dictation_control;
     atomic_uint level, view;
     _Atomic uint64_t interrupt;
     _Atomic uint64_t pause_until;
+    _Atomic uint64_t session_pending, session_attachment;
 };
 
 struct snag_ui_display {
@@ -96,6 +100,12 @@ struct snag_ui_display {
     uint64_t turn_generation;
     bool suspended;
     bool input_closed, backlog_warned, view_repainting;
+    bool native, native_barrier, native_continuing, native_quitting;
+    struct snag_terminal_profile profile;
+    struct snag_session_process native_process;
+    struct snag_session_relay relay;
+    struct snag_session_listener listener;
+    char native_notice[256];
     char feedback[192];
     struct ui_action *local;
     bool local_acknowledged, painting_feedback;
@@ -263,6 +273,7 @@ input_note_controls(struct snag_ui_runtime *runtime, const unsigned char *bytes,
     }
     (void)pthread_mutex_unlock(&input->lock);
     if (exit) {
+        atomic_store(&runtime->hard_exit_requested, true);
         struct ui_hard_exit_watchdog *watchdog = malloc(sizeof(*watchdog));
         pthread_t thread;
         int rc = watchdog ? 0 : ENOMEM;
@@ -452,6 +463,8 @@ take_snapshot(struct snag_ui_display *display, struct ui_snapshot *snapshot)
     snapshot->opened = display->term.opened;
     snapshot->prompt_wanted = display->term.prompt_wanted;
     snapshot->active = display->term.active;
+    snapshot->native_continuing = display->native_continuing;
+    snapshot->profile = display->profile;
     snapshot->turn_generation = display->turn_generation;
     snapshot->selection = display->term.destination;
     memcpy(snapshot->label, display->term.label, sizeof(snapshot->label));
@@ -464,6 +477,8 @@ adopt_snapshot(struct snag_ui *ui, const struct ui_snapshot *snapshot)
     ui->opened = snapshot->opened;
     ui->prompt_wanted = snapshot->prompt_wanted;
     ui->active = snapshot->active;
+    ui->native_continuing = snapshot->native_continuing;
+    ui->profile = snapshot->profile;
     ui->turn_generation = snapshot->turn_generation;
     ui->selection = snapshot->selection;
     memcpy(ui->label, snapshot->label, sizeof(ui->label));
@@ -608,6 +623,148 @@ display_cycle_view(struct snag_ui_display *display)
 }
 
 static int
+session_service(struct snag_ui_display *display, int timeout_ms)
+{
+    enum snag_session_message event;
+    if (!display->native) return 0;
+    if (!display->native_quitting && atomic_load(&display->runtime->hard_exit_requested) &&
+        display->relay.peer >= 0 &&
+        display->relay.phase == SNAG_SESSION_ATTACHED) {
+        /* The sole relay writer announces the watchdog's accepted hard escape.
+         * Never have the input/watchdog thread interleave transport frames. */
+        if (snag_session_relay_control(&display->relay, SNAG_SESSION_QUITTING, NULL, 0u) == 0)
+            display->native_quitting = true;
+        else if (errno != EAGAIN && errno != EALREADY) return -1;
+    }
+    int rc = snag_session_relay_step(&display->relay, &display->listener, timeout_ms, &event);
+    if (rc) return rc < 0 ? -1 : snag_errno(EPIPE);
+    if (event == SNAG_SESSION_COMMIT) {
+        display->native_quitting = false;
+        atomic_store(&display->runtime->session_attachment, 0u);
+        atomic_store(&display->runtime->session_pending, display->relay.generation);
+        snag_wakeup_send(display->runtime->actions.wake[1]);
+    } else if (event == SNAG_SESSION_RESIZE) {
+        snag_term_notify_resize();
+        if (display->suspended)
+            (void)snag_session_process_redraw(&display->native_process);
+    } else if (event == SNAG_SESSION_DETACH) {
+        display->native_continuing = false;
+        display->native_quitting = false;
+        atomic_store(&display->runtime->session_attachment, 0u);
+        atomic_store(&display->runtime->session_pending, 0u);
+    } else if (event == SNAG_SESSION_ERROR) {
+        (void)snprintf(display->native_notice, sizeof(display->native_notice), "%.*s",
+            (int)display->relay.event_length, display->relay.event_data);
+    }
+    return 0;
+}
+
+static int
+session_control(struct snag_ui_display *display, enum snag_session_message type,
+                 const void *data, size_t length)
+{
+    if (!display->native) return snag_errno(ENOTSUP);
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
+    for (;;) {
+        if (session_service(display, 0) < 0) return -1;
+        if (snag_session_relay_control(&display->relay, type, data, length) == 0) break;
+        if (errno != EAGAIN) return -1;
+        if (snag_monotonic_ms() >= deadline) return snag_errno(ETIMEDOUT);
+        if (session_service(display, 1) < 0) return -1;
+    }
+    if (type == SNAG_SESSION_SUSPEND) {
+        display->native_continuing = true;
+        atomic_store(&display->runtime->session_attachment, 0u);
+    }
+    /* Synchronous UI completion includes the control frame, not only its
+     * placement behind output. The engine can then resume producing output. */
+    while (display->relay.output.used) {
+        if (snag_monotonic_ms() >= deadline) return snag_errno(ETIMEDOUT);
+        if (session_service(display, 1) < 0) return -1;
+    }
+    return 0;
+}
+
+static int
+session_suspend(void *opaque)
+{
+    struct snag_ui_display *display = opaque;
+    if (snag_term_hide(&display->term) < 0 ||
+        snag_term_attachment_modes(&display->term, false) < 0) return -1;
+    if (session_control(display, SNAG_SESSION_SUSPEND, NULL, 0u) < 0)
+        (void)snprintf(display->native_notice, sizeof(display->native_notice),
+            "cannot suspend terminal client: %s", strerror(errno));
+    return 0;
+}
+
+static int
+apply_session(struct snag_ui_display *display, const struct snag_ui_command *command)
+{
+    struct snag_ui_runtime *runtime = display->runtime;
+    if (command->kind == SNAG_UI_SESSION_START) {
+        struct snag_session_process *process = command->data.session_process;
+        if (display->native) return snag_errno(EALREADY);
+        if (snag_session_relay_init(&display->relay, process->master, process->peer) < 0)
+            return -1;
+        display->listener = (struct snag_session_listener){.fd = -1, .dir_fd = -1};
+        display->native_process = (struct snag_session_process){
+            .master = -1, .slave = process->slave, .peer = -1, .profile = process->profile};
+        process->master = process->slave = process->peer = -1;
+        display->native = true;
+        display->profile = display->relay.profile = display->native_process.profile;
+        display->term.screen = display->profile.sty[0] != '\0';
+        atomic_store(&runtime->session_attachment, display->relay.generation);
+        display->term.suspend = session_suspend;
+        display->term.suspend_opaque = display;
+        return snag_term_output_prepare(&display->term);
+    }
+    if (!display->native) return snag_errno(ENOTSUP);
+    if (command->kind == SNAG_UI_SESSION_LISTEN) {
+        const struct snag_session *session = command->data.session;
+        if (!session) {
+            snag_session_listener_close(&display->listener);
+            return 0;
+        }
+        return snag_session_listener_open(&display->listener, session->dir_fd,
+                                           session->dir_path, session->lock_fd);
+    }
+    if (command->kind == SNAG_UI_SESSION_CONTROL)
+        return session_control(display, (enum snag_session_message)command->data.value,
+                                command->text, command->len);
+    if (display->relay.generation != command->data.seq || display->relay.peer < 0)
+        return snag_errno(ESTALE);
+    if (command->kind == SNAG_UI_SESSION_REBIND) {
+        if (display->relay.phase != SNAG_SESSION_REPAINT) return snag_errno(ESTALE);
+        display->native_barrier = true;
+        display->term.defer_redraw = true;
+        if (snag_render_rebind(&display->render) < 0 ||
+            snag_session_relay_activate(&display->relay, command->data.seq,
+                                         display->native_process.slave) < 0) return -1;
+        display->profile = display->relay.profile;
+        display->term.screen = display->profile.sty[0] != '\0';
+        atomic_store(&runtime->session_attachment, display->relay.generation);
+        atomic_store(&runtime->session_pending, 0u);
+        if (display->suspended)
+            (void)snag_session_process_redraw(&display->native_process);
+        if (!display->suspended && display->term.opened &&
+            snag_term_attachment_modes(&display->term, true) < 0) return -1;
+        return 0;
+    }
+    if (display->relay.phase != SNAG_SESSION_ATTACHED) return snag_errno(ESTALE);
+    display->native_barrier = false;
+    display->term.defer_redraw = display->view_repainting;
+    if (!display->suspended && display->prompt.source && !display->view_repainting)
+        return apply_prompt(display);
+    return 0;
+}
+
+static bool
+session_command(enum snag_ui_operation kind)
+{
+    return kind >= SNAG_UI_SESSION_START && kind <= SNAG_UI_SESSION_READY;
+}
+
+static int
 apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
               char *error, size_t error_size)
 {
@@ -615,6 +772,9 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     struct snag_term *term = &display->term;
 
     switch (command->kind) {
+    case SNAG_UI_SESSION_START: case SNAG_UI_SESSION_LISTEN: case SNAG_UI_SESSION_CONTROL:
+    case SNAG_UI_SESSION_REBIND: case SNAG_UI_SESSION_READY:
+        return apply_session(display, command);
     case SNAG_UI_LEVEL: return set_level(display, command->data.value);
     case SNAG_UI_HOST: return snag_render_host(render, command->text);
     case SNAG_UI_HELP: return snag_render_help(render, command->text);
@@ -739,6 +899,8 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     }
     case SNAG_UI_AUDIO: {
         bool voice=command->data.value==2u;
+        if (command->text[0] && display->native &&
+            !atomic_load(&display->runtime->session_attachment))return 1;
         if(voice && (!term->opened || !term->raw || !term->capable || term->input_only || term->output_depth))return 1;
         int rc = snag_term_audio(term, command->text, command->data.value == 1u);
         return rc < 0 && errno == ENOTTY ? 1 : rc;
@@ -786,6 +948,8 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
 static int
 read_input(struct snag_ui_display *display, int timeout_ms)
 {
+    if (session_service(display, 0) < 0) return -1;
+    if (display->native && (timeout_ms < 0 || timeout_ms > 16)) timeout_ms = 16;
     struct snag_ui_runtime *runtime = display->runtime;
     struct snag_term *term = &display->term;
     struct ui_action *item;
@@ -806,7 +970,8 @@ read_input(struct snag_ui_display *display, int timeout_ms)
             return 0;
         }
     }
-    if (!term->opened || display->suspended || display->input_closed || held) {
+    if (!term->opened || display->suspended || display->input_closed || held ||
+        display->native_barrier) {
         rc = snag_wakeup_wait(runtime->commands[0], timeout_ms);
         return rc < 0 && errno != EINTR ? -1 : 0;
     }
@@ -1098,6 +1263,13 @@ presentation_main(void *opaque)
             snag_wakeup_send(runtime->actions.wake[1]);
         }
         if (local_feedback(&display) < 0) atomic_store(&runtime->fatal, errno ? errno : EIO);
+        if (display.native_notice[0] && !display.suspended && !display.native_barrier) {
+            char notice[sizeof(display.native_notice)];
+            memcpy(notice, display.native_notice, sizeof(notice));
+            display.native_notice[0] = '\0';
+            if (snag_render_warning_ctx(&display.render, notice) < 0)
+                atomic_store(&runtime->fatal, errno ? errno : EIO);
+        }
         if (message) {
             /* A short delivery may release a citation held by the renderer. */
             snag_buf_init(&message->delivered,
@@ -1105,6 +1277,7 @@ presentation_main(void *opaque)
             message->result = apply_display(&display, message);
             message->saved_errno = errno;
             if (message->result < 0 && message->command.kind != SNAG_UI_VALIDATE &&
+                !session_command(message->command.kind) &&
                 !(message->saved_errno == ECANCELED && atomic_load(&runtime->exit_requested))) {
                 int error = errno ? errno : EIO;
                 atomic_store(&runtime->fatal, error);
@@ -1119,7 +1292,7 @@ presentation_main(void *opaque)
                 if (stop) break;
             }
         }
-        if (snag_render_view_pending(&display.render) &&
+        if (!display.native_barrier && snag_render_view_pending(&display.render) &&
             snag_render_flush_pending(&display.render, UI_RENDER_BATCH) < 0) {
             atomic_store(&runtime->fatal, errno ? errno : EIO);
             display.input_closed = true;
@@ -1127,8 +1300,8 @@ presentation_main(void *opaque)
         }
         if (display.view_repainting && !snag_render_view_pending(&display.render)) {
             display.view_repainting = false;
-            display.term.defer_redraw = false;
-            if (display.prompt.source && apply_prompt(&display) < 0) {
+            display.term.defer_redraw = display.native_barrier;
+            if (!display.native_barrier && display.prompt.source && apply_prompt(&display) < 0) {
                 atomic_store(&runtime->fatal, errno ? errno : EIO);
                 display.input_closed = true;
                 snag_wakeup_send(runtime->actions.wake[1]);
@@ -1152,6 +1325,11 @@ presentation_main(void *opaque)
     input_stop(&display);
     if (hard_exit) snag_term_abort(&display.term);
     else snag_term_close(&display.term);
+    if (display.native) {
+        snag_session_listener_close(&display.listener);
+        snag_session_relay_close(&display.relay);
+        snag_session_process_close(&display.native_process);
+    }
     prompt_free(&display.prompt);
     return NULL;
 }
@@ -1208,6 +1386,56 @@ snag_ui_send(struct snag_ui *ui, struct snag_ui_command command)
 }
 
 int
+snag_ui_session_start(struct snag_ui *ui, struct snag_session_process *process)
+{
+    int rc = snag_ui_send(ui, (struct snag_ui_command){
+        .kind = SNAG_UI_SESSION_START, .data.session_process = process});
+    if (rc == 0) ui->native = true;
+    return rc;
+}
+
+int
+snag_ui_session_listen(struct snag_ui *ui, const struct snag_session *session)
+{
+    return snag_ui_send(ui, (struct snag_ui_command){
+        .kind = SNAG_UI_SESSION_LISTEN, .data.session = session});
+}
+
+int
+snag_ui_session_control(struct snag_ui *ui, enum snag_session_message type,
+                        const void *data, size_t length)
+{
+    return snag_ui_send(ui, (struct snag_ui_command){.kind = SNAG_UI_SESSION_CONTROL,
+        .data.value = (unsigned int)type, .text = data, .len = length});
+}
+
+uint64_t
+snag_ui_session_pending(const struct snag_ui *ui)
+{
+    return ui->native ? atomic_load(&ui->runtime->session_pending) : 0u;
+}
+
+uint64_t
+snag_ui_session_attachment(const struct snag_ui *ui)
+{
+    return ui->native ? atomic_load(&ui->runtime->session_attachment) : 0u;
+}
+
+int
+snag_ui_session_rebind(struct snag_ui *ui, uint64_t generation)
+{
+    return snag_ui_send(ui, (struct snag_ui_command){
+        .kind = SNAG_UI_SESSION_REBIND, .data.seq = generation});
+}
+
+int
+snag_ui_session_ready(struct snag_ui *ui, uint64_t generation)
+{
+    return snag_ui_send(ui, (struct snag_ui_command){
+        .kind = SNAG_UI_SESSION_READY, .data.seq = generation});
+}
+
+int
 snag_ui_init(struct snag_ui *ui)
 {
     struct snag_ui_runtime *runtime;
@@ -1216,11 +1444,14 @@ snag_ui_init(struct snag_ui *ui)
     runtime = calloc(1u, sizeof(*runtime));
     if (!runtime) return -1;
     atomic_init(&runtime->fatal, 0);
+    atomic_init(&runtime->session_pending, 0u);
+    atomic_init(&runtime->session_attachment, 0u);
     runtime->engine = pthread_self();
     atomic_init(&runtime->interrupt, 0u);
     atomic_init(&runtime->exit_requested, false);
     atomic_init(&runtime->cancel, false);
     atomic_init(&runtime->hard_exit_acknowledged, false);
+    atomic_init(&runtime->hard_exit_requested, false);
     atomic_init(&runtime->steering_pending, 0u);
     atomic_init(&runtime->dictation_control, 0u);
     atomic_init(&runtime->pause_until, 0u);
@@ -1517,6 +1748,8 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
             *action = SNAG_TERM_SUBMIT;
             return 1;
         }
+        /* COMMIT is engine work even when no input action was submitted. */
+        if (atomic_load(&runtime->session_pending)) return 0;
         item = queue_pop(&runtime->actions);
         if (item) {
             snag_wakeup_send(runtime->commands[1]);

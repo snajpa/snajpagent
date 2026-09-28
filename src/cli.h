@@ -20,6 +20,7 @@ struct snag_cli {
     bool with_api_key;
     const char *auth_provider;
     bool resume;
+    bool attach;
     bool execute;
     bool list;
     bool last;
@@ -46,6 +47,7 @@ struct snag_cli {
     const char *irc_operator_nick;
     const char *irc_room_name;
     const char *resume_id;
+    const char *attach_id;
     char *prompt;
 };
 

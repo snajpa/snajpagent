@@ -18,6 +18,8 @@ by running sessions; `/session list` also includes stopped/archived sessions;
 to another live owner. Unique ID prefixes are accepted and ambiguous matches
 are listed rather than guessed. Omitting an attach ID offers a live-session
 selection, not an implicit resume or a new session.
+Attachment bypasses provider onboarding and uses the live owner's configuration,
+including when its state directory has no default configuration file.
 
 Keep the existing engine/presentation ownership split. One process remains the
 session and journal owner throughout requests, tools, IRC, goals and terminal
@@ -56,6 +58,11 @@ catch-up from existing display history, with a visible omission/range notice
 when needed, then show the retained composer. Catch-up is display only and must
 not create model inputs, repeat provider work, resend IRC, or change journal
 lineage. Normal streaming/resizing still never repaints sealed conversation.
+Forward each resize notification to presentation, including unchanged dimensions:
+the private PTY's size ioctl only generates SIGWINCH when its dimensions change.
+Close and unlink the owned attachment endpoint before deleting a session, while
+the original writer lock is held. The connected client remains until the final
+exit acknowledgement.
 
 Before enabling this path, account for every actual-terminal ownership path:
 Ctrl-C/quit versus detach, Ctrl-Z/job control, signals and abrupt SSH/terminal
@@ -77,6 +84,15 @@ owners. Terminal loss closes only its client connection. Ctrl-Z suspends the
 client, not the session engine. Reattachment invalidates only the previous
 composer coordinates and uses bounded semantic history on the new terminal.
 
+The pre-thread startup primitive requires all standard descriptors on the same
+terminal and preserves its modes and geometry. The frontend keeps only its
+socket and the child identity. The surviving owner creates a separate process
+session and controlling terminal, retains the private PTY master and slave,
+and directs its standard streams there. Closing the frontend socket or original
+terminal leaves this private terminal alive. Startup does not open a journal,
+acquire a session lock or publish an attachment endpoint; those remain with
+the application after successful initialization.
+
 The local stream protocol has bounded frames and independently handles partial
 reads/writes. Socket access requires the private session directory and matching
 native peer credentials. Only a held session writer lock authorizes publishing
@@ -89,7 +105,10 @@ terminal behavior until their attachment backend is implemented and tested.
 
 The relay has one descriptor owner and one frame per input/output direction;
 other threads must serialize requests to that owner. Each frame carries at most
-16 KiB, so slow terminals cannot create an unbounded queue. A silent handshake
+16 KiB. The client acknowledges the cumulative physical-write offset of each
+output frame before the relay sends the next one. Partial-write acknowledgements
+extend the progress deadline. This keeps bulk bytes out of the socket's control
+capacity when the physical terminal stalls. A silent handshake
 expires after 15 seconds; five seconds without progress in a queued input or
 output frame disconnects only that client. Detached output is drained rather
 than saved. A competing client receives a busy response, including while the
@@ -110,8 +129,111 @@ a delayed acknowledgement cannot activate a replacement client. The foreground
 terminal/SIGTTOU rules also apply during external pager/editor ownership. After
 activation, present bounded semantic catch-up rather than old cursor bytes.
 
-The commands and transport above are a design/acceptance contract, not a claim
-that installed rescue binaries already provide native attachment.
+The terminal client keeps one frame per direction plus one incoming control
+frame, holds physical input during
+the destination handshake, and finishes pending source output/input before
+switching after acknowledgement. Refusal, handshake EOF and timeout retain the
+source. A failed-switch diagnostic returns to its presentation owner as a control
+message; it neither becomes engine input nor disconnects that source. Suspension
+continues the same reservation through a fresh geometry/repaint handshake.
+That reserved client may finish keyboard and control frames already in flight
+before its continuation handshake. A newly reserved client still cannot send
+input or resize before activation.
+
+Five consecutive Ctrl-C presses retain the owner's existing hard-escape policy.
+Its sole relay writer announces accepted hard-exit intent; the input watchdog
+then exits independently of blocked display output. The client can read that
+notice while holding a partially written display frame, and treats the following
+peer EOF as a successful hard exit. Unexpected peer loss remains an error.
+After peer hangup, pending display bytes may be discarded to reach terminal
+controls and restore physical modes. Live output is never discarded for this
+purpose, and the frontend never interprets raw transfer bytes as hard escapes.
+
+Exclusive file-transfer input belongs to the attachment that began the exchange.
+Loss or replacement of that attachment cancels an unfinished exchange and clears
+its unread protocol input before the composer reopens. Verified, completed
+transfer results remain valid; only the old attachment's keyboard tail is
+discarded. A replacement terminal performs its own workstation capability probe.
+
+Attachment metadata must describe the new physical terminal, not the surviving
+owner's startup environment. The unreleased native wire draft 2 carries TERM and
+STY with the existing geometry commit. Earlier wire drafts are rejected rather
+than silently losing the profile. Each name is bounded to 255 bytes plus its
+terminator, matching a terminal-name
+or screen socket-name component. Validate the complete metadata before changing
+attachment state. The native frontend requires an ANSI-capable terminal; plain
+or missing TERM keeps ordinary startup on its direct-terminal path, and an
+unsupported replacement is refused without changing the live owner.
+
+Initial widths below the renderer's existing 20-column threshold also keep
+ordinary startup direct, preserving cooked input and terminal-driver echo.
+An existing native owner retains raw input when its terminal becomes narrower,
+including on return from an editor or pager. Rendering capability controls
+presentation; it must not let the private PTY consume Ctrl-Z before the UI can
+delegate suspension to the frontend.
+
+Apply the accepted profile at the existing rebind barrier. Screen passthrough
+for input modes, workstation probes and transfers uses that profile. Owner
+preferences, including color policy, stay unchanged. Newly launched editors and
+pagers receive TERM/STY overrides in their own child environment, without
+interpolating metadata into shell source. Never change the multithreaded owner's
+environment.
+An already-running external program keeps its launch environment and receives
+the existing private-PTY resize/redraw notification on reattachment.
+
+Local dictation, playback and voice belong to the terminal that explicitly
+started them. Native detach, terminal loss, switching away or job suspension
+ends those operations; replacement does not authorize microphone restart.
+Check the activated attachment generation in the voice worker's connection and
+media checkpoints as well as the engine's audio service. Stop before accepting
+an unadmitted voice handoff; preserve accepted coding work and final transcripts
+through the existing voice-close drain. Cancel unfinished dictation without
+submitting captured audio or inserting a delayed transcript into a new terminal.
+The UI must refuse capture activation while detached, even though the owner's
+private PTY remains raw and open. Explicit /voice on or /dictate after attachment
+starts a new operation.
+
+The real-terminal frontend opens an independent descriptor and restores the
+original terminal modes on detach/failure. It emits an ANSI reset only if it
+actually forwarded escape bytes. A narrow plain-output fallback stays plain.
+The frontend stops only itself for job control. On continue it waits for
+foreground ownership, reads fresh geometry and recommits the same reservation.
+The frontend never signals a session owner.
+Isolated PTY tests cover actual stop/continue, mode restoration, resize, input,
+output and termination of the replaceable client.
+
+The presentation thread drives the relay at idle, input and output checkpoints.
+Native editor polling yields between buffered input bytes so output credits and
+resize controls are serviced before the next repaint. Input-only output
+checkpoints retain burst admission without recursively painting the composer.
+It binds nonblocking output aliases before opening input so startup output can
+progress through a full private PTY buffer. A commit wakes the engine with its
+attachment generation. The UI rebind clears physical coordinates while keeping
+the draft, buffered input and live semantic response. Input remains buffered
+through the engine's catch-up work; a matching ready operation releases that
+barrier and restores the composer. Raw composer suspension queues a client
+control frame without stopping the owner or flushing its input.
+
+Application startup now forks the native owner before worker creation. Linux
+terminal sessions persist before the first composer and publish the endpoint
+under that original writer lock. Idle, active-work and external-service
+checkpoints handle attachment; a pending commit wakes an idle engine even
+without a submitted action. Same-client job continuation restores only the
+composer, while replacement clients receive bounded semantic history. Endpoint
+closure precedes writer-lock release and the exit acknowledgement.
+
+The app connects --attach/-A, the live picker and /session attach|a/detach|d
+with /s aliases. Isolated full-app coverage verifies frontend loss, draft and
+lock retention, competing clients, failed switching, selection and no duplicate
+model turns. Pager/editor startup establishes a foreground process group before
+exec, waits for stopped children and delegates suspension to the frontend.
+The owner can service private-PTY control operations while that child owns the
+foreground; exec children restore ordinary job-control signal dispositions.
+Reattachment requests a redraw from the private terminal's foreground job.
+The isolated pager regression covers actual frontend stop/continue, real
+terminal mode restoration and the foreground job's redraw. Transfer/audio
+interactions and broader lifecycle coverage remain under implementation/
+validation; installed rescue binaries still do not provide native attachment.
 
 Every application mode uses the same two core threads: one presentation owner
 and one engine owner. The editor and renderer stay together on the presentation

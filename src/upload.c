@@ -13,12 +13,14 @@
 #ifdef _WIN32
 int
 snag_download_send(int tty, int file_fd, const char *name, const char *expected_sha,
+                    const struct snag_terminal_profile *profile,
                     int (*checkpoint)(void *), void *opaque,
                     struct snag_upload_result *result, char *error, size_t error_size)
 {
     (void)tty;
     (void)file_fd;
     (void)expected_sha;
+    (void)profile;
     (void)name;
     (void)checkpoint;
     (void)opaque;
@@ -28,6 +30,7 @@ snag_download_send(int tty, int file_fd, const char *name, const char *expected_
 
 int
 snag_upload_receive(int tty, int stage_fd, size_t slots, bool directory,
+                    const struct snag_terminal_profile *profile,
                     int (*checkpoint)(void *), void *opaque,
                     struct snag_upload_result *result, char *error, size_t error_size)
 {
@@ -35,6 +38,7 @@ snag_upload_receive(int tty, int stage_fd, size_t slots, bool directory,
     (void)stage_fd;
     (void)slots;
     (void)directory;
+    (void)profile;
     (void)checkpoint;
     (void)opaque;
     (void)result;
@@ -130,12 +134,12 @@ write_bytes(struct upload_io *io, const unsigned char *bytes, size_t length)
 }
 
 static int
-transfer_begin(struct upload_io *io, char direction)
+transfer_begin(struct upload_io *io, char direction, const struct snag_terminal_profile *profile)
 {
     /* TERM describes capabilities and can be forwarded over SSH. Only STY
      * identifies a GNU screen backend that will unwrap DCS packets here. */
     const char *sty = getenv("STY");
-    io->screen = sty && *sty;
+    io->screen = profile ? profile->sty[0] != '\0' : sty && *sty;
     /* The final two digits are platform flags: 10 means Windows, not a nonce.
      * Match the POSIX client's 13-digit marker with a reserved 00 suffix. */
     uint64_t identifier = (snag_time_ms() % 100000000000ull) * 100ull;
@@ -441,6 +445,7 @@ snag_upload_cleanup(int stage_fd, struct snag_upload_result *result)
 
 int
 snag_upload_receive(int tty, int stage_fd, size_t slots, bool directory,
+                    const struct snag_terminal_profile *profile,
                     int (*checkpoint)(void *), void *opaque,
                     struct snag_upload_result *result, char *error, size_t error_size)
 {
@@ -463,7 +468,7 @@ snag_upload_receive(int tty, int stage_fd, size_t slots, bool directory,
     if (!slots) return snag_fail(error, error_size, EFBIG, "attachment slots are full");
 
     snag_buf_init(&frame.payload, SNAG_UPLOAD_LINE_MAX);
-    if (transfer_begin(&io, directory ? 'D' : 'R') < 0 ||
+    if (transfer_begin(&io, directory ? 'D' : 'R', profile) < 0 ||
         receive_action(&io, &frame, &peer_cancelled, &result->native_client) < 0) goto done;
     if (peer_cancelled) {
         rc = 1;
@@ -533,6 +538,7 @@ download_integer(struct upload_io *io, struct upload_frame *frame,
 
 int
 snag_download_send(int tty, int file_fd, const char *name, const char *expected_sha,
+                    const struct snag_terminal_profile *profile,
                     int (*checkpoint)(void *), void *opaque,
                     struct snag_upload_result *result, char *error, size_t error_size)
 {
@@ -568,7 +574,7 @@ snag_download_send(int tty, int file_fd, const char *name, const char *expected_
     }
     memset(result, 0, sizeof(*result));
     snag_buf_init(&frame.payload, SNAG_UPLOAD_LINE_MAX);
-    if (transfer_begin(&io, 'S') < 0) goto done;
+    if (transfer_begin(&io, 'S', profile) < 0) goto done;
     started = true;
     if (receive_action(&io, &frame, &cancelled, &result->native_client) < 0) goto done;
     if (cancelled) { rc = 1; goto done; }

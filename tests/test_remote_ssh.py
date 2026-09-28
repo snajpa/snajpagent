@@ -3,6 +3,7 @@
 import json
 import os
 import pwd
+import select
 import shlex
 import shutil
 import socket
@@ -13,6 +14,7 @@ import unittest
 from pathlib import Path
 
 from test_remote_terminal import PRODUCT, RemoteProcess
+from test_upload_client import FixtureChildren
 
 
 @unittest.skipUnless(shutil.which("sshd") and shutil.which("ssh-keygen") and
@@ -43,6 +45,8 @@ class RemoteSSHTests(unittest.TestCase):
             log = open(root / "sshd.log", "wb")
             server = subprocess.Popen([shutil.which("sshd"), "-D", "-e", "-f", str(cfg)],
                                       stdout=log, stderr=log)
+            server_children = FixtureChildren(server.pid)
+            pinned = []
             ssh = ["ssh", "-tt", "-p", str(port), "-i", str(root / "client-key"),
                    "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
                    "-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={known}",
@@ -60,7 +64,10 @@ class RemoteSSHTests(unittest.TestCase):
                         time.sleep(0.05)
                 else:
                     self.fail("private sshd did not listen")
-                for scenario in ("first", "screen", "nested"):
+                scenarios = ["first", "screen", "nested"]
+                if server_children.handles:
+                    scenarios.append("lost-client")
+                for scenario in scenarios:
                     with self.subTest(scenario=scenario):
                         state = root / scenario
                         state.mkdir()
@@ -80,7 +87,7 @@ class RemoteSSHTests(unittest.TestCase):
                         remote = "cd " + shlex.quote(str(state)) + "; exec " + shlex.join(command)
                         if scenario == "nested":
                             remote = shlex.join([*ssh, remote])
-                        child = RemoteProcess(home, [*ssh, remote])
+                        child = RemoteProcess(home, [*ssh, remote], server_children=server_children)
                         try:
                             child.until("›".encode(), 10)
                             target = home / "Downloads" / source.name
@@ -92,8 +99,17 @@ class RemoteSSHTests(unittest.TestCase):
                             journal = next((dotdir / "sessions").glob("*/events.jsonl"))
                             events = [json.loads(line) for line in journal.read_text().splitlines()]
                             self.assertEqual(sum(e["type"] == "download_removed" for e in events), 1)
-                            os.write(child.master, b"/exit\r")
-                            child.wait(0)
+                            if scenario == "lost-client":
+                                server_children.remember()
+                                pinned = [os.dup(fd) for pid, fd in server_children.handles.items()
+                                          if pid != server.pid]
+                                self.assertTrue(pinned, "private server descendants were not pinned")
+                                child.close()
+                                self.assertLess(len(select.select(pinned, [], [], 0)[0]), len(pinned),
+                                                "lost client did not leave a surviving remote owner")
+                            else:
+                                os.write(child.master, b"/exit\r")
+                                child.wait(0)
                         finally:
                             if screen_env:
                                 subprocess.run(["screen", "-S", "ssh-native", "-X", "quit"],
@@ -101,9 +117,18 @@ class RemoteSSHTests(unittest.TestCase):
                                                stderr=subprocess.DEVNULL)
                             child.close()
             finally:
-                server.terminate()
-                server.wait(timeout=5)
-                log.close()
+                try:
+                    server_children.close()
+                    if server.poll() is None:
+                        server.terminate()
+                    server.wait(timeout=5)
+                    self.assertEqual(len(select.select(pinned, [], [], 0)[0]), len(pinned),
+                                     "private SSH descendants survived fixture shutdown")
+                finally:
+                    server_children.close()
+                    for fd in pinned:
+                        os.close(fd)
+                    log.close()
 
 
 if __name__ == "__main__":
