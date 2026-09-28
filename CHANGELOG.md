@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Give voice-interface requests a stable cache identity distinct from working
+  model requests in the same session.
+
 - Admit voice UI commands through the keyboard's existing input queue and
   dispatcher, preserving the draft and rejecting stale attachments or a full
   queue. Acknowledgements distinguish admission from command completion.

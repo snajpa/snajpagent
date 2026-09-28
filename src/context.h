@@ -66,8 +66,8 @@ int snag_context_build(struct snag_session *session, const char *model,
                       const struct snag_instruction_set *instructions, const char *operator_visibility,
                       struct snag_context_projection *projection, char *error, size_t error_size,
                       const struct snag_context_control *control);
-/* One derivation for every request path: the key is stable for a session (and across resume),
- * distinct across sessions, and independent of turn, cycle or timing. */
+/* Model-work identity: stable across resume and independent of turn, cycle or
+ * timing. The interface request derives its own namespace from this identity. */
 #define SNAG_CACHE_KEY_LEN 32u
 void snag_context_cache_key(const struct snag_session *session, const char *provider, const char *model,
                             char out[SNAG_CACHE_KEY_LEN + 1u]);

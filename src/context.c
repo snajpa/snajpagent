@@ -2287,6 +2287,14 @@ snag_context_interface_request(const struct snag_session *session,
     char cache_key[SNAG_CACHE_KEY_LEN + 1u];
     snag_context_cache_key(session, provider->name,
         snag_config_model_upstream(provider, model), cache_key);
+    if (!cache_key[0]) return NULL;
+    char material[sizeof(cache_key) + sizeof("voice-interface:")];
+    char digest[SNAG_SHA256_HEX_LEN + 1u];
+    int length = snprintf(material, sizeof(material), "voice-interface:%s", cache_key);
+    if (length < 0 || (size_t)length >= sizeof(material)) return NULL;
+    snag_sha256_hex(material, (size_t)length, digest);
+    memcpy(cache_key, digest, SNAG_CACHE_KEY_LEN);
+    cache_key[SNAG_CACHE_KEY_LEN] = '\0';
     json_t *items = json_deep_copy(input);
     if (!items || !cache_key[0] || (provider->leading_instructions &&
             normalize_leading_instruction_items(items) < 0)) {

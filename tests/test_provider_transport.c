@@ -2118,6 +2118,16 @@ test_voice_read_tools(void)
             "fixture", "medium", input, tools);
         assert(request && json_array_size(input) == 3u);
         assert(strlen(snag_json_string(request, "prompt_cache_key")) == SNAG_CACHE_KEY_LEN);
+        char working_key[SNAG_CACHE_KEY_LEN + 1u], retained_key[SNAG_CACHE_KEY_LEN + 1u];
+        snag_context_cache_key(&app.session, config.providers[0].name, "fixture", working_key);
+        assert(strcmp(working_key, snag_json_string(request, "prompt_cache_key")));
+        json_t *again = snag_context_interface_request(&app.session, &config.providers[0],
+            "fixture", "medium", input, tools);
+        assert(again && !strcmp(snag_json_string(request, "prompt_cache_key"),
+            snag_json_string(again, "prompt_cache_key")));
+        json_decref(again);
+        snag_context_cache_key(&app.session, config.providers[0].name, "fixture", retained_key);
+        assert(!strcmp(working_key, retained_key));
         assert(!strcmp(snag_json_string(request, "model"), "fixture"));
         assert(json_is_true(json_object_get(request, "stream")));
         if (kind == 1u) {

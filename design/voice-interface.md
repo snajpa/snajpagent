@@ -73,6 +73,9 @@ quantities. Preserve active work, corrections, recent referents and unresolved
 requests through compaction, with older detail recoverable from the session.
 Updating the voice history leaves the working model's in-flight request, cached
 prefix and useful progress intact. Discussing work does not implicitly steer it.
+The interface request has a distinct, stable cache identity derived from the
+session/provider/model identity. It does not reuse or mutate the working model's
+cache identity merely because both conversations select the same model.
 
 Voice uses the current session's environment, working directory and effective
 instructions automatically. It requires no additional memory configuration and
