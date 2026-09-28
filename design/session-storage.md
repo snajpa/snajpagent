@@ -383,6 +383,19 @@ anchors and replay, reconstructs derived state, and reports repairs performed.
 Rebuild indexes and use original defaults for absent optional legacy fields.
 Retain original source bytes even when replacing superseded snapshots.
 
+The internal `snag_store_reconcile_legacy` primitive now provides strict,
+read-only replay from byte zero under a caller-held source writer lock. It uses
+the existing bounded reader, canonical JSON/hash checks and reducer, discards
+derived checkpoint bodies, repairs derived checkpoint pointers in memory and
+reports exact unresolved sequence/byte ranges. It retains known legacy defaults
+but does not silently drop invalid format2 transitions or write cwd refusal
+logs. It reports torn-tail bytes without truncating them, checks source identity
+and size around replay, and publishes the reconstructed state only on success.
+Callback state is provisional. Provider context still needs reconstruction;
+this primitive does not implement anchor-based suffix recovery, binary output,
+bulk scheduling, full equivalence verification or cutover. Ordinary resume
+retains its existing checkpoint and validation behavior.
+
 If corruption prevents complete state, preserve independently verified history
 and recovery evidence without publishing an executable session that invents
 missing authority or completed effects. Report exact unresolved sequence/byte

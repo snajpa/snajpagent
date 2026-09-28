@@ -13,6 +13,27 @@
 enum snag_tail_policy {
     SNAG_TAIL_REJECT, SNAG_TAIL_TRUNCATE, SNAG_TAIL_IGNORE };
 
+struct snag_legacy_recovery {
+    uint64_t verified_records, discarded_checkpoints, repaired_pointers;
+    int64_t verified_end;
+    uint64_t incomplete_tail_bytes;
+    uint64_t problem_seq; /* Zero on success; byte range is [start, end). */
+    int64_t problem_start, problem_end;
+};
+
+/* Explicit offline import only. Caller holds the original source writer lock
+ * throughout replay/publication. No source/cwd writes or descriptor seeks.
+ * Replays canonical records from byte zero, ignoring derived checkpoint bodies
+ * but validating their envelopes and chain. Known legacy defaults still apply;
+ * unresolved transitions fail instead of silently contributing no state.
+ * Initialized state-only restored is replaced only on success. Callback state
+ * is borrowed/provisional until success; checkpoint context must be rebuilt.
+ * Recovery reports the verified prefix and exact failing record range, or the
+ * unresolved suffix when a whole record cannot be read. It is not a converter. */
+int snag_store_reconcile_legacy(struct snag_session *source, struct snag_session *restored,
+    snag_session_event_fn fn, void *opaque, struct snag_legacy_recovery *recovery,
+    char *error, size_t error_size);
+
 json_t *snag_checkpoint_state_encode(const struct snag_session *session);
 int snag_checkpoint_state_decode(const json_t *data, struct snag_session *state);
 

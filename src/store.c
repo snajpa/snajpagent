@@ -874,7 +874,7 @@ download_queue_clear(struct snag_session *session, const json_t *data)
 
 static int
 apply_event(struct snag_session *session, const char *type, const json_t *data,
-            uint64_t seq, bool live, char *error, size_t error_size)
+            uint64_t seq, bool live, bool importing, char *error, size_t error_size)
 {
     uint64_t n;
     const char *event_turn_id = snag_json_string(data, "turn_id");
@@ -970,8 +970,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
                 goto invalid;
             previous = (uint64_t)json_integer_value(item);
         }
-        if (input && apply_event(session, "input_received", input, seq, true, error, error_size) < 0) return -1;
-        if (steering && apply_event(session, "steering_added", steering, seq, true, error, error_size) < 0) return -1;
+        if (input && apply_event(session, "input_received", input, seq, true, importing,
+                                error, error_size) < 0) return -1;
+        if (steering && apply_event(session, "steering_added", steering, seq, true, importing,
+                                   error, error_size) < 0) return -1;
     } else if (strcmp(type, "irc_snapshot") == 0) {
         const char *reason = snag_json_string(data, "reason");
         const char *text = snag_json_string(data, "text");
@@ -2551,8 +2553,8 @@ invalid:
         else
             (void)snprintf(detail, sizeof(detail), "invalid %s transition at sequence %llu", type,
                 (unsigned long long)seq);
-        record_refusal(session, detail);
-        if (!live && session->legacy_journal) {
+        if (!importing) record_refusal(session, detail);
+        if (!live && !importing && session->legacy_journal) {
             /* A format-2 journal predates the current record contract. Its
              * records stay in the durable history, but a record whose shape is
              * no longer reconstructible contributes no state instead of making
@@ -2579,6 +2581,7 @@ static int
 read_event_log(struct snag_session *source, struct snag_session *verifier,
                int64_t boundary, enum snag_tail_policy tail_policy, snag_session_event_fn fn, void *opaque,
                const struct snag_process_state *cursor, bool apply_suffix,
+               struct snag_legacy_recovery *recovery,
                int64_t *complete_end_out, uint64_t *next_seq_out,
                char *error, size_t error_size)
 {
@@ -2622,6 +2625,8 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
              * chunk boundaries need an owned buffer. */
             const unsigned char *newline = memchr(chunk + i, '\n', (size_t)(got - i));
             size_t span = newline ? (size_t)(newline - (chunk + i)) : (size_t)(got - i);
+            if (recovery && newline)
+                recovery->problem_end = read_off - (int64_t)(got - i) + (int64_t)span + 1;
             if (span && (!newline || line.len) && snag_buf_append(&line, chunk + i, span) < 0) {
                 snag_errorf(error, error_size, "event line exceeds checkpoint limit");
                 goto out;
@@ -2645,14 +2650,16 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
             const char *event_type = snag_json_string(event, "type");
             uint64_t pointer = 0u;
             bool indexed = json_integer_value(json_object_get(event, "v")) == 2;
+            bool pointer_valid = !indexed ||
+                (snag_json_integer_u64(event, "checkpoint_offset", &pointer) == 0 &&
+                 pointer <= (uint64_t)complete_end &&
+                 (event_type && !strcmp(event_type, "session_checkpoint") ?
+                    pointer == (uint64_t)complete_end :
+                    ((cursor && !apply_suffix) ||
+                     pointer == (uint64_t)verifier->checkpoint_offset)));
             if ((record_len > SNAG_MAX_EVENT_LINE &&
                  (!event_type || strcmp(event_type, "session_checkpoint"))) ||
-                (indexed && (snag_json_integer_u64(event, "checkpoint_offset", &pointer) < 0 ||
-                 pointer > (uint64_t)complete_end ||
-                 (event_type && !strcmp(event_type, "session_checkpoint") ?
-                    pointer != (uint64_t)complete_end :
-                    ((!cursor || apply_suffix) &&
-                     pointer != (uint64_t)verifier->checkpoint_offset)))) ||
+                (!recovery && !pointer_valid) ||
                 (!indexed && (verifier->checkpoint_seq || verifier->format_version == 4u))) {
                 json_decref(event);
                 (void)snag_fail(error, error_size, EINVAL,
@@ -2660,12 +2667,24 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
                     (unsigned long long)seq);
                 goto out;
             }
-            if (!common_event_valid(event, verifier, seq, &type, &data, error, error_size) ||
-                ((!cursor || apply_suffix) &&
-                 apply_event(verifier, type, data, seq, false, error, error_size) < 0)) {
+            if (!common_event_valid(event, verifier, seq, &type, &data, error, error_size)) {
                 json_decref(event);
                 goto out;
             }
+            if (recovery && seq == 1u && strcmp(type, "session_created")) {
+                json_decref(event);
+                (void)snag_fail(error, error_size, EINVAL, "legacy source has no creation record");
+                goto out;
+            }
+            bool derived = recovery && !strcmp(type, "session_checkpoint");
+            if ((!cursor || apply_suffix) && !derived &&
+                apply_event(verifier, type, data, seq, false, recovery != NULL,
+                            error, error_size) < 0) {
+                json_decref(event);
+                goto out;
+            }
+            if (recovery && indexed)
+                pointer = derived ? (uint64_t)complete_end : (uint64_t)verifier->checkpoint_offset;
             if (indexed && (!cursor || apply_suffix)) {
                 verifier->checkpoint_offset = (int64_t)pointer;
                 if (!strcmp(type, "session_checkpoint")) verifier->checkpoint_seq = seq;
@@ -2681,12 +2700,21 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
                 }
             }
             json_decref(event);
+            if (recovery) {
+                recovery->verified_records = seq;
+                recovery->verified_end = complete_end;
+                if (derived) ++recovery->discarded_checkpoints;
+                if (!pointer_valid) ++recovery->repaired_pointers;
+                recovery->problem_seq = seq + 1u;
+                recovery->problem_start = complete_end;
+                recovery->problem_end = boundary;
+            }
             ++seq;
             snag_buf_reset(&line);
             ++i;
         }
     }
-    if (line.len && (boundary >= 0 || tail_policy == SNAG_TAIL_REJECT)) {
+    if (line.len && ((!recovery && boundary >= 0) || tail_policy == SNAG_TAIL_REJECT)) {
         (void)snag_fail(error, error_size, EINVAL, "event log has an incomplete final suffix");
         goto out;
     }
@@ -2702,6 +2730,52 @@ read_event_log(struct snag_session *source, struct snag_session *verifier,
 
 boundary_error: (void)snag_fail(error, error_size, EIO, "event log ended before recorded boundary");
 out: snag_buf_free(&line);
+    return rc;
+}
+
+int
+snag_store_reconcile_legacy(struct snag_session *source, struct snag_session *restored,
+    snag_session_event_fn fn, void *opaque, struct snag_legacy_recovery *recovery,
+    char *error, size_t error_size)
+{
+    snag_file_info before, after;
+    struct snag_session verifier;
+    int64_t complete_end = 0;
+    uint64_t next_seq = 1u;
+    if (!source || !restored || source == restored || !recovery || source->log_fd < 0 ||
+        source->lock_fd < 0 || source->pending_log || restored->dir_fd >= 0 ||
+        restored->log_fd >= 0 || restored->lock_fd >= 0 || restored->pending_log ||
+        !snag_hex_is_lower(source->id, SNAG_ID_HEX_LEN))
+        return snag_fail(error, error_size, EINVAL,
+                         "invalid locked legacy import source/destination");
+    if (snag_fstat(source->log_fd, &before) < 0 || !S_ISREG(before.st_mode) || before.st_size < 0)
+        return snag_fail(error, error_size, EINVAL, "cannot inspect legacy source");
+    *recovery = (struct snag_legacy_recovery){.problem_seq = 1u, .problem_end = before.st_size};
+    snag_session_init(&verifier);
+    memcpy(verifier.id, source->id, sizeof(verifier.id));
+    int rc = read_event_log(source, &verifier, before.st_size, SNAG_TAIL_IGNORE,
+        fn, opaque, NULL, false, recovery, &complete_end, &next_seq, error, error_size);
+    if (rc == 0 && (snag_fstat(source->log_fd, &after) < 0 ||
+        before.st_dev != after.st_dev || before.st_ino != after.st_ino ||
+        before.st_size != after.st_size || before.st_mtime != after.st_mtime)) {
+        recovery->problem_seq = 1u;
+        recovery->problem_start = 0;
+        recovery->problem_end = before.st_size;
+        rc = snag_fail(error, error_size, EAGAIN, "legacy source changed during import");
+    }
+    if (rc == 0 && next_seq == 1u)
+        rc = snag_fail(error, error_size, EINVAL, "legacy source has no complete events");
+    if (rc == 0) {
+        verifier.log_end = complete_end;
+        verifier.next_seq = next_seq;
+        recovery->incomplete_tail_bytes = (uint64_t)(before.st_size - complete_end);
+        recovery->problem_seq = 0u;
+        recovery->problem_start = recovery->problem_end = 0;
+        snag_session_close(restored);
+        *restored = verifier;
+        return 0;
+    }
+    snag_session_close(&verifier);
     return rc;
 }
 
@@ -2944,7 +3018,8 @@ read_checkpoint_at(struct snag_session *session, int64_t checkpoint_offset,
     const char *type;
     json_t *event_data;
     if (!common_event_valid(record, restored, seq, &type, &event_data, error, error_size) ||
-        apply_event(restored, type, event_data, seq, false, error, error_size) < 0) goto invalid;
+        apply_event(restored, type, event_data, seq, false, false, error, error_size) < 0)
+        goto invalid;
     restored->checkpoint_offset = checkpoint_offset;
     restored->checkpoint_seq = seq;
     restored->log_end = record_end;
@@ -2996,7 +3071,7 @@ scan_checkpoint_suffix(struct snag_session *session, int64_t checkpoint_offset,
     anchor.log_seq = session->next_seq;
     memcpy(anchor.log_hash, session->prev_sha256, sizeof(anchor.log_hash));
     return read_event_log(session, session, boundary, SNAG_TAIL_REJECT, NULL, NULL,
-        &anchor, true, complete_end_out, next_seq_out, error, error_size);
+        &anchor, true, NULL, complete_end_out, next_seq_out, error, error_size);
 }
 
 int
@@ -3012,7 +3087,8 @@ snag_store_scan_log(struct snag_session *session, enum snag_tail_policy tail_pol
         if (scan_checkpoint_suffix(session, checkpoint_offset, boundary,
                                    &complete_end, &next_seq, error, error_size) < 0) return -1;
     } else if (read_event_log(session, session, boundary, tail_policy, NULL, NULL, NULL,
-                              false, &complete_end, &next_seq, error, error_size) < 0) return -1;
+                              false, NULL, &complete_end, &next_seq, error, error_size) < 0)
+        return -1;
     session->log_end = complete_end;
     session->next_seq = next_seq;
     if (next_seq == 1) return snag_fail(error, error_size, EINVAL, "session event log is empty");
@@ -3035,7 +3111,7 @@ snag_session_each_event(struct snag_session *session, snag_session_event_fn fn,
     snag_session_init(&verifier);
     memcpy(verifier.id, session->id, sizeof(verifier.id));
     int rc = read_event_log(session, &verifier, session->log_end,
-                           SNAG_TAIL_REJECT, fn, opaque, NULL, false,
+                           SNAG_TAIL_REJECT, fn, opaque, NULL, false, NULL,
                            NULL, NULL, error, error_size);
     snag_session_close(&verifier);
     return rc;
@@ -3054,7 +3130,7 @@ snag_session_each_event_since(struct snag_session *session, const struct snag_pr
     memcpy(verifier.id, session->id, sizeof(verifier.id));
     memcpy(verifier.prev_sha256, cursor->log_hash, sizeof(verifier.prev_sha256));
     return read_event_log(session, &verifier, session->log_end,
-                          SNAG_TAIL_REJECT, fn, opaque, cursor, false,
+                          SNAG_TAIL_REJECT, fn, opaque, cursor, false, NULL,
                           NULL, NULL, error, error_size);
 }
 
@@ -3078,7 +3154,7 @@ snag_session_each_event_from_checkpoint(struct snag_session *session, const json
     anchor.log_seq = verifier.next_seq;
     memcpy(anchor.log_hash, verifier.prev_sha256, sizeof(anchor.log_hash));
     int rc = read_event_log(session, &verifier, session->log_end,
-                            SNAG_TAIL_REJECT, fn, opaque, &anchor, true,
+                            SNAG_TAIL_REJECT, fn, opaque, &anchor, true, NULL,
                             NULL, NULL, error, error_size);
     snag_session_close(&verifier);
     return rc;
@@ -3200,8 +3276,9 @@ snag_session_commit(struct snag_session *session, const char *type, json_t *data
     }
     if (!data || clone_session_state(session, &staged) < 0) {
         (void)snag_fail(error, error_size, ENOMEM, "cannot stage %s event", type);
-    } else if ((staged.last_time_ms = snag_time_ms(), apply_event(&staged, type, data, session->next_seq, true,
-                          error, error_size)) == 0) {
+    } else if ((staged.last_time_ms = snag_time_ms(),
+                apply_event(&staged, type, data, session->next_seq, true, false,
+                            error, error_size)) == 0) {
         /* Append updates the staged metadata too. No live state is adopted
          * until durable append succeeds; descriptors and dir_path are borrowed. */
         append_attempted = true;

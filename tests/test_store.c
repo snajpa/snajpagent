@@ -1340,6 +1340,213 @@ test_image_compaction_control(struct snag_store *store, const char *cwd)
     snag_session_close(&session);
 }
 
+/* Write intentionally obsolete/malformed records only into an owned fixture.
+ * The normal commit path must continue refusing these records. */
+static void
+append_import_fixture(struct snag_session *source, const char *type, json_t *data,
+    bool bad_pointer)
+{
+    bool checkpoint = !strcmp(type, "session_checkpoint");
+    struct snag_buf bytes = {.max = SNAG_MAX_EVENT_LINE};
+    char digest[SNAG_SHA256_HEX_LEN + 1u];
+    json_t *event = json_pack("{s:O,s:s,s:I,s:s,s:I,s:s,s:i}", "data", data,
+        "prev_sha256", source->prev_sha256, "seq", (json_int_t)source->next_seq,
+        "session_id", source->id, "time_ms", (json_int_t)source->last_time_ms,
+        "type", type, "v", source->format_version == 4u ? 2 : 1);
+    json_decref(data);
+    assert(event);
+    if (source->format_version == 4u)
+        assert(!json_object_set_new(event, "checkpoint_offset", json_integer(bad_pointer ? 0 :
+            checkpoint ? source->log_end : source->checkpoint_offset)));
+    assert(!snag_json_digest(event, digest));
+    assert(!json_object_set_new(event, "event_sha256", json_string(digest)));
+    assert(!snag_json_canonical(event, &bytes) && !snag_buf_putc(&bytes, '\n'));
+    assert(!snag_write_full(source->log_fd, bytes.data, bytes.len));
+    assert(!snag_sync_file(source->log_fd));
+    if (checkpoint) {
+        source->checkpoint_seq = source->next_seq;
+        source->checkpoint_offset = source->log_end;
+    }
+    source->log_end += (int64_t)bytes.len;
+    ++source->next_seq;
+    memcpy(source->prev_sha256, digest, sizeof(digest));
+    snag_buf_free(&bytes);
+    json_decref(event);
+}
+
+static int
+reconcile_count(void *opaque, const struct snag_session *session, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    uint64_t *count = opaque;
+    (void)type; (void)data; (void)error; (void)error_size;
+    assert(session && session->next_seq == seq + 1u && seq == *count + 1u);
+    ++*count;
+    return 0;
+}
+
+static int
+reconcile_append(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct snag_session *source = opaque;
+    (void)state; (void)type; (void)data; (void)error; (void)error_size;
+    if (seq == 1u) assert(!snag_write_full(source->log_fd, "{new", 4u));
+    return 0;
+}
+
+static int
+reconcile_cancel(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    (void)opaque; (void)state; (void)type; (void)data;
+    return seq == 2u ? snag_fail(error, error_size, ECANCELED, "import interrupted") : 0;
+}
+
+static void
+test_legacy_reconciliation(struct snag_store *store, const char *cwd)
+{
+    char error[256];
+    struct snag_session source, restored;
+    struct snag_legacy_recovery recovery;
+    char *work = snag_path_join(cwd, "import-work");
+    char *refusals = snag_path_join(work, "refusals.log");
+    assert(work && refusals && !mkdir(work, 0700));
+    snag_session_init(&source);
+    snag_session_init(&restored);
+    assert(!snag_session_create(store, &source, work, "default", "model", "default",
+                               error, sizeof(error)));
+    commit_event(&source, "goal_started",
+                 goal_started_data("11111111111111111111111111111111", "retain this objective"));
+    commit_event(&source, "timer_scheduled", json_pack("{s:s,s:I,s:s}", "timer_id",
+        "22222222222222222222222222222222", "due_ms", (json_int_t)1234, "text", "remind me"));
+    assert(!snag_session_checkpoint(&source, error, sizeof(error)));
+    commit_event(&source, "effort_changed",
+                 json_pack("{s:s,s:s}", "old_effort", "default", "new_effort", "high"));
+    append_import_fixture(&source, "session_checkpoint",
+        json_pack("{s:i,s:s}", "snapshot_v", 999, "state", "obsolete derived body"), true);
+    int64_t bad_checkpoint = source.checkpoint_offset, checkpoint_end = source.log_end;
+    commit_event(&source, "banner_updated", json_pack("{s:s}", "text", "after bad checkpoint"));
+    uint64_t seen = 0;
+    int64_t size = source.log_end;
+    assert(snag_seek(source.log_fd, 7, SEEK_SET) == 7);
+    assert(!snag_store_reconcile_legacy(&source, &restored, reconcile_count, &seen,
+                                       &recovery, error, sizeof(error)));
+    assert(seen == source.next_seq - 1u && recovery.verified_records == seen);
+    assert(recovery.discarded_checkpoints == 2u && recovery.repaired_pointers == 1u);
+    assert(recovery.verified_end == size && !recovery.incomplete_tail_bytes &&
+           !recovery.problem_seq);
+    assert(restored.goal_status == SNAG_GOAL_ACTIVE && restored.timer_due_ms == 1234u);
+    assert(!strcmp(restored.goal_prompt, "retain this objective"));
+    assert(!strcmp(restored.banner_text, "after bad checkpoint"));
+    assert(!restored.checkpoint_state && !restored.checkpoint_context);
+    assert(restored.dir_fd < 0 && restored.log_fd < 0 && restored.lock_fd < 0);
+    assert(snag_seek(source.log_fd, 0, SEEK_CUR) == 7 && source.log_end == size);
+    json_t *expected = snag_checkpoint_state_encode(&source);
+    json_t *actual = snag_checkpoint_state_encode(&restored);
+    assert(expected && actual && json_equal(expected, actual));
+    json_decref(expected); json_decref(actual);
+    assert_session_lock_retained(&source, "after legacy import");
+
+    /* A torn append is counted, never truncated or interpreted as an event. */
+    assert(!snag_write_full(source.log_fd, "{torn", 5u));
+    assert(snag_seek(source.log_fd, 7, SEEK_SET) == 7);
+    assert(!snag_store_reconcile_legacy(&source, &restored, NULL, NULL,
+                                       &recovery, error, sizeof(error)));
+    assert(recovery.incomplete_tail_bytes == 5u && recovery.verified_end == size);
+    assert(snag_seek(source.log_fd, 0, SEEK_CUR) == 7);
+    struct stat st;
+    assert(!fstat(source.log_fd, &st) && st.st_size == size + 5);
+    assert(!snag_truncate(source.log_fd, size)); /* Fixture cleanup, not importer behavior. */
+
+    const char *saved_prompt = restored.goal_prompt;
+    uint64_t saved_seq = restored.next_seq;
+    assert(snag_store_reconcile_legacy(&source, &restored, reconcile_cancel, NULL,
+                                      &recovery, error, sizeof(error)) < 0 && errno == ECANCELED);
+    assert(recovery.verified_records == 1u && recovery.problem_seq == 2u);
+    assert(recovery.problem_start == recovery.verified_end &&
+           recovery.problem_end > recovery.problem_start);
+    assert(restored.goal_prompt == saved_prompt && restored.next_seq == saved_seq);
+    assert(snag_store_reconcile_legacy(&source, &restored, reconcile_append, &source,
+                                      &recovery, error, sizeof(error)) < 0 && errno == EAGAIN);
+    assert(strstr(error, "changed during import") && recovery.problem_seq == 1u);
+    assert(recovery.problem_start == 0 && recovery.problem_end == size);
+    assert(restored.goal_prompt == saved_prompt && restored.next_seq == saved_seq);
+    assert(!snag_truncate(source.log_fd, size));
+
+    /* Discarding a snapshot body must never bypass canonical hash verification. */
+    char record[512];
+    ssize_t n = pread(source.log_fd, record, sizeof(record) - 1u, bad_checkpoint);
+    assert(n > 0);
+    record[n] = '\0';
+    char *value = strstr(record, "obsolete derived body");
+    assert(value);
+    int writer = openat(source.dir_fd, "events.jsonl", O_WRONLY | O_CLOEXEC);
+    int64_t changed_offset = bad_checkpoint + (int64_t)(value - record);
+    assert(writer >= 0 && pwrite(writer, "O", 1u, changed_offset) == 1);
+    assert(snag_store_reconcile_legacy(&source, &restored, NULL, NULL,
+                                      &recovery, error, sizeof(error)) < 0);
+    assert(strstr(error, "digest mismatch") && recovery.problem_seq == 6u);
+    assert(recovery.verified_records == 5u && recovery.verified_end == bad_checkpoint);
+    assert(recovery.problem_start == bad_checkpoint && recovery.problem_end == checkpoint_end);
+    assert(restored.goal_prompt == saved_prompt && restored.next_seq == saved_seq);
+    assert(pwrite(writer, "o", 1u, changed_offset) == 1 && !close(writer));
+
+    /* A committed invalid semantic event is not a replaceable checkpoint. */
+    append_import_fixture(&source, "goal_completed",
+        goal_actor_data("33333333333333333333333333333333", "model"), false);
+    assert(snag_store_reconcile_legacy(&source, &restored, NULL, NULL,
+                                      &recovery, error, sizeof(error)) < 0);
+    assert(strstr(error, "goal_completed") && recovery.problem_seq == saved_seq);
+    assert(recovery.verified_end == size && recovery.problem_start == size);
+    assert(recovery.problem_end == source.log_end && restored.next_seq == saved_seq);
+    assert(restored.goal_prompt == saved_prompt && restored.goal_status == SNAG_GOAL_ACTIVE);
+    assert(access(refusals, F_OK) < 0 && errno == ENOENT);
+    assert(!snag_truncate(source.log_fd, size));
+    source.log_end = size; source.next_seq = saved_seq;
+    memcpy(source.prev_sha256, restored.prev_sha256, sizeof(source.prev_sha256));
+    append_import_fixture(&source, "future_required_event", json_object(), false);
+    assert(snag_store_reconcile_legacy(&source, &restored, NULL, NULL,
+                                      &recovery, error, sizeof(error)) < 0 && errno == ENOTSUP);
+    assert(recovery.problem_seq == saved_seq && recovery.problem_start == size &&
+           recovery.problem_end == source.log_end && restored.next_seq == saved_seq);
+    int lock = source.lock_fd;
+    source.lock_fd = -1;
+    assert(snag_store_reconcile_legacy(&source, &restored, NULL, NULL,
+                                      &recovery, error, sizeof(error)) < 0 && errno == EINVAL);
+    source.lock_fd = lock;
+    assert(restored.goal_prompt == saved_prompt);
+    snag_session_close(&source);
+    snag_session_close(&restored);
+
+    /* Format2's permissive ordinary replay must not hide lost state in import. */
+    assert(!snag_session_create(store, &source, work, "default", "model", "high",
+                               error, sizeof(error)));
+    assert(!snag_truncate(source.log_fd, 0));
+    source.log_end = 0; source.next_seq = 1u; source.format_version = 2u;
+    memset(source.prev_sha256, '0', SNAG_SHA256_HEX_LEN);
+    append_import_fixture(&source, "session_created", json_pack("{s:s,s:s,s:s,s:i,s:s,s:s}",
+        "default_effort", "high", "default_model", "model", "default_provider", "default",
+        "format", 2, "protocol", "responses", "workspace", work), false);
+    size = source.log_end;
+    append_import_fixture(&source, "effort_changed",
+        json_pack("{s:s,s:s}", "old_effort", "not-the-old-value", "new_effort", "low"), false);
+    assert(snag_store_reconcile_legacy(&source, &restored, NULL, NULL,
+                                      &recovery, error, sizeof(error)) < 0);
+    assert(strstr(error, "effort_changed") && recovery.verified_records == 1u);
+    assert(recovery.problem_seq == 2u && recovery.problem_start == size);
+    assert(recovery.problem_end == source.log_end && restored.log_fd < 0 && !restored.cwd);
+    assert(access(refusals, F_OK) < 0 && errno == ENOENT);
+    assert(!snag_truncate(source.log_fd, 0));
+    assert(snag_store_reconcile_legacy(&source, &restored, NULL, NULL,
+                                      &recovery, error, sizeof(error)) < 0);
+    assert(strstr(error, "no complete events") && !recovery.verified_records &&
+           recovery.problem_seq == 1u && !recovery.problem_start && !recovery.problem_end);
+    snag_session_close(&source);
+    snag_session_close(&restored);
+    free(refusals); free(work);
+}
+
 static void
 test_checkpoint_text_width(void)
 {
@@ -1397,6 +1604,7 @@ main(void)
     test_upload_staging_lifecycle(&store, cwd);
     test_checkpoint_optional_download_queue(&store, cwd);
     test_one_file_checkpoint(&store, cwd);
+    test_legacy_reconciliation(&store, cwd);
     test_large_embedded_checkpoint(&store, cwd);
     test_failed_append_retry(&store, cwd);
     test_pending_input_media(&store, cwd);
