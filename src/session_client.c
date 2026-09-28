@@ -1,13 +1,14 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "session_client.h"
 #include "base.h"
+#include "fs.h"
 #include "term_host.h"
 
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
-#if defined(__linux__) && !defined(_WIN32)
+#ifndef _WIN32
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
@@ -365,6 +366,31 @@ terminal_geometry(struct snag_session_client *client)
                                       size.ws_col ? size.ws_col : 80u);
 }
 
+static int
+terminal_open(void)
+{
+    /* Reopen, rather than dup, so nonblocking I/O cannot change the shell's
+     * inherited open-file description. Check the reopened device identity. */
+    char path[SNAG_PATH_MAX_BYTES + 1u];
+    struct stat before, after;
+    int rc = ttyname_r(STDIN_FILENO, path, sizeof(path));
+    if (rc) return snag_errno(rc > 0 ? rc : errno);
+    if (fstat(STDIN_FILENO, &before) < 0) return -1;
+    int fd = open(path, O_RDWR | O_NOCTTY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    if (snag_fd_cloexec(fd) < 0 || fstat(fd, &after) < 0) {
+        int saved = errno;
+        (void)close(fd);
+        return snag_errno(saved);
+    }
+    if (before.st_dev != after.st_dev || before.st_ino != after.st_ino ||
+        before.st_rdev != after.st_rdev) {
+        (void)close(fd);
+        return snag_errno(ESTALE);
+    }
+    return fd;
+}
+
 int
 snag_session_client_terminal(int peer, bool attached, uint64_t child,
                              snag_session_connect_fn connect, void *opaque,
@@ -383,10 +409,7 @@ snag_session_client_terminal(int peer, bool attached, uint64_t child,
         errno = ENOTTY;
         goto out;
     }
-    /* Independent flags: making this descriptor nonblocking must not change
-     * the shell's inherited open-file description. Linux native endpoints
-     * already require procfs for held-directory socket addressing. */
-    terminal = open("/proc/self/fd/0", O_RDWR | O_NOCTTY | O_CLOEXEC);
+    terminal = terminal_open();
     if (terminal < 0 || tcgetattr(terminal, &original) < 0) goto out;
     if (snag_session_client_init(&client, terminal, attached ? peer : -1) < 0) goto out;
     terminal = -1;
@@ -590,4 +613,4 @@ snag_session_client_step(struct snag_session_client *client, int timeout_ms,
     *event = 0;
     return snag_errno(ENOTSUP);
 }
-#endif /* __linux__ && !_WIN32 */
+#endif /* !_WIN32 */

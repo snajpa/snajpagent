@@ -12,10 +12,17 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(__linux__) && !defined(_WIN32)
+#ifndef _WIN32
 #include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
+#if defined(__linux__)
+#include <pty.h>
+#elif defined(__FreeBSD__)
+#include <libutil.h>
+#else
+#include <util.h>
+#endif
 #include <signal.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -96,7 +103,6 @@ snag_session_process_start(struct snag_session_process *process)
     struct winsize geometry;
     struct stat terminal, other;
     int pair[2] = {-1, -1};
-    char name[128];
     *process = (struct snag_session_process){.master = -1, .slave = -1, .peer = -1};
 
     if (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO) || !isatty(STDERR_FILENO))
@@ -110,16 +116,11 @@ snag_session_process_start(struct snag_session_process *process)
     if (tcgetattr(STDIN_FILENO, &modes) < 0 ||
         ioctl(STDIN_FILENO, TIOCGWINSZ, &geometry) < 0) return -1;
     if (geometry.ws_col && geometry.ws_col < SNAG_TERM_MIN_COLUMNS) return snag_errno(ENOTTY);
-    process->master = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC | O_NONBLOCK);
-    if (process->master < 0 || grantpt(process->master) < 0 ||
-        unlockpt(process->master) < 0) goto fail;
-    int rc = ptsname_r(process->master, name, sizeof(name));
-    if (rc) {
-        errno = rc;
-        goto fail;
-    }
-    process->slave = open(name, O_RDWR | O_NOCTTY | O_CLOEXEC);
-    if (process->slave < 0 || tcsetattr(process->slave, TCSANOW, &modes) < 0 ||
+    if (openpty(&process->master, &process->slave, NULL, NULL, NULL) < 0) goto fail;
+    int flags = fcntl(process->master, F_GETFL);
+    if (flags < 0 || fcntl(process->master, F_SETFL, flags | O_NONBLOCK) < 0 ||
+        snag_fd_cloexec(process->master) < 0 || snag_fd_cloexec(process->slave) < 0 ||
+        tcsetattr(process->slave, TCSANOW, &modes) < 0 ||
         ioctl(process->slave, TIOCSWINSZ, &geometry) < 0 ||
         snag_session_stream_pair(pair) < 0) goto fail;
     pid_t child = fork();
@@ -194,10 +195,22 @@ stream_socket(void)
 static int
 same_user(int fd)
 {
+#if defined(__linux__)
     struct ucred peer;
     socklen_t size = sizeof(peer);
     if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &size) < 0) return -1;
     if (size != sizeof(peer) || peer.uid != geteuid()) return snag_errno(EACCES);
+#elif defined(__NetBSD__)
+    struct unpcbid peer;
+    socklen_t size = sizeof(peer);
+    if (getsockopt(fd, 0, LOCAL_PEEREID, &peer, &size) < 0) return -1;
+    if (size != sizeof(peer) || peer.unp_euid != geteuid()) return snag_errno(EACCES);
+#else
+    uid_t user;
+    gid_t group;
+    if (getpeereid(fd, &user, &group) < 0) return -1;
+    if (user != geteuid()) return snag_errno(EACCES);
+#endif
     return 0;
 }
 
@@ -207,6 +220,9 @@ endpoint_address(int dir_fd, const char *dir_path, struct sockaddr_un *address)
     if (private_directory(dir_fd) < 0) return -1;
     memset(address, 0, sizeof(*address));
     address->sun_family = AF_UNIX;
+#ifndef __linux__
+    address->sun_len = sizeof(*address);
+#endif
     (void)dir_path;
     int count = snprintf(address->sun_path, sizeof(address->sun_path),
                           "%s", SNAG_SESSION_ENDPOINT);
@@ -257,7 +273,7 @@ endpoint_link(int fd, int dir_fd, const struct sockaddr_un *address, bool create
 static int
 endpoint_stat(int dir_fd, struct stat *st)
 {
-    if (fstatat(dir_fd, SNAG_SESSION_ENDPOINT, st, AT_SYMLINK_NOFOLLOW) < 0) return -1;
+    if (snag_lstat_at(dir_fd, SNAG_SESSION_ENDPOINT, st) < 0) return -1;
     if (!S_ISSOCK(st->st_mode) || st->st_uid != geteuid() || (st->st_mode & 0077u))
         return snag_errno(EACCES);
     return 0;
@@ -296,7 +312,7 @@ remove_stale_endpoint(int dir_fd, const char *dir_path)
     if (errno != ECONNREFUSED) return -1;
     if (endpoint_stat(dir_fd, &after) < 0) return -1;
     if (before.st_dev != after.st_dev || before.st_ino != after.st_ino) return snag_errno(ESTALE);
-    return unlinkat(dir_fd, SNAG_SESSION_ENDPOINT, 0);
+    return snag_unlink_at(dir_fd, SNAG_SESSION_ENDPOINT, false);
 }
 
 int
@@ -314,17 +330,17 @@ snag_session_listener_open(struct snag_session_listener *listener, int dir_fd,
         return snag_errno(EACCES);
     if (endpoint_address(dir_fd, dir_path, &address) < 0 ||
         remove_stale_endpoint(dir_fd, dir_path) < 0) return -1;
-    listener->dir_fd = dup(dir_fd);
+    listener->dir_fd = snag_dup_read(dir_fd);
     if (listener->dir_fd < 0) return -1;
     if (snag_fd_cloexec(listener->dir_fd) < 0) goto fail;
     fd = stream_socket();
     if (fd < 0) goto fail;
     listener->fd = fd;
     if (endpoint_link(fd, dir_fd, &address, true) < 0) goto fail;
-    if (fstatat(dir_fd, SNAG_SESSION_ENDPOINT, &st, AT_SYMLINK_NOFOLLOW) < 0) goto fail;
+    if (endpoint_stat(dir_fd, &st) < 0) goto fail;
     listener->device = (uint64_t)st.st_dev;
     listener->inode = (uint64_t)st.st_ino;
-    if (fchmodat(dir_fd, SNAG_SESSION_ENDPOINT, 0600, 0) < 0 || listen(fd, 8) < 0) goto fail;
+    if (listen(fd, 8) < 0) goto fail;
     return 0;
 fail:
     saved = errno;
@@ -337,9 +353,9 @@ snag_session_listener_close(struct snag_session_listener *listener)
 {
     struct stat st;
     if (listener->dir_fd >= 0 &&
-        fstatat(listener->dir_fd, SNAG_SESSION_ENDPOINT, &st, AT_SYMLINK_NOFOLLOW) == 0 &&
+        snag_lstat_at(listener->dir_fd, SNAG_SESSION_ENDPOINT, &st) == 0 &&
         (uint64_t)st.st_dev == listener->device && (uint64_t)st.st_ino == listener->inode)
-        (void)unlinkat(listener->dir_fd, SNAG_SESSION_ENDPOINT, 0);
+        (void)snag_unlink_at(listener->dir_fd, SNAG_SESSION_ENDPOINT, false);
     if (listener->fd >= 0) (void)close(listener->fd);
     if (listener->dir_fd >= 0) (void)close(listener->dir_fd);
     *listener = (struct snag_session_listener){.fd = -1, .dir_fd = -1};

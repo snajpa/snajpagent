@@ -2836,6 +2836,9 @@ test_session_transport(void)
            cwd_before.st_ino == cwd_after.st_ino);
     free(moved);
     free(root);
+#elif !defined(_WIN32)
+    assert(snag_session_host_supported());
+    (void)received;
 #else
     assert(!snag_session_host_supported());
     (void)received;

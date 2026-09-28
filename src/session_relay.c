@@ -5,7 +5,7 @@
 #include <errno.h>
 #include <string.h>
 
-#if defined(__linux__) && !defined(_WIN32)
+#ifndef _WIN32
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/ioctl.h>
@@ -416,4 +416,4 @@ snag_session_relay_control(struct snag_session_relay *relay, enum snag_session_m
     (void)length;
     return snag_errno(ENOTSUP);
 }
-#endif /* __linux__ && !_WIN32 */
+#endif /* !_WIN32 */
