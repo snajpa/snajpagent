@@ -23,7 +23,7 @@ roundtrip(const struct snag_binary_event *event)
     struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
     assert(!snag_binary_event_encode(&payload, event));
     struct snag_binary_record record = {
-        .kind = (uint16_t)event->kind, .version = 1u,
+        .kind = (uint16_t)event->kind, .version = snag_binary_event_version(event->kind),
         .payload = payload.data, .size = payload.len
     };
     struct snag_binary_event decoded;
@@ -71,9 +71,9 @@ roundtrip(const struct snag_binary_event *event)
         assert_rejected(record);
     }
     record.size = payload.len;
-    record.version = 2u;
+    record.version = snag_binary_event_version(event->kind) + 1u;
     assert_rejected(record);
-    record.version = 1u;
+    record.version = snag_binary_event_version(event->kind);
     record.flags = SNAG_BINARY_RECORD_OPTIONAL;
     assert_rejected(record); /* Semantic records cannot claim optional status. */
     record.flags = 0u;
@@ -670,7 +670,7 @@ test_input_references(void)
     /* Framing integrity alone cannot establish supported or valid typed semantics. */
     for (int variant = 0; variant < 3; ++variant) {
         struct snag_binary_record changed = record;
-        if (variant == 0) changed.version = 2u;
+        if (variant == 0) changed.version = 3u;
         if (variant == 1) changed.flags = SNAG_BINARY_RECORD_OPTIONAL;
         if (variant == 2) {
             changed.kind = 0x8001u;
@@ -761,6 +761,192 @@ test_input_references(void)
     snag_buf_free(&bytes);
 }
 
+static void
+test_input_reference_variants(void)
+{
+    struct snag_buf instructions = {.max = SNAG_MAX_EVENT_LINE};
+    struct snag_buf parts = {.max = SNAG_MAX_EVENT_LINE};
+    struct snag_buf source = {.max = SNAG_MAX_EVENT_LINE};
+    struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
+    struct snag_buf bytes = {.max = SNAG_BINARY_BATCH_MAX};
+    assert(!snag_binary_instructions_encode(&instructions, NULL, 0));
+    struct snag_binary_part part = {.kind = SNAG_BINARY_PART_TEXT, .text = text("attachment")};
+    assert(!snag_binary_content_encode(&parts, &part, 1u));
+    struct snag_binary_event event = {.kind = SNAG_BINARY_INPUT_RECEIVED};
+    event.data.input.selection = (struct snag_binary_selection){text("p"), text("m"), text("e")};
+    event.data.input.text = text("original");
+    event.data.input.content = (struct snag_binary_content){parts.data, parts.len};
+    event.data.input.instructions = (struct snag_binary_instructions){
+        instructions.data, instructions.len
+    };
+    assert(!snag_binary_event_encode(&source, &event));
+    struct snag_binary_record original = {
+        .kind = event.kind, .version = 2u, .payload = source.data, .size = source.len
+    };
+    struct snag_binary_batch batch;
+    input_reference_batch(&original, &bytes, &batch);
+    struct snag_binary_input_reference references[3] = {0};
+    for (size_t i = 0; i < 3u; ++i) {
+        references[i].field = (enum snag_binary_input_leaf)(i + 1u);
+        assert(!snag_binary_input_ref_create(&batch, 2u, references[i].field,
+            &references[i].target));
+    }
+    event = (struct snag_binary_event){.kind = SNAG_BINARY_FUTURE_TURN_EDITED};
+    event.data.queued.id[0] = 7u;
+    event.data.queued.text_ref = references[0];
+    event.data.queued.content_ref = references[1];
+    roundtrip(&event);
+    assert(!snag_binary_event_encode(&payload, &event));
+    static const unsigned char golden[59] = {
+        [0] = 7u, [16] = 16u,
+        [17] = 255u, [18] = 255u, [19] = 255u, [20] = 255u, [21] = 1u,
+        [22] = 2u, [30] = 33u, [34] = 8u,
+        [38] = 255u, [39] = 255u, [40] = 255u, [41] = 255u, [42] = 2u,
+        [43] = 2u, [51] = 41u, [55] = 19u
+    };
+    assert(payload.len == sizeof(golden) && !memcmp(payload.data, golden, sizeof(golden)));
+    struct snag_binary_record record = {
+        .kind = event.kind, .version = 1u, .payload = payload.data, .size = payload.len
+    };
+    assert_rejected(record); /* Reference bytes cannot masquerade as a v1 literal. */
+    record.version = 2u;
+    struct snag_binary_event decoded;
+    assert(!snag_binary_event_decode(&record, &decoded));
+    assert(!decoded.data.queued.text.data && !decoded.data.queued.content.data);
+    const unsigned char *view;
+    assert(!snag_binary_input_ref_resolve(&decoded.data.queued.text_ref.target, &batch,
+        decoded.data.queued.text_ref.field, &view));
+    assert(!memcmp(view, "original", 8u));
+
+    /* Two metadata edits retain the same canonical input and attachment once. */
+    struct snag_buf edited = {.max = SNAG_MAX_EVENT_LINE};
+    event.data.queued.read_only = true;
+    assert(!snag_binary_event_encode(&edited, &event));
+    event.data.queued.read_only = false;
+    struct snag_binary_record records[] = {
+        {.kind = SNAG_BINARY_INPUT_CANCELLED, .version = 1u}, original, record,
+        {.kind = event.kind, .version = 2u, .payload = edited.data, .size = edited.len}
+    };
+    struct snag_binary_identity identity = {.id = {1}, .created_ms = 1u};
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    snag_binary_header_encode(header, &identity);
+    struct snag_binary_anchor anchor, next;
+    assert(!snag_binary_header_decode(header, sizeof(header), &identity, &anchor));
+    snag_buf_reset(&bytes);
+    assert(!snag_binary_batch_encode(&bytes, &anchor, records, 4u, 0u));
+    assert(!snag_binary_batch_decode(bytes.data, bytes.len, &anchor, &batch, &next));
+    size_t cursor = SNAG_BINARY_BATCH_HEADER_SIZE;
+    unsigned int originals = 0u;
+    unsigned int attachments = 0u;
+    struct snag_binary_record item;
+    uint64_t sequence;
+    for (size_t i = 0; i < 4u; ++i) {
+        assert(!snag_binary_record_next(&batch, &cursor, &item, &sequence));
+        for (size_t j = 0; j + 8u <= item.size; ++j) {
+            if (!memcmp(item.payload + j, "original", 8u)) ++originals;
+            if (j + 10u <= item.size && !memcmp(item.payload + j, "attachment", 10u))
+                ++attachments;
+        }
+        if (sequence < 3u) continue;
+        assert(!snag_binary_event_decode(&item, &decoded));
+        assert(decoded.data.queued.read_only == (sequence == 4u));
+        assert(!snag_binary_input_ref_resolve(&decoded.data.queued.text_ref.target, &batch,
+            decoded.data.queued.text_ref.field, &view));
+        assert(!memcmp(view, "original", 8u));
+        assert(!snag_binary_input_ref_resolve(&decoded.data.queued.content_ref.target, &batch,
+            decoded.data.queued.content_ref.field, &view));
+        assert(!memcmp(view, parts.data, parts.len));
+        assert_input_leaf_missing(&batch, sequence, SNAG_BINARY_INPUT_TEXT);
+    }
+    assert(originals == 1u && attachments == 1u);
+    snag_buf_free(&edited);
+    /* A reference-valued field cannot become a new canonical leaf. */
+    input_reference_batch(&record, &bytes, &batch);
+    assert_input_leaf_missing(&batch, 2u, SNAG_BINARY_INPUT_TEXT);
+    assert_input_leaf_missing(&batch, 2u, SNAG_BINARY_INPUT_CONTENT);
+    for (unsigned int field = 0; field <= 6u; ++field) {
+        payload.data[21] = (unsigned char)field;
+        if (field == SNAG_BINARY_INPUT_TEXT || field == SNAG_BINARY_INPUT_VOICE_TRANSCRIPT ||
+            field == SNAG_BINARY_INPUT_VOICE_REQUEST) {
+            assert(!snag_binary_event_decode(&record, &decoded));
+        } else {
+            assert_rejected(record);
+        }
+    }
+    payload.data[21] = 1u;
+    payload.data[22] = 0;
+    assert_rejected(record);
+    payload.data[22] = 2u;
+    payload.data[34] = 0;
+    assert_rejected(record);
+    payload.data[34] = 8u;
+    payload.data[55] = 8u;
+    assert_rejected(record);
+    payload.data[55] = 19u;
+    size_t saved = payload.len;
+    event.data.queued.text = text("ambiguous");
+    assert(snag_binary_event_encode(&payload, &event) < 0 && payload.len == saved);
+    event.data.queued.text = (struct snag_binary_text){0};
+    const struct snag_binary_ref invalid[] = {
+        {0u, 33u, 8u}, {UINT64_MAX, 33u, 8u}, {2u, UINT32_MAX, 8u},
+        {2u, 33u, 0u}, {2u, 33u, SNAG_MAX_QUEUED_TEXT + 1u}
+    };
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(*invalid); ++i) {
+        event.data.queued.text_ref.target = invalid[i];
+        assert(snag_binary_event_encode(&payload, &event) < 0 && payload.len == saved);
+    }
+    event.data.queued.text_ref = references[1];
+    assert(snag_binary_event_encode(&payload, &event) < 0 && payload.len == saved);
+    event.data.queued.text_ref = references[0];
+    event.data.queued.text_ref.field = 0;
+    assert(snag_binary_event_encode(&payload, &event) < 0 && payload.len == saved);
+
+    const enum snag_binary_kind kinds[] = {
+        SNAG_BINARY_INPUT_RECEIVED, SNAG_BINARY_STEERING_ADDED, SNAG_BINARY_IRC_REPLY_REMINDER,
+        SNAG_BINARY_FUTURE_TURN_QUEUED
+    };
+    for (size_t i = 0; i < sizeof(kinds) / sizeof(*kinds); ++i) {
+        event = (struct snag_binary_event){.kind = kinds[i]};
+        if (i == 0u) {
+            event.data.input.selection = (struct snag_binary_selection){
+                text("p"), text("m"), text("e")
+            };
+            event.data.input.text_ref = references[0];
+            event.data.input.content_ref = references[1];
+            event.data.input.instructions_ref = references[2];
+        } else if (i < 3u) {
+            event.data.steering_input.text_ref = references[0];
+            event.data.steering_input.content_ref = references[1];
+        } else {
+            event.data.queued.text_ref = references[0];
+            event.data.queued.content_ref = references[1];
+        }
+        roundtrip(&event);
+    }
+    event.data.queued.content_ref = (struct snag_binary_input_reference){0};
+    event.data.queued.content = (struct snag_binary_content){parts.data, parts.len};
+    roundtrip(&event); /* Literal attachments beside referenced text. */
+    event.data.queued.content = (struct snag_binary_content){0};
+    event.data.queued.has_voice = true;
+    event.data.queued.while_kind = SNAG_BINARY_WHILE_NULL;
+    event.data.queued.voice = (struct snag_binary_voice_source){
+        .input_id = text("i"), .response_id = text("r"), .call_id = text("c"),
+        .provider = text("p"), .model = text("m"),
+        .transcript_ref = references[0], .request_ref = references[0]
+    };
+    roundtrip(&event);
+    event.data.queued.voice.transcript = text("ambiguous");
+    assert(snag_binary_event_encode(&payload, &event) < 0 && payload.len == saved);
+    assert(snag_binary_event_version(SNAG_BINARY_INPUT_RECEIVED) == 2u);
+    assert(snag_binary_event_version(SNAG_BINARY_GOAL_STARTED) == 1u);
+    assert(!snag_binary_event_version(31));
+    snag_buf_free(&instructions);
+    snag_buf_free(&parts);
+    snag_buf_free(&source);
+    snag_buf_free(&payload);
+    snag_buf_free(&bytes);
+}
+
 void
 test_store_binary_event(void)
 {
@@ -769,6 +955,7 @@ test_store_binary_event(void)
     test_queued_input();
     test_metadata();
     test_input_references();
+    test_input_reference_variants();
     static const unsigned char text[] = "goal caf\xc3\xa9";
     struct snag_binary_event event = {.kind = SNAG_BINARY_TIMER_SCHEDULED};
     for (size_t i = 0; i < 16u; ++i) event.data.timer.id[i] = (unsigned char)i;

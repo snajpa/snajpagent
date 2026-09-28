@@ -116,6 +116,22 @@ int snag_binary_instructions_next(const struct snag_binary_instructions *instruc
 enum snag_binary_input_origin { SNAG_BINARY_INPUT_DEFAULT = 0, SNAG_BINARY_INPUT_TIMER = 1 };
 struct snag_binary_ids { const unsigned char (*values)[16]; size_t count; };
 
+enum snag_binary_input_leaf {
+    SNAG_BINARY_INPUT_TEXT = 1,
+    SNAG_BINARY_INPUT_CONTENT = 2,
+    SNAG_BINARY_INPUT_INSTRUCTIONS = 3,
+    SNAG_BINARY_INPUT_VOICE_TRANSCRIPT = 4,
+    SNAG_BINARY_INPUT_VOICE_REQUEST = 5
+};
+
+/* All-zero means the adjacent literal is used. A reference names a canonical
+ * source field, with the adjacent literal empty. Decode preserves the reference;
+ * callers resolve it before semantic adoption, retaining its original identity. */
+struct snag_binary_input_reference {
+    enum snag_binary_input_leaf field;
+    struct snag_binary_ref target;
+};
+
 enum snag_binary_while_turn {
     SNAG_BINARY_WHILE_EMPTY = 0, SNAG_BINARY_WHILE_ID = 1, SNAG_BINARY_WHILE_NULL = 2
 };
@@ -125,6 +141,7 @@ struct snag_binary_voice_source {
     unsigned char connection_id[16];
     struct snag_binary_text input_id, response_id, call_id;
     struct snag_binary_text provider, model, transcript, request;
+    struct snag_binary_input_reference transcript_ref, request_ref;
 };
 
 struct snag_binary_selection {
@@ -163,7 +180,8 @@ struct snag_binary_event {
             struct snag_binary_selection selection;
             struct snag_binary_text text;
             struct snag_binary_instructions instructions;
-            struct snag_binary_content content; /* {NULL, 0} means absent. */
+            struct snag_binary_content content; /* Absent when content_ref is also zero. */
+            struct snag_binary_input_reference text_ref, content_ref, instructions_ref;
             uint64_t received_ms;
             enum snag_binary_input_origin origin;
             bool read_only;
@@ -172,6 +190,7 @@ struct snag_binary_event {
             unsigned char id[16], turn[16];
             struct snag_binary_text text;
             struct snag_binary_content content;
+            struct snag_binary_input_reference text_ref, content_ref;
             uint64_t received_ms;
             bool has_received_ms;
         } steering_input;
@@ -191,6 +210,7 @@ struct snag_binary_event {
             struct snag_binary_text text;
             struct snag_binary_content content;
             struct snag_binary_voice_source voice;
+            struct snag_binary_input_reference text_ref, content_ref;
         } queued;
         struct {
             unsigned char id[16];
@@ -207,29 +227,29 @@ struct snag_binary_event {
     } data;
 };
 
-/* Typed payload codec, version 1, flags 0. The encoder appends atomically to
- * out. The decoder borrows immutable record bytes and leaves out unchanged on
+/* Return the current payload version, or zero for an unsupported kind.
+ * Input version 2 adds references; other kinds use 1. */
+uint16_t snag_binary_event_version(enum snag_binary_kind kind);
+
+/* Encode the current payload version, flags zero, appending atomically to out.
+ * Decode also accepts input version 1's literal-only fields. It borrows immutable
+ * record bytes and leaves out unchanged on
  * failure. It returns 1 only for an unknown, explicitly optional metadata kind,
  * -1 for malformed/unsupported required semantics, and 0 for a decoded event.
- * Reducer checks still govern state transitions, authority and current IDs. */
+ * References require resolution before adoption; reducer checks still govern
+ * state transitions, authority and current IDs. */
 int snag_binary_event_encode(struct snag_buf *out, const struct snag_binary_event *event);
 int snag_binary_event_decode(const struct snag_binary_record *record,
     struct snag_binary_event *out);
 
-enum snag_binary_input_leaf {
-    SNAG_BINARY_INPUT_TEXT = 1,
-    SNAG_BINARY_INPUT_CONTENT = 2,
-    SNAG_BINARY_INPUT_INSTRUCTIONS = 3,
-    SNAG_BINARY_INPUT_VOICE_TRANSCRIPT = 4,
-    SNAG_BINARY_INPUT_VOICE_REQUEST = 5
-};
-
 /* Create/resolve whole input-field references in a verified immutable batch
  * from the same journal. Text excludes its length prefix; content/instructions
- * include their complete typed list. Resolve validates the source event and
- * exact field identity, including empty versus absent fields. Views borrow the
- * batch. Outputs stay unchanged on failure. The caller still checks causal
- * ordering, receipt/provenance identity and reducer authority before adoption. */
+ * include their complete typed list. Resolve validates the source structure and
+ * exact literal-field identity, including empty versus absent fields. Reference
+ * chains are rejected: reuse the original reference directly. Views borrow the
+ * batch. Outputs stay unchanged on failure. The caller resolves every required
+ * reference and checks causal ordering, receipt/provenance identity, target-field
+ * constraints and reducer authority before adoption. */
 int snag_binary_input_ref_create(const struct snag_binary_batch *batch, uint64_t sequence,
     enum snag_binary_input_leaf field, struct snag_binary_ref *out);
 int snag_binary_input_ref_resolve(const struct snag_binary_ref *reference,

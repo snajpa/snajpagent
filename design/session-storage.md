@@ -282,8 +282,25 @@ Identical bytes in provider metadata, partial strings and nested content text
 do not identify the original-input field. Empty instruction lists retain their
 four-byte encoding; absent fields cannot supply a reference. The caller must
 still check causal ordering, receipt/provenance identity and reducer authority.
-Literal/reference event variants and their runtime integration remain pending;
-these helpers currently exercise the existing inline canonical leaves in tests.
+Input payload version 2 preserves version 1's literal encodings and adds a
+reference alternative at each original text/content/instruction/voice-text
+field. A four-byte `0xffffffff` replaces the literal length or list count and
+is followed by a one-byte source-field ID and the 16-byte reference. Source-field IDs are
+1 original text, 2 complete content, 3 instructions, 4 voice transcript and 5 voice
+request. Text fields can reuse any of the three text leaf roles; lists require
+the matching list role. Existing field-size bounds apply to referenced sizes.
+Each C value supplies either its literal or its reference; conflicting values
+are rejected. Optional content retains its presence bit even when referenced.
+
+The decoder accepts input payload versions 1/2; a version 1 record cannot carry
+reference markers. Other current families remain at version 1. Encoders report
+their required version through `snag_binary_event_version`. Structural decode
+retains unresolved references, with empty adjacent literal views. Before reducer
+adoption, callers resolve every required reference against the same journal,
+check causal ordering and target-field constraints, and preserve provenance.
+Only inline fields supply canonical leaves: metadata-only edits copy the
+original reference instead of creating reference chains. Runtime integration,
+turn-start encoding and import construction remain pending; codecs are test-only.
 
 A full checkpoint captures all current semantic state:
 

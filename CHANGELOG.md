@@ -5,7 +5,8 @@
 ## Unreleased
 
 - Add field-checked canonical input references to the test-only binary-store
-  codecs. Runtime session storage remains JSONL.
+  codecs, with versioned literal/reference input fields. Runtime session storage
+  remains JSONL.
 
 - Add `voice_output` for coding-agent speech into an already-open conversation,
   with availability queries, microphone-independent playback, bounded output
