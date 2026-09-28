@@ -218,7 +218,7 @@ tests/test_turn: $(PLATFORM_SRC) src/json.c src/media.c src/turn.c src/tools_rea
 
 tests/test_tools: $(PLATFORM_SRC) src/json.c src/wire.c src/credential.c src/secret.c src/config.c src/rules.c src/secret_source.c src/media.c src/turn.c src/tools.c src/convert.c src/tools_read.c src/tools_patch.c tests/test_tools.c $(HEADERS)
 
-tests/test_store: $(PLATFORM_SRC) src/json.c src/instructions.c src/media.c src/turn.c src/store.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c tests/test_store.c $(HEADERS)
+tests/test_store: $(PLATFORM_SRC) src/json.c src/instructions.c src/media.c src/turn.c src/store.c src/store_checkpoint.c src/irc_event.c src/store_lookup.c src/store_lifecycle.c src/store_binary.c tests/test_store.c tests/test_store_binary.c src/store_binary.h $(HEADERS)
 
 tests/test_context tests/test_store tests/test_tools tests/test_turn: tests/checked_json.h
 

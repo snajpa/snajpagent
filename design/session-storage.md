@@ -4,9 +4,12 @@
 
 ## Status and purpose
 
-Engineering design, September 27, 2026. The installed quota rescue keeps the
-existing JSONL format. This document defines its successor; binary storage,
-checkpoint replacement and grouped durability are not implemented yet.
+Engineering design, September 27, 2026, with framing implementation begun
+September 28. Installed builds keep the existing JSONL format. The draft header,
+commit-batch codec and bounded positional reader are exercised by the store
+tests. Typed event payloads, checkpoint replacement, indexed runtime storage,
+grouped durability and conversion remain under implementation. The application
+does not yet read or write binary sessions.
 
 The storage contract preserves canonical history, exact input authority,
 completed tool results, context lineage and single-writer ownership. Active
@@ -96,7 +99,9 @@ only explicitly optional metadata may be skipped.
 The journal consists of bounded commit batches:
 
 1. A batch header identifies byte length, record count, first sequence, previous
-   batch offset and previous batch digest.
+   batch offset and previous batch digest. Its own checksum validates the length
+   before allocation or incomplete-tail classification; a damaged length must
+   not disguise a previously committed batch as an unfinished tail.
 2. Typed records contain kind, payload version, length, sequence, timestamp and
    stable semantic IDs. Scalar fields use fixed widths; strings and arrays carry
    checked lengths/counts. Length arithmetic is checked before allocation.
@@ -108,6 +113,35 @@ canonicalize-for-hash followed by canonicalize-for-write duplication. Readers
 verify the complete bounded batch before adopting any record in it. Footer
 links support backward navigation; byte offsets support direct seek. Headers
 and footers provide framing, not a promise of hardware-atomic sector writes.
+
+### Draft 0.1 framing
+
+The framing codec uses the following fixed widths. All integer fields are
+little-endian. Checksums are SHA-256 bytes; lengths include their framing.
+
+| Structure | Layout in bytes |
+|---|---|
+| File header (96) | magic8, major2, minor2, size4, reader-features8, writer-features8, UUID16, created-ms8, reserved8, digest32 |
+| Batch header (112) | magic8, size8, count4, header-size4, first-sequence8, previous-offset8, previous-digest32, reserved8, header-digest32 |
+| Record header (32) | size8, sequence8, timestamp-ms8, kind2, payload-version2, flags4 |
+| Commit footer (80) | magic8, batch-offset8, size8, last-sequence8, turn-count8, reserved8, batch-digest32 |
+
+Magic values are `SNAGJNL`, `SNAGBAT` and `SNAGEND`, each followed by NUL.
+Header digests cover their preceding bytes. The batch digest covers the complete
+batch except its final digest field. The first batch links to the file-header
+digest with predecessor offset zero; subsequent batches link to their predecessor's
+offset and digest. Record flag bit0 marks optional metadata; remaining flag and
+feature bits are reserved. This draft rejects unsupported file versions/features.
+The framing layer returns verified byte views; typed event decoders must enforce
+kind/version compatibility before adopting any state. Framing verification alone
+cannot establish semantic compatibility or prove a tool effect occurred.
+
+The positional reader operates beneath an immutable boundary supplied by its
+caller. It preserves the descriptor offset, allocates at most one permitted
+batch and distinguishes incomplete tails from corruption and unexpected EOF
+beneath that boundary. Source identity, exclusive writer ownership and any tail
+truncation remain the session backend's responsibility. Failed verification
+leaves the committed anchor unchanged. No framing API modifies a file.
 
 The ordinary event-size bound remains a resource contract. Start with a 1 MiB
 batch target, admitting one larger permitted event alone. A batch never becomes
