@@ -24,6 +24,9 @@ int snag_context_continuation_scope(const struct snag_provider_config *provider,
 /* Bind the ordinary local model once when constructing a provider wire request. */
 int snag_context_provider_model(const struct snag_provider_config *provider,
                                 const char *model, json_t *request);
+json_t *snag_context_interface_request(const struct snag_session *,
+    const struct snag_provider_config *, const char *model, const char *effort,
+    const json_t *input, const json_t *tools);
 
 struct snag_context_control {
     bool (*cancelled)(void *opaque);

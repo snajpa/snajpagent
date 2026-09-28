@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Route voice delegations through a restricted session interface with general
+  file reads, work inspection, exact-turn steering, queue submission, cancellation,
+  cached model selection and voice controls. Run its provider requests independently
+  of audio and coding. Keep original ASR provenance, durable tool outcomes and
+  separate acceptance/completion feedback; preserve host-only file writes.
+
 - Keep voice conversation active across concurrent coding handoffs, with
   per-request transcript and result correlation. Preserve pending work during
   native capacity refusal and delay results safely for a slow voice consumer.

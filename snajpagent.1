@@ -1769,10 +1769,13 @@ call setup and attachment. A configured gateway key needs no separate login.
 Native audio playback runs independently of caption timing; interrupting a reply
 clears queued speech while keeping the connection ready for the next reply.
 Conversation continues while accepted coding requests are queued or running.
-Distinct later requests can enter the same coding queue; each result keeps its
-original request identity. The live connection tracks up to eight outstanding
+The session interface can read files, inspect current work, steer an exact active
+turn, queue a separate task, request turn cancellation, select a cached model,
+or change voice capture mode. Stale turn targets are refused without changing
+another turn. File changes and command execution run through the coding agent.
+Each result keeps its original request identity. The live connection tracks up to eight outstanding
 handoffs. At capacity, native voice reports that a new handoff was not submitted;
-public Realtime temporarily withholds the coding tool. Conversation and accepted
+public Realtime temporarily withholds the session tool. Conversation and accepted
 work continue. A slow result consumer delays delivery without stopping voice.
 [audio] settings are optional overrides.
 The prompt identifies microphone capture, which starts after connection setup.
@@ -1782,11 +1785,22 @@ not provided. Keyboard editing and ordinary submission remain available.
 .PP
 Capture and incoming reply audio stream concurrently through bounded PCM rings.
 The current endpoint uses server-detected speech turns. Reply generation can start
-from committed audio before its separate transcription completes. Coding requests
-wait for their matching finalized transcript and enter the existing coding queue;
-the voice model does not execute tools itself. An unavailable transcript prevents
-coding submission. Final transcripts and provider-reported usage are retained
+from committed audio before its separate transcription completes. Delegations
+wait for their matching finalized transcript. The interface uses separate text
+requests with the selected session provider and model, the session working
+directory, and existing effective instruction paths. These requests add ordinary
+provider usage and run independently of media and the coding request. The session
+owner validates tool actions and records their outcomes. Queued work and accepted
+steering are acknowledged separately from completed coding results. An unavailable
+transcript prevents action admission. Final transcripts and provider-reported usage are retained
 separately from coding token counts; raw microphone PCM is not journalled.
+.PP
+Read-only access uses get_cwd, list_files, read_file and grep with the same path
+rules as coding tools. Spoken model selection uses the existing cached catalog;
+catalog refresh remains a foreground session operation. Interface request failures
+leave the voice connection active. Oversized spoken results are marked excerpts;
+the saved session retains the full result. Voice has no separate memory directory
+or documentation configuration.
 .PP
 Playback initially waits for 60 ms of sound. A confirmed mid-reply gap increases
 this prefill by 20 ms, up to 200 ms; eight clean replies reduce it by 20 ms toward

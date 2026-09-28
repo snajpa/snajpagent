@@ -183,7 +183,8 @@ the saved session.
 `/dictate` inserts speech into your editable draft. `/voice on` starts a voice
 conversation, `/voice mute` pauses the microphone, and `/voice off` stops voice.
 You can continue speaking and submit another request while coding work runs;
-accepted requests use the same session queue and receive their own results.
+the session interface can inspect files and work status, steer the active turn,
+or queue a separate task. File changes run through the coding agent.
 These commands use the selected provider and its credentials: a Codex subscription,
 codex-lb, or a compatible BYOK provider. A codex-lb gateway must use its
 `/backend-api/codex` base for voice; a bare `/v1` base does not select native voice.

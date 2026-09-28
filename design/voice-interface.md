@@ -11,16 +11,22 @@ Starting, completing, failing or interrupting coding work leaves voice enabled.
 The requested mode stays enabled until the user turns it off. Muting affects
 microphone forwarding independently of coding and playback.
 
+Prolonged listening and conversation coexist with asynchronous discussion and
+control in the same enabled session. Connection renewal and bounded live-context
+maintenance preserve that continuity without replaying audio or accepted work.
+There is no separate asynchronous interaction mode or fixed turn-taking script.
+
 Current source tracks concurrent protocol and application handoffs, with final
 transcript gating, matching results and nonfatal native capacity refusal. The
 remaining sections specify the broader session interface, live progress and
 connection recovery; these are not yet all implemented.
 
-The host has shared read-only file schemas, an independent provider-request
+Delegations use shared read-only file schemas, an independent provider-request
 owner, and session-owner helpers for queue admission, exact-turn steering and
 cancellation. Steering reuses its durable identity after reopen, refuses changed
-source text and respects deferred boundaries. These helpers are awaiting live
-delegation routing; their presence does not yet expose spoken session controls.
+source text and respects deferred boundaries. Interface requests, tool outcomes
+and replies retain their source correlation in the session. Live connection
+renewal and the main-agent voice-output capability remain in implementation.
 
 ## Ownership and lifetime
 
@@ -114,17 +120,25 @@ errors and must never be reassigned to an unrelated request.
 
 ## Agent feedback in speech
 
+The coding agent can use a generic voice-output capability to address the user
+asynchronously. Its tool surface reports actual availability and delivery state;
+existing user instructions determine when and how the model uses it. Do not bake
+contact conditions, milestones, a dialogue style or attention-seeking scripts
+into model-facing text. Future hands-free devices can use the same conversation
+and control interface. An unavailable or privacy-suspended channel reports that
+state without activating a microphone or silently choosing another channel.
+
 Expose a bounded, redacted view of actual session state: active task, current
 operation, queued work, accepted steering, meaningful milestones, blockers and
 final results. Refresh it during execution, including process waits and provider
 streaming. Status questions are answered from this view without waiting for a
 coding turn to finish or adding a new coding request.
 
-Speak a short gist at useful milestones, on completion, when user input is
-needed, or when asked. Coalesce repetitive progress. Let the user interrupt
-speech immediately and continue their sentence. Avoid speaking every tool call,
-raw output block or internal reasoning. Preserve the ordinary transcript for
-details. Distinguish planned, running, failed and completed operations explicitly.
+Keep progress context current without automatically speaking every tool event.
+The models choose spoken output under the existing user instructions. Let the
+user interrupt speech immediately and continue their sentence. Preserve the
+ordinary transcript for details. Distinguish planned, running, failed and
+completed operations explicitly.
 Generated speech is not evidence that playback reached the user.
 
 ## Implementation and regression sequence

@@ -3488,6 +3488,31 @@ int snag_session_voice_context(struct snag_session *session,json_t **result,char
             "latest_voice_handoff",handoff?handoff:json_null());
         if(!*result)rc=-1;
     }
+    if (!rc) {
+        char *task = voice_excerpt(session->active_turn && session->active_prompt ?
+            session->active_prompt : "");
+        json_t *operations = json_array();
+        if (!task || !operations) rc = -1;
+        for (size_t i = 0; !rc && i < session->pending_call_count; ++i) {
+            const struct snag_pending_call *call = &session->pending_calls[i];
+            if (call->finished) continue;
+            if (json_array_append_new(operations, json_pack("{s:s,s:s,s:b}",
+                    "tool", call->tool_name, "command", call->command,
+                    "started", call->started)) < 0) rc = -1;
+        }
+        if (!rc && (json_object_set_new(*result, "active_task", json_string(task)) < 0 ||
+            json_object_set(*result, "operations", operations) < 0 ||
+            json_object_set_new(*result, "pending_steering",
+                json_integer((json_int_t)session->pending_steering_count)) < 0 ||
+            json_object_set_new(*result, "steering_deferred",
+                json_boolean(session->steering_deferred)) < 0 ||
+            json_object_set_new(*result, "cancellation_requested",
+                json_boolean(session->cancel_requested)) < 0 ||
+            json_object_set_new(*result, "provider_responding",
+                json_boolean(session->response_open)) < 0)) rc = -1;
+        free(task);
+        json_decref(operations);
+    }
     json_decref(handoff);free(s.transcript[0]);free(s.transcript[1]);return rc;
 }
 

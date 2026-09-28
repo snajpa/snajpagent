@@ -2271,6 +2271,36 @@ snag_context_provider_model(const struct snag_provider_config *provider, const c
         json_string(snag_config_model_upstream(provider, model))) : -1;
 }
 
+json_t *
+snag_context_interface_request(const struct snag_session *session,
+    const struct snag_provider_config *provider, const char *model, const char *effort,
+    const json_t *input, const json_t *tools)
+{
+    if (!session || !provider || !model || !effort ||
+        !json_is_array(input) || !json_is_array(tools)) return NULL;
+    char cache_key[SNAG_CACHE_KEY_LEN + 1u];
+    snag_context_cache_key(session, provider->name,
+        snag_config_model_upstream(provider, model), cache_key);
+    json_t *items = json_deep_copy(input);
+    if (!items || !cache_key[0] || (provider->leading_instructions &&
+            normalize_leading_instruction_items(items) < 0)) {
+        json_decref(items);
+        return NULL;
+    }
+    json_t *request = json_pack("{s:o,s:s,s:{s:s},s:b,s:b,s:b,s:s,s:O,s:[s],s:s,s:s}",
+        "input", items, "model", model, "reasoning", "effort", effort,
+        "store", 0, "stream", 1, "parallel_tool_calls", 0,
+        "tool_choice", "auto", "tools", tools, "include", "reasoning.encrypted_content",
+        "truncation", "disabled", "prompt_cache_key", cache_key);
+    if (!request || snag_context_provider_model(provider, model, request) < 0 ||
+        (provider->auth == SNAG_AUTH_CHATGPT && snag_context_codex_request(request) < 0) ||
+        snag_json_digest_bounded(request, SNAG_CONTEXT_MAX_REQUEST, NULL, NULL) < 0) {
+        json_decref(request);
+        return NULL;
+    }
+    return request;
+}
+
 /* Gateways can lift all developer/system messages into instructions. Keep an
  * explicitly host-generated input when compaction leaves only those messages. */
 static int

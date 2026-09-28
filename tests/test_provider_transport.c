@@ -96,6 +96,8 @@ enum model_fixture {
     MODEL_CREATE_TYPELESS,
     MODEL_VOICE_REQUEST,
     MODEL_VOICE_REQUEST_WAIT,
+    MODEL_VOICE_QUEUE,
+    MODEL_VOICE_READ,
     MODEL_OPENROUTER_SEARCH,
     MODEL_CREATE_RETRY,
     MODEL_COUNT_404,
@@ -682,6 +684,56 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_transport\",\"status\":\"completed\",\"usage\":{\"input_tokens\":7,\"output_tokens\":2,\"total_tokens\":9},\"output\":[]}}\n\n";
 
+    if (models == MODEL_VOICE_QUEUE || models == MODEL_VOICE_READ) {
+        unsigned int count = models == MODEL_VOICE_QUEUE ? 4u : 3u;
+        for (unsigned int i = 0; i < count; ++i) {
+            int fd = accept(listen_fd, NULL, NULL);
+            struct http_request request;
+            if (fd < 0) server_fail("voice interface accept failed");
+            read_request(fd, &request);
+            if (strcmp(request.method, "POST") || strcmp(request.path, "/v1/responses") ||
+                !strstr(request.body, "inspect_session") ||
+                !strstr(request.body, "get_cwd")) server_fail("missing voice capabilities");
+            bool final = models == MODEL_VOICE_QUEUE ? i % 2u : i == 2u;
+            if (final) {
+                if (!strstr(request.body, "function_call_output")) {
+                    server_fail("missing voice tool result");
+                }
+                if (models == MODEL_VOICE_READ && !strstr(request.body, "unavailable")) {
+                    server_fail("write tool was not refused");
+                }
+                send_response(fd, 200u, "text/event-stream", create_sse);
+            } else {
+                const char *name = models == MODEL_VOICE_QUEUE ? "submit_input" :
+                    i ? "write_file" : "get_cwd";
+                const char *arguments = models == MODEL_VOICE_QUEUE ?
+                    "{\"target\":\"queue\",\"text\":\"model interpretation\"}" :
+                    i ? "{\"path\":\"AGENTS.md\",\"content\":\"must not write\"}" : "{}";
+                json_t *event = json_pack("{s:s,s:i,s:{s:s,s:s,s:s,s:s,s:s,s:s}}",
+                    "type", "response.output_item.done", "output_index", 0,
+                    "item", "type", "function_call", "id", "voice_function",
+                    "call_id", i ? "voice_call_next" : "voice_call_first",
+                    "name", name, "arguments", arguments, "status", "completed");
+                char *wire = json_dumps(event, JSON_COMPACT);
+                char response[BODY_MAX];
+                if (!wire || snprintf(response, sizeof(response),
+                        "data: {\"type\":\"response.created\","
+                        "\"response\":{\"id\":\"voice_request\","
+                        "\"status\":\"in_progress\",\"output\":[]}}\n\n"
+                        "data: %s\n\n"
+                        "data: {\"type\":\"response.completed\","
+                        "\"response\":{\"id\":\"voice_request\","
+                        "\"status\":\"completed\",\"output\":[]}}\n\n", wire) <= 0) {
+                    server_fail("voice fixture encoding failed");
+                }
+                free(wire);
+                json_decref(event);
+                send_response(fd, 200u, "text/event-stream", response);
+            }
+            close(fd);
+        }
+        _exit(0);
+    }
     if (models == MODEL_VOICE_REQUEST || models == MODEL_VOICE_REQUEST_WAIT) {
         struct http_request request;
         int fd = accept(listen_fd, NULL, NULL);
@@ -1824,16 +1876,22 @@ test_voice_concurrent_owner(void)
     const char *tmp = getenv("TMPDIR");
     struct app_state app = {0};
     struct snag_config config;
+    struct snag_credential credential;
+    struct local_server server;
 
     assert(snprintf(path, sizeof(path), "%s/snajpagent-voice-calls-XXXXXX",
         tmp ? tmp : "/tmp") > 0 && mkdtemp(path));
-    snag_config_init(&config);
+    start_server(&server, MODEL_VOICE_QUEUE, false, "/v1");
+    (void)transport_connection(&config, &credential, server.endpoint);
+    config.providers[0].auth = SNAG_AUTH_API_KEY;
+    assert(snag_secret_source_parse(&config.providers[0].api_key,
+        "\"transport-secret\"", NULL, error, sizeof(error)) == 0);
     app.config = &config;
     snag_store_init(&app.store);
     snag_session_init(&app.session);
     assert(snag_ui_init(&app.ui) == 0);
     assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
-    assert(snag_session_create(&app.store, &app.session, path, "default",
+    assert(snag_session_create(&app.store, &app.session, path, "openai",
         "fixture", "medium", error, sizeof(error)) == 0);
     json_t *events = json_array();
     for (unsigned int i = 0; i < 2u; ++i) {
@@ -1845,8 +1903,22 @@ test_voice_concurrent_owner(void)
     }
     assert(snag_app_voice_fixture(&app, events, false) == 0);
     json_decref(events);
-    assert(snag_app_voice_service(&app) == 0 && app.voice);
-    assert(app.session.pending_queue_count == 2u && app.session.queue_armed);
+    unsigned int acknowledgements = 0u;
+    uint64_t started = snag_monotonic_ms();
+    while (acknowledgements < 2u && snag_monotonic_ms() - started < 5000u) {
+        assert(snag_app_voice_service(&app) == 0 && app.voice);
+        json_t *reply = snag_app_voice_fixture_result(&app);
+        if (reply) {
+            assert(!strcmp(snag_json_string(reply, "call_id"),
+                acknowledgements ? "second" : "first"));
+            assert(json_is_false(json_object_get(reply, "final")));
+            ++acknowledgements;
+            json_decref(reply);
+        }
+        snag_sleep_ms(10u);
+    }
+    assert(acknowledgements == 2u && app.session.pending_queue_count == 2u);
+    assert(app.session.queue_armed);
     for (size_t i = 0; i < 2u; ++i) {
         strcpy(queues[i], app.session.pending_queue[i].queue_id);
     }
@@ -1881,6 +1953,8 @@ test_voice_concurrent_owner(void)
     snag_store_close(&app.store);
     snag_ui_free(&app.ui);
     snag_config_free(&config);
+    snag_credential_clear(&credential);
+    stop_server(&server);
 }
 
 static void
@@ -1907,7 +1981,32 @@ test_voice_read_tools(void)
         "fixture", "medium", error, sizeof(error)) == 0);
     uint64_t seq = app.session.next_seq;
     json_t *tools = snag_app_voice_tools();
-    assert(tools && json_array_size(tools) == 5u);
+    assert(tools && json_array_size(tools) == 9u);
+    json_t *input = json_pack("[{s:s,s:s},{s:s,s:s},{s:s,s:s}]",
+        "role", "developer", "content", "instructions",
+        "role", "developer", "content", "host context",
+        "role", "user", "content", "spoken request");
+    for (unsigned int kind = 0; kind < 3u; ++kind) {
+        config.providers[0].auth = kind == 1u ? SNAG_AUTH_CHATGPT : SNAG_AUTH_API_KEY;
+        config.providers[0].leading_instructions = kind == 2u;
+        json_t *request = snag_context_interface_request(&app.session, &config.providers[0],
+            "fixture", "medium", input, tools);
+        assert(request && json_array_size(input) == 3u);
+        assert(strlen(snag_json_string(request, "prompt_cache_key")) == SNAG_CACHE_KEY_LEN);
+        assert(!strcmp(snag_json_string(request, "model"), "fixture"));
+        assert(json_is_true(json_object_get(request, "stream")));
+        if (kind == 1u) {
+            assert(json_is_string(json_object_get(request, "instructions")));
+            assert(!json_object_get(request, "truncation"));
+        }
+        if (kind == 2u) {
+            json_t *normalized = json_object_get(request, "input");
+            assert(json_array_size(normalized) == 2u);
+            assert(!strcmp(snag_json_string(json_array_get(normalized, 0u), "role"), "system"));
+        }
+        json_decref(request);
+    }
+    json_decref(input);
     assert(!snag_context_read_tool_schema("exec_command"));
     assert(!snag_context_read_tool_schema("write_file"));
     assert(!snag_context_read_tool_schema(NULL));
@@ -1964,6 +2063,63 @@ test_voice_read_tools(void)
     snag_session_close(&app.session);
     snag_store_close(&app.store);
     snag_config_free(&config);
+}
+
+static void
+test_voice_interface_read(void)
+{
+    struct app_state app = {0};
+    struct snag_config config;
+    struct snag_credential credential;
+    struct local_server server;
+    char path[4096], file[4096], error[512];
+    const char *tmp = getenv("TMPDIR");
+
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-voice-interface-XXXXXX",
+        tmp ? tmp : "/tmp") > 0 && mkdtemp(path));
+    assert(snprintf(file, sizeof(file), "%s/AGENTS.md", path) > 0);
+    int fd = open(file, O_CREAT | O_EXCL | O_RDWR, 0600);
+    assert(fd >= 0 && write(fd, "unchanged\n", 10u) == 10);
+    start_server(&server, MODEL_VOICE_READ, false, "/v1");
+    (void)transport_connection(&config, &credential, server.endpoint);
+    config.providers[0].auth = SNAG_AUTH_API_KEY;
+    assert(snag_secret_source_parse(&config.providers[0].api_key,
+        "\"transport-secret\"", NULL, error, sizeof(error)) == 0);
+    app.config = &config;
+    snag_store_init(&app.store);
+    snag_session_init(&app.session);
+    assert(snag_ui_init(&app.ui) == 0);
+    assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
+    assert(snag_session_create(&app.store, &app.session, path, "openai", "fixture",
+        "medium", error, sizeof(error)) == 0);
+    json_t *events = json_pack("[{s:s,s:s,s:s,s:s,s:s,s:s}]", "type", "voice_handoff",
+        "input_id", "read_input", "response_id", "read_response", "call_id", "read_call",
+        "transcript", "Which directory is this?", "request", "Read the session cwd.");
+    assert(snag_app_voice_fixture(&app, events, false) == 0);
+    json_decref(events);
+    json_t *reply = NULL;
+    uint64_t start = snag_monotonic_ms();
+    while (!reply && snag_monotonic_ms() - start < 5000u) {
+        assert(snag_app_voice_service(&app) == 0 && app.voice);
+        reply = snag_app_voice_fixture_result(&app);
+        if (!reply) snag_sleep_ms(10u);
+    }
+    assert(reply && !strcmp(snag_json_string(reply, "call_id"), "read_call"));
+    assert(json_is_true(json_object_get(reply, "final")));
+    assert(strstr(snag_json_string(reply, "text"), "transport"));
+    assert(!app.session.pending_queue_count && !app.session.active_turn);
+    char contents[10];
+    assert(lseek(fd, 0, SEEK_SET) == 0 && read(fd, contents, sizeof(contents)) == 10);
+    assert(!memcmp(contents, "unchanged\n", 10u));
+    close(fd);
+    json_decref(reply);
+    snag_app_voice_close(&app);
+    snag_session_close(&app.session);
+    snag_store_close(&app.store);
+    snag_ui_free(&app.ui);
+    snag_config_free(&config);
+    snag_credential_clear(&credential);
+    stop_server(&server);
 }
 
 static void
@@ -3871,6 +4027,10 @@ static void test_native_voice_protocol(void)
     json_decref(session);
     assert(snag_voice_begin(v,error,sizeof(error))==0 && snag_voice_ready(v));
     assert(json_array_size(f.sent)==0u); /* Existing native call, no public session.update. */
+    json_t *context = json_pack("{s:s}", "active_turn_id", "fixture");
+    assert(snag_voice_context(v, context, error, sizeof(error)) == 0);
+    json_decref(context);
+    assert(!strcmp(snag_json_string(voice_last(f.sent), "channel"), "commentary"));
     json_t *created=json_pack("{s:s,s:{s:s,s:s}}","type","turn.created",
         "turn","id","native-input","role","user");
     assert(voice_deliver(v,created)==0 && f.interrupts==1u);
@@ -3895,6 +4055,9 @@ static void test_native_voice_protocol(void)
         "user_bidi_turn_id","native-followup","content","type","input_text",
         "text","check the tests"))==0);
     assert(voice_notice_count(&f,"voice_handoff")==2u && snag_voice_ready(v));
+    assert(snag_voice_progress(v, "native-call-2", "request accepted",
+        error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(voice_last(f.sent), "type"), "delegation.context.append"));
     assert(snag_voice_result(v,"native-call-2","tests checked",error,sizeof(error))==0);
     assert(!strcmp(snag_json_string(voice_last(f.sent),"delegation_item_id"),"native-call-2"));
     assert(voice_deliver(v,json_incref(delegation))==0 &&
@@ -4174,6 +4337,9 @@ test_voice_concurrent_results(void)
     assert(json_object_set_new(item, "call_id", json_string("call-2")) == 0);
     assert(voice_deliver(voice, response) == 0);
     assert(voice_notice_count(&f, "voice_handoff") == 2u);
+    assert(snag_voice_progress(voice, "call-2", "request accepted", error, sizeof(error)) == 0);
+    item = json_object_get(voice_last(f.sent), "item");
+    assert(!strcmp(snag_json_string(item, "type"), "message"));
     assert(snag_voice_result(voice, "call-2", "second result", error, sizeof(error)) == 0);
     item = json_object_get(voice_last(f.sent), "item");
     assert(!strcmp(snag_json_string(item, "call_id"), "call-2"));
@@ -4744,6 +4910,7 @@ main(void)
     test_voice_close();
     test_voice_concurrent_owner();
     test_voice_read_tools();
+    test_voice_interface_read();
     test_voice_independent_request();
     test_voice_session_controls();
     test_voice_owner_mute();

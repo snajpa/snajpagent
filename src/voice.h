@@ -36,5 +36,6 @@ int snag_voice_respond(struct snag_voice *,bool drained,char *,size_t);
 int snag_voice_input(struct snag_voice *,const int16_t *,uint32_t,char *,size_t);
 int snag_voice_mute(struct snag_voice *,bool,char *,size_t);
 int snag_voice_result(struct snag_voice *,const char *call,const char *result,char *,size_t);
+int snag_voice_progress(struct snag_voice *, const char *call, const char *text, char *, size_t);
 bool snag_voice_ready(const struct snag_voice *);
 #endif
