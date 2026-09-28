@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "store_binary_event.h"
 #include "store.h"
+#include "media.h"
 
 #include <errno.h>
 #include <string.h>
@@ -84,6 +85,237 @@ read_text(struct fields *fields, struct snag_binary_text *text, size_t minimum, 
 }
 
 static int
+write_asset(struct snag_buf *out, const struct snag_binary_asset *asset)
+{
+    if (!asset->bytes || asset->bytes > SNAG_MEDIA_FILE_MAX) return invalid();
+    if (snag_buf_append(out, asset->id, 16u) < 0 ||
+        snag_buf_append(out, asset->sha256, 32u) < 0 ||
+        write_uint(out, asset->bytes, 8u) < 0) return -1;
+    return write_text(out, asset->mime, 1u, 96u);
+}
+
+static bool
+read_asset(struct fields *fields, struct snag_binary_asset *asset)
+{
+    return read_id(fields, asset->id) && read_bytes(fields, asset->sha256, 32u) &&
+        read_uint(fields, 8u, &asset->bytes) && asset->bytes &&
+        asset->bytes <= SNAG_MEDIA_FILE_MAX && read_text(fields, &asset->mime, 1u, 96u);
+}
+
+static int
+write_part(struct snag_buf *out, const struct snag_binary_part *part)
+{
+    if (part->kind < SNAG_BINARY_PART_TEXT || part->kind > SNAG_BINARY_PART_IMAGE)
+        return invalid();
+    if (write_uint(out, part->kind, 1u) < 0) return -1;
+    if (part->kind == SNAG_BINARY_PART_TEXT)
+        return write_text(out, part->text, 0u, SNAG_MAX_EVENT_LINE);
+    if (write_asset(out, &part->asset) < 0) return -1;
+    if (part->kind == SNAG_BINARY_PART_IMAGE) {
+        if (write_uint(out, part->has_source, 1u) < 0) return -1;
+        if (part->has_source && (write_asset(out, &part->source) < 0 ||
+            write_text(out, part->text, 0u, 1024u) < 0)) return -1;
+    }
+    return 0;
+}
+
+static bool
+read_part(struct fields *fields, struct snag_binary_part *part)
+{
+    uint64_t value;
+    if (!read_uint(fields, 1u, &value) || value < SNAG_BINARY_PART_TEXT ||
+        value > SNAG_BINARY_PART_IMAGE) return false;
+    part->kind = (enum snag_binary_part_kind)value;
+    if (part->kind == SNAG_BINARY_PART_TEXT)
+        return read_text(fields, &part->text, 0u, SNAG_MAX_EVENT_LINE);
+    if (!read_asset(fields, &part->asset)) return false;
+    if (part->kind == SNAG_BINARY_PART_IMAGE) {
+        if (!read_uint(fields, 1u, &value) || value > 1u) return false;
+        part->has_source = value != 0;
+        if (part->has_source && (!read_asset(fields, &part->source) ||
+            !read_text(fields, &part->text, 0u, 1024u))) return false;
+    }
+    return true;
+}
+
+static bool
+read_content(struct fields *fields, struct snag_binary_content *out)
+{
+    size_t start = fields->offset;
+    uint64_t count;
+    if (!read_uint(fields, 4u, &count) || !count ||
+        count > (fields->size - fields->offset) / 5u) return false;
+    for (uint64_t i = 0; i < count; ++i) {
+        struct snag_binary_part part = {0};
+        if (!read_part(fields, &part)) return false;
+    }
+    *out = (struct snag_binary_content){fields->data + start, fields->offset - start};
+    return true;
+}
+
+int
+snag_binary_content_encode(struct snag_buf *out, const struct snag_binary_part *parts, size_t count)
+{
+    struct snag_buf encoded = {.max = SNAG_MAX_EVENT_LINE};
+    int rc = -1;
+    if (!out || !parts || !count || count > (SNAG_MAX_EVENT_LINE - 4u) / 5u) return invalid();
+    if (write_uint(&encoded, count, 4u) < 0) goto done;
+    for (size_t i = 0; i < count; ++i)
+        if (write_part(&encoded, &parts[i]) < 0) goto done;
+    rc = snag_buf_append(out, encoded.data, encoded.len);
+ done:
+    snag_buf_free(&encoded);
+    return rc;
+}
+
+int
+snag_binary_content_decode(const void *data, size_t size, struct snag_binary_content *out)
+{
+    struct fields fields = {data, size, 0};
+    struct snag_binary_content decoded;
+    if (!data || !out || size > SNAG_MAX_EVENT_LINE || !read_content(&fields, &decoded) ||
+        fields.offset != size) return invalid();
+    *out = decoded;
+    return 0;
+}
+
+int
+snag_binary_content_next(const struct snag_binary_content *content, size_t *offset,
+    struct snag_binary_part *out)
+{
+    if (!content || !content->data || content->size < 4u || content->size > SNAG_MAX_EVENT_LINE ||
+        !offset || !out || (*offset && *offset < 4u) || *offset > content->size) return invalid();
+    struct fields fields = {content->data, content->size, *offset ? *offset : 4u};
+    struct snag_binary_part decoded = {0};
+    if (fields.offset == fields.size) return 1;
+    if (!read_part(&fields, &decoded)) return invalid();
+    *out = decoded;
+    *offset = fields.offset;
+    return 0;
+}
+
+static int
+write_instruction(struct snag_buf *out, const struct snag_binary_instruction *instruction)
+{
+    if (write_uint(out, instruction->has_snapshot, 1u) < 0 ||
+        write_text(out, instruction->path, 1u, SNAG_PATH_MAX_BYTES) < 0) return -1;
+    if (instruction->has_snapshot && (write_uint(out, instruction->bytes, 8u) < 0 ||
+        snag_buf_append(out, instruction->sha256, 32u) < 0)) return -1;
+    return 0;
+}
+
+static bool
+read_instruction(struct fields *fields, struct snag_binary_instruction *instruction)
+{
+    uint64_t value;
+    if (!read_uint(fields, 1u, &value) || value > 1u ||
+        !read_text(fields, &instruction->path, 1u, SNAG_PATH_MAX_BYTES)) return false;
+    instruction->has_snapshot = value != 0;
+    return !instruction->has_snapshot || (read_uint(fields, 8u, &instruction->bytes) &&
+        read_bytes(fields, instruction->sha256, 32u));
+}
+
+static bool
+read_instructions(struct fields *fields, struct snag_binary_instructions *out, bool snapshots)
+{
+    size_t start = fields->offset;
+    uint64_t count;
+    if (!read_uint(fields, 4u, &count) || count > (fields->size - fields->offset) / 6u)
+        return false;
+    for (uint64_t i = 0; i < count; ++i) {
+        struct snag_binary_instruction instruction = {0};
+        if (!read_instruction(fields, &instruction) ||
+            (!snapshots && instruction.has_snapshot)) return false;
+    }
+    *out = (struct snag_binary_instructions){fields->data + start, fields->offset - start};
+    return true;
+}
+
+int
+snag_binary_instructions_encode(struct snag_buf *out,
+    const struct snag_binary_instruction *instructions, size_t count)
+{
+    struct snag_buf encoded = {.max = SNAG_MAX_EVENT_LINE};
+    int rc = -1;
+    if (!out || (!instructions && count) || count > (SNAG_MAX_EVENT_LINE - 4u) / 6u)
+        return invalid();
+    if (write_uint(&encoded, count, 4u) < 0) goto done;
+    for (size_t i = 0; i < count; ++i)
+        if (write_instruction(&encoded, &instructions[i]) < 0) goto done;
+    rc = snag_buf_append(out, encoded.data, encoded.len);
+ done:
+    snag_buf_free(&encoded);
+    return rc;
+}
+
+int
+snag_binary_instructions_decode(const void *data, size_t size, struct snag_binary_instructions *out)
+{
+    struct fields fields = {data, size, 0};
+    struct snag_binary_instructions decoded;
+    if (!data || !out || size > SNAG_MAX_EVENT_LINE ||
+        !read_instructions(&fields, &decoded, true) || fields.offset != size) return invalid();
+    *out = decoded;
+    return 0;
+}
+
+int
+snag_binary_instructions_next(const struct snag_binary_instructions *instructions,
+    size_t *offset, struct snag_binary_instruction *out)
+{
+    if (!instructions || !instructions->data || instructions->size < 4u ||
+        instructions->size > SNAG_MAX_EVENT_LINE || !offset || !out ||
+        (*offset && *offset < 4u) || *offset > instructions->size) return invalid();
+    struct fields fields = {instructions->data, instructions->size, *offset ? *offset : 4u};
+    struct snag_binary_instruction decoded = {0};
+    if (fields.offset == fields.size) return 1;
+    if (!read_instruction(&fields, &decoded)) return invalid();
+    *out = decoded;
+    *offset = fields.offset;
+    return 0;
+}
+
+static int
+write_content(struct snag_buf *out, struct snag_binary_content content)
+{
+    struct snag_binary_content decoded;
+    if (snag_binary_content_decode(content.data, content.size, &decoded) < 0) return -1;
+    return snag_buf_append(out, content.data, content.size);
+}
+
+static int
+write_instructions(struct snag_buf *out, struct snag_binary_instructions instructions)
+{
+    struct fields fields = {instructions.data, instructions.size, 0};
+    struct snag_binary_instructions decoded;
+    if (!instructions.data || instructions.size > SNAG_MAX_EVENT_LINE ||
+        !read_instructions(&fields, &decoded, false) || fields.offset != fields.size)
+        return invalid();
+    return snag_buf_append(out, instructions.data, instructions.size);
+}
+
+static int
+write_ids(struct snag_buf *out, struct snag_binary_ids ids)
+{
+    if ((!ids.values && ids.count) || ids.count > (SNAG_MAX_EVENT_LINE - 4u) / 16u)
+        return invalid();
+    if (write_uint(out, ids.count, 4u) < 0) return -1;
+    return snag_buf_append(out, ids.values, ids.count * 16u);
+}
+
+static bool
+read_ids(struct fields *fields, struct snag_binary_ids *ids)
+{
+    uint64_t count;
+    if (!read_uint(fields, 4u, &count) || count > (fields->size - fields->offset) / 16u)
+        return false;
+    ids->values = (const unsigned char (*)[16])(fields->data + fields->offset);
+    ids->count = (size_t)count;
+    fields->offset += (size_t)count * 16u;
+    return true;
+}
+
+static int
 write_selection(struct snag_buf *out, const struct snag_binary_selection *selection)
 {
     if (write_text(out, selection->provider, 1u, SNAG_CONFIG_PROVIDER_NAME_MAX) < 0 ||
@@ -98,6 +330,103 @@ read_selection(struct fields *fields, struct snag_binary_selection *selection)
     return read_text(fields, &selection->provider, 1u, SNAG_CONFIG_PROVIDER_NAME_MAX) &&
         read_text(fields, &selection->model, 1u, SNAG_MODEL_MAX_BYTES - 1u) &&
         read_text(fields, &selection->effort, 1u, SNAG_EFFORT_MAX_BYTES - 1u);
+}
+
+static int
+encode_input(struct snag_buf *out, const struct snag_binary_event *event)
+{
+    bool content;
+    switch (event->kind) {
+    case SNAG_BINARY_INPUT_RECEIVED:
+        if (event->data.input.origin != SNAG_BINARY_INPUT_DEFAULT &&
+            event->data.input.origin != SNAG_BINARY_INPUT_TIMER) return invalid();
+        content = event->data.input.content.data || event->data.input.content.size;
+        if (write_uint(out, event->data.input.origin, 1u) < 0 ||
+            write_uint(out, (event->data.input.read_only ? 1u : 0u) |
+                           (content ? 2u : 0u), 1u) < 0 ||
+            write_uint(out, event->data.input.received_ms, 8u) < 0 ||
+            write_selection(out, &event->data.input.selection) < 0 ||
+            write_instructions(out, event->data.input.instructions) < 0 ||
+            write_text(out, event->data.input.text, 1u, SNAG_MAX_DIRECT_PROMPT) < 0) return -1;
+        return content ? write_content(out, event->data.input.content) : 0;
+    case SNAG_BINARY_INPUT_CANCELLED:
+        return 0;
+    case SNAG_BINARY_STEERING_ADDED:
+    case SNAG_BINARY_IRC_REPLY_REMINDER:
+        content = event->data.steering_input.content.data ||
+                  event->data.steering_input.content.size;
+        if (snag_buf_append(out, event->data.steering_input.id, 16u) < 0 ||
+            snag_buf_append(out, event->data.steering_input.turn, 16u) < 0 ||
+            write_uint(out, (event->data.steering_input.has_received_ms ? 1u : 0u) |
+                           (content ? 2u : 0u), 1u) < 0) return -1;
+        if (event->data.steering_input.has_received_ms &&
+            write_uint(out, event->data.steering_input.received_ms, 8u) < 0) return -1;
+        if (write_text(out, event->data.steering_input.text, 1u, SNAG_MAX_STEERING_TEXT) < 0)
+            return -1;
+        return content ? write_content(out, event->data.steering_input.content) : 0;
+    case SNAG_BINARY_STEERING_DEFERRED:
+        return snag_buf_append(out, event->data.turn, 16u);
+    case SNAG_BINARY_INPUT_ADMITTED:
+        if (!event->data.admission.time_ms) return invalid();
+        if (snag_buf_append(out, event->data.admission.turn, 16u) < 0 ||
+            write_uint(out, event->data.admission.time_ms, 8u) < 0) return -1;
+        return write_ids(out, event->data.admission.ids);
+    case SNAG_BINARY_FUTURE_QUEUE_STATE:
+        return write_uint(out, event->data.queue_armed, 1u);
+    case SNAG_BINARY_FUTURE_TURN_CANCELLED:
+        if (event->data.queue_cancel.actor != SNAG_BINARY_USER ||
+            !event->data.queue_cancel.ids.count) return invalid();
+        if (write_uint(out, event->data.queue_cancel.actor, 1u) < 0) return -1;
+        return write_ids(out, event->data.queue_cancel.ids);
+    default:
+        return invalid();
+    }
+}
+
+static bool
+decode_input(struct fields *fields, struct snag_binary_event *event)
+{
+    uint64_t value, flags;
+    switch (event->kind) {
+    case SNAG_BINARY_INPUT_RECEIVED:
+        if (!read_uint(fields, 1u, &value) || value > SNAG_BINARY_INPUT_TIMER ||
+            !read_uint(fields, 1u, &flags) || flags > 3u) return false;
+        event->data.input.origin = (enum snag_binary_input_origin)value;
+        event->data.input.read_only = (flags & 1u) != 0;
+        return read_uint(fields, 8u, &event->data.input.received_ms) &&
+            read_selection(fields, &event->data.input.selection) &&
+            read_instructions(fields, &event->data.input.instructions, false) &&
+            read_text(fields, &event->data.input.text, 1u, SNAG_MAX_DIRECT_PROMPT) &&
+            (!(flags & 2u) || read_content(fields, &event->data.input.content));
+    case SNAG_BINARY_INPUT_CANCELLED:
+        return true;
+    case SNAG_BINARY_STEERING_ADDED:
+    case SNAG_BINARY_IRC_REPLY_REMINDER:
+        if (!read_id(fields, event->data.steering_input.id) ||
+            !read_id(fields, event->data.steering_input.turn) ||
+            !read_uint(fields, 1u, &flags) || flags > 3u) return false;
+        event->data.steering_input.has_received_ms = (flags & 1u) != 0;
+        return (!(flags & 1u) || read_uint(fields, 8u, &event->data.steering_input.received_ms)) &&
+            read_text(fields, &event->data.steering_input.text, 1u, SNAG_MAX_STEERING_TEXT) &&
+            (!(flags & 2u) || read_content(fields, &event->data.steering_input.content));
+    case SNAG_BINARY_STEERING_DEFERRED:
+        return read_id(fields, event->data.turn);
+    case SNAG_BINARY_INPUT_ADMITTED:
+        return read_id(fields, event->data.admission.turn) &&
+            read_uint(fields, 8u, &event->data.admission.time_ms) &&
+            event->data.admission.time_ms && read_ids(fields, &event->data.admission.ids);
+    case SNAG_BINARY_FUTURE_QUEUE_STATE:
+        if (!read_uint(fields, 1u, &value) || value > 1u) return false;
+        event->data.queue_armed = value != 0;
+        return true;
+    case SNAG_BINARY_FUTURE_TURN_CANCELLED:
+        if (!read_uint(fields, 1u, &value) || value != SNAG_BINARY_USER) return false;
+        event->data.queue_cancel.actor = (enum snag_binary_actor)value;
+        return read_ids(fields, &event->data.queue_cancel.ids) &&
+            event->data.queue_cancel.ids.count;
+    default:
+        return false;
+    }
 }
 
 static bool
@@ -259,6 +588,8 @@ goal_kind(enum snag_binary_kind kind)
 static int
 encode_fields(struct snag_buf *out, const struct snag_binary_event *event)
 {
+    if (event->kind >= SNAG_BINARY_INPUT_RECEIVED &&
+        event->kind <= SNAG_BINARY_FUTURE_TURN_CANCELLED) return encode_input(out, event);
     if (event->kind >= SNAG_BINARY_SESSION_CREATED &&
         event->kind <= SNAG_BINARY_COMMAND_SHELL_CHANGED) return encode_metadata(out, event);
     if (timer_kind(event->kind)) {
@@ -302,6 +633,7 @@ encode_fields(struct snag_buf *out, const struct snag_binary_event *event)
 int
 snag_binary_event_encode(struct snag_buf *out, const struct snag_binary_event *event)
 {
+    if (!out || !event) return invalid();
     struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
     int rc = encode_fields(&payload, event);
     if (rc == 0) rc = snag_buf_append(out, payload.data, payload.len);
@@ -313,6 +645,8 @@ static bool
 decode_fields(struct fields *fields, struct snag_binary_event *event)
 {
     uint64_t value;
+    if (event->kind >= SNAG_BINARY_INPUT_RECEIVED &&
+        event->kind <= SNAG_BINARY_FUTURE_TURN_CANCELLED) return decode_input(fields, event);
     if (event->kind >= SNAG_BINARY_SESSION_CREATED &&
         event->kind <= SNAG_BINARY_COMMAND_SHELL_CHANGED) return decode_metadata(fields, event);
     if (timer_kind(event->kind)) {
@@ -359,7 +693,8 @@ int
 snag_binary_event_decode(const struct snag_binary_record *record,
     struct snag_binary_event *out)
 {
-    if (!record->kind || !record->version || record->size > SNAG_MAX_EVENT_LINE ||
+    if (!record || !out || !record->kind || !record->version ||
+        record->size > SNAG_MAX_EVENT_LINE ||
         (record->size && !record->payload)) return invalid();
     if (record->kind >= 0x8000u) {
         if (record->flags == SNAG_BINARY_RECORD_OPTIONAL) return 1;

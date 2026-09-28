@@ -31,7 +31,15 @@ enum snag_binary_kind {
     SNAG_BINARY_GOAL_BLOCKED = 69,
     SNAG_BINARY_GOAL_COMPLETED = 70,
     SNAG_BINARY_GOAL_RESUMED = 71,
-    SNAG_BINARY_GOAL_CANCELLED = 72
+    SNAG_BINARY_GOAL_CANCELLED = 72,
+    SNAG_BINARY_INPUT_RECEIVED = 96,
+    SNAG_BINARY_INPUT_CANCELLED = 97,
+    SNAG_BINARY_STEERING_ADDED = 98,
+    SNAG_BINARY_IRC_REPLY_REMINDER = 99,
+    SNAG_BINARY_STEERING_DEFERRED = 100,
+    SNAG_BINARY_INPUT_ADMITTED = 101,
+    SNAG_BINARY_FUTURE_QUEUE_STATE = 102,
+    SNAG_BINARY_FUTURE_TURN_CANCELLED = 103
 };
 
 enum snag_binary_actor { SNAG_BINARY_USER = 1, SNAG_BINARY_MODEL = 2 };
@@ -59,6 +67,52 @@ struct snag_binary_text {
     const unsigned char *data;
     size_t size;
 };
+
+struct snag_binary_asset {
+    unsigned char id[16], sha256[32];
+    uint64_t bytes;
+    struct snag_binary_text mime;
+};
+
+enum snag_binary_part_kind {
+    SNAG_BINARY_PART_TEXT = 1, SNAG_BINARY_PART_FILE = 2, SNAG_BINARY_PART_IMAGE = 3
+};
+
+struct snag_binary_part {
+    enum snag_binary_part_kind kind;
+    struct snag_binary_text text; /* Text part or image source note. */
+    struct snag_binary_asset asset, source;
+    bool has_source;
+};
+
+struct snag_binary_instruction {
+    struct snag_binary_text path;
+    bool has_snapshot; /* Preserve workspace-era metadata, not inferred file contents. */
+    uint64_t bytes;
+    unsigned char sha256[32];
+};
+
+/* Validated, borrowed typed-list encodings, not opaque provider JSON. Iteration
+ * starts with offset zero and uses only returned offsets. Bytes stay immutable.
+ * Encoders append atomically; decode/next preserve output on failure or EOF.
+ * next returns 0 for an item, 1 for EOF, -1 on error. Domain checks (path/MIME
+ * policy, duplicate paths, image totals, actual assets) remain reducer work. */
+struct snag_binary_content { const unsigned char *data; size_t size; };
+struct snag_binary_instructions { const unsigned char *data; size_t size; };
+int snag_binary_content_encode(struct snag_buf *out, const struct snag_binary_part *parts,
+    size_t count);
+int snag_binary_content_decode(const void *data, size_t size, struct snag_binary_content *out);
+int snag_binary_content_next(const struct snag_binary_content *content, size_t *offset,
+    struct snag_binary_part *out);
+int snag_binary_instructions_encode(struct snag_buf *out,
+    const struct snag_binary_instruction *instructions, size_t count);
+int snag_binary_instructions_decode(const void *data, size_t size,
+    struct snag_binary_instructions *out);
+int snag_binary_instructions_next(const struct snag_binary_instructions *instructions,
+    size_t *offset, struct snag_binary_instruction *out);
+
+enum snag_binary_input_origin { SNAG_BINARY_INPUT_DEFAULT = 0, SNAG_BINARY_INPUT_TIMER = 1 };
+struct snag_binary_ids { const unsigned char (*values)[16]; size_t count; };
 
 struct snag_binary_selection {
     struct snag_binary_text provider, model, effort;
@@ -92,6 +146,30 @@ struct snag_binary_event {
             struct snag_binary_text effort;
         } turn_model;
         struct { struct snag_binary_context_choice before, after; } context;
+        struct {
+            struct snag_binary_selection selection;
+            struct snag_binary_text text;
+            struct snag_binary_instructions instructions;
+            struct snag_binary_content content; /* {NULL, 0} means absent. */
+            uint64_t received_ms;
+            enum snag_binary_input_origin origin;
+            bool read_only;
+        } input;
+        struct {
+            unsigned char id[16], turn[16];
+            struct snag_binary_text text;
+            struct snag_binary_content content;
+            uint64_t received_ms;
+            bool has_received_ms;
+        } steering_input;
+        struct {
+            unsigned char turn[16];
+            uint64_t time_ms;
+            struct snag_binary_ids ids;
+        } admission;
+        struct { enum snag_binary_actor actor; struct snag_binary_ids ids; } queue_cancel;
+        unsigned char turn[16];
+        bool queue_armed;
         struct {
             unsigned char id[16];
             uint64_t due_ms;

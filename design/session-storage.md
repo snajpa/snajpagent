@@ -7,8 +7,8 @@
 Engineering design, September 27, 2026, with framing implementation begun
 September 28. Installed builds keep the existing JSONL format. The draft header,
 commit-batch codec, bounded positional reader and typed session/configuration,
-goal and timer payloads are exercised by the store tests. Remaining event
-families, checkpoint replacement, indexed runtime storage, grouped durability
+goal, timer and initial input/steering payloads are exercised by the store tests.
+Remaining event families, checkpoint replacement, indexed runtime storage, grouped durability
 and conversion remain under implementation. The application does not yet read
 or write binary sessions.
 
@@ -147,8 +147,9 @@ leaves the committed anchor unchanged. No framing API modifies a file.
 ### Typed control payloads
 
 Payload version1 assigns session/configuration IDs1..12, timer
-schedule/fire/cancel IDs32..34 and goal
-start/replace/reword/lock/pause/block/complete/resume/cancel IDs64..72. IDs13..31
+schedule/fire/cancel IDs32..34, goal
+start/replace/reword/lock/pause/block/complete/resume/cancel IDs64..72 and initial
+input/steering IDs96..103. IDs13..31
 remain reserved for session metadata. Required semantic kinds occupy the low
 half of the 16-bit namespace. The high half permits explicitly optional metadata;
 unknown required records, unsupported semantic payload versions and optional
@@ -193,6 +194,40 @@ within the existing context-selection bound. Path shape, session/turn identity
 matching, deletion confirmation and valid state transitions remain reducer
 checks. Packing IDs and enums preserves their exact meaning; the importer will
 reuse the corresponding legacy validation rather than infer missing authority.
+
+Initial input and steering records use these layouts:
+
+| ID | Event | Payload fields |
+|---|---|---|
+| 96 | input received | origin1, flags1, received time8, provider/model/effort text, instructions, original text, optional content |
+| 97 | input cancelled | empty |
+| 98/99 | steering added / IRC reply reminder | steering UUID16, turn UUID16, flags1, optional received time8, original text, optional content |
+| 100 | steering deferred | turn UUID16 |
+| 101 | input admitted | turn UUID16, first-context time8, steering UUID list |
+| 102 | future queue state | armed boolean1 |
+| 103 | future turn cancelled | user reason1, nonempty queued UUID list |
+
+Input origin0 preserves the original absent origin field; origin1 means timer.
+It does not elevate IRC/voice input to operator authority. Input flag bits0/1
+mean read-only/content-present. Steering flag bits0/1 mean timestamp-present/
+content-present, preserving absent versus explicitly zero receipt timestamps.
+Remaining bits are rejected. Queue admission/order, duplicate IDs, original
+text equality and authority remain reducer checks. UUID lists use count4 plus
+packed16-byte entries; admission may carry an empty list, cancellation may not.
+
+Instruction lists use count4, then per entry a metadata-present boolean1 and
+path text. Workspace-era entries additionally retain byte count8 and SHA25632,
+not instruction file contents. Direct input receipts accept plain paths only,
+as their existing schema requires. Media content lists use nonzero count4 and
+typed entries: text1 plus text, file2 plus asset, or image3 plus asset followed
+by a source-present boolean1 and, when present, source asset and note text.
+Assets store UUID16, SHA25632, byte count8 and MIME text. These codecs check
+field shape/size, UTF-8 and flags; path/MIME policy, aggregate image limits and
+actual asset verification remain the existing domain validators' responsibility.
+Borrowed list iterators avoid allocating a second array proportional to event
+size. Counts are checked against remaining bytes before iteration. These are
+typed field encodings, not embedded JSON. Queued-input creation/editing, voice
+provenance and full turn-start records remain to be added.
 
 The ordinary event-size bound remains a resource contract. Start with a 1 MiB
 batch target, admitting one larger permitted event alone. A batch never becomes

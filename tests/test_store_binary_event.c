@@ -64,7 +64,7 @@ roundtrip(const struct snag_binary_event *event)
     struct snag_buf encoded_again = {.max = SNAG_MAX_EVENT_LINE};
     assert(!snag_binary_event_encode(&encoded_again, &decoded));
     assert(encoded_again.len == payload.len);
-    assert(!memcmp(encoded_again.data, payload.data, payload.len));
+    assert(!payload.len || !memcmp(encoded_again.data, payload.data, payload.len));
     snag_buf_free(&encoded_again);
     for (size_t i = 0; i < payload.len; ++i) {
         record.size = i;
@@ -88,6 +88,255 @@ static struct snag_binary_text
 text(const char *value)
 {
     return (struct snag_binary_text){(const unsigned char *)value, strlen(value)};
+}
+
+static void
+test_input_lists(void)
+{
+    struct snag_buf bytes = {.max = SNAG_MAX_EVENT_LINE};
+    struct snag_binary_part parts[3] = {{.kind = SNAG_BINARY_PART_TEXT}};
+    parts[0].text = text("caf\xc3\xa9");
+    assert(!snag_binary_content_encode(&bytes, parts, 1u));
+    static const unsigned char golden[] = "\x01\0\0\0\x01\x05\0\0\0caf\xc3\xa9";
+    assert(bytes.len == sizeof(golden) - 1u && !memcmp(bytes.data, golden, bytes.len));
+    struct snag_binary_content content = {0}, sentinel = {0};
+    assert(!snag_binary_content_decode(bytes.data, bytes.len, &content));
+    assert(content.data == bytes.data && content.size == bytes.len);
+    for (size_t i = 0; i < bytes.len; ++i) {
+        assert(snag_binary_content_decode(bytes.data, i, &sentinel) < 0);
+        assert(!sentinel.data && !sentinel.size);
+    }
+    size_t offset = 0;
+    struct snag_binary_part part;
+    assert(!snag_binary_content_next(&content, &offset, &part));
+    assert(part.kind == SNAG_BINARY_PART_TEXT && part.text.size == 5u);
+    assert(!memcmp(part.text.data, parts[0].text.data, part.text.size));
+    assert(snag_binary_content_next(&content, &offset, &part) == 1);
+    assert(offset == content.size && part.text.size == 5u);
+    offset = 1u;
+    assert(snag_binary_content_next(&content, &offset, &part) < 0 && offset == 1u);
+    assert(part.text.size == 5u);
+    bytes.data[4] = 4u;
+    assert(snag_binary_content_decode(bytes.data, bytes.len, &sentinel) < 0);
+    bytes.data[4] = 1u;
+    bytes.data[9] = 0u;
+    assert(snag_binary_content_decode(bytes.data, bytes.len, &sentinel) < 0);
+    bytes.data[9] = 'c';
+    memset(bytes.data, 0xff, 4u);
+    assert(snag_binary_content_decode(bytes.data, bytes.len, &sentinel) < 0);
+    snag_buf_reset(&bytes);
+    parts[1].kind = SNAG_BINARY_PART_FILE;
+    parts[1].asset.bytes = 7u;
+    parts[1].asset.mime = text("text/plain");
+    memset(parts[1].asset.id, 0xa5, 16u);
+    memset(parts[1].asset.sha256, 0x5a, 32u);
+    parts[2].kind = SNAG_BINARY_PART_IMAGE;
+    parts[2].asset = parts[1].asset;
+    parts[2].asset.mime = text("image/png");
+    parts[2].source = parts[1].asset;
+    parts[2].has_source = true;
+    parts[2].text = text("derived thumbnail");
+    assert(!snag_binary_content_encode(&bytes, parts, 3u));
+    assert(!snag_binary_content_decode(bytes.data, bytes.len, &content));
+    offset = 0;
+    struct snag_binary_part decoded[3];
+    for (size_t i = 0; i < 3u; ++i)
+        assert(!snag_binary_content_next(&content, &offset, &decoded[i]));
+    assert(offset == bytes.len && snag_binary_content_next(&content, &offset, &part) == 1);
+    assert(decoded[1].asset.bytes == 7u && !memcmp(decoded[1].asset.id, parts[1].asset.id, 16u));
+    assert(!memcmp(decoded[2].source.sha256, parts[2].source.sha256, 32u));
+    assert(decoded[2].has_source && decoded[2].text.size == parts[2].text.size);
+    struct snag_buf again = {.max = SNAG_MAX_EVENT_LINE};
+    assert(!snag_binary_content_encode(&again, decoded, 3u));
+    assert(again.len == bytes.len && !memcmp(again.data, bytes.data, bytes.len));
+    for (size_t i = 0; i < bytes.len; ++i)
+        assert(snag_binary_content_decode(bytes.data, i, &sentinel) < 0);
+    size_t saved = bytes.len;
+    parts[1].asset.bytes = 0;
+    assert(snag_binary_content_encode(&bytes, parts, 3u) < 0 && bytes.len == saved);
+    assert(snag_binary_content_encode(&bytes, parts, SIZE_MAX) < 0 && bytes.len == saved);
+    assert(snag_binary_content_encode(&bytes, NULL, 0) < 0 && bytes.len == saved);
+    snag_buf_reset(&bytes);
+    assert(!snag_binary_content_encode(&bytes, &parts[2], 1u));
+    bytes.data[74] = 2u; /* Image source-presence byte after the primary asset. */
+    assert(snag_binary_content_decode(bytes.data, bytes.len, &sentinel) < 0);
+    bytes.data[74] = 1u;
+    memset(bytes.data + 53, 0, 8u); /* Required positive asset byte count. */
+    assert(snag_binary_content_decode(bytes.data, bytes.len, &sentinel) < 0);
+    snag_buf_reset(&bytes);
+    parts[2].has_source = false;
+    assert(!snag_binary_content_encode(&bytes, &parts[2], 1u));
+    assert(!snag_binary_content_decode(bytes.data, bytes.len, &content));
+    offset = 0;
+    assert(!snag_binary_content_next(&content, &offset, &part) && !part.has_source);
+    assert(!snag_buf_putc(&bytes, 0));
+    assert(snag_binary_content_decode(bytes.data, bytes.len, &sentinel) < 0);
+
+    snag_buf_reset(&bytes);
+    struct snag_binary_instruction instructions[2] = {{.path = text("/a")}, {.path = text("/b")}};
+    assert(!snag_binary_instructions_encode(&bytes, instructions, 1u));
+    static const unsigned char instruction_bytes[] = "\x01\0\0\0\0\x02\0\0\0/a";
+    assert(bytes.len == sizeof(instruction_bytes) - 1u);
+    assert(!memcmp(bytes.data, instruction_bytes, bytes.len));
+    struct snag_binary_instructions paths = {0};
+    for (size_t i = 0; i < bytes.len; ++i) {
+        assert(snag_binary_instructions_decode(bytes.data, i, &paths) < 0);
+        assert(!paths.data && !paths.size);
+    }
+    bytes.data[4] = 2u;
+    assert(snag_binary_instructions_decode(bytes.data, bytes.len, &paths) < 0);
+    snag_buf_reset(&bytes);
+    instructions[1].has_snapshot = true;
+    instructions[1].bytes = UINT64_C(0x01020304);
+    memset(instructions[1].sha256, 0x3c, 32u);
+    assert(!snag_binary_instructions_encode(&bytes, instructions, 2u));
+    assert(!snag_binary_instructions_decode(bytes.data, bytes.len, &paths));
+    struct snag_binary_instruction decoded_paths[2];
+    offset = 0;
+    assert(!snag_binary_instructions_next(&paths, &offset, &decoded_paths[0]));
+    assert(!snag_binary_instructions_next(&paths, &offset, &decoded_paths[1]));
+    assert(!decoded_paths[0].has_snapshot && decoded_paths[1].has_snapshot);
+    assert(decoded_paths[1].bytes == UINT64_C(0x01020304));
+    assert(!memcmp(decoded_paths[1].sha256, instructions[1].sha256, 32u));
+    assert(snag_binary_instructions_next(&paths, &offset, &decoded_paths[0]) == 1);
+    snag_buf_reset(&again);
+    assert(!snag_binary_instructions_encode(&again, decoded_paths, 2u));
+    assert(again.len == bytes.len && !memcmp(again.data, bytes.data, bytes.len));
+    saved = bytes.len;
+    instructions[0].path = text("");
+    assert(snag_binary_instructions_encode(&bytes, instructions, 2u) < 0 && bytes.len == saved);
+    assert(snag_binary_instructions_encode(&bytes, instructions, SIZE_MAX) < 0 &&
+           bytes.len == saved);
+    snag_buf_reset(&bytes);
+    assert(!snag_binary_instructions_encode(&bytes, NULL, 0));
+    assert(bytes.len == 4u && !memcmp(bytes.data, "\0\0\0\0", 4u));
+    assert(!snag_binary_instructions_decode(bytes.data, bytes.len, &paths));
+    offset = 0;
+    assert(snag_binary_instructions_next(&paths, &offset, &decoded_paths[0]) == 1 && !offset);
+    snag_buf_free(&again); snag_buf_free(&bytes);
+}
+
+static void
+test_input_events(void)
+{
+    struct snag_buf instructions = {.max = SNAG_MAX_EVENT_LINE};
+    struct snag_buf parts = {.max = SNAG_MAX_EVENT_LINE};
+    struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
+    assert(!snag_binary_instructions_encode(&instructions, NULL, 0));
+    struct snag_binary_part part = {.kind = SNAG_BINARY_PART_TEXT, .text = text("original")};
+    assert(!snag_binary_content_encode(&parts, &part, 1u));
+    struct snag_binary_event input = {.kind = SNAG_BINARY_INPUT_RECEIVED};
+    input.data.input.selection = (struct snag_binary_selection){text("p"), text("m"), text("e")};
+    input.data.input.instructions = (struct snag_binary_instructions){
+        instructions.data, instructions.len
+    };
+    input.data.input.text = text("x");
+    input.data.input.received_ms = UINT64_C(0x0102030405060708);
+    input.data.input.read_only = true;
+    input.data.input.origin = SNAG_BINARY_INPUT_TIMER;
+    roundtrip(&input);
+    assert(!snag_binary_event_encode(&payload, &input));
+    static const unsigned char golden[] =
+        "\x01\x01\x08\x07\x06\x05\x04\x03\x02\x01"
+        "\x01\0\0\0p\x01\0\0\0m\x01\0\0\0e\0\0\0\0\x01\0\0\0x";
+    assert(payload.len == sizeof(golden) - 1u && !memcmp(payload.data, golden, payload.len));
+    struct snag_binary_record record = {
+        .kind = SNAG_BINARY_INPUT_RECEIVED, .version = 1u,
+        .payload = payload.data, .size = payload.len
+    };
+    struct snag_binary_event decoded;
+    assert(!snag_binary_event_decode(&record, &decoded));
+    assert(decoded.data.input.received_ms == input.data.input.received_ms);
+    assert(decoded.data.input.origin == SNAG_BINARY_INPUT_TIMER && decoded.data.input.read_only);
+    assert(!decoded.data.input.content.data && decoded.data.input.text.data[0] == 'x');
+    payload.data[0] = 2u;
+    assert_rejected(record);
+    payload.data[0] = 1u;
+    payload.data[1] = 4u;
+    assert_rejected(record);
+    input.data.input.content = (struct snag_binary_content){parts.data, parts.len};
+    input.data.input.origin = SNAG_BINARY_INPUT_DEFAULT;
+    input.data.input.read_only = false;
+    roundtrip(&input);
+    struct snag_binary_event event = {.kind = SNAG_BINARY_INPUT_CANCELLED};
+    roundtrip(&event);
+    event.kind = SNAG_BINARY_STEERING_ADDED;
+    memset(event.data.steering_input.id, 0x11, 16u);
+    memset(event.data.steering_input.turn, 0x22, 16u);
+    event.data.steering_input.text = text("original steering");
+    roundtrip(&event);
+    event.data.steering_input.has_received_ms = true;
+    event.data.steering_input.content = input.data.input.content;
+    roundtrip(&event); /* A present zero timestamp must not become absent. */
+    event.data.steering_input.received_ms = UINT64_C(0x1020304050607080);
+    roundtrip(&event);
+    event.kind = SNAG_BINARY_IRC_REPLY_REMINDER;
+    roundtrip(&event);
+    event = (struct snag_binary_event){.kind = SNAG_BINARY_STEERING_DEFERRED};
+    memset(event.data.turn, 0x22, 16u);
+    roundtrip(&event);
+    event = (struct snag_binary_event){.kind = SNAG_BINARY_INPUT_ADMITTED};
+    memset(event.data.admission.turn, 0x22, 16u);
+    event.data.admission.time_ms = 1u;
+    roundtrip(&event);
+    static const unsigned char ids[2][16] = {{1}, {2}};
+    event.data.admission.ids = (struct snag_binary_ids){ids, 2u};
+    roundtrip(&event);
+    snag_buf_reset(&payload);
+    assert(!snag_binary_event_encode(&payload, &event));
+    assert(payload.len == 60u && payload.data[16] == 1u && payload.data[24] == 2u);
+    assert(payload.data[28] == 1u && payload.data[44] == 2u);
+    record = (struct snag_binary_record){
+        .kind = SNAG_BINARY_INPUT_ADMITTED, .version = 1u,
+        .payload = payload.data, .size = payload.len
+    };
+    memset(payload.data + 24, 0xff, 4u);
+    assert_rejected(record);
+    size_t saved = payload.len;
+    event.data.admission.time_ms = 0;
+    assert(snag_binary_event_encode(&payload, &event) < 0 && payload.len == saved);
+    event = (struct snag_binary_event){.kind = SNAG_BINARY_FUTURE_QUEUE_STATE};
+    roundtrip(&event);
+    event.data.queue_armed = true;
+    roundtrip(&event);
+    event = (struct snag_binary_event){.kind = SNAG_BINARY_FUTURE_TURN_CANCELLED};
+    event.data.queue_cancel.actor = SNAG_BINARY_USER;
+    event.data.queue_cancel.ids = (struct snag_binary_ids){ids, 2u};
+    roundtrip(&event);
+    event.data.queue_cancel.actor = SNAG_BINARY_MODEL;
+    assert(snag_binary_event_encode(&payload, &event) < 0 && payload.len == saved);
+    event.data.queue_cancel.actor = SNAG_BINARY_USER;
+    event.data.queue_cancel.ids.count = 0;
+    assert(snag_binary_event_encode(&payload, &event) < 0 && payload.len == saved);
+    char *large = malloc(SNAG_MAX_DIRECT_PROMPT);
+    assert(large);
+    memset(large, 'x', SNAG_MAX_DIRECT_PROMPT);
+    input.data.input.text = (struct snag_binary_text){
+        (unsigned char *)large, SNAG_MAX_DIRECT_PROMPT
+    };
+    snag_buf_reset(&payload);
+    assert(!snag_binary_event_encode(&payload, &input));
+    record = (struct snag_binary_record){
+        .kind = SNAG_BINARY_INPUT_RECEIVED, .version = 1u,
+        .payload = payload.data, .size = payload.len
+    };
+    assert(!snag_binary_event_decode(&record, &decoded));
+    assert(decoded.data.input.text.size == SNAG_MAX_DIRECT_PROMPT);
+    ++input.data.input.text.size;
+    saved = payload.len;
+    assert(snag_binary_event_encode(&payload, &input) < 0 && payload.len == saved);
+    free(large);
+    input.data.input.text = text("x");
+    snag_buf_reset(&instructions);
+    struct snag_binary_instruction legacy = {.path = text("/a"), .has_snapshot = true};
+    assert(!snag_binary_instructions_encode(&instructions, &legacy, 1u));
+    input.data.input.instructions = (struct snag_binary_instructions){
+        instructions.data, instructions.len
+    };
+    assert(snag_binary_event_encode(&payload, &input) < 0 && payload.len == saved);
+    assert(snag_binary_event_encode(&payload, NULL) < 0 && payload.len == saved);
+    assert(snag_binary_event_decode(NULL, &decoded) < 0);
+    snag_buf_free(&instructions); snag_buf_free(&parts); snag_buf_free(&payload);
 }
 
 static void
@@ -206,6 +455,8 @@ test_metadata(void)
 void
 test_store_binary_event(void)
 {
+    test_input_lists();
+    test_input_events();
     test_metadata();
     static const unsigned char text[] = "goal caf\xc3\xa9";
     struct snag_binary_event event = {.kind = SNAG_BINARY_TIMER_SCHEDULED};
