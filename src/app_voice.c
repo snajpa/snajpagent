@@ -5,6 +5,7 @@
 #include "voice_rtc.h"
 #include "provider.h"
 #include "secret.h"
+#include "tools.h"
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -16,6 +17,97 @@
  * notices and serialized, correlated coding results. No second executor. */
 #define VOICE_MESSAGE (2u*1024u*1024u)
 #define VOICE_NOTICES 16u
+/* The interface's file capability is deliberately narrower than an ordinary
+ * read-only coding turn (which may also open media or use remote providers). */
+json_t *
+snag_app_voice_tools(void)
+{
+    static const char *const names[] = {"get_cwd", "list_files", "read_file", "grep"};
+    json_t *tools = json_array();
+    if (!tools) return NULL;
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
+        if (json_array_append_new(tools, snag_context_read_tool_schema(names[i])) < 0) {
+            json_decref(tools);
+            return NULL;
+        }
+    }
+    if (json_array_append_new(tools, json_pack("{s:s,s:s,s:s,s:{s:s,s:{},s:[],s:b}}",
+            "type", "function", "name", "inspect_session",
+            "description", "Read current session state and effective instruction paths.",
+            "parameters", "type", "object", "properties", "required",
+            "additionalProperties", 0)) < 0) {
+        json_decref(tools);
+        return NULL;
+    }
+    return tools;
+}
+
+int
+snag_app_voice_read(struct app_state *app, const struct snag_response_item *call,
+                    json_t **result, char *error, size_t size)
+{
+    if (!app || !call || !call->name || !result) return -1;
+    *result = NULL;
+    if (snag_string_in(call->name, "get_cwd list_files read_file grep")) {
+        return snag_tools_read_only(call, app->session.cwd, NULL, NULL, result);
+    }
+    if (strcmp(call->name, "inspect_session")) {
+        *result = snag_tool_result_terminal(false, "Tool is unavailable to the voice interface.");
+        return *result ? 0 : -1;
+    }
+    if (!snag_json_arg_keys(call->arguments, "", "", error, size)) {
+        *result = snag_tool_result_terminal(false, error);
+        return *result ? 0 : -1;
+    }
+    json_t *context = NULL;
+    json_t *paths = NULL;
+    struct snag_instruction_set discovered = {0};
+    int rc = snag_session_voice_context(&app->session, &context, error, size);
+    if (rc < 0) goto out;
+    if (app->session.active_turn) {
+        paths = json_incref(app->session.active_instructions);
+    } else {
+        if (app->config->read_agents_md &&
+            snag_instructions_discover(&discovered, app->session.cwd, error, size) < 0) {
+            rc = -1;
+            goto out;
+        }
+        const json_t *saved = json_object_get(app->session.pending_input, "instructions");
+        size_t count = saved ? json_array_size(saved) :
+            app->cli ? app->cli->doc_instructions.count : 0u;
+        for (size_t i = 0; i < count; ++i) {
+            const char *path = saved ? json_string_value(json_array_get(saved, i)) :
+                app->cli->doc_instructions.paths[i];
+            if (snag_instructions_add_file(&discovered, path, error, size) < 0) {
+                rc = -1;
+                goto out;
+            }
+        }
+        paths = snag_instructions_metadata_json(&discovered);
+    }
+    if (!paths) paths = json_array();
+    if (!paths ||
+        json_object_set_new(context, "cwd", json_string(app->session.cwd)) < 0 ||
+        json_object_set(context, "instructions", paths) < 0 ||
+        json_object_set_new(context, "provider", json_string(app->session.default_provider)) < 0 ||
+        json_object_set_new(context, "model", json_string(app->session.default_model)) < 0 ||
+        json_object_set_new(context, "effort", json_string(app->session.default_effort)) < 0) {
+        rc = -1;
+        goto out;
+    }
+    struct snag_buf text = {.max = VOICE_MESSAGE};
+    rc = snag_json_canonical(context, &text);
+    if (!rc) rc = snag_buf_terminate(&text);
+    if (!rc) *result = snag_tool_result_terminal(true, (const char *)text.data);
+    if (!*result) rc = -1;
+    snag_buf_free(&text);
+out:
+    json_decref(paths);
+    json_decref(context);
+    snag_instructions_free(&discovered);
+    return rc;
+}
+
 struct voice_handoff {
     char call[SNAG_MAX_PROVIDER_ID + 1u];
     char queue[33];

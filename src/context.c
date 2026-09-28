@@ -1899,9 +1899,16 @@ stdin_tool_schema(uint32_t max_wait_ms, uint32_t max_output_tokens)
             "description", "Model-facing UTF-8 byte limit. Legacy max_output_tokens is accepted; supply only one spelling. Null uses the configured ceiling; smaller positive requests reduce the excerpt, larger positive requests up to 4000000000 are capped and reported. Does not limit durable capture."));
 }
 
-static json_t *
-read_only_schema(const char *name)
+json_t *
+snag_context_read_tool_schema(const char *name)
 {
+    if (!snag_string_in(name, "get_cwd list_files read_file grep")) return NULL;
+    if (!strcmp(name, "get_cwd")) {
+        return tool_schema("get_cwd", "",
+            "Return the default working directory used by relative file paths and command calls. "
+            "New sessions start in the user's home directory; cd changes it for later calls.",
+            json_object());
+    }
     bool read = strcmp(name, "read_file") == 0;
     bool grep = strcmp(name, "grep") == 0;
     json_t *props;
@@ -2058,10 +2065,7 @@ tool_schemas(bool goal_active,
         json_array_append_new(tools, tool_schema("speak_text", "text", "Generate AI speech via a paid API and retain a WAV asset. If no speech route is configured, execution returns a factual unavailable result.",
             json_pack("{s:{s:s,s:s}}", "text", "type", "string", "description",
                 "Text to synthesize, 1..4096 UTF-8 bytes. Uses the configured voice and retains a WAV without playback or capture."))) < 0 ||
-        json_array_append_new(tools, tool_schema("get_cwd", "",
-            "Return the default working directory used by relative file paths and command calls. "
-            "New sessions start in the user's home directory; cd changes it for later calls.",
-            json_object())) < 0 ||
+        json_array_append_new(tools, snag_context_read_tool_schema("get_cwd")) < 0 ||
         json_array_append_new(tools, tool_schema("cd", "path",
             "Change the session's current working directory for later file and command calls. "
             "Paths may be absolute or start ./ relative to current cwd. Existing running commands "
@@ -2101,9 +2105,9 @@ tool_schemas(bool goal_active,
             "This changes the session selection, not the configuration file.",
             json_pack("{s:{s:s,s:s}}", "selector", "type", "string", "description",
                 "Cached model/effort row, or cache to refresh and list."))) < 0) ||
-        json_array_append_new(tools, read_only_schema("list_files")) < 0 ||
-        json_array_append_new(tools, read_only_schema("read_file")) < 0 ||
-        json_array_append_new(tools, read_only_schema("grep")) < 0 ||
+        json_array_append_new(tools, snag_context_read_tool_schema("list_files")) < 0 ||
+        json_array_append_new(tools, snag_context_read_tool_schema("read_file")) < 0 ||
+        json_array_append_new(tools, snag_context_read_tool_schema("grep")) < 0 ||
         json_array_append_new(tools, json_pack("{s:s}", "type", search_type)) < 0) goto fail;
     uint32_t max_wait_ms = session ? session->max_wait_ms : config ? config->max_wait_ms : UINT32_MAX;
     uint32_t max_timeout_ms = session ? session->max_timeout_ms :

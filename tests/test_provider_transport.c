@@ -1860,6 +1860,89 @@ test_voice_concurrent_owner(void)
     snag_config_free(&config);
 }
 
+static void
+test_voice_read_tools(void)
+{
+    char path[4096], file[4096], error[256];
+    const char *tmp = getenv("TMPDIR");
+    struct app_state app = {0};
+    struct snag_config config;
+    struct snag_response_item call = {.kind = SNAG_ITEM_TOOL_CALL};
+    json_t *result = NULL;
+
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-voice-read-XXXXXX",
+        tmp ? tmp : "/tmp") > 0 && mkdtemp(path));
+    assert(snprintf(file, sizeof(file), "%s/AGENTS.md", path) > 0);
+    FILE *out = fopen(file, "w");
+    assert(out && fputs("Existing project instructions.\n", out) >= 0 && fclose(out) == 0);
+    snag_config_init(&config);
+    app.config = &config;
+    snag_store_init(&app.store);
+    snag_session_init(&app.session);
+    assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
+    assert(snag_session_create(&app.store, &app.session, path, "default",
+        "fixture", "medium", error, sizeof(error)) == 0);
+    uint64_t seq = app.session.next_seq;
+    json_t *tools = snag_app_voice_tools();
+    assert(tools && json_array_size(tools) == 5u);
+    assert(!snag_context_read_tool_schema("exec_command"));
+    assert(!snag_context_read_tool_schema("write_file"));
+    assert(!snag_context_read_tool_schema(NULL));
+    for (size_t i = 0; i < 4u; ++i) {
+        const char *name = snag_json_string(json_array_get(tools, i), "name");
+        json_t *shared = snag_context_read_tool_schema(name);
+        assert(shared && json_equal(shared, json_array_get(tools, i)));
+        json_decref(shared);
+    }
+    json_decref(tools);
+    call.name = "get_cwd";
+    call.arguments = json_object();
+    assert(snag_app_voice_read(&app, &call, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "model_text"), path));
+    json_decref(result);
+    call.name = "inspect_session";
+    assert(snag_app_voice_read(&app, &call, &result, error, sizeof(error)) == 0);
+    const char *text = snag_json_string(result, "model_text");
+    json_t *context = json_loads(text, 0, NULL);
+    assert(context && !strcmp(snag_json_string(context, "cwd"), path));
+    assert(!strcmp(snag_json_string(context, "session_id"), app.session.id));
+    const json_t *paths = json_object_get(context, "instructions");
+    bool found = false;
+    for (size_t i = 0; i < json_array_size(paths); ++i) {
+        if (!strcmp(json_string_value(json_array_get(paths, i)), file)) found = true;
+    }
+    assert(found);
+    json_decref(context);
+    json_decref(result);
+    json_decref(call.arguments);
+    call.name = "read_file";
+    call.arguments = json_pack("{s:s}", "path", "AGENTS.md");
+    assert(snag_app_voice_read(&app, &call, &result, error, sizeof(error)) == 0);
+    assert(strstr(snag_json_string(result, "model_text"), "Existing project instructions."));
+    json_decref(result);
+    json_decref(call.arguments);
+    call.name = "write_file";
+    call.arguments = json_pack("{s:s,s:s}", "path", "AGENTS.md", "content", "changed");
+    assert(snag_app_voice_read(&app, &call, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), "failed"));
+    json_decref(result);
+    call.name = "exec_command";
+    assert(snag_app_voice_read(&app, &call, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), "failed"));
+    json_decref(result);
+    json_decref(call.arguments);
+    call.name = "read_file";
+    call.arguments = json_pack("{s:s}", "path", "AGENTS.md");
+    assert(snag_app_voice_read(&app, &call, &result, error, sizeof(error)) == 0);
+    assert(strstr(snag_json_string(result, "model_text"), "Existing project instructions."));
+    assert(app.session.next_seq == seq && !app.session.pending_queue_count);
+    json_decref(result);
+    json_decref(call.arguments);
+    snag_session_close(&app.session);
+    snag_store_close(&app.store);
+    snag_config_free(&config);
+}
+
 static void test_voice_owner_mute(void)
 {
     struct app_state app={0};
@@ -4432,6 +4515,7 @@ main(void)
 #endif
     test_voice_close();
     test_voice_concurrent_owner();
+    test_voice_read_tools();
     test_voice_owner_mute();
     test_voice_socket();
     test_audio_transport();

@@ -56,6 +56,18 @@ script. The presence of readable files, effective instructions and useful tools
 should make the workflow discoverable without a special documentation prompt.
 An environment with no project notes still supports conversation and controls.
 
+The native Codex client protocol carries text delegation and context messages;
+its session setup does not declare local function schemas. Handle that delegation
+with a restricted interface-model request using the session's selected provider,
+model and effective instructions. Keep its provider I/O independent of the audio
+loop and coding request. Its tool calls return to the existing session owner for
+validation and execution. This adds a reasoning conversation behind the native
+audio frontend, not a second filesystem writer. Retain its context in the session
+and expose actual typed tools; do not invent a text command language for speech.
+Public Realtime's function calls can use the same host capability implementations.
+The transport adapter must preserve the original transcript and distinguish an
+interface-model reply, a committed control and a completed coding result.
+
 ## Spoken input and task control
 
 The voice conversation can discuss a task without submitting each utterance.

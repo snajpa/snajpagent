@@ -15,6 +15,8 @@
 #define SNAG_CONTEXT_MAX_COMPACT (12u * 1024u * 1024u)
 
 int snag_context_codex_request(json_t *request);
+/* Shared native file-reading schemas; NULL for tools outside this capability. */
+json_t *snag_context_read_tool_schema(const char *name);
 struct snag_credential;
 int snag_context_continuation_scope(const struct snag_provider_config *provider, const char *model,
                                    const struct snag_credential *credential,
