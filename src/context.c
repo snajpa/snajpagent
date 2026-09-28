@@ -1902,6 +1902,26 @@ stdin_tool_schema(uint32_t max_wait_ms, uint32_t max_output_tokens)
 json_t *
 snag_context_read_tool_schema(const char *name)
 {
+    if (name && !strcmp(name, "read_session_history")) {
+        return tool_schema("read_session_history", "",
+            "Read a bounded newest-first page of this session's verified durable event history. "
+            "Use next_before_seq to walk older history, including empty filtered pages "
+            "with scan_complete=false. Counts cover the scanned range, not the entire journal; "
+            "provider-only payloads are omitted.",
+            json_pack("{s:{s:[s,s],s:i,s:s},s:{s:[s,s],s:i,s:i,s:s},"
+                "s:{s:[s,s],s:i,s:i,s:s},s:{s:[s,s],s:i,s:{s:s},s:s}}",
+                "before_seq", "type", "integer", "null", "minimum", 1,
+                    "description", "Exclusive event sequence upper bound; "
+                        "omission/null selects the newest events.",
+                "limit", "type", "integer", "null", "minimum", 1, "maximum", 50,
+                    "description", "Maximum complete events to return; omission/null selects 20.",
+                "detail_bytes", "type", "integer", "null", "minimum", 128, "maximum", 2048,
+                    "description", "Maximum compact JSON bytes retained per event; "
+                        "omission/null selects 512.",
+                "event_types", "type", "array", "null", "minItems", 1, "items", "type", "string",
+                    "description", "Optional nonempty list of exact event type names; "
+                        "omission/null selects all types."));
+    }
     if (!snag_string_in(name, "get_cwd list_files read_file grep")) return NULL;
     if (!strcmp(name, "get_cwd")) {
         return tool_schema("get_cwd", "",
@@ -2133,23 +2153,7 @@ tool_schemas(bool goal_active,
                 "offset", "type", "integer", "null", "minimum", 0, "description", "Zero-based redacted byte offset; omission/null selects 0.",
                 "max_output_bytes", "type", "integer", "null", "minimum", 512, "maximum", (json_int_t)SNAG_CONFIG_TOKEN_LIMIT_MAX,
                     "description", "Total model-facing page ceiling in bytes. Null uses the configured common output ceiling; larger requests are capped."))) < 0 ||
-        json_array_append_new(tools, tool_schema("read_session_history", "",
-            "Read a bounded newest-first page of this session's verified durable event history. "
-            "Use next_before_seq to walk older history, including empty filtered pages "
-            "with scan_complete=false. Counts cover the scanned range, not the entire journal; "
-            "provider-only payloads are omitted.",
-            json_pack("{s:{s:[s,s],s:i,s:s},s:{s:[s,s],s:i,s:i,s:s},"
-                "s:{s:[s,s],s:i,s:i,s:s},s:{s:[s,s],s:i,s:{s:s},s:s}}",
-                "before_seq", "type", "integer", "null", "minimum", 1,
-                    "description", "Exclusive event sequence upper bound; omission/null selects the newest events.",
-                "limit", "type", "integer", "null", "minimum", 1, "maximum", 50,
-                    "description", "Maximum complete events to return; omission/null selects 20.",
-                "detail_bytes", "type", "integer", "null", "minimum", 128, "maximum", 2048,
-                    "description", "Maximum compact JSON bytes retained per event; "
-                        "omission/null selects 512.",
-                "event_types", "type", "array", "null", "minItems", 1, "items", "type", "string",
-                    "description", "Optional nonempty list of exact event type names; "
-                        "omission/null selects all types."))) < 0 ||
+        json_array_append_new(tools, snag_context_read_tool_schema("read_session_history")) < 0 ||
         json_array_append_new(tools, tool_schema("list_goals", "",
             "List bounded durable goal identities, final/current statuses and copy-on-write parent/replacement lineage. "
             "Use next_before_seq to walk older goals without changing the current goal.",

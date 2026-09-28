@@ -109,6 +109,11 @@ Avoid recursively executing a UI command from inside voice service: commands can
 stop voice, transfer the terminal or wait for subsequent confirmation input.
 
 The model chooses which files to consult and how to use the available controls.
+The interface also has `read_session_history`, using the working model's existing
+schema and verified paged reader. Older utterances, controls and results remain
+retrievable by journal sequence without submitting a coding task. History is
+context rather than fresh approval; provider-only continuation payloads stay out
+of the displayed history.
 Tool descriptions explain their real operations and outcomes. Do not encode a
 particular documentation path, language, phrase vocabulary or conversation
 script. The presence of readable files, effective instructions and useful tools

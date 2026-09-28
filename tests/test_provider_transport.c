@@ -2086,7 +2086,7 @@ test_voice_read_tools(void)
         "fixture", "medium", error, sizeof(error)) == 0);
     uint64_t seq = app.session.next_seq;
     json_t *tools = snag_app_voice_tools();
-    assert(tools && json_array_size(tools) == 10u);
+    assert(tools && json_array_size(tools) == 11u);
     bool ui_input_tool = false;
     for (size_t i = 0u; i < json_array_size(tools); ++i) {
         const json_t *tool = json_array_get(tools, i);
@@ -2645,6 +2645,10 @@ test_history_and_goal_list_tools(void)
                     (unsigned long long)replaced_seq) > 0);
     assert(strstr(text, completed) < strstr(text, replaced));
     assert(strstr(text, cursor));
+    json_t *voice_result = NULL;
+    assert(snag_app_voice_read(&app, &call, &voice_result, error, sizeof(error)) == 0);
+    assert(json_equal(result, voice_result));
+    json_decref(voice_result);
     json_decref(result);
     json_decref(call.arguments);
 

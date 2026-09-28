@@ -1807,6 +1807,9 @@ through the same input queue as the keyboard. The typed draft is preserved.
 An acknowledgement reports admission; the command's normal output reports its
 result or asks for confirmation. A full input queue refuses admission. Input
 from an ended attachment is rejected, including queued input not yet dispatched.
+The voice interface can read older dialogue, controls and results with the same
+paged session-history tool used by the model. History inspection keeps existing
+work running and admits no new task.
 Voice activity persists the session even before the first model turn. Voice
 interface actions appear as tools labelled "voice:" at verbosity 1 and above;
 verbosity 2 adds the ordinary argument and result previews. Each action's

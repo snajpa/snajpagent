@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Let the voice interface inspect older session history through the existing
+  verified, paged history tool, without starting model work.
+
 - Give voice-interface requests a stable cache identity distinct from working
   model requests in the same session.
 
