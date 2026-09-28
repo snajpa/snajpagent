@@ -65,6 +65,14 @@ identified cursor. Stream model output while work runs. State observations carry
 their session, request identity and freshness; an accepted operation retains its
 identity through completion, interruption or refusal.
 
+The durable journal is the backlog. Forward observation uses the existing journal
+cursor's sequence, byte offset and previous-record hash, verifying each envelope
+and chain link without replaying the reducer or mutating live session state.
+Each service step reads a bounded byte quantum; a consumer can pause before an
+event or after consuming it. Advance the cursor only after consumption. New
+commits remain available on later steps, so a slow voice connection needs neither
+a lifetime scan nor an unbounded parallel queue of model output.
+
 Keep the stable instruction/help prefix and append new context to the history.
 Choose batched compaction versus a sliding window from measured prefill latency,
 cache reuse and conversational behavior on the selected provider. Establish the

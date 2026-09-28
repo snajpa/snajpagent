@@ -371,6 +371,88 @@ reverse_event(void *opaque, const struct snag_session *state, uint64_t seq,
     return 0;
 }
 
+struct forward_scan {
+    uint64_t next;
+    int action;
+};
+
+static int
+forward_event(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t error_size)
+{
+    struct forward_scan *scan = opaque;
+    assert(!state && seq == scan->next && type && json_is_object(data));
+    if (scan->action < 0)
+        return snag_fail(error, error_size, ECANCELED, "test forward cancellation");
+    if (scan->action != 1) ++scan->next;
+    return scan->action;
+}
+
+static void
+test_forward_history(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session;
+    char error[256], id[SNAG_ID_HEX_LEN + 1u];
+    snag_session_init(&session);
+    assert(snag_session_prepare(&session, cwd, "default", "model", "high",
+        error, sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+    commit_event(&session, "effort_changed",
+        change_data("old_effort", "high", "new_effort", "low"));
+    for (unsigned int phase = 0u; phase < 3u; ++phase) {
+        struct snag_journal_cursor cursor = {0};
+        struct forward_scan scan = {.next = 1u};
+        uint64_t original_seq = session.next_seq;
+        int64_t original_end = session.log_end;
+        assert(snag_session_each_event_forward(&session, &cursor, 1u, forward_event,
+            &scan, error, sizeof(error)) == 0);
+        assert(cursor.next_seq == 2u && scan.next == 2u && cursor.offset > 0);
+        struct snag_journal_cursor saved = cursor;
+        scan.action = 1;
+        assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX, forward_event,
+            &scan, error, sizeof(error)) == 0);
+        assert(cursor.next_seq == saved.next_seq && cursor.offset == saved.offset);
+        scan.action = -1;
+        assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX, forward_event,
+            &scan, error, sizeof(error)) < 0 && errno == ECANCELED);
+        assert(cursor.next_seq == saved.next_seq && cursor.offset == saved.offset);
+        scan.action = SNAG_JOURNAL_STOP_AFTER;
+        assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX, forward_event,
+            &scan, error, sizeof(error)) == 0);
+        assert(cursor.next_seq == saved.next_seq + 1u && scan.next == cursor.next_seq);
+        scan.action = 0;
+        assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX, forward_event,
+            &scan, error, sizeof(error)) == 0);
+        assert(cursor.next_seq == original_seq && cursor.offset == original_end);
+        assert(!strcmp(cursor.prev_sha256, session.prev_sha256));
+        assert(session.next_seq == original_seq && session.log_end == original_end);
+        assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX, forward_event,
+            &scan, error, sizeof(error)) == 0 && scan.next == original_seq);
+        commit_event(&session, "effort_changed",
+            change_data("old_effort", session.default_effort, "new_effort",
+                !strcmp(session.default_effort, "high") ? "low" : "high"));
+        assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX, forward_event,
+            &scan, error, sizeof(error)) == 0 && scan.next == original_seq + 1u);
+        cursor = saved;
+        cursor.prev_sha256[0] = cursor.prev_sha256[0] == '0' ? '1' : '0';
+        scan.next = saved.next_seq;
+        assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX, forward_event,
+            &scan, error, sizeof(error)) < 0 && scan.next == saved.next_seq);
+        cursor = saved;
+        ++cursor.offset;
+        assert(snag_session_each_event_forward(&session, &cursor, SIZE_MAX, forward_event,
+            &scan, error, sizeof(error)) < 0 && scan.next == saved.next_seq);
+        if (!phase) {
+            assert(snag_session_persist(store, &session, error, sizeof(error)) == 0);
+        } else if (phase == 1u) {
+            assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+            snag_session_close(&session);
+            assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+        }
+    }
+    snag_session_close(&session);
+}
+
 static void
 test_reverse_history(struct snag_store *store, const char *cwd)
 {
@@ -1601,6 +1683,7 @@ main(void)
     assert(snag_store_open(&store, state, error, sizeof(error)) == 0);
     test_pending_session(&store, cwd);
     test_reverse_history(&store, cwd);
+    test_forward_history(&store, cwd);
     test_upload_staging_lifecycle(&store, cwd);
     test_checkpoint_optional_download_queue(&store, cwd);
     test_one_file_checkpoint(&store, cwd);

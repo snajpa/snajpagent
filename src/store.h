@@ -355,6 +355,11 @@ int snag_session_checkpoint_read(struct snag_session *, json_t **state, json_t *
 #define SNAG_JOURNAL_STOP_AFTER 2
 int snag_session_each_event_reverse(struct snag_session *, uint64_t before_seq, size_t scan_bytes,
     snag_session_event_fn, void *opaque, uint64_t *next_before, char *error, size_t error_size);
+/* Forward envelope/hash-verified records; zero cursor starts at the beginning.
+ * Uses the same callback pause rules as reverse scans. Advances only through
+ * consumed records and supplies NULL state. End-of-log is reusable after append. */
+int snag_session_each_event_forward(struct snag_session *, struct snag_journal_cursor *,
+    size_t scan_bytes, snag_session_event_fn, void *opaque, char *error, size_t error_size);
 
 int snag_session_media(struct snag_session *session, const char *path, const char *mime,
                        int (*pump)(void *, unsigned int), void *opaque,

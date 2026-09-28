@@ -2952,6 +2952,62 @@ snag_session_each_event_reverse(struct snag_session *session, uint64_t before, s
     return 0;
 }
 
+int
+snag_session_each_event_forward(struct snag_session *session, struct snag_journal_cursor *cursor,
+    size_t scan_bytes, snag_session_event_fn fn, void *opaque, char *error, size_t error_size)
+{
+    if (!session || !cursor || !scan_bytes || !fn || session->log_end < 0)
+        return snag_fail(error, error_size, EINVAL, "invalid forward history scan");
+    if (!cursor->next_seq) {
+        if (cursor->offset || cursor->prev_sha256[0])
+            return snag_fail(error, error_size, EINVAL, "incomplete forward history cursor");
+        cursor->next_seq = 1u;
+        memset(cursor->prev_sha256, '0', SNAG_SHA256_HEX_LEN);
+        cursor->prev_sha256[SNAG_SHA256_HEX_LEN] = '\0';
+    }
+    if (cursor->offset < 0 || cursor->offset > session->log_end ||
+        cursor->next_seq > session->next_seq ||
+        !snag_hex_is_lower(cursor->prev_sha256, SNAG_SHA256_HEX_LEN)) {
+        return snag_fail(error, error_size, EINVAL, "invalid forward history cursor");
+    }
+    struct snag_journal_cursor tail = {.offset = session->log_end, .next_seq = session->next_seq};
+    memcpy(tail.prev_sha256, session->prev_sha256, sizeof(tail.prev_sha256));
+    while (cursor->offset < tail.offset && scan_bytes) {
+        int64_t end = -1;
+        json_t *record = read_record_at(session, cursor->offset, &end);
+        uint64_t seq = cursor->next_seq;
+        if (seq >= tail.next_seq || end > tail.offset ||
+            history_record_valid(session, record, cursor->offset, end, seq,
+                error, error_size) < 0) {
+            json_decref(record);
+            return snag_fail(error, error_size, EINVAL, "invalid forward history record");
+        }
+        if (strcmp(cursor->prev_sha256, snag_json_string(record, "prev_sha256"))) {
+            json_decref(record);
+            return snag_fail(error, error_size, EINVAL, "history hash chain mismatch");
+        }
+        int rc = fn(opaque, NULL, seq, snag_json_string(record, "type"),
+            json_object_get(record, "data"), error, error_size);
+        if (rc && rc != SNAG_JOURNAL_STOP_AFTER) {
+            json_decref(record);
+            return rc < 0 ? -1 : 0;
+        }
+        uint64_t visited = (uint64_t)(end - cursor->offset);
+        scan_bytes = visited >= scan_bytes ? 0u : scan_bytes - (size_t)visited;
+        cursor->offset = end;
+        cursor->next_seq = seq + 1u;
+        memcpy(cursor->prev_sha256, snag_json_string(record, "event_sha256"),
+            sizeof(cursor->prev_sha256));
+        json_decref(record);
+        if (rc == SNAG_JOURNAL_STOP_AFTER) break;
+    }
+    if (cursor->offset == tail.offset &&
+        (cursor->next_seq != tail.next_seq || strcmp(cursor->prev_sha256, tail.prev_sha256))) {
+        return snag_fail(error, error_size, EINVAL, "history end does not match committed state");
+    }
+    return 0;
+}
+
 /* 1 = indexed record; 0 = an older or uncheckpointed journal; -1 = corrupt.
  * A malformed index is never interpreted as permission to scan the prefix. */
 static int
