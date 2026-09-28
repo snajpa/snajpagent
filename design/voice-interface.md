@@ -22,7 +22,9 @@ There is no separate asynchronous interaction mode or fixed turn-taking script.
 
 Current source tracks concurrent protocol and application handoffs, with final
 transcript gating, matching results and nonfatal native capacity refusal. The
-remaining sections specify the broader session interface, live progress and
+initial native/public instructions and interface requests include the CLI help
+text from the shared command catalog and formatter. The remaining sections
+specify the broader session interface, live progress and
 connection recovery; these are not yet all implemented.
 
 Delegations use shared read-only file schemas, an independent provider-request

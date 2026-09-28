@@ -21,7 +21,7 @@ struct snag_voice_io {
     uint32_t (*interrupt)(void *);
 };
 struct snag_voice *snag_voice_new(const struct snag_voice_io *,void *,const char *model,
-                                 const char *transcribe_model,const char *voice);
+    const char *transcribe_model, const char *voice, const char *help);
 void snag_voice_free(struct snag_voice *);
 int snag_voice_begin(struct snag_voice *,char *,size_t);
 /* Select native call semantics before begin; caller owns the returned session. */

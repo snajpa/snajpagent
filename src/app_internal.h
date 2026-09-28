@@ -234,6 +234,7 @@ int snag_app_context_preview(struct app_state *app, const struct snag_provider_c
 void snag_app_record_model_accounting(struct app_state *app, enum snag_count_capability capability,
                                      uint64_t hard_input_tokens);
 int snag_app_help(struct app_state *app, const char *command);
+int snag_app_help_text(struct snag_buf *text, const char *command);
 int snag_app_goal_command(struct app_state *app, const char *line, bool active);
 int snag_app_goal_tool(struct app_state *app, const struct snag_response_item *call,
                       json_t **result, char *error, size_t error_size);

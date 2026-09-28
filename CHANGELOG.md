@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Include the CLI's `/help` text in initial native/public voice instructions and
+  interface requests, using the same command catalog and formatter as typed help.
+
 - Label microphone transcripts and voice-model replies in rollout and composer
   captions. Orient the voice model to the shared session and distinguish it from
   the working model, with consistent instructions on native and public routes.

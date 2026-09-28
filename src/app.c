@@ -1289,7 +1289,7 @@ out: snag_buf_free(&text);
 static bool page_reference(struct app_state *app, const char *text, size_t length);
 
 int
-snag_app_help(struct app_state *app, const char *command)
+snag_app_help_text(struct snag_buf *text, const char *command)
 {
     static const char legend[] = "Syntax: [optional], A|B alternatives, UPPERCASE values.\n";
     static const char settings[] =
@@ -1318,28 +1318,41 @@ snag_app_help(struct app_state *app, const char *command)
         {"/cat PATH", "Files and media"},
         {"/chat", "Network chat"},
     };
-    struct snag_buf text = {.max = 64u * 1024u};
     size_t prefix = command ? strlen(command) : 0u;
-    int rc = -1;
 
-    if (snag_buf_append(&text, legend, sizeof(legend) - 1u) < 0) goto out;
+    if (snag_buf_append(text, legend, sizeof(legend) - 1u) < 0) return -1;
     for (size_t i = 0u; i < command_count(); ++i) {
         if (command && (strncmp(commands[i].syntax, command, prefix) ||
                         (commands[i].syntax[prefix] && commands[i].syntax[prefix] != ' '))) continue;
         if (!command) {
             for (size_t j = 0u; j < sizeof(sections) / sizeof(sections[0]); ++j) {
                 if (!strcmp(commands[i].syntax, sections[j].first) &&
-                    snag_buf_printf(&text, "\n%s\n", sections[j].title) < 0) goto out;
+                    snag_buf_printf(text, "\n%s\n", sections[j].title) < 0) {
+                    return -1;
+                }
             }
         }
-        if (snag_buf_printf(&text, "%s — %s\n", commands[i].syntax, commands[i].description) < 0) goto out;
+        if (snag_buf_printf(text, "%s — %s\n", commands[i].syntax,
+                commands[i].description) < 0) {
+            return -1;
+        }
     }
-    if (!command && (snag_buf_append(&text, settings, sizeof(settings) - 1u) < 0 ||
-                     snag_buf_append(&text, keys, sizeof(keys) - 1u) < 0)) goto out;
-    if (snag_buf_terminate(&text) < 0) goto out;
-    rc = page_reference(app, (const char *)text.data, text.len) ? 0 :
-        snag_ui_text(&app->ui, SNAG_UI_HELP, (const char *)text.data);
-out: snag_buf_free(&text);
+    if (!command && (snag_buf_append(text, settings, sizeof(settings) - 1u) < 0 ||
+            snag_buf_append(text, keys, sizeof(keys) - 1u) < 0)) {
+        return -1;
+    }
+    return snag_buf_terminate(text);
+}
+
+int
+snag_app_help(struct app_state *app, const char *command)
+{
+    struct snag_buf text = {.max = 64u * 1024u};
+    int rc = snag_app_help_text(&text, command);
+    if (!rc && !page_reference(app, (const char *)text.data, text.len)) {
+        rc = snag_ui_text(&app->ui, SNAG_UI_HELP, (const char *)text.data);
+    }
+    snag_buf_free(&text);
     return rc;
 }
 static int

@@ -693,7 +693,10 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
             read_request(fd, &request);
             if (strcmp(request.method, "POST") || strcmp(request.path, "/v1/responses") ||
                 !strstr(request.body, "inspect_session") ||
-                !strstr(request.body, "get_cwd")) server_fail("missing voice capabilities");
+                !strstr(request.body, "get_cwd") || !strstr(request.body, "Keyboard") ||
+                !strstr(request.body, "/session") || !strstr(request.body, "/voice")) {
+                server_fail("missing voice capabilities or CLI help");
+            }
             bool final = models == MODEL_VOICE_QUEUE ? i % 2u : i == 2u;
             if (final) {
                 if (!strstr(request.body, "function_call_output")) {
@@ -4052,6 +4055,18 @@ static int voice_deliver(struct snag_voice *voice,json_t *event)
     char error[256];assert(event);
     int rc=snag_voice_event(voice,event,error,sizeof(error));json_decref(event);return rc;
 }
+static struct snag_voice *
+voice_fixture_new(const struct snag_voice_io *io, void *opaque, const char *model,
+    const char *transcribe, const char *voice)
+{
+    struct snag_buf help = {.max = 64u * 1024u};
+    assert(snag_app_help_text(&help, NULL) == 0);
+    struct snag_voice *protocol = snag_voice_new(io, opaque, model, transcribe,
+        voice, (const char *)help.data);
+    snag_buf_free(&help);
+    return protocol;
+}
+
 static void
 voice_orientation(const json_t *session)
 {
@@ -4061,13 +4076,18 @@ voice_orientation(const json_t *session)
     assert(strstr(instructions, "The CLI is another interface to this same session"));
     assert(strstr(instructions, "do not automatically request new work"));
     assert(strstr(instructions, "do not authenticate a speaker or add permissions"));
+    struct snag_buf help = {.max = 64u * 1024u};
+    assert(snag_app_help_text(&help, NULL) == 0 && help.len);
+    const char *commands = strstr(instructions, (const char *)help.data);
+    assert(commands && commands > instructions && !strcmp(commands, (const char *)help.data));
+    snag_buf_free(&help);
 }
 
 static struct snag_voice *voice_start(struct voice_fixture *f)
 {
     memset(f,0,sizeof(*f));f->sent=json_array();f->notices=json_array();assert(f->sent && f->notices);
     struct snag_voice_io io={voice_send,voice_notice,voice_play,voice_interrupt};
-    struct snag_voice *voice=snag_voice_new(&io,f,"fixture-model","fixture-asr","fixture-voice");
+    struct snag_voice *voice=voice_fixture_new(&io,f,"fixture-model","fixture-asr","fixture-voice");
     char error[256];assert(voice && !snag_voice_ready(voice));
     assert(snag_voice_begin(voice,error,sizeof(error))==0);
     json_t *session=json_object_get(voice_last(f->sent),"session");assert(json_is_object(session));
@@ -4115,7 +4135,7 @@ static void test_native_voice_playback(void)
     struct voice_fixture f={.sent=json_array(),.notices=json_array(),.audio_item="native-output"};
     struct snag_voice_io io={.send=voice_send,.notice=voice_notice,
         .play=voice_play,.interrupt=voice_interrupt};
-    struct snag_voice *v=snag_voice_new(&io,&f,"gpt-live-1-codex","gpt-4o-transcribe","marin");
+    struct snag_voice *v=voice_fixture_new(&io,&f,"gpt-live-1-codex","gpt-4o-transcribe","marin");
     assert(v);
     json_decref(snag_voice_native_session(v));
     char error[256];int16_t pcm[24];
@@ -4146,7 +4166,7 @@ static void test_native_voice_protocol(void)
 {
     struct voice_fixture f={.sent=json_array(),.notices=json_array()};char error[256];
     struct snag_voice_io io={voice_send,voice_notice,voice_play,voice_interrupt};
-    struct snag_voice *v=snag_voice_new(&io,&f,"gpt-live-1-codex","gpt-4o-transcribe","cove");
+    struct snag_voice *v=voice_fixture_new(&io,&f,"gpt-live-1-codex","gpt-4o-transcribe","cove");
     json_t *session=snag_voice_native_session(v);
     assert(session &&
         !strcmp(snag_json_string(json_object_get(session,"delegation"),"type"),"client"));
@@ -4202,7 +4222,7 @@ static void test_native_voice_protocol(void)
     voice_end(v,&f);json_decref(delegation);
 
     memset(&f,0,sizeof(f));f.sent=json_array();f.notices=json_array();
-    v=snag_voice_new(&io,&f,"gpt-live-1-codex","gpt-4o-transcribe","cove");
+    v=voice_fixture_new(&io,&f,"gpt-live-1-codex","gpt-4o-transcribe","cove");
     json_decref(snag_voice_native_session(v));assert(snag_voice_begin(v,error,sizeof(error))==0);
     assert(voice_deliver(v,json_pack("{s:s,s:{s:s,s:s,s:s}}","type","turn.done","turn",
         "id","native-input","role","user","transcript","please inspect the worktree"))==0);
@@ -4234,7 +4254,7 @@ test_native_voice_concurrency(void)
     for (unsigned int delayed = 0; delayed < 2u; ++delayed) {
         struct voice_fixture f = {.sent = json_array(), .notices = json_array()};
         struct snag_voice_io io = {voice_send, voice_notice, voice_play, voice_interrupt};
-        struct snag_voice *v = snag_voice_new(&io, &f, "voice", "transcribe", "cove");
+        struct snag_voice *v = voice_fixture_new(&io, &f, "voice", "transcribe", "cove");
         char error[256], ids[SNAG_VOICE_HANDOFFS + 2u][32];
 
         assert(v);
