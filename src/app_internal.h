@@ -160,6 +160,11 @@ void snag_app_voice_event(struct app_state *,const char *,const json_t *);
 json_t *snag_app_voice_tools(void);
 int snag_app_voice_read(struct app_state *, const struct snag_response_item *,
                         json_t **, char *, size_t);
+/* One independent provider request; only the session owner takes its graph.
+ * take: 0 pending, 1 settled with provider outcome, -1 invalid host state. */
+int snag_app_voice_request_start(struct app_state *, const json_t *, char *, size_t);
+int snag_app_voice_request_take(struct app_state *, struct snag_response_graph *,
+                                int *, char *, size_t);
 #ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
 int snag_app_audio_fixture(struct app_state *,bool playing);
 int snag_app_audio_fixture_checkpoint(struct app_state *);

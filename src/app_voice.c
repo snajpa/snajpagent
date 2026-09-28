@@ -114,6 +114,20 @@ struct voice_handoff {
     char turn[33];
     bool result_needed;
 };
+struct voice_request {
+    pthread_t thread;
+    atomic_bool stop;
+    atomic_bool done;
+    bool started;
+    const struct snag_config *config;
+    struct snag_provider_config provider;
+    struct snag_credential credential;
+    char session_id[SNAG_ID_HEX_LEN + 1u];
+    json_t *input;
+    struct snag_response_graph graph;
+    int outcome;
+    char error[256];
+};
 struct app_voice {
     pthread_t thread;
     pthread_mutex_t mutex;
@@ -143,7 +157,100 @@ struct app_voice {
     /* Session-owner-only handoff/result correlation. */
     struct voice_handoff handoffs[SNAG_VOICE_HANDOFFS];
     bool context_dirty;
+    struct voice_request *request;
 };
+
+static int
+request_pump(void *opaque, unsigned int timeout_ms)
+{
+    (void)timeout_ms;
+    struct voice_request *request = opaque;
+    return atomic_load_explicit(&request->stop, memory_order_acquire) ? 2 : 0;
+}
+
+static void *
+request_owner(void *opaque)
+{
+    struct voice_request *request = opaque;
+    request->outcome = snag_provider_responses_create((struct snag_provider_connection){
+        .config = request->config, .provider = &request->provider,
+        .credential = &request->credential, .pump = request_pump,
+        .pump_opaque = request, .session_id = request->session_id},
+        request->input, NULL, NULL, NULL, NULL, NULL, NULL, &request->graph,
+        NULL, request->error, sizeof(request->error), NULL);
+    atomic_store_explicit(&request->done, true, memory_order_release);
+    return NULL;
+}
+
+static void
+request_free(struct voice_request *request)
+{
+    if (!request) return;
+    atomic_store_explicit(&request->stop, true, memory_order_release);
+    if (request->started) pthread_join(request->thread, NULL);
+    json_decref(request->input);
+    snag_response_graph_free(&request->graph);
+    snag_credential_clear(&request->credential);
+    free(request);
+}
+
+int
+snag_app_voice_request_start(struct app_state *app, const json_t *input,
+                             char *error, size_t size)
+{
+    struct app_voice *v = app ? app->voice : NULL;
+    if (!v || v->request || !json_is_object(input)) {
+        return snag_errorf(error, size, "Voice interface request is unavailable or already active");
+    }
+    const struct snag_provider_config *provider = snag_config_provider(app->config,
+        app->session.default_provider);
+    if (!provider) return snag_errorf(error, size, "Selected session provider is unavailable");
+    struct voice_request *request = calloc(1, sizeof(*request));
+    if (!request) return -1;
+    atomic_init(&request->stop, false);
+    atomic_init(&request->done, false);
+    snag_credential_clear(&request->credential);
+    /* Configuration reload is excluded while voice is open. Model selection
+     * changes session state; this request keeps its own provider and input. */
+    request->config = app->config;
+    request->provider = *provider;
+    request->provider.models = NULL;
+    request->provider.model_count = 0;
+    strcpy(request->session_id, app->session.id);
+    request->input = json_deep_copy(input);
+    if (!request->input || snag_auth_read(app->store.root_fd, provider, false, NULL,
+            &request->credential, NULL, NULL, error, size) < 0) {
+        request_free(request);
+        return -1;
+    }
+    int rc = pthread_create(&request->thread, NULL, request_owner, request);
+    if (rc) {
+        request_free(request);
+        return snag_errorf(error, size, "Cannot start voice interface request: %s", strerror(rc));
+    }
+    request->started = true;
+    v->request = request;
+    return 0;
+}
+
+int
+snag_app_voice_request_take(struct app_state *app, struct snag_response_graph *graph,
+                            int *outcome, char *error, size_t size)
+{
+    struct app_voice *v = app ? app->voice : NULL;
+    if (!v || !v->request || !graph || !outcome) return -1;
+    struct voice_request *request = v->request;
+    if (!atomic_load_explicit(&request->done, memory_order_acquire)) return 0;
+    pthread_join(request->thread, NULL);
+    request->started = false;
+    *outcome = request->outcome;
+    *graph = request->graph;
+    memset(&request->graph, 0, sizeof(request->graph));
+    snag_strcpy(error, size, request->error);
+    v->request = NULL;
+    request_free(request);
+    return 1;
+}
 
 static bool voice_attachment_lost(const struct app_voice *v)
 {
@@ -541,6 +648,8 @@ void snag_app_voice_close(struct app_state *app)
 {
     struct app_voice *v=app->voice;if(!v)return;
     atomic_store(&v->stop,true);
+    request_free(v->request);
+    v->request = NULL;
     if(v->thread_started)pthread_join(v->thread,NULL);
     if (voice_attachment_lost(v))strcpy(v->error,lost_terminal);
     /* The worker is joined: preserve final notices on shutdown/error as well

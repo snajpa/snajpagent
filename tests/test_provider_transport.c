@@ -62,6 +62,9 @@ static void test_static_alsa_config(void)
 #define REQUEST_MAX (64u * 1024u)
 #define BODY_MAX (32u * 1024u)
 
+/* Inherited only by the voice-request fixture child, never a product control. */
+static int voice_request_ready_fd = -1;
+
 struct local_server {
     int fd;
     pid_t pid;
@@ -91,6 +94,8 @@ enum model_fixture {
     MODEL_CREATE_HTTP_FAILURE,
     MODEL_CREATE_SSE_FAILURE,
     MODEL_CREATE_TYPELESS,
+    MODEL_VOICE_REQUEST,
+    MODEL_VOICE_REQUEST_WAIT,
     MODEL_OPENROUTER_SEARCH,
     MODEL_CREATE_RETRY,
     MODEL_COUNT_404,
@@ -677,6 +682,24 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         "event: response.completed\n"
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_transport\",\"status\":\"completed\",\"usage\":{\"input_tokens\":7,\"output_tokens\":2,\"total_tokens\":9},\"output\":[]}}\n\n";
 
+    if (models == MODEL_VOICE_REQUEST || models == MODEL_VOICE_REQUEST_WAIT) {
+        struct http_request request;
+        int fd = accept(listen_fd, NULL, NULL);
+        if (fd < 0) server_fail("voice interface accept failed");
+        read_request(fd, &request);
+        if (strcmp(request.method, "POST") || strcmp(request.path, "/v1/responses") ||
+            !strstr(request.body, "get_cwd")) server_fail("invalid voice interface request");
+        if (voice_request_ready_fd >= 0) {
+            if (write(voice_request_ready_fd, "R", 1u) != 1) {
+                server_fail("cannot acknowledge voice request");
+            }
+            close(voice_request_ready_fd);
+        }
+        snag_sleep_ms(models == MODEL_VOICE_REQUEST_WAIT ? 2000u : 250u);
+        send_response(fd, 200u, "text/event-stream", create_sse);
+        close(fd);
+        _exit(0);
+    }
     if (models == MODEL_OPENROUTER_SEARCH) {
         serve_one(listen_fd, 200u, "POST", "/v1/responses", "openrouter:web_search", "text/event-stream",
                   "event: response.created\n"
@@ -1941,6 +1964,96 @@ test_voice_read_tools(void)
     snag_session_close(&app.session);
     snag_store_close(&app.store);
     snag_config_free(&config);
+}
+
+static void
+test_voice_independent_request(void)
+{
+    for (unsigned int mode = 0; mode < 3u; ++mode) {
+        struct local_server server;
+        struct app_state app = {0};
+        struct snag_config config;
+        struct snag_credential credential;
+        struct snag_response_graph graph = {0};
+        char path[4096], error[512];
+        const char *tmp = getenv("TMPDIR");
+
+        assert(snprintf(path, sizeof(path), "%s/snajpagent-voice-request-XXXXXX",
+            tmp ? tmp : "/tmp") > 0 && mkdtemp(path));
+        int received[2] = {-1, -1};
+        if (mode == 2u) {
+            assert(pipe(received) == 0);
+            voice_request_ready_fd = received[1];
+        }
+        start_server(&server, mode == 2u ? MODEL_VOICE_REQUEST_WAIT :
+            mode == 1u ? MODEL_CREATE_TYPELESS : MODEL_VOICE_REQUEST, false, "/v1");
+        if (mode == 2u) {
+            assert(close(received[1]) == 0);
+            voice_request_ready_fd = -1;
+        }
+        (void)transport_connection(&config, &credential, server.endpoint);
+        config.providers[0].auth = SNAG_AUTH_API_KEY;
+        assert(snag_secret_source_parse(&config.providers[0].api_key,
+            "\"transport-secret\"", NULL, error, sizeof(error)) == 0);
+        app.config = &config;
+        snag_store_init(&app.store);
+        snag_session_init(&app.session);
+        assert(snag_ui_init(&app.ui) == 0);
+        assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
+        assert(snag_session_create(&app.store, &app.session, path, config.providers[0].name,
+            "fixture", "medium", error, sizeof(error)) == 0);
+        json_t *notices = json_pack("[{s:s,s:s,s:s,s:s}]", "type", "voice_transcript",
+            "speaker", "user", "item_id", "input", "text", "still listening");
+        assert(snag_app_voice_fixture(&app, notices, false) == 0);
+        json_decref(notices);
+        json_t *request = request_with_marker("get_cwd");
+        assert(snag_app_voice_request_start(&app, request, error, sizeof(error)) == 0);
+        assert(snag_app_voice_request_start(&app, request, error, sizeof(error)) < 0);
+        json_decref(request);
+        /* Servicing audio notices does not wait for the independent response. */
+        uint64_t begin = snag_monotonic_ms();
+        assert(snag_app_voice_service(&app) == 0 && app.voice);
+        assert(snag_monotonic_ms() - begin < 1000u);
+        if (mode == 2u) {
+            /* Closing immediately after thread creation could cancel before
+             * any network I/O. Exercise a request already waiting for a reply. */
+            struct pollfd ready = {.fd = received[0], .events = POLLIN};
+            assert(poll(&ready, 1u, 5000) == 1 && (ready.revents & POLLIN));
+            char reply;
+            assert(read(received[0], &reply, 1u) == 1 && reply == 'R');
+            assert(close(received[0]) == 0);
+            begin = snag_monotonic_ms();
+            snag_app_voice_close(&app);
+            assert(snag_monotonic_ms() - begin < 1000u && !app.voice);
+        } else {
+            int ready = 0, outcome = 0;
+            uint64_t seq = app.session.next_seq;
+            while (!ready && snag_monotonic_ms() - begin < 5000u) {
+                ready = snag_app_voice_request_take(&app, &graph, &outcome,
+                    error, sizeof(error));
+                assert(ready >= 0);
+                if (!ready) snag_sleep_ms(10u);
+            }
+            assert(ready == 1 && app.voice && app.session.next_seq == seq);
+            if (mode == 1u) {
+                assert(outcome < 0 && strstr(error, "Responses event has no type"));
+                assert(!strstr(error, "private-value"));
+            } else {
+                assert(outcome == 0 && graph.count == 1u);
+                assert(!strcmp(graph.provider_response_id, "resp_transport"));
+            }
+            snag_response_graph_free(&graph);
+            assert(snag_app_voice_request_take(&app, &graph, &outcome,
+                error, sizeof(error)) < 0);
+            snag_app_voice_close(&app);
+        }
+        snag_session_close(&app.session);
+        snag_store_close(&app.store);
+        snag_ui_free(&app.ui);
+        snag_config_free(&config);
+        snag_credential_clear(&credential);
+        stop_server(&server);
+    }
 }
 
 static void test_voice_owner_mute(void)
@@ -4516,6 +4629,7 @@ main(void)
     test_voice_close();
     test_voice_concurrent_owner();
     test_voice_read_tools();
+    test_voice_independent_request();
     test_voice_owner_mute();
     test_voice_socket();
     test_audio_transport();
