@@ -79,6 +79,10 @@ fragmenting it, so larger descriptions continue without repeated disk reads or
 lost remainder bytes. Existing voice snapshots remain separate from this live
 cursor while conversation retention is developed.
 
+Initial and refreshed textual context snapshots use the same configured-secret
+filter as recorded voice events. Filtering operates on an outbound copy; the
+working session's prompt, queue contents and authority records stay unchanged.
+
 Keep the stable instruction/help prefix and append new context to the history.
 Choose batched compaction versus a sliding window from measured prefill latency,
 cache reuse and conversational behavior on the selected provider. Establish the

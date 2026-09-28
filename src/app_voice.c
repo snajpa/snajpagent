@@ -344,19 +344,44 @@ static bool voice_attachment_lost(const struct app_voice *v)
 static const char lost_terminal[] =
     "Voice stopped: controlling terminal detached, suspended or changed.";
 
-static int voice_record(struct app_state *app,struct app_voice *v,json_t *event)
+static json_t *
+voice_redact(struct app_voice *v, const json_t *value, char *error, size_t size)
 {
-    if(!event)return -1;
+    struct snag_buf raw = {.max = VOICE_MESSAGE};
+    struct snag_buf clean = {.max = VOICE_MESSAGE};
+    int rc = snag_json_canonical(value, &raw);
+    if (!rc) rc = snag_wire_json_redact(raw.data, raw.len, &v->secrets.wire, &clean, error, size);
+    json_t *safe = !rc ? json_loadb((char *)clean.data, clean.len,
+        JSON_REJECT_DUPLICATES, NULL) : NULL;
+    snag_secret_clear(raw.data, raw.len);
+    snag_buf_free(&raw);
+    snag_buf_free(&clean);
+    return safe;
+}
+
+static int
+voice_context_snapshot(struct app_state *app, struct app_voice *v, json_t **result,
+    char *error, size_t size)
+{
+    json_t *context = NULL;
+    *result = NULL;
+    if (snag_session_voice_context(&app->session, &context, error, size) < 0) return -1;
+    *result = voice_redact(v, context, error, size);
+    json_decref(context);
+    return *result ? 0 : snag_errorf(error, size, "Cannot filter voice session context");
+}
+
+static int
+voice_record(struct app_state *app, struct app_voice *v, json_t *event)
+{
+    if (!event) return -1;
     char error[256];
-    struct snag_buf raw,clean;snag_buf_init(&raw,VOICE_MESSAGE);snag_buf_init(&clean,VOICE_MESSAGE);
-    int rc=snag_json_canonical(event,&raw);json_decref(event);
-    if(!rc)rc=snag_wire_json_redact(raw.data,raw.len,&v->secrets.wire,&clean,error,sizeof(error));
-    json_t *safe=!rc?json_loadb((char *)clean.data,clean.len,JSON_REJECT_DUPLICATES,NULL):NULL;
-    if(!safe)rc=-1;
-    if(!rc)rc=snag_app_commit_event(app,"voice_event",json_pack("{s:s,s:s,s:s,s:o}",
-        "connection_id",v->connection,"provider",v->config.provider,"model",v->config.realtime_model,"event",safe),error,sizeof(error));
-    snag_secret_clear(raw.data,raw.len);snag_buf_free(&raw);snag_buf_free(&clean);
-    return rc;
+    json_t *safe = voice_redact(v, event, error, sizeof(error));
+    json_decref(event);
+    if (!safe) return -1;
+    return snag_app_commit_event(app, "voice_event", json_pack("{s:s,s:s,s:s,s:o}",
+        "connection_id", v->connection, "provider", v->config.provider,
+        "model", v->config.realtime_model, "event", safe), error, sizeof(error));
 }
 
 int
@@ -522,6 +547,17 @@ snag_app_voice_fixture_observation(struct app_state *app)
     v->observation = NULL;
     pthread_mutex_unlock(&v->mutex);
     return observation;
+}
+json_t *
+snag_app_voice_fixture_context(struct app_state *app)
+{
+    struct app_voice *v = app->voice;
+    if (!v) return NULL;
+    pthread_mutex_lock(&v->mutex);
+    json_t *context = v->context;
+    v->context = NULL;
+    pthread_mutex_unlock(&v->mutex);
+    return context;
 }
 #endif
 
@@ -1384,7 +1420,7 @@ int snag_app_voice_service(struct app_state *app)
     char error[256] = {0};
     if(v->context_dirty && !atomic_load(&v->stop) && !atomic_load(&v->done)) {
         json_t *context=NULL;
-        if(snag_session_voice_context(&app->session,&context,error,sizeof(error))<0)goto failed;
+        if (voice_context_snapshot(app, v, &context, error, sizeof(error)) < 0) goto failed;
         pthread_mutex_lock(&v->mutex);json_decref(v->context);v->context=context;pthread_mutex_unlock(&v->mutex);
         v->context_dirty=false;
     }
@@ -1602,7 +1638,7 @@ int snag_app_voice_command(struct app_state *app,const char *line,bool *handled)
             owner_controls,v,error,sizeof(error))<0 ||
         snag_secret_set_build(&v->secrets,app->config,&v->credential,
             error,sizeof(error))<0)goto failed;
-    if(snag_session_voice_context(&app->session,&v->context,error,sizeof(error))<0)goto failed;
+    if (voice_context_snapshot(app, v, &v->context, error, sizeof(error)) < 0) goto failed;
     observation_start(v, &app->session);
     if(pthread_create(&v->thread,NULL,voice_owner,v))goto failed;
     v->thread_started=true;return 0;

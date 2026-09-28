@@ -176,6 +176,7 @@ int snag_app_audio_fixture_checkpoint(struct app_state *);
 int snag_app_voice_fixture(struct app_state *,const json_t *notices,bool done);
 json_t *snag_app_voice_fixture_result(struct app_state *);
 json_t *snag_app_voice_fixture_observation(struct app_state *);
+json_t *snag_app_voice_fixture_context(struct app_state *);
 int snag_app_voice_fixture_mute(struct app_state *);
 int snag_app_voice_fixture_checkpoint(struct app_state *);
 #endif

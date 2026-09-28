@@ -1813,6 +1813,8 @@ work running and admits no new task.
 While voice is enabled, new model output, tool outcomes and control changes are
 forwarded in journal order as background context. Larger records continue in
 bounded fragments. These observations do not start model work or request speech.
+Textual host context, including initial and refreshed snapshots, is filtered for
+configured secrets before delivery to the voice provider.
 Voice activity persists the session even before the first model turn. Voice
 interface actions appear as tools labelled "voice:" at verbosity 1 and above;
 verbosity 2 adds the ordinary argument and result previews. Each action's

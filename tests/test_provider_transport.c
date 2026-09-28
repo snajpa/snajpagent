@@ -2129,6 +2129,25 @@ test_voice_observation_cursor(void)
     assert(packet && !strcmp(snag_json_string(packet, "event_type"), "effort_changed"));
     json_decref(packet);
     assert(!app.session.active_turn && !app.session.pending_queue_count);
+    json_t *started = json_pack("{s:{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b},"
+        "s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:I,s:s}",
+        "config", "capability_version", SNAJPAGENT_CAPABILITY_VERSION, "effort", "high",
+        "max_output_tokens", "model", "fixture", "provider", "default",
+        "profile_id", SNAJPAGENT_PROFILE_ID, "prompt_schema", 1, "replay_schema", 1,
+        "tool_schema", 1, "max_parallel_commands", 4, "parallel_tool_calls", 1,
+        "input_kind", "direct", "read_only", 0, "instructions", json_array(),
+        "queue_id", "queue_seq", "text", "voice-observation-secret",
+        "turn_id", "fedcba9876543210fedcba9876543210", "turn_number", (json_int_t)1,
+        "cwd", app.session.cwd);
+    assert(started && snag_session_commit(&app.session, "turn_started", started,
+        NULL, error, sizeof(error)) == 0);
+    snag_app_voice_event(&app, "turn_started", NULL);
+    assert(snag_app_voice_service(&app) == 0 && app.voice);
+    json_t *context = snag_app_voice_fixture_context(&app);
+    assert(context && !strcmp(snag_json_string(context, "active_task"), "<redacted:secret>"));
+    json_decref(context);
+    assert(app.session.active_turn && !strcmp(app.session.active_prompt,
+        "voice-observation-secret"));
     snag_app_voice_close(&app);
     snag_ui_free(&app.ui);
     snag_session_close(&app.session);

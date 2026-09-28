@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Filter configured secrets from initial and refreshed voice context snapshots
+  while preserving the working session's original state.
+
 - Forward committed model progress and control changes into the voice connection
   as ordered passive observations, using a journal cursor and bounded fragments.
 
