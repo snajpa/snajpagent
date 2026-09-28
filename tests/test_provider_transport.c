@@ -1870,6 +1870,60 @@ static void test_voice_close(void)
 }
 
 static void
+test_voice_transcript_labels(void)
+{
+    char path[4096];
+    char error[256];
+    const char *tmp = getenv("TMPDIR");
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-voice-labels-XXXXXX",
+        tmp ? tmp : "/tmp") > 0 && mkdtemp(path));
+    struct snag_config config;
+    snag_config_init(&config);
+    struct app_state app = {.config = &config};
+    snag_store_init(&app.store);
+    snag_session_init(&app.session);
+    assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
+    assert(snag_session_create(&app.store, &app.session, path, "default", "fixture",
+        "medium", error, sizeof(error)) == 0);
+
+    for (unsigned int verbosity = 0u; verbosity <= 6u; ++verbosity) {
+        int captured[2];
+        assert(pipe(captured) == 0);
+        int saved = dup(STDERR_FILENO);
+        assert(saved >= 0 && dup2(captured[1], STDERR_FILENO) >= 0);
+        assert(close(captured[1]) == 0);
+        assert(snag_ui_init(&app.ui) == 0);
+        assert(snag_ui_set_verbosity(&app.ui, verbosity) == 0);
+        json_t *events = json_pack("[{s:s,s:s,s:s,s:s},{s:s,s:s,s:s,s:s}]",
+            "type", "voice_transcript", "speaker", "user", "item_id", "input-label",
+            "text", "show the -l option", "type", "voice_transcript", "speaker", "assistant",
+            "item_id", "reply-label", "text", "192.0.2.1\n/fixture/file");
+        assert(events && snag_app_voice_fixture(&app, events, false) == 0);
+        json_decref(events);
+        assert(snag_app_voice_service(&app) == 0);
+        assert(!app.session.pending_queue_count && !app.session.active_turn);
+        snag_app_voice_close(&app);
+        snag_ui_free(&app.ui);
+        assert(dup2(saved, STDERR_FILENO) >= 0 && close(saved) == 0);
+
+        char output[8192];
+        size_t used = 0u;
+        ssize_t n;
+        while ((n = read(captured[0], output + used, sizeof(output) - used - 1u)) > 0) {
+            used += (size_t)n;
+            assert(used < sizeof(output) - 1u);
+        }
+        assert(n == 0 && close(captured[0]) == 0);
+        output[used] = '\0';
+        assert(strstr(output, "You [voice, ASR]: show the -l option"));
+        assert(strstr(output, "Voice model [generated]: 192.0.2.1\n/fixture/file"));
+    }
+    snag_session_close(&app.session);
+    snag_store_close(&app.store);
+    snag_config_free(&config);
+}
+
+static void
 test_voice_concurrent_owner(void)
 {
     char path[4096], error[256], queues[2][33];
@@ -2374,7 +2428,7 @@ test_voice_output_tool(void)
     json_decref(result);
     result = snag_app_voice_fixture_result(&app);
     assert(json_is_true(json_object_get(result, "standalone")));
-    assert(!strcmp(snag_json_string(result, "text"), "Coding-agent message:\nThe build finished."));
+    assert(!strcmp(snag_json_string(result, "text"), "Model output:\nThe build finished."));
     json_decref(result);
     assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
     json_decref(result);
@@ -3998,6 +4052,17 @@ static int voice_deliver(struct snag_voice *voice,json_t *event)
     char error[256];assert(event);
     int rc=snag_voice_event(voice,event,error,sizeof(error));json_decref(event);return rc;
 }
+static void
+voice_orientation(const json_t *session)
+{
+    const char *instructions = snag_json_string(session, "instructions");
+    assert(instructions && strstr(instructions, "voice model"));
+    assert(strstr(instructions, "The model means the working model"));
+    assert(strstr(instructions, "The CLI is another interface to this same session"));
+    assert(strstr(instructions, "do not automatically request new work"));
+    assert(strstr(instructions, "do not authenticate a speaker or add permissions"));
+}
+
 static struct snag_voice *voice_start(struct voice_fixture *f)
 {
     memset(f,0,sizeof(*f));f->sent=json_array();f->notices=json_array();assert(f->sent && f->notices);
@@ -4006,6 +4071,7 @@ static struct snag_voice *voice_start(struct voice_fixture *f)
     char error[256];assert(voice && !snag_voice_ready(voice));
     assert(snag_voice_begin(voice,error,sizeof(error))==0);
     json_t *session=json_object_get(voice_last(f->sent),"session");assert(json_is_object(session));
+    voice_orientation(session);
     assert(json_array_size(json_object_get(session,"tools"))==1u);
     assert(voice_deliver(voice,json_pack("{s:s,s:O}","type","session.updated","session",session))==0);
     assert(snag_voice_ready(voice));return voice;
@@ -4084,6 +4150,7 @@ static void test_native_voice_protocol(void)
     json_t *session=snag_voice_native_session(v);
     assert(session &&
         !strcmp(snag_json_string(json_object_get(session,"delegation"),"type"),"client"));
+    voice_orientation(session);
     json_decref(session);
     assert(snag_voice_begin(v,error,sizeof(error))==0 && snag_voice_ready(v));
     assert(json_array_size(f.sent)==0u); /* Existing native call, no public session.update. */
@@ -4118,7 +4185,7 @@ static void test_native_voice_protocol(void)
     assert(snag_voice_progress(v, "native-call-2", "request accepted",
         error, sizeof(error)) == 0);
     assert(!strcmp(snag_json_string(voice_last(f.sent), "type"), "delegation.context.append"));
-    assert(snag_voice_output(v, "Coding-agent message:\nThe build finished.",
+    assert(snag_voice_output(v, "Model output:\nThe build finished.",
         error, sizeof(error)) == 0);
     assert(!strcmp(snag_json_string(voice_last(f.sent), "type"), "session.context.append"));
     assert(!strcmp(snag_json_string(voice_last(f.sent), "channel"), "speakable"));
@@ -4405,7 +4472,7 @@ test_voice_concurrent_results(void)
     assert(snag_voice_progress(voice, "call-2", "request accepted", error, sizeof(error)) == 0);
     item = json_object_get(voice_last(f.sent), "item");
     assert(!strcmp(snag_json_string(item, "type"), "message"));
-    assert(snag_voice_output(voice, "Coding-agent message:\nThe build finished.",
+    assert(snag_voice_output(voice, "Model output:\nThe build finished.",
         error, sizeof(error)) == 0);
     item = json_object_get(voice_last(f.sent), "item");
     assert(!strcmp(snag_json_string(item, "type"), "message"));
@@ -4978,6 +5045,7 @@ main(void)
     assert(snag_audio_fixture_capture()==0);
 #endif
     test_voice_close();
+    test_voice_transcript_labels();
     test_voice_concurrent_owner();
     test_voice_read_tools();
     test_voice_interface_read();

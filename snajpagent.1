@@ -1846,6 +1846,10 @@ is context, not a function output for a new call.
 Partial input captions and generated reply captions update above the composer
 when supplied by the provider. They show recent text and never alter the draft
 or authorize coding work. Final transcripts use the durable session record.
+The rollout labels finalized microphone transcripts as "You [voice, ASR]" and
+voice-model replies as "Voice model [generated]" at every verbosity level.
+The labels remain with the text in scrollback. Partial captions distinguish
+the same speakers above the composer.
 Stopping voice clears these previews. Generated captions may precede audible
 playback and do not indicate that the words were heard.
 .PP

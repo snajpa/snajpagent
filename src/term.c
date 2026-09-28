@@ -1013,8 +1013,10 @@ compose_frame(struct snag_term *term, struct snag_buf *out, size_t *label_bytes,
     if (label_len > (SIZE_MAX - 32u) / 4u)
         return snag_errno(EOVERFLOW);
     out->max = label_len * 4u + 32u + sizeof(term->caption)*4u + 256u;
-    if(caption_line(out,"voice you [partial]: ",term->caption[0],term->columns)<0 ||
-        caption_line(out,"voice reply [generated]: ",term->caption[1],term->columns)<0)return -1;
+    if (caption_line(out, "You [voice, partial]: ", term->caption[0], term->columns) < 0 ||
+        caption_line(out, "Voice model [generated]: ", term->caption[1], term->columns) < 0) {
+        return -1;
+    }
     size_t caption_rows=(term->caption[0][0]!=0)+(term->caption[1][0]!=0);
     /* Search labels can contain a multiline draft; keep labels on their
      * logical line instead of letting a bare LF desynchronize row layout. */

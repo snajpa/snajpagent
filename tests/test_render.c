@@ -1038,7 +1038,8 @@ test_dictation_editor(void)
     assert(snag_term_caption(&term, 1u, "reply \033[2J\nnext") == 0);
     assert(term.cursor == 12u && term.draft.len == 17u && !term.dictating);
     assert(snag_buf_terminate(&term.painted_prompt) == 0);
-    assert(strstr((char *)term.painted_prompt.data, "voice you [partial]: spoken partial"));
+    assert(strstr((char *)term.painted_prompt.data, "You [voice, partial]: spoken partial"));
+    assert(strstr((char *)term.painted_prompt.data, "Voice model [generated]: reply"));
     assert(!strstr((char *)term.painted_prompt.data, "\033[2J"));
     assert(snag_term_caption(&term, 0u, "\xff") < 0);
     assert(!strcmp(term.caption[0], "spoken partial"));

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Label microphone transcripts and voice-model replies in rollout and composer
+  captions. Orient the voice model to the shared session and distinguish it from
+  the working model, with consistent instructions on native and public routes.
+
 - Add field-checked canonical input references to the test-only binary-store
   codecs, with versioned literal/reference input fields and turn-start payloads
   that retain legacy field presence and instruction metadata. Runtime session
