@@ -12,6 +12,7 @@
 #define SNAG_BINARY_BATCH_MAX (SNAG_MAX_EVENT_LINE + SNAG_BINARY_RECORD_HEADER_SIZE + \
     SNAG_BINARY_BATCH_HEADER_SIZE + SNAG_BINARY_BATCH_FOOTER_SIZE)
 #define SNAG_BINARY_RECORD_OPTIONAL 1u
+#define SNAG_BINARY_REF_SIZE 16u
 
 /* Draft 0.1: framing only. Runtime storage remains JSONL until the typed event,
  * full-state checkpoint and conversion implementations are complete. */
@@ -41,6 +42,23 @@ struct snag_binary_batch {
     uint32_t count;
     uint64_t first_seq;
 };
+
+/* A slice of one canonical record's payload in the same journal. The
+ * containing typed field determines the expected record kind/version. */
+struct snag_binary_ref {
+    uint64_t sequence;
+    uint32_t offset, size;
+};
+
+int snag_binary_ref_encode(unsigned char out[SNAG_BINARY_REF_SIZE],
+    const struct snag_binary_ref *reference);
+int snag_binary_ref_decode(const void *data, size_t size, struct snag_binary_ref *reference);
+/* Resolve only against a verified immutable batch from this journal. Validate
+ * sequence, required record status, expected type/version and slice bounds
+ * before exposing a view. Required state cannot depend on optional metadata. */
+int snag_binary_ref_resolve(const struct snag_binary_ref *reference,
+    const struct snag_binary_batch *batch, uint16_t kind, uint16_t version,
+    const unsigned char **view);
 
 void snag_binary_header_encode(unsigned char out[SNAG_BINARY_HEADER_SIZE],
     const struct snag_binary_identity *identity);

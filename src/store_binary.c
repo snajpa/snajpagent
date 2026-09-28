@@ -43,6 +43,62 @@ invalid(void)
     return -1;
 }
 
+static bool
+reference_valid(const struct snag_binary_ref *reference)
+{
+    return reference->sequence && reference->sequence < UINT64_MAX &&
+        reference->offset <= SNAG_MAX_EVENT_LINE &&
+        reference->size <= SNAG_MAX_EVENT_LINE - reference->offset;
+}
+
+int
+snag_binary_ref_encode(unsigned char out[SNAG_BINARY_REF_SIZE],
+    const struct snag_binary_ref *reference)
+{
+    if (!reference_valid(reference)) return invalid();
+    put_le(out, reference->sequence, 8u);
+    put_le(out + 8, reference->offset, 4u);
+    put_le(out + 12, reference->size, 4u);
+    return 0;
+}
+
+int
+snag_binary_ref_decode(const void *data, size_t size, struct snag_binary_ref *reference)
+{
+    const unsigned char *bytes = data;
+    if (size != SNAG_BINARY_REF_SIZE) return invalid();
+    struct snag_binary_ref decoded = {
+        .sequence = get_le(bytes, 8u), .offset = (uint32_t)get_le(bytes + 8, 4u),
+        .size = (uint32_t)get_le(bytes + 12, 4u)
+    };
+    if (!reference_valid(&decoded)) return invalid();
+    *reference = decoded;
+    return 0;
+}
+
+int
+snag_binary_ref_resolve(const struct snag_binary_ref *reference,
+    const struct snag_binary_batch *batch, uint16_t kind, uint16_t version,
+    const unsigned char **view)
+{
+    if (!reference_valid(reference) || !kind || !version ||
+        reference->sequence < batch->first_seq ||
+        reference->sequence - batch->first_seq >= batch->count) return invalid();
+    size_t cursor = SNAG_BINARY_BATCH_HEADER_SIZE;
+    struct snag_binary_record record;
+    uint64_t sequence;
+    int rc;
+    while ((rc = snag_binary_record_next(batch, &cursor, &record, &sequence)) == 0) {
+        if (sequence != reference->sequence) continue;
+        if (record.kind != kind || record.version != version || record.flags ||
+            reference->offset > record.size ||
+            reference->size > record.size - reference->offset) return invalid();
+        *view = record.payload + reference->offset;
+        return 0;
+    }
+    return rc < 0 ? rc : invalid();
+}
+
 void
 snag_binary_header_encode(unsigned char out[SNAG_BINARY_HEADER_SIZE],
     const struct snag_binary_identity *identity)

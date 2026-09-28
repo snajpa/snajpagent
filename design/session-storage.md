@@ -190,6 +190,16 @@ output chunk, provider item and compaction summary once. Later events and
 checkpoints refer to stable record IDs and bounded payload slices. Use direct
 references for known reuse; a global content-deduplication table is unnecessary.
 
+Draft references occupy16 bytes: canonical sequence8, payload offset4 and slice
+length4, all little-endian. They identify the same journal's record payload,
+excluding its framing. Resolution checks the verified batch's sequence range,
+the containing field's expected kind/version and the record's actual slice
+bounds before returning borrowed bytes. Required state cannot refer to optional
+metadata. Empty slices are permitted at the end of a payload. Zero/overflowing
+sequences and wrapped or out-of-range slices are
+invalid. Framing/reference support does not yet replace runtime checkpoint
+payload copies; that follows typed checkpoint integration.
+
 A full checkpoint captures all current semantic state:
 
 - Journal boundary, sequence, chain digest, session identity and turn count.

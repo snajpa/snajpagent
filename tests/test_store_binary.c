@@ -22,6 +22,78 @@ assert_bytes(const unsigned char *bytes, size_t size, const char *hex)
 }
 
 static void
+test_references(const struct snag_binary_batch *batch)
+{
+    struct snag_binary_ref reference = {
+        .sequence = UINT64_C(0x0807060504030201), .offset = 0x010203u, .size = 0x040506u
+    };
+    unsigned char encoded[SNAG_BINARY_REF_SIZE];
+    assert(!snag_binary_ref_encode(encoded, &reference));
+    assert_bytes(encoded, sizeof(encoded), "01020304050607080302010006050400");
+    struct snag_binary_ref decoded;
+    assert(!snag_binary_ref_decode(encoded, sizeof(encoded), &decoded));
+    assert(decoded.sequence == reference.sequence && decoded.offset == reference.offset &&
+        decoded.size == reference.size);
+    for (size_t i = 0; i < sizeof(encoded); ++i) {
+        struct snag_binary_ref kept = decoded;
+        assert(snag_binary_ref_decode(encoded, i, &kept) < 0);
+        assert(!memcmp(&kept, &decoded, sizeof(kept)));
+    }
+    assert(snag_binary_ref_decode(encoded, sizeof(encoded) + 1u, &decoded) < 0);
+    unsigned char saved[sizeof(encoded)];
+    memcpy(saved, encoded, sizeof(saved));
+    reference.sequence = 0;
+    assert(snag_binary_ref_encode(encoded, &reference) < 0);
+    assert(!memcmp(encoded, saved, sizeof(encoded)));
+    reference.sequence = UINT64_MAX;
+    assert(snag_binary_ref_encode(encoded, &reference) < 0);
+    reference.sequence = 1u;
+    reference.offset = UINT32_MAX;
+    reference.size = 2u;
+    assert(snag_binary_ref_encode(encoded, &reference) < 0);
+    reference.offset = SNAG_MAX_EVENT_LINE;
+    reference.size = 1u;
+    assert(snag_binary_ref_encode(encoded, &reference) < 0);
+    reference.size = 0u;
+    assert(!snag_binary_ref_encode(encoded, &reference));
+    assert(!snag_binary_ref_decode(encoded, sizeof(encoded), &decoded));
+    encoded[12] = 1u;
+    assert(snag_binary_ref_decode(encoded, sizeof(encoded), &decoded) < 0);
+    memset(encoded, 0, 8u);
+    assert(snag_binary_ref_decode(encoded, sizeof(encoded), &decoded) < 0);
+
+    reference = (struct snag_binary_ref){
+        .sequence = batch->first_seq + 1u, .offset = 1u, .size = 3u
+    };
+    const unsigned char sentinel = 0u;
+    const unsigned char *view = &sentinel;
+    assert(snag_binary_ref_resolve(&reference, batch, 7u, 1u, &view) < 0);
+    assert(view == &sentinel); /* Required state cannot refer to optional metadata. */
+    reference.sequence = batch->first_seq;
+    assert(!snag_binary_ref_resolve(&reference, batch, 7u, 1u, &view));
+    static const unsigned char slice[] = {'b', 'c', 0};
+    assert(!memcmp(view, slice, sizeof(slice)));
+    view = &sentinel;
+    assert(snag_binary_ref_resolve(&reference, batch, 8u, 1u, &view) < 0);
+    assert(view == &sentinel);
+    assert(snag_binary_ref_resolve(&reference, batch, 7u, 2u, &view) < 0);
+    assert(view == &sentinel);
+    reference.offset = 4u;
+    reference.size = 2u;
+    assert(snag_binary_ref_resolve(&reference, batch, 7u, 1u, &view) < 0);
+    assert(view == &sentinel);
+    reference.offset = 6u;
+    reference.size = 0u;
+    assert(snag_binary_ref_resolve(&reference, batch, 7u, 1u, &view) < 0);
+    reference.offset = 5u;
+    assert(!snag_binary_ref_resolve(&reference, batch, 7u, 1u, &view));
+    reference.sequence = batch->first_seq - 1u;
+    assert(snag_binary_ref_resolve(&reference, batch, 7u, 1u, &view) < 0);
+    reference.sequence = batch->first_seq + batch->count;
+    assert(snag_binary_ref_resolve(&reference, batch, 7u, 1u, &view) < 0);
+}
+
+static void
 rehash(unsigned char *bytes, size_t size)
 {
     struct snag_sha256 hash;
@@ -204,6 +276,7 @@ test_store_binary(void)
     assert(!snag_binary_batch_encode(&second, &next, records, 2u, 1u));
     struct snag_binary_anchor third;
     assert(!snag_binary_batch_decode(second.data, second.len, &next, &batch, &third));
+    test_references(&batch);
     assert(third.next_seq == 4u && third.turns == 1u && third.previous == next.end);
     reject_batch(&second, &anchor); /* predecessor mismatch */
     struct snag_buf joined = {.max = encoded.len + second.len};
