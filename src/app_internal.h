@@ -165,6 +165,9 @@ int snag_app_voice_read(struct app_state *, const struct snag_response_item *,
 int snag_app_voice_request_start(struct app_state *, const json_t *, char *, size_t);
 int snag_app_voice_request_take(struct app_state *, struct snag_response_graph *,
                                 int *, char *, size_t);
+int snag_app_voice_submit(struct app_state *, const json_t *, const char *target,
+                          char id[SNAG_ID_HEX_LEN + 1u], json_t **, char *, size_t);
+int snag_app_voice_interrupt(struct app_state *, const char *turn, json_t **, char *, size_t);
 #ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
 int snag_app_audio_fixture(struct app_state *,bool playing);
 int snag_app_audio_fixture_checkpoint(struct app_state *);

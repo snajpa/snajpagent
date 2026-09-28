@@ -317,6 +317,7 @@ int snag_session_complete_delete(struct snag_store *store, struct snag_session *
  * including after queue consumption, deletion, or session replay. */
 int snag_session_voice_queue(struct snag_session *,const json_t *,char id[SNAG_ID_HEX_LEN+1u],
                              bool *duplicate,char *,size_t);
+int snag_session_voice_prompt(const json_t *, struct snag_buf *, char *, size_t);
 /* Read the original queue/turn state, including after disconnect or replay.
  * Caller owns *result: status, turn_id (empty while queued), and text. */
 int snag_session_voice_status(struct snag_session *,const char *queue_id,json_t **result,char *,size_t);

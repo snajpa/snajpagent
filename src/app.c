@@ -858,6 +858,123 @@ clear: app->queue_edit_id[0] = '\0';
     if (set_input_prompt(app, active) < 0) return -1;
     return rc;
 }
+struct voice_steering_lookup {
+    const char *id;
+    const char *text;
+    bool found;
+    bool conflict;
+};
+
+static int
+voice_steering_find(void *opaque, const struct snag_session *session, uint64_t seq,
+                    const char *type, const json_t *data, char *error, size_t size)
+{
+    (void)session;
+    (void)seq;
+    (void)error;
+    (void)size;
+    struct voice_steering_lookup *lookup = opaque;
+    const char *id = snag_json_string(data, "steering_id");
+    if (!strcmp(type, "steering_added") && id && !strcmp(id, lookup->id)) {
+        lookup->found = true;
+        const char *text = snag_json_string(data, "text");
+        lookup->conflict = !text || strcmp(text, lookup->text);
+    }
+    return 0;
+}
+
+int
+snag_app_voice_submit(struct app_state *app, const json_t *source, const char *target,
+                      char id[SNAG_ID_HEX_LEN + 1u], json_t **result, char *error, size_t size)
+{
+    struct snag_buf prompt = {.max = SNAG_MAX_STEERING_TEXT};
+    *result = NULL;
+    id[0] = '\0';
+    if (!target || (strcmp(target, "queue") &&
+        (!app->session.active_turn || strcmp(target, app->session.active_turn_id)))) {
+        *result = snag_tool_result_terminal(false,
+            "Target turn is no longer active; input not submitted.");
+        return *result ? 0 : -1;
+    }
+    if (snag_session_voice_prompt(source, &prompt, error, size) < 0) {
+        snag_buf_free(&prompt);
+        *result = snag_tool_result_terminal(false, error);
+        return *result ? 0 : -1;
+    }
+    if (!strcmp(target, "queue")) {
+        bool duplicate = false;
+        int rc = snag_session_voice_queue(&app->session, source, id, &duplicate, error, size);
+        snag_buf_free(&prompt);
+        if (rc < 0) return -1;
+        json_t *state = NULL;
+        if (snag_session_voice_status(&app->session, id, &state, error, size) < 0) return -1;
+        if (!strcmp(snag_json_string(state, "status"), "queued") &&
+            snag_app_queue_arm(app, true) < 0) {
+            json_decref(state);
+            return -1;
+        }
+        *result = snag_tool_result_terminal(true, snag_json_string(state, "text"));
+        json_decref(state);
+        return *result ? 0 : -1;
+    }
+    json_t *identity = json_pack("{s:s,s:s,s:s,s:s}", "kind", "voice_steering",
+        "connection_id", snag_json_string(source, "connection_id"),
+        "input_id", snag_json_string(source, "input_id"), "turn_id", target);
+    char digest[SNAG_SHA256_HEX_LEN + 1u];
+    int rc = identity ? snag_json_digest_bounded(identity, SNAG_MAX_STEERING_TEXT,
+        digest, NULL) : -1;
+    json_decref(identity);
+    if (rc < 0) {
+        snag_buf_free(&prompt);
+        return -1;
+    }
+    memcpy(id, digest, SNAG_ID_HEX_LEN);
+    id[SNAG_ID_HEX_LEN] = '\0';
+    struct voice_steering_lookup lookup = {.id = id, .text = (const char *)prompt.data};
+    rc = snag_session_each_event(&app->session, voice_steering_find, &lookup, error, size);
+    if (!rc && !lookup.found) {
+        /* An unrelated keyboard draft's receipt time is not voice provenance. */
+        uint64_t received = app->ui.input_received_ms;
+        app->ui.input_received_ms = 0u;
+        rc = commit_event(app, "steering_added",
+            snag_app_steering_added_data(target, id, (const char *)prompt.data), error, size);
+        app->ui.input_received_ms = received;
+    }
+    snag_buf_free(&prompt);
+    if (rc < 0) return -1;
+    if (lookup.conflict) {
+        *result = snag_tool_result_terminal(false,
+            "Voice input identity already has different accepted steering; nothing changed.");
+        return *result ? 0 : -1;
+    }
+    if (!lookup.found && !app->session.steering_deferred &&
+        !app->session.active_compact_id[0]) {
+        app->steering_requested = true;
+    }
+    const char *text = lookup.found ? "Steering was already accepted." :
+        app->steering_requested ? "Steering accepted for the active turn." :
+        "Steering saved for the next permitted boundary.";
+    *result = snag_tool_result_terminal(true, text);
+    return *result ? 0 : -1;
+}
+
+int
+snag_app_voice_interrupt(struct app_state *app, const char *turn, json_t **result,
+                         char *error, size_t size)
+{
+    *result = NULL;
+    if (!turn || !app->session.active_turn || strcmp(turn, app->session.active_turn_id)) {
+        *result = snag_tool_result_terminal(false,
+            "Target turn is no longer active; nothing interrupted.");
+        return *result ? 0 : -1;
+    }
+    if (!app->session.cancel_requested && commit_event(app, "turn_cancel_requested",
+            json_pack("{s:s}", "turn_id", turn), error, size) < 0) return -1;
+    app->interrupt_requested = true;
+    *result = snag_tool_result_terminal(true, "Turn cancellation requested.");
+    return *result ? 0 : -1;
+}
+
 static int
 queue_future_turn(struct app_state *app, const char *text, bool arm, char *error, size_t error_size)
 {

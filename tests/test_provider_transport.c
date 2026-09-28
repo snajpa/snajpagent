@@ -2056,6 +2056,121 @@ test_voice_independent_request(void)
     }
 }
 
+static void
+test_voice_session_controls(void)
+{
+    struct app_state app = {0};
+    struct snag_config config;
+    char path[4096], error[512] = {0}, id[33], first[33], session_id[33];
+    const char *tmp = getenv("TMPDIR");
+    const char *turn = "0123456789abcdef0123456789abcdef";
+    json_t *result = NULL;
+
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-voice-controls-XXXXXX",
+        tmp ? tmp : "/tmp") > 0 && mkdtemp(path));
+    snag_config_init(&config);
+    app.config = &config;
+    snag_store_init(&app.store);
+    snag_session_init(&app.session);
+    assert(snag_ui_init(&app.ui) == 0);
+    assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
+    assert(snag_session_create(&app.store, &app.session, path, "openai", "fixture",
+        "medium", error, sizeof(error)) == 0);
+    strcpy(session_id, app.session.id);
+    json_t *source = json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s}",
+        "connection_id", turn, "input_id", "spoken_input", "response_id", "spoken_response",
+        "call_id", "spoken_call", "provider", "openai", "model", "fixture",
+        "transcript", "Změň prosím tento úkol.", "request", "Change the current task.");
+    assert(source);
+    uint64_t seq = app.session.next_seq;
+    assert(snag_app_voice_submit(&app, source, turn, id, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), "failed"));
+    assert(app.session.next_seq == seq && !id[0]);
+    json_decref(result);
+
+    json_t *started = json_pack("{s:{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b},"
+        "s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:I,s:s}",
+        "config", "capability_version", SNAJPAGENT_CAPABILITY_VERSION, "effort", "medium",
+        "max_output_tokens", "model", "fixture", "provider", "openai",
+        "profile_id", SNAJPAGENT_PROFILE_ID, "prompt_schema", 1, "replay_schema", 1,
+        "tool_schema", 1, "max_parallel_commands", 4, "parallel_tool_calls", 1,
+        "input_kind", "direct", "read_only", 0, "instructions", json_array(),
+        "queue_id", "queue_seq", "text", "Existing task", "turn_id", turn,
+        "turn_number", (json_int_t)1, "cwd", app.session.cwd);
+    assert(started && snag_session_commit(&app.session, "turn_started", started,
+        NULL, error, sizeof(error)) == 0);
+    app.ui.input_received_ms = 123u;
+    assert(snag_app_voice_submit(&app, source, turn, id, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), "succeeded"));
+    assert(app.steering_requested && app.session.pending_steering_count == 1u);
+    assert(!app.session.pending_queue_count && app.ui.input_received_ms == 123u);
+    assert(strstr(app.session.pending_steering[0].text, "Změň prosím tento úkol."));
+    assert(strstr(app.session.pending_steering[0].text, "derived context"));
+    assert(app.session.pending_steering[0].received_ms != 123u);
+    strcpy(first, id);
+    json_decref(result);
+    seq = app.session.next_seq;
+    app.steering_requested = false;
+    assert(snag_app_voice_submit(&app, source, turn, id, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(first, id) && !app.steering_requested && app.session.next_seq == seq);
+    json_decref(result);
+    assert(json_object_set_new(source, "transcript", json_string("Different input")) == 0);
+    assert(snag_app_voice_submit(&app, source, turn, id, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), "failed"));
+    assert(app.session.next_seq == seq && app.session.pending_steering_count == 1u);
+    json_decref(result);
+    assert(json_object_set_new(source, "transcript", json_string("Změň prosím tento úkol.")) == 0);
+    assert(json_object_set_new(source, "input_id", json_string("later_input")) == 0);
+    app.session.steering_deferred = true;
+    assert(snag_app_voice_submit(&app, source, turn, id, &result, error, sizeof(error)) == 0);
+    assert(!app.steering_requested && app.session.pending_steering_count == 2u);
+    assert(strstr(snag_json_string(result, "model_text"), "next permitted boundary"));
+    json_decref(result);
+    app.session.steering_deferred = false;
+
+    assert(snag_app_voice_submit(&app, source, "queue", id, &result, error, sizeof(error)) == 0);
+    assert(app.session.pending_queue_count == 1u && app.session.queue_armed);
+    assert(strstr(snag_json_string(result, "model_text"), "queued"));
+    json_decref(result);
+    strcpy(first, id);
+    seq = app.session.next_seq;
+    assert(snag_app_voice_submit(&app, source, "queue", id, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(first, id) && app.session.next_seq == seq);
+    json_decref(result);
+    assert(snag_session_commit(&app.session, "future_turn_cancelled",
+        json_pack("{s:[s],s:s}", "queue_ids", id, "reason", "user"),
+        NULL, error, sizeof(error)) == 0);
+    assert(snag_app_voice_submit(&app, source, "queue", id, &result, error, sizeof(error)) == 0);
+    assert(!app.session.pending_queue_count && !app.session.queue_armed);
+    json_decref(result);
+
+    seq = app.session.next_seq;
+    assert(snag_app_voice_interrupt(&app, "stale_turn", &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), "failed"));
+    assert(!app.interrupt_requested && app.session.next_seq == seq);
+    json_decref(result);
+    assert(snag_app_voice_interrupt(&app, turn, &result, error, sizeof(error)) == 0);
+    assert(app.interrupt_requested && app.session.cancel_requested);
+    json_decref(result);
+    seq = app.session.next_seq;
+    assert(snag_app_voice_interrupt(&app, turn, &result, error, sizeof(error)) == 0);
+    assert(app.session.next_seq == seq);
+    json_decref(result);
+
+    snag_session_close(&app.session);
+    assert(snag_session_open(&app.store, &app.session, session_id, error, sizeof(error)) == 0);
+    assert(app.session.pending_steering_count == 2u && app.session.cancel_requested);
+    seq = app.session.next_seq;
+    assert(snag_app_voice_submit(&app, source, turn, id, &result, error, sizeof(error)) == 0);
+    assert(app.session.next_seq == seq && app.session.pending_steering_count == 2u);
+    json_decref(result);
+    json_decref(source);
+    snag_session_close(&app.session);
+    snag_store_close(&app.store);
+    snag_ui_free(&app.ui);
+    snag_config_free(&config);
+}
+
 static void test_voice_owner_mute(void)
 {
     struct app_state app={0};
@@ -4630,6 +4745,7 @@ main(void)
     test_voice_concurrent_owner();
     test_voice_read_tools();
     test_voice_independent_request();
+    test_voice_session_controls();
     test_voice_owner_mute();
     test_voice_socket();
     test_audio_transport();

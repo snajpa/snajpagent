@@ -16,6 +16,12 @@ transcript gating, matching results and nonfatal native capacity refusal. The
 remaining sections specify the broader session interface, live progress and
 connection recovery; these are not yet all implemented.
 
+The host has shared read-only file schemas, an independent provider-request
+owner, and session-owner helpers for queue admission, exact-turn steering and
+cancellation. Steering reuses its durable identity after reopen, refuses changed
+source text and respects deferred boundaries. These helpers are awaiting live
+delegation routing; their presence does not yet expose spoken session controls.
+
 ## Ownership and lifetime
 
 Keep the existing audio/connection owner and the existing coding/session owner.
