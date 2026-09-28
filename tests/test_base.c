@@ -2736,10 +2736,18 @@ test_session_transport(void)
     assert(close(pair[1]) == 0);
 
     const char *temp = getenv("TMPDIR");
-    char *root = snag_path_join(temp ? temp : "/tmp", "snag-session-host-XXXXXX");
+    char *root = snag_path_join(temp ? temp : "/tmp",
+        "snag-session-host-with-a-path-longer-than-the-unix-socket-address-limit-"
+        "and-a-held-directory-retained-across-a-parent-rename-XXXXXX");
     assert(root && mkdtemp(root));
     int dir = open(root, O_RDONLY | O_DIRECTORY);
     assert(dir >= 0);
+    char *moved = malloc(strlen(root) + sizeof("-moved"));
+    assert(moved);
+    (void)sprintf(moved, "%s-moved", root);
+    assert(rename(root, moved) == 0 && mkdir(root, 0700) == 0);
+    struct stat cwd_before, cwd_after;
+    assert(stat(".", &cwd_before) == 0);
     int lock = openat(dir, "lock", O_CREAT | O_RDWR, 0600);
     assert(lock >= 0 && snag_lock_file(lock, false) == 0);
     struct snag_session_listener listener, other;
@@ -2823,7 +2831,10 @@ test_session_transport(void)
     int status;
     assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && !WEXITSTATUS(status));
     assert(close(lock) == 0 && unlinkat(dir, "lock", 0) == 0 && close(dir) == 0);
-    assert(rmdir(root) == 0);
+    assert(rmdir(root) == 0 && rmdir(moved) == 0);
+    assert(stat(".", &cwd_after) == 0 && cwd_before.st_dev == cwd_after.st_dev &&
+           cwd_before.st_ino == cwd_after.st_ino);
+    free(moved);
     free(root);
 #else
     assert(!snag_session_host_supported());

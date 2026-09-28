@@ -15,11 +15,13 @@
 #if defined(__linux__) && !defined(_WIN32)
 #include <fcntl.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
 #define SNAG_SESSION_NATIVE 1
@@ -202,17 +204,54 @@ same_user(int fd)
 static int
 endpoint_address(int dir_fd, const char *dir_path, struct sockaddr_un *address)
 {
-    int count;
     if (private_directory(dir_fd) < 0) return -1;
     memset(address, 0, sizeof(*address));
     address->sun_family = AF_UNIX;
-    /* A held directory avoids both sun_path's pathname limit and races through
-     * parent names. No process-wide chdir in the multithreaded owner. */
     (void)dir_path;
-    count = snprintf(address->sun_path, sizeof(address->sun_path),
-                      "/proc/self/fd/%d/%s", dir_fd, SNAG_SESSION_ENDPOINT);
+    int count = snprintf(address->sun_path, sizeof(address->sun_path),
+                          "%s", SNAG_SESSION_ENDPOINT);
     if (count < 0 || (size_t)count >= sizeof(address->sun_path)) return snag_errno(ENAMETOOLONG);
     return 0;
+}
+
+static int
+endpoint_link(int fd, int dir_fd, const struct sockaddr_un *address, bool create)
+{
+    /* Bind/connect relative to the held directory without procfs, pathname
+     * length limits or changing the multithreaded owner's cwd/umask. Only this
+     * short-lived child changes cwd; the shared socket remains in the parent.
+     * Block inherited handlers: the child must use only async-signal-safe calls. */
+    sigset_t blocked, previous;
+    sigfillset(&blocked);
+    int error = pthread_sigmask(SIG_BLOCK, &blocked, &previous);
+    if (error) return snag_errno(error);
+    pid_t child = fork();
+    int saved = errno;
+    if (!child) {
+        int rc = fchdir(dir_fd);
+        if (!rc && create) {
+            (void)umask(0177);
+            rc = bind(fd, (const struct sockaddr *)address, sizeof(*address));
+        } else if (!rc) {
+            rc = connect(fd, (const struct sockaddr *)address, sizeof(*address));
+        }
+        error = rc < 0 ? errno : 0;
+        /* Process exit status has eight bits. Never turn an unrepresentable
+         * host error into apparent success by truncating it. */
+        _exit(error >= 0 && error <= 255 ? error : EIO);
+    }
+    error = pthread_sigmask(SIG_SETMASK, &previous, NULL);
+    if (child < 0) return snag_errno(saved);
+    int status;
+    pid_t waited;
+    do {
+        waited = waitpid(child, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    if (waited < 0) return -1;
+    if (error) return snag_errno(error);
+    if (!WIFEXITED(status)) return snag_errno(EIO);
+    error = WEXITSTATUS(status);
+    return error ? snag_errno(error) : 0;
 }
 
 static int
@@ -236,7 +275,7 @@ snag_session_endpoint_connect(int dir_fd, const char *dir_path)
     if (fd < 0) return -1;
     /* A private local endpoint connects immediately. A full listen backlog is
      * a refusal for this attempt, not an unbounded engine-side wait. */
-    if (connect(fd, (const struct sockaddr *)&address, sizeof(address)) == 0 && same_user(fd) == 0)
+    if (endpoint_link(fd, dir_fd, &address, false) == 0 && same_user(fd) == 0)
         return fd;
     saved = errno;
     (void)close(fd);
@@ -281,7 +320,7 @@ snag_session_listener_open(struct snag_session_listener *listener, int dir_fd,
     fd = stream_socket();
     if (fd < 0) goto fail;
     listener->fd = fd;
-    if (bind(fd, (const struct sockaddr *)&address, sizeof(address)) < 0) goto fail;
+    if (endpoint_link(fd, dir_fd, &address, true) < 0) goto fail;
     if (fstatat(dir_fd, SNAG_SESSION_ENDPOINT, &st, AT_SYMLINK_NOFOLLOW) < 0) goto fail;
     listener->device = (uint64_t)st.st_dev;
     listener->inode = (uint64_t)st.st_ino;

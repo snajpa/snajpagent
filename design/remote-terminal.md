@@ -8,6 +8,17 @@ SHELL), owns a child PTY and forwards input, resize, signals and exit status.
 It creates no local session, provider, tools, IRC runtime or media state.
 `[terminal] download_dir` defaults to `~/Downloads`.
 
+## Session attachment transport
+
+The native session endpoint is rooted in its held private directory, not a
+caller-supplied pathname. Bind and connect run in a short-lived, reaped child
+that changes its own cwd and uses the inherited socket. This removes the
+procfs dependency without imposing the Unix socket address limit on session
+paths or changing the multithreaded owner's cwd or umask. The child blocks
+inherited signal handlers and uses only async-signal-safe calls. The parent
+retains peer authentication, endpoint identity checks and the original writer
+lock. No session protocol or attachment ownership transition changes.
+
 ## Endpoint ownership and wire lifecycle
 
 The wrapper recognizes the existing protocol-1 trzsz transfer marker and runs a
