@@ -137,6 +137,7 @@ Review `/attachments` before submitting. Uploads reject directories and empty fi
 
 Use `/send PATH` to send an agent file to the workstation, or ask the model to
 use `send_file`. Downloads accept empty files and accepted `asset:ID` references.
+Transfers keep the conversation visible; the native wrapper shows a compact progress line.
 Native downloads default to `~/Downloads`; set `[terminal] download_dir` in the
 workstation's `~/.snajpagent/config.ini` to change it. Receipts list actual saved
 paths, and transfers restore the prompt and editable draft.

@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep terminal transfers on the conversation screen and show a compact native
+  upload/download progress line with byte counts and percentage.
+
 - Keep native subscription voice playback flowing across barge-in and delayed
   caption events, with a stable identity for its continuous audio stream.
 

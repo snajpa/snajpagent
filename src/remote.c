@@ -4,6 +4,7 @@
 #include "config.h"
 #include "fs.h"
 #include "process_host.h"
+#include "term_host.h"
 #include "upload.h"
 #include "upload_wire.h"
 
@@ -92,6 +93,9 @@ struct remote_transfer {
     int drop_fd;
     char drop_name[SNAG_NAME_MAX_BYTES + 1u];
     uint64_t drop_at;
+    uint64_t progress_at;
+    bool progress_visible;
+    char direction;
 };
 
 /* Terminal drops are literal paths, shell-quoted paths or bracketed pastes.
@@ -308,28 +312,60 @@ remote_upload_choice(struct remote_transfer *client, char *path, size_t capacity
 static int remote_output(struct remote_transfer *, const unsigned char *, size_t);
 
 static int
+remote_progress(void *opaque, uint64_t done, uint64_t total)
+{
+    struct remote_transfer *client = opaque;
+    uint64_t now = snag_monotonic_ms();
+    if (client->progress_visible && done != total && now - client->progress_at < 100u) return 0;
+    unsigned int percent = done == total ? 100u :
+        (unsigned int)(100.0 * (double)done / (double)total);
+    if (done != total && percent > 99u) percent = 99u;
+    const char *label = client->direction == 'S' ? "Download" : "Upload";
+    char bar[13], text[128];
+    for (unsigned int i = 0; i < 12u; ++i) bar[i] = i < percent * 12u / 100u ? '#' : '-';
+    bar[12] = '\0';
+    int n = snprintf(text, sizeof(text), "%s [%s] %3u%%  %llu/%llu bytes", label, bar,
+                     percent, (unsigned long long)done, (unsigned long long)total);
+    unsigned int columns = snag_term_host_columns();
+    if (!columns) columns = 80u;
+    if (n >= 0 && (unsigned int)n >= columns)
+        n = snprintf(text, sizeof(text), "%s %u%%", label, percent);
+    if (n < 0 || (size_t)n >= sizeof(text)) return -1;
+    size_t length = (size_t)n < columns ? (size_t)n : columns - 1u;
+    if (remote_write(STDOUT_FILENO, "\r\033[2K", 5u) < 0 ||
+        remote_write(STDOUT_FILENO, text, length) < 0) return -1;
+    client->progress_visible = true;
+    client->progress_at = now;
+    return 0;
+}
+
+static int
 remote_transfer_run(struct remote_transfer *client, char direction)
 {
     struct snag_client_result result = {0};
     char error[256] = {0};
     int rc = -1, fd = -1;
     char *directory = NULL;
+    client->direction = direction;
+    client->progress_visible = false;
+    client->progress_at = 0u;
     if (direction == 'S') {
         fd = remote_download_root(client, &directory);
         if (fd >= 0) rc = snag_client_download(client->child->fd[0], fd, directory,
-            remote_checkpoint, client, &result, error, sizeof(error));
+            remote_progress, remote_checkpoint, client, &result, error, sizeof(error));
     } else if (client->drop_fd >= 0) {
         fd = client->drop_fd;
         client->drop_fd = -1;
         rc = snag_client_upload(client->child->fd[0], fd, client->drop_name,
-            remote_checkpoint, client, &result, error, sizeof(error));
+            remote_progress, remote_checkpoint, client, &result, error, sizeof(error));
     } else {
         char path[SNAG_PATH_MAX_BYTES + 1u];
         if (remote_upload_choice(client, path, sizeof(path)) == 0 && path[0]) {
             fd = snag_open_read(path, false);
             const char *name = strrchr(path, '/');
             if (fd >= 0) rc = snag_client_upload(client->child->fd[0], fd,
-                name ? name + 1u : path, remote_checkpoint, client, &result, error, sizeof(error));
+                name ? name + 1u : path, remote_progress, remote_checkpoint, client,
+                &result, error, sizeof(error));
         }
     }
     if (fd >= 0) (void)close(fd);
@@ -344,6 +380,8 @@ remote_transfer_run(struct remote_transfer *client, char direction)
             (void)remote_write(client->child->fd[2], response.data, response.len);
         snag_buf_free(&response);
     }
+    if (client->progress_visible && remote_write(STDOUT_FILENO, "\r\033[2K", 5u) < 0) return -1;
+    client->progress_visible = false;
     if (result.tail_len && remote_output(client, result.tail, result.tail_len) < 0) return -1;
     if (client->key_len && client->drop_fd < 0) {
         (void)remote_write(client->child->fd[2], client->keys, client->key_len);

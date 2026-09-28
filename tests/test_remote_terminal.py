@@ -7,6 +7,7 @@ import struct
 import os
 import pty
 import select
+import shlex
 import shutil
 import signal
 import subprocess
@@ -77,8 +78,32 @@ class RemoteProcess:
 
 
 class RemoteStartupTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("tmux"), "tmux is required for rendered transfer coverage")
+    def test_native_drop_keeps_one_composer_and_sealed_rollout(self):
+        from tmux_terminal import TmuxTerminal
+        with tempfile.TemporaryDirectory(prefix="snag-drop-view-") as tmp:
+            root = Path(tmp)
+            launcher = root / "wrapped-agent"
+            program = shlex.quote(str(PRODUCT))
+            launcher.write_text(f'#!/bin/sh\nexec {program} remote {program} "$@"\n')
+            launcher.chmod(0o700)
+            source = root / "note.md"
+            source.write_text("native transfer viewport regression\n")
+            with TmuxTerminal(root / "terminal", launcher, root, root / "agent", None,
+                              100, 28) as term:
+                term.wait("›")
+                term.submit("ping")
+                before = term.wait("pong")
+                term.send_text("\x1b[200~" + str(source) + "\x1b[201~")
+                term.wait("1 unsent attachment(s)")
+                after = term.wait("[1 attached]")
+                self.assertEqual(after.count("pong"), 1, after)
+                self.assertEqual(after.count("session id"), 1, after)
+                self.assertEqual(after.count("›"), before.count("›"), after)
+                term.exit()
+
     def test_native_drop_preserves_draft(self):
-        for form in ("plain", "escaped", "quoted", "paste", "fragmented", "nested", "active"):
+        for form in ("plain", "escaped", "quoted", "paste", "fragmented", "nested", "active", "narrow"):
             with self.subTest(form=form), tempfile.TemporaryDirectory(prefix="snag-drop-") as tmp:
                 root = Path(tmp)
                 name = "HANDOFF_ALL.md" if form == "plain" else "résumé 'notes'.md"
@@ -89,6 +114,8 @@ class RemoteStartupTests(unittest.TestCase):
                     command = [str(PRODUCT), "remote", *command]
                 child = RemoteProcess(root, command)
                 try:
+                    if form == "narrow":
+                        fcntl.ioctl(child.slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 24, 0, 0))
                     child.until("›".encode(), 8)
                     if form == "active":
                         os.write(child.master, b"defer_slow_test\r")
@@ -111,6 +138,10 @@ class RemoteStartupTests(unittest.TestCase):
                     else:
                         os.write(child.master, data)
                     child.until(b"1 unsent attachment(s)", 8)
+                    self.assertNotIn(b"\x1b[?1049h", child.output,
+                                     "native upload blanked the conversation")
+                    self.assertIn(b"Upload 100%" if form == "narrow" else b"Upload [", child.output)
+                    self.assertIn(b"100%", child.output)
                     landed = list((root / "agent" / "sessions").glob("*/media/*"))
                     self.assertTrue(any(p.read_bytes() == source.read_bytes() for p in landed))
                     self.assertNotIn(b"unknown slash command", child.output)
@@ -472,6 +503,9 @@ class RemoteStartupTests(unittest.TestCase):
                 target = home / "Downloads" / "résumé file.bin"
                 child.until(str(target).encode(), 12)
                 self.assertEqual(target.read_bytes(), data)
+                self.assertNotIn(b"\x1b[?1049h", child.output)
+                self.assertIn(b"Download [", child.output)
+                self.assertIn(b"100%", child.output)
                 self.assertNotIn(b"#DATA:", child.output)
                 self.assertNotIn(b"#CFG:", child.output)
                 os.write(child.master, b"ping\r")

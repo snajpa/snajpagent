@@ -140,9 +140,11 @@ transfer_begin(struct upload_io *io, char direction)
      * Match the POSIX client's 13-digit marker with a reserved 00 suffix. */
     uint64_t identifier = (snag_time_ms() % 100000000000ull) * 100ull;
     char marker[128];
+    /* The terminal lease has hidden the draft. Use that area for transfer UI
+     * while keeping the sealed conversation visible on the main screen. */
     int n = snprintf(marker, sizeof(marker),
-        "%s\033[s::TRZSZ:TRANSFER:%c:1.0.0:%013llu:0\r\n",
-        io->screen ? "" : "\033[?1049h", direction, (unsigned long long)identifier);
+        "\033[s::TRZSZ:TRANSFER:%c:1.0.0:%013llu:0\r\n",
+        direction, (unsigned long long)identifier);
     if (n < 0 || (size_t)n >= sizeof(marker)) return snag_errno(EOVERFLOW);
     io->display_started = true;
     return write_bytes(io, (const unsigned char *)marker, (size_t)n);
@@ -151,8 +153,7 @@ transfer_begin(struct upload_io *io, char direction)
 static int
 transfer_end(struct upload_io *io, bool stopped)
 {
-    const char *restore = io->screen ? "\033[u\033[0J\r\n" :
-                                      "\033[u\033[0J\033[?1049l\r\n";
+    const char *restore = "\033[u\033[0J\r\n";
     if (!io->display_started) return 0;
     io->checkpoint = NULL;
     if (stopped) {
@@ -723,6 +724,7 @@ client_publish(int dir, struct snag_upload_file *file, const char *path,
 
 int
 snag_client_download(int tty, int directory, const char *path,
+                     int (*progress)(void *, uint64_t, uint64_t),
                      int (*checkpoint)(void *), void *opaque,
                      struct snag_client_result *result, char *error, size_t error_size)
 {
@@ -746,6 +748,7 @@ snag_client_download(int tty, int directory, const char *path,
     struct snag_upload_md5 hash;
     snag_upload_md5_init(&hash);
     uint64_t received = 0u;
+    if (progress && progress(opaque, 0u, size) < 0) goto done;
     unsigned char bytes[SNAG_UPLOAD_BLOCK_MAX];
     while (received < size) {
         size_t amount;
@@ -761,7 +764,8 @@ snag_client_download(int tty, int directory, const char *path,
         }
         snag_upload_md5_update(&hash, bytes, amount);
         received += amount;
-        if (send_integer(&io, amount) < 0) goto done;
+        if (send_integer(&io, amount) < 0 ||
+            (progress && progress(opaque, received, size) < 0)) goto done;
     }
     unsigned char digest[16], announced[16];
     size_t length;
@@ -805,6 +809,7 @@ done:
 
 int
 snag_client_upload(int tty, int fd, const char *name,
+                   int (*progress)(void *, uint64_t, uint64_t),
                    int (*checkpoint)(void *), void *opaque,
                    struct snag_client_result *result, char *error, size_t error_size)
 {
@@ -830,6 +835,7 @@ snag_client_upload(int tty, int fd, const char *name,
     struct snag_upload_md5 hash;
     snag_upload_md5_init(&hash);
     uint64_t sent = 0u;
+    if (progress && progress(opaque, 0u, (uint64_t)before.st_size) < 0) goto done;
     while (sent < (uint64_t)before.st_size) {
         size_t want = (uint64_t)before.st_size - sent > block ? block :
                       (size_t)((uint64_t)before.st_size - sent);
@@ -842,6 +848,7 @@ snag_client_upload(int tty, int fd, const char *name,
         if (accepted != (uint64_t)amount) { errno = EPROTO; goto done; }
         snag_upload_md5_update(&hash, bytes, (size_t)amount);
         sent += (uint64_t)amount;
+        if (progress && progress(opaque, sent, (uint64_t)before.st_size) < 0) goto done;
     }
     ssize_t remaining;
     do remaining = read(fd, bytes, 1u); while (remaining < 0 && errno == EINTR);

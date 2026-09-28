@@ -18,6 +18,12 @@ The final EXIT carries native receipt JSON with actual landed paths. The remote
 application restores its terminal lease before rendering that receipt through
 ordinary UI text, preserving the composer and cursor. Buffered post-transfer
 output and keyboard bytes return to their respective owners.
+Transfers keep the conversation on the main screen. The native endpoint shows
+one rate-limited progress line with direction, byte count and percentage,
+shortening it for narrow terminals and clearing it before agent output resumes.
+The percentage reports transferred bytes; digest acknowledgement and final EXIT
+still determine successful completion. Legacy Go clients retain their own
+selection/progress UI and the same protocol-1 framing.
 
 A private CSI probe with a fresh decimal nonce discovers a native client without
 starting file-transfer frames. GNU screen receives it through DCS passthrough.

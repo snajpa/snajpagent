@@ -49,9 +49,11 @@ struct snag_client_result {
 /* Workstation endpoints; tty is the proxy's private nonblocking child PTY.
  * The caller owns selection, output presentation, fd and directory lifetime. */
 int snag_client_download(int tty, int directory, const char *path,
+                         int (*progress)(void *, uint64_t, uint64_t),
                          int (*checkpoint)(void *), void *opaque,
                          struct snag_client_result *result, char *error, size_t error_size);
 int snag_client_upload(int tty, int fd, const char *name,
+                       int (*progress)(void *, uint64_t, uint64_t),
                        int (*checkpoint)(void *), void *opaque,
                        struct snag_client_result *result, char *error, size_t error_size);
 #endif

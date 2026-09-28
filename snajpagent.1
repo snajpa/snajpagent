@@ -1294,6 +1294,9 @@ preserves existing files through collision-safe names. Actual landed paths
 appear in download receipts in the remote conversation, with the prompt and
 editable draft restored afterward. Receipt paths also enter the saved tool
 result for model-triggered sends.
+Transfers keep the conversation visible. The native wrapper displays a single
+progress line with direction, byte count and percentage, then restores the prompt.
+Byte progress reaches 100% before final verification; the receipt confirms completion.
 .PP
 Keep the outer workstation wrapper active across SSH hops and screen
 reattachments. An inner native wrapper probes for an upstream native client
