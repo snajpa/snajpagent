@@ -757,6 +757,10 @@ independently, and neither changes stored, provider, redirected, or IRC bytes.
 
 ## Media streaming boundary
 
+The [persistent voice interface](voice-interface.md) defines concurrent spoken
+control, agent-progress feedback and the required voice lifetime independently
+of coding work. It also records the remaining singleton-delegation limitation.
+
 Direct input admission records its typed attachment references in `input_received`
 before preparation or provider activity. The pending input retains those references
 through failure and resume; `turn_started` must carry the identical content.
