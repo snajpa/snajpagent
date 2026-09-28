@@ -173,6 +173,11 @@ speech. Render voice-initiated actions and their outcomes through the ordinary
 tool verbosity controls, including actions that affect the model. A spoken claim
 does not replace the action result.
 
+Voice activity now persists a prepared session before its first voice event.
+Interface actions record their invocation before execution and their result
+afterwards. Those records use ordinary tool-row and preview rendering with a
+voice source label, independently of the working model's current response.
+
 ## Shared attachment transition
 
 Shell attachment, typed session switching and voice-requested switching use the

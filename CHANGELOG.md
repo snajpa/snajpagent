@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Persist voice-only sessions and show voice interface actions with ordinary tool
+  rows and result previews. Record each action before execution and its outcome
+  afterwards, keeping speech capture separate from model work admission.
+
 - Include the CLI's `/help` text in initial native/public voice instructions and
   interface requests, using the same command catalog and formatter as typed help.
 

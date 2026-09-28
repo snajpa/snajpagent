@@ -1132,6 +1132,13 @@ interface_service(struct app_state *app, char *error, size_t size)
             called = true;
             json_t *result = NULL;
             error[0] = '\0';
+            if (voice_record(app, v, json_pack("{s:s,s:s,s:s,s:s,s:s,s:O}",
+                    "type", "voice_response", "operation", "interface_tool_started",
+                    "call_id", handoff->call, "tool_call_id", item.provider_call_id,
+                    "tool", item.name, "arguments", item.arguments)) < 0) {
+                snag_response_graph_free(&graph);
+                return -1;
+            }
             int rc = interface_call(app, handoff, &item, &result, error, size);
             if (rc < 0) {
                 json_decref(result);
@@ -1139,10 +1146,10 @@ interface_service(struct app_state *app, char *error, size_t size)
                     error[0] ? error : "The requested operation could not be acknowledged.");
             }
             rc = result ? snag_secret_result(&v->secrets, result, error, size) : -1;
-            if (!rc) rc = voice_record(app, v, json_pack("{s:s,s:s,s:s,s:s,s:s,s:O,s:O}",
+            if (!rc) rc = voice_record(app, v, json_pack("{s:s,s:s,s:s,s:s,s:s,s:O}",
                 "type", "voice_response", "operation", "interface_tool", "call_id", handoff->call,
                 "tool_call_id", item.provider_call_id, "tool", item.name,
-                "arguments", item.arguments, "result", result));
+                "result", result));
             char *text = !rc ? interface_json(result) : NULL;
             if (!text || json_array_append_new(handoff->input,
                     json_pack("{s:s,s:s,s:s}", "type", "function_call_output",

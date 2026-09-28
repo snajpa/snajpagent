@@ -1802,6 +1802,10 @@ leave the voice connection active. Oversized spoken results are marked excerpts;
 the saved session retains the full result. Voice has no separate memory directory
 or documentation configuration.
 Initial instructions include the same command and keyboard reference as /help.
+Voice activity persists the session even before the first model turn. Voice
+interface actions appear as tools labelled "voice:" at verbosity 1 and above;
+verbosity 2 adds the ordinary argument and result previews. Each action's
+invocation is saved before execution, followed by its acknowledged outcome.
 .PP
 Playback initially waits for 60 ms of sound. A confirmed mid-reply gap increases
 this prefill by 20 ms, up to 200 ms; eight clean replies reduce it by 20 ms toward

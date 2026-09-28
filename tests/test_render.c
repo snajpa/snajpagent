@@ -2439,6 +2439,60 @@ append_event(FILE *file, const char *text)
 }
 
 static void
+test_voice_tool_history(void)
+{
+    for (unsigned int live = 0u; live <= 1u; ++live)
+    for (unsigned int level = 0u; level <= 3u; ++level) {
+        char path[] = "build/voice-tool-log-XXXXXX";
+        int log_fd = mkstemp(path);
+        assert(log_fd >= 0 && unlink(path) == 0);
+        FILE *file = fdopen(log_fd, "w+");
+        assert(file);
+        struct output_capture capture = capture_open(false, true);
+        assert(fcntl(capture.fd, F_SETFL, O_NONBLOCK) == 0);
+        struct snag_render render;
+        snag_render_init(&render, live ? level : 6u);
+        snag_render_set_color(&render, SNAG_COLOR_NEVER);
+        if (!live) assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
+
+        struct snag_render_source source = append_event(file,
+            "{\"data\":{\"event\":{\"type\":\"voice_response\","
+            "\"operation\":\"interface_tool_started\",\"tool\":\"submit_input\","
+            "\"tool_call_id\":\"voice-call\",\"arguments\":{\"target\":\"queue\","
+            "\"text\":\"requested task\"}}}}\n");
+        assert(snag_render_durable(&render, fileno(file), source, "voice_event", 0u, 0u) == 0);
+        source = append_event(file,
+            "{\"data\":{\"event\":{\"type\":\"voice_response\","
+            "\"operation\":\"interface_tool\",\"tool\":\"submit_input\","
+            "\"tool_call_id\":\"voice-call\",\"result\":{\"status\":\"succeeded\","
+            "\"model_text\":\"Queued request fixture-queue.\"}}}}\n");
+        assert(snag_render_durable(&render, fileno(file), source, "voice_event", 0u, 0u) == 0);
+        source = append_event(file,
+            "{\"data\":{\"event\":{\"type\":\"voice_started\",\"state\":\"ready\"}}}\n");
+        assert(snag_render_durable(&render, fileno(file), source, "voice_event", 0u, 0u) == 0);
+        render.verbosity = level;
+        assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
+        while (snag_render_view_pending(&render))
+            assert(snag_render_flush_pending(&render, 8u) == 0);
+
+        char output[4096] = {0};
+        size_t used = drain_available(capture.fd, output, sizeof(output), 0u);
+        assert(snag_render_set_view(&render, SNAG_RENDER_CHAT) == 0);
+        assert(snag_render_set_view(&render, SNAG_RENDER_ROLLOUT) == 0);
+        (void)drain_available(capture.fd, output, sizeof(output), used);
+        snag_render_free(&render);
+        fclose(file);
+        capture_restore(&capture);
+        close(capture.fd);
+        assert((strstr(output, "→ voice: submit_input") != NULL) == (level >= 1u));
+        assert((strstr(output, "← voice: submit_input") != NULL) == (level >= 1u));
+        assert((strstr(output, "Queued request fixture-queue.") != NULL) == (level >= 2u));
+        assert(!strstr(output, "ready"));
+        assert(count_text(output, "submit_input") == (level ? 2u : 0u));
+    }
+}
+
+static void
 test_semantic_history(void)
 {
     for (unsigned int live = 0u; live <= 1u; ++live)
@@ -3215,6 +3269,7 @@ main(void)
     test_tool_previews();
     test_hosted_search_rows();
     test_semantic_history();
+    test_voice_tool_history();
     test_live_downgrade();
     for (unsigned int verbosity = 0u; verbosity <= 6u; ++verbosity) test_append_only_views(verbosity);
     test_chat_room_views();

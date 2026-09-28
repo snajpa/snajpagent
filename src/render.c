@@ -51,7 +51,7 @@ struct markdown_table_output {
 
 enum snag_render_record_kind {
     SNAG_RENDER_RECORD_BLOCK, SNAG_RENDER_RECORD_IRC, SNAG_RENDER_RECORD_TOOL,
-    SNAG_RENDER_RECORD_HOSTED, SNAG_RENDER_RECORD_PUBLIC };
+    SNAG_RENDER_RECORD_HOSTED, SNAG_RENDER_RECORD_VOICE, SNAG_RENDER_RECORD_PUBLIC };
 
 struct snag_render_record {
     struct snag_render_record *next;
@@ -123,6 +123,7 @@ static int markdown_gap(struct snag_render *render);
 static int flush_wrap_pending(struct snag_render *render);
 static int render_tool_record(struct snag_render *render, const struct snag_render_record *record);
 static int render_hosted_record(struct snag_render *render, const struct snag_render_record *record);
+static int render_voice_record(struct snag_render *render, struct snag_render_record *record);
 static json_t *source_event(struct snag_render *render, struct snag_render_source source);
 static json_t *record_event(struct snag_render *render, struct snag_render_record *record, bool response);
 
@@ -3213,6 +3214,8 @@ flush_view(struct snag_render *render, enum snag_render_view view, size_t record
             rc = render_tool_record(render, record);
         } else if (record->kind == SNAG_RENDER_RECORD_HOSTED) {
             rc = render_hosted_record(render, record);
+        } else if (record->kind == SNAG_RENDER_RECORD_VOICE) {
+            rc = render_voice_record(render, record);
         } else {
             rc = 0;
             if (record->source.len && !record->text.data) {
@@ -3611,6 +3614,50 @@ out: json_decref(event);
     return rc;
 }
 
+static int
+render_voice_record(struct snag_render *render, struct snag_render_record *record)
+{
+    if (!snag_render_enabled(render, SNAG_PRESENT_TOOL)) return 0;
+    json_t *entry = record_event(render, record, false);
+    if (!entry) return -1;
+    json_t *event = json_object_get(json_object_get(entry, "data"), "event");
+    const char *operation = snag_json_string(event, "operation");
+    if (!operation || !snag_string_in(operation, "interface_tool_started interface_tool")) {
+        json_decref(entry);
+        return 0;
+    }
+    const char *tool = snag_json_string(event, "tool");
+    const char *call_id = snag_json_string(event, "tool_call_id");
+    if (!tool || !call_id) {
+        json_decref(entry);
+        return snag_errno(EPROTO);
+    }
+    struct snag_buf name = {.max = SNAG_MAX_TOOL_ARGUMENTS};
+    int rc = snag_buf_printf(&name, "voice: %s", tool);
+    if (!rc) rc = snag_buf_terminate(&name);
+    if (!rc) {
+        struct snag_render_block block;
+        unsigned int columns = render->term ? render->term->columns : 0u;
+        if (!strcmp(operation, "interface_tool_started")) {
+            struct snag_response_item call = {.name = (char *)name.data,
+                .call_id = call_id, .arguments = json_object_get(event, "arguments")};
+            rc = snag_render_prepare_tool_start(&block, &call, "?",
+                record->timeout_ms, render->verbosity, columns);
+        } else {
+            rc = snag_render_prepare_tool_finish(&block, (const char *)name.data, call_id,
+                json_object_get(event, "result"), record->max_output_bytes,
+                render->verbosity, columns);
+        }
+        if (!rc) {
+            rc = snag_render_tool_block(render, &block);
+            snag_render_block_free(&block);
+        }
+    }
+    snag_buf_free(&name);
+    json_decref(entry);
+    return rc;
+}
+
 int
 snag_render_durable(struct snag_render *render, int fd, struct snag_render_source source,
                     const char *type, uint32_t timeout_ms, uint32_t max_output_bytes)
@@ -3640,6 +3687,16 @@ snag_render_durable(struct snag_render *render, int fd, struct snag_render_sourc
         return rc;
     }
     if (strcmp(type, "response_completed") == 0) render->response_source = source;
+    if (!strcmp(type, "voice_event")) {
+        struct snag_render_record *voice = calloc(1u, sizeof(*voice));
+        if (!voice) return -1;
+        voice->kind = SNAG_RENDER_RECORD_VOICE;
+        voice->source = source;
+        voice->timeout_ms = timeout_ms;
+        voice->max_output_bytes = max_output_bytes;
+        queue_record(render, SNAG_RENDER_ROLLOUT, voice);
+        return 0;
+    }
     if (strcmp(type, "irc_event") == 0) {
         render->irc_source = source;
         return 0;

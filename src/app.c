@@ -409,7 +409,9 @@ snag_app_commit_event(struct app_state *app, const char *type, json_t *data, cha
         json_decref(data);
         return -1;
     }
-    if (snag_string_in(type, "goal_started control_requested future_turn_queued input_received irc_admitted") &&
+    if (snag_string_in(type,
+            "goal_started control_requested future_turn_queued input_received "
+            "irc_admitted voice_event") &&
         persist_session(app, error, error_size) < 0) {
         ++app->session.write_failures;
         json_decref(data);

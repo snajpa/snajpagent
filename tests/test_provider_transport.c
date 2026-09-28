@@ -1886,8 +1886,8 @@ test_voice_transcript_labels(void)
     snag_store_init(&app.store);
     snag_session_init(&app.session);
     assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
-    assert(snag_session_create(&app.store, &app.session, path, "default", "fixture",
-        "medium", error, sizeof(error)) == 0);
+    assert(snag_session_prepare(&app.session, path, "default", "fixture", "medium",
+        error, sizeof(error)) == 0 && app.session.pending_log);
 
     for (unsigned int verbosity = 0u; verbosity <= 6u; ++verbosity) {
         int captured[2];
@@ -1905,9 +1905,11 @@ test_voice_transcript_labels(void)
         json_decref(events);
         assert(snag_app_voice_service(&app) == 0);
         assert(!app.session.pending_queue_count && !app.session.active_turn);
+        bool persisted = app.session.pending_log == NULL;
         snag_app_voice_close(&app);
         snag_ui_free(&app.ui);
         assert(dup2(saved, STDERR_FILENO) >= 0 && close(saved) == 0);
+        assert(persisted);
 
         char output[8192];
         size_t used = 0u;
@@ -1921,9 +1923,51 @@ test_voice_transcript_labels(void)
         assert(strstr(output, "You [voice, ASR]: show the -l option"));
         assert(strstr(output, "Voice model [generated]: 192.0.2.1\n/fixture/file"));
     }
+    char id[SNAG_ID_HEX_LEN + 1u];
+    memcpy(id, app.session.id, sizeof(id));
+    snag_session_close(&app.session);
+    assert(snag_session_open(&app.store, &app.session, id, error, sizeof(error)) == 0);
+    json_t *context = NULL;
+    assert(snag_session_voice_context(&app.session, &context, error, sizeof(error)) == 0);
+    const char *asr = snag_json_string(context, "recent_asr");
+    const char *reply = snag_json_string(context, "recent_generated_reply");
+    assert(asr && !strcmp(asr, "show the -l option"));
+    assert(reply && !strcmp(reply, "192.0.2.1\n/fixture/file"));
+    json_decref(context);
     snag_session_close(&app.session);
     snag_store_close(&app.store);
     snag_config_free(&config);
+}
+
+static int
+voice_tool_record(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    (void)state;
+    (void)seq;
+    (void)error;
+    (void)size;
+    unsigned int *counts = opaque;
+    if (!strcmp(type, "future_turn_queued")) {
+        assert(counts[0] == counts[1] + 1u && counts[1] == counts[2]);
+        ++counts[1];
+    } else if (!strcmp(type, "voice_event")) {
+        const json_t *event = json_object_get(data, "event");
+        const char *operation = snag_json_string(event, "operation");
+        if (operation && !strcmp(operation, "interface_tool_started")) {
+            assert(counts[0] == counts[1] && counts[1] == counts[2]);
+            assert(!strcmp(snag_json_string(event, "tool"), "submit_input"));
+            assert(json_is_object(json_object_get(event, "arguments")));
+            assert(!json_object_get(event, "result"));
+            ++counts[0];
+        } else if (operation && !strcmp(operation, "interface_tool")) {
+            assert(counts[0] == counts[1] && counts[1] == counts[2] + 1u);
+            assert(!json_object_get(event, "arguments"));
+            assert(json_is_object(json_object_get(event, "result")));
+            ++counts[2];
+        }
+    }
+    return 0;
 }
 
 static void
@@ -1975,6 +2019,10 @@ test_voice_concurrent_owner(void)
         snag_sleep_ms(10u);
     }
     assert(acknowledgements == 2u && app.session.pending_queue_count == 2u);
+    unsigned int tool_records[3] = {0};
+    assert(snag_session_each_event(&app.session, voice_tool_record, tool_records,
+        error, sizeof(error)) == 0);
+    assert(tool_records[0] == 2u && tool_records[1] == 2u && tool_records[2] == 2u);
     assert(app.session.queue_armed);
     for (size_t i = 0; i < 2u; ++i) {
         strcpy(queues[i], app.session.pending_queue[i].queue_id);
