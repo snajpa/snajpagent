@@ -274,6 +274,17 @@ sequences and wrapped or out-of-range slices are
 invalid. Framing/reference support does not yet replace runtime checkpoint
 payload copies; that follows typed checkpoint integration.
 
+Input-field reference helpers additionally decode the source event and require
+the exact bounds of the selected field: original text, complete content list,
+instruction list, voice transcript or voice request. They accept receipt,
+steering/reminder and queued/edited input sources where that field exists.
+Identical bytes in provider metadata, partial strings and nested content text
+do not identify the original-input field. Empty instruction lists retain their
+four-byte encoding; absent fields cannot supply a reference. The caller must
+still check causal ordering, receipt/provenance identity and reducer authority.
+Literal/reference event variants and their runtime integration remain pending;
+these helpers currently exercise the existing inline canonical leaves in tests.
+
 A full checkpoint captures all current semantic state:
 
 - Journal boundary, sequence, chain digest, session identity and turn count.

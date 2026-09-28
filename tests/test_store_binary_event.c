@@ -564,6 +564,203 @@ test_metadata(void)
     snag_buf_free(&payload);
 }
 
+static void
+input_reference_batch(const struct snag_binary_record *source, struct snag_buf *bytes,
+    struct snag_binary_batch *batch)
+{
+    struct snag_binary_identity identity = {.id = {1}, .created_ms = 1u};
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    snag_binary_header_encode(header, &identity);
+    struct snag_binary_anchor anchor, next;
+    assert(!snag_binary_header_decode(header, sizeof(header), &identity, &anchor));
+    struct snag_binary_record records[] = {
+        {.kind = SNAG_BINARY_INPUT_CANCELLED, .version = 1u}, *source
+    };
+    snag_buf_reset(bytes);
+    assert(!snag_binary_batch_encode(bytes, &anchor, records, 2u, 0u));
+    assert(!snag_binary_batch_decode(bytes->data, bytes->len, &anchor, batch, &next));
+}
+
+static void
+assert_input_reference_rejected(const struct snag_binary_ref *reference,
+    const struct snag_binary_batch *batch, enum snag_binary_input_leaf field)
+{
+    const unsigned char sentinel = 0;
+    const unsigned char *view = &sentinel;
+    assert(snag_binary_input_ref_resolve(reference, batch, field, &view) < 0);
+    assert(view == &sentinel);
+}
+
+static void
+assert_input_leaf_missing(const struct snag_binary_batch *batch, uint64_t sequence,
+    enum snag_binary_input_leaf field)
+{
+    struct snag_binary_ref reference = {99u, 98u, 97u};
+    assert(snag_binary_input_ref_create(batch, sequence, field, &reference) < 0);
+    assert(reference.sequence == 99u && reference.offset == 98u && reference.size == 97u);
+    reference.sequence = sequence;
+    assert_input_reference_rejected(&reference, batch, field);
+}
+
+static void
+test_input_references(void)
+{
+    struct snag_buf instructions = {.max = SNAG_MAX_EVENT_LINE};
+    struct snag_buf parts = {.max = SNAG_MAX_EVENT_LINE};
+    struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
+    struct snag_buf bytes = {.max = SNAG_BINARY_BATCH_MAX};
+    assert(!snag_binary_instructions_encode(&instructions, NULL, 0));
+    struct snag_binary_part part = {.kind = SNAG_BINARY_PART_TEXT, .text = text("original")};
+    assert(!snag_binary_content_encode(&parts, &part, 1u));
+    struct snag_binary_event event = {.kind = SNAG_BINARY_INPUT_RECEIVED};
+    event.data.input.selection = (struct snag_binary_selection){
+        text("original"), text("m"), text("e")
+    };
+    event.data.input.instructions = (struct snag_binary_instructions){
+        instructions.data, instructions.len
+    };
+    event.data.input.content = (struct snag_binary_content){parts.data, parts.len};
+    event.data.input.text = text("original");
+    assert(!snag_binary_event_encode(&payload, &event));
+    struct snag_binary_record record = {
+        .kind = event.kind, .version = 1u, .payload = payload.data, .size = payload.len
+    };
+    struct snag_binary_batch batch;
+    input_reference_batch(&record, &bytes, &batch);
+    const struct snag_binary_text expected[] = {
+        text("original"), {parts.data, parts.len}, {instructions.data, instructions.len}
+    };
+    const uint32_t offsets[] = {40u, 48u, 32u};
+    struct snag_binary_ref reference;
+    const unsigned char *view;
+    for (int field = SNAG_BINARY_INPUT_TEXT; field <= SNAG_BINARY_INPUT_INSTRUCTIONS; ++field) {
+        assert(!snag_binary_input_ref_create(&batch, 2u, field, &reference));
+        assert(reference.sequence == 2u && reference.offset == offsets[field - 1]);
+        assert(reference.size == expected[field - 1].size);
+        assert(!snag_binary_input_ref_resolve(&reference, &batch, field, &view));
+        assert(!memcmp(view, expected[field - 1].data, reference.size));
+    }
+    assert(!snag_binary_input_ref_create(&batch, 2u, SNAG_BINARY_INPUT_TEXT, &reference));
+    assert_input_reference_rejected(&reference, &batch, SNAG_BINARY_INPUT_CONTENT);
+    assert_input_reference_rejected(&reference, &batch, SNAG_BINARY_INPUT_INSTRUCTIONS);
+    /* Identical bytes in provider metadata are a valid raw slice, not the input leaf. */
+    struct snag_binary_ref wrong = {2u, 14u, 8u};
+    assert(!snag_binary_ref_resolve(&wrong, &batch, record.kind, 1u, &view));
+    assert(!memcmp(view, "original", 8u));
+    assert_input_reference_rejected(&wrong, &batch, SNAG_BINARY_INPUT_TEXT);
+    const struct snag_binary_ref invalid[] = {
+        {2u, 41u, 7u}, {2u, 36u, 12u}, {2u, 40u, 9u}, {2u, 40u, 0u}, {2u, 57u, 8u},
+        {2u, UINT32_MAX, 8u}, {2u, 40u, UINT32_MAX},
+        {0u, 40u, 8u}, {1u, 40u, 8u}, {3u, 40u, 8u}, {UINT64_MAX, 40u, 8u}
+    };
+    for (size_t i = 0; i < sizeof(invalid) / sizeof(*invalid); ++i)
+        assert_input_reference_rejected(&invalid[i], &batch, SNAG_BINARY_INPUT_TEXT);
+    assert_input_leaf_missing(&batch, 0u, SNAG_BINARY_INPUT_TEXT);
+    assert_input_leaf_missing(&batch, 1u, SNAG_BINARY_INPUT_TEXT);
+    assert_input_leaf_missing(&batch, 3u, SNAG_BINARY_INPUT_TEXT);
+    assert_input_leaf_missing(&batch, UINT64_MAX, SNAG_BINARY_INPUT_TEXT);
+    assert_input_leaf_missing(&batch, 2u, 0);
+    assert_input_leaf_missing(&batch, 2u, 6);
+    assert_input_leaf_missing(&batch, 2u, SNAG_BINARY_INPUT_VOICE_TRANSCRIPT);
+    assert_input_leaf_missing(NULL, 2u, SNAG_BINARY_INPUT_TEXT);
+    assert(snag_binary_input_ref_create(&batch, 2u, SNAG_BINARY_INPUT_TEXT, NULL) < 0);
+    assert_input_reference_rejected(NULL, &batch, SNAG_BINARY_INPUT_TEXT);
+    assert(snag_binary_input_ref_resolve(&reference, &batch, SNAG_BINARY_INPUT_TEXT, NULL) < 0);
+
+    /* Framing integrity alone cannot establish supported or valid typed semantics. */
+    for (int variant = 0; variant < 3; ++variant) {
+        struct snag_binary_record changed = record;
+        if (variant == 0) changed.version = 2u;
+        if (variant == 1) changed.flags = SNAG_BINARY_RECORD_OPTIONAL;
+        if (variant == 2) {
+            changed.kind = 0x8001u;
+            changed.flags = SNAG_BINARY_RECORD_OPTIONAL;
+        }
+        input_reference_batch(&changed, &bytes, &batch);
+        assert_input_leaf_missing(&batch, 2u, SNAG_BINARY_INPUT_TEXT);
+        assert_input_reference_rejected(&reference, &batch, SNAG_BINARY_INPUT_TEXT);
+    }
+    payload.data[40] = 0;
+    input_reference_batch(&record, &bytes, &batch);
+    assert_input_leaf_missing(&batch, 2u, SNAG_BINARY_INPUT_TEXT);
+    payload.data[40] = 'o';
+    payload.data[48] = 0; /* Reject bad content even when the requested text is well formed. */
+    input_reference_batch(&record, &bytes, &batch);
+    assert_input_reference_rejected(&reference, &batch, SNAG_BINARY_INPUT_TEXT);
+    payload.data[48] = 1u;
+
+    for (size_t size = 0; size < record.size; ++size) {
+        struct snag_binary_record short_record = record;
+        short_record.size = size;
+        input_reference_batch(&short_record, &bytes, &batch);
+        assert_input_leaf_missing(&batch, 2u, SNAG_BINARY_INPUT_TEXT);
+    }
+    assert(!snag_buf_append(&payload, "x", 1u));
+    record.payload = payload.data;
+    record.size = payload.len;
+    input_reference_batch(&record, &bytes, &batch);
+    assert_input_leaf_missing(&batch, 2u, SNAG_BINARY_INPUT_TEXT);
+
+    const enum snag_binary_kind kinds[] = {
+        SNAG_BINARY_STEERING_ADDED, SNAG_BINARY_IRC_REPLY_REMINDER,
+        SNAG_BINARY_FUTURE_TURN_QUEUED, SNAG_BINARY_FUTURE_TURN_EDITED
+    };
+    for (size_t i = 0; i < sizeof(kinds) / sizeof(*kinds); ++i) {
+        event = (struct snag_binary_event){.kind = kinds[i]};
+        if (i < 2u) {
+            event.data.steering_input.text = text("original");
+            event.data.steering_input.content = (struct snag_binary_content){parts.data, parts.len};
+        } else {
+            event.data.queued.text = text("original");
+            event.data.queued.content = (struct snag_binary_content){parts.data, parts.len};
+        }
+        snag_buf_reset(&payload);
+        assert(!snag_binary_event_encode(&payload, &event));
+        record = (struct snag_binary_record){
+            .kind = event.kind, .version = 1u, .payload = payload.data, .size = payload.len
+        };
+        input_reference_batch(&record, &bytes, &batch);
+        for (int field = SNAG_BINARY_INPUT_TEXT; field <= SNAG_BINARY_INPUT_CONTENT; ++field) {
+            assert(!snag_binary_input_ref_create(&batch, 2u, field, &reference));
+            assert(!snag_binary_input_ref_resolve(&reference, &batch, field, &view));
+            assert(reference.size == expected[field - 1].size);
+            assert(!memcmp(view, expected[field - 1].data, reference.size));
+        }
+        assert_input_leaf_missing(&batch, 2u, SNAG_BINARY_INPUT_INSTRUCTIONS);
+    }
+
+    event = (struct snag_binary_event){.kind = SNAG_BINARY_FUTURE_TURN_QUEUED};
+    event.data.queued.text = text("original");
+    event.data.queued.has_voice = true;
+    event.data.queued.while_kind = SNAG_BINARY_WHILE_NULL;
+    event.data.queued.voice = (struct snag_binary_voice_source){
+        .input_id = text("i"), .response_id = text("r"), .call_id = text("c"),
+        .provider = text("p"), .model = text("m"),
+        .transcript = text("original"), .request = text("original")
+    };
+    snag_buf_reset(&payload);
+    assert(!snag_binary_event_encode(&payload, &event));
+    record = (struct snag_binary_record){
+        .kind = event.kind, .version = 1u, .payload = payload.data, .size = payload.len
+    };
+    input_reference_batch(&record, &bytes, &batch);
+    assert_input_leaf_missing(&batch, 2u, SNAG_BINARY_INPUT_CONTENT);
+    for (int field = SNAG_BINARY_INPUT_VOICE_TRANSCRIPT;
+        field <= SNAG_BINARY_INPUT_VOICE_REQUEST; ++field) {
+        assert(!snag_binary_input_ref_create(&batch, 2u, field, &reference));
+        assert(!snag_binary_input_ref_resolve(&reference, &batch, field, &view));
+        assert(reference.size == 8u && !memcmp(view, "original", 8u));
+        assert_input_reference_rejected(&reference, &batch, SNAG_BINARY_INPUT_TEXT);
+        int other = field == SNAG_BINARY_INPUT_VOICE_TRANSCRIPT ?
+            SNAG_BINARY_INPUT_VOICE_REQUEST : SNAG_BINARY_INPUT_VOICE_TRANSCRIPT;
+        assert_input_reference_rejected(&reference, &batch, other);
+    }
+    snag_buf_free(&instructions);
+    snag_buf_free(&parts);
+    snag_buf_free(&payload);
+    snag_buf_free(&bytes);
+}
+
 void
 test_store_binary_event(void)
 {
@@ -571,6 +768,7 @@ test_store_binary_event(void)
     test_input_events();
     test_queued_input();
     test_metadata();
+    test_input_references();
     static const unsigned char text[] = "goal caf\xc3\xa9";
     struct snag_binary_event event = {.kind = SNAG_BINARY_TIMER_SCHEDULED};
     for (size_t i = 0; i < 16u; ++i) event.data.timer.id[i] = (unsigned char)i;

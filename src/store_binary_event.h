@@ -216,4 +216,24 @@ int snag_binary_event_encode(struct snag_buf *out, const struct snag_binary_even
 int snag_binary_event_decode(const struct snag_binary_record *record,
     struct snag_binary_event *out);
 
+enum snag_binary_input_leaf {
+    SNAG_BINARY_INPUT_TEXT = 1,
+    SNAG_BINARY_INPUT_CONTENT = 2,
+    SNAG_BINARY_INPUT_INSTRUCTIONS = 3,
+    SNAG_BINARY_INPUT_VOICE_TRANSCRIPT = 4,
+    SNAG_BINARY_INPUT_VOICE_REQUEST = 5
+};
+
+/* Create/resolve whole input-field references in a verified immutable batch
+ * from the same journal. Text excludes its length prefix; content/instructions
+ * include their complete typed list. Resolve validates the source event and
+ * exact field identity, including empty versus absent fields. Views borrow the
+ * batch. Outputs stay unchanged on failure. The caller still checks causal
+ * ordering, receipt/provenance identity and reducer authority before adoption. */
+int snag_binary_input_ref_create(const struct snag_binary_batch *batch, uint64_t sequence,
+    enum snag_binary_input_leaf field, struct snag_binary_ref *out);
+int snag_binary_input_ref_resolve(const struct snag_binary_ref *reference,
+    const struct snag_binary_batch *batch, enum snag_binary_input_leaf field,
+    const unsigned char **view);
+
 #endif

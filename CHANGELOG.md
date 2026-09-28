@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Add field-checked canonical input references to the test-only binary-store
+  codecs. Runtime session storage remains JSONL.
+
 - Add `voice_output` for coding-agent speech into an already-open conversation,
   with availability queries, microphone-independent playback, bounded output
   backpressure and acknowledgements that distinguish acceptance from playback.

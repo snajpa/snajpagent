@@ -809,3 +809,111 @@ snag_binary_event_decode(const struct snag_binary_record *record,
     *out = decoded;
     return 0;
 }
+
+static int
+input_leaf(const struct snag_binary_record *record, enum snag_binary_input_leaf field,
+    struct snag_binary_text *out)
+{
+    struct snag_binary_event event;
+    if (snag_binary_event_decode(record, &event) != 0) return invalid();
+    struct snag_binary_text text = {0};
+    struct snag_binary_content content = {0};
+    struct snag_binary_instructions instructions = {0};
+    const struct snag_binary_voice_source *voice = NULL;
+    switch (event.kind) {
+    case SNAG_BINARY_INPUT_RECEIVED:
+        text = event.data.input.text;
+        content = event.data.input.content;
+        instructions = event.data.input.instructions;
+        break;
+    case SNAG_BINARY_STEERING_ADDED:
+    case SNAG_BINARY_IRC_REPLY_REMINDER:
+        text = event.data.steering_input.text;
+        content = event.data.steering_input.content;
+        break;
+    case SNAG_BINARY_FUTURE_TURN_QUEUED:
+    case SNAG_BINARY_FUTURE_TURN_EDITED:
+        text = event.data.queued.text;
+        content = event.data.queued.content;
+        if (event.data.queued.has_voice) voice = &event.data.queued.voice;
+        break;
+    default:
+        return invalid();
+    }
+
+    struct snag_binary_text leaf = {0};
+    switch (field) {
+    case SNAG_BINARY_INPUT_TEXT:
+        leaf = text;
+        break;
+    case SNAG_BINARY_INPUT_CONTENT:
+        leaf = (struct snag_binary_text){content.data, content.size};
+        break;
+    case SNAG_BINARY_INPUT_INSTRUCTIONS:
+        leaf = (struct snag_binary_text){instructions.data, instructions.size};
+        break;
+    case SNAG_BINARY_INPUT_VOICE_TRANSCRIPT:
+        if (voice) leaf = voice->transcript;
+        break;
+    case SNAG_BINARY_INPUT_VOICE_REQUEST:
+        if (voice) leaf = voice->request;
+        break;
+    default:
+        return invalid();
+    }
+    if (!leaf.data) return invalid();
+    *out = leaf;
+    return 0;
+}
+
+static int
+find_input_leaf(const struct snag_binary_batch *batch, uint64_t sequence,
+    enum snag_binary_input_leaf field, struct snag_binary_ref *reference,
+    const unsigned char **view)
+{
+    if (!batch || !sequence || sequence == UINT64_MAX || sequence < batch->first_seq ||
+        sequence - batch->first_seq >= batch->count) return invalid();
+    size_t cursor = SNAG_BINARY_BATCH_HEADER_SIZE;
+    struct snag_binary_record record;
+    uint64_t found;
+    int rc;
+    while ((rc = snag_binary_record_next(batch, &cursor, &record, &found)) == 0) {
+        if (found != sequence) continue;
+        struct snag_binary_text leaf;
+        if (input_leaf(&record, field, &leaf) < 0) return -1;
+        size_t offset = (size_t)(leaf.data - record.payload);
+        /* The event decoder bounds the complete payload before producing views. */
+        if (offset > UINT32_MAX || leaf.size > UINT32_MAX) return invalid();
+        *reference = (struct snag_binary_ref){sequence, (uint32_t)offset, (uint32_t)leaf.size};
+        *view = leaf.data;
+        return 0;
+    }
+    return rc < 0 ? rc : invalid();
+}
+
+int
+snag_binary_input_ref_create(const struct snag_binary_batch *batch, uint64_t sequence,
+    enum snag_binary_input_leaf field, struct snag_binary_ref *out)
+{
+    if (!out) return invalid();
+    struct snag_binary_ref reference;
+    const unsigned char *view;
+    if (find_input_leaf(batch, sequence, field, &reference, &view) < 0) return -1;
+    *out = reference;
+    return 0;
+}
+
+int
+snag_binary_input_ref_resolve(const struct snag_binary_ref *reference,
+    const struct snag_binary_batch *batch, enum snag_binary_input_leaf field,
+    const unsigned char **view)
+{
+    if (!reference || !view) return invalid();
+    struct snag_binary_ref canonical;
+    const unsigned char *data;
+    if (find_input_leaf(batch, reference->sequence, field, &canonical, &data) < 0) return -1;
+    if (reference->offset != canonical.offset || reference->size != canonical.size)
+        return invalid();
+    *view = data;
+    return 0;
+}
