@@ -65,6 +65,8 @@ struct ui_hard_exit_watchdog {
 
 struct ui_action {
     uint64_t received_ms;
+    uint64_t attachment;
+    bool interface_input;
     enum snag_term_action action;
     char *text;
     int error;
@@ -764,6 +766,8 @@ session_command(enum snag_ui_operation kind)
     return kind >= SNAG_UI_SESSION_START && kind <= SNAG_UI_SESSION_READY;
 }
 
+static int admit_input(struct snag_ui_display *, const char *, uint64_t);
+
 static int
 apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
               char *error, size_t error_size)
@@ -939,6 +943,7 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
         if (!display->update) display->update = snag_update_start(command->label, command->text,
                                                 display->runtime->commands[1]);
         return 0;
+    case SNAG_UI_INPUT: return admit_input(display, command->text, command->data.seq);
     case SNAG_UI_STOP: return 0;
     case SNAG_UI_PUBLIC: case SNAG_UI_RAW: break; /* Sliced by apply_display. */
     }
@@ -946,46 +951,11 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
 }
 
 static int
-read_input(struct snag_ui_display *display, int timeout_ms)
+finish_input(struct snag_ui_display *display, struct ui_action *item, int rc)
 {
-    if (session_service(display, 0) < 0) return -1;
-    if (display->native && (timeout_ms < 0 || timeout_ms > 16)) timeout_ms = 16;
     struct snag_ui_runtime *runtime = display->runtime;
     struct snag_term *term = &display->term;
-    struct ui_action *item;
-    int rc;
 
-    bool held = !term->prompt_wanted && !term->dictating && !term->input_only;
-    if (term->opened && !display->suspended && !display->input_closed && held) {
-        enum held_control control = input_take_held_control(&runtime->input,
-            (term->spinner_states & (1u << SNAG_TERM_SPINNER_TOOL)) != 0u);
-
-        if (control == HELD_EXIT) atomic_store(&runtime->exit_requested, true);
-        if (control == HELD_INTERRUPT)
-            atomic_store(&runtime->interrupt,
-                display->turn_generation ? display->turn_generation : UINT64_MAX);
-        if (control == HELD_YIELD) atomic_store(&runtime->yield_requested, true);
-        if (control != HELD_NONE) {
-            snag_wakeup_send(runtime->actions.wake[1]);
-            return 0;
-        }
-    }
-    if (!term->opened || display->suspended || display->input_closed || held ||
-        display->native_barrier) {
-        rc = snag_wakeup_wait(runtime->commands[0], timeout_ms);
-        return rc < 0 && errno != EINTR ? -1 : 0;
-    }
-    term->input_backlog = queue_full(&runtime->actions);
-    term->local_backlog = display->local != NULL;
-    if (!term->input_backlog) display->backlog_warned = false;
-    else if (!display->backlog_warned && !term->input_only) {
-        display->backlog_warned = true;
-        if (snag_render_warning_ctx(&display->render,
-                "input backlog is full; draft retained, retry Enter shortly") < 0) return -1;
-    }
-    item = calloc(1u, sizeof(*item));
-    if (!item) return -1;
-    rc = snag_term_poll(term, timeout_ms, runtime->commands[0], &item->action, &item->text);
     /* The prompt can be held while snag_term_poll is waiting for input. A
      * /yield completed at that boundary must take the same priority path as
      * a line found in the held input ring, rather than waiting in the action
@@ -1139,6 +1109,75 @@ fail: free(item->text);
 }
 
 static int
+admit_input(struct snag_ui_display *display, const char *text, uint64_t attachment)
+{
+    struct snag_ui_runtime *runtime = display->runtime;
+    if (!text || !snag_text_valid(text, 0u, SNAG_MAX_DIRECT_PROMPT)) return snag_errno(EINVAL);
+    if (!display->term.opened || display->suspended || display->input_closed ||
+        display->native_barrier ||
+        atomic_load(&runtime->session_attachment) != attachment ||
+        (display->native && !attachment)) {
+        return snag_errno(ESTALE);
+    }
+    if (queue_full(&runtime->actions) || display->local) return snag_errno(EAGAIN);
+    struct ui_action *item = calloc(1u, sizeof(*item));
+    if (!item) return -1;
+    item->text = strdup(text);
+    if (!item->text) {
+        free(item);
+        return -1;
+    }
+    item->action = SNAG_TERM_SUBMIT;
+    item->attachment = attachment;
+    item->interface_input = true;
+    return finish_input(display, item, 1);
+}
+
+static int
+read_input(struct snag_ui_display *display, int timeout_ms)
+{
+    if (session_service(display, 0) < 0) return -1;
+    if (display->native && (timeout_ms < 0 || timeout_ms > 16)) timeout_ms = 16;
+    struct snag_ui_runtime *runtime = display->runtime;
+    struct snag_term *term = &display->term;
+    struct ui_action *item;
+    int rc;
+
+    bool held = !term->prompt_wanted && !term->dictating && !term->input_only;
+    if (term->opened && !display->suspended && !display->input_closed && held) {
+        enum held_control control = input_take_held_control(&runtime->input,
+            (term->spinner_states & (1u << SNAG_TERM_SPINNER_TOOL)) != 0u);
+
+        if (control == HELD_EXIT) atomic_store(&runtime->exit_requested, true);
+        if (control == HELD_INTERRUPT)
+            atomic_store(&runtime->interrupt,
+                display->turn_generation ? display->turn_generation : UINT64_MAX);
+        if (control == HELD_YIELD) atomic_store(&runtime->yield_requested, true);
+        if (control != HELD_NONE) {
+            snag_wakeup_send(runtime->actions.wake[1]);
+            return 0;
+        }
+    }
+    if (!term->opened || display->suspended || display->input_closed || held ||
+        display->native_barrier) {
+        rc = snag_wakeup_wait(runtime->commands[0], timeout_ms);
+        return rc < 0 && errno != EINTR ? -1 : 0;
+    }
+    term->input_backlog = queue_full(&runtime->actions);
+    term->local_backlog = display->local != NULL;
+    if (!term->input_backlog) display->backlog_warned = false;
+    else if (!display->backlog_warned && !term->input_only) {
+        display->backlog_warned = true;
+        if (snag_render_warning_ctx(&display->render,
+                "input backlog is full; draft retained, retry Enter shortly") < 0) return -1;
+    }
+    item = calloc(1u, sizeof(*item));
+    if (!item) return -1;
+    rc = snag_term_poll(term, timeout_ms, runtime->commands[0], &item->action, &item->text);
+    return finish_input(display, item, rc);
+}
+
+static int
 local_feedback(struct snag_ui_display *display)
 {
     struct ui_action *item = display->local;
@@ -1277,6 +1316,9 @@ presentation_main(void *opaque)
             message->result = apply_display(&display, message);
             message->saved_errno = errno;
             if (message->result < 0 && message->command.kind != SNAG_UI_VALIDATE &&
+                !(message->command.kind == SNAG_UI_INPUT &&
+                    (message->saved_errno == ESTALE || message->saved_errno == EAGAIN ||
+                    message->saved_errno == EINVAL)) &&
                 !session_command(message->command.kind) &&
                 !(message->saved_errno == ECANCELED && atomic_load(&runtime->exit_requested))) {
                 int error = errno ? errno : EIO;
@@ -1679,6 +1721,14 @@ int snag_ui_caption(struct snag_ui *ui,unsigned int speaker,const char *text)
     return snag_ui_send(ui,(struct snag_ui_command){.kind=message.kind,.data=message.data,.text=text});
 }
 
+int
+snag_ui_input(struct snag_ui *ui, const char *text, uint64_t attachment)
+{
+    if (!ui || !ui->runtime || !text) return snag_errno(EINVAL);
+    return snag_ui_send(ui, (struct snag_ui_command){.kind = SNAG_UI_INPUT,
+        .text = text, .len = strlen(text), .data.seq = attachment});
+}
+
 static int history_snapshot(struct snag_ui *ui, bool refresh);
 
 bool
@@ -1762,6 +1812,15 @@ snag_ui_poll(struct snag_ui *ui, int timeout_ms, enum snag_term_action *action, 
             if (errno == EINTR) return 0;
             return -1;
         }
+    }
+    if (item->interface_input &&
+        (item->attachment != atomic_load(&runtime->session_attachment) ||
+        (ui->native && !item->attachment))) {
+        if (item->steering) atomic_fetch_sub(&runtime->steering_pending, 1u);
+        free(item->text);
+        free(item);
+        return snag_ui_text(ui, SNAG_UI_WARNING,
+            "UI input discarded: its originating attachment ended.");
     }
     ui->input_received_ms = item->received_ms;
     ui->input_error = item->input_error;

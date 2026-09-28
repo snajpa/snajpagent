@@ -2086,7 +2086,27 @@ test_voice_read_tools(void)
         "fixture", "medium", error, sizeof(error)) == 0);
     uint64_t seq = app.session.next_seq;
     json_t *tools = snag_app_voice_tools();
-    assert(tools && json_array_size(tools) == 9u);
+    assert(tools && json_array_size(tools) == 10u);
+    bool ui_input_tool = false;
+    for (size_t i = 0u; i < json_array_size(tools); ++i) {
+        const json_t *tool = json_array_get(tools, i);
+        struct snag_response_graph graph = {0};
+        struct snag_graph_decision decision;
+        assert(snag_response_graph_set_provider_id(&graph, "voice_tools") == 0);
+        assert(snag_response_graph_add_call(&graph, "tool_item", "tool_call",
+            snag_json_string(tool, "name"), json_object()) == 0);
+        assert(snag_response_graph_classify(&graph, &decision, error, sizeof(error)) == 0);
+        assert(decision.outcome == SNAG_GRAPH_CALLS && decision.call_count == 1u);
+        snag_response_graph_free(&graph);
+        if (strcmp(snag_json_string(tool, "name"), "ui_input")) continue;
+        assert(!ui_input_tool);
+        ui_input_tool = true;
+        const json_t *parameters = json_object_get(tool, "parameters");
+        const json_t *properties = json_object_get(parameters, "properties");
+        assert(json_object_size(properties) == 1u && json_object_get(properties, "text"));
+        assert(json_is_false(json_object_get(parameters, "additionalProperties")));
+    }
+    assert(ui_input_tool);
     json_t *input = json_pack("[{s:s,s:s},{s:s,s:s},{s:s,s:s}]",
         "role", "developer", "content", "instructions",
         "role", "developer", "content", "host context",
@@ -4935,18 +4955,58 @@ test_native_ui(void)
         assert(snag_ui_session_listen(ui, session) == 0);
         assert(snag_ui_simple_prompt(ui, false) == 0);
         assert(snag_ui_insert_draft(ui, "retained draft") == 0);
+        assert(snag_ui_input(ui, "/status", 2u) < 0 && errno == ESTALE);
+        assert(snag_ui_input(ui, "/verbose 2", 1u) == 0);
+        assert(snag_ui_verbosity(ui) == 2u);
+        enum snag_term_action admitted = SNAG_TERM_NONE;
+        char *command = NULL;
+        assert(snag_ui_poll(ui, 100, &admitted, &command) == 0 && !command);
+        unsigned int admitted_count = 0u;
+        while (admitted_count < 64u && snag_ui_input(ui, "/status", 1u) == 0)
+            ++admitted_count;
+        assert(admitted_count && admitted_count < 64u && errno == EAGAIN);
+        for (unsigned int i = 0u; i < admitted_count; ++i) {
+            assert(snag_ui_poll(ui, 0, &admitted, &command) == 1);
+            assert(admitted == SNAG_TERM_SUBMIT && command && !strcmp(command, "/status"));
+            free(command);
+            command = NULL;
+        }
         assert(snag_ui_voice(ui, "[VOICE MIC ON] ") == 0);
         json_t *notices = json_pack("[{s:s,s:s,s:s,s:s},{s:s}]",
             "type", "voice_transcript", "speaker", "user", "item_id", "input-1",
             "text", "final words", "type", "voice_handoff");
         assert(notices && snag_app_voice_fixture(&app, notices, false) == 0);
         json_decref(notices);
+        struct snag_response_item control = {.name = "ui_input",
+            .arguments = json_pack("{s:s}", "text", "/status")};
+        json_t *control_result = NULL;
+        assert(control.arguments && snag_app_voice_ui_input(&app, &control,
+            &control_result, error, sizeof(error)) == 0);
+        assert(!strcmp(snag_json_string(control_result, "status"), "succeeded"));
+        assert(strstr(snag_json_string(control_result, "model_text"),
+            "does not establish command completion"));
+        json_decref(control_result);
+        control_result = NULL;
+        assert(snag_ui_poll(ui, 0, &admitted, &command) == 1 && command);
+        bool handled = false, prompt_ready = false;
+        assert(snag_app_input_command(&app, command, false, &handled, &prompt_ready) == 0);
+        assert(handled && !app.session.pending_queue_count && !app.session.active_turn);
+        free(command);
+        command = NULL;
+        assert(snag_ui_input(ui, "/status", 1u) == 0);
         assert(snag_app_voice_fixture_checkpoint(&app) == 0);
         assert(write(report[1], session->id, sizeof(id)) == (ssize_t)sizeof(id));
         char release;
         assert(read(proceed[0], &release, 1u) == 1);
         assert(snag_ui_text(ui, SNAG_UI_HOST, "work after disconnect") == 0);
         assert(snag_ui_session_attachment(ui) == 0u);
+        assert(snag_ui_input(ui, "/status", 1u) < 0 && errno == ESTALE);
+        assert(snag_ui_poll(ui, 0, &admitted, &command) == 0 && !command);
+        assert(snag_app_voice_ui_input(&app, &control, &control_result,
+            error, sizeof(error)) == 0);
+        assert(!strcmp(snag_json_string(control_result, "status"), "failed"));
+        json_decref(control_result);
+        json_decref(control.arguments);
         char capture = (char)('0' + snag_ui_voice(ui, "[VOICE MIC ON] "));
         assert(write(report[1], &capture, 1u) == 1);
         assert(capture == '1');

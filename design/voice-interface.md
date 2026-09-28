@@ -84,8 +84,18 @@ Offer general read-only file tools and the same UI commands available to the use
 Dispatch slash commands through the existing catalog and session-owner control
 path, with ordinary permissions, confirmations and actual results. The voice
 thread never becomes another journal or execution owner. File and documentation
-work reaches the model through ordinary input admission. Current control wrappers
-cover only part of this required UI surface; full parity remains to be implemented.
+work reaches the model through ordinary input admission. The `ui_input` capability
+admits UI commands and explicit replies through the shared keyboard-input path.
+Continuous observation of command output and confirmation prompts remains to be
+implemented alongside retained conversation context.
+
+Voice UI input enters the presentation owner's existing action queue. That owner
+applies immediate UI commands and routes the remaining input to the ordinary
+session dispatcher, including its current confirmation state. Admission preserves
+the typed draft, checks the originating attachment and reports queue acceptance
+separately from execution. A full queue or lost attachment refuses admission.
+Avoid recursively executing a UI command from inside voice service: commands can
+stop voice, transfer the terminal or wait for subsequent confirmation input.
 
 The model chooses which files to consult and how to use the available controls.
 Tool descriptions explain their real operations and outcomes. Do not encode a

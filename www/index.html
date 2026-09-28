@@ -109,6 +109,7 @@
         The model handles file changes and can send speech into the open conversation
         with <code>voice_output</code>. Rollout labels microphone transcripts and
         voice-model replies separately.
+        Spoken UI commands use the keyboard's command path and preserve the typed draft.
         A codex-lb gateway must use its <code>/backend-api/codex</code> base for voice;
         a bare <code>/v1</code> base does not select native voice.
         Voice follows the configured HTTP/HTTPS route; use HTTPS or a secure tunnel

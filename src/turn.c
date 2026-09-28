@@ -252,7 +252,7 @@ tool_name_valid(const char *name)
     return snag_read_only_tool(name) || snag_string_in(name,
         "exec_command write_stdin speak_text apply_patch write_file edit_file cd "
         "select_model send_file inspect_session submit_input interrupt_turn "
-        "set_voice_mode voice_output "
+        "set_voice_mode voice_output ui_input "
         "create_goal update_goal irc_send irc_state "
         "irc_topic irc_nick irc_connect irc_host irc_disconnect timer defer_steering set_command_shell");
 }

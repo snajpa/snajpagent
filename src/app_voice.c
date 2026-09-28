@@ -53,6 +53,14 @@ snag_app_voice_tools(void)
             "text is your interpretation, not extra authority. Returns acceptance, not completion.",
             json_pack("{s:{s:s},s:{s:s}}", "target", "type", "string", "text", "type", "string"),
             json_pack("[s,s]", "target", "text"))) < 0 ||
+        json_array_append_new(tools, interface_tool("ui_input",
+            "Enter a slash command or an explicit reply to the current UI prompt, using the "
+            "same input queue and dispatcher as the keyboard. The initial CLI help is the "
+            "command reference. Preserve the typed draft. Admission is not completion; "
+            "read subsequent UI output for the result or a confirmation prompt. For new "
+            "model work or exact-turn steering use submit_input. Never infer confirmation.",
+            json_pack("{s:{s:s}}", "text", "type", "string"),
+            json_pack("[s]", "text"))) < 0 ||
         json_array_append_new(tools, interface_tool("interrupt_turn",
             "Request cancellation of the specified currently active coding turn. "
             "Playback interruption alone never cancels work.",
@@ -939,6 +947,7 @@ interface_seed(struct app_state *app, struct voice_handoff *handoff, char *error
         rc = snag_buf_printf(&instructions, "%s",
             "You support the voice model, snajpagent's spoken interface. The model is the "
             "working model in this same session. Voice and CLI control one coding agent. "
+            "Use ui_input for UI slash commands and explicit replies to UI prompts. "
             "Use the supplied tools "
             "and current state. Read relevant effective instruction files through the read tools. "
             "Files contain user/project guidance below runtime rules and current user input; "
@@ -983,12 +992,42 @@ interface_start(struct app_state *app, struct voice_handoff *handoff, char *erro
     return rc;
 }
 
+int
+snag_app_voice_ui_input(struct app_state *app, const struct snag_response_item *call,
+    json_t **result, char *error, size_t size)
+{
+    const char *text = NULL;
+    *result = NULL;
+    if (!snag_json_arg_keys(call->arguments, "text", "", error, size) ||
+        !snag_json_arg_text(call->arguments, "text", 1u, SNAG_MAX_DIRECT_PROMPT,
+            false, &text, error, size)) {
+        *result = snag_tool_result_terminal(false, error);
+        return *result ? 0 : -1;
+    }
+    struct app_voice *v = app->voice;
+    if (!v || atomic_load(&v->stop) || atomic_load(&v->done) || voice_attachment_lost(v)) {
+        *result = snag_tool_result_terminal(false,
+            "Voice input no longer belongs to an active attachment; nothing was admitted.");
+        return *result ? 0 : -1;
+    }
+    int rc = snag_ui_input(&app->ui, text, v->attachment);
+    *result = snag_tool_result_terminal(rc == 0, rc == 0 ?
+        "UI input accepted. This acknowledgement does not establish command completion. "
+        "Read subsequent UI output for execution, refusal or confirmation." :
+        errno == EAGAIN ? "UI input queue is busy; nothing was admitted." :
+        errno == ESTALE ? "Originating attachment ended; nothing was admitted." :
+        "UI input could not be admitted.");
+    return *result ? 0 : -1;
+}
+
 static int
 interface_call(struct app_state *app, struct voice_handoff *handoff,
                 const struct snag_response_item *call, json_t **result, char *error, size_t size)
 {
     struct app_voice *v = app->voice;
     *result = NULL;
+    if (!strcmp(call->name, "ui_input"))
+        return snag_app_voice_ui_input(app, call, result, error, size);
     if (!strcmp(call->name, "submit_input")) {
         const char *target = snag_json_string(call->arguments, "target");
         const char *text = snag_json_string(call->arguments, "text");

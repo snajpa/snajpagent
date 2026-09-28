@@ -37,7 +37,7 @@ enum snag_ui_operation {
     SNAG_UI_ORIENTATION, SNAG_UI_HISTORY, SNAG_UI_IRC, SNAG_UI_DURABLE, SNAG_UI_EVENT,
     SNAG_UI_RESUME, SNAG_UI_PROTOCOL, SNAG_UI_TRANSPORT, SNAG_UI_RAW, SNAG_UI_HISTORY_SNAPSHOT,
     SNAG_UI_UPDATE, SNAG_UI_SESSION_START, SNAG_UI_SESSION_LISTEN, SNAG_UI_SESSION_CONTROL,
-    SNAG_UI_SESSION_REBIND, SNAG_UI_SESSION_READY, SNAG_UI_STOP
+    SNAG_UI_SESSION_REBIND, SNAG_UI_SESSION_READY, SNAG_UI_INPUT, SNAG_UI_STOP
 };
 
 struct snag_ui_prompt {
@@ -125,6 +125,10 @@ int snag_ui_audio(struct snag_ui *, const char *, bool);
 /* Acknowledged live-capture label, with normal keyboard submission enabled. */
 int snag_ui_voice(struct snag_ui *, const char *);
 int snag_ui_caption(struct snag_ui *, unsigned int speaker, const char *);
+/* Admission to the same action queue as keyboard input, without replacing the
+ * draft. A matching attachment (zero for a direct terminal) is required.
+ * Success acknowledges admission only; the session owner executes the input. */
+int snag_ui_input(struct snag_ui *, const char *, uint64_t attachment);
 int snag_ui_poll(struct snag_ui *ui, int timeout_ms,
                  enum snag_term_action *action, char **text);
 int snag_ui_submitted(struct snag_ui *ui, const char *label, const char *text,

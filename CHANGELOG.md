@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Admit voice UI commands through the keyboard's existing input queue and
+  dispatcher, preserving the draft and rejecting stale attachments or a full
+  queue. Acknowledgements distinguish admission from command completion.
+
 - Persist voice-only sessions and show voice interface actions with ordinary tool
   rows and result previews. Record each action before execution and its outcome
   afterwards, keeping speech capture separate from model work admission.
