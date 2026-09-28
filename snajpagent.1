@@ -3869,6 +3869,23 @@ the speech endpoint. It is unavailable in read-only turns. Playback and
 microphone capture are not started. Identify this voice as AI-generated when
 presenting the sound to listeners.
 .PP
+.B voice_output
+accepts optional
+.B text
+for the active voice conversation. Omitted or null text reports whether voice is
+enabled, ready, microphone-muted, and holding pending output. A text request
+accepts 1 through 262016 UTF-8 bytes and applies configured secret redaction.
+It requires an already-ready voice connection and playback device; it never
+starts voice or reactivates a detached terminal. Microphone mute permits playback.
+Read-only turns can inspect availability but cannot send speech.
+.PP
+Accepted speech uses the existing voice output mailbox. Busy or unavailable
+output returns a failure without accepting the new message. Queue acceptance
+and protocol preparation are recorded separately; neither confirms that sound
+reached the listener. Closing voice discards unsent output, which is never
+automatically replayed on the next connection. The model chooses when to use
+this tool under the session's existing instructions.
+.PP
 Audio understanding and transcription are available in read-only turns and
 can incur API charges. A failed understanding request does not fall back to
 transcription. Accepted answers and sound assets replay without another paid

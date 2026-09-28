@@ -25,8 +25,12 @@ Delegations use shared read-only file schemas, an independent provider-request
 owner, and session-owner helpers for queue admission, exact-turn steering and
 cancellation. Steering reuses its durable identity after reopen, refuses changed
 source text and respects deferred boundaries. Interface requests, tool outcomes
-and replies retain their source correlation in the session. Live connection
-renewal and the main-agent voice-output capability remain in implementation.
+and replies retain their source correlation in the session. The main agent's
+`voice_output` tool queries readiness or queues speech through the existing
+output mailbox. Native speech uses speakable session context; public Realtime
+uses a host-labelled message and its normal response scheduler. Queue and
+protocol-preparation records make no playback claim. Live connection renewal
+and long-lived context maintenance remain in implementation.
 
 ## Ownership and lifetime
 

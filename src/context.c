@@ -2065,6 +2065,12 @@ tool_schemas(bool goal_active,
         json_array_append_new(tools, tool_schema("speak_text", "text", "Generate AI speech via a paid API and retain a WAV asset. If no speech route is configured, execution returns a factual unavailable result.",
             json_pack("{s:{s:s,s:s}}", "text", "type", "string", "description",
                 "Text to synthesize, 1..4096 UTF-8 bytes. Uses the configured voice and retains a WAV without playback or capture."))) < 0 ||
+        json_array_append_new(tools, tool_schema("voice_output", "",
+            "Queue text for the active voice conversation, or read its availability. "
+            "Acceptance is not proof of playback. Unavailable voice is not activated. "
+            "Read-only turns can inspect availability but cannot send speech.",
+            json_pack("{s:{s:[s,s],s:s}}", "text", "type", "string", "null",
+                "description", "Text for the voice conversation; omit or null for status."))) < 0 ||
         json_array_append_new(tools, snag_context_read_tool_schema("get_cwd")) < 0 ||
         json_array_append_new(tools, tool_schema("cd", "path",
             "Change the session's current working directory for later file and command calls. "

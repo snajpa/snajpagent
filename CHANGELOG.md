@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Add `voice_output` for coding-agent speech into an already-open conversation,
+  with availability queries, microphone-independent playback, bounded output
+  backpressure and acknowledgements that distinguish acceptance from playback.
 - Route voice delegations through a restricted session interface with general
   file reads, work inspection, exact-turn steering, queue submission, cancellation,
   cached model selection and voice controls. Run its provider requests independently

@@ -2327,6 +2327,66 @@ test_voice_session_controls(void)
     snag_config_free(&config);
 }
 
+static void
+test_voice_output_tool(void)
+{
+    char path[4096], error[256];
+    const char *tmp = getenv("TMPDIR");
+    struct app_state app = {0};
+    struct snag_config config;
+    struct snag_response_item call = {.kind = SNAG_ITEM_TOOL_CALL, .name = "voice_output"};
+    json_t *result = NULL;
+    snag_config_init(&config);
+    app.config = &config;
+    snag_store_init(&app.store);
+    snag_session_init(&app.session);
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-voice-output-XXXXXX",
+        tmp ? tmp : "/tmp") > 0 && mkdtemp(path));
+    assert(snag_ui_init(&app.ui) == 0);
+    assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
+    assert(snag_session_create(&app.store, &app.session, path, "default",
+        "fixture", "medium", error, sizeof(error)) == 0);
+    call.arguments = json_object();
+    uint64_t seq = app.session.next_seq;
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    assert(strstr(snag_json_string(result, "model_text"), "\"ready\":false"));
+    json_decref(result);
+    assert(json_object_set_new(call.arguments, "text", json_string("The build finished.")) == 0);
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    assert(strstr(snag_json_string(result, "model_text"), "unavailable"));
+    assert(!app.voice && app.session.next_seq == seq);
+    json_decref(result);
+    assert(snag_app_voice_fixture(&app, NULL, false) == 0);
+    assert(snag_app_voice_fixture_mute(&app) == 0);
+    app.session.active_read_only = true;
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    assert(strstr(snag_json_string(result, "model_text"), "Read-only"));
+    assert(app.session.next_seq == seq && !snag_app_voice_fixture_result(&app));
+    json_decref(result);
+    app.session.active_read_only = false;
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    assert(strstr(snag_json_string(result, "model_text"), "queued; playback is not confirmed"));
+    json_decref(result);
+    seq = app.session.next_seq;
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    assert(strstr(snag_json_string(result, "model_text"), "not accepted"));
+    assert(app.session.next_seq == seq && !app.session.pending_queue_count);
+    json_decref(result);
+    result = snag_app_voice_fixture_result(&app);
+    assert(json_is_true(json_object_get(result, "standalone")));
+    assert(!strcmp(snag_json_string(result, "text"), "Coding-agent message:\nThe build finished."));
+    json_decref(result);
+    assert(snag_app_tool_run(&app, &call, NULL, &result, error, sizeof(error)) == 0);
+    json_decref(result);
+    snag_app_voice_close(&app);
+    assert(!app.voice);
+    json_decref(call.arguments);
+    snag_session_close(&app.session);
+    snag_store_close(&app.store);
+    snag_ui_free(&app.ui);
+    snag_config_free(&config);
+}
+
 static void test_voice_owner_mute(void)
 {
     struct app_state app={0};
@@ -4058,7 +4118,12 @@ static void test_native_voice_protocol(void)
     assert(snag_voice_progress(v, "native-call-2", "request accepted",
         error, sizeof(error)) == 0);
     assert(!strcmp(snag_json_string(voice_last(f.sent), "type"), "delegation.context.append"));
-    assert(snag_voice_result(v,"native-call-2","tests checked",error,sizeof(error))==0);
+    assert(snag_voice_output(v, "Coding-agent message:\nThe build finished.",
+        error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(voice_last(f.sent), "type"), "session.context.append"));
+    assert(!strcmp(snag_json_string(voice_last(f.sent), "channel"), "speakable"));
+    assert(!json_object_get(voice_last(f.sent), "delegation_item_id"));
+    assert(snag_voice_result(v, "native-call-2", "tests checked", error, sizeof(error)) == 0);
     assert(!strcmp(snag_json_string(voice_last(f.sent),"delegation_item_id"),"native-call-2"));
     assert(voice_deliver(v,json_incref(delegation))==0 &&
         voice_notice_count(&f,"voice_handoff")==2u);
@@ -4340,6 +4405,11 @@ test_voice_concurrent_results(void)
     assert(snag_voice_progress(voice, "call-2", "request accepted", error, sizeof(error)) == 0);
     item = json_object_get(voice_last(f.sent), "item");
     assert(!strcmp(snag_json_string(item, "type"), "message"));
+    assert(snag_voice_output(voice, "Coding-agent message:\nThe build finished.",
+        error, sizeof(error)) == 0);
+    item = json_object_get(voice_last(f.sent), "item");
+    assert(!strcmp(snag_json_string(item, "type"), "message"));
+    assert(!json_object_get(item, "call_id"));
     assert(snag_voice_result(voice, "call-2", "second result", error, sizeof(error)) == 0);
     item = json_object_get(voice_last(f.sent), "item");
     assert(!strcmp(snag_json_string(item, "call_id"), "call-2"));
@@ -4914,6 +4984,7 @@ main(void)
     test_voice_independent_request();
     test_voice_session_controls();
     test_voice_owner_mute();
+    test_voice_output_tool();
     test_voice_socket();
     test_audio_transport();
     test_provider_auth();

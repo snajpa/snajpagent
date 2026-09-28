@@ -206,6 +206,8 @@ int snag_app_goal_list(struct app_state *, const struct snag_response_item *, js
                        char *, size_t);
 int snag_app_select_model_tool(struct app_state *, const struct snag_response_item *,
                                json_t **, char *, size_t);
+int snag_app_voice_output(struct app_state *, const struct snag_response_item *,
+                          json_t **, char *, size_t);
 
 enum {
     /* Provider pump results already use 1 and 2. */

@@ -365,15 +365,18 @@ voice_feedback(struct snag_voice *s, const char *call, const char *result, bool 
                 char *error, size_t size)
 {
     struct voice_call *pending = s && call && *call ? call_find(s, call) : NULL;
-    if (!snag_voice_ready(s) || !pending || pending->request || !result ||
+    if (!snag_voice_ready(s) || (call && (!pending || pending->request)) || !result ||
         strlen(result) >= VOICE_TEXT) {
         return fail(s, error, size, "Realtime coding result has no matching pending call");
     }
     if (s->native) {
-        int rc = send_event(s, json_pack("{s:s,s:s,s:s,s:[{s:s,s:s}]}",
+        json_t *event = call ? json_pack("{s:s,s:s,s:s,s:[{s:s,s:s}]}",
             "type", "delegation.context.append", "delegation_item_id", call,
-            "channel", "speakable", "content", "type", "input_text", "text", result));
-        if (!rc && final) call_finish(s, pending);
+            "channel", "speakable", "content", "type", "input_text", "text", result) :
+            json_pack("{s:s,s:s,s:[{s:s,s:s}]}", "type", "session.context.append",
+                "channel", "speakable", "content", "type", "input_text", "text", result);
+        int rc = send_event(s, event);
+        if (!rc && final && pending) call_finish(s, pending);
         return rc;
     }
     if (s->result_number == UINT64_MAX) {
@@ -382,7 +385,7 @@ voice_feedback(struct snag_voice *s, const char *call, const char *result, bool 
     char result_id[48];
     snprintf(result_id, sizeof(result_id), "sj_result_%llu",
         (unsigned long long)++s->result_number);
-    json_t *item = final ? json_pack("{s:s,s:s,s:s,s:s}", "id", result_id,
+    json_t *item = final && call ? json_pack("{s:s,s:s,s:s,s:s}", "id", result_id,
         "type", "function_call_output", "call_id", call, "output", result) :
         json_pack("{s:s,s:s,s:s,s:[{s:s,s:s}]}", "id", result_id,
             "type", "message", "role", "user", "content", "type", "input_text", "text", result);
@@ -391,7 +394,7 @@ voice_feedback(struct snag_voice *s, const char *call, const char *result, bool 
         history_add(s, result_id) < 0) {
         return fail(s, error, size, "Cannot deliver realtime coding result");
     }
-    if (final) call_finish(s, pending);
+    if (final && pending) call_finish(s, pending);
     s->result_ready = true;
     return 0;
 }
@@ -400,14 +403,20 @@ int
 snag_voice_result(struct snag_voice *s, const char *call, const char *text,
                   char *error, size_t size)
 {
-    return voice_feedback(s, call, text, true, error, size);
+    return voice_feedback(s, call ? call : "", text, true, error, size);
 }
 
 int
 snag_voice_progress(struct snag_voice *s, const char *call, const char *text,
                     char *error, size_t size)
 {
-    return voice_feedback(s, call, text, false, error, size);
+    return voice_feedback(s, call ? call : "", text, false, error, size);
+}
+
+int
+snag_voice_output(struct snag_voice *s, const char *text, char *error, size_t size)
+{
+    return voice_feedback(s, NULL, text, false, error, size);
 }
 static int native_event(struct snag_voice *s,const json_t *event,const char *type,
     char *error,size_t size)
