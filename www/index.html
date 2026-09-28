@@ -13,6 +13,10 @@
   <header>
     <h1>snajpagent</h1>
     <p class="intro">A terminal harness for autonomous, long-horizon work and distributed agent teams.</p>
+    <p>Model-owned notes in your repositories carry findings, decisions and
+      unfinished work between sessions. Sessions start in your home directory
+      and discover its <code>AGENTS.md</code> instructions, where you can point
+      the model to that shared memory.</p>
     <nav aria-label="Project">
       <a href="downloads.html">Downloads</a> ·
       <a href="https://github.com/snajpa/snajpagent#readme">README</a> ·
@@ -100,6 +104,8 @@
         starts a voice conversation; <code>/voice mute</code> pauses the microphone
         and <code>/voice off</code> stops voice. Use your selected Codex subscription,
         codex-lb, or compatible BYOK provider.
+        Continue speaking and submit another request while coding work runs;
+        accepted requests use the same session queue and receive their own results.
         A codex-lb gateway must use its <code>/backend-api/codex</code> base for voice;
         a bare <code>/v1</code> base does not select native voice.
         Voice follows the configured HTTP/HTTPS route; use HTTPS or a secure tunnel

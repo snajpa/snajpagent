@@ -11,17 +11,17 @@ Starting, completing, failing or interrupting coding work leaves voice enabled.
 The requested mode stays enabled until the user turns it off. Muting affects
 microphone forwarding independently of coding and playback.
 
-This design extends the current implementation. The current native protocol has
-one pending-delegation slot and treats a second delegation as a connection-fatal
-error. The application also has one call/queue/turn correlation slot. Both must
-change; removing an error message alone would lose or misattribute instructions.
+Current source tracks concurrent protocol and application handoffs, with final
+transcript gating, matching results and nonfatal native capacity refusal. The
+remaining sections specify the broader session interface, live progress and
+connection recovery; these are not yet all implemented.
 
 ## Ownership and lifetime
 
 Keep the existing audio/connection owner and the existing coding/session owner.
 The voice owner continues capture, playback, speech interruption and transcript
-processing while coding is idle, queued, running or awaiting a tool. It never
-executes coding tools or writes the session journal independently.
+processing while coding is idle, queued, running or awaiting a tool. The session
+owner admits its tool requests and remains the sole journal and execution owner.
 
 Track requested voice mode separately from connection/device readiness. Report
 listening, muted, reconnecting and suspended states accurately. A recoverable
@@ -34,6 +34,27 @@ Terminal detach, loss, switching away and job suspension retain the existing
 privacy boundary: stop microphone forwarding and playback immediately. A newly
 attached terminal requires explicit reactivation; attachment alone never opens
 its microphone. Accepted coding work and finalized transcripts survive.
+
+## Shared context and tool boundary
+
+Voice uses the current session's environment, working directory and effective
+instructions automatically. It requires no additional memory configuration and
+creates no separate documentation tree, memory file or index. Its conversation
+and request bookkeeping belong inside the session; existing project files stay
+the common source of long-term context.
+
+Offer general read-only file tools and the session's actual inspection and
+control capabilities. File and documentation changes are requests to the main
+agent, delivered through the ordinary steering or queue path. Voice has no direct
+file-writing or command-execution capability. Capability availability and host
+validation enforce these boundaries, rather than relying on a prompt alone.
+
+The model chooses which files to consult and how to use the available controls.
+Tool descriptions explain their real operations and outcomes. Do not encode a
+particular documentation path, language, phrase vocabulary or conversation
+script. The presence of readable files, effective instructions and useful tools
+should make the workflow discoverable without a special documentation prompt.
+An environment with no project notes still supports conversation and controls.
 
 ## Spoken input and task control
 

@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Keep voice conversation active across concurrent coding handoffs, with
+  per-request transcript and result correlation. Preserve pending work during
+  native capacity refusal and delay results safely for a slow voice consumer.
+
 - Authenticate legacy NetBSD session attachments with kernel credentials before
   accepting protocol input or sending the destination a terminal profile. Reuse
   the legacy BSD terminal lookup when reopening an independent session frontend.

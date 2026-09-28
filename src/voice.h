@@ -4,6 +4,10 @@
 #include "base.h"
 #include "snag_jansson.h"
 
+/* Live handoff staging shares the eight-input ASR bound. Durable queued work
+ * belongs to the session, not this connection-local correlation window. */
+#define SNAG_VOICE_HANDOFFS 8u
+
 /* Realtime protocol state has one owner and no device, journal, UI or executor.
  * Hooks borrow their inputs. The desktop owner queues notices to the existing
  * session owner; only that owner may accept a coding handoff durably. */

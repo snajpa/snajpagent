@@ -12,10 +12,16 @@
 #include <stdio.h>
 #include <time.h>
 
-/* One live socket/device owner; the coding/session owner exchanges only
- * bounded notices and one terminal coding result. No second executor. */
+/* One live socket/device owner; the coding/session owner exchanges bounded
+ * notices and serialized, correlated coding results. No second executor. */
 #define VOICE_MESSAGE (2u*1024u*1024u)
 #define VOICE_NOTICES 16u
+struct voice_handoff {
+    char call[SNAG_MAX_PROVIDER_ID + 1u];
+    char queue[33];
+    char turn[33];
+    bool result_needed;
+};
 struct app_voice {
     pthread_t thread;
     pthread_mutex_t mutex;
@@ -43,8 +49,8 @@ struct app_voice {
     char caption[2][384],caption_item[2][SNAG_MAX_PROVIDER_ID+1u];
     bool caption_dirty[2]; /* One coalesced preview per speaker, under mutex. */
     /* Session-owner-only handoff/result correlation. */
-    char call[SNAG_MAX_PROVIDER_ID+1u],queue[33],turn[33];
-    bool result_needed,context_dirty;
+    struct voice_handoff handoffs[SNAG_VOICE_HANDOFFS];
+    bool context_dirty;
 };
 
 static bool voice_attachment_lost(const struct app_voice *v)
@@ -141,6 +147,17 @@ int snag_app_voice_fixture(struct app_state *app,const json_t *notices,bool done
     for(size_t i=0;i<json_array_size(notices);++i)
         if(owner_notice(v,json_array_get(notices,i))<0)return -1;
     return 0;
+}
+json_t *
+snag_app_voice_fixture_result(struct app_state *app)
+{
+    struct app_voice *v = app->voice;
+    if (!v) return NULL;
+    pthread_mutex_lock(&v->mutex);
+    json_t *result = v->result;
+    v->result = NULL;
+    pthread_mutex_unlock(&v->mutex);
+    return result;
 }
 #endif
 
@@ -459,37 +476,57 @@ void snag_app_voice_close(struct app_state *app)
 
 /* This runs only after the existing session owner has durably committed the
  * corresponding queue/turn event. The voice thread never touches app/session. */
-void snag_app_voice_event(struct app_state *app,const char *type,const json_t *data)
+void
+snag_app_voice_event(struct app_state *app, const char *type, const json_t *data)
 {
-    struct app_voice *v=app->voice;if(!v)return;
-    if(!strcmp(type,"turn_started") || !strcmp(type,"future_turn_cancelled") ||
-        !strcmp(type,"future_turn_queued") || !strcmp(type,"turn_completed") ||
-        !strcmp(type,"turn_completed_silent") || !strcmp(type,"turn_failed") || !strcmp(type,"turn_interrupted"))v->context_dirty=true;
-    if(!v->queue[0] || v->result_needed)return;
-    if(!strcmp(type,"turn_started")) {
-        const char *queue=snag_json_string(data,"queue_id"),*turn=snag_json_string(data,"turn_id");
-        if(queue && !strcmp(queue,v->queue) && turn)snag_strcpy(v->turn,sizeof(v->turn),turn);
-    } else if(!strcmp(type,"future_turn_cancelled")) {
-        json_t *ids=json_object_get(data,"queue_ids");
-        for(size_t i=0;i<json_array_size(ids);++i) {
-            const char *id=json_string_value(json_array_get(ids,i));
-            if(id && !strcmp(id,v->queue))v->result_needed=true;
+    struct app_voice *v = app->voice;
+    if (!v) return;
+    if (!strcmp(type, "turn_started") || !strcmp(type, "future_turn_cancelled") ||
+        !strcmp(type, "future_turn_queued") || !strcmp(type, "turn_completed") ||
+        !strcmp(type, "turn_completed_silent") || !strcmp(type, "turn_failed") ||
+        !strcmp(type, "turn_interrupted")) {
+        v->context_dirty = true;
+    }
+    for (size_t at = 0; at < SNAG_VOICE_HANDOFFS; ++at) {
+        struct voice_handoff *handoff = &v->handoffs[at];
+        if (!handoff->queue[0] || handoff->result_needed) continue;
+        if (!strcmp(type, "turn_started")) {
+            const char *queue = snag_json_string(data, "queue_id");
+            const char *turn = snag_json_string(data, "turn_id");
+            if (queue && !strcmp(queue, handoff->queue) && turn) {
+                snag_strcpy(handoff->turn, sizeof(handoff->turn), turn);
+            }
+        } else if (!strcmp(type, "future_turn_cancelled")) {
+            json_t *ids = json_object_get(data, "queue_ids");
+            for (size_t i = 0; i < json_array_size(ids); ++i) {
+                const char *id = json_string_value(json_array_get(ids, i));
+                if (id && !strcmp(id, handoff->queue)) handoff->result_needed = true;
+            }
+        } else {
+            const char *turn = snag_json_string(data, "turn_id");
+            if (!turn || !handoff->turn[0] || strcmp(turn, handoff->turn)) continue;
+            if (!strcmp(type, "turn_completed") || !strcmp(type, "turn_completed_silent") ||
+                !strcmp(type, "turn_failed") || !strcmp(type, "turn_interrupted")) {
+                handoff->result_needed = true;
+            }
         }
-    } else {
-        const char *turn=snag_json_string(data,"turn_id");
-        if(!turn || !v->turn[0] || strcmp(turn,v->turn))return;
-        if(!strcmp(type,"turn_completed") || !strcmp(type,"turn_completed_silent") ||
-            !strcmp(type,"turn_failed") || !strcmp(type,"turn_interrupted"))v->result_needed=true;
     }
 }
 
-static int deliver_result(struct app_voice *v,const char *text)
+static int
+deliver_result(struct app_voice *v, const char *call, const char *text)
 {
-    json_t *result=json_pack("{s:s,s:s}","call_id",v->call,"text",text);
-    if(!result)return -1;
+    json_t *result = json_pack("{s:s,s:s}", "call_id", call, "text", text);
+    if (!result) return -1;
     pthread_mutex_lock(&v->mutex);
-    if(v->result) {pthread_mutex_unlock(&v->mutex);json_decref(result);return -1;}
-    v->result=result;pthread_mutex_unlock(&v->mutex);return 0;
+    if (v->result) {
+        pthread_mutex_unlock(&v->mutex);
+        json_decref(result);
+        return -1;
+    }
+    v->result = result;
+    pthread_mutex_unlock(&v->mutex);
+    return 0;
 }
 int snag_app_voice_service(struct app_state *app)
 {
@@ -529,7 +566,17 @@ int snag_app_voice_service(struct app_state *app)
             if (atomic_load(&v->stop) || atomic_load(&v->done) || voice_attachment_lost(v)) {
                 json_decref(event);continue;
             }
-            if(v->call[0]) {json_decref(event);goto failed;}
+            struct voice_handoff *handoff = NULL;
+            for (size_t i = 0; i < SNAG_VOICE_HANDOFFS; ++i) {
+                if (!v->handoffs[i].call[0]) {
+                    handoff = &v->handoffs[i];
+                    break;
+                }
+            }
+            if (!handoff) {
+                json_decref(event);
+                goto failed;
+            }
             json_t *source=json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s}","connection_id",v->connection,
                 "input_id",snag_json_string(event,"input_id"),"response_id",snag_json_string(event,"response_id"),
                 "call_id",snag_json_string(event,"call_id"),"provider",v->config.provider,"model",v->config.realtime_model,
@@ -544,17 +591,24 @@ int snag_app_voice_service(struct app_state *app)
                 json_decref(text);
             }
             bool duplicate=false;
-            if(!source || snag_session_voice_queue(&app->session,source,v->queue,&duplicate,error,sizeof(error))<0) {
+            if (!source || snag_session_voice_queue(&app->session, source, handoff->queue,
+                    &duplicate, error, sizeof(error)) < 0) {
                 json_decref(source);json_decref(event);goto failed;
             }
-            json_decref(source);snag_strcpy(v->call,sizeof(v->call),snag_json_string(event,"call_id"));
+            json_decref(source);
+            snag_strcpy(handoff->call, sizeof(handoff->call), snag_json_string(event, "call_id"));
             v->context_dirty=true;
             if(duplicate) {
                 json_t *result=NULL;
-                if(snag_session_voice_status(&app->session,v->queue,&result,error,sizeof(error))<0) {json_decref(event);goto failed;}
+                if (snag_session_voice_status(&app->session, handoff->queue, &result,
+                        error, sizeof(error)) < 0) {
+                    json_decref(event);
+                    goto failed;
+                }
                 const char *status=snag_json_string(result,"status");
-                snag_strcpy(v->turn,sizeof(v->turn),snag_json_string(result,"turn_id"));
-                v->result_needed=strcmp(status,"queued") && strcmp(status,"running");
+                snag_strcpy(handoff->turn, sizeof(handoff->turn),
+                    snag_json_string(result, "turn_id"));
+                handoff->result_needed = strcmp(status, "queued") && strcmp(status, "running");
                 if(!strcmp(status,"queued") && snag_app_queue_arm(app,true)<0) {json_decref(result);json_decref(event);goto failed;}
                 int rc=snag_ui_text(&app->ui,SNAG_UI_HOST,snag_json_string(result,"text"));
                 json_decref(result);if(rc<0) {json_decref(event);goto failed;}
@@ -601,15 +655,29 @@ int snag_app_voice_service(struct app_state *app)
             json_decref(safe);if(rc<0)goto failed;
         }
     }
-    if(v->result_needed) {
-        json_t *result=NULL;
-        if(snag_session_voice_status(&app->session,v->queue,&result,error,sizeof(error))<0)goto failed;
-        const char *text=snag_json_string(result,"text");
-        int rc=voice_record(app,v,json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}","type","voice_result","call_id",v->call,
-            "queue_id",v->queue,"turn_id",snag_json_string(result,"turn_id"),"status",snag_json_string(result,"status"),"text",text));
-        if(!rc && !atomic_load(&v->done) && !atomic_load(&v->stop))rc=deliver_result(v,text);
-        json_decref(result);if(rc<0)goto failed;
-        v->result_needed=false;v->call[0]=v->queue[0]=v->turn[0]=0;
+    for (size_t i = 0; i < SNAG_VOICE_HANDOFFS; ++i) {
+        struct voice_handoff *handoff = &v->handoffs[i];
+        if (!handoff->result_needed) continue;
+        /* Only this session owner produces results. A slow voice consumer
+         * delays the next result without losing correlation or stopping voice. */
+        pthread_mutex_lock(&v->mutex);
+        bool occupied = v->result != NULL;
+        pthread_mutex_unlock(&v->mutex);
+        if (occupied && !atomic_load(&v->done) && !atomic_load(&v->stop)) break;
+        json_t *result = NULL;
+        if (snag_session_voice_status(&app->session, handoff->queue, &result,
+                error, sizeof(error)) < 0) goto failed;
+        const char *text = snag_json_string(result, "text");
+        int rc = voice_record(app, v, json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
+            "type", "voice_result", "call_id", handoff->call, "queue_id", handoff->queue,
+            "turn_id", snag_json_string(result, "turn_id"),
+            "status", snag_json_string(result, "status"), "text", text));
+        if (!rc && !atomic_load(&v->done) && !atomic_load(&v->stop)) {
+            rc = deliver_result(v, handoff->call, text);
+        }
+        json_decref(result);
+        if (rc < 0) goto failed;
+        memset(handoff, 0, sizeof(*handoff));
     }
     if(atomic_load_explicit(&v->done,memory_order_acquire)) {
         snprintf(error,sizeof(error),"%s",v->error[0]?v->error:"Voice stopped.");

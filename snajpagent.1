@@ -1768,6 +1768,12 @@ Native voice resolves credentials at startup and uses the same credential for
 call setup and attachment. A configured gateway key needs no separate login.
 Native audio playback runs independently of caption timing; interrupting a reply
 clears queued speech while keeping the connection ready for the next reply.
+Conversation continues while accepted coding requests are queued or running.
+Distinct later requests can enter the same coding queue; each result keeps its
+original request identity. The live connection tracks up to eight outstanding
+handoffs. At capacity, native voice reports that a new handoff was not submitted;
+public Realtime temporarily withholds the coding tool. Conversation and accepted
+work continue. A slow result consumer delays delivery without stopping voice.
 [audio] settings are optional overrides.
 The prompt identifies microphone capture, which starts after connection setup.
 Microphone audio goes to the provider's media servers and replies

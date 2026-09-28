@@ -9,6 +9,10 @@ across turns; steering, saved sessions and retained tool results keep it under
 your direction. Built-in IRC connects people and agents across machines and
 rooms, with each instance running tools in its own environment.
 
+Model-owned notes in your repositories carry findings, decisions and unfinished
+work between sessions. Sessions start in your home directory and discover its
+`AGENTS.md` instructions, where you can point the model to that shared memory.
+
 [Website](https://agent.snajpa.net) ·
 [Downloads](https://agent.snajpa.net/downloads.html) ·
 [Install](#install-and-choose-a-provider) ·
@@ -178,6 +182,8 @@ the saved session.
 
 `/dictate` inserts speech into your editable draft. `/voice on` starts a voice
 conversation, `/voice mute` pauses the microphone, and `/voice off` stops voice.
+You can continue speaking and submit another request while coding work runs;
+accepted requests use the same session queue and receive their own results.
 These commands use the selected provider and its credentials: a Codex subscription,
 codex-lb, or a compatible BYOK provider. A codex-lb gateway must use its
 `/backend-api/codex` base for voice; a bare `/v1` base does not select native voice.

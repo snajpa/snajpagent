@@ -1794,6 +1794,72 @@ static void test_voice_close(void)
     snag_ui_free(&app.ui);snag_store_close(&app.store);snag_config_free(&config);
 }
 
+static void
+test_voice_concurrent_owner(void)
+{
+    char path[4096], error[256], queues[2][33];
+    const char *tmp = getenv("TMPDIR");
+    struct app_state app = {0};
+    struct snag_config config;
+
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-voice-calls-XXXXXX",
+        tmp ? tmp : "/tmp") > 0 && mkdtemp(path));
+    snag_config_init(&config);
+    app.config = &config;
+    snag_store_init(&app.store);
+    snag_session_init(&app.session);
+    assert(snag_ui_init(&app.ui) == 0);
+    assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
+    assert(snag_session_create(&app.store, &app.session, path, "default",
+        "fixture", "medium", error, sizeof(error)) == 0);
+    json_t *events = json_array();
+    for (unsigned int i = 0; i < 2u; ++i) {
+        const char *id = i ? "second" : "first";
+        assert(json_array_append_new(events,
+            json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}", "type", "voice_handoff",
+                "input_id", id, "response_id", id, "call_id", id,
+                "transcript", id, "request", id)) == 0);
+    }
+    assert(snag_app_voice_fixture(&app, events, false) == 0);
+    json_decref(events);
+    assert(snag_app_voice_service(&app) == 0 && app.voice);
+    assert(app.session.pending_queue_count == 2u && app.session.queue_armed);
+    for (size_t i = 0; i < 2u; ++i) {
+        strcpy(queues[i], app.session.pending_queue[i].queue_id);
+    }
+
+    /* Both results can become ready before the audio owner consumes either. */
+    for (size_t i = 2u; i-- > 0u;) {
+        json_t *cancel = json_pack("{s:[s],s:s}", "queue_ids", queues[i],
+            "reason", "user");
+        assert(snag_session_commit(&app.session, "future_turn_cancelled",
+            json_incref(cancel), NULL, error, sizeof(error)) == 0);
+        snag_app_voice_event(&app, "future_turn_cancelled", cancel);
+        json_decref(cancel);
+    }
+    assert(snag_app_voice_service(&app) == 0 && app.voice);
+    uint64_t seq = app.session.next_seq;
+    assert(snag_app_voice_service(&app) == 0 && app.voice);
+    assert(app.session.next_seq == seq);
+    json_t *result = snag_app_voice_fixture_result(&app);
+    assert(result && !strcmp(snag_json_string(result, "call_id"), "first"));
+    assert(strstr(snag_json_string(result, "text"), "cancelled"));
+    json_decref(result);
+    assert(snag_app_voice_service(&app) == 0 && app.voice);
+    result = snag_app_voice_fixture_result(&app);
+    assert(result && !strcmp(snag_json_string(result, "call_id"), "second"));
+    assert(strstr(snag_json_string(result, "text"), "cancelled"));
+    json_decref(result);
+    seq = app.session.next_seq;
+    assert(snag_app_voice_service(&app) == 0 && app.voice);
+    assert(!snag_app_voice_fixture_result(&app) && app.session.next_seq == seq);
+    snag_app_voice_close(&app);
+    snag_session_close(&app.session);
+    snag_store_close(&app.store);
+    snag_ui_free(&app.ui);
+    snag_config_free(&config);
+}
+
 static void test_voice_owner_mute(void)
 {
     struct app_state app={0};
@@ -3510,6 +3576,22 @@ static void test_native_voice_protocol(void)
         voice_notice_count(&f,"voice_transcript")==1u);
     assert(voice_deliver(v,json_incref(delegation))==0 &&
         voice_notice_count(&f,"voice_handoff")==1u);
+    /* Coding can remain pending while a later spoken instruction arrives. */
+    assert(voice_deliver(v,json_pack("{s:s,s:{s:s,s:s,s:s}}","type","turn.done","turn",
+        "id","native-followup","role","user","transcript","also check the tests"))==0);
+    assert(voice_deliver(v,json_pack("{s:s,s:{s:s,s:s,s:s,s:[{s:s,s:s}]}}",
+        "type","delegation.created","item","id","native-call-2","target","client",
+        "user_bidi_turn_id","native-followup","content","type","input_text",
+        "text","check the tests"))==0);
+    assert(voice_notice_count(&f,"voice_handoff")==2u && snag_voice_ready(v));
+    assert(snag_voice_result(v,"native-call-2","tests checked",error,sizeof(error))==0);
+    assert(!strcmp(snag_json_string(voice_last(f.sent),"delegation_item_id"),"native-call-2"));
+    assert(voice_deliver(v,json_incref(delegation))==0 &&
+        voice_notice_count(&f,"voice_handoff")==2u);
+    assert(snag_voice_result(v,"native-call","inspection complete",error,sizeof(error))==0);
+    assert(!strcmp(snag_json_string(voice_last(f.sent),"delegation_item_id"),"native-call"));
+    assert(voice_deliver(v,json_incref(delegation))==0 &&
+        voice_notice_count(&f,"voice_handoff")==2u && snag_voice_ready(v));
     assert(snag_voice_result(v,"wrong-call","result",error,sizeof(error))<0);
     voice_end(v,&f);json_decref(delegation);
 
@@ -3530,6 +3612,73 @@ static void test_native_voice_protocol(void)
     size_t sent=json_array_size(f.sent);
     assert(snag_voice_respond(v,true,error,sizeof(error))==0 && json_array_size(f.sent)==sent);
     voice_end(v,&f);
+}
+
+static json_t *
+native_delegation(const char *call, const char *input)
+{
+    return json_pack("{s:s,s:{s:s,s:s,s:s,s:[{s:s,s:s}]}}",
+        "type", "delegation.created", "item", "id", call, "target", "client",
+        "user_bidi_turn_id", input, "content", "type", "input_text", "text", input);
+}
+
+static void
+test_native_voice_concurrency(void)
+{
+    for (unsigned int delayed = 0; delayed < 2u; ++delayed) {
+        struct voice_fixture f = {.sent = json_array(), .notices = json_array()};
+        struct snag_voice_io io = {voice_send, voice_notice, voice_play, voice_interrupt};
+        struct snag_voice *v = snag_voice_new(&io, &f, "voice", "transcribe", "cove");
+        char error[256], ids[SNAG_VOICE_HANDOFFS + 2u][32];
+
+        assert(v);
+        json_decref(snag_voice_native_session(v));
+        assert(snag_voice_begin(v, error, sizeof(error)) == 0);
+        for (size_t i = 0; i < SNAG_VOICE_HANDOFFS + 2u; ++i) {
+            assert(snprintf(ids[i], sizeof(ids[i]), "native-%zu", i) > 0);
+        }
+        for (size_t i = 0; i < SNAG_VOICE_HANDOFFS; ++i) {
+            if (!delayed) {
+                assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s,s:s}}",
+                    "type", "turn.done", "turn", "id", ids[i], "role", "user",
+                    "transcript", ids[i])) == 0);
+            }
+            assert(voice_deliver(v, native_delegation(ids[i], ids[i])) == 0);
+        }
+        if (delayed) {
+            assert(voice_notice_count(&f, "voice_handoff") == 0u);
+            for (size_t i = SNAG_VOICE_HANDOFFS; i-- > 0u;) {
+                assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s,s:s}}",
+                    "type", "turn.done", "turn", "id", ids[i], "role", "user",
+                    "transcript", ids[i])) == 0);
+                json_t *handoff = voice_last(f.notices);
+                assert(!strcmp(snag_json_string(handoff, "call_id"), ids[i]));
+                assert(!strcmp(snag_json_string(handoff, "transcript"), ids[i]));
+            }
+        }
+        assert(voice_notice_count(&f, "voice_handoff") == SNAG_VOICE_HANDOFFS);
+        /* A full coding map must not stop conversation or reassign old work. */
+        const char *refused = ids[SNAG_VOICE_HANDOFFS];
+        assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s,s:s}}",
+            "type", "turn.done", "turn", "id", refused, "role", "user",
+            "transcript", refused)) == 0);
+        assert(voice_deliver(v, native_delegation(refused, refused)) == 0);
+        assert(snag_voice_ready(v));
+        assert(!strcmp(snag_json_string(voice_last(f.notices), "status"), "refused"));
+        assert(!strcmp(snag_json_string(voice_last(f.sent), "delegation_item_id"), refused));
+        assert(snag_voice_result(v, ids[0], "first result", error, sizeof(error)) == 0);
+        assert(voice_deliver(v, native_delegation(refused, refused)) == 0);
+        assert(voice_notice_count(&f, "voice_handoff") == SNAG_VOICE_HANDOFFS);
+        const char *fresh = ids[SNAG_VOICE_HANDOFFS + 1u];
+        assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s,s:s}}",
+            "type", "turn.done", "turn", "id", fresh, "role", "user",
+            "transcript", fresh)) == 0);
+        assert(voice_deliver(v, native_delegation(fresh, fresh)) == 0);
+        assert(voice_notice_count(&f, "voice_handoff") == SNAG_VOICE_HANDOFFS + 1u);
+        /* A reused ID with different source authority is still an integrity error. */
+        assert(voice_deliver(v, native_delegation(ids[0], fresh)) < 0);
+        voice_end(v, &f);
+    }
 }
 
 static void
@@ -3694,6 +3843,43 @@ static size_t voice_notice_count(const struct voice_fixture *f,const char *type)
         if(!strcmp(snag_json_string(json_array_get(f->notices,i),"type"),type))++count;
     return count;
 }
+static void
+test_voice_concurrent_results(void)
+{
+    struct voice_fixture f;
+    struct snag_voice *voice = voice_start(&f);
+    char error[256];
+
+    voice_commit(voice, "first", "first request");
+    assert(snag_voice_respond(voice, true, error, sizeof(error)) == 0);
+    voice_created(voice, &f, "response-1");
+    assert(voice_deliver(voice, voice_call_response("response-1", "completed")) == 0);
+    voice_commit(voice, "second", "second request");
+    assert(snag_voice_respond(voice, true, error, sizeof(error)) == 0);
+    voice_created(voice, &f, "response-2");
+    json_t *response = voice_call_response("response-2", "completed");
+    json_t *item = json_array_get(json_object_get(json_object_get(response, "response"),
+        "output"), 0u);
+    assert(json_object_set_new(item, "call_id", json_string("call-2")) == 0);
+    assert(voice_deliver(voice, response) == 0);
+    assert(voice_notice_count(&f, "voice_handoff") == 2u);
+    assert(snag_voice_result(voice, "call-2", "second result", error, sizeof(error)) == 0);
+    item = json_object_get(voice_last(f.sent), "item");
+    assert(!strcmp(snag_json_string(item, "call_id"), "call-2"));
+    const char *second_id = snag_json_string(item, "id");
+    assert(second_id);
+    assert(snag_voice_result(voice, "call-1", "first result", error, sizeof(error)) == 0);
+    item = json_object_get(voice_last(f.sent), "item");
+    assert(!strcmp(snag_json_string(item, "call_id"), "call-1"));
+    assert(strcmp(snag_json_string(item, "id"), second_id));
+    assert(snag_voice_respond(voice, true, error, sizeof(error)) == 0);
+    response = json_object_get(voice_last(f.sent), "response");
+    assert(!strcmp(snag_json_string(response, "tool_choice"), "none"));
+    assert(!strcmp(snag_json_string(json_object_get(response, "metadata"),
+        "voice_input_item"), ""));
+    voice_end(voice, &f);
+}
+
 static void test_voice_protocol(void)
 {
     struct voice_fixture f;char error[256];struct snag_voice *voice=voice_start(&f);
@@ -3725,7 +3911,7 @@ static void test_voice_protocol(void)
     assert(voice_deliver(voice,voice_call_response("response-1","completed"))==0 && voice_notice_count(&f,"voice_handoff")==1u);
     assert(snag_voice_respond(voice,true,error,sizeof(error))==0);
     request=json_object_get(voice_last(f.sent),"response");
-    assert(!strcmp(snag_json_string(request,"tool_choice"),"none"));
+    assert(!strcmp(snag_json_string(request,"tool_choice"),"auto"));
     assert(!strcmp(snag_json_string(json_object_get(request,"metadata"),"voice_input_item"),"input-2"));
     voice_created(voice,&f,"response-2");
     assert(snag_voice_result(voice,"call-1","coding still has one owner",error,sizeof(error))==0);
@@ -4221,6 +4407,7 @@ main(void)
     (void)signal(SIGTERM, fixture_stop);
     test_audio_provider_selection();
     test_native_voice_protocol();
+    test_native_voice_concurrency();
     test_native_voice_playback();
     test_native_voice_credential_snapshot();
     test_native_voice_transport();
@@ -4235,6 +4422,7 @@ main(void)
     test_static_alsa_config();
 #endif
     test_voice_protocol();
+    test_voice_concurrent_results();
     test_voice_async_asr();
     test_voice_captions();
     test_voice_context();
@@ -4243,6 +4431,7 @@ main(void)
     assert(snag_audio_fixture_capture()==0);
 #endif
     test_voice_close();
+    test_voice_concurrent_owner();
     test_voice_owner_mute();
     test_voice_socket();
     test_audio_transport();
