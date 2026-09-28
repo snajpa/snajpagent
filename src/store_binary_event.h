@@ -41,7 +41,8 @@ enum snag_binary_kind {
     SNAG_BINARY_FUTURE_QUEUE_STATE = 102,
     SNAG_BINARY_FUTURE_TURN_CANCELLED = 103,
     SNAG_BINARY_FUTURE_TURN_QUEUED = 104,
-    SNAG_BINARY_FUTURE_TURN_EDITED = 105
+    SNAG_BINARY_FUTURE_TURN_EDITED = 105,
+    SNAG_BINARY_TURN_STARTED = 128
 };
 
 enum snag_binary_actor { SNAG_BINARY_USER = 1, SNAG_BINARY_MODEL = 2 };
@@ -153,6 +154,69 @@ struct snag_binary_context_choice {
     uint64_t tokens;
 };
 
+enum snag_binary_turn_origin {
+    SNAG_BINARY_TURN_DIRECT = 0,
+    SNAG_BINARY_TURN_QUEUED = 1,
+    SNAG_BINARY_TURN_GOAL = 2,
+    SNAG_BINARY_TURN_TIMER = 3
+};
+
+/* Fixed schema positions, not arbitrary configuration keys. Each numeric
+ * field's presence is bit (1u << field); preserve absence for legacy defaults. */
+enum snag_binary_turn_config_number {
+    SNAG_BINARY_TURN_PROMPT_SCHEMA = 0,
+    SNAG_BINARY_TURN_REPLAY_SCHEMA = 1,
+    SNAG_BINARY_TURN_TOOL_SCHEMA = 2,
+    SNAG_BINARY_TURN_MAX_PARALLEL = 3,
+    SNAG_BINARY_TURN_DEFAULT_YIELD = 4,
+    SNAG_BINARY_TURN_MAX_WAIT = 5,
+    SNAG_BINARY_TURN_DEFAULT_TIMEOUT = 6,
+    SNAG_BINARY_TURN_MAX_TIMEOUT = 7,
+    SNAG_BINARY_TURN_TOOL_OUTPUT = 8,
+    SNAG_BINARY_TURN_OUTPUT_CACHE = 9,
+    SNAG_BINARY_TURN_MAX_RETRIES = 10,
+    SNAG_BINARY_TURN_NUMBER_COUNT = 11
+};
+
+enum snag_binary_turn_config_flag {
+    SNAG_BINARY_TURN_CAPABILITY = 1u << 11,
+    SNAG_BINARY_TURN_PROFILE = 1u << 12,
+    SNAG_BINARY_TURN_MAX_OUTPUT = 1u << 13,
+    SNAG_BINARY_TURN_PARALLEL_CALLS = 1u << 14
+};
+
+struct snag_binary_turn_config {
+    struct snag_binary_selection selection;
+    uint16_t present;
+    uint64_t numbers[SNAG_BINARY_TURN_NUMBER_COUNT];
+    struct snag_binary_text capability;
+    struct snag_binary_text profile;
+    uint64_t max_output_tokens;
+    bool max_output_null;
+    bool parallel_calls;
+};
+
+struct snag_binary_turn_start {
+    unsigned char id[16];
+    unsigned char queue_id[16];
+    uint64_t number;
+    uint64_t queue_seq;
+    uint64_t received_ms;
+    enum snag_binary_turn_origin origin;
+    bool has_read_only;
+    bool read_only;
+    bool has_received_ms;
+    bool workspace;
+    struct snag_binary_text cwd;
+    struct snag_binary_text text;
+    struct snag_binary_turn_config config;
+    struct snag_binary_instructions instructions;
+    struct snag_binary_content content;
+    struct snag_binary_input_reference text_ref;
+    struct snag_binary_input_reference content_ref;
+    struct snag_binary_input_reference instructions_ref;
+};
+
 struct snag_binary_event {
     enum snag_binary_kind kind;
     union {
@@ -176,6 +240,7 @@ struct snag_binary_event {
             struct snag_binary_text effort;
         } turn_model;
         struct { struct snag_binary_context_choice before, after; } context;
+        struct snag_binary_turn_start started;
         struct {
             struct snag_binary_selection selection;
             struct snag_binary_text text;
@@ -228,7 +293,8 @@ struct snag_binary_event {
 };
 
 /* Return the current payload version, or zero for an unsupported kind.
- * Input version 2 adds references; other kinds use 1. */
+ * Input version 2 adds references; turn-start version 1 includes them from its
+ * first definition. Other kinds use 1. */
 uint16_t snag_binary_event_version(enum snag_binary_kind kind);
 
 /* Encode the current payload version, flags zero, appending atomically to out.

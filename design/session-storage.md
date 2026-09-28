@@ -257,6 +257,31 @@ boundary may be stored as an opaque payload where its semantics require it;
 that does not make JSON the session envelope or checkpoint encoding. Import
 adapters may decode legacy JSON, while normal new-format paths use typed data.
 
+### Turn-start payload
+
+Kind128 starts the turn family. Its payload version1 uses the checked
+literal/reference fields from input revision2. It contains turn UUID16, turn
+number8, input kind1 (direct0/queued1/goal2/timer3), flags1, optional receipt
+timestamp8, queued UUID16/sequence8 for queued input, cwd text, turn config,
+instruction list, original text and optional content. Flag bits0/1 preserve
+read-only presence/value, bit2 receipt timestamp presence, bit3 content presence
+and bit4 the legacy `workspace` key instead of `cwd`. Unknown bits are invalid.
+
+Config contains provider/model/effort selection and an optional-field mask2.
+Bits0..10 select eight-byte numbers in this order: prompt schema, replay schema,
+tool schema, maximum parallel commands, default yield, maximum wait, default
+timeout, maximum timeout, tool output bytes, output cache bytes and maximum
+turn retries. Bits11/12 select capability-version/profile-ID text. Bit13 selects
+maximum output tokens (tag0 null; tag1 followed by an eight-byte value), and
+bit14 selects the parallel-tool-calls boolean. Missing, zero, false and null
+remain distinct. Legacy defaults and current execution-policy bounds remain
+with the existing reducer; the codec preserves the recorded values.
+
+Turn instructions may contain legacy path/size/hash metadata. They describe the
+actual turn's discovered and explicit files, which can differ from the receipt
+list. References are used only for known identical payloads. Inline turn leaves
+also supply canonical originals for older turns without receipt events.
+
 ## Payload ownership and checkpoint contents
 
 Store each original input, accepted correction, tool argument/result, retained
@@ -277,7 +302,7 @@ payload copies; that follows typed checkpoint integration.
 Input-field reference helpers additionally decode the source event and require
 the exact bounds of the selected field: original text, complete content list,
 instruction list, voice transcript or voice request. They accept receipt,
-steering/reminder and queued/edited input sources where that field exists.
+turn-start, steering/reminder and queued/edited input sources where that field exists.
 Identical bytes in provider metadata, partial strings and nested content text
 do not identify the original-input field. Empty instruction lists retain their
 four-byte encoding; absent fields cannot supply a reference. The caller must
@@ -292,15 +317,16 @@ the matching list role. Existing field-size bounds apply to referenced sizes.
 Each C value supplies either its literal or its reference; conflicting values
 are rejected. Optional content retains its presence bit even when referenced.
 
-The decoder accepts input payload versions 1/2; a version 1 record cannot carry
-reference markers. Other current families remain at version 1. Encoders report
+The decoder accepts input payload versions 1/2; an input-family version 1 record
+cannot carry reference markers. Turn-start version 1 includes references from its
+first definition. Other current families remain at version 1. Encoders report
 their required version through `snag_binary_event_version`. Structural decode
 retains unresolved references, with empty adjacent literal views. Before reducer
 adoption, callers resolve every required reference against the same journal,
 check causal ordering and target-field constraints, and preserve provenance.
 Only inline fields supply canonical leaves: metadata-only edits copy the
-original reference instead of creating reference chains. Runtime integration,
-turn-start encoding and import construction remain pending; codecs are test-only.
+original reference instead of creating reference chains. Runtime integration
+and import construction remain pending; codecs are test-only.
 
 A full checkpoint captures all current semantic state:
 

@@ -947,6 +947,313 @@ test_input_reference_variants(void)
     snag_buf_free(&bytes);
 }
 
+static struct snag_binary_event
+turn_start_event(void)
+{
+    static const unsigned char empty_instructions[4];
+    struct snag_binary_event event = {.kind = SNAG_BINARY_TURN_STARTED};
+    event.data.started.number = 1u;
+    event.data.started.cwd = text("/w");
+    event.data.started.text = text("x");
+    event.data.started.instructions = (struct snag_binary_instructions){empty_instructions, 4u};
+    event.data.started.config.selection = (struct snag_binary_selection){
+        text("p"), text("m"), text("e")
+    };
+    return event;
+}
+
+static void
+test_turn_starts(void)
+{
+    struct snag_binary_event event = turn_start_event();
+    event.data.started.workspace = true;
+    struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
+    assert(!snag_binary_event_encode(&payload, &event));
+    static const unsigned char golden[] =
+        "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+        "\x01\0\0\0\0\0\0\0\0\x10"
+        "\x02\0\0\0/w\x01\0\0\0p\x01\0\0\0m\x01\0\0\0e"
+        "\0\0\0\0\0\0\x01\0\0\0x";
+    assert(payload.len == sizeof(golden) - 1u && !memcmp(payload.data, golden, payload.len));
+    assert(snag_binary_event_version(event.kind) == 1u);
+    roundtrip(&event);
+    struct snag_binary_record record = {
+        .kind = event.kind, .version = 1u, .payload = payload.data, .size = payload.len
+    };
+    struct snag_binary_event decoded;
+    assert(!snag_binary_event_decode(&record, &decoded));
+    assert(decoded.data.started.workspace && !decoded.data.started.has_read_only);
+    assert(!decoded.data.started.config.present && !decoded.data.started.has_received_ms);
+    payload.data[24] = 4u;
+    assert_rejected(record);
+    payload.data[24] = 0u;
+    payload.data[25] = 32u;
+    assert_rejected(record);
+    payload.data[25] = 2u;
+    /* A value without its presence bit is invalid. */
+    assert_rejected(record);
+    payload.data[25] = 16u;
+    payload.data[16] = 0u;
+    assert_rejected(record);
+
+    struct snag_binary_turn_config *config = &event.data.started.config;
+    config->present = 0x7fffu;
+    for (size_t i = 0; i < SNAG_BINARY_TURN_NUMBER_COUNT; ++i) {
+        config->numbers[i] = UINT64_C(0x0807060504030201) + i;
+    }
+    config->capability = text("1");
+    config->profile = text("fixture");
+    config->max_output_tokens = 16000u;
+    config->parallel_calls = true;
+    snag_buf_reset(&payload);
+    assert(!snag_binary_event_encode(&payload, &event));
+    record.payload = payload.data;
+    record.size = payload.len;
+    assert(!snag_binary_event_decode(&record, &decoded));
+    assert(decoded.data.started.config.present == 0x7fffu);
+    for (size_t i = 0; i < SNAG_BINARY_TURN_NUMBER_COUNT; ++i) {
+        assert(decoded.data.started.config.numbers[i] == config->numbers[i]);
+        for (size_t j = 0; j < 8u; ++j) {
+            assert(payload.data[49u + 8u * i + j] == (j ? j + 1u : i + 1u));
+        }
+    }
+    assert(decoded.data.started.config.max_output_tokens == 16000u);
+    assert(!decoded.data.started.config.max_output_null);
+    assert(decoded.data.started.config.parallel_calls);
+    roundtrip(&event);
+    payload.data[48] |= 0x80u;
+    assert_rejected(record);
+    payload.data[48] &= 0x7fu;
+    size_t tag = 49u + 8u * SNAG_BINARY_TURN_NUMBER_COUNT + 8u +
+        config->capability.size + config->profile.size;
+    payload.data[tag] = 2u;
+    assert_rejected(record);
+    payload.data[tag] = 1u;
+    payload.data[tag + 9u] = 2u;
+    assert_rejected(record);
+
+    for (unsigned int i = 0; i < 15u; ++i) {
+        config->present = (uint16_t)(1u << i);
+        roundtrip(&event);
+    }
+    config->present = SNAG_BINARY_TURN_MAX_OUTPUT;
+    config->max_output_null = true;
+    snag_buf_reset(&payload);
+    assert(!snag_binary_event_encode(&payload, &event));
+    size_t null_size = payload.len;
+    record.payload = payload.data;
+    record.size = payload.len;
+    assert(!snag_binary_event_decode(&record, &decoded));
+    assert(decoded.data.started.config.max_output_null);
+    roundtrip(&event);
+    config->max_output_null = false;
+    config->max_output_tokens = 0u;
+    snag_buf_reset(&payload);
+    assert(!snag_binary_event_encode(&payload, &event));
+    assert(payload.len == null_size + 8u);
+    record.payload = payload.data;
+    record.size = payload.len;
+    assert(!snag_binary_event_decode(&record, &decoded));
+    assert(!decoded.data.started.config.max_output_null);
+    assert(!decoded.data.started.config.max_output_tokens);
+    roundtrip(&event);
+
+    config->present = SNAG_BINARY_TURN_PARALLEL_CALLS;
+    config->parallel_calls = false;
+    for (unsigned int origin = 0; origin <= SNAG_BINARY_TURN_TIMER; ++origin) {
+        event.data.started.origin = (enum snag_binary_turn_origin)origin;
+        event.data.started.queue_seq = 17u;
+        memset(event.data.started.queue_id, 0x5a, 16u);
+        for (unsigned int flags = 0; flags < 16u; ++flags) {
+            if ((flags & 2u) && !(flags & 1u)) continue;
+            event.data.started.has_read_only = (flags & 1u) != 0;
+            event.data.started.read_only = (flags & 2u) != 0;
+            event.data.started.has_received_ms = (flags & 4u) != 0;
+            event.data.started.workspace = (flags & 8u) != 0;
+            event.data.started.received_ms = UINT64_C(0x1234567890);
+            roundtrip(&event);
+        }
+    }
+
+    snag_buf_reset(&payload);
+    assert(!snag_buf_append(&payload, "keep", 4u));
+    for (unsigned int variant = 0; variant < 8u; ++variant) {
+        event = turn_start_event();
+        if (variant == 0u) event.data.started.number = 0;
+        if (variant == 1u) {
+            event.data.started.origin = (enum snag_binary_turn_origin)-1;
+        }
+        if (variant == 2u) event.data.started.read_only = true;
+        if (variant == 3u) event.data.started.config.present = 0x8000u;
+        if (variant == 4u || variant == 5u) {
+            event.data.started.origin = SNAG_BINARY_TURN_QUEUED;
+            event.data.started.queue_seq = variant == 4u ? 0u : UINT64_MAX;
+        }
+        if (variant == 6u) event.data.started.cwd = text("");
+        if (variant == 7u) event.data.started.text = text("");
+        assert(snag_binary_event_encode(&payload, &event) < 0);
+        assert(payload.len == 4u && !memcmp(payload.data, "keep", 4u));
+    }
+    event = turn_start_event();
+    event.data.started.origin = SNAG_BINARY_TURN_QUEUED;
+    event.data.started.queue_seq = 17u;
+    snag_buf_reset(&payload);
+    assert(!snag_binary_event_encode(&payload, &event));
+    record.payload = payload.data;
+    record.size = payload.len;
+    assert(!snag_binary_event_decode(&record, &decoded));
+    assert(decoded.data.started.queue_seq == 17u);
+    memset(payload.data + 42u, 0, 8u);
+    assert_rejected(record);
+    memset(payload.data + 42u, 0xff, 8u);
+    assert_rejected(record);
+    event.data.started.has_received_ms = true;
+    event.data.started.received_ms = 0u;
+    roundtrip(&event);
+    snag_buf_free(&payload);
+}
+
+static void
+test_turn_input_references(void)
+{
+    struct snag_buf instructions = {.max = SNAG_MAX_EVENT_LINE};
+    struct snag_buf parts = {.max = SNAG_MAX_EVENT_LINE};
+    struct snag_buf source = {.max = SNAG_MAX_EVENT_LINE};
+    struct snag_buf payload = {.max = SNAG_MAX_EVENT_LINE};
+    struct snag_buf bytes = {.max = SNAG_BINARY_BATCH_MAX};
+    struct snag_binary_event event = turn_start_event();
+    struct snag_binary_part part = {.kind = SNAG_BINARY_PART_TEXT, .text = text("attachment")};
+    assert(!snag_binary_content_encode(&parts, &part, 1u));
+    struct snag_binary_event receipt = {.kind = SNAG_BINARY_INPUT_RECEIVED};
+    receipt.data.input.selection = event.data.started.config.selection;
+    receipt.data.input.instructions = event.data.started.instructions;
+    receipt.data.input.text = text("original");
+    receipt.data.input.content = (struct snag_binary_content){parts.data, parts.len};
+    assert(!snag_binary_event_encode(&source, &receipt));
+    struct snag_binary_record original = {
+        .kind = receipt.kind, .version = snag_binary_event_version(receipt.kind),
+        .payload = source.data, .size = source.len
+    };
+    struct snag_binary_batch batch;
+    input_reference_batch(&original, &bytes, &batch);
+    event.data.started.text = (struct snag_binary_text){0};
+    event.data.started.text_ref.field = SNAG_BINARY_INPUT_TEXT;
+    event.data.started.content_ref.field = SNAG_BINARY_INPUT_CONTENT;
+    assert(!snag_binary_input_ref_create(&batch, 2u, SNAG_BINARY_INPUT_TEXT,
+        &event.data.started.text_ref.target));
+    assert(!snag_binary_input_ref_create(&batch, 2u, SNAG_BINARY_INPUT_CONTENT,
+        &event.data.started.content_ref.target));
+    /* Discovered turn instructions are not the receipt's empty explicit list. */
+    struct snag_binary_instruction instruction = {.path = text("/w/AGENTS.md")};
+    assert(!snag_binary_instructions_encode(&instructions, &instruction, 1u));
+    event.data.started.instructions = (struct snag_binary_instructions){
+        instructions.data, instructions.len
+    };
+    assert(!snag_binary_event_encode(&payload, &event));
+    roundtrip(&event);
+    struct snag_binary_record records[] = {
+        {.kind = SNAG_BINARY_INPUT_CANCELLED, .version = 1u}, original,
+        {.kind = event.kind, .version = 1u, .payload = payload.data, .size = payload.len}
+    };
+    struct snag_binary_identity identity = {.id = {1}, .created_ms = 1u};
+    unsigned char header[SNAG_BINARY_HEADER_SIZE];
+    snag_binary_header_encode(header, &identity);
+    struct snag_binary_anchor anchor, next;
+    assert(!snag_binary_header_decode(header, sizeof(header), &identity, &anchor));
+    snag_buf_reset(&bytes);
+    assert(!snag_binary_batch_encode(&bytes, &anchor, records, 3u, 1u));
+    assert(!snag_binary_batch_decode(bytes.data, bytes.len, &anchor, &batch, &next));
+    struct snag_binary_event decoded;
+    assert(!snag_binary_event_decode(&records[2], &decoded));
+    const unsigned char *view;
+    assert(!snag_binary_input_ref_resolve(&decoded.data.started.text_ref.target, &batch,
+        decoded.data.started.text_ref.field, &view));
+    assert(!memcmp(view, "original", 8u));
+    assert(!snag_binary_input_ref_resolve(&decoded.data.started.content_ref.target, &batch,
+        decoded.data.started.content_ref.field, &view));
+    assert(!memcmp(view, parts.data, parts.len));
+    assert_input_leaf_missing(&batch, 3u, SNAG_BINARY_INPUT_TEXT);
+    assert_input_leaf_missing(&batch, 3u, SNAG_BINARY_INPUT_CONTENT);
+    struct snag_binary_ref reference;
+    assert(!snag_binary_input_ref_create(&batch, 3u, SNAG_BINARY_INPUT_INSTRUCTIONS, &reference));
+    assert(!snag_binary_input_ref_resolve(&reference, &batch,
+        SNAG_BINARY_INPUT_INSTRUCTIONS, &view));
+    assert(reference.size == instructions.len &&
+        !memcmp(view, instructions.data, instructions.len));
+    unsigned int originals = 0u;
+    unsigned int attachments = 0u;
+    for (size_t i = 0; i < 3u; ++i) {
+        for (size_t j = 0; j + 8u <= records[i].size; ++j) {
+            if (!memcmp(records[i].payload + j, "original", 8u)) ++originals;
+            if (j + 10u <= records[i].size &&
+                !memcmp(records[i].payload + j, "attachment", 10u)) {
+                ++attachments;
+            }
+        }
+    }
+    assert(originals == 1u && attachments == 1u);
+
+    /* A receipt-less legacy turn supplies its own original leaves and snapshot. */
+    event = turn_start_event();
+    event.data.started.workspace = true;
+    event.data.started.text = text("original");
+    event.data.started.content = receipt.data.input.content;
+    instruction.has_snapshot = true;
+    instruction.bytes = 16298u;
+    memset(instruction.sha256, 0xa5, sizeof(instruction.sha256));
+    snag_buf_reset(&instructions);
+    assert(!snag_binary_instructions_encode(&instructions, &instruction, 1u));
+    event.data.started.instructions = (struct snag_binary_instructions){
+        instructions.data, instructions.len
+    };
+    snag_buf_reset(&payload);
+    assert(!snag_binary_event_encode(&payload, &event));
+    roundtrip(&event);
+    original = (struct snag_binary_record){
+        .kind = event.kind, .version = 1u, .payload = payload.data, .size = payload.len
+    };
+    input_reference_batch(&original, &bytes, &batch);
+    struct snag_binary_input_reference references[3];
+    for (unsigned int i = 0; i < 3u; ++i) {
+        references[i].field = (enum snag_binary_input_leaf)(SNAG_BINARY_INPUT_TEXT + i);
+        assert(!snag_binary_input_ref_create(&batch, 2u, references[i].field,
+            &references[i].target));
+        assert(!snag_binary_input_ref_resolve(&references[i].target, &batch,
+            references[i].field, &view));
+    }
+    struct snag_binary_instructions snapshot;
+    assert(!snag_binary_instructions_decode(view, references[2].target.size, &snapshot));
+    struct snag_binary_instruction decoded_instruction;
+    size_t cursor = 0;
+    assert(!snag_binary_instructions_next(&snapshot, &cursor, &decoded_instruction));
+    assert(decoded_instruction.has_snapshot && decoded_instruction.bytes == instruction.bytes);
+    assert(!memcmp(decoded_instruction.sha256, instruction.sha256, sizeof(instruction.sha256)));
+    event.data.started.number = 2u;
+    event.data.started.text = (struct snag_binary_text){0};
+    event.data.started.content = (struct snag_binary_content){0};
+    event.data.started.instructions = (struct snag_binary_instructions){0};
+    event.data.started.text_ref = references[0];
+    event.data.started.content_ref = references[1];
+    event.data.started.instructions_ref = references[2];
+    roundtrip(&event);
+    snag_buf_reset(&payload);
+    assert(!snag_binary_event_encode(&payload, &event));
+    original.payload = payload.data;
+    original.size = payload.len;
+    input_reference_batch(&original, &bytes, &batch);
+    for (unsigned int i = 0; i < 3u; ++i) {
+        assert_input_leaf_missing(&batch, 2u, references[i].field);
+    }
+    size_t saved = payload.len;
+    event.data.started.text = text("ambiguous");
+    assert(snag_binary_event_encode(&payload, &event) < 0 && payload.len == saved);
+    snag_buf_free(&instructions);
+    snag_buf_free(&parts);
+    snag_buf_free(&source);
+    snag_buf_free(&payload);
+    snag_buf_free(&bytes);
+}
+
 void
 test_store_binary_event(void)
 {
@@ -956,6 +1263,8 @@ test_store_binary_event(void)
     test_metadata();
     test_input_references();
     test_input_reference_variants();
+    test_turn_starts();
+    test_turn_input_references();
     static const unsigned char text[] = "goal caf\xc3\xa9";
     struct snag_binary_event event = {.kind = SNAG_BINARY_TIMER_SCHEDULED};
     for (size_t i = 0; i < 16u; ++i) event.data.timer.id[i] = (unsigned char)i;
