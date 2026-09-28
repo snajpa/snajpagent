@@ -6,10 +6,11 @@
 
 Engineering design, September 27, 2026, with framing implementation begun
 September 28. Installed builds keep the existing JSONL format. The draft header,
-commit-batch codec, bounded positional reader and typed goal/timer payloads are
-exercised by the store tests. Remaining event families, checkpoint replacement,
-indexed runtime storage, grouped durability and conversion remain under
-implementation. The application does not yet read or write binary sessions.
+commit-batch codec, bounded positional reader and typed session/configuration,
+goal and timer payloads are exercised by the store tests. Remaining event
+families, checkpoint replacement, indexed runtime storage, grouped durability
+and conversion remain under implementation. The application does not yet read
+or write binary sessions.
 
 The storage contract preserves canonical history, exact input authority,
 completed tool results, context lineage and single-writer ownership. Active
@@ -145,8 +146,9 @@ leaves the committed anchor unchanged. No framing API modifies a file.
 
 ### Typed control payloads
 
-Payload version1 assigns timer schedule/fire/cancel IDs32..34 and goal
-start/replace/reword/lock/pause/block/complete/resume/cancel IDs64..72. IDs1..31
+Payload version1 assigns session/configuration IDs1..12, timer
+schedule/fire/cancel IDs32..34 and goal
+start/replace/reword/lock/pause/block/complete/resume/cancel IDs64..72. IDs13..31
 remain reserved for session metadata. Required semantic kinds occupy the low
 half of the 16-bit namespace. The high half permits explicitly optional metadata;
 unknown required records, unsupported semantic payload versions and optional
@@ -167,6 +169,30 @@ serialization and preserves caller output on malformed input. Current-state,
 lineage and authority checks remain with the existing reducer; valid encoding
 alone does not authorize a transition. Checkpoints will refer to these canonical
 payloads when checkpoint/reference integration is complete.
+
+Session/configuration records use fixed field order:
+
+| ID | Event | Payload fields |
+|---|---|---|
+| 1 | session created | source semantic revision2, protocol1, provider/model/effort text, cwd text |
+| 2 | cwd changed | previous cwd text, new cwd text |
+| 3/4 | archived/unarchived | user origin1 |
+| 5 | delete requested | confirmed prefix4, session UUID16, trash nonce16 |
+| 6 | banner updated | text, including empty to clear |
+| 7 | steering updated | mode1: default0, mentions1, all2 |
+| 8 | model selected | previous provider/model/effort text, new provider/model/effort text |
+| 9 | active-turn model changed | turn UUID16, previous provider/model/effort text, new effort text |
+| 10 | effort changed | previous effort text, new effort text |
+| 11 | context selection changed | previous mode1/tokens8, new mode1/tokens8 |
+| 12 | command shell changed | shell path text |
+
+The creation record retains source semantic revision2/3/4 for the legacy reducer,
+separately from binary file/payload versions. Protocol1 means Responses. Context
+modes default0/maximum1 carry zero tokens; explicit2 carries a positive count
+within the existing context-selection bound. Path shape, session/turn identity
+matching, deletion confirmation and valid state transitions remain reducer
+checks. Packing IDs and enums preserves their exact meaning; the importer will
+reuse the corresponding legacy validation rather than infer missing authority.
 
 The ordinary event-size bound remains a resource contract. Start with a 1 MiB
 batch target, admitting one larger permitted event alone. A batch never becomes
