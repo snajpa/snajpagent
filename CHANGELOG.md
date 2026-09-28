@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Authenticate legacy NetBSD session attachments with kernel credentials before
+  accepting protocol input or sending the destination a terminal profile. Reuse
+  the legacy BSD terminal lookup when reopening an independent session frontend.
+
 - Use native session attach/detach in remote SSH examples and client help.
   Keep native session socket addressing relative to its held directory, without
   a procfs pathname or a short absolute-path requirement.

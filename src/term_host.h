@@ -114,6 +114,11 @@ void snag_term_input_redirect(struct snag_term_host *host,
                               ssize_t (*read_input)(void *, void *, size_t),
                               void *opaque);
 int snag_term_output_open(struct snag_term_host *host, int fd);
+#ifndef _WIN32
+/* Reopen the same terminal with independent status flags, nonblocking and
+ * close-on-exec. Access is O_RDONLY, O_WRONLY or O_RDWR. */
+int snag_term_reopen(int fd, int access);
+#endif
 int snag_term_output_mode(struct snag_term_host *host, bool active);
 int snag_term_output_write(struct snag_term_host *host, int fd, const void *text, size_t len, bool input,
                            int (*checkpoint)(void *), void *opaque);

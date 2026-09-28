@@ -2,6 +2,9 @@
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE
 #endif
+#if defined(__NetBSD__) && !defined(_NETBSD_SOURCE)
+#define _NETBSD_SOURCE
+#endif
 #include "session_host.h"
 #include "base.h"
 #include "fs.h"
@@ -32,6 +35,9 @@
 #include <termios.h>
 #include <unistd.h>
 #define SNAG_SESSION_NATIVE 1
+#if defined(__NetBSD__) && !defined(LOCAL_PEEREID)
+#define SNAG_SESSION_MESSAGE_CREDENTIALS 1
+#endif
 #endif
 
 bool
@@ -167,6 +173,38 @@ private_directory(int fd)
 }
 
 static int
+child_call(int (*call)(const void *), const void *argument)
+{
+    /* The callback uses only async-signal-safe operations. Inherited handlers
+     * cannot run against the multithreaded owner's copied state. */
+    sigset_t blocked, previous;
+    sigfillset(&blocked);
+    int error = pthread_sigmask(SIG_BLOCK, &blocked, &previous);
+    if (error) return snag_errno(error);
+    pid_t child = fork();
+    int saved = errno;
+    if (!child) {
+        int rc = call(argument);
+        error = rc < 0 ? errno : 0;
+        /* Exit status has eight bits; an oversized error must not truncate
+         * into apparent success. */
+        _exit(error >= 0 && error <= 255 ? error : EIO);
+    }
+    error = pthread_sigmask(SIG_SETMASK, &previous, NULL);
+    if (child < 0) return snag_errno(saved);
+    int status;
+    pid_t waited;
+    do {
+        waited = waitpid(child, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    if (waited < 0) return -1;
+    if (error) return snag_errno(error);
+    if (!WIFEXITED(status)) return snag_errno(EIO);
+    error = WEXITSTATUS(status);
+    return error ? snag_errno(error) : 0;
+}
+
+static int
 stream_prepare(int fd)
 {
     int flags = fcntl(fd, F_GETFL);
@@ -175,6 +213,12 @@ stream_prepare(int fd)
 #ifdef SO_NOSIGPIPE
     int yes = 1;
     if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes)) < 0) return -1;
+#endif
+#ifdef SNAG_SESSION_MESSAGE_CREDENTIALS
+    /* NetBSD inherits this listener option into newly connected sockets, so
+     * credentials accompany the first write even before accept runs. */
+    int credentials = 1;
+    if (setsockopt(fd, 0, LOCAL_CREDS, &credentials, sizeof(credentials)) < 0) return -1;
 #endif
     return 0;
 }
@@ -192,10 +236,73 @@ stream_socket(void)
     return fd;
 }
 
+#ifdef SNAG_SESSION_MESSAGE_CREDENTIALS
+struct credential_call {
+    int fd;
+    void *control;
+    size_t size, offset, alignment;
+};
+
 static int
-same_user(int fd)
+credential_peek(const void *argument)
 {
-#if defined(__linux__)
+    const struct credential_call *call = argument;
+    unsigned char byte;
+    struct iovec data = {&byte, 1u};
+    struct msghdr message = {0};
+    message.msg_iov = &data;
+    message.msg_iovlen = 1;
+    message.msg_control = call->control;
+    message.msg_controllen = call->size;
+    ssize_t count = recvmsg(call->fd, &message, MSG_PEEK);
+    if (count < 0) return -1;
+    if (!count) return snag_errno(ECONNRESET);
+    if (message.msg_flags & MSG_CTRUNC) return snag_errno(EPROTO);
+    if (message.msg_controllen < sizeof(struct cmsghdr)) return snag_errno(EPROTO);
+    struct cmsghdr *header = call->control;
+    size_t fixed = offsetof(struct sockcred, sc_groups);
+    if (header->cmsg_level != SOL_SOCKET || header->cmsg_type != SCM_CREDS ||
+        header->cmsg_len < call->offset + fixed || header->cmsg_len > message.msg_controllen)
+        return snag_errno(EPROTO);
+    struct sockcred credentials;
+    memcpy(&credentials, (unsigned char *)call->control + call->offset, fixed);
+    if (credentials.sc_ngroups < 0 || credentials.sc_ngroups > NGROUPS_MAX)
+        return snag_errno(EPROTO);
+    size_t payload = SOCKCREDSIZE(credentials.sc_ngroups);
+    size_t padding = (call->alignment - payload % call->alignment) % call->alignment;
+    if (header->cmsg_len != call->offset + payload ||
+        message.msg_controllen != call->offset + payload + padding)
+        return snag_errno(EPROTO);
+    return credentials.sc_euid == geteuid() ? 0 : snag_errno(EACCES);
+}
+#endif /* SNAG_SESSION_MESSAGE_CREDENTIALS */
+
+int
+snag_session_peer_verify(int fd)
+{
+    if (fd < 0) return snag_errno(EBADF);
+#if defined(SNAG_SESSION_MESSAGE_CREDENTIALS)
+    struct pollfd ready = {fd, POLLIN, 0};
+    int rc = poll(&ready, 1u, 0);
+    if (rc < 0) return errno == EINTR ? 0 : -1;
+    if (!rc) return 0;
+    /* Keep peeked ancillary descriptors out of the long-lived owner even on
+     * kernels that externalize SCM_RIGHTS during MSG_PEEK. No frame is consumed. */
+    struct credential_call call = {.fd = fd, .size = CMSG_SPACE(SOCKCREDSIZE(NGROUPS_MAX)),
+        .offset = CMSG_LEN(0), .alignment = CMSG_SPACE(1) - CMSG_LEN(0)};
+    /* Old NetBSD CMSG macros query libc's runtime alignment. Evaluate them
+     * before fork, not in the syscall-only receiver. malloc provides alignment. */
+    if (!call.alignment || call.offset > call.size) return snag_errno(EIO);
+    call.control = malloc(call.size);
+    if (!call.control) return -1;
+    rc = child_call(credential_peek, &call);
+    int saved = errno;
+    free(call.control);
+    if (rc < 0) {
+        if (saved == EAGAIN || saved == EWOULDBLOCK || saved == EINTR) return 0;
+        return snag_errno(saved);
+    }
+#elif defined(__linux__)
     struct ucred peer;
     socklen_t size = sizeof(peer);
     if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &size) < 0) return -1;
@@ -211,7 +318,7 @@ same_user(int fd)
     if (getpeereid(fd, &user, &group) < 0) return -1;
     if (user != geteuid()) return snag_errno(EACCES);
 #endif
-    return 0;
+    return 1;
 }
 
 static int
@@ -230,44 +337,31 @@ endpoint_address(int dir_fd, const char *dir_path, struct sockaddr_un *address)
     return 0;
 }
 
+struct endpoint_call {
+    int fd, directory;
+    const struct sockaddr_un *address;
+    bool create;
+};
+
+static int
+endpoint_child(const void *argument)
+{
+    const struct endpoint_call *call = argument;
+    if (fchdir(call->directory) < 0) return -1;
+    if (call->create) {
+        (void)umask(0177);
+        return bind(call->fd, (const struct sockaddr *)call->address, sizeof(*call->address));
+    }
+    return connect(call->fd, (const struct sockaddr *)call->address, sizeof(*call->address));
+}
+
 static int
 endpoint_link(int fd, int dir_fd, const struct sockaddr_un *address, bool create)
 {
-    /* Bind/connect relative to the held directory without procfs, pathname
-     * length limits or changing the multithreaded owner's cwd/umask. Only this
-     * short-lived child changes cwd; the shared socket remains in the parent.
-     * Block inherited handlers: the child must use only async-signal-safe calls. */
-    sigset_t blocked, previous;
-    sigfillset(&blocked);
-    int error = pthread_sigmask(SIG_BLOCK, &blocked, &previous);
-    if (error) return snag_errno(error);
-    pid_t child = fork();
-    int saved = errno;
-    if (!child) {
-        int rc = fchdir(dir_fd);
-        if (!rc && create) {
-            (void)umask(0177);
-            rc = bind(fd, (const struct sockaddr *)address, sizeof(*address));
-        } else if (!rc) {
-            rc = connect(fd, (const struct sockaddr *)address, sizeof(*address));
-        }
-        error = rc < 0 ? errno : 0;
-        /* Process exit status has eight bits. Never turn an unrepresentable
-         * host error into apparent success by truncating it. */
-        _exit(error >= 0 && error <= 255 ? error : EIO);
-    }
-    error = pthread_sigmask(SIG_SETMASK, &previous, NULL);
-    if (child < 0) return snag_errno(saved);
-    int status;
-    pid_t waited;
-    do {
-        waited = waitpid(child, &status, 0);
-    } while (waited < 0 && errno == EINTR);
-    if (waited < 0) return -1;
-    if (error) return snag_errno(error);
-    if (!WIFEXITED(status)) return snag_errno(EIO);
-    error = WEXITSTATUS(status);
-    return error ? snag_errno(error) : 0;
+    /* Only the reaped child changes cwd/umask. The socket remains shared with
+     * the owner, rooted at the held directory without a procfs pathname. */
+    const struct endpoint_call call = {fd, dir_fd, address, create};
+    return child_call(endpoint_child, &call);
 }
 
 static int
@@ -291,7 +385,7 @@ snag_session_endpoint_connect(int dir_fd, const char *dir_path)
     if (fd < 0) return -1;
     /* A private local endpoint connects immediately. A full listen backlog is
      * a refusal for this attempt, not an unbounded engine-side wait. */
-    if (endpoint_link(fd, dir_fd, &address, false) == 0 && same_user(fd) == 0)
+    if (endpoint_link(fd, dir_fd, &address, false) == 0 && snag_session_peer_verify(fd) >= 0)
         return fd;
     saved = errno;
     (void)close(fd);
@@ -366,7 +460,7 @@ snag_session_listener_accept(const struct snag_session_listener *listener)
 {
     int fd = accept(listener->fd, NULL, NULL);
     if (fd < 0) return -1;
-    if (stream_prepare(fd) < 0 || same_user(fd) < 0) {
+    if (stream_prepare(fd) < 0 || snag_session_peer_verify(fd) < 0) {
         int saved = errno;
         (void)close(fd);
         return snag_errno(saved);
@@ -490,6 +584,13 @@ snag_session_endpoint_connect(int dir_fd, const char *dir_path)
 {
     (void)dir_fd;
     (void)dir_path;
+    return snag_errno(ENOTSUP);
+}
+
+int
+snag_session_peer_verify(int fd)
+{
+    (void)fd;
     return snag_errno(ENOTSUP);
 }
 

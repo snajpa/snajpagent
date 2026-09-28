@@ -23,7 +23,7 @@ struct snag_session_relay {
     size_t input_offset, output_length, output_acknowledged;
     unsigned char event_data[256];
     size_t event_length;
-    bool input_pending, closing;
+    bool input_pending, closing, peer_verified, reject_verified;
 };
 
 /* On success takes ownership of a private PTY master and optional initial

@@ -1299,6 +1299,14 @@ int
 snag_term_output_open(struct snag_term_host *host, int fd)
 {
     (void)host;
+    return snag_term_reopen(fd, O_WRONLY);
+}
+
+int
+snag_term_reopen(int fd, int access)
+{
+    if (access != O_RDONLY && access != O_WRONLY && access != O_RDWR)
+        return snag_errno(EINVAL);
     char path[SNAG_PATH_MAX_BYTES];
     snag_file_info original, owned;
 #if defined(__FreeBSD__) && __FreeBSD__ < 6
@@ -1317,7 +1325,7 @@ snag_term_output_open(struct snag_term_host *host, int fd)
 #else
     int error = ttyname_r(fd, path, sizeof(path));
 #endif
-    int copy = error ? -1 : open(path, O_WRONLY | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
+    int copy = error ? -1 : open(path, access | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
 
     if (copy >= 0 && snag_fd_cloexec(copy) < 0) {
         error = errno;
@@ -1326,6 +1334,7 @@ snag_term_output_open(struct snag_term_host *host, int fd)
     }
     if (error) errno = error;
     if (copy < 0 || snag_fstat(fd, &original) < 0 || snag_fstat(copy, &owned) < 0 ||
+        original.st_dev != owned.st_dev || original.st_ino != owned.st_ino ||
         original.st_rdev != owned.st_rdev || !S_ISCHR(owned.st_mode)) {
         int saved = copy < 0 ? errno : EIO;
         if (copy >= 0) (void)close(copy);

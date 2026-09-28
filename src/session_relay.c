@@ -43,6 +43,7 @@ peer_drop(struct snag_session_relay *relay)
     relay->input.used = relay->input.offset = 0u;
     relay->output.used = relay->output.offset = 0u;
     relay->input_pending = relay->closing = false;
+    relay->peer_verified = false;
     relay->input_offset = 0u;
 }
 
@@ -53,6 +54,7 @@ reject_drop(struct snag_session_relay *relay)
     relay->reject = -1;
     relay->reject_deadline = 0u;
     relay->rejection.used = relay->rejection.offset = 0u;
+    relay->reject_verified = false;
 }
 
 int
@@ -64,6 +66,7 @@ snag_session_relay_init(struct snag_session_relay *relay, int master, int initia
         (initial_peer >= 0 && nonblocking(initial_peer) < 0)) return -1;
     relay->master = master;
     relay->peer = initial_peer;
+    relay->peer_verified = initial_peer >= 0;
     relay->phase = initial_peer >= 0 ? SNAG_SESSION_ATTACHED : SNAG_SESSION_WAIT_RESERVE;
     relay->generation = initial_peer >= 0 ? 1u : 0u;
     return 0;
@@ -292,14 +295,21 @@ accept_peer(struct snag_session_relay *relay, const struct snag_session_listener
     int fd = snag_session_listener_accept(listener);
 
     if (fd < 0) return;
+    int verified = snag_session_peer_verify(fd);
+    if (verified < 0) {
+        (void)close(fd);
+        return;
+    }
     if (relay->peer < 0) {
         relay->peer = fd;
+        relay->peer_verified = verified == 1;
         relay->phase = SNAG_SESSION_WAIT_RESERVE;
         ++relay->generation;
         relay->handshake_deadline = snag_monotonic_ms() + HANDSHAKE_MS;
     } else {
         static const char busy[] = "session already has a terminal or attachment reservation";
         relay->reject = fd;
+        relay->reject_verified = verified == 1;
         (void)snag_session_packet_set(&relay->rejection, SNAG_SESSION_ERROR,
                                       busy, sizeof(busy) - 1u);
         relay->reject_deadline = snag_monotonic_ms() + STALL_MS;
@@ -328,7 +338,7 @@ snag_session_relay_step(struct snag_session_relay *relay,
             (relay->input_pending ? POLLOUT : 0), 0},
         {relay->peer, (!relay->input_pending && !relay->closing ? POLLIN : 0) |
             (relay->output.used ? POLLOUT : 0), 0},
-        {relay->reject, POLLOUT, 0},
+        {relay->reject, relay->reject_verified ? POLLOUT : POLLIN, 0},
         {listener && relay->reject < 0 ? listener->fd : -1, POLLIN, 0}
     };
     int rc = poll(fds, sizeof(fds) / sizeof(fds[0]), timeout_ms);
@@ -344,7 +354,11 @@ snag_session_relay_step(struct snag_session_relay *relay,
         }
         if (relay->peer >= 0 && !relay->input_pending && !relay->closing &&
             fds[1].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) {
-            rc = snag_session_packet_read(relay->peer, &relay->input);
+            rc = relay->peer_verified ? 1 : snag_session_peer_verify(relay->peer);
+            if (rc == 1) {
+                relay->peer_verified = true;
+                rc = snag_session_packet_read(relay->peer, &relay->input);
+            }
             if (rc < 0 || (rc == 1 && peer_message(relay, event) < 0)) {
                 peer_drop(relay);
                 *event = SNAG_SESSION_DETACH;
@@ -362,7 +376,11 @@ snag_session_relay_step(struct snag_session_relay *relay,
         }
     }
     if (relay->reject >= 0 && relay->reject == fds[2].fd && fds[2].revents) {
-        rc = snag_session_packet_write(relay->reject, &relay->rejection);
+        rc = relay->reject_verified ? 1 : snag_session_peer_verify(relay->reject);
+        if (rc == 1) {
+            relay->reject_verified = true;
+            rc = snag_session_packet_write(relay->reject, &relay->rejection);
+        }
         if (rc != 0) reject_drop(relay);
     }
     if (fds[3].revents & POLLIN) accept_peer(relay, listener);

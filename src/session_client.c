@@ -81,6 +81,7 @@ snag_session_client_attach(struct snag_session_client *client, int target)
         return -1;
     packet_clear(&client->target_input);
     client->target = target;
+    client->target_verified = false;
     client->phase = SNAG_CLIENT_RESERVING;
     client->target_deadline = snag_monotonic_ms() + HANDSHAKE_MS;
     return 0;
@@ -96,6 +97,7 @@ snag_session_client_continue(struct snag_session_client *client)
     if (snag_session_commit_set(&client->target_output, client->geometry, &client->profile) < 0)
         return -1;
     client->target = client->peer;
+    client->target_verified = true;
     client->peer = -1;
     packet_clear(&client->target_input);
     client->phase = SNAG_CLIENT_COMMITTING;
@@ -133,6 +135,15 @@ target_failed(struct snag_session_client *client, const char *text,
 static int
 target_read(struct snag_session_client *client, enum snag_session_message *event)
 {
+    if (!client->target_verified) {
+        int verified = snag_session_peer_verify(client->target);
+        if (verified < 0) {
+            target_failed(client, "destination peer authentication failed", event);
+            return 0;
+        }
+        if (!verified) return 0;
+        client->target_verified = true;
+    }
     struct snag_session_packet *packet = &client->target_input;
     int rc = snag_session_packet_read(client->target, packet);
     if (rc < 0) {
@@ -366,31 +377,6 @@ terminal_geometry(struct snag_session_client *client)
                                       size.ws_col ? size.ws_col : 80u);
 }
 
-static int
-terminal_open(void)
-{
-    /* Reopen, rather than dup, so nonblocking I/O cannot change the shell's
-     * inherited open-file description. Check the reopened device identity. */
-    char path[SNAG_PATH_MAX_BYTES + 1u];
-    struct stat before, after;
-    int rc = ttyname_r(STDIN_FILENO, path, sizeof(path));
-    if (rc) return snag_errno(rc > 0 ? rc : errno);
-    if (fstat(STDIN_FILENO, &before) < 0) return -1;
-    int fd = open(path, O_RDWR | O_NOCTTY | O_CLOEXEC);
-    if (fd < 0) return -1;
-    if (snag_fd_cloexec(fd) < 0 || fstat(fd, &after) < 0) {
-        int saved = errno;
-        (void)close(fd);
-        return snag_errno(saved);
-    }
-    if (before.st_dev != after.st_dev || before.st_ino != after.st_ino ||
-        before.st_rdev != after.st_rdev) {
-        (void)close(fd);
-        return snag_errno(ESTALE);
-    }
-    return fd;
-}
-
 int
 snag_session_client_terminal(int peer, bool attached, uint64_t child,
                              snag_session_connect_fn connect, void *opaque,
@@ -409,7 +395,7 @@ snag_session_client_terminal(int peer, bool attached, uint64_t child,
         errno = ENOTTY;
         goto out;
     }
-    terminal = terminal_open();
+    terminal = snag_term_reopen(STDIN_FILENO, O_RDWR);
     if (terminal < 0 || tcgetattr(terminal, &original) < 0) goto out;
     if (snag_session_client_init(&client, terminal, attached ? peer : -1) < 0) goto out;
     terminal = -1;

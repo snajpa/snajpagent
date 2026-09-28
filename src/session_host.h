@@ -56,11 +56,15 @@ int snag_session_process_redraw(const struct snag_session_process *);
 int snag_session_listener_open(struct snag_session_listener *, int dir_fd,
                                const char *dir_path, int lock_fd);
 void snag_session_listener_close(struct snag_session_listener *);
-/* Accepted/connected streams are same-user, nonblocking and close-on-exec.
- * Neither connecting nor probing reserves the application attachment. */
+/* Checked private endpoints return nonblocking, close-on-exec streams. On
+ * message-credential hosts, callers must finish peer_verify before admitting
+ * the first frame. Connecting or probing never reserves an attachment. */
 int snag_session_listener_accept(const struct snag_session_listener *);
 int snag_session_endpoint_connect(int dir_fd, const char *dir_path);
 int snag_session_stream_pair(int fds[2]);
+/* 1 same effective user, 0 awaiting first kernel credential, -1 refusal/error.
+ * Does not consume frame bytes. Cache success only for this connection. */
+int snag_session_peer_verify(int fd);
 /* A complete frame returns 1; partial/would-block returns 0; errors return -1.
  * Reset a received packet only after its payload has been consumed. */
 int snag_session_packet_read(int fd, struct snag_session_packet *);

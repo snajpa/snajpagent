@@ -21,15 +21,15 @@ struct snag_session_client {
     size_t terminal_offset, event_length;
     unsigned char event_data[256];
     bool output_pending, resize_pending, quitting, peer_ended, ack_pending;
-    bool ansi_output;
+    bool ansi_output, target_verified;
 };
 
 /* Takes ownership on success; peer may be an already-attached initial socket
  * or -1. Descriptors become nonblocking and close-on-exec. */
 int snag_session_client_init(struct snag_session_client *, int terminal, int peer);
 void snag_session_client_close(struct snag_session_client *);
-/* Takes an authenticated connected target on success, retaining the current
- * peer until destination commit acknowledgement and pending writes complete. */
+/* Takes a connected private endpoint, verifies its peer before sending the
+ * profile, and retains the source until commit acknowledgement and writes complete. */
 int snag_session_client_attach(struct snag_session_client *, int target);
 int snag_session_client_resize(struct snag_session_client *, unsigned int rows, unsigned int cols);
 typedef int (*snag_session_connect_fn)(void *, const char *, char *, size_t);

@@ -44,6 +44,13 @@
 #undef getnameinfo
 #else
 #include <fcntl.h>
+#if defined(__linux__)
+#include <pty.h>
+#elif defined(__FreeBSD__)
+#include <libutil.h>
+#else
+#include <util.h>
+#endif
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -2156,6 +2163,8 @@ test_input_mode(void)
 #ifndef _WIN32
     struct snag_term_host invalid_output = {0};
     assert(snag_term_output_open(&invalid_output, -1) == -1 && errno == EBADF);
+    assert(snag_term_reopen(-1, O_RDWR) == -1 && errno == EBADF);
+    assert(snag_term_reopen(-1, O_RDWR | O_CREAT) == -1 && errno == EINVAL);
     int nonterminal = open("/dev/null", O_WRONLY);
     assert(nonterminal >= 0);
     errno = 0;
@@ -2163,6 +2172,26 @@ test_input_mode(void)
     errno = EIO;
     assert(snag_term_output_open(&invalid_output, nonterminal) == -1 && errno == ENOTTY);
     assert(close(nonterminal) == 0);
+    /* Reopening must leave the inherited terminal's status flags untouched,
+     * including on the old BSD paths without ttyname_r. */
+    int master, slave;
+    assert(openpty(&master, &slave, NULL, NULL, NULL) == 0);
+    int inherited = fcntl(slave, F_GETFL);
+    assert(inherited >= 0 && !(inherited & O_NONBLOCK));
+    const int access[] = {O_RDONLY, O_WRONLY, O_RDWR};
+    for (size_t i = 0u; i < sizeof(access) / sizeof(access[0]); ++i) {
+        int reopened = snag_term_reopen(slave, access[i]);
+        assert(reopened >= 0);
+        struct stat before, after;
+        assert(fstat(slave, &before) == 0 && fstat(reopened, &after) == 0);
+        assert(before.st_dev == after.st_dev && before.st_ino == after.st_ino &&
+               before.st_rdev == after.st_rdev);
+        int flags = fcntl(reopened, F_GETFL);
+        assert(flags >= 0 && (flags & O_ACCMODE) == access[i] && (flags & O_NONBLOCK));
+        assert(fcntl(reopened, F_GETFD) & FD_CLOEXEC);
+        assert(close(reopened) == 0 && fcntl(slave, F_GETFL) == inherited);
+    }
+    assert(close(slave) == 0 && close(master) == 0);
 #endif
     if (snag_isatty(2)) {
         struct snag_term_host output_host = {0};
@@ -2679,10 +2708,13 @@ test_session_transport(void)
     assert(snag_session_packet_set(&sent, SNAG_SESSION_INPUT, NULL, 1u) < 0 && errno == EINVAL);
     assert(snag_session_packet_set(&sent, SNAG_SESSION_INPUT, "x",
                                   SNAG_SESSION_FRAME_MAX + 1u) < 0);
-#if defined(__linux__) && !defined(_WIN32)
+#ifndef _WIN32
     if (!snag_session_host_supported()) return;
+    assert(snag_session_peer_verify(-1) < 0 && errno == EBADF);
     int pair[2];
     assert(snag_session_stream_pair(pair) == 0);
+    int verified = snag_session_peer_verify(pair[1]);
+    assert(verified == 0 || verified == 1);
     assert(fcntl(pair[0], F_GETFL) & O_NONBLOCK);
     assert(fcntl(pair[1], F_GETFD) & FD_CLOEXEC);
     assert(snag_session_packet_read(pair[1], &received) == 0);
@@ -2691,6 +2723,10 @@ test_session_transport(void)
     for (size_t split = 1u; split < sent.used; ++split) {
         received = (struct snag_session_packet){0};
         assert(write(pair[0], sent.bytes, split) == (ssize_t)split);
+        if (split == 1u) {
+            assert(snag_session_peer_verify(pair[1]) == 1);
+            assert(snag_session_peer_verify(pair[1]) == 1);
+        }
         assert(snag_session_packet_read(pair[1], &received) == 0);
         assert(write(pair[0], sent.bytes + split, sent.used - split) ==
                (ssize_t)(sent.used - split));
@@ -2735,20 +2771,64 @@ test_session_transport(void)
     assert(snag_session_packet_write(pair[1], &sent) < 0);
     assert(close(pair[1]) == 0);
 
+#if defined(__NetBSD__) && !defined(LOCAL_PEEREID)
+    /* Missing kernel metadata never authenticates a frame. */
+    assert(snag_session_stream_pair(pair) == 0);
+    int disabled = 0;
+    assert(setsockopt(pair[1], 0, LOCAL_CREDS, &disabled, sizeof(disabled)) == 0);
+    assert(write(pair[0], "x", 1u) == 1);
+    assert(snag_session_peer_verify(pair[1]) < 0 && errno == EPROTO);
+    char peeked;
+    assert(read(pair[1], &peeked, 1u) == 1 && peeked == 'x');
+    assert(close(pair[0]) == 0 && close(pair[1]) == 0);
+
+    /* Ancillary rights cannot masquerade as credentials or leak a descriptor
+     * into the verifier. Neither a successful nor a refused peek consumes data. */
+    assert(snag_session_stream_pair(pair) == 0);
+    int passed = open("/dev/null", O_RDONLY);
+    assert(passed >= 0);
+    size_t control_size = CMSG_SPACE(sizeof(passed));
+    void *control = calloc(1u, control_size);
+    assert(control);
+    struct iovec data = {(void *)"x", 1u};
+    struct msghdr message = {0};
+    message.msg_iov = &data;
+    message.msg_iovlen = 1;
+    message.msg_control = control;
+    message.msg_controllen = control_size;
+    struct cmsghdr *header = CMSG_FIRSTHDR(&message);
+    header->cmsg_level = SOL_SOCKET;
+    header->cmsg_type = SCM_RIGHTS;
+    header->cmsg_len = CMSG_LEN(sizeof(passed));
+    memcpy(CMSG_DATA(header), &passed, sizeof(passed));
+    assert(sendmsg(pair[0], &message, 0) == 1);
+    free(control);
+    int available = dup(passed);
+    assert(available >= 0 && close(available) == 0);
+    assert(snag_session_peer_verify(pair[1]) < 0 && errno == EPROTO);
+    assert(dup(passed) == available && close(available) == 0);
+    assert(snag_session_peer_verify(pair[1]) < 0 && errno == EPROTO);
+    assert(dup(passed) == available && close(available) == 0);
+    assert(read(pair[1], &peeked, 1u) == 1 && peeked == 'x');
+    assert(close(passed) == 0 && close(pair[0]) == 0 && close(pair[1]) == 0);
+#endif
+
     const char *temp = getenv("TMPDIR");
     char *root = snag_path_join(temp ? temp : "/tmp",
         "snag-session-host-with-a-path-longer-than-the-unix-socket-address-limit-"
         "and-a-held-directory-retained-across-a-parent-rename-XXXXXX");
     assert(root && mkdtemp(root));
-    int dir = open(root, O_RDONLY | O_DIRECTORY);
+    int dir = snag_open_read(root, true);
     assert(dir >= 0);
     char *moved = malloc(strlen(root) + sizeof("-moved"));
     assert(moved);
     (void)sprintf(moved, "%s-moved", root);
     assert(rename(root, moved) == 0 && mkdir(root, 0700) == 0);
+    char *socket_path = snag_path_join(moved, SNAG_SESSION_ENDPOINT);
+    assert(socket_path);
     struct stat cwd_before, cwd_after;
     assert(stat(".", &cwd_before) == 0);
-    int lock = openat(dir, "lock", O_CREAT | O_RDWR, 0600);
+    int lock = snag_open_private_append_at(dir, "lock", true);
     assert(lock >= 0 && snag_lock_file(lock, false) == 0);
     struct snag_session_listener listener, other;
     assert(snag_session_listener_open(&listener, dir, root, -1) < 0 && errno == EBADF);
@@ -2756,35 +2836,41 @@ test_session_transport(void)
     assert(snag_session_listener_open(&other, dir, root, lock) < 0 && errno == EADDRINUSE);
     /* The stale-endpoint probe connected but did not reserve an attachment. */
     int peer = snag_session_listener_accept(&listener);
-    assert(peer >= 0);
-    assert(close(peer) == 0);
+    if (peer >= 0) assert(close(peer) == 0);
+    else assert(errno == ECONNRESET); /* EOF before a deferred credential. */
     int client = snag_session_endpoint_connect(dir, root);
     assert(client >= 0);
     peer = snag_session_listener_accept(&listener);
     assert(peer >= 0 && (fcntl(peer, F_GETFL) & O_NONBLOCK));
     assert(snag_session_packet_set(&sent, SNAG_SESSION_RESERVE, NULL, 0u) == 0);
     assert(snag_session_packet_write(client, &sent) == 1);
+    assert(snag_session_peer_verify(peer) == 1);
+    assert(snag_session_peer_verify(peer) == 1);
     received = (struct snag_session_packet){0};
     assert(snag_session_packet_read(peer, &received) == 1);
     assert(snag_session_packet_type(&received) == SNAG_SESSION_RESERVE);
     assert(close(client) == 0 && close(peer) == 0);
-#if defined(__linux__)
     if (geteuid() == 0u) {
         /* Deliberately expose only this disposable fixture to reach native
          * peer authentication independently of the directory permission gate. */
         assert(fchmod(dir, 0711) == 0);
-        assert(fchmodat(dir, SNAG_SESSION_ENDPOINT, 0666, 0) == 0);
+        assert(chmod(socket_path, 0666) == 0);
         pid_t stranger = fork();
         assert(stranger >= 0);
         if (!stranger) {
             struct sockaddr_un address = {.sun_family = AF_UNIX};
+#ifndef __linux__
+            address.sun_len = sizeof(address);
+#endif
             if (setgid(65534u) < 0 || setuid(65534u) < 0) _exit(1);
+            if (fchdir(dir) < 0) _exit(2);
             int raw = socket(AF_UNIX, SOCK_STREAM, 0);
             if (raw < 0) _exit(2);
             int length = snprintf(address.sun_path, sizeof(address.sun_path),
-                "/proc/self/fd/%d/%s", dir, SNAG_SESSION_ENDPOINT);
+                                   "%s", SNAG_SESSION_ENDPOINT);
             if (length < 0 || (size_t)length >= sizeof(address.sun_path)) _exit(3);
             if (connect(raw, (const struct sockaddr *)&address, sizeof(address)) < 0) _exit(4);
+            if (write(raw, "x", 1u) != 1) _exit(5);
             _exit(0);
         }
         int result;
@@ -2792,33 +2878,32 @@ test_session_transport(void)
                WIFEXITED(result) && !WEXITSTATUS(result));
         assert(snag_session_listener_accept(&listener) < 0 && errno == EACCES);
         assert(fchmod(dir, 0700) == 0);
-        assert(fchmodat(dir, SNAG_SESSION_ENDPOINT, 0600, 0) == 0);
+        assert(chmod(socket_path, 0600) == 0);
     }
-#endif
     /* Closing an old owner must not unlink a replacement endpoint. */
-    assert(renameat(dir, SNAG_SESSION_ENDPOINT, dir, "old.sock") == 0);
+    assert(snag_rename_at(dir, SNAG_SESSION_ENDPOINT, dir, "old.sock") == 0);
     assert(snag_session_listener_open(&other, dir, root, lock) == 0);
     snag_session_listener_close(&listener);
     struct stat st;
-    assert(fstatat(dir, SNAG_SESSION_ENDPOINT, &st, AT_SYMLINK_NOFOLLOW) == 0 &&
+    assert(snag_lstat_at(dir, SNAG_SESSION_ENDPOINT, &st) == 0 &&
            S_ISSOCK(st.st_mode));
     snag_session_listener_close(&other);
-    assert(unlinkat(dir, "old.sock", 0) == 0);
+    assert(snag_unlink_at(dir, "old.sock", false) == 0);
     /* A crashed listener leaves a recoverable socket, never a writable file
      * or symlink that cleanup may remove. */
     assert(snag_session_listener_open(&listener, dir, root, lock) == 0);
     assert(close(listener.fd) == 0 && close(listener.dir_fd) == 0);
     assert(snag_session_listener_open(&listener, dir, root, lock) == 0);
     snag_session_listener_close(&listener);
-    int regular = openat(dir, SNAG_SESSION_ENDPOINT, O_CREAT | O_EXCL | O_WRONLY, 0600);
+    int regular = snag_open_private_append_at(dir, SNAG_SESSION_ENDPOINT, true);
     assert(regular >= 0 && close(regular) == 0);
     assert(snag_session_listener_open(&listener, dir, root, lock) < 0 && errno == EACCES);
-    assert(fstatat(dir, SNAG_SESSION_ENDPOINT, &st, AT_SYMLINK_NOFOLLOW) == 0 &&
+    assert(snag_lstat_at(dir, SNAG_SESSION_ENDPOINT, &st) == 0 &&
            S_ISREG(st.st_mode));
-    assert(unlinkat(dir, SNAG_SESSION_ENDPOINT, 0) == 0);
-    assert(symlinkat("lock", dir, SNAG_SESSION_ENDPOINT) == 0);
+    assert(snag_unlink_at(dir, SNAG_SESSION_ENDPOINT, false) == 0);
+    assert(symlink("lock", socket_path) == 0);
     assert(snag_session_listener_open(&listener, dir, root, lock) < 0 && errno == EACCES);
-    assert(unlinkat(dir, SNAG_SESSION_ENDPOINT, 0) == 0);
+    assert(snag_unlink_at(dir, SNAG_SESSION_ENDPOINT, false) == 0);
     assert(fchmod(dir, 0755) == 0);
     assert(snag_session_listener_open(&listener, dir, root, lock) < 0 && errno == EACCES);
     assert(fchmod(dir, 0700) == 0);
@@ -2830,15 +2915,13 @@ test_session_transport(void)
     }
     int status;
     assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && !WEXITSTATUS(status));
-    assert(close(lock) == 0 && unlinkat(dir, "lock", 0) == 0 && close(dir) == 0);
+    assert(close(lock) == 0 && snag_unlink_at(dir, "lock", false) == 0 && close(dir) == 0);
     assert(rmdir(root) == 0 && rmdir(moved) == 0);
     assert(stat(".", &cwd_after) == 0 && cwd_before.st_dev == cwd_after.st_dev &&
            cwd_before.st_ino == cwd_after.st_ino);
     free(moved);
+    free(socket_path);
     free(root);
-#elif !defined(_WIN32)
-    assert(snag_session_host_supported());
-    (void)received;
 #else
     assert(!snag_session_host_supported());
     (void)received;

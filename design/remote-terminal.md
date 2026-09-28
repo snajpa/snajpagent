@@ -19,6 +19,15 @@ inherited signal handlers and uses only async-signal-safe calls. The parent
 retains peer authentication, endpoint identity checks and the original writer
 lock. No session protocol or attachment ownership transition changes.
 
+NetBSD kernels without a connection-credential query use kernel-generated
+`LOCAL_CREDS` metadata. The listener enables it before binding; accepted sockets
+inherit it, including a first write that arrives before accept. The relay
+verifies the effective UID before admitting the first frame, and the frontend
+verifies its destination before sending a terminal profile. Busy refusals also
+wait for authentication. A successful check belongs to that connection and
+survives its suspension, but never a replacement. Credential peeking runs in a
+reaped syscall-only child so ancillary descriptors cannot enter the owner.
+
 ## Endpoint ownership and wire lifecycle
 
 The wrapper recognizes the existing protocol-1 trzsz transfer marker and runs a
