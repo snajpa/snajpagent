@@ -530,8 +530,9 @@ snag_session_packet_write(int fd, struct snag_session_packet *packet)
 int
 snag_session_process_redraw(const struct snag_session_process *process)
 {
+    /* On the owned slave, tcgetpgrp also verifies the caller's controlling tty. */
     pid_t group = tcgetpgrp(process->slave);
-    if (group <= 0 || tcgetsid(process->slave) != getsid(0)) return snag_errno(ENOTTY);
+    if (group <= 0) return snag_errno(ENOTTY);
     return group == getpgrp() ? 0 : kill(-group, SIGWINCH);
 }
 #else

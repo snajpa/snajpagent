@@ -687,6 +687,10 @@ application linkage passes with AV and native audio, matching debug symbols,
 only libc.so.30.3/libpthread.so.2.4 imports and no runtime search path.
 Office is excluded from that diagnostic; the executable was not target-run.
 
+Session redraw uses the portable foreground-process-group query, which verifies
+that the owned slave is the caller's controlling terminal. This retains the
+ownership check on OpenBSD 3.5, whose terminal API lacks `tcgetsid`.
+
 OpenBSD 3.5 media/audio application cross-linking and static ZIP/XML package
 checks pass with native libc/pthread imports and no runtime search path. The
 application check excludes PDF and Office import; their complete runtime closure

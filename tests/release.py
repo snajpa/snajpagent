@@ -28,6 +28,15 @@ def rejected(function):
     raise AssertionError("invalid release accepted")
 
 
+with tempfile.TemporaryDirectory(prefix="portable-tty-", dir=root / "build") as tmp:
+    # Older OpenBSD has tcgetpgrp, but no tcgetsid declaration or implementation.
+    header = Path(tmp) / "terminal.h"
+    header.write_text("#include <termios.h>\n#pragma GCC poison tcgetsid\n")
+    subprocess.run(["cc", "-std=c11", "-D_GNU_SOURCE", "-Werror", "-fsyntax-only",
+                    "-include", str(header), str(root / "src/session_host.c")], check=True)
+print("PASS: session redraw builds with the portable controlling-terminal API")
+
+
 with tempfile.TemporaryDirectory(prefix="release-", dir=root / "build") as tmp:
     tmp = Path(tmp)
     # The documented tag recipe requires an operator-supplied version and must

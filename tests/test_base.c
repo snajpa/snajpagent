@@ -3029,6 +3029,9 @@ test_session_process(void)
     if (!frontend) {
         (void)alarm(5u);
         for (int fd = 0; fd < 3; ++fd) assert(close(saved[fd]) == 0);
+        struct snag_session_process foreign = {.slave = screen};
+        assert(snag_session_process_redraw(&foreign) < 0 && errno == ENOTTY);
+        assert(snag_session_process_redraw(&process) == 0);
         assert(close(outer) == 0 && close(screen) == 0 && close(report[0]) == 0);
         assert(getsid(0) == getpid() && tcgetsid(STDIN_FILENO) == getpid());
         assert(tcgetpgrp(STDIN_FILENO) == getpgrp());

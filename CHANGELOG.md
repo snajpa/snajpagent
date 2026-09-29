@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep session redraw buildable on older OpenBSD while retaining the
+  controlling-terminal ownership check.
+
 - Preserve the approved version base when building after a development tag,
   replacing the prior Git suffix instead of appending a second one.
 
