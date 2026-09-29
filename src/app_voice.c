@@ -240,6 +240,7 @@ struct voice_request {
     struct snag_provider_config provider;
     struct snag_credential credential;
     json_t *input;
+    struct snag_secret_set protection;
     struct snag_response_graph graph;
     uint64_t start_ms, elapsed_ms, ready_ms, first_text_ms;
     bool ready_seen, text_seen;
@@ -267,6 +268,8 @@ struct app_voice {
     atomic_bool stop,muted,mute_pending,activate,done;
     atomic_bool output_ready;
     atomic_bool history_queued, history_sent;
+    atomic_bool credential_ready, credential_accepted;
+    int root_fd;
     bool thread_started,announced,applied_mute,device_started,stopped_recorded,expiry_warned;
     struct snag_provider_config provider;
     struct snag_audio_config config;
@@ -321,8 +324,8 @@ observation_start(struct app_voice *v, const struct snag_session *session)
 static int
 request_pump(void *opaque, unsigned int timeout_ms)
 {
-    (void)timeout_ms;
     struct voice_request *request = opaque;
+    if (timeout_ms && !atomic_load(&request->stop)) (void)snag_sleep_ms(timeout_ms);
     return atomic_load_explicit(&request->stop, memory_order_acquire) ? 2 : 0;
 }
 
@@ -370,7 +373,8 @@ request_owner(void *opaque)
             .session_id = snag_json_string(request->input, "prompt_cache_key"),
             .low_speed_override_ms = request->summary ? request->provider.request_timeout_ms : 0u},
             request->input, request_text, request, NULL, NULL, request_ready, request,
-            &request->graph, &failure, request->error, sizeof(request->error), &request->retries);
+            &request->graph, &failure, &request->protection,
+            request->error, sizeof(request->error), &request->retries);
         if (request->outcome && request->outcome != 2 &&
             snag_provider_failure_is_capacity(&failure)) {
             request->outcome = SNAG_PROVIDER_CONTEXT_OVERFLOW;
@@ -400,6 +404,7 @@ request_free(struct voice_request *request)
     json_decref(request->input);
     snag_response_graph_free(&request->graph);
     snag_credential_clear(&request->credential);
+    snag_secret_set_free(&request->protection);
     free(request);
 }
 
@@ -457,8 +462,9 @@ snag_app_voice_request_take(struct app_state *app, struct snag_response_graph *g
     if (!v || !v->request || !graph || !outcome) return -1;
     struct voice_request *request = v->request;
     if (!atomic_load_explicit(&request->done, memory_order_acquire)) return 0;
-    /* Retain the credential used on the wire before releasing any public output. */
-    if (snag_secret_set_build(&v->secrets, NULL, &request->credential, error, size) < 0) return -1;
+    /* Include setup and refreshed transport credentials before releasing public output. */
+    if (snag_secret_set_build(&v->secrets, NULL, &request->credential, error, size) < 0 ||
+        snag_secret_set_merge(&v->secrets, &request->protection, error, size) < 0) return -1;
     if (metrics) {
         *metrics = json_pack("{s:I,s:o,s:o,s:I,s:o}",
             "elapsed_ms", (json_int_t)request->elapsed_ms,
@@ -757,6 +763,8 @@ int snag_app_voice_fixture(struct app_state *app,const json_t *notices,bool done
     if(pthread_mutex_init(&v->mutex,NULL)) {free(v);return -1;}
     atomic_init(&v->stop,false);atomic_init(&v->muted,false);atomic_init(&v->mute_pending,false);
     atomic_init(&v->activate,false);atomic_init(&v->done,done);
+    atomic_init(&v->credential_ready, false);
+    atomic_init(&v->credential_accepted, true);
     atomic_init(&v->output_ready, !done);
     v->ui=&app->ui;v->attachment=snag_ui_session_attachment(&app->ui);
     strcpy(v->connection,"0123456789abcdef0123456789abcdef");
@@ -774,6 +782,12 @@ snag_app_voice_fixture_request_done(struct app_state *app)
 {
     struct app_voice *v = app->voice;
     return v && v->request && atomic_load_explicit(&v->request->done, memory_order_acquire);
+}
+
+bool
+snag_app_voice_fixture_credential_ready(struct app_state *app)
+{
+    return app->voice && atomic_load_explicit(&app->voice->credential_ready, memory_order_acquire);
 }
 
 json_t *
@@ -859,7 +873,7 @@ static uint32_t owner_interrupt(void *opaque)
 static int owner_controls(void *opaque,unsigned int timeout)
 {
     struct app_voice *v=opaque;
-    (void)timeout;
+    if (timeout && !atomic_load(&v->stop)) (void)snag_sleep_ms(timeout);
     if (voice_attachment_lost(v))atomic_store(&v->stop,true);
     return atomic_load(&v->stop)?2:0;
 }
@@ -950,7 +964,14 @@ static void *voice_owner(void *opaque)
 {
     struct app_voice *v=opaque;
     struct snag_voice_io io={owner_send,owner_notice,owner_play,owner_interrupt};
-    v->start_ms=snag_monotonic_ms();
+    if (snag_auth_read(v->root_fd, &v->provider, false, NULL, &v->credential,
+            owner_controls, v, v->error, sizeof(v->error)) < 0) goto done;
+    atomic_store_explicit(&v->credential_ready, true, memory_order_release);
+    while (!atomic_load_explicit(&v->credential_accepted, memory_order_acquire)) {
+        if (owner_controls(v, 10u)) goto done;
+    }
+    if (owner_controls(v, 0u)) goto done;
+    v->start_ms = snag_monotonic_ms();
     struct snag_buf help = {.max = 64u * 1024u};
     if (snag_app_help_text(&help, NULL) == 0) {
         v->protocol = snag_voice_new(&io, v, v->config.realtime_model,
@@ -1133,7 +1154,7 @@ done:
     snag_provider_voice_close(v->socket);v->socket=NULL;
     snag_voice_rtc_close(v->rtc);v->rtc=NULL;
     snag_voice_free(v->protocol);v->protocol=NULL;
-    snag_credential_clear(&v->credential);
+    /* An unaccepted credential stays immutable until the session owner joins. */
     atomic_store_explicit(&v->done,true,memory_order_release);return NULL;
 }
 
@@ -1146,8 +1167,10 @@ void snag_app_voice_close(struct app_state *app)
     if (voice_attachment_lost(v))strcpy(v->error,lost_terminal);
     /* The worker is joined: preserve final notices on shutdown/error as well
      * as /voice off. Closing never accepts a previously unaccepted handoff. */
-    bool failed = false;
-    if (json_is_true(json_object_get(v->result, "standalone")) &&
+    bool protected = atomic_load(&v->credential_accepted) ||
+        snag_secret_set_build(&v->secrets, NULL, &v->credential, NULL, 0u) == 0;
+    bool failed = !protected;
+    if (protected && json_is_true(json_object_get(v->result, "standalone")) &&
         voice_record(app, v, json_pack("{s:s,s:s,s:s}", "type", "voice_response",
             "operation", "agent_output_not_sent",
             "output_id", snag_json_string(v->result, "id"))) < 0) {
@@ -1157,13 +1180,18 @@ void snag_app_voice_close(struct app_state *app)
         json_t *event=v->notices[v->notice_read];v->notices[v->notice_read]=NULL;
         v->notice_read=(v->notice_read+1u)%VOICE_NOTICES;--v->notice_count;
         const char *type=snag_json_string(event,"type");
-        if(type && strcmp(type,"voice_ready") && strcmp(type,"voice_handoff") &&
+        if (protected && type && strcmp(type, "voice_ready") && strcmp(type, "voice_handoff") &&
             strcmp(type,"voice_buffering") && strcmp(type,"voice_expiring")) {
             if(voice_record(app,v,event)<0)failed=true;
         } else json_decref(event);
     }
-    if (interface_close(app) < 0) failed = true;
-    if(!v->stopped_recorded && v->announced &&
+    if (protected) {
+        if (interface_close(app) < 0) failed = true;
+    } else {
+        request_free(v->request);
+        v->request = NULL;
+    }
+    if (protected && !v->stopped_recorded && v->announced &&
         voice_record(app,v,json_pack("{s:s,s:s}","type","voice_stopped",
             "reason",v->error[0]?v->error:"Voice stopped."))<0)failed=true;
     if(failed)snag_ui_text(&app->ui,SNAG_UI_ERROR,"Voice stopped; some final voice records could not be saved. Inspect the session journal.");
@@ -2176,6 +2204,25 @@ int snag_app_voice_service(struct app_state *app)
         return snag_ui_text(&app->ui,SNAG_UI_HOST,lost_terminal);
     }
     char error[256] = {0};
+    if (!atomic_load_explicit(&v->credential_accepted, memory_order_acquire)) {
+        bool done = atomic_load_explicit(&v->done, memory_order_acquire);
+        if (!done && !atomic_load_explicit(&v->credential_ready, memory_order_acquire)) {
+            v->servicing = false;
+            return 0;
+        }
+        if (snag_secret_set_build(&v->secrets, NULL, &v->credential, error, sizeof(error)) < 0) {
+            goto failed;
+        }
+        if (!done && !atomic_load(&v->stop)) {
+            json_t *context = NULL;
+            if (voice_context_snapshot(app, v, &context, error, sizeof(error)) < 0) goto failed;
+            pthread_mutex_lock(&v->mutex);
+            json_decref(v->context);
+            v->context = context;
+            pthread_mutex_unlock(&v->mutex);
+        }
+        atomic_store_explicit(&v->credential_accepted, true, memory_order_release);
+    }
     if ((v->context_dirty || v->context_pending) &&
         !atomic_load(&v->stop) && !atomic_load(&v->done)) {
         json_t *context=NULL;
@@ -2387,19 +2434,20 @@ int snag_app_voice_command(struct app_state *app,const char *line,bool *handled)
     if(snag_ui_text(&app->ui,SNAG_UI_HOST,message)<0)return -1;
     struct app_voice *v=calloc(1,sizeof(*v));if(!v)return -1;
     v->provider=*provider;v->provider.models=NULL;v->provider.model_count=0;v->config=*cfg;
-    memset(&v->provider.api_key,0,sizeof(v->provider.api_key));
+    /* Configuration reload is excluded while voice owns this borrowed source. */
+    v->root_fd = app->store.root_fd;
     snag_credential_clear(&v->credential);
     if(pthread_mutex_init(&v->mutex,NULL)) {free(v);return -1;}
     atomic_init(&v->stop,false);atomic_init(&v->muted,false);atomic_init(&v->mute_pending,false);
     atomic_init(&v->activate,false);atomic_init(&v->done,false);
+    atomic_init(&v->credential_ready, false);
+    atomic_init(&v->credential_accepted, false);
     atomic_init(&v->output_ready, false);
     v->ui=&app->ui;v->attachment=snag_ui_session_attachment(&app->ui);
     for(size_t i=0;i<8u;++i)snag_buf_init(&v->send[i],VOICE_MESSAGE);
     snag_buf_init(&v->receive,VOICE_MESSAGE);app->voice=v;
     if (snag_random_id(v->connection)<0 ||
-        snag_auth_read(app->store.root_fd,provider,false,NULL,&v->credential,
-            owner_controls,v,error,sizeof(error))<0 ||
-        snag_secret_set_build(&v->secrets,app->config,&v->credential,
+        snag_secret_set_build(&v->secrets,app->config,NULL,
             error,sizeof(error))<0)goto failed;
     if (voice_context_snapshot(app, v, &v->context, error, sizeof(error)) < 0) goto failed;
     observation_start(v, &app->session);

@@ -68,6 +68,17 @@ snag_secret_set_build(struct snag_secret_set *set, const struct snag_config *con
 failed: return snag_errorf(error, error_size, "cannot retain secret protection snapshot");
 }
 
+int
+snag_secret_set_merge(struct snag_secret_set *set, const struct snag_secret_set *source,
+    char *error, size_t error_size)
+{
+    for (size_t i = 0; i < source->wire.count; ++i) {
+        if (append_secret(set, snag_strdup_checked(source->values[i], SNAG_WIRE_SECRET_MAX)) < 0)
+            return snag_errorf(error, error_size, "cannot retain transport secret protection");
+    }
+    return 0;
+}
+
 static int
 redact_text(const struct snag_secret_set *set, json_t *result, const char *key,
                    char *error, size_t error_size)

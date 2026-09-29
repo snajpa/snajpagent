@@ -33,6 +33,7 @@ struct provider_ctx {
     struct snag_buf body;
     struct snag_buf error_body;
     struct snag_secret_set secrets;
+    struct snag_secret_set *protection_out;
     struct snag_credential credential;
     struct curl_slist *headers;
     CURL *curl;
@@ -1114,6 +1115,11 @@ provider_ctx_finish(struct provider_ctx *ctx, int rc, char *error, size_t error_
     snag_sse_free(&ctx->sse);
     snag_responses_stream_free(&ctx->stream);
     snag_credential_clear(&ctx->credential);
+    if (ctx->protection_out) {
+        snag_secret_set_free(ctx->protection_out);
+        *ctx->protection_out = ctx->secrets;
+        memset(&ctx->secrets, 0, sizeof(ctx->secrets));
+    }
     snag_secret_set_free(&ctx->secrets);
     return rc;
 }
@@ -1396,6 +1402,7 @@ snag_provider_responses_create(struct snag_provider_connection connection, const
                               snag_responses_hosted_fn hosted, void *hosted_opaque,
                               snag_provider_ready_fn ready, void *ready_opaque,
                               struct snag_response_graph *graph, struct snag_provider_failure *failure,
+                              struct snag_secret_set *protection,
                               char *error, size_t error_size, unsigned int *retry_count)
 {
     struct provider_ctx ctx;
@@ -1408,6 +1415,7 @@ snag_provider_responses_create(struct snag_provider_connection connection, const
         return snag_fail(error, error_size, EINVAL, "invalid provider request");
     provider_ctx_init(&ctx, connection, SNAG_CONTEXT_MAX_REQUEST, SNAG_WIRE_BODY_MAX);
     ctx.ready = ready;
+    ctx.protection_out = protection;
     ctx.ready_opaque = ready_opaque;
     snag_responses_stream_init(&ctx.stream, emit, emit_opaque);
     snag_responses_stream_set_hosted(&ctx.stream, hosted, hosted_opaque);
@@ -1651,8 +1659,8 @@ snag_provider_voice_call(const struct snag_config *config,
             pump,opaque,NULL, 0},
         65536u,65536u);
     /* The caller resolves credentials before starting voice. Keep that same
-     * snapshot for the call and WebSocket attachment; the worker's provider
-     * copy deliberately omits borrowed secret-source pointers. */
+     * snapshot for the call and WebSocket attachment. The session owner protects
+     * this credential before permitting the connection to send context. */
     ctx.credential.root_fd = -1;
     ctx.audio_output=answer;ctx.location=location;ctx.location_size=sizeof(location);
     json_t *body=json_pack("{s:s,s:O}","sdp",sdp,"session",session);

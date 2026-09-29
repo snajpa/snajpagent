@@ -371,7 +371,7 @@ snag_app_provider_run(struct app_state *app, const char *prompt, const json_t *s
         .session_id = app->session.id},
         create_request, snag_app_stream_public, app, hosted_search_activity, app,
         snag_app_request_ready, app,
-        graph, failure, error, error_size, retry_count);
+        graph, failure, NULL, error, error_size, retry_count);
 #endif
 }
 

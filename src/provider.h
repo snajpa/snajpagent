@@ -11,6 +11,7 @@
 #include <stddef.h>
 
 struct snag_ui;
+struct snag_secret_set;
 
 typedef int (*snag_provider_pump_fn)(void *opaque, unsigned int timeout_ms);
 /* Called once after a response.created event has been validated. */
@@ -99,12 +100,17 @@ int snag_provider_responses_compact(struct snag_provider_connection connection,
 int snag_provider_native_compaction_probe(struct snag_provider_connection connection, const char *model,
                                           char *error, size_t error_size);
 
+/* Optional protection receives the transport's owned secret snapshot, including
+ * refreshed credentials. Initialize it to zero; a call replaces prior contents.
+ * Public consumers retain it before releasing output; private graphs stay intact. */
 int snag_provider_responses_create(struct snag_provider_connection connection,
                                   const json_t *request, snag_responses_emit_fn emit,
                                   void *emit_opaque, snag_responses_hosted_fn hosted,
                                   void *hosted_opaque, snag_provider_ready_fn ready,
                                   void *ready_opaque, struct snag_response_graph *graph,
-                                  struct snag_provider_failure *failure, char *error, size_t error_size,
+                                  struct snag_provider_failure *failure,
+                                  struct snag_secret_set *protection,
+                                  char *error, size_t error_size,
                                   unsigned int *retry_count);
 
 int snag_provider_models_list(struct snag_provider_connection connection,

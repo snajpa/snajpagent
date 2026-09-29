@@ -1764,6 +1764,10 @@ Stop local audio before reloading configuration or preparing attachments.
 .TP
 .B /voice on
 Start a voice conversation using the selected provider and its credentials.
+Credential loading and refresh run in the voice connection worker while ordinary
+input and coding work continue. The microphone stays off during startup;
+.B /voice off
+cancels a pending credential wait or connection attempt.
 Direct Codex subscriptions and codex-lb use native subscription voice; compatible
 BYOK providers use their Realtime API. A codex-lb gateway must use its
 /backend-api/codex base for native voice; a bare /v1 base does not select it.
@@ -1829,7 +1833,8 @@ requests that continue after a tool action.
 Public history and returned replies filter registered secrets, including
 credentials reflected in provider output. This protection follows credentials
 used by interface requests when a credential file changes during voice use,
-including responses retained during shutdown.
+including tokens refreshed inside the HTTP transport and responses retained
+during shutdown.
 Before its first delegation, the text interface reads working inputs, public
 output and outcomes from session history. It appends newly recorded working
 events before subsequent ordinary requests. This catches up in bounded steps

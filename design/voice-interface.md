@@ -45,6 +45,13 @@ The voice owner continues capture, playback, speech interruption and transcript
 processing while coding is idle, queued, running or awaiting a tool. The session
 owner admits its tool requests and remains the sole journal and execution owner.
 
+The connection owner loads or refreshes credentials while the session owner keeps
+servicing input and coding work. It publishes the completed credential and waits
+for the session owner to retain its secret protection and refresh the initial
+context before opening the connection. Cancellation or attachment loss interrupts
+this wait; closing joins the worker before retaining final credential protection
+and notices. Credential storage stays private to the current activation.
+
 Track requested voice mode separately from connection/device readiness. Report
 listening, muted, reconnecting and suspended states accurately. A recoverable
 connection loss uses paced, interruptible recovery while voice remains requested;
@@ -155,6 +162,10 @@ request to the existing voice filter before consuming its public graph. Keep pri
 registered values protected even if a credential source changes again. The same
 rule applies when closing voice retains a discarded response; credential values
 remain private.
+The HTTP transport transfers its existing protection snapshot with the completed
+request, including credentials acquired during setup or a 401 refresh. The request
+worker owns that snapshot until the session owner merges it into the voice filter.
+Public copies use the merged protection; private provider continuation stays intact.
 The same ordered cursor restores public voice records preceding the activation
 boundary, including after session reopen. Restoration neither dispatches their
 tools nor sends their old audio, and needs no separate history store.

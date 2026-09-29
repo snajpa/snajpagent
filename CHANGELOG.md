@@ -4,8 +4,12 @@
 
 ## Unreleased
 
+- Keep voice credential loading and refresh off the session owner, with cancellable
+  startup and secret protection established before connection context is sent.
+
 - Filter reflected interface credentials after credential rotation, including
-  responses retained when voice closes, while keeping earlier secrets protected.
+  credentials refreshed inside the HTTP transport and responses retained when
+  voice closes, while keeping earlier secrets protected.
 
 - Preserve policy categories through provider-error normalization and keep mixed
   policy/capacity errors out of context-capacity recovery.
