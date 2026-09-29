@@ -11,6 +11,28 @@
 #include <string.h>
 #include <unistd.h>
 
+static int
+prepare_checkpoint(void *opaque, unsigned int timeout_ms)
+{
+    struct app_state *app = opaque;
+    enum snag_term_action action = SNAG_TERM_NONE;
+    char *text = NULL;
+    (void)timeout_ms;
+    if (app->input_closed || app->shutdown_signal) return 2;
+    if (snag_ui_poll(&app->ui, 0, &action, &text) < 0) return -1;
+    if (action == SNAG_TERM_EXIT) app->input_closed = true;
+    if (text && !*text) { free(text); return 0; }
+    if (text) {
+        int rc = snag_ui_send(&app->ui,
+                              (struct snag_ui_command){.kind = SNAG_UI_DRAFT, .text = text});
+        free(text);
+        return rc < 0 ? -1 : 1;
+    }
+    if (action == SNAG_TERM_CANCEL || action == SNAG_TERM_INTERRUPT ||
+        action == SNAG_TERM_EXIT) return 2;
+    return 0;
+}
+
 #ifndef _WIN32
 #include <fcntl.h>
 #include <termios.h>
@@ -41,28 +63,6 @@ transfer_discard_stale_input(const struct terminal_transfer *lease, int tty,
     if (!transfer_replaced(lease)) return 0;
     result->tail_len = 0u;
     return tty < 0 ? 0 : tcflush(tty, TCIFLUSH);
-}
-
-static int
-prepare_checkpoint(void *opaque, unsigned int timeout_ms)
-{
-    struct app_state *app = opaque;
-    enum snag_term_action action = SNAG_TERM_NONE;
-    char *text = NULL;
-    (void)timeout_ms;
-    if (app->input_closed || app->shutdown_signal) return 2;
-    if (snag_ui_poll(&app->ui, 0, &action, &text) < 0) return -1;
-    if (action == SNAG_TERM_EXIT) app->input_closed = true;
-    if (text && !*text) { free(text); return 0; }
-    if (text) {
-        int rc = snag_ui_send(&app->ui,
-                              (struct snag_ui_command){.kind = SNAG_UI_DRAFT, .text = text});
-        free(text);
-        return rc < 0 ? -1 : 1;
-    }
-    if (action == SNAG_TERM_CANCEL || action == SNAG_TERM_INTERRUPT ||
-        action == SNAG_TERM_EXIT) return 2;
-    return 0;
 }
 
 static void

@@ -10,6 +10,8 @@
 #include <errno.h>
 #include <limits.h>
 
+#include "base.h"
+
 #if defined(__OpenBSD__) || defined(__NetBSD__)
 #include <fcntl.h>
 #endif
@@ -37,10 +39,6 @@
 #else
 #define SNAG_NAME_MAX_BYTES NAME_MAX
 #endif
-#ifndef ESTALE
-#define ESTALE EAGAIN /* Changed file: retry from a fresh snapshot. */
-#endif
-
 #ifdef _WIN32
 typedef struct {
     uint64_t st_dev, st_ino, st_nlink, st_rdev;

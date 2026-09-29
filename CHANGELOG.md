@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Restore Windows UI and queued-attachment builds with shared stale-state
+  error handling and cancellable media preparation.
+
 - Restore client-terminal builds on OpenBSD 3.5 while preserving GNU screen
   backend isolation.
 

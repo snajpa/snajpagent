@@ -21,6 +21,10 @@
 #define EPROTO EIO /* Old BSD has no distinct protocol-error number. */
 #endif
 
+#ifndef ESTALE
+#define ESTALE EAGAIN /* Retry stale state from a fresh snapshot. */
+#endif
+
 #define SNAG_VERBOSITY_MAX 6u
 
 bool snag_verbosity_command(const char *text, size_t len);

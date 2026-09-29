@@ -48,6 +48,38 @@ with tempfile.TemporaryDirectory(prefix="portable-env-", dir=root / "build") as 
 print("PASS: client terminal builds with void-returning unsetenv")
 
 
+with tempfile.TemporaryDirectory(prefix="portable-stale-", dir=root / "build") as tmp:
+    header = Path(tmp) / "errors.h"
+    probe = Path(tmp) / "errors.c"
+    for missing in (True, False):
+        header.write_text("#include <errno.h>\n" + ("#undef ESTALE\n" if missing else "") +
+                          "#ifdef ESTALE\nenum { expected_stale = ESTALE };\n"
+                          "#else\nenum { expected_stale = EAGAIN };\n#endif\n")
+        flags = ["cc", "-std=c11", "-D_GNU_SOURCE", "-Werror", "-include", str(header)]
+        subprocess.run(flags + ["-fsyntax-only", str(root / "src/ui.c")], check=True)
+        for include in ("base.h", "fs.h"):
+            probe.write_text(f'#include "{include}"\n'
+                             '_Static_assert(ESTALE == expected_stale, "stale errno changed");\n'
+                             'int main(void) { return snag_errno(ESTALE) != -1 || errno != ESTALE; }\n')
+            subprocess.run(flags + ["-I" + str(root / "src"), str(probe),
+                                    "-o", str(Path(tmp) / "errors")], check=True)
+            subprocess.run([str(Path(tmp) / "errors")], check=True)
+print("PASS: UI and filesystem share the native or fallback stale-state errno")
+
+
+with tempfile.TemporaryDirectory(prefix="windows-attachments-", dir=root / "build") as tmp:
+    # Keep host declarations while selecting the Windows application body.
+    # Common media callbacks must remain outside the POSIX transfer guard.
+    header = Path(tmp) / "windows_body.h"
+    header.write_text(''.join(f'#include "{name}.h"\n' for name in
+                             ("app_internal", "fs", "media", "tools", "upload")) +
+                      '#define _WIN32 1\n')
+    subprocess.run(["cc", "-std=c11", "-D_GNU_SOURCE", "-Werror", "-fsyntax-only",
+                    "-I" + str(root / "src"), "-include", str(header),
+                    str(root / "src/app_upload.c")], check=True)
+print("PASS: Windows queued attachments retain the common media checkpoint")
+
+
 voice_crypto = (root / "nix/voice-rtc.nix").read_text()
 linux_crypto = (root / "nix/linux.nix").read_text()
 assert '"-DUSE_MBEDTLS=ON"' in voice_crypto

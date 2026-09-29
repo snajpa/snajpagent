@@ -903,6 +903,11 @@ Preserve the pinned upstream sources, patches and license notices with binary
 distributions. The internal i686 port remains outside `PROD_TARGETS` pending
 complete runtime qualification.
 
+The common portability header supplies the Windows `ESTALE` fallback for both
+UI and filesystem operations, using `EAGAIN` for stale state. Platforms with a
+native `ESTALE` value retain it. Queued asset preparation uses the shared UI
+cancellation checkpoint on Windows and POSIX.
+
 `nix/windows-legacy.nix` selects LLVM/msvcrt and the shared `nix/windows.nix`
 recipe builds static x86-64 Windows Jansson, Mbed TLS, compression,
 c-ares, HTTP/2 and GNU Unicode/IDN libraries using the same pinned nixpkgs
