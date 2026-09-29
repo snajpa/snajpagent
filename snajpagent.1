@@ -1820,6 +1820,8 @@ output and outcomes from session history. It appends newly recorded working
 events before subsequent ordinary requests. This catches up in bounded steps
 while coding work continues; each observation identifies its session and source
 sequence. Pending audio delivery does not hold up this text-history catch-up.
+Both native voice observations and text history include command lifecycle,
+goal wording/lock/cancellation changes and model-selection changes.
 Recorded native voice transcripts and deferred spoken outcomes are also appended
 before ordinary text-interface requests, with their source speaker and identities.
 When the provider reports exhausted input, or request serialization reaches its

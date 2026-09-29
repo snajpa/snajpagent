@@ -137,10 +137,13 @@ Native transcripts and deferred spoken outcomes continue through this cursor
 during the live connection. Their speaker and source fields remain in the quoted
 record. Live interface requests/outputs already have their ordinary conversation
 entries, so only their archived records are restored through this path.
-Working-event selection is shared with the native observer. A separate cursor
-keeps pending audio packets from stalling text history. Each owner step reads
-the existing 4 MiB quantum plus one atomic record. Reaching the request byte
-bound schedules the existing compactor before reading more history. Work and
+Working-event selection is shared with the native observer. It includes control
+requests, starts and finishes, goal wording/lock/cancellation changes, and both
+default-selection and active-turn model changes. Control finish records mark the
+end of an attempt; its success/error output requires separate observation.
+A separate cursor keeps pending audio packets from stalling text history. Each
+owner step reads the existing 4 MiB quantum plus one atomic record. Reaching the
+request byte bound schedules the existing compactor before reading more history. Work and
 voice cancellation remain serviceable between steps. Newer events remain in
 the journal for the following request.
 

@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Include command lifecycle, goal wording/lock/cancellation and actual model-change
+  events in native voice observations and text-interface history.
+
 - Restore prior public voice/interface dialogue and action outcomes before the
   next text-interface delegation when voice restarts, including after session reopen.
   Append new native transcripts and deferred spoken outcomes during the live connection.

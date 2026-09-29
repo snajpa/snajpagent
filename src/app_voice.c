@@ -1282,8 +1282,9 @@ working_observation(const char *type)
         "response_output response_output_correction response_completed response_interrupted "
         "response_failed tool_started tool_finished process_closed input_received "
         "future_turn_queued future_turn_edited future_turn_cancelled steering_added "
-        "control_started control_completed goal_started goal_replaced goal_completed "
-        "goal_paused goal_resumed goal_blocked model_changed effort_changed");
+        "control_requested control_started control_finished goal_started goal_replaced "
+        "goal_reworded goal_lock_changed goal_completed goal_cancelled goal_paused goal_resumed "
+        "goal_blocked model_selection_changed turn_model_changed effort_changed");
 }
 
 struct interface_history_read {
