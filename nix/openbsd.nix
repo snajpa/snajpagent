@@ -559,6 +559,7 @@ in {
         # Keep application/Unicode libraries static with native OS runtimes.
         makeFlagsArray+=(
           'DEBUG=${if debug then "1" else "0"}'
+          'WITH_AUDIO_DEVICE=1'
           ${pkgs.lib.optionalString (updateBase != "") "'UPDATE_BASE_URL=${updateBase}' 'UPDATE_TARGET=${updateTarget}'"}
           'TARGET_OS=OpenBSD'
           'WITH_OFFICE=0' 'WITH_OFFICE_COMMANDS=1'

@@ -60,6 +60,21 @@ def check_derivations() -> None:
     print(f"nixcheck: ok ({sites} application derivations keep dontConfigure)")
 
 
+def check_device_audio() -> None:
+    """Production platform recipes enable the linked device and voice backends."""
+    for name in ("linux", "macos", "windows", "freebsd", "netbsd", "openbsd"):
+        path = ROOT / "nix" / f"{name}.nix"
+        text = path.read_text(encoding="utf-8")
+        application = re.search(r"application\s*=\s*\{", text)
+        require(application is not None, f"{path.name} has no application")
+        body = derivation_body(text, application.end())
+        require(body is not None and "'WITH_AUDIO_DEVICE=1'" in body,
+                f"{path.name} does not enable production device audio")
+        require("RTC_LIBS=" in body and "MINIAUDIO_CFLAGS=" in body,
+                f"{path.name} lacks production voice/device dependencies")
+    print("nixcheck: ok (production platform recipes enable device audio)")
+
+
 def check_riscv64_matrix() -> None:
     """riscv64 stays in PROD only with its pin fix present."""
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
@@ -104,6 +119,7 @@ def check_ppc32_ssp() -> None:
 
 def main() -> int:
     check_derivations()
+    check_device_audio()
     check_riscv64_matrix()
 
     check_ppc32_ssp()

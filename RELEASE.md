@@ -88,12 +88,11 @@ still uses one Nix build job/core and isolated `build/matrix/<target>/` outputs;
 the load-aware scheduler does not omit implemented targets. Plain `make`
 remains host-only and does not build or publish a release.
 
-The next full binary release must enable device audio on every first-tier
-platform, as requested on September 27, 2026. Check the actual application build
-flags and linked device/voice backends for each target; file decoding and provider
-audio routes alone do not satisfy this requirement. Keep any platform-specific
-runtime dependencies explicit. This requirement does not authorize a version
-change or alter previously published binaries.
+The Linux, macOS, Windows and BSD production recipes enable device audio.
+Check the actual application build flags and linked device/voice backends for
+each target; file decoding and provider audio routes alone do not satisfy the
+first-tier requirement. Keep platform-specific runtime dependencies explicit.
+Recipe changes do not alter previously published binaries.
 
 The current required outputs are:
 

@@ -4775,7 +4775,8 @@ packaging is never bundled and is resolved from a separately installed runtime.
 .B make WITH_AUDIO_DEVICE=0
 Build a custom executable without capture, playback or audio-device enumeration.
 The tracked config.mk defaults to WITH_AUDIO_DEVICE=0; configure can enable
-available device support. Linux and macOS production recipes explicitly enable it.
+available device support. Linux, macOS, Windows and BSD production recipes
+explicitly enable it.
 MINIAUDIO_CFLAGS supplies the path to
 miniaudio.h; AUDIO_DEVICE_LIBS overrides platform backend link flags.
 The device adapter uses miniaudio's low-level API, without its engine or decoders.

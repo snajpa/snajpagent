@@ -284,6 +284,7 @@ in {
         sed -E 's/([0-9]+)/\1,/g' > build/ca_bundle.inc
       makeFlagsArray+=(
         'DEBUG=${if debug then "1" else "0"}'
+        'WITH_AUDIO_DEVICE=1'
         ${pkgs.lib.optionalString (updateBase != "") "'UPDATE_BASE_URL=${updateBase}' 'UPDATE_TARGET=${updateTarget}'"}
         'TARGET_OS=Windows' 'BIN=${packageName}.exe'
         'DEBUG_SYMBOLS=debug-${packageName}.exe'

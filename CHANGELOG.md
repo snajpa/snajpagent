@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Enable device audio in Windows and BSD production packages through their
+  existing miniaudio and native voice backends.
+
 - Fix OpenAI API-key token preflight sending response-only parameters such as
   `include` and `prompt_cache_key`, including late compaction cache setup.
   Count requests retain input configuration; generation requests keep encrypted

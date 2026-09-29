@@ -425,6 +425,7 @@ in {
         # c-ares' pkg-config pthread flags must not pull in old static libthr.
         makeFlagsArray+=(
           'DEBUG=${if debug then "1" else "0"}'
+          'WITH_AUDIO_DEVICE=1'
           ${pkgs.lib.optionalString (updateBase != "") "'UPDATE_BASE_URL=${updateBase}' 'UPDATE_TARGET=${updateTarget}'"}
           'TARGET_OS=FreeBSD'
           'WITH_OFFICE=0' 'WITH_OFFICE_COMMANDS=1'
