@@ -164,8 +164,10 @@ footer {
 }
 
 /* OS-family disclosures keep every file and its checksum together. */
-.downloads .os-family { border-bottom: 1px solid var(--rule); }
-.downloads .os-family > summary { cursor: pointer; padding: 0.8rem 0; font-size: 1.15rem; }
+.downloads .os-family,
+.downloads .development-downloads { border-bottom: 1px solid var(--rule); }
+.downloads .os-family > summary,
+.downloads .development-downloads > summary { cursor: pointer; padding: 0.8rem 0; font-size: 1.15rem; }
 .downloads summary:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; }
 .downloads .family-content { padding: 0 0 1.5rem; }
 .downloads .download-table { table-layout: fixed; }

@@ -1,9 +1,9 @@
 {
   "name": "snajpagent",
   "target": "windows-arm64",
-  "version": "0.99.2-9d98036",
-  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.2-9d98036/snajpagent-0.99.2-9d98036-windows-arm64.exe",
-  "sha256": "2dd1ac5937e8435929bb37f1eba3853a53ec046e9b0129151723b70fae686a43",
-  "size": 7989248,
+  "version": "0.99.8b-d25f0846",
+  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.8b-d25f0846/snajpagent-0.99.8b-d25f0846-windows-arm64.exe",
+  "sha256": "f11d9a69c9424e4e03d726539c0a58d74539fdebfd20f5cad1d524dce8ca894f",
+  "size": 36281344,
   "changelog": "https://agent.snajpa.net/downloads.html#changelog"
 }

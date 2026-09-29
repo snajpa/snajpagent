@@ -1,0 +1,9 @@
+{
+  "name": "snajpagent",
+  "target": "linux-riscv64",
+  "version": "0.99.8b-d25f0846",
+  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.8b-d25f0846/snajpagent-0.99.8b-d25f0846-linux-riscv64",
+  "sha256": "35cbea49580f9288e4bc33ccf345f5098f2cd181f103a4a7967b01884a3d5207",
+  "size": 41271928,
+  "changelog": "https://agent.snajpa.net/downloads.html#changelog"
+}

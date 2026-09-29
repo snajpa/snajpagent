@@ -1,0 +1,9 @@
+{
+  "name": "snajpagent",
+  "target": "linux-ppc64le",
+  "version": "0.99.8b-d25f0846",
+  "url": "https://github.com/snajpa/snajpagent/releases/download/0.99.8b-d25f0846/snajpagent-0.99.8b-d25f0846-linux-ppc64le",
+  "sha256": "4dd1b320ee21fd9ada9e3249d5af9ddbb50a24bf2b07c95eea2de0adaadeee02",
+  "size": 50916456,
+  "changelog": "https://agent.snajpa.net/downloads.html#changelog"
+}

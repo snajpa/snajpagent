@@ -298,8 +298,30 @@
         <a href="manual.html">manual</a> for supported formats and configuration,
         or the release's matching manual for its exact command set.</p>
     </section>
+    <details class="development-downloads" id="development">
+      <summary>Development snapshot</summary>
+      <div class="family-content">
+        <p><strong>0.99.8b-d25f0846</strong> · September 29, 2026 · Prerelease</p>
+        <p>Debug-enabled builds cover the OS, architecture and ABI variants
+          listed above, with device audio and live voice backends included.
+          Voice requires a configured provider route and compatible audio
+          devices. Office rendering uses an installed LibreOffice runtime.</p>
+        <p><a href="https://github.com/snajpa/snajpagent/releases/tag/0.99.8b-d25f0846">Executables, symbols, source and release notes</a> ·
+          <a href="https://github.com/snajpa/snajpagent/releases/download/0.99.8b-d25f0846/SHA256SUMS">SHA-256 checksums</a></p>
+        <p>Automatic updates default to off in development builds.</p>
+      </div>
+    </details>
     <section aria-labelledby="changelog">
       <h2 id="changelog">Release highlights</h2>
+      <h3>0.99.8b-d25f0846 · September 29, 2026 · Development</h3>
+      <ul>
+        <li>Fixes OpenAI API-key token-count requests rejected for
+          <code>include</code>, including compaction preflight.</li>
+        <li>Improves terminal attachment, retained history and voice
+          conversation continuity across long sessions.</li>
+        <li>Enables device audio and native voice backends in Linux, macOS,
+          Windows and BSD builds.</li>
+      </ul>
       <h3>0.99.8b · September 27, 2026</h3>
       <ul>
         <li>Long sessions recover from repeated context and media limits while
