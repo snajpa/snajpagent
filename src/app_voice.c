@@ -266,6 +266,7 @@ struct app_voice {
     pthread_mutex_t mutex;
     atomic_bool stop,muted,mute_pending,activate,done;
     atomic_bool output_ready;
+    atomic_bool history_queued, history_sent;
     bool thread_started,announced,applied_mute,device_started,stopped_recorded,expiry_warned;
     struct snag_provider_config provider;
     struct snag_audio_config config;
@@ -301,7 +302,7 @@ struct app_voice {
     /* Provider-private continuation stays inside its current handoff. */
     json_t *interface_history;
     struct snag_journal_cursor interface_cursor;
-    uint64_t interface_restore_before;
+    uint64_t restore_before;
     struct interface_compaction compact;
     bool interface_needs_compact;
     uint64_t interface_order;
@@ -312,11 +313,9 @@ struct app_voice {
 static void
 observation_start(struct app_voice *v, const struct snag_session *session)
 {
-    v->interface_restore_before = session->next_seq;
-    v->observation_cursor.offset = session->log_end;
-    v->observation_cursor.next_seq = session->next_seq;
-    memcpy(v->observation_cursor.prev_sha256, session->prev_sha256,
-        sizeof(v->observation_cursor.prev_sha256));
+    v->restore_before = session->next_seq;
+    atomic_init(&v->history_queued, false);
+    atomic_init(&v->history_sent, false);
 }
 
 static int
@@ -478,6 +477,24 @@ static bool voice_attachment_lost(const struct app_voice *v)
 
 static const char lost_terminal[] =
     "Voice stopped: controlling terminal detached, suspended or changed.";
+
+static bool
+voice_capture_ready(const struct app_voice *v)
+{
+    return atomic_load(&v->activate) && atomic_load(&v->history_sent) &&
+        !atomic_load(&v->stop) && !atomic_load(&v->done) && !voice_attachment_lost(v);
+}
+
+/* The connection owner publishes this only after writing the initial context.
+ * Later live observations must not extend the captured activation boundary. */
+static void
+observation_flushed(struct app_voice *v)
+{
+    if (v->send_count || !atomic_load(&v->history_queued)) return;
+    pthread_mutex_lock(&v->mutex);
+    if (!v->observation && !v->context) atomic_store(&v->history_sent, true);
+    pthread_mutex_unlock(&v->mutex);
+}
 
 static json_t *
 voice_redact_bounded(struct app_voice *v, const json_t *value, size_t max,
@@ -690,7 +707,13 @@ snag_app_voice_fixture_observation(struct app_state *app)
     json_t *observation = v->observation;
     v->observation = NULL;
     pthread_mutex_unlock(&v->mutex);
+    observation_flushed(v);
     return observation;
+}
+bool
+snag_app_voice_fixture_capture_ready(struct app_state *app)
+{
+    return app->voice && voice_capture_ready(app->voice);
 }
 json_t *
 snag_app_voice_fixture_context(struct app_state *app)
@@ -701,6 +724,7 @@ snag_app_voice_fixture_context(struct app_state *app)
     json_t *context = v->context;
     v->context = NULL;
     pthread_mutex_unlock(&v->mutex);
+    observation_flushed(v);
     return context;
 }
 #endif
@@ -922,8 +946,7 @@ native_done:
             v->announced=true;
         }
         if (owner_controls(v,0u))break;
-        if (v->announced && !v->device_started &&
-            atomic_load(&v->activate)) {
+        if (v->announced && !v->device_started && voice_capture_ready(v)) {
             if(snag_audio_open(true,true,1u,v->config.capture_device,v->config.playback_device,&v->device,v->error,sizeof(v->error))<0)break;
             /* Duplex opens gated: even mute/stop during backend startup cannot
              * accumulate stale capture. Unmute is acknowledged next iteration. */
@@ -1007,7 +1030,9 @@ native_done:
             drained=drained && now-v->drained_ms>=snag_audio_latency_ms(v->device);
             if(snag_voice_respond(v->protocol,drained,v->error,sizeof(v->error))<0)break;
         }
-        if(owner_flush(v)<0 || snag_provider_voice_wait(v->socket,v->send_count!=0u,10u)<0)break;
+        if (owner_flush(v) < 0) break;
+        observation_flushed(v);
+        if (snag_provider_voice_wait(v->socket, v->send_count != 0u, 10u) < 0) break;
     }
     goto done;
 failed:
@@ -1287,6 +1312,20 @@ working_observation(const char *type)
         "goal_blocked model_selection_changed turn_model_changed effort_changed");
 }
 
+static bool
+history_observation(const struct app_voice *v, uint64_t seq, const char *type,
+    const json_t *data, bool text_interface)
+{
+    if (working_observation(type)) return true;
+    if (strcmp(type, "voice_event")) return false;
+    const char *record_type = snag_json_string(json_object_get(data, "event"), "type");
+    if (!record_type) return false;
+    if (snag_string_in(record_type, "voice_transcript voice_result")) {
+        return text_interface || seq < v->restore_before;
+    }
+    return seq < v->restore_before && !strcmp(record_type, "voice_response");
+}
+
 struct interface_history_read {
     struct app_state *app;
     struct voice_handoff *handoff;
@@ -1302,14 +1341,7 @@ interface_history_event(void *opaque, const struct snag_session *state, uint64_t
     (void)error;
     (void)size;
     if (seq >= read->handoff->history_target) return 1;
-    bool voice_dialogue = false;
-    if (!strcmp(type, "voice_event")) {
-        const char *record_type = snag_json_string(json_object_get(data, "event"), "type");
-        voice_dialogue = record_type &&
-            (snag_string_in(record_type, "voice_transcript voice_result") ||
-                (seq < v->interface_restore_before && !strcmp(record_type, "voice_response")));
-    }
-    if (!working_observation(type) && !voice_dialogue) return 0;
+    if (!history_observation(v, seq, type, data, true)) return 0;
     char *encoded = snag_app_history_data(seq, type, data);
     json_t *view = encoded ? json_loads(encoded, JSON_REJECT_DUPLICATES, NULL) : NULL;
     if (encoded) snag_secret_clear(encoded, strlen(encoded));
@@ -1972,7 +2004,8 @@ observation_event(void *opaque, const struct snag_session *state, uint64_t seq,
     struct app_state *app = opaque;
     struct app_voice *v = app->voice;
     (void)state;
-    if (!working_observation(type)) return 0;
+    if (!atomic_load(&v->history_sent) && seq >= v->restore_before) return 1;
+    if (!history_observation(v, seq, type, data, false)) return 0;
     char *encoded = snag_app_history_data(seq, type, data);
     if (!encoded) return -1;
     struct snag_buf clean = {.max = SNAG_MAX_EVENT_LINE};
@@ -1996,16 +2029,30 @@ observation_service(struct app_state *app, char *error, size_t size)
 {
     struct app_voice *v = app->voice;
     if (atomic_load(&v->stop) || atomic_load(&v->done)) return 0;
+    if (atomic_load(&v->history_queued) && !atomic_load(&v->history_sent)) return 0;
     pthread_mutex_lock(&v->mutex);
     bool pending = v->observation != NULL;
     pthread_mutex_unlock(&v->mutex);
     if (pending) return 0;
     if (!v->observation_record) {
-        if (v->observation_cursor.next_seq >= app->session.next_seq) return 0;
-        int rc = snag_session_each_event_forward(&app->session, &v->observation_cursor,
-            SNAG_JOURNAL_PAGE_BYTES, observation_event, app, error, size);
-        if (rc < 0) return rc;
-        if (!v->observation_record) return 0;
+        if (v->observation_cursor.next_seq < app->session.next_seq) {
+            int rc = snag_session_each_event_forward(&app->session, &v->observation_cursor,
+                SNAG_JOURNAL_PAGE_BYTES, observation_event, app, error, size);
+            if (rc < 0) return rc;
+        }
+        if (!v->observation_record) {
+            if (!atomic_load(&v->history_queued) &&
+                v->observation_cursor.next_seq >= v->restore_before) {
+                json_t *context = NULL;
+                if (voice_context_snapshot(app, v, &context, error, size) < 0) return -1;
+                pthread_mutex_lock(&v->mutex);
+                json_decref(v->context);
+                v->context = context;
+                pthread_mutex_unlock(&v->mutex);
+                if (!v->context_pending) atomic_store(&v->history_queued, true);
+            }
+            return 0;
+        }
     }
     /* Retain one decoded record so fragmentation never rereads it quadratically. */
     const char *text = snag_json_string(v->observation_record, "text");
@@ -2071,7 +2118,11 @@ int snag_app_voice_service(struct app_state *app)
                 json_decref(event);continue;
             }
             bool mute=atomic_load(&v->muted);
-            if(snag_ui_voice(&app->ui,mute?"[voice mic off; /voice unmute | off] ":"[voice starting mic; /voice mute | off] ")==0) {
+            const char *label = !atomic_load(&v->history_sent) ?
+                "[voice restoring history; mic off; /voice off cancels] " :
+                mute ? "[voice mic off; /voice unmute | off] " :
+                "[voice starting mic; /voice mute | off] ";
+            if (snag_ui_voice(&app->ui, label) == 0) {
                 if(voice_record(app,v,json_pack("{s:s}","type","voice_started"))<0) {json_decref(event);goto failed;}
                 atomic_store(&v->activate,true);
             } else {json_decref(event);goto failed;}

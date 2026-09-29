@@ -2428,7 +2428,7 @@ static int voice_close_record(void *opaque,const struct snag_session *state,uint
     const char *kind=snag_json_string(json_object_get(data,"event"),"type");
     if(!strcmp(kind,"voice_transcript"))++counts[0];
     else if(!strcmp(kind,"voice_stopped"))++counts[1];
-    else assert(false);
+    else assert(!strcmp(kind, "voice_started"));
     return 0;
 }
 
@@ -3037,11 +3037,72 @@ test_voice_observation_cursor(void)
     assert(snag_session_create(&app.store, &app.session, path, "default", "fixture", "medium",
         error, sizeof(error)) == 0);
     assert(snag_ui_init(&app.ui) == 0);
+    const char *archive_goal = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    uint64_t archive_seq = app.session.next_seq;
+    json_t *archive[] = {
+        json_pack("{s:s,s:s}", "goal_id", archive_goal, "prompt", "Earlier objective"),
+        json_pack("{s:s}", "goal_id", archive_goal),
+        json_pack("{s:s,s:s,s:s,s:{s:s,s:s,s:s,s:s}}", "connection_id", archive_goal,
+            "provider", "default", "model", "fixture", "event", "type", "voice_transcript",
+            "speaker", "user", "item_id", "old-input",
+            "text", "Correction voice-observation-secret"),
+        json_pack("{s:s,s:s,s:s,s:{s:s,s:s,s:s,s:s}}", "connection_id", archive_goal,
+            "provider", "default", "model", "fixture", "event", "type", "voice_transcript",
+            "speaker", "assistant", "item_id", "old-reply", "text", "Correction understood"),
+        json_pack("{s:s,s:s,s:s,s:{s:s,s:s,s:s,s:s,s:{s:b,s:s}}}", "connection_id", archive_goal,
+            "provider", "default", "model", "fixture", "event", "type", "voice_response",
+            "operation", "interface_tool", "tool", "read_file", "call_id", "old-read",
+            "result", "ok", 1, "model_text", "Earlier tool result")
+    };
+    const char *archive_types[] = {
+        "goal_started", "goal_cancelled", "voice_event", "voice_event", "voice_event"
+    };
+    char *archive_expected[5];
+    for (size_t i = 0u; i < 5u; ++i) {
+        json_t *safe = json_deep_copy(archive[i]);
+        assert(safe);
+        if (i == 2u) {
+            assert(json_object_set_new(json_object_get(safe, "event"), "text",
+                json_string("Correction <redacted:secret>")) == 0);
+        }
+        archive_expected[i] = snag_app_history_data(archive_seq + i, archive_types[i], safe);
+        json_decref(safe);
+        assert(archive_expected[i] && snag_session_commit(&app.session, archive_types[i],
+            archive[i], NULL, error, sizeof(error)) == 0);
+    }
+    char session_id[33];
+    strcpy(session_id, app.session.id);
+    snag_session_close(&app.session);
+    snag_session_init(&app.session);
+    assert(snag_session_open(&app.store, &app.session, session_id, error, sizeof(error)) == 0);
     json_t *notices = json_array();
     assert(notices && snag_app_voice_fixture(&app, notices, false) == 0);
     json_decref(notices);
+    for (size_t i = 0u; i < 5u; ++i) {
+        assert(snag_app_voice_service(&app) == 0 && app.voice);
+        json_t *restored = snag_app_voice_fixture_observation(&app);
+        if (!restored) fprintf(stderr, "native archive omitted %s at %llu\n", archive_types[i],
+            (unsigned long long)(archive_seq + i));
+        assert(restored && !strcmp(snag_json_string(restored, "session_id"), session_id));
+        assert((uint64_t)json_integer_value(json_object_get(restored, "seq")) == archive_seq + i);
+        assert(!strcmp(snag_json_string(restored, "event_type"), archive_types[i]));
+        assert(json_is_true(json_object_get(restored, "complete")));
+        assert(!strcmp(snag_json_string(restored, "text"), archive_expected[i]));
+        json_decref(restored);
+        free(archive_expected[i]);
+    }
+    assert(!app.session.active_turn && !app.session.pending_queue_count);
     assert(snag_app_voice_service(&app) == 0);
     assert(!snag_app_voice_fixture_observation(&app));
+    json_t *initial_context = snag_app_voice_fixture_context(&app);
+    assert(initial_context && json_is_true(json_object_get(initial_context, "history_complete")));
+    json_decref(initial_context);
+    assert(snag_session_commit(&app.session, "voice_event", json_pack(
+        "{s:s,s:s,s:s,s:{s:s,s:s,s:s,s:s}}", "connection_id", archive_goal,
+        "provider", "default", "model", "fixture", "event", "type", "voice_transcript",
+        "speaker", "user", "item_id", "live-input", "text", "Current native speech"),
+        NULL, error, sizeof(error)) == 0);
+    assert(snag_app_voice_service(&app) == 0 && !snag_app_voice_fixture_observation(&app));
     char prompt[6100];
     for (size_t i = 0; i < 6000u; i += 2u) memcpy(prompt + i, "λ", 2u);
     strcpy(prompt + 6000u, "voice-observation-secret");
@@ -6321,6 +6382,64 @@ test_native_ui(void)
             free(command);
             command = NULL;
         }
+        const char *goal = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        char history_text[3073];
+        for (size_t i = 0u; i < sizeof(history_text) - 1u; i += 2u) {
+            memcpy(history_text + i, "λ", 2u);
+        }
+        history_text[sizeof(history_text) - 1u] = '\0';
+        assert(snag_session_commit(session, "goal_started",
+            json_pack("{s:s,s:s}", "goal_id", goal, "prompt", history_text),
+            NULL, error, sizeof(error)) == 0);
+        assert(snag_session_commit(session, "goal_cancelled", json_pack("{s:s}", "goal_id", goal),
+            NULL, error, sizeof(error)) == 0);
+        for (unsigned int cancelled = 1u; ; --cancelled) {
+            json_t *ready = json_pack("[{s:s}]", "type", "voice_ready");
+            assert(ready && snag_app_voice_fixture(&app, ready, false) == 0);
+            json_decref(ready);
+            assert(snag_app_voice_service(&app) == 0 && app.voice);
+            assert(!snag_app_voice_fixture_capture_ready(&app));
+            /* Repeated service cannot bypass an unconsumed initial packet. */
+            assert(snag_app_voice_service(&app) == 0 && app.voice);
+            assert(!snag_app_voice_fixture_capture_ready(&app));
+            if (!cancelled) {
+                /* Ongoing model changes must not move the initial history boundary. */
+                assert(voice_fixture_model_changes(&app, false) == 0u);
+                const char *types[] = {"goal_started", "goal_cancelled"};
+                for (size_t i = 0u; i < 2u; ++i) {
+                    bool complete = false;
+                    for (size_t fragments = 0u; !complete && fragments < 8u; ++fragments) {
+                        json_t *history = snag_app_voice_fixture_observation(&app);
+                        assert(history && !strcmp(snag_json_string(history, "event_type"),
+                            types[i]));
+                        complete = json_is_true(json_object_get(history, "complete"));
+                        if (!i && !fragments) assert(!complete);
+                        json_decref(history);
+                        assert(!snag_app_voice_fixture_capture_ready(&app));
+                        assert(snag_app_voice_service(&app) == 0 && app.voice);
+                    }
+                    assert(complete);
+                }
+                assert(!snag_app_voice_fixture_capture_ready(&app));
+                json_t *context = snag_app_voice_fixture_context(&app);
+                assert(context && json_is_true(json_object_get(context, "history_complete")));
+                assert((uint64_t)json_integer_value(json_object_get(context,
+                    "history_as_of_seq")) == session->next_seq - 1u);
+                json_decref(context);
+                assert(!snag_app_voice_fixture_observation(&app));
+                assert(snag_app_voice_fixture_capture_ready(&app));
+                for (size_t i = 0u; i < 2u; ++i) {
+                    assert(snag_app_voice_service(&app) == 0);
+                    json_t *history = snag_app_voice_fixture_observation(&app);
+                    assert(history && !strcmp(snag_json_string(history, "event_type"),
+                        "model_selection_changed"));
+                    json_decref(history);
+                }
+            }
+            snag_app_voice_close(&app);
+            assert(!app.voice && !session->active_turn && !session->pending_queue_count);
+            if (!cancelled) break;
+        }
         assert(snag_ui_voice(ui, "[VOICE MIC ON] ") == 0);
         json_t *notices = json_pack("[{s:s,s:s,s:s,s:s},{s:s}]",
             "type", "voice_transcript", "speaker", "user", "item_id", "input-1",
@@ -6367,7 +6486,7 @@ test_native_ui(void)
         unsigned int voice_counts[2] = {0};
         assert(snag_session_each_event(session, voice_close_record, voice_counts,
                                         error, sizeof(error)) == 0);
-        assert(voice_counts[0] == 1u && voice_counts[1] == 1u && !session->pending_queue_count);
+        assert(voice_counts[0] == 1u && voice_counts[1] == 3u && !session->pending_queue_count);
         for (unsigned int playing = 0u; playing < 2u; ++playing) {
             assert(snag_app_audio_fixture(&app, playing != 0u) == 0);
             assert(snag_app_audio_fixture_checkpoint(&app) == 2);

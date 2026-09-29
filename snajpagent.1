@@ -1785,7 +1785,12 @@ handoffs. At capacity, native voice reports that a new handoff was not submitted
 public Realtime temporarily withholds the session tool. Conversation and accepted
 work continue. A slow result consumer delays delivery without stopping voice.
 [audio] settings are optional overrides.
-The prompt identifies microphone capture, which starts after connection setup.
+The prompt identifies microphone capture. Before capture starts, voice restores
+prior public working history, speech and interface outcomes from the saved session
+as identified historical observations. The microphone stays off until the initial
+history and fresh-state transport writes finish. Large histories can delay this
+stage; /voice off cancels it while coding work continues. Saved actions and audio
+are not replayed. Current speech already belongs to the live provider conversation.
 Microphone audio goes to the provider's media servers and replies
 are synthesized speech. Use a headset: software acoustic echo cancellation is
 not provided. Keyboard editing and ordinary submission remain available.

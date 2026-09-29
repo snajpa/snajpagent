@@ -122,7 +122,20 @@ connection restores prior public voice transcripts, interface requests, outputs
 and outcomes from the journal as identified historical observations. It captures
 the activation sequence boundary before admitting new dialogue, so live interface
 items are appended once and saved actions remain historical context. Provider-private
-continuation is not restored. Native audio-context renewal and retention remain open.
+continuation is not restored. Native audio-context renewal and capacity recovery remain open.
+
+Native restoration uses the same verified journal and public formatter as
+text restoration. Its source boundary is captured at activation. Prior public
+speech, interface actions and outcomes are historical observations; active native
+speech already belongs to the current provider conversation. The existing bounded
+observation stream carries the archive in order. A fresh, complete state snapshot
+follows the initial history. Device activation waits for the initial cursor and
+queued transport writes to finish, while cancellation and
+working-model progress remain serviceable. Later working output follows through
+the same cursor. Provider-window recovery and shared attachment still require
+separate implementation; this boundary supplies neither a model-capacity estimate
+nor a proactive retention policy. Socket-write completion is a local ordering
+barrier, not evidence of remote context adoption across native media channels.
 
 The text interface reads working inputs, public output, outcomes and controls
 from the verified journal before its first delegation. Before each ordinary

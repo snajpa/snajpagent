@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Restore public working history, prior speech and interface outcomes into the
+  voice connection before capture starts, including after session reopen. Keep
+  capture behind initial-history and fresh-state transport writes, with cancellation
+  available throughout catch-up.
+
 - Include command lifecycle, goal wording/lock/cancellation and actual model-change
   events in native voice observations and text-interface history.
 
