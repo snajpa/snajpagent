@@ -270,6 +270,7 @@ struct app_voice {
     /* Session-owner-only handoff/result correlation. */
     struct voice_handoff handoffs[SNAG_VOICE_HANDOFFS];
     bool context_dirty;
+    bool context_pending;
     struct voice_request *request;
     struct voice_handoff *interface_active;
     uint64_t interface_order;
@@ -419,8 +420,10 @@ voice_context_snapshot(struct app_state *app, struct app_voice *v, json_t **resu
     json_t *context = NULL;
     *result = NULL;
     if (snag_session_voice_context(&app->session, &context, error, size) < 0) return -1;
+    bool pending = !json_is_true(json_object_get(context, "history_complete"));
     *result = voice_redact(v, context, error, size);
     json_decref(context);
+    if (*result) v->context_pending = pending;
     return *result ? 0 : snag_errorf(error, size, "Cannot filter voice session context");
 }
 
@@ -1470,7 +1473,8 @@ int snag_app_voice_service(struct app_state *app)
         return snag_ui_text(&app->ui,SNAG_UI_HOST,lost_terminal);
     }
     char error[256] = {0};
-    if(v->context_dirty && !atomic_load(&v->stop) && !atomic_load(&v->done)) {
+    if ((v->context_dirty || v->context_pending) &&
+        !atomic_load(&v->stop) && !atomic_load(&v->done)) {
         json_t *context=NULL;
         if (voice_context_snapshot(app, v, &context, error, sizeof(error)) < 0) goto failed;
         pthread_mutex_lock(&v->mutex);json_decref(v->context);v->context=context;pthread_mutex_unlock(&v->mutex);

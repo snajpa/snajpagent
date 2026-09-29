@@ -18,6 +18,7 @@
 /* The checkpoint is a materialized current view, not one ordinary 16 MiB
  * event. Its maximum covers the active provider request and pending state. */
 #define SNAG_CHECKPOINT_EVENT_MAX (128u * 1024u * 1024u)
+static void voice_projection_free(struct snag_voice_projection *);
 static int
 open_dir_path(const char *path)
 {
@@ -216,6 +217,7 @@ void
 snag_session_close(struct snag_session *session)
 {
     if (session->on_commit_free) session->on_commit_free(session->on_commit_opaque);
+    voice_projection_free(session->voice_projection);
     if (session->log_fd >= 0) (void)close(session->log_fd);
     if (session->lock_fd >= 0) (void)close(session->lock_fd);
     if (session->dir_fd >= 0) (void)close(session->dir_fd);
@@ -3442,9 +3444,15 @@ static int voice_status_event(void *opaque,const struct snag_session *state,uint
         s->status="queued";
     if(!s->status)return 0;
     if(!strcmp(type,"future_turn_cancelled")) {
-        const json_t *ids=json_object_get(data,"queue_ids");
-        for(size_t i=0;i<json_array_size(ids);++i)
-            if(!strcmp(json_string_value(json_array_get(ids,i)),s->queue))s->status="cancelled";
+        const json_t *ids = json_object_get(data, "queue_ids");
+        if (!json_is_array(ids))
+            return snag_errorf(error, size, "Invalid voice queue cancellation");
+        for (size_t i = 0u; i < json_array_size(ids); ++i) {
+            const char *id = json_string_value(json_array_get(ids, i));
+            if (!id || !snag_hex_is_lower(id, SNAG_ID_HEX_LEN))
+                return snag_errorf(error, size, "Invalid voice queue cancellation identity");
+            if (!strcmp(id, s->queue)) s->status = "cancelled";
+        }
     } else if(!strcmp(type,"turn_started") && queue && !strcmp(queue,s->queue)) {
         if(!snag_strcpy(s->turn,sizeof(s->turn),turn))return -1;
         s->status="running";
@@ -3467,30 +3475,55 @@ static int voice_status_event(void *opaque,const struct snag_session *state,uint
     return 0;
 }
 
-int snag_session_voice_status(struct snag_session *session,const char *queue,json_t **result,char *error,size_t size)
+static json_t *
+voice_status_result(const struct voice_status_lookup *s)
 {
-    if(!session || !queue || !result || !snag_hex_is_lower(queue,SNAG_ID_HEX_LEN))return -1;
-    *result=NULL;struct voice_status_lookup s={.queue=queue};
-    int rc=snag_session_each_event(session,voice_status_event,&s,error,size);
-    if(!rc && !s.status) {snag_errorf(error,size,"Voice handoff is not in the session journal");rc=-1;}
-    if(!rc) {
-        const char *text="Coding request is queued.";
-        if(!strcmp(s.status,"running"))text="Coding turn is running under the existing session owner.";
-        else if(!strcmp(s.status,"cancelled"))text="Coding request cancelled before execution.";
-        else if(!strcmp(s.status,"interrupted"))text="Coding turn interrupted by the existing session controls.";
-        else if(!strcmp(s.status,"failed"))text="Coding turn failed. Inspect the coding session for the error.";
-        else if(!strcmp(s.status,"completed_silent"))text="Coding turn completed without a spoken result.";
-        else if(!strcmp(s.status,"completed"))text=s.text?s.text:"Coding turn completed.";
-        *result=json_pack("{s:s,s:s,s:s}","status",s.status,"turn_id",s.turn,"text",text);
-        if(!*result)rc=-1;
-    }
-    free(s.text);return rc;
+    const char *text = "Coding request is queued.";
+    if (!strcmp(s->status, "running"))
+        text = "Coding turn is running under the existing session owner.";
+    else if (!strcmp(s->status, "cancelled")) text = "Coding request cancelled before execution.";
+    else if (!strcmp(s->status, "interrupted"))
+        text = "Coding turn interrupted by the existing session controls.";
+    else if (!strcmp(s->status, "failed"))
+        text = "Coding turn failed. Inspect the coding session for the error.";
+    else if (!strcmp(s->status, "completed_silent"))
+        text = "Coding turn completed without a spoken result.";
+    else if (!strcmp(s->status, "completed")) text = s->text ? s->text : "Coding turn completed.";
+    return json_pack("{s:s,s:s,s:s}", "status", s->status, "turn_id", s->turn, "text", text);
 }
 
-struct voice_context_lookup {
+int
+snag_session_voice_status(struct snag_session *session, const char *queue, json_t **result,
+    char *error, size_t size)
+{
+    if (!session || !queue || !result || !snag_hex_is_lower(queue, SNAG_ID_HEX_LEN)) return -1;
+    *result = NULL;
+    struct voice_status_lookup s = {.queue = queue};
+    int rc = snag_session_each_event(session, voice_status_event, &s, error, size);
+    if (!rc && !s.status)
+        rc = snag_errorf(error, size, "Voice handoff is not in the session journal");
+    if (!rc && !(*result = voice_status_result(&s))) rc = -1;
+    free(s.text);
+    return rc;
+}
+
+struct snag_voice_projection {
+    struct snag_journal_cursor cursor;
     char *transcript[2];
-    char queue[SNAG_ID_HEX_LEN+1u];
+    uint64_t transcript_seq[2];
+    char queue[SNAG_ID_HEX_LEN + 1u];
+    struct voice_status_lookup handoff;
 };
+
+static void
+voice_projection_free(struct snag_voice_projection *s)
+{
+    if (!s) return;
+    free(s->transcript[0]);
+    free(s->transcript[1]);
+    free(s->handoff.text);
+    free(s);
+}
 
 /* Three 8 KiB excerpts leave room for escaped JSON inside a realtime text
  * message and live history within 256 KiB. This bounds a snapshot, not storage. */
@@ -3505,44 +3538,76 @@ static char *voice_excerpt(const char *text)
     memcpy(out,text,end);strcpy(out+end,"\n[excerpt truncated]");return out;
 }
 
-static int voice_context_event(void *opaque,const struct snag_session *state,uint64_t seq,const char *type,const json_t *data,char *error,size_t size)
+static int
+voice_context_event(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t size)
 {
-    (void)state;(void)seq;(void)error;(void)size;
-    struct voice_context_lookup *s=opaque;
-    if(!strcmp(type,"future_turn_queued") && json_object_get(data,"voice")) {
-        if(!snag_strcpy(s->queue,sizeof(s->queue),snag_json_string(data,"queue_id")))return -1;
-    } else if(!strcmp(type,"voice_event")) {
-        const json_t *event=json_object_get(data,"event");
-        const char *kind=snag_json_string(event,"type"),*speaker=snag_json_string(event,"speaker");
-        if(!kind || strcmp(kind,"voice_transcript") || !speaker)return 0;
-        unsigned int who=!strcmp(speaker,"assistant");
-        const char *text=snag_json_string(event,"text");if(!text)return 0;
-        char *copy=voice_excerpt(text);if(!copy)return -1;
-        free(s->transcript[who]);s->transcript[who]=copy;
+    struct snag_voice_projection *s = opaque;
+    if (!strcmp(type, "future_turn_queued") && json_object_get(data, "voice")) {
+        const char *queue = snag_json_string(data, "queue_id");
+        if (!queue || !snag_hex_is_lower(queue, SNAG_ID_HEX_LEN) ||
+            !snag_strcpy(s->queue, sizeof(s->queue), queue))
+            return snag_errorf(error, size, "Invalid voice queue identity");
+        free(s->handoff.text);
+        memset(&s->handoff, 0, sizeof(s->handoff));
+        s->handoff.queue = s->queue;
+    } else if (!strcmp(type, "voice_event")) {
+        const json_t *event = json_object_get(data, "event");
+        const char *kind = snag_json_string(event, "type");
+        const char *speaker = snag_json_string(event, "speaker");
+        const char *text = snag_json_string(event, "text");
+        if (kind && !strcmp(kind, "voice_transcript") &&
+            snag_string_in(speaker, "user assistant") && text) {
+            unsigned int who = !strcmp(speaker, "assistant");
+            char *copy = voice_excerpt(text);
+            if (!copy) return -1;
+            free(s->transcript[who]);
+            s->transcript[who] = copy;
+            s->transcript_seq[who] = seq;
+        }
     }
-    return 0;
+    return s->queue[0] ? voice_status_event(&s->handoff, state, seq, type, data, error, size) : 0;
 }
 
-int snag_session_voice_context(struct snag_session *session,json_t **result,char *error,size_t size)
+int
+snag_session_voice_context(struct snag_session *session, json_t **result, char *error, size_t size)
 {
-    if(!session || !result)return -1;
-    *result=NULL;struct voice_context_lookup s={0};json_t *handoff=NULL;
-    int rc=snag_session_each_event(session,voice_context_event,&s,error,size);
-    if(!rc && s.queue[0])rc=snag_session_voice_status(session,s.queue,&handoff,error,size);
-    if(!rc && handoff) {
-        char *text=voice_excerpt(snag_json_string(handoff,"text"));
-        if(!text || json_object_set_new(handoff,"text",json_string(text))<0 ||
-            json_object_set_new(handoff,"queue_id",json_string(s.queue))<0)rc=-1;
+    if (!session || !result) return -1;
+    *result = NULL;
+    if (!session->voice_projection &&
+        !(session->voice_projection = calloc(1u, sizeof(*session->voice_projection)))) return -1;
+    struct snag_voice_projection *s = session->voice_projection;
+    int rc = snag_session_each_event_forward(session, &s->cursor, SNAG_JOURNAL_PAGE_BYTES,
+        voice_context_event, s, error, size);
+    if (rc < 0) {
+        /* A failed callback may have partially updated the current record's view.
+         * Rebuild on retry; never publish it or alter the authoritative session. */
+        voice_projection_free(s);
+        session->voice_projection = NULL;
+        return -1;
+    }
+    json_t *handoff = s->handoff.status ? voice_status_result(&s->handoff) : NULL;
+    if (s->handoff.status && !handoff) return -1;
+    if (handoff) {
+        char *text = voice_excerpt(snag_json_string(handoff, "text"));
+        if (!text || json_object_set_new(handoff, "text", json_string(text)) < 0 ||
+            json_object_set_new(handoff, "queue_id", json_string(s->queue)) < 0) rc = -1;
         free(text);
     }
-    if(!rc) {
-        *result=json_pack("{s:s,s:s,s:s,s:i,s:s,s:s,s:O}","kind","session_context",
-            "session_id",session->id,"active_turn_id",session->active_turn?session->active_turn_id:"",
-            "queued_inputs",(int)session->pending_queue_count,
-            "recent_asr",s.transcript[0]?s.transcript[0]:"",
-            "recent_generated_reply",s.transcript[1]?s.transcript[1]:"",
-            "latest_voice_handoff",handoff?handoff:json_null());
-        if(!*result)rc=-1;
+    if (!rc) {
+        *result = json_pack("{s:s,s:s,s:s,s:i,s:s,s:s,s:O,s:I,s:I,s:b,s:I,s:I}",
+            "kind", "session_context", "session_id", session->id,
+            "active_turn_id", session->active_turn ? session->active_turn_id : "",
+            "queued_inputs", (int)session->pending_queue_count,
+            "recent_asr", s->transcript[0] ? s->transcript[0] : "",
+            "recent_generated_reply", s->transcript[1] ? s->transcript[1] : "",
+            "latest_voice_handoff", handoff ? handoff : json_null(),
+            "state_as_of_seq", (json_int_t)(session->next_seq - 1u),
+            "history_as_of_seq", (json_int_t)(s->cursor.next_seq - 1u),
+            "history_complete", s->cursor.next_seq == session->next_seq,
+            "recent_asr_seq", (json_int_t)s->transcript_seq[0],
+            "recent_generated_reply_seq", (json_int_t)s->transcript_seq[1]);
+        if (!*result) rc = -1;
     }
     if (!rc) {
         char *task = voice_excerpt(session->active_turn && session->active_prompt ?
@@ -3569,7 +3634,12 @@ int snag_session_voice_context(struct snag_session *session,json_t **result,char
         free(task);
         json_decref(operations);
     }
-    json_decref(handoff);free(s.transcript[0]);free(s.transcript[1]);return rc;
+    json_decref(handoff);
+    if (rc < 0) {
+        json_decref(*result);
+        *result = NULL;
+    }
+    return rc;
 }
 
 char *

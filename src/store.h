@@ -197,6 +197,9 @@ struct snag_session {
     bool checkpoint_has_context;
     /* Derived paging position only; never encoded into a checkpoint. */
     struct snag_journal_cursor history_cursor;
+    /* Owner-local derived view; borrowed by staged commits, freed only on close.
+     * Its verified cursor and bounded excerpts never enter durable state. */
+    struct snag_voice_projection *voice_projection;
     unsigned int format_version;
     /* An optional in-process consumer of newly committed events. The durable
      * state remains authoritative; a failed consumer must invalidate itself,

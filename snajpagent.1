@@ -1827,6 +1827,11 @@ forwarded in journal order as background context. Larger records continue in
 bounded fragments. These observations do not start model work or request speech.
 Textual host context, including initial and refreshed snapshots, is filtered for
 configured secrets before delivery to the voice provider.
+Context snapshots identify the current session-state sequence separately from
+the historical sequence they have verified. History catches up in bounded steps;
+an incomplete historical view is marked and continues on later service steps.
+The latest speaker excerpts include their journal sequences for older-detail
+retrieval. Updating this view leaves the working model and queue unchanged.
 Voice activity persists the session even before the first model turn. Voice
 interface actions appear as tools labelled "voice:" at verbosity 1 and above;
 verbosity 2 adds the ordinary argument and result previews. Each action's

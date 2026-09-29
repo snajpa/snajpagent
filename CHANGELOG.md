@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Refresh voice snapshot history incrementally through a verified journal cursor,
+  with explicit coverage and continuing catch-up instead of repeated full scans.
+
 - Include labeled voice transcripts and action results in session history and
   resume, including voice-only sessions, while preserving coding-turn counts.
 

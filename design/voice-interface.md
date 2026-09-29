@@ -82,6 +82,18 @@ cursor while conversation retention is developed.
 Initial and refreshed textual context snapshots use the same configured-secret
 filter as recorded voice events. Filtering operates on an outbound copy; the
 working session's prompt, queue contents and authority records stay unchanged.
+Snapshot history uses an owner-local derived projection and the verified forward
+cursor. Each call consumes at most the existing 4 MiB scan quantum plus one
+complete record; later calls continue from the saved position. The projection
+keeps the latest speaker excerpts and voice-queue outcome together, avoiding a
+second status scan. Its storage stays bounded as the journal grows. Current
+session fields carry `state_as_of_seq`; historical fields carry
+`history_as_of_seq`, transcript sequences and `history_complete`. A partial view
+does not claim freshness beyond its cursor. Voice service continues catch-up
+between ordinary event-loop steps, including when no new utterance arrives.
+The cache survives commits and pending-to-durable persistence, is freed on session
+close and rebuilds incrementally after reopen. It is neither checkpoint state
+nor a second authority. Ordered conversation retention remains separate work.
 
 Keep the stable instruction/help prefix and append new context to the history.
 Choose batched compaction versus a sliding window from measured prefill latency,

@@ -2129,6 +2129,17 @@ test_voice_observation_cursor(void)
     assert(packet && !strcmp(snag_json_string(packet, "event_type"), "effort_changed"));
     json_decref(packet);
     assert(!app.session.active_turn && !app.session.pending_queue_count);
+    char *padding = malloc(1024u * 1024u + 1u);
+    assert(padding);
+    memset(padding, 'x', 1024u * 1024u);
+    padding[1024u * 1024u] = '\0';
+    for (unsigned int i = 0u; i < 4u; ++i) {
+        assert(snag_session_commit(&app.session, "voice_event", json_pack(
+            "{s:s,s:s,s:s,s:{s:s,s:s}}", "connection_id",
+            "0123456789abcdef0123456789abcdef", "provider", "default", "model", "fixture",
+            "event", "type", "voice_usage", "padding", padding), NULL, error, sizeof(error)) == 0);
+    }
+    free(padding);
     json_t *started = json_pack("{s:{s:s,s:s,s:n,s:s,s:s,s:s,s:i,s:i,s:i,s:i,s:b},"
         "s:s,s:b,s:o,s:n,s:n,s:s,s:s,s:I,s:s}",
         "config", "capability_version", SNAJPAGENT_CAPABILITY_VERSION, "effort", "high",
@@ -2145,6 +2156,17 @@ test_voice_observation_cursor(void)
     assert(snag_app_voice_service(&app) == 0 && app.voice);
     json_t *context = snag_app_voice_fixture_context(&app);
     assert(context && !strcmp(snag_json_string(context, "active_task"), "<redacted:secret>"));
+    assert(json_is_false(json_object_get(context, "history_complete")));
+    json_decref(context);
+    /* No new event/utterance is needed to finish the remaining historical work. */
+    uint64_t current_seq = app.session.next_seq;
+    assert(snag_app_voice_service(&app) == 0 && app.voice);
+    context = snag_app_voice_fixture_context(&app);
+    assert(context && !strcmp(snag_json_string(context, "active_task"), "<redacted:secret>"));
+    assert(json_is_true(json_object_get(context, "history_complete")));
+    assert((uint64_t)json_integer_value(json_object_get(context,
+        "history_as_of_seq")) == current_seq - 1u);
+    assert(app.session.next_seq == current_seq);
     json_decref(context);
     assert(app.session.active_turn && !strcmp(app.session.active_prompt,
         "voice-observation-secret"));

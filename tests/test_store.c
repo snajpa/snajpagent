@@ -22,6 +22,8 @@
 #include <sys/wait.h>
 #endif
 
+static void append_import_fixture(struct snag_session *, const char *, json_t *, bool);
+
 static void
 assert_session_lock_retained(const struct snag_session *session, const char *stage)
 {
@@ -1075,6 +1077,16 @@ static void voice_status(struct snag_session *session,const char *queue,const ch
     assert(!strcmp(snag_json_string(result,"turn_id"),turn));
     assert(snag_json_string(result,"text") && session->next_seq==seq);
     json_decref(result);
+    assert(snag_session_voice_context(session, &result, error, sizeof(error)) == 0);
+    const json_t *latest = json_object_get(result, "latest_voice_handoff");
+    assert(json_is_true(json_object_get(result, "history_complete")));
+    assert(snag_json_string(latest, "queue_id"));
+    if (!strcmp(snag_json_string(latest, "queue_id"), queue)) {
+        assert(!strcmp(snag_json_string(latest, "status"), expected));
+        assert(!strcmp(snag_json_string(latest, "turn_id"), turn));
+    }
+    assert(session->next_seq == seq);
+    json_decref(result);
 }
 
 static void
@@ -1180,7 +1192,102 @@ test_voice_queue(struct snag_store *store,const char *cwd)
     assert(session.next_seq==seq);json_decref(context);
     json_t *missing=NULL;
     assert(snag_session_voice_status(&session,"ffffffffffffffffffffffffffffffff",&missing,error,sizeof(error))<0 && !missing);
+    /* Forward projection verifies envelopes without replaying the reducer. */
+    json_t *malformed = json_pack("{s:[n],s:s}", "queue_ids", "reason", "fixture");
+    assert(malformed);
+    append_import_fixture(&session, "future_turn_cancelled", malformed, false);
+    assert(snag_session_voice_context(&session, &missing, error, sizeof(error)) < 0 && !missing);
     json_decref(source);snag_session_close(&session);
+}
+
+static void
+voice_context_record(struct snag_session *session, const char *speaker, const char *text)
+{
+    commit_event(session, "voice_event", checked_json(json_pack(
+        "{s:s,s:s,s:s,s:{s:s,s:s,s:s}}",
+        "connection_id", "0123456789abcdef0123456789abcdef", "provider", "default",
+        "model", "fixture", "event", "type", "voice_transcript", "speaker", speaker,
+        "text", text)));
+}
+
+static void
+test_voice_context_cursor(struct snag_store *store, const char *cwd)
+{
+    struct snag_session session;
+    char error[256], id[SNAG_ID_HEX_LEN + 1u];
+    snag_session_init(&session);
+    assert(snag_session_prepare(&session, cwd, "default", "model", "high",
+        error, sizeof(error)) == 0);
+    memcpy(id, session.id, sizeof(id));
+    voice_context_record(&session, "user", "Earlier source utterance");
+    char *padding = malloc(1024u * 1024u + 1u);
+    assert(padding);
+    memset(padding, 'x', 1024u * 1024u);
+    padding[1024u * 1024u] = '\0';
+    for (unsigned int i = 0u; i < 4u; ++i) {
+        commit_event(&session, "voice_event", checked_json(json_pack(
+            "{s:s,s:s,s:s,s:{s:s,s:s}}", "connection_id",
+            "0123456789abcdef0123456789abcdef", "provider", "default", "model", "fixture",
+            "event", "type", "voice_usage", "padding", padding)));
+    }
+    free(padding);
+    voice_context_record(&session, "assistant", "Reply beyond the first scan quantum");
+    for (unsigned int phase = 0u; phase < 3u; ++phase) {
+        json_t *context = NULL;
+        uint64_t seq = session.next_seq;
+        assert(snag_session_voice_context(&session, &context, error, sizeof(error)) == 0);
+        if (phase != 1u) {
+            assert(json_is_false(json_object_get(context, "history_complete")));
+            assert((uint64_t)json_integer_value(json_object_get(context,
+                "history_as_of_seq")) < seq - 1u);
+            assert(!strcmp(snag_json_string(context, "recent_generated_reply"), ""));
+            json_decref(context);
+            assert(snag_session_voice_context(&session, &context, error, sizeof(error)) == 0);
+        }
+        assert(json_is_true(json_object_get(context, "history_complete")));
+        assert((uint64_t)json_integer_value(json_object_get(context,
+            "history_as_of_seq")) == seq - 1u);
+        assert((uint64_t)json_integer_value(json_object_get(context,
+            "state_as_of_seq")) == seq - 1u);
+        assert(!strcmp(snag_json_string(context, "recent_asr"), "Earlier source utterance"));
+        assert(!strcmp(snag_json_string(context, "recent_generated_reply"),
+            "Reply beyond the first scan quantum"));
+        assert(session.next_seq == seq && !session.active_turn && !session.pending_queue_count);
+        json_decref(context);
+        if (!phase) {
+            /* An immutable prefix already verified by this view is never rescanned. */
+            unsigned char saved = session.pending_log->data[0];
+            session.pending_log->data[0] = '#';
+            assert(snag_session_voice_context(&session, &context, error, sizeof(error)) == 0);
+            assert(json_is_true(json_object_get(context, "history_complete")));
+            json_decref(context);
+            session.pending_log->data[0] = saved;
+            size_t offset = session.pending_log->len;
+            voice_context_record(&session, "assistant", "Reply beyond the first scan quantum");
+            saved = session.pending_log->data[offset];
+            session.pending_log->data[offset] = '#';
+            assert(snag_session_voice_context(&session, &context, error, sizeof(error)) < 0);
+            assert(!context);
+            session.pending_log->data[offset] = saved;
+            for (unsigned int step = 0u; step < 2u; ++step) {
+                assert(snag_session_voice_context(&session, &context, error, sizeof(error)) == 0);
+                assert(json_is_true(json_object_get(context, "history_complete")) == (step == 1u));
+                json_decref(context);
+            }
+            assert(snag_session_persist(store, &session, error, sizeof(error)) == 0);
+        } else if (phase == 1u) {
+            assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+            snag_session_close(&session);
+            assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+        }
+    }
+    voice_context_record(&session, "user", "Correction after catch-up");
+    json_t *context = NULL;
+    assert(snag_session_voice_context(&session, &context, error, sizeof(error)) == 0);
+    assert(json_is_true(json_object_get(context, "history_complete")));
+    assert(!strcmp(snag_json_string(context, "recent_asr"), "Correction after catch-up"));
+    json_decref(context);
+    snag_session_close(&session);
 }
 
 static int
@@ -2176,6 +2283,7 @@ main(void)
     test_refusal_diagnostic(cwd);
     test_audio_usage(&store,cwd);
     test_voice_queue(&store,cwd);
+    test_voice_context_cursor(&store, cwd);
     test_banner_steering(&store,cwd);
     test_image_compaction_control(&store, cwd);
     test_legacy_journal(&store, cwd);
