@@ -1,65 +1,63 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 
-# snajpagent 0.99.8b — September 27, 2026
+# Development snapshot based on 0.99.8b — September 29, 2026
 
-This release follows the immutable 0.99.8 tag. It includes the long-session
-recovery, prompt, terminal-upload and model-selection changes developed since
-that tag, plus updater support for this letter-suffixed stable version.
+This snapshot fixes OpenAI API-key token preflight and includes the terminal,
+voice and context-continuity changes developed after 0.99.8b. Its version keeps
+that approved base and adds the source commit's Git suffix. The stable release
+and its existing downloads remain unchanged.
 
 ## Changes
 
-- Long-running sessions with accumulated media and tool history recover from
-  repeated compaction or active-request rejection without re-compacting the
-  same already-covered prefix. Completed tool effects and retained attachments
-  remain durable. The original first native provider error was not recoverable
-  from the journal; the fix is supported by reproductions and fixture coverage,
-  not a claimed reconstruction of that missing response.
-- The measured context percentage repaints during active progress and at the
-  idle prompt. A just-submitted input stays visible when the next composer is
-  blocked, without a second echo after admission.
-- Wrapped POSIX terminals can receive regular files with the stock `trz` drag
-  action or `/upload`. Successful batches become private unsent attachments;
-  failed transfers restore terminal input and preserve the pending draft.
-  `/attach` also accepts opaque files. Resume and deletion remove abandoned
-  upload staging only under the operation's ownership and shape checks.
-- The model's `select_model` tool accepts only rows and effort variants in the
-  current provider catalog. Selector `cache` refreshes and lists those rows;
-  failed refresh leaves the prior catalog and selection intact. The operator's
-  typed `/model` still accepts uncached names.
-- The updater and release channel accept `0.99.8b` as a stable version after
-  `0.99.8`. Stable installations stay on `latest`; Git-suffixed development
-  builds stay on `latest-dev`. Existing processes continue running their mapped
-  executables until their operators restart them.
-- Checkpoint serialization, upload transfer formatting, and upload checksum
-  errors use interfaces available in the older BSD build SDKs; compilation
-  does not establish new runtime qualification on those operating systems.
+- Token-count requests select input parameters separately from generation
+  controls. This fixes the `Unknown parameter: 'include'` rejection and excludes
+  prompt-cache routing from ordinary and compaction counts. Generation retains
+  encrypted reasoning and cache affinity, including after manual compaction.
+- Native terminal attachment keeps one session owner while the foreground
+  terminal detaches, reattaches or switches sessions. Retained controls, process
+  continuity and workstation transfers use the existing ownership boundaries.
+- History paging, context-cache recovery and goal-aware retries preserve durable
+  work across long-session transitions. IRC recovery retains input identities
+  and reply obligations within their original input and turn lifetimes.
+- Voice shares session controls and read capabilities with typed input, retains
+  public dialogue and working-history observations, and keeps interface requests
+  separate from coding work. Credential filtering and settled-request retention
+  protect responses across credential rotation and voice shutdown.
+- Validated native voice expiry and temporary transport/service failures renew
+  the physical connection while retaining logical conversation state. Completed
+  tool effects and previously sent audio are not replayed. Policy errors remain
+  distinct from capacity recovery.
+- Production recipes enable device audio and native voice backends on Linux,
+  macOS, Windows and BSD. File decoding, provider audio routes and device access
+  remain separate capabilities; Office rendering uses its documented runtime.
+- Builds after a development tag keep the approved version base and replace the
+  previous Git suffix with the current revision. Clean tagged builds retain the
+  exact tag; modified checkouts add `-dirty`.
 
-## Scope and known limits
+## Scope and compatibility
 
-The upload client was exercised in a disposable PTY using a pinned stock Go
-client, including binary multi-file success and malformed-image rollback;
-synthetic wire cases cover other failures. A desktop GUI drag action, nested
-SSH, a terminal-specific relay, and prompt/scrollback behavior outside the
-PTY fixtures were not qualified. The iTerm2 saved-scrollback display issue is
-intentionally left open. The old running processes whose high CPU usage was
-sampled mapped older deleted executables. A newly installed 0.99.8 development
-snapshot mapped its own inode, used 0.160 CPU seconds for twelve fake-provider
-tool calls and zero CPU time while idle for five seconds; this is not a
-real-provider or large-journal performance guarantee. No live session was
-signaled or restarted during the fix work.
+Permanent unit and strict HTTP-fixture regressions cover the token-count
+rejections, compaction request isolation and development-version derivation.
+Fixture coverage also exercises context, transport, terminal attachment,
+lifecycle and packaging. Device and operating-system runtime qualification is
+listed separately in `QUALIFICATION.md`; consult it together with the platform
+ABI and installation guidance in the manual.
 
-The release ships the implemented `PROD_TARGETS` matrix with separate matching
-symbols, manual, source and dependency notices. Build success is not runtime
-qualification on every platform. Linux i686 legacy stays outside that matrix:
-its pinned uClibc dependency chain remains unbuildable; the opt-in recipe and
-honest compatibility notes remain in source and on the download page.
+Native voice capacity recovery remains unfinished and is excluded from this
+snapshot. The binary journal codecs are preparatory; live sessions continue
+using the existing storage format.
 
 ## Downloads and updates
 
-Choose the executable matching the OS, architecture and ABI, compare its
-SHA-256 with the published `SHA256SUMS`, and consult the download page for
-minimum requirements and tested configurations. The official stable updater
-installs a verified replacement in the background and displays one restart
-notice; it never restarts a running session. Set `[agent] auto_update = false`
-to opt out. Development builds default to updates off. Older release notes and
-assets remain available under their original GitHub tags.
+Development assets cover the complete implemented `PROD_TARGETS` matrix and
+include matching symbols, manual, source, dependency notices and `SHA256SUMS`.
+Application builds use `DEBUG=1`, retaining debug information and frame pointers
+without application LTO or stripping. Select the exact OS, architecture and ABI
+and verify its checksum before installation. macOS builds retain the documented
+per-file quarantine exception for a verified download.
+
+Git-suffixed versions use `latest-dev` and default automatic updates to off.
+An update replaces the executable for the next launch; existing processes keep
+running until their operators restart them. Stable installations remain on
+`latest`. Older releases and their immutable assets remain available under
+their original GitHub tags.
