@@ -1370,15 +1370,14 @@ voice_transcript(struct app_state *app, struct app_voice *v, const json_t *event
         return snag_errorf(error, size, "Voice transcript has no valid speaker");
     }
     json_t *safe = json_pack("{s:s}", "model_text", snag_json_string(event, "text"));
-    struct snag_buf text = {.max = VOICE_MESSAGE};
     int rc = safe ? snag_secret_result(&v->secrets, safe, error, size) : -1;
     if (!rc) {
-        rc = snag_buf_printf(&text, "%s: %s", !strcmp(speaker, "user") ?
-            "You [voice, ASR]" : "Voice model [generated]", snag_json_string(safe, "model_text"));
+        json_t *transcript = json_pack("{s:s,s:s,s:s}", "type", "voice_transcript",
+            "speaker", speaker, "text", snag_json_string(safe, "model_text"));
+        rc = transcript ? snag_ui_send(&app->ui, (struct snag_ui_command){
+            .kind = SNAG_UI_VOICE_EVENT, .data.voice = transcript}) : -1;
+        json_decref(transcript);
     }
-    if (!rc) rc = snag_buf_terminate(&text);
-    if (!rc) rc = snag_ui_text(&app->ui, SNAG_UI_HOST, (const char *)text.data);
-    snag_buf_free(&text);
     json_decref(safe);
     return rc;
 }

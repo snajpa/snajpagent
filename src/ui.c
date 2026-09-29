@@ -929,6 +929,7 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     case SNAG_UI_HISTORY: return snag_render_history(render, command->data.replay.turn,
             command->data.replay.shown, command->data.replay.completed, command->data.replay.total);
     case SNAG_UI_IRC: return snag_render_irc_event(render, command->data.irc);
+    case SNAG_UI_VOICE_EVENT: return snag_render_voice_event(render, command->data.voice, 0u, 0u);
     case SNAG_UI_DURABLE: return snag_render_durable(render, command->data.durable.fd,
             command->data.durable.source, command->text,
             command->data.durable.timeout_ms, command->data.durable.max_output_bytes);
@@ -2031,25 +2032,41 @@ history_items(struct history_replay *history, const json_t *items)
 }
 
 static int
-history_finish(struct history_replay *history)
+history_flush(struct history_replay *history, bool finish)
 {
     char *resolved;
-    if (!history->turn.user && !history->turn.partial) return 0;
+    if (!finish && !history->turn.user && !history->turn.assistant && !history->turn.partial) {
+        return 0;
+    }
     resolved = history_resolve_irc(history, history->turn.user);
     if (resolved) {
         free(history->turn.user);
         history->turn.user = resolved;
     }
-    if (history->response.len) {
+    if (finish && history->response.len) {
         if (snag_buf_terminate(&history->response) < 0 ||
             history_append(&history->turn.assistant, (char *)history->response.data, "\n\n") < 0) return -1;
         snag_buf_reset(&history->response);
     }
-    ++history->shown;
-    int rc = history_display(history, &history->turn);
+    if (!history->turn.continuation) ++history->shown;
+    struct snag_history_turn displayed = history->turn;
+    if (!finish) displayed.status = NULL;
+    int rc = history_display(history, &displayed);
     free(history->turn.user);
     free(history->turn.assistant);
-    history->turn = (struct snag_history_turn){0};
+    history->turn.user = NULL;
+    history->turn.assistant = NULL;
+    history->turn.partial = false;
+    history->turn.continuation = true;
+    return rc;
+}
+
+static int
+history_finish(struct history_replay *history)
+{
+    if (!history->turn.user && !history->turn.partial && !history->turn.continuation) return 0;
+    int rc = history_flush(history, true);
+    if (!rc) history->turn = (struct snag_history_turn){0};
     return rc;
 }
 
@@ -2064,6 +2081,11 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
     if (history->ui && snag_ui_leaving(history->ui)) return snag_errno(ECANCELED);
     if (history->ui && !strcmp(type, "irc_event") && history_note_irc_event(history, data) < 0)
         return -1;
+    if (!strcmp(type, "voice_event")) {
+        if (history_flush(history, false) < 0) return -1;
+        return snag_ui_send(history->ui, (struct snag_ui_command){.kind = SNAG_UI_VOICE_EVENT,
+            .data.voice = json_object_get(data, "event")});
+    }
     if (!strcmp(type, "turn_started")) {
         if (history_finish(history) < 0) return -1;
         const char *text = snag_json_string(data, "text");
@@ -2074,7 +2096,7 @@ history_event(void *opaque, const struct snag_session *state, uint64_t seq,
         turn->status = "unfinished";
         return turn->user ? 0 : -1;
     }
-    if (!turn->user && !turn->partial) return 0;
+    if (!turn->user && !turn->partial && !turn->continuation) return 0;
     if (!strcmp(type, "irc_admitted") && json_object_get(data, "steering"))
         return history_append(&turn->user, snag_json_string(json_object_get(data, "steering"), "text"), "\nsteering: ");
     if (!strcmp(type, "steering_added"))
@@ -2123,7 +2145,7 @@ history_collect(void *opaque, const struct snag_session *state, uint64_t seq,
         if (!irc) return 0;
         ++window->prefix_irc;
     } else if (!irc && !snag_string_in(type,
-            "turn_started steering_added irc_admitted response_started response_output "
+            "voice_event turn_started steering_added irc_admitted response_started response_output "
             "response_completed response_failed response_interrupted response_output_correction "
             "turn_completed turn_completed_silent turn_failed turn_interrupted")) return 0;
     const json_t *text_data = !strcmp(type, "irc_admitted") ?
@@ -2148,14 +2170,14 @@ snag_ui_history(struct snag_ui *ui, struct snag_session *session, uint64_t count
     struct history_window window = {.ui = ui, .remaining = count, .events = json_array()};
     uint64_t before = 0u;
     int rc = window.events ? 0 : -1;
-    if (!rc && count && history.total) {
+    if (!rc && count) {
         rc = snag_session_each_event_reverse(session, 0u, SNAG_JOURNAL_PAGE_BYTES,
             history_collect, &window, &before, NULL, 0u);
         bool first = true;
         for (size_t i = json_array_size(window.events); !rc && i; --i) {
             const json_t *entry = json_array_get(window.events, i - 1u);
             const char *type = snag_json_string(entry, "type");
-            if (first && strcmp(type, "irc_event")) {
+            if (first && strcmp(type, "irc_event") && strcmp(type, "voice_event")) {
                 history.turn.partial = before && strcmp(type, "turn_started");
                 history.turn.status = "unfinished";
                 first = false;

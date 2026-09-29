@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Include labeled voice transcripts and action results in session history and
+  resume, including voice-only sessions, while preserving coding-turn counts.
+
 - Restore terminal input modes without waiting for the private PTY output relay,
   fixing an interactive exit hang on macOS while preserving queued output.
 

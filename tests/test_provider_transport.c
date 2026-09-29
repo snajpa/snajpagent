@@ -3078,6 +3078,15 @@ test_output_cache_failure(void)
 }
 
 static void
+history_voice_event(struct snag_session *session, json_t *event)
+{
+    char error[256] = {0};
+    assert(snag_session_commit(session, "voice_event", json_pack("{s:s,s:s,s:s,s:o}",
+        "connection_id", "12345678901234567890123456789012", "provider", "default",
+        "model", "fixture", "event", event), NULL, error, sizeof(error)) == 0);
+}
+
+static void
 test_ui_bounded_history(void)
 {
     char path[4096], output_path[4096], error[256] = {0}, output[8192];
@@ -3096,6 +3105,31 @@ test_ui_bounded_history(void)
     int fd = open(output_path, O_CREAT | O_EXCL | O_RDWR, 0600), saved = dup(STDERR_FILENO);
     assert(fd >= 0 && saved >= 0 && dup2(fd, STDERR_FILENO) == STDERR_FILENO);
     assert(snag_ui_init(&ui) == 0);
+    history_voice_event(&session, json_pack("{s:s,s:s,s:s}", "type", "voice_transcript",
+        "speaker", "user", "text", "voice-only original"));
+    history_voice_event(&session, json_pack("{s:s,s:s,s:s}", "type", "voice_transcript",
+        "speaker", "assistant", "text", "voice-only reply"));
+    char session_id[33];
+    memcpy(session_id, session.id, sizeof(session_id));
+    snag_session_close(&session);
+    assert(snag_session_open(&store, &session, session_id, error, sizeof(error)) == 0);
+    assert(session.turn_count == 0u);
+    assert(snag_ui_history(&ui, &session, 0u) == 0);
+    ssize_t voice_bytes = pread(fd, output, sizeof(output) - 1u, 0);
+    assert(voice_bytes > 0);
+    output[voice_bytes] = '\0';
+    assert(!strstr(output, "voice-only"));
+    assert(snag_ui_history(&ui, &session, 1u) == 0);
+    voice_bytes = pread(fd, output, sizeof(output) - 1u, 0);
+    assert(voice_bytes > 0);
+    output[voice_bytes] = '\0';
+    const char *asr = strstr(output, "You [voice, ASR]: voice-only original");
+    const char *reply = strstr(output, "Voice model [generated]: voice-only reply");
+    assert(asr && reply && asr < reply);
+    assert(!strstr(reply + 1, "Voice model [generated]: voice-only reply"));
+    assert(session.turn_count == 0u && session.pending_queue_count == 0u);
+    assert(ftruncate(fd, 0) == 0 && lseek(fd, 0, SEEK_SET) == 0);
+    assert(snag_ui_set_verbosity(&ui, 2u) == 0);
     int64_t damaged = 0;
     json_t *checkpoint = NULL;
     for (unsigned int i = 1u; i <= 3u; ++i) {
@@ -3113,6 +3147,18 @@ test_ui_bounded_history(void)
             "turn_id", id, "turn_number", (json_int_t)i, "cwd", session.cwd);
         assert(snag_session_commit(&session, "turn_started", started,
             NULL, error, sizeof(error)) == 0);
+        if (i == 2u) {
+            history_voice_event(&session, json_pack("{s:s,s:s,s:s}",
+                "type", "voice_transcript", "speaker", "user", "text", "during work"));
+            history_voice_event(&session, json_pack("{s:s,s:s,s:s,s:s,s:{s:s}}",
+                "type", "voice_response", "operation", "interface_tool_started",
+                "tool", "inspect_session", "tool_call_id", "history-call",
+                "arguments", "scope", "queue"));
+            history_voice_event(&session, json_pack("{s:s,s:s,s:s,s:s,s:{s:s,s:s}}",
+                "type", "voice_response", "operation", "interface_tool",
+                "tool", "inspect_session", "tool_call_id", "history-call",
+                "result", "status", "succeeded", "model_text", "queue remains empty"));
+        }
         if (i == 1u) damaged = session.log_end;
         if (i == 3u) {
             size_t size = SNAG_JOURNAL_PAGE_BYTES + 4096u;
@@ -3159,7 +3205,7 @@ test_ui_bounded_history(void)
         json_pack("{s:[I]}", "sequences", (json_int_t)irc_seq), NULL, error, sizeof(error)) == 0);
     assert(snag_ui_history(&ui, &session, 1u) == 0);
     /* Integrity-valid envelopes still need safe presentation-field checks. */
-    for (unsigned int malformed = 0u; malformed < 3u; ++malformed) {
+    for (unsigned int malformed = 0u; malformed < 5u; ++malformed) {
         struct snag_session broken;
         struct snag_buf bytes = {.max = 65536u};
         snag_session_init(&broken);
@@ -3167,10 +3213,13 @@ test_ui_bounded_history(void)
         broken.pending_log = &bytes; broken.turn_count = 1u;
         for (unsigned int row = 0u; row <= (malformed ? 1u : 0u); ++row) {
             const char *type = !row ? "turn_started" : malformed == 1u ?
-                "response_output" : "response_completed";
+                "response_output" : malformed == 2u ? "response_completed" : "voice_event";
             json_t *data = !row ? (malformed ? json_pack("{s:s}", "text", "fixture") :
                 json_object()) : malformed == 1u ? json_pack("{s:i,s:{}}", "offset", 0, "item") :
-                json_pack("{s:[{s:s}]}", "items", "kind", "assistant");
+                malformed == 2u ? json_pack("{s:[{s:s}]}", "items", "kind", "assistant") :
+                malformed == 3u ? json_pack("{s:{s:s,s:s,s:s}}", "event",
+                    "type", "voice_transcript", "speaker", "invalid", "text", "fixture") :
+                json_pack("{s:{s:s,s:s}}", "event", "type", "voice_transcript", "speaker", "user");
             json_t *record = json_pack("{s:o,s:s,s:I,s:s,s:i,s:s,s:i}", "data", data,
                 "prev_sha256", broken.prev_sha256, "seq", (json_int_t)broken.next_seq,
                 "session_id", broken.id, "time_ms", 1, "type", type, "v", 1);
@@ -3197,6 +3246,13 @@ test_ui_bounded_history(void)
     ssize_t got = pread(fd, output, sizeof(output) - 1u, 0);
     assert(got > 0); output[got] = '\0';
     assert(strstr(output, "history input 2") && !strstr(output, "history input 1"));
+    const char *during = strstr(output, "You [voice, ASR]: during work");
+    const char *started = strstr(output, "voice: inspect_session");
+    const char *finished = started ? strstr(started + 1, "voice: inspect_session") : NULL;
+    assert(during && started && finished);
+    assert(strstr(output, "history input 2") < during && during < started && started < finished);
+    assert(strstr(finished, "queue remains empty"));
+    assert(!strstr(output, "voice-only"));
     assert(!strstr(output, "history input 3"));
     assert(strstr(output, "earlier input outside restored history window"));
     assert(!strstr(strstr(output, "earlier input outside restored history window") + 1,

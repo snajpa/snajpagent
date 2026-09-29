@@ -858,7 +858,7 @@ snag_render_history(struct snag_render *render, const struct snag_history_turn *
 {
     if (pause_rollout(render) < 0) return -1;
     if (turn) {
-        if (shown == 1u) {
+        if (shown == 1u && !turn->continuation) {
             char header[128];
             (void)snprintf(header, sizeof(header), "── history: %llu total turns ──\n",
                 (unsigned long long)total);
@@ -3614,24 +3614,31 @@ out: json_decref(event);
     return rc;
 }
 
-static int
-render_voice_record(struct snag_render *render, struct snag_render_record *record)
+int
+snag_render_voice_event(struct snag_render *render, const json_t *event,
+    uint32_t timeout_ms, uint32_t max_output_bytes)
 {
+    if (snag_string_in(snag_json_string(event, "type"), "voice_transcript")) {
+        const char *speaker = snag_json_string(event, "speaker");
+        const char *text = snag_json_string(event, "text");
+        if (!text || !snag_string_in(speaker, "user assistant")) return snag_errno(EINVAL);
+        struct snag_buf line = {.max = SNAG_MAX_EVENT_LINE};
+        int rc = snag_buf_printf(&line, "%s: %s", !strcmp(speaker, "user") ?
+            "You [voice, ASR]" : "Voice model [generated]", text);
+        if (!rc) rc = snag_buf_terminate(&line);
+        if (!rc) rc = pause_rollout(render);
+        if (!rc) rc = snag_render_host(render, (char *)line.data);
+        snag_buf_free(&line);
+        return rc;
+    }
     if (!snag_render_enabled(render, SNAG_PRESENT_TOOL)) return 0;
-    json_t *entry = record_event(render, record, false);
-    if (!entry) return -1;
-    json_t *event = json_object_get(json_object_get(entry, "data"), "event");
     const char *operation = snag_json_string(event, "operation");
     if (!operation || !snag_string_in(operation, "interface_tool_started interface_tool")) {
-        json_decref(entry);
         return 0;
     }
     const char *tool = snag_json_string(event, "tool");
     const char *call_id = snag_json_string(event, "tool_call_id");
-    if (!tool || !call_id) {
-        json_decref(entry);
-        return snag_errno(EPROTO);
-    }
+    if (!tool || !call_id) return snag_errno(EPROTO);
     struct snag_buf name = {.max = SNAG_MAX_TOOL_ARGUMENTS};
     int rc = snag_buf_printf(&name, "voice: %s", tool);
     if (!rc) rc = snag_buf_terminate(&name);
@@ -3642,10 +3649,10 @@ render_voice_record(struct snag_render *render, struct snag_render_record *recor
             struct snag_response_item call = {.name = (char *)name.data,
                 .call_id = call_id, .arguments = json_object_get(event, "arguments")};
             rc = snag_render_prepare_tool_start(&block, &call, "?",
-                record->timeout_ms, render->verbosity, columns);
+                timeout_ms, render->verbosity, columns);
         } else {
             rc = snag_render_prepare_tool_finish(&block, (const char *)name.data, call_id,
-                json_object_get(event, "result"), record->max_output_bytes,
+                json_object_get(event, "result"), max_output_bytes,
                 render->verbosity, columns);
         }
         if (!rc) {
@@ -3654,6 +3661,21 @@ render_voice_record(struct snag_render *render, struct snag_render_record *recor
         }
     }
     snag_buf_free(&name);
+    return rc;
+}
+
+static int
+render_voice_record(struct snag_render *render, struct snag_render_record *record)
+{
+    if (!snag_render_enabled(render, SNAG_PRESENT_TOOL)) return 0;
+    json_t *entry = record_event(render, record, false);
+    if (!entry) return -1;
+    const json_t *event = json_object_get(json_object_get(entry, "data"), "event");
+    /* Final transcripts are emitted immediately, including while the working
+     * model has an open stream. Durable rows here are interface actions. */
+    const char *operation = snag_json_string(event, "operation");
+    int rc = snag_string_in(operation, "interface_tool_started interface_tool") ?
+        snag_render_voice_event(render, event, record->timeout_ms, record->max_output_bytes) : 0;
     json_decref(entry);
     return rc;
 }

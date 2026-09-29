@@ -2467,6 +2467,27 @@ test_voice_tool_history(void)
             "\"tool_call_id\":\"voice-call\",\"result\":{\"status\":\"succeeded\","
             "\"model_text\":\"Queued request fixture-queue.\"}}}}\n");
         assert(snag_render_durable(&render, fileno(file), source, "voice_event", 0u, 0u) == 0);
+        bool streaming = live && !level;
+        if (streaming) {
+            while (snag_render_view_pending(&render)) {
+                assert(snag_render_flush_pending(&render, 8u) == 0);
+            }
+            assert(snag_render_rollout_begin(&render, STDERR_FILENO, "assistant: ",
+                SNAG_PRESENT_CONVERSATION) == 0);
+            assert(snag_render_rollout(&render, "working before", 14u, NULL) == 0);
+        }
+        json_t *transcript = json_pack("{s:s,s:s,s:s}", "type", "voice_transcript",
+            "speaker", "user", "text", "original spoken words");
+        assert(snag_render_voice_event(&render, transcript, 0u, 0u) == 0);
+        json_decref(transcript);
+        transcript = json_pack("{s:s,s:s,s:s}", "type", "voice_transcript",
+            "speaker", "assistant", "text", "spoken reply");
+        assert(snag_render_voice_event(&render, transcript, 0u, 0u) == 0);
+        json_decref(transcript);
+        if (streaming) {
+            assert(snag_render_rollout(&render, "working after", 13u, NULL) == 0);
+            assert(snag_render_rollout_end(&render) == 0);
+        }
         source = append_event(file,
             "{\"data\":{\"event\":{\"type\":\"voice_started\",\"state\":\"ready\"}}}\n");
         assert(snag_render_durable(&render, fileno(file), source, "voice_event", 0u, 0u) == 0);
@@ -2489,6 +2510,14 @@ test_voice_tool_history(void)
         assert((strstr(output, "Queued request fixture-queue.") != NULL) == (level >= 2u));
         assert(!strstr(output, "ready"));
         assert(count_text(output, "submit_input") == (level ? 2u : 0u));
+        assert(count_text(output, "You [voice, ASR]: original spoken words") == 1u);
+        assert(count_text(output, "Voice model [generated]: spoken reply") == 1u);
+        if (streaming) {
+            assert(count_text(output, "working before") == 1u);
+            assert(count_text(output, "working after") == 1u);
+            assert(strstr(output, "working before") < strstr(output, "You [voice, ASR]"));
+            assert(strstr(output, "Voice model [generated]") < strstr(output, "working after"));
+        }
     }
 }
 

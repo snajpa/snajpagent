@@ -37,7 +37,7 @@ enum snag_ui_operation {
     SNAG_UI_ORIENTATION, SNAG_UI_HISTORY, SNAG_UI_IRC, SNAG_UI_DURABLE, SNAG_UI_EVENT,
     SNAG_UI_RESUME, SNAG_UI_PROTOCOL, SNAG_UI_TRANSPORT, SNAG_UI_RAW, SNAG_UI_HISTORY_SNAPSHOT,
     SNAG_UI_UPDATE, SNAG_UI_SESSION_START, SNAG_UI_SESSION_LISTEN, SNAG_UI_SESSION_CONTROL,
-    SNAG_UI_SESSION_REBIND, SNAG_UI_SESSION_READY, SNAG_UI_INPUT, SNAG_UI_STOP
+    SNAG_UI_SESSION_REBIND, SNAG_UI_SESSION_READY, SNAG_UI_INPUT, SNAG_UI_VOICE_EVENT, SNAG_UI_STOP
 };
 
 struct snag_ui_prompt {
@@ -66,6 +66,7 @@ struct snag_ui_command {
         struct { uint64_t turns; size_t queued; bool resumed, queue_armed; } orientation;
         struct { const struct snag_history_turn *turn; uint64_t shown, completed, total; } replay;
         const struct snag_irc_event *irc;
+        const json_t *voice;
         struct { int fd; struct snag_render_source source;
                  uint32_t timeout_ms, max_output_bytes; } durable;
         uint64_t seq;

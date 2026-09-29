@@ -219,6 +219,15 @@ Interface actions record their invocation before execution and their result
 afterwards. Those records use ordinary tool-row and preview rendering with a
 voice source label, independently of the working model's current response.
 
+Session resume and `/history` include finalized voice transcripts and interface
+action rows within the same bounded journal window as coding turns. The renderer
+owns the ASR/generated labels in both live output and replay. Voice-only sessions
+also replay; voice records leave coding-turn totals unchanged. Interleaved voice
+records retain the current coding turn, with earlier committed response text
+shown first. In-progress response fragments are consolidated when that response
+finishes. Replay displays stored text and results without starting audio or
+executing actions.
+
 ## Shared attachment transition
 
 Shell attachment, typed session switching and voice-requested switching use the
