@@ -1370,6 +1370,15 @@ snag_term_input_capture(struct snag_term_host *host)
     return tcgetattr(STDIN_FILENO, &host->input_mode);
 }
 
+static int
+input_mode_apply(const struct termios *mode, bool flush)
+{
+    /* TCSAFLUSH also waits for output. The owner can be waiting for this UI
+     * request while its PTY relay is paused, so leave output queued for it. */
+    if (flush && tcflush(STDIN_FILENO, TCIFLUSH) < 0) return -1;
+    return tcsetattr(STDIN_FILENO, TCSANOW, mode);
+}
+
 int
 snag_term_input_raw(struct snag_term_host *host)
 {
@@ -1378,7 +1387,7 @@ snag_term_input_raw(struct snag_term_host *host)
     raw.c_lflag &= (tcflag_t)~(ECHO | ICANON | IEXTEN | ISIG);
     raw.c_cc[VMIN] = 0;
     raw.c_cc[VTIME] = 0;
-    return tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+    return input_mode_apply(&raw, true);
 }
 
 int
@@ -1393,7 +1402,7 @@ snag_term_input_hidden(struct snag_term_host *host)
 {
     struct termios hidden = host->input_mode;
     hidden.c_lflag &= (tcflag_t)~ECHO;
-    return tcsetattr(STDIN_FILENO, TCSAFLUSH, &hidden);
+    return input_mode_apply(&hidden, true);
 }
 
 ssize_t
@@ -1442,7 +1451,7 @@ snag_term_input_native_wait(struct snag_term_host *host, snag_wake_fd wake, int 
 int
 snag_term_input_restore(struct snag_term_host *host, bool flush)
 {
-    return tcsetattr(STDIN_FILENO, flush ? TCSAFLUSH : TCSANOW, &host->input_mode);
+    return input_mode_apply(&host->input_mode, flush);
 }
 
 static int

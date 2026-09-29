@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Restore terminal input modes without waiting for the private PTY output relay,
+  fixing an interactive exit hang on macOS while preserving queued output.
+
 - Add paged queue inspection to the voice interface, with exact IDs, current text
   previews and stable enqueue cursors, without arming or starting queued work.
 

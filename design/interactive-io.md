@@ -93,6 +93,12 @@ terminal leaves this private terminal alive. Startup does not open a journal,
 acquire a session lock or publish an attachment endpoint; those remain with
 the application after successful initialization.
 
+POSIX input-mode changes apply immediately and discard input only when requested.
+They preserve queued output for the relay. A UI command may run while the session
+owner waits for its completion, so a terminal-mode syscall must not wait for that
+owner to drain the private PTY. This applies to shutdown, external-program handoff,
+raw-input entry and hidden-input prompts.
+
 The local stream protocol has bounded frames and independently handles partial
 reads/writes. Socket access requires the private session directory and matching
 native peer credentials. Only a held session writer lock authorizes publishing

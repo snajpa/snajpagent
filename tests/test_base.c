@@ -60,6 +60,68 @@
 #include <pthread.h>
 #endif
 
+static void
+test_term_modes_pending_output(void)
+{
+#ifndef _WIN32
+    /* The session owner waits for the UI while its relay is not reading the
+     * private PTY. Input mode changes must leave queued output for that relay. */
+    for (unsigned int operation = 0u; operation < 3u; ++operation) {
+        int master, slave;
+        assert(openpty(&master, &slave, NULL, NULL, NULL) == 0);
+        pid_t child = fork();
+        assert(child >= 0);
+        if (!child) {
+            close(master);
+            assert(dup2(slave, STDIN_FILENO) == STDIN_FILENO);
+            struct snag_term_host host = {0};
+            assert(snag_term_input_capture(&host) == 0);
+            if (!operation) assert(snag_term_input_raw(&host) == 0);
+            assert(write(slave, "retained-output", 15u) == 15);
+            if (!operation) assert(snag_term_input_restore(&host, true) == 0);
+            else if (operation == 1u) assert(snag_term_input_raw(&host) == 0);
+            else assert(snag_term_input_hidden(&host) == 0);
+            assert(snag_term_input_restore(&host, false) == 0);
+            struct termios restored;
+            assert(tcgetattr(slave, &restored) == 0);
+            assert(restored.c_iflag == host.input_mode.c_iflag);
+            assert(restored.c_oflag == host.input_mode.c_oflag);
+            tcflag_t changed = restored.c_lflag ^ host.input_mode.c_lflag;
+#ifdef PENDIN
+            /* BSD marks input for reprocessing when canonical mode returns. */
+            changed &= (tcflag_t)~PENDIN;
+#endif
+            assert(!changed);
+            assert(restored.c_cflag == host.input_mode.c_cflag);
+            assert(!memcmp(restored.c_cc, host.input_mode.c_cc, sizeof(restored.c_cc)));
+            _exit(0);
+        }
+        int status;
+        pid_t ended = 0;
+        uint64_t deadline = snag_monotonic_ms() + 2000u;
+        while (!ended && snag_monotonic_ms() < deadline) {
+            ended = waitpid(child, &status, WNOHANG);
+            assert(ended >= 0);
+            struct timespec delay = {0, 1000000};
+            if (!ended) nanosleep(&delay, NULL);
+        }
+        if (!ended) {
+            assert(kill(child, SIGKILL) == 0);
+            assert(waitpid(child, &status, 0) == child);
+            fprintf(stderr, "terminal mode operation %u waited for queued output\n", operation);
+        }
+        assert(ended == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+        char output[32];
+        int flags = fcntl(master, F_GETFL);
+        assert(flags >= 0 && fcntl(master, F_SETFL, flags | O_NONBLOCK) == 0);
+        assert(read(master, output, sizeof(output)) == 15);
+        assert(!memcmp(output, "retained-output", 15u));
+        close(master);
+        close(slave);
+    }
+#endif
+}
+
 static FILE *
 test_tmpfile(void)
 {
@@ -2837,7 +2899,14 @@ test_session_transport(void)
     /* The stale-endpoint probe connected but did not reserve an attachment. */
     int peer = snag_session_listener_accept(&listener);
     if (peer >= 0) assert(close(peer) == 0);
-    else assert(errno == ECONNRESET); /* EOF before a deferred credential. */
+    else {
+#ifdef __APPLE__
+        /* SO_NOSIGPIPE rejects this already-closed probe with EINVAL. */
+        assert(errno == ECONNRESET || errno == EINVAL);
+#else
+        assert(errno == ECONNRESET); /* EOF before a deferred credential. */
+#endif
+    }
     int client = snag_session_endpoint_connect(dir, root);
     assert(client >= 0);
     peer = snag_session_listener_accept(&listener);
@@ -4391,6 +4460,7 @@ run_base(int argc, char **argv)
     test_memory_primitives();
     test_thread_local();
     test_sockets();
+    test_term_modes_pending_output();
     test_session_transport();
 #if defined(__linux__) && !defined(_WIN32)
     test_session_relay();
