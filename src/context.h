@@ -27,6 +27,8 @@ int snag_context_provider_model(const struct snag_provider_config *provider,
 json_t *snag_context_interface_request(const struct snag_session *,
     const struct snag_provider_config *, const char *model, const char *effort,
     const json_t *input, const json_t *tools);
+/* Select input-token endpoint fields without mutating generation controls. */
+json_t *snag_context_count_request(const json_t *create_request);
 
 struct snag_context_control {
     bool (*cancelled)(void *opaque);

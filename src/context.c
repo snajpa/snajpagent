@@ -2336,6 +2336,27 @@ ensure_conversation_input(json_t *input)
         "This marker adds no task, approval or change to the goal state.");
 }
 
+json_t *
+snag_context_count_request(const json_t *create_request)
+{
+    static const char *const fields[] = {
+        "conversation", "input", "instructions", "model", "parallel_tool_calls",
+        "personality", "previous_response_id", "reasoning", "text", "tool_choice",
+        "tools", "truncation"
+    };
+    if (!json_is_object(create_request)) return NULL;
+    json_t *request = json_object();
+    if (!request) return NULL;
+    for (size_t i = 0u; i < sizeof(fields) / sizeof(fields[0]); ++i) {
+        json_t *value = json_object_get(create_request, fields[i]);
+        if (value && json_object_set(request, fields[i], value) < 0) {
+            json_decref(request);
+            return NULL;
+        }
+    }
+    return request;
+}
+
 static json_t *
 compact_count_request_object(const json_t *input, const char *model)
 {
@@ -2627,12 +2648,13 @@ snag_context_compact_request_build(struct snag_session *session, const char *mod
     if (snag_media_request_check(projection->create_request.value,error,error_size)<0)goto out;
     if (snag_json_document_set(&projection->model_input,
             json_incref(builder.request_input), SNAG_CONTEXT_MAX_COMPACT) < 0 ||
-        snag_json_document_measure(&projection->create_request, SNAG_CONTEXT_MAX_COMPACT) < 0) {
+        snag_json_document_measure(&projection->create_request, SNAG_CONTEXT_MAX_COMPACT) < 0 ||
+        snag_json_document_set(&projection->count_request,
+            snag_context_count_request(projection->create_request.value),
+            SNAG_CONTEXT_MAX_COMPACT) < 0) {
         snag_errorf(error, error_size, "compact request exceeds 12 MiB");
         goto out;
     }
-    projection->count_request = projection->create_request;
-    json_incref(projection->count_request.value);
     projection->source_seq = builder.compact_source_seq;
     if (continuation_scope && !snag_strcpy(projection->continuation_scope,
             sizeof(projection->continuation_scope), continuation_scope)) goto out;
@@ -3101,10 +3123,8 @@ snag_context_build(struct snag_session *session, const char *model, const char *
         (provider && provider->auth == SNAG_AUTH_CHATGPT &&
          snag_context_codex_request(projection->create_request.value) < 0)) goto projection_error;
     /* Only the envelope differs; input, reasoning and tools stay immutable. */
-    projection->count_request.value = json_copy(projection->create_request.value);
-    json_object_del(projection->count_request.value, "stream");
-    json_object_del(projection->count_request.value, "store");
-    json_object_del(projection->count_request.value, "max_output_tokens");
+    projection->count_request.value =
+        snag_context_count_request(projection->create_request.value);
     if (snag_media_request_check(projection->create_request.value, error, error_size) < 0)
         goto out;
     if (!projection->model_input.value || !projection->create_request.value ||

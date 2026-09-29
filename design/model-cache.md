@@ -368,6 +368,17 @@ it and authentication, rate-limit, transport, or malformed-body failures stay
 uncached and fail the count operation. `true` makes every count failure
 terminal; `false` disables preflight counting.
 
+Count projections select the endpoint's input fields from the generation request:
+model, messages, instructions, conversation references, reasoning and text
+configuration, tools and tool choice, parallel-call settings, personality and
+truncation. Generation-only controls, including `include`, output limits,
+stream/store settings and prompt-cache routing, remain on the generation request.
+Ordinary turns and Responses-based compaction use the same projection.
+Compaction applies session cache affinity only to generation, including when
+the native compact endpoint is selected; later request preparation preserves
+the input-only count payload. Generation and count projections use separate
+top-level objects, so preparing one cannot add routing fields to the other.
+
 Exact preflight is avoided when a compatible completed-response usage anchor
 already accounts for normal transcript growth. When neither is available, a
 matching discovered model may use one representative observation: the exact

@@ -273,6 +273,20 @@ class FakeResponses:
                 raise AssertionError("fake endpoint request length is invalid")
             request = json.loads(handler.rfile.read(length))
             if counting:
+                count_fields = {"conversation", "input", "instructions", "model",
+                                "parallel_tool_calls", "personality", "previous_response_id",
+                                "reasoning", "text", "tool_choice", "tools", "truncation"}
+                unknown = sorted(set(request) - count_fields)
+                if unknown:
+                    body = json.dumps({"error": {"code": "unknown_parameter",
+                        "message": f"Unknown parameter: '{unknown[0]}'.",
+                        "param": unknown[0], "type": "invalid_request_error"}}).encode()
+                    handler.send_response(400)
+                    handler.send_header("Content-Type", "application/json")
+                    handler.send_header("Content-Length", str(len(body)))
+                    handler.end_headers()
+                    handler.wfile.write(body)
+                    return
                 assert self.runtime_count_handler is not None
                 self.runtime_count_handler(handler, request)
                 return
@@ -7120,7 +7134,7 @@ def run_nested_command_cases(binary, root, modes=("nested", "nested-resume", "po
             provider.close()
 
 
-def run_manual_compaction_cases(binary, root, modes=("after-cancel", "native-cancel", "count-cancel", "progress", "input", "input-failure", "failure", "active", "steer", "cancel-active", "no-prefix", "no-prefix-resume")):
+def run_manual_compaction_cases(binary, root, modes=("after-cancel", "native-cancel", "count-cancel", "native-count-cancel", "progress", "input", "input-failure", "failure", "active", "steer", "cancel-active", "no-prefix", "no-prefix-resume")):
     """Exercise manual controls through real HTTP polling, not immediate fixture summaries."""
     for mode in modes:
         case = root / ("manual-compact-" + mode)
@@ -7128,9 +7142,9 @@ def run_manual_compaction_cases(binary, root, modes=("after-cancel", "native-can
         provider = FakeResponses()
         state, config = case / "state", case / "config.ini"
         write_irc_config(config, provider.port, "host-model")
-        if mode == "native-cancel":
+        if mode in ("native-cancel", "native-count-cancel"):
             config.write_text(config.read_text().replace("native_compaction = false", "native_compaction = true"))
-        if mode == "count-cancel":
+        if mode in ("count-cancel", "native-count-cancel"):
             config.write_text(config.read_text().replace("exact_token_count = false", "exact_token_count = true"))
         counts = []
         def count(handler, request):
@@ -7194,10 +7208,10 @@ def run_manual_compaction_cases(binary, root, modes=("after-cancel", "native-can
             if mode not in ("no-prefix", "no-prefix-resume"):
                 terminal.submit("seed context")
                 wait_event_count(state, "turn_completed", 1)
-            if mode in ("after-cancel", "native-cancel", "count-cancel", "active", "steer", "cancel-active", "no-prefix", "no-prefix-resume"):
+            if mode in ("after-cancel", "native-cancel", "count-cancel", "native-count-cancel", "active", "steer", "cancel-active", "no-prefix", "no-prefix-resume"):
                 terminal.submit("hold this turn")
                 assert held.wait(5), terminal.capture()
-            if mode in ("after-cancel", "native-cancel", "count-cancel"):
+            if mode in ("after-cancel", "native-cancel", "count-cancel", "native-count-cancel"):
                 terminal.send_key("C-c")
                 wait_event_count(state, "turn_interrupted", 1)
                 finish_turn.set()
@@ -7281,12 +7295,17 @@ def run_manual_compaction_cases(binary, root, modes=("after-cancel", "native-can
                 log = wait_event_count(state, "turn_completed", 2)
                 assert event_list(log, "turn_started")[-1]["data"]["text"] == "typed during compaction"
                 assert not event_list(log, "steering_added")
-            if mode in ("after-cancel", "native-cancel", "count-cancel", "active", "steer", "cancel-active", "no-prefix", "no-prefix-resume"):
+            if mode in ("after-cancel", "native-cancel", "count-cancel", "native-count-cancel", "active", "steer", "cancel-active", "no-prefix", "no-prefix-resume"):
                 assert summaries, (mode, log)
-            if mode == "native-cancel":
+            if mode in ("native-cancel", "native-count-cancel"):
                 assert summaries[0].get("instructions") == "", summaries[0]
-            if mode == "count-cancel":
+            if mode in ("count-cancel", "native-count-cancel"):
                 assert counts
+                assert all("include" not in request and "prompt_cache_key" not in request
+                           for request in counts), counts
+                ordinary = provider.matching_requests("seed context")[0]["body"]
+                cache_key = ordinary.get("prompt_cache_key")
+                assert cache_key and summaries[-1].get("prompt_cache_key") == cache_key, summaries
             if mode == "progress":
                 terminal.submit("/compact")
                 terminal.wait("compaction skipped; no new context")

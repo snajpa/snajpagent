@@ -912,6 +912,11 @@ test_large_compact_prefix(struct snag_store *store, const char *cwd)
     assert(snag_monotonic_ms() - started < 20000u);
     assert(projection.model_input.bytes > 4u * 1024u * 1024u);
     assert(projection.source_seq == session.next_seq - 1u);
+    assert(projection.count_request.value != projection.create_request.value);
+    assert(json_equal(projection.count_request.value, projection.create_request.value));
+    assert(json_object_set_new(projection.create_request.value, "prompt_cache_key",
+        json_string("generation-only-affinity")) == 0);
+    assert(json_object_get(projection.count_request.value, "prompt_cache_key") == NULL);
     snag_context_projection_free(&projection);
     snag_session_close(&session);
 }
@@ -1559,6 +1564,8 @@ test_read_only_and_queue_controllers(struct snag_store *store, const char *temp)
         }
         assert(json_is_false(json_object_get(projection.create_request.value, "store")));
         assert(json_is_true(json_object_get(projection.create_request.value, "stream")));
+        assert(!json_object_get(projection.count_request.value, "include"));
+        assert(!json_object_get(projection.count_request.value, "prompt_cache_key"));
         requests[0] = projection.model_input.value;
         requests[1] = projection.create_request.value;
         requests[2] = projection.count_request.value;
@@ -4577,6 +4584,34 @@ test_host_fact_cache_prefix(struct snag_store *store, const char *cwd)
     assert(changed == 0u);
 }
 
+static void
+test_count_request_schema(void)
+{
+    json_t *expected = json_loads(
+        "{\"conversation\":\"conv_fixture\",\"previous_response_id\":\"resp_fixture\","
+        "\"input\":[{\"role\":\"user\",\"content\":\"ping\"}],\"instructions\":\"fixture\","
+        "\"model\":\"fixture\",\"parallel_tool_calls\":true,\"personality\":\"pragmatic\","
+        "\"reasoning\":{\"effort\":\"medium\"},\"text\":{\"format\":{\"type\":\"text\"}},"
+        "\"tools\":[],\"tool_choice\":\"auto\",\"truncation\":\"disabled\"}", 0, NULL);
+    json_t *controls = json_loads(
+        "{\"include\":[\"reasoning.encrypted_content\"],\"prompt_cache_key\":\"cache_fixture\","
+        "\"prompt_cache_retention\":\"24h\",\"store\":false,\"stream\":true,"
+        "\"max_output_tokens\":4096,\"metadata\":{\"fixture\":\"kept\"},"
+        "\"background\":false,\"service_tier\":\"auto\"}", 0, NULL);
+    json_t *create = json_deep_copy(expected);
+    assert(expected && controls && create && json_object_update(create, controls) == 0);
+    json_t *before = json_deep_copy(create);
+    json_t *count = snag_context_count_request(create);
+    assert(before && count && json_equal(count, expected) && json_equal(create, before));
+    assert(!snag_context_count_request(NULL));
+    assert(!snag_context_count_request(json_null()));
+    json_decref(count);
+    json_decref(before);
+    json_decref(create);
+    json_decref(controls);
+    json_decref(expected);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -4589,6 +4624,7 @@ main(int argc, char **argv)
     snag_office_program(argv[0]);
     (void)snag_office_worker(argc,argv);
     test_office_limits();
+    test_count_request_schema();
 #ifdef _WIN32
     char *office_root=snag_office_runtime("C:\\bundle\\bin\\snajpagent.exe","../lib/libreoffice");
     assert(office_root && !strcmp(office_root,"C:/bundle/bin/../lib/libreoffice"));free(office_root);
@@ -5109,6 +5145,18 @@ main(int argc, char **argv)
     assert(json_object_get(projection.count_request.value, "stream") == NULL);
     assert(json_object_get(projection.count_request.value, "store") == NULL);
     assert(json_object_get(projection.count_request.value, "max_output_tokens") == NULL);
+    assert(json_object_get(projection.count_request.value, "include") == NULL);
+    assert(json_object_get(projection.count_request.value, "prompt_cache_key") == NULL);
+    assert(json_is_array(json_object_get(projection.create_request.value, "include")));
+    assert(json_is_string(json_object_get(projection.create_request.value, "prompt_cache_key")));
+    const char *count_fields[] = {"input", "model", "parallel_tool_calls", "reasoning",
+        "tool_choice", "tools", "truncation"};
+    size_t count_field_count = sizeof(count_fields) / sizeof(count_fields[0]);
+    assert(json_object_size(projection.count_request.value) == count_field_count);
+    for (size_t i = 0u; i < count_field_count; ++i) {
+        assert(json_equal(json_object_get(projection.count_request.value, count_fields[i]),
+            json_object_get(projection.create_request.value, count_fields[i])));
+    }
     assert_string(projection.count_request.value, "model", SNAJPAGENT_MODEL);
     {
         json_t *tools = json_object_get(projection.create_request.value, "tools");

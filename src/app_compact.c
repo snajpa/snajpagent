@@ -108,21 +108,6 @@ out: json_decref(copy);
     return request;
 }
 
-static json_t *
-responses_compact_count_request(const json_t *create_request)
-{
-    json_t *request = json_copy((json_t *)create_request);
-
-    if (!request) return NULL;
-    if (json_object_del(request, "store") < 0 || json_object_del(request, "stream") < 0 ||
-        (json_object_get(request, "max_output_tokens") &&
-         json_object_del(request, "max_output_tokens") < 0)) {
-        json_decref(request);
-        return NULL;
-    }
-    return request;
-}
-
 static int
 run_responses_compaction(struct app_state *app, const json_t *create_request,
                          const struct snag_credential *credential, struct snag_json_document *output,
@@ -411,7 +396,8 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             json_decref(projection.create_request.value);
             projection.create_request.value = wire;
             json_decref(projection.count_request.value);
-            projection.count_request.value = responses_compact_count_request(projection.create_request.value);
+            projection.count_request.value =
+                snag_context_count_request(projection.create_request.value);
         }
         /* Codex-style compact endpoints require the field even when the caller
          * supplies no summary instruction; omission is rejected as invalid. */
@@ -419,17 +405,14 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             snag_json_set_new(projection.create_request.value, "instructions", json_string("")) < 0) goto out;
         if (projection.create_request.value && !native && app->turn_provider->auth == SNAG_AUTH_CHATGPT &&
             snag_context_codex_request(projection.create_request.value) < 0) goto out;
-          /* The compaction request is the largest request a session sends, so it carries the same
-           * session cache key as an ordinary request; a key derived per request path would place the
-           * compacted history in a different cache space from the turn that produced it. */
-          char compact_cache_key[SNAG_CACHE_KEY_LEN + 1u];
-          snag_context_cache_key(&app->session, app->turn_provider ? app->turn_provider->name : NULL,
-                                 snag_config_model_upstream(app->turn_provider, model), compact_cache_key);
-          if (compact_cache_key[0] &&
-              ((projection.create_request.value && snag_json_set_new(projection.create_request.value,
-                    "prompt_cache_key", json_string(compact_cache_key)) < 0) ||
-               (projection.count_request.value && snag_json_set_new(projection.count_request.value,
-                    "prompt_cache_key", json_string(compact_cache_key)) < 0))) goto out;
+        /* Summary generation shares the ordinary turn's session cache space.
+         * Input-token counting accepts no cache-routing fields. */
+        char compact_cache_key[SNAG_CACHE_KEY_LEN + 1u];
+        snag_context_cache_key(&app->session, app->turn_provider ? app->turn_provider->name : NULL,
+            snag_config_model_upstream(app->turn_provider, model), compact_cache_key);
+        if (compact_cache_key[0] && projection.create_request.value &&
+            snag_json_set_new(projection.create_request.value, "prompt_cache_key",
+                json_string(compact_cache_key)) < 0) goto out;
         if (!projection.create_request.value || !projection.count_request.value ||
             snag_context_provider_model(app->turn_provider, model, projection.create_request.value) < 0 ||
             snag_context_provider_model(app->turn_provider, model, projection.count_request.value) < 0) {

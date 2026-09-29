@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Fix OpenAI API-key token preflight sending response-only parameters such as
+  `include` and `prompt_cache_key`, including late compaction cache setup.
+  Count requests retain input configuration; generation requests keep encrypted
+  reasoning and prompt-cache affinity.
+
 - Retain native voice call HTTP failures and renew validated temporary rejections
   using their accepted Retry-After hints. Policy, capacity and malformed responses
   keep their distinct outcomes and never replay accepted work.

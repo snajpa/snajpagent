@@ -2643,6 +2643,9 @@ disables it.  Default:
 An absent endpoint (HTTP 405/501, or a route-level 404 without a semantic
 error code) uses the automatic fallback; strict counting still fails.
 Authentication failures and named model errors do not disable exact counting.
+Counting sends model input, tool schemas and input configuration. Response-only
+controls and prompt-cache routing remain on the generation request, including
+native and Responses-based compaction.
 OpenAI Platform and current llama.cpp servers provide full-request Responses
 counting.  Direct ChatGPT/Codex, OpenRouter and other Responses servers without
 that endpoint continue using measured response usage and bounded overflow recovery;
