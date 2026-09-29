@@ -37,8 +37,9 @@ output mailbox. Native speech uses speakable session context; public Realtime
 uses a host-labelled message and its normal response scheduler. Queue and
 protocol-preparation records make no playback claim. Advertised expiry and validated
 temporary provider-service errors renew the physical connection while retaining
-the logical helper. Transport-cause classification, native capacity recovery and
-long-lived context maintenance remain in implementation.
+the logical helper. DNS/connect/timeout failures before an HTTP response and
+abrupt WebSocket EOF also renew. Remaining transport-cause classification, native
+capacity recovery and long-lived context maintenance remain in implementation.
 
 ## Ownership and lifetime
 
@@ -76,8 +77,14 @@ off cancels both backoff and credential waits. Existing helper slots cover queue
 notices and unfinished delegations across replacements. A full helper acknowledges
 new requests as unsubmitted. Once an old delegation settles, its obsolete native
 call is retired; accepted coding work remains in the canonical queue. The new
-connection observes late outcomes as source-labelled history. Native capacity
-recovery and transport-error classification remain in implementation.
+connection observes late outcomes as source-labelled history. The transport also
+distinguishes DNS/connect/timeout failures before an HTTP response, abrupt socket
+EOF and the existing outbound-write stall deadline. These end the physical attempt
+without replaying its partial writes. HTTP rejections, close frames, TLS failures
+and ambiguous send/receive errors still stop voice. In particular, libcurl uses
+receive errors for malformed WebSocket frames too; a generic receive failure is
+insufficient evidence for automatic recovery. Native capacity recovery and the
+remaining transport classifications stay in implementation.
 
 Terminal detach, loss, switching away and job suspension retain the existing
 privacy boundary: stop microphone forwarding and playback immediately. A newly

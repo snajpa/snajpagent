@@ -1644,6 +1644,23 @@ out:
     return provider_ctx_finish(&ctx,rc,error,error_size);
 }
 
+/* WebSocket receive errors also cover invalid framing. Keep ambiguous errors,
+ * TLS failures and HTTP rejections out of automatic voice replacement. */
+static bool
+voice_transport_retryable(CURLcode code)
+{
+    switch (code) {
+    case CURLE_COULDNT_RESOLVE_HOST:
+    case CURLE_COULDNT_RESOLVE_PROXY:
+    case CURLE_COULDNT_CONNECT:
+    case CURLE_OPERATION_TIMEDOUT:
+    case CURLE_GOT_NOTHING:
+        return true;
+    default:
+        return false;
+    }
+}
+
 int
 snag_provider_voice_call(const struct snag_config *config,
     const struct snag_provider_config *provider,
@@ -1675,6 +1692,7 @@ snag_provider_voice_call(const struct snag_config *config,
     if (code!=CURLE_OK || ctx.http_status!=201) {
         snag_errorf(error,size,"Native voice call failed (HTTP %ld, %s)",
             ctx.http_status,curl_easy_strerror(code));
+        if (!ctx.http_status && voice_transport_retryable(code)) rc = SNAG_PROVIDER_VOICE_RETRY;
         goto out;
     }
     char *query=strchr(location,'?');if (query)*query=0;
@@ -1816,30 +1834,52 @@ voice_connect(const struct snag_provider_config *provider,const struct snag_cred
         curl_easy_setopt(curl,CURLOPT_USERAGENT,SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION)!=CURLE_OK ||
         curl_multi_add_handle(voice->multi,curl)!=CURLM_OK)goto failed;
     voice->added=true;
+    uint64_t started = snag_monotonic_ms();
     for(;;) {
         if(pump && (rc=pump(opaque,0u)))goto done;
         rc=-1;
         int running=0,remaining=0;
         if(curl_multi_perform(voice->multi,&running)!=CURLM_OK)goto failed;
+        bool expired = provider->connect_timeout_ms &&
+            snag_monotonic_ms() - started >= provider->connect_timeout_ms;
         CURLMsg *message;
         while((message=curl_multi_info_read(voice->multi,&remaining))) {
             if(message->msg!=CURLMSG_DONE)continue;
             long status=0;
-            curl_easy_getinfo(curl,CURLINFO_RESPONSE_CODE,&status);
+            if (curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status) != CURLE_OK) goto failed;
             if(message->data.result!=CURLE_OK || status!=101) {
+                /* Enforce the configured deadline even if curl returns OK
+                 * without a response. Preserve actual HTTP/TLS/protocol errors. */
+                if (!status && message->data.result == CURLE_OK && expired) {
+                    snag_errorf(error, size,
+                        "Realtime connection timed out before an HTTP response");
+                    rc = SNAG_PROVIDER_VOICE_RETRY;
+                    goto done;
+                }
                 const char *hint = local_gateway ?
                     ", a local subscription gateway requires "
                     "the /backend-api/codex base" : "";
                 snag_errorf(error, size,
-                    "Realtime connection failed (HTTP %ld, %s)%s; not retried",
+                    "Realtime connection failed (HTTP %ld, %s)%s",
                     status, curl_easy_strerror(message->data.result), hint);
+                if (!status && voice_transport_retryable(message->data.result)) {
+                    rc = SNAG_PROVIDER_VOICE_RETRY;
+                }
                 goto done;
             }
             if(curl_easy_getinfo(curl,CURLINFO_ACTIVESOCKET,&voice->socket)!=CURLE_OK ||
                 voice->socket==CURL_SOCKET_BAD)goto failed;
             voice->connected=true;*out=voice;return 0;
         }
-        if(!running || curl_multi_poll(voice->multi,NULL,0,20,NULL)!=CURLM_OK)goto failed;
+        if (!running) goto failed;
+        if (expired) {
+            long status = 0;
+            if (curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status) != CURLE_OK) goto failed;
+            snag_errorf(error, size, "Realtime connection timed out (HTTP %ld)", status);
+            if (!status) rc = SNAG_PROVIDER_VOICE_RETRY;
+            goto done;
+        }
+        if (curl_multi_poll(voice->multi, NULL, 0, 20, NULL) != CURLM_OK) goto failed;
     }
 failed:
     if (local_gateway)
@@ -1869,31 +1909,42 @@ int snag_provider_voice_attach(const struct snag_provider_config *p,const struct
 int
 snag_provider_voice_send(struct snag_voice_socket *voice,const void *bytes,size_t length,size_t *offset,char *error,size_t size)
 {
+    int status = -1;
 #if LIBCURL_VERSION_NUM >= 0x075600
     if(!voice || voice->closed || !bytes || !length || !offset || *offset>length)goto failed;
     if(*offset==length)return 0;
     size_t sent=0;
     CURLcode rc=curl_ws_send(voice->curl,(const char *)bytes+*offset,length-*offset,&sent,0,CURLWS_TEXT);
-    if(sent>length-*offset || (rc!=CURLE_OK && rc!=CURLE_AGAIN))goto failed;
+    if (sent > length - *offset) goto failed;
+    if (rc != CURLE_OK && rc != CURLE_AGAIN) {
+        if (voice_transport_retryable(rc)) status = SNAG_PROVIDER_VOICE_RETRY;
+        goto failed;
+    }
     *offset+=sent;voice->sending=*offset<length;return 0;
 #else
     (void)bytes;(void)length;(void)offset;
 #endif
 failed:
     if(voice)voice->closed=true;
-    snag_errorf(error,size,"Realtime WebSocket send failed; connection stopped without replay");return -1;
+    snag_errorf(error, size, "Realtime WebSocket send failed; connection stopped without replay");
+    return status;
 }
 
 int
 snag_provider_voice_receive(struct snag_voice_socket *voice,struct snag_buf *message,char *error,size_t size)
 {
+    int status = -1;
 #if LIBCURL_VERSION_NUM >= 0x075600
     if(!voice || voice->closed || !message)goto failed;
     unsigned char buffer[16384];size_t got=0;
     const struct curl_ws_frame *frame=NULL;
     CURLcode rc=curl_ws_recv(voice->curl,buffer,sizeof(buffer),&got,&frame);
     if(rc==CURLE_AGAIN)return 0;
-    if(rc!=CURLE_OK || !frame || (frame->flags&CURLWS_CLOSE))goto failed;
+    if (rc != CURLE_OK) {
+        if (voice_transport_retryable(rc)) status = SNAG_PROVIDER_VOICE_RETRY;
+        goto failed;
+    }
+    if (!frame || (frame->flags & CURLWS_CLOSE)) goto failed;
     /* libcurl handles ping replies; interleaved controls do not affect data offsets. */
     if(frame->flags&(CURLWS_PING|CURLWS_PONG))return 0;
     if(!(frame->flags&CURLWS_TEXT) || (frame->flags&CURLWS_BINARY) ||
@@ -1911,7 +1962,10 @@ snag_provider_voice_receive(struct snag_voice_socket *voice,struct snag_buf *mes
 #endif
 failed:
     if(voice)voice->closed=true;
-    snag_errorf(error,size,"Realtime WebSocket closed or returned invalid/oversized text; connection stopped");return -1;
+    snag_errorf(error, size, status == SNAG_PROVIDER_VOICE_RETRY ?
+        "Realtime WebSocket connection was lost" :
+        "Realtime WebSocket closed or returned invalid/oversized text; connection stopped");
+    return status;
 }
 
 int

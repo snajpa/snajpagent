@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Renew voice after identifiable network failures, abrupt socket closure or a
+  stalled write, while keeping HTTP rejections and malformed frames distinct.
+
 - Renew voice connections after advertised expiry or validated temporary service
   errors, preserving mute state, interface requests and accepted coding work.
   Replacement drops old transport audio and keeps late helper outcomes tied to

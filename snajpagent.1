@@ -1913,14 +1913,17 @@ the old input before fresh capture is admitted.
 Stop capture, playback and the voice connection. Accepted coding work stays with
 the existing session owner. Use the normal coding controls to interrupt that work.
 An advertised connection lifetime ending or a validated temporary provider-service
-error starts paced, cancellable renewal. The microphone stays off during replacement
+error starts paced, cancellable renewal. DNS, connection and timeout failures before
+an HTTP response, abrupt WebSocket EOF and stalled outbound writes also renew.
+The microphone stays off during replacement
 authentication and history restoration. Requested mute state, the interface helper
 and accepted coding work survive; old audio and native call results are discarded
 from the transport. Late helper outcomes keep their original source and reach the
 new connection as historical context. Voice-off also cancels a pending renewal.
-Device loss, overflow, authentication or policy rejection, protocol-integrity errors
-and other unclassified connection failures stop voice. Review the diagnostic and
-restart explicitly with /voice on.
+Device loss, overflow, authentication failure, HTTP or policy rejection, TLS
+failures, WebSocket close frames, protocol-integrity errors and other unclassified
+connection failures stop voice. Review the diagnostic and restart explicitly with
+/voice on.
 Native terminal loss, detach, switching away or job suspension also stops
 voice. Final transcripts and previously accepted coding work remain saved;
 unaccepted voice handoffs are discarded. Reattach before restarting voice.

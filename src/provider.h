@@ -61,9 +61,15 @@ int snag_provider_audio(enum snag_audio_operation operation, const json_t *reque
                          snag_provider_pump_fn pump, void *opaque, struct snag_buf *output,
                          char *error, size_t error_size);
 
+/* A known transport failure ended the attempt. The owner may replace the
+ * connection, but must discard its pending media and partial writes. */
+#define SNAG_PROVIDER_VOICE_RETRY (-2)
+
 /* One owner, one realtime WSS connection. No device, journal, retry or coding
  * executor here. Caller owns message buffers and retries only unsent bytes.
- * receive: 1 whole text message, 0 incomplete/would-block, -1 stopped/error.
+ * receive: 1 whole text message, 0 incomplete/would-block, -1 stopped/error,
+ * SNAG_PROVIDER_VOICE_RETRY for a known recoverable transport failure.
+ * Call/open/attach/send also preserve this typed failure for the owner.
  * Clear the receive buffer after each whole message; preserve it otherwise. */
 struct snag_voice_socket;
 /* Resolve/refresh once before starting voice. Call and attach use the supplied

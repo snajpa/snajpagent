@@ -24,6 +24,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <signal.h>
@@ -5654,10 +5655,28 @@ ws_server(unsigned int mode,int listen_fd,bool native)
     if(mode==4u) {
         send_response(fd,401u,"application/json","{\"error\":\"private denied body\"}");close(fd);_Exit(0);
     }
-    if(mode==5u) {while(read(fd,&mode,1u)>0){}close(fd);_Exit(0);}
+    if (mode == 5u || mode == 9u) {
+        char discard;
+        while (read(fd, &discard, 1u) > 0) {}
+        close(fd);
+        _Exit(0);
+    }
     const char *upgrade="HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"
         "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n";
     write_all_or_die(fd,upgrade,strlen(upgrade));
+    if (mode == 6u) {
+        close(fd);
+        _Exit(0);
+    }
+    if (mode == 7u) {
+        /* Server frames must not be masked. libcurl reports RECV_ERROR here. */
+        const unsigned char invalid[] = {0x81, 0x81, 0, 0, 0, 0, 'x'};
+        write_all_or_die(fd, (const char *)invalid, sizeof(invalid));
+        char discard;
+        while (read(fd, &discard, 1u) > 0) {}
+        close(fd);
+        _Exit(0);
+    }
     if(mode) {
         const char *frame=mode==1u?"\202\001x":mode==2u?"\201\176\020\000x":"\201\002\377\377";
         write_all_or_die(fd,frame,mode==1u?3u:mode==2u?5u:4u);
@@ -5702,31 +5721,62 @@ test_voice_socket(void)
     assert(snag_provider_voice_open(&provider,&credential,"fixture",NULL,NULL,
         &voice,error,sizeof(error))<0 && !voice);
     assert(strstr(error,"/backend-api/codex"));
-    for (unsigned int test=0;test<18u;++test) {
-        unsigned int mode = test % 6u;
-        unsigned int route = test / 6u;
+    for (unsigned int test = 0; test < 30u; ++test) {
+        unsigned int mode = test % 10u;
+        unsigned int route = test / 10u;
         bool native = route == 2u;
+        provider.connect_timeout_ms = mode == 9u ? 100u : 2000u;
         fprintf(stderr,"WebSocket fixture route %u mode %u\n",route,mode);
         struct local_server server;
         struct sockaddr_in address; socklen_t address_size=sizeof(address);
         memset(&server,0,sizeof(server));memset(&address,0,sizeof(address));
         server.fd=socket(AF_INET,SOCK_STREAM,0);assert(server.fd>=0);
         address.sin_family=AF_INET;address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
-        assert(bind(server.fd,(struct sockaddr *)&address,sizeof(address))==0 && listen(server.fd,1)==0);
+        assert(bind(server.fd, (struct sockaddr *)&address, sizeof(address)) == 0);
+        /* A bound, non-listening socket keeps refusal on an owned port. */
+        if (mode != 8u) assert(listen(server.fd, 1) == 0);
         assert(getsockname(server.fd,(struct sockaddr *)&address,&address_size)==0);
         server.port=ntohs(address.sin_port);
-        server.pid=fork();assert(server.pid>=0);
-        if (!server.pid) ws_server(mode,server.fd,native);
-        close(server.fd);server.fd=-1;
+        if (mode != 8u) {
+            server.pid = fork();
+            assert(server.pid >= 0);
+            if (!server.pid) ws_server(mode, server.fd, native);
+            close(server.fd);
+            server.fd = -1;
+        }
         snprintf(provider.base_url,sizeof(provider.base_url),"http://%s:%u/%s",
             route ? "localhost" : "127.0.0.1",server.port,native ? "backend-api/codex" : "v1/");
-        uint64_t deadline=snag_monotonic_ms()+200u;
+        uint64_t started = snag_monotonic_ms();
+        uint64_t deadline = started + 200u;
         int rc = native ? snag_provider_voice_attach(&provider,&credential,"rtc_native",
             mode==5u?ws_cancel:NULL,&deadline,&voice,error,sizeof(error)) :
             snag_provider_voice_open(&provider,&credential,"fixture voice",mode==5u?ws_cancel:NULL,
                 &deadline,&voice,error,sizeof(error));
-        if(mode>=4u) {
-            assert(rc==(mode==5u?2:-1) && !voice);
+        if (mode == 8u) {
+            assert(rc == SNAG_PROVIDER_VOICE_RETRY && !voice);
+            if (native) {
+                struct snag_buf answer = {.max = 32768u};
+                char call[257] = {0};
+                json_t *session = json_pack("{s:s}", "model", "gpt-live-1-codex");
+                assert(session);
+                rc = snag_provider_voice_call(NULL, &provider, &credential,
+                    "v=0\r\n", session, NULL, NULL, &answer, call, error, sizeof(error));
+                assert(rc == SNAG_PROVIDER_VOICE_RETRY && !call[0] && !answer.len);
+                json_decref(session);
+                snag_buf_free(&answer);
+            }
+            close(server.fd);
+            continue;
+        }
+        if (mode == 4u || mode == 5u || mode == 9u) {
+            int expected = mode == 9u ? SNAG_PROVIDER_VOICE_RETRY : mode == 5u ? 2 : -1;
+            uint64_t elapsed = snag_monotonic_ms() - started;
+            if (mode == 9u) assert(elapsed >= provider.connect_timeout_ms && elapsed < 1000u);
+            if (rc != expected || voice) {
+                fprintf(stderr, "WebSocket handshake rc=%d expected=%d elapsed=%" PRIu64 ": %s\n",
+                    rc, expected, elapsed, error);
+            }
+            assert(rc == expected && !voice);
             if(mode==4u)assert(strstr(error,"401") && !strstr(error,"private denied body"));
             stop_server(&server);continue;
         }
@@ -5765,6 +5815,7 @@ test_voice_socket(void)
             if(rc==0)assert(snag_provider_voice_wait(voice,false,20u)==0);
         }while(rc>=0);
         assert(messages==(mode?0u:2u));
+        assert(rc == (mode == 6u ? SNAG_PROVIDER_VOICE_RETRY : -1));
         snag_provider_voice_close(voice);voice=NULL;snag_buf_free(&received);
         stop_server(&server);
     }
@@ -6930,6 +6981,48 @@ test_voice_renewal(struct app_state *app, struct snag_config *config,
 }
 
 static void
+test_voice_network_renewal(struct app_state *app, struct snag_config *config)
+{
+    int refused = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    struct sockaddr_in address = {.sin_family = AF_INET,
+        .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+    socklen_t length = sizeof(address);
+    assert(refused >= 0 && bind(refused, (struct sockaddr *)&address, sizeof(address)) == 0);
+    assert(getsockname(refused, (struct sockaddr *)&address, &length) == 0);
+    struct snag_provider_config *provider = &config->providers[1];
+    char previous[SNAG_CONFIG_URL_MAX], connection[33];
+    strcpy(previous, provider->base_url);
+    snprintf(provider->base_url, sizeof(provider->base_url), "http://127.0.0.1:%u/v1",
+        ntohs(address.sin_port));
+    strcpy(config->audio.provider, "native-key");
+    bool handled = false;
+    assert(snag_app_voice_command(app, "/voice on", &handled) == 0 && handled && app->voice);
+    json_t *state = snag_app_voice_fixture_state(app);
+    assert(state);
+    strcpy(connection, snag_json_string(state, "connection_id"));
+    json_decref(state);
+    uint64_t deadline = snag_monotonic_ms() + 4000u;
+    for (;;) {
+        assert(snag_monotonic_ms() < deadline);
+        assert(snag_app_voice_service(app) == 0 && app->voice);
+        assert(!snag_app_voice_fixture_capture_ready(app));
+        state = snag_app_voice_fixture_state(app);
+        bool replaced = state && json_integer_value(json_object_get(state, "reconnects")) >= 2;
+        if (replaced) assert(strcmp(connection, snag_json_string(state, "connection_id")));
+        json_decref(state);
+        if (replaced) break;
+        (void)snag_sleep_ms(1u);
+    }
+    uint64_t stopping = snag_monotonic_ms();
+    assert(snag_app_voice_command(app, "/voice off", &handled) == 0 && handled && !app->voice);
+    assert(snag_monotonic_ms() - stopping < 1000u);
+    assert(!app->session.active_turn && !app->session.pending_queue_count);
+    assert(close(refused) == 0);
+    strcpy(provider->base_url, previous);
+    config->audio.provider[0] = '\0';
+}
+
+static void
 test_native_ui(void)
 {
     char path[4096], directory[4096], id[33], error[256];
@@ -7159,6 +7252,7 @@ test_native_ui(void)
         }
         test_voice_renewal(&app, &config, renewal_server.endpoint,
             renewal_received[0], renewal_release[1]);
+        test_voice_network_renewal(&app, &config);
         assert(snag_ui_voice(ui, "[VOICE MIC ON] ") == 0);
         json_t *notices = json_pack("[{s:s,s:s,s:s,s:s},{s:s}]",
             "type", "voice_transcript", "speaker", "user", "item_id", "input-1",
@@ -7205,7 +7299,7 @@ test_native_ui(void)
         unsigned int voice_counts[2] = {0};
         assert(snag_session_each_event(session, voice_close_record, voice_counts,
                                         error, sizeof(error)) == 0);
-        assert(voice_counts[0] == 2u && voice_counts[1] == 7u && !session->pending_queue_count);
+        assert(voice_counts[0] == 2u && voice_counts[1] == 8u && !session->pending_queue_count);
         for (unsigned int playing = 0u; playing < 2u; ++playing) {
             assert(snag_app_audio_fixture(&app, playing != 0u) == 0);
             assert(snag_app_audio_fixture_checkpoint(&app) == 2);

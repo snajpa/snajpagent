@@ -928,10 +928,19 @@ static int owner_flush(struct app_voice *v)
         snag_secret_clear(out->data,out->len);snag_buf_reset(out);
         v->send_read=(v->send_read+1u)%8u;--v->send_count;return 0;
     }
-    if(snag_monotonic_ms()>v->send_deadline) {strcpy(v->error,"Realtime send stalled; stopped without replay");return -1;}
+    if (snag_monotonic_ms() > v->send_deadline) {
+        strcpy(v->error, "Realtime send stalled; renewing without replay");
+        v->retryable = true;
+        return SNAG_PROVIDER_VOICE_RETRY;
+    }
     struct snag_buf *out=&v->send[v->send_read];
     size_t before=v->send_offset;
-    if(snag_provider_voice_send(v->socket,out->data,out->len,&v->send_offset,v->error,sizeof(v->error))<0)return -1;
+    int rc = snag_provider_voice_send(v->socket, out->data, out->len,
+        &v->send_offset, v->error, sizeof(v->error));
+    if (rc < 0) {
+        v->retryable = rc == SNAG_PROVIDER_VOICE_RETRY;
+        return rc;
+    }
     if(v->send_offset!=before)v->send_deadline=snag_monotonic_ms()+2000u;
     if(v->send_offset==out->len) {
         v->send_bytes-=out->len;snag_secret_clear(out->data,out->len);snag_buf_reset(out);
@@ -997,6 +1006,12 @@ int snag_app_voice_fixture_mute(struct app_state *app)
     if(snag_voice_input(v->protocol,pcm,480u,v->error,sizeof(v->error))<0)return -1;
     v->send_offset=1u;
     if(owner_mute(v)<0 || v->send_count!=2u || !v->send_audio[v->send_read] || v->send_offset!=1u)return -1;
+    /* The existing stall deadline retires a partial frame without resending it. */
+    v->send_deadline = 0u;
+    if (owner_flush(v) != SNAG_PROVIDER_VOICE_RETRY || !v->retryable ||
+        v->send_count != 2u || v->send_offset != 1u) return -1;
+    v->retryable = false;
+    v->error[0] = '\0';
     snag_voice_free(v->protocol);v->protocol=NULL;
     return 0;
 }
@@ -1055,10 +1070,11 @@ snag_app_voice_fixture_state(struct app_state *app)
 {
     struct app_voice *v = app->voice;
     if (!v || (v->thread_started && atomic_load(&v->credential_accepted))) return NULL;
-    return json_pack("{s:s,s:b,s:b,s:i}", "connection_id", v->connection,
+    return json_pack("{s:s,s:b,s:b,s:i,s:I}", "connection_id", v->connection,
         "muted", atomic_load(&v->muted), "transport_empty",
         !v->send_count && !v->send_bytes && !v->send_offset && !v->receive.len && !v->result,
-        "pending_handoffs", (int)atomic_load(&v->pending_handoffs));
+        "pending_handoffs", (int)atomic_load(&v->pending_handoffs),
+        "reconnects", (json_int_t)v->reconnects);
 }
 #endif /* SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS */
 
@@ -1108,10 +1124,19 @@ static void *voice_owner(void *opaque)
             &v->socket,v->error,sizeof(v->error));
 native_done:
         json_decref(session);snag_buf_free(&offer);snag_buf_free(&answer);
-        if (rc)goto done;
-    } else if (snag_provider_voice_open(&v->provider,&v->credential,
-        v->config.realtime_model,owner_controls,v,
-        &v->socket,v->error,sizeof(v->error)))goto done;
+        if (rc) {
+            v->retryable = rc == SNAG_PROVIDER_VOICE_RETRY;
+            goto done;
+        }
+    } else {
+        int rc = snag_provider_voice_open(&v->provider, &v->credential,
+            v->config.realtime_model, owner_controls, v,
+            &v->socket, v->error, sizeof(v->error));
+        if (rc) {
+            v->retryable = rc == SNAG_PROVIDER_VOICE_RETRY;
+            goto done;
+        }
+    }
     snag_credential_clear(&v->credential);
     if (snag_voice_begin(v->protocol,v->error,sizeof(v->error))<0)goto done;
     while (!owner_controls(v,0u)) {
@@ -1133,7 +1158,10 @@ native_done:
         if(owner_flush(v)<0)break;
         for(unsigned int i=0;i<16u;++i) {
             int rc=snag_provider_voice_receive(v->socket,&v->receive,v->error,sizeof(v->error));
-            if(rc<0)goto done;
+            if (rc < 0) {
+                v->retryable = rc == SNAG_PROVIDER_VOICE_RETRY;
+                goto done;
+            }
             if(!rc)break;
             json_t *event=snag_json_load_strict(v->receive.data,v->receive.len,VOICE_MESSAGE,v->error,sizeof(v->error));
             if(!event)goto done;
