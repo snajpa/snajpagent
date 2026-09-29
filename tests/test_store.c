@@ -814,14 +814,14 @@ test_one_file_checkpoint(struct snag_store *store, const char *cwd)
     unsigned char changed = original == 'X' ? 'Y' : 'X';
     int writer = openat(session.dir_fd, "events.jsonl", O_WRONLY | O_CLOEXEC);
     assert(writer >= 0 && pwrite(writer, &changed, 1u, 0) == 1);
-    assert(fdatasync(writer) == 0 && close(writer) == 0);
+    assert(snag_sync_file(writer) == 0 && close(writer) == 0);
     snag_session_close(&session);
     snag_session_init(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     assert(session.checkpoint_seq && strcmp(session.default_effort, "default") == 0);
     writer = openat(session.dir_fd, "events.jsonl", O_WRONLY | O_CLOEXEC);
     assert(writer >= 0 && pwrite(writer, &original, 1u, 0) == 1);
-    assert(fdatasync(writer) == 0 && close(writer) == 0);
+    assert(snag_sync_file(writer) == 0 && close(writer) == 0);
     /* A broken referenced checkpoint is a hard error, never a quiet prefix
      * scan. An incomplete trailing append is separately recoverable. */
     int64_t checkpoint = session.checkpoint_offset;
@@ -829,7 +829,7 @@ test_one_file_checkpoint(struct snag_store *store, const char *cwd)
     assert(pread(session.log_fd, &checkpoint_byte, 1u, checkpoint) == 1);
     writer = openat(session.dir_fd, "events.jsonl", O_WRONLY | O_CLOEXEC);
     assert(writer >= 0 && pwrite(writer, &changed, 1u, checkpoint) == 1);
-    assert(fdatasync(writer) == 0 && close(writer) == 0);
+    assert(snag_sync_file(writer) == 0 && close(writer) == 0);
     snag_session_close(&session);
     snag_session_init(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) < 0);
@@ -838,13 +838,13 @@ test_one_file_checkpoint(struct snag_store *store, const char *cwd)
     assert(dir >= 0);
     int log = openat(dir, "events.jsonl", O_WRONLY | O_CLOEXEC);
     assert(log >= 0 && pwrite(log, &checkpoint_byte, 1u, checkpoint) == 1);
-    assert(fdatasync(log) == 0);
+    assert(snag_sync_file(log) == 0);
     assert(close(log) == 0 && close(dir) == 0);
     snag_session_init(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     int64_t complete = session.log_end;
     assert(write(session.log_fd, "{incomplete", 11u) == 11);
-    assert(fdatasync(session.log_fd) == 0);
+    assert(snag_sync_file(session.log_fd) == 0);
     snag_session_close(&session);
     snag_session_init(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
