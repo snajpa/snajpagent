@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Retain live voice-interface dialogue and tool outcomes across spoken handoffs,
+  refresh state on continuation requests, and recover exhausted input with
+  tool-free, paced compaction through the existing request worker. Filter
+  reflected credentials from public interface history and returned replies.
+
 - Isolate voice-interface transport cache affinity from the working conversation,
   and retain reported request usage, cache counts and observed timing in history.
 

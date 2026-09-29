@@ -93,7 +93,8 @@ does not claim freshness beyond its cursor. Voice service continues catch-up
 between ordinary event-loop steps, including when no new utterance arrives.
 The cache survives commits and pending-to-durable persistence, is freed on session
 close and rebuilds incrementally after reopen. It is neither checkpoint state
-nor a second authority. Ordered conversation retention remains separate work.
+nor a second authority. Live dialogue restoration on reopen is separate from
+this latest-state projection.
 
 Keep the stable instruction/help prefix and append new context to the history.
 Choose batched compaction versus a sliding window from measured prefill latency,
@@ -107,6 +108,44 @@ The interface request has a distinct, stable cache identity derived from the
 session/provider/model identity. Both its prompt-cache key and transport affinity
 header use that identity. It does not reuse or mutate the working model's cache
 identity merely because both conversations select the same model.
+
+The live text interface now retains public dialogue and tool results across
+delegations, with the orientation/help prefix kept verbatim. Each ordinary
+request appends a fresh, secret-filtered state snapshot; this includes tool
+continuations. Provider-private continuation stays within its current delegation.
+Public assistant output is recorded separately from the eventual spoken reply.
+Public history copies and returned replies pass through the existing secret
+filter. Public protocol identities must survive filtering unchanged; a response
+whose identity contains a configured secret fails before action dispatch.
+Turning voice off releases this live history. Rehydration on a later connection,
+initial full working-model history and appending actual working output before
+each text request remain open, as do native audio-context renewal and retention.
+
+Capacity recovery reuses the existing request worker and the working compactor's
+tool-free summary-request builder. An actual provider capacity rejection or the
+existing request-serialization bound triggers recovery; no guessed token window
+is used. The owner summarizes an older prefix while keeping the current
+delegation's unsummarized tail, or summarizes the whole available dialogue when
+there is no older prefix. The instruction/help item remains outside the summary.
+Whole-dialogue recovery continues with a correlated host marker rather than
+resubmitting the original speech as a new user message. Failed seeded delegations
+leave a recorded failure marker with any previously accepted queue identity, so
+their source does not silently become a new pending request on a later handoff.
+Source JSON is streamed to summary requests in UTF-8-aligned fragments with item
+positions and byte offsets. The initial 4 MiB quantum is a staging bound, not
+model capacity. Capacity rejection halves the actual source bytes sent, with
+the existing interruptible retry delay. Consecutive normal capacity rejections
+are paced too; retry counts govern delay, not a lifetime quota.
+
+Original live entries remain until all fragments have contributed to a smaller
+summary and the owner has recorded `interface_compacted`. Empty, actionable or
+non-reducing summary responses fail that delegation while leaving history and
+the voice connection available. Summary requests have separate
+`interface_compaction_settled` observations and never dispatch their returned
+tool calls. The pending handoff and its accepted queue identity survive recovery;
+summary work changes neither the coding request nor the working-model cache key.
+This reactive recovery does not select a proactive retention policy: measured
+provider latency/cache behavior and broader continuity acceptance remain required.
 
 Settled interface requests return their reported usage and observed timing to the
 session owner. Before acting on the response, that owner records an

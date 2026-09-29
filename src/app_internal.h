@@ -232,6 +232,9 @@ bool snag_app_measured_input(struct app_state *app, uint64_t *tokens);
 int snag_app_capacity_resolve(struct app_state *app, const struct snag_provider_config *provider,
                              const char *model, struct snag_model_capacity *capacity,
                              char *error, size_t error_size);
+/* Tool-free summary request shared by working and interface context maintenance. */
+json_t *snag_app_summary_request(const json_t *request, const char *model, const char *effort,
+    const struct snag_model_capacity *capacity);
 /* Resolve one candidate context selection without recording it; /context uses
  * this before the choice enters the session log. */
 int snag_app_context_preview(struct app_state *app, const struct snag_provider_config *provider,

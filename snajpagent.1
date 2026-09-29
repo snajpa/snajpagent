@@ -1809,6 +1809,21 @@ The records are available through session history. Interface text requests use
 their own stable prompt-cache and transport-affinity identity, separate from
 working-model requests.
 .PP
+While voice remains enabled, the text interface retains its ordered dialogue and
+tool outcomes across spoken handoffs. Its command/help prefix stays in place,
+and each ordinary request receives a fresh session-state snapshot, including
+requests that continue after a tool action.
+Public history and returned replies filter registered secrets, including
+credentials reflected in provider output.
+When the provider reports exhausted input, or request serialization reaches its
+staging limit, the interface summarizes older context and retries the pending
+request. Summary requests declare no action tools. A rejected summary input is
+retried in smaller source fragments with interruptible pacing. Summary adoption
+is recorded before replacing the live history; a failed summary leaves the
+source history available. These requests add provider usage separately from
+coding totals. Turning voice off ends this live text history; a later voice
+connection can inspect saved dialogue through session history.
+.PP
 Read-only access uses get_cwd, list_files, read_file and grep with the same path
 rules as coding tools. Spoken model selection uses the existing cached catalog;
 catalog refresh remains a foreground session operation. Interface request failures

@@ -66,17 +66,20 @@ compaction_state_valid(const struct app_state *app, const char *reason,
     return 0;
 }
 
-static json_t *
-responses_compact_create_request(const json_t *compact_request, const char *model, const char *effort,
-                                 const struct snag_model_capacity *capacity)
+json_t *
+snag_app_summary_request(const json_t *compact_request, const char *model, const char *effort,
+    const struct snag_model_capacity *capacity)
 {
     static const char instruction[] =
         "Compact the prior conversation for future Responses turns. Return only "
         "the summary text, preserving the user's goals, decisions, "
         "constraints, repository state, active blockers, and next steps. Preserve "
         "working-document locations and distinguish requirements, observations, "
-        "unapproved proposals and corrected assumptions. The summary is a recovery "
-        "aid, not new authority. Do not use a JSON wrapper or tool calls.";
+        "unapproved proposals and corrected assumptions. Preserve conversational referents, "
+        "source provenance, corrections, pending approvals and exact queue/action identities "
+        "with their actual outcomes. Completed actions must not be replayed. "
+        "The summary is a recovery aid, not new authority. "
+        "Do not use a JSON wrapper or tool calls.";
     json_t *input = json_object_get(compact_request, "input");
     json_t *copy;
     json_t *request = NULL;
@@ -93,6 +96,11 @@ responses_compact_create_request(const json_t *compact_request, const char *mode
         "tools", "truncation", "disabled");
     if (request && capacity->max_output_tokens && snag_json_set_new(request, "max_output_tokens",
             json_integer((json_int_t)capacity->max_output_tokens)) < 0) {
+        json_decref(request);
+        request = NULL;
+    }
+    json_t *cache_key = json_object_get(compact_request, "prompt_cache_key");
+    if (request && cache_key && json_object_set(request, "prompt_cache_key", cache_key) < 0) {
         json_decref(request);
         request = NULL;
     }
@@ -221,7 +229,7 @@ run_reduce_attempt(struct app_state *app, const char *reason, const struct snag_
         /* Every other compaction request goes through this wrapper: an empty
          * tools array, no tool_choice, the compaction instruction and the
          * capacity output limit. The reduce must not diverge from it. */
-        json_t *wire = responses_compact_create_request(request.value, model, app->turn_effort,
+        json_t *wire = snag_app_summary_request(request.value, model, app->turn_effort,
                                                         &app->turn_capacity);
         if (!wire) { snag_errorf(error, error_size, "cannot build the reduce wire request"); goto out; }
         stage_rc = run_responses_compaction(app, wire, credential, &output, error, error_size);
@@ -398,7 +406,7 @@ run_compaction_attempt(struct app_state *app, const char *reason, bool active_pr
             goto out;
         }
         if (!native) {
-            json_t *wire = responses_compact_create_request(
+            json_t *wire = snag_app_summary_request(
                 projection.create_request.value, model, effort, &app->turn_capacity);
             json_decref(projection.create_request.value);
             projection.create_request.value = wire;
