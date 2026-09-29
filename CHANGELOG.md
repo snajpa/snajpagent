@@ -7,6 +7,9 @@
 - Filter reflected interface credentials after credential rotation, including
   responses retained when voice closes, while keeping earlier secrets protected.
 
+- Preserve policy categories through provider-error normalization and keep mixed
+  policy/capacity errors out of context-capacity recovery.
+
 - Retain interface-request settlement, received public output and pending handoff
   identities when voice closes, without executing returned calls or cancelling
   accepted coding work.

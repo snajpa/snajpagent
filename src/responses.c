@@ -69,7 +69,8 @@ record_diagnostic(struct snag_responses_stream *stream, const struct snag_sse_re
 bool
 snag_provider_failure_is_capacity(const struct snag_provider_failure *failure)
 {
-    return failure && strcmp(failure->code, "context_length_exceeded") == 0;
+    return failure && !snag_provider_failure_is_policy(failure) &&
+        strcmp(failure->code, "context_length_exceeded") == 0;
 }
 
 bool
@@ -106,11 +107,13 @@ snag_provider_failure_from_json(const json_t *root, struct snag_provider_failure
         }
     }
     typed = snag_json_string(json_is_object(response) ? response : root, "error_type");
-    if (!typed) typed = snag_json_string(json_object_get(object, "metadata"), "error_type");
     if (!json_is_object(object) && typed) object = json_is_object(response) ? response : (json_t *)root;
     if (!json_is_object(object) && (json_object_get(root, "code") || json_object_get(root, "reason") ||
          json_object_get(root, "type"))) object = (json_t *)root;
     if (!json_is_object(object)) return object && !json_is_null(object) ? -1 : 0;
+    const char *metadata_type = snag_json_string(json_object_get(object, "metadata"), "error_type");
+    if (!typed || (!snag_string_in(typed, "cyber_policy content_filter") && metadata_type &&
+        snag_string_in(metadata_type, "cyber_policy content_filter"))) typed = metadata_type;
     {
         const char *keys[] = {"code", "reason", "type"};
         for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
@@ -128,11 +131,15 @@ snag_provider_failure_from_json(const json_t *root, struct snag_provider_failure
     if (!code) code = snag_json_string(object, "reason");
     message = snag_json_string(object, "message");
     if (code) memcpy(failure->code, code, strlen(code) + 1u);
-    /* A top-level SSE type is the event name, not the error category. */
-    if (snag_json_string(object, "type") &&
-        (object != root || !strcmp(snag_json_string(object, "type"), "exceed_context_size_error") ||
-         !strcmp(snag_json_string(object, "type"), "invalid_request_error")))
-        snprintf(failure->type, sizeof(failure->type), "%s", snag_json_string(object, "type"));
+    /* Recognized top-level error categories survive; SSE event names do not. */
+    const char *category = snag_json_string(object, "type");
+    if (category && (object != root || snag_string_in(category,
+        "exceed_context_size_error invalid_request_error cyber_policy content_filter"))) {
+        snprintf(failure->type, sizeof(failure->type), "%s", category);
+    }
+    if (typed && snag_string_in(typed, "cyber_policy content_filter")) {
+        snprintf(failure->type, sizeof(failure->type), "%s", typed);
+    }
     if (snag_text_valid(message, 0u, sizeof(failure->message) - 1u))
         memcpy(failure->message, message, strlen(message) + 1u);
     for (size_t i = 0; i < sizeof(limit_keys) / sizeof(limit_keys[0]); ++i)
@@ -141,12 +148,15 @@ snag_provider_failure_from_json(const json_t *root, struct snag_provider_failure
     for (size_t i = 0; i < sizeof(requested_keys) / sizeof(requested_keys[0]); ++i)
         if (snag_json_merge_limit(object, requested_keys[i], SNAG_CONFIG_TOKEN_LIMIT_MAX,
                           &failure->requested_input_tokens) < 0) return -1;
-    if ((typed && !strcmp(typed, "context_length_exceeded")) ||
-        !strcmp(failure->type, "exceed_context_size_error"))
+    /* Capacity aliases must not erase an explicit policy rejection. */
+    bool policy = snag_provider_failure_is_policy(failure);
+    if (!policy && ((typed && !strcmp(typed, "context_length_exceeded")) ||
+        !strcmp(failure->type, "exceed_context_size_error")))
         snprintf(failure->code, sizeof(failure->code), "context_length_exceeded");
     /* vLLM Responses has a specific validation error, not a context code.
      * Match the complete grammar and param; never classify arbitrary HTTP 400. */
-    if (!strcmp(failure->type, "invalid_request_error") && message && snag_json_string(object, "param") &&
+    if (!policy && !strcmp(failure->type, "invalid_request_error") && message &&
+        snag_json_string(object, "param") &&
         !strcmp(snag_json_string(object, "param"), "input")) {
         unsigned long long prompt = 0u, limit = 0u;
         int end = 0;

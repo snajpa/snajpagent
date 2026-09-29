@@ -48,6 +48,9 @@ routine reopen reads that boundary and its suffix, not the lifetime prefix.
    exact count, use compatible provider measurements for proactive decisions and
    the existing provider-rejection recovery path for actual overflow. Native
    image/body byte limits remain independent, enforced transport constraints.
+   Explicit policy categories take precedence over capacity codes and aliases.
+   Preserve them during error normalization and keep the failure on the existing
+   policy path; context reduction must not reclassify a policy rejection.
 8. Present consistent context information while working and at idle. The prompt
    and `/status` use the same observation validity and selected-capacity rules;
    issuing a command must not be necessary to refresh them.

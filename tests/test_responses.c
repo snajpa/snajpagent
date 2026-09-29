@@ -815,6 +815,42 @@ test_provider_context_formats(void)
         assert(failure.requested_input_tokens == cases[i].input);
         json_decref(root);
     }
+    static const char *const policy_errors[] = {
+        "{\"error\":{\"code\":\"context_length_exceeded\",\"type\":\"content_filter\","
+            "\"max_context_tokens\":42,\"input_tokens\":43}}",
+        "{\"error\":{\"code\":\"cyber_policy\",\"type\":\"exceed_context_size_error\"}}",
+        "{\"error\":{\"code\":\"content_filter\"},\"error_type\":\"context_length_exceeded\"}",
+        "{\"error\":{\"code\":\"cyber_policy\",\"type\":\"invalid_request_error\","
+            "\"param\":\"input\",\"message\":\"The engine prompt length 9000 exceeds "
+            "the max_model_len 8192. Please reduce prompt.\"}}",
+        "{\"error\":{\"code\":\"context_length_exceeded\"},\"error_type\":\"cyber_policy\"}",
+        "{\"error\":{\"code\":\"context_length_exceeded\","
+            "\"metadata\":{\"error_type\":\"content_filter\"}}}",
+        "{\"response\":{\"error\":{\"code\":\"context_length_exceeded\"},"
+            "\"error_type\":\"content_filter\"}}",
+        "{\"code\":\"context_length_exceeded\",\"type\":\"content_filter\"}",
+        "{\"code\":\"invalid_prompt\",\"type\":\"cyber_policy\","
+            "\"error_type\":\"context_length_exceeded\"}",
+        "{\"error\":{\"code\":\"invalid_prompt\",\"metadata\":{\"error_type\":\"cyber_policy\"}},"
+            "\"error_type\":\"context_length_exceeded\"}",
+        "{\"code\":\"context_length_exceeded\",\"metadata\":{\"error_type\":\"content_filter\"}}",
+    };
+    unsigned int policy_failures = 0u;
+    for (size_t i = 0u; i < sizeof(policy_errors) / sizeof(policy_errors[0]); ++i) {
+        struct snag_provider_failure failure;
+        json_t *root = json_loads(policy_errors[i], JSON_REJECT_DUPLICATES, NULL);
+        assert(root && snag_provider_failure_from_json(root, &failure) == 0);
+        if (!snag_provider_failure_is_policy(&failure) ||
+            snag_provider_failure_is_capacity(&failure) ||
+            failure.context_limit_tokens != (!i ? 42u : 0u) ||
+            failure.requested_input_tokens != (!i ? 43u : 0u)) {
+            fprintf(stderr, "policy/capacity case %zu: code=%s type=%s\n",
+                i, failure.code, failure.type);
+            ++policy_failures;
+        }
+        json_decref(root);
+    }
+    assert(!policy_failures);
     struct snag_responses_stream stream;
     const char *created = "{\"type\":\"response.created\",\"response\":{\"id\":\"resp_cap\",\"status\":\"in_progress\"}}";
     const char *completed = "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_cap\",\"status\":\"completed\",\"error_type\":\"context_length_exceeded\",\"output\":[]}}";

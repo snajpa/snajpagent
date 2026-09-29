@@ -2312,7 +2312,9 @@ turn and runs afterwards; during active-turn compaction it remains steering.
 Interrupted or failed compaction retains the previous context.  Provider errors
 leave the interactive session open; use
 .B /compact
-to retry.  Accepted requests survive a process restart.  Compaction changes
+to retry. Policy rejections remain on the policy path even when their metadata
+also contains a context-limit code; they do not trigger capacity recovery.
+Accepted requests survive a process restart. Compaction changes
 model context and preserves the append-only local log.
 .PP
 The versioned session checkpoint is a record in the same journal.  It stores

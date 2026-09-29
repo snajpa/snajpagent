@@ -5858,7 +5858,7 @@ test_voice_provider_errors(void)
                 struct snag_provider_failure failure;
                 assert(snag_provider_failure_from_json(report, &failure) == 0);
                 assert(!strcmp(failure.code, code));
-                assert(snag_provider_failure_is_capacity(&failure) == (!shape || shape == 6u));
+                assert(snag_provider_failure_is_capacity(&failure) == !shape);
                 assert(snag_provider_failure_is_policy(&failure) == (shape >= 5u));
                 assert(snag_provider_failure_retryable(0, failure.code, failure.type) ==
                     (shape == 1u));
