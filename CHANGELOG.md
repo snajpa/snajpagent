@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Isolate voice-interface transport cache affinity from the working conversation,
+  and retain reported request usage, cache counts and observed timing in history.
+
 - Refresh voice snapshot history incrementally through a verified journal cursor,
   with explicit coverage and continuing catch-up instead of repeated full scans.
 

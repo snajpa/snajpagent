@@ -50,7 +50,7 @@ partial_public_target(struct app_state *app, size_t graph_index,
         if (app->partial_count == app->partial_capacity) {
             size_t capacity = app->partial_capacity ? app->partial_capacity * 2u : 16u;
             struct partial_public_item *grown;
-            if (capacity < app->partial_capacity) {
+            if (capacity < app->partial_capacity || capacity > SIZE_MAX / sizeof(*grown)) {
                 errno = EOVERFLOW;
                 return NULL;
             }
@@ -62,18 +62,14 @@ partial_public_target(struct app_state *app, size_t graph_index,
             app->partial = grown;
             app->partial_capacity = capacity;
         }
-        item = &app->partial[app->partial_count++];
-        memset(item, 0, sizeof(*item));
-        item->graph_index = graph_index;
-        item->kind = kind;
-        item->phase = phase;
-        if (snag_random_id(item->local_item_id) < 0) {
-            memset(item, 0, sizeof(*item));
-            --app->partial_count;
-            return NULL;
-        }
-        memcpy(item->provider_item_id, provider_item_id, id_len + 1u);
-        snag_buf_init(&item->text, SNAG_MAX_PUBLIC_ITEM);
+        struct partial_public_item fresh = {
+            .graph_index = graph_index, .kind = kind, .phase = phase};
+        if (snag_random_id(fresh.local_item_id) < 0) return NULL;
+        memcpy(fresh.provider_item_id, provider_item_id, id_len + 1u);
+        snag_buf_init(&fresh.text, SNAG_MAX_PUBLIC_ITEM);
+        item = &app->partial[app->partial_count];
+        *item = fresh;
+        ++app->partial_count;
         *created = true;
     } else {
         item = &app->partial[app->partial_count - 1u];

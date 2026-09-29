@@ -230,9 +230,11 @@ struct voice_request {
     int root_fd;
     struct snag_provider_config provider;
     struct snag_credential credential;
-    char session_id[SNAG_ID_HEX_LEN + 1u];
     json_t *input;
     struct snag_response_graph graph;
+    uint64_t start_ms, elapsed_ms, ready_ms, first_text_ms;
+    bool ready_seen, text_seen;
+    unsigned int retries;
     int outcome;
     char error[256];
 };
@@ -295,20 +297,51 @@ request_pump(void *opaque, unsigned int timeout_ms)
     return atomic_load_explicit(&request->stop, memory_order_acquire) ? 2 : 0;
 }
 
+static int
+request_ready(void *opaque)
+{
+    struct voice_request *request = opaque;
+    if (!request->ready_seen) {
+        request->ready_ms = snag_monotonic_ms() - request->start_ms;
+        request->ready_seen = true;
+    }
+    return 0;
+}
+
+static int
+request_text(void *opaque, size_t index, enum snag_item_kind kind,
+    enum snag_item_phase phase, const char *id, const char *text, size_t length)
+{
+    (void)index;
+    (void)kind;
+    (void)phase;
+    (void)id;
+    (void)text;
+    struct voice_request *request = opaque;
+    if (length && !request->text_seen) {
+        request->first_text_ms = snag_monotonic_ms() - request->start_ms;
+        request->text_seen = true;
+    }
+    return 0;
+}
+
 static void *
 request_owner(void *opaque)
 {
     struct voice_request *request = opaque;
+    request->start_ms = snag_monotonic_ms();
     request->outcome = snag_auth_read(request->root_fd, &request->provider, false, NULL,
         &request->credential, request_pump, request, request->error, sizeof(request->error));
     if (!request->outcome) {
         request->outcome = snag_provider_responses_create((struct snag_provider_connection){
             .config = request->config, .provider = &request->provider,
             .credential = &request->credential, .pump = request_pump,
-            .pump_opaque = request, .session_id = request->session_id},
-            request->input, NULL, NULL, NULL, NULL, NULL, NULL, &request->graph,
-            NULL, request->error, sizeof(request->error), NULL);
+            .pump_opaque = request,
+            .session_id = snag_json_string(request->input, "prompt_cache_key")},
+            request->input, request_text, request, NULL, NULL, request_ready, request,
+            &request->graph, NULL, request->error, sizeof(request->error), &request->retries);
     }
+    request->elapsed_ms = snag_monotonic_ms() - request->start_ms;
     atomic_store_explicit(&request->done, true, memory_order_release);
     return NULL;
 }
@@ -346,7 +379,6 @@ request_start(struct app_state *app, const struct snag_provider_config *provider
     request->provider = *provider;
     request->provider.models = NULL;
     request->provider.model_count = 0;
-    strcpy(request->session_id, app->session.id);
     request->input = json_deep_copy(input);
     if (!request->input) {
         request_free(request);
@@ -372,12 +404,24 @@ snag_app_voice_request_start(struct app_state *app, const json_t *input,
 
 int
 snag_app_voice_request_take(struct app_state *app, struct snag_response_graph *graph,
-                            int *outcome, char *error, size_t size)
+                            int *outcome, json_t **metrics, char *error, size_t size)
 {
+    if (metrics) *metrics = NULL;
     struct app_voice *v = app ? app->voice : NULL;
     if (!v || !v->request || !graph || !outcome) return -1;
     struct voice_request *request = v->request;
     if (!atomic_load_explicit(&request->done, memory_order_acquire)) return 0;
+    if (metrics) {
+        *metrics = json_pack("{s:I,s:o,s:o,s:I,s:o}",
+            "elapsed_ms", (json_int_t)request->elapsed_ms,
+            "response_ready_ms", request->ready_seen ?
+                json_integer((json_int_t)request->ready_ms) : json_null(),
+            "first_text_ms", request->text_seen ?
+                json_integer((json_int_t)request->first_text_ms) : json_null(),
+            "retries", (json_int_t)request->retries,
+            "usage", snag_response_usage_json(&request->graph.usage));
+        if (!*metrics) return -1;
+    }
     pthread_join(request->thread, NULL);
     request->started = false;
     *outcome = request->outcome;
@@ -1274,10 +1318,22 @@ interface_service(struct app_state *app, char *error, size_t size)
     struct voice_handoff *handoff = v->interface_active;
     if (handoff) {
         struct snag_response_graph graph = {0};
+        json_t *metrics = NULL;
         int outcome = 0;
-        int ready = snag_app_voice_request_take(app, &graph, &outcome, error, size);
+        int ready = snag_app_voice_request_take(app, &graph, &outcome, &metrics, error, size);
         if (ready <= 0) return ready;
         v->interface_active = NULL;
+        int recorded = voice_record(app, v,
+            json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:o}", "type", "voice_response",
+                "operation", "interface_request_settled", "call_id", handoff->call,
+                "provider", handoff->provider, "model", handoff->model,
+                "effort", handoff->effort,
+                "status", outcome == 2 ? "cancelled" : outcome ? "failed" : "completed",
+                "metrics", metrics));
+        if (recorded < 0) {
+            snag_response_graph_free(&graph);
+            return -1;
+        }
         if (outcome) {
             snag_response_graph_free(&graph);
             return interface_reply(handoff, "failed",

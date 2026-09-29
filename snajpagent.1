@@ -1801,6 +1801,13 @@ owner validates tool actions and records their outcomes. Queued work and accepte
 steering are acknowledged separately from completed coding results. An unavailable
 transcript prevents action admission. Final transcripts and provider-reported usage are retained
 separately from coding token counts; raw microphone PCM is not journalled.
+Settled interface text requests also record provider/model identity, reported
+cached tokens when available, retries, and elapsed, response-ready and first-text
+times. Missing observations remain unknown. These client timings include
+authentication, transport and retries; they do not isolate provider prefill time.
+The records are available through session history. Interface text requests use
+their own stable prompt-cache and transport-affinity identity, separate from
+working-model requests.
 .PP
 Read-only access uses get_cwd, list_files, read_file and grep with the same path
 rules as coding tools. Spoken model selection uses the existing cached catalog;

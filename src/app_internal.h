@@ -163,10 +163,11 @@ int snag_app_voice_read(struct app_state *, const struct snag_response_item *,
 int snag_app_voice_ui_input(struct app_state *, const struct snag_response_item *,
     json_t **, char *, size_t);
 /* One independent provider request; only the session owner takes its graph.
- * take: 0 pending, 1 settled with provider outcome, -1 invalid host state. */
+ * take: 0 pending, 1 settled with provider outcome, -1 invalid host state.
+ * Optional metrics are owned by the caller; the worker never journals them. */
 int snag_app_voice_request_start(struct app_state *, const json_t *, char *, size_t);
 int snag_app_voice_request_take(struct app_state *, struct snag_response_graph *,
-                                int *, char *, size_t);
+                                int *, json_t **, char *, size_t);
 int snag_app_voice_submit(struct app_state *, const json_t *, const char *target,
                           char id[SNAG_ID_HEX_LEN + 1u], json_t **, char *, size_t);
 int snag_app_voice_interrupt(struct app_state *, const char *turn, json_t **, char *, size_t);

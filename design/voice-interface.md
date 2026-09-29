@@ -104,8 +104,21 @@ requests through compaction, with older detail recoverable from the session.
 Updating the voice history leaves the working model's in-flight request, cached
 prefix and useful progress intact. Discussing work does not implicitly steer it.
 The interface request has a distinct, stable cache identity derived from the
-session/provider/model identity. It does not reuse or mutate the working model's
-cache identity merely because both conversations select the same model.
+session/provider/model identity. Both its prompt-cache key and transport affinity
+header use that identity. It does not reuse or mutate the working model's cache
+identity merely because both conversations select the same model.
+
+Settled interface requests return their reported usage and observed timing to the
+session owner. Before acting on the response, that owner records an
+`interface_request_settled` voice event with the delegation identity, provider/model/effort,
+outcome, usage, retry count and elapsed milliseconds. Response-ready and first-text
+timings are nullable when those events were not observed; unknown token counts
+remain unknown, including absent cache counts. Timing begins before authentication
+and includes transport and retries. These are client-observed durations, not a
+measurement of the provider's internal prefill time. Tool-only responses need not
+have a first-text observation. The records remain separate from coding-token totals
+and are available through the existing history reader. Capacity and retention
+policy still require measurements on the selected provider.
 
 Voice uses the current session's environment, working directory and effective
 instructions automatically. It requires no additional memory configuration and
