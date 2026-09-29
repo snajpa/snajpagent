@@ -16,6 +16,7 @@
  * Hooks borrow their inputs. The desktop owner queues notices to the existing
  * session owner; only that owner may accept a coding handoff durably. */
 struct snag_voice;
+struct snag_provider_failure;
 struct snag_voice_io {
     int (*send)(void *,const json_t *);
     /* Positive for a handoff means busy: acknowledge without admission. */
@@ -37,6 +38,9 @@ int snag_voice_context(struct snag_voice *,const json_t *,char *,size_t);
 /* Append a passive journal observation; never requests speech or coding work. */
 int snag_voice_observe(struct snag_voice *, const json_t *, char *, size_t);
 int snag_voice_event(struct snag_voice *,const json_t *,char *,size_t);
+/* Retain validated transport facts through the same notice/stop path as errors
+ * received in the event stream. The session owner filters the public copy. */
+int snag_voice_failure(struct snag_voice *, const struct snag_provider_failure *, char *, size_t);
 /* At most one response at once. Committed audio may be answered before ASR
  * finishes; only a coding handoff waits for its correlated final transcript. */
 int snag_voice_respond(struct snag_voice *,bool drained,char *,size_t);

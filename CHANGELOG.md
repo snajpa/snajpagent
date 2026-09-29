@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Retain native voice call HTTP failures and renew validated temporary rejections
+  using their accepted Retry-After hints. Policy, capacity and malformed responses
+  keep their distinct outcomes and never replay accepted work.
+
 - Renew voice after identifiable network failures, abrupt socket closure or a
   stalled write, while keeping HTTP rejections and malformed frames distinct.
 

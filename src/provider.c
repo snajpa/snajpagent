@@ -1666,10 +1666,11 @@ snag_provider_voice_call(const struct snag_config *config,
     const struct snag_provider_config *provider,
     const struct snag_credential *credential,const char *sdp,const json_t *session,
     snag_provider_pump_fn pump,void *opaque,struct snag_buf *answer,
-    char call[257],char *error,size_t size)
+    char call[257], struct snag_provider_failure *failure, char *error, size_t size)
 {
     struct provider_ctx ctx;
     char location[1024]={0};int rc=-1;
+    if (failure) memset(failure, 0, sizeof(*failure));
     if (!snag_provider_native_audio(provider) || !sdp || !json_is_object(session))return -1;
     provider_ctx_init(&ctx,
         (struct snag_provider_connection){config,provider,credential,NULL,
@@ -1693,6 +1694,27 @@ snag_provider_voice_call(const struct snag_config *config,
         snag_errorf(error,size,"Native voice call failed (HTTP %ld, %s)",
             ctx.http_status,curl_easy_strerror(code));
         if (!ctx.http_status && voice_transport_retryable(code)) rc = SNAG_PROVIDER_VOICE_RETRY;
+        if (code == CURLE_OK && ctx.http_status >= 300) {
+            if (ctx.error_body.len) {
+                json_t *root = snag_json_load_strict(ctx.error_body.data,
+                    ctx.error_body.len, ctx.error_body.max, NULL, 0u);
+                bool valid = json_is_object(root) &&
+                    snag_provider_failure_from_json(root, &ctx.provider_failure) == 0;
+                json_decref(root);
+                if (!valid) goto out;
+            }
+            ctx.provider_failure.http_status = ctx.http_status;
+            ctx.provider_failure.retry_after_ms = ctx.retry_after_present ? ctx.retry_after_ms : 0u;
+            redact_diagnostic(&ctx.secrets, ctx.provider_failure.message,
+                sizeof(ctx.provider_failure.message));
+            if (failure) *failure = ctx.provider_failure;
+            if (!snag_provider_failure_is_policy(&ctx.provider_failure) &&
+                !snag_provider_failure_is_capacity(&ctx.provider_failure) &&
+                snag_provider_failure_retryable(ctx.http_status,
+                    ctx.provider_failure.code, ctx.provider_failure.type)) {
+                rc = SNAG_PROVIDER_VOICE_RETRY;
+            }
+        }
         goto out;
     }
     char *query=strchr(location,'?');if (query)*query=0;

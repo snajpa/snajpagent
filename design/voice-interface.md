@@ -80,8 +80,15 @@ call is retired; accepted coding work remains in the canonical queue. The new
 connection observes late outcomes as source-labelled history. The transport also
 distinguishes DNS/connect/timeout failures before an HTTP response, abrupt socket
 EOF and the existing outbound-write stall deadline. These end the physical attempt
-without replaying its partial writes. HTTP rejections, close frames, TLS failures
-and ambiguous send/receive errors still stop voice. In particular, libcurl uses
+without replaying its partial writes. Native call setup validates its complete
+HTTP error body with the common failure parser before deciding whether to renew.
+Policy and capacity rejections take precedence over temporary service categories;
+invalid or partial metadata cannot authorize renewal or publish partial facts.
+Validated HTTP status, error metadata, reported counts and a bounded Retry-After
+hint use the existing failure output and filtered owner notice path. Positive
+Retry-After hints pace the next physical attempt; off remains interruptible.
+WebSocket HTTP rejections, close frames, TLS failures and ambiguous send/receive
+errors still stop voice. In particular, libcurl uses
 receive errors for malformed WebSocket frames too; a generic receive failure is
 insufficient evidence for automatic recovery. Native capacity recovery and the
 remaining transport classifications stay in implementation.

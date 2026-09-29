@@ -180,7 +180,8 @@ json_t *snag_app_voice_fixture_observation(struct app_state *);
 bool snag_app_voice_fixture_capture_ready(struct app_state *);
 bool snag_app_voice_fixture_request_done(struct app_state *);
 bool snag_app_voice_fixture_credential_ready(struct app_state *);
-int snag_app_voice_fixture_failure(struct app_state *, const json_t *);
+int snag_app_voice_fixture_failure(struct app_state *, const json_t *,
+    const struct snag_provider_failure *);
 json_t *snag_app_voice_fixture_state(struct app_state *);
 json_t *snag_app_voice_fixture_context(struct app_state *);
 int snag_app_voice_fixture_mute(struct app_state *);

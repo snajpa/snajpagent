@@ -9,6 +9,8 @@
 #include <stddef.h>
 
 struct snag_provider_failure {
+    /* HTTP rejection when supplied by the transport; zero is unavailable. */
+    long http_status;
     char code[64];
     char type[64];
     char message[256];

@@ -614,6 +614,39 @@ int snag_voice_native_output(struct snag_voice *s,const int16_t *pcm,uint32_t fr
     return s->io.play(s->opaque,"native-output",pcm,frames);
 }
 
+int
+snag_voice_failure(struct snag_voice *s, const struct snag_provider_failure *failure,
+    char *error, size_t size)
+{
+    if (!s || s->failed || !failure) return -1;
+    json_t *report = json_pack("{s:s,s:s,s:o,s:o,s:{s:s,s:s,s:s,s:o,s:o}}",
+        "type", "voice_response", "operation", "provider_error",
+        "http_status", failure->http_status ? json_integer(failure->http_status) : json_null(),
+        "retry_after_ms", failure->retry_after_ms ?
+            json_integer(failure->retry_after_ms) : json_null(), "error",
+        "code", failure->code, "type", failure->type, "message", failure->message,
+        "max_context_tokens", failure->context_limit_tokens ?
+            json_integer((json_int_t)failure->context_limit_tokens) : json_null(),
+        "input_tokens", failure->requested_input_tokens ?
+            json_integer((json_int_t)failure->requested_input_tokens) : json_null());
+    if (notice(s, report) < 0) {
+        return fail(s, error, size, "Realtime provider error could not be retained");
+    }
+    bool retryable = false;
+    const char *reason = "Realtime provider reported an error; details retained in session history";
+    if (snag_provider_failure_is_policy(failure)) {
+        reason = "Realtime provider rejected the request under its policy";
+    } else if (snag_provider_failure_is_capacity(failure)) {
+        reason = "Realtime provider rejected the conversation context";
+    } else if (snag_provider_failure_retryable(failure->http_status,
+            failure->code, failure->type)) {
+        reason = "Realtime provider reported a temporary service failure";
+        retryable = true;
+    }
+    int rc = fail(s, error, size, reason);
+    return retryable ? SNAG_VOICE_RETRY : rc;
+}
+
 static int
 provider_error(struct snag_voice *s, const json_t *event, char *error, size_t size)
 {
@@ -621,28 +654,7 @@ provider_error(struct snag_voice *s, const json_t *event, char *error, size_t si
     if (snag_provider_failure_from_json(event, &failure) < 0) {
         return fail(s, error, size, "Realtime provider error metadata is invalid");
     }
-    json_t *report = json_pack("{s:s,s:s,s:{s:s,s:s,s:s,s:o,s:o}}",
-        "type", "voice_response", "operation", "provider_error", "error",
-        "code", failure.code, "type", failure.type, "message", failure.message,
-        "max_context_tokens", failure.context_limit_tokens ?
-            json_integer((json_int_t)failure.context_limit_tokens) : json_null(),
-        "input_tokens", failure.requested_input_tokens ?
-            json_integer((json_int_t)failure.requested_input_tokens) : json_null());
-    if (notice(s, report) < 0) {
-        return fail(s, error, size, "Realtime provider error could not be retained");
-    }
-    bool retryable = false;
-    const char *reason = "Realtime provider reported an error; details retained in session history";
-    if (snag_provider_failure_is_policy(&failure)) {
-        reason = "Realtime provider rejected the request under its policy";
-    } else if (snag_provider_failure_is_capacity(&failure)) {
-        reason = "Realtime provider rejected the conversation context";
-    } else if (snag_provider_failure_retryable(0, failure.code, failure.type)) {
-        reason = "Realtime provider reported a temporary service failure";
-        retryable = true;
-    }
-    int rc = fail(s, error, size, reason);
-    return retryable ? SNAG_VOICE_RETRY : rc;
+    return snag_voice_failure(s, &failure, error, size);
 }
 
 int snag_voice_event(struct snag_voice *s,const json_t *event,char *error,size_t size)

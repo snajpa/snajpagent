@@ -1814,17 +1814,21 @@ Settled interface text requests also record provider/model identity, reported
 cached tokens when available, retries, and elapsed, response-ready and first-text
 times. Missing observations remain unknown. These client timings include
 authentication, transport and retries; they do not isolate provider prefill time.
-The records are available through session history. Closing voice records the
+The records are available through session history. Turning voice off records the
 settlement of an outstanding interface request and marks its response as discarded.
-Received public output and pending handoff identities remain in history; closing
+Received public output and pending handoff identities remain in history; shutdown
 executes no returned tool calls and leaves accepted coding work under the existing
 session controls. Interface text requests use their own stable prompt-cache and
-transport-affinity identity, separate from working-model requests.
+transport-affinity identity, separate from working-model requests. Connection
+renewal retains the outstanding helper request.
 Provider error records retain validated error codes, categories, available messages
 and reported context/input counts through the same secret-filtered history path.
+Validated native call HTTP rejections also retain status and accepted Retry-After
+hints. Partial or invalid metadata cannot publish partial failure facts.
 Missing counts remain unknown. A generic error message does not establish the
-voice model's context capacity. A provider error stops the current connection;
-/voice on starts a fresh connection.
+voice model's context capacity. Recognized temporary failures renew automatically
+with the pacing described below. Other errors stop voice for review before
+restarting with /voice on.
 .PP
 While voice remains enabled, the text interface retains its ordered dialogue and
 tool outcomes across spoken handoffs. Its command/help prefix stays in place,
@@ -1915,12 +1919,16 @@ the existing session owner. Use the normal coding controls to interrupt that wor
 An advertised connection lifetime ending or a validated temporary provider-service
 error starts paced, cancellable renewal. DNS, connection and timeout failures before
 an HTTP response, abrupt WebSocket EOF and stalled outbound writes also renew.
+Native call setup renews recognized temporary HTTP rejections after validating
+the complete error body. Policy and context-capacity rejections retain their
+distinct diagnostics and stop voice. Accepted Retry-After hints delay replacement;
+/voice off cancels that wait.
 The microphone stays off during replacement
 authentication and history restoration. Requested mute state, the interface helper
 and accepted coding work survive; old audio and native call results are discarded
 from the transport. Late helper outcomes keep their original source and reach the
 new connection as historical context. Voice-off also cancels a pending renewal.
-Device loss, overflow, authentication failure, HTTP or policy rejection, TLS
+Device loss, overflow, authentication failure, unclassified HTTP or policy rejection, TLS
 failures, WebSocket close frames, protocol-integrity errors and other unclassified
 connection failures stop voice. Review the diagnostic and restart explicitly with
 /voice on.

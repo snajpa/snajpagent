@@ -273,6 +273,7 @@ struct app_voice {
     bool retryable; /* Published with done by the connection owner. */
     uint64_t reconnect_at;
     unsigned int reconnects;
+    uint32_t retry_after_ms; /* Published with done; positive bounded provider hint. */
     int root_fd;
     bool thread_started,announced,applied_mute,device_started,stopped_recorded,expiry_warned;
     struct snag_provider_config provider;
@@ -1043,13 +1044,22 @@ connection_finished(struct app_voice *v)
     atomic_store_explicit(&v->done, true, memory_order_release);
 }
 
+static int
+connection_failure(struct app_voice *v, const struct snag_provider_failure *failure)
+{
+    int rc = snag_voice_failure(v->protocol, failure, v->error, sizeof(v->error));
+    v->retry_after_ms = rc == SNAG_VOICE_RETRY ? failure->retry_after_ms : 0u;
+    return rc;
+}
+
 #ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
 int
-snag_app_voice_fixture_failure(struct app_state *app, const json_t *event)
+snag_app_voice_fixture_failure(struct app_state *app, const json_t *event,
+    const struct snag_provider_failure *failure)
 {
     struct app_voice *v = app->voice;
     if (!v || v->thread_started || v->protocol) return -1;
-    if (!event) {
+    if (!event && !failure) {
         /* Advance the advertised deadline without sleeping in the fixture. */
         v->expires_ms = 1u;
         if (connection_expired(v, 0u) || !connection_expired(v, 1u)) return -1;
@@ -1059,7 +1069,8 @@ snag_app_voice_fixture_failure(struct app_state *app, const json_t *event)
     struct snag_voice_io io = {owner_send, owner_notice, owner_play, owner_interrupt};
     v->protocol = snag_voice_new(&io, v, "fixture", "asr", "voice", NULL);
     if (!v->protocol) return -1;
-    int rc = snag_voice_event(v->protocol, event, v->error, sizeof(v->error));
+    int rc = failure ? connection_failure(v, failure) :
+        snag_voice_event(v->protocol, event, v->error, sizeof(v->error));
     v->retryable = rc == SNAG_VOICE_RETRY;
     connection_finished(v);
     return rc;
@@ -1070,11 +1081,13 @@ snag_app_voice_fixture_state(struct app_state *app)
 {
     struct app_voice *v = app->voice;
     if (!v || (v->thread_started && atomic_load(&v->credential_accepted))) return NULL;
-    return json_pack("{s:s,s:b,s:b,s:i,s:I}", "connection_id", v->connection,
+    return json_pack("{s:s,s:b,s:b,s:i,s:I,s:I,s:I}", "connection_id", v->connection,
         "muted", atomic_load(&v->muted), "transport_empty",
         !v->send_count && !v->send_bytes && !v->send_offset && !v->receive.len && !v->result,
         "pending_handoffs", (int)atomic_load(&v->pending_handoffs),
-        "reconnects", (json_int_t)v->reconnects);
+        "reconnects", (json_int_t)v->reconnects,
+        "retry_after_ms", (json_int_t)v->retry_after_ms,
+        "reconnect_at", (json_int_t)v->reconnect_at);
 }
 #endif /* SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS */
 
@@ -1112,8 +1125,14 @@ static void *voice_owner(void *opaque)
                 "Native voice media preparation stopped or timed out");
             goto native_done;
         }
-        rc=snag_provider_voice_call(NULL,&v->provider,&v->credential,(char *)offer.data,session,
-            owner_controls,v,&answer,call,v->error,sizeof(v->error));
+        struct snag_provider_failure failure;
+        rc = snag_provider_voice_call(NULL, &v->provider, &v->credential,
+            (char *)offer.data, session, owner_controls, v, &answer, call,
+            &failure, v->error, sizeof(v->error));
+        if (rc < 0 && failure.http_status) {
+            int reported = connection_failure(v, &failure);
+            rc = reported == SNAG_VOICE_RETRY ? SNAG_PROVIDER_VOICE_RETRY : -1;
+        }
         if (rc)goto native_done;
         if (snag_voice_rtc_answer(v->rtc,(char *)answer.data)<0) {
             rc=-1;
@@ -1318,6 +1337,7 @@ connection_restart(struct app_state *app, char *error, size_t size)
     snag_buf_reset(&v->receive);
     v->send_read = v->send_count = v->send_bytes = v->send_offset = 0u;
     v->send_deadline = v->drained_ms = v->expires_ms = 0u;
+    v->retry_after_ms = 0u;
     v->audio_base = v->gaps = 0u;
     v->audio_item[0] = '\0';
     v->gap_reported = v->expiry_warned = false;
@@ -2596,7 +2616,8 @@ interface:
     if (finished && v->retryable && !atomic_load(&v->stop)) {
         uint64_t now = snag_monotonic_ms();
         if (!v->reconnect_at) {
-            uint32_t delay = snag_provider_retry_delay_ms(v->reconnects, false, 0u);
+            uint32_t delay = snag_provider_retry_delay_ms(v->reconnects,
+                v->retry_after_ms != 0u, v->retry_after_ms);
             if (voice_record(app, v, json_pack("{s:s,s:s,s:s,s:i}", "type", "voice_response",
                     "operation", "connection_retry", "reason", v->error,
                     "delay_ms", (int)delay)) < 0 ||

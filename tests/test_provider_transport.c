@@ -132,6 +132,15 @@ enum model_fixture {
     MODEL_NATIVE_CALL,
     MODEL_NATIVE_CALL_NO_ID,
     MODEL_NATIVE_CALL_DENIED,
+    MODEL_NATIVE_CALL_TEMPORARY,
+    MODEL_NATIVE_CALL_POLICY,
+    MODEL_NATIVE_CALL_CAPACITY,
+    MODEL_NATIVE_CALL_MALFORMED,
+    MODEL_NATIVE_CALL_INVALID,
+    MODEL_NATIVE_CALL_AUTH_ERROR,
+    MODEL_NATIVE_CALL_EMPTY,
+    MODEL_NATIVE_CALL_UNKNOWN,
+    MODEL_NATIVE_CALL_PARTIAL,
     MODEL_AUTH_DEVICE,
     MODEL_AUTH_CANCEL,
     MODEL_AUTH_EXPIRED,
@@ -918,7 +927,7 @@ static void
 server_child(int listen_fd, enum model_fixture models, bool transport)
 {
     (void)signal(SIGTERM, fixture_stop);
-    if (models>=MODEL_NATIVE_TRANSCRIBE && models<=MODEL_NATIVE_CALL_DENIED) {
+    if (models >= MODEL_NATIVE_TRANSCRIBE && models <= MODEL_NATIVE_CALL_PARTIAL) {
         struct http_request request;int fd=accept(listen_fd,NULL,NULL);
         if (fd<0)server_fail("native voice accept failed");
         read_request(fd,&request);
@@ -940,7 +949,34 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
             if (models==MODEL_NATIVE_CALL_DENIED)
                 send_response(fd,403u,"application/json",
                     "{\"error\":{\"message\":\"access denied\"}}");
-            else {
+            else if (models >= MODEL_NATIVE_CALL_TEMPORARY) {
+                static const char *const failures[] = {
+                    "{\"error\":{\"code\":\"server_error\",\"type\":\"server_error\","
+                        "\"message\":\"reflected transport-secret\"}}",
+                    "{\"error\":{\"code\":\"context_length_exceeded\",\"type\":\"content_filter\","
+                        "\"max_context_tokens\":12345,\"input_tokens\":12346}}",
+                    "{\"error\":{\"code\":\"context_length_exceeded\","
+                        "\"type\":\"invalid_request_error\","
+                        "\"max_context_tokens\":12345,\"input_tokens\":12346}}",
+                    "{",
+                    "{\"error\":{\"code\":\"server_error\",\"max_context_tokens\":-1}}",
+                    "{\"error\":{\"code\":\"server_error\",\"type\":\"server_error\"}}",
+                    "",
+                    "{\"error\":{\"code\":\"unknown_service_category\"}}",
+                    "{\"error\":{\"code\":\"server_error\",\"type\":\"server_error\"}}"
+                };
+                const char *body = failures[models - MODEL_NATIVE_CALL_TEMPORARY];
+                unsigned int status = models == MODEL_NATIVE_CALL_AUTH_ERROR ? 401u :
+                    models == MODEL_NATIVE_CALL_EMPTY ? 429u : 503u;
+                char header[256];
+                int n = snprintf(header, sizeof(header), "HTTP/1.1 %u Failure\r\n"
+                    "Content-Type: application/json\r\nContent-Length: %zu\r\n"
+                    "Retry-After: 2\r\nConnection: close\r\n\r\n", status,
+                    strlen(body) + (models == MODEL_NATIVE_CALL_PARTIAL));
+                assert(n > 0 && (size_t)n < sizeof(header));
+                write_all_or_die(fd, header, (size_t)n);
+                write_all_or_die(fd, body, strlen(body));
+            } else {
                 static const char answer[]="v=0\r\ns=native fixture\r\n";
                 char header[256];int n=snprintf(header,sizeof(header),
                     "HTTP/1.1 201 Created\r\nContent-Type: application/sdp\r\n"
@@ -5760,7 +5796,7 @@ test_voice_socket(void)
                 json_t *session = json_pack("{s:s}", "model", "gpt-live-1-codex");
                 assert(session);
                 rc = snag_provider_voice_call(NULL, &provider, &credential,
-                    "v=0\r\n", session, NULL, NULL, &answer, call, error, sizeof(error));
+                    "v=0\r\n", session, NULL, NULL, &answer, call, NULL, error, sizeof(error));
                 assert(rc == SNAG_PROVIDER_VOICE_RETRY && !call[0] && !answer.len);
                 json_decref(session);
                 snag_buf_free(&answer);
@@ -6276,7 +6312,7 @@ test_native_voice_credential_snapshot(void)
     snag_secret_source_free(&config.providers[0].api_key);
     json_t *session = json_pack("{s:s}", "model", "gpt-live-1-codex");
     int rc = snag_provider_voice_call(NULL, conn.provider, &credential,
-        "v=0\r\n", session, NULL, NULL, &output, call, error, sizeof(error));
+        "v=0\r\n", session, NULL, NULL, &output, call, NULL, error, sizeof(error));
     bool valid = rc == 0 && !strcmp(call, "rtc_native") && output.len != 0u;
     bool unchanged = credential.root_fd == store.root_fd &&
         !strcmp(credential.value, "transport-secret");
@@ -6293,7 +6329,7 @@ test_native_voice_credential_snapshot(void)
 static void test_native_voice_transport(void)
 {
     for (unsigned int direct=0;direct<2u;++direct)
-        for (int mode=MODEL_NATIVE_TRANSCRIBE;mode<=MODEL_NATIVE_CALL_DENIED;++mode) {
+        for (int mode = MODEL_NATIVE_TRANSCRIBE; mode <= MODEL_NATIVE_CALL_PARTIAL; ++mode) {
         struct local_server server;struct snag_config config;struct snag_credential credential;
         char error[256]={0},call[257]={0};struct snag_buf output={.max=65536u};
         start_server(&server,(enum model_fixture)mode,false,"/backend-api/codex");
@@ -6314,11 +6350,59 @@ static void test_native_voice_transport(void)
             assert(!rc && output.len && !memcmp(output.data,"{\"text\":",8u));
         } else {
             json_t *session=json_pack("{s:s}","model","gpt-live-1-codex");
+            struct snag_provider_failure failure;
             rc=snag_provider_voice_call(&config,conn.provider,&credential,
                 "v=0\r\n",session,NULL,NULL,
-                &output,call,error,sizeof(error));json_decref(session);
+                &output, call, &failure, error, sizeof(error));json_decref(session);
             if (mode==MODEL_NATIVE_CALL)assert(!rc && !strcmp(call,"rtc_native") && output.len);
             else assert(rc<0 && !call[0] && error[0]);
+            if (mode >= MODEL_NATIVE_CALL_DENIED) {
+                bool invalid = mode == MODEL_NATIVE_CALL_MALFORMED ||
+                    mode == MODEL_NATIVE_CALL_INVALID || mode == MODEL_NATIVE_CALL_PARTIAL;
+                bool retry = mode == MODEL_NATIVE_CALL_TEMPORARY || mode == MODEL_NATIVE_CALL_EMPTY;
+                long status = invalid ? 0 : mode == MODEL_NATIVE_CALL_DENIED ? 403 :
+                    mode == MODEL_NATIVE_CALL_AUTH_ERROR ? 401 :
+                    mode == MODEL_NATIVE_CALL_EMPTY ? 429 : 503;
+                assert(rc == (retry ? SNAG_PROVIDER_VOICE_RETRY : -1));
+                assert(failure.http_status == status && !output.len);
+                assert(failure.retry_after_ms == (status && status != 403 ? 2000u : 0u));
+                assert(snag_provider_failure_is_policy(&failure) ==
+                    (mode == MODEL_NATIVE_CALL_POLICY));
+                assert(snag_provider_failure_is_capacity(&failure) ==
+                    (mode == MODEL_NATIVE_CALL_CAPACITY));
+                bool counts = mode == MODEL_NATIVE_CALL_POLICY ||
+                    mode == MODEL_NATIVE_CALL_CAPACITY;
+                assert(failure.context_limit_tokens == (counts ? 12345u : 0u));
+                assert(failure.requested_input_tokens == (counts ? 12346u : 0u));
+                if (invalid) assert(!failure.code[0] && !failure.type[0] && !failure.message[0]);
+                if (mode == MODEL_NATIVE_CALL_TEMPORARY) {
+                    assert(strstr(failure.message, "<redacted:secret>"));
+                    assert(!strstr(failure.message, "transport-secret"));
+                }
+                if (status) {
+                    struct voice_fixture f = {.sent = json_array(), .notices = json_array()};
+                    struct snag_voice_io io = {
+                        voice_send, voice_notice, voice_play, voice_interrupt};
+                    struct snag_voice *voice = voice_fixture_new(&io, &f,
+                        "fixture", "asr", "voice");
+                    assert(voice);
+                    json_t *native = snag_voice_native_session(voice);
+                    assert(native);
+                    json_decref(native);
+                    int reported = snag_voice_failure(voice, &failure, error, sizeof(error));
+                    assert(reported == (retry ? SNAG_VOICE_RETRY : -1));
+                    assert(f.interrupts == 1u && !json_array_size(f.sent));
+                    assert(json_array_size(f.notices) == 1u);
+                    const json_t *notice = voice_last(f.notices);
+                    assert(json_integer_value(json_object_get(notice, "http_status")) == status);
+                    assert(json_integer_value(json_object_get(notice, "retry_after_ms")) ==
+                        failure.retry_after_ms);
+                    assert(!voice_notice_count(&f, "voice_handoff"));
+                    snag_voice_free(voice);
+                    json_decref(f.sent);
+                    json_decref(f.notices);
+                }
+            }
         }
         snag_buf_free(&output);
         snag_config_free(&config);
@@ -6886,11 +6970,50 @@ test_voice_renewal(struct app_state *app, struct snag_config *config,
         "code", "server_error", "type", "server_error");
     assert(empty && failure && snag_app_voice_fixture(app, empty, false) == 0);
     json_decref(empty);
-    assert(snag_app_voice_fixture_failure(app, NULL) == SNAG_VOICE_RETRY);
+    assert(snag_app_voice_fixture_failure(app, NULL, NULL) == SNAG_VOICE_RETRY);
     assert(snag_app_voice_service(app) == 0 && app->voice);
     uint64_t stopping = snag_monotonic_ms();
     assert(snag_app_voice_command(app, "/voice off", &handled) == 0 && handled && !app->voice);
     assert(snag_monotonic_ms() - stopping < 1000u);
+
+    /* A native HTTP hint schedules the existing backoff and expires with its
+     * attempt. Replacement credentials still wait on the parent's auth lock. */
+    {
+        assert(setenv("SNAJPAGENT_TEST_AUTH_BASE", "http://127.0.0.1:1", 1) == 0);
+        struct snag_provider_failure http = {.http_status = 503,
+            .code = "server_error", .type = "server_error", .retry_after_ms = 2000u};
+        empty = json_array();
+        assert(empty && snag_app_voice_fixture(app, empty, false) == 0);
+        json_decref(empty);
+        assert(snag_app_voice_fixture_failure(app, NULL, &http) == SNAG_VOICE_RETRY);
+        assert(snag_app_voice_service(app) == 0 && app->voice);
+        json_t *state = snag_app_voice_fixture_state(app);
+        assert(state);
+        char old[33];
+        strcpy(old, snag_json_string(state, "connection_id"));
+        uint64_t now = snag_monotonic_ms();
+        uint64_t scheduled = (uint64_t)json_integer_value(json_object_get(state, "reconnect_at"));
+        assert(scheduled >= now + 1000u && scheduled <= now + 2000u);
+        assert(json_integer_value(json_object_get(state, "retry_after_ms")) == 2000);
+        json_decref(state);
+        uint64_t deadline = now + 3000u;
+        for (;;) {
+            assert(snag_monotonic_ms() < deadline);
+            assert(snag_app_voice_service(app) == 0 && app->voice);
+            assert(!snag_app_voice_fixture_capture_ready(app));
+            state = snag_app_voice_fixture_state(app);
+            assert(state);
+            bool replaced = strcmp(old, snag_json_string(state, "connection_id")) != 0;
+            if (replaced) assert(json_integer_value(json_object_get(state, "retry_after_ms")) == 0);
+            json_decref(state);
+            if (replaced) break;
+            (void)snag_sleep_ms(1u);
+        }
+        stopping = snag_monotonic_ms();
+        assert(snag_app_voice_command(app, "/voice off", &handled) == 0 && handled && !app->voice);
+        assert(snag_monotonic_ms() - stopping < 1000u);
+        assert(unsetenv("SNAJPAGENT_TEST_AUTH_BASE") == 0);
+    }
 
     struct snag_provider_config *provider = &config->providers[2];
     snag_config_provider_init(provider, "renewal");
@@ -6928,7 +7051,7 @@ test_voice_renewal(struct app_state *app, struct snag_config *config,
     strcpy(seen.queue, app->session.pending_queue[0].queue_id);
     /* Leave a partly sent PCM frame, then fail while its helper request waits. */
     assert(snag_app_voice_fixture_mute(app) == 0);
-    assert(snag_app_voice_fixture_failure(app, failure) == SNAG_VOICE_RETRY);
+    assert(snag_app_voice_fixture_failure(app, failure, NULL) == SNAG_VOICE_RETRY);
     json_decref(failure);
     assert(snag_app_voice_service(app) == 0 && app->voice);
     for (;;) {
@@ -7299,7 +7422,7 @@ test_native_ui(void)
         unsigned int voice_counts[2] = {0};
         assert(snag_session_each_event(session, voice_close_record, voice_counts,
                                         error, sizeof(error)) == 0);
-        assert(voice_counts[0] == 2u && voice_counts[1] == 8u && !session->pending_queue_count);
+        assert(voice_counts[0] == 2u && voice_counts[1] == 9u && !session->pending_queue_count);
         for (unsigned int playing = 0u; playing < 2u; ++playing) {
             assert(snag_app_audio_fixture(&app, playing != 0u) == 0);
             assert(snag_app_audio_fixture_checkpoint(&app) == 2);
@@ -7388,18 +7511,19 @@ test_native_ui(void)
     assert(dir >= 0);
     int peer = snag_session_endpoint_connect(dir, directory);
     assert(peer >= 0 && close(dir) == 0);
+    /* Catch-up may precede the commit ACK; retain the whole new attachment. */
+    struct snag_buf output = {.max = 64u * 1024u};
     native_ui_frame(peer, SNAG_SESSION_RESERVE, NULL, 0u);
-    native_ui_expect(peer, SNAG_SESSION_READY, NULL);
+    native_ui_expect(peer, SNAG_SESSION_READY, &output);
     unsigned char geometry[4] = {31u, 0u, 97u, 0u};
     native_ui_frame(peer, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
-    native_ui_expect(peer, SNAG_SESSION_READY, NULL);
+    native_ui_expect(peer, SNAG_SESSION_READY, &output);
     assert(read(report[0], &phase, 1u) == 1 && phase == 'B');
     /* Ctrl-Z must suspend only the replaceable frontend. The following byte
      * was already admitted and must survive suspension and recommit. */
     native_ui_frame(peer, SNAG_SESSION_INPUT, "\032z", 2u);
     (void)snag_sleep_ms(40u);
     assert(write(proceed[1], "r", 1u) == 1);
-    struct snag_buf output = {.max = 64u * 1024u};
     native_ui_expect(peer, SNAG_SESSION_SUSPEND, &output);
     geometry[0] = 33u;
     native_ui_frame(peer, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
