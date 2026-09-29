@@ -1912,15 +1912,22 @@ the old input before fresh capture is admitted.
 .B /voice off
 Stop capture, playback and the voice connection. Accepted coding work stays with
 the existing session owner. Use the normal coding controls to interrupt that work.
-Device loss, overflow or connection failure stops voice without automatic
-reconnect or audio replay. Restart explicitly with /voice on.
+An advertised connection lifetime ending or a validated temporary provider-service
+error starts paced, cancellable renewal. The microphone stays off during replacement
+authentication and history restoration. Requested mute state, the interface helper
+and accepted coding work survive; old audio and native call results are discarded
+from the transport. Late helper outcomes keep their original source and reach the
+new connection as historical context. Voice-off also cancels a pending renewal.
+Device loss, overflow, authentication or policy rejection, protocol-integrity errors
+and other unclassified connection failures stop voice. Review the diagnostic and
+restart explicitly with /voice on.
 Native terminal loss, detach, switching away or job suspension also stops
 voice. Final transcripts and previously accepted coding work remain saved;
 unaccepted voice handoffs are discarded. Reattach before restarting voice.
 When the provider supplies a session expiry time, a warning appears within its
-last minute. Expiry stops the connection and requires an explicit restart.
+last minute.
 Final notices already received are saved on shutdown and connection failure.
-Closing voice does not accept a handoff that has not yet entered the coding
+Turning voice off does not accept a handoff that has not yet entered the coding
 queue. A journal write failure is reported; unsaved notices cannot be recovered.
 Repeated handoffs for an accepted utterance retain the original queue and turn
 identity. Queued or running work remains pending; completed, failed, interrupted

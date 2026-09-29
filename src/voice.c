@@ -147,6 +147,10 @@ input_settle(struct snag_voice *s, struct voice_input *in, char *error, size_t s
             rc = notice(s, json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
                 "type", "voice_handoff", "input_id", in->id, "response_id", call->response,
                 "call_id", call->id, "transcript", in->text, "request", request));
+            if (rc > 0) {
+                rc = snag_voice_result(s, call->id,
+                    "Request not submitted: the coding handoff buffer is full.", error, size);
+            }
         }
         free(request);
         if (rc < 0) return fail(s, error, size, "Cannot settle realtime coding handoff");
@@ -627,6 +631,7 @@ provider_error(struct snag_voice *s, const json_t *event, char *error, size_t si
     if (notice(s, report) < 0) {
         return fail(s, error, size, "Realtime provider error could not be retained");
     }
+    bool retryable = false;
     const char *reason = "Realtime provider reported an error; details retained in session history";
     if (snag_provider_failure_is_policy(&failure)) {
         reason = "Realtime provider rejected the request under its policy";
@@ -634,8 +639,10 @@ provider_error(struct snag_voice *s, const json_t *event, char *error, size_t si
         reason = "Realtime provider rejected the conversation context";
     } else if (snag_provider_failure_retryable(0, failure.code, failure.type)) {
         reason = "Realtime provider reported a temporary service failure";
+        retryable = true;
     }
-    return fail(s, error, size, reason);
+    int rc = fail(s, error, size, reason);
+    return retryable ? SNAG_VOICE_RETRY : rc;
 }
 
 int snag_voice_event(struct snag_voice *s,const json_t *event,char *error,size_t size)

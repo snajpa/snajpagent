@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Renew voice connections after advertised expiry or validated temporary service
+  errors, preserving mute state, interface requests and accepted coding work.
+  Replacement drops old transport audio and keeps late helper outcomes tied to
+  their original source. Voice-off cancels backoff and replacement authentication.
+
 - Keep voice credential loading and refresh off the session owner, with cancellable
   startup and secret protection established before connection context is sent.
 

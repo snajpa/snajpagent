@@ -269,6 +269,10 @@ struct app_voice {
     atomic_bool output_ready;
     atomic_bool history_queued, history_sent;
     atomic_bool credential_ready, credential_accepted;
+    atomic_uint pending_handoffs; /* Notices plus session-owner handoff slots. */
+    bool retryable; /* Published with done by the connection owner. */
+    uint64_t reconnect_at;
+    unsigned int reconnects;
     int root_fd;
     bool thread_started,announced,applied_mute,device_started,stopped_recorded,expiry_warned;
     struct snag_provider_config provider;
@@ -306,6 +310,7 @@ struct app_voice {
     json_t *interface_history;
     struct snag_journal_cursor interface_cursor;
     uint64_t restore_before;
+    uint64_t native_restore_before;
     struct interface_compaction compact;
     bool interface_needs_compact;
     uint64_t interface_order;
@@ -316,9 +321,10 @@ struct app_voice {
 static void
 observation_start(struct app_voice *v, const struct snag_session *session)
 {
-    v->restore_before = session->next_seq;
-    atomic_init(&v->history_queued, false);
-    atomic_init(&v->history_sent, false);
+    if (!v->restore_before) v->restore_before = session->next_seq;
+    v->native_restore_before = session->next_seq;
+    atomic_store(&v->history_queued, false);
+    atomic_store(&v->history_sent, false);
 }
 
 static int
@@ -550,7 +556,8 @@ voice_context_snapshot(struct app_state *app, struct app_voice *v, json_t **resu
 }
 
 static int
-voice_record(struct app_state *app, struct app_voice *v, json_t *event)
+voice_record_at(struct app_state *app, struct app_voice *v,
+    const char *connection, json_t *event)
 {
     if (!event) return -1;
     char error[256];
@@ -558,8 +565,21 @@ voice_record(struct app_state *app, struct app_voice *v, json_t *event)
     json_decref(event);
     if (!safe) return -1;
     return snag_app_commit_event(app, "voice_event", json_pack("{s:s,s:s,s:s,s:o}",
-        "connection_id", v->connection, "provider", v->config.provider,
+        "connection_id", connection, "provider", v->config.provider,
         "model", v->config.realtime_model, "event", safe), error, sizeof(error));
+}
+
+static int
+voice_record(struct app_state *app, struct app_voice *v, json_t *event)
+{
+    return voice_record_at(app, v, v->connection, event);
+}
+
+static int
+handoff_record(struct app_state *app, struct app_voice *v,
+    const struct voice_handoff *handoff, json_t *event)
+{
+    return voice_record_at(app, v, snag_json_string(handoff->source, "connection_id"), event);
 }
 
 static int
@@ -579,7 +599,7 @@ interface_settled(struct app_state *app, const struct voice_handoff *handoff,
         json_decref(event);
         return -1;
     }
-    return voice_record(app, v, event);
+    return handoff_record(app, v, handoff, event);
 }
 
 static int
@@ -615,7 +635,7 @@ interface_close(struct app_state *app)
                     "kind", item.kind == SNAG_ITEM_REFUSAL ? "refusal" : "assistant",
                     "text", item.text);
             } else continue;
-            if (voice_record(app, v, event) < 0) rc = -1;
+            if (handoff_record(app, v, handoff, event) < 0) rc = -1;
         }
         snag_response_graph_free(&graph);
     }
@@ -625,7 +645,7 @@ interface_close(struct app_state *app)
     for (size_t i = 0u; i < SNAG_VOICE_HANDOFFS; ++i) {
         handoff = &v->handoffs[i];
         if (!handoff->source) continue;
-        if (voice_record(app, v, json_pack("{s:s,s:s,s:s,s:s,s:O}",
+        if (handoff_record(app, v, handoff, json_pack("{s:s,s:s,s:s,s:s,s:O}",
                 "type", "voice_response", "operation", "interface_closed",
                 "call_id", handoff->call, "queue_id", handoff->queue,
                 "reply", handoff->reply ? handoff->reply : json_null())) < 0) rc = -1;
@@ -734,6 +754,8 @@ static int owner_notice(void *opaque,const json_t *event)
     }
     char digest[SNAG_SHA256_HEX_LEN+1u];size_t bytes;
     if(snag_json_digest_bounded(event,VOICE_MESSAGE,digest,&bytes)<0)return -1;
+    bool handoff = type && !strcmp(type, "voice_handoff");
+    if (handoff && atomic_load(&v->pending_handoffs) >= SNAG_VOICE_HANDOFFS) return 1;
     pthread_mutex_lock(&v->mutex);
     if(type && !strcmp(type,"voice_muted") && json_is_true(json_object_get(event,"muted"))) {
         v->caption[0][0]=0;v->caption_dirty[0]=true;
@@ -749,7 +771,13 @@ static int owner_notice(void *opaque,const json_t *event)
     if(v->notice_count<VOICE_NOTICES && bytes<=VOICE_MESSAGE-v->notice_bytes) {
         size_t at=(v->notice_read+v->notice_count)%VOICE_NOTICES;
         v->notices[at]=json_deep_copy(event);
-        if(v->notices[at]) {v->notice_size[at]=bytes;v->notice_count++;v->notice_bytes+=bytes;rc=0;}
+        if (v->notices[at]) {
+            v->notice_size[at] = bytes;
+            v->notice_count++;
+            v->notice_bytes += bytes;
+            if (handoff) atomic_fetch_add(&v->pending_handoffs, 1u);
+            rc = 0;
+        }
     }
     pthread_mutex_unlock(&v->mutex);return rc;
 }
@@ -764,11 +792,25 @@ int snag_app_voice_fixture(struct app_state *app,const json_t *notices,bool done
     atomic_init(&v->stop,false);atomic_init(&v->muted,false);atomic_init(&v->mute_pending,false);
     atomic_init(&v->activate,false);atomic_init(&v->done,done);
     atomic_init(&v->credential_ready, false);
+    atomic_init(&v->pending_handoffs, 0u);
+    atomic_init(&v->history_queued, false);
+    atomic_init(&v->history_sent, false);
     atomic_init(&v->credential_accepted, true);
     atomic_init(&v->output_ready, !done);
     v->ui=&app->ui;v->attachment=snag_ui_session_attachment(&app->ui);
     strcpy(v->connection,"0123456789abcdef0123456789abcdef");
     strcpy(v->config.provider,"default");strcpy(v->config.realtime_model,"fixture");
+    strcpy(v->config.transcribe_model, "asr");
+    strcpy(v->config.voice, "voice");
+    v->root_fd = app->store.root_fd;
+    const struct snag_provider_config *provider = app->config ?
+        snag_config_provider(app->config, app->config->audio.provider[0] ?
+            app->config->audio.provider : app->session.default_provider) : NULL;
+    if (provider) {
+        v->provider = *provider;
+        v->provider.models = NULL;
+        v->provider.model_count = 0u;
+    }
     for(size_t i=0;i<8u;++i)snag_buf_init(&v->send[i],VOICE_MESSAGE);
     snag_buf_init(&v->receive,VOICE_MESSAGE);v->announced=true;app->voice=v;
     observation_start(v, &app->session);
@@ -960,6 +1002,66 @@ int snag_app_voice_fixture_mute(struct app_state *app)
 }
 #endif
 
+static bool
+connection_expired(struct app_voice *v, uint64_t now)
+{
+    if (!v->expires_ms || now < v->expires_ms) return false;
+    strcpy(v->error, "Realtime session lifetime reached");
+    v->retryable = true;
+    return true;
+}
+
+static void
+connection_finished(struct app_voice *v)
+{
+    atomic_store(&v->output_ready, false);
+    if (voice_attachment_lost(v)) strcpy(v->error, lost_terminal);
+    snag_audio_close(v->device);
+    v->device = NULL;
+    snag_provider_voice_close(v->socket);
+    v->socket = NULL;
+    snag_voice_rtc_close(v->rtc);
+    v->rtc = NULL;
+    snag_voice_free(v->protocol);
+    v->protocol = NULL;
+    /* Unaccepted credentials stay immutable until the session owner joins. */
+    atomic_store_explicit(&v->done, true, memory_order_release);
+}
+
+#ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
+int
+snag_app_voice_fixture_failure(struct app_state *app, const json_t *event)
+{
+    struct app_voice *v = app->voice;
+    if (!v || v->thread_started || v->protocol) return -1;
+    if (!event) {
+        /* Advance the advertised deadline without sleeping in the fixture. */
+        v->expires_ms = 1u;
+        if (connection_expired(v, 0u) || !connection_expired(v, 1u)) return -1;
+        connection_finished(v);
+        return SNAG_VOICE_RETRY;
+    }
+    struct snag_voice_io io = {owner_send, owner_notice, owner_play, owner_interrupt};
+    v->protocol = snag_voice_new(&io, v, "fixture", "asr", "voice", NULL);
+    if (!v->protocol) return -1;
+    int rc = snag_voice_event(v->protocol, event, v->error, sizeof(v->error));
+    v->retryable = rc == SNAG_VOICE_RETRY;
+    connection_finished(v);
+    return rc;
+}
+
+json_t *
+snag_app_voice_fixture_state(struct app_state *app)
+{
+    struct app_voice *v = app->voice;
+    if (!v || (v->thread_started && atomic_load(&v->credential_accepted))) return NULL;
+    return json_pack("{s:s,s:b,s:b,s:i}", "connection_id", v->connection,
+        "muted", atomic_load(&v->muted), "transport_empty",
+        !v->send_count && !v->send_bytes && !v->send_offset && !v->receive.len && !v->result,
+        "pending_handoffs", (int)atomic_load(&v->pending_handoffs));
+}
+#endif /* SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS */
+
 static void *voice_owner(void *opaque)
 {
     struct app_voice *v=opaque;
@@ -1021,7 +1123,7 @@ native_done:
             now-v->start_ms>v->provider.connect_timeout_ms+10000u) {
             strcpy(v->error,"Voice session or media connection did not become ready");break;
         }
-        if(v->expires_ms && now>=v->expires_ms) {strcpy(v->error,"Realtime session lifetime reached; restart voice explicitly");break;}
+        if (connection_expired(v, now)) break;
         if(v->expires_ms && !v->expiry_warned && v->expires_ms-now<=60000u) {
             json_t *event=json_pack("{s:s}","type","voice_expiring");
             int rc=event?owner_notice(v,event):-1;json_decref(event);if(rc<0)goto failed;
@@ -1044,9 +1146,13 @@ native_done:
                     v->expires_ms=now+(expires-seconds)*1000u;
                 }
             }
-            rc=snag_voice_event(v->protocol,event,v->error,sizeof(v->error));json_decref(event);
+            rc = snag_voice_event(v->protocol, event, v->error, sizeof(v->error));
+            json_decref(event);
             snag_secret_clear(v->receive.data,v->receive.len);snag_buf_reset(&v->receive);
-            if(rc<0)goto done;
+            if (rc < 0) {
+                v->retryable = rc == SNAG_VOICE_RETRY;
+                goto done;
+            }
         }
         if (snag_voice_ready(v->protocol) &&
             (!v->rtc || snag_voice_rtc_ready(v->rtc)) &&
@@ -1148,14 +1254,69 @@ native_done:
 failed:
     strcpy(v->error,"Realtime voice stopped because its device, protocol or mailbox became unavailable");
 done:
-    atomic_store(&v->output_ready, false);
-    if (voice_attachment_lost(v))strcpy(v->error,lost_terminal);
-    snag_audio_close(v->device);v->device=NULL;
-    snag_provider_voice_close(v->socket);v->socket=NULL;
-    snag_voice_rtc_close(v->rtc);v->rtc=NULL;
-    snag_voice_free(v->protocol);v->protocol=NULL;
-    /* An unaccepted credential stays immutable until the session owner joins. */
-    atomic_store_explicit(&v->done,true,memory_order_release);return NULL;
+    connection_finished(v);
+    return NULL;
+}
+
+static int
+connection_restart(struct app_state *app, char *error, size_t size)
+{
+    struct app_voice *v = app->voice;
+    char connection[33];
+    if (snag_random_id(connection) < 0) return -1;
+    if (json_is_true(json_object_get(v->result, "standalone")) &&
+        voice_record(app, v, json_pack("{s:s,s:s,s:s}", "type", "voice_response",
+            "operation", "agent_output_not_sent",
+            "output_id", snag_json_string(v->result, "id"))) < 0) return -1;
+
+    /* The old worker has joined. Its call IDs, media and transport buffers
+     * cannot cross generations; helper history and accepted work stay owned. */
+    json_decref(v->result);
+    v->result = NULL;
+    json_decref(v->context);
+    v->context = NULL;
+    json_decref(v->observation);
+    v->observation = NULL;
+    json_decref(v->observation_record);
+    v->observation_record = NULL;
+    memset(&v->observation_cursor, 0, sizeof(v->observation_cursor));
+    v->observation_offset = 0u;
+    for (size_t i = 0u; i < 8u; ++i) {
+        snag_secret_clear(v->send[i].data, v->send[i].len);
+        snag_buf_reset(&v->send[i]);
+        v->send_audio[i] = false;
+    }
+    snag_secret_clear(v->receive.data, v->receive.len);
+    snag_buf_reset(&v->receive);
+    v->send_read = v->send_count = v->send_bytes = v->send_offset = 0u;
+    v->send_deadline = v->drained_ms = v->expires_ms = 0u;
+    v->audio_base = v->gaps = 0u;
+    v->audio_item[0] = '\0';
+    v->gap_reported = v->expiry_warned = false;
+    v->announced = v->applied_mute = v->device_started = false;
+    v->stopped_recorded = false;
+    snag_secret_clear(v->caption, sizeof(v->caption));
+    memset(v->caption_item, 0, sizeof(v->caption_item));
+    memset(v->caption_dirty, 0, sizeof(v->caption_dirty));
+    for (unsigned int who = 0u; who < 2u; ++who) {
+        if (snag_ui_caption(&app->ui, who, "") < 0) return -1;
+    }
+    snag_credential_clear(&v->credential);
+    atomic_store(&v->credential_ready, false);
+    atomic_store(&v->credential_accepted, false);
+    atomic_store(&v->activate, false);
+    atomic_store(&v->mute_pending, false);
+    atomic_store(&v->done, false);
+    observation_start(v, &app->session);
+    strcpy(v->connection, connection);
+    v->error[0] = '\0';
+    v->retryable = false;
+    v->reconnect_at = 0u;
+    if (pthread_create(&v->thread, NULL, voice_owner, v)) {
+        return snag_errorf(error, size, "Cannot start replacement voice connection owner");
+    }
+    v->thread_started = true;
+    return 0;
 }
 
 void snag_app_voice_close(struct app_state *app)
@@ -1280,12 +1441,13 @@ deliver_result(struct app_voice *v, const char *call, const char *text, bool fin
     return 0;
 }
 static void
-handoff_clear(struct voice_handoff *handoff)
+handoff_clear(struct app_voice *v, struct voice_handoff *handoff)
 {
     json_decref(handoff->source);
     json_decref(handoff->input);
     json_decref(handoff->reply);
     memset(handoff, 0, sizeof(*handoff));
+    atomic_fetch_sub(&v->pending_handoffs, 1u);
 }
 
 static char *
@@ -1437,10 +1599,13 @@ history_observation(const struct app_voice *v, uint64_t seq, const char *type,
     if (strcmp(type, "voice_event")) return false;
     const char *record_type = snag_json_string(json_object_get(data, "event"), "type");
     if (!record_type) return false;
+    uint64_t boundary = text_interface ? v->restore_before : v->native_restore_before;
+    const char *origin = snag_json_string(data, "connection_id");
+    bool previous = !text_interface && origin && strcmp(origin, v->connection);
     if (snag_string_in(record_type, "voice_transcript voice_result")) {
-        return text_interface || seq < v->restore_before;
+        return text_interface || seq < boundary || previous;
     }
-    return seq < v->restore_before && !strcmp(record_type, "voice_response");
+    return (seq < boundary || previous) && !strcmp(record_type, "voice_response");
 }
 
 struct interface_history_read {
@@ -1660,7 +1825,7 @@ interface_compact_adopt(struct app_state *app, struct voice_handoff *handoff,
         goto fail;
     }
     json_t *input = handoff->input ? json_copy(history) : NULL;
-    if ((handoff->input && !input) || voice_record(app, v, json_incref(event)) < 0) {
+    if ((handoff->input && !input) || handoff_record(app, v, handoff, json_incref(event)) < 0) {
         json_decref(input);
         goto fail;
     }
@@ -1751,7 +1916,8 @@ snag_app_voice_ui_input(struct app_state *app, const struct snag_response_item *
         return *result ? 0 : -1;
     }
     struct app_voice *v = app->voice;
-    if (!v || atomic_load(&v->stop) || atomic_load(&v->done) || voice_attachment_lost(v)) {
+    if (!v || atomic_load(&v->stop) ||
+        (atomic_load(&v->done) && !v->retryable) || voice_attachment_lost(v)) {
         *result = snag_tool_result_terminal(false,
             "Voice input no longer belongs to an active attachment; nothing was admitted.");
         return *result ? 0 : -1;
@@ -1901,7 +2067,7 @@ interface_reply(struct app_state *app, struct voice_handoff *handoff,
         int rc = history ? json_array_append_new(history, json_pack("{s:s,s:s}",
             "role", "developer", "content", encoded)) : -1;
         free(encoded);
-        if (!rc) rc = voice_record(app, v, json_incref(safe));
+        if (!rc) rc = handoff_record(app, v, handoff, json_incref(safe));
         json_decref(safe);
         if (rc < 0) {
             json_decref(history);
@@ -2013,7 +2179,7 @@ interface_service(struct app_state *app, char *error, size_t size)
         for (size_t i = 0; i < graph.count; ++i) {
             struct snag_response_item item = snag_response_graph_item(&graph, i);
             if (item.kind != SNAG_ITEM_TOOL_CALL) {
-                if (item.text && *item.text && voice_record(app, v,
+                if (item.text && *item.text && handoff_record(app, v, handoff,
                         json_pack("{s:s,s:s,s:s,s:I,s:s}", "type", "voice_response",
                             "operation", "interface_output", "call_id", handoff->call,
                             "item_index", (json_int_t)i, "text", item.text)) < 0) {
@@ -2027,7 +2193,7 @@ interface_service(struct app_state *app, char *error, size_t size)
             called = true;
             json_t *result = NULL;
             error[0] = '\0';
-            if (voice_record(app, v, json_pack("{s:s,s:s,s:s,s:s,s:s,s:O}",
+            if (handoff_record(app, v, handoff, json_pack("{s:s,s:s,s:s,s:s,s:s,s:O}",
                     "type", "voice_response", "operation", "interface_tool_started",
                     "call_id", handoff->call, "tool_call_id", item.provider_call_id,
                     "tool", item.name, "arguments", item.arguments)) < 0) {
@@ -2041,7 +2207,7 @@ interface_service(struct app_state *app, char *error, size_t size)
                     error[0] ? error : "The requested operation could not be acknowledged.");
             }
             rc = result ? snag_secret_result(&v->secrets, result, error, size) : -1;
-            if (!rc) rc = voice_record(app, v, json_pack("{s:s,s:s,s:s,s:s,s:s,s:O}",
+            if (!rc) rc = handoff_record(app, v, handoff, json_pack("{s:s,s:s,s:s,s:s,s:s,s:O}",
                 "type", "voice_response", "operation", "interface_tool", "call_id", handoff->call,
                 "tool_call_id", item.provider_call_id, "tool", item.name,
                 "result", result));
@@ -2114,7 +2280,7 @@ observation_event(void *opaque, const struct snag_session *state, uint64_t seq,
     struct app_state *app = opaque;
     struct app_voice *v = app->voice;
     (void)state;
-    if (!atomic_load(&v->history_sent) && seq >= v->restore_before) return 1;
+    if (!atomic_load(&v->history_sent) && seq >= v->native_restore_before) return 1;
     if (!history_observation(v, seq, type, data, false)) return 0;
     char *encoded = snag_app_history_data(seq, type, data);
     if (!encoded) return -1;
@@ -2152,7 +2318,7 @@ observation_service(struct app_state *app, char *error, size_t size)
         }
         if (!v->observation_record) {
             if (!atomic_load(&v->history_queued) &&
-                v->observation_cursor.next_seq >= v->restore_before) {
+                v->observation_cursor.next_seq >= v->native_restore_before) {
                 json_t *context = NULL;
                 if (voice_context_snapshot(app, v, &context, error, size) < 0) return -1;
                 pthread_mutex_lock(&v->mutex);
@@ -2203,12 +2369,17 @@ int snag_app_voice_service(struct app_state *app)
         snag_app_voice_close(app);
         return snag_ui_text(&app->ui,SNAG_UI_HOST,lost_terminal);
     }
+    bool finished = atomic_load_explicit(&v->done, memory_order_acquire);
+    if (finished && v->thread_started) {
+        pthread_join(v->thread, NULL);
+        v->thread_started = false;
+    }
     char error[256] = {0};
     if (!atomic_load_explicit(&v->credential_accepted, memory_order_acquire)) {
         bool done = atomic_load_explicit(&v->done, memory_order_acquire);
         if (!done && !atomic_load_explicit(&v->credential_ready, memory_order_acquire)) {
-            v->servicing = false;
-            return 0;
+            /* Existing delegations remain serviceable during replacement auth. */
+            goto interface;
         }
         if (snag_secret_set_build(&v->secrets, NULL, &v->credential, error, sizeof(error)) < 0) {
             goto failed;
@@ -2256,7 +2427,9 @@ int snag_app_voice_service(struct app_state *app)
                 atomic_store(&v->activate,true);
             } else {json_decref(event);goto failed;}
         } else if(!strcmp(type,"voice_handoff")) {
-            if (atomic_load(&v->stop) || atomic_load(&v->done) || voice_attachment_lost(v)) {
+            if (atomic_load(&v->stop) || (atomic_load(&v->done) && !v->retryable) ||
+                voice_attachment_lost(v)) {
+                atomic_fetch_sub(&v->pending_handoffs, 1u);
                 json_decref(event);continue;
             }
             struct voice_handoff *handoff = NULL;
@@ -2296,7 +2469,9 @@ int snag_app_voice_service(struct app_state *app)
             snag_strcpy(handoff->call, sizeof(handoff->call), snag_json_string(event, "call_id"));
             v->context_dirty = true;
         } else if(!strcmp(type,"voice_expiring")) {
-            if(snag_ui_text(&app->ui,SNAG_UI_HOST,"Voice connection expires within one minute. Restart explicitly with /voice off, then /voice on.")<0) {
+            if (snag_ui_text(&app->ui, SNAG_UI_HOST,
+                    "Voice connection expires within one minute and will renew automatically. "
+                    "/voice off cancels renewal.") < 0) {
                 json_decref(event);goto failed;
             }
         } else if(!strcmp(type,"voice_buffering")) {
@@ -2331,7 +2506,8 @@ int snag_app_voice_service(struct app_state *app)
             json_decref(safe);if(rc<0)goto failed;
         }
     }
-    if (!atomic_load(&v->done) && !atomic_load(&v->stop) &&
+interface:
+    if ((!atomic_load(&v->done) || v->retryable) && !atomic_load(&v->stop) &&
         interface_service(app, error, sizeof(error)) < 0) goto failed;
     if (v->close_requested) {
         snag_app_voice_close(app);
@@ -2339,25 +2515,38 @@ int snag_app_voice_service(struct app_state *app)
     }
     for (size_t i = 0; i < SNAG_VOICE_HANDOFFS; ++i) {
         struct voice_handoff *handoff = &v->handoffs[i];
+        if (!handoff->call[0]) continue;
+        bool current = !strcmp(v->connection,
+            snag_json_string(handoff->source, "connection_id"));
+        if (!current && handoff->interface_done && !handoff->reply) {
+            /* The canonical queue still owns accepted work and publishes its
+             * eventual outcome. This obsolete native call cannot receive it. */
+            if (handoff_record(app, v, handoff, json_pack("{s:s,s:s,s:s,s:s}",
+                    "type", "voice_response", "operation", "interface_connection_retired",
+                    "call_id", handoff->call, "queue_id", handoff->queue)) < 0) goto failed;
+            handoff_clear(v, handoff);
+            continue;
+        }
         if (!handoff->reply && !handoff->result_needed) continue;
         /* Only this session owner produces results. A slow voice consumer
          * delays the next result without losing correlation or stopping voice. */
         pthread_mutex_lock(&v->mutex);
         bool occupied = v->result != NULL;
         pthread_mutex_unlock(&v->mutex);
-        if (occupied && !atomic_load(&v->done) && !atomic_load(&v->stop)) break;
+        bool deliver = current && !atomic_load(&v->done) && !atomic_load(&v->stop);
+        if (occupied && deliver) continue;
         if (handoff->reply) {
             const char *text = snag_json_string(handoff->reply, "text");
-            int rc = voice_record(app, v, json_pack("{s:s,s:s,s:s,s:s,s:O}",
+            int rc = handoff_record(app, v, handoff, json_pack("{s:s,s:s,s:s,s:s,s:O}",
                 "type", "voice_response", "operation", "interface_reply",
                 "call_id", handoff->call, "queue_id", handoff->queue, "reply", handoff->reply));
-            if (!rc && !atomic_load(&v->done) && !atomic_load(&v->stop)) {
+            if (!rc && deliver) {
                 rc = deliver_result(v, handoff->call, text, !handoff->queue[0]);
             }
             if (rc < 0) goto failed;
             json_decref(handoff->reply);
             handoff->reply = NULL;
-            if (!handoff->queue[0]) handoff_clear(handoff);
+            if (!handoff->queue[0]) handoff_clear(v, handoff);
             continue;
         }
         if (!handoff->interface_done) continue;
@@ -2365,18 +2554,36 @@ int snag_app_voice_service(struct app_state *app)
         if (snag_session_voice_status(&app->session, handoff->queue, &result,
                 error, sizeof(error)) < 0) goto failed;
         const char *text = snag_json_string(result, "text");
-        int rc = voice_record(app, v, json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
+        int rc = handoff_record(app, v, handoff, json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
             "type", "voice_result", "call_id", handoff->call, "queue_id", handoff->queue,
             "turn_id", snag_json_string(result, "turn_id"),
             "status", snag_json_string(result, "status"), "text", text));
-        if (!rc && !atomic_load(&v->done) && !atomic_load(&v->stop)) {
+        if (!rc && deliver) {
             rc = deliver_result(v, handoff->call, text, true);
         }
         json_decref(result);
         if (rc < 0) goto failed;
-        handoff_clear(handoff);
+        handoff_clear(v, handoff);
     }
-    if(atomic_load_explicit(&v->done,memory_order_acquire)) {
+    if (finished && v->retryable && !atomic_load(&v->stop)) {
+        uint64_t now = snag_monotonic_ms();
+        if (!v->reconnect_at) {
+            uint32_t delay = snag_provider_retry_delay_ms(v->reconnects, false, 0u);
+            if (voice_record(app, v, json_pack("{s:s,s:s,s:s,s:i}", "type", "voice_response",
+                    "operation", "connection_retry", "reason", v->error,
+                    "delay_ms", (int)delay)) < 0 ||
+                snag_ui_voice(&app->ui, "[voice reconnecting; mic off; /voice off cancels] ") < 0) {
+                goto failed;
+            }
+            v->reconnect_at = now + delay;
+            if (v->reconnects < UINT_MAX) ++v->reconnects;
+        } else if (now >= v->reconnect_at && connection_restart(app, error, sizeof(error)) < 0) {
+            goto failed;
+        }
+        v->servicing = false;
+        return 0;
+    }
+    if (finished) {
         snprintf(error,sizeof(error),"%s",v->error[0]?v->error:"Voice stopped.");
         int rc=voice_record(app,v,json_pack("{s:s,s:s}","type","voice_stopped","reason",error));
         v->stopped_recorded=!rc;
@@ -2441,6 +2648,9 @@ int snag_app_voice_command(struct app_state *app,const char *line,bool *handled)
     atomic_init(&v->stop,false);atomic_init(&v->muted,false);atomic_init(&v->mute_pending,false);
     atomic_init(&v->activate,false);atomic_init(&v->done,false);
     atomic_init(&v->credential_ready, false);
+    atomic_init(&v->pending_handoffs, 0u);
+    atomic_init(&v->history_queued, false);
+    atomic_init(&v->history_sent, false);
     atomic_init(&v->credential_accepted, false);
     atomic_init(&v->output_ready, false);
     v->ui=&app->ui;v->attachment=snag_ui_session_attachment(&app->ui);

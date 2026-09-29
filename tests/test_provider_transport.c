@@ -2503,7 +2503,7 @@ static int voice_close_record(void *opaque,const struct snag_session *state,uint
     const char *kind=snag_json_string(json_object_get(data,"event"),"type");
     if(!strcmp(kind,"voice_transcript"))++counts[0];
     else if(!strcmp(kind,"voice_stopped"))++counts[1];
-    else assert(!strcmp(kind, "voice_started"));
+    else assert(snag_string_in(kind, "voice_started voice_response voice_muted"));
     return 0;
 }
 
@@ -3173,11 +3173,25 @@ test_voice_observation_cursor(void)
     assert(initial_context && json_is_true(json_object_get(initial_context, "history_complete")));
     json_decref(initial_context);
     assert(snag_session_commit(&app.session, "voice_event", json_pack(
-        "{s:s,s:s,s:s,s:{s:s,s:s,s:s,s:s}}", "connection_id", archive_goal,
+        "{s:s,s:s,s:s,s:{s:s,s:s,s:s,s:s}}", "connection_id", "0123456789abcdef0123456789abcdef",
         "provider", "default", "model", "fixture", "event", "type", "voice_transcript",
         "speaker", "user", "item_id", "live-input", "text", "Current native speech"),
         NULL, error, sizeof(error)) == 0);
     assert(snag_app_voice_service(&app) == 0 && !snag_app_voice_fixture_observation(&app));
+    uint64_t late_seq = app.session.next_seq;
+    assert(snag_session_commit(&app.session, "voice_event", json_pack(
+        "{s:s,s:s,s:s,s:{s:s,s:s,s:s,s:s}}", "connection_id", archive_goal,
+        "provider", "default", "model", "fixture", "event", "type", "voice_response",
+        "operation", "interface_reply", "call_id", "old-call",
+        "text", "Late voice-observation-secret"), NULL, error, sizeof(error)) == 0);
+    assert(snag_app_voice_service(&app) == 0);
+    json_t *late = snag_app_voice_fixture_observation(&app);
+    assert(late && (uint64_t)json_integer_value(json_object_get(late, "seq")) == late_seq);
+    const char *late_text = snag_json_string(late, "text");
+    assert(late_text && strstr(late_text, archive_goal) && strstr(late_text, "<redacted:secret>"));
+    assert(!strstr(late_text, "voice-observation-secret"));
+    json_decref(late);
+    assert(!app.session.active_turn && !app.session.pending_queue_count);
     char prompt[6100];
     for (size_t i = 0; i < 6000u; i += 2u) memcpy(prompt + i, "λ", 2u);
     strcpy(prompt + 6000u, "voice-observation-secret");
@@ -5761,6 +5775,7 @@ struct voice_fixture {
     json_t *sent,*notices;
     uint32_t played,frames,interrupts,ends;
     const char *audio_item;
+    bool busy;
 };
 static int voice_send(void *opaque,const json_t *event)
 {
@@ -5768,6 +5783,9 @@ static int voice_send(void *opaque,const json_t *event)
 }
 static int voice_notice(void *opaque,const json_t *event)
 {
+    struct voice_fixture *f = opaque;
+    const char *type = snag_json_string(event, "type");
+    if (f->busy && type && !strcmp(type, "voice_handoff")) return 1;
     return json_array_append(((struct voice_fixture *)opaque)->notices,(json_t *)event);
 }
 static int voice_play(void *opaque,const char *item,const int16_t *pcm,uint32_t frames)
@@ -5900,7 +5918,8 @@ test_voice_provider_errors(void)
                 assert(json_object_set_new(detail, "max_context_tokens", json_integer(-1)) == 0);
             }
             size_t sent = json_array_size(f.sent);
-            assert(snag_voice_event(voice, event, error, sizeof(error)) < 0);
+            int outcome = snag_voice_event(voice, event, error, sizeof(error));
+            assert(outcome == (shape == 1u ? SNAG_VOICE_RETRY : -1));
             if (shape >= 5u) assert(strstr(error, "policy"));
             assert(!snag_voice_ready(voice) && f.interrupts == 1u);
             assert(json_array_size(f.sent) == sent && !voice_notice_count(&f, "voice_handoff"));
@@ -6119,6 +6138,16 @@ test_native_voice_concurrency(void)
         assert(v);
         json_decref(snag_voice_native_session(v));
         assert(snag_voice_begin(v, error, sizeof(error)) == 0);
+        f.busy = true;
+        assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s,s:s}}",
+            "type", "turn.done", "turn", "id", "host-busy", "role", "user",
+            "transcript", "deferred request")) == 0);
+        assert(voice_deliver(v, native_delegation("host-busy", "host-busy")) == 0);
+        assert(snag_voice_ready(v) && !voice_notice_count(&f, "voice_handoff"));
+        assert(!strcmp(snag_json_string(voice_last(f.sent), "delegation_item_id"), "host-busy"));
+        f.busy = false;
+        assert(voice_deliver(v, native_delegation("host-busy", "host-busy")) == 0);
+        assert(!voice_notice_count(&f, "voice_handoff"));
         for (size_t i = 0; i < SNAG_VOICE_HANDOFFS + 2u; ++i) {
             assert(snprintf(ids[i], sizeof(ids[i]), "native-%zu", i) > 0);
         }
@@ -6375,6 +6404,20 @@ test_voice_concurrent_results(void)
 
 static void test_voice_protocol(void)
 {
+    /* An older connection may still own all logical helper slots. */
+    struct voice_fixture busy;
+    struct snag_voice *waiting = voice_start(&busy);
+    busy.busy = true;
+    char busy_error[256];
+    voice_commit(waiting, "busy-input", "new request");
+    assert(snag_voice_respond(waiting, true, busy_error, sizeof(busy_error)) == 0);
+    voice_created(waiting, &busy, "busy-response");
+    assert(voice_deliver(waiting, voice_call_response("busy-response", "completed")) == 0);
+    assert(snag_voice_ready(waiting) && !voice_notice_count(&busy, "voice_handoff"));
+    json_t *busy_item = json_object_get(voice_last(busy.sent), "item");
+    assert(strstr(snag_json_string(busy_item, "output"), "not submitted"));
+    voice_end(waiting, &busy);
+
     struct voice_fixture f;char error[256];struct snag_voice *voice=voice_start(&f);
     voice_commit(voice,"input-1",NULL);voice_commit(voice,"input-2","later words");
     size_t sent=json_array_size(f.sent);
@@ -6746,6 +6789,146 @@ native_ui_expect(int fd, enum snag_session_message expected, struct snag_buf *ou
     }
 }
 
+struct voice_renewal_records {
+    uint64_t first;
+    char queue[33];
+    unsigned int queued, settled, replies, retired;
+};
+
+static int
+voice_renewal_record(void *opaque, const struct snag_session *session, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    (void)session;
+    (void)error;
+    (void)size;
+    struct voice_renewal_records *seen = opaque;
+    if (seq < seen->first) return 0;
+    if (!strcmp(type, "future_turn_queued")) {
+        assert(!strcmp(snag_json_string(data, "queue_id"), seen->queue));
+        ++seen->queued;
+    }
+    if (strcmp(type, "voice_event")) return 0;
+    const json_t *event = json_object_get(data, "event");
+    const char *call = snag_json_string(event, "call_id");
+    if (!call || strcmp(call, "first")) return 0;
+    assert(!strcmp(snag_json_string(data, "connection_id"), "0123456789abcdef0123456789abcdef"));
+    const char *op = snag_json_string(event, "operation");
+    assert(op && strcmp(op, "interface_failed"));
+    if (!strcmp(op, "interface_request_settled")) {
+        assert(!strcmp(snag_json_string(event, "status"), "completed"));
+        assert(!json_object_get(event, "disposition"));
+        ++seen->settled;
+    } else if (!strcmp(op, "interface_reply")) ++seen->replies;
+    else if (!strcmp(op, "interface_connection_retired")) ++seen->retired;
+    return 0;
+}
+
+static void
+test_voice_renewal(struct app_state *app, struct snag_config *config,
+    const char *endpoint, int received, int release)
+{
+    char error[256];
+    bool handled = false;
+    json_t *empty = json_array();
+    json_t *failure = json_pack("{s:s,s:{s:s,s:s}}", "type", "error", "error",
+        "code", "server_error", "type", "server_error");
+    assert(empty && failure && snag_app_voice_fixture(app, empty, false) == 0);
+    json_decref(empty);
+    assert(snag_app_voice_fixture_failure(app, NULL) == SNAG_VOICE_RETRY);
+    assert(snag_app_voice_service(app) == 0 && app->voice);
+    uint64_t stopping = snag_monotonic_ms();
+    assert(snag_app_voice_command(app, "/voice off", &handled) == 0 && handled && !app->voice);
+    assert(snag_monotonic_ms() - stopping < 1000u);
+
+    struct snag_provider_config *provider = &config->providers[2];
+    snag_config_provider_init(provider, "renewal");
+    config->provider_count = 3u;
+    provider->auth = SNAG_AUTH_API_KEY;
+    strcpy(provider->base_url, endpoint);
+    strcpy(provider->openrouter_referer, "https://github.com/snajpa/snajpagent");
+    strcpy(provider->openrouter_title, "snajpagent");
+    assert(snag_secret_source_parse(&provider->api_key, "\"transport-secret\"", NULL,
+        error, sizeof(error)) == 0);
+    assert(voice_fixture_transition(app, "model_selection_changed",
+        json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}", "old_provider", app->session.default_provider,
+            "old_model", "fixture", "old_effort", app->session.default_effort,
+            "new_provider", "renewal", "new_model", "fixture",
+            "new_effort", app->session.default_effort), false) == 0u);
+    strcpy(config->audio.provider, "default");
+    assert(setenv("SNAJPAGENT_TEST_AUTH_BASE", "http://127.0.0.1:1", 1) == 0);
+    assert(setenv("SNAJPAGENT_TEST_OPENAI_BASE", endpoint, 1) == 0);
+    struct voice_renewal_records seen = {.first = app->session.next_seq};
+    json_t *request = json_pack("[{s:s,s:s,s:s,s:s,s:s,s:s}]", "type", "voice_handoff",
+        "input_id", "first", "response_id", "first", "call_id", "first",
+        "transcript", "retained-first-utterance", "request", "first");
+    assert(request && snag_app_voice_fixture(app, request, false) == 0);
+    json_decref(request);
+    uint64_t deadline = snag_monotonic_ms() + 5000u;
+    struct pollfd ready = {.fd = received, .events = POLLIN};
+    while (poll(&ready, 1u, 0) == 0) {
+        assert(snag_monotonic_ms() < deadline);
+        assert(snag_app_voice_service(app) == 0 && app->voice);
+        snag_sleep_ms(1u);
+    }
+    char marker;
+    assert(read(received, &marker, 1u) == 1 && marker == 'R');
+    assert(close(received) == 0 && app->session.pending_queue_count == 1u);
+    strcpy(seen.queue, app->session.pending_queue[0].queue_id);
+    /* Leave a partly sent PCM frame, then fail while its helper request waits. */
+    assert(snag_app_voice_fixture_mute(app) == 0);
+    assert(snag_app_voice_fixture_failure(app, failure) == SNAG_VOICE_RETRY);
+    json_decref(failure);
+    assert(snag_app_voice_service(app) == 0 && app->voice);
+    for (;;) {
+        assert(snag_monotonic_ms() < deadline);
+        assert(snag_app_voice_service(app) == 0 && app->voice);
+        json_t *state = snag_app_voice_fixture_state(app);
+        assert(state && json_is_true(json_object_get(state, "muted")));
+        bool replaced = strcmp(snag_json_string(state, "connection_id"),
+            "0123456789abcdef0123456789abcdef") != 0;
+        if (replaced) {
+            assert(json_is_true(json_object_get(state, "transport_empty")));
+            assert(json_integer_value(json_object_get(state, "pending_handoffs")) == 1);
+        }
+        json_decref(state);
+        if (replaced) break;
+        snag_sleep_ms(1u);
+    }
+    /* Replacement auth waits on the parent's lock. The old helper still settles. */
+    assert(write(release, "T", 1u) == 1 && close(release) == 0);
+    for (;;) {
+        assert(snag_monotonic_ms() < deadline);
+        assert(snag_app_voice_service(app) == 0 && app->voice);
+        json_t *state = snag_app_voice_fixture_state(app);
+        assert(state && json_is_true(json_object_get(state, "transport_empty")));
+        bool settled = json_integer_value(json_object_get(state, "pending_handoffs")) == 0;
+        json_decref(state);
+        if (settled) break;
+        snag_sleep_ms(1u);
+    }
+    assert(snag_session_each_event(&app->session, voice_renewal_record, &seen,
+        error, sizeof(error)) == 0);
+    assert(seen.queued == 1u && seen.settled == 2u && seen.replies == 1u && seen.retired == 1u);
+    assert(app->session.pending_queue_count == 1u && !app->session.active_turn);
+    assert(app->session.usage_totals.responses == 0u);
+    stopping = snag_monotonic_ms();
+    assert(snag_app_voice_command(app, "/voice off", &handled) == 0 && handled && !app->voice);
+    assert(snag_monotonic_ms() - stopping < 1000u);
+    assert(app->session.pending_queue_count == 1u);
+    assert(snag_session_commit(&app->session, "future_turn_cancelled",
+        json_pack("{s:[s],s:s}", "queue_ids", seen.queue, "reason", "user"),
+        NULL, error, sizeof(error)) == 0);
+    assert(voice_fixture_transition(app, "model_selection_changed",
+        json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}", "old_provider", "renewal",
+            "old_model", "fixture", "old_effort", app->session.default_effort,
+            "new_provider", "default", "new_model", "fixture",
+            "new_effort", app->session.default_effort), false) == 0u);
+    config->audio.provider[0] = '\0';
+    assert(unsetenv("SNAJPAGENT_TEST_AUTH_BASE") == 0);
+    assert(unsetenv("SNAJPAGENT_TEST_OPENAI_BASE") == 0);
+}
+
 static void
 test_native_ui(void)
 {
@@ -6794,6 +6977,14 @@ test_native_ui(void)
     snag_auth_clear(&tokens);
     snag_config_free(&auth_config);
     snag_store_close(&auth_store);
+    struct local_server renewal_server;
+    int renewal_received[2], renewal_release[2];
+    assert(pipe(renewal_received) == 0 && pipe(renewal_release) == 0);
+    voice_request_ready_fd = renewal_received[1];
+    voice_request_release_fd = renewal_release[0];
+    start_server(&renewal_server, MODEL_VOICE_CLOSE, false, "/v1");
+    assert(close(renewal_received[1]) == 0 && close(renewal_release[0]) == 0);
+    voice_request_ready_fd = voice_request_release_fd = -1;
     int saved[3], report[2], proceed[2];
     assert(pipe(report) == 0 && pipe(proceed) == 0 && fflush(NULL) == 0);
     for (int fd = 0; fd < 3; ++fd) {
@@ -6966,6 +7157,8 @@ test_native_ui(void)
             assert(!app.voice && !session->active_turn && !session->pending_queue_count);
             if (!cancelled) break;
         }
+        test_voice_renewal(&app, &config, renewal_server.endpoint,
+            renewal_received[0], renewal_release[1]);
         assert(snag_ui_voice(ui, "[VOICE MIC ON] ") == 0);
         json_t *notices = json_pack("[{s:s,s:s,s:s,s:s},{s:s}]",
             "type", "voice_transcript", "speaker", "user", "item_id", "input-1",
@@ -7012,7 +7205,7 @@ test_native_ui(void)
         unsigned int voice_counts[2] = {0};
         assert(snag_session_each_event(session, voice_close_record, voice_counts,
                                         error, sizeof(error)) == 0);
-        assert(voice_counts[0] == 2u && voice_counts[1] == 5u && !session->pending_queue_count);
+        assert(voice_counts[0] == 2u && voice_counts[1] == 7u && !session->pending_queue_count);
         for (unsigned int playing = 0u; playing < 2u; ++playing) {
             assert(snag_app_audio_fixture(&app, playing != 0u) == 0);
             assert(snag_app_audio_fixture_checkpoint(&app) == 2);
@@ -7129,6 +7322,8 @@ test_native_ui(void)
     assert(waitpid((pid_t)process.child, &status, 0) == (pid_t)process.child);
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
     native_ui_owner = 0;
+    assert(close(renewal_received[0]) == 0 && close(renewal_release[1]) == 0);
+    stop_server(&renewal_server);
     assert(close(auth_lock) == 0);
     assert(close(credential_listener) == 0);
 }

@@ -35,8 +35,10 @@ and replies retain their source correlation in the session. The main agent's
 `voice_output` tool queries readiness or queues speech through the existing
 output mailbox. Native speech uses speakable session context; public Realtime
 uses a host-labelled message and its normal response scheduler. Queue and
-protocol-preparation records make no playback claim. Live connection renewal
-and long-lived context maintenance remain in implementation.
+protocol-preparation records make no playback claim. Advertised expiry and validated
+temporary provider-service errors renew the physical connection while retaining
+the logical helper. Transport-cause classification, native capacity recovery and
+long-lived context maintenance remain in implementation.
 
 ## Ownership and lifetime
 
@@ -64,7 +66,18 @@ validated code, category, bounded message and reported input/context counts thro
 the ordinary voice notice and session-owner journal path. Missing counts remain
 unknown; invalid metadata must not become a capacity estimate. The outbound copy
 uses the configured-secret filter. These observations supply recovery facts without
-selecting retry policy or admitting actions; connection recovery remains separate.
+admitting actions. The protocol adapter distinguishes a validated temporary
+service error from policy, capacity and malformed-error failures. Recovery consumes
+that typed outcome, never the diagnostic wording. A fresh physical connection
+keeps the logical helper and its accepted work; its pending records retain their
+original source, while old native call results and audio stay out of the new
+connection. Replacement reuses the connection worker and provider retry pacing;
+off cancels both backoff and credential waits. Existing helper slots cover queued
+notices and unfinished delegations across replacements. A full helper acknowledges
+new requests as unsubmitted. Once an old delegation settles, its obsolete native
+call is retired; accepted coding work remains in the canonical queue. The new
+connection observes late outcomes as source-labelled history. Native capacity
+recovery and transport-error classification remain in implementation.
 
 Terminal detach, loss, switching away and job suspension retain the existing
 privacy boundary: stop microphone forwarding and playback immediately. A newly
@@ -136,10 +149,13 @@ connection restores prior public voice transcripts, interface requests, outputs
 and outcomes from the journal as identified historical observations. It captures
 the activation sequence boundary before admitting new dialogue, so live interface
 items are appended once and saved actions remain historical context. Provider-private
-continuation is not restored. Native audio-context renewal and capacity recovery remain open.
+continuation is not restored after voice-off; physical renewal retains the running
+helper's continuation. Native capacity recovery and per-turn context maintenance
+remain open.
 
 Native restoration uses the same verified journal and public formatter as
-text restoration. Its source boundary is captured at activation. Prior public
+text restoration. Its source boundary is captured for each physical connection.
+Prior public
 speech, interface actions and outcomes are historical observations; active native
 speech already belongs to the current provider conversation. The existing bounded
 observation stream carries the archive in order. A fresh, complete state snapshot

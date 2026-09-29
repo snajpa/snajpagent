@@ -8,12 +8,17 @@
  * belongs to the session, not this connection-local correlation window. */
 #define SNAG_VOICE_HANDOFFS 8u
 
+/* A validated temporary provider error ended this protocol instance. The
+ * owner may replace it; retained work and media must not be replayed. */
+#define SNAG_VOICE_RETRY (-2)
+
 /* Realtime protocol state has one owner and no device, journal, UI or executor.
  * Hooks borrow their inputs. The desktop owner queues notices to the existing
  * session owner; only that owner may accept a coding handoff durably. */
 struct snag_voice;
 struct snag_voice_io {
     int (*send)(void *,const json_t *);
+    /* Positive for a handoff means busy: acknowledge without admission. */
     int (*notice)(void *,const json_t *);
     /* Zero frames marks audio end; release a short prefill without waiting. */
     int (*play)(void *,const char *item,const int16_t *,uint32_t);
