@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Restore PowerPC Linux session-host and terminal-relay builds while preserving
+  terminal-size request bits across musl, glibc and BSD interfaces.
+
 - Keep development update descriptors and verified immutable release downloads
   within the website's size limit; preserve stable executable aliases.
 

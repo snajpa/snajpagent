@@ -162,7 +162,7 @@ resize_terminal(struct snag_session_relay *relay, bool commit)
     size.ws_row = (unsigned short)((unsigned int)p[0] | (unsigned int)p[1] << 8u);
     size.ws_col = (unsigned short)((unsigned int)p[2] | (unsigned int)p[3] << 8u);
     if (!size.ws_row || !size.ws_col) return snag_errno(EPROTO);
-    return ioctl(relay->master, TIOCSWINSZ, &size);
+    return ioctl(relay->master, (unsigned int)TIOCSWINSZ, &size);
 }
 
 static int

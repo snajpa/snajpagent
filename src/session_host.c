@@ -127,7 +127,7 @@ snag_session_process_start(struct snag_session_process *process)
     if (flags < 0 || fcntl(process->master, F_SETFL, flags | O_NONBLOCK) < 0 ||
         snag_fd_cloexec(process->master) < 0 || snag_fd_cloexec(process->slave) < 0 ||
         tcsetattr(process->slave, TCSANOW, &modes) < 0 ||
-        ioctl(process->slave, TIOCSWINSZ, &geometry) < 0 ||
+        ioctl(process->slave, (unsigned int)TIOCSWINSZ, &geometry) < 0 ||
         snag_session_stream_pair(pair) < 0) goto fail;
     pid_t child = fork();
     if (child < 0) goto fail;

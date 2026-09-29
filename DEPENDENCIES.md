@@ -302,6 +302,11 @@ closure's static LibreOfficeKit instead would put its archives into the
 artifact, which is why the linked import stays a host-build choice, where
 `WITH_OFFICE=1` loads a separately installed runtime through `OFFICE_ROOT`.
 
+Terminal-size write requests preserve their unsigned 32-bit ioctl encoding
+before conversion to the platform's request type. PowerPC Linux sets bit31;
+musl accepts an `int`, while glibc and BSD accept `unsigned long`. This applies
+to command PTYs, the session host and its attached-terminal relay.
+
 The opt-in `make prod-linux-ppc32` recipe is outside the supported production
 matrix and has no stable binary or update channel. It uses the pinned
 big-endian PowerPC musl toolchain,

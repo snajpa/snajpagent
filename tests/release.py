@@ -398,6 +398,12 @@ resize = re.search(r"static void\npty_apply_current_size\(.*?\n}\n",
                    process_host, re.S).group()
 # GCC14 diagnoses the implicit conversion; GCC13 may silently accept it.
 assert "ioctl(fd, (unsigned int)TIOCSWINSZ, &ws)" in resize
+session_resizes = []
+for name in ("session_host.c", "session_relay.c"):
+    source = (root / "src" / name).read_text()
+    call = re.search(r"ioctl\([^,\n]+, .*?TIOCSWINSZ, &\w+\)", source).group()
+    assert "(unsigned int)TIOCSWINSZ" in call, (name, call)
+    session_resizes.append(call)
 with tempfile.TemporaryDirectory(prefix="release-ioctl-", dir=root / "build") as tmp:
     tmp = Path(tmp)
     for request_type in ("int", "unsigned long"):
@@ -434,14 +440,22 @@ int main(void)
     assert(calls == 2 && rows == 37 && cols == 101);
     pty_apply_current_size(7, &rows, &cols);
     assert(calls == 2);
+    struct { int slave; } host = {7}, *process = &host;
+    struct { int master; } owner = {7}, *relay = &owner;
+    struct winsize geometry = {.ws_row = 37, .ws_col = 101};
+    struct winsize size = geometry;
+    SESSION_RESIZES
+    assert(calls == 6);
     return 0;
 }
-""")
+""".replace("SESSION_RESIZES", "\n".join(
+    f"fail = {failed}; assert({call} == {-1 if failed else 0});"
+    for failed in (0, 1) for call in session_resizes)))
         binary = tmp / "resize"
         subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
                         str(source), "-o", str(binary)], check=True)
         subprocess.run([str(binary)], check=True)
-print("PASS: PTY resize preserves ioctl request bits for signed and wide ABIs")
+print("PASS: process/session PTY resize preserves ioctl request bits for signed and wide ABIs")
 
 # stdenvNoCC exports empty AR/RANLIB; Android archive commands must name NDK tools.
 android = (root / "nix/android.nix").read_text()
