@@ -5533,6 +5533,128 @@ static void voice_end(struct snag_voice *voice,struct voice_fixture *f)
 
 static size_t voice_notice_count(const struct voice_fixture *,const char *);
 
+static int
+voice_error_record(void *opaque, const struct snag_session *session, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    (void)session;
+    (void)seq;
+    (void)error;
+    (void)size;
+    if (strcmp(type, "voice_event")) return 0;
+    const json_t *event = json_object_get(data, "event");
+    const char *operation = snag_json_string(event, "operation");
+    if (!operation || strcmp(operation, "provider_error")) return 0;
+    const json_t *failure = json_object_get(event, "error");
+    assert(!strcmp(snag_json_string(failure, "code"), "context_length_exceeded"));
+    assert(!strcmp(snag_json_string(failure, "message"), "reflected <redacted:secret>"));
+    assert(json_integer_value(json_object_get(failure, "max_context_tokens")) == 12345);
+    assert(json_integer_value(json_object_get(failure, "input_tokens")) == 12346);
+    ++*(unsigned int *)opaque;
+    return 0;
+}
+
+static void
+test_voice_provider_errors(void)
+{
+    for (unsigned int native = 0u; native < 2u; ++native) {
+        for (unsigned int shape = 0u; shape < 7u; ++shape) {
+            struct voice_fixture f;
+            struct snag_voice *voice;
+            char error[256];
+            if (!native) {
+                voice = voice_start(&f);
+            } else {
+                f = (struct voice_fixture){.sent = json_array(), .notices = json_array()};
+                struct snag_voice_io io = {voice_send, voice_notice, voice_play, voice_interrupt};
+                voice = voice_fixture_new(&io, &f, "fixture", "fixture-asr", "fixture-voice");
+                assert(voice);
+                json_t *session = snag_voice_native_session(voice);
+                assert(session);
+                json_decref(session);
+                assert(snag_voice_begin(voice, error, sizeof(error)) == 0);
+            }
+            const char *code = shape == 1u ? "server_error" :
+                shape == 2u ? "invalid_request_error" :
+                shape == 5u ? "content_filter" : "context_length_exceeded";
+            const char *category = shape == 1u ? "server_error" :
+                shape >= 5u ? "content_filter" : "invalid_request_error";
+            json_t *event = json_pack("{s:s,s:{s:s,s:s,s:s}}", "type", "error", "error",
+                "code", code, "type", category,
+                "message", !shape ? "reflected voice-error-secret" : "context window exhausted");
+            json_t *detail = json_object_get(event, "error");
+            assert(event && detail);
+            if (!shape) {
+                assert(json_object_set_new(detail, "max_context_tokens", json_integer(12345)) == 0);
+                assert(json_object_set_new(detail, "input_tokens", json_integer(12346)) == 0);
+            } else if (shape == 3u) {
+                assert(json_object_set_new(detail, "code", json_array()) == 0);
+            } else if (shape == 4u) {
+                assert(json_object_set_new(detail, "max_context_tokens", json_integer(-1)) == 0);
+            }
+            size_t sent = json_array_size(f.sent);
+            assert(snag_voice_event(voice, event, error, sizeof(error)) < 0);
+            if (shape >= 5u) assert(strstr(error, "policy"));
+            assert(!snag_voice_ready(voice) && f.interrupts == 1u);
+            assert(json_array_size(f.sent) == sent && !voice_notice_count(&f, "voice_handoff"));
+            bool valid = shape < 3u || shape >= 5u;
+            assert(json_array_size(f.notices) == (size_t)valid);
+            if (valid) {
+                const json_t *report = voice_last(f.notices);
+                assert(!strcmp(snag_json_string(report, "type"), "voice_response"));
+                assert(!strcmp(snag_json_string(report, "operation"), "provider_error"));
+                struct snag_provider_failure failure;
+                assert(snag_provider_failure_from_json(report, &failure) == 0);
+                assert(!strcmp(failure.code, code));
+                assert(snag_provider_failure_is_capacity(&failure) == (!shape || shape == 6u));
+                assert(snag_provider_failure_is_policy(&failure) == (shape >= 5u));
+                assert(snag_provider_failure_retryable(0, failure.code, failure.type) ==
+                    (shape == 1u));
+                assert(failure.context_limit_tokens == (!shape ? 12345u : 0u));
+                assert(failure.requested_input_tokens == (!shape ? 12346u : 0u));
+                if (shape) {
+                    assert(json_is_null(json_object_get(json_object_get(report, "error"),
+                        "max_context_tokens")));
+                    assert(json_is_null(json_object_get(json_object_get(report, "error"),
+                        "input_tokens")));
+                }
+            }
+            assert(snag_voice_event(voice, event, error, sizeof(error)) < 0);
+            assert(json_array_size(f.notices) == (size_t)valid && f.interrupts == 1u);
+            json_decref(event);
+            if (native && !shape) {
+                char path[4096];
+                const char *tmp = getenv("TMPDIR");
+                assert(snprintf(path, sizeof(path), "%s/snajpagent-voice-error-XXXXXX",
+                    tmp ? tmp : "/tmp") > 0 && mkdtemp(path));
+                struct snag_config config;
+                snag_config_init(&config);
+                assert(snag_secret_source_parse(&config.providers[0].api_key,
+                    "\"voice-error-secret\"", NULL, error, sizeof(error)) == 0);
+                struct app_state app = {.config = &config};
+                snag_store_init(&app.store);
+                snag_session_init(&app.session);
+                assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
+                assert(snag_session_create(&app.store, &app.session, path, "default",
+                    "fixture", "medium", error, sizeof(error)) == 0);
+                assert(snag_ui_init(&app.ui) == 0);
+                assert(snag_app_voice_fixture(&app, f.notices, true) == 0);
+                assert(snag_app_voice_service(&app) == 0 && !app.voice);
+                unsigned int records = 0u;
+                assert(snag_session_each_event(&app.session, voice_error_record, &records,
+                    error, sizeof(error)) == 0 && records == 1u);
+                assert(!app.session.active_turn && !app.session.pending_queue_count &&
+                    app.session.usage_totals.responses == 0u);
+                snag_ui_free(&app.ui);
+                snag_session_close(&app.session);
+                snag_store_close(&app.store);
+                snag_config_free(&config);
+            }
+            voice_end(voice, &f);
+        }
+    }
+}
+
 static void test_audio_provider_selection(void)
 {
     struct snag_config config;snag_config_init(&config);
@@ -6635,6 +6757,7 @@ main(void)
     test_static_alsa_config();
 #endif
     test_voice_protocol();
+    test_voice_provider_errors();
     test_voice_concurrent_results();
     test_voice_async_asr();
     test_voice_captions();

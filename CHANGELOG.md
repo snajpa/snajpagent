@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Retain validated voice-provider error categories and reported capacity facts in
+  session history, with missing counts marked unknown and reflected credentials filtered.
+
 - Restore public working history, prior speech and interface outcomes into the
   voice connection before capture starts, including after session reopen. Keep
   capture behind initial-history and fresh-state transport writes, with cancellation

@@ -1813,6 +1813,11 @@ authentication, transport and retries; they do not isolate provider prefill time
 The records are available through session history. Interface text requests use
 their own stable prompt-cache and transport-affinity identity, separate from
 working-model requests.
+Provider error records retain validated error codes, categories, available messages
+and reported context/input counts through the same secret-filtered history path.
+Missing counts remain unknown. A generic error message does not establish the
+voice model's context capacity. A provider error stops the current connection;
+/voice on starts a fresh connection.
 .PP
 While voice remains enabled, the text interface retains its ordered dialogue and
 tool outcomes across spoken handoffs. Its command/help prefix stays in place,

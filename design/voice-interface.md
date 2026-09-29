@@ -52,6 +52,13 @@ discard unsent captured audio and never replay it automatically. Authentication,
 protocol-integrity and device-permission failures require a visible explanation
 and an actionable recovery path. Voice-off cancels pending reconnect work.
 
+Provider error handling reuses the existing structured-error parser. Record its
+validated code, category, bounded message and reported input/context counts through
+the ordinary voice notice and session-owner journal path. Missing counts remain
+unknown; invalid metadata must not become a capacity estimate. The outbound copy
+uses the configured-secret filter. These observations supply recovery facts without
+selecting retry policy or admitting actions; connection recovery remains separate.
+
 Terminal detach, loss, switching away and job suspension retain the existing
 privacy boundary: stop microphone forwarding and playback immediately. A newly
 attached terminal requires explicit reactivation; attachment alone never opens

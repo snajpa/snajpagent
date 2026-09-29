@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "voice.h"
 #include "json.h"
+#include "provider_retry.h"
+#include "responses.h"
 #include "secret_source.h"
 #include <stdlib.h>
 #include <string.h>
@@ -608,12 +610,40 @@ int snag_voice_native_output(struct snag_voice *s,const int16_t *pcm,uint32_t fr
     return s->io.play(s->opaque,"native-output",pcm,frames);
 }
 
+static int
+provider_error(struct snag_voice *s, const json_t *event, char *error, size_t size)
+{
+    struct snag_provider_failure failure;
+    if (snag_provider_failure_from_json(event, &failure) < 0) {
+        return fail(s, error, size, "Realtime provider error metadata is invalid");
+    }
+    json_t *report = json_pack("{s:s,s:s,s:{s:s,s:s,s:s,s:o,s:o}}",
+        "type", "voice_response", "operation", "provider_error", "error",
+        "code", failure.code, "type", failure.type, "message", failure.message,
+        "max_context_tokens", failure.context_limit_tokens ?
+            json_integer((json_int_t)failure.context_limit_tokens) : json_null(),
+        "input_tokens", failure.requested_input_tokens ?
+            json_integer((json_int_t)failure.requested_input_tokens) : json_null());
+    if (notice(s, report) < 0) {
+        return fail(s, error, size, "Realtime provider error could not be retained");
+    }
+    const char *reason = "Realtime provider reported an error; details retained in session history";
+    if (snag_provider_failure_is_policy(&failure)) {
+        reason = "Realtime provider rejected the request under its policy";
+    } else if (snag_provider_failure_is_capacity(&failure)) {
+        reason = "Realtime provider rejected the conversation context";
+    } else if (snag_provider_failure_retryable(0, failure.code, failure.type)) {
+        reason = "Realtime provider reported a temporary service failure";
+    }
+    return fail(s, error, size, reason);
+}
+
 int snag_voice_event(struct snag_voice *s,const json_t *event,char *error,size_t size)
 {
     if(!s || s->failed)return -1;
     const char *type=snag_json_string(event,"type");
     if(!type)return fail(s,error,size,"Realtime event has no type");
-    if(!strcmp(type,"error"))return fail(s,error,size,"Realtime provider reported an error; connection stopped without retry");
+    if (!strcmp(type, "error")) return provider_error(s, event, error, size);
     if (s->native)return native_event(s,event,type,error,size);
     if(!strcmp(type,"session.updated")) {
         const json_t *session=json_object_get(event,"session"),*audio=json_object_get(session,"audio");
