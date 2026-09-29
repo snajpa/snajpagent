@@ -123,7 +123,15 @@ let
     '';
     preFixup = "";
   });
-  tls = staticFixed.mbedtls;
+  tls = voice.tls;
+  archive = (staticFixed.libarchive.override { openssl = null; }).overrideAttrs (old: {
+    buildInputs = (old.buildInputs or []) ++ [ staticFixed.nettle ];
+    configureFlags = (old.configureFlags or []) ++ [ "--without-openssl" "--with-nettle" ];
+    preFixup = ''
+      sed -i "$lib/lib/libarchive.la" \
+        -e 's|-llzo2|-L${pkgs.lib.getLib staticFixed.lzo}/lib -llzo2|'
+    '';
+  });
   curl = (staticFixed.curlMinimal.override {
     opensslSupport = false;
     scpSupport = false;
@@ -157,8 +165,9 @@ in {
     src = source;
     outputs = [ "out" "debug" ];
     nativeBuildInputs = [ musl.buildPackages.pkg-config ];
-    buildInputs = [ staticFixed.jansson curl av pdf staticFixed.libpng staticFixed.libarchive staticFixed.libxml2 alsa pulse
-      voice.rtc voice.juice voice.opus staticFixed.srtp staticFixed.usrsctp staticFixed.openssl ];
+    buildInputs = [ staticFixed.jansson curl av pdf staticFixed.libpng archive
+      staticFixed.libxml2 alsa pulse voice.rtc voice.juice voice.opus voice.srtp
+      staticFixed.usrsctp tls ];
     enableParallelBuilding = true;
     dontConfigure = true;
     dontStrip = true;
@@ -201,7 +210,7 @@ in {
         "MINIAUDIO_CFLAGS=-isystem ${pkgs.miniaudio.src} $($PKG_CONFIG --cflags alsa libpulse) -DMA_NO_RUNTIME_LINKING -DMA_ENABLE_ONLY_SPECIFIC_BACKENDS -DMA_ENABLE_ALSA -DMA_ENABLE_PULSEAUDIO"
         "AUDIO_DEVICE_LIBS=$($PKG_CONFIG --static --libs alsa libpulse)"
         "RTC_CFLAGS=-DRTC_STATIC -I${voice.rtc.dev}/include -I${voice.opus.dev}/include"
-        "RTC_LIBS=-L${voice.rtc}/lib -ldatachannel -L${voice.juice}/lib -ljuice $($PKG_CONFIG --static --libs opus libsrtp2 usrsctp openssl) -lstdc++"
+        "RTC_LIBS=-L${voice.rtc}/lib -ldatachannel -L${voice.juice}/lib -ljuice $($PKG_CONFIG --static --libs opus libsrtp2 usrsctp mbedtls) -lstdc++"
       )
     '';
     installPhase = ''

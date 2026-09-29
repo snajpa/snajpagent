@@ -124,6 +124,10 @@ Native subscription voice links libdatachannel 0.24.1 and Opus
 through their C APIs. `RTC_CFLAGS`/`RTC_LIBS` select nonstandard installations.
 Portable builds use libjuice for ICE, plus DTLS and SRTP. BYOK uses libcurl
 WebSockets. `WITH_AUDIO_DEVICE=0` disables audio devices and native voice media.
+Portable Linux voice and provider HTTPS share Mbed TLS with DTLS-SRTP enabled.
+libSRTP uses Mbed TLS's AES-GCM implementation; libarchive is built with Nettle
+cryptography. These libraries offer GPLv2-compatible license options for the
+application's GPL-2.0-only distribution terms.
 FFmpeg and Poppler are reached through narrow file-only adapters in `src/av.c`
 and `src/pdf.cpp`; PDF requires C++20. System Poppler 26 reshaped the stream
 and renderer C++ APIs: host builds against it pass `HAVE_POPPLER_NEW_API=1`

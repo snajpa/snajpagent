@@ -30,6 +30,8 @@ and its existing downloads remain unchanged.
 - Production recipes enable device audio and native voice backends on Linux,
   macOS, Windows and BSD. File decoding, provider audio routes and device access
   remain separate capabilities; Office rendering uses its documented runtime.
+- Linux voice and HTTPS share Mbed TLS; libarchive is built with Nettle.
+  DTLS-SRTP and AES-GCM remain enabled with GPLv2-compatible license options.
 - Builds after a development tag keep the approved version base and replace the
   previous Git suffix with the current revision. Clean tagged builds retain the
   exact tag; modified checkouts add `-dirty`.

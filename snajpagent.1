@@ -4953,6 +4953,8 @@ This fallback requires readable /proc/PID/stat files.
 The OS must supply secure entropy.  Mbed TLS retains /dev/random; on Linux
 before 5.6, it may block when entropy is depleted even after initial seeding.
 Maintain the system's entropy source rather than weakening TLS randomness.
+Official Linux recipes select Mbed TLS for provider HTTPS, native voice DTLS
+and SRTP.  They build libarchive with Nettle cryptography.
 .PP
 The x86-64 and legacy i686 targets share the old-kernel clock fallback
 described below.  Musl's translated clock error is checked with a raw syscall;

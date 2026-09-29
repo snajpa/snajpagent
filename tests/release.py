@@ -37,6 +37,20 @@ with tempfile.TemporaryDirectory(prefix="portable-tty-", dir=root / "build") as 
 print("PASS: session redraw builds with the portable controlling-terminal API")
 
 
+voice_crypto = (root / "nix/voice-rtc.nix").read_text()
+linux_crypto = (root / "nix/linux.nix").read_text()
+assert '"-DUSE_MBEDTLS=ON"' in voice_crypto
+assert "MBEDTLS_SSL_DTLS_SRTP" in voice_crypto
+assert '"-Dcrypto-library=mbedtls"' in voice_crypto
+assert "target.openssl" not in voice_crypto
+assert "tls = voice.tls;" in linux_crypto
+assert "voice.srtp" in linux_crypto and "usrsctp mbedtls)" in linux_crypto
+assert "staticFixed.openssl" not in linux_crypto
+assert '"--without-openssl" "--with-nettle"' in linux_crypto
+assert "staticFixed.nettle" in linux_crypto
+print("PASS: Linux voice and archive crypto retain GPLv2-compatible backends")
+
+
 with tempfile.TemporaryDirectory(prefix="release-", dir=root / "build") as tmp:
     tmp = Path(tmp)
     # The documented tag recipe requires an operator-supplied version and must

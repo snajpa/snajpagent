@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Build Linux voice with Mbed TLS and archive crypto with Nettle, retaining
+  DTLS-SRTP and AES-GCM support under GPLv2-compatible license options.
+
 - Keep session redraw buildable on older OpenBSD while retaining the
   controlling-terminal ownership check.
 

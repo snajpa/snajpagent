@@ -16,12 +16,27 @@ let
     nativeBuildInputs = [ pkgs.cmake pkgs.ninja ];
     cmakeFlags = [ "-DBUILD_SHARED_LIBS=OFF" "-DNO_TESTS=ON" "-DNO_SERVER=ON" ];
   };
-  rtc = (target.libdatachannel.override { libnice = null; }).overrideAttrs (_: {
-    buildInputs = [ juice target.openssl target.srtp target.usrsctp target.plog ];
+  tls = target.mbedtls.overrideAttrs (old: {
+    postConfigure = (old.postConfigure or "") + ''
+      perl scripts/config.pl set MBEDTLS_SSL_DTLS_SRTP
+    '';
+  });
+  srtp = (target.srtp.override { openssl = null; }).overrideAttrs (old: {
+    buildInputs = (old.buildInputs or []) ++ [ tls ];
+    mesonFlags = builtins.filter
+      (flag: !(pkgs.lib.hasPrefix "-Dcrypto-library=" flag)) old.mesonFlags
+      ++ [ "-Dcrypto-library=mbedtls" ];
+  });
+  rtc = (target.libdatachannel.override {
+    libnice = null;
+    openssl = null;
+    inherit srtp;
+  }).overrideAttrs (_: {
+    buildInputs = [ juice tls srtp target.usrsctp target.plog ];
     cmakeFlags = [
-      "-DBUILD_SHARED_LIBS=OFF"
+      "-DBUILD_SHARED_LIBS=OFF" "-DUSE_MBEDTLS=ON"
       "-DUSE_NICE=OFF" "-DPREFER_SYSTEM_LIB=ON" "-DUSE_SYSTEM_JUICE=ON"
       "-DNO_WEBSOCKET=ON" "-DNO_EXAMPLES=ON" "-DNO_TESTS=ON"
     ];
   });
-in { inherit rtc juice; opus = target.libopus; }
+in { inherit rtc juice tls srtp; opus = target.libopus; }
