@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Seed voice-interface requests with working history and append newly recorded
+  working output and outcomes through a bounded journal cursor before each request.
+  Include the active dialogue when an older-prefix summary still exceeds capacity.
+
 - Retain live voice-interface dialogue and tool outcomes across spoken handoffs,
   refresh state on continuation requests, and recover exhausted input with
   tool-free, paced compaction through the existing request worker. Filter

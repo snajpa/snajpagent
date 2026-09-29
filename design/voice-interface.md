@@ -118,15 +118,30 @@ Public history copies and returned replies pass through the existing secret
 filter. Public protocol identities must survive filtering unchanged; a response
 whose identity contains a configured secret fails before action dispatch.
 Turning voice off releases this live history. Rehydration on a later connection,
-initial full working-model history and appending actual working output before
-each text request remain open, as do native audio-context renewal and retention.
+including prior interface dialogue, remains open, as do native audio-context
+renewal and retention.
+
+The text interface reads working inputs, public output, outcomes and controls
+from the verified journal before its first delegation. Before each ordinary
+request, it catches up to a captured sequence boundary, retaining the same
+forward cursor across requests. Each quoted observation carries its session,
+sequence and event type. Provider-private continuation is omitted by the shared
+history formatter; registered secrets are filtered on the outbound copy.
+Catch-up shares the native observer's event selection but has its own cursor,
+so a pending audio packet does not stall text history. Each owner step reads
+the existing 4 MiB quantum plus one atomic record. Reaching the request byte
+bound schedules the existing compactor before reading more history. Work and
+voice cancellation remain serviceable between steps. Newer events remain in
+the journal for the following request.
 
 Capacity recovery reuses the existing request worker and the working compactor's
 tool-free summary-request builder. An actual provider capacity rejection or the
 existing request-serialization bound triggers recovery; no guessed token window
 is used. The owner summarizes an older prefix while keeping the current
 delegation's unsummarized tail, or summarizes the whole available dialogue when
-there is no older prefix. The instruction/help item remains outside the summary.
+there is no older prefix. If the reduced prefix still leaves the request too
+large, the next recovery includes the active tail. The instruction/help item
+remains outside the summary.
 Whole-dialogue recovery continues with a correlated host marker rather than
 resubmitting the original speech as a new user message. Failed seeded delegations
 leave a recorded failure marker with any previously accepted queue identity, so
