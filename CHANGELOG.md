@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Add paged queue inspection to the voice interface, with exact IDs, current text
+  previews and stable enqueue cursors, without arming or starting queued work.
+
 - Filter configured secrets from initial and refreshed voice context snapshots
   while preserving the working session's original state.
 

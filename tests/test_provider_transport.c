@@ -2294,6 +2294,85 @@ test_voice_read_tools(void)
 }
 
 static void
+test_voice_queue_inspection(void)
+{
+    char path[4096], error[256], prompt[1028];
+    const char *tmp = getenv("TMPDIR");
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-voice-queue-view-XXXXXX",
+        tmp ? tmp : "/tmp") > 0 && mkdtemp(path));
+    struct snag_config config;
+    snag_config_init(&config);
+    config.read_agents_md = false;
+    struct app_state app = {.config = &config};
+    snag_store_init(&app.store);
+    snag_session_init(&app.session);
+    assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
+    assert(snag_session_create(&app.store, &app.session, path, "default", "fixture", "medium",
+        error, sizeof(error)) == 0);
+    const char *ids[] = {"11111111111111111111111111111111", "22222222222222222222222222222222"};
+    for (size_t i = 0u; i < 1023u; i += 3u) memcpy(prompt + i, "€", 3u);
+    strcpy(prompt + 1023u, "tail");
+    uint64_t queued[2];
+    for (unsigned int i = 0u; i < 2u; ++i) {
+        queued[i] = app.session.next_seq;
+        assert(snag_session_commit(&app.session, "future_turn_queued",
+            json_pack("{s:s,s:s,s:b,s:s,s:b}", "queue_id", ids[i],
+                "text", i ? prompt : "first queued task", "read_only", i != 0u,
+                "while_turn_id", "", "armed", 0), NULL, error, sizeof(error)) == 0);
+    }
+    struct snag_response_item call = {.name = "inspect_session"};
+    for (unsigned int page = 0u; page < 3u; ++page) {
+        uint64_t seq = app.session.next_seq;
+        call.arguments = json_pack("{s:i,s:I}", "queue_limit", 1,
+            "queue_after_seq", (json_int_t)(page ? queued[0] : 0u));
+        json_t *result = NULL;
+        assert(snag_app_voice_read(&app, &call, &result, error, sizeof(error)) == 0);
+        assert(!strcmp(snag_json_string(result, "status"), "succeeded"));
+        json_t *view = json_loads(snag_json_string(result, "model_text"), 0, NULL);
+        json_t *entries = json_object_get(view, "queue");
+        assert(view && json_array_size(entries) == 1u);
+        const json_t *entry = json_array_get(entries, 0u);
+        assert(!strcmp(snag_json_string(entry, "queue_id"), ids[page ? 1 : 0]));
+        assert(json_is_true(json_object_get(view, "queue_more")) == !page);
+        assert(json_integer_value(json_object_get(view, "queue_next_after_seq")) ==
+            (json_int_t)queued[page ? 1 : 0]);
+        assert(json_is_true(json_object_get(entry, "read_only")) == (page != 0u));
+        if (page == 1u) {
+            const char *preview = snag_json_string(entry, "text");
+            assert(preview && strlen(preview) == 510u && !strncmp(preview, prompt, 510u));
+            assert(json_is_true(json_object_get(entry, "text_truncated")));
+            assert(json_integer_value(json_object_get(entry, "text_bytes")) == 1027);
+        } else if (page == 2u) {
+            assert(!strcmp(snag_json_string(entry, "text"), "changed queued task"));
+            assert(!json_is_true(json_object_get(entry, "text_truncated")));
+        }
+        assert(app.session.next_seq == seq && !app.session.active_turn && !app.session.queue_armed);
+        json_decref(view);
+        json_decref(result);
+        json_decref(call.arguments);
+        if (page == 0u) {
+            assert(snag_session_commit(&app.session, "future_turn_cancelled",
+                json_pack("{s:[s],s:s}", "queue_ids", ids[0], "reason", "user"),
+                NULL, error, sizeof(error)) == 0);
+        } else if (page == 1u) {
+            assert(snag_session_commit(&app.session, "future_turn_edited",
+                json_pack("{s:s,s:s,s:b}", "queue_id", ids[1],
+                    "text", "changed queued task", "read_only", 1),
+                NULL, error, sizeof(error)) == 0);
+        }
+    }
+    call.arguments = json_pack("{s:i}", "queue_limit", 0);
+    json_t *result = NULL;
+    assert(snag_app_voice_read(&app, &call, &result, error, sizeof(error)) == 0);
+    assert(!strcmp(snag_json_string(result, "status"), "failed"));
+    json_decref(result);
+    json_decref(call.arguments);
+    snag_session_close(&app.session);
+    snag_store_close(&app.store);
+    snag_config_free(&config);
+}
+
+static void
 test_voice_interface_read(void)
 {
     struct app_state app = {0};
@@ -5334,6 +5413,7 @@ main(void)
     test_voice_concurrent_owner();
     test_voice_observation_cursor();
     test_voice_read_tools();
+    test_voice_queue_inspection();
     test_voice_interface_read();
     test_voice_independent_request();
     test_voice_session_controls();

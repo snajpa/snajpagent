@@ -124,6 +124,11 @@ schema and verified paged reader. Older utterances, controls and results remain
 retrievable by journal sequence without submitting a coding task. History is
 context rather than fresh approval; provider-only continuation payloads stay out
 of the displayed history.
+`inspect_session` also pages the current queue by immutable enqueue sequence,
+returning exact IDs, read-only flags and bounded text previews. Removed earlier
+entries do not shift this cursor. Queue edits retain their identity and are
+reported as current text; clipped previews are marked. Inspection never arms or
+starts queued work.
 Tool descriptions explain their real operations and outcomes. Do not encode a
 particular documentation path, language, phrase vocabulary or conversation
 script. The presence of readable files, effective instructions and useful tools

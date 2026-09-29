@@ -17,6 +17,9 @@
  * notices and serialized, correlated coding results. No second executor. */
 #define VOICE_MESSAGE (2u*1024u*1024u)
 #define VOICE_NOTICES 16u
+/* Bound queue projections within the interface's serialized message budget. */
+#define VOICE_QUEUE_PAGE 100u
+#define VOICE_QUEUE_PREVIEW 512u
 static json_t *
 interface_tool(const char *name, const char *description, json_t *properties, json_t *required)
 {
@@ -41,11 +44,15 @@ snag_app_voice_tools(void)
             return NULL;
         }
     }
-    if (json_array_append_new(tools, json_pack("{s:s,s:s,s:s,s:{s:s,s:{},s:[],s:b}}",
-            "type", "function", "name", "inspect_session",
-            "description", "Read current session state and effective instruction paths.",
-            "parameters", "type", "object", "properties", "required",
-            "additionalProperties", 0)) < 0) {
+    if (json_array_append_new(tools, interface_tool("inspect_session",
+            "Read current session state, effective instruction paths and exact queued IDs. "
+            "Queue text is a marked preview. queue_limit defaults to 20 (maximum 100); "
+            "when queue_more is true, pass queue_next_after_seq as queue_after_seq. "
+            "Each page reflects current state. Inspection does not start or arm work.",
+            json_pack("{s:{s:s,s:i},s:{s:s,s:i,s:i}}",
+                "queue_after_seq", "type", "integer", "minimum", 0,
+                "queue_limit", "type", "integer", "minimum", 1,
+                "maximum", (int)VOICE_QUEUE_PAGE), json_array())) < 0) {
         json_decref(tools);
         return NULL;
     }
@@ -85,6 +92,45 @@ snag_app_voice_tools(void)
     return tools;
 }
 
+static int
+voice_queue_view(const struct snag_session *session, json_t *context,
+                 uint64_t after, size_t limit)
+{
+    json_t *entries = json_array();
+    bool more = false;
+    int rc = -1;
+    if (!entries) return -1;
+    for (size_t i = 0u; i < session->pending_queue_count; ++i) {
+        const struct snag_queued_turn *queued = &session->pending_queue[i];
+        if (queued->seq <= after) continue;
+        if (json_array_size(entries) == limit) {
+            more = true;
+            break;
+        }
+        size_t bytes = strlen(queued->text);
+        size_t length = bytes < VOICE_QUEUE_PREVIEW ? bytes : VOICE_QUEUE_PREVIEW;
+        while (length < bytes && ((unsigned char)queued->text[length] & 0xc0u) == 0x80u)
+            --length;
+        json_t *entry = json_pack("{s:s,s:I,s:b,s:I,s:b,s:s%}",
+            "queue_id", queued->queue_id, "enqueued_seq", (json_int_t)queued->seq,
+            "read_only", queued->read_only, "text_bytes", (json_int_t)bytes,
+            "text_truncated", length != bytes, "text", queued->text, length);
+        if (json_array_append_new(entries, entry) < 0) goto out;
+        after = queued->seq;
+    }
+    if (json_object_set(context, "queue", entries) < 0 ||
+        json_object_set_new(context, "queue_more", json_boolean(more)) < 0 ||
+        json_object_set_new(context, "queue_next_after_seq", json_integer((json_int_t)after)) < 0 ||
+        json_object_set_new(context, "queue_armed", json_boolean(session->queue_armed)) < 0 ||
+        json_object_set_new(context, "as_of_seq",
+            json_integer((json_int_t)(session->next_seq ? session->next_seq - 1u : 0u))) < 0)
+        goto out;
+    rc = 0;
+out:
+    json_decref(entries);
+    return rc;
+}
+
 int
 snag_app_voice_read(struct app_state *app, const struct snag_response_item *call,
                     json_t **result, char *error, size_t size)
@@ -100,7 +146,12 @@ snag_app_voice_read(struct app_state *app, const struct snag_response_item *call
         *result = snag_tool_result_terminal(false, "Tool is unavailable to the voice interface.");
         return *result ? 0 : -1;
     }
-    if (!snag_json_arg_keys(call->arguments, "", "", error, size)) {
+    uint64_t after, limit;
+    if (!snag_json_arg_keys(call->arguments, "", "queue_after_seq queue_limit", error, size) ||
+        !snag_json_arg_uint(call->arguments, "queue_after_seq", 0u, 0u, INT64_MAX,
+            &after, error, size) ||
+        !snag_json_arg_uint(call->arguments, "queue_limit", 20u, 1u, VOICE_QUEUE_PAGE,
+            &limit, error, size)) {
         *result = snag_tool_result_terminal(false, error);
         return *result ? 0 : -1;
     }
@@ -108,6 +159,8 @@ snag_app_voice_read(struct app_state *app, const struct snag_response_item *call
     json_t *paths = NULL;
     struct snag_instruction_set discovered = {0};
     int rc = snag_session_voice_context(&app->session, &context, error, size);
+    if (rc < 0) goto out;
+    rc = voice_queue_view(&app->session, context, after, (size_t)limit);
     if (rc < 0) goto out;
     if (app->session.active_turn) {
         paths = json_incref(app->session.active_instructions);

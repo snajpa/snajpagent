@@ -1810,6 +1810,11 @@ from an ended attachment is rejected, including queued input not yet dispatched.
 The voice interface can read older dialogue, controls and results with the same
 paged session-history tool used by the model. History inspection keeps existing
 work running and admits no new task.
+Session inspection includes paged queue identities, read-only flags and current
+text previews of up to 512 bytes. Pages default to 20 entries and support up to
+100; continuation follows the immutable enqueue sequence, so removing earlier
+entries preserves the cursor. Each page reflects current queue state. Clipped
+previews are marked, and inspection leaves queue arming and execution unchanged.
 While voice is enabled, new model output, tool outcomes and control changes are
 forwarded in journal order as background context. Larger records continue in
 bounded fragments. These observations do not start model work or request speech.
