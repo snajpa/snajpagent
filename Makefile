@@ -18,7 +18,7 @@ endif
 ifeq ($(GIT_HEAD)$(GIT_DIRTY),$(GIT_VERSION_TAG))
 BUILD_VERSION := $(VERSION)
 else
-BUILD_VERSION := $(VERSION)-$(GIT_REVISION)$(GIT_DIRTY)
+BUILD_VERSION := $(firstword $(subst -, ,$(VERSION)))-$(GIT_REVISION)$(GIT_DIRTY)
 endif
 endif
 # Publisher-enabled development applications always retain debug information.

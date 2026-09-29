@@ -235,6 +235,25 @@ with tempfile.TemporaryDirectory(prefix="release-tag-", dir=root / "build") as t
     assert "--argstr buildVersion '0.99.3'" in matrix_plan
     # Keep the existing manual override available independently of the tag.
     assert subprocess.check_output(command + ["BUILD_VERSION=7.8.9"], cwd=tmp, text=True).strip() == "7.8.9"
+    # A development tag names its exact commit; later/dirty builds retain the
+    # approved base and their own revision, rather than stacking Git suffixes.
+    for base in ("0.99.3", "0.99.3a"):
+        git("commit", "--allow-empty", "-qm", "development snapshot")
+        revision = git("rev-parse", "--short", "HEAD")
+        version = f"{base}-{revision}"
+        git("tag", "-a", version, "-m", "approved fixture development snapshot")
+        assert subprocess.check_output(command, cwd=tmp, text=True).strip() == version
+        metadata = tmp / "META"
+        metadata.write_text(metadata.read_text() + "\n")
+        actual = subprocess.check_output(command, cwd=tmp, text=True).strip()
+        assert actual == version + "-dirty", (actual, version + "-dirty")
+        git("restore", "META")
+        git("commit", "--allow-empty", "-qm", "after development snapshot")
+        expected = f"{base}-{git('rev-parse', '--short', 'HEAD')}"
+        actual = subprocess.check_output(command, cwd=tmp, text=True).strip()
+        assert actual == expected, (actual, expected)
+    git("switch", "--quiet", "--detach", "0.99.3")
+    print("PASS: development tags preserve one current Git suffix and the approved base")
     args = argparse.Namespace(version=None, revision="0.99.3", publisher="https://publisher.test",
         release=None, changelog="https://publisher.test/#log", output=tmp / "stage", matrix=tmp / "matrix")
     binary = args.matrix / "linux-x86_64/bin/snajpagent"

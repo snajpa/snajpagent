@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Preserve the approved version base when building after a development tag,
+  replacing the prior Git suffix instead of appending a second one.
+
 - Enable device audio in Windows and BSD production packages through their
   existing miniaudio and native voice backends.
 

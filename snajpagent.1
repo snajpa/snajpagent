@@ -4662,6 +4662,8 @@ what it found.  ELF production
 packaging needs strip and objcopy; macOS needs strip and dsymutil.
 The build version uses the latest reachable Git tag; untagged commits add their
 short revision, and modified checkouts add a -dirty suffix.
+After a development tag, the current revision replaces the prior Git suffix;
+the approved version base stays unchanged.
 META defines the product name only.  A tagged Git history is required; portable
 build targets pass the same derived identity into their isolated source build.
 .TP
@@ -4840,6 +4842,8 @@ For a release, create its approved Git tag on the clean source commit first,
 then run make or make prod-matrix without a version override.
 The build version uses the latest reachable Git tag; untagged commits add their
 short revision, and modified checkouts add a -dirty suffix.
+After a development tag, the current revision replaces the prior Git suffix;
+the approved version base stays unchanged.
 META defines the product name only.  A tagged Git history is required; portable
 build targets pass the same derived identity into their isolated source build.
 .TP
