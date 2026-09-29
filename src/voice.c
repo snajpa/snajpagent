@@ -632,19 +632,20 @@ snag_voice_failure(struct snag_voice *s, const struct snag_provider_failure *fai
     if (notice(s, report) < 0) {
         return fail(s, error, size, "Realtime provider error could not be retained");
     }
-    bool retryable = false;
+    int outcome = -1;
     const char *reason = "Realtime provider reported an error; details retained in session history";
     if (snag_provider_failure_is_policy(failure)) {
         reason = "Realtime provider rejected the request under its policy";
     } else if (snag_provider_failure_is_capacity(failure)) {
         reason = "Realtime provider rejected the conversation context";
+        outcome = SNAG_VOICE_CAPACITY;
     } else if (snag_provider_failure_retryable(failure->http_status,
             failure->code, failure->type)) {
         reason = "Realtime provider reported a temporary service failure";
-        retryable = true;
+        outcome = SNAG_VOICE_RETRY;
     }
-    int rc = fail(s, error, size, reason);
-    return retryable ? SNAG_VOICE_RETRY : rc;
+    (void)fail(s, error, size, reason);
+    return outcome;
 }
 
 static int

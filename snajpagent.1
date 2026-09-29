@@ -2008,7 +2008,8 @@ Validated native call HTTP rejections also retain status and accepted Retry-Afte
 hints. Partial or invalid metadata cannot publish partial failure facts.
 Missing counts remain unknown. A generic error message does not establish the
 voice model's context capacity. Recognized temporary failures renew automatically
-with the pacing described below. Other errors stop voice for review before
+with the pacing described below. Classified capacity rejections reduce history
+before replacement. Other errors stop voice for review before
 restarting with /voice on.
 .PP
 While voice remains enabled, the text interface retains its ordered dialogue and
@@ -2040,6 +2041,22 @@ coding totals. Turning voice off releases the live text history. The next
 text-interface connection restores prior public voice dialogue and actual
 outcomes from the saved session as historical observations before handling new
 input. This also applies after session reopen. Saved actions and audio are not replayed.
+.PP
+Native capacity recovery keeps the microphone off while existing helper work
+settles. It summarizes the verified public history in bounded pages through a
+fixed sequence boundary, carrying the summary between tool-free requests.
+The complete summary must be smaller and saved before replacing any live history.
+The replacement connection receives that summary, the unsummarized tail and
+fresh session state. Original records and accepted coding work remain available;
+summary work does not replay speech or admit historical actions.
+Saved summaries pass through the current credential filter before restoration
+or reuse by another recovery.
+Turning voice off cancels maintenance and retains received public output without
+adopting a partial summary. Received public output is saved within the session's
+journal record limits even when it exceeds the live voice message budget.
+A refused, empty, executable, oversized or nonreducing summary
+stops voice with its history intact. Byte staging limits provide no model-window
+estimate.
 .PP
 Read-only access uses get_cwd, list_files, read_file and grep with the same path
 rules as coding tools. Spoken model selection uses the existing cached catalog;
@@ -2101,8 +2118,8 @@ An advertised connection lifetime ending or a validated temporary provider-servi
 error starts paced, cancellable renewal. DNS, connection and timeout failures before
 an HTTP response, abrupt WebSocket EOF and stalled outbound writes also renew.
 Native call setup renews recognized temporary HTTP rejections after validating
-the complete error body. Policy and context-capacity rejections retain their
-distinct diagnostics and stop voice. Accepted Retry-After hints delay replacement;
+the complete error body. Context-capacity rejections first reduce the retained
+history; policy rejections stop voice. Accepted Retry-After hints delay replacement;
 /voice off cancels that wait.
 The microphone stays off during replacement
 authentication and history restoration. Requested mute state, the interface helper

@@ -11,6 +11,9 @@
 /* A validated temporary provider error ended this protocol instance. The
  * owner may replace it; retained work and media must not be replayed. */
 #define SNAG_VOICE_RETRY (-2)
+/* A verified capacity rejection requires a smaller historical prefix before
+ * replacing the connection; retrying unchanged history is insufficient. */
+#define SNAG_VOICE_CAPACITY (-3)
 
 /* Realtime protocol state has one owner and no device, journal, UI or executor.
  * Hooks borrow their inputs. The desktop owner queues notices to the existing

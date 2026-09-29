@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int
@@ -126,10 +127,45 @@ test_reasoning_redaction(void)
     snag_buf_free(&out);
 }
 
+static void
+test_json_record_bound(void)
+{
+    const char *values[] = {"large-record-secret"};
+    struct snag_wire_secrets secrets = {values, 1u};
+    struct snag_buf input = {.max = SNAG_MAX_EVENT_LINE};
+    struct snag_buf out = {.max = SNAG_MAX_EVENT_LINE};
+    char error[256];
+    size_t length = SNAG_WIRE_BODY_MAX + 64u;
+    char *text = malloc(length + 1u);
+    assert(text);
+    memset(text, 'g', length);
+    text[length] = '\0';
+    memcpy(text + length - strlen(values[0]), values[0], strlen(values[0]));
+    assert(snag_buf_printf(&input, "{\"message\":\"%s\"}", text) == 0);
+    free(text);
+    /* Diagnostic callers retain their existing input limit. Public copies
+     * explicitly supply their record budget and still filter every byte. */
+    assert(snag_wire_json_redact(input.data, input.len, &secrets, &out,
+        error, sizeof(error)) < 0);
+    assert(snag_wire_json_redact_bounded(input.data, input.len, input.len - 1u,
+        &secrets, &out, error, sizeof(error)) < 0);
+    assert(snag_wire_json_redact_bounded(input.data, input.len, SNAG_MAX_EVENT_LINE,
+        &secrets, &out, error, sizeof(error)) == 0);
+    assert(out.len > SNAG_WIRE_BODY_MAX);
+    assert(!contains(&out, values[0], strlen(values[0])));
+    assert(contains(&out, "<redacted:secret>", strlen("<redacted:secret>")));
+    out.max = 32u;
+    assert(snag_wire_json_redact_bounded(input.data, input.len, SNAG_MAX_EVENT_LINE,
+        &secrets, &out, error, sizeof(error)) < 0);
+    snag_buf_free(&out);
+    snag_buf_free(&input);
+}
+
 int
 main(void)
 {
     test_json();
+    test_json_record_bound();
     test_reasoning_redaction();
     test_max_secret_count();
     test_invalid_json();

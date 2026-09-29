@@ -186,6 +186,7 @@ bool snag_app_voice_fixture_credential_ready(struct app_state *);
 int snag_app_voice_fixture_failure(struct app_state *, const json_t *,
     const struct snag_provider_failure *);
 json_t *snag_app_voice_fixture_state(struct app_state *);
+int snag_app_voice_fixture_restart(struct app_state *, const struct snag_credential *);
 json_t *snag_app_voice_fixture_context(struct app_state *);
 int snag_app_voice_fixture_mute(struct app_state *);
 int snag_app_voice_fixture_checkpoint(struct app_state *);

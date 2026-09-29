@@ -90,8 +90,9 @@ Retry-After hints pace the next physical attempt; off remains interruptible.
 WebSocket HTTP rejections, close frames, TLS failures and ambiguous send/receive
 errors still stop voice. In particular, libcurl uses
 receive errors for malformed WebSocket frames too; a generic receive failure is
-insufficient evidence for automatic recovery. Native capacity recovery and the
-remaining transport classifications stay in implementation.
+insufficient evidence for automatic recovery. Classified capacity rejections use
+the history reduction described below; remaining transport classifications stay
+in implementation.
 
 Terminal detach, loss, switching away and job suspension retain the existing
 privacy boundary: stop microphone forwarding and playback immediately. A newly
@@ -164,8 +165,7 @@ and outcomes from the journal as identified historical observations. It captures
 the activation sequence boundary before admitting new dialogue, so live interface
 items are appended once and saved actions remain historical context. Provider-private
 continuation is not restored after voice-off; physical renewal retains the running
-helper's continuation. Native capacity recovery and per-turn context maintenance
-remain open.
+helper's continuation. Full per-turn context maintenance remains open.
 
 Native restoration uses the same verified journal and public formatter as
 text restoration. Its source boundary is captured for each physical connection.
@@ -176,9 +176,9 @@ observation stream carries the archive in order. A fresh, complete state snapsho
 follows the initial history. Device activation waits for the initial cursor and
 queued transport writes to finish, while cancellation and
 working-model progress remain serviceable. Later working output follows through
-the same cursor. Provider-window recovery and shared attachment still require
-separate implementation; this boundary supplies neither a model-capacity estimate
-nor a proactive retention policy. Socket-write completion is a local ordering
+the same cursor. Shared attachment still requires separate implementation. This
+boundary supplies neither a model-capacity estimate nor a proactive retention
+policy. Socket-write completion is a local ordering
 barrier, not evidence of remote context adoption across native media channels.
 
 The text interface reads working inputs, public output, outcomes and controls
@@ -240,6 +240,40 @@ tool calls. The pending handoff and its accepted queue identity survive recovery
 summary work changes neither the coding request nor the working-model cache key.
 This reactive recovery does not select a proactive retention policy: measured
 provider latency/cache behavior and broader continuity acceptance remain required.
+
+Native capacity recovery uses a verified public-history prefix, with its own
+coverage cursor. The text helper's `source_as_of_seq` describes its observation
+time; its summary may leave an active tail and cannot serve as this cursor.
+After a classified capacity rejection, capture stays off while existing helper
+work settles. The same request worker summarizes canonical public records in
+bounded pages through a fixed sequence boundary. Maintenance has no fabricated
+utterance or handoff. Tool-free requests retain source identities and carry the
+summary across pages; native byte staging establishes no token-window estimate.
+The existing compaction state stages one reader quantum plus an atomic record,
+with ordered UTF-8 fragments carrying the source sequence and event type. The
+selected summary provider/model/effort stays fixed for the maintenance operation.
+A rejected summary request reduces its actual sent source bytes and uses the
+same interruptible retry pacing as text-interface compaction.
+
+The owner retains the original journal and previous summary until a complete,
+smaller summary is durably recorded. Renewal then sends that summary, the
+unsummarized tail and a fresh state snapshot under a new connection identity.
+Coverage advances only across successfully summarized records. Canonical queue
+identities and unfinished work remain with their current owner. Cancellation
+retains received maintenance output without adopting an incomplete summary.
+Public maintenance output uses the existing journal record bound for retention;
+the smaller live-message bound still applies to summary adoption and delivery.
+The durable adoption records the verified cursor's next sequence, byte offset
+and preceding-record hash. The replacement observer starts there, sends the
+summary once and then follows its ordinary bounded tail restoration. Maintenance
+receipts remain in the journal without recursively entering later summaries.
+Saved summaries are filtered against the current registered credentials before
+restoration or reuse by another recovery; filtering leaves the stored original
+unchanged. Partial recovery retains the preceding verified coverage boundary.
+Policy refusals, executable summary calls, empty, oversized or nonreducing summaries and
+retention failures leave the originals available and stop voice with a diagnostic.
+Provider-window estimates, proactive retention and full per-turn continuity
+remain separate work.
 
 Settled interface requests return their reported usage and observed timing to the
 session owner. Before acting on the response, that owner records an

@@ -9,6 +9,7 @@
 #include "model_cache.h"
 #include "provider.h"
 #include "provider_retry.h"
+#include "sse.h"
 #include "tools.h"
 #include "convert.h"
 #include "media.h"
@@ -110,6 +111,15 @@ enum model_fixture {
     MODEL_VOICE_COMPACT_TOOL,
     MODEL_VOICE_COMPACT_ACTIVE,
     MODEL_VOICE_BACKLOG,
+    MODEL_VOICE_NATIVE_SUMMARY,
+    MODEL_VOICE_NATIVE_TOOL,
+    MODEL_VOICE_NATIVE_REFUSAL,
+    MODEL_VOICE_NATIVE_EMPTY,
+    MODEL_VOICE_NATIVE_NONREDUCING,
+    MODEL_VOICE_NATIVE_OVERSIZED,
+    MODEL_VOICE_NATIVE_CANCEL,
+    MODEL_VOICE_NATIVE_CANCEL_DONE,
+    MODEL_VOICE_NATIVE_HANDOFF,
     MODEL_VOICE_READ,
     MODEL_OPENROUTER_SEARCH,
     MODEL_CREATE_RETRY,
@@ -617,6 +627,221 @@ serve_voice_backlog(int listen_fd, const char *ordinary_reply)
 }
 
 static void
+send_native_large_summary(int fd)
+{
+    size_t length = SNAG_MAX_PUBLIC_ITEM;
+    char *text = malloc(length + 1u);
+    if (!text) server_fail("native summary allocation failed");
+    memset(text, 'g', length);
+    text[length] = '\0';
+    memcpy(text + SNAG_MAX_SSE_EVENT / 2u - 11u,
+        "native-capacity-secret", sizeof("native-capacity-secret") - 1u);
+    memcpy(text + length - 19u, "native complete end", 19u);
+    struct snag_buf response = {.max = SNAG_MAX_PROVIDER_WIRE};
+    if (snag_buf_printf(&response,
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"voice_request\","
+            "\"status\":\"in_progress\",\"output\":[]}}\n\n"
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{"
+            "\"type\":\"message\",\"id\":\"native_summary\",\"role\":\"assistant\","
+            "\"status\":\"in_progress\",\"phase\":\"final_answer\",\"content\":[]}}\n\n") < 0) {
+        server_fail("native summary header failed");
+    }
+    /* Complete small parts form one large public message without exceeding
+     * the existing per-event SSE bound. */
+    size_t index = 0u;
+    for (size_t offset = 0u; offset < length; offset += SNAG_MAX_SSE_EVENT / 2u) {
+        size_t bytes = length - offset;
+        if (bytes > SNAG_MAX_SSE_EVENT / 2u) bytes = SNAG_MAX_SSE_EVENT / 2u;
+        json_t *part = json_pack("{s:s,s:s,s:i,s:I,s:{s:s,s:s%}}",
+            "type", "response.content_part.done", "item_id", "native_summary",
+            "output_index", 0, "content_index", (json_int_t)index++,
+            "part", "type", "output_text", "text", text + offset, bytes);
+        char *wire = part ? json_dumps(part, JSON_COMPACT) : NULL;
+        if (!wire || snag_buf_printf(&response, "data: %s\n\n", wire) < 0) {
+            server_fail("native summary part failed");
+        }
+        free(wire);
+        json_decref(part);
+    }
+    free(text);
+    if (snag_buf_printf(&response,
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"voice_request\","
+            "\"status\":\"completed\",\"output\":[]}}\n\n") < 0 ||
+        snag_buf_terminate(&response) < 0) server_fail("native summary completion failed");
+    send_response(fd, 200u, "text/event-stream", (char *)response.data);
+    snag_buf_free(&response);
+}
+
+static void
+serve_native_summary(int listen_fd, enum model_fixture mode)
+{
+    char *wire = malloc(SNAG_CONTEXT_MAX_REQUEST + 1u);
+    struct snag_buf record = {.max = SNAG_CONTEXT_MAX_REQUEST};
+    uint64_t previous = 0u, rejected_at = 0u;
+    size_t rejected_bytes = 0u;
+    unsigned int requests = 0u, transcripts = 0u;
+    unsigned int queues = 0u;
+    bool finished = false, handoff_done = false, second = false;
+    bool closing = mode == MODEL_VOICE_NATIVE_CANCEL || mode == MODEL_VOICE_NATIVE_CANCEL_DONE;
+    if (!wire) server_fail("cannot allocate native summary request");
+    while (!finished) {
+        struct http_request request;
+        int fd = accept(listen_fd, NULL, NULL);
+        if (fd < 0) server_fail("native summary accept failed");
+        read_request_body(fd, &request, wire, SNAG_CONTEXT_MAX_REQUEST + 1u);
+        json_t *body = json_loadb(wire, request.body_len, JSON_REJECT_DUPLICATES, NULL);
+        json_t *tools = json_object_get(body, "tools");
+        json_t *input = json_object_get(body, "input");
+        json_t *parts = NULL;
+        if (mode == MODEL_VOICE_NATIVE_HANDOFF && json_array_size(tools)) {
+            if (handoff_done || !strstr(wire, "pre-existing discussion")) {
+                server_fail("native recovery replayed or lost its pending handoff");
+            }
+            send_voice_item(fd, json_pack("{s:s,s:i,s:{s:s,s:s,s:s,s:s,s:[{s:s,s:s}]}}",
+                "type", "response.output_item.done", "output_index", 0,
+                "item", "type", "message", "id", "native_existing", "role", "assistant",
+                "status", "completed", "content", "type", "output_text", "text",
+                "Settled pre-existing discussion"));
+            handoff_done = true;
+            json_decref(body);
+            close(fd);
+            continue;
+        }
+        if (mode == MODEL_VOICE_NATIVE_HANDOFF && !handoff_done) {
+            server_fail("native maintenance displaced its pending helper request");
+        }
+        if (strcmp(request.path, "/v1/responses") || !json_is_array(tools) ||
+            json_array_size(tools) || strstr(wire, "native-capacity-secret")) {
+            server_fail("native maintenance exposed tools or a credential");
+        }
+        if (second && strstr(wire, "next-native-secret")) {
+            server_fail("native recovery carried a newly registered credential into its summary");
+        }
+        for (size_t i = 0u; i < json_array_size(input); ++i) {
+            json_t *item = json_array_get(input, i);
+            const char *role = snag_json_string(item, "role");
+            const char *text = snag_json_string(item, "content");
+            if (role && !strcmp(role, "user") && text) {
+                parts = json_loads(text, JSON_REJECT_DUPLICATES, NULL);
+                break;
+            }
+        }
+        if (!json_array_size(parts)) server_fail("native maintenance omitted history");
+        size_t bytes = 0u;
+        for (size_t i = 0u; i < json_array_size(parts); ++i) {
+            bytes += json_string_length(json_object_get(json_array_get(parts, i), "source_json"));
+        }
+        if (!requests++) {
+            rejected_bytes = bytes;
+            rejected_at = snag_monotonic_ms();
+            send_response(fd, 400u, "application/json",
+                "{\"error\":{\"code\":\"context_length_exceeded\","
+                "\"message\":\"summary input too large\"}}");
+        } else {
+            if (rejected_at && (bytes >= rejected_bytes ||
+                    snag_monotonic_ms() - rejected_at <
+                        snag_provider_retry_delay_ms(0u, false, 0u))) {
+                server_fail("native maintenance retried unchanged history or without pacing");
+            }
+            rejected_at = 0u;
+            if (closing && voice_close_release() == 'X') {
+                json_decref(parts);
+                json_decref(body);
+                close(fd);
+                _exit(0);
+            }
+            const char *prior = mode == MODEL_VOICE_NATIVE_NONREDUCING ?
+                "gggggggg" : "native carry";
+            if (requests > 2u && !strstr(wire, prior)) {
+                server_fail("native maintenance lost its prior summary");
+            }
+            for (size_t i = 0u; i < json_array_size(parts); ++i) {
+                json_t *part = json_array_get(parts, i);
+                const char *text = snag_json_string(part, "source_json");
+                size_t offset = (size_t)json_integer_value(json_object_get(part, "offset"));
+                size_t end = (size_t)json_integer_value(json_object_get(part, "end"));
+                if (!text || offset != record.len || end <= offset ||
+                    end - offset != strlen(text) ||
+                    snag_buf_append(&record, text, end - offset) < 0) {
+                    server_fail("native maintenance lost ordered UTF-8 fragments");
+                }
+                if (!json_is_true(json_object_get(part, "complete"))) continue;
+                json_t *item = json_loadb((char *)record.data, record.len,
+                    JSON_REJECT_DUPLICATES, NULL);
+                uint64_t seq = (uint64_t)json_integer_value(json_object_get(part, "source_seq"));
+                json_t *event = json_object_get(item, "event");
+                const char *source = snag_json_string(event, "text");
+                const char *operation = snag_json_string(event, "operation");
+                const char *type = snag_json_string(part, "event_type");
+                if (!seq || seq <= previous || !type) {
+                    server_fail("native maintenance source cursor is not ordered");
+                }
+                previous = seq;
+                if (!strcmp(type, "future_turn_queued")) {
+                    const char *queue = snag_json_string(item, "queue_id");
+                    if (!queue || strcmp(queue, "33333333333333333333333333333333")) {
+                        server_fail("native maintenance changed an accepted queue identity");
+                    }
+                    ++queues;
+                }
+                if (source && strstr(source, "native transcript")) ++transcripts;
+                if (operation && !strcmp(operation, mode == MODEL_VOICE_NATIVE_HANDOFF ?
+                        "interface_reply" : "provider_error")) finished = true;
+                json_decref(item);
+                snag_buf_reset(&record);
+            }
+            if (mode == MODEL_VOICE_NATIVE_TOOL) {
+                send_voice_item(fd, json_pack("{s:s,s:i,s:{s:s,s:s,s:s,s:s,s:s,s:s}}",
+                    "type", "response.output_item.done", "output_index", 0,
+                    "item", "type", "function_call", "id", "native_forbidden_tool",
+                    "call_id", "do_not_execute", "name", "submit_input",
+                    "arguments", "{\"target\":\"queue\",\"text\":\"must not run\"}",
+                    "status", "completed"));
+            } else if (mode == MODEL_VOICE_NATIVE_OVERSIZED) {
+                send_native_large_summary(fd);
+            } else {
+                char growing[8193];
+                memset(growing, 'g', sizeof(growing) - 1u);
+                growing[sizeof(growing) - 1u] = '\0';
+                bool refusal = mode == MODEL_VOICE_NATIVE_REFUSAL;
+                const char *text = refusal ? "Cannot summarize" :
+                    mode == MODEL_VOICE_NATIVE_EMPTY ? "" :
+                    mode == MODEL_VOICE_NATIVE_NONREDUCING ? growing :
+                    "native carry native-capacity-secret next-native-secret; "
+                    "queue 33333333333333333333333333333333";
+                send_voice_item(fd, json_pack("{s:s,s:i,s:{s:s,s:s,s:s,s:s,s:[{s:s,s:s}]}}",
+                    "type", "response.output_item.done", "output_index", 0,
+                    "item", "type", "message", "id", "native_summary", "role", "assistant",
+                    "status", "completed", "content", "type", refusal ? "refusal" : "output_text",
+                    refusal ? "refusal" : "text", text));
+            }
+        }
+        json_decref(parts);
+        json_decref(body);
+        if (close(fd) < 0) server_fail("native summary close failed");
+        if (requests > 1u && (closing || mode == MODEL_VOICE_NATIVE_OVERSIZED ||
+                (mode >= MODEL_VOICE_NATIVE_TOOL &&
+                mode <= MODEL_VOICE_NATIVE_EMPTY))) _exit(0);
+        if (finished && mode == MODEL_VOICE_NATIVE_SUMMARY && !second) {
+            if (transcripts != 5u || queues != 1u || requests < 4u) {
+                server_fail("first native recovery skipped its source history");
+            }
+            second = true;
+            finished = false;
+            transcripts = queues = 0u;
+        }
+    }
+    if (transcripts != (second ? 0u : 5u) || queues != (second ? 0u : 1u) ||
+        ((mode == MODEL_VOICE_NATIVE_SUMMARY || mode == MODEL_VOICE_NATIVE_HANDOFF) &&
+            requests < 4u)) {
+        server_fail("native maintenance skipped part of its paged history");
+    }
+    snag_buf_free(&record);
+    free(wire);
+    _exit(0);
+}
+
+static void
 serve_one(int listen_fd, unsigned int status, const char *method, const char *path, const char *marker,
           const char *content_type, const char *body)
 {
@@ -1047,6 +1272,9 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         "\"output_tokens\":2,\"total_tokens\":9},\"output\":[]}}\n\n";
 
     if (models == MODEL_VOICE_BACKLOG) serve_voice_backlog(listen_fd, create_sse);
+    if (models >= MODEL_VOICE_NATIVE_SUMMARY && models <= MODEL_VOICE_NATIVE_HANDOFF) {
+        serve_native_summary(listen_fd, models);
+    }
     if (models == MODEL_VOICE_QUEUE || models == MODEL_VOICE_READ ||
         models == MODEL_VOICE_CLOSE || models == MODEL_VOICE_CLOSE_SUMMARY ||
         models == MODEL_VOICE_CLOSE_CREDENTIAL || models == MODEL_VOICE_CLOSE_REFRESH ||
@@ -3129,6 +3357,277 @@ test_voice_initial_backlog(void)
     snag_ui_free(&app.ui);
     snag_config_free(&config);
     snag_credential_clear(&credential);
+    stop_server(&server);
+}
+
+struct native_capacity_records {
+    json_t *adopted;
+    size_t largest_output;
+    unsigned int adopted_count, waiting, settled, output, discarded, tools;
+};
+
+static int
+native_capacity_record(void *opaque, const struct snag_session *session, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    (void)session;
+    (void)seq;
+    (void)error;
+    (void)size;
+    if (strcmp(type, "voice_event")) return 0;
+    struct native_capacity_records *seen = opaque;
+    json_t *event = json_object_get(data, "event");
+    const char *operation = snag_json_string(event, "operation");
+    if (!operation || strncmp(operation, "native_compact", 14u)) return 0;
+    assert(!json_object_get(event, "call_id"));
+    const char *text = snag_json_string(event, "text");
+    assert(!text || !strstr(text, "native-capacity-secret"));
+    if (!strcmp(operation, "native_compaction_waiting")) ++seen->waiting;
+    else if (!strcmp(operation, "native_compacted")) {
+        json_decref(seen->adopted);
+        seen->adopted = json_incref(event);
+        ++seen->adopted_count;
+    } else if (!strcmp(operation, "native_compaction_settled")) {
+        assert(json_is_object(json_object_get(event, "metrics")));
+        ++seen->settled;
+    } else if (!strcmp(operation, "native_compaction_output")) {
+        size_t bytes = json_string_length(json_object_get(event, "text"));
+        if (bytes > seen->largest_output) seen->largest_output = bytes;
+        if (bytes > SNAG_MAX_PUBLIC_ITEM - 128u) {
+            assert(!strcmp(text + bytes - 19u, "native complete end"));
+        }
+        ++seen->output;
+    } else if (!strcmp(operation, "native_compaction_output_discarded")) ++seen->discarded;
+    else if (!strcmp(operation, "native_compaction_tool_discarded")) ++seen->tools;
+    return 0;
+}
+
+static int
+native_capacity_prefix(void *opaque, const struct snag_session *session, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    (void)session;
+    (void)type;
+    (void)data;
+    (void)error;
+    (void)size;
+    return seq >= *(uint64_t *)opaque ? 1 : 0;
+}
+
+static void
+test_voice_native_capacity(enum model_fixture mode)
+{
+    char path[4096], error[256];
+    const char *tmp = getenv("TMPDIR");
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-native-capacity-XXXXXX",
+        tmp ? tmp : "/tmp") > 0 && mkdtemp(path));
+    struct local_server server;
+    bool closing = mode == MODEL_VOICE_NATIVE_CANCEL || mode == MODEL_VOICE_NATIVE_CANCEL_DONE;
+    bool success = mode == MODEL_VOICE_NATIVE_SUMMARY || mode == MODEL_VOICE_NATIVE_HANDOFF;
+    int received[2] = {-1, -1}, release[2] = {-1, -1};
+    if (closing) {
+        assert(pipe(received) == 0 && pipe(release) == 0);
+        voice_request_ready_fd = received[1];
+        voice_request_release_fd = release[0];
+    }
+    const char *authorization = expected_authorization_header;
+    expected_authorization_header = "Authorization: Bearer native-capacity-secret";
+    start_server(&server, mode, false, "/v1");
+    expected_authorization_header = authorization;
+    if (closing) {
+        assert(close(received[1]) == 0 && close(release[0]) == 0);
+        voice_request_ready_fd = voice_request_release_fd = -1;
+    }
+    struct snag_config config;
+    snag_config_init(&config);
+    struct snag_provider_config *provider = &config.providers[0];
+    strcpy(provider->base_url, server.endpoint);
+    strcpy(provider->openrouter_referer, "https://github.com/snajpa/snajpagent");
+    strcpy(provider->openrouter_title, "snajpagent");
+    assert(snag_secret_source_parse(&provider->api_key,
+        "\"native-capacity-secret\"", NULL, error, sizeof(error)) == 0);
+    struct app_state app = {.config = &config};
+    snag_store_init(&app.store);
+    snag_session_init(&app.session);
+    assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
+    assert(snag_session_create(&app.store, &app.session, path, provider->name, "fixture", "medium",
+        error, sizeof(error)) == 0);
+    assert(snag_ui_init(&app.ui) == 0);
+    json_t *empty = json_array();
+    if (mode == MODEL_VOICE_NATIVE_HANDOFF) {
+        assert(json_array_append_new(empty, json_pack("{s:s,s:s,s:s,s:s,s:s,s:s}",
+            "type", "voice_handoff", "call_id", "native_pending", "input_id", "original_input",
+            "response_id", "original_response", "transcript", "pre-existing discussion",
+            "request", "Continue the pre-existing discussion")) == 0);
+    }
+    assert(empty && snag_app_voice_fixture(&app, empty, false) == 0);
+    json_decref(empty);
+    /* These are live records, after the initial restoration boundary. An
+     * interface summary's observation time cannot establish native coverage. */
+    const char *queue = "33333333333333333333333333333333";
+    assert(snag_session_commit(&app.session, "future_turn_queued",
+        json_pack("{s:s,s:s,s:b,s:s,s:b}", "queue_id", queue,
+            "text", "previously accepted work", "read_only", 0,
+            "while_turn_id", "", "armed", 0), NULL, error, sizeof(error)) == 0);
+    size_t length = success || closing ? 1024u * 1024u : 64u;
+    char *text = malloc(length + 1u);
+    assert(text);
+    memset(text, 'x', length);
+    memcpy(text, "native transcript native-capacity-secret ", 40u);
+    for (size_t i = 40u; i + 2u <= length; i += 2u) memcpy(text + i, "ž", 2u);
+    text[length] = '\0';
+    for (unsigned int i = 0u; i < 5u; ++i) {
+        json_t *event = json_pack("{s:s,s:s,s:s,s:{s:s,s:s,s:s}}",
+            "connection_id", "0123456789abcdef0123456789abcdef", "provider", "default",
+            "model", "fixture", "event", "type", "voice_transcript", "speaker", "user",
+            "text", text);
+        assert(event && snag_session_commit(&app.session, "voice_event", event,
+            NULL, error, sizeof(error)) == 0);
+        if (!i) {
+            json_t *old = json_pack("{s:s,s:s,s:s,s:{s:s,s:s,s:I,s:{s:s}}}",
+                "connection_id", "0123456789abcdef0123456789abcdef", "provider", "default",
+                "model", "fixture", "event", "type", "voice_response",
+                "operation", "interface_compacted", "source_as_of_seq", (json_int_t)999999,
+                "summary", "text", "Earlier partial interface summary");
+            assert(old && snag_session_commit(&app.session, "voice_event", old,
+                NULL, error, sizeof(error)) == 0);
+        }
+    }
+    free(text);
+    bool handled = false;
+    unsigned int rounds = mode == MODEL_VOICE_NATIVE_SUMMARY ? 2u : 1u;
+    uint64_t covered = 0u, tail_seq = 0u;
+    for (unsigned int round = 0u; round < rounds; ++round) {
+        struct snag_provider_failure failure = {.http_status = 400,
+            .code = "context_length_exceeded", .type = "invalid_request_error"};
+        assert(snag_app_voice_fixture_failure(&app, NULL, &failure) == SNAG_VOICE_CAPACITY);
+        uint64_t previous_boundary = covered;
+        covered = tail_seq = 0u;
+        assert(snag_app_voice_service(&app) == 0 && app.voice);
+        uint64_t deadline = snag_monotonic_ms() + 30000u;
+        for (;;) {
+            assert(snag_monotonic_ms() < deadline);
+            assert(snag_app_voice_service(&app) == 0);
+            if (!app.voice) {
+                assert(!success && !closing);
+                break;
+            }
+            assert(!snag_app_voice_fixture_capture_ready(&app));
+            json_t *state = snag_app_voice_fixture_state(&app);
+            assert(state);
+            uint64_t through =
+                (uint64_t)json_integer_value(json_object_get(state, "compacting_through_seq"));
+            if (!covered && through) {
+                covered = through + 1u;
+                tail_seq = app.session.next_seq;
+                assert(snag_session_commit(&app.session, "voice_event", json_pack(
+                    "{s:s,s:s,s:s,s:{s:s,s:s,s:s}}", "connection_id",
+                    "0123456789abcdef0123456789abcdef",
+                    "provider", "default", "model", "fixture", "event", "type", "voice_transcript",
+                    "speaker", "user", "text", "native tail after boundary"),
+                    NULL, error, sizeof(error)) == 0);
+            }
+            uint64_t boundary =
+                (uint64_t)json_integer_value(json_object_get(state, "covered_next_seq"));
+            bool advanced = boundary != previous_boundary;
+            assert(!advanced || (success && boundary == covered));
+            json_decref(state);
+            if (advanced) break;
+            struct pollfd waiting = {.fd = received[0], .events = POLLIN};
+            if (closing && poll(&waiting, 1u, 0) == 1) {
+                char ready;
+                assert(read(received[0], &ready, 1u) == 1 && ready == 'R');
+                if (mode == MODEL_VOICE_NATIVE_CANCEL_DONE) {
+                    assert(write(release[1], "T", 1u) == 1);
+                    while (!snag_app_voice_fixture_request_done(&app)) {
+                        assert(snag_monotonic_ms() < deadline);
+                        (void)snag_sleep_ms(1u);
+                    }
+                }
+                break;
+            }
+            (void)snag_sleep_ms(1u);
+        }
+        if (success) {
+            struct snag_credential replacement = {.value = "next-native-secret",
+                .len = sizeof("next-native-secret") - 1u, .root_fd = -1};
+            assert(snag_app_voice_fixture_restart(&app, &replacement) == 0);
+            snag_credential_clear(&replacement);
+            json_t *state = snag_app_voice_fixture_state(&app);
+            assert(state && json_is_false(json_object_get(state, "muted")));
+            assert(strcmp(snag_json_string(state, "connection_id"),
+                "0123456789abcdef0123456789abcdef"));
+            json_decref(state);
+            assert(snag_app_voice_service(&app) == 0);
+            json_t *summary = snag_app_voice_fixture_observation(&app);
+            assert(summary &&
+                !strcmp(snag_json_string(summary, "kind"), "session_history_summary"));
+            assert((uint64_t)json_integer_value(json_object_get(summary, "seq")) == covered - 1u);
+            assert(strstr(snag_json_string(summary, "text"), queue));
+            assert(!strstr(snag_json_string(summary, "text"), "native-capacity-secret"));
+            assert(!strstr(snag_json_string(summary, "text"), "next-native-secret"));
+            assert(json_integer_value(json_object_get(summary, "length")) ==
+                (json_int_t)json_string_length(json_object_get(summary, "text")));
+            json_decref(summary);
+            assert(snag_app_voice_service(&app) == 0);
+            json_t *tail = snag_app_voice_fixture_observation(&app);
+            assert(tail && (uint64_t)json_integer_value(json_object_get(tail, "seq")) == tail_seq);
+            assert(strstr(snag_json_string(tail, "text"), "native tail after boundary"));
+            json_decref(tail);
+            bool fresh = false;
+            for (unsigned int i = 0u; i < 100u && !fresh; ++i) {
+                assert(snag_app_voice_service(&app) == 0);
+                json_t *packet = snag_app_voice_fixture_observation(&app);
+                if (packet) {
+                    assert((uint64_t)json_integer_value(json_object_get(packet, "seq")) > tail_seq);
+                    json_decref(packet);
+                }
+                json_t *context = snag_app_voice_fixture_context(&app);
+                fresh = json_is_true(json_object_get(context, "history_complete"));
+                json_decref(context);
+            }
+            assert(fresh);
+        }
+    }
+    assert(app.session.pending_queue_count == 1u && app.session.usage_totals.responses == 0u);
+    assert(!strcmp(app.session.pending_queue[0].queue_id, queue));
+    uint64_t stopping = snag_monotonic_ms();
+    /* The restoration fixture has no physical worker to finish on off. */
+    if (success) snag_app_voice_close(&app);
+    assert(snag_app_voice_command(&app, "/voice off", &handled) == 0 && handled && !app.voice);
+    assert(snag_monotonic_ms() - stopping < 1000u);
+    if (closing) {
+        if (mode == MODEL_VOICE_NATIVE_CANCEL) assert(write(release[1], "X", 1u) == 1);
+        assert(close(received[0]) == 0 && close(release[1]) == 0);
+    }
+    struct native_capacity_records seen = {0};
+    assert(snag_session_each_event(&app.session, native_capacity_record, &seen,
+        error, sizeof(error)) == 0);
+    assert(seen.adopted_count == (success ? rounds : 0u) && seen.settled >= 2u);
+    assert(seen.waiting == rounds);
+    assert(seen.tools == (mode == MODEL_VOICE_NATIVE_TOOL));
+    assert(seen.discarded == (mode == MODEL_VOICE_NATIVE_CANCEL_DONE));
+    if (mode == MODEL_VOICE_NATIVE_OVERSIZED) {
+        assert(seen.largest_output == SNAG_MAX_PUBLIC_ITEM -
+            strlen("native-capacity-secret") + strlen("<redacted:secret>"));
+    }
+    if (success) {
+        struct snag_journal_cursor cursor = {0};
+        while (cursor.next_seq < covered) {
+            assert(snag_session_each_event_forward(&app.session, &cursor,
+                SNAG_JOURNAL_PAGE_BYTES, native_capacity_prefix, &covered,
+                error, sizeof(error)) == 0);
+        }
+        assert(cursor.next_seq == covered);
+        assert(json_integer_value(json_object_get(seen.adopted, "covered_offset")) ==
+            cursor.offset);
+        assert(!strcmp(snag_json_string(seen.adopted, "covered_sha256"), cursor.prev_sha256));
+    }
+    json_decref(seen.adopted);
+    snag_session_close(&app.session);
+    snag_store_close(&app.store);
+    snag_ui_free(&app.ui);
+    snag_config_free(&config);
     stop_server(&server);
 }
 
@@ -6024,7 +6523,8 @@ test_voice_provider_errors(void)
             }
             size_t sent = json_array_size(f.sent);
             int outcome = snag_voice_event(voice, event, error, sizeof(error));
-            assert(outcome == (shape == 1u ? SNAG_VOICE_RETRY : -1));
+            assert(outcome == (!shape ? SNAG_VOICE_CAPACITY :
+                shape == 1u ? SNAG_VOICE_RETRY : -1));
             if (shape >= 5u) assert(strstr(error, "policy"));
             assert(!snag_voice_ready(voice) && f.interrupts == 1u);
             assert(json_array_size(f.sent) == sent && !voice_notice_count(&f, "voice_handoff"));
@@ -6408,7 +6908,8 @@ static void test_native_voice_transport(void)
                     assert(native);
                     json_decref(native);
                     int reported = snag_voice_failure(voice, &failure, error, sizeof(error));
-                    assert(reported == (retry ? SNAG_VOICE_RETRY : -1));
+                    assert(reported == (retry ? SNAG_VOICE_RETRY :
+                        mode == MODEL_NATIVE_CALL_CAPACITY ? SNAG_VOICE_CAPACITY : -1));
                     assert(f.interrupts == 1u && !json_array_size(f.sent));
                     assert(json_array_size(f.notices) == 1u);
                     const json_t *notice = voice_last(f.notices);
@@ -7621,6 +8122,8 @@ main(void)
     test_voice_close();
     test_voice_transcript_labels();
     test_voice_observation_cursor();
+    for (enum model_fixture mode = MODEL_VOICE_NATIVE_SUMMARY;
+            mode <= MODEL_VOICE_NATIVE_HANDOFF; ++mode) test_voice_native_capacity(mode);
     test_voice_concurrent_owner(MODEL_VOICE_QUEUE);
     test_voice_concurrent_owner(MODEL_VOICE_COMPACT);
     test_voice_concurrent_owner(MODEL_VOICE_COMPACT_RETRY);

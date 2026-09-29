@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Recover classified native voice context-capacity rejections through bounded,
+  tool-free history summaries before reconnecting. Preserve verified coverage,
+  pending work and original records; keep the microphone off during recovery.
+
 - Sort session lists by status: attached, detached, then stored, with the latest
   saved activity first in each group. Rename PROCESS to STATUS. `-l` includes
   all running sessions and the 10 most recent stored sessions; `-l N` changes

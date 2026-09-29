@@ -980,7 +980,7 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !snag_text_valid(snag_json_string(data,"provider"),1u,(SNAG_CONFIG_PROVIDER_NAME_MAX+1u)-1u) ||
             !snag_text_valid(snag_json_string(data,"model"),1u,(SNAG_MODEL_MAX_BYTES)-1u) ||
             !snag_string_in(kind,types) ||
-            snag_json_digest_bounded(event,2u*1024u*1024u,digest,&bytes)<0)goto invalid;
+            snag_json_digest_bounded(event, SNAG_MAX_EVENT_LINE, digest, &bytes) < 0) goto invalid;
         /* Transcript/status provenance only. Coding work enters through the
          * existing queued-input event, never through a voice notice. */
     } else if (strcmp(type, "irc_event") == 0) {

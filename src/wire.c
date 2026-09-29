@@ -93,14 +93,14 @@ key_redaction(const char *key, size_t len)
 /* Mutate only the private parsed diagnostic tree, returning an owned reference.
  * Keys containing a secret fail closed: redacting them could merge members. */
 static json_t *
-redact_value(json_t *value, const struct snag_wire_secrets *secrets)
+redact_value(json_t *value, const struct snag_wire_secrets *secrets, size_t max)
 {
     const char *type = snag_json_string(value, "type");
     if (type && (snag_string_in(type, "reasoning reasoning_text summary_text") ||
                  strncmp(type, "response.reasoning_", 19u) == 0)) return json_string("<redacted:reasoning>");
     if (json_is_string(value)) {
         json_t *redacted = NULL;
-        struct snag_buf text = {.max = SNAG_WIRE_BODY_MAX};
+        struct snag_buf text = {.max = max};
         if (append_redacted(&text, (const unsigned char *)json_string_value(value),
                             json_string_length(value), secrets, false) == 0)
             redacted = json_stringn(text.data ? (char *)text.data : "", text.len);
@@ -118,12 +118,12 @@ redact_value(json_t *value, const struct snag_wire_secrets *secrets)
                 return NULL;
             }
             json_t *child = replacement ? json_string(replacement) :
-                redact_value(json_object_iter_value(iter), secrets);
+                redact_value(json_object_iter_value(iter), secrets, max);
             if (!child || json_object_set_new(value, key, child) < 0) return NULL;
         }
     } else if (json_is_array(value)) {
         for (size_t i = 0; i < json_array_size(value); ++i) {
-            json_t *child = redact_value(json_array_get(value, i), secrets);
+            json_t *child = redact_value(json_array_get(value, i), secrets, max);
             if (!child || json_array_set_new(value, i, child) < 0) return NULL;
         }
     }
@@ -131,23 +131,31 @@ redact_value(json_t *value, const struct snag_wire_secrets *secrets)
 }
 
 int
-snag_wire_json_redact(const unsigned char *data, size_t len, const struct snag_wire_secrets *secrets,
-                     struct snag_buf *out, char *error, size_t error_size)
+snag_wire_json_redact_bounded(const unsigned char *data, size_t len, size_t input_max,
+    const struct snag_wire_secrets *secrets, struct snag_buf *out, char *error, size_t error_size)
 {
     json_t *value;
     int rc;
 
     if (!out || secrets_valid(secrets) < 0)
         return snag_errorf(error, error_size, "invalid diagnostic secret set");
-    value = snag_json_load_strict(data, len, SNAG_WIRE_BODY_MAX, error, error_size);
+    value = snag_json_load_strict(data, len, input_max, error, error_size);
     if (!value) return -1;
     snag_buf_reset(out);
-    json_t *redacted = redact_value(value, secrets);
+    json_t *redacted = redact_value(value, secrets, out->max);
     rc = redacted ? snag_json_diagnostic(redacted, out) : -1;
     json_decref(redacted);
     json_decref(value);
     if (rc < 0) return snag_errorf(error, error_size, "sanitized JSON exceeds diagnostic bound");
     return 0;
+}
+
+int
+snag_wire_json_redact(const unsigned char *data, size_t len,
+    const struct snag_wire_secrets *secrets, struct snag_buf *out, char *error, size_t error_size)
+{
+    return snag_wire_json_redact_bounded(data, len, SNAG_WIRE_BODY_MAX, secrets,
+        out, error, error_size);
 }
 
 static bool
