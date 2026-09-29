@@ -301,6 +301,7 @@ struct app_voice {
     /* Provider-private continuation stays inside its current handoff. */
     json_t *interface_history;
     struct snag_journal_cursor interface_cursor;
+    uint64_t interface_restore_before;
     struct interface_compaction compact;
     bool interface_needs_compact;
     uint64_t interface_order;
@@ -311,6 +312,7 @@ struct app_voice {
 static void
 observation_start(struct app_voice *v, const struct snag_session *session)
 {
+    v->interface_restore_before = session->next_seq;
     v->observation_cursor.offset = session->log_end;
     v->observation_cursor.next_seq = session->next_seq;
     memcpy(v->observation_cursor.prev_sha256, session->prev_sha256,
@@ -1299,7 +1301,14 @@ interface_history_event(void *opaque, const struct snag_session *state, uint64_t
     (void)error;
     (void)size;
     if (seq >= read->handoff->history_target) return 1;
-    if (!working_observation(type)) return 0;
+    bool voice_dialogue = false;
+    if (!strcmp(type, "voice_event")) {
+        const char *record_type = snag_json_string(json_object_get(data, "event"), "type");
+        voice_dialogue = record_type &&
+            (snag_string_in(record_type, "voice_transcript voice_result") ||
+                (seq < v->interface_restore_before && !strcmp(record_type, "voice_response")));
+    }
+    if (!working_observation(type) && !voice_dialogue) return 0;
     char *encoded = snag_app_history_data(seq, type, data);
     json_t *view = encoded ? json_loads(encoded, JSON_REJECT_DUPLICATES, NULL) : NULL;
     if (encoded) snag_secret_clear(encoded, strlen(encoded));

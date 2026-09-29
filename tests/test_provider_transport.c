@@ -102,6 +102,7 @@ enum model_fixture {
     MODEL_VOICE_COMPACT_RETRY,
     MODEL_VOICE_COMPACT_TOOL,
     MODEL_VOICE_COMPACT_ACTIVE,
+    MODEL_VOICE_BACKLOG,
     MODEL_VOICE_READ,
     MODEL_OPENROUTER_SEARCH,
     MODEL_CREATE_RETRY,
@@ -218,7 +219,7 @@ find_header_end(const char *buffer, size_t len)
 }
 
 static void
-read_request(int fd, struct http_request *request)
+read_request_body(int fd, struct http_request *request, char *body, size_t capacity)
 {
     char buffer[REQUEST_MAX];
     size_t used = 0u;
@@ -260,12 +261,16 @@ read_request(int fd, struct http_request *request)
         server_fail("session identity header missing or altered");
     cl = content_length(request->headers);
     if (strcmp(request->method, "GET") == 0 && cl < 0) cl = 0;
-    if (cl < 0 || cl > (long)(sizeof(request->body) - 1u)) server_fail("invalid content length");
+    if (cl < 0 || (size_t)cl >= capacity) server_fail("invalid content length");
     request->body_len = (size_t)cl;
     if (used - header_end > request->body_len) server_fail("request body overflowed expected length");
-    memcpy(request->body, buffer + header_end, used - header_end);
+    if (header_contains(request->headers, "\r\nExpect: 100-continue\r\n")) {
+        const char ready[] = "HTTP/1.1 100 Continue\r\n\r\n";
+        write_all_or_die(fd, ready, sizeof(ready) - 1u);
+    }
+    memcpy(body, buffer + header_end, used - header_end);
     while (used - header_end < request->body_len) {
-        ssize_t n = read(fd, request->body + (used - header_end), request->body_len - (used - header_end));
+        ssize_t n = read(fd, body + (used - header_end), request->body_len - (used - header_end));
         if (n < 0) {
             if (errno == EINTR) continue;
             server_fail("body read failed");
@@ -273,7 +278,13 @@ read_request(int fd, struct http_request *request)
         if (n == 0) server_fail("request closed before body");
         used += (size_t)n;
     }
-    request->body[request->body_len] = '\0';
+    body[request->body_len] = '\0';
+}
+
+static void
+read_request(int fd, struct http_request *request)
+{
+    read_request_body(fd, request, request->body, sizeof(request->body));
 }
 
 static void
@@ -431,6 +442,145 @@ serve_voice_summary(int fd, const json_t *body, bool retry, bool continued,
         "status", "completed", "content", "type", "output_text", "text", summary));
     json_decref(parts);
     return done;
+}
+
+static void
+voice_backlog_record(const json_t *item, unsigned int *started, unsigned int *completed,
+    uint64_t *last_seq)
+{
+    const char *text = snag_json_string(item, "content");
+    json_t *view = text ? json_loads(text, JSON_REJECT_DUPLICATES, NULL) : NULL;
+    const char *kind = snag_json_string(view, "kind");
+    if (!kind || strcmp(kind, "session_observation")) {
+        json_decref(view);
+        return;
+    }
+    uint64_t seq = (uint64_t)json_integer_value(json_object_get(view, "seq"));
+    const char *type = snag_json_string(view, "event_type");
+    json_t *data = json_object_get(view, "data");
+    if (seq <= *last_seq || !type) server_fail("initial history order changed");
+    *last_seq = seq;
+    if (!strcmp(type, "voice_event")) {
+        json_decref(view);
+        return;
+    }
+    char identity[33];
+    if (!strcmp(type, "goal_started")) {
+        const char *prompt = snag_json_string(data, "prompt");
+        if (*started != *completed || !prompt || strlen(prompt) != SNAG_MAX_GOAL_PROMPT) {
+            server_fail("initial goal history was dropped or truncated");
+        }
+        for (size_t i = 0u; i < SNAG_MAX_GOAL_PROMPT; i += 2u) {
+            if (memcmp(prompt + i, "λ", 2u)) server_fail("initial goal source bytes changed");
+        }
+        ++*started;
+    } else if (!strcmp(type, "goal_completed")) {
+        if (*started != *completed + 1u) server_fail("initial goal outcome reordered");
+        ++*completed;
+    } else {
+        server_fail("unexpected initial history event");
+    }
+    assert(snprintf(identity, sizeof(identity), "%032x", *started) == 32);
+    const char *id = snag_json_string(data, "goal_id");
+    if (!id || strcmp(id, identity)) server_fail("initial goal identity changed");
+    json_decref(view);
+}
+
+static void
+serve_voice_backlog(int listen_fd, const char *ordinary_reply)
+{
+    /* The small fixtures keep their stack buffer; this case reaches the real byte bound. */
+    char *wire = malloc(SNAG_CONTEXT_MAX_REQUEST + 1u);
+    struct snag_buf record = {.max = SNAG_CONTEXT_MAX_REQUEST};
+    unsigned int started = 0u;
+    unsigned int completed = 0u;
+    unsigned int summaries = 0u;
+    size_t index = 1u;
+    uint64_t last_seq = 0u;
+    char summary[128] = {0};
+    if (!wire) server_fail("cannot allocate large request fixture");
+    (void)alarm(90u);
+    for (;;) {
+        struct http_request request;
+        int fd = accept(listen_fd, NULL, NULL);
+        if (fd < 0) server_fail("initial history accept failed");
+        read_request_body(fd, &request, wire, SNAG_CONTEXT_MAX_REQUEST + 1u);
+        if (strcmp(request.method, "POST") || strcmp(request.path, "/v1/responses")) {
+            server_fail("unexpected initial history request");
+        }
+        json_t *body = json_loadb(wire, request.body_len, JSON_REJECT_DUPLICATES, NULL);
+        json_t *input = json_object_get(body, "input");
+        json_t *tools = json_object_get(body, "tools");
+        if (!json_array_size(input) || !json_is_array(tools)) {
+            server_fail("initial history request malformed");
+        }
+        if (summaries && !strstr(wire, summary)) {
+            server_fail("initial history lost its preceding partial summary");
+        }
+        unsigned int users = 0u;
+        json_t *parts = NULL;
+        bool ordinary = json_array_size(tools) != 0u;
+        for (size_t i = 0u; i < json_array_size(input); ++i) {
+            json_t *item = json_array_get(input, i);
+            const char *role = snag_json_string(item, "role");
+            const char *text = snag_json_string(item, "content");
+            if (ordinary) voice_backlog_record(item, &started, &completed, &last_seq);
+            if (!role || strcmp(role, "user")) continue;
+            ++users;
+            if (ordinary) {
+                if (!text || !strstr(text, "backlog-pending-utterance")) {
+                    server_fail("preseed compaction lost the pending utterance");
+                }
+            } else {
+                parts = text ? json_loads(text, JSON_REJECT_DUPLICATES, NULL) : NULL;
+            }
+        }
+        if (users != 1u) server_fail("initial history replayed or omitted user input");
+        if (ordinary) {
+            if (summaries < 2u || record.len || started != 34u || completed != 34u) {
+                server_fail("initial history compaction lost source or outcomes");
+            }
+            send_response(fd, 200u, "text/event-stream", ordinary_reply);
+            json_decref(body);
+            (void)close(fd);
+            break;
+        }
+        if (!json_array_size(parts)) server_fail("initial summary source missing");
+        for (size_t i = 0u; i < json_array_size(parts); ++i) {
+            json_t *part = json_array_get(parts, i);
+            const char *source = snag_json_string(part, "source_json");
+            size_t offset = (size_t)json_integer_value(json_object_get(part, "offset"));
+            size_t end = (size_t)json_integer_value(json_object_get(part, "end"));
+            if (!source || (size_t)json_integer_value(json_object_get(part, "history_item")) !=
+                    index || offset != record.len || end < offset ||
+                end - offset != strlen(source) ||
+                snag_buf_append(&record, source, strlen(source)) < 0) {
+                server_fail("initial source fragment reordered or dropped");
+            }
+            if (!json_is_true(json_object_get(part, "complete"))) continue;
+            json_t *item = json_loadb((char *)record.data, record.len,
+                JSON_REJECT_DUPLICATES, NULL);
+            if (!item) server_fail("initial history source is not complete JSON");
+            voice_backlog_record(item, &started, &completed, &last_seq);
+            json_decref(item);
+            snag_buf_reset(&record);
+            ++index;
+        }
+        ++summaries;
+        int length = snprintf(summary, sizeof(summary),
+            "Archived %u completed goals; no pending work. Earlier read was cancelled.", completed);
+        if (length <= 0 || (size_t)length >= sizeof(summary)) server_fail("summary overflow");
+        send_voice_item(fd, json_pack("{s:s,s:i,s:{s:s,s:s,s:s,s:s,s:[{s:s,s:s}]}}",
+            "type", "response.output_item.done", "output_index", 0,
+            "item", "id", "backlog_summary", "type", "message", "role", "assistant",
+            "status", "completed", "content", "type", "output_text", "text", summary));
+        json_decref(parts);
+        json_decref(body);
+        (void)close(fd);
+    }
+    snag_buf_free(&record);
+    free(wire);
+    _exit(0);
 }
 
 static void
@@ -836,6 +986,7 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         "\"usage\":{\"input_tokens\":7,\"input_tokens_details\":{\"cached_tokens\":4},"
         "\"output_tokens\":2,\"total_tokens\":9},\"output\":[]}}\n\n";
 
+    if (models == MODEL_VOICE_BACKLOG) serve_voice_backlog(listen_fd, create_sse);
     if (models == MODEL_VOICE_QUEUE || models == MODEL_VOICE_READ ||
         models == MODEL_VOICE_COMPACT || models == MODEL_VOICE_COMPACT_RETRY ||
         models == MODEL_VOICE_COMPACT_TOOL || models == MODEL_VOICE_COMPACT_ACTIVE) {
@@ -847,6 +998,7 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
         unsigned int summary_request = rejected_request + 1u;
         bool queue = models != MODEL_VOICE_READ;
         unsigned int count = retry ? 8u : compact && !bad_summary ? 6u : queue ? 4u : 3u;
+        if (models == MODEL_VOICE_QUEUE) ++count;
         char affinity[SNAG_CACHE_KEY_LEN + 1u] = {0};
         struct voice_summary_fixture summary = {0};
         for (unsigned int i = 0; i < count; ++i) {
@@ -879,6 +1031,7 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
             if (models == MODEL_VOICE_QUEUE) {
                 unsigned int failures = 0u;
                 unsigned int outputs = 0u;
+                unsigned int spoken = 0u;
                 uint64_t prior_seq = 0u;
                 json_t *input = json_object_get(body, "input");
                 for (size_t j = 0u; j < json_array_size(input); ++j) {
@@ -913,10 +1066,20 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
                         }
                         ++failures;
                     }
+                    if (kind && type && !strcmp(kind, "session_observation") &&
+                        !strcmp(type, "voice_event")) {
+                        const json_t *record = json_object_get(
+                            json_object_get(event, "data"), "event");
+                        const char *record_type = snag_json_string(record, "type");
+                        if (record_type && !strcmp(record_type, "voice_transcript")) ++spoken;
+                    }
                     json_decref(event);
                 }
                 if (failures != (i < 2u ? 1u : 2u) || outputs != failures) {
                     server_fail("interface omitted initial or newly completed working history");
+                }
+                if (spoken != (i < 2u ? 2u : 3u)) {
+                    server_fail("interface omitted live native dialogue before a request");
                 }
             }
             if (compact && (i == rejected_request || (retry && i == 4u))) {
@@ -955,6 +1118,60 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
             if (((active && i == 3u) || (retry && i == 6u)) &&
                 !strstr(request.body, "interface_continuation")) {
                 server_fail("whole-history compaction replayed speech as a new user request");
+            }
+            if (models == MODEL_VOICE_QUEUE && i == 4u) {
+                unsigned int requests = 0u, outputs = 0u, results = 0u, cancelled = 0u;
+                unsigned int transcripts = 0u, queued = 0u;
+                char identities[2][SNAG_ID_HEX_LEN + 1u];
+                json_t *input = json_object_get(body, "input");
+                for (size_t j = 0u; j < json_array_size(input); ++j) {
+                    const char *text = snag_json_string(json_array_get(input, j), "content");
+                    json_t *quote = text ? json_loads(text, JSON_REJECT_DUPLICATES, NULL) : NULL;
+                    const char *event_type = snag_json_string(quote, "event_type");
+                    json_t *data = json_object_get(quote, "data");
+                    json_t *event = json_object_get(data, "event");
+                    const char *type = snag_json_string(event, "type");
+                    const char *operation = snag_json_string(event, "operation");
+                    if (event_type && !strcmp(event_type, "future_turn_queued")) {
+                        const char *id = snag_json_string(data, "queue_id");
+                        if (queued >= 2u || !id || strlen(id) != SNAG_ID_HEX_LEN) {
+                            server_fail("restored queue identity missing or duplicated");
+                        }
+                        strcpy(identities[queued++], id);
+                    }
+                    if (type && !strcmp(type, "voice_transcript")) {
+                        const char *speaker = snag_json_string(event, "speaker");
+                        const char *words = snag_json_string(event, "text");
+                        const char *expected[] = {"native correction", "native acknowledgement",
+                            "native follow-up discussion"};
+                        if (transcripts >= 3u || !speaker || !words ||
+                            strcmp(speaker, transcripts == 1u ? "assistant" : "user") ||
+                            !strstr(words, expected[transcripts])) {
+                            server_fail("restored transcript lost source speaker or order");
+                        }
+                        ++transcripts;
+                    }
+                    if (operation && !strcmp(operation, "interface_request")) ++requests;
+                    if (operation && !strcmp(operation, "interface_output")) ++outputs;
+                    if (operation && !strcmp(operation, "interface_tool")) ++results;
+                    if (type && !strcmp(type, "voice_result") &&
+                        !strcmp(snag_json_string(event, "status"), "cancelled")) {
+                        const char *id = snag_json_string(event, "queue_id");
+                        if (cancelled >= queued || !id || strcmp(id, identities[cancelled])) {
+                            server_fail("restored outcome changed its queue identity");
+                        }
+                        ++cancelled;
+                    }
+                    json_decref(quote);
+                }
+                if (requests != 2u || outputs != 2u || results != 2u || cancelled != 2u ||
+                    transcripts != 3u || queued != 2u) {
+                    server_fail("reopened interface lost prior dialogue or actual outcomes");
+                }
+                send_response(fd, 200u, "text/event-stream", create_sse);
+                json_decref(body);
+                close(fd);
+                continue;
             }
             if (models == MODEL_VOICE_QUEUE && i >= 2u) {
                 json_t *input = json_object_get(body, "input");
@@ -1220,6 +1437,49 @@ stop_server(struct local_server *server)
     assert(waitpid(server->pid, &status, 0) == server->pid);
     assert(WIFEXITED(status));
     assert(WEXITSTATUS(status) == 0);
+}
+
+static void
+test_http_continue(void)
+{
+    struct local_server server;
+    start_server(&server, MODEL_CREATE_TYPELESS, false, "/v1");
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in address = {.sin_family = AF_INET,
+        .sin_port = htons(server.port), .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+    assert(fd >= 0 && connect(fd, (struct sockaddr *)&address, sizeof(address)) == 0);
+    const char headers[] = "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Authorization: Bearer transport-secret\r\n"
+        "HTTP-Referer: https://github.com/snajpa/snajpagent\r\n"
+        "X-OpenRouter-Title: snajpagent\r\n"
+        "User-Agent: " SNAJPAGENT_NAME "/" SNAJPAGENT_VERSION "\r\n"
+        "Content-Length: 2\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n";
+    write_all_or_die(fd, headers, sizeof(headers) - 1u);
+    const char expected[] = "HTTP/1.1 100 Continue\r\n\r\n";
+    char response[512];
+    size_t used = 0u;
+    struct pollfd readable = {.fd = fd, .events = POLLIN};
+    while (used < sizeof(expected) - 1u) {
+        assert(poll(&readable, 1u, 1000) == 1);
+        ssize_t n = read(fd, response + used, sizeof(expected) - 1u - used);
+        assert(n > 0);
+        used += (size_t)n;
+    }
+    assert(!memcmp(response, expected, used));
+    /* Body transmission depends on the interim response, never a fallback timer. */
+    write_all_or_die(fd, "{}", 2u);
+    used = 0u;
+    for (;;) {
+        assert(used < sizeof(response) - 1u && poll(&readable, 1u, 1000) == 1);
+        ssize_t n = read(fd, response + used, sizeof(response) - 1u - used);
+        assert(n >= 0);
+        if (!n) break;
+        used += (size_t)n;
+    }
+    response[used] = '\0';
+    assert(strstr(response, "HTTP/1.1 200 "));
+    assert(close(fd) == 0);
+    stop_server(&server);
 }
 
 static json_t *
@@ -2283,7 +2543,7 @@ voice_tool_record(void *opaque, const struct snag_session *state, uint64_t seq,
             assert(json_is_integer(json_object_get(metrics, "elapsed_ms")));
             assert(json_is_integer(json_object_get(metrics, "response_ready_ms")));
             assert(json_integer_value(json_object_get(metrics, "retries")) == 0);
-            if (counts[3] % 2u) {
+            if (counts[3] % 2u || !strcmp(snag_json_string(event, "call_id"), "third")) {
                 assert(json_is_integer(json_object_get(metrics, "first_text_ms")));
                 assert(json_integer_value(json_object_get(usage, "cached_tokens")) == 4);
             } else {
@@ -2406,6 +2666,12 @@ test_voice_concurrent_owner(enum model_fixture model)
     json_t *events = json_array();
     char speech[4096] = "retained-first-utterance";
     if (model == MODEL_VOICE_QUEUE) {
+        for (unsigned int i = 0u; i < 2u; ++i) {
+            assert(json_array_append_new(events, json_pack("{s:s,s:s,s:s,s:s}",
+                "type", "voice_transcript", "speaker", i ? "assistant" : "user",
+                "item_id", i ? "native-reply" : "native-input", "text", i ?
+                    "native acknowledgement" : "native correction transport-secret")) == 0);
+        }
         char *padding = malloc(1024u * 1024u + 1u);
         assert(padding);
         memset(padding, 'x', 1024u * 1024u);
@@ -2462,6 +2728,11 @@ test_voice_concurrent_owner(enum model_fixture model)
             ++acknowledgements;
             if (model == MODEL_VOICE_QUEUE && acknowledgements == 1u) {
                 voice_fixture_working_outcome(&app, 2u, "new working outcome");
+                assert(snag_session_commit(&app.session, "voice_event", json_pack(
+                    "{s:s,s:s,s:s,s:{s:s,s:s,s:s,s:s}}", "connection_id",
+                    "0123456789abcdef0123456789abcdef", "provider", "openai", "model", "fixture",
+                    "event", "type", "voice_transcript", "speaker", "user", "item_id", "follow-up",
+                    "text", "native follow-up discussion"), NULL, error, sizeof(error)) == 0);
             }
             json_decref(reply);
         }
@@ -2519,6 +2790,131 @@ test_voice_concurrent_owner(enum model_fixture model)
     assert(snag_app_voice_service(&app) == 0 && app.voice);
     assert(!snag_app_voice_fixture_result(&app) && app.session.next_seq == seq);
     snag_app_voice_close(&app);
+    if (model == MODEL_VOICE_QUEUE) {
+        char id[SNAG_ID_HEX_LEN + 1u];
+        strcpy(id, app.session.id);
+        snag_session_close(&app.session);
+        assert(snag_session_open(&app.store, &app.session, id, error, sizeof(error)) == 0);
+        events = json_pack("[{s:s,s:s,s:s,s:s,s:s,s:s}]", "type", "voice_handoff",
+            "input_id", "third", "response_id", "third", "call_id", "third",
+            "transcript", "What happened earlier?", "request", "Report earlier outcomes");
+        assert(events && snag_app_voice_fixture(&app, events, false) == 0);
+        json_decref(events);
+        json_t *reply = NULL;
+        started = snag_monotonic_ms();
+        while (!reply && snag_monotonic_ms() - started < 5000u) {
+            assert(snag_app_voice_service(&app) == 0 && app.voice);
+            reply = snag_app_voice_fixture_result(&app);
+            if (!reply) snag_sleep_ms(10u);
+        }
+        assert(reply && !strcmp(snag_json_string(reply, "call_id"), "third"));
+        assert(strstr(snag_json_string(reply, "text"), "transport"));
+        json_decref(reply);
+        memset(tool_records, 0, sizeof(tool_records));
+        assert(snag_session_each_event(&app.session, voice_tool_record, tool_records,
+            error, sizeof(error)) == 0);
+        assert(tool_records[0] == 2u && tool_records[1] == 2u && tool_records[2] == 2u);
+        assert(tool_records[3] == 5u && tool_records[8] == 0u);
+        assert(app.session.pending_queue_count == 0u && app.session.usage_totals.responses == 0u);
+        snag_app_voice_close(&app);
+    }
+    snag_session_close(&app.session);
+    snag_store_close(&app.store);
+    snag_ui_free(&app.ui);
+    snag_config_free(&config);
+    snag_credential_clear(&credential);
+    stop_server(&server);
+}
+
+static int
+voice_backlog_settled(void *opaque, const struct snag_session *session, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    (void)session;
+    (void)seq;
+    (void)error;
+    (void)size;
+    if (strcmp(type, "voice_event")) return 0;
+    const json_t *event = json_object_get(data, "event");
+    const char *op = snag_json_string(event, "operation");
+    if (!op) return 0;
+    assert(strcmp(op, "interface_failed"));
+    if (strcmp(op, "interface_request_settled")) return 0;
+    assert(!strcmp(snag_json_string(event, "call_id"), "backlog"));
+    assert(!strcmp(snag_json_string(event, "status"), "completed"));
+    ++*(unsigned int *)opaque;
+    return 0;
+}
+
+static void
+test_voice_initial_backlog(void)
+{
+    char path[4096];
+    char error[256];
+    const char *tmp = getenv("TMPDIR");
+    struct app_state app = {0};
+    struct snag_config config;
+    struct snag_credential credential;
+    struct local_server server;
+    assert(snprintf(path, sizeof(path), "%s/snajpagent-voice-backlog-XXXXXX",
+        tmp ? tmp : "/tmp") > 0 && mkdtemp(path));
+    snag_store_init(&app.store);
+    snag_session_init(&app.session);
+    assert(snag_ui_init(&app.ui) == 0);
+    assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
+    assert(snag_session_create(&app.store, &app.session, path, "openai",
+        "fixture", "medium", error, sizeof(error)) == 0);
+    /* 34 legal 1 MiB objectives cross the existing 32 MiB serialization boundary. */
+    char *prompt = malloc(SNAG_MAX_GOAL_PROMPT + 1u);
+    assert(prompt);
+    for (size_t i = 0u; i < SNAG_MAX_GOAL_PROMPT; i += 2u) memcpy(prompt + i, "λ", 2u);
+    prompt[SNAG_MAX_GOAL_PROMPT] = '\0';
+    for (unsigned int i = 1u; i <= 34u; ++i) {
+        char identity[33];
+        assert(snprintf(identity, sizeof(identity), "%032x", i) == 32);
+        assert(snag_session_commit(&app.session, "goal_started", json_pack("{s:s,s:s}",
+            "goal_id", identity, "prompt", prompt), NULL, error, sizeof(error)) == 0);
+        assert(snag_session_commit(&app.session, "goal_completed", json_pack("{s:s,s:s}",
+            "goal_id", identity, "actor", "model"), NULL, error, sizeof(error)) == 0);
+    }
+    free(prompt);
+    start_server(&server, MODEL_VOICE_BACKLOG, false, "/v1");
+    (void)transport_connection(&config, &credential, server.endpoint);
+    config.providers[0].auth = SNAG_AUTH_API_KEY;
+    assert(snag_secret_source_parse(&config.providers[0].api_key,
+        "\"transport-secret\"", NULL, error, sizeof(error)) == 0);
+    app.config = &config;
+    for (unsigned int pass = 0u; pass < 2u; ++pass) {
+        const char *id = pass ? "backlog" : "backlog-cancelled";
+        json_t *events = json_pack("[{s:s,s:s,s:s,s:s,s:s,s:s}]", "type", "voice_handoff",
+            "input_id", id, "response_id", id, "call_id", id,
+            "transcript", pass ? "backlog-pending-utterance" : "cancel this read",
+            "request", "Report the old goals");
+        assert(events && snag_app_voice_fixture(&app, events, false) == 0);
+        json_decref(events);
+        assert(snag_app_voice_service(&app) == 0 && app.voice);
+        assert(!snag_app_voice_fixture_result(&app));
+        if (pass) {
+            json_t *reply = NULL;
+            uint64_t started = snag_monotonic_ms();
+            while (!reply && snag_monotonic_ms() - started < 60000u) {
+                assert(snag_app_voice_service(&app) == 0 && app.voice);
+                reply = snag_app_voice_fixture_result(&app);
+                if (!reply) snag_sleep_ms(10u);
+            }
+            assert(reply && !strcmp(snag_json_string(reply, "call_id"), "backlog"));
+            assert(strstr(snag_json_string(reply, "text"), "transport"));
+            json_decref(reply);
+        }
+        /* The first pass stops between reader quanta, before any request starts. */
+        snag_app_voice_close(&app);
+        assert(!app.voice && app.session.pending_queue_count == 0u);
+    }
+    assert(app.session.goal_status == SNAG_GOAL_COMPLETED);
+    assert(app.session.usage_totals.responses == 0u);
+    unsigned int settled = 0u;
+    assert(snag_session_each_event(&app.session, voice_backlog_settled, &settled,
+        error, sizeof(error)) == 0 && settled == 1u);
     snag_session_close(&app.session);
     snag_store_close(&app.store);
     snag_ui_free(&app.ui);
@@ -5994,6 +6390,7 @@ main(void)
      * SIGTERM: install the handler before the first fork so all of them
      * inherit it, whatever path starts them, and exit with status 0. */
     (void)signal(SIGTERM, fixture_stop);
+    test_http_continue();
     test_audio_provider_selection();
     test_native_voice_protocol();
     test_native_voice_concurrency();
@@ -6027,6 +6424,7 @@ main(void)
     test_voice_concurrent_owner(MODEL_VOICE_COMPACT_RETRY);
     test_voice_concurrent_owner(MODEL_VOICE_COMPACT_TOOL);
     test_voice_concurrent_owner(MODEL_VOICE_COMPACT_ACTIVE);
+    test_voice_initial_backlog();
     test_voice_observation_cursor();
     test_voice_read_tools();
     test_voice_queue_inspection();

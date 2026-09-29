@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Restore prior public voice/interface dialogue and action outcomes before the
+  next text-interface delegation when voice restarts, including after session reopen.
+  Append new native transcripts and deferred spoken outcomes during the live connection.
+
 - Seed voice-interface requests with working history and append newly recorded
   working output and outcomes through a bounded journal cursor before each request.
   Include the active dialogue when an older-prefix summary still exceeds capacity.

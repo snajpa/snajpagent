@@ -117,9 +117,12 @@ Public assistant output is recorded separately from the eventual spoken reply.
 Public history copies and returned replies pass through the existing secret
 filter. Public protocol identities must survive filtering unchanged; a response
 whose identity contains a configured secret fails before action dispatch.
-Turning voice off releases this live history. Rehydration on a later connection,
-including prior interface dialogue, remains open, as do native audio-context
-renewal and retention.
+Turning voice off releases the in-memory text history. A later text-interface
+connection restores prior public voice transcripts, interface requests, outputs
+and outcomes from the journal as identified historical observations. It captures
+the activation sequence boundary before admitting new dialogue, so live interface
+items are appended once and saved actions remain historical context. Provider-private
+continuation is not restored. Native audio-context renewal and retention remain open.
 
 The text interface reads working inputs, public output, outcomes and controls
 from the verified journal before its first delegation. Before each ordinary
@@ -127,8 +130,15 @@ request, it catches up to a captured sequence boundary, retaining the same
 forward cursor across requests. Each quoted observation carries its session,
 sequence and event type. Provider-private continuation is omitted by the shared
 history formatter; registered secrets are filtered on the outbound copy.
-Catch-up shares the native observer's event selection but has its own cursor,
-so a pending audio packet does not stall text history. Each owner step reads
+The same ordered cursor restores public voice records preceding the activation
+boundary, including after session reopen. Restoration neither dispatches their
+tools nor sends their old audio, and needs no separate history store.
+Native transcripts and deferred spoken outcomes continue through this cursor
+during the live connection. Their speaker and source fields remain in the quoted
+record. Live interface requests/outputs already have their ordinary conversation
+entries, so only their archived records are restored through this path.
+Working-event selection is shared with the native observer. A separate cursor
+keeps pending audio packets from stalling text history. Each owner step reads
 the existing 4 MiB quantum plus one atomic record. Reaching the request byte
 bound schedules the existing compactor before reading more history. Work and
 voice cancellation remain serviceable between steps. Newer events remain in

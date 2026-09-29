@@ -1820,6 +1820,8 @@ output and outcomes from session history. It appends newly recorded working
 events before subsequent ordinary requests. This catches up in bounded steps
 while coding work continues; each observation identifies its session and source
 sequence. Pending audio delivery does not hold up this text-history catch-up.
+Recorded native voice transcripts and deferred spoken outcomes are also appended
+before ordinary text-interface requests, with their source speaker and identities.
 When the provider reports exhausted input, or request serialization reaches its
 staging limit, the interface summarizes older context and retries the pending
 request. If that prefix reduction is insufficient, recovery includes the active
@@ -1827,8 +1829,10 @@ dialogue as well. Summary requests declare no action tools. A rejected summary i
 retried in smaller source fragments with interruptible pacing. Summary adoption
 is recorded before replacing the live history; a failed summary leaves the
 source history available. These requests add provider usage separately from
-coding totals. Turning voice off ends this live text history; a later voice
-connection can inspect saved dialogue through session history.
+coding totals. Turning voice off releases the live text history. The next
+text-interface connection restores prior public voice dialogue and actual
+outcomes from the saved session as historical observations before handling new
+input. This also applies after session reopen. Saved actions and audio are not replayed.
 .PP
 Read-only access uses get_cwd, list_files, read_file and grep with the same path
 rules as coding tools. Spoken model selection uses the existing cached catalog;
