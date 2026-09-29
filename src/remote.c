@@ -615,7 +615,11 @@ remote_proxy(const char *executable, const char *const *command, const char *dow
     if (client.screen && !screen_backend) rc = -1;
     /* Each wrapper terminates the inherited backend at its child PTY. Relays
      * envelope probes and file frames for the parent screen, leaving UI ordinary. */
-    if (rc == 0 && screen_backend) rc = unsetenv("STY");
+    if (rc == 0 && screen_backend) {
+        /* Legacy BSD unsetenv returns void; verify the environment itself. */
+        (void)unsetenv("STY");
+        if (getenv("STY")) rc = snag_errno(EIO);
+    }
     if (rc == 0) rc = snag_child_spawn_terminal(&child, executable, command);
     int spawn_errno = errno;
     if (screen_backend && setenv("STY", screen_backend, 1) < 0 && rc == 0) {

@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Restore client-terminal builds on OpenBSD 3.5 while preserving GNU screen
+  backend isolation.
+
 - Build Linux voice with Mbed TLS and archive crypto with Nettle, retaining
   DTLS-SRTP and AES-GCM support under GPLv2-compatible license options.
 

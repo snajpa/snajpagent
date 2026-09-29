@@ -37,6 +37,17 @@ with tempfile.TemporaryDirectory(prefix="portable-tty-", dir=root / "build") as 
 print("PASS: session redraw builds with the portable controlling-terminal API")
 
 
+with tempfile.TemporaryDirectory(prefix="portable-env-", dir=root / "build") as tmp:
+    # OpenBSD 3.5 declares unsetenv with a void return type.
+    header = Path(tmp) / "environment.h"
+    header.write_text("#include <stdlib.h>\n"
+                      "static void legacy_unsetenv(const char *name) { (void)unsetenv(name); }\n"
+                      "#define unsetenv legacy_unsetenv\n")
+    subprocess.run(["cc", "-std=c11", "-D_GNU_SOURCE", "-Werror", "-fsyntax-only",
+                    "-include", str(header), str(root / "src/remote.c")], check=True)
+print("PASS: client terminal builds with void-returning unsetenv")
+
+
 voice_crypto = (root / "nix/voice-rtc.nix").read_text()
 linux_crypto = (root / "nix/linux.nix").read_text()
 assert '"-DUSE_MBEDTLS=ON"' in voice_crypto

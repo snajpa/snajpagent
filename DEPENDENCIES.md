@@ -748,6 +748,9 @@ Modern POSIX-format modules with incompatible licensing are excluded. Native
 `/dev/urandom` supplies both application and TLS entropy; `/dev/random` returns
 EIO on the exercised 3.5 installation. Optional zstd trace hooks are disabled
 because the old loader reports unresolved weak hooks.
+The client-terminal wrapper checks that `STY` was removed before spawning its
+child, supporting the legacy void-returning `unsetenv` without losing the
+GNU screen backend-isolation check.
 
 Filesystem operations use the validated pathname fallback: directory identity
 and no-follow checks remain, but external rename races and non-atomic close-on-
