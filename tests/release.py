@@ -246,11 +246,18 @@ with tempfile.TemporaryDirectory(prefix="release-", dir=root / "build") as tmp:
         rejected(lambda: release.load_channel(channel))
         meta["target"] = "linux-x86_64"
         descriptor.write_text(json.dumps(meta))
+        download_bytes = {meta["url"]: data}
         def download(command, **kwargs):
-            Path(command[command.index("--output") + 1]).write_bytes(data)
-        with patch.object(release.subprocess, "run", side_effect=download):
+            Path(command[command.index("--output") + 1]).write_bytes(download_bytes[command[-1]])
+        with patch.object(release.subprocess, "run", side_effect=download) as fetch:
+            # Keep DEBUG=1 development matrices out of the size-limited Pages site.
+            # The updater downloads the verified immutable URL in the descriptor.
+            descriptor.with_suffix("").write_bytes(b"stale development alias")
             release.pages(argparse.Namespace(web=args.output))
-            assert descriptor.with_suffix("").read_bytes() == data
+            assert fetch.call_count == 1
+            assert not descriptor.with_suffix("").exists()
+            assert staged.read_bytes() == data
+            assert not list(channel.glob("*.download"))
             meta["sha256"] = "0" * 64
             descriptor.write_text(json.dumps(meta))
             rejected(lambda: release.pages(argparse.Namespace(web=args.output)))
@@ -265,7 +272,19 @@ with tempfile.TemporaryDirectory(prefix="release-", dir=root / "build") as tmp:
         (symbols / "snajpagent").write_bytes(letter_data)
         release.stage(args)
         assert (args.output / "snajpagent-0.99.8b-linux-x86_64").read_bytes() == letter_data
-        assert release.load_channel(args.output / "latest", ["linux-x86_64"])[0][1]["version"] == "0.99.8b"
+        stable_descriptor = args.output / "latest/snajpagent-linux-x86_64.json"
+        stable_meta = release.load_channel(args.output / "latest", ["linux-x86_64"])[0][1]
+        assert stable_meta["version"] == "0.99.8b"
+        download_bytes[stable_meta["url"]] = letter_data
+        with patch.object(release.subprocess, "run", side_effect=download):
+            release.pages(argparse.Namespace(web=args.output))
+            assert stable_descriptor.with_suffix("").read_bytes() == letter_data
+            assert not list(stable_descriptor.parent.glob("*.download"))
+            # Both channels continue to reject truncated or corrupted downloads.
+            download_bytes[stable_meta["url"]] = letter_data[:-1]
+            rejected(lambda: release.pages(argparse.Namespace(web=args.output)))
+            assert stable_descriptor.with_suffix("").read_bytes() == letter_data
+            assert not list(stable_descriptor.parent.glob("*.download"))
         args.version = f"0.99.8b-{revision[:7]}"
         args.release = f"https://publisher.test/{args.version}"
         args.output = tmp / "stage-letter-dev"

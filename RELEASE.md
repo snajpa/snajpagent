@@ -259,17 +259,21 @@ Never publish an ordinary stripped build under a development version. Both
 channels ship the full current `PROD_TARGETS`, with dev downloads in a secondary
 expandable section. Keep stable and dev immutable versioned assets available.
 
-For each channel, publish one small `.json` beside its latest executable URL.
-It contains `name`, `target`, `version`, immutable HTTPS `url`, `sha256`, `size`
-and HTTPS `changelog`. The latter can include `#changelog`. Hash and size are
+For each channel, publish one small `.json` at its update URL. It contains
+`name`, `target`, `version`, immutable HTTPS `url`, `sha256`, `size` and HTTPS
+`changelog`. The latter can include `#changelog`. Hash and size are
 computed from the final executable bytes, after signing/strip operations.
 Publish all versioned assets before switching the channel; never point a channel
 at a draft or partial matrix. HTTPS is the publisher trust root; hashes detect
 corruption and mixed-version publication, not compromise of that publisher.
 
-The existing manual Pages workflow fetches the channel executables from their
-immutable release URLs, verifies them, and includes them in the atomic site
-artifact. Git stores only the tiny channel descriptions, not executables.
+The existing manual Pages workflow fetches every channel executable from its
+immutable release URL and verifies its size and checksum. The site retains
+stable executable aliases under `latest/`. Under `latest-dev/`, it publishes the
+JSON descriptors and discards each verified download: the full unstripped debug
+matrix exceeds GitHub Pages' 1 GB published-site limit. Development downloads
+use the immutable GitHub Release assets, and the updater already follows the
+URL in each descriptor. Git stores only the tiny channel descriptions.
 No automatic deploy-on-push or updater service is required.
 
 Maintain compact highlights in `www/downloads.html#changelog`: version/date,

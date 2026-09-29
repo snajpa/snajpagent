@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Stage release executables or materialize the two static Pages channels."""
+"""Stage release executables or prepare verified static Pages update channels."""
 import argparse
 import hashlib
 import json
@@ -144,10 +144,15 @@ def pages(args):
                                 "--output", str(temporary), meta["url"]], check=True)
                 if temporary.stat().st_size != meta["size"] or digest(temporary) != meta["sha256"]:
                     raise ValueError(f"release asset mismatch: {descriptor}")
-                temporary.replace(dest)
+                if channel == "latest-dev":
+                    # DEBUG=1 matrices exceed Pages' site limit. Updates use the
+                    # immutable release URL; retain only their descriptors here.
+                    dest.unlink(missing_ok=True)
+                else:
+                    temporary.replace(dest)
             finally:
                 temporary.unlink(missing_ok=True)
-        print(f"Materialized {channel}: {len(entries)} verified executables")
+        print(f"Verified {channel}: {len(entries)} executables")
 
 
 if __name__ == "__main__":

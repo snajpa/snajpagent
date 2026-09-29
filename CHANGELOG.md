@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep development update descriptors and verified immutable release downloads
+  within the website's size limit; preserve stable executable aliases.
+
 - Restore Windows UI and queued-attachment builds with shared stale-state
   error handling and cancellable media preparation.
 
