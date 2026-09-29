@@ -382,11 +382,21 @@ request_owner(void *opaque)
 }
 
 static void
-request_free(struct voice_request *request)
+request_stop(struct voice_request *request)
 {
     if (!request) return;
     atomic_store_explicit(&request->stop, true, memory_order_release);
-    if (request->started) pthread_join(request->thread, NULL);
+    if (request->started) {
+        pthread_join(request->thread, NULL);
+        request->started = false;
+    }
+}
+
+static void
+request_free(struct voice_request *request)
+{
+    if (!request) return;
+    request_stop(request);
     json_decref(request->input);
     snag_response_graph_free(&request->graph);
     snag_credential_clear(&request->credential);
@@ -447,6 +457,8 @@ snag_app_voice_request_take(struct app_state *app, struct snag_response_graph *g
     if (!v || !v->request || !graph || !outcome) return -1;
     struct voice_request *request = v->request;
     if (!atomic_load_explicit(&request->done, memory_order_acquire)) return 0;
+    /* Retain the credential used on the wire before releasing any public output. */
+    if (snag_secret_set_build(&v->secrets, NULL, &request->credential, error, size) < 0) return -1;
     if (metrics) {
         *metrics = json_pack("{s:I,s:o,s:o,s:I,s:o}",
             "elapsed_ms", (json_int_t)request->elapsed_ms,
@@ -458,8 +470,7 @@ snag_app_voice_request_take(struct app_state *app, struct snag_response_graph *g
             "usage", snag_response_usage_json(&request->graph.usage));
         if (!*metrics) return -1;
     }
-    pthread_join(request->thread, NULL);
-    request->started = false;
+    request_stop(request);
     *outcome = request->outcome;
     *graph = request->graph;
     memset(&request->graph, 0, sizeof(request->graph));
@@ -543,6 +554,77 @@ voice_record(struct app_state *app, struct app_voice *v, json_t *event)
     return snag_app_commit_event(app, "voice_event", json_pack("{s:s,s:s,s:s,s:o}",
         "connection_id", v->connection, "provider", v->config.provider,
         "model", v->config.realtime_model, "event", safe), error, sizeof(error));
+}
+
+static int
+interface_settled(struct app_state *app, const struct voice_handoff *handoff,
+    int outcome, json_t *metrics, bool discarded)
+{
+    struct app_voice *v = app->voice;
+    json_t *event = json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:o}",
+        "type", "voice_response", "operation", v->compact.active ?
+            "interface_compaction_settled" : "interface_request_settled",
+        "call_id", handoff->call, "provider", handoff->provider,
+        "model", handoff->model, "effort", handoff->effort,
+        "status", outcome == 2 ? "cancelled" : outcome ? "failed" : "completed",
+        "metrics", metrics);
+    if (discarded && json_object_set_new(event, "disposition",
+            json_string("discarded_on_voice_stop")) < 0) {
+        json_decref(event);
+        return -1;
+    }
+    return voice_record(app, v, event);
+}
+
+static int
+interface_close(struct app_state *app)
+{
+    struct app_voice *v = app->voice;
+    struct voice_handoff *handoff = v->interface_active;
+    int rc = 0;
+    if (v->request && handoff) {
+        struct snag_response_graph graph = {0};
+        json_t *metrics = NULL;
+        int outcome = 0;
+        char error[256];
+        int ready = snag_app_voice_request_take(app, &graph, &outcome, &metrics,
+            error, sizeof(error));
+        if (ready != 1 || interface_settled(app, handoff, outcome, metrics, true) < 0) rc = -1;
+        /* Keep received public evidence; neither private continuation nor
+         * executable calls cross the close boundary. */
+        for (size_t i = 0u; i < graph.count; ++i) {
+            struct snag_response_item item = snag_response_graph_item(&graph, i);
+            json_t *event = NULL;
+            if (item.kind == SNAG_ITEM_TOOL_CALL) {
+                event = json_pack("{s:s,s:s,s:s,s:s,s:s,s:O}",
+                    "type", "voice_response", "operation", "interface_tool_discarded",
+                    "call_id", handoff->call,
+                    "tool_call_id", item.provider_call_id ? item.provider_call_id : "",
+                    "tool", item.name ? item.name : "",
+                    "arguments", item.arguments ? item.arguments : json_null());
+            } else if (item.text && *item.text) {
+                event = json_pack("{s:s,s:s,s:s,s:I,s:s,s:s}",
+                    "type", "voice_response", "operation", "interface_output_discarded",
+                    "call_id", handoff->call, "item_index", (json_int_t)i,
+                    "kind", item.kind == SNAG_ITEM_REFUSAL ? "refusal" : "assistant",
+                    "text", item.text);
+            } else continue;
+            if (voice_record(app, v, event) < 0) rc = -1;
+        }
+        snag_response_graph_free(&graph);
+    }
+    request_free(v->request);
+    v->request = NULL;
+    v->interface_active = NULL;
+    for (size_t i = 0u; i < SNAG_VOICE_HANDOFFS; ++i) {
+        handoff = &v->handoffs[i];
+        if (!handoff->source) continue;
+        if (voice_record(app, v, json_pack("{s:s,s:s,s:s,s:s,s:O}",
+                "type", "voice_response", "operation", "interface_closed",
+                "call_id", handoff->call, "queue_id", handoff->queue,
+                "reply", handoff->reply ? handoff->reply : json_null())) < 0) rc = -1;
+    }
+    return rc;
 }
 
 int
@@ -687,6 +769,13 @@ int snag_app_voice_fixture(struct app_state *app,const json_t *notices,bool done
         if(owner_notice(v,json_array_get(notices,i))<0)return -1;
     return 0;
 }
+bool
+snag_app_voice_fixture_request_done(struct app_state *app)
+{
+    struct app_voice *v = app->voice;
+    return v && v->request && atomic_load_explicit(&v->request->done, memory_order_acquire);
+}
+
 json_t *
 snag_app_voice_fixture_result(struct app_state *app)
 {
@@ -1052,8 +1141,7 @@ void snag_app_voice_close(struct app_state *app)
 {
     struct app_voice *v=app->voice;if(!v)return;
     atomic_store(&v->stop,true);
-    request_free(v->request);
-    v->request = NULL;
+    request_stop(v->request);
     if(v->thread_started)pthread_join(v->thread,NULL);
     if (voice_attachment_lost(v))strcpy(v->error,lost_terminal);
     /* The worker is joined: preserve final notices on shutdown/error as well
@@ -1074,6 +1162,7 @@ void snag_app_voice_close(struct app_state *app)
             if(voice_record(app,v,event)<0)failed=true;
         } else json_decref(event);
     }
+    if (interface_close(app) < 0) failed = true;
     if(!v->stopped_recorded && v->announced &&
         voice_record(app,v,json_pack("{s:s,s:s}","type","voice_stopped",
             "reason",v->error[0]?v->error:"Voice stopped."))<0)failed=true;
@@ -1850,14 +1939,7 @@ interface_service(struct app_state *app, char *error, size_t size)
         int ready = snag_app_voice_request_take(app, &graph, &outcome, &metrics, error, size);
         if (ready <= 0) return ready;
         v->interface_active = NULL;
-        int recorded = voice_record(app, v,
-            json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:o}", "type", "voice_response",
-                "operation", v->compact.active ? "interface_compaction_settled" :
-                    "interface_request_settled", "call_id", handoff->call,
-                "provider", handoff->provider, "model", handoff->model,
-                "effort", handoff->effort,
-                "status", outcome == 2 ? "cancelled" : outcome ? "failed" : "completed",
-                "metrics", metrics));
+        int recorded = interface_settled(app, handoff, outcome, metrics, false);
         if (recorded < 0) {
             snag_response_graph_free(&graph);
             return -1;

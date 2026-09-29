@@ -65,6 +65,7 @@ static void test_static_alsa_config(void)
 
 /* Inherited only by the voice-request fixture child, never a product control. */
 static int voice_request_ready_fd = -1;
+static int voice_request_release_fd = -1;
 
 struct local_server {
     int fd;
@@ -97,6 +98,9 @@ enum model_fixture {
     MODEL_CREATE_TYPELESS,
     MODEL_VOICE_REQUEST,
     MODEL_VOICE_REQUEST_WAIT,
+    MODEL_VOICE_CLOSE,
+    MODEL_VOICE_CLOSE_SUMMARY,
+    MODEL_VOICE_CLOSE_CREDENTIAL,
     MODEL_VOICE_QUEUE,
     MODEL_VOICE_COMPACT,
     MODEL_VOICE_COMPACT_RETRY,
@@ -298,6 +302,18 @@ send_response(int fd, unsigned int status, const char *content_type, const char 
     if (n <= 0 || (size_t)n >= sizeof(header)) server_fail("response header build failed");
     write_all_or_die(fd, header, (size_t)n);
     write_all_or_die(fd, body, len);
+}
+
+static char
+voice_close_release(void)
+{
+    struct pollfd release = {.fd = voice_request_release_fd, .events = POLLIN};
+    char action = 0;
+    if (write(voice_request_ready_fd, "R", 1u) != 1 ||
+        poll(&release, 1u, 5000) != 1 || read(release.fd, &action, 1u) != 1) {
+        server_fail("voice close request barrier failed");
+    }
+    return action;
 }
 
 static void
@@ -993,17 +1009,23 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
 
     if (models == MODEL_VOICE_BACKLOG) serve_voice_backlog(listen_fd, create_sse);
     if (models == MODEL_VOICE_QUEUE || models == MODEL_VOICE_READ ||
+        models == MODEL_VOICE_CLOSE || models == MODEL_VOICE_CLOSE_SUMMARY ||
+        models == MODEL_VOICE_CLOSE_CREDENTIAL ||
         models == MODEL_VOICE_COMPACT || models == MODEL_VOICE_COMPACT_RETRY ||
         models == MODEL_VOICE_COMPACT_TOOL || models == MODEL_VOICE_COMPACT_ACTIVE) {
         bool retry = models == MODEL_VOICE_COMPACT_RETRY;
         bool bad_summary = models == MODEL_VOICE_COMPACT_TOOL;
-        bool active = models == MODEL_VOICE_COMPACT_ACTIVE;
+        bool active = models == MODEL_VOICE_COMPACT_ACTIVE || models == MODEL_VOICE_CLOSE_SUMMARY;
+        bool rotated = models == MODEL_VOICE_CLOSE_CREDENTIAL;
+        bool closing = models == MODEL_VOICE_CLOSE ||
+            models == MODEL_VOICE_CLOSE_SUMMARY || rotated;
         bool compact = models == MODEL_VOICE_COMPACT || retry || bad_summary || active;
         unsigned int rejected_request = active ? 1u : 2u;
         unsigned int summary_request = rejected_request + 1u;
         bool queue = models != MODEL_VOICE_READ;
         unsigned int count = retry ? 8u : compact && !bad_summary ? 6u : queue ? 4u : 3u;
         if (models == MODEL_VOICE_QUEUE) ++count;
+        if (closing) count = active ? 3u : 2u;
         char affinity[SNAG_CACHE_KEY_LEN + 1u] = {0};
         struct voice_summary_fixture summary = {0};
         /* Retained control timelines exceed the small fixture request buffer. */
@@ -1014,6 +1036,8 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
             struct http_request request;
             char *wire = large ? large : request.body;
             if (fd < 0) server_fail("voice interface accept failed");
+            if (rotated) expected_authorization_header = i ?
+                "Authorization: Bearer transport-secret" : "Authorization: Bearer old-voice-secret";
             read_request_body(fd, &request, wire,
                 large ? SNAG_CONTEXT_MAX_REQUEST + 1u : sizeof(request.body));
             if (strcmp(request.method, "POST") || strcmp(request.path, "/v1/responses")) {
@@ -1114,6 +1138,38 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
                 json_decref(body);
                 close(fd);
                 continue;
+            }
+            if (rotated && !i && voice_close_release() != 'N') {
+                server_fail("voice credential rotation barrier failed");
+            }
+            if (closing && i + 1u == count) {
+                char action = voice_close_release();
+                close(voice_request_ready_fd);
+                close(voice_request_release_fd);
+                if (action == 'X') {
+                    json_decref(body);
+                    close(fd);
+                    break;
+                }
+                if (action == 'C') {
+                    send_voice_item(fd, json_pack("{s:s,s:i,s:{s:s,s:s,s:s,s:s,s:s,s:s}}",
+                        "type", "response.output_item.done", "output_index", 0,
+                        "item", "type", "function_call", "id", "discarded_function",
+                        "call_id", "discarded_call", "name", "submit_input",
+                        "arguments", "{\"target\":\"queue\","
+                            "\"text\":\"discarded transport-secret\"}",
+                        "status", "completed"));
+                    json_decref(body);
+                    close(fd);
+                    continue;
+                }
+                if (action != 'T') server_fail("invalid voice close barrier action");
+                if (summarizing) {
+                    send_response(fd, 200u, "text/event-stream", create_sse);
+                    json_decref(body);
+                    close(fd);
+                    continue;
+                }
             }
             if (summarizing) {
                 if (bad_summary) {
@@ -1241,14 +1297,15 @@ server_child(int listen_fd, enum model_fixture models, bool transport)
                 if (models == MODEL_VOICE_READ && !strstr(wire, "unavailable")) {
                     server_fail("write tool was not refused");
                 }
-                if (models == MODEL_VOICE_QUEUE && i == 1u) {
+                if ((models == MODEL_VOICE_QUEUE || closing) && i == 1u) {
                     struct snag_buf reflected = {.max = BODY_MAX};
                     const char *cursor = create_sse;
                     const char *match;
                     while ((match = strstr(cursor, " transport\""))) {
                         size_t bytes = (size_t)(match - cursor) + strlen(" transport");
                         if (snag_buf_append(&reflected, cursor, bytes) < 0 ||
-                            snag_buf_printf(&reflected, " transport-secret") < 0) {
+                            snag_buf_printf(&reflected, "%s", rotated ?
+                                " old-voice-secret transport-secret" : " transport-secret") < 0) {
                             server_fail("cannot build reflected-credential response");
                         }
                         cursor += bytes;
@@ -3529,6 +3586,201 @@ test_public_item_growth(void)
     free(app.partial);
     snag_ui_free(&app.ui);
     snag_session_close(&app.session);
+}
+
+struct voice_close_records {
+    unsigned int mode, settled, discarded, output, calls, closed, started, queued;
+    unsigned int leaked;
+    char queue[33];
+};
+
+static int
+voice_interface_close_record(void *opaque, const struct snag_session *state, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    (void)state;
+    (void)seq;
+    (void)error;
+    (void)size;
+    struct voice_close_records *seen = opaque;
+    if (!strcmp(type, "future_turn_queued")) {
+        assert(!seen->queued++);
+        assert(!strcmp(snag_json_string(data, "queue_id"), seen->queue));
+    }
+    if (strcmp(type, "voice_event")) return 0;
+    const json_t *event = json_object_get(data, "event");
+    const char *op = snag_json_string(event, "operation");
+    if (!op) return 0;
+    if (!strcmp(op, "interface_request_settled") || !strcmp(op, "interface_compaction_settled")) {
+        ++seen->settled;
+        const char *disposition = snag_json_string(event, "disposition");
+        if (!disposition && (seen->mode != 5u || seen->settled < 2u)) return 0;
+        if (seen->mode == 5u) assert(!disposition);
+        else assert(!strcmp(disposition, "discarded_on_voice_stop"));
+        assert(!strcmp(snag_json_string(event, "call_id"), "first"));
+        assert(!strcmp(snag_json_string(event, "status"), seen->mode ? "completed" : "cancelled"));
+        assert(!strcmp(op, seen->mode == 3u ? "interface_compaction_settled" :
+            "interface_request_settled"));
+        const json_t *metrics = json_object_get(event, "metrics");
+        const json_t *usage = json_object_get(metrics, "usage");
+        assert(json_is_integer(json_object_get(metrics, "elapsed_ms")));
+        assert(json_integer_value(json_object_get(metrics, "retries")) == 0);
+        if (!seen->mode) {
+            assert(json_is_null(json_object_get(metrics, "response_ready_ms")));
+            assert(json_is_null(json_object_get(metrics, "first_text_ms")));
+            assert(json_is_null(json_object_get(usage, "input_tokens")));
+        } else {
+            assert(json_is_integer(json_object_get(metrics, "response_ready_ms")));
+            if (seen->mode == 2u) {
+                assert(json_is_null(json_object_get(metrics, "first_text_ms")));
+            } else {
+                assert(json_integer_value(json_object_get(usage, "input_tokens")) == 7);
+                assert(json_integer_value(json_object_get(usage, "cached_tokens")) == 4);
+            }
+        }
+        if (disposition) ++seen->discarded;
+    } else if (!strcmp(op, "interface_output_discarded") || !strcmp(op, "interface_output")) {
+        assert(!strcmp(op, seen->mode == 5u ? "interface_output" : "interface_output_discarded"));
+        const char *text = snag_json_string(event, "text");
+        assert(text && strstr(text, "transport"));
+        if (strstr(text, "transport-secret") || strstr(text, "old-voice-secret")) {
+            fprintf(stderr, "rotated credential reached history in mode %u\n", seen->mode);
+            ++seen->leaked;
+        } else if (seen->mode == 1u || seen->mode >= 4u) {
+            const char *first = strstr(text, "<redacted:secret>");
+            assert(first);
+            if (seen->mode >= 4u) assert(strstr(first + 1u, "<redacted:secret>"));
+        }
+        ++seen->output;
+    } else if (!strcmp(op, "interface_tool_discarded")) {
+        assert(!strcmp(snag_json_string(event, "tool_call_id"), "discarded_call"));
+        assert(!strcmp(snag_json_string(json_object_get(event, "arguments"), "text"),
+            "discarded <redacted:secret>"));
+        ++seen->calls;
+    } else if (!strcmp(op, "interface_closed")) {
+        assert(!strcmp(snag_json_string(event, "call_id"), "first"));
+        assert(!strcmp(snag_json_string(event, "queue_id"), seen->queue));
+        ++seen->closed;
+    } else if (!strcmp(op, "interface_tool_started")) {
+        assert(!strcmp(snag_json_string(event, "tool_call_id"), "voice_call_first"));
+        ++seen->started;
+    } else {
+        assert(strcmp(op, "interface_compacted"));
+    }
+    return 0;
+}
+
+static void
+voice_credential_file(const char *path, const char *value)
+{
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    assert(fd >= 0 && write(fd, value, strlen(value)) == (ssize_t)strlen(value));
+    assert(close(fd) == 0);
+}
+
+static void
+test_voice_close_settlement(void)
+{
+    unsigned int privacy_failures = 0u;
+    for (unsigned int mode = 0u; mode < 6u; ++mode) {
+        struct app_state app = {0};
+        struct snag_config config;
+        struct snag_credential credential;
+        struct local_server server;
+        char path[4096], key[4096], error[256];
+        const char *tmp = getenv("TMPDIR");
+        assert(snprintf(path, sizeof(path), "%s/snajpagent-voice-close-XXXXXX",
+            tmp ? tmp : "/tmp") > 0 && mkdtemp(path));
+        int received[2], release[2];
+        assert(pipe(received) == 0 && pipe(release) == 0);
+        voice_request_ready_fd = received[1];
+        voice_request_release_fd = release[0];
+        start_server(&server, mode >= 4u ? MODEL_VOICE_CLOSE_CREDENTIAL :
+            mode == 3u ? MODEL_VOICE_CLOSE_SUMMARY : MODEL_VOICE_CLOSE, false, "/v1");
+        assert(close(received[1]) == 0 && close(release[0]) == 0);
+        voice_request_ready_fd = voice_request_release_fd = -1;
+        (void)transport_connection(&config, &credential, server.endpoint);
+        config.providers[0].auth = SNAG_AUTH_API_KEY;
+        if (mode >= 4u) {
+            int n = snprintf(key, sizeof(key), "%s/credential", path);
+            assert(n > 0 && (size_t)n < sizeof(key));
+            voice_credential_file(key, "old-voice-secret");
+        }
+        assert(snag_secret_source_parse(&config.providers[0].api_key,
+            mode >= 4u ? key : "\"transport-secret\"", NULL, error, sizeof(error)) == 0);
+        app.config = &config;
+        snag_store_init(&app.store);
+        snag_session_init(&app.session);
+        assert(snag_ui_init(&app.ui) == 0);
+        assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
+        assert(snag_session_create(&app.store, &app.session, path, "openai", "fixture",
+            "medium", error, sizeof(error)) == 0);
+        json_t *events = json_pack("[{s:s,s:s,s:s,s:s,s:s,s:s}]", "type", "voice_handoff",
+            "input_id", "first", "response_id", "first", "call_id", "first",
+            "transcript", "retained-first-utterance", "request", "first");
+        assert(snag_app_voice_fixture(&app, events, false) == 0);
+        json_decref(events);
+        uint64_t started = snag_monotonic_ms();
+        struct pollfd ready = {.fd = received[0], .events = POLLIN};
+        char reply;
+        if (mode >= 4u) {
+            while (poll(&ready, 1u, 0) == 0 && snag_monotonic_ms() - started < 5000u) {
+                assert(snag_app_voice_service(&app) == 0 && app.voice);
+                snag_sleep_ms(1u);
+            }
+            assert(poll(&ready, 1u, 0) == 1 && read(received[0], &reply, 1u) == 1 && reply == 'R');
+            voice_credential_file(key, "transport-secret");
+            assert(write(release[1], "N", 1u) == 1);
+        }
+        while (poll(&ready, 1u, 0) == 0 && snag_monotonic_ms() - started < 5000u) {
+            assert(snag_app_voice_service(&app) == 0 && app.voice);
+            snag_sleep_ms(1u);
+        }
+        assert(poll(&ready, 1u, 0) == 1 && read(received[0], &reply, 1u) == 1 && reply == 'R');
+        assert(close(received[0]) == 0 && app.session.pending_queue_count == 1u);
+        struct voice_close_records seen = {.mode = mode};
+        strcpy(seen.queue, app.session.pending_queue[0].queue_id);
+        if (mode >= 4u) voice_credential_file(key, "rotated-again-secret");
+        if (mode) {
+            const char *action = mode == 2u ? "C" : "T";
+            assert(write(release[1], action, 1u) == 1);
+            while (!snag_app_voice_fixture_request_done(&app) &&
+                snag_monotonic_ms() - started < 5000u) snag_sleep_ms(1u);
+            assert(snag_app_voice_fixture_request_done(&app));
+        }
+        if (mode == 5u) {
+            assert(snag_app_voice_service(&app) == 0 && app.voice);
+            json_t *result = snag_app_voice_fixture_result(&app);
+            const char *text = snag_json_string(result, "text");
+            assert(text);
+            if (strstr(text, "transport-secret") || strstr(text, "old-voice-secret")) {
+                fprintf(stderr, "rotated credential reached live reply\n");
+                ++seen.leaked;
+            }
+            assert(strstr(text, "<redacted:secret>"));
+            json_decref(result);
+        }
+        uint64_t closing = snag_monotonic_ms();
+        snag_app_voice_close(&app);
+        uint64_t elapsed = snag_monotonic_ms() - closing;
+        if (!mode) assert(write(release[1], "X", 1u) == 1);
+        assert(close(release[1]) == 0);
+        stop_server(&server);
+        assert(elapsed < 1000u && !app.voice && app.session.pending_queue_count == 1u);
+        assert(!strcmp(app.session.pending_queue[0].queue_id, seen.queue));
+        assert(!app.session.active_turn && app.session.usage_totals.responses == 0u);
+        assert(snag_session_each_event(&app.session, voice_interface_close_record, &seen,
+            error, sizeof(error)) == 0);
+        assert(seen.settled == (mode == 3u ? 3u : 2u) && seen.discarded == (mode != 5u));
+        assert(seen.output == (mode == 1u || mode >= 3u) && seen.calls == (mode == 2u));
+        assert(seen.closed == 1u && seen.started == 1u && seen.queued == 1u);
+        if (seen.leaked) ++privacy_failures;
+        snag_ui_free(&app.ui);
+        snag_session_close(&app.session);
+        snag_store_close(&app.store);
+        snag_config_free(&config);
+    }
+    assert(!privacy_failures);
 }
 
 static void
@@ -6779,6 +7031,7 @@ main(void)
     test_voice_read_tools();
     test_voice_queue_inspection();
     test_voice_interface_read();
+    test_voice_close_settlement();
     test_voice_independent_request();
     test_public_item_growth();
     test_voice_session_controls();

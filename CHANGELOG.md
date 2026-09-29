@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+- Filter reflected interface credentials after credential rotation, including
+  responses retained when voice closes, while keeping earlier secrets protected.
+
+- Retain interface-request settlement, received public output and pending handoff
+  identities when voice closes, without executing returned calls or cancelling
+  accepted coding work.
+
 - Retain validated voice-provider error categories and reported capacity facts in
   session history, with missing counts marked unknown and reflected credentials filtered.
 

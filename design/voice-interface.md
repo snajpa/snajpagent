@@ -150,6 +150,11 @@ request, it catches up to a captured sequence boundary, retaining the same
 forward cursor across requests. Each quoted observation carries its session,
 sequence and event type. Provider-private continuation is omitted by the shared
 history formatter; registered secrets are filtered on the outbound copy.
+At completed-request ownership transfer, add the credential actually used by that
+request to the existing voice filter before consuming its public graph. Keep prior
+registered values protected even if a credential source changes again. The same
+rule applies when closing voice retains a discarded response; credential values
+remain private.
 The same ordered cursor restores public voice records preceding the activation
 boundary, including after session reopen. Restoration neither dispatches their
 tools nor sends their old audio, and needs no separate history store.
@@ -204,8 +209,14 @@ remain unknown, including absent cache counts. Timing begins before authenticati
 and includes transport and retries. These are client-observed durations, not a
 measurement of the provider's internal prefill time. Tool-only responses need not
 have a first-text observation. The records remain separate from coding-token totals
-and are available through the existing history reader. Capacity and retention
-policy still require measurements on the selected provider.
+and are available through the existing history reader. Closing voice cancels and
+joins an outstanding interface request, then records its actual settlement with a
+`discarded_on_voice_stop` disposition. A response that already completed keeps its
+completed provider status; closing neither dispatches its tool calls nor adopts a
+returned summary. Retain received public output and mark unfinished handoffs with
+their original call and accepted queue identities. Accepted coding work remains
+under the existing session controls. Capacity and retention policy still require
+measurements on the selected provider.
 
 Voice uses the current session's environment, working directory and effective
 instructions automatically. It requires no additional memory configuration and

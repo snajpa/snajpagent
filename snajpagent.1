@@ -1810,9 +1810,12 @@ Settled interface text requests also record provider/model identity, reported
 cached tokens when available, retries, and elapsed, response-ready and first-text
 times. Missing observations remain unknown. These client timings include
 authentication, transport and retries; they do not isolate provider prefill time.
-The records are available through session history. Interface text requests use
-their own stable prompt-cache and transport-affinity identity, separate from
-working-model requests.
+The records are available through session history. Closing voice records the
+settlement of an outstanding interface request and marks its response as discarded.
+Received public output and pending handoff identities remain in history; closing
+executes no returned tool calls and leaves accepted coding work under the existing
+session controls. Interface text requests use their own stable prompt-cache and
+transport-affinity identity, separate from working-model requests.
 Provider error records retain validated error codes, categories, available messages
 and reported context/input counts through the same secret-filtered history path.
 Missing counts remain unknown. A generic error message does not establish the
@@ -1824,7 +1827,9 @@ tool outcomes across spoken handoffs. Its command/help prefix stays in place,
 and each ordinary request receives a fresh session-state snapshot, including
 requests that continue after a tool action.
 Public history and returned replies filter registered secrets, including
-credentials reflected in provider output.
+credentials reflected in provider output. This protection follows credentials
+used by interface requests when a credential file changes during voice use,
+including responses retained during shutdown.
 Before its first delegation, the text interface reads working inputs, public
 output and outcomes from session history. It appends newly recorded working
 events before subsequent ordinary requests. This catches up in bounded steps
