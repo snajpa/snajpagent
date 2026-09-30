@@ -7,6 +7,11 @@
 - Keep active native microphone forwarding independent of queued context and
   result messages, preserving the initial history, mute and stop gates.
 
+- Keep keyboard input usable in the source session while a destination attachment
+  is pending, including input readable alongside the destination acknowledgement.
+  Let the source relay consume queued input and display acknowledgements before
+  closing its connection and directing subsequent input to the destination.
+
 - Keep native voice startup alive when a turn finishes before audio devices open.
 
 - Reset native Opus encoder lookahead when microphone input is cleared at mute,

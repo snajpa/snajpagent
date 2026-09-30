@@ -493,6 +493,11 @@ Shell attachment, typed session switching and voice-requested switching use the
 same attachment operation. Voice invokes the existing session command. Keep the
 source usable until the destination acknowledges attachment; a failed switch
 preserves the original target and conversation. Source-session work continues.
+The terminal client queues input already readable in the same poll as destination
+acceptance to the source before processing that acknowledgement. It drains the
+queued source frame before changing peers: write-side shutdown lets the source
+relay consume queued input and display acknowledgements before closing. Late source
+controls cannot cross this drain boundary. Subsequent input follows the destination.
 
 An intentional successful switch preserves the requested voice mode independently
 of whether keyboard or voice initiated it. Append an explicit session boundary

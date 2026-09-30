@@ -1686,8 +1686,13 @@ This does not attach to or resume a session.
 .TP
 .BR "/session attach ID" , " /session a ID" , " /s a ID"
 Switch the terminal to a live session on Linux. A unique short ID is accepted.
-The source stays attached until the destination accepts the connection;
-refusal, timeout or an unavailable owner leaves the source usable.
+The source stays attached and accepts input until the destination accepts the
+connection. Input read alongside destination acceptance stays with the source.
+Queued source frames finish before new input enters the destination; refusal,
+timeout or an unavailable owner before acceptance leaves the source usable.
+After acceptance, the client waits for the source relay to consume queued input
+and display acknowledgements before releasing that connection. A connection
+failure during this final drain is reported and ends the terminal connection.
 .TP
 .BR "/session name NAME" , " /s name NAME"
 Save or replace the current session's name, including while work is active.

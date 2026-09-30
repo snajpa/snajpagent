@@ -13,6 +13,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
@@ -108,7 +109,7 @@ snag_session_client_continue(struct snag_session_client *client)
 int
 snag_session_client_error(struct snag_session_client *client, const char *text)
 {
-    if (client->peer < 0) return snag_errno(ENOTCONN);
+    if (client->peer < 0 || client->peer_draining) return snag_errno(ENOTCONN);
     if (client->input.used) return snag_errno(EAGAIN);
     size_t length = strlen(text);
     if (!length || length >= sizeof(client->event_data)) return snag_errno(EINVAL);
@@ -175,20 +176,28 @@ target_read(struct snag_session_client *client, enum snag_session_message *event
     return 0;
 }
 
-static bool
+static int
 commit_target(struct snag_session_client *client, enum snag_session_message *event)
 {
     if (client->target < 0 || client->phase != SNAG_CLIENT_READY ||
         client->output_pending || client->input.used || client->ack_pending ||
-        client->incoming.used) return false;
-    if (client->peer >= 0) (void)close(client->peer);
+        client->incoming.used) return 0;
+    if (client->peer >= 0) {
+        /* A full close makes the relay discard unread frames on POLLHUP.
+         * Write EOF lets it consume queued input/ACKs before normal closure. */
+        if (!client->peer_draining) {
+            if (shutdown(client->peer, SHUT_WR) < 0) return -1;
+            client->peer_draining = true;
+        }
+        return 0;
+    }
     client->peer = client->target;
     client->quitting = client->peer_ended = false;
     client->target = -1;
     client->target_deadline = 0u;
     packet_clear(&client->output);
     *event = SNAG_SESSION_READY;
-    return true;
+    return 1;
 }
 
 static int
@@ -218,9 +227,22 @@ peer_read(struct snag_session_client *client, enum snag_session_message *event)
     int rc = snag_session_packet_read(client->peer, &client->incoming);
     if (rc < 0) {
         client->peer_ended = errno == ECONNRESET;
+        if (client->peer_draining && client->peer_ended && client->target >= 0) {
+            (void)close(client->peer);
+            client->peer = -1;
+            client->peer_draining = false;
+            packet_clear(&client->incoming);
+            return 0;
+        }
         return 1;
     }
     if (!rc) return 0;
+    /* Cutover has frozen source display and controls. Consume its final bytes
+     * without displaying unacknowledgeable output or retargeting old controls. */
+    if (client->peer_draining) {
+        packet_clear(&client->incoming);
+        return 0;
+    }
     enum snag_session_message type = snag_session_packet_type(&client->incoming);
     size_t length = snag_session_packet_length(&client->incoming);
     const unsigned char *bytes = client->incoming.bytes + SNAG_SESSION_HEADER;
@@ -285,13 +307,17 @@ snag_session_client_step(struct snag_session_client *client, int timeout_ms,
         client->ack_pending = false;
     }
     if (client->target_deadline && now >= client->target_deadline) {
-        target_failed(client, client->peer >= 0 ?
+        target_failed(client, client->peer_draining ?
+            "source connection did not finish draining after destination acceptance" :
+            client->peer >= 0 ?
             "destination attachment timed out; original session retained" :
             "destination attachment timed out", event);
         return 0;
     }
-    if (commit_target(client, event)) return 0;
-    if (client->resize_pending && client->peer >= 0 && client->target < 0 && !client->input.used) {
+    int committed = commit_target(client, event);
+    if (committed) return committed < 0 ? -1 : 0;
+    if (client->resize_pending && client->peer >= 0 && client->target < 0 &&
+        !client->peer_draining && !client->input.used) {
         if (snag_session_packet_set(&client->input, SNAG_SESSION_RESIZE,
                                     client->geometry, sizeof(client->geometry)) < 0) return -1;
         client->resize_pending = false;
@@ -302,8 +328,11 @@ snag_session_client_step(struct snag_session_client *client, int timeout_ms,
         client->incoming.used == SNAG_SESSION_HEADER +
                                  snag_session_packet_length(&client->incoming);
     if (incoming_ready && !client->output_pending) timeout_ms = 0;
+    /* Keep source input usable until acceptance, then drain only its queued frame. */
+    bool source_input = client->peer >= 0 && !client->peer_draining &&
+        (client->target < 0 || client->phase != SNAG_CLIENT_READY);
     struct pollfd fds[] = {
-        {client->terminal, (client->peer >= 0 && client->target < 0 && !client->input.used ?
+        {client->terminal, (source_input && !client->input.used ?
             POLLIN : 0) | (client->output_pending ? POLLOUT : 0), 0},
         {client->peer, (!incoming_ready ? POLLIN : 0) |
             (client->input.used ? POLLOUT : 0), 0},
@@ -322,6 +351,18 @@ snag_session_client_step(struct snag_session_client *client, int timeout_ms,
         packet_clear(&client->output);
     }
     if (client->output_pending && fds[0].revents & POLLOUT && terminal_write(client) < 0) return -1;
+    /* The poll's readable input precedes any destination ACK in this batch. */
+    if (fds[0].revents & POLLIN && !client->input.used) {
+        unsigned char bytes[SNAG_SESSION_FRAME_MAX];
+        ssize_t n = read(client->terminal, bytes, sizeof(bytes));
+        if (n < 0) {
+            return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR ? 0 : -1;
+        }
+        if (!n) return 1;
+        if (snag_session_packet_set(&client->input, SNAG_SESSION_INPUT, bytes, (size_t)n) < 0) {
+            return -1;
+        }
+    }
     if (client->target >= 0) {
         if (client->target_output.used && fds[2].revents & POLLOUT) {
             rc = snag_session_packet_write(client->target, &client->target_output);
@@ -333,7 +374,9 @@ snag_session_client_step(struct snag_session_client *client, int timeout_ms,
         }
         if (fds[2].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) {
             if (client->phase == SNAG_CLIENT_READY) {
-                target_failed(client, "destination disconnected before transfer", event);
+                target_failed(client, client->peer_draining ?
+                    "destination disconnected after acceptance; source connection is closing" :
+                    "destination disconnected before transfer", event);
             } else if (target_read(client, event) < 0) return -1;
             if (*event) return 0;
         }
@@ -344,18 +387,12 @@ snag_session_client_step(struct snag_session_client *client, int timeout_ms,
         if (rc < 0) return 1;
         if (rc == 1) packet_clear(&client->input);
     }
-    if (commit_target(client, event)) return 0;
+    committed = commit_target(client, event);
+    if (committed) return committed < 0 ? -1 : 0;
     if (client->peer >= 0 && (incoming_ready ||
         fds[1].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL))) {
         rc = peer_read(client, event);
         if (rc || *event) return rc;
-    }
-    if (fds[0].revents & POLLIN && !client->input.used && client->target < 0) {
-        unsigned char bytes[SNAG_SESSION_FRAME_MAX];
-        ssize_t n = read(client->terminal, bytes, sizeof(bytes));
-        if (n < 0) return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR ? 0 : -1;
-        if (!n) return 1;
-        return snag_session_packet_set(&client->input, SNAG_SESSION_INPUT, bytes, (size_t)n);
     }
     return 0;
 }

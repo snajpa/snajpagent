@@ -144,10 +144,17 @@ terminal/SIGTTOU rules also apply during external pager/editor ownership. After
 activation, present bounded semantic catch-up rather than old cursor bytes.
 
 The terminal client keeps one frame per direction plus one incoming control
-frame, holds physical input during
-the destination handshake, and finishes pending source output/input before
-switching after acknowledgement. Refusal, handshake EOF and timeout retain the
-source. A failed-switch diagnostic returns to its presentation owner as a control
+frame. Physical input reaches the source during the destination handshake,
+including input already readable in the poll that accepts the destination.
+Acceptance stops new source reads while queued source output/input finishes.
+The client then shuts down its source write side and waits for relay EOF, so
+queued input and display acknowledgements are consumed before full closure.
+Late source display and controls are consumed without presentation or retargeting
+during this final drain. Subsequent input enters the destination after switching.
+Initial attachment has no source and holds input until acceptance. Refusal,
+handshake EOF and timeout before acceptance retain the source. A failure after
+write shutdown ends the terminal connection with a diagnostic; rollback is then
+unavailable. A failed-switch diagnostic returns to its presentation owner as a control
 message; it neither becomes engine input nor disconnects that source. Suspension
 continues the same reservation through a fresh geometry/repaint handshake.
 That reserved client may finish keyboard and control frames already in flight

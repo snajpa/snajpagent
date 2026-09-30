@@ -21,7 +21,7 @@ struct snag_session_client {
     size_t terminal_offset, event_length;
     unsigned char event_data[256];
     bool output_pending, resize_pending, quitting, peer_ended, ack_pending;
-    bool ansi_output, target_verified;
+    bool ansi_output, target_verified, peer_draining;
 };
 
 /* Takes ownership on success; peer may be an already-attached initial socket
@@ -29,7 +29,7 @@ struct snag_session_client {
 int snag_session_client_init(struct snag_session_client *, int terminal, int peer);
 void snag_session_client_close(struct snag_session_client *);
 /* Takes a connected private endpoint, verifies its peer before sending the
- * profile, and retains the source until commit acknowledgement and writes complete. */
+ * profile, and retains the source until commit acknowledgement and source drain. */
 int snag_session_client_attach(struct snag_session_client *, int target);
 int snag_session_client_resize(struct snag_session_client *, unsigned int rows, unsigned int cols);
 typedef int (*snag_session_connect_fn)(void *, const char *, char *, size_t);
@@ -49,8 +49,11 @@ int snag_session_client_error(struct snag_session_client *, const char *);
 /* Poll once: 0 progress/timeout, 1 terminal/peer EOF, -1 transport failure.
  * event is READY after attachment, ERROR for a failed target, or a received
  * terminal control. Its payload is in event_data/event_length until the next
- * step. ERROR during switching leaves the source peer live. Physical input is
- * held during attach. */
+ * step. ERROR before destination acceptance leaves the source peer live. Input
+ * reaches the source until destination acceptance, then waits for queued source
+ * frames to drain before entering the destination. After write-side shutdown,
+ * a transport failure ends the connection rather than rolling back to the source.
+ * Initial attach has no source. */
 int snag_session_client_step(struct snag_session_client *, int timeout_ms,
                              enum snag_session_message *event);
 
