@@ -5993,10 +5993,57 @@ connect_session(void *opaque, const char *prefix, char *error, size_t error_size
 }
 
 static int
+select_startup_session(const struct snag_cli *cli, char **selected, bool *live,
+                        char *error, size_t error_size)
+{
+    struct app_state app = {.cli = cli};
+    struct snag_session target;
+    char id[SNAG_ID_HEX_LEN + 1u];
+    char *picked = NULL;
+    const char *prefix = cli->resume ? cli->resume_id : cli->attach_id;
+    char *dotdir = snag_app_dotdir(cli->dotdir, error, error_size);
+    int rc = -1;
+
+    *selected = NULL;
+    snag_store_init(&app.store);
+    snag_session_init(&target);
+    if (!dotdir || snag_store_open(&app.store, dotdir, error, error_size) < 0) goto out;
+    if (!prefix) {
+        if (cli->session_name) {
+            if (snag_store_find_name(&app.store, cli->session_name, id,
+                    attachment_candidate, NULL, error, error_size) < 0) goto out;
+            prefix = id;
+        } else if (cli->last) {
+            if (snag_store_find_last(&app.store, id, error, error_size) < 0) goto out;
+            prefix = id;
+        } else {
+            if (snag_ui_init(&app.ui) < 0) goto out;
+            rc = pick_session_id(&app, cli->resume ? SNAG_SESSIONS_ACTIVE : SNAG_SESSIONS_RUNNING,
+                                  &picked, error, error_size);
+            snag_ui_free(&app.ui);
+            if (rc < 0) goto out;
+            prefix = picked;
+        }
+    }
+    rc = snag_session_locate(&app.store, &target, prefix, attachment_candidate, NULL,
+                             error, error_size);
+    if (rc < 0) goto out;
+    *selected = snag_strdup_checked(target.id, SNAG_ID_HEX_LEN);
+    if (!*selected) { rc = -1; goto out; }
+    if (live) *live = snag_session_is_live(&target);
+out:
+    snag_session_close(&target);
+    snag_store_close(&app.store);
+    free(picked);
+    free(dotdir);
+    return rc;
+}
+
+static int
 attach_session(const struct snag_cli *cli, char *error, size_t error_size)
 {
     char *selected = NULL;
-    int peer = -1;
+    int peer;
     if (!snag_session_host_supported())
         return snag_errorf(error, error_size, "native attachment is unavailable on this host");
     if (!snag_text_locale_init())
@@ -6004,40 +6051,16 @@ attach_session(const struct snag_cli *cli, char *error, size_t error_size)
     if (!snag_isatty(STDIN_FILENO) || !snag_isatty(STDOUT_FILENO) || !snag_isatty(STDERR_FILENO))
         return snag_errorf(error, error_size,
             "attachment requires terminal stdin, stdout and stderr");
-    if (!cli->attach_id) {
-        struct app_state app = {.cli = cli};
-        char *dotdir = snag_app_dotdir(cli->dotdir, error, error_size);
-        if (!dotdir) return -1;
-        snag_store_init(&app.store);
-        int rc = snag_store_open(&app.store, dotdir, error, error_size);
-        if (!rc) {
-            if (cli->session_name) {
-                char id[SNAG_ID_HEX_LEN + 1u];
-                rc = snag_store_find_name(&app.store, cli->session_name, id,
-                                          attachment_candidate, NULL, error, error_size);
-                if (!rc && !(selected = snag_strdup_checked(id, SNAG_ID_HEX_LEN))) rc = -1;
-            } else {
-                rc = snag_ui_init(&app.ui);
-                if (!rc) {
-                    rc = pick_session_id(&app, SNAG_SESSIONS_RUNNING, &selected, error, error_size);
-                    snag_ui_free(&app.ui);
-                }
-            }
-        }
-        snag_store_close(&app.store);
-        free(dotdir);
-        if (rc < 0) return -1;
-    }
-    peer = connect_session((void *)cli, cli->attach_id ? cli->attach_id : selected,
-        error, error_size);
+    if (select_startup_session(cli, &selected, NULL, error, error_size) < 0) return -1;
+    peer = connect_session((void *)cli, selected, error, error_size);
     free(selected);
     if (peer < 0) return -1;
     return snag_session_client_terminal(peer, false, 0u, connect_session,
                                         (void *)cli, error, error_size);
 }
 
-int
-snag_app_run(const struct snag_cli *cli, const char *program)
+static int
+run_session(const struct snag_cli *cli, const char *program)
 {
     struct snag_session_process process = {.master = -1, .slave = -1, .peer = -1};
     char error[256] = {0};
@@ -6068,5 +6091,36 @@ snag_app_run(const struct snag_cli *cli, const char *program)
         (void)fprintf(stderr, "%s: %s\n", program, error[0] ? error : strerror(errno));
         return 3;
     }
+    return rc;
+}
+
+int
+snag_app_run(const struct snag_cli *cli, const char *program)
+{
+    if (!cli->resume || cli->execute || !snag_session_host_supported() ||
+        !snag_isatty(STDIN_FILENO) || !snag_isatty(STDOUT_FILENO) ||
+        !snag_isatty(STDERR_FILENO) || !snag_text_locale_init()) {
+        return run_session(cli, program);
+    }
+    char error[256] = {0};
+    char *id = NULL;
+    bool live = false;
+    if (select_startup_session(cli, &id, &live, error, sizeof(error)) < 0) {
+        (void)fprintf(stderr, "%s: %s\n", program, error[0] ? error : strerror(errno));
+        return 3;
+    }
+    struct snag_cli selected = *cli;
+    selected.session_name = NULL;
+    selected.last = false;
+    selected.resume_id = id;
+    if (live) {
+        selected.resume = false;
+        selected.attach = true;
+        selected.attach_id = id;
+        (void)fprintf(stderr, "%s: session is running; attaching with its existing settings%s\n",
+            program, cli->prompt ? "; follow-up was not submitted; enter it after attaching" : "");
+    }
+    int rc = run_session(&selected, program);
+    free(id);
     return rc;
 }

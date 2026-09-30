@@ -296,6 +296,9 @@ int snag_session_open(struct snag_store *store, struct snag_session *session,
                      const char *prefix, char *error, size_t error_size);
 int snag_session_open_last(struct snag_store *store, struct snag_session *session,
                           char *error, size_t error_size);
+int snag_store_find_last(struct snag_store *, char id[SNAG_ID_HEX_LEN + 1u],
+                         char *error, size_t error_size);
+bool snag_session_is_live(const struct snag_session *);
 typedef int (*snag_store_emit_fn)(void *, const char *, size_t);
 bool snag_session_name_valid(const char *name);
 int snag_store_find_name(struct snag_store *, const char *name, char id[SNAG_ID_HEX_LEN + 1u],

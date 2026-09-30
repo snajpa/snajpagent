@@ -531,7 +531,7 @@ or reopen the newest session with
 .BR "snajpagent --resume --last" .
 Use
 .B snajpagent --resume -N lead
-to resume a stored session by name.
+to attach to a running session or resume a stored one by name.
 .PP
 Exit is not goal pause.  No work runs after exit, but a saved active goal
 continues when resumed.  Use
@@ -553,8 +553,8 @@ and cannot be bypassed by automatic goal work.  Resume restores recorded
 context and accounts for lost command owners; old OS processes and handles
 are not revived.
 .PP
-Interactive resume starts networking from the current configuration and explicit
-startup options.  For example, reopen a session with a hosted IRC server and no
+Resuming a stopped session starts networking from the current configuration and
+explicit startup options.  For example, reopen a session with a hosted IRC server and no
 outgoing client connections:
 .PP
 .nf
@@ -583,6 +583,26 @@ Same-turn recovery retains the original working-document paths.  The files
 remain external dependencies: their contents are read when needed, and moved
 or missing files require inspection.  New full turns discover their own entry
 points.  Session records contain paths rather than automatic file snapshots.
+.SS Silent SSH network loss
+A network outage can leave the server's SSH connection and terminal frontend
+alive until SSH detects the missing client. If attachment reports that a terminal
+is still present after an outage, wait for the SSH timeout and reconnect.
+Configure the SSH server's sshd_config with:
+.PP
+.nf
+ClientAliveInterval 15
+ClientAliveCountMax 3
+.fi
+.PP
+Validate with sshd -t and reload the SSH service. New connections then release
+unresponsive clients after approximately 45 seconds; responsive idle clients
+remain connected. Existing connections keep their original liveness settings.
+The detached native agent owner continues running. Client-side ServerAliveInterval
+can detect a dead server, but server-side checks release the abandoned terminal.
+.PP
+Interactive --resume selects the live owner's attachment path, including by ID,
+-N NAME, --last or the picker. A terminal still held by another connection is
+reported as occupied; attachment does not displace it.
 .SS Read this reference
 Use
 .B man snajpagent
@@ -873,14 +893,18 @@ Render supported model Markdown on terminals.  This is the default.
 Show model Markdown literally.
 .TP
 .BR \-\-resume " [" session-id "]"
-Resume a stopped durable session.  Without an ID or
+Interactively attach to a running native session, or resume a stopped durable
+session. Live attachment retains the owner's configuration, model and draft;
+startup overrides are not applied. A command-line follow-up is not submitted on
+attachment; a notice asks you to enter it after reconnecting. One-shot
+.B \-e
+execution still requires a stopped session. Without an ID or
 .B \-N NAME
 or
 .BR \-\-last ,
 interactively select an active session.
 An ID is a unique prefix of 8 through 32 lowercase hexadecimal characters.
-An exact ID may select an archived session; a live session lock prevents
-concurrent resume.
+An exact ID may select an archived session. The writer lock prevents a second owner.
 .TP
 .BR \-A , " \-\-attach [" session-id "]"
 Connect a terminal to a live native session owner on Linux. Without an ID,

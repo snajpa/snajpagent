@@ -424,7 +424,7 @@ snag_cli_usage(int fd)
         "  -v                           exact detail level: repeat 1 through 6 times\n"
         "                               1 tools; 2 previews; 3 full tools;\n"
         "                               4 debug; 5 protocol; 6 wire (default 0)\n"
-        "      --resume [ID|--last]      resume a durable session\n"
+        "      --resume [ID|--last]      attach if running; resume if stored\n"
         "  -e                           one-shot execution (prompt/stdin, or saved work on resume)\n"
         "  -l                           list sessions\n" "  -h                           show short help\n"
         "      --help                   open the manual (short help if unavailable)\n"

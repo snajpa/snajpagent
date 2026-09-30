@@ -272,8 +272,8 @@ snag_store_find_name(struct snag_store *store, const char *name, char id[SNAG_ID
 }
 
 int
-snag_session_open_last(struct snag_store *store, struct snag_session *session,
-                      char *error, size_t error_size)
+snag_store_find_last(struct snag_store *store, char id[SNAG_ID_HEX_LEN + 1u],
+                     char *error, size_t error_size)
 {
     struct snag_directory *dir;
     const char *entry;
@@ -294,18 +294,31 @@ snag_session_open_last(struct snag_store *store, struct snag_session *session,
     }
     if (finish_directory(dir, error, error_size) < 0) return -1;
     if (!best[0]) return snag_fail(error, error_size, ENOENT, "no matching active session");
-    return open_full_id(store, session, best, error, error_size);
+    memcpy(id, best, sizeof(best));
+    return 0;
 }
 
-static bool
-session_live(int dir_fd)
+int
+snag_session_open_last(struct snag_store *store, struct snag_session *session,
+                       char *error, size_t error_size)
+{
+    char id[SNAG_ID_HEX_LEN + 1u];
+    if (snag_store_find_last(store, id, error, error_size) < 0) return -1;
+    return open_full_id(store, session, id, error, error_size);
+}
+
+bool
+snag_session_is_live(const struct snag_session *session)
 {
     int fd;
     bool live;
     int saved_errno;
 
-    if (dir_fd < 0) return false;
-    fd = snag_create_private_at(dir_fd, "lock", false);
+    /* Never reopen a lock already owned by this process: closing that descriptor
+     * would also drop its original POSIX record lock. */
+    if (session->lock_fd >= 0) return true;
+    if (session->dir_fd < 0) return false;
+    fd = snag_create_private_at(session->dir_fd, "lock", false);
     if (fd < 0) return false;
     live = snag_lock_file(fd, false) < 0 && (errno == EAGAIN || errno == EACCES);
     saved_errno = errno;
@@ -331,7 +344,7 @@ snag_store_list(struct snag_store *store, const struct snag_session *owned,
         /* Closing any descriptor of our POSIX lock file drops all locks held
          * by this process on that file, even if another descriptor owns them. */
         bool live = owned && owned->lock_fd >= 0 && !strcmp(owned->id, entry);
-        if (!live) live = session_live(snapshot.dir_fd);
+        if (!live) live = snag_session_is_live(&snapshot);
         if (filter == SNAG_SESSIONS_RUNNING && !live) {
             snag_session_close(&snapshot);
             continue;

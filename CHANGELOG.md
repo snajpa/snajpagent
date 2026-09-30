@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+- Make interactive `--resume` attach to a running native session, including
+  selection by ID, name, `--last` or the picker; stored sessions resume normally.
+
+- Document SSH server liveness settings and cover silent network loss with a
+  real SSH regression so stale terminals expire while agent work continues.
+
 - Add session-list column headings and label sessions without a running owner
   as `stored`; running sessions retain the `live` label.
 

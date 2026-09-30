@@ -113,15 +113,15 @@ snajpagent -l
 snajpagent --resume --last
 ```
 
-List headings distinguish `live` from `stored` sessions. Name a new session with
+List headings distinguish `live` from `stored` sessions. Name a session with
 `snajpagent -N lead`, or an existing one with `/session name lead`.
 `snajpagent --attach -N lead` reconnects while it runs;
-`snajpagent --resume -N lead` reopens it after stopping. Duplicate names require
-an ID.
+`snajpagent --resume -N lead` attaches if running or reopens it if stored.
+Duplicate names require an ID.
 
 **Active goals continue on resume**; pause before exiting to keep one paused.
 Armed queues run before goal work; paused queues need `/next`. Resume retains
-public history and completed results. Keep important requirements in project files.
+public history and completed results. Keep requirements in project files.
 
 ### Transfer files through the terminal
 

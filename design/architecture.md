@@ -14,7 +14,12 @@ replaceable terminal frontend. The owner retains provider requests, commands and
 IRC connections across terminal loss. A new frontend attaches through the private
 session socket; explicit exit stops the owner. One-shot execution and plain
 terminal operation run directly. Durable state is written to local event logs,
-and resume reconstructs stopped sessions from those logs.
+and resume reconstructs stopped sessions from those logs. Interactive resume
+resolves its target and probes writer ownership before creating a new owner or
+loading provider configuration. A live target uses the normal attachment client;
+a stopped target follows ordinary recovery. The writer lock still prevents a
+second owner if ownership changes during selection. SSH network loss requires
+server-side liveness detection to close a half-open transport and its frontend.
 The append-only rollout for a session is
 `$DOTDIR/sessions/<session-id>/events.jsonl`. Format-4 records carry the byte
 offset of the last embedded checkpoint, which combines session state and the

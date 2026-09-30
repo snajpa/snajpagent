@@ -724,6 +724,57 @@ def test_session_list_keeps_live_owner():
             "first-live-session", "terminal_status"], turns
 
 
+def test_resume_attaches_live_session():
+    if not sys.platform.startswith("linux"):
+        return
+    name = "resume live owner"
+    with Child(["-N", name], ready=DEFAULT_IDLE_PROMPT) as original:
+        sid = original.session_id()
+        engine = original.engine_pid()
+        original.send_wait_idle(b"ping\r", b"pong")
+        with Child(["--resume", sid]) as competing:
+            competing.wait_text(b"session already has a terminal")
+            assert competing.reap() != 0
+        original.send_wait(b"retained resume draft", b"retained resume draft")
+        # Simulate a terminal client dying while its separate owner survives.
+        os.kill(original.pid, signal.SIGTERM)
+        assert original.reap() != 0
+        for selector in (["--resume", sid[:8]], ["--resume", "-N", name],
+                         ["--resume", "--last"], ["--resume"]):
+            with Child(selector) as attached:
+                if selector == ["--resume"]:
+                    attached.wait_text("session › ".encode())
+                    attached.send(sid.encode() + b"\r")
+                attached.wait_text(b"Attached session")
+                attached.wait_text(b"retained resume draft")
+                os.kill(engine, 0)
+                with open(STATE_ROOT / sid / "lock", "r+b") as lock:
+                    try:
+                        fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        pass
+                    else:
+                        raise AssertionError("resume attachment released the owner lock")
+                os.kill(attached.pid, signal.SIGTERM)
+                assert attached.reap() != 0
+        # Live attachment bypasses launch configuration and never injects a prompt.
+        with Child(["--resume", sid, "--config", "/missing/resume-config.ini",
+                    "-m", "missing/model", "--", "unsubmitted follow-up"]) as attached:
+            attached.wait_text(b"follow-up was not submitted")
+            attached.wait_text(b"Attached session")
+            attached.wait_text(b"retained resume draft")
+            attached.send(b"\x15")
+            attached.exit_now()
+        starts = [e for e in events(sid) if e["type"] == "turn_started"]
+        assert [e["data"]["text"] for e in starts] == ["ping"], starts
+    with Child(["--resume", "-N", name]) as resumed:
+        resumed.wait_text(b"pong")
+        resumed.send_wait_idle(b"ping\r", b"pong", start=len(resumed.buf))
+        resumed.exit_now()
+    assert len([e for e in events(sid) if e["type"] == "turn_started"]) == 2
+    print("resume attaches live ID/name/last/picker, resumes stopped: ok", flush=True)
+
+
 def test_session_names():
     name = "lead žluťoučký"
     env = dict(os.environ, HOME=WORKSPACE, PAGER="")
@@ -6692,6 +6743,7 @@ if __name__ == "__main__":
     test_redraw_preserves_sealed_output()
     test_session_list_keeps_live_owner()
     test_session_names()
+    test_resume_attaches_live_session()
     test_compaction_ignores_legacy_samples()
     test_hard_compaction_progress_is_remeasured()
     test_hard_compaction_resets_after_completed_response()
