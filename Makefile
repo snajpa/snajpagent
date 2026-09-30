@@ -241,7 +241,7 @@ tests/test_store:
 	$(CC) $(CPPFLAGS) -DSNAJPAGENT_TEST_FIXTURE=1 $(JANSSON_CFLAGS) $(CFLAGS) $(LDFLAGS) -Isrc \
 		-o $@ $(filter %.c %.o,$^) $(LDLIBS)
 
-check: $(TEST_BIN)
+check: $(BIN) $(TEST_BIN)
 	./tests/test_base
 	./tests/test_config
 	./tests/test_irc
@@ -257,6 +257,7 @@ check: $(TEST_BIN)
 	python3 tests/test_remote_terminal.py
 	python3 tests/test_remote_ssh.py
 	./tests/test_responses
+	python3 tests/test_response_keepalive.py ./$(BIN)
 	./tests/test_provider_retry
 	./tests/test_provider_transport
 	./tests/test_context
