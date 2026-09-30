@@ -7113,6 +7113,51 @@ static void test_native_voice_transport(void)
 }
 
 #if SNAJPAGENT_AUDIO_DEVICE
+static void
+test_native_input_reset(void)
+{
+    struct snag_voice_rtc *media = NULL;
+    char error[256] = {0};
+    assert(snag_voice_rtc_open(&media, error, sizeof(error)) == 0);
+    int16_t silence[480] = {0};
+    int16_t signal[480];
+    unsigned char fresh[1500];
+    unsigned char packet[1500];
+    int pristine = snag_voice_rtc_fixture_encode(media, silence, fresh, sizeof(fresh));
+    assert(pristine > 0);
+    for (size_t i = 0u; i < 480u; ++i) signal[i] = i % 48u < 24u ? 8000 : -8000;
+    for (size_t frame = 0u; frame < 20u; ++frame) {
+        assert(snag_voice_rtc_fixture_encode(media, signal, packet, sizeof(packet)) > 0);
+    }
+    assert(snag_voice_rtc_input(media, signal, 240u) == 0);
+    assert(snag_voice_rtc_input(media, NULL, 0u) == 0);
+    int bytes = snag_voice_rtc_fixture_encode(media, silence, packet, sizeof(packet));
+    assert(bytes > 0);
+    int code;
+    OpusDecoder *decoder = opus_decoder_create(24000, 1, &code);
+    assert(decoder && code == OPUS_OK);
+    int16_t expected[480];
+    assert(opus_decode(decoder, fresh, pristine, expected, 480, 0) == 480);
+    double baseline = 0.0;
+    for (size_t i = 0u; i < 480u; ++i) baseline += (double)expected[i] * expected[i];
+    assert(opus_decoder_ctl(decoder, OPUS_RESET_STATE) == OPUS_OK);
+    int16_t decoded[480];
+    assert(opus_decode(decoder, packet, bytes, decoded, 480, 0) == 480);
+    double energy = 0.0;
+    for (size_t i = 0u; i < 480u; ++i) energy += (double)decoded[i] * decoded[i];
+    fprintf(stderr, "native input clear: fresh=%d after=%d silence energy=%.0f after energy=%.0f\n",
+        pristine, bytes, baseline, energy);
+    /* Silence can include codec noise; the prior signal must not reappear. */
+    assert(energy <= baseline);
+    bytes = snag_voice_rtc_fixture_encode(media, signal, packet, sizeof(packet));
+    assert(bytes > 0 && opus_decode(decoder, packet, bytes, decoded, 480, 0) == 480);
+    energy = 0.0;
+    for (size_t i = 0u; i < 480u; ++i) energy += (double)decoded[i] * decoded[i];
+    assert(energy > baseline);
+    opus_decoder_destroy(decoder);
+    snag_voice_rtc_close(media);
+}
+
 static double
 near_tone_sample(size_t frame)
 {
@@ -8425,6 +8470,7 @@ main(void)
     test_native_voice_transcript_events();
 #if SNAJPAGENT_AUDIO_DEVICE
     test_native_media_loss_burst();
+    test_native_input_reset();
     test_duplex_echo();
 #endif
 #if defined(__linux__) && !defined(_WIN32)

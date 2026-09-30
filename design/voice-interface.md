@@ -51,8 +51,10 @@ The device owner also owns the filter state; processing adds no device, worker
 or provider connection. Standalone dictation and file playback retain their
 existing sample paths. Assistant activity does not gate the microphone, so
 near-end speech can interrupt a reply. While mute is acknowledged, unmute clears
-partial capture and resets the filter before admitting fresh samples. Existing
-Autoconf dependency recipes supply the filter across portable targets.
+partial capture and resets the filter before admitting fresh samples. Native
+input clearing also resets Opus encoder lookahead, so previously captured
+samples cannot reappear in the next encoded frame. Autoconf dependency recipes
+supply the filter across portable targets.
 Hardware-free echo/double-talk tests cover sample flow; device qualification
 remains separate (see `QUALIFICATION.md`).
 

@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Reset native Opus encoder lookahead when microphone input is cleared at mute,
+  so its buffered microphone tail is not encoded after unmute.
+
 - Reduce speaker echo in duplex voice capture with SpeexDSP, using the actual
   rendered output as its reference. The microphone stays available during replies.
   Unmute clears partial capture and resets the filter before forwarding resumes.

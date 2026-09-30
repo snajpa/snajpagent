@@ -134,7 +134,12 @@ bool snag_voice_rtc_ready(struct snag_voice_rtc *r)
 int snag_voice_rtc_input(struct snag_voice_rtc *r,const int16_t *pcm,uint32_t frames)
 {
     if (atomic_load(&r->failed))return -1;
-    if (!frames) {memset(r->input,0,sizeof(r->input));r->input_count=0u;return 0;}
+    if (!frames) {
+        memset(r->input, 0, sizeof(r->input));
+        r->input_count = 0u;
+        /* The encoder retains delayed microphone samples beyond this buffer. */
+        return opus_encoder_ctl(r->encoder, OPUS_RESET_STATE) == OPUS_OK ? 0 : -1;
+    }
     if (!pcm)return -1;
     while (frames) {
         uint32_t n=480u-r->input_count;if (n>frames)n=frames;
@@ -183,6 +188,14 @@ void snag_voice_rtc_flush(struct snag_voice_rtc *r)
     pthread_mutex_unlock(&r->mutex);
 }
 #ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
+int
+snag_voice_rtc_fixture_encode(struct snag_voice_rtc *r, const int16_t *pcm,
+    unsigned char *packet, int size)
+{
+    if (r->input_count) return -1;
+    return opus_encode(r->encoder, pcm, 480, packet, size);
+}
+
 void
 snag_voice_rtc_fixture_packet(struct snag_voice_rtc *r, const void *packet, int size,
     bool expired)
