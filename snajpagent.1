@@ -1960,6 +1960,9 @@ Native voice resolves credentials at startup and uses the same credential for
 call setup and attachment. A configured gateway key needs no separate login.
 Native audio playback runs independently of caption timing; interrupting a reply
 clears queued speech while keeping the connection ready for the next reply.
+Native ASR and generated captions update as transcript segments arrive, with a
+separate preview for each speaker. Finalized transcripts retain their utterance
+identities; partial captions do not submit coding work.
 Conversation continues while accepted coding requests are queued or running.
 The session interface can read files, inspect current work, steer an exact active
 turn, queue a separate task, request turn cancellation, select a cached model,
@@ -2151,6 +2154,8 @@ is context, not a function output for a new call.
 Partial input captions and generated reply captions update above the composer
 when supplied by the provider. They show recent text and never alter the draft
 or authorize coding work. Final transcripts use the durable session record.
+Native transcript streams take precedence over turn-level previews, so the
+accumulated text is neither replaced nor duplicated.
 The rollout labels finalized microphone transcripts as "You [voice, ASR]" and
 voice-model replies as "Voice model [generated]" at every verbosity level.
 The labels remain with the text in scrollback. Partial captions distinguish

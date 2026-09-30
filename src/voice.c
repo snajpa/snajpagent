@@ -487,14 +487,29 @@ static int native_event(struct snag_voice *s,const json_t *event,const char *typ
         s->ready=true;return 0;
     }
     if (!s->ready)return fail(s,error,size,"Native voice content preceded session start");
+    if (!strcmp(type, "input_transcript.added") || !strcmp(type, "output_transcript.added")) {
+        const json_t *item = json_object_get(event, "item");
+        const char *text = snag_json_string(item, "text");
+        bool user = !strcmp(type, "input_transcript.added");
+        if (!text || strlen(text) >= VOICE_TEXT ||
+            !snag_utf8_valid((const unsigned char *)text, strlen(text), true)) {
+            return fail(s, error, size, "Invalid native transcript segment");
+        }
+        if (user && s->muted) return 0;
+        /* These are deltas without an utterance identity. */
+        return notice(s, json_pack("{s:s,s:s,s:s,s:s,s:b}", "type", "voice_caption",
+            "speaker", user ? "user" : "assistant", "item_id", "",
+            "text", text, "stream", true));
+    }
     if (!strcmp(type,"turn.delta")) {
         const char *id=snag_json_string(event,"turn_id"),*text=snag_json_string(event,"delta");
         struct voice_input *in=id_valid(id)?input_find(s,id,false):NULL;
         if (!id_valid(id) || !text || strlen(text)>=VOICE_TEXT)
             return fail(s,error,size,"Invalid native voice caption");
         if (in ? s->muted || in->discarded || in->finished :
-            s->interrupted || strcmp(id,s->response))
+            s->interrupted || strcmp(id, s->response) || !strcmp(id, s->last_response)) {
             return 0;
+        }
         return notice(s,json_pack("{s:s,s:s,s:s,s:s}","type","voice_caption",
             "speaker",in?"user":"assistant",
             "item_id",id,"text",text));
@@ -509,6 +524,7 @@ static int native_event(struct snag_voice *s,const json_t *event,const char *typ
         struct voice_input *in=user?input_find(s,id,true):NULL;
         if (user && !in)return fail(s,error,size,"Native voice input backlog is full");
         if (!done) {
+            if (user ? in->finished : !strcmp(id, s->last_response)) return 0;
             if (user) {
                 in->committed=true;in->discarded=s->muted;
                 if (!s->muted) {
@@ -520,8 +536,8 @@ static int native_event(struct snag_voice *s,const json_t *event,const char *typ
             if (strlen(text)>=VOICE_TEXT)
                 return fail(s,error,size,
                     "Native voice initial caption is too large");
-            return notice(s,json_pack("{s:s,s:s,s:s,s:s}","type","voice_caption",
-                "speaker",role,"item_id",id,"text",text));
+            return notice(s, json_pack("{s:s,s:s,s:s,s:s,s:b}", "type", "voice_caption",
+                "speaker", role, "item_id", id, "text", text, "replace", true));
         }
         if (!text || strlen(text)>=VOICE_TEXT ||
             !snag_utf8_valid((const unsigned char *)text,strlen(text),true))
@@ -531,10 +547,15 @@ static int native_event(struct snag_voice *s,const json_t *event,const char *typ
             in->finished=true;if (!strcmp(s->speaking,id))s->speaking[0]=0;
             if (in->discarded || !*text) {in->failed=true;return input_settle(s,in,error,size);}
             in->text=snag_strdup_checked(text,VOICE_TEXT-1u);if (!in->text)return -1;
-        } else if (s->io.play(s->opaque,"native-output",NULL,0u)<0)return -1;
-        if (notice(s,json_pack("{s:s,s:s,s:s,s:s}","type","voice_transcript",
-            "speaker",role,"item_id",id,"text",text))<0)
+        } else {
+            if (!strcmp(id, s->last_response)) return 0;
+            if (s->io.play(s->opaque, "native-output", NULL, 0u) < 0) return -1;
+        }
+        if (notice(s, json_pack("{s:s,s:s,s:s,s:s,s:b}", "type", "voice_transcript",
+            "speaker", role, "item_id", id, "text", text, "stream", true)) < 0) {
             return -1;
+        }
+        if (!user) strcpy(s->last_response, id);
         if (user && input_pending(s,id))
             return input_settle(s,in,error,size);
         return 0;

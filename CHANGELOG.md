@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Native voice now displays incoming ASR and generated transcript segments as
+  they arrive, preserving interleaved speaker previews and newer speech when a
+  delayed final transcript arrives. Mirrored turn updates do not reset or double
+  the accumulated transcript stream.
+
 - Recover classified native voice context-capacity rejections through bounded,
   tool-free history summaries before reconnecting. Preserve verified coverage,
   pending work and original records; keep the microphone off during recovery.

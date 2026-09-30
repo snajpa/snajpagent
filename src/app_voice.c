@@ -309,7 +309,8 @@ struct app_voice {
     uint32_t audio_base,gaps;
     bool gap_reported;
     char caption[2][384],caption_item[2][SNAG_MAX_PROVIDER_ID+1u];
-    bool caption_dirty[2]; /* One coalesced preview per speaker, under mutex. */
+    bool caption_dirty[2]; /* Coalesced previews under mutex. */
+    bool caption_stream[2];
     /* Session-owner-only handoff/result correlation. */
     struct voice_handoff handoffs[SNAG_VOICE_HANDOFFS];
     bool context_dirty;
@@ -761,6 +762,27 @@ snag_app_voice_output(struct app_state *app, const struct snag_response_item *ca
     return *result ? 0 : -1;
 }
 
+/* Native finals may trail segments from the next utterance. Consume only the
+ * covered preview; a suffix match also handles the bounded preview's old trim. */
+static void
+caption_finish(struct app_voice *v, unsigned int who, const char *text)
+{
+    if (!text) return;
+    char *caption = v->caption[who];
+    size_t have = strlen(caption);
+    size_t length = strlen(text);
+    if (!have || !length) return;
+    if (length <= have && !memcmp(caption, text, length)) {
+        memmove(caption, caption + length, have - length + 1u);
+    } else if (length >= have && (!memcmp(text, caption, have) ||
+        !memcmp(text + length - have, caption, have))) {
+        caption[0] = '\0';
+    } else {
+        return;
+    }
+    v->caption_dirty[who] = true;
+}
+
 static int owner_notice(void *opaque,const json_t *event)
 {
     struct app_voice *v=opaque;
@@ -771,13 +793,24 @@ static int owner_notice(void *opaque,const json_t *event)
         const char *text=snag_json_string(event,"text");
         if(!speaker || !item || !text)return -1;
         size_t len=strlen(text),size=sizeof(v->caption[who]);
+        bool stream = json_is_true(json_object_get(event, "stream"));
         pthread_mutex_lock(&v->mutex);
-        if(strcmp(item,v->caption_item[who])) {
+        /* Native turn captions can mirror the per-speaker transcript stream.
+         * Once that stream is present, turn metadata must not reset or double it. */
+        if (v->caption_stream[who] && !stream) {
+            pthread_mutex_unlock(&v->mutex);
+            return 0;
+        }
+        if (json_is_true(json_object_get(event, "replace")) ||
+            stream != v->caption_stream[who] || (!stream && strcmp(item, v->caption_item[who]))) {
+            v->caption[who][0] = '\0';
+        }
+        if (strcmp(item, v->caption_item[who])) {
             if(!snag_strcpy(v->caption_item[who],sizeof(v->caption_item[who]),item)) {
                 pthread_mutex_unlock(&v->mutex);return -1;
             }
-            v->caption[who][0]=0;
         }
+        v->caption_stream[who] = stream;
         size_t old=strlen(v->caption[who]);
         if(len>=size) {
             size_t skip=len-(size-1u);
@@ -800,8 +833,12 @@ static int owner_notice(void *opaque,const json_t *event)
     if(type && !strcmp(type,"voice_muted") && json_is_true(json_object_get(event,"muted"))) {
         v->caption[0][0]=0;v->caption_dirty[0]=true;
     }
-    if(type && ((!strcmp(type,"voice_transcript") && item && !strcmp(item,v->caption_item[who])) ||
-        !strcmp(type,"voice_asr_failed") || !strcmp(type,"voice_interrupted"))) {
+    if (type && !strcmp(type, "voice_transcript") &&
+        json_is_true(json_object_get(event, "stream")) && v->caption_stream[who]) {
+        caption_finish(v, who, snag_json_string(event, "text"));
+    } else if (type && ((!strcmp(type, "voice_transcript") && item &&
+        !strcmp(item, v->caption_item[who])) || !strcmp(type, "voice_asr_failed") ||
+        !strcmp(type, "voice_interrupted"))) {
         if(!strcmp(type,"voice_interrupted"))who=1u;
         if(strcmp(type,"voice_asr_failed") || (item && !strcmp(item,v->caption_item[who]))) {
             v->caption[who][0]=0;v->caption_dirty[who]=true;
@@ -822,6 +859,28 @@ static int owner_notice(void *opaque,const json_t *event)
     pthread_mutex_unlock(&v->mutex);return rc;
 }
 #ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
+json_t *
+snag_app_voice_fixture_captions(const json_t *events)
+{
+    struct app_voice *v = calloc(1u, sizeof(*v));
+    if (!v) return NULL;
+    if (pthread_mutex_init(&v->mutex, NULL)) {
+        free(v);
+        return NULL;
+    }
+    atomic_init(&v->pending_handoffs, 0u);
+    int rc = 0;
+    for (size_t i = 0; !rc && i < json_array_size(events); ++i) {
+        rc = owner_notice(v, json_array_get(events, i));
+    }
+    json_t *result = !rc ? json_pack("{s:s,s:s}",
+        "user", v->caption[0], "assistant", v->caption[1]) : NULL;
+    for (size_t i = 0; i < v->notice_count; ++i) json_decref(v->notices[i]);
+    pthread_mutex_destroy(&v->mutex);
+    free(v);
+    return result;
+}
+
 /* Existing transport tests exercise main-owner close without opening devices
  * or connecting to a provider. Production has no fixture entry point. */
 int snag_app_voice_fixture(struct app_state *app,const json_t *notices,bool done)
@@ -1391,6 +1450,7 @@ connection_reset(struct app_state *app)
     snag_secret_clear(v->caption, sizeof(v->caption));
     memset(v->caption_item, 0, sizeof(v->caption_item));
     memset(v->caption_dirty, 0, sizeof(v->caption_dirty));
+    memset(v->caption_stream, 0, sizeof(v->caption_stream));
     for (unsigned int who = 0u; who < 2u; ++who) {
         if (snag_ui_caption(&app->ui, who, "") < 0) return -1;
     }

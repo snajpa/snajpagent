@@ -6613,6 +6613,186 @@ static void test_audio_provider_selection(void)
     snag_config_free(&config);
 }
 
+static void
+voice_preview(const struct voice_fixture *f, const char *user, const char *assistant)
+{
+    json_t *captions = snag_app_voice_fixture_captions(f->notices);
+    assert(captions);
+    assert(!strcmp(snag_json_string(captions, "user"), user));
+    assert(!strcmp(snag_json_string(captions, "assistant"), assistant));
+    json_decref(captions);
+}
+
+static void
+test_native_voice_caption_mirrors(void)
+{
+    for (unsigned int who = 0u; who < 2u; ++who) {
+        for (unsigned int first = 0u; first < 2u; ++first) {
+            struct voice_fixture f = {.sent = json_array(), .notices = json_array(),
+                .audio_item = "native-output"};
+            struct snag_voice_io io = {voice_send, voice_notice, voice_play, voice_interrupt};
+            struct snag_voice *v = voice_fixture_new(&io, &f, "gpt-live-1-codex",
+                "gpt-4o-transcribe", "cove");
+            assert(v);
+            json_decref(snag_voice_native_session(v));
+            char error[256];
+            assert(snag_voice_begin(v, error, sizeof(error)) == 0);
+            const char *role = who ? "assistant" : "user";
+            const char *stream = who ? "output_transcript.added" : "input_transcript.added";
+            /* Either feed may arrive first. Turn snapshots/deltas may mirror
+             * the same words, but may not replace or double the caption stream. */
+            for (unsigned int i = 0u; i < 2u; ++i) {
+                json_t *event = i == first ? json_pack("{s:s,s:{s:s}}",
+                    "type", stream, "item", "text", "one") :
+                    json_pack("{s:s,s:{s:s,s:s,s:s}}", "type", "turn.created", "turn",
+                        "id", "preview-turn", "role", role, "transcript", "one");
+                assert(voice_deliver(v, event) == 0);
+            }
+            voice_preview(&f, who ? "" : "one", who ? "one" : "");
+            assert(voice_deliver(v, json_pack("{s:s,s:s,s:s}", "type", "turn.delta",
+                "turn_id", "preview-turn", "delta", " two")) == 0);
+            assert(voice_deliver(v, json_pack("{s:s,s:{s:s}}", "type", stream,
+                "item", "text", " two")) == 0);
+            voice_preview(&f, who ? "" : "one two", who ? "one two" : "");
+            assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s,s:s}}", "type", "turn.created",
+                "turn", "id", "preview-turn", "role", role, "transcript", "one two")) == 0);
+            assert(voice_deliver(v, json_pack("{s:s,s:{s:s}}", "type", stream,
+                "item", "text", " three.")) == 0);
+            voice_preview(&f, who ? "" : "one two three.", who ? "one two three." : "");
+            assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s,s:s}}", "type", "turn.done",
+                "turn", "id", "preview-turn", "role", role,
+                "transcript", "one two three.")) == 0);
+            voice_preview(&f, "", "");
+            voice_end(v, &f);
+        }
+    }
+}
+
+static void
+test_native_voice_transcript_events(void)
+{
+    struct voice_fixture f = {.sent = json_array(), .notices = json_array(),
+        .audio_item = "native-output"};
+    struct snag_voice_io io = {voice_send, voice_notice, voice_play, voice_interrupt};
+    struct snag_voice *v = voice_fixture_new(&io, &f, "gpt-live-1-codex",
+        "gpt-4o-transcribe", "cove");
+    assert(v);
+    json_decref(snag_voice_native_session(v));
+    char error[256];
+    assert(snag_voice_begin(v, error, sizeof(error)) == 0);
+    /* Native transcript deltas precede turn.done and have no utterance identity. */
+    assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s,s:s}}",
+        "type", "input_transcript.added", "item", "id", "input-1",
+        "type", "input_transcript", "text", "hello")) == 0);
+    assert(voice_notice_count(&f, "voice_caption") == 1u);
+    assert(!strcmp(snag_json_string(voice_last(f.notices), "speaker"), "user"));
+    assert(!strcmp(snag_json_string(voice_last(f.notices), "text"), "hello"));
+    assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s,s:s}}",
+        "type", "output_transcript.added", "item", "id", "output-1",
+        "type", "output_transcript", "text", "Hello there.")) == 0);
+    assert(voice_notice_count(&f, "voice_caption") == 2u);
+    assert(!strcmp(snag_json_string(voice_last(f.notices), "speaker"), "assistant"));
+    assert(!strcmp(snag_json_string(voice_last(f.notices), "text"), "Hello there."));
+    assert(voice_notice_count(&f, "voice_handoff") == 0u);
+    voice_preview(&f, "hello", "Hello there.");
+    assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s}}",
+        "type", "input_transcript.added", "item", "id", "input-2",
+        "text", " world.")) == 0);
+    voice_preview(&f, "hello world.", "Hello there.");
+    /* Reusing an optional item ID must not discard a new delta. */
+    assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s}}",
+        "type", "input_transcript.added", "item", "id", "input-2",
+        "text", " Next")) == 0);
+    assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s}}",
+        "type", "output_transcript.added", "item", "id", "output-2",
+        "text", " Next response.")) == 0);
+    voice_preview(&f, "hello world. Next", "Hello there. Next response.");
+    assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s,s:s}}",
+        "type", "turn.done", "turn", "id", "user-turn-1", "role", "user",
+        "transcript", "hello world.")) == 0);
+    voice_preview(&f, " Next", "Hello there. Next response.");
+    for (unsigned int i = 0; i < 2u; ++i) {
+        assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s,s:s}}",
+            "type", "turn.done", "turn", "id", "assistant-turn-1", "role", "assistant",
+            "transcript", "Hello there.")) == 0);
+    }
+    assert(voice_notice_count(&f, "voice_transcript") == 2u && f.ends == 1u);
+    voice_preview(&f, " Next", " Next response.");
+    /* A repeated creation snapshot cannot resurrect a completed turn. */
+    size_t before = json_array_size(f.notices);
+    assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s,s:s}}",
+        "type", "turn.created", "turn", "id", "assistant-turn-1", "role", "assistant",
+        "transcript", "Hello there.")) == 0);
+    assert(json_array_size(f.notices) == before);
+    assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s,s:s}}",
+        "type", "turn.done", "turn", "id", "user-turn-2", "role", "user",
+        "transcript", " Next")) == 0);
+    assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s,s:s}}",
+        "type", "turn.done", "turn", "id", "assistant-turn-2", "role", "assistant",
+        "transcript", " Next response.")) == 0);
+    voice_preview(&f, "", "");
+    assert(snag_voice_mute(v, true, error, sizeof(error)) == 0);
+    before = json_array_size(f.notices);
+    assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s}}",
+        "type", "input_transcript.added", "item", "id", "muted-input",
+        "text", "Must not appear")) == 0);
+    assert(json_array_size(f.notices) == before);
+    assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s}}",
+        "type", "output_transcript.added", "item", "id", "unmuted-output",
+        "text", "Still speaking")) == 0);
+    voice_preview(&f, "", "Still speaking");
+    assert(snag_voice_mute(v, false, error, sizeof(error)) == 0);
+    /* Missing optional segment IDs do not invent an utterance association. */
+    assert(voice_deliver(v, json_pack("{s:s,s:{s:s}}",
+        "type", "input_transcript.added", "item", "text", "More speech")) == 0);
+    voice_preview(&f, "More speech", "Still speaking");
+    assert(voice_notice_count(&f, "voice_handoff") == 0u);
+    /* A long UTF-8 segment keeps a valid display tail; its final retires that tail. */
+    char long_text[1008];
+    memcpy(long_text, "Start ", 6u);
+    for (size_t i = 0; i < 500u; ++i) {
+        memcpy(long_text + 6u + 2u * i, "\xc5\xbe", 2u);
+    }
+    memcpy(long_text + 1006u, "!", 2u);
+    assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s}}",
+        "type", "input_transcript.added", "item", "id", "long-input",
+        "text", long_text)) == 0);
+    voice_preview(&f, long_text + 624u, "Still speaking");
+    assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s,s:s}}",
+        "type", "turn.done", "turn", "id", "long-turn", "role", "user",
+        "transcript", long_text)) == 0);
+    voice_preview(&f, "", "Still speaking");
+    voice_end(v, &f);
+    /* A fresh identified-only connection retains the other caption path. A
+     * connection already supplying native segments does not switch to mirrors. */
+    f = (struct voice_fixture){.sent = json_array(), .notices = json_array(),
+        .audio_item = "native-output"};
+    v = voice_fixture_new(&io, &f, "gpt-live-1-codex", "gpt-4o-transcribe", "cove");
+    assert(v);
+    json_decref(snag_voice_native_session(v));
+    assert(snag_voice_begin(v, error, sizeof(error)) == 0);
+    /* Public deltas stay item-scoped; native creation text is a replacement snapshot. */
+    assert(json_array_append_new(f.notices, json_pack("{s:s,s:s,s:s,s:s}",
+        "type", "voice_caption", "speaker", "user", "item_id", "public-1",
+        "text", "public")) == 0);
+    assert(json_array_append_new(f.notices, json_pack("{s:s,s:s,s:s,s:s}",
+        "type", "voice_caption", "speaker", "user", "item_id", "public-1",
+        "text", " delta")) == 0);
+    voice_preview(&f, "public delta", "");
+    assert(json_array_append_new(f.notices, json_pack("{s:s,s:s,s:s,s:s}",
+        "type", "voice_transcript", "speaker", "user", "item_id", "public-1",
+        "text", "public delta")) == 0);
+    for (unsigned int i = 0; i < 2u; ++i) {
+        assert(voice_deliver(v, json_pack("{s:s,s:{s:s,s:s,s:s}}",
+            "type", "turn.created", "turn", "id", "snapshot", "role", "assistant",
+            "transcript", "Snapshot")) == 0);
+    }
+    voice_preview(&f, "", "Snapshot");
+    assert(voice_deliver(v, json_pack("{s:s,s:{s:s}}",
+        "type", "input_transcript.added", "item", "id", "missing-text")) < 0);
+    voice_end(v, &f);
+}
+
 static void test_native_voice_playback(void)
 {
     struct voice_fixture f={.sent=json_array(),.notices=json_array(),.audio_item="native-output"};
@@ -8083,6 +8263,8 @@ test_native_ui(void)
 int
 main(void)
 {
+    test_native_voice_caption_mirrors();
+    test_native_voice_transcript_events();
 #if defined(__linux__) && !defined(_WIN32)
     test_native_ui();
 #endif

@@ -347,6 +347,22 @@ interface-model reply, a committed control and a completed coding result.
 
 ## Spoken input and task control
 
+Native incremental speech uses `input_transcript.added` and
+`output_transcript.added`. These deltas carry text without an utterance association;
+optional item IDs do not establish one. Coalesce previews per speaker, preserve
+interleaving, and retire matching text when `turn.done` supplies the final
+transcript. Text matching is a presentation heuristic; a mismatched final leaves
+the preview intact. Final records retain the provider's utterance IDs.
+Partial captions are presentation data; they neither submit work nor substitute
+for a finalized source utterance. Microphone mute suppresses input previews while
+generated speech remains visible. Public Realtime keeps its item-scoped deltas.
+
+Native per-speaker transcript segments own the live caption preview once that
+feed is observed. Identified turn snapshots/deltas may mirror the same words;
+they must not switch the preview back, erase its prefix or double its text.
+Identified-only providers retain their existing preview path. Final transcripts,
+muting and barge-in retain their normal completion/clearing behavior.
+
 The voice conversation can discuss a task without submitting each utterance.
 When it requests an action, carry the finalized source utterance identities and
 transcripts separately from the voice model's interpretation. Preserve their

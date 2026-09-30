@@ -178,6 +178,7 @@ int snag_app_voice_interrupt(struct app_state *, const char *turn, json_t **, ch
 int snag_app_audio_fixture(struct app_state *,bool playing);
 int snag_app_audio_fixture_checkpoint(struct app_state *);
 int snag_app_voice_fixture(struct app_state *,const json_t *notices,bool done);
+json_t *snag_app_voice_fixture_captions(const json_t *events);
 json_t *snag_app_voice_fixture_result(struct app_state *);
 json_t *snag_app_voice_fixture_observation(struct app_state *);
 bool snag_app_voice_fixture_capture_ready(struct app_state *);
