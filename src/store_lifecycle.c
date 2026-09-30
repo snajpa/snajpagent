@@ -125,26 +125,6 @@ snag_store_remove_upload_staging(int session_fd, char *error, size_t error_size)
 #endif
 }
 
-static json_t *
-origin_user_data(void)
-{
-    return json_pack("{s:s}", "origin", "user");
-}
-
-int
-snag_session_archive(struct snag_session *session, uint64_t *written_seq, char *error, size_t error_size)
-{
-    return snag_session_commit(session, "session_archived", origin_user_data(),
-                              written_seq, error, error_size);
-}
-
-int
-snag_session_unarchive(struct snag_session *session, uint64_t *written_seq, char *error, size_t error_size)
-{
-    return snag_session_commit(session, "session_unarchived", origin_user_data(),
-                              written_seq, error, error_size);
-}
-
 static int
 make_trash_name(const struct snag_session *session, char out[SNAG_TRASH_NAME_LEN + 1u], char *error,
                 size_t error_size)

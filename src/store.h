@@ -44,7 +44,9 @@ enum snag_response_terminal {
     SNAG_RESPONSE_TERMINAL_INTERRUPTED, SNAG_RESPONSE_TERMINAL_FAILED };
 
 enum snag_session_control {
-    SNAG_CONTROL_CONFIG = 1u, SNAG_CONTROL_CACHE = 2u, SNAG_CONTROL_COMPACT = 4u, SNAG_CONTROL_ARCHIVE = 8u,
+    SNAG_CONTROL_CONFIG = 1u, SNAG_CONTROL_CACHE = 2u, SNAG_CONTROL_COMPACT = 4u,
+    /* Retained only to finish controls recorded by older builds. */
+    SNAG_CONTROL_LEGACY_ARCHIVE = 8u,
     SNAG_CONTROL_DELETE = 16u, SNAG_CONTROL_RETRY = 32u };
 
 struct snag_pending_call {
@@ -257,7 +259,6 @@ struct snag_session {
     bool cancel_requested;
     enum snag_policy_stop policy_stopped;
     bool response_handoff;
-    bool archived;
     bool delete_requested;
     bool response_open;
     bool response_complete;
@@ -309,14 +310,11 @@ int snag_store_find_name(struct snag_store *, const char *name, char id[SNAG_ID_
  * On EEXIST, matches_emit (if non-NULL) receives each full matching ID + newline. */
 int snag_session_locate(struct snag_store *, struct snag_session *, const char *prefix,
                         snag_store_emit_fn matches_emit, void *, char *error, size_t error_size);
-enum snag_session_list { SNAG_SESSIONS_ACTIVE, SNAG_SESSIONS_ALL, SNAG_SESSIONS_RUNNING };
+enum snag_session_list { SNAG_SESSIONS_ALL, SNAG_SESSIONS_RUNNING };
 /* Supply the caller's owned session so probing never opens/closes its lock. */
 int snag_store_list(struct snag_store *store, const struct snag_session *owned,
                     enum snag_session_list filter, snag_store_emit_fn emit, void *opaque,
                     char *error, size_t error_size);
-int snag_session_archive(struct snag_session *session, uint64_t *written_seq, char *error, size_t error_size);
-int snag_session_unarchive(struct snag_session *session, uint64_t *written_seq,
-                          char *error, size_t error_size);
 int snag_session_delete(struct snag_store *store, struct snag_session *session,
                        const char *confirmed_prefix, uint64_t *written_seq, char *error, size_t error_size);
 int snag_session_complete_delete(struct snag_store *store, struct snag_session *session,

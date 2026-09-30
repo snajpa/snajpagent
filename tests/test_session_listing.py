@@ -53,22 +53,22 @@ def check_listing(binary):
                 assert not result.stderr, result.stderr
                 lines = result.stdout.decode().splitlines()
                 assert lines[0].split("\t") == [
-                    "SESSION", "NAME", "MODEL", "TURNS", "STATUS", "PROCESS", "FIRST PROMPT"]
+                    "SESSION", "NAME", "MODEL", "TURNS", "PROCESS", "FIRST PROMPT"]
                 assert len(lines) == len(journals) + 1, (name, len(lines), len(journals))
                 for line in lines[1:]:
                     fields = line.split("\t")
-                    assert len(fields) == 7, fields
-                    for field in (fields[1], fields[2], fields[6]):
+                    assert len(fields) == 6, fields
+                    for field in (fields[1], fields[2], fields[5]):
                         assert len(field) <= 81, field
                         assert not any(ord(c) < 32 or 127 <= ord(c) <= 159 or
                                        c in "\u2028\u2029" for c in field), repr(field)
                 own = next(line.split("\t") for line in lines if line.startswith(journal.parent.name[:8]))
                 if name == "multiline":
-                    assert own[6] == "first line second column return vertical form feed", own
+                    assert own[5] == "first line second column return vertical form feed", own
                 if name == "Unicode":
-                    assert own[6] == "a" * 79 + "界…", own
+                    assert own[5] == "a" * 79 + "界…", own
                 if name in ("IRC history", "large"):
-                    assert own[6].endswith("…"), own
+                    assert own[5].endswith("…"), own
                 assert all(hashlib.sha256(path.read_bytes()).hexdigest() == digest
                            for path, digest in journals.items()), "listing changed saved history"
             assert not provider.failure, provider.failure

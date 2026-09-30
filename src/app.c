@@ -235,7 +235,6 @@ static const struct snag_term_command commands[] = {
     {"/session detach|d", "return to the shell while this session continues"},
     {"/s [list|l|name NAME|attach|a ID|detach|d]", "alias for /session"},
     {"/history [N]", "show N retained turns; default 1, 0 counts only"},
-    {"/archive", "archive at a safe boundary and exit"},
     {"/delete", "delete after confirmation at a safe boundary"},
     {"/exit", "stop work, preserve session and exit"},
     {"/cat PATH", "open a local file in the configured pager"},
@@ -2826,10 +2825,10 @@ apply_controls(struct app_state *app)
             rc = app->session.compact_control_image_boundary ?
                 snag_app_compact_image_boundary(app, error, sizeof(error)) :
                 snag_app_compact_requested(app, error, sizeof(error));
-        } else if (bit != SNAG_CONTROL_RETRY) {
-            rc = snag_app_lifecycle_command(app,
-                bit == SNAG_CONTROL_ARCHIVE ? "/archive" : "/delete", &handled, &exit_now);
+        } else if (bit == SNAG_CONTROL_DELETE) {
+            rc = snag_app_lifecycle_command(app, "/delete", &handled, &exit_now);
         }
+        /* Retired archive controls finish without an effect when old sessions resume. */
         if (error[0] && app_error(app, error) < 0) { result = -1; break; }
         if (bit == SNAG_CONTROL_DELETE && exit_now && app->session.delete_requested) {
             app->input_closed = true;
@@ -2921,9 +2920,8 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
             return app_textf(app, SNAG_UI_HOST, "nothing to compact before the first prompt");
         return request_control(app, SNAG_CONTROL_COMPACT, "/compact");
     }
-    if (active && snag_string_in(line, "/archive /delete"))
-        return request_control(app, !strcmp(line, "/archive") ?
-            SNAG_CONTROL_ARCHIVE : SNAG_CONTROL_DELETE, line);
+    if (active && !strcmp(line, "/delete"))
+        return request_control(app, SNAG_CONTROL_DELETE, line);
     if (active && !strcmp(line, "/next")) {
         if (!app->session.pending_queue_count) return app_error(app, "future-turn queue is empty");
         if (snag_app_queue_arm(app, true) < 0) return -1;
@@ -5111,7 +5109,7 @@ run_tracked_turn(struct app_state *app, const char *prompt,
         char error[256] = {0};
         if (snag_app_goal_pause(app, "user", error, sizeof(error)) < 0) (void)app_error(app, error);
     }
-    if (app->session.active_turn && !app->session.archived && !app->session.delete_requested &&
+    if (app->session.active_turn && !app->session.delete_requested &&
         (app->input_closed || app->interrupt_requested) &&
         (app->session.response_open || app->session.response_complete ||
          app->session.process_count || app->session.pending_call_count || !app->input_closed)) {
@@ -5289,7 +5287,7 @@ static int
 pick_session(struct app_state *app, char *error, size_t error_size)
 {
     char *prefix = NULL;
-    int rc = pick_session_id(app, SNAG_SESSIONS_ACTIVE, &prefix, error, error_size);
+    int rc = pick_session_id(app, SNAG_SESSIONS_ALL, &prefix, error, error_size);
     if (!rc) rc = snag_session_open(&app->store, &app->session, prefix, error, error_size);
     free(prefix);
     return rc;
@@ -5823,14 +5821,6 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
             invalid_message = "configured prompt cannot be rendered with the current selection";
             goto invalid;
         }
-        /* The archive effect may be durable before its control completion.
-         * Settle that intent before explicit resume unarchives the session. */
-        if (app.session.archived && (app.session.started_controls & SNAG_CONTROL_ARCHIVE) &&
-            commit_event(&app, "control_finished", json_pack("{s:i}", "control", SNAG_CONTROL_ARCHIVE),
-                         error, sizeof(error)) < 0) goto fail;
-        if (app.session.archived && snag_session_unarchive(&app.session, NULL, error, sizeof(error)) < 0) {
-            (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error); rc = 3; goto out;
-        }
         if (recover_session(&app, error, sizeof(error)) < 0) {
             goto fail;
         }
@@ -6018,7 +6008,7 @@ select_startup_session(const struct snag_cli *cli, char **selected, bool *live,
             prefix = id;
         } else {
             if (snag_ui_init(&app.ui) < 0) goto out;
-            rc = pick_session_id(&app, cli->resume ? SNAG_SESSIONS_ACTIVE : SNAG_SESSIONS_RUNNING,
+            rc = pick_session_id(&app, cli->resume ? SNAG_SESSIONS_ALL : SNAG_SESSIONS_RUNNING,
                                   &picked, error, error_size);
             snag_ui_free(&app.ui);
             if (rc < 0) goto out;

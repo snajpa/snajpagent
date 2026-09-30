@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Remove session archiving, `/archive` and the archive-status column. All saved
+  sessions appear in resume selection and participate in `--last`; previously
+  archived histories resume normally.
+
 - Keep session-list text in single-line previews, including IRC history and long
   Unicode prompts; terminal controls cannot create extra rows or columns.
 

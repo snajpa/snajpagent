@@ -212,19 +212,6 @@ snag_app_lifecycle_command(struct app_state *app, const char *line, bool *handle
 
     *handled = true;
     *exit_now = false;
-    if (strcmp(line, "/archive") == 0) {
-        if (app->session.process_count && snag_app_close_active_processes(app,
-                app->session.active_turn_id, "user_interrupt", true, error, sizeof(error)) < 0) return -1;
-        seq = app->session.next_seq;
-        if (snag_session_archive(&app->session, &seq, error, sizeof(error)) < 0) {
-            (void)snag_ui_text(&app->ui, SNAG_UI_ERROR, error);
-            return -1;
-        }
-        if (render_event_seq(app, seq, "session_archived") < 0 ||
-            snag_ui_text(&app->ui, SNAG_UI_HOST, "session archived") < 0) return -1;
-        *exit_now = true;
-        return 0;
-    }
     if (strcmp(line, "/delete") == 0) {
         if (app->session.pending_log) {
             *exit_now = true;

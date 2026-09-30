@@ -902,9 +902,9 @@ execution still requires a stopped session. Without an ID or
 .B \-N NAME
 or
 .BR \-\-last ,
-interactively select an active session.
+interactively select a saved session.
 An ID is a unique prefix of 8 through 32 lowercase hexadecimal characters.
-An exact ID may select an archived session. The writer lock prevents a second owner.
+The writer lock prevents a second owner.
 .TP
 .BR \-A , " \-\-attach [" session-id "]"
 Connect a terminal to a live native session owner on Linux. Without an ID,
@@ -933,11 +933,11 @@ Names use nonempty UTF-8 without control characters, within the 16 KiB CLI
 argument bound. Quote names containing spaces in the shell.
 Names are labels independent of the IRC model nick set by -n.
 Duplicate names are allowed; ambiguous selection prints matching full IDs
-and requires an ID to choose one. Archived sessions participate in name lookup.
+and requires an ID to choose one.
 Use /session name NAME in an existing session to set or replace its name.
 .TP
 .BR \-\-last
-Resume the most recently used active session.  Requires
+Resume the most recently used saved session.  Requires
 .BR \-\-resume .
 .TP
 .BR \-e
@@ -946,14 +946,14 @@ Execute one turn and exit.  The prompt must follow
 or arrive on non-terminal standard input.  Network options are not accepted.
 .TP
 .BR \-l
-List active and archived sessions and exit. Only
+List saved sessions and exit. Only
 .BR \-\-dotdir ,
 .BR \-\-config ,
 color options, Markdown presentation options, and
 .B \-\-update-model-cache
 may accompany it.  Markdown
 presentation has no useful effect on session-list output. The table has headings
-for session ID, name, model, turn count, active/archived status, process state and first prompt.
+for session ID, name, model, turn count, process state and first prompt.
 Text columns show single-line previews of up to 80 Unicode characters, followed
 by an ellipsis when shortened. Whitespace and terminal controls become spaces;
 the saved names, model IDs and prompts retain their full contents.
@@ -1536,7 +1536,7 @@ slash command completes before the next app command is accepted; typeahead is
 held without a second ready prompt. Model selection changes the next response
 in an active turn and remains selected for later turns and resume. Effort-only
 selection applies to later requests after a safe response boundary. Configuration, cache
-refresh, compaction, retry, archive and delete run at safe request boundaries;
+refresh, compaction, retry and delete run at safe request boundaries;
 their accepted intents in an established session survive restart and retain
 admission order.  Configuration editing and cache discovery before the first
 work item preserve lazy session creation.  Repeated
@@ -1582,7 +1582,7 @@ Print the full current session ID followed by running sessions. A new unsaved
 session is identified as not yet saved; listing does not start a model turn.
 .TP
 .BR "/session list" , " /session l" , " /s list" , " /s l"
-Print the current session ID and all saved sessions, including archived ones,
+Print the current session ID and all saved sessions,
 with column headings and their live or stored process state.
 This does not attach to or resume a session.
 .TP
@@ -1594,7 +1594,7 @@ refusal, timeout or an unavailable owner leaves the source usable.
 .BR "/session name NAME" , " /s name NAME"
 Save or replace the current session's name, including while work is active.
 The remaining text is the name; shell-style quotes are unnecessary here.
-The name is retained across detach, restart and archive. Use -N NAME with
+The name is retained across detach and restart. Use -N NAME with
 --attach or --resume to select it from the CLI.
 .TP
 .BR "/session detach" , " /session d" , " /s d"
@@ -1781,9 +1781,6 @@ work (Enter or active-turn Tab).  Subsequent output uses the new level;
 already visited detail is not replayed.  It is local feedback, never chat or
 model input.  The printed resume
 command carries this current level, not the original startup flag count.
-.TP
-.B /archive
-Archive the session and exit, settling active work at a safe request boundary.  Exact resume can unarchive it.  Resume recognizes an already-recorded archive even if the program stopped before acknowledging the command.
 .TP
 .B /compact
 Compact model context at idle or at a safe active-turn request boundary.
@@ -3914,8 +3911,8 @@ retained for follow-up inspection, while only the prepared PNG is transmitted.
 The journal stores references, not base64. Resume reuses the prepared PNG without
 redecoding the original; a changed/deleted external source cannot change accepted
 input. Missing or corrupt retained source/prepared assets fail explicitly.
-Copy the entire session directory when moving a session. Archive retains media;
-confirmed session deletion removes it.
+Copy the entire session directory when moving a session. Confirmed session
+deletion removes its retained media.
 .PP
 Requests accept prepared image data up to 12 MiB in total, at any image count.
 Provider/request ceilings may be lower. Retained media accumulates on disk until
@@ -4579,7 +4576,7 @@ replace current runtime network state; unrelated edits preserve it.
 A live session cannot be resumed concurrently.  Do not delete its lock to start
 a second owner.  Pre-1.0 internal formats can change; preserve older logs and
 use a compatible binary to inspect them rather than rewriting or deleting
-unknown data.  Archive/deletion of a session does not erase shared prompt history.
+unknown data.  Session deletion does not erase shared prompt history.
 .SS "Provider message phases"
 A streaming assistant message can begin with a provisional
 .B commentary
@@ -5325,7 +5322,7 @@ directories to be mode 0700 and creates state files mode 0600.
 Prompt history intentionally retains submitted operator text across sessions
 and chat/rollout modes.  It cannot identify a secret deliberately
 typed by the operator; remove or protect the history file with the same care as
-shell history.  Session archive and deletion do not erase it.
+shell history.  Session deletion does not erase it.
 .PP
 Provider credential variables and configured
 .B secret

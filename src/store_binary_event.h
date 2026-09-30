@@ -10,6 +10,7 @@
 enum snag_binary_kind {
     SNAG_BINARY_SESSION_CREATED = 1,
     SNAG_BINARY_CWD_CHANGED = 2,
+    /* Retired metadata; preserved for reading older records. */
     SNAG_BINARY_SESSION_ARCHIVED = 3,
     SNAG_BINARY_SESSION_UNARCHIVED = 4,
     SNAG_BINARY_SESSION_DELETE_REQUESTED = 5,

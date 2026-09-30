@@ -738,6 +738,8 @@ test_checkpoint_optional_download_queue(struct snag_store *store, const char *cw
     memcpy(id, session.id, sizeof(id));
     state = snag_checkpoint_state_encode(&session);
     assert(state && json_object_del(state, "download_queue") == 0);
+    assert(json_object_set_new(state, "archived", json_true()) == 0);
+    /* Retired archive flags in old checkpoints have no selection effect. */
     /* Earlier snapshot-v1 writers predate the download outbox. Their verified
      * checkpoints still carry every required field of the original format. */
     commit_event(&session, "session_checkpoint", checked_json(json_pack(
@@ -749,6 +751,13 @@ test_checkpoint_optional_download_queue(struct snag_store *store, const char *cw
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     assert(!session.download_queue && !strcmp(session.default_effort, "high"));
     assert(!session.name);
+    char last[SNAG_ID_HEX_LEN + 1u];
+    assert(snag_store_find_last(store, last, error, sizeof(error)) == 0);
+    assert(strcmp(last, id) == 0);
+    assert(snag_session_commit(&session, "session_archived",
+        checked_json(json_pack("{s:s}", "origin", "user")), NULL, error, sizeof(error)) < 0);
+    assert(snag_session_commit(&session, "control_requested",
+        checked_json(json_pack("{s:i}", "control", 8)), NULL, error, sizeof(error)) < 0);
     commit_event(&session, "session_named", checked_json(json_pack("{s:s}", "name", "lead")));
     assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
     snag_session_close(&session);
@@ -2062,19 +2071,8 @@ main(void)
         snag_store_close(&legacy_store);
     }
 
-    assert(snag_session_archive(&session, NULL, error, sizeof(error)) == 0);
-    assert(session.archived);
     assert_session_lock_retained(&session, "before listing");
     assert(snprintf(list_path, sizeof(list_path), "%s/list", temp) > 0);
-    {
-        int fd = open(list_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
-        assert(fd >= 0);
-        assert(snag_store_list(&store, &session, SNAG_SESSIONS_ACTIVE,
-                              list_to_fd, &fd, error, sizeof(error)) == 0);
-        assert(close(fd) == 0);
-        assert(read_file(list_path, list_buf, sizeof(list_buf)) > 0u);
-        assert(strstr(list_buf, id_prefix) == NULL);
-    }
     {
         int fd = open(list_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
         assert(fd >= 0);
@@ -2082,11 +2080,10 @@ main(void)
                               list_to_fd, &fd, error, sizeof(error)) == 0);
         assert(close(fd) == 0);
         assert(read_file(list_path, list_buf, sizeof(list_buf)) > 0u);
-        assert(strstr(list_buf, "\tarchived\t") != NULL);
+        assert(strstr(list_buf, id_prefix) != NULL);
+        assert(strstr(list_buf, "STATUS") == NULL);
     }
     assert_session_lock_retained(&session, "after listing");
-    assert(snag_session_unarchive(&session, NULL, error, sizeof(error)) == 0);
-    assert(!session.archived);
     assert(snag_session_delete(&store, &session, id_prefix, NULL, error, sizeof(error)) == 0);
     snag_session_close(&session);
     snag_session_init(&session);

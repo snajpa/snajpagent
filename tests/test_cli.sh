@@ -370,7 +370,7 @@ while ! grep -q 'waiting for shutdown' "$root/live-hold.err"; do
     sleep 0.01
 done
 $bin --dotdir "$live_state" -l >"$root/live-list" 2>"$root/live-list.err"
-[ "$(head -n 1 "$root/live-list")" = "$(printf 'SESSION\tNAME\tMODEL\tTURNS\tSTATUS\tPROCESS\tFIRST PROMPT')" ]
+[ "$(head -n 1 "$root/live-list")" = "$(printf 'SESSION\tNAME\tMODEL\tTURNS\tPROCESS\tFIRST PROMPT')" ]
 grep -q "^$(printf %.8s "$live_id").*live" "$root/live-list"
 kill -s TERM "$live_pid"
 set +e
@@ -1281,6 +1281,7 @@ print("working-docs CLI: ok")
 PY
 
 python3 "$(dirname "$bin")/test_session_listing.py" "$bin"
+python3 "$(dirname "$bin")/test_session_archiving.py" "$bin"
 
 TERM=xterm "$(dirname "$bin")/pty_interactive.py" "$bin" "$root/work"
 TERM=dumb "$(dirname "$bin")/pty_interactive.py" "$bin" "$root/work"

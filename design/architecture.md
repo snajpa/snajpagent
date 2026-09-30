@@ -42,10 +42,14 @@ existing string table retains it; older checkpoints have no name. `-N` names new
 sessions and selects an exact name for attach/resume. Name lookup reads snapshots
 without acquiring the session writer lock. Duplicate names list candidate IDs.
 `/session name` updates the owned session, including during active work. Lists
-show column headings and separate active/archived status from live/stored process
-ownership. Name, model and first-prompt cells use bounded single-line previews;
+show column headings and live/stored process ownership. Name, model and first-prompt cells use bounded single-line previews;
 whitespace and terminal controls become spaces without changing stored text.
 Probing the caller's own session uses its retained lock descriptor.
+
+All saved sessions participate in resume selection and --last. Archiving has been
+removed: old archive/unarchive events are inert history, and old checkpoint
+archive flags are ignored. A pending legacy archive control is completed without
+an effect on resume. New writers refuse archive events and archive requests.
 
 ## Model-facing tool contract
 

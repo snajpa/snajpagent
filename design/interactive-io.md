@@ -11,9 +11,9 @@ the terminal, and how users inspect and modify queued turns.
 
 The operator must be able to leave a live session without a terminal multiplexer
 and reconnect without restarting its engine. `--attach` / `-A` attach to a live
-owner; `--resume` continues a stopped session. Existing file `/attach` and
+owner; `--resume` attaches to a live session or continues a stopped one. Existing file `/attach` and
 `/detach` remain unchanged. Bare `/session` prints the full current ID followed
-by running sessions; `/session list` also includes stopped/archived sessions;
+by running sessions; `/session list` also includes stopped sessions;
 `/session detach` returns to the shell; `/session attach ID` switches terminals
 to another live owner. Unique ID prefixes are accepted and ambiguous matches
 are listed rather than guessed. Omitting an attach ID offers a live-session

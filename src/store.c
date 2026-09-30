@@ -270,7 +270,7 @@ session_closure_event(const char *type)
         "response_interrupted response_failed response_completed response_output_correction "
         "tool_finished process_closed turn_completed turn_completed_silent turn_failed "
         "turn_interrupted turn_cancel_requested turn_recovery compaction_interrupted "
-        "compaction_completed control_finished goal_paused goal_cancelled session_archived "
+        "compaction_completed control_finished goal_paused goal_cancelled "
         "session_delete_requested input_cancelled");
 }
 
@@ -1002,11 +1002,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
     } else if (snag_string_in(type, "session_archived session_unarchived")) {
         const char *origin = snag_json_string(data, "origin");
-        bool archived = strcmp(type, "session_archived") == 0;
-        if (!snag_json_exact_keys(data, "origin") || session->response_open ||
-            session->pending_call_count || session->process_count != 0u || session->archived == archived ||
+        /* Old journals retain these inert markers; new writers cannot create them. */
+        if (live || !snag_json_exact_keys(data, "origin") || session->response_open ||
+            session->pending_call_count || session->process_count != 0u ||
             !origin || strcmp(origin, "user") != 0) goto invalid;
-        session->archived = archived;
     } else if (strcmp(type, "session_delete_requested") == 0) {
         const char *prefix = snag_json_string(data, "confirmed_id_prefix");
         const char *trash = snag_json_string(data, "trash_name");
@@ -1292,7 +1291,8 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
         if (!(requested ? snag_json_arg_keys(data, "control", "origin source_seq", error, error_size) :
                           snag_json_exact_keys(data, "control")) ||
             snag_json_integer_u64(data, "control", &control) < 0 ||
-            !control || control > SNAG_CONTROL_RETRY || (control & (control - 1u))) goto invalid;
+            !control || control > SNAG_CONTROL_RETRY || (control & (control - 1u)) ||
+            (live && requested && control == SNAG_CONTROL_LEGACY_ARCHIVE)) goto invalid;
         if ((origin_value && !origin) || (origin &&
              (control != SNAG_CONTROL_COMPACT || strcmp(origin, "image_boundary") || !source_value ||
               snag_json_integer_u64(data, "source_seq", &source_seq) < 0 || !source_seq || source_seq >= seq)) ||

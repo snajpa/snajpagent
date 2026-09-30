@@ -213,14 +213,14 @@ open_snapshot(struct snag_store *store, struct snag_session *session,
 /* On success the caller owns the snapshot; no selected-field copies. */
 static int
 matching_snapshot(struct snag_store *store, struct snag_session *snapshot,
-                   const char *id, bool include_archived)
+                   const char *id)
 {
     char error[128];
 
     snag_session_init(snapshot);
     if (strlen(id) == SNAG_ID_HEX_LEN && snag_hex_is_lower(id, SNAG_ID_HEX_LEN) &&
         open_snapshot(store, snapshot, id, error, sizeof(error)) == 0 &&
-        !snapshot->delete_requested && (include_archived || !snapshot->archived)) return 0;
+        !snapshot->delete_requested) return 0;
     snag_session_close(snapshot);
     return -1;
 }
@@ -249,7 +249,7 @@ snag_store_find_name(struct snag_store *store, const char *name, char id[SNAG_ID
     if (!dir) return -1;
     while ((entry = snag_directory_next(dir)) != NULL) {
         struct snag_session snapshot;
-        if (matching_snapshot(store, &snapshot, entry, true) < 0) continue;
+        if (matching_snapshot(store, &snapshot, entry) < 0) continue;
         bool match = snapshot.name && !strcmp(snapshot.name, name);
         snag_session_close(&snapshot);
         if (!match) continue;
@@ -284,7 +284,7 @@ snag_store_find_last(struct snag_store *store, char id[SNAG_ID_HEX_LEN + 1u],
     if (!dir) return -1;
     while ((entry = snag_directory_next(dir)) != NULL) {
         struct snag_session snapshot;
-        if (matching_snapshot(store, &snapshot, entry, false) < 0) continue;
+        if (matching_snapshot(store, &snapshot, entry) < 0) continue;
         uint64_t last = snapshot.last_time_ms;
         if (!best[0] || last > best_time || (last == best_time && strcmp(entry, best) > 0)) {
             memcpy(best, entry, sizeof(best));
@@ -293,7 +293,7 @@ snag_store_find_last(struct snag_store *store, char id[SNAG_ID_HEX_LEN + 1u],
         snag_session_close(&snapshot);
     }
     if (finish_directory(dir, error, error_size) < 0) return -1;
-    if (!best[0]) return snag_fail(error, error_size, ENOENT, "no matching active session");
+    if (!best[0]) return snag_fail(error, error_size, ENOENT, "no saved session");
     memcpy(id, best, sizeof(best));
     return 0;
 }
@@ -372,7 +372,7 @@ snag_store_list(struct snag_store *store, const struct snag_session *owned,
     if (!dir) return -1;
     while ((entry = snag_directory_next(dir)) != NULL) {
         struct snag_session snapshot;
-        if (matching_snapshot(store, &snapshot, entry, filter != SNAG_SESSIONS_ACTIVE) < 0) continue;
+        if (matching_snapshot(store, &snapshot, entry) < 0) continue;
         struct snag_buf row = {.max = SNAG_PATH_MAX_BYTES + 8192u};
         /* Closing any descriptor of our POSIX lock file drops all locks held
          * by this process on that file, even if another descriptor owns them. */
@@ -383,14 +383,13 @@ snag_store_list(struct snag_store *store, const struct snag_session *owned,
             continue;
         }
         if ((!shown && snag_buf_printf(&row,
-                "SESSION\tNAME\tMODEL\tTURNS\tSTATUS\tPROCESS\tFIRST PROMPT\n") < 0) ||
+                "SESSION\tNAME\tMODEL\tTURNS\tPROCESS\tFIRST PROMPT\n") < 0) ||
             snag_buf_printf(&row, "%.8s\t", entry) < 0 ||
             append_list_preview(&row, snapshot.name ? snapshot.name : "-") < 0 ||
             snag_buf_putc(&row, '\t') < 0 ||
             append_list_preview(&row, snapshot.default_model) < 0 ||
-            snag_buf_printf(&row, "\t%llu\t%s\t%s\t",
+            snag_buf_printf(&row, "\t%llu\t%s\t",
                             (unsigned long long)snapshot.turn_count,
-                            snapshot.archived ? "archived" : "active",
                             live ? "live" : "stored") < 0 ||
             append_list_preview(&row, snapshot.first_user) < 0 ||
             snag_buf_putc(&row, '\n') < 0 ||

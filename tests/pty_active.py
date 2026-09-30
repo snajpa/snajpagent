@@ -670,7 +670,7 @@ def test_session_list_keeps_live_owner():
         child.wait_idle_prompt(start=end)
         return bytes(child.buf[start:])
 
-    header = b"SESSION\tNAME\tMODEL\tTURNS\tSTATUS\tPROCESS\tFIRST PROMPT"
+    header = b"SESSION\tNAME\tMODEL\tTURNS\tPROCESS\tFIRST PROMPT"
     with Child([], ready=DEFAULT_IDLE_PROMPT, cols=160) as stopped:
         end = stopped.send_wait(b"stopped-session-regression\r", b"fixture answer")
         stopped.wait_idle_prompt(start=end)
@@ -699,7 +699,7 @@ def test_session_list_keeps_live_owner():
                 for identity in (first_id, second_id, stopped_id):
                     state = b"stored" if identity == stopped_id else b"live"
                     row = (identity[:8].encode() + b"\t-\t" + DEFAULT_MODEL.encode() +
-                           b"\t1\tactive\t" + state + b"\t")
+                           b"\t1\t" + state + b"\t")
                     assert row in output, output
             output = query(first, b"/s", b"running sessions:")
             assert first_id.encode() in output and second_id[:8].encode() in output, output
@@ -722,6 +722,39 @@ def test_session_list_keeps_live_owner():
         turns = [event for event in events(first_id) if event["type"] == "turn_started"]
         assert [turn["data"]["text"] for turn in turns] == [
             "first-live-session", "terminal_status"], turns
+
+
+def test_removed_archive_command_and_picker():
+    from test_session_archiving import append_legacy_events
+
+    with Child([], ready=DEFAULT_IDLE_PROMPT, cols=200) as child:
+        start = len(child.buf)
+        child.send_wait(b"/help\r", b"/delete", start=start)
+        child.wait_idle_prompt(start=start)
+        assert b"/archive" not in child.buf[start:]
+        child.send_wait_idle(b"/archive\r", b"unknown slash command", start=len(child.buf))
+        child.send_wait_idle(b"ping\r", b"pong", start=len(child.buf))
+        sid = child.session_id()
+        child.send_wait(b"slow\r", b"working slowly", start=len(child.buf))
+        child.send_wait(b"/archive\r", b"unknown slash command", start=len(child.buf))
+        child.wait(b"slow complete", start=len(child.buf))
+        child.wait_idle_prompt()
+        child.exit_now()
+    assert not any(e["type"] == "session_archived" for e in events(sid))
+    path = STATE_ROOT / sid / "events.jsonl"
+    append_legacy_events(path, ["session_archived"])
+    original = path.read_bytes()
+    with Child(["--resume"], cols=200) as picker:
+        picker.wait_text("session › ".encode())
+        assert sid[:8].encode() in picker.buf, bytes(picker.buf)
+        picker.send(b"\x04")
+        picker.reap()
+    assert path.read_bytes() == original
+    with Child(["--resume", sid], ready=PROMPT, cols=200) as resumed:
+        resumed.send_wait_idle(b"ping\r", b"pong", start=len(resumed.buf))
+        resumed.exit_now()
+    assert path.read_bytes().startswith(original)
+    print("removed /archive, uninterrupted work and legacy resume picker: ok", flush=True)
 
 
 def test_session_list_previews():
@@ -833,10 +866,10 @@ def test_session_names():
     listed = run("-l")
     assert listed.returncode == 0, listed
     assert listed.stdout.splitlines()[0].split("\t") == [
-        "SESSION", "NAME", "MODEL", "TURNS", "STATUS", "PROCESS", "FIRST PROMPT"], listed
+        "SESSION", "NAME", "MODEL", "TURNS", "PROCESS", "FIRST PROMPT"], listed
     row = next(line.split("\t") for line in listed.stdout.splitlines()
                if line.startswith(sid[:8] + "\t"))
-    assert row[1] == name and row[5] == "stored", row
+    assert row[1] == name and row[4] == "stored", row
     assert len([e for e in events(sid) if e["type"] == "session_named"]) == 1
 
     for invalid in ("", " ", "line\nname", "tab\tname", "escape\x1bname", "x" * 16385):
@@ -867,8 +900,7 @@ def test_session_names():
         renamed.send_wait(b"/session name renamed lead\r", b"session name: renamed lead")
         renamed.send_wait(b"/s name\r", b"usage: /session name")
         renamed.send_wait(b"/status\r", b"name: renamed lead")
-        renamed.send(b"/archive\r")
-        assert renamed.reap() == 0
+        renamed.exit_now()
     result = run("--resume", "-N", "renamed lead", "-e", "--", "ping")
     assert result.returncode == 0 and result.stdout.strip() == "pong", result
     assert [e["data"]["name"] for e in events(sid) if e["type"] == "session_named"] == [
@@ -1004,7 +1036,7 @@ def new_session(before, child=None):
         if child is not None:
             # Concurrent native fixtures each save before either submits input.
             # Resolve the ID advertised on this fixture's own terminal.
-            shown = re.search(rb"\bsession id ([0-9a-f]{8})\b", child.buf)
+            shown = re.search(rb"\bsession\s+id\s+([0-9a-f]{8})\b", child.buf)
             if shown:
                 created = {sid for sid in created if sid.startswith(shown[1].decode("ascii"))}
         if child is None or child.pid is None or (created and all(
@@ -2618,30 +2650,6 @@ def test_deferred_controls_in_admission_order():
     assert marker.read_text() == "x"
 
 
-def test_archive_control_completion_recovery():
-    for cut_type in ("session_archived", "control_finished"):
-        with Child([], PROMPT.rstrip()) as child:
-            child.send_wait(b"engine_blocked\r", b"engine-block-start")
-            child.send(b"/archive\r")
-            child.wait(b"session archived")
-            child.finish()
-            sid = child.session_id()
-        path = STATE_ROOT / sid / "events.jsonl"
-        lines = path.read_bytes().splitlines(keepends=True)
-        log = [json.loads(line) for line in lines]
-        cut = one(log, cut_type)
-        assert one(log, "control_requested")["data"]["control"] == 8
-        # Inactive private session, cut at the actual writer's durable boundary.
-        path.write_bytes(b"".join(lines[:cut["seq"]]))
-        with Child(["--resume", sid]) as child:
-            child.wait_idle_prompt()
-            child.exit_now()
-        log = events(sid)
-        one(log, "session_archived")
-        one(log, "session_unarchived")
-        one(log, "control_finished")
-
-
 def test_exit_preserves_pending_submission():
     with Child([], DEFAULT_IDLE_PROMPT) as child:
         child.send_wait(b"engine_blocked\r", b"engine-block-start")
@@ -3665,7 +3673,6 @@ def test_command_name_completion():
         (b"/voi", b"/voice"),
         (b"/q", b"/queue"),
         (b"/ne", b"/next"),
-        (b"/ar", b"/archive"),
         (b"/com", b"/compact"),
         (b"/conf", b"/config"),
         (b"/del", b"/delete"),
@@ -5028,7 +5035,7 @@ def test_config_and_cli_model_passthrough():
 
 
 def test_empty_session_lifecycle():
-    for action in (b"/exit\r", b"\x04", b"\x03" * 5, b"/archive\r", b"/delete\r",
+    for action in (b"/exit\r", b"\x04", b"\x03" * 5, b"/delete\r",
                    signal.SIGHUP, signal.SIGTERM):
         before = session_ids()
         with Child(["--no-color", "--no-listen", "--no-client"], DEFAULT_IDLE_PROMPT) as child:
@@ -5142,7 +5149,7 @@ def test_empty_network_session():
 
 def test_exit_resume_matrix():
     for action in (b"/exit\r", b"\x04", "cancel", signal.SIGHUP, signal.SIGTERM,
-                   "active", b"/archive\r", b"/delete\r", "selection"):
+                   "active", b"/delete\r", "selection"):
         before = session_ids()
         ready = DEFAULT_IDLE_PROMPT if action == "cancel" else PROMPT.rstrip()
         with Child(["--no-color"], ready) as child:
@@ -5177,8 +5184,6 @@ def test_exit_resume_matrix():
             arguments = command_arguments(command)
             assert arguments[-2:] == ["--resume", session_id], arguments
             assert arguments[arguments.index("--dotdir") + 1] == DOTDIR
-            if action == b"/archive\r":
-                assert one(events(session_id), "session_archived")
             if action == "active":
                 log = events(session_id)
                 assert not [event for event in log if event["type"] == "turn_interrupted"]
@@ -6767,6 +6772,7 @@ if __name__ == "__main__":
     test_session_list_keeps_live_owner()
     test_session_names()
     test_session_list_previews()
+    test_removed_archive_command_and_picker()
     test_resume_attaches_live_session()
     test_compaction_ignores_legacy_samples()
     test_hard_compaction_progress_is_remeasured()
@@ -6832,7 +6838,6 @@ if __name__ == "__main__":
     test_irc_update_prompt_names_update_and_replay_resolves_it()
     test_irc_admission_is_not_echoed_as_operator_input()
     test_deferred_controls_in_admission_order()
-    test_archive_control_completion_recovery()
     test_exit_preserves_pending_submission()
     test_input_survives_preparation_failure()
     test_resume_keeps_original_instruction_paths()

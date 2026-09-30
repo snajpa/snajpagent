@@ -106,7 +106,6 @@ static const struct checkpoint_field session_fields[] = {
     B(struct snag_session, active_goal),
     B(struct snag_session, cancel_requested),
     B(struct snag_session, response_handoff),
-    B(struct snag_session, archived),
     B(struct snag_session, delete_requested),
     B(struct snag_session, response_open),
     B(struct snag_session, response_complete),

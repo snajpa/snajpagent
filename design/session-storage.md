@@ -177,7 +177,7 @@ Session/configuration records use fixed field order:
 |---|---|---|
 | 1 | session created | source semantic revision2, protocol1, provider/model/effort text, cwd text |
 | 2 | cwd changed | previous cwd text, new cwd text |
-| 3/4 | archived/unarchived | user origin1 |
+| 3/4 | retired archive/unarchive metadata | user origin1; inert legacy records |
 | 5 | delete requested | confirmed prefix4, session UUID16, trash nonce16 |
 | 6 | banner updated | text, including empty to clear |
 | 7 | steering updated | mode1: default0, mentions1, all2 |
