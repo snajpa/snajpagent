@@ -441,6 +441,8 @@ decode_state(const json_t *data, struct snag_session *s)
         json_decref(s->strings);
         s->strings = copy;
     }
+    s->name = snag_json_string(s->strings, "name");
+    if (json_object_get(s->strings, "name") && !snag_session_name_valid(s->name)) return -1;
 #define TEXT_FIELD(f) do { \
     const json_t *value = json_object_get(data, "has_" #f); \
     if (!json_is_boolean(value)) return -1; \

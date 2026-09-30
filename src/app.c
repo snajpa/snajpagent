@@ -82,7 +82,7 @@ turn_retry_available(const struct app_state *app, const struct turn_retry *retry
 }
 
 static int
-app_error(struct app_state *app, const char *message)
+failure_notice(struct app_state *app, const char *message, bool recovering)
 {
     uint64_t now = snag_monotonic_ms();
     if ((app->session.goal_status == SNAG_GOAL_ACTIVE || app->session.active_turn) &&
@@ -90,7 +90,20 @@ app_error(struct app_state *app, const char *message)
         !strcmp(app->recovery_error, message) && now - app->recovery_notice_ms < 30000u) return 0;
     (void)snag_strcpy(app->recovery_error, sizeof(app->recovery_error), message);
     app->recovery_notice_ms = now;
+    if (recovering) {
+        struct snag_buf text = {.max = 4096u};
+        int rc = snag_buf_printf(&text, "%s; recovering automatically", message);
+        if (!rc) rc = snag_ui_text(&app->ui, SNAG_UI_WARNING, (const char *)text.data);
+        snag_buf_free(&text);
+        return rc;
+    }
     return snag_ui_text(&app->ui, SNAG_UI_ERROR, message);
+}
+
+static int
+app_error(struct app_state *app, const char *message)
+{
+    return failure_notice(app, message, false);
 }
 static int list_row(void *opaque, const char *text, size_t len);
 static int
@@ -217,9 +230,10 @@ static const struct snag_term_command commands[] = {
     {"/yield", "return tool wait to model; keep running processes"},
     {"/session", "current session ID and running sessions"},
     {"/session list|l", "all saved sessions and their live state"},
+    {"/session name NAME", "set the current session's saved name"},
     {"/session attach|a ID", "switch to a live session; failure keeps this attachment"},
     {"/session detach|d", "return to the shell while this session continues"},
-    {"/s [list|l|attach|a ID|detach|d]", "alias for /session"},
+    {"/s [list|l|name NAME|attach|a ID|detach|d]", "alias for /session"},
     {"/history [N]", "show N retained turns; default 1, 0 counts only"},
     {"/archive", "archive at a safe boundary and exit"},
     {"/delete", "delete after confirmation at a safe boundary"},
@@ -1156,10 +1170,11 @@ render_status(struct app_state *app)
     if (capacity.source_bound)
         advertised = snag_model_metadata(&app->model_cache, provider, app->session.default_model);
     struct snag_buf text = {.max = 64u * 1024u};
-    if (snag_buf_printf(&text, "session: %s\n" "state: %s\n" "tools: %s\n"
+    if (snag_buf_printf(&text, "session: %s\n" "name: %s\n" "state: %s\n" "tools: %s\n"
         "provider: %s\n" "model: %s\n" "effort: %s\n" "cwd: %s\n"
         "turns: %llu\n" "queue: %zu%s\n" "verbosity: %u\n" "context: source=%s",
-        id, app->session.active_turn ? "active" : "idle",
+        id, app->session.name ? app->session.name : "-",
+        app->session.active_turn ? "active" : "idle",
         app->session.active_read_only ? "read-only query" : "normal",
         next_provider(app) ? next_provider(app)->name : "<missing>", app->session.default_model,
         app->session.default_effort, app->session.cwd,
@@ -2948,6 +2963,18 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         }
         size_t verb = 0u;
         while (verb < len && !isspace((unsigned char)argument[verb])) ++verb;
+        if (verb == 4u && !strncmp(argument, "name", 4u)) {
+            while (verb < len && isspace((unsigned char)argument[verb])) ++verb;
+            json_t *name = json_stringn(argument + verb, len - verb);
+            if (!name || !snag_session_name_valid(json_string_value(name))) {
+                json_decref(name);
+                return app_error(app, "usage: /session name NAME (nonempty single-line UTF-8)");
+            }
+            if (commit_event(app, "session_named", json_pack("{s:o}", "name", name),
+                              error, sizeof(error)) < 0 ||
+                persist_session(app, error, sizeof(error)) < 0) return app_error(app, error);
+            return app_textf(app, SNAG_UI_HOST, "session name: %s", app->session.name);
+        }
         if ((verb == 1u && argument[0] == 'a') ||
             (verb == 6u && !strncmp(argument, "attach", 6u))) {
             if (!app->ui.native) return app_error(app, "native attachment is unavailable here");
@@ -2972,7 +2999,8 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
         }
         if (len && !(len == 1u && argument[0] == 'l') &&
             (len != 4u || strncmp(argument, "list", 4u)))
-            return app_error(app, "usage: /session [list|l|attach|a ID|detach|d] (alias /s)");
+            return app_error(app,
+                "usage: /session [list|l|name NAME|attach|a ID|detach|d] (alias /s)");
         if (app_textf(app, SNAG_UI_HOST, "current session: %s%s\n%s sessions:",
                       app->session.id, app->session.pending_log ? " (not yet saved)" : "",
                       len ? "saved" : "running") < 0) return -1;
@@ -4598,7 +4626,7 @@ run_turn(struct app_state *app, struct turn_retry *retry, const char *prompt,
                               "provider_failure", &provider_failure, error, sizeof(error)) < 0) {
                 goto fail;
             }
-            (void)app_error(app, failure);
+            (void)failure_notice(app, failure, retry->pending && !retry->new_input);
             result = !app->stream_failed && provider_failure.new_input ? SNAG_APP_INPUT_READY : exit_status;
             goto out;
         }
@@ -5764,7 +5792,12 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
     if (cli->resume) {
         const struct snag_provider_config *resume_provider;
         const char *resume_model;
-        if (cli->resume_id) rc = snag_session_open(&app.store, &app.session, cli->resume_id,
+        if (cli->session_name) {
+            char id[SNAG_ID_HEX_LEN + 1u];
+            rc = snag_store_find_name(&app.store, cli->session_name, id,
+                                      list_row, &app, error, sizeof(error));
+            if (!rc) rc = snag_session_open(&app.store, &app.session, id, error, sizeof(error));
+        } else if (cli->resume_id) rc = snag_session_open(&app.store, &app.session, cli->resume_id,
                                   error, sizeof(error));
         else if (cli->last) rc = snag_session_open_last(&app.store, &app.session,
                                        error, sizeof(error));
@@ -5826,6 +5859,10 @@ run_owner(const struct snag_cli *cli, const char *program, struct snag_session_p
                                selected_provider->name, new_model, new_effort, error, sizeof(error)) < 0) {
             goto fail;
         }
+        if (cli->session_name &&
+            (commit_event(&app, "session_named", json_pack("{s:s}", "name", cli->session_name),
+                          error, sizeof(error)) < 0 ||
+             persist_session(&app, error, sizeof(error)) < 0)) goto fail;
         snag_context_start_new(&app.session);
         app.turn_model = app.session.default_model;
         app.turn_effort = resolve_effort(app.session.default_effort);
@@ -5974,10 +6011,17 @@ attach_session(const struct snag_cli *cli, char *error, size_t error_size)
         snag_store_init(&app.store);
         int rc = snag_store_open(&app.store, dotdir, error, error_size);
         if (!rc) {
-            rc = snag_ui_init(&app.ui);
-            if (!rc) {
-                rc = pick_session_id(&app, SNAG_SESSIONS_RUNNING, &selected, error, error_size);
-                snag_ui_free(&app.ui);
+            if (cli->session_name) {
+                char id[SNAG_ID_HEX_LEN + 1u];
+                rc = snag_store_find_name(&app.store, cli->session_name, id,
+                                          attachment_candidate, NULL, error, error_size);
+                if (!rc && !(selected = snag_strdup_checked(id, SNAG_ID_HEX_LEN))) rc = -1;
+            } else {
+                rc = snag_ui_init(&app.ui);
+                if (!rc) {
+                    rc = pick_session_id(&app, SNAG_SESSIONS_RUNNING, &selected, error, error_size);
+                    snag_ui_free(&app.ui);
+                }
             }
         }
         snag_store_close(&app.store);

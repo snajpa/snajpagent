@@ -4,6 +4,15 @@
 
 ## Unreleased
 
+- Add session-list column headings and label sessions without a running owner
+  as `stored`; running sessions retain the `live` label.
+
+- Add saved session names with `-N`/`--name`, exact name selection on attach and
+  resume, and `/session name NAME` for existing sessions.
+
+- Identify automatically recovering provider failures as warnings, including
+  streams ending before `response.completed`; completed tool results remain retained.
+
 - Preserve tool-call admission and replay when `cd` changes directory within a
   response batch; later calls use the updated directory.
 

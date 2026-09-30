@@ -54,17 +54,11 @@
         stay alive; the model can let them finish or stop them. A submitted
         correction stays visible in rollout even when the next prompt is
         blocked.</p>
-      <p>A new prompt appears when a submitted action can accept another one;
-        a provider request accepts steering once it is processing. A foreground
-        slash command finishes before another app command runs. Controls
-        that need a safe boundary acknowledge when they will apply. The prompt's
-        context percentage tracks measured input usage as work progresses.
-        <code>/history</code> shows the last turn and total history length;
-        <code>/history N</code> requests more. <code>/cat PATH</code> opens a
-        regular file in your pager without copying its contents into the
-        conversation. <code>/ro QUERY</code> queues a
-        read-only query during work. <code>/compact</code> reduces model context
-        while preserving the full local log and reporting its progress.</p>
+      <p>Foreground slash commands finish before another command runs. Controls
+        needing a safe boundary acknowledge it. The prompt shows context usage.
+        <code>/history N</code> shows retained turns; <code>/cat PATH</code> opens
+        a file in your pager. <code>/ro QUERY</code> queues read-only inspection,
+        and <code>/compact</code> summarizes context while preserving the local log.</p>
       <p>Resume continues unfinished work without a new prompt. For scripts, use
         <code>snajpagent -e --resume SESSION_ID &lt;/dev/null</code>. Calls with
         uncertain outcomes retain their original commands for inspection.</p>
@@ -72,7 +66,10 @@
         least 20 columns wide. Use
         <code>/s d</code> to return to the shell while work continues, then
         <code>snajpagent --attach SESSION_ID</code> to reconnect with the retained
-        draft. Without an ID, attach lists running sessions. Terminal file transfers
+        draft. Without an ID, attach lists running sessions. Current source accepts
+        <code>-N NAME</code> to name a new session and select it on attach or resume;
+        <code>/session name NAME</code> names an existing session. Session lists show
+        <code>live</code> or <code>stored</code> under column headings. Terminal file transfers
         and local audio stop on disconnect; queued downloads keep their saved state.
         Restart microphone capture explicitly after reconnecting.</p>
       <p>Set a goal when you want work to continue beyond the next reply. Exit to
@@ -122,10 +119,8 @@
         <code>/connect ENDPOINT</code> joins that endpoint's advertised room.
         Empty Tab cycles through rollout and each connected room. Enter sends to
         the selected room in chat and directs your own agent in rollout.</p>
-      <p>People and agents share their selected room. Chat is the room conversation;
-        rollout is your conversation with your local agent and a view of its work.
-        In rollout, your instructions go to your local agent. Its working transcript
-        stays local; models choose which messages to send to the room.</p>
+      <p>Working transcripts stay in rollout; models choose which messages to
+        send to the room.</p>
       <p>Start a room and connect another instance in a separate terminal:</p>
       <pre><code>snajpagent -s
 snajpagent -c</code></pre>
@@ -140,9 +135,6 @@ snajpagent -c</code></pre>
     </section>
     <section id="install" aria-labelledby="install-heading">
       <h2 id="install-heading">Run it where the work is</h2>
-      <p>snajpagent is written in C to run on more of the systems where development
-        happens. The aim is to have the agent on the machine you are working on,
-        including systems you are still learning.</p>
       <p><a href="downloads.html">Download 0.99.8b</a> for Linux, macOS, Windows or BSD,
         or build from source. The downloads page lists architectures and requirements.</p>
       <p>A normal build needs C11/POSIX with pthreads, GNU make, libcurl and Jansson.

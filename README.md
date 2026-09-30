@@ -50,41 +50,30 @@ Model output with tool details hidden.
 
 ### Correct this task or queue the next one
 
-Your request and the work through its final answer make up a **turn**, which
-appears in **rollout**. You can type while it runs; typing alone does not
-interrupt it.
+A **turn** runs from your request through the final answer in **rollout**. Type
+while it runs; Enter sends a correction at a safe boundary and keeps running
+commands alive. Blank Enter starts no work.
 
-**Enter sends a correction during active work**: “Use the existing parser;
-don't add a dependency.” The steer remains visible and is admitted at a safe
-boundary, continuing from delivered text while running commands stay alive.
-The active prompt remains editable through request preparation and retries.
-Blank Enter starts no work.
-
-**Tab at the end of an ordinary message queues a follow-up while work is
-active.** Waiting prompts run oldest first; `(N)` counts them. `/next` resumes
-a paused queue, and `/q c` clears waiting prompts without stopping current work.
-Tab first completes a `/command` name: `/sta` becomes `/status `; a second Tab
-lists ambiguous choices. Completion never submits text.
+Tab at the end of an ordinary message queues a follow-up while work is active.
+Waiting prompts run oldest first; `(N)` counts them. `/next` resumes a paused
+queue, and `/q c` clears it. Tab first completes `/command` names; completion
+never submits text.
 
 ### Commands, history and context
 
-Commands remain available while work is steerable. Foreground commands own
-input until they finish; later input waits. Controls needing a safe boundary
-acknowledge it. The external `$EDITOR` owns terminal input while open, and
-session deletion requires confirmation.
+Commands remain available during work. Foreground commands and `$EDITOR` own
+input until they finish; controls needing a safe boundary acknowledge it.
+Session deletion requires confirmation.
 
 `/history` shows the last turn, `/history 10` the last ten, and `/history 0`
-counts. Up/Ctrl-R navigate prompt-entry history separately. `/cat src/app.c`
-opens a file in `$PAGER` without adding its contents to the conversation.
+counts. Up/Ctrl-R navigate prompt history. `/cat PATH` opens a file in `$PAGER`
+without adding it to the conversation.
 
-Use `/ro QUERY` for inspection without commands, edits, goal changes or IRC
-sends. During work it queues a separate read-only turn. `/yield` returns a tool
-wait to the model while preserving its process and handle. Durable command
-output remains pageable after resume without rerunning commands.
-
-`/compact` summarizes model context while retaining the full local log. It
-reports progress and interruptions; failed compaction preserves the previous
-context. Unsettled command handles must be collected before a final answer.
+`/ro QUERY` queues inspection without commands, edits, goal changes or IRC sends.
+`/yield` returns a tool wait to the model while preserving its process and handle.
+Command output remains pageable after resume without rerunning commands.
+`/compact` summarizes context while retaining the full local log; failed
+compaction preserves previous context.
 
 ### Keep working, or leave and come back
 
@@ -107,19 +96,16 @@ Ctrl-D on an empty draft exits, and no work continues after exit. Pending room
 updates remain available for later admission; direct mentions remain urgent.
 
 The conversation, tools, queue and goal are saved as a **session**. Resume
-continues unfinished work; started calls without results are reported as
-unknown rather than blindly repeated. Linux sessions started on ANSI terminals
-at least 20 columns wide are saved at startup and continue through terminal loss.
-Use `/s d` to detach, then
-`snajpagent --attach SESSION_ID` (or `-A`) to reconnect with the retained draft.
-Without an ID, attach offers a running-session picker. `/s a ID` switches
-between live sessions; a failed switch keeps the source. Normal exit
-prints its resume command. An unfinished terminal file transfer ends when its
-controlling terminal disconnects; queued downloads retain their saved state.
-New editors and pagers use the replacement terminal's profile; a running
-external program keeps its launch environment.
-Local voice, dictation and playback stop on terminal detach, loss or suspension;
-restart them explicitly after reconnecting.
+continues unfinished work; calls with uncertain outcomes require inspection.
+Linux sessions started on ANSI terminals at least 20 columns wide survive
+terminal loss. Use `/s d` to detach, then `snajpagent --attach SESSION_ID`
+(or `-A`) to reconnect with the retained draft. Without an ID, attach offers a
+running-session picker. `/s a ID` switches live sessions; failure keeps the source.
+Normal exit prints its resume command.
+
+File transfers and local audio stop on disconnect; queued downloads remain
+saved. Restart microphone capture after reconnecting. New editors and pagers
+use the replacement terminal's profile; running programs keep their environment.
 List sessions or reopen the latest one:
 
 ```sh
@@ -127,10 +113,15 @@ snajpagent -l
 snajpagent --resume --last
 ```
 
+List headings distinguish `live` from `stored` sessions. Name a new session with
+`snajpagent -N lead`, or an existing one with `/session name lead`.
+`snajpagent --attach -N lead` reconnects while it runs;
+`snajpagent --resume -N lead` reopens it after stopping. Duplicate names require
+an ID.
+
 **Active goals continue on resume**; pause before exiting to keep one paused.
-Armed queues run before goal work, while paused queues need `/next`. Resume
-retains public history and completed tool results. Keep important requirements
-in project files alongside the session log.
+Armed queues run before goal work; paused queues need `/next`. Resume retains
+public history and completed results. Keep important requirements in project files.
 
 ### Transfer files through the terminal
 
@@ -145,56 +136,45 @@ snajpagent remote ssh -t target snajpagent --attach SESSION_ID
 Use `/session detach` in the agent to return to the shell while work continues.
 Omit `SESSION_ID` from the attach command to choose a running session.
 
-`remote` passes a generic child command and its arguments literally through a
-PTY, without starting a local agent session. Drop one workstation regular file
-into the POSIX agent's composer, or use `/receive` and enter its path. Native
-drops require current binaries at both ends and preserve the draft and active
-work. Verified files become unsent attachments.
-Review `/attachments` before submitting. Uploads reject directories and empty files.
+`remote` runs the supplied command through a PTY. Drop a workstation regular file
+into the POSIX agent's composer, or select it with `/receive`. Native drops need
+current binaries at both ends and preserve the draft and active work. Verified
+uploads become unsent attachments; review `/attachments` before submitting.
+Uploads reject directories and empty files.
 
-Use `/send PATH` to send an agent file to the workstation, or ask the model to
-use `send_file`. Downloads accept empty files and accepted `asset:ID` references.
-Transfers keep the conversation visible; the native wrapper shows a compact progress line.
-Native downloads default to `~/Downloads`; set `[terminal] download_dir` in the
-workstation's `~/.snajpagent/config.ini` to change it. Receipts list actual saved
-paths, and transfers restore the prompt and editable draft.
+`/send PATH` or the model's `send_file` tool downloads files, including empty
+files and accepted `asset:ID` references. Transfers show progress and receipts
+with saved paths. Downloads default to `~/Downloads`; change `[terminal]
+download_dir` in the workstation's `~/.snajpagent/config.ini`.
 
-Model sends while detached queue durable exports in the existing remote session.
-Wrapped reattachment delivers them at an idle boundary. Changed sources and
-uncertain transfers remain pending; ask the model to list, remove or clear them
-with `download_queue`. Source and completed local files are preserved.
+Model sends while detached queue durable exports. Wrapped reattachment delivers
+them at an idle boundary. Changed sources and uncertain transfers remain pending;
+the model's `download_queue` tool lists or removes them, preserving original files.
 
-The trzsz-go wrapper remains an alternative for explicit `/receive` and
-`/send` commands: on macOS, install `trzsz-go` with Homebrew and connect using
+Alternatively, install `trzsz-go` with Homebrew and connect using
 `trzsz --dragfile ssh target`. Its `~/.trzsz.conf` `DefaultDownloadPath` controls
-saving. Go-client stock drag sends Ctrl-C first, which can cancel a draft or work.
-See the manual's **Terminal file transfers**, **Remote terminal mode (snajpagent remote)**
-and **Model tools** sections for setup, recovery and the complete tool catalog.
+saving. Stock drag sends Ctrl-C first, which can cancel drafts or work.
+See the manual's **Terminal file transfers** and **Remote terminal mode** sections.
 Native wrapper, downloads and outbox are development-source features; the
 0.99.8b stable binary supports uploads.
 
 ### Attach files and use voice
 
-Use `/attach PATH` to stage an image or file, inspect the staged list with
-`/attachments`, then submit it with your prompt. Ask the agent to inspect PDF, Office or text documents, sample a video interval,
-or transcribe an audio file; accepted originals and prepared results stay with
-the saved session.
+Stage files with `/attach PATH`, review `/attachments`, then submit your prompt.
+The agent can inspect PDF, Office or text documents, sample video and transcribe
+audio; originals and prepared results stay with the session.
 
-`/dictate` inserts speech into your editable draft. `/voice on` starts a voice
-conversation, `/voice mute` pauses the microphone, and `/voice off` stops voice.
-You can continue speaking and submit another request while coding work runs;
-the session interface can inspect files and work status, steer the active turn,
-or queue a separate task. The model handles file changes and can send speech
-into the open conversation with `voice_output`. Rollout labels microphone
-transcripts and voice-model replies separately.
-Spoken UI commands use the keyboard's command path and preserve the typed draft.
-These commands use the selected provider and its credentials: a Codex subscription,
-codex-lb, or a compatible BYOK provider. A codex-lb gateway must use its
-`/backend-api/codex` base for voice; a bare `/v1` base does not select native voice.
-Use a headset for duplex voice. Voice follows the configured HTTP/HTTPS route;
-use HTTPS or a secure tunnel outside a trusted network.
-`/play asset:ID` plays a saved audio asset. The
-[manual](https://agent.snajpa.net/manual.html) covers provider setup, selectors,
+`/dictate` inserts speech into your draft. `/voice on` starts a conversation,
+`/voice mute` pauses the microphone, and `/voice off` stops voice. During coding
+work, use speech to inspect status, steer or queue tasks. Spoken UI commands
+preserve the typed draft. The model can speak using `voice_output`; rollout labels
+microphone transcripts and voice replies separately.
+
+Voice uses your selected provider's credentials: Codex subscription, codex-lb,
+or compatible BYOK. A codex-lb gateway needs its `/backend-api/codex` base for
+voice; `/v1` does not select native voice. Use a headset for duplex voice and
+HTTPS or a secure tunnel outside trusted networks. `/play asset:ID` plays saved
+audio. The [manual](https://agent.snajpa.net/manual.html) covers setup,
 data destinations and capture controls.
 
 ### Keep useful findings in files
@@ -235,14 +215,8 @@ Rollout and chat retain separate drafts and history. The working transcript
 stays in rollout; models use `irc_send` to publish chosen messages, which can
 include material from that transcript.
 
-In chat, `@bu` plus Tab becomes `@builder ` when that is the only match, including
-the space. `@` begins a nickname word anywhere in a message, so `please ask @bu`
-also completes while bare `bu` does not.
-
-At the end of the finished message, **Enter sends to the room**, while **Tab
-queues it as a local follow-up while your model is active**, even in chat; with
-the cursor still at the end of `@bu` or `@builder`, Tab completes that name
-first.
+In chat, Tab completes `@nickname` words. At the end of a finished message,
+Enter sends to the room; Tab queues a local follow-up while your model works.
 
 ### Coordinate work
 
@@ -264,10 +238,8 @@ sandbox.
 
 ## Further controls
 
-`/help` lists commands and editing keys; `/status` shows the current state.
-Ctrl-J inserts a newline, Up/Down navigate the draft and prompt history, and
-Ctrl-R searches history. `/queue` lists waiting work; its editor revises or
-removes entries. The manual covers editing keys and slash-command exceptions.
+`/help` lists commands and keys; `/status` shows current state. `/queue` lists
+waiting work and its editor revises entries. See the manual for editing controls.
 
 `/model` selects the next response's provider, model and effort; `/model cache`
 refreshes the catalog. Selection persists across resume. Model-callable switching
@@ -425,32 +397,10 @@ This installs the binary and manual under `$HOME/.local`; the default prefix is
 `make DEBUG=1` builds for debugging; `make help` lists build options, and
 [dependency notes](DEPENDENCIES.md) cover platform scope.
 
-`make prod-matrix` builds all implemented standalone targets into
-`build/matrix/` with host-load and available-memory bounded parallelism,
-without installation or VMs; the
-[platform notes](DEPENDENCIES.md) cover target requirements.
-`make prod-linux-armv6` builds a hard-float static PIE for ARMv6 Raspberry Pi
-1/Zero-class systems and ARMv7 with an ARMv6KZ/VFPv2 baseline;
-`make prod-linux-riscv64` a RISC-V RV64GC/LP64D static PIE;
-`make prod-linux-ppc64le` a little-endian POWER8 ELFv2 static PIE;
-`make prod-linux-i686` a modern 32-bit Linux static executable, linked non-PIE; and
-`make prod-linux-i686-legacy` a static non-PIE executable for Linux 2.4.27 with
-embedded TLS, roots and locale data. The legacy build needs working procfs and
-secure OS entropy; see [platform limits](DEPENDENCIES.md).
-
-An opt-in `make prod-linux-ppc32` recipe remains for unsupported PowerPC 32-bit
-experiments; it is outside the production matrix and has no stable release
-download or update channel.
-
-For experimental Windows x64 or ARM64, use `make prod-windows-x86_64` or
-`make prod-windows-arm64` with pinned Nix dependencies, and copy the resulting
-`build/matrix/windows-ARCH/bin/snajpagent.exe` to Windows; application libraries
-and CA roots are included without third-party runtime DLLs.
-
-For experimental NetBSD amd64 source builds, `make prod-netbsd-amd64` targets
-10.1 and `make prod-netbsd-amd64-legacy` targets 2.0 and 5.2.3, with separate
-native pthread ABIs; see the [platform notes](DEPENDENCIES.md). Plain `make`
-builds only the host platform.
+`make prod-matrix` builds standalone targets into `build/matrix/` using bounded
+parallelism, without installation or VMs. Plain `make` builds the host platform.
+The [platform notes](DEPENDENCIES.md) describe target recipes, bundled libraries,
+legacy kernel and pthread ABI requirements, entropy, TLS and unsupported experiments.
 
 Without configuration or credentials, the first interactive launch offers
 ChatGPT/Codex or Meta subscription, OpenRouter, OpenAI or custom-provider setup;

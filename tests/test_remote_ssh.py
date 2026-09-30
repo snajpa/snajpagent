@@ -75,6 +75,8 @@ class RemoteSSHTests(unittest.TestCase):
                         source.write_bytes(bytes(range(256)) * 300)
                         dotdir = state / "agent"
                         command = ["env", "LC_ALL=C.UTF-8", str(PRODUCT), "--dotdir", str(dotdir)]
+                        if scenario == "lost-client":
+                            command.insert(1, f"HOME={state}")
                         screen_env = None
                         if scenario == "screen":
                             sockets = state / "screens"
@@ -100,6 +102,17 @@ class RemoteSSHTests(unittest.TestCase):
                             events = [json.loads(line) for line in journal.read_text().splitlines()]
                             self.assertEqual(sum(e["type"] == "download_removed" for e in events), 1)
                             if scenario == "lost-client":
+                                started = state / "native-process-started"
+                                finished = state / "native-process-finished"
+                                os.write(child.master, b"native_attachment_process\r")
+                                deadline = time.monotonic() + 10
+                                while not started.exists():
+                                    self.assertLess(time.monotonic(), deadline,
+                                                    "remote command did not start")
+                                    child.remember_children()
+                                    time.sleep(0.02)
+                                self.assertFalse(finished.exists(),
+                                                 "command finished before SSH disconnected")
                                 server_children.remember()
                                 pinned = [os.dup(fd) for pid, fd in server_children.handles.items()
                                           if pid != server.pid]
@@ -107,6 +120,40 @@ class RemoteSSHTests(unittest.TestCase):
                                 child.close()
                                 self.assertLess(len(select.select(pinned, [], [], 0)[0]), len(pinned),
                                                 "lost client did not leave a surviving remote owner")
+                                deadline = time.monotonic() + 15
+                                while True:
+                                    events = [json.loads(line) for line in
+                                              journal.read_text().splitlines(keepends=True)
+                                              if line.endswith("\n")]
+                                    if sum(e["type"] == "turn_completed" for e in events) == 2:
+                                        break
+                                    self.assertLess(time.monotonic(), deadline,
+                                                    "remote work stopped after SSH disconnected")
+                                    time.sleep(0.05)
+                                self.assertEqual(finished.read_text(), "completed")
+                                reconnect = shlex.join([*command, "--attach", journal.parent.name])
+                                attached = RemoteProcess(home, [*ssh, reconnect],
+                                                         server_children=server_children)
+                                try:
+                                    attached.until(b"Attached session", 10)
+                                    attached.until(b"native process complete", 10)
+                                    os.write(attached.master, b"/exit\r")
+                                    attached.wait(0)
+                                finally:
+                                    attached.close()
+                                events = [json.loads(line) for line in
+                                          journal.read_text().splitlines()]
+                                calls = [item for event in events
+                                         if event["type"] == "response_completed"
+                                         for item in event["data"]["items"]
+                                         if item["kind"] == "tool_call"]
+                                self.assertEqual(sum(c["name"] == "exec_command"
+                                                     for c in calls), 1)
+                                self.assertEqual(sum(e["type"] == "turn_started"
+                                                     for e in events), 2)
+                                self.assertFalse([e for e in events if e["type"] in
+                                                  ("turn_interrupted", "response_interrupted",
+                                                   "turn_recovery", "turn_failed")])
                             else:
                                 os.write(child.master, b"/exit\r")
                                 child.wait(0)

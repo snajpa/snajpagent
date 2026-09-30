@@ -9,10 +9,12 @@ The next-format [binary storage design](session-storage.md) defines replacement
 checkpoints and indexed history. The storage implementation described here is
 the current JSONL format.
 
-snajpagent is a single foreground terminal process. It can host a built-in IRC
-server and maintain outgoing IRC connections, but does not fork a background
-worker or rely on a socket to keep sessions alive. Durable state is written to
-local event logs, and resume reconstructs the active session from those logs.
+Linux interactive ANSI sessions have an owner process with a private PTY and a
+replaceable terminal frontend. The owner retains provider requests, commands and
+IRC connections across terminal loss. A new frontend attaches through the private
+session socket; explicit exit stops the owner. One-shot execution and plain
+terminal operation run directly. Durable state is written to local event logs,
+and resume reconstructs stopped sessions from those logs.
 The append-only rollout for a session is
 `$DOTDIR/sessions/<session-id>/events.jsonl`. Format-4 records carry the byte
 offset of the last embedded checkpoint, which combines session state and the
@@ -29,6 +31,14 @@ compaction succeeds, context projection places a synthetic system notice
 with that absolute path immediately after the compact output. The notice is
 rebuilt during replay and does not modify the provider-produced compact output
 or its recorded hash and token count.
+
+`session_named` records a session's display name in the journal. The checkpoint's
+existing string table retains it; older checkpoints have no name. `-N` names new
+sessions and selects an exact name for attach/resume. Name lookup reads snapshots
+without acquiring the session writer lock. Duplicate names list candidate IDs.
+`/session name` updates the owned session, including during active work. Lists
+show column headings and separate active/archived status from live/stored process
+ownership. Probing the caller's own session uses its retained lock descriptor.
 
 ## Model-facing tool contract
 

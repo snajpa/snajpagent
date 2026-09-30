@@ -416,6 +416,53 @@ def case_home_instruction_symlink(binary, provider, root):
     print("tools e2e home-instruction-symlink: ok", flush=True)
 
 
+def case_incomplete_stream_recovery(binary, provider, root):
+    requests = []
+
+    def respond(handler, request, sequence):
+        requests.append(request)
+        count = len(requests)
+        arguments = {"command": "printf once >> completed-command", "workdir": None,
+                     "stdin": None, "pty": False, "timeout_ms": 10000,
+                     "yield_ms": 1000, "max_output_tokens": 1000}
+        if count == 1:
+            body = provider.function_body(sequence, "completed-before-drop",
+                                          "exec_command", arguments)
+        elif count == 2:
+            # A complete local proposal without response.completed cannot execute.
+            partial = provider.response_body(sequence, "partial provider text")
+            partial = partial.split("event: response.completed", 1)[0]
+            arguments["command"] = "printf forbidden > unfinished-command"
+            proposal = provider.function_body(sequence, "unfinished-at-drop",
+                                               "exec_command", arguments)
+            proposal = proposal.split("event: response.output_item.added", 1)[1]
+            proposal = "event: response.output_item.added" + proposal
+            # Keep distinct item slots and identities within this response.
+            proposal = proposal.replace('"output_index":0', '"output_index":1')
+            body = partial + proposal.split("event: response.completed", 1)[0]
+        else:
+            assert count == 3, count
+            inputs = json.dumps(request["input"])
+            assert "partial provider text" in inputs, inputs
+            assert "completed-before-drop" in inputs, inputs
+            assert "unfinished-at-drop" not in inputs, inputs
+            body = provider.response_body(sequence, "stream recovered")
+        provider.reply(handler, body.encode(), close_header=True)
+
+    case, result, events = run_case(binary, provider, root, "incomplete-stream",
+                                   "continue through a provider disconnect", respond)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert "stream recovered" in result.stdout, result
+    assert (case / "completed-command").read_text() == "once"
+    assert not (case / "unfinished-command").exists()
+    failed, = harness.event_list(events, "response_failed")
+    assert failed["data"]["message"] == "provider stream ended before response.completed", failed
+    assert len(harness.event_list(events, "turn_recovery")) == 1
+    assert len(harness.event_list(events, "turn_completed")) == 1
+    assert "recovering automatically" in result.stderr, result.stderr
+    print("tools e2e incomplete stream recovery without duplicate effects: ok", flush=True)
+
+
 CASES = (
     case_home_default,
     case_model_switch_disabled,
@@ -428,6 +475,7 @@ CASES = (
     case_wide_call_batch,
     case_cd_call_batch,
     case_home_instruction_symlink,
+    case_incomplete_stream_recovery,
 )
 
 

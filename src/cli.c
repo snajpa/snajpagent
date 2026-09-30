@@ -3,6 +3,7 @@
 #include "base.h"
 #include "config.h"
 #include "snajpagent.h"
+#include "store.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -156,7 +157,7 @@ parse_auth_command(struct snag_cli *cli, int argc, char **argv, int first, char 
             cli->auth_provider = argv[i];
         } else goto invalid;
     }
-    if (cli->update_model_cache || cli->list || cli->last || cli->provider ||
+    if (cli->update_model_cache || cli->list || cli->last || cli->provider || cli->session_name ||
         cli->irc_listen || cli->irc_client_count ||
         cli->doc_instructions.count || cli->irc_no_listen || cli->irc_no_client ||
         cli->irc_model_nick || cli->irc_operator_nick || cli->irc_room_name ||
@@ -182,6 +183,7 @@ parse_options(struct snag_cli *cli, int argc, char **argv, int *index, char *err
     } options[] = {
         {NULL, 'm', true, &cli->model, NULL},
         {"--model-nick", 'n', true, &cli->irc_model_nick, NULL},
+        {"--name", 'N', true, &cli->session_name, NULL},
         {"--operator-nick", 'o', true, &cli->irc_operator_nick, NULL},
         {"--room-name", 'r', true, &cli->irc_room_name, NULL}, {"--dotdir", 0, true, &cli->dotdir, NULL},
         {"--provider", 0, true, &cli->provider, NULL}, {"--config", 0, true, &cli->config_path, NULL},
@@ -309,6 +311,16 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t 
          (strcmp(argv[1], "-h") != 0 && strcmp(argv[1], "--help") != 0 && strcmp(argv[1], "-V") != 0)))
         return snag_errorf(error, error_size, "-h, --help and -V must stand alone");
     if (cli->help || cli->version) return 0;
+    if (cli->session_name) {
+        if (!snag_session_name_valid(cli->session_name)) {
+            return snag_errorf(error, error_size,
+                "session name must be nonempty UTF-8 without control characters, "
+                "within 16 KiB");
+        }
+        if (cli->resume_id || cli->attach_id || cli->last) {
+            return snag_errorf(error, error_size, "select a session by name, id, or --last");
+        }
+    }
     if (cli->attach) {
         if (cli->resume || cli->execute || cli->list || cli->last || dashdash ||
             (positional >= 0 && positional < argc) || cli->doc_instructions.count ||
@@ -317,7 +329,7 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t 
             cli->irc_no_listen || cli->irc_no_client || cli->irc_client_count ||
             cli->irc_model_nick || cli->irc_operator_nick || cli->irc_room_name)
             return snag_errorf(error, error_size,
-                "--attach accepts only --dotdir and an optional live session id");
+                "--attach accepts only --dotdir and a live session id or -N NAME");
         return 0;
     }
     if ((cli->irc_no_listen && cli->irc_listen) || (cli->irc_no_client && cli->irc_client_count))
@@ -325,7 +337,7 @@ snag_cli_parse(struct snag_cli *cli, int argc, char **argv, char *error, size_t 
     if (!cli->execute && !cli->resume && !dashdash && positional >= 0 &&
         (strcmp(argv[positional], "login") == 0 || strcmp(argv[positional], "logout") == 0))
         return parse_auth_command(cli, argc, argv, positional, error, error_size);
-    if (cli->list && (cli->resume || cli->execute || cli->last ||
+    if (cli->list && (cli->resume || cli->execute || cli->last || cli->session_name ||
                       cli->doc_instructions.count ||
                       cli->model || cli->provider || cli->effort || cli->verbosity ||
                       cli->irc_listen || cli->irc_no_listen || cli->irc_no_client ||
@@ -383,8 +395,9 @@ void
 snag_cli_usage(int fd)
 {
     static const char text[] = "usage: " SNAJPAGENT_NAME " [OPTIONS] [--] [INITIAL PROMPT...]\n"
-        "       " SNAJPAGENT_NAME " --resume [OPTIONS] [SESSION_ID|--last] [OPTIONS] [-- FOLLOW-UP...]\n"
-        "       " SNAJPAGENT_NAME " --attach [--dotdir DIR] [SESSION_ID] (alias -A)\n"
+        "       " SNAJPAGENT_NAME
+        " --resume [OPTIONS] [SESSION_ID|-N NAME|--last] [-- FOLLOW-UP...]\n"
+        "       " SNAJPAGENT_NAME " --attach [--dotdir DIR] [SESSION_ID|-N NAME] (alias -A)\n"
         "       " SNAJPAGENT_NAME " -e [OPTIONS] [-- PROMPT...]\n" "       " SNAJPAGENT_NAME " -l [OPTIONS]\n"
         "       " SNAJPAGENT_NAME " [OPTIONS] login [PROVIDER] [--openai-device-auth|--meta-device-auth|--with-api-key]\n"
         "       " SNAJPAGENT_NAME " [OPTIONS] login status [PROVIDER]\n"
@@ -394,6 +407,7 @@ snag_cli_usage(int fd)
         "      --no-listen              suppress the configured listener\n"
         "      --no-client              suppress configured outgoing connections\n"
         "  -n, --model-nick NICK        model nick (default agent0)\n"
+        "  -N, --name NAME              name a new session; select by name on attach/resume\n"
         "  -o, --operator-nick NICK     local operator nick\n"
         "  -r, --room-name ROOM         hosted room name\n"
         "      --dotdir DIR             private application directory\n"

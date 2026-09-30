@@ -48,6 +48,7 @@ struct snag_cli {
     const char *irc_room_name;
     const char *resume_id;
     const char *attach_id;
+    const char *session_name;
     char *prompt;
 };
 

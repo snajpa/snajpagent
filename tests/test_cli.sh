@@ -160,7 +160,7 @@ expect_exit 2 $bin -e --model-nick=worker --operator-nick alice -- ping \
     >"$root/network-long.out" 2>"$root/network-long.err"
 grep -q -- '-e cannot be combined with network options' "$root/network-long.err"
 
-for option in --name --operator-name; do
+for option in --operator-name; do
     expect_exit 2 $bin "$option" stale -l >"$root/old-nick-option.out" \
         2>"$root/old-nick-option.err"
     grep -q "unknown option $option" "$root/old-nick-option.err"
@@ -370,13 +370,14 @@ while ! grep -q 'waiting for shutdown' "$root/live-hold.err"; do
     sleep 0.01
 done
 $bin --dotdir "$live_state" -l >"$root/live-list" 2>"$root/live-list.err"
+[ "$(head -n 1 "$root/live-list")" = "$(printf 'SESSION\tNAME\tMODEL\tTURNS\tSTATUS\tPROCESS\tFIRST PROMPT')" ]
 grep -q "^$(printf %.8s "$live_id").*live" "$root/live-list"
 kill -s TERM "$live_pid"
 set +e
 wait "$live_pid"
 set -e
 $bin --dotdir "$live_state" -l >"$root/live-list2" 2>"$root/live-list2.err"
-grep -q "^$(printf %.8s "$live_id").*idle" "$root/live-list2"
+grep -q "^$(printf %.8s "$live_id").*stored" "$root/live-list2"
 
 expect_exit 4 $bin -e -- empty >"$root/empty.out" 2>"$root/empty.err"
 [ ! -s "$root/empty.out" ]

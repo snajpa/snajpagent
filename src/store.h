@@ -166,6 +166,7 @@ struct snag_session {
     const char *cwd;
     char trash_name[SNAG_ID_HEX_LEN + 1u + SNAG_ID_HEX_LEN + 1u];
     char *dir_path;
+    const char *name;
     const char *first_user;
     const char *last_user;
     const char *active_prompt;
@@ -296,6 +297,9 @@ int snag_session_open(struct snag_store *store, struct snag_session *session,
 int snag_session_open_last(struct snag_store *store, struct snag_session *session,
                           char *error, size_t error_size);
 typedef int (*snag_store_emit_fn)(void *, const char *, size_t);
+bool snag_session_name_valid(const char *name);
+int snag_store_find_name(struct snag_store *, const char *name, char id[SNAG_ID_HEX_LEN + 1u],
+                         snag_store_emit_fn matches_emit, void *, char *error, size_t error_size);
 /* Resolve a saved session's private directory without opening its lock/journal
  * or cleaning up trash. The caller supplies an initialized, unopened session
  * and closes it on every outcome. This does not establish live-owner status.

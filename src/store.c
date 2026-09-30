@@ -932,6 +932,10 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             goto invalid;
     } else if (session->delete_requested) {
         goto invalid;
+    } else if (strcmp(type, "session_named") == 0) {
+        const char *name = snag_json_string(data, "name");
+        if (!snag_json_exact_keys(data, "name") || !snag_session_name_valid(name)) goto invalid;
+        if (replace_text(session, &session->name, "name", name, SNAG_PATH_MAX_BYTES) < 0) return -1;
     } else if (strcmp(type, "audio_usage") == 0) {
         /* Auxiliary billing is retained for inspection only. It changes no
          * coding context, token counters, queue or executor state. */

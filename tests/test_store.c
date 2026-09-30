@@ -748,6 +748,13 @@ test_checkpoint_optional_download_queue(struct snag_store *store, const char *cw
     snag_session_init(&session);
     assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
     assert(!session.download_queue && !strcmp(session.default_effort, "high"));
+    assert(!session.name);
+    commit_event(&session, "session_named", checked_json(json_pack("{s:s}", "name", "lead")));
+    assert(snag_session_checkpoint(&session, error, sizeof(error)) == 0);
+    snag_session_close(&session);
+    snag_session_init(&session);
+    assert(snag_session_open(store, &session, id, error, sizeof(error)) == 0);
+    assert(session.name && !strcmp(session.name, "lead"));
 
     state = snag_checkpoint_state_encode(&session);
     assert(state);
@@ -756,6 +763,7 @@ test_checkpoint_optional_download_queue(struct snag_store *store, const char *cw
     snag_session_close(&restored);
     assert(json_object_set_new(state, "download_queue", json_null()) == 0);
     assert(snag_checkpoint_state_decode(state, &restored) == 0);
+    assert(restored.name && !strcmp(restored.name, "lead"));
     snag_session_close(&restored);
     assert(json_object_set_new(state, "download_queue", json_array()) == 0);
     assert(snag_checkpoint_state_decode(state, &restored) == 0);

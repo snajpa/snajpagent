@@ -10,12 +10,12 @@ snajpagent \- terminal coding agent with built-in IRC
 .br
 .B snajpagent \-\-resume
 .RI [ options ]
-.RI [ session-id " | --last]"
+.RI [ session-id " | -N NAME | --last]"
 .RI "[-- " follow-up " ...]"
 .br
 .B snajpagent \-\-attach
 .RI [ --dotdir " PATH]"
-.RI [ session-id ]
+.RI [ session-id " | -N NAME]"
 .br
 .B snajpagent \-e
 .RI [ options ]
@@ -493,7 +493,8 @@ Ordinary errors retain the goal and recover automatically.  Policy stops and
 provider refusals pause automatic goal continuation.
 Explicit turn interruption pauses automatic goal work.
 .SS Leave and resume a session
-On Linux, interactive ANSI terminal sessions keep running when their terminal disconnects.
+On Linux, interactive ANSI terminal sessions keep running when their terminal disconnects,
+including when an SSH connection drops. Open a new SSH connection and attach to the same session.
 Use
 .B /s d
 to return to the shell while requests, commands, IRC and goals continue.
@@ -501,6 +502,13 @@ Reconnect with
 .BR "snajpagent --attach SESSION_ID" ;
 .B \-A
 is the short option. Without an ID, select from the running-session list.
+Name a new session with
+.BR "snajpagent -N lead" ,
+then reconnect with
+.BR "snajpagent --attach -N lead" .
+Use
+.B /session name lead
+inside an existing session to give it a name.
 Only one terminal controls a session at a time. The session keeps its unsent
 draft, selected view and destination; attachment displays bounded recent
 history before restoring the composer.
@@ -515,12 +523,15 @@ An already-running external program keeps its launch environment and receives
 the terminal resize notification. Owner configuration, including color policy,
 stays unchanged.
 .PP
-A session saves its current working directory, conversation, tool results,
+A session saves its name, current working directory, conversation, tool results,
 model selection, queue and goal on disk. Normal exit prints a command to reopen
 that exact session. You can also list sessions with
 .B snajpagent -l
 or reopen the newest session with
 .BR "snajpagent --resume --last" .
+Use
+.B snajpagent --resume -N lead
+to resume a stored session by name.
 .PP
 Exit is not goal pause.  No work runs after exit, but a saved active goal
 continues when resumed.  Use
@@ -863,6 +874,8 @@ Show model Markdown literally.
 .TP
 .BR \-\-resume " [" session-id "]"
 Resume a stopped durable session.  Without an ID or
+.B \-N NAME
+or
 .BR \-\-last ,
 interactively select an active session.
 An ID is a unique prefix of 8 through 32 lowercase hexadecimal characters.
@@ -871,6 +884,8 @@ concurrent resume.
 .TP
 .BR \-A , " \-\-attach [" session-id "]"
 Connect a terminal to a live native session owner on Linux. Without an ID,
+or
+.BR "\-N NAME" ,
 select a running session. Accepts a unique 8..32-character ID prefix and
 .BR \-\-dotdir ;
 the owner retains its existing configuration and model selection. Ambiguous
@@ -885,6 +900,17 @@ or a known width below 20 columns, retains direct-terminal operation, as do
 other hosts until their native backend is available. An existing native owner
 keeps its control keys when a terminal becomes narrower, including after an
 editor or pager returns.
+.TP
+.BR \-N , " \-\-name NAME"
+Give a new session a saved name, including an empty interactive session.
+With --attach or --resume, select an existing session by its exact,
+case-sensitive name. Choose one selector: an ID, a name, or --last.
+Names use nonempty UTF-8 without control characters, within the 16 KiB CLI
+argument bound. Quote names containing spaces in the shell.
+Names are labels independent of the IRC model nick set by -n.
+Duplicate names are allowed; ambiguous selection prints matching full IDs
+and requires an ID to choose one. Archived sessions participate in name lookup.
+Use /session name NAME in an existing session to set or replace its name.
 .TP
 .BR \-\-last
 Resume the most recently used active session.  Requires
@@ -902,8 +928,12 @@ List active and archived sessions and exit. Only
 color options, Markdown presentation options, and
 .B \-\-update-model-cache
 may accompany it.  Markdown
-presentation has no useful effect on session-list output.  Rows mark sessions
-held open by a live process as live, others idle.
+presentation has no useful effect on session-list output. The table has headings
+for session ID, name, model, turn count, active/archived status, process state and first prompt.
+An unnamed session shows a dash in the name column.
+The process column shows live while a process owns the session, and stored when
+only its saved history remains. Live includes sessions waiting for input.
+Use --attach to reconnect to a running native session, or --resume to start a stored session.
 .TP
 .BR \-h
 Print short help and exit.  It must stand alone.
@@ -1525,12 +1555,19 @@ session is identified as not yet saved; listing does not start a model turn.
 .TP
 .BR "/session list" , " /session l" , " /s list" , " /s l"
 Print the current session ID and all saved sessions, including archived ones,
-with their live or idle state. This does not attach to or resume a session.
+with column headings and their live or stored process state.
+This does not attach to or resume a session.
 .TP
 .BR "/session attach ID" , " /session a ID" , " /s a ID"
 Switch the terminal to a live session on Linux. A unique short ID is accepted.
 The source stays attached until the destination accepts the connection;
 refusal, timeout or an unavailable owner leaves the source usable.
+.TP
+.BR "/session name NAME" , " /s name NAME"
+Save or replace the current session's name, including while work is active.
+The remaining text is the name; shell-style quotes are unnecessary here.
+The name is retained across detach, restart and archive. Use -N NAME with
+--attach or --resume to select it from the CLI.
 .TP
 .BR "/session detach" , " /session d" , " /s d"
 Return to the shell while the native session continues. Terminal loss has
@@ -4560,6 +4597,13 @@ Older sessions cannot recover reasoning discarded by an earlier executable.
 Plaintext provider reasoning is sensitive journal data:
 protect the session directory and its backups as you would the conversation.
 .SS Provider failures
+If a provider stream closes before
+.BR response.completed ,
+the incomplete response enters ordinary recovery. Public text remains retained;
+unadmitted tool proposals from that response do not execute. Completed tool
+results from earlier responses remain available. A warning identifies automatic
+recovery while the session continues working.
+.PP
 Ordinary failures that otherwise offer
 .B /retry
 receive up to five automatic retries per consecutive failure sequence by default.

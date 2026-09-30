@@ -670,6 +670,7 @@ def test_session_list_keeps_live_owner():
         child.wait_idle_prompt(start=end)
         return bytes(child.buf[start:])
 
+    header = b"SESSION\tNAME\tMODEL\tTURNS\tSTATUS\tPROCESS\tFIRST PROMPT"
     with Child([], ready=DEFAULT_IDLE_PROMPT, cols=160) as stopped:
         end = stopped.send_wait(b"stopped-session-regression\r", b"fixture answer")
         stopped.wait_idle_prompt(start=end)
@@ -688,13 +689,18 @@ def test_session_list_keeps_live_owner():
             second.wait_idle_prompt(start=end)
             second_id = second.session_id()
             output = query(first, b"/session", b"running sessions:")
+            assert output.count(header) == 1, output
             assert first_id.encode() in output, output
             assert second_id[:8].encode() in output, output
             assert stopped_id[:8].encode() not in output, output
             for command in (b"/session list", b"/session l", b"/s list", b"/s l"):
                 output = query(first, command, b"saved sessions:")
+                assert output.count(header) == 1, output
                 for identity in (first_id, second_id, stopped_id):
-                    assert identity[:8].encode() in output, output
+                    state = b"stored" if identity == stopped_id else b"live"
+                    row = (identity[:8].encode() + b"\t-\t" + DEFAULT_MODEL.encode() +
+                           b"\t1\tactive\t" + state + b"\t")
+                    assert row in output, output
             output = query(first, b"/s", b"running sessions:")
             assert first_id.encode() in output and second_id[:8].encode() in output, output
             assert stopped_id[:8].encode() not in output, output
@@ -716,6 +722,84 @@ def test_session_list_keeps_live_owner():
         turns = [event for event in events(first_id) if event["type"] == "turn_started"]
         assert [turn["data"]["text"] for turn in turns] == [
             "first-live-session", "terminal_status"], turns
+
+
+def test_session_names():
+    name = "lead žluťoučký"
+    env = dict(os.environ, HOME=WORKSPACE, PAGER="")
+    env.pop("OPENAI_API_KEY", None)
+
+    def run(*args):
+        return subprocess.run([BINARY, "--dotdir", DOTDIR, *args], env=env,
+                              cwd=WORKSPACE, input="", text=True, capture_output=True,
+                              timeout=MIN_WAIT_S)
+
+    with Child(["-N", name], ready=DEFAULT_IDLE_PROMPT) as original:
+        sid = original.session_id()
+        assert one(events(sid), "session_named")["data"]["name"] == name
+        assert not [e for e in events(sid) if e["type"] == "turn_started"]
+        original.send_wait(b"/status\r", f"name: {name}".encode())
+        result = run("--resume", "-N", name, "-e", "--", "ping")
+        assert result.returncode != 0 and "already open" in result.stderr, result
+        original.send_wait_idle(b"ping\r", b"pong")
+        if sys.platform.startswith("linux"):
+            engine = original.engine_pid()
+            original.send(b"/s d\r")
+            assert original.reap() == 0
+            with Child(["--attach", "--name", name], ready=b"Attached session") as attached:
+                attached.wait_text(sid.encode())
+                attached.send_wait_idle(b"ping\r", b"pong")
+                os.kill(engine, 0)
+                attached.exit_now()
+        else:
+            original.exit_now()
+
+    result = run("--resume", "-N", name, "-e", "--", "ping")
+    assert result.returncode == 0 and result.stdout.strip() == "pong", result
+    listed = run("-l")
+    assert listed.returncode == 0, listed
+    assert listed.stdout.splitlines()[0].split("\t") == [
+        "SESSION", "NAME", "MODEL", "TURNS", "STATUS", "PROCESS", "FIRST PROMPT"], listed
+    row = next(line.split("\t") for line in listed.stdout.splitlines()
+               if line.startswith(sid[:8] + "\t"))
+    assert row[1] == name and row[5] == "stored", row
+    assert len([e for e in events(sid) if e["type"] == "session_named"]) == 1
+
+    for invalid in ("", " ", "line\nname", "tab\tname", "escape\x1bname", "x" * 16385):
+        before = session_ids()
+        result = run("-N", invalid, "-e", "--", "ping")
+        assert result.returncode == 2 and session_ids() == before, result
+    for selector in (["--resume", sid], ["--resume", "--last"], ["--attach", sid]):
+        result = run(*selector, "-N", name)
+        assert result.returncode == 2 and "by name, id, or --last" in result.stderr, result
+    result = run("--resume", "-N", name.upper(), "-e", "--", "ping")
+    assert result.returncode != 0 and "name was not found" in result.stderr, result
+    before = session_ids()
+    result = run("--name", name, "-e", "--", "ping")
+    assert result.returncode == 0, result
+    duplicate, = session_ids() - before
+    result = run("--resume", "-N", name, "-e", "--", "ping")
+    assert result.returncode != 0 and "name is ambiguous" in result.stderr, result
+    assert sid in result.stderr and duplicate in result.stderr, result
+    if sys.platform.startswith("linux"):
+        with Child(["--attach", "-N", name]) as ambiguous:
+            ambiguous.wait_text(b"name is ambiguous")
+            assert ambiguous.reap() != 0
+            assert sid.encode() in ambiguous.buf and duplicate.encode() in ambiguous.buf
+        with Child(["--attach", "-N", "no-such-name"]) as missing:
+            missing.wait_text(b"name was not found")
+            assert missing.reap() != 0
+    with Child(["--resume", sid], ready=PROMPT) as renamed:
+        renamed.send_wait(b"/session name renamed lead\r", b"session name: renamed lead")
+        renamed.send_wait(b"/s name\r", b"usage: /session name")
+        renamed.send_wait(b"/status\r", b"name: renamed lead")
+        renamed.send(b"/archive\r")
+        assert renamed.reap() == 0
+    result = run("--resume", "-N", "renamed lead", "-e", "--", "ping")
+    assert result.returncode == 0 and result.stdout.strip() == "pong", result
+    assert [e["data"]["name"] for e in events(sid) if e["type"] == "session_named"] == [
+        name, "renamed lead"]
+    print("session names: create, attach, resume, list and selection errors: ok")
 
 
 def test_redraw_preserves_sealed_output():
@@ -6607,6 +6691,7 @@ if __name__ == "__main__":
     test_resize_and_suspend_preserve_draft()
     test_redraw_preserves_sealed_output()
     test_session_list_keeps_live_owner()
+    test_session_names()
     test_compaction_ignores_legacy_samples()
     test_hard_compaction_progress_is_remeasured()
     test_hard_compaction_resets_after_completed_response()
