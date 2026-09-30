@@ -5219,6 +5219,37 @@ def test_exit_resume_matrix():
     occupied.close()
 
 
+def test_live_nick_listing():
+    endpoint = f"127.0.0.1:{free_port()}"
+    with Child(["--no-color", "-s", endpoint, "-n", "server", "-o", "serverop", "-r", "lab"],
+               chat_prompt("serverop")) as server:
+        before = session_ids()
+        with Child(["--no-color", "-c", endpoint, "-n", "minion4", "-o", "clientop"],
+                   chat_prompt("clientop")) as client:
+            identity = new_session(before, client)
+            for old, nick in (("minion4", "docsowner"), ("docsowner", "docsreviewer")):
+                start = len(client.buf)
+                client.send(f"/nick {nick}\r".encode())
+                deadline = time.monotonic() + MIN_WAIT_S
+                while time.monotonic() < deadline:
+                    if any(e["type"] == "irc_event" and e["data"]["kind"] == "nick" and
+                           e["data"]["nick"] == old and e["data"]["text"] == nick
+                           for e in events(identity)):
+                        break
+                    client.read_once(0.02)
+                    server.read_once(0.02)
+                else:
+                    raise AssertionError("server did not acknowledge the nickname change")
+                client.send_wait(b"/nick\r", f"model nick: {nick}".encode(), start=start)
+                result = subprocess.run([BINARY, "--dotdir", DOTDIR, "-l"], cwd=WORKSPACE,
+                                        capture_output=True, text=True, timeout=MIN_WAIT_S)
+                assert result.returncode == 0, result.stderr
+                row = next(line.split("\t") for line in result.stdout.splitlines()[1:]
+                           if line.startswith(identity[:8]))
+                assert row[6] == f"c/{nick}@{endpoint}", row
+            client.exit_now()
+        server.exit_now()
+
 def test_runtime_network_commands():
     endpoint = f"127.0.0.1:{free_port()}"
     upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -6898,6 +6929,7 @@ if __name__ == "__main__":
     test_config_and_cli_model_passthrough()
     test_exit_resume_matrix()
     test_runtime_network_commands()
+    test_live_nick_listing()
     test_network_resume_roles()
     test_network_collision_prompts()
     test_network_live_nick_prompt()

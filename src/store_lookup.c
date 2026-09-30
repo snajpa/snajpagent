@@ -383,6 +383,8 @@ struct list_irc {
     const char *prompt;
     struct snag_buf preview;
     struct snag_buf endpoints;
+    json_t *renames;
+    uint64_t checkpoint_seq;
     bool prompt_found;
     bool topology_found;
     bool wants_message;
@@ -439,6 +441,18 @@ list_irc_prompt(struct list_irc *irc)
     return snag_buf_append(&irc->preview, body, next ? (size_t)(next - body) : strlen(body));
 }
 
+static bool
+list_nick_equal(const char *nick, size_t length, const char *other)
+{
+    if (strlen(other) != length) return false;
+    for (size_t i = 0u; i < length; ++i) {
+        if (snag_irc_fold((unsigned char)nick[i]) != snag_irc_fold((unsigned char)other[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static int
 list_irc_endpoint(struct list_irc *irc, const char *text, const char *end,
     char role, const char *endpoint, size_t length, const char *nick, size_t nick_len)
@@ -453,6 +467,17 @@ list_irc_endpoint(struct list_irc *irc, const char *text, const char *end,
         nick_len = strcspn(nick, " \t\r\n");
     }
     if (nick_len > SNAG_CONFIG_IRC_NICK_MAX) nick_len = 0u;
+
+    /* Reverse traversal collected newest first; apply the rename chain forward. */
+    for (size_t i = json_array_size(irc->renames); nick_len && i; ) {
+        const json_t *event = json_array_get(irc->renames, --i);
+        const char *address = snag_json_string(event, "endpoint");
+        if (strlen(address) == length && !memcmp(address, endpoint, length) &&
+            list_nick_equal(nick, nick_len, snag_json_string(event, "nick"))) {
+            nick = snag_json_string(event, "text");
+            nick_len = strlen(nick);
+        }
+    }
     return snag_buf_printf(&irc->endpoints, "%s%c/%.*s%s%.*s",
         irc->endpoints.len ? "," : "", role, (int)nick_len, nick ? nick : "",
         nick_len ? "@" : "", (int)length, endpoint);
@@ -514,21 +539,24 @@ list_irc_event(void *opaque, const struct snag_session *state, uint64_t seq,
 {
     struct list_irc *irc = opaque;
     (void)state;
-    (void)seq;
     (void)error;
     (void)error_size;
 
+    if (seq && seq == irc->checkpoint_seq) return SNAG_JOURNAL_STOP_AFTER;
     if (!irc->topology_found && !strcmp(type, "irc_snapshot")) {
         const char *text = snag_json_string(data, "text");
         if (text && list_irc_topology(irc, text) < 0) return -1;
     }
-    if (!irc->prompt_found && !strcmp(type, "irc_event")) {
+    if ((!irc->prompt_found || !irc->topology_found) && !strcmp(type, "irc_event")) {
         struct snag_irc_event event;
         if (snag_irc_event_read(data, &event) < 0) return -1;
+        if (!irc->topology_found && event.kind == SNAG_IRC_NICK && !event.historical &&
+            event.text[0] && strlen(event.text) <= SNAG_CONFIG_IRC_NICK_MAX &&
+            json_array_append(irc->renames, (json_t *)data) < 0) return -1;
         char reference[96];
         (void)snprintf(reference, sizeof(reference), "[IRC update id=%s:%llu ",
             event.stream, (unsigned long long)event.sequence);
-        if (event.stream[0] && strstr(irc->prompt, reference) &&
+        if (!irc->prompt_found && event.stream[0] && strstr(irc->prompt, reference) &&
             (!irc->wants_message || event.kind == SNAG_IRC_MESSAGE ||
              event.kind == SNAG_IRC_NOTICE)) {
             irc->preview.len = 0u;
@@ -546,30 +574,50 @@ list_cells(struct snag_store *store, struct snag_session *session, const char *s
 {
     struct list_irc irc = {.prompt = session->last_user,
         .preview = {.max = SNAG_MAX_DIRECT_PROMPT},
-        .endpoints = {.max = SNAG_MAX_IRC_SNAPSHOT}};
+        .endpoints = {.max = SNAG_MAX_IRC_SNAPSHOT}, .renames = json_array()};
     struct snag_buf cell = {.max = SNAG_MAX_DIRECT_PROMPT};
     json_t *cells = NULL;
-    uint64_t before;
+    uint64_t before = 0u;
     char id[SNAG_ID_HEX_LEN + 1u];
     char turns[32];
 
     const char *topology = snag_json_string(session->strings, "irc_snapshot");
-    if (list_irc_prompt(&irc) < 0 ||
-        (topology && list_irc_topology(&irc, topology) < 0)) goto out;
-    /* The verified checkpoint already contains recent typed events. Reuse them
-     * before rereading potentially large response records from the journal. */
+    if (!irc.renames || list_irc_prompt(&irc) < 0) goto out;
+    irc.topology_found = topology && !*topology;
     const json_t *recent = json_object_get(session->checkpoint_context, "recent");
-    for (size_t i = json_array_size(recent); i && (!irc.topology_found || !irc.prompt_found); ) {
-        const json_t *entry = json_array_get(recent, --i);
+    for (size_t i = 0u; i < json_array_size(recent); ++i) {
+        const json_t *entry = json_array_get(recent, i);
         const char *type = snag_json_string(entry, "type");
-        if (type && list_irc_event(&irc, NULL, 0u, type,
-                json_object_get(entry, "data"), NULL, 0u) < 0) goto out;
+        if (type && !strcmp(type, "irc_snapshot")) {
+            irc.checkpoint_seq = session->checkpoint_seq;
+            break;
+        }
     }
+    if (irc.topology_found) irc.checkpoint_seq = session->checkpoint_seq;
     if (!irc.topology_found || !irc.prompt_found) {
-        /* Older checkpoints lack the topology cache. A damaged historical prefix
-         * must not hide a session whose current checkpoint remains valid. */
         (void)snag_session_each_event_reverse(session, 0u, SIZE_MAX, list_irc_event,
             &irc, &before, NULL, 0u);
+    }
+    if (irc.checkpoint_seq) {
+        /* Apply fresh suffix events before the verified recent checkpoint data.
+         * The snapshot boundary keeps old or unrelated renames out of the list. */
+        irc.checkpoint_seq = 0u;
+        for (size_t i = json_array_size(recent);
+            i && (!irc.topology_found || !irc.prompt_found); ) {
+            const json_t *entry = json_array_get(recent, --i);
+            const char *type = snag_json_string(entry, "type");
+            if (type && list_irc_event(&irc, NULL, 0u, type,
+                    json_object_get(entry, "data"), NULL, 0u) < 0) goto out;
+        }
+        if (before && (!irc.topology_found || !irc.prompt_found)) {
+            (void)snag_session_each_event_reverse(session, before, SIZE_MAX, list_irc_event,
+                &irc, &before, NULL, 0u);
+        }
+    }
+    if (!irc.topology_found && topology) {
+        /* A damaged historical prefix still permits the last cached topology. */
+        json_array_clear(irc.renames);
+        if (list_irc_topology(&irc, topology) < 0) goto out;
     }
     if (snag_buf_terminate(&irc.preview) < 0 ||
         snag_buf_terminate(&irc.endpoints) < 0) goto out;
@@ -597,6 +645,7 @@ list_cells(struct snag_store *store, struct snag_session *session, const char *s
         }
     }
 out:
+    json_decref(irc.renames);
     snag_buf_free(&cell);
     snag_buf_free(&irc.preview);
     snag_buf_free(&irc.endpoints);

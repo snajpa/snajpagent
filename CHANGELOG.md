@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Recognize acknowledgements of requested IRC nick changes for both local roles
+  and refresh saved identities on every endpoint. Session lists apply later
+  recorded renames when an older owner retained a stale nickname snapshot.
+
 - Show recorded agent nicks in the session list IRC column as `s/nick@endpoint`
   and `c/nick@endpoint`, including per-endpoint aliases and stored sessions.
 

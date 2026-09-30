@@ -976,6 +976,8 @@ Whitespace and terminal controls become spaces; saved text retains its full cont
 IRC lists comma-separated entries: s/NICK@ENDPOINT for the hosted server first,
 then c/NICK@ENDPOINT for each outgoing client. NICK is the agent nick recorded
 for that endpoint; older snapshots fall back to the recorded session nick.
+Later recorded nick changes update the displayed identity, including sessions
+whose owner retained an older nickname snapshot.
 An unknown nick leaves only s/ENDPOINT or c/ENDPOINT. A dash means no recorded
 endpoints. Stored sessions show their last recorded topology and nicks. An IRC prompt shows
 ENDPOINT: MESSAGE, resolving saved event references to the latest message

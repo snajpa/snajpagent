@@ -295,9 +295,9 @@ drain(struct snag_irc *irc, int timeout_ms)
         --owner->queued;
         pthread_cond_broadcast(&irc->changed);
         if (record->kind != IRC_TRACE) {
-            if (irc->owner_count && owner == irc->owners[0] &&
-                (strcmp(owner->view.model, record->view.model) != 0 ||
-                 strcmp(owner->view.operator, record->view.operator) != 0)) irc->identity_changed = true;
+            if (strcmp(owner->view.model, record->view.model) != 0 ||
+                strcmp(owner->view.operator, record->view.operator) != 0)
+                irc->identity_changed = true;
             if (record->view.room[0]) {
                 if (owner->routing_room[0] && strcmp(owner->routing_room, record->view.room) != 0) {
                     ++irc->routing_revision;

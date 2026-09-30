@@ -442,6 +442,21 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     assert(strcmp(capture.last_message.text, "upstream-only") == 0);
     assert(strcmp(capture.last_message.endpoint, other) == 0);
     assert(strcmp(capture.last_message.nick, "agent1") == 0);
+    /* A secondary endpoint's accepted rename must refresh the saved identities. */
+    (void)snag_irc_identity_changed(runtime);
+    assert(snag_irc_send_route(runtime, &route, true, SNAG_IRC_NICK,
+        "secondary", NULL, error, sizeof(error)) == 0);
+    uint64_t nick_deadline = snag_monotonic_ms() + 1000u;
+    do {
+        tick(upstream, 1u);
+        tick(runtime, 1u);
+        snag_irc_destinations(runtime, &destinations);
+    } while (strcmp(destinations.items[0].model, "secondary") &&
+        snag_monotonic_ms() < nick_deadline);
+    assert(strcmp(destinations.items[0].model, "secondary") == 0);
+    assert(strcmp(snag_irc_model_nick(runtime), "agent") == 0);
+    assert(snag_irc_identity_changed(runtime));
+    route.targets[0] = destinations.items[0].target;
     ++route.targets[0].revision;
     assert(snag_irc_send_route(runtime, &route, true, SNAG_IRC_MESSAGE,
         "wrong-revision", NULL, error, sizeof(error)) == 1);
@@ -476,7 +491,7 @@ static void __attribute__((noinline)) test_runtime_roles(void)
     config.irc.listen_explicit = false;
     assert(snag_irc_configure(runtime, &config, "/private-workspace", error, sizeof(error)) == 0);
     assert(strstr(capture.message_text, "accepted-before-removal"));
-    assert(strcmp(snag_irc_model_nick(runtime), "agent1") == 0);
+    assert(strcmp(snag_irc_model_nick(runtime), "secondary") == 0);
     snag_socket_close(human);
     tick(upstream, 3u);
     assert(upstream_capture.events[SNAG_IRC_JOIN] == joins);
@@ -1397,6 +1412,32 @@ static void __attribute__((noinline)) test_client_events(void)
         assert(send_all(client, true, SNAG_IRC_MESSAGE, "local renamed model", error, sizeof(error)) == 0);
         assert(strcmp(capture.last_message.nick, "agent7") == 0);
     }
+    /* Requested names differ from the server-confirmed sender until its ack. */
+    assert(send_all(client, true, SNAG_IRC_NICK, "docsowner", error, sizeof(error)) == 0);
+    assert(strcmp(snag_irc_model_nick(client), "agent7") == 0);
+    send_text(operator_fd, ":agent7!u@fake NICK :docsowner\r\n");
+    tick(client, 10u);
+    assert(strcmp(snag_irc_model_nick(client), "docsowner") == 0);
+    assert(send_all(client, true, SNAG_IRC_NICK, "first", error, sizeof(error)) == 0);
+    assert(send_all(client, true, SNAG_IRC_NICK, "final", error, sizeof(error)) == 0);
+    send_text(agent_fd, ":agent7!u@fake NICK :docsowner\r\n"
+        ":docsowner!u@fake NICK :first\r\n:first!u@fake NICK :final\r\n");
+    tick(client, 10u);
+    assert(strcmp(snag_irc_model_nick(client), "final") == 0);
+    send_text(operator_fd, ":docsowner!u@fake NICK :first\r\n:first!u@fake NICK :final\r\n");
+    tick(client, 10u);
+    assert(strcmp(snag_irc_model_nick(client), "final") == 0);
+    send_text(agent_fd, ":Operator7!u@fake NICK :OpFinal\r\n");
+    tick(client, 10u);
+    assert(strcmp(snag_irc_operator_nick(client), "OpFinal") == 0);
+    /* Another member may own a requested name that the server has not accepted. */
+    assert(send_all(client, true, SNAG_IRC_NICK, "remoteagent", error, sizeof(error)) == 0);
+    send_text(operator_fd, ":remoteagent!u@fake NICK :outsider\r\n");
+    tick(client, 10u);
+    assert(strcmp(snag_irc_model_nick(client), "final") == 0);
+    send_text(agent_fd, ":fake 433 final remoteagent :Nickname is already in use\r\n");
+    tick(client, 5u);
+    assert(strcmp(snag_irc_model_nick(client), "final") == 0);
     ping_without_engine(operator_fd);
     ping_without_engine(agent_fd);
     snag_irc_close(client);

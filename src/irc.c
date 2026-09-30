@@ -1693,16 +1693,19 @@ client_dispatch(struct snag_irc_core *irc, struct irc_conn *link, char *line)
     if (strcmp(message.command, "NICK") == 0 && sender && message.param_count) {
         struct irc_member *member = member_find(link, sender);
         bool op = member && member->op;
-        bool self = irc_casecmp(sender, link->nick) == 0;
+        bool self = irc_casecmp(sender, link->accepted_nick) == 0;
 
         if (!nick_valid(message.params[0]) || strcmp(sender, message.params[0]) == 0) return 0;
         /* Either role may hear its partner's rename before the self ack. */
         if (!link->historical && (member || self))
             for (size_t i = 0u; i < irc->conn_count; ++i) {
                 struct irc_conn *own = &irc->conns[i];
-                if (own->registered && irc_casecmp(own->nick, sender) == 0) {
-                    (void)snag_strcpy(own->nick, sizeof(own->nick), message.params[0]);
-                    (void)snag_strcpy(own->accepted_nick, sizeof(own->accepted_nick), own->nick);
+                if (own->registered && irc_casecmp(own->accepted_nick, sender) == 0) {
+                    /* Keep a later requested name while earlier acks arrive. */
+                    if (irc_casecmp(own->nick, own->accepted_nick) == 0)
+                        (void)snag_strcpy(own->nick, sizeof(own->nick), message.params[0]);
+                    (void)snag_strcpy(own->accepted_nick, sizeof(own->accepted_nick),
+                        message.params[0]);
                 }
             }
         if (!member) return 0;

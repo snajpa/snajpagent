@@ -61,7 +61,11 @@ inside older checkpoints before scanning history. A damaged older prefix leaves
 checkpoint-backed sessions listable with
 available metadata. IRC lists the hosted s/nick@endpoint first, then c/ clients.
 Endpoint aliases supply the accepted agent nick; older snapshots use the global
-model nick when aliases are absent. Metadata parsing stops before history.
+model nick when aliases are absent. Verified later nonhistorical NICK events
+update matching endpoint identities in order, using IRC case folding. Read the
+journal suffix before checkpoint recent events and stop at their snapshot;
+older checkpoints fall back to verified journal traversal. Metadata parsing
+stops before history.
 Stored sessions retain their last recorded topology and identities.
 Probing the caller's own session uses its retained lock descriptor.
 

@@ -218,8 +218,10 @@ terminal zero with `1`, `2`, and so on after pre-registration
 existing rule of appending `1`, `2`, and so on. Both paths truncate the
 preferred portion at a UTF-8 boundary when the IRC nick bound requires it. The
 accepted per-server nick remains stable across reconnects and governs echo
-suppression and direct-mention recognition. The welcome confirms the accepted
-nick; live `NICK` changes update it and preserve channel op status. The UI
+suppression and direct-mention recognition. Nick acknowledgements match the
+last server-confirmed sender, including while later rename requests are queued.
+Changes to either role on any endpoint refresh the saved identity snapshot.
+The welcome confirms the accepted nick; live `NICK` changes update it and preserve channel op status. The UI
 reports channel renames once. A rejected rename leaves the existing identity
 and connection intact. The
 server itself follows IRC convention by rejecting collisions rather than

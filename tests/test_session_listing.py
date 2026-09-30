@@ -277,5 +277,77 @@ def check_listing(binary):
         provider.close()
 
 
+def check_renamed_nicks(binary):
+    provider = harness.FakeResponses()
+    provider.runtime_handler = lambda handler, request, sequence: provider.reply(
+        handler, provider.response_body(sequence, "saved").encode())
+    try:
+        with tempfile.TemporaryDirectory(prefix="snag-list-rename-") as tmp:
+            root = Path(tmp).resolve()
+            config = root / "config.ini"
+            harness.write_irc_config(config, provider.port, "host-model")
+            state = root / "state"
+            env = {**os.environ, "HOME": str(root), "SNAJPAGENT_IRC_UI_KEY": "irc-ui-secret"}
+            prefix = [str(binary), "--config", str(config), "--dotdir", str(state)]
+            subprocess.run(prefix + ["-e", "--", "ping"], cwd=root, env=env,
+                           capture_output=True, check=True, timeout=20)
+            path = next((state / "sessions").glob("*/events.jsonl"))
+            snapshot = ("[IRC room snapshot; @ marks a channel operator]\n"
+                        "model nick: minion4\noperator nick: op\nhosted: no\n"
+                        "destination[1]: one:7\n"
+                        "aliases[one:7]: model minion4 operator op\n"
+                        "destination[2]: two:7\n"
+                        "aliases[two:7]: model minion4 operator op\n")
+            append_event(path, "irc_snapshot", dict(reason="join", text=snapshot, timestamp_ms=1))
+
+            def rename(old, new, sequence, endpoint="one:7", historical=False):
+                append_event(path, "irc_event", dict(endpoint=endpoint, historical=historical,
+                             kind="nick", local=False, nick=old, op=False, room="#lab", text=new,
+                             timestamp_ms=1, stream="b" * 32, sequence=sequence, input=False))
+
+            def listed(expected):
+                saved = path.read_bytes()
+                result = subprocess.run(prefix + ["-l"], cwd=root, env=env,
+                                        capture_output=True, check=True, timeout=10)
+                row = result.stdout.decode().splitlines()[1].split("\t")
+                assert row[6] == expected, row
+                assert path.read_bytes() == saved
+
+            rename("minion4", "docsowner", 1)
+            rename("stranger", "unrelated", 2)
+            rename("docsowner", "outdated", 3, historical=True)
+            listed("c/docsowner@one:7,c/minion4@two:7")
+            # The old owner checkpoints the stale snapshot after the rename.
+            for _ in range(20):
+                subprocess.run(prefix + ["--resume", path.parent.name, "-e", "--", "ping"],
+                               cwd=root, env=env, capture_output=True, check=True, timeout=20)
+                records = list(map(json.loads, path.read_text().splitlines()))
+                checkpoints = [r for r in records if r["type"] == "session_checkpoint"]
+                if checkpoints:
+                    assert checkpoints[-1]["data"]["state"]["strings"]["irc_snapshot"] == snapshot
+                    break
+            else:
+                raise AssertionError("no checkpoint created")
+            listed("c/docsowner@one:7,c/minion4@two:7")
+            rename("docsowner", "[review]", 4)
+            rename("{REVIEW}", "minion4", 5)
+            rename("minion4", "docsreviewer", 6)
+            listed("c/docsreviewer@one:7,c/minion4@two:7")
+            # Recent checkpoint data remains useful with a damaged old prefix.
+            lines = path.read_bytes().splitlines(keepends=True)
+            for i, line in enumerate(lines):
+                record = json.loads(line)
+                if record["type"] == "irc_event" and record["data"]["sequence"] == 1:
+                    lines[i] = line.replace(b"docsowner", b"docxowner")
+                    break
+            path.write_bytes(b"".join(lines))
+            listed("c/docsreviewer@one:7,c/minion4@two:7")
+            assert not provider.failure, provider.failure
+            print("session listing: later nick events, stale checkpoints and rename chains: ok")
+    finally:
+        provider.close()
+
+
 if __name__ == "__main__":
     check_listing(Path(sys.argv[1]).resolve())
+    check_renamed_nicks(Path(sys.argv[1]).resolve())
