@@ -72,6 +72,18 @@ def check(binary):
                     records = list(map(json.loads, journal.read_text().splitlines()))
                     turn = [e["data"] for e in records if e["type"] == "turn_started"][-1]
                     assert str(docs / "AGENTS.md") in turn["instructions"], turn
+            replacement = root / "replacement docs"
+            replacement.mkdir()
+            (replacement / "AGENTS.md").write_text("Replacement resume instruction marker.\n")
+            (docs / "AGENTS.md").unlink()
+            for options in (["-d", str(replacement)], []):
+                result = subprocess.run([*command, *options, "-e", "--", "replaced docs"],
+                                        cwd=home, env=env, capture_output=True, text=True, timeout=20)
+                assert result.returncode == 0, result.stderr
+                records = list(map(json.loads, journal.read_text().splitlines()))
+                turn = [e["data"] for e in records if e["type"] == "turn_started"][-1]
+                assert str(replacement / "AGENTS.md") in turn["instructions"], turn
+                assert str(docs / "AGENTS.md") not in turn["instructions"], turn
             assert not provider.failure, provider.failure
             print("resume config/instructions/preferences and minimal default/custom-dotdir hints: ok")
     finally:

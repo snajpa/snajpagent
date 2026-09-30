@@ -342,7 +342,7 @@ for color in auto always never; do
     out=$($bin --dotdir "$root/color-$color" --color="$color" -e -- ping \
         2>"$root/color-$color.err")
     [ "$out" = pong ]
-! grep -q -- ' --color' "$root/color-$color.err"
+    ! grep -q -- ' --color' "$root/color-$color.err"
 done
 
 out=$($bin -e --resume "$id" -- ping 2>"$root/err")
