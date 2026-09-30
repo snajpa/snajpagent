@@ -334,6 +334,7 @@ struct app_voice {
     bool servicing;
     bool close_requested;
     char transfer_target[SNAG_ID_HEX_LEN + 1u]; /* Session-owner-only paused transfer. */
+    struct snag_journal_cursor transfer_tail;
 };
 
 static int
@@ -1692,7 +1693,108 @@ snag_app_voice_transfer_pause(struct app_state *app, const char *target,
         snag_app_voice_close(app);
         return snag_errorf(error, size, "Voice transfer pause could not be retained or displayed");
     }
+    v->transfer_tail.offset = app->session.log_end;
+    v->transfer_tail.next_seq = app->session.next_seq;
+    memcpy(v->transfer_tail.prev_sha256, app->session.prev_sha256,
+        sizeof(v->transfer_tail.prev_sha256));
     return 1;
+}
+
+struct voice_transfer_read {
+    struct app_voice *voice;
+    json_t *records;
+    size_t bytes;
+};
+
+static int
+transfer_history_record(void *opaque, const struct snag_session *session, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    struct voice_transfer_read *read = opaque;
+    (void)session;
+    /* One existing reader quantum plus a complete atomic record, never a
+     * lifetime history limit or a clipped original utterance. */
+    if (read->bytes >= SNAG_JOURNAL_PAGE_BYTES) return 1;
+    char *encoded = snag_app_history_data(seq, type, data,
+        &read->voice->secrets.wire, error, size);
+    json_t *view = encoded ? json_loads(encoded, JSON_REJECT_DUPLICATES, NULL) : NULL;
+    if (encoded) snag_secret_clear(encoded, strlen(encoded));
+    free(encoded);
+    json_t *record = view ? json_pack("{s:I,s:s,s:O}", "seq", (json_int_t)seq,
+        "type", type, "data", view) : NULL;
+    json_decref(view);
+    size_t bytes = 0u;
+    int rc = record ? snag_json_digest_bounded(record, SNAG_CONTEXT_MAX_REQUEST,
+        NULL, &bytes) : -1;
+    if (!rc) rc = json_array_append(read->records, record);
+    if (!rc) read->bytes += bytes;
+    json_decref(record);
+    return rc;
+}
+
+int
+snag_app_voice_transfer_history(struct app_state *app, const char *target,
+    uint64_t attachment, struct snag_voice_transfer_cursor *cursor, json_t **result,
+    char *error, size_t size)
+{
+    if (!result) return snag_errorf(error, size, "Missing voice history result");
+    *result = NULL;
+    if (!cursor) return snag_errorf(error, size, "Missing voice history cursor");
+    if (voice_transfer_check(app, target, attachment, error, size) < 0) return -1;
+    struct app_voice *v = app->voice;
+    if (!v || !v->transfer_target[0] || !v->transfer_tail.next_seq) {
+        return snag_errorf(error, size, "Voice history has no prepared source");
+    }
+    bool first = cursor->source.next_seq == 0u;
+    if ((first && (cursor->source.offset || cursor->source.prev_sha256[0] ||
+            cursor->position.offset || cursor->position.next_seq ||
+            cursor->position.prev_sha256[0])) ||
+        (!first && (cursor->source.offset != v->transfer_tail.offset ||
+            cursor->source.next_seq != v->transfer_tail.next_seq ||
+            memcmp(cursor->source.prev_sha256, v->transfer_tail.prev_sha256,
+                sizeof(cursor->source.prev_sha256))))) {
+        return snag_errorf(error, size, "Voice history belongs to a different preparation");
+    }
+    struct snag_voice_transfer_cursor next = *cursor;
+    next.source = v->transfer_tail;
+    struct snag_session view;
+    snag_session_init(&view);
+    struct voice_transfer_read read = {.voice = v, .records = json_array()};
+    json_t *page = NULL, *safe = NULL;
+    int rc = read.records ? snag_session_history_open(&app->store, &view,
+        app->session.id, &next.source, error, size) : -1;
+    if (!rc) rc = snag_session_each_event_forward(&view, &next.position,
+        SNAG_JOURNAL_PAGE_BYTES, transfer_history_record, &read, error, size);
+    if (!rc) {
+        page = json_pack("{s:s,s:s,s:I,s:b,s:O}", "source_session_id", app->session.id,
+            "target_session_id", target, "as_of_seq", (json_int_t)(next.source.next_seq - 1u),
+            "complete", next.position.next_seq == next.source.next_seq, "records", read.records);
+        safe = page ? voice_redact_bounded(v, page, SNAG_CONTEXT_MAX_REQUEST, error, size) : NULL;
+        bool identity = safe &&
+            json_equal(json_object_get(page, "source_session_id"),
+                json_object_get(safe, "source_session_id")) &&
+            json_equal(json_object_get(page, "target_session_id"),
+                json_object_get(safe, "target_session_id"));
+        json_t *records = json_object_get(safe, "records");
+        for (size_t i = 0u; identity && i < json_array_size(read.records); ++i) {
+            identity = json_equal(json_object_get(json_array_get(read.records, i), "type"),
+                json_object_get(json_array_get(records, i), "type"));
+        }
+        if (!identity) {
+            rc = snag_errorf(error, size,
+                "Voice history protection failed or changed its identity");
+        }
+    }
+    if (!rc) {
+        *cursor = next;
+        *result = safe;
+        safe = NULL;
+    }
+    json_decref(safe);
+    json_decref(page);
+    json_decref(read.records);
+    snag_session_close(&view);
+    return rc;
 }
 
 int

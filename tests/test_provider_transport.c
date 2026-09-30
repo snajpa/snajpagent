@@ -8171,6 +8171,103 @@ voice_renewal_record(void *opaque, const struct snag_session *session, uint64_t 
 }
 
 static void
+test_voice_transfer_history(struct app_state *app, const char *target, uint64_t attachment,
+    uint64_t tail, size_t text_length, struct snag_voice_transfer_cursor *cursor)
+{
+    char error[256];
+    json_t *page = NULL;
+    struct snag_voice_transfer_cursor unchanged = *cursor;
+    assert(snag_app_voice_transfer_history(app, target, attachment + 1u, cursor,
+        &page, error, sizeof(error)) < 0 && !page);
+    assert(!memcmp(cursor, &unchanged, sizeof(*cursor)));
+    assert(snag_app_voice_transfer_history(app, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        attachment, cursor, &page, error, sizeof(error)) < 0 && !page);
+    assert(!memcmp(cursor, &unchanged, sizeof(*cursor)));
+    history_voice_event(&app->session, json_pack("{s:s,s:s,s:s}", "type", "voice_transcript",
+        "speaker", "user", "text", "Later source speech remains at its origin"));
+    uint64_t committed = app->session.next_seq;
+    uint64_t expected = 1u;
+    unsigned int pages = 0u, originals = 0u, visible = 0u, checkpoints = 0u;
+    bool complete = false;
+    while (!complete) {
+        assert(++pages < 16u);
+        assert(snag_app_voice_transfer_history(app, target, attachment, cursor,
+            &page, error, sizeof(error)) == 0 && page);
+        assert(!strcmp(snag_json_string(page, "source_session_id"), app->session.id));
+        assert(!strcmp(snag_json_string(page, "target_session_id"), target));
+        assert((uint64_t)json_integer_value(json_object_get(page, "as_of_seq")) == tail - 1u);
+        json_t *records = json_object_get(page, "records");
+        assert(json_is_array(records) && json_array_size(records));
+        for (size_t i = 0u; i < json_array_size(records); ++i) {
+            json_t *record = json_array_get(records, i);
+            assert((uint64_t)json_integer_value(json_object_get(record, "seq")) == expected++);
+            const char *type = snag_json_string(record, "type");
+            json_t *data = json_object_get(record, "data");
+            if (!strcmp(type, "session_checkpoint")) {
+                assert(!json_object_get(data, "context") && !json_object_get(data, "state"));
+                assert(json_is_true(json_object_get(data, "provider_view")));
+                ++checkpoints;
+            }
+            if (!strcmp(type, "response_completed")) {
+                assert(!json_object_get(data, "continuation"));
+            }
+            json_t *event = !strcmp(type, "voice_event") ? json_object_get(data, "event") : NULL;
+            const char *text = snag_json_string(event, "text");
+            const char *id = snag_json_string(event, "item_id");
+            if (id && !strncmp(id, "transfer-asr-", 13u)) {
+                assert(text && !strncmp(text, "original λ ", strlen("original λ ")));
+                size_t length = json_string_length(json_object_get(event, "text"));
+                assert(length == text_length - strlen("transfer-\"quoted\\secret") +
+                    strlen("<redacted:secret>"));
+                assert(!strcmp(text + length - strlen("<redacted:secret>"), "<redacted:secret>"));
+                assert(!strstr(text, "transfer-\"quoted\\secret"));
+                assert(!strcmp(snag_json_string(event, "speaker"), "user"));
+                assert(!strcmp(snag_json_string(data, "connection_id"),
+                    "12345678901234567890123456789012"));
+                ++originals;
+            }
+            if (text && !strcmp(text, "Transfer source visible output λ")) ++visible;
+            assert(!text || strcmp(text, "Later source speech remains at its origin"));
+        }
+        complete = json_is_true(json_object_get(page, "complete"));
+        json_decref(page);
+        page = NULL;
+    }
+    assert(pages >= 2u && originals == 4u && visible == 1u && checkpoints == 1u);
+    assert(expected == tail && cursor->source.next_seq == tail &&
+        app->session.next_seq == committed);
+    unchanged = *cursor;
+    assert(snag_app_voice_transfer_history(app, target, attachment, cursor,
+        &page, error, sizeof(error)) == 0 && page);
+    assert(json_is_true(json_object_get(page, "complete")) &&
+        !json_array_size(json_object_get(page, "records")));
+    assert(!memcmp(cursor, &unchanged, sizeof(*cursor)));
+    json_decref(page);
+    page = NULL;
+    struct snag_voice_transfer_cursor broken = *cursor;
+    broken.position.prev_sha256[0] = broken.position.prev_sha256[0] == '0' ? '1' : '0';
+    unchanged = broken;
+    assert(snag_app_voice_transfer_history(app, target, attachment, &broken,
+        &page, error, sizeof(error)) < 0 && !page);
+    assert(!memcmp(&broken, &unchanged, sizeof(broken)));
+    char first[4096];
+    ssize_t bytes = pread(app->session.log_fd, first, sizeof(first), 0);
+    assert(bytes > 0);
+    char *line = memchr(first, '\n', (size_t)bytes);
+    assert(line && line + 1u < first + bytes);
+    off_t damaged = (off_t)(line + 1u - first);
+    char saved = first[damaged];
+    int writer = openat(app->session.dir_fd, "events.jsonl", O_WRONLY | O_NOFOLLOW | O_CLOEXEC);
+    assert(writer >= 0 && pwrite(writer, "!", 1u, damaged) == 1);
+    broken = (struct snag_voice_transfer_cursor){.source = cursor->source};
+    unchanged = broken;
+    int rc = snag_app_voice_transfer_history(app, target, attachment, &broken,
+        &page, error, sizeof(error));
+    assert(pwrite(writer, &saved, 1u, damaged) == 1 && close(writer) == 0);
+    assert(rc < 0 && !page && !memcmp(&broken, &unchanged, sizeof(broken)));
+}
+
+static void
 test_voice_transfer_roundtrip(struct app_state *app)
 {
     const char *target = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -8178,6 +8275,33 @@ test_voice_transfer_roundtrip(struct app_state *app)
     uint64_t attachment = snag_ui_session_attachment(&app->ui);
     char error[256];
     bool handled = false;
+    struct snag_voice_transfer_cursor cursor = {0};
+    json_t *page = NULL;
+    assert(snag_app_voice_transfer_history(app, target, attachment, &cursor,
+        &page, error, sizeof(error)) < 0 && !page && !cursor.source.next_seq);
+    size_t text_length = 1024u * 1024u + 64u;
+    char *original = malloc(text_length + 1u);
+    assert(original);
+    memset(original, 'x', text_length);
+    memcpy(original, "original λ ", strlen("original λ "));
+    strcpy(original + text_length - strlen("transfer-\"quoted\\secret"),
+        "transfer-\"quoted\\secret");
+    for (unsigned int i = 0u; i < 4u; ++i) {
+        char id[32];
+        assert(snprintf(id, sizeof(id), "transfer-asr-%u", i) > 0);
+        history_voice_event(&app->session, json_pack("{s:s,s:s,s:s,s:s}",
+            "type", "voice_transcript", "speaker", "user", "item_id", id, "text", original));
+    }
+    free(original);
+    json_t *document = json_pack("{s:s}", "private", "transfer-provider-private");
+    assert(document);
+    app->session.on_checkpoint = history_checkpoint_document;
+    app->session.on_commit_opaque = document;
+    assert(snag_session_checkpoint(&app->session, error, sizeof(error)) == 0);
+    app->session.on_checkpoint = NULL;
+    app->session.on_commit_opaque = NULL;
+    json_decref(document);
+    assert(snag_ui_text(&app->ui, SNAG_UI_HOST, "Transfer source visible output λ") == 0);
     for (unsigned int trial = 0u; trial < 2u; ++trial) {
         json_t *state = snag_app_voice_fixture_state(app);
         assert(state && !*snag_json_string(state, "transfer_target"));
@@ -8195,6 +8319,14 @@ test_voice_transfer_roundtrip(struct app_state *app)
         uint64_t paused = app->session.next_seq;
         assert(snag_app_voice_transfer_pause(app, target, attachment,
             error, sizeof(error)) == 1 && app->session.next_seq == paused);
+        if (!trial) {
+            test_voice_transfer_history(app, target, attachment, paused, text_length, &cursor);
+        } else {
+            struct snag_voice_transfer_cursor saved = cursor;
+            assert(snag_app_voice_transfer_history(app, target, attachment, &cursor,
+                &page, error, sizeof(error)) < 0 && !page);
+            assert(!memcmp(&cursor, &saved, sizeof(cursor)));
+        }
         assert(snag_app_voice_service(app) == 0 && app->voice);
         assert(!snag_app_voice_fixture_capture_ready(app));
         state = snag_app_voice_fixture_state(app);
@@ -8213,6 +8345,8 @@ test_voice_transfer_roundtrip(struct app_state *app)
         assert(snag_app_voice_transfer_resume(app, target, attachment,
             error, sizeof(error)) == 0);
         state = snag_app_voice_fixture_state(app);
+        assert(snag_app_voice_transfer_history(app, target, attachment, &cursor,
+            &page, error, sizeof(error)) < 0 && !page);
         assert(state && !*snag_json_string(state, "transfer_target"));
         assert(strcmp(snag_json_string(state, "connection_id"), connection));
         assert(json_is_true(json_object_get(state, "muted")) == !trial);
@@ -8232,6 +8366,8 @@ test_voice_renewal(struct app_state *app, struct snag_config *config,
 {
     char error[256];
     bool handled = false;
+    assert(snag_config_add_secret(config, "\"transfer-\\\"quoted\\\\secret\"", NULL,
+        error, sizeof(error)) == 0);
     json_t *empty = json_array();
     json_t *failure = json_pack("{s:s,s:{s:s,s:s}}", "type", "error", "error",
         "code", "server_error", "type", "server_error");
@@ -8375,6 +8511,26 @@ test_voice_renewal(struct app_state *app, struct snag_config *config,
     assert(app->session.pending_queue_count == 1u);
     assert(snag_app_voice_transfer_resume(app, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         snag_ui_session_attachment(&app->ui), error, sizeof(error)) == 0 && !app->voice);
+    struct snag_voice_transfer_cursor protected = {0};
+    json_t *page = NULL;
+    uint64_t attachment = snag_ui_session_attachment(&app->ui);
+    const char *target = "dddddddddddddddddddddddddddddddd";
+    assert(snag_app_voice_transfer_history(app, target, attachment, &protected,
+        &page, error, sizeof(error)) < 0 && !page);
+    const char *protections[] = {"\"dddddddddddddddddddddddddddddddd\"", "\"voice_event\""};
+    for (size_t i = 0u; i < sizeof(protections) / sizeof(protections[0]); ++i) {
+        assert(snag_config_add_secret(config, protections[i], NULL, error, sizeof(error)) == 0);
+        empty = json_array();
+        assert(empty && snag_app_voice_fixture(app, empty, true) == 0);
+        json_decref(empty);
+        assert(snag_app_voice_transfer_pause(app, target, attachment, error, sizeof(error)) == 1);
+        /* Protection cannot silently rewrite destination or event identities. */
+        assert(snag_app_voice_transfer_history(app, target, attachment, &protected,
+            &page, error, sizeof(error)) < 0 && !page);
+        assert(!protected.source.next_seq && !protected.position.next_seq);
+        assert(snag_app_voice_command(app, "/voice off", &handled) == 0 && handled && !app->voice);
+        snag_secret_source_free(&config->secrets[--config->secret_count]);
+    }
     assert(snag_session_commit(&app->session, "future_turn_cancelled",
         json_pack("{s:[s],s:s}", "queue_ids", seen.queue, "reason", "user"),
         NULL, error, sizeof(error)) == 0);
@@ -8722,8 +8878,9 @@ test_native_ui(void)
         unsigned int voice_counts[2] = {0};
         assert(snag_session_each_event(session, voice_close_record, voice_counts,
                                         error, sizeof(error)) == 0);
-        unsigned int expected_stops = websocket_supported() ? 9u : 8u;
-        assert(voice_counts[0] == 2u && voice_counts[1] == expected_stops &&
+        /* Includes four large retained ASRs and one later source-only transcript. */
+        unsigned int expected_stops = websocket_supported() ? 11u : 10u;
+        assert(voice_counts[0] == 7u && voice_counts[1] == expected_stops &&
             !session->pending_queue_count);
         for (unsigned int playing = 0u; playing < 2u; ++playing) {
             assert(snag_app_audio_fixture(&app, playing != 0u) == 0);

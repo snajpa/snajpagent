@@ -17,8 +17,9 @@
   The live source keeps its writer lock; shared attachment import remains pending.
 
 - Add internal source-side voice handover preparation with reversible pause,
-  retained helper history and requested mode. Shared attachment wiring and
-  destination history import remain pending.
+  retained helper history and requested mode. Export the paused source's verified
+  public history in unclipped pages, retaining original ASR/UI records and source
+  protections. Shared attachment wiring and destination history import remain pending.
 
 - Preserve native microphone sample time across mute gaps and partial reads,
   using capture positions for RTP timestamps while retaining input privacy.

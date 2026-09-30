@@ -166,6 +166,16 @@ void snag_app_voice_close(struct app_state *);
  * explicit off wins, and normal history/device activation gates still apply. */
 int snag_app_voice_transfer_pause(struct app_state *, const char *, uint64_t, char *, size_t);
 int snag_app_voice_transfer_resume(struct app_state *, const char *, uint64_t, char *, size_t);
+struct snag_voice_transfer_cursor {
+    struct snag_journal_cursor source, position;
+};
+/* Initialize to zero. Export structured public records from the prepared
+ * source prefix, not a helper's private continuation or a clipped tool view.
+ * A failed page leaves cursor/result unadopted; complete is a scan result,
+ * never destination acceptance. Off, successful resume or a new preparation
+ * invalidates it. */
+int snag_app_voice_transfer_history(struct app_state *, const char *, uint64_t,
+    struct snag_voice_transfer_cursor *, json_t **, char *, size_t);
 void snag_app_voice_event(struct app_state *,const char *,const json_t *);
 json_t *snag_app_voice_tools(void);
 int snag_app_voice_read(struct app_state *, const struct snag_response_item *,

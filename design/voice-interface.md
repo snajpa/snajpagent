@@ -551,6 +551,21 @@ not adopt later appends. Closing it preserves the live source owner's lock.
 This supplies bounded history access for handover; callers must still select and
 filter public observations before importing them. Attachment does not use it yet.
 
+The paused voice owner captures this committed boundary after its media join and
+UI acknowledgement. Its source export pages the verified prefix through the common
+public projection and retained source protections. Pages carry source/destination
+IDs, original sequence/type/data and completion status. The cursor binds progress
+to this preparation; source appends stay outside it. Successful rollback, explicit
+off or a later preparation invalidates the old export. Original ASR and acknowledged
+UI records come from the journal even when the helper cache has not seen them.
+The reader uses the existing byte quantum plus complete atomic records, without
+clipping historical text. Provider checkpoint state and private continuations are
+omitted. Corruption or protection failure discards the page without advancing its
+cursor; protection that would change source/destination or event identities also
+fails closed. Export remains an internal, transient source operation. A completed
+scan neither adopts destination state nor starts audio; durable import and shared
+attachment wiring remain pending.
+
 ## Implementation and regression sequence
 
 1. Reproduce a second native delegation while a coding request is pending.
