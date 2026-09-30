@@ -4656,7 +4656,7 @@ completed tool effects, partial output and unsettled command handles.  Unsafe
 local state must be reconciled before new tools are admitted.  Credentials are
 read again on each attempt; next-turn model settings keep their normal boundary.
 Explicit pause, cancellation and exit remain available during backoff.
-An exited process resumes work when its saved active session is reopened.
+An exited process resumes work when its saved session is reopened.
 .PP
 Consecutive recovery failures appear as one bounded host-generated summary in
 model context.  Detailed errors remain in the session log, and repeated terminal
@@ -5300,7 +5300,7 @@ Execute a task from a script:
 printf '%s\en' 'run the tests and summarize failures' | snajpagent -e
 .fi
 .PP
-Resume the newest active session:
+Resume the newest saved session:
 .PP
 .nf
 snajpagent --resume --last
