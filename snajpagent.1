@@ -4637,6 +4637,11 @@ unadmitted tool proposals from that response do not execute. Completed tool
 results from earlier responses remain available. A warning identifies automatic
 recovery while the session continues working.
 .PP
+Valid structured keepalive events may arrive before, during or after a response.
+They leave completed responses successful and do not trigger recovery or repeat
+their output. Malformed records, conflicting event types, duplicate completions
+and additional response data after completion remain protocol errors.
+.PP
 Ordinary failures that otherwise offer
 .B /retry
 receive up to five automatic retries per consecutive failure sequence by default.

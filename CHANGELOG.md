@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Accept validated Responses keepalives after completion, preserving successful
+  turns and their output without an unnecessary retry. Malformed trailers and
+  later response events remain protocol errors.
+
 - Add a final IRC column to session lists, with the hosted `s/endpoint` first and
   comma-separated `c/endpoint` clients. LAST PROMPT shows the latest saved input,
   rendering IRC references as `endpoint: message`. Terminal tables share remaining

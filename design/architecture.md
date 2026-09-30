@@ -665,7 +665,10 @@ route (404) in automatic counting; strict counting still fails, and generic
 libcurl, including HTTP/2 and HTTP/3 status lines without reason phrases.
 An unlabelled SSE `[DONE]` sentinel is accepted only after a valid Responses
 terminal event; it cannot complete an otherwise unfinished response, and
-other post-terminal events remain errors.
+SSE comments and the subscription-usage trailer remain accepted. Structured
+`keepalive` events are ignored before, during and after a response, following
+JSON-object and SSE/JSON type validation. They do not mutate output or retry state.
+Duplicate terminal events and other response events after completion remain errors.
 
 When a goal is active, context projection appends the current durable wording
 and controller rules after replay and compaction. It also exposes the strict

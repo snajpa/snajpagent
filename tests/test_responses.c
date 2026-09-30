@@ -363,14 +363,20 @@ test_structured_keepalives_do_not_end_response(void)
         "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_keepalive\",\"status\":\"in_progress\",\"output\":[]}}\n\n"
         "event: keepalive\n" "data: {\"type\":\"keepalive\",\"time_ms\":123}\n\n"
         "event: response.completed\n"
-        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_keepalive\",\"status\":\"completed\",\"output\":[]}}\n\n";
-    struct parsed_stream emitted = parsed_new(1024u);
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_keepalive\",\"status\":\"completed\",\"output\":[]}}\n\n"
+        "event: keepalive\ndata: {\"type\":\"keepalive\",\"time_ms\":124}\n\n"
+        "data: {\"type\":\"keepalive\"}\n\n"
+        "event: keepalive\ndata: {\"time_ms\":125}\n\n";
+    static const size_t chunks[] = {1u, 7u, sizeof(wire)};
 
-    assert(parse_stream(wire, 7u, &emitted) == 0);
-    assert(strcmp(emitted.graph.provider_response_id, "resp_keepalive") == 0);
-    assert(emitted.graph.count == 0u);
-    assert(emitted.calls == 0u);
-    parsed_free(&emitted);
+    for (size_t i = 0u; i < sizeof(chunks) / sizeof(chunks[0]); ++i) {
+        struct parsed_stream emitted = parsed_new(1024u);
+        assert(parse_stream(wire, chunks[i], &emitted) == 0);
+        assert(strcmp(emitted.graph.provider_response_id, "resp_keepalive") == 0);
+        assert(emitted.graph.count == 0u);
+        assert(emitted.calls == 0u);
+        parsed_free(&emitted);
+    }
 }
 
 static void

@@ -1002,6 +1002,7 @@ clarification_item_safe(const json_t *item)
 static int
 dispatch_event(struct snag_responses_stream *stream, const char *type, const json_t *root)
 {
+    if (strcmp(type, "keepalive") == 0) return 0;
     json_t *output = json_object_get(json_object_get(root, "response"), "output");
     if (snag_string_in(type, "response.failed response.incomplete error")) {
         struct snag_provider_failure failure;
@@ -1040,7 +1041,6 @@ dispatch_event(struct snag_responses_stream *stream, const char *type, const jso
             }
         }
     }
-    if (strcmp(type, "keepalive") == 0) return 0;
     if (strcmp(type, "response.created") == 0) return handle_response_created(stream, root);
     /* Public text is retained; unexecuted local calls are discarded. Neither
      * permits exact transport replay. Hosted/unknown tools stay unsafe. */
@@ -1105,10 +1105,6 @@ snag_responses_sse_record(void *opaque, const struct snag_sse_record *record)
      * it carries window percentages only, no token counts, so ignore it. */
     if (stream->terminal && record->event_len == sizeof("response.subscription_usage") - 1u &&
         memcmp(record->event, "response.subscription_usage", record->event_len) == 0) return 0;
-    if (stream->terminal) {
-        record_diagnostic(stream, record, NULL, "not-parsed");
-        return stream_fail(stream, EPROTO, "Responses event follows terminal completion");
-    }
     root = snag_json_load_strict(record->data, record->data_len, SNAG_MAX_SSE_EVENT,
                                 json_error, sizeof(json_error));
     if (!root) {
@@ -1147,7 +1143,14 @@ snag_responses_sse_record(void *opaque, const struct snag_sse_record *record)
         json_decref(root);
         return stream_fail(stream, EPROTO, "SSE event name and JSON type disagree");
     }
-    rc = dispatch_event(stream, type, root);
+    /* Heartbeats can trail completion. Validate their JSON and event identity
+     * before exempting them from the terminal response boundary. */
+    if (stream->terminal && strcmp(type, "keepalive") != 0) {
+        record_diagnostic(stream, record, root, "object");
+        rc = stream_fail(stream, EPROTO, "Responses event follows terminal completion");
+    } else {
+        rc = dispatch_event(stream, type, root);
+    }
     json_decref(root);
     return rc;
 }

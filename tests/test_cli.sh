@@ -1282,6 +1282,7 @@ PY
 
 python3 "$(dirname "$bin")/test_session_listing.py" "$bin"
 python3 "$(dirname "$bin")/test_session_archiving.py" "$bin"
+python3 "$(dirname "$bin")/test_response_keepalive.py" "$bin"
 
 TERM=xterm "$(dirname "$bin")/pty_interactive.py" "$bin" "$root/work"
 TERM=dumb "$(dirname "$bin")/pty_interactive.py" "$bin" "$root/work"
