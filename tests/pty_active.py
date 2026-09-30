@@ -5227,6 +5227,15 @@ def test_live_nick_listing():
         with Child(["--no-color", "-c", endpoint, "-n", "minion4", "-o", "clientop"],
                    chat_prompt("clientop")) as client:
             identity = new_session(before, client)
+            deadline = time.monotonic() + MIN_WAIT_S
+            while time.monotonic() < deadline:
+                if any(e["type"] == "irc_event" and e["data"]["kind"] == "history_ready"
+                       for e in events(identity)):
+                    break
+                client.read_once(0.02)
+                server.read_once(0.02)
+            else:
+                raise AssertionError("client did not finish joining the IRC room")
             for old, nick in (("minion4", "docsowner"), ("docsowner", "docsreviewer")):
                 start = len(client.buf)
                 client.send(f"/nick {nick}\r".encode())
@@ -5239,7 +5248,8 @@ def test_live_nick_listing():
                     client.read_once(0.02)
                     server.read_once(0.02)
                 else:
-                    raise AssertionError("server did not acknowledge the nickname change")
+                    raise AssertionError(("server did not acknowledge the nickname change",
+                                          bytes(client.buf), bytes(server.buf)))
                 client.send_wait(b"/nick\r", f"model nick: {nick}".encode(), start=start)
                 result = subprocess.run([BINARY, "--dotdir", DOTDIR, "-l"], cwd=WORKSPACE,
                                         capture_output=True, text=True, timeout=MIN_WAIT_S)
