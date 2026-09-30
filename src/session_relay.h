@@ -6,7 +6,8 @@
 
 enum snag_session_phase {
     SNAG_SESSION_WAIT_RESERVE, SNAG_SESSION_RESERVED,
-    SNAG_SESSION_REPAINT, SNAG_SESSION_ACCEPTED, SNAG_SESSION_ATTACHED
+    SNAG_SESSION_REPAINT, SNAG_SESSION_ACCEPTED, SNAG_SESSION_ATTACHED,
+    SNAG_SESSION_RELEASING
 };
 
 /* One relay thread owns all fields and descriptors. Other threads communicate
@@ -22,8 +23,10 @@ struct snag_session_relay {
     struct snag_terminal_profile profile;
     size_t input_offset, output_length, output_acknowledged;
     unsigned char event_data[256];
+    unsigned char voice_offer[SNAG_SESSION_VOICE_BYTES];
     size_t event_length;
     bool input_pending, closing, peer_verified, reject_verified, reject_reply;
+    bool voice_offered;
 };
 
 /* On success takes ownership of a private PTY master and optional initial

@@ -914,8 +914,18 @@ snag_app_history_data(uint64_t seq, const char *type, const json_t *data,
     bool omitted = false;
     if (!strcmp(type, "session_checkpoint")) {
         view = json_pack("{s:I,s:b,s:I}", "covers_through_seq", (json_int_t)(seq - 1u),
-            "provider_view", json_is_object(json_object_get(data, "context")),
+            "provider_view", json_is_object(json_object_get(data, "context")) ||
+                json_is_true(json_object_get(data, "provider_view")),
             "snapshot_v", json_integer_value(json_object_get(data, "snapshot_v")));
+    } else if (!strcmp(type, "voice_transfer_record") ||
+        !strcmp(type, "voice_transfer_sealed")) {
+        view = json_pack("{s:b,s:s}", "prepared_voice_history", true,
+            "transfer_id", snag_json_string(data, "transfer_id"));
+    } else if (!strcmp(type, "voice_transfer_adopted")) {
+        view = json_pack("{s:b,s:s,s:s,s:I}", "session_boundary", true,
+            "source_session_id", snag_json_string(data, "source_session_id"),
+            "target_session_id", snag_json_string(data, "target_session_id"),
+            "source_as_of_seq", json_integer_value(json_object_get(data, "source_as_of_seq")));
     } else {
         view = json_copy((json_t *)data);
         if (!view) goto out;

@@ -71,7 +71,7 @@ snag_session_packet_set(struct snag_session_packet *packet, enum snag_session_me
         length > SNAG_SESSION_FRAME_MAX || (length && !data)) return snag_errno(EINVAL);
     packet->bytes[0] = 'S';
     packet->bytes[1] = 'A';
-    packet->bytes[2] = 3u;
+    packet->bytes[2] = 4u;
     packet->bytes[3] = (unsigned char)type;
     for (size_t i = 0u; i < 4u; ++i) packet->bytes[4u + i] = (unsigned char)(length >> (8u * i));
     if (length) memcpy(packet->bytes + SNAG_SESSION_HEADER, data, length);
@@ -490,7 +490,7 @@ snag_session_packet_read(int fd, struct snag_session_packet *packet)
     size_t target = SNAG_SESSION_HEADER;
     for (;;) {
         if (packet->used >= SNAG_SESSION_HEADER) {
-            if (packet->bytes[0] != 'S' || packet->bytes[1] != 'A' || packet->bytes[2] != 3u ||
+            if (packet->bytes[0] != 'S' || packet->bytes[1] != 'A' || packet->bytes[2] != 4u ||
                 packet->bytes[3] < SNAG_SESSION_RESERVE ||
                 packet->bytes[3] > SNAG_SESSION_STATUS ||
                 snag_session_packet_length(packet) > SNAG_SESSION_FRAME_MAX)

@@ -41,7 +41,10 @@ enum snag_ui_operation {
     SNAG_UI_ORIENTATION, SNAG_UI_HISTORY, SNAG_UI_IRC, SNAG_UI_DURABLE, SNAG_UI_EVENT,
     SNAG_UI_RESUME, SNAG_UI_PROTOCOL, SNAG_UI_TRANSPORT, SNAG_UI_RAW, SNAG_UI_HISTORY_SNAPSHOT,
     SNAG_UI_UPDATE, SNAG_UI_SESSION_START, SNAG_UI_SESSION_LISTEN, SNAG_UI_SESSION_CONTROL,
-    SNAG_UI_SESSION_REBIND, SNAG_UI_SESSION_READY, SNAG_UI_INPUT, SNAG_UI_VOICE_EVENT, SNAG_UI_STOP
+    SNAG_UI_SESSION_REBIND, SNAG_UI_SESSION_OFFER, SNAG_UI_SESSION_PROGRESS,
+    SNAG_UI_SESSION_REFUSE, SNAG_UI_SESSION_RELEASED, SNAG_UI_SESSION_BOUND,
+    SNAG_UI_SESSION_READY,
+    SNAG_UI_INPUT, SNAG_UI_VOICE_EVENT, SNAG_UI_STOP
 };
 
 struct snag_ui_prompt {
@@ -63,6 +66,8 @@ struct snag_ui_command {
     union {
         unsigned int value;
         struct snag_session_process *session_process;
+        struct { uint64_t generation; unsigned char *bytes; bool *present;
+            unsigned int mode; } session_voice;
         const struct snag_session *session;
         struct snag_ui_prompt prompt;
         struct { uint32_t typing_pause_ms, tool_spinner_off_delay_ms; } timing;
@@ -94,6 +99,8 @@ uint64_t snag_ui_session_pending(const struct snag_ui *);
  * and binding finish, while absent/suspended, or using a direct terminal.
  * Changes also identify exclusive-transfer lease loss. */
 uint64_t snag_ui_session_attachment(const struct snag_ui *);
+uint64_t snag_ui_session_releasing(const struct snag_ui *);
+uint64_t snag_ui_session_failures(const struct snag_ui *);
 int snag_ui_session_rebind(struct snag_ui *, uint64_t generation);
 int snag_ui_session_ready(struct snag_ui *, uint64_t generation);
 int snag_ui_update(struct snag_ui *ui, const char *program, const char *url);

@@ -95,6 +95,7 @@ snag_session_client_continue(struct snag_session_client *client)
         client->ack_pending || client->incoming.used)
         return snag_errno(EBUSY);
     if (client->peer < 0) return snag_errno(ENOTCONN);
+    client->voice_offered = client->voice_released = false;
     if (snag_session_commit_set(&client->target_output, client->geometry, &client->profile) < 0)
         return -1;
     client->target = client->peer;
@@ -113,6 +114,7 @@ snag_session_client_error(struct snag_session_client *client, const char *text)
     if (client->input.used) return snag_errno(EAGAIN);
     size_t length = strlen(text);
     if (!length || length >= sizeof(client->event_data)) return snag_errno(EINVAL);
+    if (client->target < 0) client->voice_offered = client->voice_released = false;
     return snag_session_packet_set(&client->input, SNAG_SESSION_ERROR, text, length);
 }
 
@@ -123,6 +125,7 @@ target_failed(struct snag_session_client *client, const char *text,
     if (client->target >= 0) (void)close(client->target);
     client->target = -1;
     client->target_deadline = 0u;
+    client->voice_offered = client->voice_released = false;
     packet_clear(&client->target_input);
     packet_clear(&client->target_output);
     client->event_length = strlen(text);
@@ -154,6 +157,12 @@ target_read(struct snag_session_client *client, enum snag_session_message *event
     if (!rc) return 0;
     enum snag_session_message type = snag_session_packet_type(packet);
     size_t length = snag_session_packet_length(packet);
+    if (type == SNAG_SESSION_PROGRESS && !length &&
+        client->phase == SNAG_CLIENT_COMMITTING && !client->target_output.used) {
+        client->target_deadline = snag_monotonic_ms() + HANDSHAKE_MS;
+        packet_clear(packet);
+        return 0;
+    }
     if (type == SNAG_SESSION_ERROR) {
         char message[sizeof(client->event_data)];
         if (length >= sizeof(message)) length = sizeof(message) - 1u;
@@ -167,11 +176,17 @@ target_read(struct snag_session_client *client, enum snag_session_message *event
         target_failed(client, "invalid destination attachment acknowledgement", event);
         return 0;
     }
-    if (client->phase == SNAG_CLIENT_RESERVING) {
+    if (client->phase == SNAG_CLIENT_RESERVING && client->voice_offered) {
+        rc = snag_session_packet_set(&client->target_output, SNAG_SESSION_OFFER,
+            client->voice_offer, sizeof(client->voice_offer));
+        if (rc < 0) return -1;
+        client->phase = SNAG_CLIENT_OFFERING;
+    } else if (client->phase == SNAG_CLIENT_RESERVING || client->phase == SNAG_CLIENT_OFFERING) {
         rc = snag_session_commit_set(&client->target_output, client->geometry, &client->profile);
         if (rc < 0) return -1;
         client->phase = SNAG_CLIENT_COMMITTING;
     } else client->phase = SNAG_CLIENT_READY;
+    client->target_deadline = snag_monotonic_ms() + HANDSHAKE_MS;
     packet_clear(packet);
     return 0;
 }
@@ -186,11 +201,15 @@ commit_target(struct snag_session_client *client, enum snag_session_message *eve
         /* A full close makes the relay discard unread frames on POLLHUP.
          * Write EOF lets it consume queued input/ACKs before normal closure. */
         if (!client->peer_draining) {
-            if (shutdown(client->peer, SHUT_WR) < 0) return -1;
+            if (client->voice_offered) {
+                if (snag_session_packet_set(&client->input, SNAG_SESSION_RELEASE,
+                        client->voice_offer, 16u) < 0) return -1;
+            } else if (shutdown(client->peer, SHUT_WR) < 0) return -1;
             client->peer_draining = true;
         }
         return 0;
     }
+    if (client->voice_offered && !client->voice_released) return snag_errno(EPROTO);
     client->peer = client->target;
     client->quitting = client->peer_ended = false;
     client->target = -1;
@@ -198,7 +217,11 @@ commit_target(struct snag_session_client *client, enum snag_session_message *eve
     packet_clear(&client->output);
     /* The destination cannot activate attachment-bound resources while the
      * frontend still belongs to the source. New input follows this frame. */
-    if (snag_session_packet_set(&client->input, SNAG_SESSION_BOUND, NULL, 0u) < 0) return -1;
+    const unsigned char *mode = client->voice_offered ?
+        &client->voice_offer[SNAG_SESSION_VOICE_MODE] : NULL;
+    if (snag_session_packet_set(&client->input, SNAG_SESSION_BOUND, mode, mode ? 1u : 0u) < 0)
+        return -1;
+    client->voice_offered = client->voice_released = false;
     *event = SNAG_SESSION_READY;
     return 1;
 }
@@ -231,6 +254,7 @@ peer_read(struct snag_session_client *client, enum snag_session_message *event)
     if (rc < 0) {
         client->peer_ended = errno == ECONNRESET;
         if (client->peer_draining && client->peer_ended && client->target >= 0) {
+            if (client->voice_offered && !client->voice_released) return 1;
             (void)close(client->peer);
             client->peer = -1;
             client->peer_draining = false;
@@ -243,6 +267,15 @@ peer_read(struct snag_session_client *client, enum snag_session_message *event)
     /* Cutover has frozen source display and controls. Consume its final bytes
      * without displaying unacknowledgeable output or retargeting old controls. */
     if (client->peer_draining) {
+        if (snag_session_packet_type(&client->incoming) == SNAG_SESSION_RELEASED) {
+            const unsigned char *receipt = client->incoming.bytes + SNAG_SESSION_HEADER;
+            if (!client->voice_offered || client->voice_released ||
+                snag_session_packet_length(&client->incoming) != 17u ||
+                memcmp(receipt, client->voice_offer, 16u) ||
+                receipt[16] > SNAG_SESSION_VOICE_MUTED) return snag_errno(EPROTO);
+            client->voice_offer[SNAG_SESSION_VOICE_MODE] = receipt[16];
+            client->voice_released = true;
+        }
         packet_clear(&client->incoming);
         return 0;
     }
@@ -267,13 +300,22 @@ peer_read(struct snag_session_client *client, enum snag_session_message *event)
     bool valid = (type == SNAG_SESSION_DETACH && !length) ||
                  (type == SNAG_SESSION_SUSPEND && !length) ||
                  (type == SNAG_SESSION_EXIT && length == 1u) ||
-                 (type == SNAG_SESSION_SWITCH && length >= 8u && length <= 32u) ||
+                 (type == SNAG_SESSION_SWITCH && ((length >= 8u && length <= 32u) ||
+                     length == SNAG_ID_HEX_LEN + SNAG_SESSION_VOICE_BYTES)) ||
                  (type == SNAG_SESSION_ERROR && length && length < sizeof(client->event_data));
     if (!valid) return snag_errno(EPROTO);
     /* Ordinary controls stay after their display bytes. Only hard-exit intent
      * is consumed ahead of the physical writer, and it still waits for EOF. */
     if (client->output_pending) return 0;
     if (type == SNAG_SESSION_SWITCH) {
+        client->voice_offered = length > SNAG_ID_HEX_LEN;
+        client->voice_released = false;
+        if (client->voice_offered) {
+            memcpy(client->voice_offer, bytes + SNAG_ID_HEX_LEN, sizeof(client->voice_offer));
+            if (client->voice_offer[SNAG_SESSION_VOICE_MODE] > SNAG_SESSION_VOICE_MUTED)
+                return snag_errno(EPROTO);
+            length = SNAG_ID_HEX_LEN;
+        }
         for (size_t i = 0u; i < length; ++i)
             if (!strchr("0123456789abcdef", bytes[i]) || !bytes[i]) return snag_errno(EPROTO);
     }

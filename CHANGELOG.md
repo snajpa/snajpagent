@@ -13,13 +13,12 @@
   details. Protect configured secrets and request credentials, including values
   containing quotes or backslashes in older records. Saved records stay unchanged.
 
-- Add read-only, hash-verified committed history views for source preparation.
-  The live source keeps its writer lock; shared attachment import remains pending.
-
-- Add internal source-side voice handover preparation with reversible pause,
-  retained helper history and requested mode. Export the paused source's verified
-  public history in unclipped pages, retaining original ASR/UI records and source
-  protections. Shared attachment wiring and destination history import remain pending.
+- Carry active voice conversation and requested mode through the shared session
+  attachment command. Copy protected original observations into the destination's
+  journal before acceptance, preserving source identities and queued-work ownership.
+  Use destination configuration and credentials, retire source media before binding,
+  and apply final mute/off state before starting destination audio. Failed preparation
+  keeps the source attached; ordinary reattachment requires explicit voice activation.
 
 - Preserve native microphone sample time across mute gaps and partial reads,
   using capture positions for RTP timestamps while retaining input privacy.

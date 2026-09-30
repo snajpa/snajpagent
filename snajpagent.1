@@ -1695,6 +1695,18 @@ and display acknowledgements before releasing that connection. A connection
 failure during this final drain is reported and ends the terminal connection.
 The destination publishes its live attachment after the frontend confirms that
 drain and binds to it; new input and audio activation wait for this acknowledgement.
+With voice active, this command carries its public conversation and requested
+on or muted state. Voice requests use the same command and confirmation rules.
+The microphone pauses while history is prepared. The destination uses its own
+audio/provider settings and credentials, and starts after the source has retired
+its media. Copied originals keep their source identities; queued work and late
+source results stay with the source session. The destination's previous voice
+conversation is replaced by the carried conversation, followed by current
+destination context.
+Preparation failure keeps the source attachment and resumes its voice when
+still enabled. Turning voice off before history is sealed cancels preparation;
+after the offer is sent, it leaves voice off in the destination. Mute changes
+applied before source release determine the destination's initial microphone state.
 An incompatible private-protocol version is refused before acceptance. Use a
 compatible binary to attach to an older running owner.
 .TP
@@ -2165,9 +2177,11 @@ Device loss, overflow, authentication failure, unclassified HTTP or policy rejec
 failures, WebSocket close frames, protocol-integrity errors and other unclassified
 connection failures stop voice. Review the diagnostic and restart explicitly with
 /voice on.
-Native terminal loss, detach, switching away or job suspension also stops
-voice. Final transcripts and previously accepted coding work remain saved;
-unaccepted voice handoffs are discarded. Reattach before restarting voice.
+Native terminal loss, detach or job suspension also stops voice. Final transcripts
+and previously accepted coding work remain saved; unaccepted voice handoffs are
+discarded. Ordinary reattachment requires an explicit /voice on. An intentional
+/session attach while voice is active carries its conversation and requested
+mode through the attachment exchange described above.
 When the provider supplies a session expiry time, a warning appears within its
 last minute.
 Final notices already received are saved on shutdown and connection failure.

@@ -125,9 +125,16 @@ struct snag_journal_cursor {
     char prev_sha256[SNAG_SHA256_HEX_LEN + 1u];
 };
 
+struct snag_voice_history_root {
+    char transfer_id[SNAG_ID_HEX_LEN + 1u];
+    struct snag_journal_cursor begin;
+    uint64_t adopted_seq;
+};
+
 struct snag_session {
     char id[SNAG_ID_HEX_LEN + 1u];
     char prev_sha256[SNAG_SHA256_HEX_LEN + 1u];
+    struct snag_voice_history_root voice_history;
     char active_turn_id[SNAG_ID_HEX_LEN + 1u];
     char active_response_id[SNAG_ID_HEX_LEN + 1u];
     char final_item_id[SNAG_ID_HEX_LEN + 1u];

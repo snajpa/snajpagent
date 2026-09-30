@@ -2762,7 +2762,9 @@ test_wakeup(void)
 static void
 test_session_transport(void)
 {
-    assert(SNAG_SESSION_BOUND == 14 && SNAG_SESSION_STATUS == 15);
+    assert(SNAG_SESSION_BOUND == 14 && SNAG_SESSION_OFFER == 15 &&
+        SNAG_SESSION_PROGRESS == 16 && SNAG_SESSION_RELEASE == 17 &&
+        SNAG_SESSION_RELEASED == 18 && SNAG_SESSION_STATUS == 19);
     struct snag_session_packet sent = {0}, received = {0};
     assert(snag_session_packet_set(&sent, SNAG_SESSION_OUTPUT, "hello", 5u) == 0);
     assert(snag_session_packet_length(&sent) == 5u);
@@ -3273,6 +3275,89 @@ test_session_terminal(void)
         assert(length == 0 || (length < 0 && (errno == EAGAIN || errno == EIO)));
         if (pair[0] >= 0) assert(close(pair[0]) == 0);
         assert(close(master) == 0 && close(slave) == 0);
+    }
+}
+
+static void
+test_session_voice_client(void)
+{
+    for (unsigned int trial = 0u; trial < 7u; ++trial) {
+        int terminal[2], source[2], target[2];
+        assert(snag_session_stream_pair(terminal) == 0);
+        assert(snag_session_stream_pair(source) == 0);
+        assert(snag_session_stream_pair(target) == 0);
+        struct snag_session_client client;
+        assert(snag_session_client_init(&client, terminal[0], source[0]) == 0);
+        client.profile = (struct snag_terminal_profile){.term = "xterm"};
+        unsigned char request[SNAG_ID_HEX_LEN + SNAG_SESSION_VOICE_BYTES] = {0};
+        memset(request, 'a', SNAG_ID_HEX_LEN);
+        memset(request + SNAG_ID_HEX_LEN, 42, 16u);
+        request[sizeof(request) - 1u] = SNAG_SESSION_VOICE_ON;
+        relay_send_frame(source[1], SNAG_SESSION_SWITCH, request, sizeof(request));
+        client_wait_event(&client, SNAG_SESSION_SWITCH);
+        assert(client.event_length == SNAG_ID_HEX_LEN && client.voice_offered);
+        assert(!memcmp(client.event_data, request, SNAG_ID_HEX_LEN));
+        assert(snag_session_client_resize(&client, 24u, 80u) == 0);
+        struct snag_session_packet resize;
+        client_receive_frame(&client, source[1], SNAG_SESSION_RESIZE, &resize);
+        assert(snag_session_client_attach(&client, target[0]) == 0);
+        struct snag_session_packet packet;
+        client_receive_frame(&client, target[1], SNAG_SESSION_RESERVE, &packet);
+        relay_send_frame(target[1], SNAG_SESSION_READY, NULL, 0u);
+        client_receive_frame(&client, target[1], SNAG_SESSION_OFFER, &packet);
+        assert(snag_session_packet_length(&packet) == SNAG_SESSION_VOICE_BYTES);
+        assert(!memcmp(packet.bytes + SNAG_SESSION_HEADER, request + SNAG_ID_HEX_LEN,
+            SNAG_SESSION_VOICE_BYTES));
+        relay_send_frame(target[1], SNAG_SESSION_READY, NULL, 0u);
+        client_receive_frame(&client, target[1], SNAG_SESSION_COMMIT, &packet);
+        client.target_deadline = snag_monotonic_ms() + 1000u;
+        relay_send_frame(target[1], SNAG_SESSION_PROGRESS, NULL, 0u);
+        enum snag_session_message event;
+        assert(snag_session_client_step(&client, 1, &event) == 0 && !event);
+        assert(client.target_deadline > snag_monotonic_ms() + 1000u);
+        assert(client.peer == source[0] && !client.peer_draining);
+        if (trial == 6u) {
+            relay_send_frame(target[1], SNAG_SESSION_ERROR, "unavailable", 11u);
+            client_wait_event(&client, SNAG_SESSION_ERROR);
+            assert(client.peer == source[0] && !client.peer_draining && !client.voice_offered);
+            assert(write(terminal[1], "source", 6u) == 6);
+            client_receive_frame(&client, source[1], SNAG_SESSION_INPUT, &packet);
+        } else {
+            relay_send_frame(target[1], SNAG_SESSION_READY, NULL, 0u);
+            client_receive_frame(&client, source[1], SNAG_SESSION_RELEASE, &packet);
+            assert(snag_session_packet_length(&packet) == 16u);
+            assert(!memcmp(packet.bytes + SNAG_SESSION_HEADER, request + SNAG_ID_HEX_LEN, 16u));
+            assert(client.peer == source[0] && client.peer_draining);
+            unsigned char released[17];
+            memcpy(released, request + SNAG_ID_HEX_LEN, 16u);
+            released[16] = (unsigned char)trial;
+            if (trial == 4u) {
+                released[0] ^= 1u;
+                released[16] = SNAG_SESSION_VOICE_ON;
+            }
+            if (trial != 3u)
+                relay_send_frame(source[1], SNAG_SESSION_RELEASED, released, sizeof(released));
+            if (trial < 4u) assert(shutdown(source[1], SHUT_WR) == 0);
+            if (trial < 3u) {
+                client_wait_event(&client, SNAG_SESSION_READY);
+                client_receive_frame(&client, target[1], SNAG_SESSION_BOUND, &packet);
+                assert(snag_session_packet_length(&packet) == 1u);
+                assert(packet.bytes[SNAG_SESSION_HEADER] == trial);
+                assert(!client.voice_offered && !client.voice_released);
+            } else {
+                int rc = 0;
+                for (unsigned int i = 0u; i < 1000u && !rc; ++i) {
+                    rc = snag_session_client_step(&client, 1, &event);
+                    assert(!event);
+                }
+                assert(trial == 3u ? rc == 1 : rc < 0 && errno == EPROTO);
+                assert(client.peer != target[0]);
+                packet = (struct snag_session_packet){0};
+                assert(snag_session_packet_read(target[1], &packet) == 0);
+            }
+        }
+        snag_session_client_close(&client);
+        assert(close(terminal[1]) == 0 && close(source[1]) == 0 && close(target[1]) == 0);
     }
 }
 
@@ -3933,6 +4018,74 @@ test_session_relay(void)
         assert(read(slave, input, sizeof(input)) < 0 && errno == EAGAIN);
     }
 
+    /* A carried voice offer is prepared before READY, and BOUND supplies
+     * its final mode. Source media release needs a matching explicit receipt. */
+    for (unsigned int trial = 0u; trial < 8u; ++trial) {
+        unsigned char request[SNAG_ID_HEX_LEN + SNAG_SESSION_VOICE_BYTES] = {0};
+        memset(request, 'a', SNAG_ID_HEX_LEN);
+        unsigned char *offer = request + SNAG_ID_HEX_LEN;
+        memset(offer, 42, 16u);
+        offer[SNAG_SESSION_VOICE_MODE] = trial == 3u ? 3u : SNAG_SESSION_VOICE_ON;
+        client = relay_reserve(&relay, &listener, dir, root);
+        relay_send_frame(client, SNAG_SESSION_OFFER, offer,
+            SNAG_SESSION_VOICE_BYTES - (trial == 4u ? 1u : 0u));
+        if (trial == 3u || trial == 4u) {
+            relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
+        } else {
+            relay_receive_frame(&relay, &listener, client, SNAG_SESSION_READY, &packet);
+            assert(relay.voice_offered && !memcmp(relay.voice_offer, offer,
+                SNAG_SESSION_VOICE_BYTES));
+            if (trial == 5u) {
+                relay_send_frame(client, SNAG_SESSION_OFFER, offer, SNAG_SESSION_VOICE_BYTES);
+                relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
+            } else {
+                relay_send_frame(client, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
+                relay_wait_event(&relay, &listener, SNAG_SESSION_COMMIT);
+                relay.handshake_deadline = snag_monotonic_ms() + 1000u;
+                assert(snag_session_relay_control(&relay, SNAG_SESSION_PROGRESS, NULL, 0u) == 0);
+                relay_receive_frame(&relay, &listener, client, SNAG_SESSION_PROGRESS, &packet);
+                assert(relay.handshake_deadline > snag_monotonic_ms() + 1000u);
+                assert(snag_session_relay_activate(&relay, relay.generation, slave) == 0);
+                relay_receive_frame(&relay, &listener, client, SNAG_SESSION_READY, &packet);
+                unsigned char mode = (unsigned char)trial;
+                relay_send_frame(client, SNAG_SESSION_BOUND, &mode, trial == 6u ? 0u : 1u);
+                if (trial >= 6u) relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
+                else {
+                    relay_wait_event(&relay, &listener, SNAG_SESSION_BOUND);
+                    assert(relay.voice_offer[SNAG_SESSION_VOICE_MODE] == mode);
+                    assert(snag_session_relay_control(&relay, SNAG_SESSION_SWITCH,
+                        request, sizeof(request)) == 0);
+                    relay_receive_frame(&relay, &listener, client, SNAG_SESSION_SWITCH, &packet);
+                    relay_send_frame(client, SNAG_SESSION_RELEASE, offer, 16u);
+                    relay_wait_event(&relay, &listener, SNAG_SESSION_RELEASE);
+                    assert(relay.phase == SNAG_SESSION_RELEASING);
+                    assert(write(slave, "late source", 11u) == 11);
+                    for (unsigned int i = 0u; i < 10u; ++i) {
+                        enum snag_session_message event;
+                        assert(snag_session_relay_step(&relay, &listener, 1, &event) == 0);
+                        assert(!event);
+                    }
+                    packet = (struct snag_session_packet){0};
+                    assert(snag_session_packet_read(client, &packet) == 0);
+                    unsigned char released[17];
+                    memcpy(released, offer, 16u);
+                    released[16] = mode;
+                    released[0] ^= 1u;
+                    assert(snag_session_relay_control(&relay, SNAG_SESSION_RELEASED,
+                        released, sizeof(released)) < 0 && errno == EINVAL);
+                    released[0] ^= 1u;
+                    assert(snag_session_relay_control(&relay, SNAG_SESSION_RELEASED,
+                        released, sizeof(released)) == 0);
+                    relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
+                    assert(snag_session_packet_read(client, &packet) == 1);
+                    assert(snag_session_packet_type(&packet) == SNAG_SESSION_RELEASED);
+                    assert(!memcmp(packet.bytes + SNAG_SESSION_HEADER, released, sizeof(released)));
+                }
+            }
+        }
+        assert(close(client) == 0 && relay.peer == -1 && !relay.voice_offered);
+    }
+
     /* BOUND cannot overtake the destination's queued acceptance. */
     client = relay_reserve(&relay, &listener, dir, root);
     relay_send_frame(client, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
@@ -3942,31 +4095,30 @@ test_session_relay(void)
     relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
     assert(close(client) == 0);
 
-    /* Reject an old frontend before reservation or a terminal geometry change. */
-    client = snag_session_endpoint_connect(dir, root);
-    assert(client >= 0);
-    assert(snag_session_packet_set(&packet, SNAG_SESSION_RESERVE, NULL, 0u) == 0);
-    packet.bytes[2] = 2u;
-    assert(snag_session_packet_write(client, &packet) == 1);
-    relay_wait_event(&relay, &listener, SNAG_SESSION_DETACH);
-    assert(close(client) == 0 && relay.peer == -1);
-
-    /* Bad initial messages and zero geometry cannot commit an attachment. */
-    client = snag_session_endpoint_connect(dir, root);
-    assert(client >= 0);
-    uint64_t before_bad_request = relay.generation;
-    relay_send_frame(client, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
-    /* An unreserved socket is closed without creating an attachment or a
-     * synthetic detach notification for the UI. */
-    bool rejected = false;
-    packet = (struct snag_session_packet){0};
-    for (unsigned int i = 0u; i < 1000u && !rejected; ++i) {
-        enum snag_session_message bad_event;
-        assert(snag_session_relay_step(&relay, &listener, 1, &bad_event) == 0 && !bad_event);
-        rejected = snag_session_packet_read(client, &packet) < 0;
+    /* Old frontends and unreserved commands cannot acquire an attachment or
+     * emit a synthetic detach notification for the UI. */
+    for (unsigned int trial = 0u; trial < 3u; ++trial) {
+        client = snag_session_endpoint_connect(dir, root);
+        assert(client >= 0);
+        uint64_t before_bad_request = relay.generation;
+        enum snag_session_phase before_phase = relay.phase;
+        if (trial < 2u) {
+            assert(snag_session_packet_set(&packet, SNAG_SESSION_RESERVE, NULL, 0u) == 0);
+            packet.bytes[2] = (unsigned char)(2u + trial);
+            assert(snag_session_packet_write(client, &packet) == 1);
+        } else relay_send_frame(client, SNAG_SESSION_COMMIT, geometry, sizeof(geometry));
+        bool rejected = false;
+        packet = (struct snag_session_packet){0};
+        for (unsigned int i = 0u; i < 1000u && !rejected; ++i) {
+            enum snag_session_message bad_event;
+            assert(snag_session_relay_step(&relay, &listener, 1, &bad_event) == 0 && !bad_event);
+            rejected = snag_session_packet_read(client, &packet) < 0;
+        }
+        assert(rejected && relay.peer < 0 && relay.generation == before_bad_request);
+        assert(relay.phase == before_phase && relay.master == master);
+        assert(close(client) == 0);
     }
-    assert(rejected && relay.peer < 0 && relay.generation == before_bad_request);
-    assert(close(client) == 0);
+    /* Zero geometry cannot commit an otherwise valid reservation. */
     client = relay_reserve(&relay, &listener, dir, root);
     const unsigned char invalid_geometry[] = {0u, 0u, 80u, 0u};
     relay_send_frame(client, SNAG_SESSION_COMMIT, invalid_geometry, sizeof(invalid_geometry));
@@ -4678,6 +4830,7 @@ run_base(int argc, char **argv)
 #if defined(__linux__) && !defined(_WIN32)
     test_session_relay();
     test_session_client();
+    test_session_voice_client();
     test_session_process();
     test_session_terminal();
     test_raw_pty_empty_read();

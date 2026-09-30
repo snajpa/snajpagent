@@ -44,6 +44,7 @@ peer_drop(struct snag_session_relay *relay)
     relay->output.used = relay->output.offset = 0u;
     relay->input_pending = relay->closing = false;
     relay->peer_verified = false;
+    relay->voice_offered = false;
     relay->input_offset = 0u;
 }
 
@@ -99,20 +100,42 @@ snag_session_relay_control(struct snag_session_relay *relay, enum snag_session_m
     if (relay->peer < 0) return snag_errno(ENOTCONN);
     if (type != SNAG_SESSION_DETACH && type != SNAG_SESSION_EXIT &&
         type != SNAG_SESSION_SWITCH && type != SNAG_SESSION_SUSPEND &&
-        type != SNAG_SESSION_QUITTING) return snag_errno(EINVAL);
+        type != SNAG_SESSION_QUITTING && type != SNAG_SESSION_PROGRESS &&
+        type != SNAG_SESSION_ERROR && type != SNAG_SESSION_RELEASED) return snag_errno(EINVAL);
     if ((type == SNAG_SESSION_SWITCH || type == SNAG_SESSION_SUSPEND) &&
         relay->phase != SNAG_SESSION_ATTACHED) return snag_errno(EBUSY);
     if (relay->closing) return snag_errno(EALREADY);
+    if ((type == SNAG_SESSION_PROGRESS || type == SNAG_SESSION_ERROR) &&
+        relay->phase != SNAG_SESSION_REPAINT) return snag_errno(ESTALE);
+    if (type == SNAG_SESSION_PROGRESS && length) return snag_errno(EINVAL);
+    if (type == SNAG_SESSION_RELEASED &&
+        (relay->phase != SNAG_SESSION_RELEASING || length != 17u || !data ||
+            memcmp(data, relay->voice_offer, 16u) ||
+            ((const unsigned char *)data)[16] > SNAG_SESSION_VOICE_MUTED))
+        return snag_errno(EINVAL);
+    if (type == SNAG_SESSION_SWITCH && (length < 8u || length > SNAG_ID_HEX_LEN) &&
+        length != SNAG_ID_HEX_LEN + SNAG_SESSION_VOICE_BYTES) return snag_errno(EINVAL);
     /* Graceful closure follows the physical output acknowledgement. Hard
      * escape is a separate notice and may precede a stalled display writer. */
     if ((type == SNAG_SESSION_DETACH || type == SNAG_SESSION_EXIT) && relay->output_length)
         return snag_errno(EAGAIN);
     if (queue_output(relay, type, data, length) < 0) return -1;
-    relay->closing = type == SNAG_SESSION_DETACH || type == SNAG_SESSION_EXIT;
+    relay->closing = type == SNAG_SESSION_DETACH || type == SNAG_SESSION_EXIT ||
+        type == SNAG_SESSION_ERROR || type == SNAG_SESSION_RELEASED;
+    if (type == SNAG_SESSION_SWITCH) {
+        relay->voice_offered = length > SNAG_ID_HEX_LEN;
+        if (relay->voice_offered) {
+            memcpy(relay->voice_offer, (const unsigned char *)data + SNAG_ID_HEX_LEN,
+                sizeof(relay->voice_offer));
+        }
+    }
+    if (type == SNAG_SESSION_PROGRESS)
+        relay->handshake_deadline = snag_monotonic_ms() + HANDSHAKE_MS;
     if (type == SNAG_SESSION_SUSPEND) {
         /* A stopped client retains its reservation without an I/O deadline.
          * On continue it commits fresh geometry through the repaint barrier. */
         relay->phase = SNAG_SESSION_RESERVED;
+        relay->voice_offered = false;
         ++relay->generation;
     }
     return 0;
@@ -187,6 +210,13 @@ peer_message(struct snag_session_relay *relay, enum snag_session_message *event)
         if (type != SNAG_SESSION_RESERVE || length) return snag_errno(EPROTO);
         if (queue_output(relay, SNAG_SESSION_READY, NULL, 0u) < 0) return -1;
         relay->phase = SNAG_SESSION_RESERVED;
+    } else if (relay->phase == SNAG_SESSION_RESERVED && type == SNAG_SESSION_OFFER) {
+        const unsigned char *offer = relay->input.bytes + SNAG_SESSION_HEADER;
+        if (relay->voice_offered || relay->output.used || length != SNAG_SESSION_VOICE_BYTES ||
+            offer[SNAG_SESSION_VOICE_MODE] > SNAG_SESSION_VOICE_MUTED) return snag_errno(EPROTO);
+        memcpy(relay->voice_offer, offer, sizeof(relay->voice_offer));
+        relay->voice_offered = true;
+        if (queue_output(relay, SNAG_SESSION_READY, NULL, 0u) < 0) return -1;
     } else if (relay->phase == SNAG_SESSION_RESERVED && type == SNAG_SESSION_COMMIT) {
         if (relay->output.used || relay->output_length) return snag_errno(EPROTO);
         if (length != SNAG_SESSION_COMMIT_BYTES) return snag_errno(EPROTO);
@@ -201,7 +231,12 @@ peer_message(struct snag_session_relay *relay, enum snag_session_message *event)
         relay->handshake_deadline = snag_monotonic_ms() + HANDSHAKE_MS;
         *event = SNAG_SESSION_COMMIT;
     } else if (relay->phase == SNAG_SESSION_ACCEPTED && type == SNAG_SESSION_BOUND) {
-        if (length) return snag_errno(EPROTO);
+        if (length != (relay->voice_offered ? 1u : 0u)) return snag_errno(EPROTO);
+        if (relay->voice_offered) {
+            unsigned char mode = relay->input.bytes[SNAG_SESSION_HEADER];
+            if (mode > SNAG_SESSION_VOICE_MUTED) return snag_errno(EPROTO);
+            relay->voice_offer[SNAG_SESSION_VOICE_MODE] = mode;
+        }
         relay->phase = SNAG_SESSION_ATTACHED;
         relay->handshake_deadline = 0u;
         *event = SNAG_SESSION_BOUND;
@@ -226,6 +261,15 @@ peer_message(struct snag_session_relay *relay, enum snag_session_message *event)
             relay->event_data[length] = 0;
             relay->event_length = length;
             *event = SNAG_SESSION_ERROR;
+        } else if (type == SNAG_SESSION_RELEASE && relay->voice_offered && length == 16u &&
+            !memcmp(relay->input.bytes + SNAG_SESSION_HEADER, relay->voice_offer, 16u)) {
+            /* Drain late source output while the engine retires its media and
+             * supplies the final requested mode. EOF cannot replace that receipt. */
+            relay->phase = SNAG_SESSION_RELEASING;
+            relay->handshake_deadline = snag_monotonic_ms() + HANDSHAKE_MS;
+            relay->output_length = relay->output_acknowledged = 0u;
+            relay->output_ack_deadline = 0u;
+            *event = SNAG_SESSION_RELEASE;
         } else if (type == SNAG_SESSION_DETACH && !length) {
             peer_drop(relay);
             *event = SNAG_SESSION_DETACH;
@@ -266,7 +310,8 @@ peer_write(struct snag_session_relay *relay, enum snag_session_message *event)
         peer_drop(relay);
         *event = SNAG_SESSION_DETACH;
     } else if (rc == 1) {
-        if (snag_session_packet_type(&relay->output) == SNAG_SESSION_OUTPUT)
+        if (snag_session_packet_type(&relay->output) == SNAG_SESSION_OUTPUT &&
+            relay->phase != SNAG_SESSION_RELEASING)
             relay->output_ack_deadline = snag_monotonic_ms() + STALL_MS;
         relay->output.used = relay->output.offset = 0u;
         relay->output_deadline = 0u;

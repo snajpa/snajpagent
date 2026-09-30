@@ -513,7 +513,7 @@ queued source frame before changing peers: write-side shutdown lets the source
 relay consume queued input and display acknowledgements before closing. Late source
 controls cannot cross this drain boundary. Subsequent input follows the destination.
 
-The private attachment protocol uses version3. Destination READY records acceptance;
+The private attachment protocol uses version4. Destination READY records acceptance;
 the frontend sends BOUND after source drain, before new destination input. The relay
 keeps an ACCEPTED phase under its existing handshake deadline until that frame
 arrives. Semantic repaint output and output credits remain live, while UI attachment
@@ -527,8 +527,9 @@ of whether keyboard or voice initiated it. Append an explicit session boundary
 and destination context to the voice history. Pending actions, output and late
 speech retain their origin, so switching cannot execute old work in the new target.
 Actual detach, terminal loss and suspension stop capture and playback; ordinary
-reattachment requires explicit activation. Shared voice continuity across a
-successful attachment transition remains to be implemented and tested.
+reattachment requires explicit activation. The shared dispatcher schedules source
+preparation and returns to its caller, so a voice helper requesting the switch can
+finish before preparation waits for helper quiescence.
 
 Source preparation has an internal pause/resume operation in the existing voice
 owner. Preparation waits for interface requests and compaction to settle while
@@ -540,16 +541,16 @@ connection renewal and history activation. Mute changes made while paused apply
 to that renewal; explicit off uses the normal durable stop and prevents revival.
 An existing provider retry keeps its delay and pending capacity work.
 Journal or display failure stops voice through existing failure handling.
-These source operations currently have fixture coverage only. Connecting them to
-the shared attachment exchange and importing destination history remain pending.
+The attachment service advances preparation between ordinary owner work and
+resumes the same lease on preacceptance refusal.
 
 The store can open an exact source session's committed history prefix with a
 read-only descriptor. The source supplies its end offset, next sequence and hash;
 opening verifies the boundary record, then existing paged cursors verify the
 visited chain. The view takes no writer lock, runs no reducer or repair and does
 not adopt later appends. Closing it preserves the live source owner's lock.
-This supplies bounded history access for handover; callers must still select and
-filter public observations before importing them. Attachment does not use it yet.
+Attachment uses this view to verify and copy the protected public archive into
+the destination journal. Prepared records remain inert until adoption.
 
 The paused voice owner captures this committed boundary after its media join and
 UI acknowledgement. Its source export pages the verified prefix through the common
@@ -562,9 +563,24 @@ The reader uses the existing byte quantum plus complete atomic records, without
 clipping historical text. Provider checkpoint state and private continuations are
 omitted. Corruption or protection failure discards the page without advancing its
 cursor; protection that would change source/destination or event identities also
-fails closed. Export remains an internal, transient source operation. A completed
-scan neither adopts destination state nor starts audio; durable import and shared
-attachment wiring remain pending.
+fails closed. A sealed archive reference travels in the attachment exchange; a
+completed source scan alone neither adopts destination state nor starts audio.
+
+OFFER contains two binary UUIDs, two offset/next-sequence/SHA256 cursors, source
+sequence, record count and requested mode, using explicit little-endian integers.
+The target identity is the destination of the existing SWITCH request. Preparation
+progress renews the existing handshake deadline. Before READY, the destination
+validates its local provider configuration and credentials without provider I/O,
+copies and verifies the archive, and rechecks configuration. RELEASE requests
+final source media retirement; RELEASED binds the final mode to the transfer
+identity. The frontend waits for that receipt and remaining source output/EOF
+before BOUND. EOF without the receipt cannot complete a voice switch.
+
+The UI retains an observed BOUND receipt until the session owner consumes it, even
+if the frontend subsequently disconnects. Adoption remains durable in that case;
+starting audio still requires the exact live generation that accepted the transfer.
+Initial mute is set before creating the destination media worker. A later ordinary
+attachment cannot inherit that activation permission.
 
 ### Handover implementation decisions
 
@@ -608,9 +624,8 @@ be stale by then. Explicit off during preparation wins; unapplied or late source
 actions remain source actions and cannot be replayed against the new destination.
 Loss of the frontend never serves as proof of a successful intentional handover.
 
-These are implementation decisions for the pending shared transition. The current
-runtime still uses the stop-on-switch behavior described above. Integration tests
-must exercise the real command queue and attachment exchange, including a voice
+The shared transition follows these decisions. Qualification must exercise the
+real command queue and attachment exchange, including a voice
 request for the switch itself, rollback, off/mute during preparation, repeated
 switches, large original observations and replay after reopening the destination.
 

@@ -36,6 +36,8 @@ struct partial_public_item {
 
 struct app_audio;
 struct app_voice;
+struct app_voice_import;
+struct app_voice_switch;
 struct snag_wire_secrets;
 struct snag_output_cache {
     char handle[SNAG_ID_HEX_LEN + 1u];
@@ -54,6 +56,8 @@ struct app_state {
     uint64_t switch_deadline_ms;
     struct app_audio *audio;
     struct app_voice *voice;
+    struct app_voice_import *voice_import;
+    struct app_voice_switch *voice_switch;
     struct snag_store store;
     json_t *draft_content;
     bool attaching;
@@ -169,6 +173,13 @@ int snag_app_voice_transfer_resume(struct app_state *, const char *, uint64_t, c
 struct snag_voice_transfer_cursor {
     struct snag_journal_cursor source, position;
 };
+struct snag_voice_archive {
+    char source_id[SNAG_ID_HEX_LEN + 1u];
+    char target_id[SNAG_ID_HEX_LEN + 1u];
+    char transfer_id[SNAG_ID_HEX_LEN + 1u];
+    struct snag_journal_cursor begin, tail;
+    uint64_t source_seq, records;
+};
 /* Initialize to zero. Export structured public records from the prepared
  * source prefix, not a helper's private continuation or a clipped tool view.
  * A failed page leaves cursor/result unadopted; complete is a scan result,
@@ -176,6 +187,19 @@ struct snag_voice_transfer_cursor {
  * invalidates it. */
 int snag_app_voice_transfer_history(struct app_state *, const char *, uint64_t,
     struct snag_voice_transfer_cursor *, json_t **, char *, size_t);
+/* One source quantum per call; 1 sealed, 0 preparing, -1 failed. The sealed
+ * reference is published only after all source records have been verified. */
+int snag_app_voice_transfer_archive(struct app_state *, const char *, uint64_t,
+    struct snag_voice_archive *, char *, size_t);
+int snag_app_voice_import_begin(struct app_state *, const struct snag_voice_archive *,
+    char *, size_t);
+int snag_app_voice_import_service(struct app_state *, char *, size_t);
+int snag_app_voice_import_adopt(struct app_state *, char *, size_t);
+void snag_app_voice_import_close(struct app_state *);
+int snag_app_voice_switch_request(struct app_state *, const char *, char *, size_t);
+int snag_app_voice_attachment_service(struct app_state *);
+int snag_app_voice_attachment_prepare(struct app_state *, uint64_t);
+void snag_app_voice_attachment_close(struct app_state *);
 void snag_app_voice_event(struct app_state *,const char *,const json_t *);
 json_t *snag_app_voice_tools(void);
 int snag_app_voice_read(struct app_state *, const struct snag_response_item *,

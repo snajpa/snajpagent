@@ -13,6 +13,13 @@
 #define SNAG_SESSION_HEADER 8u
 #define SNAG_SESSION_ENDPOINT "terminal.sock"
 #define SNAG_SESSION_COMMIT_BYTES (4u + 2u * SNAG_TERMINAL_NAME_BYTES)
+/* Transfer/source UUIDs, two offset/sequence/SHA-256 cursors, source sequence,
+ * record count, and requested mode. Integers use explicit little-endian bytes. */
+#define SNAG_SESSION_VOICE_BYTES (16u + 16u + 48u + 48u + 8u + 8u + 1u)
+#define SNAG_SESSION_VOICE_MODE (SNAG_SESSION_VOICE_BYTES - 1u)
+enum snag_session_voice_mode {
+    SNAG_SESSION_VOICE_OFF, SNAG_SESSION_VOICE_ON, SNAG_SESSION_VOICE_MUTED
+};
 
 /* OUTPUT_ACK carries a two-byte little-endian cumulative write offset within
  * the current OUTPUT frame. QUITTING announces a hard escape, completed by EOF.
@@ -22,7 +29,8 @@ enum snag_session_message {
     SNAG_SESSION_INPUT, SNAG_SESSION_OUTPUT, SNAG_SESSION_RESIZE,
     SNAG_SESSION_DETACH, SNAG_SESSION_EXIT, SNAG_SESSION_SWITCH,
     SNAG_SESSION_ERROR, SNAG_SESSION_SUSPEND, SNAG_SESSION_QUITTING, SNAG_SESSION_OUTPUT_ACK,
-    SNAG_SESSION_BOUND, SNAG_SESSION_STATUS
+    SNAG_SESSION_BOUND, SNAG_SESSION_OFFER, SNAG_SESSION_PROGRESS,
+    SNAG_SESSION_RELEASE, SNAG_SESSION_RELEASED, SNAG_SESSION_STATUS
 };
 
 struct snag_session_packet {

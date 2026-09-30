@@ -970,6 +970,54 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
             !snag_text_valid(snag_json_string(data,"provider"),1u,(SNAG_CONFIG_PROVIDER_NAME_MAX+1u)-1u) ||
             !snag_text_valid(snag_json_string(data,"model"),1u,(SNAG_MODEL_MAX_BYTES)-1u) ||
             !snag_text_valid(snag_json_string(data,"report"),1u,(256u*1024u)-1u))goto invalid;
+    } else if (!strcmp(type, "voice_transfer_record")) {
+        if (!snag_json_exact_keys(data,
+                "transfer_id target_session_id source_session_id source_seq source_type data") ||
+            !snag_hex_is_lower(snag_json_string(data, "transfer_id"), SNAG_ID_HEX_LEN) ||
+            !snag_hex_is_lower(snag_json_string(data, "target_session_id"), SNAG_ID_HEX_LEN) ||
+            !snag_hex_is_lower(snag_json_string(data, "source_session_id"), SNAG_ID_HEX_LEN) ||
+            snag_json_integer_u64(data, "source_seq", &n) < 0 || !n ||
+            !snag_text_valid(snag_json_string(data, "source_type"), 1u, SNAG_MAX_EVENT_LINE) ||
+            snag_string_in(snag_json_string(data, "source_type"),
+                "voice_transfer_record voice_transfer_sealed") ||
+            !json_is_object(json_object_get(data, "data"))) goto invalid;
+        /* Inert public source data. Neither staging nor copying applies the
+         * enclosed event to this session's queue, provider graph or controls. */
+    } else if (!strcmp(type, "voice_transfer_sealed")) {
+        if (!snag_json_exact_keys(data,
+                "transfer_id target_session_id source_session_id source_as_of_seq count") ||
+            !snag_hex_is_lower(snag_json_string(data, "transfer_id"), SNAG_ID_HEX_LEN) ||
+            !snag_hex_is_lower(snag_json_string(data, "target_session_id"), SNAG_ID_HEX_LEN) ||
+            !snag_json_string(data, "source_session_id") ||
+            strcmp(snag_json_string(data, "source_session_id"), session->id) ||
+            snag_json_integer_u64(data, "source_as_of_seq", &n) < 0 || !n || n >= seq ||
+            snag_json_integer_u64(data, "count", &n) < 0 || !n || n >= seq) goto invalid;
+    } else if (!strcmp(type, "voice_transfer_adopted")) {
+        struct snag_voice_history_root root = {0};
+        uint64_t offset;
+        uint64_t count;
+        const char *id = snag_json_string(data, "transfer_id");
+        const char *hash = snag_json_string(data, "begin_sha256");
+        if (!snag_json_exact_keys(data,
+                "transfer_id target_session_id source_session_id source_as_of_seq "
+                "begin_offset begin_seq begin_sha256 count") ||
+            !snag_hex_is_lower(id, SNAG_ID_HEX_LEN) ||
+            !snag_hex_is_lower(snag_json_string(data, "source_session_id"), SNAG_ID_HEX_LEN) ||
+            !snag_json_string(data, "target_session_id") ||
+            strcmp(snag_json_string(data, "target_session_id"), session->id) ||
+            snag_json_integer_u64(data, "source_as_of_seq", &n) < 0 || !n ||
+            snag_json_integer_u64(data, "begin_offset", &offset) < 0 ||
+            !offset || (live && offset > (uint64_t)session->log_end) ||
+            snag_json_integer_u64(data, "begin_seq", &root.begin.next_seq) < 0 ||
+            root.begin.next_seq < 2u || root.begin.next_seq >= seq ||
+            !snag_hex_is_lower(hash, SNAG_SHA256_HEX_LEN) ||
+            snag_json_integer_u64(data, "count", &count) < 0 || !count ||
+            count > seq - root.begin.next_seq) goto invalid;
+        strcpy(root.transfer_id, id);
+        strcpy(root.begin.prev_sha256, hash);
+        root.begin.offset = (int64_t)offset;
+        root.adopted_seq = seq;
+        session->voice_history = root;
     } else if (strcmp(type,"voice_event")==0) {
         static const char types[]="voice_started voice_stopped voice_transcript voice_usage voice_asr_failed voice_interrupted voice_response voice_result voice_muted";
         const json_t *event=json_object_get(data,"event");
@@ -2554,10 +2602,13 @@ apply_event(struct snag_session *session, const char *type, const json_t *data,
     } else if (strcmp(type, "session_checkpoint") == 0) {
         const json_t *state = json_object_get(data, "state");
         const json_t *context = json_object_get(data, "context");
+        uint64_t revision;
         if (!snag_json_exact_keys(data, "context format snapshot_v state") ||
             !json_is_object(state) || !context ||
             (!json_is_object(context) && !json_is_null(context)) ||
-            snag_json_integer_u64(data, "snapshot_v", &n) < 0 || n != 1u ||
+            snag_json_integer_u64(data, "snapshot_v", &revision) < 0 ||
+            (revision != 1u && revision != 2u) ||
+            (revision == 2u && !json_is_object(json_object_get(state, "voice_history"))) ||
             snag_json_integer_u64(data, "format", &n) < 0 || n != 4u ||
             strcmp(snag_json_string(state, "id") ? snag_json_string(state, "id") : "", session->id))
             goto invalid;
@@ -3362,7 +3413,8 @@ snag_session_checkpoint(struct snag_session *session, char *error, size_t error_
         return snag_fail(error, error_size, ENOMEM, "cannot materialize session checkpoint");
     }
     json_t *data = json_pack("{s:o,s:o,s:i,s:i}", "state", state,
-                             "context", context, "snapshot_v", 1, "format", 4);
+                             "context", context, "snapshot_v",
+                             session->voice_history.adopted_seq ? 2 : 1, "format", 4);
     if (!data) return snag_fail(error, error_size, ENOMEM, "cannot encode session checkpoint");
     return snag_session_commit(session, "session_checkpoint", data, NULL, error, error_size);
 }
@@ -3577,8 +3629,12 @@ snag_session_voice_status(struct snag_session *session, const char *queue, json_
 
 struct snag_voice_projection {
     struct snag_journal_cursor cursor;
+    struct snag_voice_history_root root;
+    char session_id[SNAG_ID_HEX_LEN + 1u];
     char *transcript[2];
     uint64_t transcript_seq[2];
+    char transcript_origin[2][SNAG_ID_HEX_LEN + 1u];
+    uint64_t transcript_origin_seq[2];
     char queue[SNAG_ID_HEX_LEN + 1u];
     struct voice_status_lookup handoff;
 };
@@ -3611,6 +3667,20 @@ voice_context_event(void *opaque, const struct snag_session *state, uint64_t seq
     const char *type, const json_t *data, char *error, size_t size)
 {
     struct snag_voice_projection *s = opaque;
+    const char *origin = s->session_id;
+    uint64_t origin_seq = seq;
+    if (s->root.adopted_seq && seq < s->root.adopted_seq) {
+        const char *id = snag_json_string(data, "transfer_id");
+        const char *source_type = snag_json_string(data, "source_type");
+        if (strcmp(type, "voice_transfer_record") || !id || !source_type ||
+            strcmp(id, s->root.transfer_id) || strcmp(source_type, "voice_event")) return 0;
+        origin = snag_json_string(data, "source_session_id");
+        if (snag_json_integer_u64(data, "source_seq", &origin_seq) < 0) return -1;
+        data = json_object_get(data, "data");
+        const char *kind = snag_json_string(json_object_get(data, "event"), "type");
+        if (!kind || strcmp(kind, "voice_transcript")) return 0;
+        type = "voice_event";
+    }
     if (!strcmp(type, "future_turn_queued") && json_object_get(data, "voice")) {
         const char *queue = snag_json_string(data, "queue_id");
         if (!queue || !snag_hex_is_lower(queue, SNAG_ID_HEX_LEN) ||
@@ -3632,6 +3702,9 @@ voice_context_event(void *opaque, const struct snag_session *state, uint64_t seq
             free(s->transcript[who]);
             s->transcript[who] = copy;
             s->transcript_seq[who] = seq;
+            if (!snag_strcpy(s->transcript_origin[who],
+                    sizeof(s->transcript_origin[who]), origin)) return -1;
+            s->transcript_origin_seq[who] = origin_seq;
         }
     }
     return s->queue[0] ? voice_status_event(&s->handoff, state, seq, type, data, error, size) : 0;
@@ -3642,9 +3715,17 @@ snag_session_voice_context(struct snag_session *session, json_t **result, char *
 {
     if (!session || !result) return -1;
     *result = NULL;
+    if (session->voice_projection &&
+        session->voice_projection->root.adopted_seq != session->voice_history.adopted_seq) {
+        voice_projection_free(session->voice_projection);
+        session->voice_projection = NULL;
+    }
     if (!session->voice_projection &&
         !(session->voice_projection = calloc(1u, sizeof(*session->voice_projection)))) return -1;
     struct snag_voice_projection *s = session->voice_projection;
+    memcpy(s->session_id, session->id, sizeof(s->session_id));
+    s->root = session->voice_history;
+    if (s->cursor.next_seq < s->root.begin.next_seq) s->cursor = s->root.begin;
     int rc = snag_session_each_event_forward(session, &s->cursor, SNAG_JOURNAL_PAGE_BYTES,
         voice_context_event, s, error, size);
     if (rc < 0) {
@@ -3663,7 +3744,7 @@ snag_session_voice_context(struct snag_session *session, json_t **result, char *
         free(text);
     }
     if (!rc) {
-        *result = json_pack("{s:s,s:s,s:s,s:i,s:s,s:s,s:O,s:I,s:I,s:b,s:I,s:I}",
+        *result = json_pack("{s:s,s:s,s:s,s:i,s:s,s:s,s:O,s:I,s:I,s:b,s:I,s:I,s:s,s:I,s:s,s:I}",
             "kind", "session_context", "session_id", session->id,
             "active_turn_id", session->active_turn ? session->active_turn_id : "",
             "queued_inputs", (int)session->pending_queue_count,
@@ -3674,7 +3755,11 @@ snag_session_voice_context(struct snag_session *session, json_t **result, char *
             "history_as_of_seq", (json_int_t)(s->cursor.next_seq - 1u),
             "history_complete", s->cursor.next_seq == session->next_seq,
             "recent_asr_seq", (json_int_t)s->transcript_seq[0],
-            "recent_generated_reply_seq", (json_int_t)s->transcript_seq[1]);
+            "recent_generated_reply_seq", (json_int_t)s->transcript_seq[1],
+            "recent_asr_origin_session_id", s->transcript_origin[0],
+            "recent_asr_origin_seq", (json_int_t)s->transcript_origin_seq[0],
+            "recent_generated_reply_origin_session_id", s->transcript_origin[1],
+            "recent_generated_reply_origin_seq", (json_int_t)s->transcript_origin_seq[1]);
         if (!*result) rc = -1;
     }
     if (!rc) {

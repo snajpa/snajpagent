@@ -93,6 +93,7 @@ struct snag_ui_runtime {
     _Atomic uint64_t interrupt;
     _Atomic uint64_t pause_until;
     _Atomic uint64_t session_pending, session_attachment;
+    _Atomic uint64_t session_releasing, session_failures;
 };
 
 struct snag_ui_display {
@@ -108,6 +109,8 @@ struct snag_ui_display {
     struct snag_terminal_profile profile;
     struct snag_session_process native_process;
     struct snag_session_relay relay;
+    uint64_t voice_bound_generation;
+    unsigned char voice_bound_offer[SNAG_SESSION_VOICE_BYTES];
     struct snag_session_listener listener;
     char native_notice[256];
     char feedback[192];
@@ -648,11 +651,21 @@ session_service(struct snag_ui_display *display, int timeout_ms)
     if (rc) return rc < 0 ? -1 : snag_errno(EPIPE);
     if (event == SNAG_SESSION_COMMIT) {
         display->native_quitting = false;
+        atomic_store(&display->runtime->session_releasing, 0u);
         atomic_store(&display->runtime->session_attachment, 0u);
         atomic_store(&display->runtime->session_pending, display->relay.generation);
         snag_wakeup_send(display->runtime->actions.wake[1]);
     } else if (event == SNAG_SESSION_BOUND) {
+        if (display->relay.voice_offered) {
+            display->voice_bound_generation = display->relay.generation;
+            memcpy(display->voice_bound_offer, display->relay.voice_offer,
+                sizeof(display->voice_bound_offer));
+        }
         atomic_store(&display->runtime->session_attachment, display->relay.generation);
+        snag_wakeup_send(display->runtime->actions.wake[1]);
+    } else if (event == SNAG_SESSION_RELEASE) {
+        atomic_store(&display->runtime->session_attachment, 0u);
+        atomic_store(&display->runtime->session_releasing, display->relay.generation);
         snag_wakeup_send(display->runtime->actions.wake[1]);
     } else if (event == SNAG_SESSION_RESIZE) {
         snag_term_notify_resize();
@@ -663,7 +676,10 @@ session_service(struct snag_ui_display *display, int timeout_ms)
         display->native_quitting = false;
         atomic_store(&display->runtime->session_attachment, 0u);
         atomic_store(&display->runtime->session_pending, 0u);
+        atomic_store(&display->runtime->session_releasing, 0u);
     } else if (event == SNAG_SESSION_ERROR) {
+        (void)atomic_fetch_add(&display->runtime->session_failures, 1u);
+        snag_wakeup_send(display->runtime->actions.wake[1]);
         (void)snprintf(display->native_notice, sizeof(display->native_notice), "%.*s",
             (int)display->relay.event_length, display->relay.event_data);
     }
@@ -742,8 +758,55 @@ apply_session(struct snag_ui_display *display, const struct snag_ui_command *com
     if (command->kind == SNAG_UI_SESSION_CONTROL)
         return session_control(display, (enum snag_session_message)command->data.value,
                                 command->text, command->len);
+    if (command->kind == SNAG_UI_SESSION_BOUND) {
+        if (!command->data.session_voice.bytes || !command->data.session_voice.present)
+            return snag_errno(EINVAL);
+        bool present = display->voice_bound_generation && display->voice_bound_generation ==
+            command->data.session_voice.generation;
+        *command->data.session_voice.present = present;
+        if (present) {
+            memcpy(command->data.session_voice.bytes, display->voice_bound_offer,
+                sizeof(display->voice_bound_offer));
+            display->voice_bound_generation = 0u;
+        }
+        return 0;
+    }
+    if (command->kind == SNAG_UI_SESSION_OFFER || command->kind == SNAG_UI_SESSION_RELEASED) {
+        uint64_t generation = command->data.session_voice.generation;
+        if (display->relay.generation != generation || display->relay.peer < 0)
+            return snag_errno(ESTALE);
+        if (command->kind == SNAG_UI_SESSION_OFFER) {
+            if (!command->data.session_voice.bytes || !command->data.session_voice.present)
+                return snag_errno(EINVAL);
+            *command->data.session_voice.present = display->relay.voice_offered;
+            if (display->relay.voice_offered) {
+                memcpy(command->data.session_voice.bytes, display->relay.voice_offer,
+                    SNAG_SESSION_VOICE_BYTES);
+            }
+            return 0;
+        }
+        if (atomic_load(&runtime->session_releasing) != generation ||
+            command->data.session_voice.mode > SNAG_SESSION_VOICE_MUTED)
+            return snag_errno(ESTALE);
+        unsigned char receipt[17];
+        memcpy(receipt, display->relay.voice_offer, 16u);
+        receipt[16] = (unsigned char)command->data.session_voice.mode;
+        int rc = snag_session_relay_control(&display->relay, SNAG_SESSION_RELEASED,
+            receipt, sizeof(receipt));
+        if (!rc) atomic_store(&runtime->session_releasing, 0u);
+        return rc;
+    }
     if (display->relay.generation != command->data.seq || display->relay.peer < 0)
         return snag_errno(ESTALE);
+    if (command->kind == SNAG_UI_SESSION_PROGRESS) {
+        int rc = snag_session_relay_control(&display->relay, SNAG_SESSION_PROGRESS, NULL, 0u);
+        return rc < 0 && errno == EAGAIN ? 0 : rc;
+    }
+    if (command->kind == SNAG_UI_SESSION_REFUSE) {
+        int rc = session_control(display, SNAG_SESSION_ERROR, command->text, command->len);
+        if (!rc) atomic_store(&runtime->session_pending, 0u);
+        return rc;
+    }
     if (command->kind == SNAG_UI_SESSION_REBIND) {
         if (display->relay.phase != SNAG_SESSION_REPAINT) return snag_errno(ESTALE);
         display->native_barrier = true;
@@ -787,6 +850,9 @@ apply_message(struct snag_ui_display *display, struct snag_ui_command *command,
     switch (command->kind) {
     case SNAG_UI_SESSION_START: case SNAG_UI_SESSION_LISTEN: case SNAG_UI_SESSION_CONTROL:
     case SNAG_UI_SESSION_REBIND: case SNAG_UI_SESSION_READY:
+    case SNAG_UI_SESSION_OFFER: case SNAG_UI_SESSION_PROGRESS:
+    case SNAG_UI_SESSION_REFUSE: case SNAG_UI_SESSION_RELEASED:
+    case SNAG_UI_SESSION_BOUND:
         return apply_session(display, command);
     case SNAG_UI_LEVEL: return set_level(display, command->data.value);
     case SNAG_UI_HOST: return snag_render_host(render, command->text);
@@ -1506,6 +1572,18 @@ snag_ui_session_attachment(const struct snag_ui *ui)
     return ui->native ? atomic_load(&ui->runtime->session_attachment) : 0u;
 }
 
+uint64_t
+snag_ui_session_releasing(const struct snag_ui *ui)
+{
+    return ui->native ? atomic_load(&ui->runtime->session_releasing) : 0u;
+}
+
+uint64_t
+snag_ui_session_failures(const struct snag_ui *ui)
+{
+    return ui->native ? atomic_load(&ui->runtime->session_failures) : 0u;
+}
+
 int
 snag_ui_session_rebind(struct snag_ui *ui, uint64_t generation)
 {
@@ -1531,6 +1609,8 @@ snag_ui_init(struct snag_ui *ui)
     atomic_init(&runtime->fatal, 0);
     atomic_init(&runtime->session_pending, 0u);
     atomic_init(&runtime->session_attachment, 0u);
+    atomic_init(&runtime->session_releasing, 0u);
+    atomic_init(&runtime->session_failures, 0u);
     runtime->engine = pthread_self();
     atomic_init(&runtime->interrupt, 0u);
     atomic_init(&runtime->exit_requested, false);

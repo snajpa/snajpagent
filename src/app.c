@@ -177,8 +177,11 @@ app_reportf(struct app_state *app, const char *format, ...)
 static int
 service_attachment(struct app_state *app, bool external)
 {
+    if (snag_app_voice_attachment_service(app) < 0) return -1;
     uint64_t generation = snag_ui_session_pending(&app->ui);
     if (generation) {
+        int prepared = snag_app_voice_attachment_prepare(app, generation);
+        if (prepared <= 0) return prepared;
         if (snag_ui_session_rebind(&app->ui, generation) < 0)
             return errno == ESTALE ? 0 : -1;
         if (!app->ui.native_continuing) {
@@ -3044,10 +3047,14 @@ handle_common_command(struct app_state *app, const char *line, bool active, bool
                 list_row, app, error, sizeof(error));
             if (!rc && !strcmp(target.id, app->session.id))
                 rc = snag_errorf(error, sizeof(error), "already attached to this session");
-            if (!rc && snag_ui_session_control(&app->ui, SNAG_SESSION_SWITCH,
-                                                target.id, strlen(target.id)) < 0)
-                rc = snag_errorf(error, sizeof(error),
-                    "cannot switch terminal: %s", strerror(errno));
+            if (!rc) {
+                rc = snag_app_voice_switch_request(app, target.id, error, sizeof(error));
+                if (rc > 0 && snag_ui_session_control(&app->ui, SNAG_SESSION_SWITCH,
+                        target.id, strlen(target.id)) < 0) {
+                    rc = snag_errorf(error, sizeof(error),
+                        "cannot switch terminal: %s", strerror(errno));
+                }
+            }
             snag_session_close(&target);
             return rc < 0 ? app_error(app, error) : 0;
         }
@@ -5997,6 +6004,7 @@ out:
         (void)snag_ui_text(&app.ui, SNAG_UI_ERROR, error);
         if (!rc) rc = 3;
     }
+    snag_app_voice_attachment_close(&app);
     snag_app_audio_close(&app);
     (void)snag_app_shutdown(&app);
     /* A POSIX process lock is released by closing any descriptor on its inode. */

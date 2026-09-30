@@ -115,6 +115,13 @@ static const struct checkpoint_field session_fields[] = {
     B(struct snag_session, goal_locked),
     B(struct snag_session, capacity_ceiling_valid),
 };
+static const struct checkpoint_field voice_history_fields[] = {
+    S(struct snag_voice_history_root, transfer_id),
+    S(struct snag_voice_history_root, begin.prev_sha256),
+    U(struct snag_voice_history_root, begin.offset),
+    U(struct snag_voice_history_root, begin.next_seq),
+    U(struct snag_voice_history_root, adopted_seq),
+};
 static const struct checkpoint_field observation_fields[] = {
     S(struct snag_input_observation, provider),
     S(struct snag_input_observation, model),
@@ -300,6 +307,8 @@ encode_state(const struct snag_session *s)
     OBS(active_accounting); OBS(usage_anchor); OBS(context_meter); OBS(capacity_rejection);
 #undef OBS
     PUT("usage_totals", encode_fields(&s->usage_totals, usage_fields, COUNT(usage_fields)));
+    PUT("voice_history", encode_fields(&s->voice_history,
+        voice_history_fields, COUNT(voice_history_fields)));
     json_t *controls = json_array();
     if (!controls) goto fail;
     for (size_t i = 0; i < COUNT(s->control_seq); ++i)
@@ -378,6 +387,18 @@ decode_state(const json_t *data, struct snag_session *s)
 {
     if (!json_is_object(data) ||
         decode_fields(data, s, session_fields, COUNT(session_fields)) < 0) return -1;
+    const json_t *history = json_object_get(data, "voice_history");
+    struct snag_voice_history_root *root = &s->voice_history;
+    if (history && decode_fields(history, root, voice_history_fields,
+            COUNT(voice_history_fields)) < 0) return -1;
+    if (root->adopted_seq) {
+        if (root->adopted_seq >= s->next_seq || root->begin.next_seq < 2u ||
+            root->begin.next_seq >= root->adopted_seq || root->begin.offset <= 0 ||
+            root->begin.offset > s->log_end ||
+            !snag_hex_is_lower(root->transfer_id, SNAG_ID_HEX_LEN) ||
+            !snag_hex_is_lower(root->begin.prev_sha256, SNAG_SHA256_HEX_LEN)) return -1;
+    } else if (root->transfer_id[0] || root->begin.offset || root->begin.next_seq ||
+        root->begin.prev_sha256[0]) return -1;
 #define OBS(f) if (decode_fields(json_object_get(data, #f), &s->f, observation_fields, \
                            COUNT(observation_fields)) < 0) return -1
     OBS(active_accounting); OBS(usage_anchor); OBS(context_meter); OBS(capacity_rejection);

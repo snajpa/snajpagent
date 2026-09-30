@@ -9,6 +9,7 @@
 #include "model_cache.h"
 #include "provider.h"
 #include "provider_retry.h"
+#include "session_client.h"
 #include "sse.h"
 #include "tools.h"
 #include "convert.h"
@@ -8267,13 +8268,120 @@ test_voice_transfer_history(struct app_state *app, const char *target, uint64_t 
     assert(rc < 0 && !page && !memcmp(&broken, &unchanged, sizeof(broken)));
 }
 
+struct voice_archive_records {
+    const char *source;
+    const char *transfer;
+    size_t text_length;
+    unsigned int originals, visible, checkpoints;
+};
+
+static int
+voice_archive_record(void *opaque, const struct snag_session *session, uint64_t seq,
+    const char *type, const json_t *data, char *error, size_t size)
+{
+    struct voice_archive_records *seen = opaque;
+    (void)session;
+    (void)seq;
+    (void)error;
+    (void)size;
+    if (strcmp(type, "voice_transfer_record")) return 0;
+    assert(!strcmp(snag_json_string(data, "transfer_id"), seen->transfer));
+    assert(!strcmp(snag_json_string(data, "source_session_id"), seen->source));
+    assert(json_integer_value(json_object_get(data, "source_seq")) > 0);
+    const char *original_type = snag_json_string(data, "source_type");
+    const json_t *original = json_object_get(data, "data");
+    assert(strcmp(original_type, "voice_transfer_record"));
+    if (!strcmp(original_type, "session_checkpoint")) {
+        assert(!json_object_get(original, "state") && !json_object_get(original, "context"));
+        ++seen->checkpoints;
+    }
+    const json_t *event = json_object_get(original, "event");
+    const char *id = snag_json_string(event, "item_id");
+    const char *text = snag_json_string(event, "text");
+    if (id && !strncmp(id, "transfer-asr-", 13u)) {
+        assert(text && !strncmp(text, "original λ ", strlen("original λ ")));
+        assert(json_string_length(json_object_get(event, "text")) == seen->text_length -
+            strlen("transfer-\"quoted\\secret") + strlen("<redacted:secret>"));
+        assert(!strstr(text, "transfer-\"quoted\\secret"));
+        assert(!strcmp(snag_json_string(original, "connection_id"),
+            "12345678901234567890123456789012"));
+        ++seen->originals;
+    }
+    if (text && !strcmp(text, "Transfer source visible output λ")) ++seen->visible;
+    assert(!text || strcmp(text, "Later source speech remains at its origin"));
+    return 0;
+}
+
+static void
+test_voice_archive(struct app_state *source, struct app_state *destination,
+    uint64_t attachment, size_t text_length)
+{
+    char error[256];
+    struct snag_voice_archive archive = {0};
+    int rc;
+    unsigned int pages = 0u;
+    do {
+        rc = snag_app_voice_transfer_archive(source, destination->session.id, attachment,
+            &archive, error, sizeof(error));
+        assert(rc >= 0 && ++pages < 16u);
+    } while (!rc);
+    assert(pages >= 2u && archive.records && archive.tail.next_seq);
+    assert(!strcmp(archive.source_id, source->session.id));
+    struct snag_voice_archive wrong = archive;
+    wrong.tail.prev_sha256[0] = wrong.tail.prev_sha256[0] == 'a' ? 'b' : 'a';
+    assert(snag_app_voice_import_begin(destination, &wrong, error, sizeof(error)) < 0);
+    assert(!destination->voice_import && !destination->session.voice_history.adopted_seq);
+    assert(snag_app_voice_import_begin(destination, &archive, error, sizeof(error)) == 0);
+    assert(snag_app_voice_import_adopt(destination, error, sizeof(error)) < 0);
+    pages = 0u;
+    do {
+        rc = snag_app_voice_import_service(destination, error, sizeof(error));
+        assert(rc >= 0 && ++pages < 16u);
+        assert(!destination->session.voice_history.adopted_seq);
+        assert(!destination->session.pending_queue_count && !destination->session.active_turn);
+    } while (!rc);
+    assert(pages >= 2u && source->session.pending_queue_count == 1u);
+    assert(snag_app_voice_import_adopt(destination, error, sizeof(error)) == 0);
+    assert(!destination->voice_import);
+    struct snag_voice_history_root root = destination->session.voice_history;
+    assert(root.adopted_seq && !strcmp(root.transfer_id, archive.transfer_id));
+    assert(snag_session_checkpoint(&destination->session, error, sizeof(error)) == 0);
+    json_t *state = NULL, *context = NULL;
+    assert(snag_session_checkpoint_read(&destination->session, &state, &context,
+        error, sizeof(error)) == 0);
+    assert(json_is_object(json_object_get(state, "voice_history")));
+    json_decref(state);
+    json_decref(context);
+    char id[SNAG_ID_HEX_LEN + 1u];
+    strcpy(id, destination->session.id);
+    snag_session_close(&destination->session);
+    snag_session_init(&destination->session);
+    assert(snag_session_open(&destination->store, &destination->session, id,
+        error, sizeof(error)) == 0);
+    assert(destination->session.voice_history.adopted_seq == root.adopted_seq);
+    assert(destination->session.voice_history.begin.offset == root.begin.offset);
+    assert(!strcmp(destination->session.voice_history.transfer_id, root.transfer_id));
+    struct voice_archive_records seen = {.source = source->session.id,
+        .transfer = archive.transfer_id, .text_length = text_length};
+    assert(snag_session_each_event(&destination->session, voice_archive_record, &seen,
+        error, sizeof(error)) == 0);
+    assert(seen.originals == 4u && seen.visible == 1u && seen.checkpoints == 1u);
+    assert(!destination->session.pending_queue_count && !destination->session.active_turn);
+}
+
 static void
 test_voice_transfer_roundtrip(struct app_state *app)
 {
-    const char *target = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    struct app_state destination = {.config = app->config, .store = app->store};
+    char error[256];
+    snag_session_init(&destination.session);
+    assert(snag_ui_init(&destination.ui) == 0);
+    assert(snag_session_create(&destination.store, &destination.session, app->session.cwd,
+        app->session.default_provider, app->session.default_model, app->session.default_effort,
+        error, sizeof(error)) == 0);
+    const char *target = destination.session.id;
     const char *other = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     uint64_t attachment = snag_ui_session_attachment(&app->ui);
-    char error[256];
     bool handled = false;
     struct snag_voice_transfer_cursor cursor = {0};
     json_t *page = NULL;
@@ -8321,6 +8429,7 @@ test_voice_transfer_roundtrip(struct app_state *app)
             error, sizeof(error)) == 1 && app->session.next_seq == paused);
         if (!trial) {
             test_voice_transfer_history(app, target, attachment, paused, text_length, &cursor);
+            test_voice_archive(app, &destination, attachment, text_length);
         } else {
             struct snag_voice_transfer_cursor saved = cursor;
             assert(snag_app_voice_transfer_history(app, target, attachment, &cursor,
@@ -8358,6 +8467,8 @@ test_voice_transfer_roundtrip(struct app_state *app)
     }
     assert(snag_app_voice_transfer_pause(app, target, attachment,
         error, sizeof(error)) == 1);
+    snag_session_close(&destination.session);
+    snag_ui_free(&destination.ui);
 }
 
 static void
@@ -8588,6 +8699,415 @@ test_voice_network_renewal(struct app_state *app, struct snag_config *config)
     assert(close(refused) == 0);
     strcpy(provider->base_url, previous);
     config->audio.provider[0] = '\0';
+}
+
+struct handover_owner {
+    pid_t pid;
+    int peer, report, control;
+    char id[SNAG_ID_HEX_LEN + 1u];
+};
+
+enum { HANDOVER_LOST = 3u, HANDOVER_REFUSED, HANDOVER_CASES };
+
+static void
+test_voice_archive_return(struct app_state *source, const char *original, uint64_t original_seq)
+{
+    struct app_state destination = {.config = source->config, .store = source->store};
+    char error[256], queue[SNAG_ID_HEX_LEN + 1u];
+    snag_session_init(&destination.session);
+    assert(snag_ui_init(&destination.ui) == 0);
+    assert(snag_session_open(&destination.store, &destination.session, original,
+        error, sizeof(error)) == 0);
+    assert(destination.session.pending_queue_count == 1u);
+    strcpy(queue, destination.session.pending_queue[0].queue_id);
+    history_voice_event(&source->session, json_pack("{s:s,s:s,s:s,s:s}",
+        "type", "voice_transcript", "speaker", "assistant", "item_id", "return-reply",
+        "text", "Destination reply before return"));
+    assert(snag_ui_voice(&source->ui, "[VOICE FIXTURE] ") == 0);
+    json_t *empty = json_array();
+    assert(empty && snag_app_voice_fixture(source, empty, true) == 0);
+    json_decref(empty);
+    uint64_t attachment = snag_ui_session_attachment(&source->ui);
+    struct snag_voice_archive archive = {0};
+    int ready;
+    do {
+        ready = snag_app_voice_transfer_archive(source, original, attachment,
+            &archive, error, sizeof(error));
+        assert(ready >= 0);
+    } while (!ready);
+    struct snag_voice_transfer_cursor cursor = {0};
+    unsigned int originals = 0u, queues = 0u, boundaries = 0u;
+    bool complete = false;
+    while (!complete) {
+        json_t *page = NULL;
+        assert(snag_app_voice_transfer_history(source, original, attachment, &cursor,
+            &page, error, sizeof(error)) == 0 && page);
+        json_t *records = json_object_get(page, "records");
+        for (size_t i = 0u; i < json_array_size(records); ++i) {
+            const json_t *record = json_array_get(records, i);
+            const char *type = snag_json_string(record, "type");
+            assert(strcmp(type, "voice_transfer_record") && strcmp(type, "voice_transfer_sealed"));
+            const json_t *data = json_object_get(record, "data");
+            if (!strcmp(type, "voice_transfer_adopted")) {
+                assert(json_is_true(json_object_get(data, "session_boundary")));
+                ++boundaries;
+            }
+            if (!strcmp(type, "future_turn_queued")) ++queues;
+            const json_t *event = json_object_get(data, "event");
+            const char *item = snag_json_string(event, "item_id");
+            if (!item || strcmp(item, "handover-original")) continue;
+            assert(!strcmp(snag_json_string(record, "source_session_id"), original));
+            assert((uint64_t)json_integer_value(json_object_get(record, "source_seq")) ==
+                original_seq);
+            assert(!strcmp(snag_json_string(event, "text"), "handover source words"));
+            ++originals;
+        }
+        complete = json_is_true(json_object_get(page, "complete"));
+        json_decref(page);
+    }
+    assert(originals == 1u && queues == 1u && boundaries == 1u);
+    assert(snag_app_voice_import_begin(&destination, &archive, error, sizeof(error)) == 0);
+    do {
+        ready = snag_app_voice_import_service(&destination, error, sizeof(error));
+        assert(ready >= 0 && !destination.session.voice_history.adopted_seq);
+    } while (!ready);
+    assert(snag_app_voice_import_adopt(&destination, error, sizeof(error)) == 0);
+    assert(snag_session_checkpoint(&destination.session, error, sizeof(error)) == 0);
+    snag_session_close(&destination.session);
+    snag_session_init(&destination.session);
+    assert(snag_session_open(&destination.store, &destination.session, original,
+        error, sizeof(error)) == 0);
+    json_t *context = NULL;
+    do {
+        json_decref(context);
+        assert(snag_session_voice_context(&destination.session, &context,
+            error, sizeof(error)) == 0);
+    } while (!json_is_true(json_object_get(context, "history_complete")));
+    assert(!strcmp(snag_json_string(context, "recent_asr"), "handover source words"));
+    assert(!strcmp(snag_json_string(context, "recent_asr_origin_session_id"), original));
+    assert((uint64_t)json_integer_value(json_object_get(context, "recent_asr_origin_seq")) ==
+        original_seq);
+    const char *reply = snag_json_string(context, "recent_generated_reply");
+    const char *origin = snag_json_string(context, "recent_generated_reply_origin_session_id");
+    assert(reply && !strcmp(reply, "Destination reply before return"));
+    assert(origin && !strcmp(origin, source->session.id));
+    assert(destination.session.pending_queue_count == 1u && !destination.session.active_turn);
+    assert(!strcmp(destination.session.pending_queue[0].queue_id, queue));
+    json_decref(context);
+    snag_app_voice_close(source);
+    snag_session_close(&destination.session);
+    snag_ui_free(&destination.ui);
+}
+
+static void
+handover_engine(struct snag_session_process *process, const char *path, const char *target,
+    unsigned int mode, int report, int control)
+{
+    (void)alarm(20u);
+    struct app_state app = {0};
+    struct snag_config config;
+    char error[256], source_id[SNAG_ID_HEX_LEN + 1u];
+    snag_config_init(&config);
+    strcpy(config.providers[0].name, "default");
+    strcpy(config.providers[0].base_url, "http://127.0.0.1:1/v1");
+    assert(snag_secret_source_parse(&config.providers[0].api_key, "\"handover-key\"",
+        NULL, error, sizeof(error)) == 0);
+    if (!target && mode == HANDOVER_REFUSED) strcpy(config.audio.provider, "missing");
+    app.config = &config;
+    snag_store_init(&app.store);
+    snag_session_init(&app.session);
+    assert(snag_store_open(&app.store, path, error, sizeof(error)) == 0);
+    assert(snag_session_create(&app.store, &app.session, path, "default", "fixture", "medium",
+        error, sizeof(error)) == 0);
+    assert(snag_ui_init(&app.ui) == 0 && snag_ui_session_start(&app.ui, process) == 0);
+    assert(snag_ui_open(&app.ui, error, sizeof(error)) == 0);
+    assert(snag_session_persist(&app.store, &app.session, error, sizeof(error)) == 0);
+    assert(snag_ui_session_listen(&app.ui, &app.session) == 0);
+    assert(write(report, app.session.id, sizeof(app.session.id)) == sizeof(app.session.id));
+    char gate;
+    if (target) {
+        assert(read(control, &gate, 1u) == 1 && gate == 'Q');
+        assert(snag_ui_simple_prompt(&app.ui, false) == 0);
+        assert(snag_ui_voice(&app.ui, "[VOICE FIXTURE] ") == 0);
+        json_t *notices = json_pack("[{s:s,s:s,s:s,s:s}]", "type", "voice_transcript",
+            "speaker", "user", "item_id", "handover-original", "text", "handover source words");
+        assert(notices && snag_app_voice_fixture(&app, notices, false) == 0);
+        json_decref(notices);
+        json_t *queued = json_pack("{s:s,s:s,s:s,s:s,s:s,s:s,s:s,s:s}",
+            "connection_id", "0123456789abcdef0123456789abcdef", "input_id", "pending-input",
+            "response_id", "pending-response", "call_id", "pending-call", "provider", "default",
+            "model", "fixture", "transcript", "pending source task", "request", "inspect source");
+        char queue[SNAG_ID_HEX_LEN + 1u];
+        bool duplicate = false;
+        assert(snag_session_voice_queue(&app.session, queued, queue, &duplicate,
+            error, sizeof(error)) == 0 && !duplicate);
+        json_decref(queued);
+        char command[80];
+        assert(snprintf(command, sizeof(command), "/session attach %s", target) > 0);
+        struct snag_response_item call = {.name = "ui_input",
+            .arguments = json_pack("{s:s}", "text", command)};
+        json_t *result = NULL;
+        assert(snag_app_voice_ui_input(&app, &call, &result, error, sizeof(error)) == 0);
+        assert(!strcmp(snag_json_string(result, "status"), "succeeded"));
+        json_decref(result);
+        json_decref(call.arguments);
+        assert(!app.voice_switch);
+        enum snag_term_action action;
+        char *line = NULL;
+        assert(snag_ui_poll(&app.ui, 100, &action, &line) == 1 && line);
+        bool handled = false, prompt = false;
+        assert(snag_app_input_command(&app, line, false, &handled, &prompt) == 0 && handled);
+        free(line);
+        assert(app.voice_switch && app.voice && app.session.pending_queue_count == 1u);
+        /* Admit the command while active, then use the existing expiry fixture
+         * to finish the simulated owner without opening media or a provider. */
+        assert(snag_app_voice_fixture_failure(&app, NULL, NULL) == SNAG_VOICE_RETRY);
+        assert(fcntl(control, F_SETFL, O_NONBLOCK) == 0);
+        while (app.voice_switch) {
+            ssize_t n = read(control, &gate, 1u);
+            assert(n == 1 || (n < 0 && errno == EAGAIN));
+            if (n == 1) {
+                assert(gate == 'M');
+                const char *setting = mode == SNAG_SESSION_VOICE_OFF ? "/voice off" :
+                    mode == SNAG_SESSION_VOICE_MUTED ? "/voice mute" : "/voice unmute";
+                assert(snag_app_voice_command(&app, setting, &handled) == 0 && handled);
+                assert(write(report, "C", 1u) == 1);
+            }
+            assert(snag_app_voice_attachment_service(&app) == 0);
+            (void)snag_sleep_ms(1u);
+        }
+        if (mode == HANDOVER_REFUSED) {
+            assert(app.voice && snag_ui_session_attachment(&app.ui) == 1u);
+            json_t *state = snag_app_voice_fixture_state(&app);
+            assert(state && !*snag_json_string(state, "transfer_target"));
+            assert(!json_is_true(json_object_get(state, "muted")));
+            json_decref(state);
+            call.arguments = json_pack("{s:s}", "text", "/status");
+            assert(call.arguments &&
+                snag_app_voice_ui_input(&app, &call, &result, error, sizeof(error)) == 0);
+            assert(!strcmp(snag_json_string(result, "status"), "succeeded"));
+            json_decref(result);
+            json_decref(call.arguments);
+            assert(snag_ui_poll(&app.ui, 100, &action, &line) == 1);
+            assert(line && !strcmp(line, "/status"));
+            free(line);
+            snag_app_voice_close(&app);
+        } else assert(!app.voice && !snag_ui_session_attachment(&app.ui));
+        assert(app.session.pending_queue_count == 1u);
+        assert(!strcmp(app.session.pending_queue[0].queue_id, queue));
+        assert(write(report, "D", 1u) == 1);
+    } else {
+        while (snag_ui_session_attachment(&app.ui)) (void)snag_sleep_ms(1u);
+        assert(write(report, "d", 1u) == 1);
+        assert(read(control, source_id, sizeof(source_id)) == sizeof(source_id));
+        uint64_t generation;
+        while (!(generation = snag_ui_session_pending(&app.ui))) (void)snag_sleep_ms(1u);
+        if (mode == HANDOVER_REFUSED) {
+            assert(snag_app_voice_attachment_prepare(&app, generation) == 0);
+            assert(!snag_ui_session_pending(&app.ui) && !app.voice_import && !app.voice);
+            assert(!app.session.voice_history.adopted_seq && !app.session.pending_queue_count);
+            assert(write(report, "F", 1u) == 1);
+            assert(read(control, &gate, 1u) == 1 && gate == 'A');
+            goto finished;
+        }
+        int ready;
+        do {
+            ready = snag_app_voice_attachment_prepare(&app, generation);
+            assert(ready >= 0 && !app.session.voice_history.adopted_seq && !app.voice);
+        } while (!ready);
+        assert(write(report, "P", 1u) == 1);
+        assert(read(control, &gate, 1u) == 1 && gate == 'R');
+        assert(snag_ui_session_rebind(&app.ui, generation) == 0);
+        assert(snag_ui_session_ready(&app.ui, generation) == 0);
+        while (!snag_ui_session_attachment(&app.ui)) (void)snag_sleep_ms(1u);
+        assert(!app.session.voice_history.adopted_seq && !app.voice);
+        assert(write(report, "b", 1u) == 1);
+        assert(read(control, &gate, 1u) == 1 && gate == 'A');
+        if (mode == HANDOVER_LOST) {
+            while (snag_ui_session_attachment(&app.ui)) (void)snag_sleep_ms(1u);
+        }
+        assert(snag_app_voice_attachment_service(&app) == 0);
+        assert(app.session.voice_history.adopted_seq && !app.voice_import);
+        if (mode == SNAG_SESSION_VOICE_OFF || mode == HANDOVER_LOST) assert(!app.voice);
+        else {
+            json_t *state = snag_app_voice_fixture_state(&app);
+            assert(state && json_is_true(json_object_get(state, "muted")) ==
+                (mode == SNAG_SESSION_VOICE_MUTED));
+            assert(!snag_app_voice_fixture_capture_ready(&app));
+            json_decref(state);
+        }
+        /* The real new owner is stopped before credential acceptance. These
+         * tests never connect to a provider or open an audio device. */
+        snag_app_voice_close(&app);
+        assert(snag_session_checkpoint(&app.session, error, sizeof(error)) == 0);
+        char id[SNAG_ID_HEX_LEN + 1u];
+        strcpy(id, app.session.id);
+        snag_session_close(&app.session);
+        snag_session_init(&app.session);
+        assert(snag_session_open(&app.store, &app.session, id, error, sizeof(error)) == 0);
+        json_t *context = NULL;
+        do {
+            json_decref(context);
+            assert(snag_session_voice_context(&app.session, &context, error, sizeof(error)) == 0);
+        } while (!json_is_true(json_object_get(context, "history_complete")));
+        assert(!strcmp(snag_json_string(context, "recent_asr"), "handover source words"));
+        assert(!strcmp(snag_json_string(context, "recent_asr_origin_session_id"), source_id));
+        assert(json_integer_value(json_object_get(context, "recent_asr_origin_seq")) > 0);
+        assert(json_is_null(json_object_get(context, "latest_voice_handoff")));
+        if (mode == SNAG_SESSION_VOICE_OFF) {
+            assert(write(report, "r", 1u) == 1);
+            assert(read(control, &gate, 1u) == 1 && gate == 'H');
+            test_voice_archive_return(&app, source_id,
+                (uint64_t)json_integer_value(json_object_get(context, "recent_asr_origin_seq")));
+        }
+        json_decref(context);
+        assert(!app.session.pending_queue_count && !app.session.active_turn);
+        assert(write(report, "F", 1u) == 1);
+    }
+finished:
+    snag_app_voice_attachment_close(&app);
+    snag_ui_free(&app.ui);
+    snag_session_close(&app.session);
+    snag_store_close(&app.store);
+    snag_config_free(&config);
+    _exit(0);
+}
+
+static struct handover_owner
+handover_spawn(const char *path, const char *target, unsigned int mode)
+{
+    int saved[3], report[2], control[2];
+    assert(pipe(report) == 0 && pipe(control) == 0 && fflush(NULL) == 0);
+    for (int fd = 0; fd < 3; ++fd) {
+        saved[fd] = fcntl(fd, F_DUPFD_CLOEXEC, 3);
+        assert(saved[fd] >= 0);
+    }
+    int outer = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
+    assert(outer >= 0 && grantpt(outer) == 0 && unlockpt(outer) == 0);
+    int screen = open(ptsname(outer), O_RDWR | O_NOCTTY | O_CLOEXEC);
+    assert(screen >= 0);
+    for (int fd = 0; fd < 3; ++fd) assert(dup2(screen, fd) == fd);
+    struct snag_session_process process;
+    int frontend = snag_session_process_start(&process);
+    if (!frontend) {
+        for (int fd = 0; fd < 3; ++fd) assert(close(saved[fd]) == 0);
+        assert(close(outer) == 0 && close(screen) == 0);
+        assert(close(report[0]) == 0 && close(control[1]) == 0);
+        handover_engine(&process, path, target, mode, report[1], control[0]);
+    }
+    assert(frontend == 1);
+    for (int fd = 0; fd < 3; ++fd) {
+        assert(dup2(saved[fd], fd) == fd && close(saved[fd]) == 0);
+    }
+    assert(close(outer) == 0 && close(screen) == 0);
+    assert(close(report[1]) == 0 && close(control[0]) == 0);
+    struct handover_owner owner = {.pid = (pid_t)process.child, .peer = process.peer,
+        .report = report[0], .control = control[1]};
+    assert(read(owner.report, owner.id, sizeof(owner.id)) == sizeof(owner.id));
+    return owner;
+}
+
+static void
+test_voice_handover(void)
+{
+    for (unsigned int mode = 0u; mode < HANDOVER_CASES; ++mode) {
+        char path[4096], directory[4096], retired[4096];
+        assert(snprintf(path, sizeof(path), "%s/snajpagent-voice-handover-XXXXXX",
+            getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp") > 0 && mkdtemp(path));
+        struct handover_owner target = handover_spawn(path, NULL, mode);
+        assert(close(target.peer) == 0);
+        char phase;
+        assert(read(target.report, &phase, 1u) == 1 && phase == 'd');
+        struct handover_owner source = handover_spawn(path, target.id,
+            mode == 3u ? SNAG_SESSION_VOICE_ON : mode);
+        assert(write(target.control, source.id, sizeof(source.id)) == sizeof(source.id));
+        int terminal[2];
+        assert(snag_session_stream_pair(terminal) == 0);
+        struct snag_session_client client;
+        assert(snag_session_client_init(&client, terminal[0], source.peer) == 0);
+        client.profile = (struct snag_terminal_profile){.term = "xterm"};
+        assert(write(source.control, "Q", 1u) == 1);
+        bool source_done = false, bound = false, adopted = false, released = false;
+        bool client_open = true;
+        uint64_t deadline = snag_monotonic_ms() + 15000u;
+        bool refused = false;
+        char notice[64] = "";
+        while (!adopted || !source_done) {
+            assert(snag_monotonic_ms() < deadline);
+            if (client_open) {
+                if (notice[0] && snag_session_client_error(&client, notice) == 0)
+                    notice[0] = '\0';
+                enum snag_session_message event;
+                int rc = snag_session_client_step(&client, 1, &event);
+                assert(rc >= 0);
+                if (rc) {
+                    snag_session_client_close(&client);
+                    client_open = false;
+                }
+                if (event == SNAG_SESSION_SWITCH) {
+                    assert(!strcmp((const char *)client.event_data, target.id));
+                    assert(snprintf(directory, sizeof(directory), "%s/sessions/%s",
+                        path, target.id) > 0);
+                    int dir = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+                    assert(dir >= 0);
+                    int peer = snag_session_endpoint_connect(dir, directory);
+                    assert(peer >= 0 && close(dir) == 0);
+                    assert(snag_session_client_attach(&client, peer) == 0);
+                } else if (event == SNAG_SESSION_ERROR) {
+                    assert(mode == HANDOVER_REFUSED && !refused);
+                    assert(strstr((const char *)client.event_data, "provider is not configured"));
+                    assert(client.target < 0 && !client.peer_draining);
+                    refused = true;
+                    strcpy(notice, "fixture destination refused voice configuration");
+                } else assert(!event || event == SNAG_SESSION_READY);
+                unsigned char bytes[SNAG_SESSION_FRAME_MAX];
+                while (read(terminal[1], bytes, sizeof(bytes)) > 0) {}
+            }
+            struct pollfd reports[] = {{source.report, POLLIN, 0}, {target.report, POLLIN, 0}};
+            assert(poll(reports, 2u, 1) >= 0);
+            for (size_t i = 0u; i < 2u; ++i) {
+                if (!(reports[i].revents & POLLIN)) continue;
+                assert(read(reports[i].fd, &phase, 1u) == 1);
+                if (i == 0u) {
+                    if (phase == 'C') assert(write(target.control, "R", 1u) == 1);
+                    else { assert(phase == 'D'); source_done = true; }
+                } else if (phase == 'P') assert(write(source.control, "M", 1u) == 1);
+                else if (phase == 'b') bound = true;
+                else if (phase == 'r') {
+                    assert(mode == SNAG_SESSION_VOICE_OFF && released);
+                    assert(snprintf(directory, sizeof(directory), "%s/sessions/%s",
+                        path, source.id) > 0);
+                    assert(rename(retired, directory) == 0);
+                    assert(write(target.control, "H", 1u) == 1);
+                } else { assert(phase == 'F'); adopted = true; }
+            }
+            if (source_done && !released && (bound || (mode == HANDOVER_REFUSED && adopted))) {
+                int status;
+                assert(waitpid(source.pid, &status, 0) == source.pid);
+                assert(WIFEXITED(status) && !WEXITSTATUS(status));
+                if (mode == HANDOVER_REFUSED) assert(refused && !bound);
+                else {
+                    assert(snprintf(directory, sizeof(directory), "%s/sessions/%s",
+                        path, source.id) > 0);
+                    assert(snprintf(retired, sizeof(retired), "%s/retired-source", path) > 0);
+                    assert(rename(directory, retired) == 0);
+                }
+                if (mode == HANDOVER_LOST) {
+                    snag_session_client_close(&client);
+                    client_open = false;
+                }
+                assert(write(target.control, "A", 1u) == 1);
+                released = true;
+            }
+        }
+        assert(released);
+        if (client_open) snag_session_client_close(&client);
+        int status;
+        assert(waitpid(target.pid, &status, 0) == target.pid);
+        assert(WIFEXITED(status) && !WEXITSTATUS(status));
+        assert(close(terminal[1]) == 0 && close(source.report) == 0 && close(source.control) == 0);
+        assert(close(target.report) == 0 && close(target.control) == 0);
+    }
 }
 
 static void
@@ -8829,9 +9349,14 @@ test_native_ui(void)
             assert(!app.voice && !session->active_turn && !session->pending_queue_count);
             if (!cancelled) break;
         }
+        /* Each independent phase has its own bounded waits. History export
+         * and multiple reconnect series must not share the startup watchdog. */
+        (void)alarm(10u);
         test_voice_renewal(&app, &config, renewal_server.endpoint,
             renewal_received[0], renewal_release[1]);
+        (void)alarm(10u);
         test_voice_network_renewal(&app, &config);
+        (void)alarm(10u);
         assert(snag_ui_voice(ui, "[VOICE MIC ON] ") == 0);
         json_t *notices = json_pack("[{s:s,s:s,s:s,s:s},{s:s}]",
             "type", "voice_transcript", "speaker", "user", "item_id", "input-1",
@@ -9036,6 +9561,7 @@ main(void)
 #endif
 #if defined(__linux__) && !defined(_WIN32)
     test_native_ui();
+    test_voice_handover();
 #endif
     test_context_preview_retains_catalog();
     /* Every fixture is a forked copy of this process and is stopped with

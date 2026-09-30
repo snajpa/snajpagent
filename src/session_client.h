@@ -5,7 +5,7 @@
 #include "session_host.h"
 
 enum snag_session_client_phase {
-    SNAG_CLIENT_RESERVING, SNAG_CLIENT_COMMITTING, SNAG_CLIENT_READY
+    SNAG_CLIENT_RESERVING, SNAG_CLIENT_OFFERING, SNAG_CLIENT_COMMITTING, SNAG_CLIENT_READY
 };
 
 /* Single-threaded socket/terminal pump. The caller owns terminal modes and
@@ -20,8 +20,10 @@ struct snag_session_client {
     uint64_t target_deadline, terminal_deadline;
     size_t terminal_offset, event_length;
     unsigned char event_data[256];
+    unsigned char voice_offer[SNAG_SESSION_VOICE_BYTES];
     bool output_pending, resize_pending, quitting, peer_ended, ack_pending;
     bool ansi_output, target_verified, peer_draining;
+    bool voice_offered, voice_released;
 };
 
 /* Takes ownership on success; peer may be an already-attached initial socket
