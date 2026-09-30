@@ -4684,7 +4684,38 @@ static void test_voice_owner_mute(void)
     assert(!snag_app_voice_fixture_capture_ready(&app));
     int16_t sample = 0;
     assert(snag_app_voice_fixture_play(&app, &sample, 1u) < 0);
+#if SNAJPAGENT_AUDIO_DEVICE
+    /* Native media must continue while sideband context is queued. Public PCM
+     * shares the control socket and still waits. No hardware or remote peer. */
+    struct snag_audio_device *device = snag_audio_fixture_duplex();
+    struct snag_voice_rtc *rtc = NULL;
+    char media_error[256];
+    assert(device && snag_voice_rtc_open(&rtc, media_error, sizeof(media_error)) == 0);
+    int16_t input[480] = {0};
+    int16_t output[480];
+    snag_audio_fixture_io(device, output, input, 480u);
+    assert(snag_audio_mute(device, false) == 0);
+    for (size_t i = 0u; i < 480u; ++i) input[i] = (int16_t)(i * 32u);
+    snag_audio_fixture_io(device, output, input, 480u);
+    assert(snag_app_voice_fixture_capture(&app, device, NULL) == 0);
+    assert(snag_audio_capture(device, output, 240u) == 240u);
+    /* Leave half a frame: this reaches the real encoder without sending RTP. */
+    assert(snag_app_voice_fixture_capture(&app, device, rtc) == 0);
+    assert(snag_audio_capture(device, output, 480u) == 0u);
+    unsigned char packet[1500];
+    assert(snag_voice_rtc_fixture_encode(rtc, input, packet, sizeof(packet)) < 0);
+    assert(snag_voice_rtc_input(rtc, NULL, 0u) == 0);
+    assert(snag_voice_rtc_fixture_encode(rtc, input, packet, sizeof(packet)) > 0);
+#endif /* SNAJPAGENT_AUDIO_DEVICE */
     assert(snag_app_voice_fixture_mute(&app)==0);
+#if SNAJPAGENT_AUDIO_DEVICE
+    /* The applied owner mute still wins over the independent native transport. */
+    snag_audio_fixture_io(device, output, input, 480u);
+    assert(snag_app_voice_fixture_capture(&app, device, rtc) == 0);
+    assert(snag_audio_capture(device, output, 480u) == 480u);
+    snag_audio_close(device);
+    snag_voice_rtc_close(rtc);
+#endif
     /* The close fixture separately tests durable notice draining. This owner
      * fixture needs a real private session for that same close path. */
     char path[4096],error[256];const char *tmp=getenv("TMPDIR");

@@ -124,6 +124,12 @@ known loss burst without another wait per packet; receiving the next real packet
 starts the deadline for any subsequent hole. Late packets remain retired, and
 the same sequence arithmetic covers wraparound and interruption resets.
 
+After device activation, native microphone frames continue through the media
+transport while context or result messages wait on the sideband socket. Public
+PCM shares its control socket and admits one audio message only after pending
+writes drain. Both paths retain the existing stop, mute and device gates; the
+initial history/snapshot activation barrier is unchanged.
+
 ## Shared context and tool boundary
 
 Maintain an ordered voice conversation history. Before each voice-model turn,

@@ -1059,6 +1059,39 @@ static int owner_flush(struct app_voice *v)
     return 0;
 }
 
+static int
+owner_capture(struct app_voice *v)
+{
+    /* Public PCM shares the control socket; native media has its own transport. */
+    if (atomic_load(&v->stop) || atomic_load(&v->muted) || v->applied_mute ||
+        (!v->rtc && v->send_count)) return 0;
+    int16_t pcm[480];
+    uint32_t count = snag_audio_capture(v->device, pcm, 480u);
+    int rc = count ? (v->rtc ? snag_voice_rtc_input(v->rtc, pcm, count) :
+        snag_voice_input(v->protocol, pcm, count, v->error, sizeof(v->error))) : 0;
+    snag_secret_clear(pcm, sizeof(pcm));
+    return rc;
+}
+
+#ifdef SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS
+int
+snag_app_voice_fixture_capture(struct app_state *app, struct snag_audio_device *device,
+    struct snag_voice_rtc *rtc)
+{
+    struct app_voice *v = app->voice;
+    if (!v || v->thread_started || v->device || v->rtc) return -1;
+    size_t pending = v->send_count;
+    v->send_count = 1u;
+    v->device = device;
+    v->rtc = rtc;
+    int rc = owner_capture(v);
+    v->device = NULL;
+    v->rtc = NULL;
+    v->send_count = pending;
+    return rc;
+}
+#endif /* SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS */
+
 static int owner_mute(struct app_voice *v)
 {
     if(!snag_voice_ready(v->protocol))return 0;
@@ -1383,14 +1416,7 @@ native_done:
                     v->gap_reported=true;
                 }
             }
-            /* Only one small audio message enters the socket queue. Urgent
-             * controls never wait behind a buffered stream of audio messages. */
-            if(!atomic_load(&v->stop) && !atomic_load(&v->muted) && !v->applied_mute && !v->send_count) {
-                int16_t pcm[480];uint32_t n=snag_audio_capture(v->device,pcm,480u);
-                int rc=n?(v->rtc?snag_voice_rtc_input(v->rtc,pcm,n):
-                    snag_voice_input(v->protocol,pcm,n,v->error,sizeof(v->error))):0;
-                snag_secret_clear(pcm,sizeof(pcm));if(rc<0)break;
-            }
+            if (owner_capture(v) < 0) break;
             if (v->rtc) {
                 for (unsigned int i=0;i<4u;++i) {
                     int16_t pcm[2880];

@@ -191,6 +191,10 @@ int snag_app_voice_fixture_restart(struct app_state *, const struct snag_credent
 json_t *snag_app_voice_fixture_context(struct app_state *);
 int snag_app_voice_fixture_mute(struct app_state *);
 int snag_app_voice_fixture_play(struct app_state *, const int16_t *, uint32_t);
+struct snag_audio_device;
+struct snag_voice_rtc;
+int snag_app_voice_fixture_capture(struct app_state *, struct snag_audio_device *,
+    struct snag_voice_rtc *);
 int snag_app_voice_fixture_checkpoint(struct app_state *);
 #endif
 bool snag_app_shutdown(struct app_state *);

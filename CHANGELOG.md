@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- Keep active native microphone forwarding independent of queued context and
+  result messages, preserving the initial history, mute and stop gates.
+
 - Keep native voice startup alive when a turn finishes before audio devices open.
 
 - Reset native Opus encoder lookahead when microphone input is cleared at mute,

@@ -2108,6 +2108,8 @@ played position to the provider.
 Native media waits up to 60 ms for a missing packet to arrive out of order.
 After that deadline, a known burst of lost packets is concealed together;
 each missing packet does not add another wait.
+Once capture is active, queued context or result messages do not pause native
+microphone forwarding: its media transport is separate from the control socket.
 Duplex capture reduces speaker echo using the samples actually rendered as its
 reference. The microphone remains available during replies. Echo reduction
 depends on the devices and room; headphones can help when speaker audio still
