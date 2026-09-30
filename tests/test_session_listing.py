@@ -22,6 +22,18 @@ import tmux_terminal as harness
 HEADER = ["SESSION", "NAME", "MODEL", "TURNS", "PROCESS", "LAST PROMPT", "IRC"]
 
 
+def canonical(value):
+    if isinstance(value, str):
+        return '"' + "".join(f"\\u{ord(c):04x}" if ord(c) < 32 else
+                              "\\" + c if c in '\\"' else c for c in value) + '"'
+    if isinstance(value, dict):
+        return "{" + ",".join(canonical(k) + ":" + canonical(value[k])
+                              for k in sorted(value)) + "}"
+    if isinstance(value, list):
+        return "[" + ",".join(map(canonical, value)) + "]"
+    return json.dumps(value, separators=(",", ":"))
+
+
 def append_event(path, kind, data):
     previous = json.loads(path.read_bytes().splitlines()[-1])
     event = dict(data=data, prev_sha256=previous["event_sha256"], seq=previous["seq"] + 1,
@@ -29,14 +41,6 @@ def append_event(path, kind, data):
                  type=kind, v=previous["v"])
     if "checkpoint_offset" in previous:
         event["checkpoint_offset"] = previous["checkpoint_offset"]
-    def canonical(value):
-        if isinstance(value, str):
-            return '"' + "".join(f"\\u{ord(c):04x}" if ord(c) < 32 else
-                                  "\\" + c if c in '\\"' else c for c in value) + '"'
-        if isinstance(value, dict):
-            return "{" + ",".join(canonical(k) + ":" + canonical(value[k])
-                                  for k in sorted(value)) + "}"
-        return json.dumps(value, separators=(",", ":"))
     def encode():
         return canonical(event).encode()
     event["event_sha256"] = hashlib.sha256(encode()).hexdigest()
@@ -189,6 +193,42 @@ def check_listing(binary):
             own = next(line.split("\t") for line in listed.splitlines()
                        if line.startswith(path.parent.name[:8]))
             assert own[6] == "c/client.example:7777", own
+
+            # Old checkpoints already carry verified recent IRC events. Preserve
+            # those previews even when the historical prefix is unreadable.
+            for _ in range(20):
+                result = subprocess.run(prefix + ["--resume", path.parent.name, "-e", "--", prompt],
+                                        cwd=root, env=env, capture_output=True, timeout=20)
+                assert result.returncode == 0, result.stderr
+                records = list(map(json.loads, path.read_text().splitlines()))
+                checkpoints = [i for i, e in enumerate(records) if e["type"] == "session_checkpoint"]
+                if checkpoints:
+                    index = checkpoints[-1]
+                    context = records[index]["data"]["context"]
+                    if context and any(e["type"] == "irc_event" and e["data"]["sequence"] == 2
+                                       for e in context["recent"]):
+                        break
+            else:
+                raise AssertionError("provider did not write a checkpoint with recent IRC input")
+            records[index]["data"]["state"]["strings"].pop("irc_snapshot", None)
+            previous = records[index - 1]["event_sha256"]
+            for record in records[index:]:
+                record["prev_sha256"] = previous
+                del record["event_sha256"]
+                record["event_sha256"] = hashlib.sha256(canonical(record).encode()).hexdigest()
+                previous = record["event_sha256"]
+            encoded = [canonical(record).encode() + b"\n" for record in records]
+            bad = next(i for i, e in enumerate(records[:index]) if e["type"] == "irc_event"
+                       and e["data"]["sequence"] == 2)
+            encoded[bad] = encoded[bad].replace(b"latest actual message", b"broken actual message")
+            path.write_bytes(b"".join(encoded))
+            saved = path.read_bytes()
+            listed = subprocess.check_output(prefix + ["-l"], cwd=root, env=env).decode()
+            own = next(line.split("\t") for line in listed.splitlines()
+                       if line.startswith(path.parent.name[:8]))
+            assert own[5] == "localhost:6667: latest actual message", own
+            assert own[6] == "c/client.example:7777", own
+            assert path.read_bytes() == saved
             assert not provider.failure, provider.failure
             print("session listing: multiline IRC, controls, long Unicode and read-only rows: ok", flush=True)
     finally:

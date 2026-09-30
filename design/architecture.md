@@ -47,8 +47,9 @@ by display width and divide the space after metadata equally between LAST PROMPT
 and IRC. Redirected output uses TSV with 80-column previews. Whitespace and terminal
 controls become spaces without changing stored text. LAST PROMPT uses last_user;
 IRC references resolve through verified historical events. The latest irc_snapshot
-text is cached in the checkpoint string table; old checkpoints use reverse history
-lookup. A damaged older prefix leaves checkpoint-backed sessions listable with
+text is cached in the checkpoint string table. Lookup reuses verified recent events
+inside older checkpoints before scanning history. A damaged older prefix leaves
+checkpoint-backed sessions listable with
 available metadata. IRC lists the hosted s/ endpoint first, then c/ clients;
 stored sessions retain their last recorded topology.
 Probing the caller's own session uses its retained lock descriptor.

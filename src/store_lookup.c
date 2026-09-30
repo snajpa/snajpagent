@@ -525,6 +525,15 @@ list_cells(struct snag_session *session, bool live, unsigned int columns)
     const char *topology = snag_json_string(session->strings, "irc_snapshot");
     if (list_irc_prompt(&irc) < 0 ||
         (topology && list_irc_topology(&irc, topology) < 0)) goto out;
+    /* The verified checkpoint already contains recent typed events. Reuse them
+     * before rereading potentially large response records from the journal. */
+    const json_t *recent = json_object_get(session->checkpoint_context, "recent");
+    for (size_t i = json_array_size(recent); i && (!irc.topology_found || !irc.prompt_found); ) {
+        const json_t *entry = json_array_get(recent, --i);
+        const char *type = snag_json_string(entry, "type");
+        if (type && list_irc_event(&irc, NULL, 0u, type,
+                json_object_get(entry, "data"), NULL, 0u) < 0) goto out;
+    }
     if (!irc.topology_found || !irc.prompt_found) {
         /* Older checkpoints lack the topology cache. A damaged historical prefix
          * must not hide a session whose current checkpoint remains valid. */
