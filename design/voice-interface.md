@@ -566,6 +566,54 @@ fails closed. Export remains an internal, transient source operation. A complete
 scan neither adopts destination state nor starts audio; durable import and shared
 attachment wiring remain pending.
 
+### Handover implementation decisions
+
+The destination uses its own audio/provider configuration and resolves its own
+credentials. Only the requested on/muted/off state and public conversation follow
+the terminal. Source credentials, configuration objects, helper continuation state
+and authority are never installed in the destination. Validate destination
+configuration before READY; a preparation failure resumes the source through its
+existing rollback path. A later provider or device failure follows ordinary voice
+failure handling in the accepted destination.
+
+Use the existing journals for preparation and adoption. The source seals a public
+archive under a fresh transfer ID after completing the protected prefix scan. The
+attachment exchange carries a reference to that committed archive, not bulk history
+or a new pathname. The destination reads that exact source prefix, checks the
+transfer ID and intended destination, and copies the public observations into its
+own journal. Its adoption record follows complete verification and durable writes.
+Prepared records alone do not enter active voice context. This leaves accepted
+history independent of subsequent source deletion or credential changes. Ordinary
+session work, queue IDs and provider execution remain at their original owners.
+
+Archive observations retain their original session, sequence and event kind as
+separate fields. Their public data stays structured in the current JSONL format.
+The binary migration must give the archive wrapper explicit typed fields and encode
+each enclosed public event with its concrete kind/version schema; serializing the
+host record into an opaque JSON string is not the binary representation. Checkpoint
+and provider-private omissions remain explicit. An event that cannot fit the
+existing journal bound fails preparation without clipping it or changing owners.
+
+The latest adopted archive becomes the conversation's history root. Loading or
+exporting it does not prepend the destination's earlier voice conversation again.
+Re-export preserves original observation identities, flattens already imported
+observations, and excludes preparation records. This prevents an A-to-B-to-A switch
+from recursively wrapping or duplicating the same conversation. Destination state
+is appended as a new, explicit boundary after the carried source observations.
+
+READY can accept the destination only after its history is ready for adoption.
+BOUND remains the microphone activation boundary. The frontend's source drain must
+also report the final requested voice state: a mode captured at initial pause can
+be stale by then. Explicit off during preparation wins; unapplied or late source
+actions remain source actions and cannot be replayed against the new destination.
+Loss of the frontend never serves as proof of a successful intentional handover.
+
+These are implementation decisions for the pending shared transition. The current
+runtime still uses the stop-on-switch behavior described above. Integration tests
+must exercise the real command queue and attachment exchange, including a voice
+request for the switch itself, rollback, off/mute during preparation, repeated
+switches, large original observations and replay after reopening the destination.
+
 ## Implementation and regression sequence
 
 1. Reproduce a second native delegation while a coding request is pending.
