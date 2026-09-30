@@ -8063,6 +8063,62 @@ voice_renewal_record(void *opaque, const struct snag_session *session, uint64_t 
 }
 
 static void
+test_voice_transfer_roundtrip(struct app_state *app)
+{
+    const char *target = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const char *other = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    uint64_t attachment = snag_ui_session_attachment(&app->ui);
+    char error[256];
+    bool handled = false;
+    for (unsigned int trial = 0u; trial < 2u; ++trial) {
+        json_t *state = snag_app_voice_fixture_state(app);
+        assert(state && !*snag_json_string(state, "transfer_target"));
+        json_t *history = json_deep_copy(json_object_get(state, "history"));
+        assert(json_is_array(history) && json_array_size(history) > 1u);
+        char connection[SNAG_ID_HEX_LEN + 1u];
+        strcpy(connection, snag_json_string(state, "connection_id"));
+        json_decref(state);
+        assert(snag_app_voice_transfer_pause(app, "short", attachment,
+            error, sizeof(error)) < 0);
+        assert(snag_app_voice_transfer_pause(app, target, attachment + 1u,
+            error, sizeof(error)) < 0);
+        assert(snag_app_voice_transfer_pause(app, target, attachment,
+            error, sizeof(error)) == 1);
+        uint64_t paused = app->session.next_seq;
+        assert(snag_app_voice_transfer_pause(app, target, attachment,
+            error, sizeof(error)) == 1 && app->session.next_seq == paused);
+        assert(snag_app_voice_service(app) == 0 && app->voice);
+        assert(!snag_app_voice_fixture_capture_ready(app));
+        state = snag_app_voice_fixture_state(app);
+        assert(state && !strcmp(snag_json_string(state, "transfer_target"), target));
+        assert(!strcmp(snag_json_string(state, "connection_id"), connection));
+        assert(json_equal(json_object_get(state, "history"), history));
+        json_decref(state);
+        assert(snag_app_voice_transfer_resume(app, other, attachment,
+            error, sizeof(error)) < 0);
+        assert(snag_app_voice_transfer_resume(app, target, attachment + 1u,
+            error, sizeof(error)) < 0);
+        if (trial) {
+            assert(snag_app_voice_command(app, "/voice unmute", &handled) == 0 && handled);
+            assert(!snag_app_voice_fixture_capture_ready(app));
+        }
+        assert(snag_app_voice_transfer_resume(app, target, attachment,
+            error, sizeof(error)) == 0);
+        state = snag_app_voice_fixture_state(app);
+        assert(state && !*snag_json_string(state, "transfer_target"));
+        assert(strcmp(snag_json_string(state, "connection_id"), connection));
+        assert(json_is_true(json_object_get(state, "muted")) == !trial);
+        assert(json_equal(json_object_get(state, "history"), history));
+        assert(!snag_app_voice_fixture_capture_ready(app));
+        assert(app->session.pending_queue_count == 1u && !app->session.active_turn);
+        json_decref(state);
+        json_decref(history);
+    }
+    assert(snag_app_voice_transfer_pause(app, target, attachment,
+        error, sizeof(error)) == 1);
+}
+
+static void
 test_voice_renewal(struct app_state *app, struct snag_config *config,
     const char *endpoint, int received, int release)
 {
@@ -8098,6 +8154,18 @@ test_voice_renewal(struct app_state *app, struct snag_config *config,
         uint64_t scheduled = (uint64_t)json_integer_value(json_object_get(state, "reconnect_at"));
         assert(scheduled >= now + 1000u && scheduled <= now + 2000u);
         assert(json_integer_value(json_object_get(state, "retry_after_ms")) == 2000);
+        json_decref(state);
+        const char *target = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        uint64_t attachment = snag_ui_session_attachment(&app->ui);
+        assert(snag_app_voice_transfer_pause(app, target, attachment,
+            error, sizeof(error)) == 1);
+        assert(snag_app_voice_transfer_resume(app, target, attachment,
+            error, sizeof(error)) == 0);
+        state = snag_app_voice_fixture_state(app);
+        assert(state && !strcmp(snag_json_string(state, "connection_id"), old));
+        assert(json_integer_value(json_object_get(state, "retry_after_ms")) == 2000);
+        assert((uint64_t)json_integer_value(json_object_get(state, "reconnect_at")) == scheduled);
+        assert(!snag_app_voice_fixture_capture_ready(app));
         json_decref(state);
         uint64_t deadline = now + 3000u;
         for (;;) {
@@ -8152,6 +8220,9 @@ test_voice_renewal(struct app_state *app, struct snag_config *config,
     assert(read(received, &marker, 1u) == 1 && marker == 'R');
     assert(close(received) == 0 && app->session.pending_queue_count == 1u);
     strcpy(seen.queue, app->session.pending_queue[0].queue_id);
+    /* An active helper holds preparation open; its pending graph is not cancelled. */
+    assert(snag_app_voice_transfer_pause(app, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        snag_ui_session_attachment(&app->ui), error, sizeof(error)) == 0);
     /* Leave a partly sent PCM frame, then fail while its helper request waits. */
     assert(snag_app_voice_fixture_mute(app) == 0);
     assert(snag_app_voice_fixture_failure(app, failure, NULL) == SNAG_VOICE_RETRY);
@@ -8189,10 +8260,13 @@ test_voice_renewal(struct app_state *app, struct snag_config *config,
     assert(seen.queued == 1u && seen.settled == 2u && seen.replies == 1u && seen.retired == 1u);
     assert(app->session.pending_queue_count == 1u && !app->session.active_turn);
     assert(app->session.usage_totals.responses == 0u);
+    test_voice_transfer_roundtrip(app);
     stopping = snag_monotonic_ms();
     assert(snag_app_voice_command(app, "/voice off", &handled) == 0 && handled && !app->voice);
     assert(snag_monotonic_ms() - stopping < 1000u);
     assert(app->session.pending_queue_count == 1u);
+    assert(snag_app_voice_transfer_resume(app, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        snag_ui_session_attachment(&app->ui), error, sizeof(error)) == 0 && !app->voice);
     assert(snag_session_commit(&app->session, "future_turn_cancelled",
         json_pack("{s:[s],s:s}", "queue_ids", seen.queue, "reason", "user"),
         NULL, error, sizeof(error)) == 0);

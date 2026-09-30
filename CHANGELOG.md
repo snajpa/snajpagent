@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+- Add internal source-side voice handover preparation with reversible pause,
+  retained helper history and requested mode. Shared attachment wiring and
+  destination history import remain pending.
+
 - Preserve native microphone sample time across mute gaps and partial reads,
   using capture positions for RTP timestamps while retaining input privacy.
 

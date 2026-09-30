@@ -330,6 +330,7 @@ struct app_voice {
     uint64_t interface_order;
     bool servicing;
     bool close_requested;
+    char transfer_target[SNAG_ID_HEX_LEN + 1u]; /* Session-owner-only paused transfer. */
 };
 
 static void
@@ -1250,7 +1251,8 @@ snag_app_voice_fixture_state(struct app_state *app)
 {
     struct app_voice *v = app->voice;
     if (!v || (v->thread_started && atomic_load(&v->credential_accepted))) return NULL;
-    return json_pack("{s:s,s:b,s:b,s:i,s:I,s:I,s:I,s:I,s:I}", "connection_id", v->connection,
+    return json_pack("{s:s,s:b,s:b,s:i,s:I,s:I,s:I,s:I,s:I,s:s,s:O}",
+        "connection_id", v->connection,
         "muted", atomic_load(&v->muted), "transport_empty",
         !v->send_count && !v->send_bytes && !v->send_offset && !v->receive.len && !v->result,
         "pending_handoffs", (int)atomic_load(&v->pending_handoffs),
@@ -1258,7 +1260,9 @@ snag_app_voice_fixture_state(struct app_state *app)
         "retry_after_ms", (json_int_t)v->retry_after_ms,
         "reconnect_at", (json_int_t)v->reconnect_at,
         "covered_next_seq", (json_int_t)v->native_covered.next_seq,
-        "compacting_through_seq", (json_int_t)(v->compact.native ? v->compact.source_seq : 0u));
+        "compacting_through_seq", (json_int_t)(v->compact.native ? v->compact.source_seq : 0u),
+        "transfer_target", v->transfer_target,
+        "history", v->interface_history ? v->interface_history : json_null());
 }
 #endif /* SNAJPAGENT_TEST_TRANSPORT_ENDPOINTS */
 
@@ -1610,6 +1614,101 @@ void snag_app_voice_close(struct app_state *app)
     json_decref(v->native_summary);
     snag_credential_clear(&v->credential);snag_secret_set_free(&v->secrets);json_decref(v->result);json_decref(v->context);
     pthread_mutex_destroy(&v->mutex);free(v);app->voice=NULL;
+}
+
+static int
+voice_transfer_check(struct app_state *app, const char *target, uint64_t attachment,
+    char *error, size_t size)
+{
+    if (!target || strlen(target) != SNAG_ID_HEX_LEN ||
+        strspn(target, "0123456789abcdef") != SNAG_ID_HEX_LEN ||
+        !strcmp(target, app->session.id)) {
+        return snag_errorf(error, size, "Voice transfer requires a different full session ID");
+    }
+    struct app_voice *v = app->voice;
+    if (v && v->ui_observation_failed) {
+        return snag_errorf(error, size, "Voice output history could not be retained");
+    }
+    if (v && (attachment != v->attachment || voice_attachment_lost(v))) {
+        return snag_errorf(error, size, "Voice transfer belongs to a different attachment");
+    }
+    if (v && v->transfer_target[0] && strcmp(v->transfer_target, target)) {
+        return snag_errorf(error, size, "Another voice transfer is already prepared");
+    }
+    return 0;
+}
+
+int
+snag_app_voice_transfer_pause(struct app_state *app, const char *target,
+    uint64_t attachment, char *error, size_t size)
+{
+    if (voice_transfer_check(app, target, attachment, error, size) < 0) return -1;
+    struct app_voice *v = app->voice;
+    if (!v || v->transfer_target[0]) return 1;
+    /* Preparation waits for helper work rather than cancelling it. Accepted
+     * coding work already belongs to the session queue and can keep running. */
+    if (v->servicing || v->request || v->interface_active || v->compact.active) return 0;
+    unsigned int retained = 0u;
+    for (size_t i = 0u; i < SNAG_VOICE_HANDOFFS; ++i) {
+        const struct voice_handoff *handoff = &v->handoffs[i];
+        if (!handoff->call[0]) continue;
+        if (!handoff->interface_done) return 0;
+        ++retained;
+    }
+    if (atomic_load(&v->pending_handoffs) > retained) return 0;
+    if (!v->thread_started && !atomic_load(&v->done)) {
+        return snag_errorf(error, size, "Voice connection owner is unavailable");
+    }
+    strcpy(v->transfer_target, target);
+    atomic_store(&v->stop, true);
+    if (v->thread_started) {
+        pthread_join(v->thread, NULL);
+        v->thread_started = false;
+    }
+    /* Retain the owner's final source notices before exposing the paused state.
+     * New, unaccepted native calls are handled by the existing stop barrier. */
+    if (snag_app_voice_service(app) < 0 || app->voice != v) {
+        return snag_errorf(error, size, "Voice stopped while preparing the session switch");
+    }
+    if (voice_record(app, v, json_pack("{s:s,s:s,s:s,s:b}", "type", "voice_response",
+            "operation", "interface_transfer_paused", "target_session_id", target,
+            "muted", atomic_load(&v->muted))) < 0 ||
+        snag_ui_voice(&app->ui,
+            "[voice switching sessions; mic off; /voice off cancels] ") != 0) {
+        snag_app_voice_close(app);
+        return snag_errorf(error, size, "Voice transfer pause could not be retained or displayed");
+    }
+    return 1;
+}
+
+int
+snag_app_voice_transfer_resume(struct app_state *app, const char *target,
+    uint64_t attachment, char *error, size_t size)
+{
+    if (voice_transfer_check(app, target, attachment, error, size) < 0) return -1;
+    struct app_voice *v = app->voice;
+    /* Explicit off supersedes rollback; ordinary attachment cannot revive it. */
+    if (!v || !v->transfer_target[0]) return 0;
+    if (v->servicing) return snag_errorf(error, size, "Voice interface is still servicing input");
+    if (voice_record(app, v, json_pack("{s:s,s:s,s:s,s:b}", "type", "voice_response",
+            "operation", "interface_transfer_resuming", "target_session_id", target,
+            "muted", atomic_load(&v->muted))) < 0 ||
+        snag_ui_voice(&app->ui,
+            "[voice restoring history; mic off; /voice off cancels] ") != 0) {
+        snag_app_voice_close(app);
+        return snag_errorf(error, size,
+            "Voice transfer rollback could not be retained or displayed");
+    }
+    atomic_store(&v->stop, false);
+    /* A paused retry keeps its advertised delay and pending capacity work.
+     * The normal service loop resumes it without an early replacement request. */
+    if (!v->retryable && connection_restart(app, error, size) < 0) {
+        atomic_store(&v->stop, true);
+        atomic_store(&v->done, true);
+        return -1;
+    }
+    v->transfer_target[0] = '\0';
+    return 0;
 }
 
 /* This runs only after the existing session owner has durably committed the
@@ -2996,6 +3095,10 @@ interface:
         if (rc < 0) goto failed;
         handoff_clear(v, handoff);
     }
+    if (v->transfer_target[0]) {
+        v->servicing = false;
+        return 0;
+    }
     if (finished && v->capacity_pending && !atomic_load(&v->stop)) {
         int rc = native_compact_service(app, error, sizeof(error));
         if (rc < 0) {
@@ -3044,7 +3147,9 @@ int snag_app_voice_command(struct app_state *app,const char *line,bool *handled)
     *handled=!strcmp(line,"/voice") || !strncmp(line,"/voice ",7u);
     if(!*handled || !strcmp(line,"/voice devices")) {*handled=false;return 0;}
     if(!strcmp(line,"/voice off")) {
-        if(app->voice) {
+        if (app->voice) {
+            /* Off supersedes a prepared transfer and follows the usual durable stop. */
+            app->voice->transfer_target[0] = '\0';
             struct app_voice *v=app->voice;atomic_store(&v->stop,true);
             if(v->thread_started) {pthread_join(v->thread,NULL);v->thread_started=false;}
             if(snag_app_voice_service(app)<0)return -1;
@@ -3058,7 +3163,11 @@ int snag_app_voice_command(struct app_state *app,const char *line,bool *handled)
         if(mute) {
             atomic_store(&app->voice->muted,true);atomic_store(&app->voice->mute_pending,true);
         }
-        int rc=snag_ui_voice(&app->ui,mute?"[voice muting; /voice unmute | off] ":"[voice starting mic; /voice mute | off] ");
+        const char *label = app->voice->transfer_target[0] ?
+            "[voice switching sessions; mic off; /voice off cancels] " : mute ?
+            "[voice muting; /voice unmute | off] " :
+            "[voice starting mic; /voice mute | off] ";
+        int rc = snag_ui_voice(&app->ui, label);
         if(!rc && !mute)atomic_store(&app->voice->muted,false);
         if(rc)snag_app_voice_close(app);
         return rc<0?-1:0;

@@ -159,6 +159,12 @@ void snag_app_audio_close(struct app_state *);
 int snag_app_voice_command(struct app_state *,const char *,bool *);
 int snag_app_voice_service(struct app_state *);
 void snag_app_voice_close(struct app_state *);
+/* Source-side transfer preparation, called only by the session owner.
+ * pause: 1 quiet/off, 0 helper work still active, -1 invalid/failed preparation.
+ * resume requests reconnection only for the same target and attachment;
+ * explicit off wins, and normal history/device activation gates still apply. */
+int snag_app_voice_transfer_pause(struct app_state *, const char *, uint64_t, char *, size_t);
+int snag_app_voice_transfer_resume(struct app_state *, const char *, uint64_t, char *, size_t);
 void snag_app_voice_event(struct app_state *,const char *,const json_t *);
 json_t *snag_app_voice_tools(void);
 int snag_app_voice_read(struct app_state *, const struct snag_response_item *,

@@ -514,6 +514,19 @@ Actual detach, terminal loss and suspension stop capture and playback; ordinary
 reattachment requires explicit activation. Shared voice continuity across a
 successful attachment transition remains to be implemented and tested.
 
+Source preparation has an internal pause/resume operation in the existing voice
+owner. Preparation waits for interface requests and compaction to settle while
+accepted coding work continues at the source. It joins the media owner, retains
+final source notices and acknowledges the paused state through the journal and
+visible UI. The public helper history and requested mute state remain in place.
+Rollback checks the destination ID and original live attachment, then uses normal
+connection renewal and history activation. Mute changes made while paused apply
+to that renewal; explicit off uses the normal durable stop and prevents revival.
+An existing provider retry keeps its delay and pending capacity work.
+Journal or display failure stops voice through existing failure handling.
+These source operations currently have fixture coverage only. Connecting them to
+the shared attachment exchange and importing destination history remain pending.
+
 ## Implementation and regression sequence
 
 1. Reproduce a second native delegation while a coding request is pending.
